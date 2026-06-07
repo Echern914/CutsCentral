@@ -19,15 +19,54 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
     return;
   }
 
+  const now = new Date();
   const balance = await currentBalance(client.shopId, client.id);
-  const visits = await prisma.visit.findMany({
-    where: { shopId: client.shopId, clientId: client.id, status: "COMPLETED" },
-    orderBy: { scheduledAt: "desc" },
-    take: 10,
-    select: { scheduledAt: true, serviceName: true },
-  });
+  const [visits, upcoming] = await Promise.all([
+    prisma.visit.findMany({
+      where: { shopId: client.shopId, clientId: client.id, status: "COMPLETED" },
+      orderBy: { scheduledAt: "desc" },
+      take: 10,
+      select: { scheduledAt: true, serviceName: true },
+    }),
+    prisma.visit.findFirst({
+      where: {
+        shopId: client.shopId,
+        clientId: client.id,
+        status: { in: ["SCHEDULED", "RESCHEDULED"] },
+        scheduledAt: { gt: now },
+      },
+      orderBy: { scheduledAt: "asc" },
+      select: { scheduledAt: true },
+    }),
+  ]);
 
   const threshold = client.shop.rewardThreshold;
+
+  // Rebooking countdown: deadline = lastVisit + rebookWindowDays. The client-side
+  // timer ticks down to this ISO instant. We surface the state so the UI can show
+  // the right message (booked / counting down / overdue / no-data).
+  const lastVisitAt = client.lastVisitAt ?? visits[0]?.scheduledAt ?? null;
+  const windowDays = client.shop.rebookWindowDays;
+  let rebook: {
+    state: "booked" | "counting" | "overdue" | "none";
+    deadline: string | null;
+    windowDays: number;
+    upcomingAt: string | null;
+  };
+  if (upcoming) {
+    rebook = { state: "booked", deadline: null, windowDays, upcomingAt: upcoming.scheduledAt.toISOString() };
+  } else if (lastVisitAt) {
+    const deadline = new Date(lastVisitAt.getTime() + windowDays * 86_400_000);
+    rebook = {
+      state: deadline.getTime() > now.getTime() ? "counting" : "overdue",
+      deadline: deadline.toISOString(),
+      windowDays,
+      upcomingAt: null,
+    };
+  } else {
+    rebook = { state: "none", deadline: null, windowDays, upcomingAt: null };
+  }
+
   res.json({
     shop: {
       name: client.shop.name,
@@ -44,6 +83,7 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
       towardNext: balance % threshold,
       rewardsUnlocked: Math.floor(balance / threshold),
     },
+    rebook,
     visits: visits.map((v) => ({
       date: v.scheduledAt.toISOString(),
       service: v.serviceName,

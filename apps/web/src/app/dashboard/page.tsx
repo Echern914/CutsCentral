@@ -10,7 +10,6 @@ import { Leaderboard, type Leader } from "./_components/Leaderboard";
 import { SettingsCard, type ShopSettings } from "./_components/SettingsCard";
 
 interface ShopMe extends ShopSettings {
-  name: string;
   connected: boolean;
 }
 
@@ -35,6 +34,18 @@ export default async function DashboardPage() {
           <h1 className="font-display text-3xl tracking-tight">{shop.name}</h1>
         </div>
         <div className="flex items-center gap-3">
+          <a
+            href="/dashboard/clients"
+            className="rounded-full border border-subtle px-4 py-2 text-xs text-offwhite hover:bg-charcoal-700"
+          >
+            Clients
+          </a>
+          <a
+            href="/dashboard/nudges"
+            className="rounded-full border border-subtle px-4 py-2 text-xs text-offwhite hover:bg-charcoal-700"
+          >
+            Nudges
+          </a>
           {!shop.connected && (
             <a
               href="/onboarding/connect"

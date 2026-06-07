@@ -3,6 +3,7 @@ import { z } from "zod";
 import { DEFAULTS, randomToken } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
+import { previewNudgeBody } from "../messaging/templates.js";
 
 export const shopsRouter: Router = Router();
 
@@ -14,6 +15,8 @@ const createShopSchema = z.object({
   rewardLabel: z.string().min(1).max(80).default(DEFAULTS.rewardLabel),
   nudgeBufferDays: z.number().int().min(0).max(90).default(DEFAULTS.nudgeBufferDays),
   dailySendCap: z.number().int().min(1).max(1000).default(DEFAULTS.dailySendCap),
+  smsTemplate: z.string().max(480).nullish(),
+  rebookWindowDays: z.number().int().min(1).max(90).default(14),
 });
 
 const updateShopSchema = createShopSchema.partial();
@@ -70,6 +73,14 @@ shopsRouter.patch("/me", requireUser, requireShop, async (req, res) => {
   res.json(serializeShop(shop));
 });
 
+// SMS template preview (sample-rendered, no real client).
+shopsRouter.post("/me/sms-preview", requireUser, requireShop, (req, res) => {
+  const template = typeof req.body?.template === "string" ? req.body.template : null;
+  res.json({
+    preview: previewNudgeBody(template, req.shop!.name, req.shop!.bookingUrl),
+  });
+});
+
 function serializeShop(shop: {
   id: string;
   name: string;
@@ -79,6 +90,8 @@ function serializeShop(shop: {
   rewardLabel: string;
   nudgeBufferDays: number;
   dailySendCap: number;
+  smsTemplate: string | null;
+  rebookWindowDays: number;
   plan: string;
 }) {
   // Note: webhookSecret is intentionally NOT exposed to the client.
@@ -91,6 +104,8 @@ function serializeShop(shop: {
     rewardLabel: shop.rewardLabel,
     nudgeBufferDays: shop.nudgeBufferDays,
     dailySendCap: shop.dailySendCap,
+    smsTemplate: shop.smsTemplate,
+    rebookWindowDays: shop.rebookWindowDays,
     plan: shop.plan,
   };
 }

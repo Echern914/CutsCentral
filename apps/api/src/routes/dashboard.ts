@@ -145,6 +145,7 @@ dashboardRouter.post("/nudge/:clientId", smsLimiter, async (req, res) => {
     shopName: shop.name,
     bookingUrl: shop.bookingUrl,
     magicToken: client.magicToken,
+    template: shop.smsTemplate,
   });
   const nudge = await db.nudge.create({
     data: { clientId: client.id, channel: "SMS", status: "PENDING", body },
@@ -181,6 +182,121 @@ dashboardRouter.post("/redeem/:clientId", async (req, res) => {
   }
   await redeemPunches(shop.id, client.id, shop.rewardThreshold);
   res.json({ ok: true, newBalance: balance - shop.rewardThreshold });
+});
+
+// Client list with optional search (name / phone / email).
+dashboardRouter.get("/clients", async (req, res) => {
+  const shop = req.shop!;
+  const q = String(req.query.q ?? "").trim();
+  const where = q
+    ? {
+        OR: [
+          { firstName: { contains: q, mode: "insensitive" as const } },
+          { lastName: { contains: q, mode: "insensitive" as const } },
+          { phone: { contains: q } },
+          { email: { contains: q, mode: "insensitive" as const } },
+        ],
+      }
+    : {};
+  const clients = await forShop(shop.id).client.findMany({
+    where,
+    orderBy: { lastVisitAt: { sort: "desc", nulls: "last" } },
+    take: 200,
+  });
+
+  // Punch balances in one grouped query.
+  const balances = await prisma.punchLedger.groupBy({
+    by: ["clientId"],
+    where: { shopId: shop.id },
+    _sum: { punchesEarned: true, punchesRedeemed: true },
+  });
+  const balById = new Map(
+    balances.map((b) => [b.clientId, (b._sum.punchesEarned ?? 0) - (b._sum.punchesRedeemed ?? 0)]),
+  );
+
+  res.json({
+    clients: clients.map((c) => ({
+      id: c.id,
+      name: name(c),
+      phone: c.phone,
+      email: c.email,
+      optedOut: c.optedOut,
+      lastVisitAt: c.lastVisitAt?.toISOString() ?? null,
+      medianIntervalDays: c.medianIntervalDays,
+      balance: balById.get(c.id) ?? 0,
+    })),
+  });
+});
+
+// Single client detail: profile, visits, punch balance, nudge history.
+dashboardRouter.get("/clients/:clientId", async (req, res) => {
+  const shop = req.shop!;
+  const db = forShop(shop.id);
+  const client = await db.client.findFirst({ where: { id: req.params.clientId } });
+  if (!client) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const [visits, nudges, balance] = await Promise.all([
+    db.visit.findMany({
+      where: { clientId: client.id },
+      orderBy: { scheduledAt: "desc" },
+      take: 50,
+    }),
+    db.nudge.findMany({
+      where: { clientId: client.id },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+    }),
+    currentBalance(shop.id, client.id),
+  ]);
+
+  res.json({
+    client: {
+      id: client.id,
+      name: name(client),
+      firstName: client.firstName,
+      phone: client.phone,
+      email: client.email,
+      optedOut: client.optedOut,
+      magicToken: client.magicToken,
+      lastVisitAt: client.lastVisitAt?.toISOString() ?? null,
+      medianIntervalDays: client.medianIntervalDays,
+      nextExpectedAt: client.nextExpectedAt?.toISOString() ?? null,
+    },
+    balance,
+    rewardThreshold: shop.rewardThreshold,
+    rewardReady: balance >= shop.rewardThreshold,
+    visits: visits.map((v) => ({
+      date: v.scheduledAt.toISOString(),
+      status: v.status,
+      service: v.serviceName,
+    })),
+    nudges: nudges.map((n) => ({
+      sentAt: (n.sentAt ?? n.createdAt).toISOString(),
+      status: n.status,
+      resultedInBooking: Boolean(n.resultedInBookingAt),
+    })),
+  });
+});
+
+// Nudge history across the shop (who, when, did it convert).
+dashboardRouter.get("/nudges", async (req, res) => {
+  const shop = req.shop!;
+  const nudges = await prisma.nudge.findMany({
+    where: { shopId: shop.id },
+    orderBy: { createdAt: "desc" },
+    take: 100,
+    include: { client: { select: { firstName: true, lastName: true } } },
+  });
+  res.json({
+    nudges: nudges.map((n) => ({
+      who: name(n.client),
+      at: (n.sentAt ?? n.createdAt).toISOString(),
+      status: n.status,
+      resultedInBooking: Boolean(n.resultedInBookingAt),
+    })),
+  });
 });
 
 // Run a dry-run sweep preview (who WOULD be nudged) without sending.

@@ -18,6 +18,12 @@ export interface RewardsData {
     towardNext: number;
     rewardsUnlocked: number;
   };
+  rebook: {
+    state: "booked" | "counting" | "overdue" | "none";
+    deadline: string | null;
+    windowDays: number;
+    upcomingAt: string | null;
+  };
   visits: { date: string; service: string | null }[];
 }
 

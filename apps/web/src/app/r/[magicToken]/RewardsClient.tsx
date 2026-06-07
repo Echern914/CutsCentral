@@ -4,6 +4,7 @@ import { motion } from "framer-motion";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { CountUp } from "@/components/motion/CountUp";
 import { PunchGrid } from "@/components/rewards/PunchGrid";
+import { RebookCountdown } from "@/components/rewards/RebookCountdown";
 import { RewardCelebration } from "@/components/rewards/RewardCelebration";
 import { VisitHistory } from "@/components/rewards/VisitHistory";
 import { LinkButton } from "@/components/ui/Button";
@@ -11,7 +12,7 @@ import { Card } from "@/components/ui/Card";
 import type { RewardsData } from "./page";
 
 export function RewardsClient({ data }: { data: RewardsData }) {
-  const { shop, client, punches, visits } = data;
+  const { shop, client, punches, visits, rebook } = data;
   const remaining = punches.threshold - punches.towardNext;
   const rewardReady = punches.towardNext === 0 && punches.balance > 0;
 
@@ -46,6 +47,11 @@ export function RewardsClient({ data }: { data: RewardsData }) {
                 : `${remaining} more ${remaining === 1 ? "cut" : "cuts"} to your ${shop.rewardLabel}`}
             </p>
           </Card>
+        </motion.div>
+
+        {/* Rebooking countdown — drives urgency to book the next visit */}
+        <motion.div variants={fadeUp}>
+          <RebookCountdown rebook={rebook} bookingUrl={shop.bookingUrl} />
         </motion.div>
 
         {/* Celebration when a reward is unlocked */}

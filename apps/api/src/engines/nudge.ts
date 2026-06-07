@@ -116,6 +116,7 @@ export async function sweepShop(
       shopName: shop.name,
       bookingUrl: shop.bookingUrl,
       magicToken: client.magicToken,
+      template: shop.smsTemplate,
     });
 
     // WRITE-AHEAD: persist a PENDING nudge BEFORE dispatch so a crash can't

@@ -59,6 +59,10 @@ model Shop {
   rewardLabel     String   @default("Free Cut")
   nudgeBufferDays Int      @default(7)
   dailySendCap    Int      @default(50)
+  smsTemplate     String? // custom nudge copy; null = built-in default. Placeholders: {firstName} {shop} {bookingUrl} {rewardsUrl}
+  // Rebooking countdown: target window (days) for a client to rebook after their
+  // last visit. Drives the urgency timer on the rewards page. Default 14 (<2 wks).
+  rebookWindowDays Int     @default(14)
   plan            String   @default("free") // inert Stripe seam, no enforcement
 
   // per-shop webhook routing (the body has no account id, so the URL path routes)

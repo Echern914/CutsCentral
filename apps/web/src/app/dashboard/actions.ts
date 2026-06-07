@@ -12,6 +12,13 @@ export async function nudgeNowAction(clientId: string): Promise<{ ok: boolean }>
 export async function redeemAction(clientId: string): Promise<{ ok: boolean }> {
   const res = await apiSend("POST", `/api/dashboard/redeem/${clientId}`);
   revalidatePath("/dashboard");
+  revalidatePath(`/dashboard/clients/${clientId}`);
+  return { ok: res.ok };
+}
+
+export async function nudgeClientAction(clientId: string): Promise<{ ok: boolean }> {
+  const res = await apiSend("POST", `/api/dashboard/nudge/${clientId}`);
+  revalidatePath(`/dashboard/clients/${clientId}`);
   return { ok: res.ok };
 }
 
@@ -38,12 +45,24 @@ export async function saveSettingsAction(
   _prev: { saved?: boolean; error?: string },
   formData: FormData,
 ): Promise<{ saved?: boolean; error?: string }> {
+  const smsTemplate = String(formData.get("smsTemplate") ?? "").trim();
   const res = await apiSend("PATCH", "/api/shops/me", {
+    name: String(formData.get("name") ?? "").trim() || undefined,
+    bookingUrl: String(formData.get("bookingUrl") ?? "").trim() || undefined,
     rewardThreshold: Number(formData.get("rewardThreshold") ?? 10),
     rewardLabel: String(formData.get("rewardLabel") ?? "Free Cut"),
     nudgeBufferDays: Number(formData.get("nudgeBufferDays") ?? 7),
     dailySendCap: Number(formData.get("dailySendCap") ?? 50),
+    rebookWindowDays: Number(formData.get("rebookWindowDays") ?? 14),
+    smsTemplate: smsTemplate === "" ? null : smsTemplate,
   });
   revalidatePath("/dashboard");
   return res.ok ? { saved: true } : { error: "Could not save settings." };
+}
+
+export async function smsPreviewAction(template: string): Promise<string> {
+  const res = await apiSend<{ preview: string }>("POST", "/api/shops/me/sms-preview", {
+    template: template.trim() === "" ? null : template,
+  });
+  return res.data?.preview ?? "";
 }
