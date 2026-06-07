@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import { prisma, type Shop } from "@chairback/db";
-import { SESSION_COOKIE_NAME, userIdFromCookie } from "../auth/session.js";
+import { SESSION_COOKIE_NAME, userIdFromToken } from "../auth/session.js";
 
 /**
  * Auth middleware. requireUser resolves the session to req.userId. requireShop
@@ -23,8 +23,13 @@ export function requireUser(
   res: Response,
   next: NextFunction,
 ): void {
+  // Accept either the httpOnly session cookie (web) or a bearer token (native app).
   const cookie = req.cookies?.[SESSION_COOKIE_NAME] as string | undefined;
-  const userId = userIdFromCookie(cookie);
+  const authHeader = req.header("Authorization");
+  const bearer = authHeader?.startsWith("Bearer ")
+    ? authHeader.slice(7)
+    : undefined;
+  const userId = userIdFromToken(cookie ?? bearer);
   if (!userId) {
     res.status(401).json({ error: "unauthorized" });
     return;

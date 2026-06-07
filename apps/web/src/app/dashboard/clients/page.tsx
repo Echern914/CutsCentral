@@ -51,7 +51,15 @@ export default async function ClientsPage({
         </Link>
         <div className="mt-1 flex items-baseline justify-between">
           <h1 className="font-display text-3xl tracking-tight">Clients</h1>
-          <span className="text-sm text-muted">{data?.total ?? 0} total</span>
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-muted">{data?.total ?? 0} total</span>
+            <a
+              href="/dashboard/export/clients"
+              className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted hover:bg-charcoal-700"
+            >
+              Export CSV
+            </a>
+          </div>
         </div>
       </header>
 

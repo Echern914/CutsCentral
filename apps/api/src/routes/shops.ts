@@ -17,6 +17,12 @@ const createShopSchema = z.object({
   dailySendCap: z.number().int().min(1).max(1000).default(DEFAULTS.dailySendCap),
   smsTemplate: z.string().max(480).nullish(),
   rebookWindowDays: z.number().int().min(1).max(90).default(14),
+  logoUrl: z.string().url().max(500).nullish().or(z.literal("")),
+  accentColor: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/, "Use a hex color like #D4AF37")
+    .nullish()
+    .or(z.literal("")),
 });
 
 const updateShopSchema = createShopSchema.partial();
@@ -66,11 +72,28 @@ shopsRouter.patch("/me", requireUser, requireShop, async (req, res) => {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
     return;
   }
+  // Normalize empty strings on optional branding fields to null.
+  const data = { ...parsed.data };
+  if (data.logoUrl === "") data.logoUrl = null;
+  if (data.accentColor === "") data.accentColor = null;
   const shop = await prisma.shop.update({
     where: { id: req.shop!.id },
-    data: parsed.data,
+    data,
   });
   res.json(serializeShop(shop));
+});
+
+// Danger zone: delete the shop and ALL its data (clients, visits, punches,
+// nudges, Acuity connection) via cascading deletes. Requires the shop name as
+// a typed confirmation to prevent accidents.
+shopsRouter.delete("/me", requireUser, requireShop, async (req, res) => {
+  const confirm = String(req.body?.confirm ?? "");
+  if (confirm !== req.shop!.name) {
+    res.status(400).json({ error: "confirm_mismatch" });
+    return;
+  }
+  await prisma.shop.delete({ where: { id: req.shop!.id } });
+  res.json({ ok: true });
 });
 
 // SMS template preview (sample-rendered, no real client).
@@ -92,6 +115,8 @@ function serializeShop(shop: {
   dailySendCap: number;
   smsTemplate: string | null;
   rebookWindowDays: number;
+  logoUrl: string | null;
+  accentColor: string | null;
   plan: string;
 }) {
   // Note: webhookSecret is intentionally NOT exposed to the client.
@@ -106,6 +131,8 @@ function serializeShop(shop: {
     dailySendCap: shop.dailySendCap,
     smsTemplate: shop.smsTemplate,
     rebookWindowDays: shop.rebookWindowDays,
+    logoUrl: shop.logoUrl,
+    accentColor: shop.accentColor,
     plan: shop.plan,
   };
 }

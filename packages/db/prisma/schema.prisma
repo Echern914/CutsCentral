@@ -60,6 +60,8 @@ model Shop {
   nudgeBufferDays Int      @default(7)
   dailySendCap    Int      @default(50)
   smsTemplate     String? // custom nudge copy; null = built-in default. Placeholders: {firstName} {shop} {bookingUrl} {rewardsUrl}
+  logoUrl         String? // shop logo shown on the rewards page (white-label)
+  accentColor     String? // hex accent (e.g. "#D4AF37") for the rewards page; null = default gold
   // Rebooking countdown: target window (days) for a client to rebook after their
   // last visit. Drives the urgency timer on the rewards page. Default 14 (<2 wks).
   rebookWindowDays Int     @default(14)

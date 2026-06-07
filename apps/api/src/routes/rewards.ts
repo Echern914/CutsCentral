@@ -73,6 +73,8 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
       bookingUrl: client.shop.bookingUrl,
       rewardLabel: client.shop.rewardLabel,
       rewardThreshold: threshold,
+      logoUrl: client.shop.logoUrl,
+      accentColor: client.shop.accentColor,
     },
     client: {
       firstName: client.firstName,

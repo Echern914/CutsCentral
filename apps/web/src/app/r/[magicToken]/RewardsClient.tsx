@@ -15,6 +15,7 @@ export function RewardsClient({ data }: { data: RewardsData }) {
   const { shop, client, punches, visits, rebook } = data;
   const remaining = punches.threshold - punches.towardNext;
   const rewardReady = punches.towardNext === 0 && punches.balance > 0;
+  const accent = shop.accentColor || "#D4AF37"; // shop brand color or default gold
 
   return (
     <main className="mx-auto min-h-dvh w-full max-w-md px-5 py-10">
@@ -26,6 +27,14 @@ export function RewardsClient({ data }: { data: RewardsData }) {
       >
         {/* Header */}
         <motion.header variants={fadeUp} className="text-center">
+          {shop.logoUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={shop.logoUrl}
+              alt={shop.name}
+              className="mx-auto mb-3 h-14 w-14 rounded-2xl border border-subtle object-cover"
+            />
+          ) : null}
           <p className="text-xs uppercase tracking-[0.2em] text-muted">
             {shop.name}
           </p>
@@ -37,7 +46,10 @@ export function RewardsClient({ data }: { data: RewardsData }) {
         {/* Punch counter */}
         <motion.div variants={fadeUp}>
           <Card className="p-6 text-center">
-            <div className="font-display text-6xl text-gold leading-none">
+            <div
+              className="font-display text-6xl leading-none"
+              style={{ color: accent }}
+            >
               <CountUp value={punches.towardNext} />
               <span className="text-muted text-2xl">/{punches.threshold}</span>
             </div>

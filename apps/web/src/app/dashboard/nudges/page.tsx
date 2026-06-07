@@ -21,7 +21,15 @@ export default async function NudgesPage() {
       <Link href="/dashboard" className="text-xs text-muted hover:text-offwhite">
         ← Dashboard
       </Link>
-      <h1 className="mb-1 mt-1 font-display text-3xl tracking-tight">Nudge history</h1>
+      <div className="mb-1 mt-1 flex items-baseline justify-between">
+        <h1 className="font-display text-3xl tracking-tight">Nudge history</h1>
+        <a
+          href="/dashboard/export/nudges"
+          className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted hover:bg-charcoal-700"
+        >
+          Export CSV
+        </a>
+      </div>
       <p className="mb-6 text-sm text-muted">
         {sent} sent · {converted} led to a rebooking
         {sent > 0 ? ` · ${rate}% conversion` : ""}

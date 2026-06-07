@@ -50,6 +50,43 @@ dashboardRouter.get("/stats", async (req, res) => {
   });
 });
 
+// Monthly trends: completed visits + nudges sent, last 6 months.
+dashboardRouter.get("/trends", async (req, res) => {
+  const shop = req.shop!;
+  const now = new Date();
+  // Build the last 6 month buckets (YYYY-MM).
+  const months: { key: string; label: string; start: Date; end: Date }[] = [];
+  for (let i = 5; i >= 0; i--) {
+    const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
+    months.push({
+      key: `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}`,
+      label: start.toLocaleString(undefined, { month: "short" }),
+      start,
+      end,
+    });
+  }
+
+  const earliest = months[0]!.start;
+  const [visits, nudges] = await Promise.all([
+    prisma.visit.findMany({
+      where: { shopId: shop.id, status: "COMPLETED", scheduledAt: { gte: earliest } },
+      select: { scheduledAt: true },
+    }),
+    prisma.nudge.findMany({
+      where: { shopId: shop.id, status: "SENT", createdAt: { gte: earliest } },
+      select: { createdAt: true },
+    }),
+  ]);
+
+  const series = months.map((m) => ({
+    label: m.label,
+    visits: visits.filter((v) => v.scheduledAt >= m.start && v.scheduledAt < m.end).length,
+    nudges: nudges.filter((n) => n.createdAt >= m.start && n.createdAt < m.end).length,
+  }));
+  res.json({ series });
+});
+
 // At-risk client list with a "nudge now" affordance.
 dashboardRouter.get("/at-risk", async (req, res) => {
   const shop = req.shop!;
@@ -407,6 +444,52 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
   });
 });
 
+// CSV export of all clients (records / analysis).
+dashboardRouter.get("/export/clients.csv", async (req, res) => {
+  const shop = req.shop!;
+  const clients = await forShop(shop.id).client.findMany({
+    orderBy: { lastVisitAt: { sort: "desc", nulls: "last" } },
+  });
+  const balances = await prisma.punchLedger.groupBy({
+    by: ["clientId"],
+    where: { shopId: shop.id },
+    _sum: { punchesEarned: true, punchesRedeemed: true },
+  });
+  const balById = new Map(
+    balances.map((b) => [b.clientId, (b._sum.punchesEarned ?? 0) - (b._sum.punchesRedeemed ?? 0)]),
+  );
+  const rows = clients.map((c) => [
+    name(c),
+    c.phone ?? "",
+    c.email ?? "",
+    c.optedOut ? "yes" : "no",
+    c.source,
+    c.lastVisitAt ? c.lastVisitAt.toISOString().slice(0, 10) : "",
+    c.medianIntervalDays ?? "",
+    balById.get(c.id) ?? 0,
+  ]);
+  sendCsv(res, "clients.csv",
+    ["Name", "Phone", "Email", "Opted out", "Source", "Last visit", "Visits every (days)", "Punch balance"],
+    rows);
+});
+
+// CSV export of nudge history.
+dashboardRouter.get("/export/nudges.csv", async (req, res) => {
+  const shop = req.shop!;
+  const nudges = await prisma.nudge.findMany({
+    where: { shopId: shop.id },
+    orderBy: { createdAt: "desc" },
+    include: { client: { select: { firstName: true, lastName: true } } },
+  });
+  const rows = nudges.map((n) => [
+    name(n.client),
+    (n.sentAt ?? n.createdAt).toISOString(),
+    n.status,
+    n.resultedInBookingAt ? "yes" : "no",
+  ]);
+  sendCsv(res, "nudges.csv", ["Client", "Sent at", "Status", "Led to rebooking"], rows);
+});
+
 // Nudge history across the shop (who, when, did it convert).
 dashboardRouter.get("/nudges", async (req, res) => {
   const shop = req.shop!;
@@ -443,6 +526,23 @@ dashboardRouter.post("/sweep", smsLimiter, async (req, res) => {
 function name(c: { firstName: string | null; lastName: string | null } | undefined): string {
   if (!c) return "Unknown";
   return [c.firstName, c.lastName].filter(Boolean).join(" ") || "Unknown";
+}
+
+/** Escape + stream rows as a CSV download. */
+function sendCsv(
+  res: import("express").Response,
+  filename: string,
+  header: string[],
+  rows: (string | number)[][],
+): void {
+  const esc = (v: string | number) => {
+    const s = String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const csv = [header, ...rows].map((r) => r.map(esc).join(",")).join("\r\n");
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.send(csv);
 }
 
 async function countAtRisk(shopId: string, bufferDays: number, now: Date): Promise<number> {

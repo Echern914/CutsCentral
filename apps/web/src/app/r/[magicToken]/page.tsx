@@ -10,6 +10,8 @@ export interface RewardsData {
     bookingUrl: string;
     rewardLabel: string;
     rewardThreshold: number;
+    logoUrl: string | null;
+    accentColor: string | null;
   };
   client: { firstName: string | null };
   punches: {

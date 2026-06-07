@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { apiSend } from "@/lib/api";
 
 export async function nudgeNowAction(clientId: string): Promise<{ ok: boolean }> {
@@ -55,6 +56,8 @@ export async function saveSettingsAction(
     dailySendCap: Number(formData.get("dailySendCap") ?? 50),
     rebookWindowDays: Number(formData.get("rebookWindowDays") ?? 14),
     smsTemplate: smsTemplate === "" ? null : smsTemplate,
+    logoUrl: String(formData.get("logoUrl") ?? "").trim(),
+    accentColor: String(formData.get("accentColor") ?? "").trim(),
   });
   revalidatePath("/dashboard");
   return res.ok ? { saved: true } : { error: "Could not save settings." };
@@ -101,6 +104,43 @@ export async function bonusPunchAction(
   const res = await apiSend("POST", `/api/dashboard/clients/${clientId}/bonus`, { count });
   revalidatePath(`/dashboard/clients/${clientId}`);
   return { ok: res.ok };
+}
+
+export async function updateNameAction(
+  _prev: { ok?: boolean; error?: string },
+  formData: FormData,
+): Promise<{ ok?: boolean; error?: string }> {
+  const res = await apiSend("PATCH", "/api/auth/me", {
+    name: String(formData.get("name") ?? "").trim(),
+  });
+  return res.ok ? { ok: true } : { error: "Could not update name." };
+}
+
+export async function changePasswordAction(
+  _prev: { ok?: boolean; error?: string },
+  formData: FormData,
+): Promise<{ ok?: boolean; error?: string }> {
+  const res = await apiSend<{ ok: boolean }>("POST", "/api/auth/change-password", {
+    currentPassword: String(formData.get("currentPassword") ?? ""),
+    newPassword: String(formData.get("newPassword") ?? ""),
+  });
+  if (res.ok) return { ok: true };
+  return {
+    error: res.error === "wrong_password" ? "Current password is incorrect." : "Could not change password.",
+  };
+}
+
+export async function deleteShopAction(
+  _prev: { error?: string },
+  formData: FormData,
+): Promise<{ error?: string }> {
+  const res = await apiSend("DELETE", "/api/shops/me", {
+    confirm: String(formData.get("confirm") ?? ""),
+  });
+  if (!res.ok) {
+    return { error: "Confirmation didn't match. Type your shop name exactly." };
+  }
+  redirect("/login");
 }
 
 export async function smsPreviewAction(template: string): Promise<string> {

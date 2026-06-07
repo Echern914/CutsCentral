@@ -50,8 +50,9 @@ authRouter.post("/signup", authLimiter, async (req, res) => {
     data: { email: normalizedEmail, passwordHash, name: name.trim() },
   });
 
-  setSessionCookie(res, user.id);
-  res.status(201).json({ id: user.id, email: user.email, name: user.name });
+  const token = setSessionCookie(res, user.id);
+  // token is also returned for native clients (Authorization: Bearer); web uses the cookie.
+  res.status(201).json({ id: user.id, email: user.email, name: user.name, token });
 });
 
 authRouter.post("/login", authLimiter, async (req, res) => {
@@ -78,8 +79,8 @@ authRouter.post("/login", authLimiter, async (req, res) => {
     return;
   }
 
-  setSessionCookie(res, user.id);
-  res.json({ id: user.id, email: user.email, name: user.name });
+  const token = setSessionCookie(res, user.id);
+  res.json({ id: user.id, email: user.email, name: user.name, token });
 });
 
 authRouter.post("/logout", (_req, res) => {
@@ -97,6 +98,50 @@ authRouter.get("/me", requireUser, async (req, res) => {
     return;
   }
   res.json(user);
+});
+
+// Update display name.
+authRouter.patch("/me", requireUser, async (req, res) => {
+  const parsed = z.object({ name: z.string().min(1).max(120) }).safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const user = await prisma.user.update({
+    where: { id: req.userId },
+    data: { name: parsed.data.name.trim() },
+    select: { id: true, email: true, name: true },
+  });
+  res.json(user);
+});
+
+// Change password (requires the current password unless the account is Google-only).
+authRouter.post("/change-password", requireUser, async (req, res) => {
+  const parsed = z
+    .object({ currentPassword: z.string().optional(), newPassword: z.string().min(8).max(200) })
+    .safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const user = await prisma.user.findUnique({ where: { id: req.userId } });
+  if (!user) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  // If a password is already set, verify the current one first.
+  if (user.passwordHash) {
+    const ok = await verifyPassword(user.passwordHash, parsed.data.currentPassword ?? "");
+    if (!ok) {
+      res.status(403).json({ error: "wrong_password" });
+      return;
+    }
+  }
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { passwordHash: await hashPassword(parsed.data.newPassword) },
+  });
+  res.json({ ok: true });
 });
 
 // Google sign-in

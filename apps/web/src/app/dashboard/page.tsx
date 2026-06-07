@@ -3,11 +3,13 @@ import { APP_NAME } from "@chairback/config/constants";
 import { apiGet } from "@/lib/api";
 import { logoutAction } from "../(auth)/actions";
 import { StatCards, type Stats } from "./_components/StatCards";
+import { TrendsChart, type TrendPoint } from "./_components/TrendsChart";
 import { SweepControl } from "./_components/SweepControl";
 import { AtRiskTable, type AtRiskRow } from "./_components/AtRiskTable";
 import { ActivityFeed, type ActivityItem } from "./_components/ActivityFeed";
 import { Leaderboard, type Leader } from "./_components/Leaderboard";
 import { SettingsCard, type ShopSettings } from "./_components/SettingsCard";
+import { AccountCard } from "./_components/AccountCard";
 
 interface ShopMe extends ShopSettings {
   connected: boolean;
@@ -19,11 +21,13 @@ export default async function DashboardPage() {
   if (!shopRes.ok || !shopRes.data) redirect("/login");
   const shop = shopRes.data;
 
-  const [stats, atRisk, activity, leaderboard] = await Promise.all([
+  const [stats, atRisk, activity, leaderboard, trends, me] = await Promise.all([
     apiGet<Stats>("/api/dashboard/stats"),
     apiGet<{ clients: AtRiskRow[] }>("/api/dashboard/at-risk"),
     apiGet<{ items: ActivityItem[] }>("/api/dashboard/activity"),
     apiGet<{ leaders: Leader[] }>("/api/dashboard/leaderboard"),
+    apiGet<{ series: TrendPoint[] }>("/api/dashboard/trends"),
+    apiGet<{ name: string; email: string }>("/api/auth/me"),
   ]);
 
   return (
@@ -68,6 +72,12 @@ export default async function DashboardPage() {
         <SweepControl atRiskCount={atRisk.data?.clients?.length ?? 0} />
       </div>
 
+      {trends.data && (
+        <div className="mt-6">
+          <TrendsChart series={trends.data.series} />
+        </div>
+      )}
+
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <AtRiskTable
           rows={atRisk.data?.clients ?? []}
@@ -79,6 +89,14 @@ export default async function DashboardPage() {
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <Leaderboard leaders={leaderboard.data?.leaders ?? []} />
         <SettingsCard settings={shop} />
+      </div>
+
+      <div className="mt-6">
+        <AccountCard
+          name={me.data?.name ?? ""}
+          email={me.data?.email ?? ""}
+          shopName={shop.name}
+        />
       </div>
     </main>
   );

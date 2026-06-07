@@ -14,6 +14,8 @@ export interface ShopSettings {
   dailySendCap: number;
   rebookWindowDays: number;
   smsTemplate: string | null;
+  logoUrl: string | null;
+  accentColor: string | null;
 }
 
 const field =
@@ -62,6 +64,29 @@ export function SettingsCard({ settings }: { settings: ShopSettings }) {
               name="bookingUrl"
               type="url"
               defaultValue={settings.bookingUrl}
+              className={`mt-1 ${field}`}
+            />
+          </label>
+        </div>
+
+        {/* Branding (shown on the client rewards page) */}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className={labelCls}>
+            Logo URL (shown on rewards page)
+            <input
+              name="logoUrl"
+              type="url"
+              defaultValue={settings.logoUrl ?? ""}
+              placeholder="https://.../logo.png"
+              className={`mt-1 ${field}`}
+            />
+          </label>
+          <label className={labelCls}>
+            Accent color (hex)
+            <input
+              name="accentColor"
+              defaultValue={settings.accentColor ?? ""}
+              placeholder="#D4AF37"
               className={`mt-1 ${field}`}
             />
           </label>
