@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { apiGet } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
 import { ClientActions } from "./ClientActions";
+import { NotesEditor } from "./NotesEditor";
 
 interface ClientDetail {
   client: {
@@ -12,6 +13,8 @@ interface ClientDetail {
     phone: string | null;
     email: string | null;
     optedOut: boolean;
+    notes: string;
+    source: string;
     magicToken: string;
     lastVisitAt: string | null;
     medianIntervalDays: number | null;
@@ -61,7 +64,8 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         <ClientActions
           clientId={client.id}
           rewardsUrl={rewardsUrl}
-          canNudge={!client.optedOut && Boolean(client.phone)}
+          optedOut={client.optedOut}
+          hasPhone={Boolean(client.phone)}
           rewardReady={rewardReady}
           rewardLabel="Free Cut"
         />
@@ -120,6 +124,10 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
             </ul>
           )}
         </Card>
+      </div>
+
+      <div className="mt-6">
+        <NotesEditor clientId={client.id} initial={client.notes} />
       </div>
     </main>
   );

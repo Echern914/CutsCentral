@@ -27,13 +27,13 @@ export default async function DashboardPage() {
   ]);
 
   return (
-    <main className="mx-auto w-full max-w-6xl px-5 py-8">
-      <header className="mb-8 flex items-center justify-between">
+    <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-5 sm:py-8">
+      <header className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <p className="text-xs uppercase tracking-[0.2em] text-muted">{APP_NAME}</p>
           <h1 className="font-display text-3xl tracking-tight">{shop.name}</h1>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           <a
             href="/dashboard/clients"
             className="rounded-full border border-subtle px-4 py-2 text-xs text-offwhite hover:bg-charcoal-700"

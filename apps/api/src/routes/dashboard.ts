@@ -1,6 +1,7 @@
 import { Router } from "express";
+import { z } from "zod";
 import { forShop, prisma } from "@chairback/db";
-import { NUDGE } from "@chairback/config";
+import { NUDGE, randomToken } from "@chairback/config";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { smsLimiter } from "../middleware/rateLimit.js";
 import { currentBalance, redeemPunches } from "../services/punch.js";
@@ -8,6 +9,7 @@ import { sweepShop } from "../engines/nudge.js";
 import { isNudgeEligible } from "../engines/eligibility.js";
 import { buildNudgeBody } from "../messaging/templates.js";
 import { getMessageProvider } from "../messaging/twilio.js";
+import { toE164 } from "../acuity/clientKey.js";
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
@@ -184,27 +186,44 @@ dashboardRouter.post("/redeem/:clientId", async (req, res) => {
   res.json({ ok: true, newBalance: balance - shop.rewardThreshold });
 });
 
-// Client list with optional search (name / phone / email).
+// Client list: search + sort + filter + pagination.
+const SORTS = {
+  recent: { lastVisitAt: { sort: "desc", nulls: "last" } },
+  oldest: { lastVisitAt: { sort: "asc", nulls: "last" } },
+  name: { firstName: "asc" },
+} as const;
+
 dashboardRouter.get("/clients", async (req, res) => {
   const shop = req.shop!;
   const q = String(req.query.q ?? "").trim();
-  const where = q
-    ? {
-        OR: [
-          { firstName: { contains: q, mode: "insensitive" as const } },
-          { lastName: { contains: q, mode: "insensitive" as const } },
-          { phone: { contains: q } },
-          { email: { contains: q, mode: "insensitive" as const } },
-        ],
-      }
-    : {};
-  const clients = await forShop(shop.id).client.findMany({
-    where,
-    orderBy: { lastVisitAt: { sort: "desc", nulls: "last" } },
-    take: 200,
-  });
+  const sortKey = (String(req.query.sort ?? "recent") as keyof typeof SORTS);
+  const filter = String(req.query.filter ?? "all"); // all | optedOut | active
+  const page = Math.max(1, Number(req.query.page ?? 1));
+  const pageSize = 50;
 
-  // Punch balances in one grouped query.
+  const where: Record<string, unknown> = {};
+  if (q) {
+    where.OR = [
+      { firstName: { contains: q, mode: "insensitive" } },
+      { lastName: { contains: q, mode: "insensitive" } },
+      { phone: { contains: q } },
+      { email: { contains: q, mode: "insensitive" } },
+    ];
+  }
+  if (filter === "optedOut") where.optedOut = true;
+  if (filter === "active") where.optedOut = false;
+
+  const db = forShop(shop.id);
+  const [total, clients] = await Promise.all([
+    db.client.count({ where }),
+    db.client.findMany({
+      where,
+      orderBy: SORTS[sortKey] ?? SORTS.recent,
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    }),
+  ]);
+
   const balances = await prisma.punchLedger.groupBy({
     by: ["clientId"],
     where: { shopId: shop.id },
@@ -221,11 +240,117 @@ dashboardRouter.get("/clients", async (req, res) => {
       phone: c.phone,
       email: c.email,
       optedOut: c.optedOut,
+      source: c.source,
       lastVisitAt: c.lastVisitAt?.toISOString() ?? null,
       medianIntervalDays: c.medianIntervalDays,
       balance: balById.get(c.id) ?? 0,
     })),
+    total,
+    page,
+    pageSize,
+    pageCount: Math.max(1, Math.ceil(total / pageSize)),
   });
+});
+
+// Manually add a client (walk-ins, referrals — no Acuity needed).
+const addClientSchema = z.object({
+  firstName: z.string().min(1).max(80),
+  lastName: z.string().max(80).optional(),
+  phone: z.string().max(40).optional(),
+  email: z.string().email().optional().or(z.literal("")),
+  notes: z.string().max(2000).optional(),
+});
+
+dashboardRouter.post("/clients", async (req, res) => {
+  const shop = req.shop!;
+  const parsed = addClientSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const d = parsed.data;
+  const phone = toE164(d.phone);
+  // Stable key: phone, else email, else a manual-namespaced random key.
+  const key = phone
+    ? `tel:${phone}`
+    : d.email
+      ? `mail:${d.email.toLowerCase()}`
+      : `manual:${randomToken(8)}`;
+
+  try {
+    const client = await forShop(shop.id).client.upsert({
+      where: { shopId_acuityClientKey: { shopId: shop.id, acuityClientKey: key } },
+      create: {
+        acuityClientKey: key,
+        magicToken: randomToken(),
+        firstName: d.firstName,
+        lastName: d.lastName ?? null,
+        phone,
+        email: d.email || null,
+        notes: d.notes ?? null,
+        source: "manual",
+      },
+      update: {
+        firstName: d.firstName,
+        lastName: d.lastName ?? undefined,
+        notes: d.notes ?? undefined,
+      },
+    });
+    res.status(201).json({ id: client.id });
+  } catch {
+    res.status(500).json({ error: "create_failed" });
+  }
+});
+
+// Toggle opt-out (opt a client back in, or out, from the dashboard).
+dashboardRouter.post("/clients/:clientId/opt", async (req, res) => {
+  const shop = req.shop!;
+  const optedOut = Boolean(req.body?.optedOut);
+  const db = forShop(shop.id);
+  const client = await db.client.findFirst({ where: { id: req.params.clientId } });
+  if (!client) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  await db.client.update({ where: { id: client.id }, data: { optedOut } });
+  res.json({ ok: true, optedOut });
+});
+
+// Save private notes on a client.
+dashboardRouter.patch("/clients/:clientId/notes", async (req, res) => {
+  const shop = req.shop!;
+  const notes = String(req.body?.notes ?? "").slice(0, 2000);
+  const db = forShop(shop.id);
+  const client = await db.client.findFirst({ where: { id: req.params.clientId } });
+  if (!client) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  await db.client.update({ where: { id: client.id }, data: { notes } });
+  res.json({ ok: true });
+});
+
+// Grant bonus punches (e.g. a referral reward) — recorded in the ledger.
+dashboardRouter.post("/clients/:clientId/bonus", async (req, res) => {
+  const shop = req.shop!;
+  const count = Math.max(1, Math.min(20, Number(req.body?.count ?? 1)));
+  const db = forShop(shop.id);
+  const client = await db.client.findFirst({ where: { id: req.params.clientId } });
+  if (!client) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const balance = await currentBalance(shop.id, client.id);
+  await db.punch.create({
+    data: {
+      clientId: client.id,
+      visitId: null,
+      punchesEarned: count,
+      runningBalance: balance + count,
+      note: "bonus",
+    },
+  });
+  res.json({ ok: true, newBalance: balance + count });
 });
 
 // Single client detail: profile, visits, punch balance, nudge history.
@@ -259,6 +384,8 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
       phone: client.phone,
       email: client.email,
       optedOut: client.optedOut,
+      notes: client.notes ?? "",
+      source: client.source,
       magicToken: client.magicToken,
       lastVisitAt: client.lastVisitAt?.toISOString() ?? null,
       medianIntervalDays: client.medianIntervalDays,

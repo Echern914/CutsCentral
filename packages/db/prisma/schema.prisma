@@ -109,6 +109,8 @@ model Client {
   phone           String? // E.164
   email           String?
   optedOut        Boolean  @default(false)
+  notes           String? // barber's private notes about the client
+  source          String   @default("acuity") // "acuity" | "manual"
   magicToken      String   @unique // GLOBAL — rewards auth resolves without a shop
 
   // cadence (recomputed by the engine; null until >=2 completed visits)

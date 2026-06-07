@@ -60,6 +60,49 @@ export async function saveSettingsAction(
   return res.ok ? { saved: true } : { error: "Could not save settings." };
 }
 
+export async function addClientAction(
+  _prev: { error?: string; ok?: boolean },
+  formData: FormData,
+): Promise<{ error?: string; ok?: boolean }> {
+  const res = await apiSend<{ id: string }>("POST", "/api/dashboard/clients", {
+    firstName: String(formData.get("firstName") ?? "").trim(),
+    lastName: String(formData.get("lastName") ?? "").trim() || undefined,
+    phone: String(formData.get("phone") ?? "").trim() || undefined,
+    email: String(formData.get("email") ?? "").trim() || undefined,
+    notes: String(formData.get("notes") ?? "").trim() || undefined,
+  });
+  revalidatePath("/dashboard/clients");
+  return res.ok ? { ok: true } : { error: "Could not add client. Check the fields." };
+}
+
+export async function toggleOptOutAction(
+  clientId: string,
+  optedOut: boolean,
+): Promise<{ ok: boolean }> {
+  const res = await apiSend("POST", `/api/dashboard/clients/${clientId}/opt`, { optedOut });
+  revalidatePath(`/dashboard/clients/${clientId}`);
+  revalidatePath("/dashboard/clients");
+  return { ok: res.ok };
+}
+
+export async function saveNotesAction(
+  clientId: string,
+  notes: string,
+): Promise<{ ok: boolean }> {
+  const res = await apiSend("PATCH", `/api/dashboard/clients/${clientId}/notes`, { notes });
+  revalidatePath(`/dashboard/clients/${clientId}`);
+  return { ok: res.ok };
+}
+
+export async function bonusPunchAction(
+  clientId: string,
+  count: number,
+): Promise<{ ok: boolean }> {
+  const res = await apiSend("POST", `/api/dashboard/clients/${clientId}/bonus`, { count });
+  revalidatePath(`/dashboard/clients/${clientId}`);
+  return { ok: res.ok };
+}
+
 export async function smsPreviewAction(template: string): Promise<string> {
   const res = await apiSend<{ preview: string }>("POST", "/api/shops/me/sms-preview", {
     template: template.trim() === "" ? null : template,

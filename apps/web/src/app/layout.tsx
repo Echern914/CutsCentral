@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter, Bricolage_Grotesque } from "next/font/google";
 import { APP_NAME } from "@chairback/config/constants";
 import { MotionConfigProvider } from "@/components/motion/MotionConfigProvider";
+import { ToastProvider } from "@/components/ui/Toast";
 import "./globals.css";
 
 const inter = Inter({
@@ -29,7 +30,9 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} ${display.variable}`}>
       <body className="font-sans antialiased bg-charcoal text-offwhite">
-        <MotionConfigProvider>{children}</MotionConfigProvider>
+        <MotionConfigProvider>
+          <ToastProvider>{children}</ToastProvider>
+        </MotionConfigProvider>
       </body>
     </html>
   );

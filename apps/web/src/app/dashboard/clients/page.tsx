@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { apiGet } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
+import { ClientsControls } from "./ClientsControls";
 
 interface ClientRow {
   id: string;
@@ -8,46 +9,59 @@ interface ClientRow {
   phone: string | null;
   email: string | null;
   optedOut: boolean;
+  source: string;
   lastVisitAt: string | null;
   medianIntervalDays: number | null;
   balance: number;
 }
 
+interface ClientsResponse {
+  clients: ClientRow[];
+  total: number;
+  page: number;
+  pageCount: number;
+}
+
 export default async function ClientsPage({
   searchParams,
 }: {
-  searchParams: { q?: string };
+  searchParams: { q?: string; sort?: string; filter?: string; page?: string };
 }) {
-  const q = searchParams.q?.trim() ?? "";
-  const res = await apiGet<{ clients: ClientRow[] }>(
-    `/api/dashboard/clients${q ? `?q=${encodeURIComponent(q)}` : ""}`,
-  );
-  const clients = res.data?.clients ?? [];
+  const qs = new URLSearchParams();
+  for (const k of ["q", "sort", "filter", "page"] as const) {
+    if (searchParams[k]) qs.set(k, searchParams[k]!);
+  }
+  const res = await apiGet<ClientsResponse>(`/api/dashboard/clients?${qs.toString()}`);
+  const data = res.data;
+  const clients = data?.clients ?? [];
+  const page = data?.page ?? 1;
+  const pageCount = data?.pageCount ?? 1;
+
+  function pageUrl(p: number) {
+    const next = new URLSearchParams(qs.toString());
+    next.set("page", String(p));
+    return `/dashboard/clients?${next.toString()}`;
+  }
 
   return (
-    <main className="mx-auto w-full max-w-5xl px-5 py-8">
-      <header className="mb-6 flex items-center justify-between">
-        <div>
-          <Link href="/dashboard" className="text-xs text-muted hover:text-offwhite">
-            ← Dashboard
-          </Link>
-          <h1 className="mt-1 font-display text-3xl tracking-tight">Clients</h1>
+    <main className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-5">
+      <header className="mb-6">
+        <Link href="/dashboard" className="text-xs text-muted hover:text-offwhite">
+          ← Dashboard
+        </Link>
+        <div className="mt-1 flex items-baseline justify-between">
+          <h1 className="font-display text-3xl tracking-tight">Clients</h1>
+          <span className="text-sm text-muted">{data?.total ?? 0} total</span>
         </div>
       </header>
 
-      <form className="mb-5" action="/dashboard/clients" method="get">
-        <input
-          name="q"
-          defaultValue={q}
-          placeholder="Search by name, phone, or email…"
-          className="w-full rounded-xl border border-subtle bg-charcoal-800 px-4 py-3 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50"
-        />
-      </form>
+      <ClientsControls />
 
       <Card className="overflow-hidden">
         {clients.length === 0 ? (
           <p className="px-5 py-8 text-center text-sm text-muted">
-            {q ? "No clients match that search." : "No clients yet. They appear as appointments sync from Acuity."}
+            No clients found. Use “Add client” for walk-ins, or connect Acuity to
+            sync your appointment history.
           </p>
         ) : (
           <ul className="divide-y divide-subtle">
@@ -55,13 +69,18 @@ export default async function ClientsPage({
               <li key={c.id}>
                 <Link
                   href={`/dashboard/clients/${c.id}`}
-                  className="flex items-center justify-between gap-3 px-5 py-4 hover:bg-charcoal-700"
+                  className="flex items-center justify-between gap-3 px-4 py-4 hover:bg-charcoal-700 sm:px-5"
                 >
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-offwhite">
+                    <p className="flex items-center gap-2 truncate text-sm font-medium text-offwhite">
                       {c.name}
+                      {c.source === "manual" && (
+                        <span className="rounded-full bg-charcoal-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted">
+                          manual
+                        </span>
+                      )}
                       {c.optedOut && (
-                        <span className="ml-2 text-[10px] uppercase tracking-wide text-danger-soft">
+                        <span className="text-[10px] uppercase tracking-wide text-danger-soft">
                           opted out
                         </span>
                       )}
@@ -73,17 +92,47 @@ export default async function ClientsPage({
                         : ""}
                     </p>
                   </div>
-                  <span className="shrink-0 font-display text-gold">{c.balance}</span>
+                  <span className="shrink-0 font-display text-gold" title="Punch balance">
+                    {c.balance}
+                  </span>
                 </Link>
               </li>
             ))}
           </ul>
         )}
       </Card>
-      <p className="mt-3 text-xs text-muted">
-        Showing {clients.length} {clients.length === 1 ? "client" : "clients"}
-        {clients.length === 200 ? " (max)" : ""}. Number on the right is punch balance.
-      </p>
+
+      {pageCount > 1 && (
+        <div className="mt-4 flex items-center justify-center gap-3">
+          {page > 1 ? (
+            <Link
+              href={pageUrl(page - 1)}
+              className="rounded-full border border-subtle px-4 py-2 text-xs text-offwhite hover:bg-charcoal-700"
+            >
+              ← Prev
+            </Link>
+          ) : (
+            <span className="rounded-full border border-subtle px-4 py-2 text-xs text-muted/40">
+              ← Prev
+            </span>
+          )}
+          <span className="text-xs text-muted">
+            Page {page} of {pageCount}
+          </span>
+          {page < pageCount ? (
+            <Link
+              href={pageUrl(page + 1)}
+              className="rounded-full border border-subtle px-4 py-2 text-xs text-offwhite hover:bg-charcoal-700"
+            >
+              Next →
+            </Link>
+          ) : (
+            <span className="rounded-full border border-subtle px-4 py-2 text-xs text-muted/40">
+              Next →
+            </span>
+          )}
+        </div>
+      )}
     </main>
   );
 }
