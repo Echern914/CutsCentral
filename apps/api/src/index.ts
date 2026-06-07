@@ -6,11 +6,16 @@ import { logger } from "./logger.js";
 import { startScheduler } from "./scheduler.js";
 
 const env = apiEnv();
-const PORT = Number(new URL(env.API_BASE_URL).port || 4000);
+// Hosts (Railway, Render, etc.) inject PORT and route traffic to it. Prefer that;
+// fall back to the API_BASE_URL port, then 4000 for local dev.
+const PORT = Number(
+  process.env.PORT || new URL(env.API_BASE_URL).port || 4000,
+);
 
 const app = createApp();
 
-const server = app.listen(PORT, () => {
+// Bind to 0.0.0.0 so the container is reachable from outside (not just localhost).
+const server = app.listen(PORT, "0.0.0.0", () => {
   logger.info({ port: PORT }, "chairback-api listening");
 });
 

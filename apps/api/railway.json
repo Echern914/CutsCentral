@@ -8,6 +8,7 @@
     "startCommand": "pnpm --filter @chairback/db migrate:deploy && pnpm --filter @chairback/api start",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 3,
-    "healthcheckPath": "/healthz"
+    "healthcheckPath": "/healthz",
+    "healthcheckTimeout": 300
   }
 }
