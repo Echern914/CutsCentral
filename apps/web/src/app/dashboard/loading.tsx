@@ -1,6 +1,6 @@
 import { Card } from "@/components/ui/Card";
 
-/** Dashboard loading skeleton — mirrors the real layout to avoid layout shift. */
+/** Dashboard loading skeleton - mirrors the real layout to avoid layout shift. */
 export default function DashboardLoading() {
   return (
     <main className="mx-auto w-full max-w-6xl px-5 py-8">

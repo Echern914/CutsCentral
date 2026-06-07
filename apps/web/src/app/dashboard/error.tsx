@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { Card } from "@/components/ui/Card";
 
-/** Dashboard error boundary — no more blank page on a failed fetch. */
+/** Dashboard error boundary - no more blank page on a failed fetch. */
 export default function DashboardError({
   error,
   reset,

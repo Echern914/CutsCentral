@@ -28,7 +28,7 @@ export default async function OnboardingDonePage() {
       <Card className="mt-4 flex flex-col items-center gap-4 p-8 text-center">
         {!status?.connected ? (
           <p className="text-sm text-muted">
-            Acuity isn&apos;t connected yet — you can connect it anytime from your
+            Acuity isn&apos;t connected yet. You can connect it anytime from your
             dashboard settings.
           </p>
         ) : status.visitCount === 0 ? (

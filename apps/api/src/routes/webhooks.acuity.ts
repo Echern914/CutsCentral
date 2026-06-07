@@ -7,7 +7,7 @@ import { ingestAppointment } from "../ingest.js";
  * Per-shop Acuity webhook receiver.
  *
  * Routing: the body carries NO account id, so the unguessable :webhookSecret in
- * the URL path identifies the shop. Unknown secret → 404.
+ * the URL path identifies the shop. Unknown secret -> 404.
  *
  * Body: application/x-www-form-urlencoded with action,id,calendarID,
  * appointmentTypeID. We capture the RAW body (express.raw) so a signature can be

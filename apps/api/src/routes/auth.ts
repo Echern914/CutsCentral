@@ -64,7 +64,7 @@ authRouter.post("/login", authLimiter, async (req, res) => {
   const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
 
   // Always run a verify to keep timing roughly constant (no user-enumeration).
-  // A Google-only account has no passwordHash → verify against the dummy hash so
+  // A Google-only account has no passwordHash -> verify against the dummy hash so
   // the response is a generic 401 (and timing stays constant).
   const DUMMY_HASH =
     "$argon2id$v=19$m=65536,t=3,p=4$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -99,7 +99,7 @@ authRouter.get("/me", requireUser, async (req, res) => {
   res.json(user);
 });
 
-// ── Google sign-in ───────────────────────────────────────────────────
+// Google sign-in
 
 function nowSeconds() {
   return Math.floor(Date.now() / 1000);
@@ -127,7 +127,7 @@ authRouter.get("/google/start", authLimiter, (_req, res) => {
   res.redirect(buildGoogleAuthorizeUrl(state));
 });
 
-// Callback: validate state → exchange code → find-or-link user → session → web.
+// Callback: validate state -> exchange code -> find-or-link user -> session -> web.
 authRouter.get("/google/callback", authLimiter, async (req, res) => {
   const cookieState = req.cookies?.[GOOGLE_STATE_COOKIE] as string | undefined;
   const queryState = req.query.state as string | undefined;
@@ -142,8 +142,8 @@ authRouter.get("/google/callback", authLimiter, async (req, res) => {
   try {
     const profile = await exchangeGoogleCode(code);
 
-    // 1) Existing Google user. 2) Existing email user → link googleId.
-    // 3) New user → create (no password).
+    // 1) Existing Google user. 2) Existing email user -> link googleId.
+    // 3) New user -> create (no password).
     let user = await prisma.user.findUnique({ where: { googleId: profile.sub } });
     if (!user) {
       const byEmail = await prisma.user.findUnique({ where: { email: profile.email } });

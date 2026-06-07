@@ -22,7 +22,7 @@ interface ToastApi {
 
 const ToastContext = createContext<ToastApi | null>(null);
 
-/** Lightweight toast provider — no external dependency. */
+/** Lightweight toast provider - no external dependency. */
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   let nextId = 0;

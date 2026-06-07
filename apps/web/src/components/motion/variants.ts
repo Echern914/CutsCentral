@@ -1,6 +1,6 @@
 import type { Variants } from "framer-motion";
 
-/** Reusable framer-motion variants — subtle, tasteful, low-stiffness springs. */
+/** Reusable framer-motion variants - subtle, tasteful, low-stiffness springs. */
 
 export const fadeUp: Variants = {
   hidden: { opacity: 0, y: 10 },

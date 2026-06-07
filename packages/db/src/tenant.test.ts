@@ -93,7 +93,7 @@ describe("tenant isolation via forShop", () => {
   });
 
   it("the same acuityAppointmentId can exist in two shops (composite unique)", async () => {
-    // Shop B creates a visit with the SAME acuity appt id — allowed, different tenant.
+    // Shop B creates a visit with the SAME acuity appt id - allowed, different tenant.
     const visitB = await forShop(shopB).visit.upsert({
       where: { shopId_acuityAppointmentId: { shopId: shopB, acuityAppointmentId: "appt-1" } },
       create: {

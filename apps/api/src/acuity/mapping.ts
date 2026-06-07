@@ -14,7 +14,7 @@ export function resolveStatus(
     return appt.noShow ? "NO_SHOW" : "CANCELED";
   }
   if (action === "rescheduled") return "RESCHEDULED";
-  // scheduled / changed / anything else with a live appointment → SCHEDULED.
+  // scheduled / changed / anything else with a live appointment becomes SCHEDULED.
   // The status-promotion job later flips past-end visits to COMPLETED.
   return "SCHEDULED";
 }

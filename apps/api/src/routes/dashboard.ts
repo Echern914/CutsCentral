@@ -252,7 +252,7 @@ dashboardRouter.get("/clients", async (req, res) => {
   });
 });
 
-// Manually add a client (walk-ins, referrals — no Acuity needed).
+// Manually add a client (walk-ins, referrals - no Acuity needed).
 const addClientSchema = z.object({
   firstName: z.string().min(1).max(80),
   lastName: z.string().max(80).optional(),
@@ -330,7 +330,7 @@ dashboardRouter.patch("/clients/:clientId/notes", async (req, res) => {
   res.json({ ok: true });
 });
 
-// Grant bonus punches (e.g. a referral reward) — recorded in the ledger.
+// Grant bonus punches (e.g. a referral reward) - recorded in the ledger.
 dashboardRouter.post("/clients/:clientId/bonus", async (req, res) => {
   const shop = req.shop!;
   const count = Math.max(1, Math.min(20, Number(req.body?.count ?? 1)));
@@ -432,13 +432,13 @@ dashboardRouter.post("/sweep-preview", smsLimiter, async (req, res) => {
   res.json(summary);
 });
 
-// Run the real sweep now — texts every eligible client (respects daily cap).
+// Run the real sweep now - texts every eligible client (respects daily cap).
 dashboardRouter.post("/sweep", smsLimiter, async (req, res) => {
   const summary = await sweepShop(req.shop!, { dryRun: false });
   res.json(summary);
 });
 
-// ── helpers ──────────────────────────────────────────────────────────
+// helpers
 
 function name(c: { firstName: string | null; lastName: string | null } | undefined): string {
   if (!c) return "Unknown";

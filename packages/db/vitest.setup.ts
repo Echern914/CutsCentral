@@ -1,6 +1,6 @@
 /**
  * Load the repo-root .env into process.env before DB-backed tests run.
- * Vitest doesn't read .env automatically. Minimal parser — no extra dep.
+ * Vitest doesn't read .env automatically. Minimal parser - no extra dep.
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -24,5 +24,5 @@ try {
     if (!(key in process.env)) process.env[key] = val;
   }
 } catch {
-  // No .env (e.g. CI with env injected directly) — fine.
+  // No .env (e.g. CI with env injected directly) - fine.
 }

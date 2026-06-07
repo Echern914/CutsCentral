@@ -5,7 +5,7 @@ const env = apiEnv();
 
 /**
  * Minimal CORS for the web app origin, with credentials so the session cookie
- * flows on dashboard requests. Single allowed origin (APP_BASE_URL) — no
+ * flows on dashboard requests. Single allowed origin (APP_BASE_URL) - no
  * wildcard, which is required when credentials are allowed.
  */
 export function corsMiddleware(

@@ -6,7 +6,7 @@ import { runWithShop } from "./tenant.js";
 /**
  * Proves RLS enforces at the DATABASE layer (not just the app layer). With the
  * shop-A context set, a write that tries to insert/read a shop-B row must be
- * blocked by the policy — independent of the app-level shopId filtering.
+ * blocked by the policy - independent of the app-level shopId filtering.
  *
  * Skips cleanly if the RLS role isn't grantable in this environment.
  */

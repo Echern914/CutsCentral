@@ -1,5 +1,5 @@
 /**
- * App-wide constants. The product name lives here ONLY — rename in one place.
+ * App-wide constants. The product name lives here ONLY - rename in one place.
  */
 export const APP_NAME = "ChairBack";
 

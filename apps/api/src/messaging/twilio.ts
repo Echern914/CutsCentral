@@ -7,7 +7,7 @@ const env = apiEnv();
 /**
  * Twilio SMS provider using the single shared platform number. The shop name is
  * carried in the message body (set by the nudge template), not via a per-shop
- * number — that's a future seam.
+ * number - that's a future seam.
  */
 export class TwilioMessageProvider implements MessageProvider {
   readonly channel = "SMS" as const;
@@ -25,7 +25,7 @@ export class TwilioMessageProvider implements MessageProvider {
 
 let provider: MessageProvider | undefined;
 
-/** Factory — Twilio today. */
+/** Factory - Twilio today. */
 export function getMessageProvider(): MessageProvider {
   if (!provider) provider = new TwilioMessageProvider();
   return provider;

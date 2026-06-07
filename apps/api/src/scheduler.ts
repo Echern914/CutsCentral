@@ -8,7 +8,7 @@ import { linkBookingsToNudges } from "./engines/attribution.js";
 const env = apiEnv();
 
 /**
- * node-cron jobs in the single API process. SINGLE-REPLICA assumption — if the
+ * node-cron jobs in the single API process. SINGLE-REPLICA assumption - if the
  * API ever scales out, wrap each job in a pg_advisory_lock (seam) or move to
  * Railway cron hitting the /admin endpoints. Guarded by ENABLE_SCHEDULER.
  *

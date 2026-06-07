@@ -49,7 +49,7 @@ export function RewardsClient({ data }: { data: RewardsData }) {
           </Card>
         </motion.div>
 
-        {/* Rebooking countdown — drives urgency to book the next visit */}
+        {/* Rebooking countdown - drives urgency to book the next visit */}
         <motion.div variants={fadeUp}>
           <RebookCountdown rebook={rebook} bookingUrl={shop.bookingUrl} />
         </motion.div>

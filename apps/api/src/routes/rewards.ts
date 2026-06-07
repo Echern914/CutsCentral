@@ -3,7 +3,7 @@ import { prisma } from "@chairback/db";
 import { currentBalance } from "../services/punch.js";
 
 /**
- * Public rewards endpoint. The magicToken in the path IS the auth — it resolves
+ * Public rewards endpoint. The magicToken in the path IS the auth - it resolves
  * both the client AND the shop. No session. 404 (not 403) on a bad token to
  * avoid a token-probing oracle. Never accepts a shopId from the request.
  */

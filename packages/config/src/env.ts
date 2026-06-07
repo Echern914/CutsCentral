@@ -4,7 +4,7 @@ import { z } from "zod";
  * Env validation. Split into apiEnv() (server, needs everything) and webEnv()
  * (the Next app, needs only the origins). Both crash loudly on missing vars.
  *
- * Call these once at boot and reuse the returned object — do not read process.env
+ * Call these once at boot and reuse the returned object - do not read process.env
  * scattered through the codebase.
  */
 
@@ -29,7 +29,7 @@ const apiSchema = z.object({
   ACUITY_OAUTH_CLIENT_SECRET: z.string().min(1),
   ACUITY_OAUTH_REDIRECT_URI: z.string().url(),
 
-  // Google sign-in (optional — barber auth works with email/password without it).
+  // Google sign-in (optional - barber auth works with email/password without it).
   GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
   GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
   GOOGLE_OAUTH_REDIRECT_URI: z.string().url().optional(),

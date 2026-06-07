@@ -59,7 +59,7 @@ async function main() {
     });
     console.log("Seeded shop WITH a dev Acuity connection.");
   } else {
-    console.log("Seeded shop (no Acuity connection — connect via the UI).");
+    console.log("Seeded shop (no Acuity connection - connect via the UI).");
   }
 
   console.log(`Seed complete:

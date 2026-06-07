@@ -3,8 +3,8 @@ import { prisma, type Shop } from "@chairback/db";
 import { SESSION_COOKIE_NAME, userIdFromCookie } from "../auth/session.js";
 
 /**
- * Auth middleware. requireUser resolves the session → req.userId. requireShop
- * additionally loads the barber's owned shop → req.shop. THE RULE: dashboard/API
+ * Auth middleware. requireUser resolves the session to req.userId. requireShop
+ * additionally loads the barber's owned shop to req.shop. THE RULE: dashboard/API
  * routes derive shopId ONLY from the session here, never from params/body.
  */
 

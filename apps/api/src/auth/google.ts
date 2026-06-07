@@ -8,7 +8,7 @@ const env = apiEnv();
  * pattern: a signed, short-TTL state cookie. The code is exchanged server-to-
  * server over TLS; the returned id_token is a Google-issued JWT whose payload we
  * read for the user's sub/email/name. (We trust it because it came directly from
- * Google's token endpoint over TLS — no third-party relay.)
+ * Google's token endpoint over TLS - no third-party relay.)
  */
 
 const AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth";

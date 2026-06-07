@@ -89,7 +89,7 @@ export function SettingsCard({ settings }: { settings: ShopSettings }) {
 
         {/* Rebooking window (powers the client countdown timer) */}
         <label className={labelCls}>
-          Rebooking window (days) — drives the client countdown timer
+          Rebooking window in days. Drives the client countdown timer.
           <input
             name="rebookWindowDays"
             type="number"

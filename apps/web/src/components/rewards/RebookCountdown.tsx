@@ -55,7 +55,7 @@ export function RebookCountdown({
   // reference now so the lint/render re-runs each tick
   void now;
 
-  // Already rebooked — celebrate, no timer.
+  // Already rebooked - celebrate, no timer.
   if (rebook.state === "booked" && rebook.upcomingAt) {
     const when = new Date(rebook.upcomingAt).toLocaleString(undefined, {
       weekday: "short",
@@ -74,7 +74,7 @@ export function RebookCountdown({
     );
   }
 
-  // No history yet — gentle prompt, no countdown.
+  // No history yet - gentle prompt, no countdown.
   if (rebook.state === "none" || !rebook.deadline) {
     return null;
   }
@@ -126,7 +126,7 @@ export function RebookCountdown({
           {overdue
             ? `Book now to stay on track.`
             : urgent
-              ? `Your window closes soon — grab a slot.`
+              ? `Your window closes soon. Grab a slot.`
               : `Rebook within ${rebook.windowDays} days to keep your streak.`}
         </p>
       </div>

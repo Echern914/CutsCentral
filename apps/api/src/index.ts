@@ -1,4 +1,4 @@
-import "./env-bootstrap.js"; // MUST be first — loads .env before anything reads env
+import "./env-bootstrap.js"; // MUST be first - loads .env before anything reads env
 import { apiEnv } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { createApp } from "./app.js";

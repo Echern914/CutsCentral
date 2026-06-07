@@ -11,8 +11,8 @@ export default function LandingPage() {
         Keep your chair full.
       </h1>
       <p className="mt-5 max-w-xl text-lg text-muted">
-        Automated loyalty punch-cards and smart rebooking texts for barbershops —
-        built on top of your Acuity scheduling. No punch cards, no manual
+        Automated loyalty punch cards and smart rebooking texts for barbershops,
+        built on top of your Acuity scheduling. No paper cards, no manual
         follow-up.
       </p>
 

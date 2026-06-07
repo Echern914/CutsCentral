@@ -9,7 +9,7 @@ const env = apiEnv();
 
 /**
  * Twilio inbound webhook for STOP handling. On a stop keyword we set optedOut on
- * every client matching the sender's phone (shared number → opt out all matches,
+ * every client matching the sender's phone (shared number -> opt out all matches,
  * the safe choice). Validates the Twilio signature.
  */
 export const twilioWebhookRouter: Router = Router();
@@ -43,7 +43,7 @@ twilioWebhookRouter.post(
         where: { phone: from },
         data: { optedOut: true },
       });
-      logger.info({ from, count }, "twilio STOP — opted out");
+      logger.info({ from, count }, "twilio STOP - opted out");
     } else if (from && START_WORDS.has(text)) {
       await prisma.client.updateMany({
         where: { phone: from },

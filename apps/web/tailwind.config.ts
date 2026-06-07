@@ -1,7 +1,7 @@
 import type { Config } from "tailwindcss";
 
 /**
- * ChairBack design tokens. Premium dark barbershop feel — charcoal + warm gold,
+ * ChairBack design tokens. Premium dark barbershop feel - charcoal + warm gold,
  * no pure #fff/#000, subtle 1px borders over heavy shadows.
  */
 const config: Config = {

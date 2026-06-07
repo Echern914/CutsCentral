@@ -49,7 +49,7 @@ export async function backfillShop(shopId: string): Promise<{ ingested: number }
       if (page.length < PAGE_SIZE) break; // final partial page
 
       if (nextCursor === lastCursor) {
-        // Whole page shares the cursor timestamp — bail to avoid an infinite
+        // Whole page shares the cursor timestamp - bail to avoid an infinite
         // loop. At one small shop this effectively never happens; the unique
         // constraint already prevents duplicates if we did re-read.
         if (++sameCursorRuns >= 2) {

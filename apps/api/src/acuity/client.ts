@@ -65,7 +65,7 @@ export async function getAcuityClientForShop(
     let res = await doFetch(accessToken);
 
     if (res.status === 401 && refreshToken) {
-      logger.info({ shopId }, "acuity token 401 — attempting refresh");
+      logger.info({ shopId }, "acuity token 401 - attempting refresh");
       accessToken = await refreshAccessToken(shopId, refreshToken);
       res = await doFetch(accessToken);
     }
@@ -116,7 +116,7 @@ async function refreshAccessToken(
     body,
   });
   if (!res.ok) {
-    throw new AcuityError(res.status, "Acuity token refresh failed — reconnect required");
+    throw new AcuityError(res.status, "Acuity token refresh failed - reconnect required");
   }
   const token = acuityTokenSchema.parse(await res.json());
   await prisma.acuityConnection.update({

@@ -6,7 +6,7 @@ import type { AcuityAppointment } from "../acuity/types.js";
 
 /**
  * Webhook receiver: per-shop routing + idempotent ingest. We mock the Acuity
- * client so no live API call happens — getAppointment returns a fixture.
+ * client so no live API call happens - getAppointment returns a fixture.
  */
 
 // A mutable fixture the mock returns for any appointment id.
@@ -91,7 +91,7 @@ describe("acuity webhook receiver", () => {
     expect(visit?.serviceName).toBe("Haircut");
   });
 
-  it("is idempotent — re-delivering the same appointment makes no duplicates", async () => {
+  it("is idempotent - re-delivering the same appointment makes no duplicates", async () => {
     await postWebhook(secretA, "action=scheduled&id=appt-100");
     await postWebhook(secretA, "action=changed&id=appt-100");
 

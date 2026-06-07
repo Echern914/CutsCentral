@@ -31,7 +31,7 @@ beforeAll(async () => {
     create: { acuityClientKey: "tel:+13025557777", magicToken, firstName: "Reward" },
     update: {},
   });
-  // Give 3 completed visits → balance 3.
+  // Give 3 completed visits -> balance 3.
   for (let i = 0; i < 3; i++) {
     const v = await forShop(shopId).visit.upsert({
       where: { shopId_acuityAppointmentId: { shopId, acuityAppointmentId: `rw-v${i}` } },

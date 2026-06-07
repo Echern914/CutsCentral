@@ -20,7 +20,7 @@ try {
     if (!(key in process.env)) process.env[key] = val;
   }
 } catch {
-  // env injected directly (CI) — fine.
+  // env injected directly (CI) - fine.
 }
 
 // Prefer the direct connection for tests if available.

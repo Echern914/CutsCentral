@@ -35,7 +35,7 @@ acuityOAuthRouter.get("/start", requireUser, requireShop, (req, res) => {
   res.redirect(buildAuthorizeUrl(state));
 });
 
-// Callback: validate state → exchange code → /me → store → subscribe → backfill.
+// Callback: validate state -> exchange code -> /me -> store -> subscribe -> backfill.
 acuityOAuthRouter.get("/callback", async (req, res) => {
   const cookieState = req.cookies?.[OAUTH_STATE_COOKIE] as string | undefined;
   const queryState = req.query.state as string | undefined;

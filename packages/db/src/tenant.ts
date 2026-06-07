@@ -10,11 +10,11 @@ import { Prisma } from "./generated/client/index.js";
  *  2. DB LAYER (defense-in-depth): each operation runs inside a transaction that
  *     first sets `app.current_shop_id`; Postgres RLS policies then restrict rows
  *     to that shop. Even an app-layer bug or a leaked app credential cannot cross
- *     tenants. (Requires the app to connect as the non-owner RLS role — see the
+ *     tenants. (Requires the app to connect as the non-owner RLS role - see the
  *     RLS migration. With the owner role, layer 1 still fully applies.)
  *
  * The set_config is transaction-local (`true`), which is required for Supabase's
- * PgBouncer transaction pooling — a plain SESSION SET would not survive pooling.
+ * PgBouncer transaction pooling - a plain SESSION SET would not survive pooling.
  *
  * THE RULE: tenant tables (Client, Visit, PunchLedger, Nudge) are ONLY touched
  * through forShop(). Direct prisma.* is reserved for non-tenant tables (User,

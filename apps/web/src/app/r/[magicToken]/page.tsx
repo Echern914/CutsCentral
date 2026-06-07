@@ -39,7 +39,7 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const data = await getData(params.magicToken);
   if (!data) return { title: APP_NAME };
-  const title = `${data.shop.name} — Your Rewards`;
+  const title = `${data.shop.name} Rewards`;
   const description = `${data.punches.towardNext}/${data.punches.threshold} punches toward your ${data.shop.rewardLabel}.`;
   return {
     title,

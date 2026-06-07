@@ -28,7 +28,7 @@ interface ClientDetail {
 }
 
 function fmt(d: string | null) {
-  return d ? new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—";
+  return d ? new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "None";
 }
 
 export default async function ClientDetailPage({ params }: { params: { id: string } }) {
@@ -75,7 +75,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <Stat label="Punches" value={`${towardNext}/${rewardThreshold}`} accent />
         <Stat label="Total earned" value={String(balance)} />
-        <Stat label="Visits every" value={client.medianIntervalDays ? `~${client.medianIntervalDays}d` : "—"} />
+        <Stat label="Visits every" value={client.medianIntervalDays ? `~${client.medianIntervalDays}d` : "n/a"} />
         <Stat label="Last visit" value={fmt(client.lastVisitAt)} />
       </div>
 

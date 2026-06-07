@@ -3,7 +3,7 @@
 -- The app connects as a NON-OWNER role (chairback_app) so these policies are
 -- actually enforced (the owner/superuser role bypasses RLS). Each tenant query
 -- runs inside a transaction that sets app.current_shop_id; policies restrict
--- rows to that shop. This is a SECOND layer — forShop() already scopes queries
+-- rows to that shop. This is a SECOND layer - forShop() already scopes queries
 -- at the application level.
 --
 -- Idempotent where practical so it can be re-applied safely.
@@ -51,6 +51,6 @@ BEGIN
 END
 $$;
 
--- NOTE: Shop, User, AcuityConnection are NOT under per-shop RLS — they are
--- looked up by the API as the trusted server (session→ownerId, magicToken,
+-- NOTE: Shop, User, AcuityConnection are NOT under per-shop RLS - they are
+-- looked up by the API as the trusted server (session->ownerId, magicToken,
 -- webhookSecret). They remain protected by the non-owner GRANTs above.

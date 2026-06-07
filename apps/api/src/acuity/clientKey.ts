@@ -3,9 +3,9 @@ import parsePhoneNumberFromString from "libphonenumber-js";
 /**
  * Derive a stable per-shop client key from an Acuity appointment. Acuity has no
  * global client id, so we namespace by contact channel:
- *   tel:<E.164>   — preferred (phone is the SMS channel of record)
- *   mail:<lower>  — fallback
- *   anon:<slug>   — last resort (can't be nudged; flagged in dashboard)
+ *   tel:<E.164>   - preferred (phone is the SMS channel of record)
+ *   mail:<lower>  - fallback
+ *   anon:<slug>   - last resort (can't be nudged; flagged in dashboard)
  *
  * Prefixes prevent a phone and an email from ever colliding into one key.
  * US is the default region for bare phone numbers.

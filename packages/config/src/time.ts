@@ -1,5 +1,5 @@
 /**
- * Pure time/stat helpers used by the cadence engine. No I/O, no Date.now() —
+ * Pure time/stat helpers used by the cadence engine. No I/O, no Date.now() -
  * callers pass timestamps in, so these stay deterministic and unit-testable.
  */
 
@@ -25,7 +25,7 @@ export function dayGaps(dates: Date[]): number[] {
 }
 
 /**
- * Median of a list of numbers. Median (not mean) resists outliers — a client
+ * Median of a list of numbers. Median (not mean) resists outliers - a client
  * with one freak 90-day gap shouldn't skew their cadence. Returns null for [].
  */
 export function median(values: number[]): number | null {

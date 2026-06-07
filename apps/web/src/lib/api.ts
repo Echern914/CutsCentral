@@ -47,7 +47,7 @@ export async function apiSend<T>(
   return toResult<T>(res);
 }
 
-/** Public (no-cookie) GET — used by the rewards page. */
+/** Public (no-cookie) GET - used by the rewards page. */
 export async function apiPublicGet<T>(path: string): Promise<ApiResult<T>> {
   const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
   return toResult<T>(res);

@@ -6,7 +6,7 @@ import { NUDGE } from "@chairback/config";
  *
  * ALL must hold:
  *   R1: >= 2 completed visits (need history for a cadence)
- *   R2: overdue — daysSinceLastVisit > medianIntervalDays + nudgeBufferDays
+ *   R2: overdue - daysSinceLastVisit > medianIntervalDays + nudgeBufferDays
  *   R3: no upcoming SCHEDULED visit
  *   R4: no nudge in the last suppressionDays (21)
  *   R5: not opted out

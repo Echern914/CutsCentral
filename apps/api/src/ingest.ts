@@ -19,8 +19,8 @@ export async function ingestAppointment(
   acuityId: string,
   prefetched?: AcuityAppointment,
 ): Promise<void> {
-  // Webhook payloads are skeletal — fetch the full appointment unless the
-  // caller (backfill) already has it. (Outside the tx — it's a network call.)
+  // Webhook payloads are skeletal - fetch the full appointment unless the
+  // caller (backfill) already has it. (Outside the tx - it's a network call.)
   const appt =
     prefetched ??
     (await (await getAcuityClientForShop(shop.id)).getAppointment(acuityId));

@@ -22,7 +22,7 @@ function appt(id: number, iso: string): AcuityAppointment {
   };
 }
 
-// 250 active appointments across 2026, spaced a day apart → spans >1 page (200).
+// 250 active appointments across 2026, spaced a day apart -> spans >1 page (200).
 const ACTIVE: AcuityAppointment[] = Array.from({ length: 250 }, (_, i) =>
   appt(i + 1, new Date(Date.UTC(2026, 0, 1 + i, 15)).toISOString()),
 );
@@ -72,7 +72,7 @@ describe("backfillShop date-cursor walk", () => {
     expect(await prisma.visit.count({ where: { shopId } })).toBe(250);
   });
 
-  it("is idempotent — a re-run creates no duplicates", async () => {
+  it("is idempotent - a re-run creates no duplicates", async () => {
     await backfillShop(shopId);
     expect(await prisma.visit.count({ where: { shopId } })).toBe(250);
   });

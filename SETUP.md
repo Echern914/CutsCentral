@@ -1,12 +1,12 @@
-# ChairBack — local setup
+# ChairBack - local setup
 
 ## 1. Database (Supabase)
 
 1. Create a free project at https://supabase.com (note your DB password).
-2. In the dashboard: **Project Settings → Database → Connection string**.
-3. Copy two strings into `.env` (copy `.env.example` → `.env` first):
-   - **`DATABASE_URL`** — the **Transaction pooler** string (host contains `-pooler`, port **6543**). Append `?pgbouncer=true&connection_limit=1`.
-   - **`DIRECT_URL`** — the **Direct connection** string (port **5432**). Used only by `prisma migrate`.
+2. In the dashboard: **Project Settings to Database to Connection string**.
+3. Copy two strings into `.env` (copy `.env.example` to `.env` first):
+   - **`DATABASE_URL`** - the **Transaction pooler** string (host contains `-pooler`, port **6543**). Append `?pgbouncer=true&connection_limit=1`.
+   - **`DIRECT_URL`** - the **Direct connection** string (port **5432**). Used only by `prisma migrate`.
 4. Run migrations + generate client + seed:
    ```
    pnpm db:migrate        # creates tables + RLS roles/policies (uses DIRECT_URL)
@@ -24,7 +24,7 @@ Generate the two crypto secrets and paste into `.env`:
 # session signing secret (any long random string)
 openssl rand -base64 48
 
-# token encryption key — MUST decode to exactly 32 bytes
+# token encryption key - MUST decode to exactly 32 bytes
 openssl rand -base64 32
 ```
 (No openssl on Windows? `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`)

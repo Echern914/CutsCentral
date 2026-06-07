@@ -40,7 +40,7 @@ export function createApp(): Express {
   // Health check (no body needed).
   app.use(healthRouter);
 
-  // (1) Webhooks — each mounts its own body parser internally. Rate-limited per
+  // (1) Webhooks - each mounts its own body parser internally. Rate-limited per
   // IP (generous; legit bursts happen) to bound DoS if a secret leaks.
   app.use("/webhooks/acuity", webhookLimiter, acuityWebhookRouter);
   app.use("/webhooks/twilio", webhookLimiter, twilioWebhookRouter);

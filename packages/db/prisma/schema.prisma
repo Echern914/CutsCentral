@@ -1,4 +1,4 @@
-// ChairBack — multi-tenant data model.
+// ChairBack - multi-tenant data model.
 // See the implementation plan for the idempotency vs tenant-scoping rationale.
 
 generator client {
@@ -31,10 +31,10 @@ enum NudgeStatus {
 
 enum MessageChannel {
   SMS
-  // EMAIL — future seam, not implemented
+  // EMAIL - future seam, not implemented
 }
 
-// ── Identity / tenancy ──────────────────────────────────────────────
+//  Identity / tenancy 
 
 model User {
   id           String   @id @default(cuid())
@@ -97,7 +97,7 @@ model AcuityConnection {
   @@index([acuityAccountId])
 }
 
-// ── Tenant-owned domain (every table carries shopId) ────────────────
+//  Tenant-owned domain (every table carries shopId) 
 
 model Client {
   id              String   @id @default(cuid())
@@ -111,7 +111,7 @@ model Client {
   optedOut        Boolean  @default(false)
   notes           String? // barber's private notes about the client
   source          String   @default("acuity") // "acuity" | "manual"
-  magicToken      String   @unique // GLOBAL — rewards auth resolves without a shop
+  magicToken      String   @unique // GLOBAL - rewards auth resolves without a shop
 
   // cadence (recomputed by the engine; null until >=2 completed visits)
   medianIntervalDays Int?
@@ -136,7 +136,7 @@ model Visit {
   shop                Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
   clientId            String
   client              Client      @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  acuityAppointmentId String // unique only WITHIN an account → must be composite with shopId
+  acuityAppointmentId String // unique only WITHIN an account, so must be composite with shopId
   status              VisitStatus
   scheduledAt         DateTime
   endAt               DateTime? // start + duration; drives COMPLETED promotion

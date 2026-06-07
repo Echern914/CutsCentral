@@ -33,7 +33,7 @@ async function makeOverdueClient(shopId: string, key: string, phone: string) {
       magicToken: randomToken(),
       firstName: "Over",
       phone,
-      // overdue: median 30, last visit 60 days ago, buffer 7 → 60 > 37
+      // overdue: median 30, last visit 60 days ago, buffer 7 -> 60 > 37
       medianIntervalDays: 30,
       lastVisitAt: addDays(NOW, -60),
     },
@@ -99,7 +99,7 @@ describe("sweepShop", () => {
     expect(nudge?.body).toContain("/r/");
   });
 
-  it("real run writes PENDING→SENT and sends via the provider", async () => {
+  it("real run writes PENDING->SENT and sends via the provider", async () => {
     const summary = await sweepShop(shop, { now: NOW, dryRun: false });
     expect(summary.sent).toBeGreaterThanOrEqual(1);
     expect(sent.length).toBe(summary.sent);
@@ -111,7 +111,7 @@ describe("sweepShop", () => {
   });
 
   it("respects the per-shop daily cap", async () => {
-    // Cap is 2; add a 3rd overdue client → only 2 should send.
+    // Cap is 2; add a 3rd overdue client -> only 2 should send.
     await makeOverdueClient(shop.id, "tel:+13025551002", "+13025551002");
     await makeOverdueClient(shop.id, "tel:+13025551003", "+13025551003");
     const summary = await sweepShop(shop, { now: NOW, dryRun: false });
@@ -125,7 +125,7 @@ describe("sweepShop", () => {
     const firstCount = await prisma.nudge.count({ where: { shopId: shop.id, status: "SENT" } });
     expect(firstCount).toBeGreaterThanOrEqual(1);
     sent = [];
-    // Same day again → all suppressed by R4 (PENDING/SENT within 21d).
+    // Same day again -> all suppressed by R4 (PENDING/SENT within 21d).
     const summary = await sweepShop(shop, { now: NOW, dryRun: false });
     expect(summary.sent).toBe(0);
     expect(sent.length).toBe(0);

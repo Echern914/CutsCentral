@@ -10,7 +10,7 @@ const env = apiEnv();
  * publicly. Based on Acuity's docs the shape is POST /webhooks with { event,
  * target }. We subscribe one target per shop pointing at the unguessable
  * per-shop URL. If the call fails we log and continue (the barber can retry from
- * the dashboard) — connection itself still succeeds.
+ * the dashboard) - connection itself still succeeds.
  *
  * Returns the created subscription ids (best-effort).
  */

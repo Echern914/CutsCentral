@@ -5,7 +5,7 @@ import { Card } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
 import { saveNotesAction } from "../../actions";
 
-/** Private barber notes on a client — autosave on blur / explicit save. */
+/** Private barber notes on a client - autosave on blur / explicit save. */
 export function NotesEditor({
   clientId,
   initial,
@@ -41,7 +41,7 @@ export function NotesEditor({
         value={notes}
         onChange={(e) => setNotes(e.target.value)}
         rows={4}
-        placeholder="Private notes — preferences, history, anything useful."
+        placeholder="Private notes: preferences, history, anything useful."
         className="w-full resize-none rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50"
       />
     </Card>

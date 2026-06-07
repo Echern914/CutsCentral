@@ -8,7 +8,7 @@ import { API_BASE } from "@/lib/api";
 /**
  * Auth server actions. They call the API, then copy the API's session cookie
  * onto the web origin so subsequent server-component requests (which forward
- * cookies) are authenticated. httpOnly throughout — no token in JS.
+ * cookies) are authenticated. httpOnly throughout - no token in JS.
  */
 
 interface ActionState {

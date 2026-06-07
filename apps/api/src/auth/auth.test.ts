@@ -8,7 +8,7 @@ const email = `auth-${Date.now()}@test.local`;
 const password = "supersecret123";
 
 afterAll(async () => {
-  // Delete shops first (User→Shop has no cascade, by design), then the user.
+  // Delete shops first (User->Shop has no cascade, by design), then the user.
   const user = await prisma.user.findUnique({ where: { email } });
   if (user) {
     await prisma.shop.deleteMany({ where: { ownerId: user.id } });
