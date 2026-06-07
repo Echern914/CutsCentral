@@ -16,6 +16,12 @@ packages/db/src/generated/
 .env.local
 .env.*.local
 
+# local-only docs containing real secrets (deploy values)
+DEPLOY.md
+.api-dev.log
+.web-dev.log
+.api-dev.err.log
+
 # logs
 *.log
 npm-debug.log*
