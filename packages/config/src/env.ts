@@ -1,0 +1,99 @@
+import { z } from "zod";
+
+/**
+ * Env validation. Split into apiEnv() (server, needs everything) and webEnv()
+ * (the Next app, needs only the origins). Both crash loudly on missing vars.
+ *
+ * Call these once at boot and reuse the returned object — do not read process.env
+ * scattered through the codebase.
+ */
+
+const boolish = z
+  .enum(["true", "false", "1", "0"])
+  .transform((v) => v === "true" || v === "1");
+
+const apiSchema = z.object({
+  DATABASE_URL: z.string().url(),
+  // Direct (non-pooled) connection for prisma migrate. Optional at app runtime.
+  DIRECT_URL: z.string().url().optional(),
+
+  APP_BASE_URL: z.string().url(),
+  API_BASE_URL: z.string().url(),
+
+  SESSION_SECRET: z.string().min(16),
+  TOKEN_ENCRYPTION_KEY: z.string().min(1),
+  // Platform-operator token guarding /admin/* (backfill, sweeps, promotion).
+  ADMIN_TOKEN: z.string().min(8).optional(),
+
+  ACUITY_OAUTH_CLIENT_ID: z.string().min(1),
+  ACUITY_OAUTH_CLIENT_SECRET: z.string().min(1),
+  ACUITY_OAUTH_REDIRECT_URI: z.string().url(),
+
+  // Google sign-in (optional — barber auth works with email/password without it).
+  GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
+  GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
+  GOOGLE_OAUTH_REDIRECT_URI: z.string().url().optional(),
+
+  TWILIO_ACCOUNT_SID: z.string().min(1),
+  TWILIO_AUTH_TOKEN: z.string().min(1),
+  TWILIO_FROM_NUMBER: z.string().min(1),
+
+  NUDGE_DEFAULT_BUFFER_DAYS: z.coerce.number().int().nonnegative().default(7),
+  NUDGE_DEFAULT_DAILY_CAP: z.coerce.number().int().positive().default(50),
+
+  ENABLE_SCHEDULER: boolish.default("false"),
+  DB_RLS_ENFORCE: boolish.default("true"),
+  DRY_RUN: boolish.default("true"),
+  LOG_LEVEL: z
+    .enum(["fatal", "error", "warn", "info", "debug", "trace"])
+    .default("info"),
+  NODE_ENV: z
+    .enum(["development", "test", "production"])
+    .default("development"),
+
+  DEV_SEED_ACUITY_ACCESS_TOKEN: z.string().optional().default(""),
+  DEV_SEED_ACUITY_ACCOUNT_ID: z.string().optional().default(""),
+});
+
+export type ApiEnv = z.infer<typeof apiSchema>;
+
+let cachedApiEnv: ApiEnv | undefined;
+
+export function apiEnv(source: NodeJS.ProcessEnv = process.env): ApiEnv {
+  if (cachedApiEnv) return cachedApiEnv;
+  const parsed = apiSchema.safeParse(source);
+  if (!parsed.success) {
+    const issues = parsed.error.issues
+      .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
+      .join("\n");
+    throw new Error(`Invalid API environment:\n${issues}`);
+  }
+  cachedApiEnv = parsed.data;
+  return cachedApiEnv;
+}
+
+const webSchema = z.object({
+  APP_BASE_URL: z.string().url(),
+  API_BASE_URL: z.string().url(),
+  NODE_ENV: z
+    .enum(["development", "test", "production"])
+    .default("development"),
+});
+
+export type WebEnv = z.infer<typeof webSchema>;
+
+export function webEnv(source: NodeJS.ProcessEnv = process.env): WebEnv {
+  const parsed = webSchema.safeParse(source);
+  if (!parsed.success) {
+    const issues = parsed.error.issues
+      .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
+      .join("\n");
+    throw new Error(`Invalid web environment:\n${issues}`);
+  }
+  return parsed.data;
+}
+
+/** Test helper: reset the cached api env so a test can re-parse a fresh source. */
+export function __resetEnvCacheForTests(): void {
+  cachedApiEnv = undefined;
+}

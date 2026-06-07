@@ -1,0 +1,188 @@
+// ChairBack — multi-tenant data model.
+// See the implementation plan for the idempotency vs tenant-scoping rationale.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/client"
+}
+
+datasource db {
+  provider  = "postgresql"
+  // Supabase: pooled connection (PgBouncer, port 6543) for the app at runtime.
+  url       = env("DATABASE_URL")
+  // Supabase: direct connection (port 5432) for migrations / introspection.
+  directUrl = env("DIRECT_URL")
+}
+
+enum VisitStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELED
+  RESCHEDULED
+  NO_SHOW
+}
+
+enum NudgeStatus {
+  PENDING // write-ahead row, before dispatch
+  SENT
+  FAILED
+  SKIPPED // dry-run / cap-hit, recorded for audit
+}
+
+enum MessageChannel {
+  SMS
+  // EMAIL — future seam, not implemented
+}
+
+// ── Identity / tenancy ──────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique // login identity (global)
+  passwordHash String? // argon2id; null for Google-only accounts
+  googleId     String?  @unique // Google "sub"; set for Google sign-in
+  name         String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  shops Shop[] @relation("ShopOwner") // one today; FK clean for N later
+}
+
+model Shop {
+  id              String   @id @default(cuid())
+  ownerId         String
+  owner           User     @relation("ShopOwner", fields: [ownerId], references: [id])
+  name            String // appears in SMS body
+  timezone        String   @default("America/New_York")
+  bookingUrl      String
+  rewardThreshold Int      @default(10)
+  rewardLabel     String   @default("Free Cut")
+  nudgeBufferDays Int      @default(7)
+  dailySendCap    Int      @default(50)
+  plan            String   @default("free") // inert Stripe seam, no enforcement
+
+  // per-shop webhook routing (the body has no account id, so the URL path routes)
+  webhookSecret    String   @unique // 32-byte random, used in the webhook URL path
+  acuityWebhookIds String[] @default([]) // subscription ids returned by Acuity (teardown)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  acuity  AcuityConnection?
+  clients Client[]
+  visits  Visit[]
+  ledger  PunchLedger[]
+  nudges  Nudge[]
+
+  @@index([ownerId])
+}
+
+// Secrets isolated in their own 1:1 model so plain Shop reads never load ciphertext.
+model AcuityConnection {
+  id              String    @id @default(cuid())
+  shopId          String    @unique
+  shop            Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  acuityAccountId String // from GET /me
+  accessToken     String // AES-256-GCM encrypted
+  refreshToken    String? // AES-256-GCM encrypted; may be absent
+  scope           String    @default("api-v1")
+  tokenExpiresAt  DateTime? // may be null if no expiry
+  connectedAt     DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([acuityAccountId])
+}
+
+// ── Tenant-owned domain (every table carries shopId) ────────────────
+
+model Client {
+  id              String   @id @default(cuid())
+  shopId          String
+  shop            Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  acuityClientKey String // normalized phone || email || anon slug
+  firstName       String?
+  lastName        String?
+  phone           String? // E.164
+  email           String?
+  optedOut        Boolean  @default(false)
+  magicToken      String   @unique // GLOBAL — rewards auth resolves without a shop
+
+  // cadence (recomputed by the engine; null until >=2 completed visits)
+  medianIntervalDays Int?
+  lastVisitAt        DateTime?
+  nextExpectedAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  visits Visit[]
+  ledger PunchLedger[]
+  nudges Nudge[]
+
+  @@unique([shopId, acuityClientKey]) // tenant-scoped identity + idempotent upsert
+  @@index([shopId])
+  @@index([shopId, lastVisitAt])
+}
+
+model Visit {
+  id                  String      @id @default(cuid())
+  shopId              String
+  shop                Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  clientId            String
+  client              Client      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  acuityAppointmentId String // unique only WITHIN an account → must be composite with shopId
+  status              VisitStatus
+  scheduledAt         DateTime
+  endAt               DateTime? // start + duration; drives COMPLETED promotion
+  completedAt         DateTime?
+  canceledAt          DateTime?
+  noShow              Boolean     @default(false)
+  price               Decimal?    @db.Decimal(10, 2)
+  serviceName         String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  punch PunchLedger?
+
+  @@unique([shopId, acuityAppointmentId]) // IDEMPOTENCY (per shop): webhook re-delivery + backfill safe
+  @@index([shopId, clientId, scheduledAt]) // cadence + future-booking checks
+  @@index([status, endAt]) // promotion scan
+}
+
+model PunchLedger {
+  id              String   @id @default(cuid())
+  shopId          String
+  shop            Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  clientId        String
+  client          Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  visitId         String?  @unique // one EARN per visit; redemptions use null (Postgres allows many NULLs)
+  visit           Visit?   @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  punchesEarned   Int      @default(0)
+  punchesRedeemed Int      @default(0)
+  runningBalance  Int
+  note            String?
+  createdAt       DateTime @default(now())
+
+  @@index([shopId, clientId])
+}
+
+model Nudge {
+  id                  String         @id @default(cuid())
+  shopId              String
+  shop                Shop           @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  clientId            String
+  client              Client         @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  channel             MessageChannel @default(SMS)
+  status              NudgeStatus    @default(PENDING)
+  body                String?
+  messageSid          String?
+  failedReason        String?
+  sentAt              DateTime?
+  resultedInBookingAt DateTime? // attribution
+  resultedVisitId     String?
+  createdAt           DateTime       @default(now())
+
+  @@index([shopId, clientId, createdAt]) // "no nudge in 21d" + attribution lookback
+  @@index([status, createdAt]) // daily send-cap count
+}
