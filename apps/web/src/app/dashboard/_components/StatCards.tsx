@@ -15,12 +15,11 @@ export interface Stats {
 }
 
 export function StatCards({ stats }: { stats: Stats }) {
-  const cards = [
+  const secondary = [
     { label: "Active clients", value: stats.activeClients },
     { label: "At risk", value: stats.atRiskClients, accent: true },
     { label: "Nudges this month", value: stats.nudgesThisMonth },
     { label: "Rebookings recovered", value: stats.rebookingsRecovered },
-    { label: "Est. $ recovered", value: stats.estDollarsRecovered, money: true },
   ];
 
   return (
@@ -28,23 +27,41 @@ export function StatCards({ stats }: { stats: Stats }) {
       variants={staggerContainer}
       initial="hidden"
       animate="show"
-      className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5"
+      className="grid gap-4 lg:grid-cols-3"
     >
-      {cards.map((c) => (
-        <motion.div key={c.label} variants={fadeUp}>
-          <Card className="p-5">
-            <p className="text-xs uppercase tracking-wide text-muted">{c.label}</p>
-            <p
-              className={`mt-2 font-display text-3xl ${
-                c.accent ? "text-gold" : "text-offwhite"
-              }`}
-            >
-              {c.money && "$"}
-              <CountUp value={c.value} />
-            </p>
-          </Card>
-        </motion.div>
-      ))}
+      {/* Hero: estimated revenue recovered */}
+      <motion.div variants={fadeUp} className="lg:col-span-1">
+        <Card className="h-full p-6">
+          <p className="text-xs uppercase tracking-wide text-muted">
+            Est. revenue recovered
+          </p>
+          <p className="mt-2 font-display text-5xl text-gold">
+            $<CountUp value={stats.estDollarsRecovered} />
+          </p>
+          <p className="mt-2 text-xs text-muted">
+            {stats.rebookingsRecovered} rebookings × ${Math.round(stats.avgTicket)} avg
+            ticket
+          </p>
+        </Card>
+      </motion.div>
+
+      {/* Supporting metrics */}
+      <motion.div variants={fadeUp} className="lg:col-span-2">
+        <div className="grid h-full grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4">
+          {secondary.map((c) => (
+            <Card key={c.label} className="flex flex-col justify-center p-5">
+              <p className="text-xs uppercase tracking-wide text-muted">{c.label}</p>
+              <p
+                className={`mt-2 font-display text-3xl ${
+                  c.accent ? "text-gold" : "text-offwhite"
+                }`}
+              >
+                <CountUp value={c.value} />
+              </p>
+            </Card>
+          ))}
+        </div>
+      </motion.div>
     </motion.div>
   );
 }

@@ -189,6 +189,12 @@ dashboardRouter.post("/sweep-preview", smsLimiter, async (req, res) => {
   res.json(summary);
 });
 
+// Run the real sweep now — texts every eligible client (respects daily cap).
+dashboardRouter.post("/sweep", smsLimiter, async (req, res) => {
+  const summary = await sweepShop(req.shop!, { dryRun: false });
+  res.json(summary);
+});
+
 // ── helpers ──────────────────────────────────────────────────────────
 
 function name(c: { firstName: string | null; lastName: string | null } | undefined): string {
@@ -214,13 +220,16 @@ async function buildAtRiskRows(shopId: string, bufferDays: number, now: Date) {
   const rows: {
     id: string;
     name: string;
+    phone: string | null;
+    lastService: string | null;
+    magicToken: string;
     daysOverdue: number;
     medianIntervalDays: number;
     lastVisitAt: string;
   }[] = [];
 
   for (const c of candidates) {
-    const [completed, upcoming, lastNudge] = await Promise.all([
+    const [completed, upcoming, lastNudge, lastVisit] = await Promise.all([
       db.visit.count({ where: { clientId: c.id, status: "COMPLETED" } }),
       db.visit.findFirst({
         where: { clientId: c.id, status: "SCHEDULED", scheduledAt: { gt: now } },
@@ -230,6 +239,11 @@ async function buildAtRiskRows(shopId: string, bufferDays: number, now: Date) {
         where: { clientId: c.id, status: { in: ["SENT", "PENDING"] } },
         orderBy: { createdAt: "desc" },
         select: { createdAt: true },
+      }),
+      db.visit.findFirst({
+        where: { clientId: c.id, status: "COMPLETED" },
+        orderBy: { scheduledAt: "desc" },
+        select: { serviceName: true },
       }),
     ]);
 
@@ -249,6 +263,9 @@ async function buildAtRiskRows(shopId: string, bufferDays: number, now: Date) {
     rows.push({
       id: c.id,
       name: name(c),
+      phone: c.phone,
+      lastService: lastVisit?.serviceName ?? null,
+      magicToken: c.magicToken,
       daysOverdue:
         (daysSinceLastVisit ?? 0) - ((c.medianIntervalDays ?? 0) + bufferDays),
       medianIntervalDays: c.medianIntervalDays!,

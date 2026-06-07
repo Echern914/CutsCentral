@@ -15,6 +15,25 @@ export async function redeemAction(clientId: string): Promise<{ ok: boolean }> {
   return { ok: res.ok };
 }
 
+export interface SweepSummary {
+  considered: number;
+  sent: number;
+  skipped: number;
+  failed: number;
+  dryRun: boolean;
+}
+
+export async function sweepPreviewAction(): Promise<SweepSummary | null> {
+  const res = await apiSend<SweepSummary>("POST", "/api/dashboard/sweep-preview");
+  return res.data;
+}
+
+export async function runSweepAction(): Promise<SweepSummary | null> {
+  const res = await apiSend<SweepSummary>("POST", "/api/dashboard/sweep");
+  revalidatePath("/dashboard");
+  return res.data;
+}
+
 export async function saveSettingsAction(
   _prev: { saved?: boolean; error?: string },
   formData: FormData,

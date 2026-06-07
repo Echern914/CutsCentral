@@ -3,6 +3,7 @@ import { APP_NAME } from "@chairback/config/constants";
 import { apiGet } from "@/lib/api";
 import { logoutAction } from "../(auth)/actions";
 import { StatCards, type Stats } from "./_components/StatCards";
+import { SweepControl } from "./_components/SweepControl";
 import { AtRiskTable, type AtRiskRow } from "./_components/AtRiskTable";
 import { ActivityFeed, type ActivityItem } from "./_components/ActivityFeed";
 import { Leaderboard, type Leader } from "./_components/Leaderboard";
@@ -52,8 +53,15 @@ export default async function DashboardPage() {
 
       {stats.data && <StatCards stats={stats.data} />}
 
-      <div className="mt-8 grid gap-6 lg:grid-cols-2">
-        <AtRiskTable rows={atRisk.data?.clients ?? []} />
+      <div className="mt-6">
+        <SweepControl atRiskCount={atRisk.data?.clients?.length ?? 0} />
+      </div>
+
+      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+        <AtRiskTable
+          rows={atRisk.data?.clients ?? []}
+          appBaseUrl={process.env.APP_BASE_URL ?? ""}
+        />
         <ActivityFeed items={activity.data?.items ?? []} />
       </div>
 
