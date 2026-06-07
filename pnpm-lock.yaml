@@ -23,6 +23,18 @@ importers:
       '@chairback/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@types/cookie-parser':
+        specifier: ^1.4.7
+        version: 1.4.10(@types/express@4.17.25)
+      '@types/express':
+        specifier: ^4.17.21
+        version: 4.17.25
+      '@types/node':
+        specifier: ^20.16.5
+        version: 20.19.42
+      '@types/node-cron':
+        specifier: ^3.0.11
+        version: 3.0.11
       argon2:
         specifier: ^0.41.1
         version: 0.41.1
@@ -53,22 +65,13 @@ importers:
       twilio:
         specifier: ^5.3.0
         version: 5.13.1
+      typescript:
+        specifier: ^5.6.2
+        version: 5.9.3
       zod:
         specifier: ^3.23.8
         version: 3.25.76
     devDependencies:
-      '@types/cookie-parser':
-        specifier: ^1.4.7
-        version: 1.4.10(@types/express@4.17.25)
-      '@types/express':
-        specifier: ^4.17.21
-        version: 4.17.25
-      '@types/node':
-        specifier: ^20.16.5
-        version: 20.19.42
-      '@types/node-cron':
-        specifier: ^3.0.11
-        version: 3.0.11
       '@types/supertest':
         specifier: ^6.0.2
         version: 6.0.3
@@ -81,9 +84,6 @@ importers:
       tsx:
         specifier: ^4.19.1
         version: 4.22.4
-      typescript:
-        specifier: ^5.6.2
-        version: 5.9.3
       vitest:
         specifier: ^2.1.1
         version: 2.1.9(@types/node@20.19.42)
@@ -155,16 +155,16 @@ importers:
       argon2:
         specifier: ^0.41.1
         version: 0.41.1
-    devDependencies:
-      '@types/node':
-        specifier: ^20.16.5
-        version: 20.19.42
       prisma:
         specifier: ^5.20.0
         version: 5.22.0
       tsx:
         specifier: ^4.19.1
         version: 4.22.4
+    devDependencies:
+      '@types/node':
+        specifier: ^20.16.5
+        version: 20.19.42
       typescript:
         specifier: ^5.6.2
         version: 5.9.3
