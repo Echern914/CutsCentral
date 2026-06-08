@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 
 export interface ActivityItem {
@@ -7,11 +8,22 @@ export interface ActivityItem {
   detail: string;
 }
 
-export function ActivityFeed({ items }: { items: ActivityItem[] }) {
+export function ActivityFeed({
+  items,
+  seeAllHref,
+}: {
+  items: ActivityItem[];
+  seeAllHref?: string;
+}) {
   return (
     <Card className="overflow-hidden">
-      <div className="border-b border-subtle px-5 py-4">
+      <div className="flex items-center justify-between border-b border-subtle px-5 py-4">
         <h2 className="font-display text-lg">Recent activity</h2>
+        {seeAllHref && (
+          <Link href={seeAllHref} className="text-xs text-gold hover:underline">
+            See all
+          </Link>
+        )}
       </div>
       {items.length === 0 ? (
         <p className="px-5 py-6 text-sm text-muted">No activity yet.</p>

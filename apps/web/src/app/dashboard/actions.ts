@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { apiSend } from "@/lib/api";
+import { apiGet, apiSend } from "@/lib/api";
 
 export async function nudgeNowAction(clientId: string): Promise<{ ok: boolean }> {
   const res = await apiSend("POST", `/api/dashboard/nudge/${clientId}`);
@@ -141,6 +141,28 @@ export async function deleteShopAction(
     return { error: "Confirmation didn't match. Type your shop name exactly." };
   }
   redirect("/login");
+}
+
+export async function trendsAction(
+  months: number,
+): Promise<{ label: string; visits: number; nudges: number }[]> {
+  const res = await apiGet<{ series: { label: string; visits: number; nudges: number }[] }>(
+    `/api/dashboard/trends?months=${months}`,
+  );
+  return res.data?.series ?? [];
+}
+
+export async function bulkClientAction(
+  action: "optOut" | "optIn" | "nudge",
+  clientIds: string[],
+): Promise<{ ok: boolean; sent?: number; updated?: number }> {
+  const res = await apiSend<{ ok: boolean; sent?: number; updated?: number }>(
+    "POST",
+    "/api/dashboard/clients/bulk",
+    { action, clientIds },
+  );
+  revalidatePath("/dashboard/clients");
+  return res.data ?? { ok: res.ok };
 }
 
 export async function smsPreviewAction(template: string): Promise<string> {

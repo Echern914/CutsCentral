@@ -1,19 +1,7 @@
 import Link from "next/link";
 import { apiGet } from "@/lib/api";
-import { Card } from "@/components/ui/Card";
 import { ClientsControls } from "./ClientsControls";
-
-interface ClientRow {
-  id: string;
-  name: string;
-  phone: string | null;
-  email: string | null;
-  optedOut: boolean;
-  source: string;
-  lastVisitAt: string | null;
-  medianIntervalDays: number | null;
-  balance: number;
-}
+import { ClientsList, type ClientRow } from "./ClientsList";
 
 interface ClientsResponse {
   clients: ClientRow[];
@@ -65,50 +53,7 @@ export default async function ClientsPage({
 
       <ClientsControls />
 
-      <Card className="overflow-hidden">
-        {clients.length === 0 ? (
-          <p className="px-5 py-8 text-center text-sm text-muted">
-            No clients found. Use “Add client” for walk-ins, or connect Acuity to
-            sync your appointment history.
-          </p>
-        ) : (
-          <ul className="divide-y divide-subtle">
-            {clients.map((c) => (
-              <li key={c.id}>
-                <Link
-                  href={`/dashboard/clients/${c.id}`}
-                  className="flex items-center justify-between gap-3 px-4 py-4 hover:bg-charcoal-700 sm:px-5"
-                >
-                  <div className="min-w-0">
-                    <p className="flex items-center gap-2 truncate text-sm font-medium text-offwhite">
-                      {c.name}
-                      {c.source === "manual" && (
-                        <span className="rounded-full bg-charcoal-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted">
-                          manual
-                        </span>
-                      )}
-                      {c.optedOut && (
-                        <span className="text-[10px] uppercase tracking-wide text-danger-soft">
-                          opted out
-                        </span>
-                      )}
-                    </p>
-                    <p className="truncate text-xs text-muted">
-                      {c.phone ?? c.email ?? "no contact"}
-                      {c.lastVisitAt
-                        ? ` · last ${new Date(c.lastVisitAt).toLocaleDateString()}`
-                        : ""}
-                    </p>
-                  </div>
-                  <span className="shrink-0 font-display text-gold" title="Punch balance">
-                    {c.balance}
-                  </span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
+      <ClientsList clients={clients} />
 
       {pageCount > 1 && (
         <div className="mt-4 flex items-center justify-center gap-3">

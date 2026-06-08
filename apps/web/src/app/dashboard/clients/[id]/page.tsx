@@ -31,13 +31,25 @@ function fmt(d: string | null) {
   return d ? new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "None";
 }
 
+interface LedgerEntry {
+  at: string;
+  earned: number;
+  redeemed: number;
+  runningBalance: number;
+  note: string | null;
+}
+
 export default async function ClientDetailPage({ params }: { params: { id: string } }) {
-  const res = await apiGet<ClientDetail>(`/api/dashboard/clients/${params.id}`);
+  const [res, ledgerRes] = await Promise.all([
+    apiGet<ClientDetail>(`/api/dashboard/clients/${params.id}`),
+    apiGet<{ entries: LedgerEntry[] }>(`/api/dashboard/clients/${params.id}/ledger`),
+  ]);
   if (res.status === 404) notFound();
   if (!res.ok || !res.data) {
     return <main className="p-8 text-muted">Could not load client.</main>;
   }
   const { client, balance, rewardThreshold, rewardReady, visits, nudges } = res.data;
+  const ledger = ledgerRes.data?.entries ?? [];
   const appBase = process.env.APP_BASE_URL ?? "";
   const rewardsUrl = `${appBase}/r/${client.magicToken}`;
   const towardNext = balance % rewardThreshold;
@@ -118,6 +130,32 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
                     {n.resultedInBooking && (
                       <span className="ml-2 text-emerald-soft">rebooked</span>
                     )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
+
+      <div className="mt-6">
+        <Card className="overflow-hidden">
+          <div className="border-b border-subtle px-5 py-3">
+            <h2 className="font-display text-lg">Punch history</h2>
+          </div>
+          {ledger.length === 0 ? (
+            <p className="px-5 py-5 text-sm text-muted">No punch activity yet.</p>
+          ) : (
+            <ul className="max-h-80 divide-y divide-subtle overflow-y-auto">
+              {ledger.map((e, i) => (
+                <li key={i} className="flex items-center justify-between px-5 py-3">
+                  <span className="text-sm text-offwhite">
+                    {e.earned > 0 ? `+${e.earned} earned` : ""}
+                    {e.redeemed > 0 ? `-${e.redeemed} redeemed` : ""}
+                    {e.note ? <span className="ml-2 text-xs text-muted">({e.note})</span> : null}
+                  </span>
+                  <span className="text-xs text-muted">
+                    bal {e.runningBalance} · {fmt(e.at)}
                   </span>
                 </li>
               ))}

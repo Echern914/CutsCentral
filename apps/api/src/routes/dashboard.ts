@@ -50,13 +50,14 @@ dashboardRouter.get("/stats", async (req, res) => {
   });
 });
 
-// Monthly trends: completed visits + nudges sent, last 6 months.
+// Monthly trends: completed visits + nudges sent, configurable range (3/6/12).
 dashboardRouter.get("/trends", async (req, res) => {
   const shop = req.shop!;
   const now = new Date();
-  // Build the last 6 month buckets (YYYY-MM).
+  const requested = Number(req.query.months ?? 6);
+  const monthCount = [3, 6, 12].includes(requested) ? requested : 6;
   const months: { key: string; label: string; start: Date; end: Date }[] = [];
-  for (let i = 5; i >= 0; i--) {
+  for (let i = monthCount - 1; i >= 0; i--) {
     const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
     months.push({
@@ -96,21 +97,22 @@ dashboardRouter.get("/at-risk", async (req, res) => {
 });
 
 // Recent activity feed (latest nudges + completed visits, interleaved).
+// ?limit controls how many merged items to return (dashboard 20, see-all 100).
 dashboardRouter.get("/activity", async (req, res) => {
   const shop = req.shop!;
-  // Reads-with-relations use prisma directly with an explicit shopId filter
-  // (forShop covers the common where/create stamping; includes stay simple here).
+  const limit = Math.min(100, Math.max(5, Number(req.query.limit ?? 20)));
+  const perSource = limit; // pull enough from each source to fill `limit` after merge
   const [nudges, visits] = await Promise.all([
     prisma.nudge.findMany({
       where: { shopId: shop.id, status: "SENT" },
       orderBy: { createdAt: "desc" },
-      take: 15,
+      take: perSource,
       include: { client: { select: { firstName: true, lastName: true } } },
     }),
     prisma.visit.findMany({
       where: { shopId: shop.id, status: "COMPLETED" },
       orderBy: { completedAt: "desc" },
-      take: 15,
+      take: perSource,
       include: { client: { select: { firstName: true, lastName: true } } },
     }),
   ]);
@@ -130,14 +132,15 @@ dashboardRouter.get("/activity", async (req, res) => {
     })),
   ]
     .sort((a, b) => (a.at < b.at ? 1 : -1))
-    .slice(0, 20);
+    .slice(0, limit);
 
   res.json({ items });
 });
 
-// Punch leaderboard (top balances).
+// Punch leaderboard. ?limit controls how many (dashboard 10, see-all up to 100).
 dashboardRouter.get("/leaderboard", async (req, res) => {
   const shop = req.shop!;
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 10)));
   const grouped = await prisma.punchLedger.groupBy({
     by: ["clientId"],
     where: { shopId: shop.id },
@@ -148,8 +151,9 @@ dashboardRouter.get("/leaderboard", async (req, res) => {
       clientId: g.clientId,
       balance: (g._sum.punchesEarned ?? 0) - (g._sum.punchesRedeemed ?? 0),
     }))
+    .filter((r) => r.balance > 0)
     .sort((a, b) => b.balance - a.balance)
-    .slice(0, 10);
+    .slice(0, limit);
 
   const clients = await prisma.client.findMany({
     where: { id: { in: ranked.map((r) => r.clientId) } },
@@ -388,6 +392,95 @@ dashboardRouter.post("/clients/:clientId/bonus", async (req, res) => {
     },
   });
   res.json({ ok: true, newBalance: balance + count });
+});
+
+// Bulk actions over selected clients: opt-out, opt-in, or nudge.
+dashboardRouter.post("/clients/bulk", smsLimiter, async (req, res) => {
+  const shop = req.shop!;
+  const parsed = z
+    .object({
+      action: z.enum(["optOut", "optIn", "nudge"]),
+      clientIds: z.array(z.string()).min(1).max(200),
+    })
+    .safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const { action, clientIds } = parsed.data;
+  const db = forShop(shop.id);
+
+  if (action === "optOut" || action === "optIn") {
+    const optedOut = action === "optOut";
+    const { count } = await prisma.client.updateMany({
+      where: { shopId: shop.id, id: { in: clientIds } },
+      data: { optedOut },
+    });
+    res.json({ ok: true, updated: count });
+    return;
+  }
+
+  // Bulk nudge: only eligible (not opted out, has phone). Respects nothing fancy
+  // here beyond opt-out/phone; this is a deliberate barber action.
+  const clients = await db.client.findMany({
+    where: { id: { in: clientIds }, optedOut: false, phone: { not: null } },
+  });
+  const provider = getMessageProvider();
+  let sent = 0;
+  let failed = 0;
+  for (const client of clients) {
+    const body = buildNudgeBody({
+      firstName: client.firstName,
+      shopName: shop.name,
+      bookingUrl: shop.bookingUrl,
+      magicToken: client.magicToken,
+      template: shop.smsTemplate,
+    });
+    const nudge = await db.nudge.create({
+      data: { clientId: client.id, channel: "SMS", status: "PENDING", body },
+    });
+    try {
+      const result = await provider.send({ to: client.phone!, body });
+      await prisma.nudge.update({
+        where: { id: nudge.id },
+        data: { status: "SENT", sentAt: new Date(), messageSid: result.sid },
+      });
+      sent++;
+    } catch (err) {
+      await prisma.nudge.update({
+        where: { id: nudge.id },
+        data: { status: "FAILED", failedReason: (err as Error).message },
+      });
+      failed++;
+    }
+  }
+  res.json({ ok: true, sent, failed, skipped: clientIds.length - clients.length });
+});
+
+// Punch ledger detail for one client (earned/redeemed/bonus history).
+dashboardRouter.get("/clients/:clientId/ledger", async (req, res) => {
+  const shop = req.shop!;
+  const db = forShop(shop.id);
+  const client = await db.client.findFirst({ where: { id: req.params.clientId } });
+  if (!client) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const entries = await db.punch.findMany({
+    where: { clientId: client.id },
+    orderBy: { createdAt: "desc" },
+    take: 100,
+  });
+  res.json({
+    balance: await currentBalance(shop.id, client.id),
+    entries: entries.map((e) => ({
+      at: e.createdAt.toISOString(),
+      earned: e.punchesEarned,
+      redeemed: e.punchesRedeemed,
+      runningBalance: e.runningBalance,
+      note: e.note,
+    })),
+  });
 });
 
 // Single client detail: profile, visits, punch balance, nudge history.

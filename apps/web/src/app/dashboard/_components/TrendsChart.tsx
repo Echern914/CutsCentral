@@ -1,8 +1,10 @@
 "use client";
 
+import { useState, useTransition } from "react";
 import { motion } from "framer-motion";
 import { Card } from "@/components/ui/Card";
 import { fadeUp } from "@/components/motion/variants";
+import { trendsAction } from "../actions";
 
 export interface TrendPoint {
   label: string;
@@ -11,25 +13,53 @@ export interface TrendPoint {
 }
 
 /**
- * Lightweight dependency-free bar chart: completed visits vs nudges sent over the
- * last 6 months. Grouped bars per month, scaled to the max value.
+ * Lightweight dependency-free bar chart: completed visits vs nudges sent over a
+ * selectable range (3/6/12 months). Grouped bars per month, scaled to the max.
  */
-export function TrendsChart({ series }: { series: TrendPoint[] }) {
+export function TrendsChart({ series: initial }: { series: TrendPoint[] }) {
+  const [series, setSeries] = useState(initial);
+  const [range, setRange] = useState(6);
+  const [pending, startTransition] = useTransition();
+
+  function pick(months: number) {
+    if (months === range) return;
+    setRange(months);
+    startTransition(async () => {
+      setSeries(await trendsAction(months));
+    });
+  }
+
   const max = Math.max(1, ...series.flatMap((p) => [p.visits, p.nudges]));
   const hasData = series.some((p) => p.visits > 0 || p.nudges > 0);
 
   return (
     <motion.div variants={fadeUp} initial="hidden" animate="show">
       <Card className="p-5">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="font-display text-lg">Last 6 months</h2>
-          <div className="flex items-center gap-4 text-xs text-muted">
-            <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-gold" /> Visits
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-muted" /> Nudges
-            </span>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="font-display text-lg">Trends</h2>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1 rounded-full border border-subtle p-0.5">
+              {[3, 6, 12].map((m) => (
+                <button
+                  key={m}
+                  onClick={() => pick(m)}
+                  disabled={pending}
+                  className={`rounded-full px-2.5 py-1 text-xs ${
+                    range === m ? "bg-gold text-charcoal" : "text-muted hover:text-offwhite"
+                  }`}
+                >
+                  {m}m
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-3 text-xs text-muted">
+              <span className="flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-gold" /> Visits
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-muted" /> Nudges
+              </span>
+            </div>
           </div>
         </div>
 

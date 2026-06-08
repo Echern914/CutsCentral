@@ -83,11 +83,17 @@ export default async function DashboardPage() {
           rows={atRisk.data?.clients ?? []}
           appBaseUrl={process.env.APP_BASE_URL ?? ""}
         />
-        <ActivityFeed items={activity.data?.items ?? []} />
+        <ActivityFeed
+          items={activity.data?.items ?? []}
+          seeAllHref="/dashboard/activity"
+        />
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
-        <Leaderboard leaders={leaderboard.data?.leaders ?? []} />
+        <Leaderboard
+          leaders={leaderboard.data?.leaders ?? []}
+          seeAllHref="/dashboard/leaderboard"
+        />
         <SettingsCard settings={shop} />
       </div>
 
