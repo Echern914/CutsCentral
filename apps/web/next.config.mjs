@@ -1,9 +1,12 @@
 // CSP: Next.js needs inline scripts/styles for hydration without a nonce
-// pipeline, so script/style allow 'unsafe-inline'. Everything else is locked
-// down; img allows https (shop logos are barber-provided URLs).
+// pipeline, so script/style allow 'unsafe-inline'. 'unsafe-eval' is only
+// required by the dev-mode toolchain (react-refresh), never in production.
+// Everything else is locked down; img allows https (shop logos are
+// barber-provided URLs).
+const isDev = process.env.NODE_ENV === "development";
 const csp = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' https: data:",
   "font-src 'self' data:",

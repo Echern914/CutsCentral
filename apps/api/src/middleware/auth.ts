@@ -24,31 +24,38 @@ export async function requireUser(
   next: NextFunction,
 ): Promise<void> {
   // Accept either the httpOnly session cookie (web) or a bearer token (native
-  // app). Try BOTH: a stale cookie must not shadow a valid Authorization header.
+  // app). Try BOTH all the way through the revocation check: a stale or even
+  // REVOKED cookie must not shadow a valid Authorization header.
   const cookie = req.cookies?.[SESSION_COOKIE_NAME] as string | undefined;
   const authHeader = req.header("Authorization");
   const bearer = authHeader?.startsWith("Bearer ")
     ? authHeader.slice(7)
     : undefined;
-  const payload = sessionFromToken(cookie) ?? sessionFromToken(bearer);
-  if (!payload) {
-    res.status(401).json({ error: "unauthorized" });
-    return;
-  }
+  const candidates = [sessionFromToken(cookie), sessionFromToken(bearer)].filter(
+    (p): p is NonNullable<typeof p> => p !== null,
+  );
 
   // Revocation check: a token minted before the user's current tokenVersion
-  // (e.g. before a password change) is dead even if its signature/expiry hold.
-  const user = await prisma.user.findUnique({
-    where: { id: payload.userId },
-    select: { tokenVersion: true },
-  });
-  if (!user || (payload.v ?? 0) !== user.tokenVersion) {
-    res.status(401).json({ error: "unauthorized" });
-    return;
+  // (e.g. before a password change or logout) is dead even if its
+  // signature/expiry hold. Cache per userId - both candidates usually agree.
+  const versions = new Map<string, number | null>();
+  for (const payload of candidates) {
+    let version = versions.get(payload.userId);
+    if (version === undefined) {
+      const user = await prisma.user.findUnique({
+        where: { id: payload.userId },
+        select: { tokenVersion: true },
+      });
+      version = user ? user.tokenVersion : null;
+      versions.set(payload.userId, version);
+    }
+    if (version !== null && (payload.v ?? 0) === version) {
+      req.userId = payload.userId;
+      next();
+      return;
+    }
   }
-
-  req.userId = payload.userId;
-  next();
+  res.status(401).json({ error: "unauthorized" });
 }
 
 export async function requireShop(

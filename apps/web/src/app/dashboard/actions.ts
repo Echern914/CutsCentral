@@ -75,7 +75,13 @@ export async function addClientAction(
     notes: String(formData.get("notes") ?? "").trim() || undefined,
   });
   revalidatePath("/dashboard/clients");
-  return res.ok ? { ok: true } : { error: "Could not add client. Check the fields." };
+  if (res.ok) return { ok: true };
+  return {
+    error:
+      res.error === "invalid_phone"
+        ? "That phone number isn't valid — use a US number like (302) 555-0142."
+        : "Could not add client. Check the fields.",
+  };
 }
 
 export async function toggleOptOutAction(

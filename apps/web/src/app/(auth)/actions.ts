@@ -85,6 +85,17 @@ export async function loginAction(
 }
 
 export async function logoutAction(): Promise<void> {
+  // Tell the API first so the token is revoked server-side (tokenVersion bump),
+  // then drop the web-origin cookie. Best-effort: a dead API must not trap the
+  // user in a session they're trying to leave.
+  const token = cookies().get(SESSION_COOKIE_NAME)?.value;
+  if (token) {
+    await fetch(`${API_BASE}/api/auth/logout`, {
+      method: "POST",
+      headers: { Cookie: `${SESSION_COOKIE_NAME}=${token}` },
+      cache: "no-store",
+    }).catch(() => undefined);
+  }
   cookies().delete(SESSION_COOKIE_NAME);
   redirect("/login");
 }

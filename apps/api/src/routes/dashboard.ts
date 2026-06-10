@@ -325,6 +325,15 @@ dashboardRouter.post("/clients", async (req, res) => {
   }
   const d = parsed.data;
   const phone = toE164(d.phone);
+  // A supplied-but-unparseable phone must fail loudly: silently storing null
+  // means the barber thinks the client is reachable when they never will be.
+  if (d.phone && d.phone.trim() && !phone) {
+    res.status(400).json({
+      error: "invalid_phone",
+      message: "That phone number doesn't look valid. Use a US number like (302) 555-0142.",
+    });
+    return;
+  }
   // Stable key: phone, else email, else a manual-namespaced random key.
   const key = phone
     ? `tel:${phone}`

@@ -70,16 +70,23 @@ export function verifySession(
   const b = Buffer.from(expectedSig);
   if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
 
-  let payload: SessionPayload;
+  let raw: Record<string, unknown>;
   try {
-    payload = JSON.parse(
+    raw = JSON.parse(
       Buffer.from(payloadB64, "base64url").toString("utf8"),
-    ) as SessionPayload;
+    ) as Record<string, unknown>;
   } catch {
     return null;
   }
+  // Other token types (e.g. the Google handoff code) are signed with the same
+  // secret and also carry userId+exp. They tag themselves with `purpose` and
+  // have no `iat` - reject anything that isn't strictly a session payload so
+  // a short-lived handoff code can never double as a session credential.
+  if ("purpose" in raw) return null;
+  const payload = raw as unknown as SessionPayload;
   if (
     typeof payload.userId !== "string" ||
+    typeof payload.iat !== "number" ||
     typeof payload.exp !== "number" ||
     payload.exp <= nowSeconds
   ) {

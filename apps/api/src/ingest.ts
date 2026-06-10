@@ -3,6 +3,7 @@ import { randomToken } from "@chairback/config";
 import { deriveAcuityClientKey, toE164 } from "./acuity/clientKey.js";
 import { getAcuityClientForShop } from "./acuity/client.js";
 import { resolveStatus } from "./acuity/mapping.js";
+import { recomputeCadence } from "./engines/cadence.js";
 import type { AcuityAppointment } from "./acuity/types.js";
 
 /**
@@ -32,7 +33,7 @@ export async function ingestAppointment(
   const endAt = appt.endTime ? new Date(appt.endTime) : null;
   const price = appt.price ? Number(appt.price) : null;
 
-  await runWithShop(shop.id, async (tx) => {
+  const { clientId, clawedBack } = await runWithShop(shop.id, async (tx) => {
     const client = await tx.client.upsert({
       where: { shopId_acuityClientKey: { shopId: shop.id, acuityClientKey } },
       create: {
@@ -66,6 +67,11 @@ export async function ingestAppointment(
       existing?.status === "COMPLETED" &&
       status !== "CANCELED" &&
       status !== "NO_SHOW";
+    // A retroactive cancel/no-show on an already-promoted visit: the punch it
+    // earned is phantom (the cut never happened) and must be clawed back.
+    const revokeCompleted =
+      existing?.status === "COMPLETED" &&
+      (status === "CANCELED" || status === "NO_SHOW");
 
     const visit = await tx.visit.upsert({
       where: {
@@ -91,8 +97,15 @@ export async function ingestAppointment(
         serviceName: appt.type ?? undefined,
         noShow: appt.noShow ?? false,
         canceledAt: status === "CANCELED" ? new Date() : null,
+        completedAt: revokeCompleted ? null : undefined,
       },
     });
+
+    if (revokeCompleted) {
+      // Remove the visit's earn entry (visitId is unique; balance is always
+      // derived from the aggregate, so deleting keeps it consistent).
+      await tx.punchLedger.deleteMany({ where: { visitId: visit.id } });
+    }
 
     // If a visit arrives already COMPLETED, earn a punch here (normally the
     // status-promotion job does this). Idempotent via PunchLedger.visitId.
@@ -117,7 +130,14 @@ export async function ingestAppointment(
         });
       }
     }
+
+    return { clientId: client.id, clawedBack: revokeCompleted };
   });
+
+  // The completed-visit set changed: lastVisitAt / median cadence / nextExpectedAt
+  // were all advanced by the phantom visit and must be recomputed. (Outside the
+  // tx - recomputeCadence opens its own shop-scoped transaction.)
+  if (clawedBack) await recomputeCadence(shop.id, clientId);
 }
 
 /** Re-export prisma for callers that need a raw lookup near ingest. */

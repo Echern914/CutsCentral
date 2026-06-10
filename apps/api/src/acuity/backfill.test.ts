@@ -66,14 +66,26 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-describe("backfillShop date-cursor walk", () => {
-  it("ingests all appointments across multiple pages", async () => {
-    await backfillShop(shopId);
-    expect(await prisma.visit.count({ where: { shopId } })).toBe(250);
-  });
+// 250 appointments x one runWithShop transaction each (~7 round trips) against
+// the remote DB far exceeds the 30s default - this is an integration test.
+const BACKFILL_TIMEOUT = 180_000;
 
-  it("is idempotent - a re-run creates no duplicates", async () => {
-    await backfillShop(shopId);
-    expect(await prisma.visit.count({ where: { shopId } })).toBe(250);
-  });
+describe("backfillShop date-cursor walk", () => {
+  it(
+    "ingests all appointments across multiple pages",
+    async () => {
+      await backfillShop(shopId);
+      expect(await prisma.visit.count({ where: { shopId } })).toBe(250);
+    },
+    BACKFILL_TIMEOUT,
+  );
+
+  it(
+    "is idempotent - a re-run creates no duplicates",
+    async () => {
+      await backfillShop(shopId);
+      expect(await prisma.visit.count({ where: { shopId } })).toBe(250);
+    },
+    BACKFILL_TIMEOUT,
+  );
 });

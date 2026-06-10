@@ -72,6 +72,20 @@ export function verifyGoogleState(token: string | undefined, nowSeconds: number)
  */
 const HANDOFF_TTL_SECONDS = 60;
 
+// Single-use enforcement: consumed nonces are remembered until they expire.
+// In-memory is sufficient for the current single-instance API deploy; a
+// multi-instance deploy would need a shared store (DB row / Redis).
+const consumedNonces = new Map<string, number>();
+
+function consumeNonce(nonce: string, exp: number, nowSeconds: number): boolean {
+  for (const [n, e] of consumedNonces) {
+    if (e <= nowSeconds) consumedNonces.delete(n);
+  }
+  if (consumedNonces.has(nonce)) return false;
+  consumedNonces.set(nonce, exp);
+  return true;
+}
+
 export function createHandoffCode(userId: string, nowSeconds: number): string {
   const payload = {
     userId,
@@ -83,7 +97,11 @@ export function createHandoffCode(userId: string, nowSeconds: number): string {
   return `${b64}.${signState(b64)}`;
 }
 
-/** Returns the userId if the code is authentic and unexpired; otherwise null. */
+/**
+ * Returns the userId if the code is authentic, unexpired, and has never been
+ * used before; otherwise null. Single-use: a replayed code (browser history,
+ * proxy/access logs that captured the redirect URL) is rejected.
+ */
 export function verifyHandoffCode(
   code: string | undefined,
   nowSeconds: number,
@@ -101,11 +119,16 @@ export function verifyHandoffCode(
     const payload = JSON.parse(Buffer.from(b64, "base64url").toString("utf8")) as {
       userId?: string;
       purpose?: string;
+      nonce?: string;
       exp?: number;
     };
     if (payload.purpose !== "google-handoff") return null;
     if (typeof payload.exp !== "number" || payload.exp <= nowSeconds) return null;
-    return typeof payload.userId === "string" ? payload.userId : null;
+    if (typeof payload.userId !== "string" || typeof payload.nonce !== "string") {
+      return null;
+    }
+    if (!consumeNonce(payload.nonce, payload.exp, nowSeconds)) return null;
+    return payload.userId;
   } catch {
     return null;
   }

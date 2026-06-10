@@ -3,7 +3,12 @@ import { z } from "zod";
 import { apiEnv } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { hashPassword, verifyPassword } from "../auth/password.js";
-import { clearSessionCookie, setSessionCookie } from "../auth/session.js";
+import {
+  SESSION_COOKIE_NAME,
+  clearSessionCookie,
+  sessionFromToken,
+  setSessionCookie,
+} from "../auth/session.js";
 import {
   GOOGLE_STATE_COOKIE,
   buildGoogleAuthorizeUrl,
@@ -89,7 +94,28 @@ authRouter.post("/login", authLimiter, async (req, res) => {
   res.json({ id: user.id, email: user.email, name: user.name, token });
 });
 
-authRouter.post("/logout", (_req, res) => {
+authRouter.post("/logout", async (req, res) => {
+  // Server-side revocation, not just a cookie clear: session tokens are
+  // stateless 30-day bearers (also handed to native clients), so bump
+  // tokenVersion to kill every copy. Only when the presented token is
+  // currently valid - an already-revoked token must not be able to keep
+  // bumping the version and lock the real user out of live sessions.
+  const cookie = req.cookies?.[SESSION_COOKIE_NAME] as string | undefined;
+  const authHeader = req.header("Authorization");
+  const bearer = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
+  const payload = sessionFromToken(cookie) ?? sessionFromToken(bearer);
+  if (payload) {
+    const user = await prisma.user.findUnique({
+      where: { id: payload.userId },
+      select: { tokenVersion: true },
+    });
+    if (user && (payload.v ?? 0) === user.tokenVersion) {
+      await prisma.user.update({
+        where: { id: payload.userId },
+        data: { tokenVersion: { increment: 1 } },
+      });
+    }
+  }
   clearSessionCookie(res);
   res.json({ ok: true });
 });
