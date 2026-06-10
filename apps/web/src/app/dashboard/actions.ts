@@ -140,7 +140,9 @@ export async function deleteShopAction(
   if (!res.ok) {
     return { error: "Confirmation didn't match. Type your shop name exactly." };
   }
-  redirect("/login");
+  // The account (and session) still exist - only the shop is gone. Onboarding
+  // is the truthful destination; /login while still authenticated was a dead end.
+  redirect("/onboarding");
 }
 
 export async function trendsAction(

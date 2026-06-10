@@ -46,8 +46,13 @@ export function RebookCountdown({
 }) {
   const reduce = useReducedMotion();
   const [now, setNow] = useState(0); // tick trigger
+  // Live clock math can't render on the server: the SSR HTML's seconds would
+  // never match the client's hydration pass (guaranteed hydration error).
+  // Render a stable shell first; start the clock after mount.
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
+    setMounted(true);
     if (rebook.state !== "counting") return;
     const id = setInterval(() => setNow((n) => n + 1), 1000);
     return () => clearInterval(id);
@@ -57,19 +62,23 @@ export function RebookCountdown({
 
   // Already rebooked - celebrate, no timer.
   if (rebook.state === "booked" && rebook.upcomingAt) {
-    const when = new Date(rebook.upcomingAt).toLocaleString(undefined, {
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    });
+    const when = mounted
+      ? new Date(rebook.upcomingAt).toLocaleString(undefined, {
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        })
+      : "";
     return (
       <Card className="border-emerald-soft/30 p-5 text-center">
         <p className="text-xs uppercase tracking-[0.18em] text-emerald-soft">
           You&apos;re booked
         </p>
-        <p className="mt-1 text-sm text-offwhite">Next visit: {when}</p>
+        <p className="mt-1 min-h-5 text-sm text-offwhite">
+          {when ? `Next visit: ${when}` : "See you soon."}
+        </p>
       </Card>
     );
   }
@@ -77,6 +86,23 @@ export function RebookCountdown({
   // No history yet - gentle prompt, no countdown.
   if (rebook.state === "none" || !rebook.deadline) {
     return null;
+  }
+
+  if (!mounted) {
+    // Same-size placeholder so the card doesn't jump when the clock appears.
+    return (
+      <Card className="border-gold/30 p-5">
+        <div className="text-center">
+          <p className="text-xs uppercase tracking-[0.18em] text-muted">
+            Time left to rebook
+          </p>
+          <div className="skeleton mx-auto mt-3 h-14 w-64 max-w-full rounded-xl" />
+          <p className="mt-3 text-xs text-muted">
+            Rebook within {rebook.windowDays} days to keep your streak.
+          </p>
+        </div>
+      </Card>
+    );
   }
 
   const r = diff(rebook.deadline);

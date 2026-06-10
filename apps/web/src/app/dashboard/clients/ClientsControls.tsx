@@ -103,7 +103,16 @@ function AddClientForm({ onDone }: { onDone: () => void }) {
       <form action={action} className="grid gap-3 sm:grid-cols-2">
         <input name="firstName" placeholder="First name *" required className={field} />
         <input name="lastName" placeholder="Last name" className={field} />
-        <input name="phone" placeholder="Phone (for nudges)" className={field} />
+        <input
+          name="phone"
+          type="tel"
+          placeholder="Phone (for nudges)"
+          // US numbers only - the API silently drops anything it can't parse to
+          // E.164, so catch typos here instead of "adding" a client with no phone.
+          pattern="^\+?1?[-. (]*\d{3}[-. )]*\d{3}[-. ]*\d{4}$"
+          title="Enter a 10-digit US phone number, e.g. 302-555-0142"
+          className={field}
+        />
         <input name="email" type="email" placeholder="Email" className={field} />
         <textarea
           name="notes"

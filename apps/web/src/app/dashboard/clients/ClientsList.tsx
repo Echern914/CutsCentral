@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState, useTransition } from "react";
 import { Card } from "@/components/ui/Card";
+import { LocalDate } from "@/components/ui/LocalDate";
 import { useToast } from "@/components/ui/Toast";
 import { bulkClientAction } from "../actions";
 
@@ -34,10 +35,12 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
       return next;
     });
   }
+  // Membership-checked (not size-checked) so stale ids can never read as
+  // "everything selected" after the visible rows change.
+  const allSelected =
+    clients.length > 0 && clients.every((c) => selected.has(c.id));
   function toggleAll() {
-    setSelected((prev) =>
-      prev.size === clients.length ? new Set() : new Set(clients.map((c) => c.id)),
-    );
+    setSelected(allSelected ? new Set() : new Set(clients.map((c) => c.id)));
   }
 
   function runBulk(action: "optOut" | "optIn" | "nudge") {
@@ -109,7 +112,7 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
         <div className="flex items-center gap-3 border-b border-subtle px-4 py-2.5 sm:px-5">
           <input
             type="checkbox"
-            checked={selected.size === clients.length && clients.length > 0}
+            checked={allSelected}
             onChange={toggleAll}
             className="h-4 w-4 accent-gold"
             aria-label="Select all"
@@ -146,9 +149,12 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
                   </p>
                   <p className="truncate text-xs text-muted">
                     {c.phone ?? c.email ?? "no contact"}
-                    {c.lastVisitAt
-                      ? ` · last ${new Date(c.lastVisitAt).toLocaleDateString()}`
-                      : ""}
+                    {c.lastVisitAt ? (
+                      <>
+                        {" · last "}
+                        <LocalDate iso={c.lastVisitAt} />
+                      </>
+                    ) : null}
                   </p>
                 </div>
                 <span className="shrink-0 font-display text-gold" title="Punch balance">

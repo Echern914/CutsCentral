@@ -19,13 +19,13 @@ export function Button({
 } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
   const styles =
     variant === "primary"
-      ? "bg-gold text-charcoal hover:bg-gold-muted shadow-glow"
-      : "bg-transparent text-offwhite border border-subtle hover:bg-charcoal-700";
+      ? "bg-gold-gradient text-charcoal shadow-glow hover:shadow-glow-lg hover:brightness-105"
+      : "bg-transparent text-offwhite border border-subtle hover:bg-charcoal-700 hover:border-subtle-strong";
   return (
     <motion.button
       {...pressable}
       className={cn(
-        "rounded-full px-5 py-2.5 text-sm font-medium transition-colors disabled:opacity-50 disabled:pointer-events-none",
+        "rounded-full px-5 py-2.5 text-sm font-semibold transition-all disabled:opacity-50 disabled:pointer-events-none",
         styles,
         className,
       )}
@@ -51,7 +51,7 @@ export function LinkButton({
       href={href}
       className={cn(
         "inline-flex items-center justify-center rounded-full px-6 py-3 text-sm font-semibold",
-        "bg-gold text-charcoal hover:bg-gold-muted shadow-glow transition-colors",
+        "bg-gold-gradient text-charcoal shadow-glow transition-all hover:shadow-glow-lg hover:brightness-105",
         className,
       )}
     >

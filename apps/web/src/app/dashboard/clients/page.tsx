@@ -53,7 +53,9 @@ export default async function ClientsPage({
 
       <ClientsControls />
 
-      <ClientsList clients={clients} />
+      {/* Keyed by the query so selection state resets when the visible rows
+          change - otherwise bulk actions could hit clients from a previous page. */}
+      <ClientsList key={qs.toString() || "all"} clients={clients} />
 
       {pageCount > 1 && (
         <div className="mt-4 flex items-center justify-center gap-3">

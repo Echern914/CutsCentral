@@ -1,8 +1,35 @@
+// CSP: Next.js needs inline scripts/styles for hydration without a nonce
+// pipeline, so script/style allow 'unsafe-inline'. Everything else is locked
+// down; img allows https (shop logos are barber-provided URLs).
+const csp = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' https: data:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "frame-ancestors 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join("; ");
+
+const securityHeaders = [
+  { key: "Content-Security-Policy", value: csp },
+  { key: "X-Frame-Options", value: "DENY" },
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  { key: "Strict-Transport-Security", value: "max-age=15552000; includeSubDomains" },
+  { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+];
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
   // Compile the shared workspace package from source.
   transpilePackages: ["@chairback/config"],
+  async headers() {
+    return [{ source: "/(.*)", headers: securityHeaders }];
+  },
   // On Vercel (monorepo, "include files outside root" on), `next build` can pull
   // sibling workspace TS (apps/api) into its typecheck and fail on Node-vs-DOM
   // Response types that are valid in their own package. The web app's own types

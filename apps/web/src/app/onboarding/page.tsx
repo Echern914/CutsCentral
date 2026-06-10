@@ -15,7 +15,7 @@ function Submit() {
     <button
       type="submit"
       disabled={pending}
-      className="w-full rounded-full bg-gold px-5 py-3 text-sm font-semibold text-charcoal shadow-glow hover:bg-gold-muted disabled:opacity-50"
+      className="w-full rounded-full bg-gold-gradient px-5 py-3 text-sm font-semibold text-charcoal shadow-glow transition-all hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
     >
       {pending ? "Creating…" : "Continue"}
     </button>

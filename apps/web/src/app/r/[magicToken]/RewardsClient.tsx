@@ -14,11 +14,18 @@ import type { RewardsData } from "./page";
 export function RewardsClient({ data }: { data: RewardsData }) {
   const { shop, client, punches, visits, rebook } = data;
   const remaining = punches.threshold - punches.towardNext;
-  const rewardReady = punches.towardNext === 0 && punches.balance > 0;
+  // An unlocked reward stays visible until the barber redeems it - even if the
+  // client keeps visiting (balance 11/threshold 10 still shows "ready").
+  const rewardReady = punches.rewardsUnlocked > 0;
   const accent = shop.accentColor || "#D4AF37"; // shop brand color or default gold
 
   return (
-    <main className="mx-auto min-h-dvh w-full max-w-md px-5 py-10">
+    <main className="relative mx-auto min-h-dvh w-full max-w-md px-5 py-10">
+      <div
+        className="absolute left-1/2 top-24 -z-10 h-80 w-80 -translate-x-1/2 rounded-full opacity-15 blur-3xl"
+        style={{ backgroundColor: accent }}
+        aria-hidden
+      />
       <motion.div
         variants={staggerContainer}
         initial="hidden"
@@ -45,7 +52,7 @@ export function RewardsClient({ data }: { data: RewardsData }) {
 
         {/* Punch counter */}
         <motion.div variants={fadeUp}>
-          <Card className="p-6 text-center">
+          <Card className={`p-6 text-center ${rewardReady ? "ring-conic" : ""}`}>
             <div
               className="font-display text-6xl leading-none"
               style={{ color: accent }}

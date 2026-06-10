@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Card } from "@/components/ui/Card";
 import { fadeUp } from "@/components/motion/variants";
@@ -15,18 +15,37 @@ export interface TrendPoint {
 /**
  * Lightweight dependency-free bar chart: completed visits vs nudges sent over a
  * selectable range (3/6/12 months). Grouped bars per month, scaled to the max.
+ *
+ * The default (6m) range always renders the server prop, so revalidations after
+ * sweeps/nudges show up immediately; other ranges re-fetch whenever the server
+ * data refreshes so they never go stale either.
  */
 export function TrendsChart({ series: initial }: { series: TrendPoint[] }) {
-  const [series, setSeries] = useState(initial);
   const [range, setRange] = useState(6);
-  const [pending, startTransition] = useTransition();
+  const [override, setOverride] = useState<TrendPoint[] | null>(null);
+  const [pending, setPending] = useState(false);
+  const series = range === 6 ? initial : (override ?? initial);
+
+  useEffect(() => {
+    if (range === 6) {
+      setOverride(null);
+      setPending(false);
+      return;
+    }
+    let cancelled = false;
+    setPending(true);
+    void trendsAction(range).then((s) => {
+      if (cancelled) return;
+      setOverride(s);
+      setPending(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [range, initial]);
 
   function pick(months: number) {
-    if (months === range) return;
-    setRange(months);
-    startTransition(async () => {
-      setSeries(await trendsAction(months));
-    });
+    if (months !== range) setRange(months);
   }
 
   const max = Math.max(1, ...series.flatMap((p) => [p.visits, p.nudges]));

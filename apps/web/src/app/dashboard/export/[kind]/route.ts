@@ -27,7 +27,9 @@ export async function GET(
     return NextResponse.json({ error: "export_failed" }, { status: res.status });
   }
   const body = await res.text();
-  return new NextResponse(body, {
+  // UTF-8 BOM: without it, Excel on Windows opens the file as ANSI and names
+  // like "José" come out garbled.
+  return new NextResponse(String.fromCharCode(0xfeff) + body, {
     status: 200,
     headers: {
       "Content-Type": "text/csv; charset=utf-8",

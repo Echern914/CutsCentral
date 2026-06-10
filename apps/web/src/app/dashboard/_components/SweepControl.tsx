@@ -55,10 +55,18 @@ export function SweepControl({ atRiskCount }: { atRiskCount: number }) {
 
         <div className="flex flex-wrap items-center gap-3">
           {result ? (
-            <span className="text-sm text-emerald-soft">
-              Sent {result.sent} {result.sent === 1 ? "nudge" : "nudges"}
-              {result.failed > 0 ? ` (${result.failed} failed)` : ""}.
-            </span>
+            <>
+              <span className="text-sm text-emerald-soft">
+                Sent {result.sent} {result.sent === 1 ? "nudge" : "nudges"}
+                {result.failed > 0 ? ` (${result.failed} failed)` : ""}.
+              </span>
+              <button
+                onClick={() => setResult(null)}
+                className="rounded-full border border-subtle px-4 py-2 text-xs text-muted hover:bg-charcoal-700"
+              >
+                Done
+              </button>
+            </>
           ) : confirming && preview ? (
             <>
               <span className="text-sm text-offwhite">

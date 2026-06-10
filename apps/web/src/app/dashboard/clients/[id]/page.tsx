@@ -40,9 +40,10 @@ interface LedgerEntry {
 }
 
 export default async function ClientDetailPage({ params }: { params: { id: string } }) {
-  const [res, ledgerRes] = await Promise.all([
+  const [res, ledgerRes, shopRes] = await Promise.all([
     apiGet<ClientDetail>(`/api/dashboard/clients/${params.id}`),
     apiGet<{ entries: LedgerEntry[] }>(`/api/dashboard/clients/${params.id}/ledger`),
+    apiGet<{ rewardLabel: string }>("/api/shops/me"),
   ]);
   if (res.status === 404) notFound();
   if (!res.ok || !res.data) {
@@ -50,9 +51,12 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
   }
   const { client, balance, rewardThreshold, rewardReady, visits, nudges } = res.data;
   const ledger = ledgerRes.data?.entries ?? [];
+  const rewardLabel = shopRes.data?.rewardLabel ?? "Free Cut";
   const appBase = process.env.APP_BASE_URL ?? "";
   const rewardsUrl = `${appBase}/r/${client.magicToken}`;
-  const towardNext = balance % rewardThreshold;
+  // A full, redeemable card shows threshold/threshold, not a misleading 0/threshold.
+  const towardNext = rewardReady ? rewardThreshold : balance % rewardThreshold;
+  const totalEarned = ledger.reduce((sum, e) => sum + e.earned, 0);
 
   return (
     <main className="mx-auto w-full max-w-3xl px-5 py-8">
@@ -79,14 +83,14 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           optedOut={client.optedOut}
           hasPhone={Boolean(client.phone)}
           rewardReady={rewardReady}
-          rewardLabel="Free Cut"
+          rewardLabel={rewardLabel}
         />
       </header>
 
       {/* Snapshot */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <Stat label="Punches" value={`${towardNext}/${rewardThreshold}`} accent />
-        <Stat label="Total earned" value={String(balance)} />
+        <Stat label="Total earned" value={String(totalEarned)} />
         <Stat label="Visits every" value={client.medianIntervalDays ? `~${client.medianIntervalDays}d` : "n/a"} />
         <Stat label="Last visit" value={fmt(client.lastVisitAt)} />
       </div>

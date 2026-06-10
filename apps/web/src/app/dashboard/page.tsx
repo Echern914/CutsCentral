@@ -1,7 +1,5 @@
 import { redirect } from "next/navigation";
-import { APP_NAME } from "@chairback/config/constants";
 import { apiGet } from "@/lib/api";
-import { logoutAction } from "../(auth)/actions";
 import { StatCards, type Stats } from "./_components/StatCards";
 import { TrendsChart, type TrendPoint } from "./_components/TrendsChart";
 import { SweepControl } from "./_components/SweepControl";
@@ -17,8 +15,11 @@ interface ShopMe extends ShopSettings {
 
 export default async function DashboardPage() {
   const shopRes = await apiGet<ShopMe>("/api/shops/me");
+  if (shopRes.status === 401) redirect("/login");
   if (shopRes.status === 404) redirect("/onboarding");
-  if (!shopRes.ok || !shopRes.data) redirect("/login");
+  // A transient API failure (5xx) must NOT bounce an authenticated barber to
+  // the login page - let error.tsx render its "Try again" instead.
+  if (!shopRes.ok || !shopRes.data) throw new Error("Failed to load your shop");
   const shop = shopRes.data;
 
   const [stats, atRisk, activity, leaderboard, trends, me] = await Promise.all([
@@ -32,38 +33,22 @@ export default async function DashboardPage() {
 
   return (
     <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-5 sm:py-8">
-      <header className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <header className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-xs uppercase tracking-[0.2em] text-muted">{APP_NAME}</p>
-          <h1 className="font-display text-3xl tracking-tight">{shop.name}</h1>
+          <p className="text-xs uppercase tracking-[0.2em] text-muted">
+            Your shop
+          </p>
+          <h1 className="font-display text-4xl tracking-tight">{shop.name}</h1>
         </div>
-        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+        {!shop.connected && (
           <a
-            href="/dashboard/clients"
-            className="rounded-full border border-subtle px-4 py-2 text-xs text-offwhite hover:bg-charcoal-700"
+            href="/onboarding/connect"
+            className="animate-pulse-glow inline-flex w-fit items-center gap-2 rounded-full border border-gold/50 bg-gold/10 px-4 py-2 text-xs font-medium text-gold transition-colors hover:bg-gold/20"
           >
-            Clients
+            <span className="h-1.5 w-1.5 rounded-full bg-gold" />
+            Connect Acuity to go live
           </a>
-          <a
-            href="/dashboard/nudges"
-            className="rounded-full border border-subtle px-4 py-2 text-xs text-offwhite hover:bg-charcoal-700"
-          >
-            Nudges
-          </a>
-          {!shop.connected && (
-            <a
-              href="/onboarding/connect"
-              className="rounded-full border border-gold/50 px-4 py-2 text-xs text-gold hover:bg-gold/10"
-            >
-              Connect Acuity
-            </a>
-          )}
-          <form action={logoutAction}>
-            <button className="rounded-full border border-subtle px-4 py-2 text-xs text-muted hover:bg-charcoal-700">
-              Sign out
-            </button>
-          </form>
-        </div>
+        )}
       </header>
 
       {stats.data && <StatCards stats={stats.data} />}

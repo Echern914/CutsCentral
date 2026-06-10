@@ -1,4 +1,5 @@
 import { Card } from "@/components/ui/Card";
+import { LocalDate } from "@/components/ui/LocalDate";
 
 /** Recent completed visits list. */
 export function VisitHistory({
@@ -18,13 +19,11 @@ export function VisitHistory({
           <span className="text-sm text-offwhite">
             {v.service ?? "Visit"}
           </span>
-          <span className="text-xs text-muted">
-            {new Date(v.date).toLocaleDateString(undefined, {
-              month: "short",
-              day: "numeric",
-              year: "numeric",
-            })}
-          </span>
+          <LocalDate
+            iso={v.date}
+            options={{ month: "short", day: "numeric", year: "numeric" }}
+            className="text-xs text-muted"
+          />
         </div>
       ))}
     </Card>

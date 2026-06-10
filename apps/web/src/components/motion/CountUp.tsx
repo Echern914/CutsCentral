@@ -14,22 +14,26 @@ export function CountUp({
   className?: string;
 }) {
   const reduce = useReducedMotion();
-  const [display, setDisplay] = useState(reduce ? value : 0);
-  const node = useRef(value);
+  // Start at 0 (matches SSR HTML exactly); the first effect animates 0 -> value.
+  // Seeding the ref with `value` made the first animation a value -> value no-op.
+  const [display, setDisplay] = useState(0);
+  const node = useRef(0);
 
   useEffect(() => {
     if (reduce) {
+      node.current = value;
       setDisplay(value);
       return;
     }
-    const controls = animate(node.current, value, {
+    const from = node.current;
+    node.current = value;
+    const controls = animate(from, value, {
       duration,
       ease: "easeOut",
       onUpdate(v) {
         setDisplay(Math.round(v));
       },
     });
-    node.current = value;
     return () => controls.stop();
   }, [value, duration, reduce]);
 

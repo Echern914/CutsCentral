@@ -31,14 +31,18 @@ export function StatCards({ stats }: { stats: Stats }) {
     >
       {/* Hero: estimated revenue recovered */}
       <motion.div variants={fadeUp} className="lg:col-span-1">
-        <Card className="h-full p-6">
+        <Card className="relative h-full overflow-hidden p-6">
+          <div
+            className="absolute -right-10 -top-10 h-40 w-40 rounded-full bg-gold/15 blur-3xl"
+            aria-hidden
+          />
           <p className="text-xs uppercase tracking-wide text-muted">
             Est. revenue recovered
           </p>
-          <p className="mt-2 font-display text-5xl text-gold">
+          <p className="mt-2 font-display text-6xl text-gradient-gold">
             $<CountUp value={stats.estDollarsRecovered} />
           </p>
-          <p className="mt-2 text-xs text-muted">
+          <p className="mt-3 text-xs text-muted">
             {stats.rebookingsRecovered} rebookings × ${Math.round(stats.avgTicket)} avg
             ticket
           </p>
@@ -49,7 +53,11 @@ export function StatCards({ stats }: { stats: Stats }) {
       <motion.div variants={fadeUp} className="lg:col-span-2">
         <div className="grid h-full grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4">
           {secondary.map((c) => (
-            <Card key={c.label} className="flex flex-col justify-center p-5">
+            <Card
+              key={c.label}
+              hover
+              className="flex flex-col justify-center p-5"
+            >
               <p className="text-xs uppercase tracking-wide text-muted">{c.label}</p>
               <p
                 className={`mt-2 font-display text-3xl ${
