@@ -30,3 +30,13 @@ async function shutdown(signal: string) {
 
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("SIGINT", () => void shutdown("SIGINT"));
+
+// Safety net for fire-and-forget rejections (scheduler ticks, webhook post-ack
+// work). Log instead of letting Node 20's default kill the process.
+process.on("unhandledRejection", (reason) => {
+  logger.error({ err: reason }, "unhandled promise rejection");
+});
+process.on("uncaughtException", (err) => {
+  logger.fatal({ err }, "uncaught exception");
+  process.exit(1);
+});
