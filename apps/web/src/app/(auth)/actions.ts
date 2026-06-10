@@ -76,7 +76,12 @@ export async function loginAction(
     return { error: "Invalid email or password." };
   }
   applySessionCookie(result.setCookie);
-  redirect("/dashboard");
+  // Honor the deep link the middleware preserved (?next=), but only same-origin
+  // relative paths - never an absolute/protocol-relative URL (open redirect).
+  const next = String(formData.get("next") ?? "");
+  const safeNext =
+    next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
+  redirect(safeNext);
 }
 
 export async function logoutAction(): Promise<void> {

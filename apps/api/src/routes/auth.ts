@@ -8,9 +8,11 @@ import {
   GOOGLE_STATE_COOKIE,
   buildGoogleAuthorizeUrl,
   createGoogleState,
+  createHandoffCode,
   exchangeGoogleCode,
   googleConfigured,
   verifyGoogleState,
+  verifyHandoffCode,
 } from "../auth/google.js";
 import { requireUser } from "../middleware/auth.js";
 import { authLimiter } from "../middleware/rateLimit.js";
@@ -18,16 +20,20 @@ import { authLimiter } from "../middleware/rateLimit.js";
 const env = apiEnv();
 export const authRouter: Router = Router();
 
-const signupSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(8).max(200),
-  name: z.string().min(1).max(120),
-});
+const signupSchema = z
+  .object({
+    email: z.string().email(),
+    password: z.string().min(8).max(200),
+    name: z.string().min(1).max(120),
+  })
+  .strict();
 
-const loginSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(1).max(200),
-});
+const loginSchema = z
+  .object({
+    email: z.string().email(),
+    password: z.string().min(1).max(200),
+  })
+  .strict();
 
 authRouter.post("/signup", authLimiter, async (req, res) => {
   const parsed = signupSchema.safeParse(req.body);
@@ -50,7 +56,7 @@ authRouter.post("/signup", authLimiter, async (req, res) => {
     data: { email: normalizedEmail, passwordHash, name: name.trim() },
   });
 
-  const token = setSessionCookie(res, user.id);
+  const token = setSessionCookie(res, user.id, user.tokenVersion);
   // token is also returned for native clients (Authorization: Bearer); web uses the cookie.
   res.status(201).json({ id: user.id, email: user.email, name: user.name, token });
 });
@@ -79,7 +85,7 @@ authRouter.post("/login", authLimiter, async (req, res) => {
     return;
   }
 
-  const token = setSessionCookie(res, user.id);
+  const token = setSessionCookie(res, user.id, user.tokenVersion);
   res.json({ id: user.id, email: user.email, name: user.name, token });
 });
 
@@ -102,7 +108,7 @@ authRouter.get("/me", requireUser, async (req, res) => {
 
 // Update display name.
 authRouter.patch("/me", requireUser, async (req, res) => {
-  const parsed = z.object({ name: z.string().min(1).max(120) }).safeParse(req.body);
+  const parsed = z.object({ name: z.string().min(1).max(120) }).strict().safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_input" });
     return;
@@ -118,7 +124,11 @@ authRouter.patch("/me", requireUser, async (req, res) => {
 // Change password (requires the current password unless the account is Google-only).
 authRouter.post("/change-password", requireUser, async (req, res) => {
   const parsed = z
-    .object({ currentPassword: z.string().optional(), newPassword: z.string().min(8).max(200) })
+    .object({
+      currentPassword: z.string().optional(),
+      newPassword: z.string().min(8).max(200),
+    })
+    .strict()
     .safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_input" });
@@ -137,11 +147,18 @@ authRouter.post("/change-password", requireUser, async (req, res) => {
       return;
     }
   }
-  await prisma.user.update({
+  // Bump tokenVersion: every session issued before this moment (any device,
+  // any leaked token) is revoked. Then mint a fresh cookie for THIS browser
+  // so the user changing their password stays signed in.
+  const updated = await prisma.user.update({
     where: { id: user.id },
-    data: { passwordHash: await hashPassword(parsed.data.newPassword) },
+    data: {
+      passwordHash: await hashPassword(parsed.data.newPassword),
+      tokenVersion: { increment: 1 },
+    },
   });
-  res.json({ ok: true });
+  const token = setSessionCookie(res, updated.id, updated.tokenVersion);
+  res.json({ ok: true, token });
 });
 
 // Google sign-in
@@ -204,10 +221,37 @@ authRouter.get("/google/callback", authLimiter, async (req, res) => {
       }
     }
 
-    setSessionCookie(res, user.id);
-    // New users (no shop yet) land in onboarding; the dashboard redirects there too.
-    res.redirect(`${env.APP_BASE_URL}/dashboard`);
+    // The API (Railway) and web (Vercel) are DIFFERENT origins: a cookie set
+    // here never reaches the web app, which used to bounce Google users back
+    // to /login forever. Hand off via a 60s signed code instead; the web
+    // exchanges it server-side and sets the cookie on its own origin.
+    const handoff = createHandoffCode(user.id, nowSeconds());
+    res.redirect(
+      `${env.APP_BASE_URL}/auth/google/landing?code=${encodeURIComponent(handoff)}`,
+    );
   } catch {
     res.redirect(`${env.APP_BASE_URL}/login?error=google_failed`);
   }
+});
+
+// Exchange a handoff code (from the Google callback redirect) for a session
+// token. Called server-to-server by the web app, never by the browser.
+authRouter.post("/google/exchange", authLimiter, async (req, res) => {
+  const parsed = z.object({ code: z.string().min(1).max(1000) }).strict().safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const userId = verifyHandoffCode(parsed.data.code, nowSeconds());
+  if (!userId) {
+    res.status(401).json({ error: "invalid_code" });
+    return;
+  }
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) {
+    res.status(401).json({ error: "invalid_code" });
+    return;
+  }
+  const token = setSessionCookie(res, user.id, user.tokenVersion);
+  res.json({ token });
 });

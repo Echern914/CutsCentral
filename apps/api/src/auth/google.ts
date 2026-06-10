@@ -62,6 +62,55 @@ export function verifyGoogleState(token: string | undefined, nowSeconds: number)
   }
 }
 
+/**
+ * Post-OAuth session handoff. The API and the web app live on DIFFERENT domains
+ * (Railway vs Vercel), so a cookie set during the OAuth callback never reaches
+ * the web origin. Instead the callback redirects to the web app with a signed,
+ * 60-second, single-purpose code; the web server exchanges it for a real
+ * session token and sets the cookie on ITS origin. The long-lived session token
+ * never appears in a URL.
+ */
+const HANDOFF_TTL_SECONDS = 60;
+
+export function createHandoffCode(userId: string, nowSeconds: number): string {
+  const payload = {
+    userId,
+    purpose: "google-handoff",
+    nonce: randomBytes(12).toString("base64url"),
+    exp: nowSeconds + HANDOFF_TTL_SECONDS,
+  };
+  const b64 = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  return `${b64}.${signState(b64)}`;
+}
+
+/** Returns the userId if the code is authentic and unexpired; otherwise null. */
+export function verifyHandoffCode(
+  code: string | undefined,
+  nowSeconds: number,
+): string | null {
+  if (!code) return null;
+  const dot = code.indexOf(".");
+  if (dot <= 0) return null;
+  const b64 = code.slice(0, dot);
+  const sig = code.slice(dot + 1);
+  const expected = signState(b64);
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(b64, "base64url").toString("utf8")) as {
+      userId?: string;
+      purpose?: string;
+      exp?: number;
+    };
+    if (payload.purpose !== "google-handoff") return null;
+    if (typeof payload.exp !== "number" || payload.exp <= nowSeconds) return null;
+    return typeof payload.userId === "string" ? payload.userId : null;
+  } catch {
+    return null;
+  }
+}
+
 export function buildGoogleAuthorizeUrl(state: string): string {
   const q = new URLSearchParams({
     response_type: "code",

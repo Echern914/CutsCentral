@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import { prisma, type Shop } from "@chairback/db";
-import { SESSION_COOKIE_NAME, userIdFromToken } from "../auth/session.js";
+import { SESSION_COOKIE_NAME, sessionFromToken } from "../auth/session.js";
 
 /**
  * Auth middleware. requireUser resolves the session to req.userId. requireShop
@@ -18,23 +18,36 @@ declare global {
   }
 }
 
-export function requireUser(
+export async function requireUser(
   req: Request,
   res: Response,
   next: NextFunction,
-): void {
-  // Accept either the httpOnly session cookie (web) or a bearer token (native app).
+): Promise<void> {
+  // Accept either the httpOnly session cookie (web) or a bearer token (native
+  // app). Try BOTH: a stale cookie must not shadow a valid Authorization header.
   const cookie = req.cookies?.[SESSION_COOKIE_NAME] as string | undefined;
   const authHeader = req.header("Authorization");
   const bearer = authHeader?.startsWith("Bearer ")
     ? authHeader.slice(7)
     : undefined;
-  const userId = userIdFromToken(cookie ?? bearer);
-  if (!userId) {
+  const payload = sessionFromToken(cookie) ?? sessionFromToken(bearer);
+  if (!payload) {
     res.status(401).json({ error: "unauthorized" });
     return;
   }
-  req.userId = userId;
+
+  // Revocation check: a token minted before the user's current tokenVersion
+  // (e.g. before a password change) is dead even if its signature/expiry hold.
+  const user = await prisma.user.findUnique({
+    where: { id: payload.userId },
+    select: { tokenVersion: true },
+  });
+  if (!user || (payload.v ?? 0) !== user.tokenVersion) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+
+  req.userId = payload.userId;
   next();
 }
 

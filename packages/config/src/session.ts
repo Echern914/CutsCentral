@@ -15,6 +15,8 @@ export interface SessionPayload {
   iat: number;
   /** expiry (epoch seconds) */
   exp: number;
+  /** token version for revocation; tokens minted before the field default to 0 */
+  v?: number;
 }
 
 const DEFAULT_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
@@ -36,11 +38,13 @@ export function createSession(
   secret: string,
   nowSeconds: number,
   ttlSeconds: number = DEFAULT_TTL_SECONDS,
+  version = 0,
 ): string {
   const payload: SessionPayload = {
     userId,
     iat: nowSeconds,
     exp: nowSeconds + ttlSeconds,
+    v: version,
   };
   const payloadB64 = b64url(Buffer.from(JSON.stringify(payload), "utf8"));
   return `${payloadB64}.${sign(payloadB64, secret)}`;

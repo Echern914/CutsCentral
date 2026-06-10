@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useFormState, useFormStatus } from "react-dom";
+import { APP_NAME } from "@chairback/config/constants";
 import { motion } from "framer-motion";
 import { fadeUp } from "@/components/motion/variants";
 import { Card } from "@/components/ui/Card";
@@ -12,7 +13,7 @@ function SubmitButton({ label }: { label: string }) {
     <button
       type="submit"
       disabled={pending}
-      className="w-full rounded-full bg-gold px-5 py-3 text-sm font-semibold text-charcoal shadow-glow transition-colors hover:bg-gold-muted disabled:opacity-50"
+      className="w-full rounded-full bg-gold-gradient px-5 py-3 text-sm font-semibold text-charcoal shadow-glow transition-all hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
     >
       {pending ? "Please wait…" : label}
     </button>
@@ -27,6 +28,8 @@ export function AuthForm({
   action,
   googleAvailable,
   googleStartUrl,
+  initialError,
+  next,
 }: {
   mode: "login" | "signup";
   action: (
@@ -35,13 +38,25 @@ export function AuthForm({
   ) => Promise<{ error?: string }>;
   googleAvailable: boolean;
   googleStartUrl: string;
+  /** Error carried in from a redirect (e.g. a failed Google sign-in). */
+  initialError?: string;
+  /** Deep link to return to after login (set by the middleware redirect). */
+  next?: string;
 }) {
   const [state, formAction] = useFormState(action, {});
   const isSignup = mode === "signup";
+  const errorText = state.error ?? initialError;
 
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center px-5">
+    <main className="relative mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center px-5">
+      <div
+        className="absolute left-1/2 top-1/3 -z-10 h-72 w-72 -translate-x-1/2 -translate-y-1/2 rounded-full bg-gold/10 blur-3xl"
+        aria-hidden
+      />
       <motion.div variants={fadeUp} initial="hidden" animate="show">
+        <p className="mb-4 text-center text-xs uppercase tracking-[0.25em] text-gold">
+          {APP_NAME}
+        </p>
         <h1 className="mb-1 text-center font-display text-3xl tracking-tight">
           {isSignup ? "Create your account" : "Welcome back"}
         </h1>
@@ -66,6 +81,7 @@ export function AuthForm({
             </>
           )}
           <form action={formAction} className="flex flex-col gap-3">
+            {next && <input type="hidden" name="next" value={next} />}
             {isSignup && (
               <input name="name" placeholder="Your name" required className={field} />
             )}
@@ -84,8 +100,8 @@ export function AuthForm({
               minLength={8}
               className={field}
             />
-            {state.error && (
-              <p className="text-sm text-danger-soft">{state.error}</p>
+            {errorText && (
+              <p className="text-sm text-danger-soft">{errorText}</p>
             )}
             <div className="mt-1">
               <SubmitButton label={isSignup ? "Create account" : "Sign in"} />
