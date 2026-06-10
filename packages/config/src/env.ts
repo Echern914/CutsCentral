@@ -12,13 +12,22 @@ const boolish = z
   .enum(["true", "false", "1", "0"])
   .transform((v) => v === "true" || v === "1");
 
-const apiSchema = z.object({
-  DATABASE_URL: z.string().url(),
-  // Direct (non-pooled) connection for prisma migrate. Optional at app runtime.
-  DIRECT_URL: z.string().url().optional(),
+// URL env var that tolerates stray edge whitespace from copy-paste. Plain .trim()
+// leaves zero-width space (U+200B-200D), BOM (U+FEFF), and word-joiner (U+2060) -
+// invisible chars that still pass .url() and then poison every `${url}/path` we
+// build (a leading space breaks CORS Allow-Origin matching and 302 Location headers).
+// transform-then-pipe so the cleaned value is what gets validated and stored.
+const STRIP_EDGES = /^[\s\u200B-\u200D\uFEFF\u2060]+|[\s\u200B-\u200D\uFEFF\u2060]+$/g;
+const cleanUrl = () =>
+  z.string().transform((v) => v.replace(STRIP_EDGES, "")).pipe(z.string().url());
 
-  APP_BASE_URL: z.string().url(),
-  API_BASE_URL: z.string().url(),
+const apiSchema = z.object({
+  DATABASE_URL: cleanUrl(),
+  // Direct (non-pooled) connection for prisma migrate. Optional at app runtime.
+  DIRECT_URL: cleanUrl().optional(),
+
+  APP_BASE_URL: cleanUrl(),
+  API_BASE_URL: cleanUrl(),
 
   SESSION_SECRET: z.string().min(16),
   TOKEN_ENCRYPTION_KEY: z.string().min(1),
@@ -27,12 +36,12 @@ const apiSchema = z.object({
 
   ACUITY_OAUTH_CLIENT_ID: z.string().min(1),
   ACUITY_OAUTH_CLIENT_SECRET: z.string().min(1),
-  ACUITY_OAUTH_REDIRECT_URI: z.string().url(),
+  ACUITY_OAUTH_REDIRECT_URI: cleanUrl(),
 
   // Google sign-in (optional - barber auth works with email/password without it).
   GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
   GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
-  GOOGLE_OAUTH_REDIRECT_URI: z.string().url().optional(),
+  GOOGLE_OAUTH_REDIRECT_URI: cleanUrl().optional(),
 
   TWILIO_ACCOUNT_SID: z.string().min(1),
   TWILIO_AUTH_TOKEN: z.string().min(1),
@@ -73,8 +82,8 @@ export function apiEnv(source: NodeJS.ProcessEnv = process.env): ApiEnv {
 }
 
 const webSchema = z.object({
-  APP_BASE_URL: z.string().url(),
-  API_BASE_URL: z.string().url(),
+  APP_BASE_URL: cleanUrl(),
+  API_BASE_URL: cleanUrl(),
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),
