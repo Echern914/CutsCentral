@@ -18,8 +18,12 @@ const display = Bricolage_Grotesque({
 });
 
 export const metadata: Metadata = {
-  title: APP_NAME,
-  description: "Loyalty & rebooking for barbershops.",
+  title: {
+    default: `${APP_NAME} — loyalty & rebooking for barbershops`,
+    template: `%s — ${APP_NAME}`,
+  },
+  description:
+    "Automatic loyalty punch cards and perfectly-timed rebooking texts for barbershops. Built on top of your Acuity scheduling.",
 };
 
 export default function RootLayout({

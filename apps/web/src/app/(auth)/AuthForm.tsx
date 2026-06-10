@@ -55,7 +55,9 @@ export function AuthForm({
       />
       <motion.div variants={fadeUp} initial="hidden" animate="show">
         <p className="mb-4 text-center text-xs uppercase tracking-[0.25em] text-gold">
-          {APP_NAME}
+          <Link href="/" className="transition-opacity hover:opacity-80">
+            {APP_NAME}
+          </Link>
         </p>
         <h1 className="mb-1 text-center font-display text-3xl tracking-tight">
           {isSignup ? "Create your account" : "Welcome back"}
