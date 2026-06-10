@@ -10,8 +10,12 @@ import { logger } from "../logger.js";
  * Idempotent: only processes nudges with resultedInBookingAt = null.
  */
 export async function linkBookingsToNudges(now = new Date()): Promise<number> {
+  // One hour of slack past the window: the job runs hourly, and a nudge whose
+  // window closed between runs would otherwise age out of this fetch before its
+  // last-hour bookings were ever checked (permanently missed attribution).
   const windowStart = new Date(
-    now.getTime() - NUDGE.attributionWindowDays * 24 * 60 * 60 * 1000,
+    now.getTime() -
+      (NUDGE.attributionWindowDays * 24 + 1) * 60 * 60 * 1000,
   );
 
   const nudges = await prisma.nudge.findMany({

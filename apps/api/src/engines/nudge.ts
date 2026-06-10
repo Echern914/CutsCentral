@@ -41,8 +41,85 @@ export async function runNudgeSweep(opts: SweepOptions = {}): Promise<SweepSumma
   return summaries;
 }
 
+/**
+ * Batched per-client eligibility data: 3 grouped queries for the whole
+ * candidate set instead of 3 queries per candidate (the old N+1 pattern timed
+ * out on big shops). The nudge lookback is bounded to suppressionDays+1 because
+ * anything older passes R4 regardless.
+ */
+export interface EligibilityData {
+  completedCounts: Map<string, number>;
+  upcomingIds: Set<string>;
+  lastNudgeAt: Map<string, Date>;
+}
+
+export async function loadEligibilityData(
+  shopId: string,
+  clientIds: string[],
+  now: Date,
+): Promise<EligibilityData> {
+  const db = forShop(shopId);
+  const since = new Date(now.getTime() - (NUDGE.suppressionDays + 1) * MS_PER_DAY);
+  const [completed, upcoming, nudges] = await Promise.all([
+    db.visit.findMany({
+      where: { clientId: { in: clientIds }, status: "COMPLETED" },
+      select: { clientId: true },
+    }),
+    db.visit.findMany({
+      where: { clientId: { in: clientIds }, status: "SCHEDULED", scheduledAt: { gt: now } },
+      select: { clientId: true },
+    }),
+    db.nudge.findMany({
+      where: {
+        clientId: { in: clientIds },
+        status: { in: ["SENT", "PENDING"] },
+        createdAt: { gte: since },
+      },
+      select: { clientId: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+    }),
+  ]);
+
+  const completedCounts = new Map<string, number>();
+  for (const v of completed) {
+    completedCounts.set(v.clientId, (completedCounts.get(v.clientId) ?? 0) + 1);
+  }
+  const upcomingIds = new Set(upcoming.map((v) => v.clientId));
+  const lastNudgeAt = new Map<string, Date>();
+  for (const n of nudges) {
+    if (!lastNudgeAt.has(n.clientId)) lastNudgeAt.set(n.clientId, n.createdAt);
+  }
+  return { completedCounts, upcomingIds, lastNudgeAt };
+}
+
+/**
+ * Per-shop sweep serialization (in-process; matches the single-replica
+ * assumption documented in scheduler.ts). Without it, the 10:00 cron sweep and
+ * a barber-clicked dashboard sweep can interleave: both read "no nudge in 21
+ * days" before either writes PENDING, and the client gets texted twice.
+ */
+const sweepTails = new Map<string, Promise<unknown>>();
+
+export function sweepShop(
+  shop: Shop,
+  opts: SweepOptions = {},
+): Promise<SweepSummary> {
+  const prev = sweepTails.get(shop.id) ?? Promise.resolve();
+  const run = prev.then(
+    () => doSweepShop(shop, opts),
+    () => doSweepShop(shop, opts),
+  );
+  const tail: Promise<unknown> = run
+    .catch(() => {})
+    .finally(() => {
+      if (sweepTails.get(shop.id) === tail) sweepTails.delete(shop.id);
+    });
+  sweepTails.set(shop.id, tail);
+  return run;
+}
+
 /** Sweep a single shop. Per-shop cap, write-ahead ledger, dry-run aware. */
-export async function sweepShop(
+async function doSweepShop(
   shop: Shop,
   opts: SweepOptions = {},
 ): Promise<SweepSummary> {
@@ -77,6 +154,16 @@ export async function sweepShop(
     failed: 0,
     dryRun,
   };
+  if (candidates.length === 0) {
+    logger.info(summary, "nudge sweep complete");
+    return summary;
+  }
+
+  const data = await loadEligibilityData(
+    shop.id,
+    candidates.map((c) => c.id),
+    now,
+  );
 
   for (const client of candidates) {
     if (budget <= 0) {
@@ -84,27 +171,15 @@ export async function sweepShop(
       break;
     }
 
-    const [completedVisitCount, upcoming, lastNudge] = await Promise.all([
-      db.visit.count({ where: { clientId: client.id, status: "COMPLETED" } }),
-      db.visit.findFirst({
-        where: { clientId: client.id, status: "SCHEDULED", scheduledAt: { gt: now } },
-        select: { id: true },
-      }),
-      db.nudge.findFirst({
-        where: { clientId: client.id, status: { in: ["SENT", "PENDING"] } },
-        orderBy: { createdAt: "desc" },
-        select: { createdAt: true },
-      }),
-    ]);
-
+    const lastNudge = data.lastNudgeAt.get(client.id);
     const eligible = isNudgeEligible({
-      completedVisitCount,
+      completedVisitCount: data.completedCounts.get(client.id) ?? 0,
       medianIntervalDays: client.medianIntervalDays,
       daysSinceLastVisit: client.lastVisitAt
         ? daysBetween(client.lastVisitAt, now)
         : null,
-      hasUpcomingVisit: Boolean(upcoming),
-      daysSinceLastNudge: lastNudge ? daysBetween(lastNudge.createdAt, now) : null,
+      hasUpcomingVisit: data.upcomingIds.has(client.id),
+      daysSinceLastNudge: lastNudge ? daysBetween(lastNudge, now) : null,
       optedOut: client.optedOut,
       phone: client.phone,
       nudgeBufferDays: shop.nudgeBufferDays,
@@ -132,8 +207,11 @@ export async function sweepShop(
         data: { status: "SKIPPED" },
       });
       summary.skipped++;
+      // Dry-run consumes the (simulated) cap so the preview matches what a real
+      // run would actually send - otherwise "would text 20" can become "sent 5".
+      budget--;
       logger.info({ shopId: shop.id, clientId: client.id }, "[dry-run] would nudge");
-      continue; // dry-run does NOT consume the cap
+      continue;
     }
 
     try {

@@ -28,7 +28,12 @@ import { Prisma } from "./generated/client/index.js";
  * Toggle via DB_RLS_ENFORCE=false to fall back to app-layer-only (e.g. if the
  * role isn't present yet).
  */
-const ENFORCE_RLS = process.env.DB_RLS_ENFORCE !== "false";
+// Accept both documented falsy spellings ("false"/"0") - the env schema allows
+// either, and treating "0" as enabled would SET ROLE to a possibly-absent role
+// and take down every tenant query.
+const ENFORCE_RLS = !["false", "0"].includes(
+  (process.env.DB_RLS_ENFORCE ?? "").trim(),
+);
 
 /** Run a unit of work inside a transaction with the RLS shop context set. */
 export async function runWithShop<T>(

@@ -10,9 +10,11 @@ export function resolveStatus(
   appt: AcuityAppointment,
   action: string,
 ): VisitStatus {
-  if (appt.canceled) {
-    return appt.noShow ? "NO_SHOW" : "CANCELED";
-  }
+  // Acuity marks no-shows WITHOUT canceling the appointment, so check the flag
+  // first - otherwise a no-show stays SCHEDULED, gets promoted to COMPLETED,
+  // and earns a loyalty punch for a visit that never happened.
+  if (appt.noShow) return "NO_SHOW";
+  if (appt.canceled) return "CANCELED";
   if (action === "rescheduled") return "RESCHEDULED";
   // scheduled / changed / anything else with a live appointment becomes SCHEDULED.
   // The status-promotion job later flips past-end visits to COMPLETED.

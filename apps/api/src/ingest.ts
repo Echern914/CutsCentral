@@ -52,6 +52,21 @@ export async function ingestAppointment(
       },
     });
 
+    // A re-delivered/"changed" event resolves to SCHEDULED (resolveStatus never
+    // returns COMPLETED) - it must NOT downgrade a visit the promotion job
+    // already completed, or the punch/cadence history silently loses the visit.
+    // Terminal cancel/no-show states still override (a retroactive cancel is real).
+    const existing = await tx.visit.findUnique({
+      where: {
+        shopId_acuityAppointmentId: { shopId: shop.id, acuityAppointmentId: acuityId },
+      },
+      select: { status: true },
+    });
+    const keepCompleted =
+      existing?.status === "COMPLETED" &&
+      status !== "CANCELED" &&
+      status !== "NO_SHOW";
+
     const visit = await tx.visit.upsert({
       where: {
         shopId_acuityAppointmentId: { shopId: shop.id, acuityAppointmentId: acuityId },
@@ -69,7 +84,7 @@ export async function ingestAppointment(
         canceledAt: status === "CANCELED" ? new Date() : null,
       },
       update: {
-        status,
+        status: keepCompleted ? undefined : status,
         scheduledAt,
         endAt,
         price: price ?? undefined,

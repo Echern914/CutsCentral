@@ -4,8 +4,12 @@ import { forShop, prisma } from "@chairback/db";
 import { NUDGE, randomToken } from "@chairback/config";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { smsLimiter } from "../middleware/rateLimit.js";
-import { currentBalance, redeemPunches } from "../services/punch.js";
-import { sweepShop } from "../engines/nudge.js";
+import {
+  currentBalance,
+  grantBonusPunches,
+  redeemPunches,
+} from "../services/punch.js";
+import { loadEligibilityData, sweepShop } from "../engines/nudge.js";
 import { isNudgeEligible } from "../engines/eligibility.js";
 import { buildNudgeBody } from "../messaging/templates.js";
 import { getMessageProvider } from "../messaging/twilio.js";
@@ -18,6 +22,14 @@ dashboardRouter.use(requireUser, requireShop);
 
 function daysSince(d: Date, now: Date): number {
   return Math.floor((now.getTime() - d.getTime()) / MS_PER_DAY);
+}
+
+/** Parse a numeric query param defensively: NaN/garbage falls back to `def`,
+ * and the result is clamped - a malformed ?limit= must never reach Prisma. */
+function intQuery(raw: unknown, def: number, min: number, max: number): number {
+  const n = Number(raw ?? def);
+  if (!Number.isFinite(n)) return def;
+  return Math.min(max, Math.max(min, Math.trunc(n)));
 }
 
 // Aggregate stats for the dashboard cards.
@@ -100,7 +112,7 @@ dashboardRouter.get("/at-risk", async (req, res) => {
 // ?limit controls how many merged items to return (dashboard 20, see-all 100).
 dashboardRouter.get("/activity", async (req, res) => {
   const shop = req.shop!;
-  const limit = Math.min(100, Math.max(5, Number(req.query.limit ?? 20)));
+  const limit = intQuery(req.query.limit, 20, 5, 100);
   const perSource = limit; // pull enough from each source to fill `limit` after merge
   const [nudges, visits] = await Promise.all([
     prisma.nudge.findMany({
@@ -140,7 +152,7 @@ dashboardRouter.get("/activity", async (req, res) => {
 // Punch leaderboard. ?limit controls how many (dashboard 10, see-all up to 100).
 dashboardRouter.get("/leaderboard", async (req, res) => {
   const shop = req.shop!;
-  const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 10)));
+  const limit = intQuery(req.query.limit, 10, 1, 100);
   const grouped = await prisma.punchLedger.groupBy({
     by: ["clientId"],
     where: { shopId: shop.id },
@@ -218,13 +230,13 @@ dashboardRouter.post("/redeem/:clientId", async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const balance = await currentBalance(shop.id, client.id);
-  if (balance < shop.rewardThreshold) {
-    res.status(400).json({ error: "insufficient_punches", balance });
+  // Atomic check-and-redeem (double-click / two tabs can't redeem twice).
+  const result = await redeemPunches(shop.id, client.id, shop.rewardThreshold);
+  if (!result.ok) {
+    res.status(400).json({ error: "insufficient_punches", balance: result.balance });
     return;
   }
-  await redeemPunches(shop.id, client.id, shop.rewardThreshold);
-  res.json({ ok: true, newBalance: balance - shop.rewardThreshold });
+  res.json({ ok: true, newBalance: result.newBalance });
 });
 
 // Client list: search + sort + filter + pagination.
@@ -239,7 +251,7 @@ dashboardRouter.get("/clients", async (req, res) => {
   const q = String(req.query.q ?? "").trim();
   const sortKey = (String(req.query.sort ?? "recent") as keyof typeof SORTS);
   const filter = String(req.query.filter ?? "all"); // all | optedOut | active
-  const page = Math.max(1, Number(req.query.page ?? 1));
+  const page = intQuery(req.query.page, 1, 1, 100000);
   const pageSize = 50;
 
   const where: Record<string, unknown> = {};
@@ -294,13 +306,15 @@ dashboardRouter.get("/clients", async (req, res) => {
 });
 
 // Manually add a client (walk-ins, referrals - no Acuity needed).
-const addClientSchema = z.object({
-  firstName: z.string().min(1).max(80),
-  lastName: z.string().max(80).optional(),
-  phone: z.string().max(40).optional(),
-  email: z.string().email().optional().or(z.literal("")),
-  notes: z.string().max(2000).optional(),
-});
+const addClientSchema = z
+  .object({
+    firstName: z.string().min(1).max(80),
+    lastName: z.string().max(80).optional(),
+    phone: z.string().max(40).optional(),
+    email: z.string().email().optional().or(z.literal("")),
+    notes: z.string().max(2000).optional(),
+  })
+  .strict();
 
 dashboardRouter.post("/clients", async (req, res) => {
   const shop = req.shop!;
@@ -374,24 +388,15 @@ dashboardRouter.patch("/clients/:clientId/notes", async (req, res) => {
 // Grant bonus punches (e.g. a referral reward) - recorded in the ledger.
 dashboardRouter.post("/clients/:clientId/bonus", async (req, res) => {
   const shop = req.shop!;
-  const count = Math.max(1, Math.min(20, Number(req.body?.count ?? 1)));
+  const count = intQuery(req.body?.count, 1, 1, 20);
   const db = forShop(shop.id);
   const client = await db.client.findFirst({ where: { id: req.params.clientId } });
   if (!client) {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const balance = await currentBalance(shop.id, client.id);
-  await db.punch.create({
-    data: {
-      clientId: client.id,
-      visitId: null,
-      punchesEarned: count,
-      runningBalance: balance + count,
-      note: "bonus",
-    },
-  });
-  res.json({ ok: true, newBalance: balance + count });
+  const { newBalance } = await grantBonusPunches(shop.id, client.id, count);
+  res.json({ ok: true, newBalance });
 });
 
 // Bulk actions over selected clients: opt-out, opt-in, or nudge.
@@ -402,6 +407,7 @@ dashboardRouter.post("/clients/bulk", smsLimiter, async (req, res) => {
       action: z.enum(["optOut", "optIn", "nudge"]),
       clientIds: z.array(z.string()).min(1).max(200),
     })
+    .strict()
     .safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_input" });
@@ -629,7 +635,10 @@ function sendCsv(
   rows: (string | number)[][],
 ): void {
   const esc = (v: string | number) => {
-    const s = String(v);
+    let s = String(v);
+    // Neutralize spreadsheet formula injection (=, +, -, @, tab, CR prefixes
+    // in attacker-influenced text like client names) before CSV quoting.
+    if (typeof v === "string" && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const csv = [header, ...rows].map((r) => r.map(esc).join(",")).join("\r\n");
@@ -652,6 +661,23 @@ async function buildAtRiskRows(shopId: string, bufferDays: number, now: Date) {
       lastVisitAt: { not: null },
     },
   });
+  if (candidates.length === 0) return [];
+
+  // Batched lookups (4 queries total) instead of 4 queries PER candidate - the
+  // old N+1 was ~6 round-trips per client per dashboard load.
+  const ids = candidates.map((c) => c.id);
+  const [data, lastVisits] = await Promise.all([
+    loadEligibilityData(shopId, ids, now),
+    db.visit.findMany({
+      where: { clientId: { in: ids }, status: "COMPLETED" },
+      orderBy: [{ clientId: "asc" }, { scheduledAt: "desc" }],
+      distinct: ["clientId"],
+      select: { clientId: true, serviceName: true },
+    }),
+  ]);
+  const lastServiceById = new Map(
+    lastVisits.map((v) => [v.clientId, v.serviceName]),
+  );
 
   const rows: {
     id: string;
@@ -665,31 +691,14 @@ async function buildAtRiskRows(shopId: string, bufferDays: number, now: Date) {
   }[] = [];
 
   for (const c of candidates) {
-    const [completed, upcoming, lastNudge, lastVisit] = await Promise.all([
-      db.visit.count({ where: { clientId: c.id, status: "COMPLETED" } }),
-      db.visit.findFirst({
-        where: { clientId: c.id, status: "SCHEDULED", scheduledAt: { gt: now } },
-        select: { id: true },
-      }),
-      db.nudge.findFirst({
-        where: { clientId: c.id, status: { in: ["SENT", "PENDING"] } },
-        orderBy: { createdAt: "desc" },
-        select: { createdAt: true },
-      }),
-      db.visit.findFirst({
-        where: { clientId: c.id, status: "COMPLETED" },
-        orderBy: { scheduledAt: "desc" },
-        select: { serviceName: true },
-      }),
-    ]);
-
+    const lastNudge = data.lastNudgeAt.get(c.id);
     const daysSinceLastVisit = c.lastVisitAt ? daysSince(c.lastVisitAt, now) : null;
     const eligible = isNudgeEligible({
-      completedVisitCount: completed,
+      completedVisitCount: data.completedCounts.get(c.id) ?? 0,
       medianIntervalDays: c.medianIntervalDays,
       daysSinceLastVisit,
-      hasUpcomingVisit: Boolean(upcoming),
-      daysSinceLastNudge: lastNudge ? daysSince(lastNudge.createdAt, now) : null,
+      hasUpcomingVisit: data.upcomingIds.has(c.id),
+      daysSinceLastNudge: lastNudge ? daysSince(lastNudge, now) : null,
       optedOut: c.optedOut,
       phone: c.phone,
       nudgeBufferDays: bufferDays,
@@ -700,7 +709,7 @@ async function buildAtRiskRows(shopId: string, bufferDays: number, now: Date) {
       id: c.id,
       name: name(c),
       phone: c.phone,
-      lastService: lastVisit?.serviceName ?? null,
+      lastService: lastServiceById.get(c.id) ?? null,
       magicToken: c.magicToken,
       daysOverdue:
         (daysSinceLastVisit ?? 0) - ((c.medianIntervalDays ?? 0) + bufferDays),

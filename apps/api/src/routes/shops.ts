@@ -7,23 +7,34 @@ import { previewNudgeBody } from "../messaging/templates.js";
 
 export const shopsRouter: Router = Router();
 
-const createShopSchema = z.object({
-  name: z.string().min(1).max(120),
-  bookingUrl: z.string().url(),
-  timezone: z.string().min(1).default(DEFAULTS.timezone),
-  rewardThreshold: z.number().int().min(1).max(100).default(DEFAULTS.rewardThreshold),
-  rewardLabel: z.string().min(1).max(80).default(DEFAULTS.rewardLabel),
-  nudgeBufferDays: z.number().int().min(0).max(90).default(DEFAULTS.nudgeBufferDays),
-  dailySendCap: z.number().int().min(1).max(1000).default(DEFAULTS.dailySendCap),
-  smsTemplate: z.string().max(480).nullish(),
-  rebookWindowDays: z.number().int().min(1).max(90).default(14),
-  logoUrl: z.string().url().max(500).nullish().or(z.literal("")),
-  accentColor: z
+// http(s) only: these URLs are rendered as <a href>/<img src> on the PUBLIC
+// rewards page, so a javascript:/data: scheme would be stored XSS for clients.
+const httpUrl = (max: number) =>
+  z
     .string()
-    .regex(/^#[0-9a-fA-F]{6}$/, "Use a hex color like #D4AF37")
-    .nullish()
-    .or(z.literal("")),
-});
+    .max(max)
+    .url()
+    .refine((u) => /^https?:\/\//i.test(u), "Must be an http(s) URL");
+
+const createShopSchema = z
+  .object({
+    name: z.string().min(1).max(120),
+    bookingUrl: httpUrl(500),
+    timezone: z.string().min(1).default(DEFAULTS.timezone),
+    rewardThreshold: z.number().int().min(1).max(100).default(DEFAULTS.rewardThreshold),
+    rewardLabel: z.string().min(1).max(80).default(DEFAULTS.rewardLabel),
+    nudgeBufferDays: z.number().int().min(0).max(90).default(DEFAULTS.nudgeBufferDays),
+    dailySendCap: z.number().int().min(1).max(1000).default(DEFAULTS.dailySendCap),
+    smsTemplate: z.string().max(480).nullish(),
+    rebookWindowDays: z.number().int().min(1).max(90).default(14),
+    logoUrl: httpUrl(500).nullish().or(z.literal("")),
+    accentColor: z
+      .string()
+      .regex(/^#[0-9a-fA-F]{6}$/, "Use a hex color like #D4AF37")
+      .nullish()
+      .or(z.literal("")),
+  })
+  .strict();
 
 const updateShopSchema = createShopSchema.partial();
 

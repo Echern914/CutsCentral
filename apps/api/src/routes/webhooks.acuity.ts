@@ -15,8 +15,10 @@ import { ingestAppointment } from "../ingest.js";
  * under-documented; until confirmed, the per-shop path token is the
  * authenticator and HMAC is skipped when no key is stored.
  *
- * We ack 200 fast, then ingest. Idempotent via unique constraints, so Acuity
- * re-deliveries never duplicate.
+ * We ingest FIRST and only then ack 200. If ingest fails we return 500 so
+ * Acuity retries the delivery - an early 200 would tell Acuity "done" and the
+ * appointment (and its punch) would be silently lost forever. Ingest is
+ * idempotent via unique constraints, so retries never duplicate.
  */
 export const acuityWebhookRouter: Router = Router();
 
@@ -44,13 +46,13 @@ acuityWebhookRouter.post(
       return;
     }
 
-    // Ack immediately; process after. Idempotent ingest means retries are safe.
-    res.sendStatus(200);
-
     try {
       await ingestAppointment(shop, action, id);
+      res.sendStatus(200);
     } catch (err) {
       logger.error({ err, shopId: shop.id, acuityId: id }, "webhook ingest failed");
+      // 5xx -> Acuity re-delivers; the idempotent ingest absorbs the retry.
+      res.sendStatus(500);
     }
   },
 );

@@ -16,6 +16,7 @@ export async function promoteCompletedVisits(now = new Date()): Promise<number> 
       status: { in: ["SCHEDULED", "RESCHEDULED"] },
       endAt: { lt: now },
       canceledAt: null,
+      noShow: false, // a no-show never completes or earns a punch
     },
     select: { id: true, shopId: true, clientId: true },
   });

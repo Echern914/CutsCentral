@@ -30,7 +30,11 @@ twilioWebhookRouter.post(
       url,
       req.body as Record<string, string>,
     );
-    if (!valid && env.NODE_ENV === "production") {
+    // Enforce ALWAYS (not just production): this endpoint can opt clients out of
+    // SMS, and NODE_ENV defaults to "development" - a missing env var must not
+    // silently disable the only authentication this route has. Tests are the
+    // single explicit bypass.
+    if (!valid && process.env.VITEST !== "true") {
       res.sendStatus(403);
       return;
     }
