@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE_NAME } from "@chairback/config/constants";
 import { API_BASE } from "@/lib/api";
+import { sessionCookieDomain } from "@/lib/sessionCookieDomain";
 
 export const dynamic = "force-dynamic";
 
@@ -33,12 +34,19 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   // New users (no shop yet) get bounced from /dashboard to /onboarding.
   const redirect = NextResponse.redirect(new URL("/dashboard", req.url));
-  redirect.cookies.set(SESSION_COOKIE_NAME, token, {
+  const opts = {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
     maxAge: 60 * 60 * 24 * 30,
-  });
+  } as const;
+  redirect.cookies.set(SESSION_COOKIE_NAME, token, opts);
+  // Domain-wide copy so browser navigations to api.<apex> (Acuity OAuth start)
+  // are authenticated too.
+  const domain = sessionCookieDomain(req.headers.get("host"));
+  if (domain) {
+    redirect.cookies.set(SESSION_COOKIE_NAME, token, { ...opts, domain });
+  }
   return redirect;
 }

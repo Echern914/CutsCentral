@@ -1,9 +1,10 @@
 "use server";
 
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@chairback/config/constants";
 import { API_BASE } from "@/lib/api";
+import { sessionCookieDomain } from "@/lib/sessionCookieDomain";
 
 /**
  * Auth server actions. They call the API, then copy the API's session cookie
@@ -33,19 +34,30 @@ async function proxyAuth(
   return { ok: true, setCookie };
 }
 
-/** Copy the session value out of an API Set-Cookie header onto our origin. */
+const SESSION_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "lax",
+  path: "/",
+  maxAge: 60 * 60 * 24 * 30,
+} as const;
+
+/**
+ * Copy the session value out of an API Set-Cookie header onto our origin.
+ * On the product domain we set it TWICE: host-only (the web's own copy) and
+ * domain-wide (so browser navigations to api.<apex> - the Acuity OAuth start -
+ * carry it). Same value, so duplicate-name ordering is harmless.
+ */
 function applySessionCookie(setCookie: string | undefined): void {
   if (!setCookie) return;
   const match = new RegExp(`${SESSION_COOKIE_NAME}=([^;]+)`).exec(setCookie);
   const value = match?.[1];
   if (!value) return;
-  cookies().set(SESSION_COOKIE_NAME, value, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 30,
-  });
+  cookies().set(SESSION_COOKIE_NAME, value, SESSION_COOKIE_OPTIONS);
+  const domain = sessionCookieDomain(headers().get("host"));
+  if (domain) {
+    cookies().set(SESSION_COOKIE_NAME, value, { ...SESSION_COOKIE_OPTIONS, domain });
+  }
 }
 
 export async function signupAction(
@@ -96,6 +108,16 @@ export async function logoutAction(): Promise<void> {
       cache: "no-store",
     }).catch(() => undefined);
   }
+  // Clear BOTH cookie variants - the host-only one and (on the product
+  // domain) the domain-wide one set for API navigations.
   cookies().delete(SESSION_COOKIE_NAME);
+  const domain = sessionCookieDomain(headers().get("host"));
+  if (domain) {
+    cookies().set(SESSION_COOKIE_NAME, "", {
+      ...SESSION_COOKIE_OPTIONS,
+      domain,
+      maxAge: 0,
+    });
+  }
   redirect("/login");
 }
