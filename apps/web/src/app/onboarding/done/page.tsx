@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { apiGet } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
+import { BackfillPoller } from "./BackfillPoller";
 
 interface ShopStatus {
   connected: boolean;
@@ -14,11 +15,10 @@ export default async function OnboardingDonePage() {
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center px-5">
-      {/* Light auto-refresh while backfill imports history */}
-      {status?.connected && (status.visitCount ?? 0) === 0 && (
-        // eslint-disable-next-line @next/next/no-head-element
-        <meta httpEquiv="refresh" content="4" />
-      )}
+      {/* Light auto-refresh while backfill imports history (stops on its own) */}
+      <BackfillPoller
+        active={Boolean(status?.connected) && (status?.visitCount ?? 0) === 0}
+      />
       <p className="text-center text-xs uppercase tracking-[0.2em] text-muted">
         Step 3 of 3
       </p>
@@ -37,7 +37,9 @@ export default async function OnboardingDonePage() {
               <div className="skeleton h-full w-1/3 rounded-full bg-gold/40" />
             </div>
             <p className="text-sm text-muted">
-              Importing your appointment history… this can take a minute.
+              Importing your appointment history… this can take a minute. New on
+              Acuity? There may be nothing to import yet — your dashboard works
+              either way.
             </p>
           </>
         ) : (
