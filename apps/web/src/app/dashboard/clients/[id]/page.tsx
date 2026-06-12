@@ -21,8 +21,15 @@ interface ClientDetail {
     nextExpectedAt: string | null;
   };
   balance: number;
-  rewardThreshold: number;
+  rewards: {
+    id: string;
+    name: string;
+    emoji: string | null;
+    punchCost: number;
+    affordable: boolean;
+  }[];
   rewardReady: boolean;
+  promotions: { id: string; title: string }[];
   visits: { date: string; status: string; service: string | null }[];
   nudges: { sentAt: string; status: string; resultedInBooking: boolean }[];
 }
@@ -40,22 +47,19 @@ interface LedgerEntry {
 }
 
 export default async function ClientDetailPage({ params }: { params: { id: string } }) {
-  const [res, ledgerRes, shopRes] = await Promise.all([
+  const [res, ledgerRes] = await Promise.all([
     apiGet<ClientDetail>(`/api/dashboard/clients/${params.id}`),
     apiGet<{ entries: LedgerEntry[] }>(`/api/dashboard/clients/${params.id}/ledger`),
-    apiGet<{ rewardLabel: string }>("/api/shops/me"),
   ]);
   if (res.status === 404) notFound();
   if (!res.ok || !res.data) {
     return <main className="p-8 text-muted">Could not load client.</main>;
   }
-  const { client, balance, rewardThreshold, rewardReady, visits, nudges } = res.data;
+  const { client, balance, rewards, promotions, visits, nudges } = res.data;
   const ledger = ledgerRes.data?.entries ?? [];
-  const rewardLabel = shopRes.data?.rewardLabel ?? "Free Cut";
   const appBase = process.env.APP_BASE_URL ?? "";
   const rewardsUrl = `${appBase}/r/${client.magicToken}`;
-  // A full, redeemable card shows threshold/threshold, not a misleading 0/threshold.
-  const towardNext = rewardReady ? rewardThreshold : balance % rewardThreshold;
+  const readyCount = rewards.filter((r) => r.affordable).length;
   const totalEarned = ledger.reduce((sum, e) => sum + e.earned, 0);
 
   return (
@@ -82,18 +86,38 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           rewardsUrl={rewardsUrl}
           optedOut={client.optedOut}
           hasPhone={Boolean(client.phone)}
-          rewardReady={rewardReady}
-          rewardLabel={rewardLabel}
+          rewards={rewards}
+          promotions={promotions}
         />
       </header>
 
       {/* Snapshot */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <Stat label="Punches" value={`${towardNext}/${rewardThreshold}`} accent />
-        <Stat label="Total earned" value={String(totalEarned)} />
+        <Stat label="Punch balance" value={String(balance)} accent />
+        <Stat
+          label="Rewards ready"
+          value={rewards.length === 0 ? "n/a" : String(readyCount)}
+        />
         <Stat label="Visits every" value={client.medianIntervalDays ? `~${client.medianIntervalDays}d` : "n/a"} />
         <Stat label="Last visit" value={fmt(client.lastVisitAt)} />
       </div>
+
+      {/* Where the balance stands against the menu */}
+      {rewards.length > 0 && (
+        <Card className="mt-4 px-5 py-3.5">
+          <ul className="flex flex-wrap gap-x-5 gap-y-1.5">
+            {rewards.map((r) => (
+              <li key={r.id} className="text-xs">
+                <span className={r.affordable ? "text-emerald-soft" : "text-muted"}>
+                  {r.emoji ? `${r.emoji} ` : ""}
+                  {r.name} · {r.punchCost}
+                  {r.affordable ? " — ready" : ` (${r.punchCost - balance} to go)`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
 
       <div className="mt-6 grid gap-6 md:grid-cols-2">
         {/* Visit history */}

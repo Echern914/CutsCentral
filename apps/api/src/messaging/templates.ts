@@ -47,3 +47,28 @@ export function previewNudgeBody(template: string | null, shopName: string, book
     template,
   });
 }
+
+/**
+ * Promotion blast SMS copy. Same compliance safety net as nudges (STOP is
+ * always present); the booking link is the call to action.
+ */
+export function buildPromoBody(params: {
+  firstName: string | null;
+  shopName: string;
+  bookingUrl: string;
+  title: string;
+  description?: string | null;
+  code?: string | null;
+}): string {
+  const parts = [
+    `Hey ${params.firstName ?? "there"} — ${params.shopName}: ${params.title}.`,
+  ];
+  if (params.description?.trim()) parts.push(params.description.trim());
+  if (params.code?.trim()) parts.push(`Show code ${params.code.trim()}.`);
+  parts.push(`Book: ${params.bookingUrl}`);
+  let body = parts.join(" ");
+  if (!/reply stop/i.test(body)) {
+    body = `${body} Reply STOP to opt out.`;
+  }
+  return body;
+}

@@ -8,14 +8,10 @@ import { saveSettingsAction, smsPreviewAction } from "../actions";
 export interface ShopSettings {
   name: string;
   bookingUrl: string;
-  rewardThreshold: number;
-  rewardLabel: string;
   nudgeBufferDays: number;
   dailySendCap: number;
   rebookWindowDays: number;
   smsTemplate: string | null;
-  logoUrl: string | null;
-  accentColor: string | null;
 }
 
 const field =
@@ -69,39 +65,8 @@ export function SettingsCard({ settings }: { settings: ShopSettings }) {
           </label>
         </div>
 
-        {/* Branding (shown on the client rewards page) */}
-        <div className="grid gap-4 sm:grid-cols-2">
-          <label className={labelCls}>
-            Logo URL (shown on rewards page)
-            <input
-              name="logoUrl"
-              type="url"
-              defaultValue={settings.logoUrl ?? ""}
-              placeholder="https://.../logo.png"
-              className={`mt-1 ${field}`}
-            />
-          </label>
-          <label className={labelCls}>
-            Accent color (hex)
-            <input
-              name="accentColor"
-              defaultValue={settings.accentColor ?? ""}
-              placeholder="#D4AF37"
-              className={`mt-1 ${field}`}
-            />
-          </label>
-        </div>
-
-        {/* Loyalty + nudge numbers */}
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-          <label className={labelCls}>
-            Cuts / reward
-            <input name="rewardThreshold" type="number" min={1} defaultValue={settings.rewardThreshold} className={`mt-1 ${field}`} />
-          </label>
-          <label className={labelCls}>
-            Reward label
-            <input name="rewardLabel" defaultValue={settings.rewardLabel} className={`mt-1 ${field}`} />
-          </label>
+        {/* Nudge numbers (rewards now live in the Rewards tab) */}
+        <div className="grid grid-cols-2 gap-4">
           <label className={labelCls}>
             Buffer days
             <input name="nudgeBufferDays" type="number" min={0} defaultValue={settings.nudgeBufferDays} className={`mt-1 ${field}`} />
@@ -111,6 +76,13 @@ export function SettingsCard({ settings }: { settings: ShopSettings }) {
             <input name="dailySendCap" type="number" min={1} defaultValue={settings.dailySendCap} className={`mt-1 ${field}`} />
           </label>
         </div>
+        <p className="-mt-2 text-xs text-muted">
+          Looking for your reward setup? It moved to the{" "}
+          <a href="/dashboard/rewards" className="text-gold hover:underline">
+            Rewards
+          </a>{" "}
+          tab, where you can build a full menu.
+        </p>
 
         {/* Rebooking window (powers the client countdown timer) */}
         <label className={labelCls}>

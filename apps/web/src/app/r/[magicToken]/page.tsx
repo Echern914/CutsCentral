@@ -8,18 +8,35 @@ export interface RewardsData {
   shop: {
     name: string;
     bookingUrl: string;
-    rewardLabel: string;
-    rewardThreshold: number;
     logoUrl: string | null;
     accentColor: string | null;
+    pageSlug: string | null;
   };
   client: { firstName: string | null };
   punches: {
     balance: number;
-    threshold: number;
-    towardNext: number;
-    rewardsUnlocked: number;
+    nextTarget: { name: string; punchCost: number; remaining: number } | null;
   };
+  rewards: {
+    id: string;
+    name: string;
+    description: string | null;
+    emoji: string | null;
+    punchCost: number;
+    ready: boolean;
+    remaining: number;
+  }[];
+  promotions: {
+    id: string;
+    kind: "PERCENT_OFF" | "AMOUNT_OFF" | "FREE_ADDON" | "EXTRA_PUNCHES";
+    title: string;
+    description: string | null;
+    code: string | null;
+    percentOff: number | null;
+    amountOff: number | null;
+    extraPunches: number | null;
+    endsAt: string | null;
+  }[];
   rebook: {
     state: "booked" | "counting" | "overdue" | "none";
     deadline: string | null;
@@ -42,7 +59,12 @@ export async function generateMetadata({
   const data = await getData(params.magicToken);
   if (!data) return { title: APP_NAME };
   const title = `${data.shop.name} Rewards`;
-  const description = `${data.punches.towardNext}/${data.punches.threshold} punches toward your ${data.shop.rewardLabel}.`;
+  const ready = data.rewards.filter((r) => r.ready).length;
+  const description = ready > 0
+    ? `${ready} reward${ready === 1 ? "" : "s"} ready to claim at ${data.shop.name}.`
+    : data.punches.nextTarget
+      ? `${data.punches.nextTarget.remaining} punches to your ${data.punches.nextTarget.name}.`
+      : `${data.punches.balance} punches at ${data.shop.name}.`;
   return {
     title,
     description,

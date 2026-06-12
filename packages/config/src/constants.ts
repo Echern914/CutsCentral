@@ -37,3 +37,55 @@ export const BACKFILL_MIN_DATE = "2015-01-01";
 
 /** Barber session cookie name (shared by api + web; plain constant, no node deps). */
 export const SESSION_COOKIE_NAME = "cb_session";
+
+/**
+ * Public shop page theme presets. The shop's accentColor (if set) overrides
+ * the preset accent; everything else keys off these tokens so each barber's
+ * page can look like THEIR shop, not like the product.
+ */
+export const PAGE_THEMES = {
+  classic: {
+    label: "Classic Gold",
+    bg: "#0A0A0B",
+    surface: "#161618",
+    border: "rgba(245,245,244,0.10)",
+    text: "#F5F5F4",
+    muted: "#A1A1AA",
+    accent: "#D4AF37",
+    scheme: "dark",
+  },
+  midnight: {
+    label: "Midnight Blue",
+    bg: "#090E1C",
+    surface: "#111A30",
+    border: "rgba(226,235,255,0.10)",
+    text: "#EDF1FA",
+    muted: "#8B96B3",
+    accent: "#5B8CFF",
+    scheme: "dark",
+  },
+  crisp: {
+    label: "Crisp Light",
+    bg: "#F7F6F2",
+    surface: "#FFFFFF",
+    border: "rgba(22,22,26,0.10)",
+    text: "#1A1A1E",
+    muted: "#6B6B70",
+    accent: "#A07807",
+    scheme: "light",
+  },
+  blade: {
+    label: "Blade Red",
+    bg: "#120C0C",
+    surface: "#1D1313",
+    border: "rgba(247,239,234,0.10)",
+    text: "#F7EFEA",
+    muted: "#A18F8A",
+    accent: "#E0453A",
+    scheme: "dark",
+  },
+} as const;
+
+export type PageThemeKey = keyof typeof PAGE_THEMES;
+
+export const PAGE_THEME_KEYS = Object.keys(PAGE_THEMES) as PageThemeKey[];

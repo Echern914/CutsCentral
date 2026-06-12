@@ -7,7 +7,7 @@ import { smsLimiter } from "../middleware/rateLimit.js";
 import {
   currentBalance,
   grantBonusPunches,
-  redeemPunches,
+  redeemReward,
 } from "../services/punch.js";
 import { loadEligibilityData, sweepShop } from "../engines/nudge.js";
 import { isNudgeEligible } from "../engines/eligibility.js";
@@ -221,9 +221,17 @@ dashboardRouter.post("/nudge/:clientId", smsLimiter, async (req, res) => {
   }
 });
 
-// Manual punch redemption.
+// Manual redemption of a specific menu reward.
 dashboardRouter.post("/redeem/:clientId", async (req, res) => {
   const shop = req.shop!;
+  const parsed = z
+    .object({ rewardId: z.string().min(1) })
+    .strict()
+    .safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
   const db = forShop(shop.id);
   const client = await db.client.findFirst({ where: { id: req.params.clientId } });
   if (!client) {
@@ -231,12 +239,20 @@ dashboardRouter.post("/redeem/:clientId", async (req, res) => {
     return;
   }
   // Atomic check-and-redeem (double-click / two tabs can't redeem twice).
-  const result = await redeemPunches(shop.id, client.id, shop.rewardThreshold);
+  const result = await redeemReward(shop.id, client.id, parsed.data.rewardId);
   if (!result.ok) {
-    res.status(400).json({ error: "insufficient_punches", balance: result.balance });
+    if (result.reason === "reward_not_found") {
+      res.status(404).json({ error: "reward_not_found" });
+      return;
+    }
+    res.status(400).json({
+      error: "insufficient_punches",
+      balance: result.balance,
+      required: result.required,
+    });
     return;
   }
-  res.json({ ok: true, newBalance: result.newBalance });
+  res.json({ ok: true, newBalance: result.newBalance, reward: result.reward });
 });
 
 // Client list: search + sort + filter + pagination.
@@ -507,7 +523,8 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const [visits, nudges, balance] = await Promise.all([
+  const now = new Date();
+  const [visits, nudges, balance, rewards, livePromos] = await Promise.all([
     db.visit.findMany({
       where: { clientId: client.id },
       orderBy: { scheduledAt: "desc" },
@@ -519,6 +536,18 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
       take: 50,
     }),
     currentBalance(shop.id, client.id),
+    forShop(shop.id).reward.findMany({
+      where: { active: true },
+      orderBy: [{ sortOrder: "asc" }, { punchCost: "asc" }],
+    }),
+    forShop(shop.id).promotion.findMany({
+      where: {
+        active: true,
+        startsAt: { lte: now },
+        OR: [{ endsAt: null }, { endsAt: { gt: now } }],
+      },
+      orderBy: { createdAt: "desc" },
+    }),
   ]);
 
   res.json({
@@ -537,8 +566,15 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
       nextExpectedAt: client.nextExpectedAt?.toISOString() ?? null,
     },
     balance,
-    rewardThreshold: shop.rewardThreshold,
-    rewardReady: balance >= shop.rewardThreshold,
+    rewards: rewards.map((r) => ({
+      id: r.id,
+      name: r.name,
+      emoji: r.emoji,
+      punchCost: r.punchCost,
+      affordable: balance >= r.punchCost,
+    })),
+    rewardReady: rewards.some((r) => balance >= r.punchCost),
+    promotions: livePromos.map((p) => ({ id: p.id, title: p.title })),
     visits: visits.map((v) => ({
       date: v.scheduledAt.toISOString(),
       status: v.status,

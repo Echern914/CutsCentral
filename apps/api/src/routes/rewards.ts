@@ -21,7 +21,7 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
 
   const now = new Date();
   const balance = await currentBalance(client.shopId, client.id);
-  const [visits, upcoming] = await Promise.all([
+  const [visits, upcoming, rewards, promotions] = await Promise.all([
     prisma.visit.findMany({
       where: { shopId: client.shopId, clientId: client.id, status: "COMPLETED" },
       orderBy: { scheduledAt: "desc" },
@@ -38,9 +38,46 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
       orderBy: { scheduledAt: "asc" },
       select: { scheduledAt: true },
     }),
+    prisma.reward.findMany({
+      where: { shopId: client.shopId, active: true },
+      orderBy: [{ sortOrder: "asc" }, { punchCost: "asc" }],
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        emoji: true,
+        punchCost: true,
+      },
+    }),
+    prisma.promotion.findMany({
+      where: {
+        shopId: client.shopId,
+        active: true,
+        startsAt: { lte: now },
+        OR: [{ endsAt: null }, { endsAt: { gt: now } }],
+      },
+      orderBy: [{ endsAt: { sort: "asc", nulls: "last" } }, { createdAt: "desc" }],
+      take: 6,
+      select: {
+        id: true,
+        kind: true,
+        title: true,
+        description: true,
+        code: true,
+        percentOff: true,
+        amountOff: true,
+        extraPunches: true,
+        endsAt: true,
+      },
+    }),
   ]);
 
-  const threshold = client.shop.rewardThreshold;
+  // The punch grid counts toward the cheapest reward the client can't afford
+  // yet; with everything in reach (or an empty menu) there's no next target.
+  const nextTarget =
+    [...rewards]
+      .sort((a, b) => a.punchCost - b.punchCost)
+      .find((r) => r.punchCost > balance) ?? null;
 
   // Rebooking countdown: deadline = lastVisit + rebookWindowDays. The client-side
   // timer ticks down to this ISO instant. We surface the state so the UI can show
@@ -71,20 +108,46 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
     shop: {
       name: client.shop.name,
       bookingUrl: client.shop.bookingUrl,
-      rewardLabel: client.shop.rewardLabel,
-      rewardThreshold: threshold,
       logoUrl: client.shop.logoUrl,
       accentColor: client.shop.accentColor,
+      // Link to the shop's public mini-site when it's live.
+      pageSlug: client.shop.publicPageEnabled ? client.shop.slug : null,
     },
     client: {
       firstName: client.firstName,
     },
     punches: {
       balance,
-      threshold,
-      towardNext: balance % threshold,
-      rewardsUnlocked: Math.floor(balance / threshold),
+      // Grid target: progress toward the next reward out of reach (null when
+      // the menu is empty or everything is already affordable).
+      nextTarget: nextTarget
+        ? {
+            name: nextTarget.name,
+            punchCost: nextTarget.punchCost,
+            remaining: nextTarget.punchCost - balance,
+          }
+        : null,
     },
+    rewards: rewards.map((r) => ({
+      id: r.id,
+      name: r.name,
+      description: r.description,
+      emoji: r.emoji,
+      punchCost: r.punchCost,
+      ready: balance >= r.punchCost,
+      remaining: Math.max(0, r.punchCost - balance),
+    })),
+    promotions: promotions.map((p) => ({
+      id: p.id,
+      kind: p.kind,
+      title: p.title,
+      description: p.description,
+      code: p.code,
+      percentOff: p.percentOff,
+      amountOff: p.amountOff === null ? null : Number(p.amountOff),
+      extraPunches: p.extraPunches,
+      endsAt: p.endsAt?.toISOString() ?? null,
+    })),
     rebook,
     visits: visits.map((v) => ({
       date: v.scheduledAt.toISOString(),

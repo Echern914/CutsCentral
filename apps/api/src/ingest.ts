@@ -4,6 +4,7 @@ import { deriveAcuityClientKey, toE164 } from "./acuity/clientKey.js";
 import { getAcuityClientForShop } from "./acuity/client.js";
 import { resolveStatus } from "./acuity/mapping.js";
 import { recomputeCadence } from "./engines/cadence.js";
+import { earnPunchForVisitInTx } from "./services/punch.js";
 import type { AcuityAppointment } from "./acuity/types.js";
 
 /**
@@ -107,28 +108,18 @@ export async function ingestAppointment(
       await tx.punchLedger.deleteMany({ where: { visitId: visit.id } });
     }
 
-    // If a visit arrives already COMPLETED, earn a punch here (normally the
-    // status-promotion job does this). Idempotent via PunchLedger.visitId.
+    // If a visit arrives already COMPLETED, earn punches here (normally the
+    // status-promotion job does this). Idempotent via PunchLedger.visitId;
+    // amount follows the shop's earn rules.
     if (visit.status === "COMPLETED") {
-      const existing = await tx.punchLedger.findUnique({ where: { visitId: visit.id } });
-      if (!existing) {
-        const agg = await tx.punchLedger.aggregate({
-          where: { shopId: shop.id, clientId: client.id },
-          _sum: { punchesEarned: true, punchesRedeemed: true },
-        });
-        const balance =
-          (agg._sum.punchesEarned ?? 0) - (agg._sum.punchesRedeemed ?? 0);
-        await tx.punchLedger.create({
-          data: {
-            shopId: shop.id,
-            clientId: client.id,
-            visitId: visit.id,
-            punchesEarned: 1,
-            runningBalance: balance + 1,
-            note: "visit",
-          },
-        });
-      }
+      await earnPunchForVisitInTx(
+        tx,
+        shop,
+        client.id,
+        visit.id,
+        visit.serviceName,
+        visit.completedAt ?? visit.scheduledAt,
+      );
     }
 
     return { clientId: client.id, clawedBack: revokeCompleted };

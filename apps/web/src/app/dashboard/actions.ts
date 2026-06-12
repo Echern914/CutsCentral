@@ -10,11 +10,14 @@ export async function nudgeNowAction(clientId: string): Promise<{ ok: boolean }>
   return { ok: res.ok };
 }
 
-export async function redeemAction(clientId: string): Promise<{ ok: boolean }> {
-  const res = await apiSend("POST", `/api/dashboard/redeem/${clientId}`);
+export async function redeemAction(
+  clientId: string,
+  rewardId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiSend("POST", `/api/dashboard/redeem/${clientId}`, { rewardId });
   revalidatePath("/dashboard");
   revalidatePath(`/dashboard/clients/${clientId}`);
-  return { ok: res.ok };
+  return { ok: res.ok, error: res.error };
 }
 
 export async function nudgeClientAction(clientId: string): Promise<{ ok: boolean }> {
@@ -50,14 +53,10 @@ export async function saveSettingsAction(
   const res = await apiSend("PATCH", "/api/shops/me", {
     name: String(formData.get("name") ?? "").trim() || undefined,
     bookingUrl: String(formData.get("bookingUrl") ?? "").trim() || undefined,
-    rewardThreshold: Number(formData.get("rewardThreshold") ?? 10),
-    rewardLabel: String(formData.get("rewardLabel") ?? "Free Cut"),
     nudgeBufferDays: Number(formData.get("nudgeBufferDays") ?? 7),
     dailySendCap: Number(formData.get("dailySendCap") ?? 50),
     rebookWindowDays: Number(formData.get("rebookWindowDays") ?? 14),
     smsTemplate: smsTemplate === "" ? null : smsTemplate,
-    logoUrl: String(formData.get("logoUrl") ?? "").trim(),
-    accentColor: String(formData.get("accentColor") ?? "").trim(),
   });
   revalidatePath("/dashboard");
   return res.ok ? { saved: true } : { error: "Could not save settings." };

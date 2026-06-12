@@ -7,7 +7,14 @@ import { motion, useReducedMotion } from "framer-motion";
  * shimmer that fades once (<1.5s). Respects reduced motion (renders a static
  * banner instead).
  */
-export function RewardCelebration({ rewardLabel }: { rewardLabel: string }) {
+export function RewardCelebration({
+  count,
+  label,
+}: {
+  /** How many rewards are claimable; `label` names the first when count is 1. */
+  count: number;
+  label: string;
+}) {
   const reduce = useReducedMotion();
 
   return (
@@ -25,9 +32,20 @@ export function RewardCelebration({ rewardLabel }: { rewardLabel: string }) {
           }}
         />
       )}
-      <p className="font-display text-xl text-gold">Reward unlocked!</p>
+      <p className="font-display text-xl text-gold">
+        {count === 1 ? "Reward unlocked!" : "Rewards unlocked!"}
+      </p>
       <p className="mt-1 text-sm text-offwhite">
-        You&apos;ve earned a <span className="font-semibold">{rewardLabel}</span>.
+        {count === 1 ? (
+          <>
+            You&apos;ve earned a <span className="font-semibold">{label}</span>.
+          </>
+        ) : (
+          <>
+            You&apos;ve got <span className="font-semibold">{count} rewards</span> ready
+            to claim.
+          </>
+        )}{" "}
         Show this to your barber.
       </p>
     </div>

@@ -1,11 +1,39 @@
 import { Router } from "express";
 import { z } from "zod";
-import { DEFAULTS, randomToken } from "@chairback/config";
+import { DEFAULTS, PAGE_THEME_KEYS, randomToken } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { previewNudgeBody } from "../messaging/templates.js";
 
 export const shopsRouter: Router = Router();
+
+/** URL handle for the public page: lowercase, digits, single dashes. */
+function slugify(name: string): string {
+  const base = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return base || "shop";
+}
+
+/** First free slug: base, base-2, base-3... (unique index is the backstop). */
+async function availableSlug(name: string): Promise<string> {
+  const base = slugify(name).slice(0, 40);
+  const taken = new Set(
+    (
+      await prisma.shop.findMany({
+        where: { slug: { startsWith: base } },
+        select: { slug: true },
+      })
+    ).map((s) => s.slug),
+  );
+  if (!taken.has(base)) return base;
+  for (let n = 2; n < 100; n++) {
+    const candidate = `${base}-${n}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return `${base}-${randomToken(4)}`;
+}
 
 // http(s) only: these URLs are rendered as <a href>/<img src> on the PUBLIC
 // rewards page, so a javascript:/data: scheme would be stored XSS for clients.
@@ -21,6 +49,8 @@ const createShopSchema = z
     name: z.string().min(1).max(120),
     bookingUrl: httpUrl(500),
     timezone: z.string().min(1).default(DEFAULTS.timezone),
+    // Seeds the FIRST reward on the shop's menu (the Reward table is the
+    // source of truth; the legacy field names keep onboarding compatible).
     rewardThreshold: z.number().int().min(1).max(100).default(DEFAULTS.rewardThreshold),
     rewardLabel: z.string().min(1).max(80).default(DEFAULTS.rewardLabel),
     nudgeBufferDays: z.number().int().min(0).max(90).default(DEFAULTS.nudgeBufferDays),
@@ -36,7 +66,34 @@ const createShopSchema = z
   })
   .strict();
 
-const updateShopSchema = createShopSchema.partial();
+// The single-reward fields moved to the loyalty designer (/api/loyalty); the
+// rest of the shop settings remain editable here, plus the public page fields.
+const updateShopSchema = createShopSchema
+  .omit({ rewardThreshold: true, rewardLabel: true })
+  .extend({
+    slug: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .regex(
+        /^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])?$/,
+        "3-40 chars: letters, numbers, dashes",
+      ),
+    publicPageEnabled: z.boolean(),
+    theme: z.enum(PAGE_THEME_KEYS as [string, ...string[]]),
+    bio: z.string().trim().max(500).nullish().or(z.literal("")),
+    heroImageUrl: httpUrl(500).nullish().or(z.literal("")),
+    instagramHandle: z
+      .string()
+      .trim()
+      .transform((s) => s.replace(/^@/, ""))
+      .pipe(z.string().regex(/^[A-Za-z0-9._]{0,30}$/, "Letters, numbers, dots, underscores"))
+      .nullish()
+      .or(z.literal("")),
+    hoursText: z.string().trim().max(400).nullish().or(z.literal("")),
+    galleryUrls: z.array(httpUrl(500)).max(6),
+  })
+  .partial();
 
 // Create the barber's shop (one per barber for now).
 shopsRouter.post("/", requireUser, async (req, res) => {
@@ -50,12 +107,27 @@ shopsRouter.post("/", requireUser, async (req, res) => {
     res.status(409).json({ error: "shop_exists", shopId: existing.id });
     return;
   }
-  const shop = await prisma.shop.create({
-    data: {
-      ownerId: req.userId!,
-      webhookSecret: randomToken(),
-      ...parsed.data,
-    },
+  const { rewardLabel, rewardThreshold, ...shopData } = parsed.data;
+  const slug = await availableSlug(parsed.data.name);
+  // Shop + its first menu reward land together or not at all.
+  const shop = await prisma.$transaction(async (tx) => {
+    const created = await tx.shop.create({
+      data: {
+        ownerId: req.userId!,
+        webhookSecret: randomToken(),
+        slug,
+        ...shopData,
+      },
+    });
+    await tx.reward.create({
+      data: {
+        shopId: created.id,
+        name: rewardLabel,
+        punchCost: rewardThreshold,
+        sortOrder: 0,
+      },
+    });
+    return created;
   });
   res.status(201).json(serializeShop(shop));
 });
@@ -83,15 +155,89 @@ shopsRouter.patch("/me", requireUser, requireShop, async (req, res) => {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
     return;
   }
-  // Normalize empty strings on optional branding fields to null.
+  // Normalize empty strings on optional branding/page fields to null.
   const data = { ...parsed.data };
   if (data.logoUrl === "") data.logoUrl = null;
   if (data.accentColor === "") data.accentColor = null;
-  const shop = await prisma.shop.update({
-    where: { id: req.shop!.id },
-    data,
+  if (data.bio === "") data.bio = null;
+  if (data.heroImageUrl === "") data.heroImageUrl = null;
+  if (data.instagramHandle === "") data.instagramHandle = null;
+  if (data.hoursText === "") data.hoursText = null;
+  try {
+    const shop = await prisma.shop.update({
+      where: { id: req.shop!.id },
+      data,
+    });
+    res.json(serializeShop(shop));
+  } catch (err) {
+    // Unique violation on slug = someone else owns that handle.
+    if ((err as { code?: string }).code === "P2002") {
+      res.status(409).json({ error: "slug_taken" });
+      return;
+    }
+    throw err;
+  }
+});
+
+// Public shop page payload, by slug. No auth - this IS the public mini-site.
+// Mounted with the rewards (public) rate limiter in app.ts.
+export const publicPageRouter: Router = Router();
+publicPageRouter.get("/:slug", async (req, res) => {
+  const slug = String(req.params.slug).toLowerCase();
+  const shop = await prisma.shop.findUnique({ where: { slug } });
+  if (!shop || !shop.publicPageEnabled) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const now = new Date();
+  const [rewards, promotions] = await Promise.all([
+    prisma.reward.findMany({
+      where: { shopId: shop.id, active: true },
+      orderBy: [{ sortOrder: "asc" }, { punchCost: "asc" }],
+      select: { id: true, name: true, description: true, emoji: true, punchCost: true },
+    }),
+    prisma.promotion.findMany({
+      where: {
+        shopId: shop.id,
+        active: true,
+        startsAt: { lte: now },
+        OR: [{ endsAt: null }, { endsAt: { gt: now } }],
+      },
+      orderBy: [{ endsAt: { sort: "asc", nulls: "last" } }, { createdAt: "desc" }],
+      take: 6,
+      select: {
+        id: true,
+        kind: true,
+        title: true,
+        description: true,
+        code: true,
+        percentOff: true,
+        amountOff: true,
+        extraPunches: true,
+        endsAt: true,
+      },
+    }),
+  ]);
+  res.json({
+    name: shop.name,
+    slug: shop.slug,
+    bio: shop.bio,
+    theme: shop.theme,
+    logoUrl: shop.logoUrl,
+    heroImageUrl: shop.heroImageUrl,
+    accentColor: shop.accentColor,
+    instagramHandle: shop.instagramHandle,
+    hoursText: shop.hoursText,
+    galleryUrls: shop.galleryUrls,
+    bookingUrl: shop.bookingUrl,
+    punchesPerVisit: shop.punchesPerVisit,
+    rewards,
+    promotions: promotions.map((p) => ({
+      ...p,
+      amountOff: p.amountOff === null ? null : Number(p.amountOff),
+      endsAt: p.endsAt?.toISOString() ?? null,
+    })),
   });
-  res.json(serializeShop(shop));
 });
 
 // Danger zone: delete the shop and ALL its data (clients, visits, punches,
@@ -120,8 +266,7 @@ function serializeShop(shop: {
   name: string;
   timezone: string;
   bookingUrl: string;
-  rewardThreshold: number;
-  rewardLabel: string;
+  punchesPerVisit: number;
   nudgeBufferDays: number;
   dailySendCap: number;
   smsTemplate: string | null;
@@ -129,6 +274,14 @@ function serializeShop(shop: {
   logoUrl: string | null;
   accentColor: string | null;
   plan: string;
+  slug: string | null;
+  publicPageEnabled: boolean;
+  theme: string;
+  bio: string | null;
+  heroImageUrl: string | null;
+  instagramHandle: string | null;
+  hoursText: string | null;
+  galleryUrls: string[];
 }) {
   // Note: webhookSecret is intentionally NOT exposed to the client.
   return {
@@ -136,8 +289,7 @@ function serializeShop(shop: {
     name: shop.name,
     timezone: shop.timezone,
     bookingUrl: shop.bookingUrl,
-    rewardThreshold: shop.rewardThreshold,
-    rewardLabel: shop.rewardLabel,
+    punchesPerVisit: shop.punchesPerVisit,
     nudgeBufferDays: shop.nudgeBufferDays,
     dailySendCap: shop.dailySendCap,
     smsTemplate: shop.smsTemplate,
@@ -145,5 +297,13 @@ function serializeShop(shop: {
     logoUrl: shop.logoUrl,
     accentColor: shop.accentColor,
     plan: shop.plan,
+    slug: shop.slug,
+    publicPageEnabled: shop.publicPageEnabled,
+    theme: shop.theme,
+    bio: shop.bio,
+    heroImageUrl: shop.heroImageUrl,
+    instagramHandle: shop.instagramHandle,
+    hoursText: shop.hoursText,
+    galleryUrls: shop.galleryUrls,
   };
 }

@@ -34,6 +34,13 @@ enum MessageChannel {
   // EMAIL - future seam, not implemented
 }
 
+enum PromotionKind {
+  PERCENT_OFF // e.g. 20% off
+  AMOUNT_OFF // e.g. $5 off
+  FREE_ADDON // e.g. free hot towel with any cut
+  EXTRA_PUNCHES // visits earn extra punches while the promo is live
+}
+
 //  Identity / tenancy 
 
 model User {
@@ -58,17 +65,33 @@ model Shop {
   name            String // appears in SMS body
   timezone        String   @default("America/New_York")
   bookingUrl      String
+  // DEPRECATED single-reward config: superseded by the Reward table (each shop
+  // designs its own menu). Columns kept so the previously deployed API keeps
+  // working through the migration window; no current code reads them.
   rewardThreshold Int      @default(10)
   rewardLabel     String   @default("Free Cut")
+  // Base loyalty earn rate: punches per completed visit. Service-specific
+  // EarnRule rows override it for matching services.
+  punchesPerVisit Int      @default(1)
   nudgeBufferDays Int      @default(7)
   dailySendCap    Int      @default(50)
   smsTemplate     String? // custom nudge copy; null = built-in default. Placeholders: {firstName} {shop} {bookingUrl} {rewardsUrl}
-  logoUrl         String? // shop logo shown on the rewards page (white-label)
-  accentColor     String? // hex accent (e.g. "#D4AF37") for the rewards page; null = default gold
+  logoUrl         String? // shop logo shown on the rewards + public pages (white-label)
+  accentColor     String? // hex accent (e.g. "#D4AF37"); null = the theme's accent
   // Rebooking countdown: target window (days) for a client to rebook after their
   // last visit. Drives the urgency timer on the rewards page. Default 14 (<2 wks).
   rebookWindowDays Int     @default(14)
   plan            String   @default("free") // inert Stripe seam, no enforcement
+
+  // Public shop page (/s/[slug]) - each barber's own mini-site.
+  slug              String?  @unique // URL handle; backfilled from name
+  publicPageEnabled Boolean  @default(true)
+  theme             String   @default("classic") // PAGE_THEMES key
+  bio               String? // short intro shown on the hero
+  heroImageUrl      String? // wide banner image
+  instagramHandle   String? // without the @
+  hoursText         String? // freeform hours ("Mon-Fri 9-6 ...")
+  galleryUrls       String[] @default([]) // up to 6 photo URLs
 
   // per-shop webhook routing (the body has no account id, so the URL path routes)
   webhookSecret    String   @unique // 32-byte random, used in the webhook URL path
@@ -77,13 +100,96 @@ model Shop {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  acuity  AcuityConnection?
-  clients Client[]
-  visits  Visit[]
-  ledger  PunchLedger[]
-  nudges  Nudge[]
+  acuity     AcuityConnection?
+  clients    Client[]
+  visits     Visit[]
+  ledger     PunchLedger[]
+  nudges     Nudge[]
+  rewards    Reward[]
+  earnRules  EarnRule[]
+  promotions Promotion[]
+  promoUses  PromotionRedemption[]
 
   @@index([ownerId])
+}
+
+// A shop-designed promotion ("Spring special: 20% off weekday cuts"). Live =
+// active && startsAt <= now && (endsAt null || endsAt > now). Shows on the
+// client rewards page; can be blasted by SMS; EXTRA_PUNCHES kinds boost earning
+// while live.
+model Promotion {
+  id           String        @id @default(cuid())
+  shopId       String
+  shop         Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  kind         PromotionKind
+  title        String // "Spring Special"
+  description  String? // "20% off any weekday cut"
+  code         String? // optional walk-in code the client shows ("SPRING20")
+  percentOff   Int? // PERCENT_OFF
+  amountOff    Decimal?      @db.Decimal(10, 2) // AMOUNT_OFF (dollars)
+  extraPunches Int? // EXTRA_PUNCHES: extra per completed visit while live
+  startsAt     DateTime      @default(now())
+  endsAt       DateTime? // null = runs until paused
+  active       Boolean       @default(true)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  redemptions PromotionRedemption[]
+  nudges      Nudge[] // promo SMS blasts, for per-promo attribution
+
+  @@index([shopId, active, startsAt])
+}
+
+// One client cashing in one promotion (barber records it at the chair).
+model PromotionRedemption {
+  id          String    @id @default(cuid())
+  shopId      String
+  shop        Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  promotionId String
+  promotion   Promotion @relation(fields: [promotionId], references: [id], onDelete: Cascade)
+  clientId    String
+  client      Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  redeemedAt  DateTime  @default(now())
+
+  @@index([shopId, promotionId])
+  @@index([shopId, clientId])
+}
+
+// A shop-designed reward on the loyalty menu ("5 punches = free beard lineup").
+// Each shop curates as many as it wants; clients redeem against a specific one.
+model Reward {
+  id          String   @id @default(cuid())
+  shopId      String
+  shop        Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  name        String // "Free Cut", "Free Beard Trim", "$10 Off Premium Package"
+  description String? // optional detail shown under the name on the client page
+  emoji       String? // small visual flair on the client page (e.g. "✂️")
+  punchCost   Int // punches deducted when the barber redeems it
+  active      Boolean  @default(true) // inactive = hidden from clients, kept for history
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  redemptions PunchLedger[]
+
+  @@index([shopId, active])
+}
+
+// Service-specific earn override: a completed visit whose serviceName contains
+// `serviceMatch` (case-insensitive) earns `punches` instead of the shop's base
+// punchesPerVisit. First match by sortOrder wins.
+model EarnRule {
+  id           String   @id @default(cuid())
+  shopId       String
+  shop         Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  serviceMatch String // substring matched against Visit.serviceName
+  punches      Int
+  active       Boolean  @default(true)
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([shopId, active])
 }
 
 // Secrets isolated in their own 1:1 model so plain Shop reads never load ciphertext.
@@ -126,9 +232,10 @@ model Client {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  visits Visit[]
-  ledger PunchLedger[]
-  nudges Nudge[]
+  visits    Visit[]
+  ledger    PunchLedger[]
+  nudges    Nudge[]
+  promoUses PromotionRedemption[]
 
   @@unique([shopId, acuityClientKey]) // tenant-scoped identity + idempotent upsert
   @@index([shopId])
@@ -169,6 +276,10 @@ model PunchLedger {
   client          Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
   visitId         String?  @unique // one EARN per visit; redemptions use null (Postgres allows many NULLs)
   visit           Visit?   @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  // Which menu reward a redemption bought. SetNull keeps the ledger history
+  // intact if the barber later deletes the reward (note still has the name).
+  rewardId        String?
+  reward          Reward?  @relation(fields: [rewardId], references: [id], onDelete: SetNull)
   punchesEarned   Int      @default(0)
   punchesRedeemed Int      @default(0)
   runningBalance  Int
@@ -176,6 +287,7 @@ model PunchLedger {
   createdAt       DateTime @default(now())
 
   @@index([shopId, clientId])
+  @@index([rewardId])
 }
 
 model Nudge {
@@ -186,6 +298,12 @@ model Nudge {
   client              Client         @relation(fields: [clientId], references: [id], onDelete: Cascade)
   channel             MessageChannel @default(SMS)
   status              NudgeStatus    @default(PENDING)
+  // What kind of outbound text this was: "nudge" (rebooking) or "promo"
+  // (promotion blast). Both count against the same daily send cap.
+  kind                String         @default("nudge")
+  // Set on promo blasts so rebookings can be attributed to a SPECIFIC promo.
+  promotionId         String?
+  promotion           Promotion?     @relation(fields: [promotionId], references: [id], onDelete: SetNull)
   body                String?
   messageSid          String?
   failedReason        String?
@@ -196,4 +314,5 @@ model Nudge {
 
   @@index([shopId, clientId, createdAt]) // "no nudge in 21d" + attribution lookback
   @@index([status, createdAt]) // daily send-cap count
+  @@index([promotionId])
 }

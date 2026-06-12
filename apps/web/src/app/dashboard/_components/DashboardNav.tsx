@@ -7,6 +7,9 @@ import { cn } from "@/lib/cn";
 const LINKS = [
   { href: "/dashboard", label: "Overview" },
   { href: "/dashboard/clients", label: "Clients" },
+  { href: "/dashboard/rewards", label: "Rewards" },
+  { href: "/dashboard/promotions", label: "Promos" },
+  { href: "/dashboard/site", label: "Page" },
   { href: "/dashboard/nudges", label: "Nudges" },
 ] as const;
 
@@ -14,7 +17,7 @@ const LINKS = [
 export function DashboardNavLinks() {
   const pathname = usePathname();
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-1 overflow-x-auto whitespace-nowrap">
       {LINKS.map((l) => {
         const active =
           l.href === "/dashboard"

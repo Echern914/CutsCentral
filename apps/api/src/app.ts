@@ -11,13 +11,15 @@ import { apiEnv } from "@chairback/config";
 import { logger } from "./logger.js";
 import { authRouter } from "./routes/auth.js";
 import { healthRouter } from "./routes/health.js";
-import { shopsRouter } from "./routes/shops.js";
+import { publicPageRouter, shopsRouter } from "./routes/shops.js";
 import { acuityWebhookRouter } from "./routes/webhooks.acuity.js";
 import { twilioWebhookRouter } from "./routes/webhooks.twilio.js";
 import { acuityOAuthRouter } from "./routes/acuity.oauth.js";
 import { adminRouter } from "./routes/admin.js";
 import { rewardsRouter } from "./routes/rewards.js";
 import { dashboardRouter } from "./routes/dashboard.js";
+import { loyaltyRouter } from "./routes/loyalty.js";
+import { promotionsRouter } from "./routes/promotions.js";
 import { corsMiddleware } from "./middleware/cors.js";
 import {
   adminLimiter,
@@ -70,7 +72,10 @@ export function createApp(): Express {
   app.use("/api/shops", shopsRouter);
   app.use("/api/acuity/oauth", oauthLimiter, acuityOAuthRouter);
   app.use("/api/rewards", rewardsLimiter, rewardsRouter);
+  app.use("/api/page", rewardsLimiter, publicPageRouter); // public shop pages
   app.use("/api/dashboard", dashboardLimiter, dashboardRouter);
+  app.use("/api/loyalty", dashboardLimiter, loyaltyRouter);
+  app.use("/api/promos", dashboardLimiter, promotionsRouter);
   app.use("/admin", adminLimiter, adminRouter);
 
   // Fallback 404 for unknown API routes.

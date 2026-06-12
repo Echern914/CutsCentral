@@ -66,6 +66,13 @@ type ClientCreateNoShop = Omit<Prisma.ClientUncheckedCreateInput, "shopId">;
 type VisitCreateNoShop = Omit<Prisma.VisitUncheckedCreateInput, "shopId">;
 type PunchCreateNoShop = Omit<Prisma.PunchLedgerUncheckedCreateInput, "shopId">;
 type NudgeCreateNoShop = Omit<Prisma.NudgeUncheckedCreateInput, "shopId">;
+type RewardCreateNoShop = Omit<Prisma.RewardUncheckedCreateInput, "shopId">;
+type EarnRuleCreateNoShop = Omit<Prisma.EarnRuleUncheckedCreateInput, "shopId">;
+type PromotionCreateNoShop = Omit<Prisma.PromotionUncheckedCreateInput, "shopId">;
+type PromoUseCreateNoShop = Omit<
+  Prisma.PromotionRedemptionUncheckedCreateInput,
+  "shopId"
+>;
 
 export function forShop(shopId: string) {
   return {
@@ -167,6 +174,125 @@ export function forShop(shopId: string) {
           tx.punchLedger.upsert({
             ...args,
             create: stamp(args.create, shopId) as Prisma.PunchLedgerUncheckedCreateInput,
+          }),
+        ),
+    },
+
+    reward: {
+      findMany: (args: Prisma.RewardFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.reward.findMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      findFirst: (args: Prisma.RewardFindFirstArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.reward.findFirst({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      count: (args: Prisma.RewardCountArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.reward.count({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      create: (args: { data: RewardCreateNoShop }) =>
+        runWithShop(shopId, (tx) =>
+          tx.reward.create({
+            data: stamp(args.data, shopId) as Prisma.RewardUncheckedCreateInput,
+          }),
+        ),
+      update: (args: Prisma.RewardUpdateArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.reward.update({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      // updateMany keys the where by non-unique fields, which lets a delete-safe
+      // "update if mine" pattern work without a prior fetch.
+      updateMany: (args: Prisma.RewardUpdateManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.reward.updateMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      deleteMany: (args: Prisma.RewardDeleteManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.reward.deleteMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+    },
+
+    earnRule: {
+      findMany: (args: Prisma.EarnRuleFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.earnRule.findMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      findFirst: (args: Prisma.EarnRuleFindFirstArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.earnRule.findFirst({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      count: (args: Prisma.EarnRuleCountArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.earnRule.count({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      create: (args: { data: EarnRuleCreateNoShop }) =>
+        runWithShop(shopId, (tx) =>
+          tx.earnRule.create({
+            data: stamp(args.data, shopId) as Prisma.EarnRuleUncheckedCreateInput,
+          }),
+        ),
+      updateMany: (args: Prisma.EarnRuleUpdateManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.earnRule.updateMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      deleteMany: (args: Prisma.EarnRuleDeleteManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.earnRule.deleteMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+    },
+
+    promotion: {
+      findMany: (args: Prisma.PromotionFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.promotion.findMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      findFirst: (args: Prisma.PromotionFindFirstArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.promotion.findFirst({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      count: (args: Prisma.PromotionCountArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.promotion.count({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      create: (args: { data: PromotionCreateNoShop }) =>
+        runWithShop(shopId, (tx) =>
+          tx.promotion.create({
+            data: stamp(args.data, shopId) as Prisma.PromotionUncheckedCreateInput,
+          }),
+        ),
+      updateMany: (args: Prisma.PromotionUpdateManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.promotion.updateMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      deleteMany: (args: Prisma.PromotionDeleteManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.promotion.deleteMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+    },
+
+    promoUse: {
+      findMany: (args: Prisma.PromotionRedemptionFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.promotionRedemption.findMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      count: (args: Prisma.PromotionRedemptionCountArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.promotionRedemption.count({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      create: (args: { data: PromoUseCreateNoShop }) =>
+        runWithShop(shopId, (tx) =>
+          tx.promotionRedemption.create({
+            data: stamp(
+              args.data,
+              shopId,
+            ) as Prisma.PromotionRedemptionUncheckedCreateInput,
           }),
         ),
     },

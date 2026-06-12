@@ -50,21 +50,26 @@ export default function OnboardingShopPage() {
               <option value="America/Denver">Mountain (Denver)</option>
               <option value="America/Los_Angeles">Pacific (Los Angeles)</option>
             </select>
-            <div className="grid grid-cols-2 gap-3">
-              <input
-                name="rewardThreshold"
-                type="number"
-                min={1}
-                defaultValue={10}
-                placeholder="Cuts for reward"
-                className={field}
-              />
-              <input
-                name="rewardLabel"
-                defaultValue="Free Cut"
-                placeholder="Reward label"
-                className={field}
-              />
+            <div>
+              <p className="mb-2 text-xs text-muted">
+                Your first reward (you can build a full menu later in the Rewards tab)
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <input
+                  name="rewardThreshold"
+                  type="number"
+                  min={1}
+                  defaultValue={10}
+                  placeholder="Punches needed"
+                  className={field}
+                />
+                <input
+                  name="rewardLabel"
+                  defaultValue="Free Cut"
+                  placeholder="Reward name"
+                  className={field}
+                />
+              </div>
             </div>
             {state.error && (
               <p className="text-sm text-danger-soft">{state.error}</p>
