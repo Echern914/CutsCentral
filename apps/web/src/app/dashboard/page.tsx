@@ -40,7 +40,12 @@ export default async function DashboardPage() {
           </p>
           <h1 className="font-display text-4xl tracking-tight">{shop.name}</h1>
         </div>
-        {!shop.connected && (
+        {shop.connected ? (
+          <span className="inline-flex w-fit items-center gap-2 rounded-full border border-emerald-soft/40 bg-emerald-soft/10 px-4 py-2 text-xs font-medium text-emerald-soft">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-soft" />
+            Acuity connected
+          </span>
+        ) : (
           <a
             href="/onboarding/connect"
             className="animate-pulse-glow inline-flex w-fit items-center gap-2 rounded-full border border-gold/50 bg-gold/10 px-4 py-2 text-xs font-medium text-gold transition-colors hover:bg-gold/20"
