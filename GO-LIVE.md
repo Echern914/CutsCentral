@@ -1,7 +1,32 @@
-# Go-live runbook: real SMS + real Acuity
+# Go-live runbook: domain + real SMS + real Acuity
 
 No secrets in this file. Values you generate (SIDs, tokens, client secrets) go in
 Railway Variables and DEPLOY.md (gitignored), never here.
+
+Final domain: **getchairback.com** (web) and **api.getchairback.com** (API).
+Do section 0 FIRST so Acuity/Twilio/Google are registered against final URLs once.
+
+## 0) Domain wiring (getchairback.com via Namecheap)
+
+1. Vercel -> project -> Settings -> Domains -> add `getchairback.com` AND
+   `www.getchairback.com` (Vercel auto-redirects www to the apex).
+2. Railway -> API service -> Settings -> Networking -> Custom Domain ->
+   `api.getchairback.com`. Railway shows a CNAME target (something.up.railway.app).
+3. Namecheap -> Domain List -> getchairback.com -> Advanced DNS, add exactly:
+   - A Record    | Host `@`   | Value `76.76.21.21` (Vercel; confirm against what Vercel shows)
+   - CNAME       | Host `www` | Value `cname.vercel-dns.com`
+   - CNAME       | Host `api` | Value (the target Railway showed in step 2)
+   Delete Namecheap's default parking records if present.
+4. Wait for both dashboards to show the domains verified (minutes, up to an hour).
+5. Env updates, SAME two values on BOTH services, then redeploy both:
+   - `APP_BASE_URL=https://getchairback.com`
+   - `API_BASE_URL=https://api.getchairback.com`
+6. Google Cloud -> OAuth client -> Authorized redirect URIs -> ADD
+   `https://api.getchairback.com/api/auth/google/callback` (keep the old Railway
+   one too; config takes a minute to propagate).
+7. Verify: `https://api.getchairback.com/healthz` returns ok; log in at
+   `https://getchairback.com`; Google sign-in works; open a client rewards link.
+   (Old vercel.app/railway.app URLs keep existing as aliases.)
 
 ## 1) Twilio + A2P 10DLC (start FIRST - approval takes days)
 
@@ -19,7 +44,7 @@ The code is ready: provider wired, STOP/START handled, daily caps enforced,
 4. Paste the campaign answers below.
 5. Point the number's webhook: Phone Number -> Messaging -> "A message comes in" ->
    Webhook, HTTP POST:
-   `https://chairbackapi-production.up.railway.app/webhooks/twilio/inbound`
+   `https://api.getchairback.com/webhooks/twilio/inbound`
 6. Railway Variables (API service):
    - `TWILIO_ACCOUNT_SID` = ACxxxxxxxx
    - `TWILIO_AUTH_TOKEN` = (from console)
@@ -67,12 +92,12 @@ stops messaging that number (automated). START/YES/UNSTOP re-subscribes.
 1. Register the app: https://acuityscheduling.com/oauth2/register
    - App name: ChairBack
    - Redirect URI (exact, no trailing slash):
-     `https://chairbackapi-production.up.railway.app/api/acuity/oauth/callback`
+     `https://api.getchairback.com/api/acuity/oauth/callback`
    - Scope: `api-v1`
 2. Railway Variables (API service):
    - `ACUITY_OAUTH_CLIENT_ID` = (issued id)
    - `ACUITY_OAUTH_CLIENT_SECRET` = (issued secret)
-   - `ACUITY_OAUTH_REDIRECT_URI` = `https://chairbackapi-production.up.railway.app/api/acuity/oauth/callback`
+   - `ACUITY_OAUTH_REDIRECT_URI` = `https://api.getchairback.com/api/acuity/oauth/callback`
 3. Redeploy the API.
 4. Connect a real Acuity account through onboarding (Dashboard -> connect step) and
    watch Railway logs during the first connect, first webhook, and backfill.
