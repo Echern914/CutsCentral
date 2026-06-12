@@ -327,12 +327,21 @@ export function Landing() {
             <ScissorsMark className="h-3.5 w-3.5 text-gold/60" />
             {APP_NAME} — built for barbers.
           </span>
-          <div className="flex gap-5">
+          <div className="flex flex-wrap justify-center gap-5">
             <Link href="/login" className="transition-colors hover:text-offwhite">
               Sign in
             </Link>
             <Link href="/signup" className="transition-colors hover:text-offwhite">
               Create account
+            </Link>
+            <Link href="/terms" className="transition-colors hover:text-offwhite">
+              Terms
+            </Link>
+            <Link href="/privacy" className="transition-colors hover:text-offwhite">
+              Privacy
+            </Link>
+            <Link href="/sms" className="transition-colors hover:text-offwhite">
+              SMS Policy
             </Link>
           </div>
         </div>

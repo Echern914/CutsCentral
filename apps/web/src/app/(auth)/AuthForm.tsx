@@ -108,6 +108,23 @@ export function AuthForm({
             <div className="mt-1">
               <SubmitButton label={isSignup ? "Create account" : "Sign in"} />
             </div>
+            {isSignup && (
+              <p className="mt-1 text-center text-xs leading-relaxed text-muted">
+                By creating an account, you agree to our{" "}
+                <Link href="/terms" className="text-gold hover:underline">
+                  Terms of Service
+                </Link>{" "}
+                and{" "}
+                <Link href="/privacy" className="text-gold hover:underline">
+                  Privacy Policy
+                </Link>
+                , including the{" "}
+                <Link href="/sms" className="text-gold hover:underline">
+                  SMS Messaging Policy
+                </Link>
+                .
+              </p>
+            )}
           </form>
         </Card>
         <p className="mt-5 text-center text-sm text-muted">
