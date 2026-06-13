@@ -11,6 +11,7 @@ const LINKS = [
   { href: "/dashboard/promotions", label: "Promos" },
   { href: "/dashboard/site", label: "Page" },
   { href: "/dashboard/nudges", label: "Nudges" },
+  { href: "/dashboard/billing", label: "Billing" },
 ] as const;
 
 /** Pill nav links with active-route highlighting. */

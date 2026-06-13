@@ -1,14 +1,18 @@
 import { Router } from "express";
 import { z } from "zod";
-import { forShop, prisma } from "@chairback/db";
+import { forShop, prisma, runWithShop } from "@chairback/db";
 import { NUDGE, randomToken } from "@chairback/config";
 import { requireShop, requireUser } from "../middleware/auth.js";
+import { requireActiveAccess } from "../middleware/billing.js";
+import { hasActiveAccess } from "../billing/stripe.js";
 import { smsLimiter } from "../middleware/rateLimit.js";
 import {
   currentBalance,
+  earnPunchForVisitInTx,
   grantBonusPunches,
   redeemReward,
 } from "../services/punch.js";
+import { recomputeCadence } from "../engines/cadence.js";
 import { loadEligibilityData, sweepShop } from "../engines/nudge.js";
 import { isNudgeEligible } from "../engines/eligibility.js";
 import { buildNudgeBody } from "../messaging/templates.js";
@@ -182,7 +186,7 @@ dashboardRouter.get("/leaderboard", async (req, res) => {
 });
 
 // Manual "nudge now" for one client. Tight per-user SMS limit (real money).
-dashboardRouter.post("/nudge/:clientId", smsLimiter, async (req, res) => {
+dashboardRouter.post("/nudge/:clientId", smsLimiter, requireActiveAccess, async (req, res) => {
   const shop = req.shop!;
   const db = forShop(shop.id);
   const client = await db.client.findFirst({ where: { id: req.params.clientId } });
@@ -382,6 +386,65 @@ dashboardRouter.post("/clients", async (req, res) => {
   }
 });
 
+// Log a visit by hand (walk-ins / shops not on Acuity). Creates a real
+// COMPLETED Visit and runs the SAME earn + cadence pipeline as Acuity ingest,
+// so punches, last-visit, and at-risk detection all work without a booking
+// integration. Optional `when` backdates (history imports); never the future.
+const logVisitSchema = z
+  .object({
+    when: z.coerce.date().optional(),
+    serviceName: z.string().trim().max(120).optional().or(z.literal("")),
+  })
+  .strict();
+
+dashboardRouter.post("/clients/:clientId/visits", async (req, res) => {
+  const shop = req.shop!;
+  const parsed = logVisitSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const now = new Date();
+  const when = parsed.data.when ?? now;
+  // 10-minute clock-skew allowance; beyond that it's a typo'd future date.
+  if (when.getTime() > now.getTime() + 10 * 60 * 1000) {
+    res.status(400).json({ error: "future_visit", message: "Visit date can't be in the future." });
+    return;
+  }
+  const serviceName = parsed.data.serviceName || null;
+  const db = forShop(shop.id);
+  const client = await db.client.findFirst({ where: { id: req.params.clientId } });
+  if (!client) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+
+  const visit = await runWithShop(shop.id, async (tx) => {
+    // Same client row lock as every other ledger write (serializes earns).
+    await tx.$queryRaw`SELECT id FROM "Client" WHERE id = ${client.id} FOR UPDATE`;
+    const created = await tx.visit.create({
+      data: {
+        shopId: shop.id,
+        clientId: client.id,
+        // Composite unique is (shopId, acuityAppointmentId); manual visits get
+        // a namespaced random id so they can never collide with Acuity's.
+        acuityAppointmentId: `manual:${randomToken(8)}`,
+        status: "COMPLETED",
+        scheduledAt: when,
+        endAt: when,
+        completedAt: when,
+        serviceName,
+      },
+    });
+    await earnPunchForVisitInTx(tx, shop, client.id, created.id, serviceName, when);
+    return created;
+  });
+  // Outside the tx - recomputeCadence opens its own shop-scoped transaction.
+  await recomputeCadence(shop.id, client.id);
+  const balance = await currentBalance(shop.id, client.id);
+  res.status(201).json({ ok: true, visitId: visit.id, balance });
+});
+
 // Toggle opt-out (opt a client back in, or out, from the dashboard).
 dashboardRouter.post("/clients/:clientId/opt", async (req, res) => {
   const shop = req.shop!;
@@ -439,6 +502,15 @@ dashboardRouter.post("/clients/bulk", smsLimiter, async (req, res) => {
     return;
   }
   const { action, clientIds } = parsed.data;
+  // Opt-in/out list hygiene stays free; only bulk TEXTING needs active access.
+  if (action === "nudge" && !hasActiveAccess(shop)) {
+    res.status(402).json({
+      error: "subscription_required",
+      message:
+        "Texting clients is a Premium feature. Upgrade to send rebooking nudges and promo blasts.",
+    });
+    return;
+  }
   const db = forShop(shop.id);
 
   if (action === "optOut" || action === "optIn") {
@@ -660,7 +732,7 @@ dashboardRouter.post("/sweep-preview", smsLimiter, async (req, res) => {
 });
 
 // Run the real sweep now - texts every eligible client (respects daily cap).
-dashboardRouter.post("/sweep", smsLimiter, async (req, res) => {
+dashboardRouter.post("/sweep", smsLimiter, requireActiveAccess, async (req, res) => {
   const summary = await sweepShop(req.shop!, { dryRun: false });
   res.json(summary);
 });

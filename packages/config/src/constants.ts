@@ -12,6 +12,36 @@ export const DEFAULTS = {
   timezone: "America/New_York",
 } as const;
 
+/**
+ * The one paid plan. Stripe owns the live price (STRIPE_PRICE_ID); these
+ * numbers are what the marketing site and billing page DISPLAY, so keep them
+ * in sync with the Stripe dashboard when the price changes.
+ */
+export const BILLING = {
+  planName: "Pro",
+  priceMonthlyUsd: 29,
+  trialDays: 14,
+} as const;
+
+/**
+ * Shop verticals. The product is service-business generic (Shop/Client/Visit);
+ * industry only flavors defaults and copy. `defaultReward` seeds the first
+ * loyalty menu item during onboarding.
+ */
+export const INDUSTRIES = {
+  barber: { label: "Barbershop", defaultReward: "Free Cut", emoji: "✂️" },
+  salon: { label: "Hair Salon", defaultReward: "Free Blowout", emoji: "💇" },
+  nails: { label: "Nail Studio", defaultReward: "Free Manicure", emoji: "💅" },
+  lashes: { label: "Lash & Brow Studio", defaultReward: "Free Lash Fill", emoji: "👁️" },
+  spa: { label: "Spa & Skincare", defaultReward: "Free Facial Add-On", emoji: "🧖" },
+  tattoo: { label: "Tattoo & Piercing", defaultReward: "$25 Off Next Session", emoji: "🖋️" },
+  other: { label: "Other", defaultReward: "Free Service", emoji: "⭐" },
+} as const;
+
+export type IndustryKey = keyof typeof INDUSTRIES;
+
+export const INDUSTRY_KEYS = Object.keys(INDUSTRIES) as IndustryKey[];
+
 /** Nudge engine windows. */
 export const NUDGE = {
   /** Minimum completed visits before a client has enough history for a cadence. */

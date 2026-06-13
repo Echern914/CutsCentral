@@ -40,8 +40,9 @@ export default function TermsPage() {
         (collectively, the <Strong>“Service”</Strong>).
       </P>
       <P>
-        {APP_NAME} is a client-retention and loyalty platform for barbershops
-        and similar appointment-based businesses. The Service can connect to
+        {APP_NAME} is a client-retention and loyalty platform for barbershops,
+        salons, and similar appointment-based personal-care businesses. The
+        Service can connect to
         your scheduling account (currently Acuity Scheduling), track completed
         visits, maintain digital punch-card balances, host a public page for
         your shop, and send text messages (such as rebooking reminders and
@@ -69,9 +70,9 @@ export default function TermsPage() {
           You must be at least 18 years old and able to form a binding contract.
         </li>
         <li>
-          The Service is offered for business use by barbershops and similar
-          businesses located in the United States. It is not offered for
-          personal, household, or consumer use.
+          The Service is offered for business use by barbershops, salons, and
+          similar appointment-based businesses located in the United States. It
+          is not offered for personal, household, or consumer use.
         </li>
         <li>
           You must provide accurate account information and keep it current.

@@ -41,8 +41,13 @@ export default async function ConnectPage() {
               href="/onboarding/done"
               className="text-xs text-muted hover:underline"
             >
-              Skip for now
+              Not on Acuity? Skip — log visits with one tap instead
             </a>
+            <p className="text-center text-[11px] leading-relaxed text-muted">
+              On Booksy, Square, or pen &amp; paper? Everything still works: add
+              clients and tap “Log visit” after each appointment. You can
+              connect Acuity later in Settings.
+            </p>
           </>
         )}
       </Card>

@@ -254,9 +254,14 @@ export function ShopPageClient({ data }: { data: ShopPageData }) {
           >
             Book with {data.name}
           </a>
-          <p className="mt-6 text-[11px]" style={{ color: theme.muted }}>
-            Powered by {APP_NAME}
-          </p>
+          {/* Growth loop: every shop page quietly markets the platform. */}
+          <a
+            href={`/?ref=${encodeURIComponent(data.slug)}`}
+            className="mt-6 inline-block text-[11px] underline-offset-2 hover:underline"
+            style={{ color: theme.muted }}
+          >
+            Powered by {APP_NAME} — loyalty for your shop
+          </a>
         </motion.footer>
       </motion.main>
     </div>

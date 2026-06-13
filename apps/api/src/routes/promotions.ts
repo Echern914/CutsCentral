@@ -7,6 +7,7 @@ import { loadEligibilityData } from "../engines/nudge.js";
 import { isNudgeEligible } from "../engines/eligibility.js";
 import { buildPromoBody } from "../messaging/templates.js";
 import { getMessageProvider } from "../messaging/twilio.js";
+import { hasActiveAccess } from "../billing/stripe.js";
 
 /**
  * Shop-designed promotions: percent/amount off, free add-ons, or extra-punch
@@ -246,6 +247,15 @@ promotionsRouter.post("/:id/blast", smsLimiter, async (req, res) => {
     return;
   }
   const { audience, dryRun } = parsed.data;
+  // Previews stay free; real sends require an active trial/subscription.
+  if (!dryRun && !hasActiveAccess(shop)) {
+    res.status(402).json({
+      error: "subscription_required",
+      message:
+        "Texting clients is a Premium feature. Upgrade to send rebooking nudges and promo blasts.",
+    });
+    return;
+  }
   const db = forShop(shop.id);
   const promo = await db.promotion.findFirst({ where: { id: req.params.id } });
   if (!promo) {
@@ -296,7 +306,9 @@ promotionsRouter.post("/:id/blast", smsLimiter, async (req, res) => {
   });
   let budget = Math.max(0, shop.dailySendCap - sentToday);
 
-  const provider = getMessageProvider();
+  // Lazy + real-send-only: a dry-run preview must work even with missing/invalid
+  // Twilio creds (same reasoning as the nudge sweep).
+  const provider = dryRun ? null : getMessageProvider();
   const summary = {
     considered,
     eligible: candidates.length,
@@ -337,7 +349,8 @@ promotionsRouter.post("/:id/blast", smsLimiter, async (req, res) => {
       },
     });
     try {
-      const result = await provider.send({ to: client.phone!, body });
+      // Non-null: dryRun===false here (the dry-run branch above `continue`d).
+      const result = await provider!.send({ to: client.phone!, body });
       await prisma.nudge.update({
         where: { id: nudge.id },
         data: { status: "SENT", sentAt: new Date(), messageSid: result.sid },

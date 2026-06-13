@@ -1,6 +1,14 @@
 import { Router } from "express";
 import { z } from "zod";
-import { DEFAULTS, PAGE_THEME_KEYS, randomToken } from "@chairback/config";
+import {
+  BILLING,
+  DEFAULTS,
+  INDUSTRIES,
+  INDUSTRY_KEYS,
+  PAGE_THEME_KEYS,
+  randomToken,
+  type IndustryKey,
+} from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { previewNudgeBody } from "../messaging/templates.js";
@@ -49,10 +57,13 @@ const createShopSchema = z
     name: z.string().min(1).max(120),
     bookingUrl: httpUrl(500),
     timezone: z.string().min(1).default(DEFAULTS.timezone),
+    // Vertical: flavors the seeded reward + copy, nothing structural.
+    industry: z.enum(INDUSTRY_KEYS as [string, ...string[]]).default("barber"),
     // Seeds the FIRST reward on the shop's menu (the Reward table is the
     // source of truth; the legacy field names keep onboarding compatible).
+    // rewardLabel falls back to the industry's default when omitted.
     rewardThreshold: z.number().int().min(1).max(100).default(DEFAULTS.rewardThreshold),
-    rewardLabel: z.string().min(1).max(80).default(DEFAULTS.rewardLabel),
+    rewardLabel: z.string().min(1).max(80).optional(),
     nudgeBufferDays: z.number().int().min(0).max(90).default(DEFAULTS.nudgeBufferDays),
     dailySendCap: z.number().int().min(1).max(1000).default(DEFAULTS.dailySendCap),
     smsTemplate: z.string().max(480).nullish(),
@@ -108,6 +119,7 @@ shopsRouter.post("/", requireUser, async (req, res) => {
     return;
   }
   const { rewardLabel, rewardThreshold, ...shopData } = parsed.data;
+  const industry = INDUSTRIES[shopData.industry as IndustryKey] ?? INDUSTRIES.other;
   const slug = await availableSlug(parsed.data.name);
   // Shop + its first menu reward land together or not at all.
   const shop = await prisma.$transaction(async (tx) => {
@@ -116,13 +128,17 @@ shopsRouter.post("/", requireUser, async (req, res) => {
         ownerId: req.userId!,
         webhookSecret: randomToken(),
         slug,
+        // The free trial starts the moment the shop exists. Enforcement only
+        // kicks in once Stripe is configured (see billing/stripe.ts).
+        trialEndsAt: new Date(Date.now() + BILLING.trialDays * 86_400_000),
         ...shopData,
       },
     });
     await tx.reward.create({
       data: {
         shopId: created.id,
-        name: rewardLabel,
+        name: rewardLabel ?? industry.defaultReward,
+        emoji: industry.emoji,
         punchCost: rewardThreshold,
         sortOrder: 0,
       },
@@ -265,6 +281,7 @@ function serializeShop(shop: {
   id: string;
   name: string;
   timezone: string;
+  industry: string;
   bookingUrl: string;
   punchesPerVisit: number;
   nudgeBufferDays: number;
@@ -288,6 +305,7 @@ function serializeShop(shop: {
     id: shop.id,
     name: shop.name,
     timezone: shop.timezone,
+    industry: shop.industry,
     bookingUrl: shop.bookingUrl,
     punchesPerVisit: shop.punchesPerVisit,
     nudgeBufferDays: shop.nudgeBufferDays,

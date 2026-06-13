@@ -46,7 +46,7 @@ export function RewardCelebration({
             to claim.
           </>
         )}{" "}
-        Show this to your barber.
+        Show this at your next visit.
       </p>
     </div>
   );

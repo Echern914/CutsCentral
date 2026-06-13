@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useToast } from "@/components/ui/Toast";
 import {
   bonusPunchAction,
+  logVisitAction,
   nudgeClientAction,
   redeemAction,
   toggleOptOutAction,
@@ -88,6 +89,21 @@ export function ClientActions({
         className="rounded-full border border-subtle px-4 py-2 text-xs text-muted hover:bg-charcoal-700 disabled:opacity-50"
       >
         {isOptedOut ? "Opt back in" : "Opt out"}
+      </button>
+
+      <button
+        disabled={pending}
+        onClick={() =>
+          startTransition(async () => {
+            const r = await logVisitAction(clientId);
+            if (r.ok) toast("Visit logged — punches added", "success");
+            else toast("Could not log visit", "error");
+          })
+        }
+        title="Record a visit that happened outside your booking calendar"
+        className="rounded-full border border-gold/50 px-4 py-2 text-xs font-medium text-gold hover:bg-gold/10 disabled:opacity-50"
+      >
+        Log visit
       </button>
 
       <button

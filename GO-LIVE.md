@@ -56,13 +56,14 @@ The code is ready: provider wired, STOP/START handled, daily caps enforced,
 ### Campaign registration answers (paste these)
 
 **Campaign description:**
-ChairBack is a loyalty and rebooking tool for independent barbershops. On behalf of
-a barbershop, we send its existing clients (1) occasional reminders that they are
-due for their next appointment, with a booking link, and (2) occasional offers or
-loyalty-program updates from that specific shop. Clients are existing customers of
-the shop who provided their phone number when booking an appointment. Every message
-identifies the shop and includes opt-out language. STOP is honored automatically
-and permanently; START re-subscribes.
+ChairBack is a loyalty and rebooking tool for independent barbershops, salons, and
+similar appointment-based personal-care businesses. On behalf of a shop, we send its
+existing clients (1) occasional reminders that they are due for their next
+appointment, with a booking link, and (2) occasional offers or loyalty-program
+updates from that specific shop. Clients are existing customers of the shop who
+provided their phone number when booking an appointment. Every message identifies
+the shop and includes opt-out language. STOP is honored automatically and
+permanently; START re-subscribes.
 
 **Sample message 1 (rebooking reminder):**
 Hey Marcus, it's been a while since your last cut at Dave's Barbershop! Book your
@@ -74,7 +75,7 @@ Hey Marcus — Dave's Barbershop: Spring Special. 20% off any weekday cut. Show 
 SPRING20. Book: https://example.com/book Reply STOP to opt out.
 
 **How do end users consent / opt in?**
-End users are existing clients of the barbershop. They provide their phone number
+End users are existing clients of the shop. They provide their phone number
 directly to the shop when booking an appointment (through the shop's online booking
 system) or in person at the shop, understanding the shop will contact them about
 appointments and its loyalty program. Messages are sent only to clients with a
@@ -109,6 +110,38 @@ stops messaging that number (automated). START/YES/UNSTOP re-subscribes.
 3. What HMAC key signs webhooks for OAuth apps (we also rely on the unguessable
    per-shop webhook URL, so signature ambiguity is not fatal).
 
+## 2.5) Stripe billing (flip revenue on any time — code is live, dormant)
+
+The product is fully built: $29/mo "Pro" plan, 14-day free trial (starts at shop
+creation; existing shops were backfilled with a fresh trial in the
+`billing_industry` migration). With the three STRIPE_* vars ABSENT, billing is
+disabled and everything stays free — no banner, no gating. Setting them flips on:
+trial countdown banner, /dashboard/billing checkout, and a 402 gate on outbound
+SMS (manual nudge, real sweep, bulk nudge, promo blast) for shops with no active
+trial/subscription. Dashboards, ingest, and punch earning are never gated.
+
+1. Stripe Dashboard -> create Product "ChairBack Pro" -> recurring price $29/month.
+   Copy the `price_...` id. (If the display price ever changes, also update
+   BILLING in packages/config/src/constants.ts - Stripe owns truth, config owns display.)
+2. Developers -> Webhooks -> Add endpoint:
+   `https://api.getchairback.com/webhooks/stripe`
+   Events: `checkout.session.completed`, `customer.subscription.created`,
+   `customer.subscription.updated`, `customer.subscription.deleted`.
+   Copy the signing secret (`whsec_...`).
+3. Settings -> Billing -> Customer portal -> enable it (cancel + payment method
+   + invoice history). The app links to it from /dashboard/billing.
+4. Railway Variables (API service), then redeploy:
+   - `STRIPE_SECRET_KEY` = sk_live_... (use sk_test_... + test price first if you
+     want a dry run; test cards: 4242 4242 4242 4242)
+   - `STRIPE_PRICE_ID` = price_...
+   - `STRIPE_WEBHOOK_SECRET` = whsec_...
+5. Verify: /dashboard shows the trial banner; Billing page -> Subscribe opens
+   Stripe Checkout; after paying, the webhook flips the shop to Pro (banner
+   disappears, "Manage billing" opens the portal).
+
+Optional same-section: error monitoring. Create a free Sentry project (Node),
+set `SENTRY_DSN` on Railway, redeploy - 500s and crashes start reporting. Unset = off.
+
 ## 3) Post-flip verification checklist (15 minutes)
 
 1. Add yourself as a manual client with your real phone.
@@ -128,6 +161,10 @@ stops messaging that number (automated). START/YES/UNSTOP re-subscribes.
 - **Booksy: no self-serve public API** (partner/contact-only). Not practical now.
 - **theCut: no public API.** Not practical.
 - **Squire: no public developer docs** (partner-only at best). Not practical.
-- **Coverage for everyone else:** a manual "Log visit" button (one tap per client
-  visit, earns punches via the normal engine) lets barbers on Booksy/theCut/Squire
-  use ChairBack rewards with zero integration.
+- **Coverage for everyone else: SHIPPED 2026-06-12.** The "Log visit" button on
+  each client page creates a real completed Visit and runs the normal earn +
+  cadence pipeline, so shops on Booksy/theCut/Squire (or paper) get punches,
+  at-risk radar, and nudges with zero integration. Onboarding's Acuity step says
+  so explicitly, and signup has an industry picker (barber/salon/nails/lashes/
+  spa/tattoo) that seeds matching defaults. Marketing: /for/salons, /for/nails,
+  /for/lashes, /for/spas, /for/tattoo, /for/barbers.

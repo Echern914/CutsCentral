@@ -4,8 +4,10 @@ import { prisma } from "@chairback/db";
 import { createApp } from "./app.js";
 import { logger } from "./logger.js";
 import { startScheduler } from "./scheduler.js";
+import { captureError, initSentry } from "./sentry.js";
 
 const env = apiEnv();
+initSentry();
 // Hosts (Railway, Render, etc.) inject PORT and route traffic to it. Prefer that;
 // fall back to the API_BASE_URL port, then 4000 for local dev.
 const PORT = Number(
@@ -35,8 +37,10 @@ process.on("SIGINT", () => void shutdown("SIGINT"));
 // work). Log instead of letting Node 20's default kill the process.
 process.on("unhandledRejection", (reason) => {
   logger.error({ err: reason }, "unhandled promise rejection");
+  captureError(reason);
 });
 process.on("uncaughtException", (err) => {
   logger.fatal({ err }, "uncaught exception");
+  captureError(err);
   process.exit(1);
 });

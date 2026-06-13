@@ -22,8 +22,9 @@ export default function SmsPolicyPage() {
       title="SMS Messaging Policy"
       intro={
         <P>
-          {APP_NAME} sends text messages on behalf of participating barbershops
-          — things like rebooking reminders, loyalty/rewards updates, and
+          {APP_NAME} sends text messages on behalf of participating barbershops,
+          salons, and similar shops — things like rebooking reminders,
+          loyalty/rewards updates, and
           promotional offers from the shop you visit. These program terms apply
           to anyone who receives those messages.
         </P>
@@ -33,7 +34,7 @@ export default function SmsPolicyPage() {
       <UL>
         <li>
           <Strong>Who is texting you:</Strong> messages are sent through the{" "}
-          {APP_NAME} platform on behalf of your barbershop. The shop’s name
+          {APP_NAME} platform on behalf of your shop. The shop’s name
           appears in the message body.
         </li>
         <li>
@@ -54,7 +55,7 @@ export default function SmsPolicyPage() {
       <H2>How you opt in</H2>
       <P>
         You receive messages only if you provided your mobile number to your
-        barbershop and agreed to receive texts from them — for example when
+        shop and agreed to receive texts from them — for example when
         booking an appointment or signing up for the shop’s rewards program.
         Consent to receive texts is not a condition of purchasing any goods or
         services.
@@ -65,13 +66,13 @@ export default function SmsPolicyPage() {
         Reply <Strong>STOP</Strong> to any message to stop receiving texts.
         You may also reply STOPALL, UNSUBSCRIBE, CANCEL, END, or QUIT. After
         you opt out, you will not receive further messages unless you opt back
-        in by replying <Strong>START</Strong>. You can also ask your barbershop
+        in by replying <Strong>START</Strong>. You can also ask your shop
         to opt you out at any time.
       </Notice>
 
       <H2>Help</H2>
       <P>
-        Reply <Strong>HELP</Strong> to any message, contact your barbershop
+        Reply <Strong>HELP</Strong> to any message, contact your shop
         directly, or email{" "}
         <A href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</A>.
       </P>

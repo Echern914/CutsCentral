@@ -47,6 +47,16 @@ const apiSchema = z.object({
   TWILIO_AUTH_TOKEN: z.string().min(1),
   TWILIO_FROM_NUMBER: z.string().min(1),
 
+  // Stripe billing (optional - while absent, billing is disabled and every
+  // shop has full access; setting all three flips trial/subscription
+  // enforcement on without a code change).
+  STRIPE_SECRET_KEY: z.string().min(1).optional(),
+  STRIPE_PRICE_ID: z.string().min(1).optional(),
+  STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
+
+  // Error monitoring (optional).
+  SENTRY_DSN: cleanUrl().optional(),
+
   NUDGE_DEFAULT_BUFFER_DAYS: z.coerce.number().int().nonnegative().default(7),
   NUDGE_DEFAULT_DAILY_CAP: z.coerce.number().int().positive().default(50),
 

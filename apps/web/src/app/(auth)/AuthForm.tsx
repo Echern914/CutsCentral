@@ -63,7 +63,7 @@ export function AuthForm({
           {isSignup ? "Create your account" : "Welcome back"}
         </h1>
         <p className="mb-6 text-center text-sm text-muted">
-          {isSignup ? "Set up your barbershop in minutes." : "Sign in to your dashboard."}
+          {isSignup ? "Set up your shop in minutes." : "Sign in to your dashboard."}
         </p>
         <Card className="p-6">
           {googleAvailable && (

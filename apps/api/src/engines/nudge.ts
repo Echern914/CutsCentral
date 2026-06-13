@@ -4,6 +4,7 @@ import { logger } from "../logger.js";
 import { buildNudgeBody } from "../messaging/templates.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 import { isNudgeEligible } from "./eligibility.js";
+import { hasActiveAccess } from "../billing/stripe.js";
 
 const env = apiEnv();
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
@@ -32,6 +33,11 @@ export async function runNudgeSweep(opts: SweepOptions = {}): Promise<SweepSumma
   const shops = await prisma.shop.findMany({ where: { acuity: { isNot: null } } });
   const summaries: SweepSummary[] = [];
   for (const shop of shops) {
+    // Trial over + no subscription = no scheduled sends (SMS costs real money).
+    if (!hasActiveAccess(shop, { now })) {
+      logger.info({ shopId: shop.id }, "sweep skipped: no active access");
+      continue;
+    }
     try {
       summaries.push(await sweepShop(shop, { ...opts, now }));
     } catch (err) {
@@ -126,7 +132,11 @@ async function doSweepShop(
   const now = opts.now ?? new Date();
   const dryRun = opts.dryRun ?? env.DRY_RUN;
   const db = forShop(shop.id);
-  const provider = getMessageProvider();
+  // Construct the SMS provider lazily and ONLY for a real send. A dry-run
+  // preview sends nothing, so it must work even if Twilio creds are missing or
+  // invalid - otherwise the preview that helps a shop decide whether to send
+  // 500s on exactly the shops that haven't finished Twilio setup.
+  const provider = dryRun ? null : getMessageProvider();
 
   // Per-day global cap: count real sends today, send up to the remainder.
   const startOfDay = new Date(now);
@@ -215,7 +225,9 @@ async function doSweepShop(
     }
 
     try {
-      const result = await provider.send({ to: client.phone!, body });
+      // Non-null: dryRun===false here (the dry-run branch above `continue`d),
+      // so provider was constructed.
+      const result = await provider!.send({ to: client.phone!, body });
       await prisma.nudge.update({
         where: { id: nudge.id },
         data: { status: "SENT", sentAt: now, messageSid: result.sid },

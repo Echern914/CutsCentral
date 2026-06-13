@@ -34,7 +34,8 @@ export default function PrivacyPage() {
     >
       <H2>1. The two hats we wear</H2>
       <P>
-        {APP_NAME} is used by barbershops (“<Strong>Shops</Strong>”) to run
+        {APP_NAME} is used by barbershops, salons, and similar personal-care
+        businesses (“<Strong>Shops</Strong>”) to run
         loyalty and rebooking programs for their clients (“
         <Strong>Clients</Strong>”). We handle personal information in two
         distinct roles:
@@ -53,8 +54,8 @@ export default function PrivacyPage() {
         </li>
       </UL>
       <Notice>
-        If you are a barbershop client and want your information corrected or
-        deleted, the fastest path is to contact your barbershop directly. You
+        If you are a Shop&apos;s client and want your information corrected or
+        deleted, the fastest path is to contact that shop directly. You
         can also email us at{" "}
         <A href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</A> and we will
         assist or forward your request to your shop.

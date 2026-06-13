@@ -7,7 +7,7 @@ export default function RewardsNotFound() {
       <Card className="p-8 text-center">
         <h1 className="font-display text-2xl">Link not found</h1>
         <p className="mt-2 text-sm text-muted">
-          This rewards link isn&apos;t valid. Ask your barber to resend it.
+          This rewards link isn&apos;t valid. Ask your shop to resend it.
         </p>
       </Card>
     </main>

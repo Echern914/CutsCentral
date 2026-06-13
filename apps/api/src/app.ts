@@ -20,6 +20,9 @@ import { rewardsRouter } from "./routes/rewards.js";
 import { dashboardRouter } from "./routes/dashboard.js";
 import { loyaltyRouter } from "./routes/loyalty.js";
 import { promotionsRouter } from "./routes/promotions.js";
+import { billingRouter } from "./routes/billing.js";
+import { stripeWebhookRouter } from "./routes/webhooks.stripe.js";
+import { captureError } from "./sentry.js";
 import { corsMiddleware } from "./middleware/cors.js";
 import {
   adminLimiter,
@@ -62,6 +65,7 @@ export function createApp(): Express {
   // IP (generous; legit bursts happen) to bound DoS if a secret leaks.
   app.use("/webhooks/acuity", webhookLimiter, acuityWebhookRouter);
   app.use("/webhooks/twilio", webhookLimiter, twilioWebhookRouter);
+  app.use("/webhooks/stripe", webhookLimiter, stripeWebhookRouter);
 
   // (2) Global parsers for the rest of the app.
   app.use(express.json({ limit: "100kb" }));
@@ -76,6 +80,7 @@ export function createApp(): Express {
   app.use("/api/dashboard", dashboardLimiter, dashboardRouter);
   app.use("/api/loyalty", dashboardLimiter, loyaltyRouter);
   app.use("/api/promos", dashboardLimiter, promotionsRouter);
+  app.use("/api/billing", dashboardLimiter, billingRouter);
   app.use("/admin", adminLimiter, adminRouter);
 
   // Fallback 404 for unknown API routes.
@@ -86,6 +91,7 @@ export function createApp(): Express {
   // (4) Final error handler: log everything, leak nothing.
   app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
     logger.error({ err, path: req.path, method: req.method }, "request failed");
+    captureError(err, { path: req.path, method: req.method });
     if (res.headersSent) return;
     res.status(500).json({ error: "internal" });
   });

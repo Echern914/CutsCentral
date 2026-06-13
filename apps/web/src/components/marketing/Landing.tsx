@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { APP_NAME } from "@chairback/config/constants";
+import { APP_NAME, BILLING } from "@chairback/config/constants";
 import { DashboardPreview } from "./DashboardPreview";
 import { Marquee } from "./Marquee";
 import { PhoneDemo } from "./PhoneDemo";
@@ -33,6 +33,12 @@ export function Landing() {
             <span className="font-display text-base tracking-tight">{APP_NAME}</span>
           </Link>
           <div className="flex items-center gap-2">
+            <a
+              href="#pricing"
+              className="hidden rounded-full px-4 py-2 text-sm text-muted transition-colors hover:text-offwhite sm:inline"
+            >
+              Pricing
+            </a>
             <Link
               href="/login"
               className="rounded-full px-4 py-2 text-sm text-muted transition-colors hover:text-offwhite"
@@ -92,7 +98,7 @@ export function Landing() {
             </StaggerItem>
             <StaggerItem>
               <ul className="mt-7 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs text-muted lg:justify-start">
-                {["Set up in minutes", "Works with your booking link", "Free during early access"].map(
+                {["Set up in minutes", "Works with your booking link", `${BILLING.trialDays} days free — no card`].map(
                   (t) => (
                     <li key={t} className="flex items-center gap-1.5">
                       <CheckIcon className="h-3.5 w-3.5 text-gold/70" />
@@ -261,8 +267,104 @@ export function Landing() {
           </Stagger>
         </section>
 
+        {/* ====== Pricing ====== */}
+        <section id="pricing" className="border-t border-subtle bg-charcoal-900/40">
+          <div className="mx-auto w-full max-w-6xl px-6 py-24">
+            <SectionHeading
+              eyebrow="Pricing"
+              title={
+                <>
+                  Start free.{" "}
+                  <span className="text-gradient-gold">Upgrade when it pays for itself.</span>
+                </>
+              }
+              sub="Run a real loyalty program free forever. Add the texts that bring clients back whenever you're ready — one rebooked regular covers the month."
+            />
+            <Reveal delay={0.1} className="mx-auto mt-12 grid max-w-3xl gap-6 sm:grid-cols-2">
+              {/* Free */}
+              <div className="glass flex flex-col rounded-3xl p-8">
+                <p className="text-xs uppercase tracking-[0.25em] text-muted">Free</p>
+                <p className="mt-4 font-display text-5xl tracking-tight">
+                  $0<span className="text-lg text-muted">/forever</span>
+                </p>
+                <p className="mt-2 text-sm text-muted">
+                  Everything you need to run loyalty. No card, ever.
+                </p>
+                <ul className="mt-6 flex flex-1 flex-col gap-2.5 text-left text-sm text-offwhite">
+                  {[
+                    "Digital punch cards & your loyalty menu",
+                    "Your branded rewards page & public mini-site",
+                    "Client book, notes & CSV export",
+                    "One-tap visit logging — no booking app needed",
+                    "At-risk radar: see who's overdue",
+                  ].map((t) => (
+                    <li key={t} className="flex items-start gap-2.5">
+                      <CheckIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted" />
+                      {t}
+                    </li>
+                  ))}
+                </ul>
+                <Link
+                  href="/signup"
+                  className="mt-7 rounded-full border border-subtle px-7 py-3 text-center text-sm font-medium text-offwhite transition-colors hover:bg-charcoal-700"
+                >
+                  Get started free
+                </Link>
+              </div>
+
+              {/* Premium */}
+              <div className="glass relative flex flex-col overflow-hidden rounded-3xl border border-gold/30 p-8">
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute inset-x-0 -top-24 -z-10 h-48 rounded-full bg-gold/15 blur-3xl"
+                />
+                <div className="flex items-center justify-between">
+                  <p className="text-xs uppercase tracking-[0.25em] text-gold-soft">
+                    {BILLING.planName}
+                  </p>
+                  <span className="rounded-full bg-gold/15 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-gold">
+                    {BILLING.trialDays}-day free trial
+                  </span>
+                </div>
+                <p className="mt-4 font-display text-5xl tracking-tight">
+                  ${BILLING.priceMonthlyUsd}
+                  <span className="text-lg text-muted">/month</span>
+                </p>
+                <p className="mt-2 text-sm text-muted">
+                  Everything in Free, plus the part that brings clients back.
+                </p>
+                <ul className="mt-6 flex flex-1 flex-col gap-2.5 text-left text-sm text-offwhite">
+                  {[
+                    "Smart rebooking texts, timed per client",
+                    "Promo blasts with revenue attribution",
+                    "Automatic visit tracking via Acuity sync",
+                    "Daily send caps & STOP handling built in",
+                  ].map((t) => (
+                    <li key={t} className="flex items-start gap-2.5">
+                      <CheckIcon className="mt-0.5 h-4 w-4 shrink-0 text-gold" />
+                      {t}
+                    </li>
+                  ))}
+                </ul>
+                <Link
+                  href="/signup"
+                  className="mt-7 inline-flex items-center justify-center gap-2 rounded-full bg-gold-gradient px-7 py-3 text-sm font-semibold text-charcoal shadow-glow transition-all hover:shadow-glow-lg hover:brightness-105"
+                >
+                  Start your free trial
+                  <ArrowIcon className="h-4 w-4" />
+                </Link>
+              </div>
+            </Reveal>
+            <p className="mx-auto mt-6 max-w-md text-center text-xs text-muted">
+              No per-text fees, no contracts, cancel anytime. The average shop
+              recovers several no-show-again clients a month — the whole bill, many
+              times over.
+            </p>
+          </div>
+        </section>
+
         {/* ====== FAQ ====== */}
-        <section className="mx-auto w-full max-w-3xl px-6 pb-24">
+        <section className="mx-auto w-full max-w-3xl px-6 pb-24 pt-24">
           <SectionHeading eyebrow="FAQ" title="Quick answers." />
           <Reveal className="mt-10 flex flex-col gap-3">
             {FAQ.map((f) => (
@@ -344,6 +446,24 @@ export function Landing() {
               SMS Policy
             </Link>
           </div>
+        </div>
+        <div className="mx-auto mt-5 flex w-full max-w-6xl flex-wrap items-center justify-center gap-x-5 gap-y-2 border-t border-subtle px-6 pt-5 text-xs text-muted sm:justify-start">
+          <span className="text-muted/70">Also built for:</span>
+          <Link href="/for/salons" className="transition-colors hover:text-offwhite">
+            Hair salons
+          </Link>
+          <Link href="/for/nails" className="transition-colors hover:text-offwhite">
+            Nail studios
+          </Link>
+          <Link href="/for/lashes" className="transition-colors hover:text-offwhite">
+            Lash &amp; brow artists
+          </Link>
+          <Link href="/for/spas" className="transition-colors hover:text-offwhite">
+            Spas &amp; skincare
+          </Link>
+          <Link href="/for/tattoo" className="transition-colors hover:text-offwhite">
+            Tattoo studios
+          </Link>
         </div>
       </footer>
     </div>
@@ -436,8 +556,16 @@ const FAQ = [
     a: "They reply STOP and they're opted out instantly. You can also opt anyone out (or back in) from the dashboard.",
   },
   {
+    q: "I'm not on Acuity — can I still use it?",
+    a: "Yes. Add clients in seconds and tap “Log visit” after each appointment — punches, rewards, and rebooking texts all work the same. Acuity just makes it automatic, and you can connect it anytime.",
+  },
+  {
     q: "How much does it cost?",
-    a: `${APP_NAME} is free during early access. You'll hear well in advance before that changes.`,
+    a: `The loyalty program — punch cards, rewards page, public mini-site, client book — is free forever, no card required. Premium ($${BILLING.priceMonthlyUsd}/month) adds the texting that brings clients back: rebooking nudges, promo blasts, and Acuity auto-sync. Every new shop gets a ${BILLING.trialDays}-day full Premium trial, and one rebooked regular typically covers the month.`,
+  },
+  {
+    q: "Is it only for barbershops?",
+    a: "No — salons, nail studios, lash artists, spas, and tattoo studios run the exact same playbook: visits earn punches, drifting clients get a perfectly-timed text. Pick your industry at signup and the defaults match your business.",
   },
 ] as const;
 

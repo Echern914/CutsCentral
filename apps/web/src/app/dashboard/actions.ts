@@ -111,6 +111,21 @@ export async function bonusPunchAction(
   return { ok: res.ok };
 }
 
+export async function logVisitAction(
+  clientId: string,
+  serviceName?: string,
+): Promise<{ ok: boolean; balance?: number }> {
+  const res = await apiSend<{ ok: boolean; balance: number }>(
+    "POST",
+    `/api/dashboard/clients/${clientId}/visits`,
+    serviceName ? { serviceName } : {},
+  );
+  revalidatePath(`/dashboard/clients/${clientId}`);
+  revalidatePath("/dashboard/clients");
+  revalidatePath("/dashboard");
+  return { ok: res.ok, balance: res.data?.balance };
+}
+
 export async function updateNameAction(
   _prev: { ok?: boolean; error?: string },
   formData: FormData,

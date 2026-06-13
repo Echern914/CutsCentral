@@ -1,7 +1,13 @@
 "use client";
 
+import { useState } from "react";
 import { useFormState, useFormStatus } from "react-dom";
 import { motion } from "framer-motion";
+import {
+  INDUSTRIES,
+  INDUSTRY_KEYS,
+  type IndustryKey,
+} from "@chairback/config/constants";
 import { createShopAction } from "./actions";
 import { fadeUp } from "@/components/motion/variants";
 import { Card } from "@/components/ui/Card";
@@ -24,6 +30,7 @@ function Submit() {
 
 export default function OnboardingShopPage() {
   const [state, action] = useFormState(createShopAction, {});
+  const [industry, setIndustry] = useState<IndustryKey>("barber");
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center px-5">
@@ -36,11 +43,23 @@ export default function OnboardingShopPage() {
         </h1>
         <Card className="p-6">
           <form action={action} className="flex flex-col gap-3">
-            <input name="name" placeholder="Shop name" required className={field} />
+            <input name="name" placeholder="Shop or studio name" required className={field} />
+            <select
+              name="industry"
+              value={industry}
+              onChange={(e) => setIndustry(e.target.value as IndustryKey)}
+              className={field}
+            >
+              {INDUSTRY_KEYS.map((k) => (
+                <option key={k} value={k}>
+                  {INDUSTRIES[k].label}
+                </option>
+              ))}
+            </select>
             <input
               name="bookingUrl"
               type="url"
-              placeholder="Acuity booking link (https://you.as.me)"
+              placeholder="Booking link (Acuity, Booksy, Square…)"
               required
               className={field}
             />
@@ -65,7 +84,8 @@ export default function OnboardingShopPage() {
                 />
                 <input
                   name="rewardLabel"
-                  defaultValue="Free Cut"
+                  key={industry}
+                  defaultValue={INDUSTRIES[industry].defaultReward}
                   placeholder="Reward name"
                   className={field}
                 />

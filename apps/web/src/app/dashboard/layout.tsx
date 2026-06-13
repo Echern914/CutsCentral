@@ -2,6 +2,7 @@ import Link from "next/link";
 import { APP_NAME } from "@chairback/config/constants";
 import { logoutAction } from "../(auth)/actions";
 import { DashboardNavLinks } from "./_components/DashboardNav";
+import { TrialBanner } from "./_components/TrialBanner";
 
 /** Shared dashboard chrome: sticky glass top nav with brand, links, sign out. */
 export default function DashboardLayout({
@@ -27,6 +28,7 @@ export default function DashboardLayout({
           </form>
         </nav>
       </header>
+      <TrialBanner />
       {children}
     </div>
   );

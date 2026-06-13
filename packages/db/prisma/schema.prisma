@@ -81,7 +81,18 @@ model Shop {
   // Rebooking countdown: target window (days) for a client to rebook after their
   // last visit. Drives the urgency timer on the rewards page. Default 14 (<2 wks).
   rebookWindowDays Int     @default(14)
-  plan            String   @default("free") // inert Stripe seam, no enforcement
+  plan            String   @default("free") // "free" | "pro"; kept in sync by the Stripe webhook
+  // Vertical (INDUSTRIES key in packages/config). Flavors onboarding defaults
+  // and copy only - the data model is service-business generic.
+  industry        String   @default("barber")
+
+  // Billing (Stripe). Access = active/trialing/past_due subscription OR an
+  // unexpired trial. When the STRIPE_* env vars are absent, billing is
+  // disabled and every shop has full access (the pre-revenue behavior).
+  stripeCustomerId     String?   @unique
+  stripeSubscriptionId String?
+  subscriptionStatus   String    @default("none") // mirrors Stripe subscription.status
+  trialEndsAt          DateTime?
 
   // Public shop page (/s/[slug]) - each barber's own mini-site.
   slug              String?  @unique // URL handle; backfilled from name
