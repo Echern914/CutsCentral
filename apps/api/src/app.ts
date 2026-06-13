@@ -22,6 +22,7 @@ import { loyaltyRouter } from "./routes/loyalty.js";
 import { promotionsRouter } from "./routes/promotions.js";
 import { billingRouter } from "./routes/billing.js";
 import { stripeWebhookRouter } from "./routes/webhooks.stripe.js";
+import { adminPortalRouter } from "./routes/adminPortal.js";
 import { captureError } from "./sentry.js";
 import { corsMiddleware } from "./middleware/cors.js";
 import {
@@ -81,6 +82,7 @@ export function createApp(): Express {
   app.use("/api/loyalty", dashboardLimiter, loyaltyRouter);
   app.use("/api/promos", dashboardLimiter, promotionsRouter);
   app.use("/api/billing", dashboardLimiter, billingRouter);
+  app.use("/api/admin-portal", dashboardLimiter, adminPortalRouter);
   app.use("/admin", adminLimiter, adminRouter);
 
   // Fallback 404 for unknown API routes.

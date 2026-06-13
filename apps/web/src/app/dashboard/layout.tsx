@@ -1,15 +1,18 @@
 import Link from "next/link";
 import { APP_NAME } from "@chairback/config/constants";
+import { apiGet } from "@/lib/api";
 import { logoutAction } from "../(auth)/actions";
 import { DashboardNavLinks } from "./_components/DashboardNav";
 import { TrialBanner } from "./_components/TrialBanner";
 
 /** Shared dashboard chrome: sticky glass top nav with brand, links, sign out. */
-export default function DashboardLayout({
+export default async function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const me = await apiGet<{ isAdmin?: boolean }>("/api/auth/me");
+  const isAdmin = me.data?.isAdmin ?? false;
   return (
     <div className="min-h-dvh">
       <header className="sticky top-0 z-20 px-4">
@@ -20,7 +23,7 @@ export default function DashboardLayout({
               {APP_NAME}
             </span>
           </Link>
-          <DashboardNavLinks />
+          <DashboardNavLinks isAdmin={isAdmin} />
           <form action={logoutAction} className="shrink-0">
             <button className="rounded-full border border-subtle px-3.5 py-1.5 text-xs text-muted transition-colors hover:bg-charcoal-700 hover:text-offwhite">
               Sign out

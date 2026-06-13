@@ -52,6 +52,9 @@ model User {
   // Session revocation: bumped on password change, which invalidates every
   // previously issued session token (tokens embed the version they were minted with).
   tokenVersion Int      @default(0)
+  // Platform operator. Gates the /admin portal. Set by hand (or the bootstrap
+  // script) - never settable through any self-serve endpoint.
+  isAdmin      Boolean  @default(false)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -93,6 +96,10 @@ model Shop {
   stripeSubscriptionId String?
   subscriptionStatus   String    @default("none") // mirrors Stripe subscription.status
   trialEndsAt          DateTime?
+  // Comped full access (friends / testers / partners). When true, the shop has
+  // Premium regardless of Stripe - independent of trial/subscription, survives
+  // Stripe going live, and is excluded from paying-revenue counts. Operator-only.
+  compAccess           Boolean   @default(false)
 
   // Public shop page (/s/[slug]) - each barber's own mini-site.
   slug              String?  @unique // URL handle; backfilled from name

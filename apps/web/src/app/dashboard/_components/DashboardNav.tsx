@@ -14,12 +14,15 @@ const LINKS = [
   { href: "/dashboard/billing", label: "Billing" },
 ] as const;
 
-/** Pill nav links with active-route highlighting. */
-export function DashboardNavLinks() {
+/** Pill nav links with active-route highlighting. Admins get an extra Admin pill. */
+export function DashboardNavLinks({ isAdmin = false }: { isAdmin?: boolean }) {
   const pathname = usePathname();
+  const links = isAdmin
+    ? [...LINKS, { href: "/admin", label: "Admin" } as const]
+    : LINKS;
   return (
     <div className="flex items-center gap-1 overflow-x-auto whitespace-nowrap">
-      {LINKS.map((l) => {
+      {links.map((l) => {
         const active =
           l.href === "/dashboard"
             ? pathname === "/dashboard"

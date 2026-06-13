@@ -44,13 +44,20 @@ export const ACTIVE_STATUSES = new Set(["active", "trialing", "past_due"]);
 export interface BillingShop {
   subscriptionStatus: string;
   trialEndsAt: Date | null;
+  compAccess?: boolean;
 }
 
-/** Active subscription OR unexpired trial (always true while billing is off). */
+/**
+ * Full access = comped OR active subscription OR unexpired trial (and always
+ * true while billing is off). compAccess is checked FIRST and ignores Stripe
+ * entirely, so a comped friend/tester keeps Premium even after billing goes
+ * live and even with no card on file.
+ */
 export function hasActiveAccess(
   shop: BillingShop,
   opts: { now?: Date; enabled?: boolean } = {},
 ): boolean {
+  if (shop.compAccess) return true;
   const enabled = opts.enabled ?? billingEnabled();
   if (!enabled) return true;
   if (ACTIVE_STATUSES.has(shop.subscriptionStatus)) return true;

@@ -9,6 +9,7 @@
     "start": "tsx src/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "admin:make": "tsx scripts/make-admin.ts",
     "lint": "eslint src --max-warnings=0"
   },
   "dependencies": {

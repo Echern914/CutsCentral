@@ -4,19 +4,21 @@ import { apiGet } from "@/lib/api";
 interface BillingStatus {
   billingEnabled: boolean;
   subscribed: boolean;
+  compAccess: boolean;
   hasAccess: boolean;
   trialDaysLeft: number | null;
   priceMonthlyUsd: number;
 }
 
 /**
- * Slim banner under the dashboard nav. Silent while billing is disabled or the
- * shop is subscribed; counts down the trial; goes red when texts are paused.
+ * Slim banner under the dashboard nav. Silent while billing is disabled, the
+ * shop is subscribed, or it's comped; counts down the trial; prompts upgrade
+ * once the trial lapses to the Free tier.
  */
 export async function TrialBanner() {
   const res = await apiGet<BillingStatus>("/api/billing");
   const b = res.data;
-  if (!b?.billingEnabled || b.subscribed) return null;
+  if (!b?.billingEnabled || b.subscribed || b.compAccess) return null;
 
   if (!b.hasAccess) {
     return (

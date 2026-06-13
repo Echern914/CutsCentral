@@ -17,7 +17,8 @@ import {
  * everything-stays-free mode asserted in the unit tests below.
  */
 const WEBHOOK_SECRET = "whsec_test_secret";
-const email = `bill-${randomToken(6)}@test.local`;
+// Lowercased: signup normalizes email, randomToken can emit uppercase.
+const email = `bill-${randomToken(6)}@test.local`.toLowerCase();
 const password = "supersecret123";
 
 let app: import("express").Express;

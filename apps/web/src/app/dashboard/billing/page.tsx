@@ -11,6 +11,7 @@ interface BillingStatus {
   plan: string;
   subscriptionStatus: string;
   subscribed: boolean;
+  compAccess: boolean;
   trialEndsAt: string | null;
   trialDaysLeft: number | null;
   hasAccess: boolean;
@@ -73,22 +74,26 @@ export default async function BillingPage({
                   Current plan
                 </p>
                 <p className="mt-1 font-display text-xl">
-                  {b.subscribed
-                    ? b.planName
-                    : b.hasAccess && b.billingEnabled
-                      ? "Free trial"
-                      : "Free"}
+                  {b.compAccess
+                    ? `${b.planName} · complimentary`
+                    : b.subscribed
+                      ? b.planName
+                      : b.hasAccess && b.billingEnabled
+                        ? "Free trial"
+                        : "Free"}
                 </p>
                 <p className="mt-1 text-sm text-muted">
-                  {b.subscribed
-                    ? b.subscriptionStatus === "past_due"
-                      ? "Payment issue — update your card to keep texts flowing."
-                      : "Active. Thanks for building with us."
-                    : !b.billingEnabled
-                      ? "Early access — everything is free right now."
-                      : b.hasAccess
-                        ? `${b.trialDaysLeft} day${b.trialDaysLeft === 1 ? "" : "s"} of full Premium left. No card on file.`
-                        : "Your punch cards, rewards page, and client book are free forever. Upgrade to Premium to text clients."}
+                  {b.compAccess
+                    ? "Full access, on the house. No card needed — enjoy everything."
+                    : b.subscribed
+                      ? b.subscriptionStatus === "past_due"
+                        ? "Payment issue — update your card to keep texts flowing."
+                        : "Active. Thanks for building with us."
+                      : !b.billingEnabled
+                        ? "Early access — everything is free right now."
+                        : b.hasAccess
+                          ? `${b.trialDaysLeft} day${b.trialDaysLeft === 1 ? "" : "s"} of full Premium left. No card on file.`
+                          : "Your punch cards, rewards page, and client book are free forever. Upgrade to Premium to text clients."}
                 </p>
               </div>
               <div className="text-right">
@@ -100,7 +105,7 @@ export default async function BillingPage({
               </div>
             </div>
 
-            {!b.hasAccess && b.billingEnabled && (
+            {!b.compAccess && !b.hasAccess && b.billingEnabled && (
               <div className="mt-4 rounded-2xl border border-gold/30 bg-gold/10 px-4 py-3 text-sm text-gold">
                 You&apos;re on the Free plan — punches, your rewards page, and your
                 client book keep working. Premium adds the part that brings clients
@@ -108,18 +113,21 @@ export default async function BillingPage({
               </div>
             )}
 
-            <div className="mt-5 flex flex-wrap items-center gap-3">
-              {b.billingEnabled && !b.subscribed && (
-                <UpgradeButton
-                  label={
-                    b.hasAccess
-                      ? `Go Premium — $${b.priceMonthlyUsd}/mo`
-                      : `Upgrade to Premium — $${b.priceMonthlyUsd}/mo`
-                  }
-                />
-              )}
-              {b.canManage && <ManageBillingButton />}
-            </div>
+            {/* Comped shops have everything already; no checkout CTA. */}
+            {!b.compAccess && (
+              <div className="mt-5 flex flex-wrap items-center gap-3">
+                {b.billingEnabled && !b.subscribed && (
+                  <UpgradeButton
+                    label={
+                      b.hasAccess
+                        ? `Go Premium — $${b.priceMonthlyUsd}/mo`
+                        : `Upgrade to Premium — $${b.priceMonthlyUsd}/mo`
+                    }
+                  />
+                )}
+                {b.canManage && <ManageBillingButton />}
+              </div>
+            )}
           </Card>
 
           <div className="grid gap-5 sm:grid-cols-2">

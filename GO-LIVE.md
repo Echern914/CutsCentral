@@ -142,6 +142,26 @@ trial/subscription. Dashboards, ingest, and punch earning are never gated.
 Optional same-section: error monitoring. Create a free Sentry project (Node),
 set `SENTRY_DSN` on Railway, redeploy - 500s and crashes start reporting. Unset = off.
 
+## 2.6) Admin portal (operator-only — already built)
+
+A founder dashboard at **/admin**: platform metrics (total shops, paying, trialing,
+comped, est. MRR, new-this-week, clients/visits), a searchable list of every shop
+with owner email + status, and a one-click "Comp free" toggle to grant a friend/
+tester full Premium access regardless of Stripe (independent of trial/subscription,
+survives Stripe going live, excluded from MRR).
+
+Gating: session-derived `User.isAdmin` (checked server-side on every /api/admin-portal
+call; non-admins get 404, logged-out get 401). There is NO self-serve way to become
+admin — promote yourself once from the CLI:
+
+  # repo root, env loaded (sign up through the app first so your user exists)
+  pnpm --filter @chairback/api admin:make you@youremail.com
+  # revoke with:  pnpm --filter @chairback/api admin:make you@youremail.com --revoke
+
+After promoting, an "Admin" tab appears in your dashboard nav and /admin loads.
+To comp a friend: have them sign up, find their shop in the list, click "Comp free".
+(Comping works whether or not Stripe is configured.)
+
 ## 3) Post-flip verification checklist (15 minutes)
 
 1. Add yourself as a manual client with your real phone.

@@ -26,6 +26,7 @@ billingRouter.get("/", (req, res) => {
     subscribed:
       Boolean(shop.stripeSubscriptionId) &&
       ACTIVE_STATUSES.has(shop.subscriptionStatus),
+    compAccess: shop.compAccess,
     trialEndsAt: shop.trialEndsAt?.toISOString() ?? null,
     trialDaysLeft: trialDaysLeft(shop),
     hasAccess: hasActiveAccess(shop),

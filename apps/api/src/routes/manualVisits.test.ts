@@ -10,8 +10,9 @@ import { createApp } from "../app.js";
  * (earn rules included), and cadence/at-risk fields recomputed.
  */
 const app = createApp();
-const emailA = `mv-a-${randomToken(6)}@test.local`;
-const emailB = `mv-b-${randomToken(6)}@test.local`;
+// Lowercased: signup normalizes email, randomToken can emit uppercase.
+const emailA = `mv-a-${randomToken(6)}@test.local`.toLowerCase();
+const emailB = `mv-b-${randomToken(6)}@test.local`.toLowerCase();
 const password = "supersecret123";
 let cookieA: string;
 let cookieB: string;
