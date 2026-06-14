@@ -2,6 +2,7 @@ import { prisma, runWithShop, type Shop } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { deriveAcuityClientKey, toE164 } from "./acuity/clientKey.js";
 import { getAcuityClientForShop } from "./acuity/client.js";
+import { appointmentHasSmsConsent } from "./acuity/consent.js";
 import { resolveStatus } from "./acuity/mapping.js";
 import { recomputeCadence } from "./engines/cadence.js";
 import { earnPunchForVisitInTx } from "./services/punch.js";
@@ -33,6 +34,11 @@ export async function ingestAppointment(
   const scheduledAt = new Date(appt.datetime);
   const endAt = appt.endTime ? new Date(appt.endTime) : null;
   const price = appt.price ? Number(appt.price) : null;
+  // TCPA consent from the intake form (if the barber added the checkbox and the
+  // client ticked it). Only ever GRANTS consent - never clears it - and only
+  // when not already on file (first consent wins; a later booking without the
+  // box must not revoke an earlier opt-in).
+  const consented = appointmentHasSmsConsent(appt);
 
   const { clientId, clawedBack } = await runWithShop(shop.id, async (tx) => {
     const client = await tx.client.upsert({
@@ -45,6 +51,8 @@ export async function ingestAppointment(
         lastName: appt.lastName ?? null,
         phone,
         email: appt.email ?? null,
+        smsConsentAt: consented ? scheduledAt : null,
+        smsConsentSource: consented ? "acuity_intake" : null,
       },
       update: {
         firstName: appt.firstName ?? undefined,
@@ -53,6 +61,15 @@ export async function ingestAppointment(
         email: appt.email ?? undefined,
       },
     });
+
+    // Existing client + fresh consent on this booking: stamp it, but only if
+    // none is recorded yet (guarded update = never overwrite an earlier source).
+    if (consented) {
+      await tx.client.updateMany({
+        where: { id: client.id, smsConsentAt: null },
+        data: { smsConsentAt: scheduledAt, smsConsentSource: "acuity_intake" },
+      });
+    }
 
     // A re-delivered/"changed" event resolves to SCHEDULED (resolveStatus never
     // returns COMPLETED) - it must NOT downgrade a visit the promotion job

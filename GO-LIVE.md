@@ -110,6 +110,46 @@ stops messaging that number (automated). START/YES/UNSTOP re-subscribes.
 3. What HMAC key signs webhooks for OAuth apps (we also rely on the unguessable
    per-shop webhook URL, so signature ambiguity is not fatal).
 
+## 2.7) SMS consent via Acuity intake form (Phase B — auto-collects opt-in)
+
+ChairBack only texts clients who have **recorded consent** (TCPA). The cleanest
+way to collect it from every client is a checkbox on the barber's Acuity intake
+form: when a client books and checks it, ChairBack reads that on sync and marks
+them textable. No checkbox = client is imported but NOT textable until the barber
+attests for them on the Clients page ("Mark consent").
+
+### What each barber adds in Acuity (one-time, their clicks)
+
+1. Acuity → **Client's Scheduling Page** → **Intake Form Questions** (or
+   **Business Settings → Intake Form Questions**).
+2. Add a question of type **Checkbox** (a single yes/no checkbox).
+3. Question text (paste):
+   > I agree to receive appointment reminders and rebooking texts from this
+   > business. Msg & data rates may apply. Reply STOP to cancel, HELP for help.
+   > Consent is not a condition of purchase.
+4. Leave it **optional** (do NOT make it required — consent must be freely given,
+   and a forced checkbox isn't valid consent).
+5. Apply it to the appointment types that should collect consent (usually all).
+
+### What ChairBack does with it
+
+- On every appointment sync, ChairBack reads the appointment's `forms` answers.
+- If the consent checkbox is checked, it stamps `smsConsentAt` (source
+  `acuity_intake`) on that client — once; first consent wins, never overwritten,
+  never auto-revoked by a later booking without it.
+- Matching is by question-text substring (looks for "agree to receive" /
+  "text"); the exact field name + checked-value were confirmed via the probe
+  (`packages/db/prisma/probe-acuity-consent.ts`) against a real appointment.
+
+### Verify (DRY_RUN stays true)
+
+1. On the trial Acuity account, add the checkbox; book one test appt with it
+   CHECKED and one with it UNCHECKED.
+2. Reconnect (or wait for webhook) so both sync in.
+3. Clients page: the checked one shows textable (no "needs consent" badge); the
+   unchecked one shows "needs consent". A dry-run sweep would include only the
+   consented one.
+
 ## 2.5) Stripe billing (flip revenue on any time — code is live, dormant)
 
 The product is fully built: $29/mo "Pro" plan, 14-day free trial (starts at shop

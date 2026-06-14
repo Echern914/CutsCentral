@@ -81,7 +81,11 @@ export async function getAcuityClientForShop(
       return acuityMeSchema.parse(await call("/me"));
     },
     async getAppointment(id: string) {
-      return acuityAppointmentSchema.parse(await call(`/appointments/${id}`));
+      // pastFormAnswers=true so the response includes intake form answers, which
+      // we read for the SMS consent checkbox (see acuity/consent.ts).
+      return acuityAppointmentSchema.parse(
+        await call(`/appointments/${id}?pastFormAnswers=true`),
+      );
     },
     async listAppointments(params: ListParams) {
       const q = new URLSearchParams();
