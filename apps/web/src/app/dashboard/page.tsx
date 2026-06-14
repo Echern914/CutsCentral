@@ -8,9 +8,16 @@ import { ActivityFeed, type ActivityItem } from "./_components/ActivityFeed";
 import { Leaderboard, type Leader } from "./_components/Leaderboard";
 import { SettingsCard, type ShopSettings } from "./_components/SettingsCard";
 import { AccountCard } from "./_components/AccountCard";
+import { SyncHealthBanner } from "./_components/SyncHealthBanner";
 
 interface ShopMe extends ShopSettings {
   connected: boolean;
+}
+
+interface SyncStatus {
+  connected: boolean;
+  liveSyncHealthy: boolean;
+  needsRepair: boolean;
 }
 
 export default async function DashboardPage() {
@@ -22,13 +29,14 @@ export default async function DashboardPage() {
   if (!shopRes.ok || !shopRes.data) throw new Error("Failed to load your shop");
   const shop = shopRes.data;
 
-  const [stats, atRisk, activity, leaderboard, trends, me] = await Promise.all([
+  const [stats, atRisk, activity, leaderboard, trends, me, sync] = await Promise.all([
     apiGet<Stats>("/api/dashboard/stats"),
     apiGet<{ clients: AtRiskRow[] }>("/api/dashboard/at-risk"),
     apiGet<{ items: ActivityItem[] }>("/api/dashboard/activity"),
     apiGet<{ leaders: Leader[] }>("/api/dashboard/leaderboard"),
     apiGet<{ series: TrendPoint[] }>("/api/dashboard/trends"),
     apiGet<{ name: string; email: string }>("/api/auth/me"),
+    apiGet<SyncStatus>("/api/acuity/oauth/status"),
   ]);
 
   return (
@@ -55,6 +63,8 @@ export default async function DashboardPage() {
           </a>
         )}
       </header>
+
+      <SyncHealthBanner needsRepair={Boolean(sync.data?.needsRepair)} />
 
       {stats.data && <StatCards stats={stats.data} />}
 

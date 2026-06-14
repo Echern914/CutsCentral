@@ -126,6 +126,34 @@ acuityOAuthRouter.get("/callback", async (req, res) => {
   }
 });
 
+// Sync health for the dashboard. "healthy" = connected AND has live webhook
+// subscriptions. A connected shop with 0 webhook ids is the broken state the
+// dotted-event bug produced - the UI surfaces it with a Repair button.
+acuityOAuthRouter.get("/status", requireUser, requireShop, async (req, res) => {
+  const shop = req.shop!;
+  const [conn, clientCount, visitCount] = await Promise.all([
+    prisma.acuityConnection.findUnique({
+      where: { shopId: shop.id },
+      select: { acuityAccountId: true, connectedAt: true },
+    }),
+    prisma.client.count({ where: { shopId: shop.id } }),
+    prisma.visit.count({ where: { shopId: shop.id } }),
+  ]);
+  const connected = conn !== null;
+  const webhookCount = shop.acuityWebhookIds.length;
+  const liveSyncHealthy = connected && webhookCount > 0;
+  res.json({
+    connected,
+    connectedAt: conn?.connectedAt.toISOString() ?? null,
+    webhookCount,
+    liveSyncHealthy,
+    clientCount,
+    visitCount,
+    // Actionable hint for the UI.
+    needsRepair: connected && webhookCount === 0,
+  });
+});
+
 // Repair: re-subscribe webhooks + re-run backfill for an ALREADY-connected shop,
 // using the stored token. Recovery path for connections made before the
 // dotted-event fix, or any transient subscription failure - no re-OAuth needed.

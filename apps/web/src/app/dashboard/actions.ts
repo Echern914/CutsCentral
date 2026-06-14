@@ -10,6 +10,19 @@ export async function nudgeNowAction(clientId: string): Promise<{ ok: boolean }>
   return { ok: res.ok };
 }
 
+export async function repairAcuitySyncAction(): Promise<{
+  ok: boolean;
+  subscribed?: number;
+  message?: string;
+}> {
+  const res = await apiSend<{ ok: boolean; subscribed?: number; message?: string }>(
+    "POST",
+    "/api/acuity/oauth/repair",
+  );
+  revalidatePath("/dashboard");
+  return res.data ?? { ok: res.ok };
+}
+
 export async function redeemAction(
   clientId: string,
   rewardId: string,
