@@ -58,8 +58,19 @@ export const ACUITY = {
   authorizeUrl: "https://acuityscheduling.com/oauth2/authorize",
   tokenUrl: "https://acuityscheduling.com/oauth2/token",
   scope: "api-v1",
-  /** Bare webhook action values (NOT dotted). */
+  // IMPORTANT: Acuity uses TWO different event vocabularies.
+  // 1) INCOMING webhook payloads send BARE action strings ("scheduled") in the
+  //    POST body - the webhook receiver matches on these.
   actions: ["scheduled", "rescheduled", "canceled", "changed"] as const,
+  // 2) The Dynamic Webhooks SUBSCRIPTION API (POST /webhooks) requires DOTTED
+  //    event names ("appointment.scheduled"). Sending bare names here makes the
+  //    POST fail and no subscription is created (verified live 2026-06-14).
+  subscriptionEvents: [
+    "appointment.scheduled",
+    "appointment.rescheduled",
+    "appointment.canceled",
+    "appointment.changed",
+  ] as const,
 } as const;
 
 /** Far-past date the backfill walks from. */

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { apiEnv, encrypt } from "@chairback/config";
+import { apiEnv, decrypt, encrypt } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import {
   OAUTH_STATE_COOKIE,
@@ -94,16 +94,24 @@ acuityOAuthRouter.get("/callback", async (req, res) => {
       },
     });
 
-    // Subscribe per-shop webhooks (best-effort; verify-live endpoint).
-    const ids = await subscribeShopWebhooks({
+    // Subscribe per-shop webhooks (dotted event names; see constants).
+    const { ids, failures } = await subscribeShopWebhooks({
       accessToken: token.access_token,
       webhookSecret: shop.webhookSecret,
     });
-    if (ids.length) {
-      await prisma.shop.update({
-        where: { id: shop.id },
-        data: { acuityWebhookIds: ids },
-      });
+    await prisma.shop.update({
+      where: { id: shop.id },
+      data: { acuityWebhookIds: ids },
+    });
+    if (failures.length) {
+      // Loud: a shop that can't subscribe will never get live bookings. At
+      // scale this must be visible (alerting/dashboard), not buried.
+      logger.error(
+        { shopId: shop.id, subscribed: ids.length, failures },
+        "acuity webhook subscription INCOMPLETE - live sync degraded for shop",
+      );
+    } else {
+      logger.info({ shopId: shop.id, subscribed: ids.length }, "acuity webhooks subscribed");
     }
 
     // Kick off backfill in the background; don't block the redirect.
@@ -116,4 +124,60 @@ acuityOAuthRouter.get("/callback", async (req, res) => {
     logger.error({ err, shopId: shop.id }, "acuity oauth callback failed");
     res.status(502).json({ error: "acuity_oauth_failed" });
   }
+});
+
+// Repair: re-subscribe webhooks + re-run backfill for an ALREADY-connected shop,
+// using the stored token. Recovery path for connections made before the
+// dotted-event fix, or any transient subscription failure - no re-OAuth needed.
+// Idempotent: ingest dedupes via unique constraints; we replace webhook ids.
+acuityOAuthRouter.post("/repair", requireUser, requireShop, async (req, res) => {
+  const shop = req.shop!;
+  const conn = await prisma.acuityConnection.findUnique({ where: { shopId: shop.id } });
+  if (!conn) {
+    res.status(409).json({ error: "not_connected" });
+    return;
+  }
+  let accessToken: string;
+  try {
+    accessToken = decrypt(conn.accessToken, env.TOKEN_ENCRYPTION_KEY);
+  } catch {
+    res.status(500).json({ error: "token_decrypt_failed" });
+    return;
+  }
+
+  // Tear down any stale subscriptions first so we don't accumulate duplicates
+  // (Acuity caps at 25/account). Best-effort.
+  for (const id of shop.acuityWebhookIds) {
+    try {
+      await fetch(`${ACUITY.apiBase}/webhooks/${id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+    } catch {
+      /* ignore - the subscribe below is what matters */
+    }
+  }
+
+  const { ids, failures } = await subscribeShopWebhooks({
+    accessToken,
+    webhookSecret: shop.webhookSecret,
+  });
+  await prisma.shop.update({ where: { id: shop.id }, data: { acuityWebhookIds: ids } });
+
+  // Re-run backfill in the background; don't block the response.
+  void backfillShop(shop.id).catch((err) =>
+    logger.error({ err, shopId: shop.id }, "repair backfill failed"),
+  );
+
+  if (failures.length) {
+    logger.error({ shopId: shop.id, subscribed: ids.length, failures }, "acuity repair: subscriptions still failing");
+    res.status(502).json({
+      ok: false,
+      subscribed: ids.length,
+      failures,
+      message: "Some webhook subscriptions failed; live sync may be incomplete.",
+    });
+    return;
+  }
+  res.json({ ok: true, subscribed: ids.length, backfillStarted: true });
 });
