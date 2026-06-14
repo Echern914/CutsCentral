@@ -116,6 +116,36 @@ describe("acuity webhook receiver", () => {
     expect(await prisma.visit.count({ where: { shopId: shopA } })).toBe(1);
   });
 
+  it("ingests an appointment with an UNPARSEABLE endTime (real-data regression)", async () => {
+    // The backfill-imported-0 bug: a present-but-invalid endTime produced
+    // `new Date("Invalid Date")`, which Postgres rejected and crashed the whole
+    // upsert - silently dropping every appointment. Must now ingest fine with
+    // endAt left null.
+    const d = await prisma.shop.create({
+      data: {
+        ownerId: userId,
+        name: "WH D",
+        bookingUrl: "https://d.test",
+        webhookSecret: randomToken(),
+      },
+    });
+    const original = { id: fixture.id, endTime: fixture.endTime };
+    fixture.id = "appt-bad-endtime";
+    fixture.endTime = "not a real date"; // unparseable on purpose
+    try {
+      await postWebhook(d.webhookSecret, "action=scheduled&id=appt-bad-endtime");
+      await vi.waitFor(async () => {
+        expect(await prisma.visit.count({ where: { shopId: d.id } })).toBe(1);
+      });
+      const visit = await prisma.visit.findFirst({ where: { shopId: d.id } });
+      expect(visit?.acuityAppointmentId).toBe("appt-bad-endtime");
+      expect(visit?.endAt).toBeNull(); // bad endTime -> null, not a crash
+    } finally {
+      fixture.id = original.id;
+      fixture.endTime = original.endTime;
+    }
+  });
+
   it("stamps SMS consent from a checked intake checkbox (once, source acuity_intake)", async () => {
     // Fresh shop so we observe a brand-new client's consent state cleanly.
     const c = await prisma.shop.create({

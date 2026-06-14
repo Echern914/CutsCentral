@@ -6,7 +6,15 @@ import { appointmentHasSmsConsent } from "./acuity/consent.js";
 import { resolveStatus } from "./acuity/mapping.js";
 import { recomputeCadence } from "./engines/cadence.js";
 import { earnPunchForVisitInTx } from "./services/punch.js";
+import { logger } from "./logger.js";
 import type { AcuityAppointment } from "./acuity/types.js";
+
+/** Parse a date string, returning null for missing OR unparseable values. */
+function parseDate(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
 
 /**
  * Shared idempotent ingest path for BOTH the webhook receiver and the backfill.
@@ -31,9 +39,23 @@ export async function ingestAppointment(
   const acuityClientKey = deriveAcuityClientKey(appt);
   const phone = toE164(appt.phone);
   const status = resolveStatus(appt, action);
-  const scheduledAt = new Date(appt.datetime);
-  const endAt = appt.endTime ? new Date(appt.endTime) : null;
-  const price = appt.price ? Number(appt.price) : null;
+  // Acuity's endTime (and occasionally other fields) can be present but
+  // unparseable - `new Date("...")` then yields an Invalid Date, which Postgres
+  // rejects and crashes the whole upsert, silently dropping the appointment.
+  // Parse defensively: a bad optional date becomes null, not a thrown ingest.
+  const scheduledAt = parseDate(appt.datetime);
+  if (!scheduledAt) {
+    // datetime is required; without a valid one there's no usable visit. Skip
+    // rather than poison the backfill for every other appointment.
+    logger.warn(
+      { shopId: shop.id, acuityId, datetime: appt.datetime },
+      "skipping appointment with unparseable datetime",
+    );
+    return;
+  }
+  const endAt = parseDate(appt.endTime);
+  const priceNum = appt.price != null ? Number(appt.price) : null;
+  const price = priceNum != null && Number.isFinite(priceNum) ? priceNum : null;
   // TCPA consent from the intake form (if the barber added the checkbox and the
   // client ticked it). Only ever GRANTS consent - never clears it - and only
   // when not already on file (first consent wins; a later booking without the
