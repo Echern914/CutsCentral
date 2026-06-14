@@ -13,6 +13,7 @@ export interface ClientRow {
   phone: string | null;
   email: string | null;
   optedOut: boolean;
+  smsConsent: boolean;
   source: string;
   lastVisitAt: string | null;
   medianIntervalDays: number | null;
@@ -43,18 +44,21 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
     setSelected(allSelected ? new Set() : new Set(clients.map((c) => c.id)));
   }
 
-  function runBulk(action: "optOut" | "optIn" | "nudge") {
+  function runBulk(action: "optOut" | "optIn" | "attestConsent" | "nudge") {
     const ids = [...selected];
     startTransition(async () => {
       const r = await bulkClientAction(action, ids);
       if (r.ok) {
         const n = action === "nudge" ? (r.sent ?? 0) : (r.updated ?? ids.length);
-        toast(
+        const verb =
           action === "nudge"
             ? `Nudged ${n} ${n === 1 ? "client" : "clients"}`
-            : `${action === "optOut" ? "Opted out" : "Opted in"} ${n}`,
-          "success",
-        );
+            : action === "optOut"
+              ? `Opted out ${n}`
+              : action === "attestConsent"
+                ? `Marked consent for ${n}`
+                : `Opted in ${n}`;
+        toast(verb, "success");
         setSelected(new Set());
       } else {
         toast("Bulk action failed", "error");
@@ -84,6 +88,20 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
             className="rounded-full bg-gold px-4 py-1.5 text-xs font-semibold text-charcoal hover:bg-gold-muted disabled:opacity-50"
           >
             Nudge
+          </button>
+          <button
+            disabled={pending}
+            onClick={() => {
+              if (
+                confirm(
+                  "Confirm these clients agreed to receive text messages from your shop. Only mark consent for clients who actually opted in — this is a legal record.",
+                )
+              )
+                runBulk("attestConsent");
+            }}
+            className="rounded-full border border-emerald-soft/40 px-4 py-1.5 text-xs text-emerald-soft hover:bg-emerald-soft/10 disabled:opacity-50"
+          >
+            Mark consent
           </button>
           <button
             disabled={pending}
@@ -144,6 +162,14 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
                     {c.optedOut && (
                       <span className="text-[10px] uppercase tracking-wide text-danger-soft">
                         opted out
+                      </span>
+                    )}
+                    {!c.optedOut && !c.smsConsent && (
+                      <span
+                        className="text-[10px] uppercase tracking-wide text-gold/80"
+                        title="No SMS consent on file - this client won't be texted until they opt in"
+                      >
+                        needs consent
                       </span>
                     )}
                   </p>

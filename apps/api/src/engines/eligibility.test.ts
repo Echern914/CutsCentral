@@ -11,6 +11,7 @@ const base: EligibilityInput = {
   optedOut: false,
   phone: "+13025550123",
   nudgeBufferDays: 7,
+  smsConsentAt: new Date("2026-01-01T00:00:00Z"), // consented
 };
 
 describe("isNudgeEligible", () => {
@@ -56,5 +57,15 @@ describe("isNudgeEligible", () => {
 
   it("R6: no usable phone", () => {
     expect(isNudgeEligible({ ...base, phone: null })).toBe(false);
+  });
+
+  it("R7: no recorded SMS consent", () => {
+    expect(isNudgeEligible({ ...base, smsConsentAt: null })).toBe(false);
+  });
+
+  it("R7: a consented client with everything else satisfied passes", () => {
+    expect(
+      isNudgeEligible({ ...base, smsConsentAt: new Date("2026-02-02T00:00:00Z") }),
+    ).toBe(true);
   });
 });

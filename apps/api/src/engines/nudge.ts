@@ -147,9 +147,12 @@ async function doSweepShop(
   let budget = Math.max(0, shop.dailySendCap - sentToday);
 
   // Cheap candidate pre-filter; full eligibility checked per client.
+  // smsConsentAt must be set (TCPA): a client with no recorded consent is never
+  // textable, so exclude them before the per-client eligibility pass.
   const candidates = await db.client.findMany({
     where: {
       optedOut: false,
+      smsConsentAt: { not: null },
       phone: { not: null },
       medianIntervalDays: { not: null },
       lastVisitAt: { not: null },
@@ -193,6 +196,7 @@ async function doSweepShop(
       optedOut: client.optedOut,
       phone: client.phone,
       nudgeBufferDays: shop.nudgeBufferDays,
+      smsConsentAt: client.smsConsentAt,
     });
     if (!eligible) continue;
 

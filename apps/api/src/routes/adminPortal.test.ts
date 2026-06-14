@@ -21,13 +21,13 @@ let targetShopId: string;
 async function signupAndShop(email: string, shopName: string): Promise<string> {
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: shopName });
+    .send({ email, password, name: shopName, smsAttested: true });
   expect(signup.status).toBe(201);
   const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)
     .post("/api/shops")
     .set("Cookie", cookie)
-    .send({ name: shopName, bookingUrl: "https://admin.test" });
+    .send({ name: shopName, bookingUrl: "https://admin.test", smsAttested: true });
   expect(shop.status).toBe(201);
   return cookie;
 }

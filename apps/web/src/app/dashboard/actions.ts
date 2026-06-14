@@ -72,6 +72,7 @@ export async function addClientAction(
     phone: String(formData.get("phone") ?? "").trim() || undefined,
     email: String(formData.get("email") ?? "").trim() || undefined,
     notes: String(formData.get("notes") ?? "").trim() || undefined,
+    smsConsent: formData.get("smsConsent") === "on",
   });
   revalidatePath("/dashboard/clients");
   if (res.ok) return { ok: true };
@@ -175,7 +176,7 @@ export async function trendsAction(
 }
 
 export async function bulkClientAction(
-  action: "optOut" | "optIn" | "nudge",
+  action: "optOut" | "optIn" | "attestConsent" | "nudge",
   clientIds: string[],
 ): Promise<{ ok: boolean; sent?: number; updated?: number }> {
   const res = await apiSend<{ ok: boolean; sent?: number; updated?: number }>(

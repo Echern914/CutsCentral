@@ -18,7 +18,7 @@ interface ActionState {
 
 async function proxyAuth(
   path: string,
-  payload: Record<string, string>,
+  payload: Record<string, string | boolean>,
 ): Promise<{ ok: boolean; error?: string; setCookie?: string }> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
@@ -64,10 +64,17 @@ export async function signupAction(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
+  // The consent checkbox is required client-side; enforce server-side too so a
+  // tampered form can't create an un-attested account (API rejects != true).
+  const smsAttested = formData.get("smsAttested") === "on";
+  if (!smsAttested) {
+    return { error: "Please confirm the SMS consent statement to continue." };
+  }
   const result = await proxyAuth("/api/auth/signup", {
     name: String(formData.get("name") ?? ""),
     email: String(formData.get("email") ?? ""),
     password: String(formData.get("password") ?? ""),
+    smsAttested: true,
   });
   if (!result.ok) {
     return { error: result.error === "email_taken" ? "That email is already registered." : "Could not sign up." };

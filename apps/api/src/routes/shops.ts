@@ -74,13 +74,18 @@ const createShopSchema = z
       .regex(/^#[0-9a-fA-F]{6}$/, "Use a hex color like #D4AF37")
       .nullish()
       .or(z.literal("")),
+    // SMS attestation captured here too: the Google sign-in path skips the
+    // signup form, so onboarding (shop creation) is where those users first
+    // affirm it. Must be literally true. (Form-signup users already attested.)
+    smsAttested: z.literal(true),
   })
   .strict();
 
 // The single-reward fields moved to the loyalty designer (/api/loyalty); the
 // rest of the shop settings remain editable here, plus the public page fields.
 const updateShopSchema = createShopSchema
-  .omit({ rewardThreshold: true, rewardLabel: true })
+  // smsAttested is a create-time gate only; settings updates never carry it.
+  .omit({ rewardThreshold: true, rewardLabel: true, smsAttested: true })
   .extend({
     slug: z
       .string()
@@ -118,7 +123,9 @@ shopsRouter.post("/", requireUser, async (req, res) => {
     res.status(409).json({ error: "shop_exists", shopId: existing.id });
     return;
   }
-  const { rewardLabel, rewardThreshold, ...shopData } = parsed.data;
+  // smsAttested is a gate, not a Shop column - pull it out before the spread.
+  const { rewardLabel, rewardThreshold, smsAttested: _smsAttested, ...shopData } =
+    parsed.data;
   const industry = INDUSTRIES[shopData.industry as IndustryKey] ?? INDUSTRIES.other;
   const slug = await availableSlug(parsed.data.name);
   // Shop + its first menu reward land together or not at all.
@@ -142,6 +149,12 @@ shopsRouter.post("/", requireUser, async (req, res) => {
         punchCost: rewardThreshold,
         sortOrder: 0,
       },
+    });
+    // Record the attestation on the owner if not already set (Google-path users
+    // attest here; form-signup users were stamped at signup - don't overwrite).
+    await tx.user.updateMany({
+      where: { id: req.userId!, smsAttestedAt: null },
+      data: { smsAttestedAt: new Date() },
     });
     return created;
   });

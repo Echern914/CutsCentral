@@ -23,13 +23,13 @@ const DAY = 86_400_000;
 async function signupAndShop(email: string, shopName: string): Promise<string> {
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Manual Visits" });
+    .send({ email, password, name: "Manual Visits", smsAttested: true });
   expect(signup.status).toBe(201);
   const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)
     .post("/api/shops")
     .set("Cookie", cookie)
-    .send({ name: shopName, bookingUrl: "https://manual.test" });
+    .send({ name: shopName, bookingUrl: "https://manual.test", smsAttested: true });
   expect(shop.status).toBe(201);
   return cookie;
 }

@@ -21,12 +21,12 @@ let slugB: string;
 async function signupAndShop(email: string, shopName: string): Promise<{ cookie: string; slug: string }> {
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Page Tester" });
+    .send({ email, password, name: "Page Tester", smsAttested: true });
   const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)
     .post("/api/shops")
     .set("Cookie", cookie)
-    .send({ name: shopName, bookingUrl: "https://page.test" });
+    .send({ name: shopName, bookingUrl: "https://page.test", smsAttested: true });
   expect(shop.status).toBe(201);
   return { cookie, slug: shop.body.slug };
 }

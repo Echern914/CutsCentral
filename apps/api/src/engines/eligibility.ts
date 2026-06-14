@@ -11,6 +11,7 @@ import { NUDGE } from "@chairback/config";
  *   R4: no nudge in the last suppressionDays (21)
  *   R5: not opted out
  *   R6: has a usable phone (E.164)
+ *   R7: has recorded SMS consent (TCPA) - smsConsentAt is set
  */
 export interface EligibilityInput {
   completedVisitCount: number;
@@ -21,6 +22,9 @@ export interface EligibilityInput {
   optedOut: boolean;
   phone: string | null;
   nudgeBufferDays: number;
+  // TCPA gate: null = never consented => never textable. Distinct from optedOut
+  // (which is the STOP/START toggle on a client who DID once consent).
+  smsConsentAt: Date | null;
 }
 
 export function isNudgeEligible(input: EligibilityInput): boolean {
@@ -49,6 +53,9 @@ export function isNudgeEligible(input: EligibilityInput): boolean {
   if (input.optedOut) return false;
   // R6
   if (!input.phone) return false;
+  // R7 - no recorded consent => never textable (TCPA). This is the gate that
+  // makes Acuity-synced clients (consent unknown) un-textable by default.
+  if (input.smsConsentAt === null) return false;
 
   return true;
 }

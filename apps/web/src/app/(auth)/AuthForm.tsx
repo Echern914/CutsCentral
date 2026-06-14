@@ -102,6 +102,21 @@ export function AuthForm({
               minLength={8}
               className={field}
             />
+            {isSignup && (
+              <label className="mt-1 flex items-start gap-2.5 text-xs leading-relaxed text-muted">
+                <input
+                  type="checkbox"
+                  name="smsAttested"
+                  required
+                  className="mt-0.5 h-4 w-4 shrink-0 rounded border-subtle bg-charcoal-700 accent-gold"
+                />
+                <span>
+                  I&apos;ll only add and text clients who agreed to receive
+                  messages from my shop, and I&apos;m authorized to send on their
+                  behalf.
+                </span>
+              </label>
+            )}
             {errorText && (
               <p className="text-sm text-danger-soft">{errorText}</p>
             )}

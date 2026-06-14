@@ -268,9 +268,10 @@ promotionsRouter.post("/:id/blast", smsLimiter, async (req, res) => {
     return;
   }
 
-  // Candidates: opted-in clients with phones.
+  // Candidates: consented, opted-in clients with phones. smsConsentAt must be
+  // set (TCPA) - a promo blast is marketing, so consent is mandatory here too.
   let candidates = await db.client.findMany({
-    where: { optedOut: false, phone: { not: null } },
+    where: { optedOut: false, smsConsentAt: { not: null }, phone: { not: null } },
   });
   const considered = candidates.length;
 
@@ -294,6 +295,7 @@ promotionsRouter.post("/:id/blast", smsLimiter, async (req, res) => {
         optedOut: c.optedOut,
         phone: c.phone,
         nudgeBufferDays: shop.nudgeBufferDays,
+        smsConsentAt: c.smsConsentAt,
       }),
     );
   }

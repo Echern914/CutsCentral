@@ -33,6 +33,8 @@ async function makeOverdueClient(shopId: string, key: string, phone: string) {
       magicToken: randomToken(),
       firstName: "Over",
       phone,
+      smsConsentAt: NOW, // consented, so the consent gate (R7) lets sends through
+      smsConsentSource: "barber_attest",
       // overdue: median 30, last visit 60 days ago, buffer 7 -> 60 > 37
       medianIntervalDays: 30,
       lastVisitAt: addDays(NOW, -60),
@@ -117,6 +119,70 @@ describe("sweepShop", () => {
     const summary = await sweepShop(shop, { now: NOW, dryRun: false });
     expect(summary.sent).toBe(2);
     expect(sent.length).toBe(2);
+  });
+
+  it("excludes a client with no recorded SMS consent (R7)", async () => {
+    // Fresh, isolated shop so the assertion is order-independent: the ONLY
+    // candidate-shaped client here is one with no consent on file.
+    const freshShop = await prisma.shop.create({
+      data: {
+        ownerId: userId,
+        name: "Consent Gate Shop",
+        bookingUrl: "https://consent.test",
+        webhookSecret: randomToken(),
+        nudgeBufferDays: 7,
+      },
+    });
+    const db = forShop(freshShop.id);
+    const key = "tel:+13025551099";
+    const noConsent = await db.client.upsert({
+      where: { shopId_acuityClientKey: { shopId: freshShop.id, acuityClientKey: key } },
+      create: {
+        acuityClientKey: key,
+        magicToken: randomToken(),
+        firstName: "NoConsent",
+        phone: "+13025551099",
+        medianIntervalDays: 30,
+        lastVisitAt: addDays(NOW, -60), // overdue
+        // smsConsentAt deliberately omitted -> null
+      },
+      update: {},
+    });
+    for (let i = 0; i < 2; i++) {
+      await db.visit.upsert({
+        where: {
+          shopId_acuityAppointmentId: {
+            shopId: freshShop.id,
+            acuityAppointmentId: `${key}-v${i}`,
+          },
+        },
+        create: {
+          clientId: noConsent.id,
+          acuityAppointmentId: `${key}-v${i}`,
+          status: "COMPLETED",
+          scheduledAt: addDays(NOW, -60 - i * 30),
+        },
+        update: {},
+      });
+    }
+    const summary = await sweepShop(freshShop, { now: NOW, dryRun: true });
+    // The consentless client is filtered out by the candidate pre-filter, so
+    // the sweep considers nobody and sends/skips nothing.
+    expect(summary.considered).toBe(0);
+    expect(summary.sent).toBe(0);
+    expect(sent.length).toBe(0);
+    const nudgedThisClient = await prisma.nudge.findFirst({
+      where: { shopId: freshShop.id, clientId: noConsent.id },
+    });
+    expect(nudgedThisClient).toBeNull();
+
+    // Sanity: granting consent makes the SAME client a candidate.
+    await db.client.update({
+      where: { id: noConsent.id },
+      data: { smsConsentAt: NOW, smsConsentSource: "barber_attest" },
+    });
+    const after = await sweepShop(freshShop, { now: NOW, dryRun: true });
+    expect(after.considered).toBe(1);
   });
 
   it("suppresses a client already nudged within 21 days", async () => {

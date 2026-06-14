@@ -41,13 +41,13 @@ beforeAll(async () => {
 
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Billing Tester" });
+    .send({ email, password, name: "Billing Tester", smsAttested: true });
   expect(signup.status).toBe(201);
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)
     .post("/api/shops")
     .set("Cookie", cookie)
-    .send({ name: "Billing Cuts", bookingUrl: "https://billing.test" });
+    .send({ name: "Billing Cuts", bookingUrl: "https://billing.test", smsAttested: true });
   expect(shop.status).toBe(201);
   shopId = shop.body.id;
 });

@@ -198,6 +198,11 @@ dashboardRouter.post("/nudge/:clientId", smsLimiter, requireActiveAccess, async 
     res.status(400).json({ error: "cannot_nudge", reason: "opted out or no phone" });
     return;
   }
+  // TCPA: even a manual one-off nudge requires recorded consent.
+  if (client.smsConsentAt === null) {
+    res.status(400).json({ error: "cannot_nudge", reason: "no SMS consent on file" });
+    return;
+  }
 
   const body = buildNudgeBody({
     firstName: client.firstName,
@@ -270,7 +275,7 @@ dashboardRouter.get("/clients", async (req, res) => {
   const shop = req.shop!;
   const q = String(req.query.q ?? "").trim();
   const sortKey = (String(req.query.sort ?? "recent") as keyof typeof SORTS);
-  const filter = String(req.query.filter ?? "all"); // all | optedOut | active
+  const filter = String(req.query.filter ?? "all"); // all | optedOut | active | needsConsent
   const page = intQuery(req.query.page, 1, 1, 100000);
   const pageSize = 50;
 
@@ -285,6 +290,9 @@ dashboardRouter.get("/clients", async (req, res) => {
   }
   if (filter === "optedOut") where.optedOut = true;
   if (filter === "active") where.optedOut = false;
+  // Clients ChairBack can't text yet because no consent is on file - the set a
+  // barber would bulk-attest or collect consent for.
+  if (filter === "needsConsent") where.smsConsentAt = null;
 
   const db = forShop(shop.id);
   const [total, clients] = await Promise.all([
@@ -313,6 +321,7 @@ dashboardRouter.get("/clients", async (req, res) => {
       phone: c.phone,
       email: c.email,
       optedOut: c.optedOut,
+      smsConsent: c.smsConsentAt !== null,
       source: c.source,
       lastVisitAt: c.lastVisitAt?.toISOString() ?? null,
       medianIntervalDays: c.medianIntervalDays,
@@ -333,6 +342,9 @@ const addClientSchema = z
     phone: z.string().max(40).optional(),
     email: z.string().email().optional().or(z.literal("")),
     notes: z.string().max(2000).optional(),
+    // Barber affirms this walk-in/referral agreed to receive texts. Defaults
+    // false: a manually added client is NOT textable unless consent is stated.
+    smsConsent: z.boolean().optional().default(false),
   })
   .strict();
 
@@ -373,11 +385,18 @@ dashboardRouter.post("/clients", async (req, res) => {
         email: d.email || null,
         notes: d.notes ?? null,
         source: "manual",
+        // Only textable if the barber affirmed consent at add-time.
+        smsConsentAt: d.smsConsent ? new Date() : null,
+        smsConsentSource: d.smsConsent ? "manual" : null,
       },
       update: {
         firstName: d.firstName,
         lastName: d.lastName ?? undefined,
         notes: d.notes ?? undefined,
+        // Deliberately NOT touching consent here: re-adding an existing client
+        // must not silently re-stamp or overwrite an earlier consent record.
+        // To grant consent for an existing client, use the bulk attestConsent
+        // action (which guards on smsConsentAt: null).
       },
     });
     res.status(201).json({ id: client.id });
@@ -492,7 +511,10 @@ dashboardRouter.post("/clients/bulk", smsLimiter, async (req, res) => {
   const shop = req.shop!;
   const parsed = z
     .object({
-      action: z.enum(["optOut", "optIn", "nudge"]),
+      // attestConsent: barber affirms these clients agreed to receive texts -
+      // stamps smsConsentAt (a legal attestation), distinct from optIn which
+      // only clears a prior STOP and must NOT fabricate consent.
+      action: z.enum(["optOut", "optIn", "attestConsent", "nudge"]),
       clientIds: z.array(z.string()).min(1).max(200),
     })
     .strict()
@@ -523,10 +545,31 @@ dashboardRouter.post("/clients/bulk", smsLimiter, async (req, res) => {
     return;
   }
 
-  // Bulk nudge: only eligible (not opted out, has phone). Respects nothing fancy
-  // here beyond opt-out/phone; this is a deliberate barber action.
+  if (action === "attestConsent") {
+    // Stamp consent only where it's not already recorded (first attestation
+    // wins; don't overwrite an earlier source/timestamp). Also clear any prior
+    // opt-out, since attesting consent means the barber intends to text them.
+    const { count } = await prisma.client.updateMany({
+      where: { shopId: shop.id, id: { in: clientIds }, smsConsentAt: null },
+      data: {
+        smsConsentAt: new Date(),
+        smsConsentSource: "barber_attest",
+        optedOut: false,
+      },
+    });
+    res.json({ ok: true, updated: count });
+    return;
+  }
+
+  // Bulk nudge: only textable clients (consented, not opted out, has phone).
+  // This is a deliberate barber action but still bound by TCPA consent.
   const clients = await db.client.findMany({
-    where: { id: { in: clientIds }, optedOut: false, phone: { not: null } },
+    where: {
+      id: { in: clientIds },
+      optedOut: false,
+      smsConsentAt: { not: null },
+      phone: { not: null },
+    },
   });
   const provider = getMessageProvider();
   let sent = 0;
@@ -630,6 +673,8 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
       phone: client.phone,
       email: client.email,
       optedOut: client.optedOut,
+      smsConsent: client.smsConsentAt !== null,
+      smsConsentSource: client.smsConsentSource,
       notes: client.notes ?? "",
       source: client.source,
       magicToken: client.magicToken,
@@ -770,9 +815,14 @@ async function countAtRisk(shopId: string, bufferDays: number, now: Date): Promi
 
 async function buildAtRiskRows(shopId: string, bufferDays: number, now: Date) {
   const db = forShop(shopId);
+  // Mirror the sweep's candidate gate (incl. smsConsentAt) so the at-risk count
+  // shown on the dashboard matches who a sweep would actually text - otherwise
+  // "12 at risk" but "0 sent" looks broken. Clients lacking consent are managed
+  // from the clients page (bulk-attest), not this rebooking list.
   const candidates = await db.client.findMany({
     where: {
       optedOut: false,
+      smsConsentAt: { not: null },
       phone: { not: null },
       medianIntervalDays: { not: null },
       lastVisitAt: { not: null },
@@ -819,6 +869,7 @@ async function buildAtRiskRows(shopId: string, bufferDays: number, now: Date) {
       optedOut: c.optedOut,
       phone: c.phone,
       nudgeBufferDays: bufferDays,
+      smsConsentAt: c.smsConsentAt,
     });
     if (!eligible) continue;
 

@@ -88,4 +88,19 @@ describe("backfillShop date-cursor walk", () => {
     },
     BACKFILL_TIMEOUT,
   );
+
+  it(
+    "synced clients have NO SMS consent by default (not textable)",
+    async () => {
+      // The whole TCPA safety guarantee: importing from Acuity must never make
+      // a client textable. Every synced client lands with smsConsentAt = null.
+      const total = await prisma.client.count({ where: { shopId } });
+      expect(total).toBeGreaterThan(0);
+      const withConsent = await prisma.client.count({
+        where: { shopId, smsConsentAt: { not: null } },
+      });
+      expect(withConsent).toBe(0);
+    },
+    BACKFILL_TIMEOUT,
+  );
 });

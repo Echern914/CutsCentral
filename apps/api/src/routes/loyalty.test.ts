@@ -20,7 +20,7 @@ let clientId: string;
 async function signupAndShop(email: string, shopName: string): Promise<string> {
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Loyalty Tester" });
+    .send({ email, password, name: "Loyalty Tester", smsAttested: true });
   expect(signup.status).toBe(201);
   const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)
@@ -31,6 +31,7 @@ async function signupAndShop(email: string, shopName: string): Promise<string> {
       bookingUrl: "https://loyalty.test",
       rewardLabel: "Free Cut",
       rewardThreshold: 10,
+      smsAttested: true,
     });
   expect(shop.status).toBe(201);
   return cookie;

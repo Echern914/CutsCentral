@@ -55,6 +55,11 @@ model User {
   // Platform operator. Gates the /admin portal. Set by hand (or the bootstrap
   // script) - never settable through any self-serve endpoint.
   isAdmin      Boolean  @default(false)
+  // Explicit SMS attestation: the barber affirmed they will only add/text
+  // clients who consented and that they're authorized to send on their behalf.
+  // Captured at signup (form) or first onboarding step (Google path). The legal
+  // basis for ChairBack sending SMS on the shop's behalf.
+  smsAttestedAt DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -238,6 +243,12 @@ model Client {
   phone           String? // E.164
   email           String?
   optedOut        Boolean  @default(false)
+  // SMS consent (TCPA). A client is textable only when optedOut == false AND
+  // smsConsentAt != null. optedOut is the live STOP/START gate; smsConsentAt is
+  // the proof-of-opt-in gate. New clients (e.g. synced from Acuity) have no
+  // consent until it is granted, so they are NOT textable by default.
+  smsConsentAt     DateTime? // when opt-in was captured; null = never consented
+  smsConsentSource String? // "acuity_intake" | "barber_attest" | "manual" | "join_page"
   notes           String? // barber's private notes about the client
   source          String   @default("acuity") // "acuity" | "manual"
   magicToken      String   @unique // GLOBAL - rewards auth resolves without a shop

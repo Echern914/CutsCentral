@@ -30,7 +30,7 @@ describe("barber auth flow", () => {
   it("signs up and sets an httpOnly session cookie", async () => {
     const res = await request(app)
       .post("/api/auth/signup")
-      .send({ email, password, name: "Test Barber" });
+      .send({ email, password, name: "Test Barber", smsAttested: true });
     expect(res.status).toBe(201);
     expect(res.body.email).toBe(email);
 
@@ -44,8 +44,15 @@ describe("barber auth flow", () => {
   it("rejects a duplicate email with 409", async () => {
     const res = await request(app)
       .post("/api/auth/signup")
-      .send({ email, password, name: "Dupe" });
+      .send({ email, password, name: "Dupe", smsAttested: true });
     expect(res.status).toBe(409);
+  });
+
+  it("rejects signup without the SMS attestation", async () => {
+    const res = await request(app)
+      .post("/api/auth/signup")
+      .send({ email: `noattest-${email}`, password, name: "No Attest" });
+    expect(res.status).toBe(400);
   });
 
   it("rejects protected route without a cookie (401)", async () => {
@@ -83,7 +90,7 @@ describe("barber auth flow", () => {
     const create = await request(app)
       .post("/api/shops")
       .set("Cookie", cookie)
-      .send({ name: "Test Cuts", bookingUrl: "https://test.as.me" });
+      .send({ name: "Test Cuts", bookingUrl: "https://test.as.me", smsAttested: true });
     expect(create.status).toBe(201);
     expect(create.body.name).toBe("Test Cuts");
     // webhookSecret must NOT be exposed to the client.

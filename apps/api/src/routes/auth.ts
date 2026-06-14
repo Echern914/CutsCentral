@@ -30,6 +30,9 @@ const signupSchema = z
     email: z.string().email(),
     password: z.string().min(8).max(200),
     name: z.string().min(1).max(120),
+    // SMS attestation: must be literally true. The barber affirms they'll only
+    // add/text consented clients and are authorized to send on their behalf.
+    smsAttested: z.literal(true),
   })
   .strict();
 
@@ -58,7 +61,12 @@ authRouter.post("/signup", authLimiter, async (req, res) => {
 
   const passwordHash = await hashPassword(password);
   const user = await prisma.user.create({
-    data: { email: normalizedEmail, passwordHash, name: name.trim() },
+    data: {
+      email: normalizedEmail,
+      passwordHash,
+      name: name.trim(),
+      smsAttestedAt: new Date(), // schema requires smsAttested === true to reach here
+    },
   });
 
   const token = setSessionCookie(res, user.id, user.tokenVersion);

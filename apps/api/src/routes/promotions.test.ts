@@ -24,12 +24,12 @@ const sentBodies: { to: string; body: string }[] = [];
 async function signupAndShop(email: string, name: string): Promise<{ cookie: string; shopId: string }> {
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Promo Tester" });
+    .send({ email, password, name: "Promo Tester", smsAttested: true });
   const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)
     .post("/api/shops")
     .set("Cookie", cookie)
-    .send({ name, bookingUrl: "https://promo.test" });
+    .send({ name, bookingUrl: "https://promo.test", smsAttested: true });
   expect(shop.status).toBe(201);
   return { cookie, shopId: shop.body.id };
 }
@@ -49,8 +49,14 @@ beforeAll(async () => {
   const b = await signupAndShop(emailB, "Promo Cuts B");
   cookieB = b.cookie;
 
-  // Two reachable clients + one opted out (must never get a blast).
-  const mk = async (key: string, phone: string, optedOut = false) =>
+  // Two reachable (consented) clients + one opted out + one with no consent;
+  // the last two must never get a blast.
+  const mk = async (
+    key: string,
+    phone: string,
+    optedOut = false,
+    consented = true,
+  ) =>
     forShop(shopIdA).client.upsert({
       where: { shopId_acuityClientKey: { shopId: shopIdA, acuityClientKey: key } },
       create: {
@@ -59,12 +65,16 @@ beforeAll(async () => {
         firstName: "Promo",
         phone,
         optedOut,
+        smsConsentAt: consented ? new Date("2026-01-01T00:00:00Z") : null,
+        smsConsentSource: consented ? "barber_attest" : null,
       },
       update: {},
     });
   clientOne = (await mk("tel:+13025550101", "+13025550101")).id;
   await mk("tel:+13025550102", "+13025550102");
   await mk("tel:+13025550103", "+13025550103", true);
+  // Consented=false: textable phone, not opted out, but no consent on file.
+  await mk("tel:+13025550104", "+13025550104", false, false);
 });
 
 afterAll(async () => {

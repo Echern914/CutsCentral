@@ -52,6 +52,7 @@ export function ClientsControls() {
           <option value="all">All clients</option>
           <option value="active">Active only</option>
           <option value="optedOut">Opted out</option>
+          <option value="needsConsent">Needs SMS consent</option>
         </select>
         <button
           onClick={() => setAdding((v) => !v)}
@@ -120,6 +121,17 @@ function AddClientForm({ onDone }: { onDone: () => void }) {
           rows={2}
           className={`${field} resize-none sm:col-span-2`}
         />
+        <label className="flex items-start gap-2.5 text-xs leading-relaxed text-muted sm:col-span-2">
+          <input
+            type="checkbox"
+            name="smsConsent"
+            className="mt-0.5 h-4 w-4 shrink-0 rounded border-subtle bg-charcoal-700 accent-gold"
+          />
+          <span>
+            This client agreed to receive text reminders. Leave unchecked and we
+            won&apos;t text them until they opt in.
+          </span>
+        </label>
         <div className="sm:col-span-2">
           <SubmitBtn />
           {state.error && (
