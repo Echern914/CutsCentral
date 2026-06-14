@@ -37,7 +37,7 @@ export default async function ClientsPage({
         <Link href="/dashboard" className="text-xs text-muted hover:text-offwhite">
           ← Dashboard
         </Link>
-        <div className="mt-1 flex items-baseline justify-between">
+        <div className="mt-1 flex flex-col gap-2 sm:flex-row sm:items-baseline sm:justify-between">
           <h1 className="font-display text-3xl tracking-tight">Clients</h1>
           <div className="flex items-center gap-3">
             <span className="text-sm text-muted">{data?.total ?? 0} total</span>

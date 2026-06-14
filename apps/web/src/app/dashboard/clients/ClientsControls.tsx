@@ -26,19 +26,19 @@ export function ClientsControls() {
 
   return (
     <div className="mb-5 flex flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
         <input
           defaultValue={params.get("q") ?? ""}
           placeholder="Search name, phone, or email…"
           onKeyDown={(e) => {
             if (e.key === "Enter") setParam("q", (e.target as HTMLInputElement).value);
           }}
-          className={`${field} flex-1 min-w-[180px]`}
+          className={`${field} w-full sm:flex-1 sm:min-w-[180px]`}
         />
         <select
           value={params.get("sort") ?? "recent"}
           onChange={(e) => setParam("sort", e.target.value)}
-          className={`${field} w-auto`}
+          className={`${field} w-full sm:w-auto`}
         >
           <option value="recent">Recent visit</option>
           <option value="oldest">Oldest visit</option>
@@ -47,7 +47,7 @@ export function ClientsControls() {
         <select
           value={params.get("filter") ?? "all"}
           onChange={(e) => setParam("filter", e.target.value)}
-          className={`${field} w-auto`}
+          className={`${field} w-full sm:w-auto`}
         >
           <option value="all">All clients</option>
           <option value="active">Active only</option>

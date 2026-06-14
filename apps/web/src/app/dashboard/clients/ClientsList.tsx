@@ -80,8 +80,8 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
   return (
     <>
       {selected.size > 0 && (
-        <div className="mb-3 flex flex-wrap items-center gap-3 rounded-2xl border border-gold/30 bg-charcoal-800 px-4 py-3">
-          <span className="text-sm text-offwhite">{selected.size} selected</span>
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-2xl border border-gold/30 bg-charcoal-800 px-4 py-3">
+          <span className="w-full text-sm text-offwhite sm:w-auto">{selected.size} selected</span>
           <button
             disabled={pending}
             onClick={() => runBulk("nudge")}
@@ -132,7 +132,7 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
             type="checkbox"
             checked={allSelected}
             onChange={toggleAll}
-            className="h-4 w-4 accent-gold"
+            className="h-5 w-5 accent-gold"
             aria-label="Select all"
           />
           <span className="text-xs text-muted">Select all</span>
@@ -144,7 +144,7 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
                 type="checkbox"
                 checked={selected.has(c.id)}
                 onChange={() => toggle(c.id)}
-                className="h-4 w-4 shrink-0 accent-gold"
+                className="h-5 w-5 shrink-0 accent-gold"
                 aria-label={`Select ${c.name}`}
               />
               <Link
@@ -152,28 +152,32 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
                 className="flex min-w-0 flex-1 items-center justify-between gap-3 hover:opacity-80"
               >
                 <div className="min-w-0">
-                  <p className="flex items-center gap-2 truncate text-sm font-medium text-offwhite">
-                    {c.name}
-                    {c.source === "manual" && (
-                      <span className="rounded-full bg-charcoal-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted">
-                        manual
-                      </span>
-                    )}
-                    {c.optedOut && (
-                      <span className="text-[10px] uppercase tracking-wide text-danger-soft">
-                        opted out
-                      </span>
-                    )}
-                    {!c.optedOut && !c.smsConsent && (
-                      <span
-                        className="text-[10px] uppercase tracking-wide text-gold/80"
-                        title="No SMS consent on file - this client won't be texted until they opt in"
-                      >
-                        needs consent
-                      </span>
-                    )}
-                  </p>
-                  <p className="truncate text-xs text-muted">
+                  <p className="truncate text-sm font-medium text-offwhite">{c.name}</p>
+                  {/* Badges on their own wrapping line so a long name can't push
+                      them off-screen (they carry the consent/opt-out signal). */}
+                  {(c.source === "manual" || c.optedOut || !c.smsConsent) && (
+                    <span className="mt-1 flex flex-wrap gap-1.5">
+                      {c.source === "manual" && (
+                        <span className="rounded-full bg-charcoal-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted">
+                          manual
+                        </span>
+                      )}
+                      {c.optedOut && (
+                        <span className="rounded-full bg-danger-soft/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-danger-soft">
+                          opted out
+                        </span>
+                      )}
+                      {!c.optedOut && !c.smsConsent && (
+                        <span
+                          className="rounded-full bg-gold/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-gold/90"
+                          title="No SMS consent on file - this client won't be texted until they opt in"
+                        >
+                          needs consent
+                        </span>
+                      )}
+                    </span>
+                  )}
+                  <p className="mt-0.5 truncate text-xs text-muted">
                     {c.phone ?? c.email ?? "no contact"}
                     {c.lastVisitAt ? (
                       <>

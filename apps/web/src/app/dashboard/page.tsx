@@ -9,6 +9,7 @@ import { Leaderboard, type Leader } from "./_components/Leaderboard";
 import { SettingsCard, type ShopSettings } from "./_components/SettingsCard";
 import { AccountCard } from "./_components/AccountCard";
 import { SyncHealthBanner } from "./_components/SyncHealthBanner";
+import { GettingStarted } from "./_components/GettingStarted";
 
 interface ShopMe extends ShopSettings {
   connected: boolean;
@@ -18,6 +19,7 @@ interface SyncStatus {
   connected: boolean;
   liveSyncHealthy: boolean;
   needsRepair: boolean;
+  clientCount: number;
 }
 
 export default async function DashboardPage() {
@@ -65,6 +67,11 @@ export default async function DashboardPage() {
       </header>
 
       <SyncHealthBanner needsRepair={Boolean(sync.data?.needsRepair)} />
+
+      <GettingStarted
+        connected={shop.connected}
+        hasClients={(sync.data?.clientCount ?? 0) > 0}
+      />
 
       {stats.data && <StatCards stats={stats.data} />}
 
