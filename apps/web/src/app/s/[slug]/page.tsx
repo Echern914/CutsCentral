@@ -14,7 +14,10 @@ export interface ShopPageData {
   accentColor: string | null;
   instagramHandle: string | null;
   hoursText: string | null;
-  galleryUrls: string[];
+  gallery: { url: string; caption?: string }[];
+  fontKey: string | null;
+  layoutStyle: string | null;
+  sectionOrder: string[];
   bookingUrl: string;
   takesRequests: boolean;
   punchesPerVisit: number;

@@ -15,9 +15,14 @@ export interface ShopPageSettings {
   heroImageUrl: string | null;
   instagramHandle: string | null;
   hoursText: string | null;
-  galleryUrls: string[];
+  gallery: { url: string; caption?: string }[];
+  fontKey: string | null;
+  layoutStyle: string | null;
+  sectionOrder: string[];
   takesRequests: boolean;
   notifyPhone: string | null;
+  bookingUrl: string;
+  punchesPerVisit: number;
 }
 
 export default async function PageSettingsPage() {
@@ -27,12 +32,12 @@ export default async function PageSettingsPage() {
   }
 
   return (
-    <main className="mx-auto w-full max-w-4xl px-5 py-8">
+    <main className="mx-auto w-full max-w-6xl px-5 py-8">
       <header className="mb-6">
         <h1 className="font-display text-3xl tracking-tight">Your page</h1>
         <p className="mt-1 text-sm text-muted">
-          A public mini-site that looks like your shop. Drop the link in your
-          Instagram bio. Clients see your brand, your rewards, and your live promos.
+          A public mini-site that looks like your shop. Customize it however you
+          like and watch it update live. Drop the link in your Instagram bio.
         </p>
       </header>
       <PageEditor settings={res.data} appBase={process.env.APP_BASE_URL ?? ""} />

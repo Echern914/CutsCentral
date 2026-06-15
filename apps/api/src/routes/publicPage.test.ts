@@ -90,7 +90,53 @@ describe("public shop page", () => {
     const page = await request(app).get(`/api/page/${slugA}`);
     expect(page.body.theme).toBe("midnight");
     expect(page.body.bio).toBe("Precision fades downtown.");
-    expect(page.body.galleryUrls).toHaveLength(2);
+    // Legacy galleryUrls input surfaces in the new `gallery` shape (caption-less).
+    expect(page.body.gallery).toHaveLength(2);
+    expect(page.body.gallery[0]).toEqual({ url: "https://img.test/one.jpg" });
+  });
+
+  it("gallery with captions + style fields save and round-trip", async () => {
+    const patch = await request(app)
+      .patch("/api/shops/me")
+      .set("Cookie", cookieA)
+      .send({
+        fontKey: "classic",
+        layoutStyle: "sharp",
+        sectionOrder: ["gallery", "rewards"],
+        gallery: [
+          { url: "https://img.test/cut.jpg", caption: "Skin fade" },
+          { url: "https://img.test/beard.jpg" },
+        ],
+      });
+    expect(patch.status).toBe(200);
+
+    const page = await request(app).get(`/api/page/${slugA}`);
+    expect(page.body.fontKey).toBe("classic");
+    expect(page.body.layoutStyle).toBe("sharp");
+    expect(page.body.sectionOrder).toEqual(["gallery", "rewards"]);
+    expect(page.body.gallery[0]).toEqual({
+      url: "https://img.test/cut.jpg",
+      caption: "Skin fade",
+    });
+    expect(page.body.gallery[1]).toEqual({ url: "https://img.test/beard.jpg" });
+  });
+
+  it("rejects a junk font/layout key and an oversized gallery", async () => {
+    const font = await request(app)
+      .patch("/api/shops/me")
+      .set("Cookie", cookieA)
+      .send({ fontKey: "comic-sans-deluxe" });
+    expect(font.status).toBe(400);
+
+    const tooMany = await request(app)
+      .patch("/api/shops/me")
+      .set("Cookie", cookieA)
+      .send({
+        gallery: Array.from({ length: 17 }, (_, i) => ({
+          url: `https://img.test/${i}.jpg`,
+        })),
+      });
+    expect(tooMany.status).toBe(400);
   });
 
   it("rejects a junk theme and a junk slug", async () => {

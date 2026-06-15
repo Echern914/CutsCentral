@@ -130,3 +130,97 @@ export const PAGE_THEMES = {
 export type PageThemeKey = keyof typeof PAGE_THEMES;
 
 export const PAGE_THEME_KEYS = Object.keys(PAGE_THEMES) as PageThemeKey[];
+
+/**
+ * Font pairings the barber can pick for their public page. Each maps a heading
+ * (display) + body family. The public route (/s/[slug]) loads these via
+ * next/font and exposes them as CSS variables; the editor preview and public
+ * page both read `cssVar` so a shop's typography is part of its identity.
+ * Keep these families in sync with the next/font loader in the /s layout.
+ */
+export const PAGE_FONTS = {
+  modern: {
+    label: "Modern",
+    hint: "Clean grotesque",
+    displayVar: "--font-page-bricolage",
+    bodyVar: "--font-page-inter",
+  },
+  classic: {
+    label: "Classic Serif",
+    hint: "Editorial, timeless",
+    displayVar: "--font-page-playfair",
+    bodyVar: "--font-page-inter",
+  },
+  bold: {
+    label: "Bold Display",
+    hint: "Loud, condensed",
+    displayVar: "--font-page-archivo",
+    bodyVar: "--font-page-inter",
+  },
+  clean: {
+    label: "Clean Sans",
+    hint: "Minimal, neutral",
+    displayVar: "--font-page-inter",
+    bodyVar: "--font-page-inter",
+  },
+} as const;
+
+export type PageFontKey = keyof typeof PAGE_FONTS;
+
+export const PAGE_FONT_KEYS = Object.keys(PAGE_FONTS) as PageFontKey[];
+
+export const DEFAULT_PAGE_FONT: PageFontKey = "modern";
+
+/**
+ * Layout "shape" presets: corner roundness + button shape. Pure CSS tokens the
+ * public page and preview consume so a shop can read sharp/editorial or soft/
+ * friendly without touching colors.
+ */
+export const LAYOUT_STYLES = {
+  soft: { label: "Soft", radius: "1rem", buttonRadius: "9999px" },
+  sharp: { label: "Sharp", radius: "0.25rem", buttonRadius: "0.25rem" },
+  round: { label: "Round", radius: "1.5rem", buttonRadius: "9999px" },
+} as const;
+
+export type LayoutStyleKey = keyof typeof LAYOUT_STYLES;
+
+export const LAYOUT_STYLE_KEYS = Object.keys(LAYOUT_STYLES) as LayoutStyleKey[];
+
+export const DEFAULT_LAYOUT_STYLE: LayoutStyleKey = "soft";
+
+/**
+ * Reorderable / toggleable sections on the public page. The hero + booking CTA
+ * are fixed (always first); these are the movable blocks. `sectionOrder` on the
+ * shop is an array of these keys in render order; any section omitted from the
+ * array is hidden. An empty array means "use DEFAULT_SECTION_ORDER" (back-comp
+ * for shops created before this field existed).
+ */
+export const PAGE_SECTIONS = {
+  promotions: { label: "Promotions", hint: "Live deals" },
+  rewards: { label: "Loyalty rewards", hint: "Your rewards menu" },
+  gallery: { label: "Gallery", hint: "Your work" },
+  hours: { label: "Hours", hint: "When you're open" },
+} as const;
+
+export type PageSectionKey = keyof typeof PAGE_SECTIONS;
+
+export const PAGE_SECTION_KEYS = Object.keys(PAGE_SECTIONS) as PageSectionKey[];
+
+export const DEFAULT_SECTION_ORDER: PageSectionKey[] = [
+  "promotions",
+  "rewards",
+  "gallery",
+  "hours",
+];
+
+/** Max gallery photos a shop can show on its public page. */
+export const GALLERY_MAX = 16;
+
+/** Per-photo caption length cap (shared by API validation + editor UI). */
+export const GALLERY_CAPTION_MAX = 80;
+
+/** A single gallery photo: an http(s) image URL with an optional caption. */
+export interface GalleryItem {
+  url: string;
+  caption?: string;
+}

@@ -56,6 +56,13 @@ export const smsLimiter = make({
   keyGenerator: sessionKey,
 });
 
+/** Photo uploads: per-user, moderate (each call hits external storage). */
+export const uploadLimiter = make({
+  windowMs: 60 * 1000,
+  limit: 30,
+  keyGenerator: sessionKey,
+});
+
 /** General authenticated dashboard reads: per-user, loose. */
 export const dashboardLimiter = make({
   windowMs: 60 * 1000,

@@ -59,6 +59,15 @@ const apiSchema = z.object({
   STRIPE_PRICE_ID: z.string().min(1).optional(),
   STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
 
+  // Supabase Storage for shop photo uploads (logo / hero / gallery). Optional:
+  // while any of these is unset, the upload endpoint returns 503 and the page
+  // editor falls back to paste-a-URL, so the app still boots and works without
+  // it. SERVICE_ROLE key is server-only (full storage access) - never ship it to
+  // the browser. BUCKET must be a PUBLIC bucket so the returned URLs render.
+  SUPABASE_URL: cleanUrl().optional(),
+  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1).optional(),
+  SUPABASE_STORAGE_BUCKET: z.string().min(1).default("shop-media"),
+
   // Error monitoring (optional).
   SENTRY_DSN: cleanUrl().optional(),
 

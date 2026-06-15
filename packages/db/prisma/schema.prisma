@@ -118,7 +118,15 @@ model Shop {
   heroImageUrl      String? // wide banner image
   instagramHandle   String? // without the @
   hoursText         String? // freeform hours ("Mon-Fri 9-6 ...")
-  galleryUrls       String[] @default([]) // up to 6 photo URLs
+  galleryUrls       String[] @default([]) // legacy: bare photo URLs (superseded by galleryItems)
+  // Gallery photos with optional per-photo captions: [{ url, caption? }, ...].
+  // Migrated from galleryUrls; galleryUrls is kept for one release as a safety net.
+  galleryItems      Json     @default("[]")
+  // Per-shop styling so each page looks like THEIR shop (see PAGE_FONTS /
+  // LAYOUT_STYLES / PAGE_SECTIONS in config). All optional; null = the default.
+  fontKey           String? // PAGE_FONTS key (typography pairing)
+  layoutStyle       String? // LAYOUT_STYLES key (corner/button shape)
+  sectionOrder      String[] @default([]) // PAGE_SECTIONS keys in render order; [] = default order
 
   // Appointment requests (lead form on the public page). When takesRequests is
   // on, /s/[slug] shows a "Request an appointment" form instead of the booking

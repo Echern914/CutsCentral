@@ -14,11 +14,21 @@ export function RequestForm({
   shopName,
   accent,
   theme,
+  preview = false,
 }: {
   slug: string;
   shopName: string;
   accent: string;
-  theme: { surface: string; border: string; muted: string; scheme: "light" | "dark" };
+  theme: {
+    surface: string;
+    border: string;
+    muted: string;
+    scheme: "light" | "dark";
+    radius: string;
+    buttonRadius: string;
+  };
+  /** In-editor preview: never actually submits (keeps editing on the page). */
+  preview?: boolean;
 }) {
   const [firstName, setFirstName] = useState("");
   const [phone, setPhone] = useState("");
@@ -33,9 +43,14 @@ export function RequestForm({
     backgroundColor: theme.surface,
     border: `1px solid ${theme.border}`,
     color: "inherit",
+    borderRadius: theme.radius,
   };
+  // Inputs use a slightly tighter radius than the card; never fully pill so text
+  // doesn't crowd the rounded edge.
+  const inputStyle: CSSProperties = { ...fieldStyle, borderRadius: `min(${theme.radius}, 0.75rem)` };
 
   function submit() {
+    if (preview) return; // editor preview - do nothing
     setError(null);
     if (!firstName.trim()) {
       setError("Please add your name.");
@@ -85,8 +100,8 @@ export function RequestForm({
           onChange={(e) => setFirstName(e.target.value)}
           placeholder="Your name"
           aria-label="Your name"
-          className="w-full rounded-xl px-4 py-2.5 text-sm placeholder:opacity-60 focus:outline-none"
-          style={fieldStyle}
+          className="w-full px-4 py-2.5 text-sm placeholder:opacity-60 focus:outline-none"
+          style={inputStyle}
         />
         <input
           type="tel"
@@ -96,8 +111,8 @@ export function RequestForm({
           onChange={(e) => setPhone(e.target.value)}
           placeholder="Mobile number"
           aria-label="Mobile number"
-          className="w-full rounded-xl px-4 py-2.5 text-sm placeholder:opacity-60 focus:outline-none"
-          style={fieldStyle}
+          className="w-full px-4 py-2.5 text-sm placeholder:opacity-60 focus:outline-none"
+          style={inputStyle}
         />
         <input
           type="email"
@@ -106,8 +121,8 @@ export function RequestForm({
           onChange={(e) => setEmail(e.target.value)}
           placeholder="Email (optional)"
           aria-label="Email"
-          className="w-full rounded-xl px-4 py-2.5 text-sm placeholder:opacity-60 focus:outline-none"
-          style={fieldStyle}
+          className="w-full px-4 py-2.5 text-sm placeholder:opacity-60 focus:outline-none"
+          style={inputStyle}
         />
         <input
           type="text"
@@ -115,8 +130,8 @@ export function RequestForm({
           onChange={(e) => setPreferredTime(e.target.value)}
           placeholder="Preferred time (e.g. Sat morning)"
           aria-label="Preferred time"
-          className="w-full rounded-xl px-4 py-2.5 text-sm placeholder:opacity-60 focus:outline-none"
-          style={fieldStyle}
+          className="w-full px-4 py-2.5 text-sm placeholder:opacity-60 focus:outline-none"
+          style={inputStyle}
         />
         <textarea
           value={message}
@@ -124,19 +139,20 @@ export function RequestForm({
           placeholder="Anything else? (optional)"
           aria-label="Message"
           rows={2}
-          className="w-full rounded-xl px-4 py-2.5 text-sm placeholder:opacity-60 focus:outline-none"
-          style={fieldStyle}
+          className="w-full px-4 py-2.5 text-sm placeholder:opacity-60 focus:outline-none"
+          style={inputStyle}
         />
         {error && <p className="text-xs text-red-500">{error}</p>}
         <button
           type="button"
           onClick={submit}
           disabled={pending}
-          className="w-full rounded-full py-3 text-center text-sm font-semibold transition-transform hover:scale-[1.01] disabled:opacity-50"
+          className="w-full py-3 text-center text-sm font-semibold transition-transform hover:scale-[1.01] disabled:opacity-50"
           style={{
             backgroundColor: accent,
             color: theme.scheme === "light" ? "#FFFFFF" : "#101012",
             boxShadow: `0 8px 30px -10px ${accent}AA`,
+            borderRadius: theme.buttonRadius,
           }}
         >
           {pending ? "Sending…" : "Send request"}

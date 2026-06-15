@@ -3,11 +3,18 @@ import { z } from "zod";
 import {
   BILLING,
   DEFAULTS,
+  DEFAULT_SECTION_ORDER,
+  GALLERY_CAPTION_MAX,
+  GALLERY_MAX,
   INDUSTRIES,
   INDUSTRY_KEYS,
+  LAYOUT_STYLE_KEYS,
+  PAGE_FONT_KEYS,
+  PAGE_SECTION_KEYS,
   PAGE_THEME_KEYS,
   apiEnv,
   randomToken,
+  type GalleryItem,
   type IndustryKey,
 } from "@chairback/config";
 import { prisma } from "@chairback/db";
@@ -56,6 +63,13 @@ const httpUrl = (max: number) =>
     .max(max)
     .url()
     .refine((u) => /^https?:\/\//i.test(u), "Must be an http(s) URL");
+
+// A gallery photo: http(s) image URL + optional caption. Same XSS guard on the
+// URL as everywhere else; caption is plain text rendered as textContent.
+const galleryItemSchema = z.object({
+  url: httpUrl(500),
+  caption: z.string().trim().max(GALLERY_CAPTION_MAX).optional().or(z.literal("")),
+});
 
 const createShopSchema = z
   .object({
@@ -112,7 +126,16 @@ const updateShopSchema = createShopSchema
       .nullish()
       .or(z.literal("")),
     hoursText: z.string().trim().max(400).nullish().or(z.literal("")),
-    galleryUrls: z.array(httpUrl(500)).max(6),
+    // Legacy bare-URL gallery (still accepted from old clients). New clients send
+    // `gallery` (items with captions); when present it wins, see the PATCH below.
+    galleryUrls: z.array(httpUrl(500)).max(GALLERY_MAX),
+    gallery: z.array(galleryItemSchema).max(GALLERY_MAX),
+    // Per-shop styling (all optional; null/unset = the page default).
+    fontKey: z.enum(PAGE_FONT_KEYS as [string, ...string[]]).nullish().or(z.literal("")),
+    layoutStyle: z.enum(LAYOUT_STYLE_KEYS as [string, ...string[]]).nullish().or(z.literal("")),
+    // Section render order/visibility. De-duped, known keys only, capped to the
+    // number of real sections. [] = "use the default order" (handled on render).
+    sectionOrder: z.array(z.enum(PAGE_SECTION_KEYS as [string, ...string[]])).max(PAGE_SECTION_KEYS.length),
     // Lead form: when on, the public page shows "Request an appointment".
     // notifyPhone is texted on each new lead (normalized to E.164 below); ""/null
     // = inbox only.
@@ -120,6 +143,41 @@ const updateShopSchema = createShopSchema
     notifyPhone: z.string().max(40).nullish().or(z.literal("")),
   })
   .partial();
+
+/**
+ * Resolve a shop's gallery to the canonical {url, caption?} shape for any client
+ * (editor + public page). Prefers galleryItems (Json, with captions); falls back
+ * to the legacy galleryUrls for shops not yet migrated. Defensive about the Json
+ * blob since Prisma types it as `unknown`.
+ */
+function readGallery(shop: {
+  galleryItems: unknown;
+  galleryUrls: string[];
+}): GalleryItem[] {
+  const raw = shop.galleryItems;
+  if (Array.isArray(raw)) {
+    const items = raw
+      .map((it): GalleryItem | null => {
+        if (it && typeof it === "object" && typeof (it as { url?: unknown }).url === "string") {
+          const url = (it as { url: string }).url;
+          const caption = (it as { caption?: unknown }).caption;
+          return typeof caption === "string" && caption.trim()
+            ? { url, caption: caption.trim() }
+            : { url };
+        }
+        return null;
+      })
+      .filter((x): x is GalleryItem => x !== null);
+    if (items.length > 0 || (shop.galleryUrls?.length ?? 0) === 0) return items;
+  }
+  // Fall back to legacy bare URLs.
+  return (shop.galleryUrls ?? []).map((url) => ({ url }));
+}
+
+/** Section order for the public page: stored order if set, else the default. */
+function readSectionOrder(order: string[] | null | undefined): string[] {
+  return order && order.length > 0 ? order : DEFAULT_SECTION_ORDER;
+}
 
 // Create the barber's shop (one per barber for now).
 shopsRouter.post("/", requireUser, async (req, res) => {
@@ -194,20 +252,37 @@ shopsRouter.patch("/me", requireUser, requireShop, async (req, res) => {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
     return;
   }
+  // `gallery` (items-with-captions) isn't a Shop column - it maps to galleryItems
+  // (Json) and supersedes the legacy galleryUrls. Pull it out before the spread.
+  const { gallery, ...rest } = parsed.data;
   // Normalize empty strings on optional branding/page fields to null.
-  const data = { ...parsed.data };
+  const data: Record<string, unknown> = { ...rest };
   if (data.logoUrl === "") data.logoUrl = null;
   if (data.accentColor === "") data.accentColor = null;
   if (data.bio === "") data.bio = null;
   if (data.heroImageUrl === "") data.heroImageUrl = null;
   if (data.instagramHandle === "") data.instagramHandle = null;
   if (data.hoursText === "") data.hoursText = null;
+  // Optional style keys: "" means "clear it" (fall back to the page default).
+  if (data.fontKey === "") data.fontKey = null;
+  if (data.layoutStyle === "") data.layoutStyle = null;
+  // When the new `gallery` payload is present, it's the source of truth: write
+  // galleryItems (captions stripped to undefined when blank) and keep the legacy
+  // galleryUrls column mirrored so a rollback still renders photos.
+  if (gallery !== undefined) {
+    const items: GalleryItem[] = gallery.map((g) => ({
+      url: g.url,
+      ...(g.caption ? { caption: g.caption } : {}),
+    }));
+    data.galleryItems = items;
+    data.galleryUrls = items.map((g) => g.url);
+  }
   // notifyPhone: blank clears it; otherwise it must be a valid number (it's the
   // SMS destination for lead alerts, so a bad value would silently never text).
   if (data.notifyPhone === "" || data.notifyPhone === null) {
     data.notifyPhone = null;
   } else if (data.notifyPhone !== undefined) {
-    const normalized = toE164(data.notifyPhone);
+    const normalized = toE164(data.notifyPhone as string);
     if (!normalized) {
       res.status(400).json({ error: "invalid_phone" });
       return;
@@ -279,7 +354,10 @@ publicPageRouter.get("/:slug", async (req, res) => {
     accentColor: shop.accentColor,
     instagramHandle: shop.instagramHandle,
     hoursText: shop.hoursText,
-    galleryUrls: shop.galleryUrls,
+    gallery: readGallery(shop),
+    fontKey: shop.fontKey,
+    layoutStyle: shop.layoutStyle,
+    sectionOrder: readSectionOrder(shop.sectionOrder),
     bookingUrl: shop.bookingUrl,
     // notifyPhone is intentionally NOT exposed - it's the barber's private number.
     takesRequests: shop.takesRequests,
@@ -406,6 +484,10 @@ function serializeShop(shop: {
   instagramHandle: string | null;
   hoursText: string | null;
   galleryUrls: string[];
+  galleryItems: unknown;
+  fontKey: string | null;
+  layoutStyle: string | null;
+  sectionOrder: string[];
   takesRequests: boolean;
   notifyPhone: string | null;
 }) {
@@ -431,7 +513,10 @@ function serializeShop(shop: {
     heroImageUrl: shop.heroImageUrl,
     instagramHandle: shop.instagramHandle,
     hoursText: shop.hoursText,
-    galleryUrls: shop.galleryUrls,
+    gallery: readGallery(shop),
+    fontKey: shop.fontKey,
+    layoutStyle: shop.layoutStyle,
+    sectionOrder: readSectionOrder(shop.sectionOrder),
     takesRequests: shop.takesRequests,
     notifyPhone: shop.notifyPhone,
   };

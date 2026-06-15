@@ -13,7 +13,10 @@ export interface PageSettingsInput {
   heroImageUrl: string;
   instagramHandle: string;
   hoursText: string;
-  galleryUrls: string[];
+  gallery: { url: string; caption?: string }[];
+  fontKey: string;
+  layoutStyle: string;
+  sectionOrder: string[];
   takesRequests: boolean;
   notifyPhone: string;
 }
@@ -31,7 +34,10 @@ export async function savePageAction(
     heroImageUrl: input.heroImageUrl,
     instagramHandle: input.instagramHandle,
     hoursText: input.hoursText,
-    galleryUrls: input.galleryUrls,
+    gallery: input.gallery,
+    fontKey: input.fontKey,
+    layoutStyle: input.layoutStyle,
+    sectionOrder: input.sectionOrder,
     takesRequests: input.takesRequests,
     notifyPhone: input.notifyPhone,
   });

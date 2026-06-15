@@ -12,6 +12,7 @@ import { logger } from "./logger.js";
 import { authRouter } from "./routes/auth.js";
 import { healthRouter } from "./routes/health.js";
 import { publicPageRouter, shopsRouter } from "./routes/shops.js";
+import { uploadRouter } from "./routes/upload.js";
 import { acuityWebhookRouter } from "./routes/webhooks.acuity.js";
 import { twilioWebhookRouter } from "./routes/webhooks.twilio.js";
 import { acuityOAuthRouter } from "./routes/acuity.oauth.js";
@@ -76,6 +77,9 @@ export function createApp(): Express {
   // (3) JSON API.
   app.use("/api/auth", authRouter); // signup/login limited inside the router
   app.use("/api/shops", shopsRouter);
+  // Photo upload proxy. Uses a per-route express.raw() parser (image/*), so the
+  // global express.json() above leaves its body untouched. Limited per-user.
+  app.use("/api", uploadRouter);
   app.use("/api/acuity/oauth", oauthLimiter, acuityOAuthRouter);
   app.use("/api/rewards", rewardsLimiter, rewardsRouter);
   app.use("/api/page", rewardsLimiter, publicPageRouter); // public shop pages
