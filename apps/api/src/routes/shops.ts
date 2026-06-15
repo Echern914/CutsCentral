@@ -6,6 +6,7 @@ import {
   INDUSTRIES,
   INDUSTRY_KEYS,
   PAGE_THEME_KEYS,
+  apiEnv,
   randomToken,
   type IndustryKey,
 } from "@chairback/config";
@@ -341,17 +342,21 @@ publicPageRouter.post("/:slug/request", leadLimiter, async (req, res) => {
   });
 
   // Best-effort barber alert. A failed/absent notify must never fail the lead -
-  // it's already saved and will show in the dashboard inbox.
+  // it's already saved and will show in the dashboard inbox. Honors DRY_RUN so
+  // "no SMS sends" holds for EVERY outbound path, not just the nudge engine -
+  // this texts the barber's own number, but it's still a real (billable) send.
   if (shop.notifyPhone) {
-    try {
-      const contact = toE164(d.phone) ?? d.email ?? "no contact info";
-      const note = d.message ? `: ${d.message}` : "";
-      await getMessageProvider().send({
-        to: shop.notifyPhone,
-        body: `New appointment request at ${shop.name} from ${d.firstName} (${contact})${note}`,
-      });
-    } catch (err) {
-      logger.error({ err, shopId: shop.id }, "lead notify SMS failed");
+    const contact = toE164(d.phone) ?? d.email ?? "no contact info";
+    const note = d.message ? `: ${d.message}` : "";
+    const body = `New appointment request at ${shop.name} from ${d.firstName} (${contact})${note}`;
+    if (apiEnv().DRY_RUN) {
+      logger.info({ shopId: shop.id, to: shop.notifyPhone }, "lead notify SMS (dry-run, not sent)");
+    } else {
+      try {
+        await getMessageProvider().send({ to: shop.notifyPhone, body });
+      } catch (err) {
+        logger.error({ err, shopId: shop.id }, "lead notify SMS failed");
+      }
     }
   }
 

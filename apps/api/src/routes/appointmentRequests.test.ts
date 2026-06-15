@@ -1,7 +1,7 @@
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
-import { randomToken } from "@chairback/config";
+import { randomToken, __resetEnvCacheForTests } from "@chairback/config";
 import {
   __setMessageProviderForTests,
   getMessageProvider,
@@ -39,7 +39,14 @@ async function signupAndShop(email: string, name: string): Promise<string> {
   return cookie;
 }
 
+// This suite exercises the lead-notify SEND path, so it runs with DRY_RUN off
+// (the route honors DRY_RUN; the default true would route every notify to the
+// dry-run log instead of the injected fake provider). Restored in afterAll.
+const ORIGINAL_DRY_RUN = process.env.DRY_RUN;
+
 beforeAll(async () => {
+  process.env.DRY_RUN = "false";
+  __resetEnvCacheForTests();
   __setMessageProviderForTests({
     channel: "SMS",
     send: async (input) => {
@@ -58,6 +65,9 @@ afterEach(() => {
 });
 
 afterAll(async () => {
+  if (ORIGINAL_DRY_RUN === undefined) delete process.env.DRY_RUN;
+  else process.env.DRY_RUN = ORIGINAL_DRY_RUN;
+  __resetEnvCacheForTests();
   __setMessageProviderForTests(undefined);
   for (const email of [emailA, emailB]) {
     const user = await prisma.user.findUnique({ where: { email } });
@@ -130,6 +140,29 @@ describe("public request submission", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]!.to).toBe("+13025550999");
     expect(sent[0]!.body).toContain("Dana");
+  });
+
+  it("does NOT send the notify SMS when DRY_RUN is on (gate holds)", async () => {
+    // notifyPhone is still set from the previous test. Flip DRY_RUN on and the
+    // lead must save without any SMS leaving the building.
+    process.env.DRY_RUN = "true";
+    __resetEnvCacheForTests();
+    try {
+      const res = await request(app)
+        .post(`/api/page/${slugA}/request`)
+        .send({ firstName: "Quiet", phone: "(302) 555-0303" });
+      expect(res.status).toBe(201);
+      expect(sent).toHaveLength(0); // gated - logged, not sent
+    } finally {
+      process.env.DRY_RUN = "false";
+      __resetEnvCacheForTests();
+    }
+
+    // The lead still landed in the inbox.
+    const list = await request(app).get("/api/dashboard/requests").set("Cookie", cookieA);
+    expect(
+      list.body.requests.some((r: { firstName: string }) => r.firstName === "Quiet"),
+    ).toBe(true);
   });
 
   it("still saves the lead when the notify SMS throws", async () => {
