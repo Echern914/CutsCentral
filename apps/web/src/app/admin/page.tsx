@@ -5,6 +5,7 @@ import { apiGet } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
 import { LocalDate } from "@/components/ui/LocalDate";
 import { CompToggle } from "./CompToggle";
+import { AnalyticsSection, type Analytics } from "./Analytics";
 
 export const metadata = { title: `${APP_NAME} — Admin` };
 
@@ -45,13 +46,15 @@ interface AdminShop {
  * This page never trusts a client flag - the API session check is the gate.
  */
 export default async function AdminPage() {
-  const [metricsRes, shopsRes] = await Promise.all([
+  const [metricsRes, shopsRes, analyticsRes] = await Promise.all([
     apiGet<Metrics>("/api/admin-portal/metrics"),
     apiGet<{ shops: AdminShop[] }>("/api/admin-portal/shops"),
+    apiGet<Analytics>("/api/admin-portal/analytics?days=30"),
   ]);
   if (metricsRes.status === 404 || metricsRes.status === 401) redirect("/dashboard");
   const m = metricsRes.data;
   const shops = shopsRes.data?.shops ?? [];
+  const analytics = analyticsRes.data;
 
   return (
     <div className="min-h-dvh">
@@ -88,7 +91,9 @@ export default async function AdminPage() {
           </div>
         )}
 
-        <h2 className="mb-3 mt-9 font-display text-lg">All shops</h2>
+        {analytics && <AnalyticsSection a={analytics} />}
+
+        <h2 className="mb-3 mt-10 font-display text-lg">All shops</h2>
         <Card className="overflow-hidden p-0">
           <div className="overflow-x-auto">
             <table className="w-full min-w-[760px] text-sm">

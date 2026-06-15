@@ -96,6 +96,107 @@ adminPortalRouter.get("/shops", async (req, res) => {
   });
 });
 
+// Platform-wide usage analytics (the founder's "what's actually happening"
+// tracker). Cross-shop aggregates - runs as the raw `prisma` owner role, so it
+// sees every tenant's rows (the admin gate above is the only access control).
+// ?days= sets the window for the time-series + engagement counts (7..365,
+// default 30); the top lists count over that same window.
+adminPortalRouter.get("/analytics", async (req, res) => {
+  const days = Math.min(365, Math.max(7, Number(req.query.days) || 30));
+  const now = new Date();
+  const since = new Date(now.getTime() - days * MS_PER_DAY);
+
+  const [
+    completedVisits,
+    serviceGroups,
+    redemptionRows,
+    promoUses,
+    nudgeGroups,
+    nudgeBookings,
+  ] = await Promise.all([
+    // Time series + total: completed visits keyed by completedAt within window.
+    prisma.visit.findMany({
+      where: { status: "COMPLETED", completedAt: { gte: since } },
+      select: { completedAt: true },
+    }),
+    // Top services across all completed visits in window. serviceName is free
+    // text from Acuity (or null for manual visits), grouped as-is.
+    prisma.visit.groupBy({
+      by: ["serviceName"],
+      where: { status: "COMPLETED", completedAt: { gte: since } },
+      _count: { _all: true },
+    }),
+    // Reward redemptions: ledger rows that spent punches. note carries the
+    // reward name even after the Reward row is deleted (rewardId -> null).
+    prisma.punchLedger.findMany({
+      where: { punchesRedeemed: { gt: 0 }, createdAt: { gte: since } },
+      select: { note: true },
+    }),
+    // Promo redemptions recorded at the chair.
+    prisma.promotionRedemption.count({ where: { redeemedAt: { gte: since } } }),
+    // SMS outcomes by status (SENT/FAILED/SKIPPED/PENDING) in window.
+    prisma.nudge.groupBy({
+      by: ["status"],
+      where: { createdAt: { gte: since } },
+      _count: { _all: true },
+    }),
+    // Texts that led to a rebooking (attribution) in window.
+    prisma.nudge.count({
+      where: { createdAt: { gte: since }, resultedInBookingAt: { not: null } },
+    }),
+  ]);
+
+  // Bucket completed visits into local-ish daily counts (UTC day key). The web
+  // layer renders the labels; here we just emit a dense YYYY-MM-DD -> count map.
+  const byDay = new Map<string, number>();
+  for (let i = 0; i < days; i++) {
+    const d = new Date(since.getTime() + i * MS_PER_DAY);
+    byDay.set(d.toISOString().slice(0, 10), 0);
+  }
+  for (const v of completedVisits) {
+    if (!v.completedAt) continue;
+    const key = v.completedAt.toISOString().slice(0, 10);
+    if (byDay.has(key)) byDay.set(key, (byDay.get(key) ?? 0) + 1);
+  }
+  const visitsByDay = Array.from(byDay, ([date, count]) => ({ date, count }));
+
+  const topServices = serviceGroups
+    .map((g) => ({ name: g.serviceName?.trim() || "Unspecified", count: g._count._all }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
+
+  // Collapse redemptions by reward name (note). Drops the system "visit"/"bonus"
+  // earn notes by construction - those rows have punchesRedeemed = 0.
+  const rewardCounts = new Map<string, number>();
+  for (const r of redemptionRows) {
+    const name = r.note?.trim() || "Reward";
+    rewardCounts.set(name, (rewardCounts.get(name) ?? 0) + 1);
+  }
+  const topRewards = Array.from(rewardCounts, ([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
+
+  const nudgeByStatus = new Map(nudgeGroups.map((g) => [g.status, g._count._all]));
+
+  res.json({
+    days,
+    since: since.toISOString(),
+    completedVisits: completedVisits.length,
+    visitsByDay,
+    topServices,
+    topRewards,
+    rewardRedemptions: redemptionRows.length,
+    promoRedemptions: promoUses,
+    sms: {
+      sent: nudgeByStatus.get("SENT") ?? 0,
+      failed: nudgeByStatus.get("FAILED") ?? 0,
+      skipped: nudgeByStatus.get("SKIPPED") ?? 0,
+      pending: nudgeByStatus.get("PENDING") ?? 0,
+      ledToBooking: nudgeBookings,
+    },
+  });
+});
+
 // Comp a shop to free full access (or revoke it). The one operator write that
 // isn't better done in the Stripe dashboard - it's independent of Stripe.
 const compSchema = z.object({ compAccess: z.boolean() }).strict();
