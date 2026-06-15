@@ -38,7 +38,7 @@ export default async function OnboardingDonePage() {
             </div>
             <p className="text-sm text-muted">
               Importing your appointment history… this can take a minute. New on
-              Acuity? There may be nothing to import yet — your dashboard works
+              Acuity? There may be nothing to import yet. Your dashboard works
               either way.
             </p>
           </>

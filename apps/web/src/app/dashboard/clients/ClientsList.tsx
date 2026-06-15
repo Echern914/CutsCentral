@@ -94,7 +94,7 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
             onClick={() => {
               if (
                 confirm(
-                  "Confirm these clients agreed to receive text messages from your shop. Only mark consent for clients who actually opted in — this is a legal record.",
+                  "Confirm these clients agreed to receive text messages from your shop. Only mark consent for clients who actually opted in. This is a legal record.",
                 )
               )
                 runBulk("attestConsent");

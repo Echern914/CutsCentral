@@ -33,7 +33,7 @@ export default async function PromotionsPage() {
       <header className="mb-6">
         <h1 className="font-display text-3xl tracking-tight">Promotions</h1>
         <p className="mt-1 text-sm text-muted">
-          Run your own specials — discounts, freebies, or double-punch windows. Live
+          Run your own specials: discounts, freebies, or double-punch windows. Live
           promos show on your clients&apos; rewards page, and you can text them out.
         </p>
       </header>

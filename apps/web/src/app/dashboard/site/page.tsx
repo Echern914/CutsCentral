@@ -31,7 +31,7 @@ export default async function PageSettingsPage() {
       <header className="mb-6">
         <h1 className="font-display text-3xl tracking-tight">Your page</h1>
         <p className="mt-1 text-sm text-muted">
-          A public mini-site that looks like your shop — drop the link in your
+          A public mini-site that looks like your shop. Drop the link in your
           Instagram bio. Clients see your brand, your rewards, and your live promos.
         </p>
       </header>

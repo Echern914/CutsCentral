@@ -58,7 +58,7 @@ export function ConsentSetup({ needConsentCount }: { needConsentCount: number })
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         <div className="rounded-xl border border-subtle bg-charcoal-700 p-4">
           <p className="text-sm font-medium text-offwhite">
-            New clients — automatic
+            New clients: automatic
           </p>
           <p className="mt-1 text-xs text-muted">
             In Acuity, add an optional <strong className="text-offwhite">checkbox</strong>{" "}
@@ -72,7 +72,7 @@ export function ConsentSetup({ needConsentCount }: { needConsentCount: number })
 
         <div className="rounded-xl border border-subtle bg-charcoal-700 p-4">
           <p className="text-sm font-medium text-offwhite">
-            Existing clients — confirm consent
+            Existing clients: confirm consent
           </p>
           <p className="mt-1 text-xs text-muted">
             Already have permission to text some clients? Select them on the
@@ -89,8 +89,8 @@ export function ConsentSetup({ needConsentCount }: { needConsentCount: number })
       </div>
 
       <p className="mt-3 text-[11px] leading-relaxed text-muted">
-        Only mark consent for clients who actually agreed to receive texts —
-        it&apos;s a record you&apos;re responsible for. Clients can always reply
+        Only mark consent for clients who actually agreed to receive texts.
+        It&apos;s a record you&apos;re responsible for. Clients can always reply
         STOP to opt out.
       </p>
     </Card>

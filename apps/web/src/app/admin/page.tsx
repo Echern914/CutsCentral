@@ -7,7 +7,7 @@ import { LocalDate } from "@/components/ui/LocalDate";
 import { CompToggle } from "./CompToggle";
 import { AnalyticsSection, type Analytics } from "./Analytics";
 
-export const metadata = { title: `${APP_NAME} — Admin` };
+export const metadata = { title: `${APP_NAME} Admin` };
 
 interface Metrics {
   billingEnabled: boolean;
@@ -77,7 +77,7 @@ export default async function AdminPage() {
         <p className="mb-6 mt-1 text-sm text-muted">
           {m?.billingEnabled
             ? "Live billing."
-            : "Billing is off (everything free) — paying/MRR will populate once Stripe is configured."}
+            : "Billing is off (everything free). Paying/MRR will populate once Stripe is configured."}
         </p>
 
         {m && (

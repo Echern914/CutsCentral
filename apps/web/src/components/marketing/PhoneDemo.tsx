@@ -37,7 +37,7 @@ export function PhoneDemo({ className }: { className?: string }) {
             variants={bubble}
             className="max-w-[88%] self-start rounded-2xl rounded-bl-md border border-subtle bg-charcoal-700 px-3.5 py-2.5 text-[12px] leading-snug text-offwhite"
           >
-            Hey Marcus — it&apos;s been 4 weeks since your last cut at
+            Hey Marcus, it&apos;s been 4 weeks since your last cut at
             Drick&apos;s. Your usual Thursday slot is open this week. Book here:{" "}
             <span className="text-gold-soft underline decoration-gold/40">
               drx.cut/book
@@ -54,7 +54,7 @@ export function PhoneDemo({ className }: { className?: string }) {
           <motion.div variants={bubble} className="self-center pt-1.5">
             <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-soft/30 bg-emerald-soft/10 px-3 py-1 text-[10px] font-medium text-emerald-soft">
               <CheckIcon className="h-3 w-3" />
-              Rebooked — $35 recovered
+              Rebooked: $35 recovered
             </span>
           </motion.div>
         </motion.div>

@@ -24,7 +24,7 @@ export function SyncHealthBanner({ needsRepair }: { needsRepair: boolean }) {
       const r = await repairAcuitySyncAction();
       if (r.ok) {
         toast(
-          `Sync repaired — ${r.subscribed ?? 0} live updates reconnected. Importing history…`,
+          `Sync repaired. ${r.subscribed ?? 0} live updates reconnected. Importing history…`,
           "success",
         );
         setDone(true);

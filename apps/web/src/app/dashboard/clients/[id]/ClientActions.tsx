@@ -96,7 +96,7 @@ export function ClientActions({
         onClick={() =>
           startTransition(async () => {
             const r = await logVisitAction(clientId);
-            if (r.ok) toast("Visit logged — punches added", "success");
+            if (r.ok) toast("Visit logged. Punches added", "success");
             else toast("Could not log visit", "error");
           })
         }

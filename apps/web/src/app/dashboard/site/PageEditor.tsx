@@ -160,7 +160,7 @@ export function PageEditor({
               />
             </label>
             <label className={labelCls}>
-              Accent color (hex, optional — overrides the theme&apos;s)
+              Accent color (hex, optional, overrides the theme&apos;s)
               <span className="mt-1 flex items-center gap-2">
                 <input
                   value={accentColor}

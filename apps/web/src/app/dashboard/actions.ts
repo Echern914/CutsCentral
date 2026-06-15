@@ -92,7 +92,7 @@ export async function addClientAction(
   return {
     error:
       res.error === "invalid_phone"
-        ? "That phone number isn't valid — use a US number like (302) 555-0142."
+        ? "That phone number isn't valid. Use a US number like (302) 555-0142."
         : "Could not add client. Check the fields.",
   };
 }

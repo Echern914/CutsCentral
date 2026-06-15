@@ -32,13 +32,13 @@ const SLIDES: Slide[] = [
     icon: "✂️",
     title: `Welcome to ${APP_NAME}`,
     body:
-      "This is your loyalty and rebooking command center. In the next few screens, here's exactly what you're getting and how to use it — it takes about a minute.",
+      "This is your loyalty and rebooking command center. In the next few screens, here's exactly what you're getting and how to use it. It takes about a minute.",
   },
   {
     icon: "👥",
     title: "Clients & punch cards",
     body:
-      "Every client you serve lives on the Clients page with their own digital punch card. Each completed visit earns a punch automatically once Acuity is connected — or add a walk-in by hand. Tap a client to see their history, notes, and balance.",
+      "Every client you serve lives on the Clients page with their own digital punch card. Each completed visit earns a punch automatically once Acuity is connected, or add a walk-in by hand. Tap a client to see their history, notes, and balance.",
     href: "/dashboard/clients",
     cta: "Open Clients",
   },
@@ -46,7 +46,7 @@ const SLIDES: Slide[] = [
     icon: "🎁",
     title: "Rewards your clients chase",
     body:
-      "Build your reward menu — say 10 punches for a free cut. Clients see their progress on a card you can share with them. Set it up once in the Rewards tab and it runs itself; redeem rewards in one tap when they cash in.",
+      "Build your reward menu: say 10 punches for a free cut. Clients see their progress on a card you can share with them. Set it up once in the Rewards tab and it runs itself; redeem rewards in one tap when they cash in.",
     href: "/dashboard/rewards",
     cta: "Build rewards",
   },
@@ -54,7 +54,7 @@ const SLIDES: Slide[] = [
     icon: "💬",
     title: "Win-back nudges (on autopilot)",
     body:
-      "When a regular goes quiet, ChairBack can text them a friendly nudge to rebook — within the limits you set. You stay in control: review who's at risk on the Overview, and only consented clients are ever messaged.",
+      "When a regular goes quiet, ChairBack can text them a friendly nudge to rebook, within the limits you set. You stay in control: review who's at risk on the Overview, and only consented clients are ever messaged.",
     href: "/dashboard/nudges",
     cta: "See nudges",
   },
@@ -62,7 +62,7 @@ const SLIDES: Slide[] = [
     icon: "🌐",
     title: "Your page & new requests",
     body:
-      "You get a shareable mini-site (your Page) with your rewards, hours, and booking link. Turn on requests and clients with no online booking can ask for an appointment — leads land in your dashboard and text you instantly.",
+      "You get a shareable mini-site (your Page) with your rewards, hours, and booking link. Turn on requests and clients with no online booking can ask for an appointment. Leads land in your dashboard and text you instantly.",
     href: "/dashboard/site",
     cta: "Set up your page",
   },
@@ -70,7 +70,7 @@ const SLIDES: Slide[] = [
     icon: "🔗",
     title: "One last thing: connect Acuity",
     body:
-      "Linking your Acuity calendar imports your client history and auto-syncs new visits, so punches and rebooking just happen. You can connect it now or anytime from your Overview. That's the tour — you're ready to roll.",
+      "Linking your Acuity calendar imports your client history and auto-syncs new visits, so punches and rebooking just happen. You can connect it now or anytime from your Overview. That's the tour. You're ready to roll.",
     href: "/onboarding/connect",
     cta: "Connect Acuity",
   },

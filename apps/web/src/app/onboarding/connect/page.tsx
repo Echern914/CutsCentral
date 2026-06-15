@@ -41,7 +41,7 @@ export default async function ConnectPage() {
               href="/onboarding/done"
               className="text-xs text-muted hover:underline"
             >
-              Not on Acuity? Skip — log visits with one tap instead
+              Not on Acuity? Skip and log visits with one tap instead
             </a>
             <p className="text-center text-[11px] leading-relaxed text-muted">
               On Booksy, Square, or pen &amp; paper? Everything still works: add

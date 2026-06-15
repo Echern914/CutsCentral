@@ -43,7 +43,7 @@ export async function TrialBanner() {
     <div className="mx-auto mt-3 w-full max-w-6xl px-4">
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-gold/30 bg-gold/10 px-4 py-2.5 text-xs text-gold sm:text-sm">
         <span>
-          Premium trial — {b.trialDaysLeft} day{b.trialDaysLeft === 1 ? "" : "s"} left.
+          Premium trial: {b.trialDaysLeft} day{b.trialDaysLeft === 1 ? "" : "s"} left.
           Keep your nudges running for ${b.priceMonthlyUsd}/mo.
         </span>
         <Link

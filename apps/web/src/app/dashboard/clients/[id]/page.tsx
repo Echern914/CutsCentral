@@ -111,7 +111,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
                 <span className={r.affordable ? "text-emerald-soft" : "text-muted"}>
                   {r.emoji ? `${r.emoji} ` : ""}
                   {r.name} · {r.punchCost}
-                  {r.affordable ? " — ready" : ` (${r.punchCost - balance} to go)`}
+                  {r.affordable ? ", ready" : ` (${r.punchCost - balance} to go)`}
                 </span>
               </li>
             ))}

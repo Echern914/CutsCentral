@@ -60,7 +60,7 @@ function RewardMenu({ rewards }: { rewards: Reward[] }) {
     <Card className="overflow-hidden">
       <CardHeader
         title="Reward menu"
-        subtitle="What punches buy at your chair — add as many as you want."
+        subtitle="What punches buy at your chair. Add as many as you want."
         action={
           !adding && (
             <button onClick={() => setAdding(true)} className={goldBtn}>
@@ -90,7 +90,7 @@ function RewardMenu({ rewards }: { rewards: Reward[] }) {
 
       {rewards.length === 0 && !adding ? (
         <p className="px-5 py-6 text-sm text-muted">
-          No rewards yet. Add your first one — e.g. &ldquo;Free Cut&rdquo; for 10 punches.
+          No rewards yet. Add your first one: e.g. &ldquo;Free Cut&rdquo; for 10 punches.
         </p>
       ) : (
         <ul className="divide-y divide-subtle">
@@ -382,7 +382,7 @@ function Earning({
       <div className="px-5 py-4">
         <div className="mb-3 flex items-center justify-between gap-3">
           <p className="text-xs text-muted">
-            Service bonuses — when the booked service name contains your text, it earns
+            Service bonuses: when the booked service name contains your text, it earns
             that amount instead. First matching rule wins.
           </p>
           {!adding && (

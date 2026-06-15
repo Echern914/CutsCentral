@@ -24,7 +24,7 @@ const FREE_FEATURES = [
   "Your branded rewards page and public mini-site",
   "Client book with notes, history, and CSV export",
   "One-tap “Log visit” for walk-ins (no booking app needed)",
-  "At-risk radar — see exactly who’s overdue",
+  "At-risk radar: see exactly who’s overdue",
 ];
 
 // Premium — the outbound layer that actually brings clients back.
@@ -52,12 +52,12 @@ export default async function BillingPage({
 
       {searchParams?.checkout === "success" && (
         <div className="mb-5 rounded-2xl border border-emerald-soft/40 bg-emerald-soft/10 px-4 py-3 text-sm text-emerald-soft">
-          You&apos;re subscribed — welcome aboard. Your nudges and promos are live.
+          You&apos;re subscribed. Welcome aboard. Your nudges and promos are live.
         </div>
       )}
       {searchParams?.checkout === "canceled" && (
         <div className="mb-5 rounded-2xl border border-subtle bg-charcoal-800 px-4 py-3 text-sm text-muted">
-          Checkout canceled — no charge was made.
+          Checkout canceled. No charge was made.
         </div>
       )}
 
@@ -84,13 +84,13 @@ export default async function BillingPage({
                 </p>
                 <p className="mt-1 text-sm text-muted">
                   {b.compAccess
-                    ? "Full access, on the house. No card needed — enjoy everything."
+                    ? "Full access, on the house. No card needed, enjoy everything."
                     : b.subscribed
                       ? b.subscriptionStatus === "past_due"
-                        ? "Payment issue — update your card to keep texts flowing."
+                        ? "Payment issue. Update your card to keep texts flowing."
                         : "Active. Thanks for building with us."
                       : !b.billingEnabled
-                        ? "Early access — everything is free right now."
+                        ? "Early access: everything is free right now."
                         : b.hasAccess
                           ? `${b.trialDaysLeft} day${b.trialDaysLeft === 1 ? "" : "s"} of full Premium left. No card on file.`
                           : "Your punch cards, rewards page, and client book are free forever. Upgrade to Premium to text clients."}
@@ -107,7 +107,7 @@ export default async function BillingPage({
 
             {!b.compAccess && !b.hasAccess && b.billingEnabled && (
               <div className="mt-4 rounded-2xl border border-gold/30 bg-gold/10 px-4 py-3 text-sm text-gold">
-                You&apos;re on the Free plan — punches, your rewards page, and your
+                You&apos;re on the Free plan. Punches, your rewards page, and your
                 client book keep working. Premium adds the part that brings clients
                 back: rebooking texts and promo blasts.
               </div>
@@ -120,8 +120,8 @@ export default async function BillingPage({
                   <UpgradeButton
                     label={
                       b.hasAccess
-                        ? `Go Premium — $${b.priceMonthlyUsd}/mo`
-                        : `Upgrade to Premium — $${b.priceMonthlyUsd}/mo`
+                        ? `Go Premium, $${b.priceMonthlyUsd}/mo`
+                        : `Upgrade to Premium, $${b.priceMonthlyUsd}/mo`
                     }
                   />
                 )}
@@ -158,7 +158,7 @@ export default async function BillingPage({
               </ul>
               <p className="mt-4 text-xs text-muted">
                 One booked visit usually covers the month. Payments are handled by
-                Stripe — we never see your card.
+                Stripe. We never see your card.
               </p>
             </Card>
           </div>

@@ -60,7 +60,7 @@ export function PunchCardDemo() {
               exit={{ opacity: 0, y: -6 }}
               className="font-medium text-gold-soft"
             >
-              Free Cut unlocked — show this at the chair
+              Free Cut unlocked: show this at the chair
             </motion.p>
           ) : (
             <motion.p

@@ -9,7 +9,7 @@ export async function checkoutAction(): Promise<{ error?: string }> {
   return {
     error:
       res.error === "billing_disabled"
-        ? "Billing isn't switched on yet — everything is free during early access."
+        ? "Billing isn't switched on yet. Everything is free during early access."
         : res.error === "already_subscribed"
           ? "You're already subscribed."
           : "Could not start checkout. Try again in a moment.",

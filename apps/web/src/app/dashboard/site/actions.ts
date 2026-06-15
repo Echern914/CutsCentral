@@ -41,7 +41,7 @@ export async function savePageAction(
     ok: false,
     error:
       res.error === "slug_taken"
-        ? "That page handle is taken — try another."
+        ? "That page handle is taken. Try another."
         : res.error === "invalid_phone"
           ? "That notify number doesn't look valid. Use a US number like (302) 555-0142."
           : "Could not save. Check the fields (URLs must start with https://).",

@@ -38,7 +38,7 @@ export function GettingStarted({
     {
       done: false,
       title: "Set up your rewards",
-      body: "Decide how many visits earn a reward — clients see it on their card.",
+      body: "Decide how many visits earn a reward, and clients see it on their card.",
       href: "/dashboard/rewards",
       cta: "Build rewards",
     },
@@ -47,7 +47,7 @@ export function GettingStarted({
   return (
     <Card className="mb-6 p-6">
       <h2 className="font-display text-xl tracking-tight text-offwhite">
-        Welcome — let&apos;s get your shop set up
+        Welcome, let&apos;s get your shop set up
       </h2>
       <p className="mt-1 text-sm text-muted">
         Your dashboard fills in as clients book and earn rewards. Three quick steps:

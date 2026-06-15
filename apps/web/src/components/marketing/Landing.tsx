@@ -75,8 +75,8 @@ export function Landing() {
             <StaggerItem>
               <p className="mx-auto mt-6 max-w-xl text-lg leading-relaxed text-muted lg:mx-0">
                 Automatic loyalty punch cards and perfectly-timed rebooking
-                texts for barbershops. No paper cards, no manual follow-up —
-                every cut counts itself.
+                texts for barbershops. No paper cards, no manual follow-up.
+                Every cut counts itself.
               </p>
             </StaggerItem>
             <StaggerItem>
@@ -98,7 +98,7 @@ export function Landing() {
             </StaggerItem>
             <StaggerItem>
               <ul className="mt-7 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs text-muted lg:justify-start">
-                {["Set up in minutes", "Works with your booking link", `${BILLING.trialDays} days free — no card`].map(
+                {["Set up in minutes", "Works with your booking link", `${BILLING.trialDays} days free, no card`].map(
                   (t) => (
                     <li key={t} className="flex items-center gap-1.5">
                       <CheckIcon className="h-3.5 w-3.5 text-gold/70" />
@@ -120,7 +120,7 @@ export function Landing() {
               <PunchCardDemo />
             </Tilt>
             <p className="mt-4 text-center text-xs text-muted">
-              What your clients see — live, from a text. No app, no login.
+              What your clients see: live, from a text. No app, no login.
             </p>
           </Reveal>
         </section>
@@ -222,7 +222,7 @@ export function Landing() {
                 <p className="mt-4 max-w-lg leading-relaxed text-muted">
                   {APP_NAME} learns each client&apos;s natural rhythm from their
                   visit history. When someone drifts past their usual gap, they
-                  get one well-timed text — yours to word, with your booking
+                  get one well-timed text: yours to word, with your booking
                   link inside.
                 </p>
               </Reveal>
@@ -278,7 +278,7 @@ export function Landing() {
                   <span className="text-gradient-gold">Upgrade when it pays for itself.</span>
                 </>
               }
-              sub="Run a real loyalty program free forever. Add the texts that bring clients back whenever you're ready — one rebooked regular covers the month."
+              sub="Run a real loyalty program free forever. Add the texts that bring clients back whenever you're ready. One rebooked regular covers the month."
             />
             <Reveal delay={0.1} className="mx-auto mt-12 grid max-w-3xl gap-6 sm:grid-cols-2">
               {/* Free */}
@@ -295,7 +295,7 @@ export function Landing() {
                     "Digital punch cards & your loyalty menu",
                     "Your branded rewards page & public mini-site",
                     "Client book, notes & CSV export",
-                    "One-tap visit logging — no booking app needed",
+                    "One-tap visit logging, no booking app needed",
                     "At-risk radar: see who's overdue",
                   ].map((t) => (
                     <li key={t} className="flex items-start gap-2.5">
@@ -357,7 +357,7 @@ export function Landing() {
             </Reveal>
             <p className="mx-auto mt-6 max-w-md text-center text-xs text-muted">
               No per-text fees, no contracts, cancel anytime. The average shop
-              recovers several no-show-again clients a month — the whole bill, many
+              recovers several no-show-again clients a month: the whole bill, many
               times over.
             </p>
           </div>
@@ -427,7 +427,7 @@ export function Landing() {
         <div className="mx-auto flex w-full max-w-6xl flex-col items-center justify-between gap-4 px-6 text-xs text-muted sm:flex-row">
           <span className="flex items-center gap-2">
             <ScissorsMark className="h-3.5 w-3.5 text-gold/60" />
-            {APP_NAME} — built for barbers.
+            {APP_NAME}: built for barbers.
           </span>
           <div className="flex flex-wrap justify-center gap-5">
             <Link href="/login" className="transition-colors hover:text-offwhite">
@@ -490,7 +490,7 @@ const STEPS = [
 const NUDGE_POINTS = [
   {
     title: "Timing learned per client",
-    body: "A 2-week regular and a 6-week regular get nudged on their own schedules — not a blast on yours.",
+    body: "A 2-week regular and a 6-week regular get nudged on their own schedules, not a blast on yours.",
     icon: <ClockIcon className="h-4 w-4" />,
   },
   {
@@ -500,7 +500,7 @@ const NUDGE_POINTS = [
   },
   {
     title: "Respectful by default",
-    body: "Daily send caps, one-tap opt-outs, and instant STOP handling are built in — not bolted on.",
+    body: "Daily send caps, one-tap opt-outs, and instant STOP handling are built in, not bolted on.",
     icon: <ShieldIcon className="h-4 w-4" />,
   },
 ] as const;
@@ -513,7 +513,7 @@ const FEATURES = [
   },
   {
     title: "A rewards page clients open",
-    body: "Each client gets a private magic link — their card, their progress, your branding. No app, no password.",
+    body: "Each client gets a private magic link: their card, their progress, your branding. No app, no password.",
     icon: <LinkIcon className="h-5 w-5" />,
   },
   {
@@ -528,7 +528,7 @@ const FEATURES = [
   },
   {
     title: "Your whole client book",
-    body: "Search, sort, bulk actions, bonus punches, notes, and CSV export — manual walk-ins included.",
+    body: "Search, sort, bulk actions, bonus punches, notes, and CSV export (manual walk-ins included).",
     icon: <UsersIcon className="h-5 w-5" />,
   },
   {
@@ -541,7 +541,7 @@ const FEATURES = [
 const FAQ = [
   {
     q: "Do my clients need to download an app?",
-    a: "No. Each client gets a private magic link to their punch card — it opens in the browser from a text. No account, no password, no app store.",
+    a: "No. Each client gets a private magic link to their punch card. It opens in the browser from a text. No account, no password, no app store.",
   },
   {
     q: "Does it work with my existing Acuity account?",
@@ -556,16 +556,16 @@ const FAQ = [
     a: "They reply STOP and they're opted out instantly. You can also opt anyone out (or back in) from the dashboard.",
   },
   {
-    q: "I'm not on Acuity — can I still use it?",
-    a: "Yes. Add clients in seconds and tap “Log visit” after each appointment — punches, rewards, and rebooking texts all work the same. Acuity just makes it automatic, and you can connect it anytime.",
+    q: "I'm not on Acuity, can I still use it?",
+    a: "Yes. Add clients in seconds and tap “Log visit” after each appointment: punches, rewards, and rebooking texts all work the same. Acuity just makes it automatic, and you can connect it anytime.",
   },
   {
     q: "How much does it cost?",
-    a: `The loyalty program — punch cards, rewards page, public mini-site, client book — is free forever, no card required. Premium ($${BILLING.priceMonthlyUsd}/month) adds the texting that brings clients back: rebooking nudges, promo blasts, and Acuity auto-sync. Every new shop gets a ${BILLING.trialDays}-day full Premium trial, and one rebooked regular typically covers the month.`,
+    a: `The loyalty program (punch cards, rewards page, public mini-site, client book) is free forever, no card required. Premium ($${BILLING.priceMonthlyUsd}/month) adds the texting that brings clients back: rebooking nudges, promo blasts, and Acuity auto-sync. Every new shop gets a ${BILLING.trialDays}-day full Premium trial, and one rebooked regular typically covers the month.`,
   },
   {
     q: "Is it only for barbershops?",
-    a: "No — salons, nail studios, lash artists, spas, and tattoo studios run the exact same playbook: visits earn punches, drifting clients get a perfectly-timed text. Pick your industry at signup and the defaults match your business.",
+    a: "No. Salons, nail studios, lash artists, spas, and tattoo studios run the exact same playbook: visits earn punches, drifting clients get a perfectly-timed text. Pick your industry at signup and the defaults match your business.",
   },
 ] as const;
 

@@ -31,7 +31,7 @@ const VERTICALS: Record<string, VerticalCopy> = {
     points: [
       {
         title: "Every service earns automatically",
-        body: "Connect your booking calendar (or tap once at checkout) and each completed appointment adds a punch. Color can earn more than a trim — your rules.",
+        body: "Connect your booking calendar (or tap once at checkout) and each completed appointment adds a punch. Color can earn more than a trim: your rules.",
       },
       {
         title: "Win back lapsed guests",
@@ -39,7 +39,7 @@ const VERTICALS: Record<string, VerticalCopy> = {
       },
       {
         title: "Your salon, your brand",
-        body: "A branded rewards card and a public mini-site with your photos, hours, and live promotions — no app for guests to download.",
+        body: "A branded rewards card and a public mini-site with your photos, hours, and live promotions, with no app for guests to download.",
       },
     ],
     rewardExample: "“8 visits = free blowout” or “$20 off your 6th color”",
@@ -54,7 +54,7 @@ const VERTICALS: Record<string, VerticalCopy> = {
     points: [
       {
         title: "Punch cards without the punch card",
-        body: "Every completed appointment counts itself. Clients watch their card fill from a magic link — no app, no password.",
+        body: "Every completed appointment counts itself. Clients watch their card fill from a magic link, no app, no password.",
       },
       {
         title: "Slow-week promo blasts",
@@ -71,7 +71,7 @@ const VERTICALS: Record<string, VerticalCopy> = {
     label: "Lash & brow artists",
     industryKey: "lashes",
     headline: ["Lash fills,", "on autopilot."],
-    sub: "Loyalty and rebooking texts tuned for lash and brow studios, where a missed fill means a full set — and a lost client.",
+    sub: "Loyalty and rebooking texts tuned for lash and brow studios, where a missed fill means a full set, and a lost client.",
     rhythm:
       "Your clients should be back every 2-3 weeks. When someone slips past their fill window, ChairBack sends one perfectly-timed text before they end up needing (and shopping around for) a new full set.",
     points: [
@@ -81,7 +81,7 @@ const VERTICALS: Record<string, VerticalCopy> = {
       },
       {
         title: "Rewards they can see",
-        body: "A private magic-link card shows punches and what they're working toward — a free fill, a brow lamination, your call.",
+        body: "A private magic-link card shows punches and what they're working toward: a free fill, a brow lamination, your call.",
       },
       {
         title: "Set up between clients",
@@ -96,11 +96,11 @@ const VERTICALS: Record<string, VerticalCopy> = {
     headline: ["Turn one-time facials", "into monthly rituals."],
     sub: "Membership-feel loyalty without the membership software. Punch cards, rebooking nudges, and promos for estheticians and day spas.",
     rhythm:
-      "Skincare results need consistency, and consistency needs reminders. ChairBack learns each client's visit rhythm and brings them back monthly — the difference between a client and a regular.",
+      "Skincare results need consistency, and consistency needs reminders. ChairBack learns each client's visit rhythm and brings them back monthly: the difference between a client and a regular.",
     points: [
       {
         title: "Reward the ritual",
-        body: "Facials, peels, massages — every completed visit earns toward rewards you design, like a free add-on or $25 off a package.",
+        body: "Facials, peels, massages: every completed visit earns toward rewards you design, like a free add-on or $25 off a package.",
       },
       {
         title: "Fill quiet weekdays",
@@ -108,7 +108,7 @@ const VERTICALS: Record<string, VerticalCopy> = {
       },
       {
         title: "Elegant, branded, no app",
-        body: "Your logo and colors on a rewards page and a public mini-site that looks like your spa — not like software.",
+        body: "Your logo and colors on a rewards page and a public mini-site that looks like your spa, not like software.",
       },
     ],
     rewardExample: "“5 facials = free LED add-on” or “$25 off your 6th massage”",
@@ -123,7 +123,7 @@ const VERTICALS: Record<string, VerticalCopy> = {
     points: [
       {
         title: "Reward repeat sessions",
-        body: "Sessions earn punches toward real money off the next piece — a reason to book the half-sleeve with you, not the shop across town.",
+        body: "Sessions earn punches toward real money off the next piece: a reason to book the half-sleeve with you, not the shop across town.",
       },
       {
         title: "Flash-day blasts that convert",
@@ -131,7 +131,7 @@ const VERTICALS: Record<string, VerticalCopy> = {
       },
       {
         title: "Your book, owned by you",
-        body: "Every client, phone number, and session in one place you own — not scattered across DMs.",
+        body: "Every client, phone number, and session in one place you own, not scattered across DMs.",
       },
     ],
     rewardExample: "“4 sessions = $25 off” or “free touch-up after your 3rd piece”",
@@ -150,7 +150,7 @@ const VERTICALS: Record<string, VerticalCopy> = {
       },
       {
         title: "At-risk radar",
-        body: "See exactly which regulars are overdue today and nudge them with one tap — or let the engine do it.",
+        body: "See exactly which regulars are overdue today and nudge them with one tap, or let the engine do it.",
       },
       {
         title: "Your shop's own page",
@@ -173,7 +173,7 @@ export function generateMetadata({
   const v = VERTICALS[params.vertical];
   if (!v) return {};
   return {
-    title: `${APP_NAME} for ${v.label} — loyalty punch cards & rebooking texts`,
+    title: `${APP_NAME} for ${v.label}: loyalty punch cards & rebooking texts`,
     description: v.sub,
   };
 }
@@ -270,7 +270,7 @@ export default function VerticalPage({
             Your card, your rules.
           </h2>
           <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-muted">
-            Design rewards that fit how {v.label.toLowerCase()} actually work —{" "}
+            Design rewards that fit how {v.label.toLowerCase()} actually work:{" "}
             {v.rewardExample}. Set it up in five minutes; pick “{v.label}” at
             signup and the defaults are already right.
           </p>
