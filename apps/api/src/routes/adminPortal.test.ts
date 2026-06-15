@@ -80,6 +80,37 @@ describe("admin portal gate", () => {
     const target = res.body.shops.find((s: { id: string }) => s.id === targetShopId);
     expect(target.ownerEmail).toBe(userEmail);
   });
+
+  it("404s analytics for a non-admin", async () => {
+    const res = await request(app)
+      .get("/api/admin-portal/analytics")
+      .set("Cookie", userCookie);
+    expect(res.status).toBe(404);
+  });
+
+  it("serves platform analytics to an admin", async () => {
+    const res = await request(app)
+      .get("/api/admin-portal/analytics?days=30")
+      .set("Cookie", adminCookie);
+    expect(res.status).toBe(200);
+    expect(res.body.days).toBe(30);
+    // A dense daily series spanning the window.
+    expect(res.body.visitsByDay).toHaveLength(30);
+    expect(Array.isArray(res.body.topServices)).toBe(true);
+    expect(Array.isArray(res.body.topRewards)).toBe(true);
+    expect(typeof res.body.completedVisits).toBe("number");
+    expect(typeof res.body.sms.sent).toBe("number");
+  });
+
+  it("clamps the analytics window to a sane range", async () => {
+    // days=1 is below the floor (7); the server clamps it.
+    const res = await request(app)
+      .get("/api/admin-portal/analytics?days=1")
+      .set("Cookie", adminCookie);
+    expect(res.status).toBe(200);
+    expect(res.body.days).toBe(7);
+    expect(res.body.visitsByDay).toHaveLength(7);
+  });
 });
 
 describe("comp access toggle", () => {

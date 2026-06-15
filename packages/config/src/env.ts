@@ -33,6 +33,11 @@ const apiSchema = z.object({
   TOKEN_ENCRYPTION_KEY: z.string().min(1),
   // Platform-operator token guarding /admin/* (backfill, sweeps, promotion).
   ADMIN_TOKEN: z.string().min(8).optional(),
+  // Optional IP allowlist for the operator surface (/admin + /api/admin-portal).
+  // Comma-separated IPs (IPv4 or IPv6). When set, requests from any other IP get
+  // a 404 even with a valid admin session/token. When UNSET/empty the check is
+  // skipped (fail-open) so you can never lock yourself out by misconfiguring it.
+  ADMIN_IP_ALLOWLIST: z.string().optional().default(""),
 
   ACUITY_OAUTH_CLIENT_ID: z.string().min(1),
   ACUITY_OAUTH_CLIENT_SECRET: z.string().min(1),

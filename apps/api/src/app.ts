@@ -25,6 +25,7 @@ import { stripeWebhookRouter } from "./routes/webhooks.stripe.js";
 import { adminPortalRouter } from "./routes/adminPortal.js";
 import { captureError } from "./sentry.js";
 import { corsMiddleware } from "./middleware/cors.js";
+import { requireAdminIp } from "./middleware/adminIp.js";
 import {
   adminLimiter,
   dashboardLimiter,
@@ -82,8 +83,10 @@ export function createApp(): Express {
   app.use("/api/loyalty", dashboardLimiter, loyaltyRouter);
   app.use("/api/promos", dashboardLimiter, promotionsRouter);
   app.use("/api/billing", dashboardLimiter, billingRouter);
-  app.use("/api/admin-portal", dashboardLimiter, adminPortalRouter);
-  app.use("/admin", adminLimiter, adminRouter);
+  // The operator surface gets an optional IP allowlist (requireAdminIp) ahead of
+  // its credential gates. Fail-open when ADMIN_IP_ALLOWLIST is unset.
+  app.use("/api/admin-portal", requireAdminIp, dashboardLimiter, adminPortalRouter);
+  app.use("/admin", requireAdminIp, adminLimiter, adminRouter);
 
   // Fallback 404 for unknown API routes.
   app.use((_req, res) => {

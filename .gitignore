@@ -11,6 +11,11 @@ out/
 # prisma generated client
 packages/db/src/generated/
 
+# local-only prisma diagnostic / one-off operational scripts (reach into apps/api,
+# break the db package's rootDir typecheck; not part of the schema or migrations)
+packages/db/prisma/diagnose-*.ts
+packages/db/prisma/run-backfill.ts
+
 # env
 .env
 .env.local
