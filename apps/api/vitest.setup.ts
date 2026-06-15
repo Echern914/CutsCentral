@@ -1,10 +1,17 @@
 /**
- * Load the repo-root .env into process.env before tests. Forces the DIRECT
- * (non-pooled) connection for DB-backed tests to avoid pgbouncer quirks.
+ * Test bootstrap. Loads env, then points the DB tests at a DEDICATED test
+ * database - NEVER production.
+ *
+ * History: tests used to load the repo-root .env (the production Supabase URL)
+ * and create throwaway `@test.local` shops directly in production. They piled
+ * up and showed as fake data in the admin dashboard. This setup now hard-stops
+ * that: tests run against TEST_DATABASE_URL, and if that is missing we refuse
+ * to run against anything that looks like the production host.
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
+// Load repo-root .env into process.env (without clobbering anything already set).
 try {
   const raw = readFileSync(resolve(process.cwd(), "../../.env"), "utf8");
   for (const line of raw.split("\n")) {
@@ -23,7 +30,41 @@ try {
   // env injected directly (CI) - fine.
 }
 
-// Prefer the direct connection for tests if available.
-if (process.env.DIRECT_URL) {
+// Hosts that are NEVER allowed to be a test target. Tests create and delete
+// shops freely, so they must run against a throwaway DB.
+const PROD_HOST_FRAGMENTS = ["supabase.co", "supabase.com"];
+
+function hostOf(url: string | undefined): string {
+  if (!url) return "";
+  try {
+    return new URL(url).host;
+  } catch {
+    return "";
+  }
+}
+
+function looksLikeProd(url: string | undefined): boolean {
+  const host = hostOf(url).toLowerCase();
+  return PROD_HOST_FRAGMENTS.some((frag) => host.includes(frag));
+}
+
+// Prefer an explicit test database. This is the supported way to run DB tests.
+const testUrl = process.env.TEST_DATABASE_URL;
+if (testUrl) {
+  process.env.DATABASE_URL = testUrl;
+  process.env.DIRECT_URL = testUrl;
+} else if (process.env.DIRECT_URL) {
+  // No dedicated test DB configured - fall back to DIRECT_URL (legacy behavior),
+  // but the prod guard below will stop us if that points at production.
   process.env.DATABASE_URL = process.env.DIRECT_URL;
+}
+
+// Hard stop: never let the suite touch a production database.
+if (looksLikeProd(process.env.DATABASE_URL)) {
+  throw new Error(
+    "Refusing to run tests against a production database " +
+      `(host "${hostOf(process.env.DATABASE_URL)}"). ` +
+      "Set TEST_DATABASE_URL to a throwaway/local Postgres database and re-run. " +
+      "See .env.example for setup.",
+  );
 }

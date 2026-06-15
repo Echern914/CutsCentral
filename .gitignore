@@ -43,3 +43,6 @@ coverage/
 Thumbs.db
 .vscode/
 .idea/
+
+# operational backups written by maintenance scripts (contain real prod data)
+apps/api/scripts/backup-*.json
