@@ -12,6 +12,10 @@ import {
 import { prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { previewNudgeBody } from "../messaging/templates.js";
+import { toE164 } from "../acuity/clientKey.js";
+import { getMessageProvider } from "../messaging/twilio.js";
+import { leadLimiter } from "../middleware/rateLimit.js";
+import { logger } from "../logger.js";
 
 export const shopsRouter: Router = Router();
 
@@ -108,6 +112,11 @@ const updateShopSchema = createShopSchema
       .or(z.literal("")),
     hoursText: z.string().trim().max(400).nullish().or(z.literal("")),
     galleryUrls: z.array(httpUrl(500)).max(6),
+    // Lead form: when on, the public page shows "Request an appointment".
+    // notifyPhone is texted on each new lead (normalized to E.164 below); ""/null
+    // = inbox only.
+    takesRequests: z.boolean(),
+    notifyPhone: z.string().max(40).nullish().or(z.literal("")),
   })
   .partial();
 
@@ -192,6 +201,18 @@ shopsRouter.patch("/me", requireUser, requireShop, async (req, res) => {
   if (data.heroImageUrl === "") data.heroImageUrl = null;
   if (data.instagramHandle === "") data.instagramHandle = null;
   if (data.hoursText === "") data.hoursText = null;
+  // notifyPhone: blank clears it; otherwise it must be a valid number (it's the
+  // SMS destination for lead alerts, so a bad value would silently never text).
+  if (data.notifyPhone === "" || data.notifyPhone === null) {
+    data.notifyPhone = null;
+  } else if (data.notifyPhone !== undefined) {
+    const normalized = toE164(data.notifyPhone);
+    if (!normalized) {
+      res.status(400).json({ error: "invalid_phone" });
+      return;
+    }
+    data.notifyPhone = normalized;
+  }
   try {
     const shop = await prisma.shop.update({
       where: { id: req.shop!.id },
@@ -259,6 +280,8 @@ publicPageRouter.get("/:slug", async (req, res) => {
     hoursText: shop.hoursText,
     galleryUrls: shop.galleryUrls,
     bookingUrl: shop.bookingUrl,
+    // notifyPhone is intentionally NOT exposed - it's the barber's private number.
+    takesRequests: shop.takesRequests,
     punchesPerVisit: shop.punchesPerVisit,
     rewards,
     promotions: promotions.map((p) => ({
@@ -267,6 +290,72 @@ publicPageRouter.get("/:slug", async (req, res) => {
       endsAt: p.endsAt?.toISOString() ?? null,
     })),
   });
+});
+
+// Lead from the public page's "Request an appointment" form. UNauthenticated:
+// the slug resolves the shop. The insert uses plain prisma (connection owner, no
+// SET ROLE) so it bypasses FORCE RLS - the same path the public rewards/Twilio
+// writes use. Tighter rate limit than the page read (anti-spam).
+const requestSchema = z
+  .object({
+    firstName: z.string().trim().min(1).max(80),
+    lastName: z.string().trim().max(80).optional().or(z.literal("")),
+    phone: z.string().trim().max(40).optional().or(z.literal("")),
+    email: z.string().trim().email().max(200).optional().or(z.literal("")),
+    message: z.string().trim().max(1000).optional().or(z.literal("")),
+    preferredTime: z.string().trim().max(200).optional().or(z.literal("")),
+  })
+  .strict()
+  // Need at least one way to reach the client back.
+  .refine((d) => Boolean(d.phone?.trim()) || Boolean(d.email?.trim()), {
+    message: "Provide a phone or email so they can reach you back.",
+    path: ["phone"],
+  });
+
+publicPageRouter.post("/:slug/request", leadLimiter, async (req, res) => {
+  const parsed = requestSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const slug = String(req.params.slug).toLowerCase();
+  const shop = await prisma.shop.findUnique({ where: { slug } });
+  // 404 unless the page is live AND the barber is accepting requests - never
+  // reveal a shop that hasn't opted in.
+  if (!shop || !shop.publicPageEnabled || !shop.takesRequests) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const d = parsed.data;
+  await prisma.appointmentRequest.create({
+    data: {
+      shopId: shop.id,
+      firstName: d.firstName,
+      lastName: d.lastName || null,
+      // Store E.164 when parseable, else the raw input (still useful to the barber).
+      phone: toE164(d.phone) ?? (d.phone?.trim() || null),
+      email: d.email || null,
+      message: d.message || null,
+      preferredTime: d.preferredTime || null,
+    },
+  });
+
+  // Best-effort barber alert. A failed/absent notify must never fail the lead -
+  // it's already saved and will show in the dashboard inbox.
+  if (shop.notifyPhone) {
+    try {
+      const contact = toE164(d.phone) ?? d.email ?? "no contact info";
+      const note = d.message ? `: ${d.message}` : "";
+      await getMessageProvider().send({
+        to: shop.notifyPhone,
+        body: `New appointment request at ${shop.name} from ${d.firstName} (${contact})${note}`,
+      });
+    } catch (err) {
+      logger.error({ err, shopId: shop.id }, "lead notify SMS failed");
+    }
+  }
+
+  res.status(201).json({ ok: true });
 });
 
 // Danger zone: delete the shop and ALL its data (clients, visits, punches,
@@ -312,6 +401,8 @@ function serializeShop(shop: {
   instagramHandle: string | null;
   hoursText: string | null;
   galleryUrls: string[];
+  takesRequests: boolean;
+  notifyPhone: string | null;
 }) {
   // Note: webhookSecret is intentionally NOT exposed to the client.
   return {
@@ -336,5 +427,7 @@ function serializeShop(shop: {
     instagramHandle: shop.instagramHandle,
     hoursText: shop.hoursText,
     galleryUrls: shop.galleryUrls,
+    takesRequests: shop.takesRequests,
+    notifyPhone: shop.notifyPhone,
   };
 }

@@ -31,6 +31,8 @@ export function PageEditor({
   const [instagramHandle, setInstagramHandle] = useState(settings.instagramHandle ?? "");
   const [hoursText, setHoursText] = useState(settings.hoursText ?? "");
   const [gallery, setGallery] = useState(settings.galleryUrls.join("\n"));
+  const [takesRequests, setTakesRequests] = useState(settings.takesRequests);
+  const [notifyPhone, setNotifyPhone] = useState(settings.notifyPhone ?? "");
   const [error, setError] = useState<string | null>(null);
 
   const pageUrl = `${appBase}/s/${slug || "your-shop"}`;
@@ -55,6 +57,8 @@ export function PageEditor({
           .map((s) => s.trim())
           .filter(Boolean)
           .slice(0, 6),
+        takesRequests,
+        notifyPhone: notifyPhone.trim(),
       });
       if (r.ok) toast("Page saved", "success");
       else setError(r.error ?? "Could not save");
@@ -243,6 +247,52 @@ export function PageEditor({
               placeholder={"https://…/cut1.jpg\nhttps://…/cut2.jpg"}
               className={`mt-1 ${field} resize-none font-mono`}
             />
+          </label>
+        </div>
+      </Card>
+
+      {/* Appointment requests */}
+      <Card className="overflow-hidden">
+        <CardHeader
+          title="Appointment requests"
+          subtitle="No online booking? Let clients request a time right from your page."
+        />
+        <div className="flex flex-col gap-5 px-5 py-5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm text-offwhite">
+                Show a “Request an appointment” form
+              </p>
+              <p className="mt-0.5 text-xs text-muted">
+                Replaces the booking button with a form. Leads land in your{" "}
+                Requests inbox.
+              </p>
+            </div>
+            <button
+              onClick={() => setTakesRequests((v) => !v)}
+              className={cn(
+                "shrink-0 rounded-full px-4 py-2 text-xs font-medium",
+                takesRequests
+                  ? "bg-emerald-soft/15 text-emerald-soft"
+                  : "border border-subtle text-muted hover:bg-charcoal-700",
+              )}
+            >
+              {takesRequests ? "On" : "Off"}
+            </button>
+          </div>
+          <label className={labelCls}>
+            Text me new requests at (optional)
+            <input
+              value={notifyPhone}
+              onChange={(e) => setNotifyPhone(e.target.value)}
+              placeholder="(302) 555-0142"
+              maxLength={40}
+              className={`mt-1 ${field}`}
+            />
+            <span className="mt-1 block text-[11px] text-muted/80">
+              We&apos;ll text this number when a request comes in. Leave blank to
+              just check the Requests inbox.
+            </span>
           </label>
         </div>
       </Card>

@@ -13,6 +13,10 @@ export interface RewardsData {
     pageSlug: string | null;
   };
   client: { firstName: string | null };
+  consent: {
+    state: "opted_in" | "needs_consent" | "opted_out";
+    hasPhone: boolean;
+  };
   punches: {
     balance: number;
     nextTarget: { name: string; punchCost: number; remaining: number } | null;
@@ -80,5 +84,5 @@ export default async function RewardsPage({
 }) {
   const data = await getData(params.magicToken);
   if (!data) notFound();
-  return <RewardsClient data={data} />;
+  return <RewardsClient data={data} magicToken={params.magicToken} />;
 }

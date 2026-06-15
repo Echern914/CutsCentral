@@ -321,6 +321,40 @@ export function forShop(shopId: string) {
           tx.nudge.update({ ...args, where: scopeWhere(args.where, shopId) }),
         ),
     },
+
+    // Leads from the public page form. No create here on purpose: the insert
+    // happens on the UNauthenticated public route (no shop context), via plain
+    // prisma. The barber only reads/updates them through this scoped accessor.
+    appointmentRequest: {
+      findMany: (args: Prisma.AppointmentRequestFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.appointmentRequest.findMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      findFirst: (args: Prisma.AppointmentRequestFindFirstArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.appointmentRequest.findFirst({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      count: (args: Prisma.AppointmentRequestCountArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.appointmentRequest.count({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      update: (args: Prisma.AppointmentRequestUpdateArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.appointmentRequest.update({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+    },
   };
 }
 

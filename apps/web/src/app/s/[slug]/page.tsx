@@ -16,6 +16,7 @@ export interface ShopPageData {
   hoursText: string | null;
   galleryUrls: string[];
   bookingUrl: string;
+  takesRequests: boolean;
   punchesPerVisit: number;
   rewards: {
     id: string;

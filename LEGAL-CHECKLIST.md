@@ -11,24 +11,32 @@ This file is the rest of the to-do list, in priority order.
 > review is typically a few hundred dollars and is the single best money you
 > can spend here.
 
-## 1. Form an LLC (the #1 liability protection)
+## 1. LLC — covered by Eric Supply LLC (the #1 liability protection)
 
-Nothing in a Terms of Service protects your personal assets if ChairBack is a
-sole proprietorship — an LLC does. Until then, *you personally* are the
-counterparty to every contract and lawsuit.
+An LLC, not a Terms of Service, is what protects your personal assets. **ChairBack
+runs under the existing Eric Supply LLC** as one of its products/activities — you
+do NOT need a separate ChairBack LLC. The LLC is the legal counterparty to every
+ChairBack contract and lawsuit, which is exactly what you want. Remaining items:
 
-- [ ] Form an LLC (Delaware home-state filing is simplest if you live there:
-      one filing, no foreign-qualification; ~$110 + ~$300/yr franchise tax,
-      plus a registered agent if you don't use your own address).
-- [ ] Get an EIN (free, irs.gov, 10 minutes).
-- [ ] Open a separate business bank account and run all ChairBack money
-      through it (mixing personal/business funds can "pierce the veil" and
-      undo the LLC's protection).
-- [ ] Re-register accounts under the LLC: Twilio, Vercel, Railway, Supabase,
-      Namecheap, Acuity dev account, Google Cloud.
-- [ ] Update `LEGAL_ENTITY` in `apps/web/src/components/legal/Legal.tsx` from
-      "ChairBack" to the LLC's exact legal name (e.g. "ChairBack LLC"), and
-      bump the effective date.
+- [x] LLC exists (Eric Supply LLC). `LEGAL_ENTITY` set to
+      "ChairBack, a product of Eric Supply LLC" in Legal.tsx.
+- [ ] **Confirm the EIN/bank/accounts are actually in the LLC's name.** The veil
+      only protects you if ChairBack money flows through Eric Supply LLC's bank
+      account, not your personal one (mixing funds can "pierce the veil"). If you
+      run ChairBack revenue through the LLC's existing account, you're set.
+- [ ] **(Optional but recommended) File a DBA / fictitious name** for "ChairBack"
+      under Eric Supply LLC, if your state requires registering a name you trade
+      under that differs from the LLC's. Cheap (~$10–50, county or state level)
+      and makes the "a product of Eric Supply LLC" framing airtight.
+- [ ] Register external accounts under Eric Supply LLC where it matters most for
+      liability/billing: **Twilio** (the A2P brand should be the LLC + its EIN —
+      EIN-backed brands also get higher SMS throughput) and **Stripe** (payouts to
+      the LLC bank account). Vercel/Railway/Supabase/Namecheap/Acuity/Google can
+      stay as-is or migrate later — lower stakes.
+- [ ] Confirm Eric Supply LLC's operating agreement / purpose clause is broad
+      enough to cover a software/SaaS product (most are "any lawful business" —
+      if so, nothing to do).
+- [ ] Bump `LEGAL_EFFECTIVE_DATE` in Legal.tsx when you next revise the docs.
 
 ## 2. Insurance (when there's revenue or real usage)
 

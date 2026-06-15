@@ -1,6 +1,8 @@
 import { Router } from "express";
+import { z } from "zod";
 import { prisma } from "@chairback/db";
 import { currentBalance } from "../services/punch.js";
+import { toE164 } from "../acuity/clientKey.js";
 
 /**
  * Public rewards endpoint. The magicToken in the path IS the auth - it resolves
@@ -8,6 +10,25 @@ import { currentBalance } from "../services/punch.js";
  * avoid a token-probing oracle. Never accepts a shopId from the request.
  */
 export const rewardsRouter: Router = Router();
+
+/**
+ * Client's view of their own SMS consent, derived from the same fields the
+ * textability gate (engines/eligibility.ts) reads. opted_out wins over consent
+ * (a STOP since opting in); opted_in needs both consent on file AND not opted
+ * out; otherwise consent has never been recorded.
+ */
+function consentView(c: {
+  optedOut: boolean;
+  smsConsentAt: Date | null;
+  phone: string | null;
+}): { state: "opted_in" | "needs_consent" | "opted_out"; hasPhone: boolean } {
+  const state = c.optedOut
+    ? "opted_out"
+    : c.smsConsentAt !== null
+      ? "opted_in"
+      : "needs_consent";
+  return { state, hasPhone: Boolean(c.phone) };
+}
 
 rewardsRouter.get("/:magicToken", async (req, res) => {
   const client = await prisma.client.findUnique({
@@ -116,6 +137,7 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
     client: {
       firstName: client.firstName,
     },
+    consent: consentView(client),
     punches: {
       balance,
       // Grid target: progress toward the next reward out of reach (null when
@@ -153,5 +175,81 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
       date: v.scheduledAt.toISOString(),
       service: v.serviceName,
     })),
+  });
+});
+
+const optInSchema = z.object({ phone: z.string().max(40).optional() }).strict();
+
+/**
+ * Client self-serve opt-in from their rewards page. Grants SMS consent with the
+ * strongest possible proof (the client's own action). A phone is required for
+ * textability: use the one on file, else accept one in the body. The consent
+ * stamp is FIRST-WINS (guarded on smsConsentAt: null) so a re-opt-in never
+ * overwrites an earlier source/timestamp - matching the barber-attest path.
+ *
+ * Plain prisma (connection owner, no SET ROLE) like the GET above: resolves by
+ * the global magicToken without a shop context, RLS-safe.
+ */
+rewardsRouter.post("/:magicToken/opt-in", async (req, res) => {
+  const parsed = optInSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const client = await prisma.client.findUnique({
+    where: { magicToken: req.params.magicToken },
+  });
+  if (!client) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+
+  const rawPhone = parsed.data.phone?.trim();
+  const bodyPhone = toE164(parsed.data.phone);
+  if (rawPhone && !bodyPhone) {
+    res.status(400).json({ error: "invalid_phone" });
+    return;
+  }
+  const effectivePhone = client.phone ?? bodyPhone;
+  if (!effectivePhone) {
+    res.status(400).json({ error: "needs_phone" });
+    return;
+  }
+
+  // Two writes, deliberately kept separate:
+  //  1. Unconditional: clear any prior STOP and set the phone on first opt-in.
+  //  2. Guarded (smsConsentAt: null): stamp consent FIRST-WINS, never overwrite.
+  await prisma.client.update({
+    where: { id: client.id },
+    data: { optedOut: false, ...(client.phone ? {} : { phone: bodyPhone }) },
+  });
+  await prisma.client.updateMany({
+    where: { id: client.id, smsConsentAt: null },
+    data: { smsConsentAt: new Date(), smsConsentSource: "client_self_serve" },
+  });
+
+  res.json({ consent: { state: "opted_in", hasPhone: true } });
+});
+
+/**
+ * Client self-serve opt-out from their rewards page. PER-CLIENT only (keyed by
+ * the magicToken), deliberately narrower than the Twilio STOP handler's
+ * phone-wide updateMany: a web action speaks for one client, not everyone who
+ * happens to share that number.
+ */
+rewardsRouter.post("/:magicToken/opt-out", async (req, res) => {
+  const client = await prisma.client.findUnique({
+    where: { magicToken: req.params.magicToken },
+  });
+  if (!client) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  await prisma.client.update({
+    where: { id: client.id },
+    data: { optedOut: true },
+  });
+  res.json({
+    consent: { state: "opted_out", hasPhone: Boolean(client.phone) },
   });
 });

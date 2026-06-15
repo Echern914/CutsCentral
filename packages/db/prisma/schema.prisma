@@ -116,6 +116,13 @@ model Shop {
   hoursText         String? // freeform hours ("Mon-Fri 9-6 ...")
   galleryUrls       String[] @default([]) // up to 6 photo URLs
 
+  // Appointment requests (lead form on the public page). When takesRequests is
+  // on, /s/[slug] shows a "Request an appointment" form instead of the booking
+  // link - for barbers with no online booking. notifyPhone (E.164) is texted on
+  // each new request; null = no SMS, the lead only lands in the dashboard inbox.
+  takesRequests Boolean @default(false)
+  notifyPhone   String? // E.164; barber's number for lead-request texts. null = inbox only
+
   // per-shop webhook routing (the body has no account id, so the URL path routes)
   webhookSecret    String   @unique // 32-byte random, used in the webhook URL path
   acuityWebhookIds String[] @default([]) // subscription ids returned by Acuity (teardown)
@@ -123,15 +130,16 @@ model Shop {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  acuity     AcuityConnection?
-  clients    Client[]
-  visits     Visit[]
-  ledger     PunchLedger[]
-  nudges     Nudge[]
-  rewards    Reward[]
-  earnRules  EarnRule[]
-  promotions Promotion[]
-  promoUses  PromotionRedemption[]
+  acuity              AcuityConnection?
+  clients             Client[]
+  visits              Visit[]
+  ledger              PunchLedger[]
+  nudges              Nudge[]
+  rewards             Reward[]
+  earnRules           EarnRule[]
+  promotions          Promotion[]
+  promoUses           PromotionRedemption[]
+  appointmentRequests AppointmentRequest[]
 
   @@index([ownerId])
 }
@@ -269,6 +277,30 @@ model Client {
   @@unique([shopId, acuityClientKey]) // tenant-scoped identity + idempotent upsert
   @@index([shopId])
   @@index([shopId, lastVisitAt])
+}
+
+// A lead submitted from the public shop page's "Request an appointment" form.
+// Created via the UNauthenticated public route (resolved by slug), so the insert
+// runs as the connection owner and bypasses FORCE RLS - the same path the public
+// rewards/Twilio writes use. The barber reads/updates these through forShop()
+// (RLS-enforced). Not a booking - just a contact the barber follows up on.
+model AppointmentRequest {
+  id            String   @id @default(cuid())
+  shopId        String
+  shop          Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  firstName     String
+  lastName      String?
+  phone         String? // E.164 when parseable, else raw input
+  email         String?
+  message       String? // freeform note from the client
+  preferredTime String? // freeform ("weekday evenings", "Sat morning")
+  status        String   @default("NEW") // "NEW" | "CONTACTED" | "CLOSED"
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([shopId, status])
+  @@index([shopId, createdAt])
 }
 
 model Visit {

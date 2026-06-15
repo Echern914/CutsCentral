@@ -16,6 +16,8 @@ export interface ShopPageSettings {
   instagramHandle: string | null;
   hoursText: string | null;
   galleryUrls: string[];
+  takesRequests: boolean;
+  notifyPhone: string | null;
 }
 
 export default async function PageSettingsPage() {

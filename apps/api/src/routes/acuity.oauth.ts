@@ -131,13 +131,19 @@ acuityOAuthRouter.get("/callback", async (req, res) => {
 // dotted-event bug produced - the UI surfaces it with a Repair button.
 acuityOAuthRouter.get("/status", requireUser, requireShop, async (req, res) => {
   const shop = req.shop!;
-  const [conn, clientCount, visitCount] = await Promise.all([
+  const [conn, clientCount, visitCount, needConsentCount] = await Promise.all([
     prisma.acuityConnection.findUnique({
       where: { shopId: shop.id },
       select: { acuityAccountId: true, connectedAt: true },
     }),
     prisma.client.count({ where: { shopId: shop.id } }),
     prisma.visit.count({ where: { shopId: shop.id } }),
+    // Clients with a phone but no consent yet - the ones a barber must collect
+    // consent for (or attest) before they can be texted. Drives the consent
+    // setup prompt. Opted-out clients are deliberately excluded.
+    prisma.client.count({
+      where: { shopId: shop.id, optedOut: false, smsConsentAt: null, phone: { not: null } },
+    }),
   ]);
   const connected = conn !== null;
   const webhookCount = shop.acuityWebhookIds.length;
@@ -149,6 +155,7 @@ acuityOAuthRouter.get("/status", requireUser, requireShop, async (req, res) => {
     liveSyncHealthy,
     clientCount,
     visitCount,
+    clientsNeedingConsent: needConsentCount,
     // Actionable hint for the UI.
     needsRepair: connected && webhookCount === 0,
   });

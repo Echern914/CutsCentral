@@ -10,6 +10,7 @@ import { SettingsCard, type ShopSettings } from "./_components/SettingsCard";
 import { AccountCard } from "./_components/AccountCard";
 import { SyncHealthBanner } from "./_components/SyncHealthBanner";
 import { GettingStarted } from "./_components/GettingStarted";
+import { ConsentSetup } from "./_components/ConsentSetup";
 
 interface ShopMe extends ShopSettings {
   connected: boolean;
@@ -20,6 +21,7 @@ interface SyncStatus {
   liveSyncHealthy: boolean;
   needsRepair: boolean;
   clientCount: number;
+  clientsNeedingConsent: number;
 }
 
 export default async function DashboardPage() {
@@ -72,6 +74,8 @@ export default async function DashboardPage() {
         connected={shop.connected}
         hasClients={(sync.data?.clientCount ?? 0) > 0}
       />
+
+      <ConsentSetup needConsentCount={sync.data?.clientsNeedingConsent ?? 0} />
 
       {stats.data && <StatCards stats={stats.data} />}
 

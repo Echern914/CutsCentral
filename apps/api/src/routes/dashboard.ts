@@ -770,6 +770,54 @@ dashboardRouter.get("/nudges", async (req, res) => {
   });
 });
 
+// Appointment-request inbox: leads from the public page form, newest first.
+dashboardRouter.get("/requests", async (req, res) => {
+  const db = forShop(req.shop!.id);
+  const requests = await db.appointmentRequest.findMany({
+    orderBy: { createdAt: "desc" },
+    take: 200,
+  });
+  res.json({
+    requests: requests.map((r) => ({
+      id: r.id,
+      firstName: r.firstName,
+      lastName: r.lastName,
+      phone: r.phone,
+      email: r.email,
+      message: r.message,
+      preferredTime: r.preferredTime,
+      status: r.status,
+      createdAt: r.createdAt.toISOString(),
+    })),
+  });
+});
+
+// Update a lead's status (NEW -> CONTACTED -> CLOSED). Tenant-scoped: the
+// findFirst through forShop returns 404 for another shop's request.
+const requestStatusSchema = z
+  .object({ status: z.enum(["NEW", "CONTACTED", "CLOSED"]) })
+  .strict();
+dashboardRouter.post("/requests/:id", async (req, res) => {
+  const parsed = requestStatusSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const db = forShop(req.shop!.id);
+  const existing = await db.appointmentRequest.findFirst({
+    where: { id: req.params.id },
+  });
+  if (!existing) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  await db.appointmentRequest.update({
+    where: { id: existing.id },
+    data: { status: parsed.data.status },
+  });
+  res.json({ ok: true, status: parsed.data.status });
+});
+
 // Run a dry-run sweep preview (who WOULD be nudged) without sending.
 dashboardRouter.post("/sweep-preview", smsLimiter, async (req, res) => {
   const summary = await sweepShop(req.shop!, { dryRun: true });

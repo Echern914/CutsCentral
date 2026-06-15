@@ -14,6 +14,8 @@ export interface PageSettingsInput {
   instagramHandle: string;
   hoursText: string;
   galleryUrls: string[];
+  takesRequests: boolean;
+  notifyPhone: string;
 }
 
 export async function savePageAction(
@@ -30,6 +32,8 @@ export async function savePageAction(
     instagramHandle: input.instagramHandle,
     hoursText: input.hoursText,
     galleryUrls: input.galleryUrls,
+    takesRequests: input.takesRequests,
+    notifyPhone: input.notifyPhone,
   });
   revalidatePath("/dashboard/site");
   if (res.ok) return { ok: true };
@@ -38,6 +42,8 @@ export async function savePageAction(
     error:
       res.error === "slug_taken"
         ? "That page handle is taken — try another."
-        : "Could not save. Check the fields (URLs must start with https://).",
+        : res.error === "invalid_phone"
+          ? "That notify number doesn't look valid. Use a US number like (302) 555-0142."
+          : "Could not save. Check the fields (URLs must start with https://).",
   };
 }

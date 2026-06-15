@@ -4,6 +4,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { motion } from "framer-motion";
 import { APP_NAME, PAGE_THEMES, type PageThemeKey } from "@chairback/config/constants";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
+import { RequestForm } from "./RequestForm";
 import type { ShopPageData } from "./page";
 
 /**
@@ -102,19 +103,44 @@ export function ShopPageClient({ data }: { data: ShopPageData }) {
           </div>
         </motion.header>
 
-        {/* Book CTA */}
+        {/* Primary CTA. When the barber takes requests (no online booking), the
+            request form leads and the booking link demotes to a secondary line;
+            otherwise the booking button is the primary CTA as before. */}
         <motion.div variants={fadeUp} className="mt-6">
-          <a
-            href={data.bookingUrl}
-            className="block w-full rounded-full py-3.5 text-center text-sm font-semibold transition-transform hover:scale-[1.01]"
-            style={{
-              backgroundColor: accent,
-              color: theme.scheme === "light" ? "#FFFFFF" : "#101012",
-              boxShadow: `0 8px 30px -10px ${accent}AA`,
-            }}
-          >
-            Book an appointment
-          </a>
+          {data.takesRequests ? (
+            <>
+              <RequestForm
+                slug={data.slug}
+                shopName={data.name}
+                accent={accent}
+                theme={{
+                  surface: theme.surface,
+                  border: theme.border,
+                  muted: theme.muted,
+                  scheme: theme.scheme,
+                }}
+              />
+              <a
+                href={data.bookingUrl}
+                className="mt-3 block text-center text-xs underline-offset-2 hover:underline"
+                style={{ color: theme.muted }}
+              >
+                Or book online instantly →
+              </a>
+            </>
+          ) : (
+            <a
+              href={data.bookingUrl}
+              className="block w-full rounded-full py-3.5 text-center text-sm font-semibold transition-transform hover:scale-[1.01]"
+              style={{
+                backgroundColor: accent,
+                color: theme.scheme === "light" ? "#FFFFFF" : "#101012",
+                boxShadow: `0 8px 30px -10px ${accent}AA`,
+              }}
+            >
+              Book an appointment
+            </a>
+          )}
         </motion.div>
 
         {/* Live promotions */}

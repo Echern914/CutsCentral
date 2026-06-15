@@ -53,6 +53,26 @@ export async function apiPublicGet<T>(path: string): Promise<ApiResult<T>> {
   return toResult<T>(res);
 }
 
+/**
+ * Public (no-cookie) mutation - used by client-facing server actions (rewards
+ * consent, the public shop-page lead form). Same as apiSend but never forwards
+ * the session cookie. Must be called from a server action, never the browser:
+ * the CSP (connect-src 'self') blocks a direct browser fetch to the API origin.
+ */
+export async function apiPublicSend<T>(
+  method: "POST" | "PATCH" | "DELETE",
+  path: string,
+  body?: unknown,
+): Promise<ApiResult<T>> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    cache: "no-store",
+  });
+  return toResult<T>(res);
+}
+
 async function toResult<T>(res: Response): Promise<ApiResult<T>> {
   let data: T | null = null;
   let error: string | undefined;

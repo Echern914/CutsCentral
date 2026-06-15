@@ -7,7 +7,7 @@ import { APP_NAME } from "@chairback/config/constants";
  * Server components - plain prose on the site's dark theme, no client JS.
  */
 
-export const LEGAL_ENTITY = "ChairBack"; // swap for the LLC name once formed (see LEGAL-CHECKLIST.md)
+export const LEGAL_ENTITY = "ChairBack, a product of Eric Supply LLC"; // Eric Supply LLC is the legal counterparty; ChairBack is its product/brand
 export const SUPPORT_EMAIL = "support@getchairback.com";
 export const LEGAL_EFFECTIVE_DATE = "June 12, 2026";
 

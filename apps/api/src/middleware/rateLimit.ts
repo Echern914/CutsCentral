@@ -40,6 +40,9 @@ export const authLimiter = make({ windowMs: 15 * 60 * 1000, limit: 20 });
 /** Public rewards lookup: blunt magic-token enumeration. Per IP. */
 export const rewardsLimiter = make({ windowMs: 60 * 1000, limit: 30 });
 
+/** Public lead-form submissions: spam-bounded. Per IP, tight. */
+export const leadLimiter = make({ windowMs: 60 * 1000, limit: 5 });
+
 /** Acuity OAuth callback: blunt code-exchange replay. Per IP. */
 export const oauthLimiter = make({ windowMs: 60 * 1000, limit: 15 });
 

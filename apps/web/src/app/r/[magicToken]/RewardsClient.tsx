@@ -10,6 +10,7 @@ import { RewardCelebration } from "@/components/rewards/RewardCelebration";
 import { VisitHistory } from "@/components/rewards/VisitHistory";
 import { LinkButton } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { ConsentCard } from "./ConsentCard";
 import type { RewardsData } from "./page";
 
 function promoValue(p: RewardsData["promotions"][number]): string | null {
@@ -36,8 +37,15 @@ function endsLabel(endsAt: string | null): string | null {
   return `ends ${new Date(endsAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
 }
 
-export function RewardsClient({ data }: { data: RewardsData }) {
-  const { shop, client, punches, rewards, promotions, visits, rebook } = data;
+export function RewardsClient({
+  data,
+  magicToken,
+}: {
+  data: RewardsData;
+  magicToken: string;
+}) {
+  const { shop, client, consent, punches, rewards, promotions, visits, rebook } =
+    data;
   const accent = shop.accentColor || "#D4AF37"; // shop brand color or default gold
   const ready = rewards.filter((r) => r.ready);
   const next = punches.nextTarget;
@@ -102,6 +110,17 @@ export function RewardsClient({ data }: { data: RewardsData }) {
                     : "Every visit earns punches"}
             </p>
           </Card>
+        </motion.div>
+
+        {/* SMS consent - prominent when not yet opted in, quiet once handled */}
+        <motion.div variants={fadeUp}>
+          <ConsentCard
+            magicToken={magicToken}
+            shopName={shop.name}
+            accent={accent}
+            initialState={consent.state}
+            initialHasPhone={consent.hasPhone}
+          />
         </motion.div>
 
         {/* Rebooking countdown - drives urgency to book the next visit */}
