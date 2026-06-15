@@ -24,6 +24,15 @@ export const metadata: Metadata = {
   },
   description:
     "Automatic loyalty punch cards and perfectly-timed rebooking texts for barbershops. Built on top of your Acuity scheduling.",
+  // Declaring `icons` turns OFF Next's auto-injection of the icon.svg file
+  // convention, so list BOTH here. The favicon (icon.svg, still served at
+  // /icon.svg) plus an Apple touch icon from public/ (the apple-icon.svg file
+  // convention is ignored for .svg in Next 14; iOS 16.4+ renders SVG touch
+  // icons, older iOS falls back).
+  icons: {
+    icon: { url: "/icon.svg", type: "image/svg+xml" },
+    apple: "/apple-icon.svg",
+  },
 };
 
 // Without this, mobile browsers render at ~980px and zoom out - making the
@@ -32,6 +41,8 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  // Brand the mobile browser chrome (address bar) charcoal to match the app.
+  themeColor: "#0A0A0B",
 };
 
 export default function RootLayout({

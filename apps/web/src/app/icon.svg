@@ -1,0 +1,21 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="ChairBack">
+  <defs>
+    <linearGradient id="cbGold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F1DD8C"/>
+      <stop offset="0.5" stop-color="#D4AF37"/>
+      <stop offset="1" stop-color="#B8962F"/>
+    </linearGradient>
+  </defs>
+  <!-- Rounded charcoal tile with a subtle gold-tinted edge so it reads on light or dark tabs -->
+  <rect x="1" y="1" width="30" height="30" rx="8" fill="#0E0E10" stroke="#D4AF37" stroke-opacity="0.30" stroke-width="1"/>
+  <!-- Lucide "scissors" geometry (proven mark) on a 24-grid, nudged right by 1px
+       (translate 5,4) so the optically left-heavy finger-holes sit centered in
+       the tile. Stroke bumped to 2.2 so the blades survive at 16px. -->
+  <g transform="translate(5 4)" stroke="url(#cbGold)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <circle cx="6" cy="6" r="3"/>
+    <circle cx="6" cy="18" r="3"/>
+    <path d="M8.12 8.12 20 20"/>
+    <path d="M14.47 14.48 20 4"/>
+    <path d="M8.12 15.88 12 12"/>
+  </g>
+</svg>
