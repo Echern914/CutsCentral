@@ -76,7 +76,7 @@ export function ConsentCard({
           type="button"
           onClick={optOut}
           disabled={pending}
-          className="underline underline-offset-2 hover:text-offwhite disabled:opacity-50"
+          className="underline underline-offset-2 transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
         >
           Stop texts
         </button>
@@ -93,7 +93,7 @@ export function ConsentCard({
           type="button"
           onClick={optIn}
           disabled={pending}
-          className="underline underline-offset-2 hover:text-offwhite disabled:opacity-50"
+          className="underline underline-offset-2 transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
           style={{ color: accent }}
         >
           Resume texts

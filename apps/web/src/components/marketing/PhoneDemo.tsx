@@ -6,7 +6,7 @@ const EASE = [0.21, 0.47, 0.32, 0.98] as const;
 
 const bubble = {
   hidden: { opacity: 0, y: 14, scale: 0.96 },
-  show: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.5, ease: EASE } },
+  show: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.35, ease: EASE } },
 };
 
 /**

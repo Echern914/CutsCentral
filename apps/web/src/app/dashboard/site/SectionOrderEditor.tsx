@@ -75,7 +75,7 @@ export function SectionOrderEditor({
               setOverKey(null);
             }}
             className={cn(
-              "flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5 transition-colors",
+              "flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5 transition-[border-color,background-color,box-shadow,opacity] duration-150 ease-out",
               isVisible ? "cursor-grab border-subtle bg-charcoal-700 active:cursor-grabbing" : "border-subtle/60 opacity-55",
               overKey === key && dragKey ? "border-gold/70 ring-2 ring-gold/40" : "",
             )}
@@ -95,13 +95,13 @@ export function SectionOrderEditor({
               aria-checked={isVisible}
               onClick={() => toggle(key)}
               className={cn(
-                "relative h-5 w-9 shrink-0 rounded-full transition-colors",
+                "relative h-5 w-9 shrink-0 rounded-full transition-colors duration-150 ease-out",
                 isVisible ? "bg-emerald-soft/70" : "bg-charcoal-600",
               )}
             >
               <span
                 className={cn(
-                  "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform",
+                  "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform duration-150 ease-out",
                   isVisible ? "translate-x-4" : "translate-x-0.5",
                 )}
               />

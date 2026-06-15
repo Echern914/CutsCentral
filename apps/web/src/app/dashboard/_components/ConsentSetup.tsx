@@ -44,7 +44,7 @@ export function ConsentSetup({ needConsentCount }: { needConsentCount: number })
         </h2>
         <button
           onClick={dismiss}
-          className="shrink-0 text-xs text-muted hover:text-offwhite"
+          className="shrink-0 text-xs text-muted transition-colors duration-150 ease-out hover:text-offwhite"
           aria-label="Dismiss"
         >
           Dismiss

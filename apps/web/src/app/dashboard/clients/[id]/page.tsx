@@ -64,7 +64,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
 
   return (
     <main className="mx-auto w-full max-w-3xl px-5 py-8">
-      <Link href="/dashboard/clients" className="text-xs text-muted hover:text-offwhite">
+      <Link href="/dashboard/clients" className="text-xs text-muted transition-colors duration-150 ease-out hover:text-offwhite">
         ← All clients
       </Link>
 

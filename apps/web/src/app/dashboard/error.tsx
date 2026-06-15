@@ -26,13 +26,13 @@ export default function DashboardError({
         <div className="mt-6 flex justify-center gap-3">
           <button
             onClick={reset}
-            className="rounded-full bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal hover:bg-gold-muted"
+            className="rounded-full bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted"
           >
             Try again
           </button>
           <a
             href="/login"
-            className="rounded-full border border-subtle px-5 py-2.5 text-sm text-muted hover:bg-charcoal-700"
+            className="rounded-full border border-subtle px-5 py-2.5 text-sm text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
           >
             Sign in again
           </a>

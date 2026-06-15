@@ -97,7 +97,7 @@ export function GalleryEditor({
         onDragLeave={() => setDropActive(false)}
         onDrop={onDrop}
         className={cn(
-          "grid grid-cols-2 gap-3 rounded-2xl border border-dashed p-3 transition-colors sm:grid-cols-3",
+          "grid grid-cols-2 gap-3 rounded-2xl border border-dashed p-3 transition-colors duration-150 ease-out sm:grid-cols-3",
           dropActive ? "border-gold/60 bg-gold/5" : "border-subtle",
         )}
       >
@@ -113,7 +113,7 @@ export function GalleryEditor({
               setOverIndex(null);
             }}
             className={cn(
-              "group relative cursor-grab overflow-hidden rounded-xl border bg-charcoal-700 active:cursor-grabbing",
+              "group relative cursor-grab overflow-hidden rounded-xl border bg-charcoal-700 transition-[border-color,box-shadow,opacity] duration-150 ease-out active:cursor-grabbing",
               overIndex === i && dragIndex !== null ? "border-gold/70 ring-2 ring-gold/40" : "border-subtle",
               dragIndex === i && "opacity-50",
             )}
@@ -124,7 +124,7 @@ export function GalleryEditor({
               type="button"
               onClick={() => remove(i)}
               aria-label="Remove photo"
-              className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-black/60 text-white opacity-0 backdrop-blur transition-opacity hover:bg-black/80 group-hover:opacity-100"
+              className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-black/60 text-white opacity-0 backdrop-blur transition-[opacity,background-color] duration-150 ease-out hover:bg-black/80 group-hover:opacity-100"
             >
               ✕
             </button>
@@ -146,7 +146,7 @@ export function GalleryEditor({
             type="button"
             onClick={() => fileInput.current?.click()}
             disabled={uploading}
-            className="flex aspect-square flex-col items-center justify-center gap-1 rounded-xl border border-subtle text-muted transition-colors hover:border-gold/50 hover:text-gold disabled:opacity-60"
+            className="flex aspect-square flex-col items-center justify-center gap-1 rounded-xl border border-subtle text-muted transition-colors duration-150 ease-out hover:border-gold/50 hover:text-gold disabled:opacity-60"
           >
             {uploading ? (
               <span className="text-xs">Uploading…</span>
@@ -196,7 +196,7 @@ export function GalleryEditor({
             addUrls([urlDraft.trim()]);
             setUrlDraft("");
           }}
-          className="shrink-0 rounded-full border border-subtle px-4 py-2 text-xs text-muted hover:bg-charcoal-700 disabled:opacity-50"
+          className="shrink-0 rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
         >
           Add
         </button>

@@ -171,3 +171,21 @@ body {
     animation: none;
   }
 }
+
+/* Respect users who request reduced motion: neutralize transitions, CSS
+   animations, and smooth-scroll site-wide so the snappier transitions don't
+   force motion on anyone who opts out. Uses 0.01ms (not none) so
+   transition/animation-end events still fire and JS-driven flows don't stall.
+   Does not touch outline/focus styles. Framer Motion components already gate
+   on their own reduce flag; this is the complementary layer for CSS/Tailwind
+   transitions. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -57,7 +57,7 @@ export function AnalyticsSection({ a }: { a: Analytics }) {
               <div
                 key={d.date}
                 title={`${d.date}: ${d.count}`}
-                className="flex-1 rounded-t-sm bg-gold/70 transition-colors hover:bg-gold"
+                className="flex-1 rounded-t-sm bg-gold/70 transition-colors duration-150 ease-out hover:bg-gold"
                 style={{ height: `${Math.max(2, (d.count / peak) * 100)}%` }}
               />
             ))}

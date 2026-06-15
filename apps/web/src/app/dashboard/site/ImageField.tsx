@@ -52,18 +52,18 @@ export function ImageField({
         <div className={cn("group relative overflow-hidden rounded-xl border border-subtle bg-charcoal-700", aspectCls)}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={value} alt={label} className="h-full w-full object-cover" />
-          <div className="absolute inset-0 flex items-center justify-center gap-2 bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
+          <div className="absolute inset-0 flex items-center justify-center gap-2 bg-black/50 opacity-0 transition-opacity duration-150 ease-out group-hover:opacity-100">
             <button
               type="button"
               onClick={() => fileInput.current?.click()}
-              className="rounded-full bg-white/90 px-3 py-1.5 text-xs font-medium text-charcoal hover:bg-white"
+              className="rounded-full bg-white/90 px-3 py-1.5 text-xs font-medium text-charcoal transition-colors duration-150 ease-out hover:bg-white"
             >
               Replace
             </button>
             <button
               type="button"
               onClick={() => onChange("")}
-              className="rounded-full bg-black/60 px-3 py-1.5 text-xs font-medium text-white hover:bg-black/80"
+              className="rounded-full bg-black/60 px-3 py-1.5 text-xs font-medium text-white transition-colors duration-150 ease-out hover:bg-black/80"
             >
               Remove
             </button>
@@ -81,7 +81,7 @@ export function ImageField({
           onDrop={onDrop}
           disabled={uploading}
           className={cn(
-            "flex flex-col items-center justify-center gap-1 rounded-xl border border-dashed text-muted transition-colors hover:border-gold/50 hover:text-gold disabled:opacity-60",
+            "flex flex-col items-center justify-center gap-1 rounded-xl border border-dashed text-muted transition-colors duration-150 ease-out hover:border-gold/50 hover:text-gold disabled:opacity-60",
             aspectCls,
             dropActive ? "border-gold/60 bg-gold/5" : "border-subtle",
           )}
@@ -132,7 +132,7 @@ export function ImageField({
         <button
           type="button"
           onClick={() => setEditingUrl(true)}
-          className="self-start text-[11px] text-muted underline-offset-2 hover:text-offwhite hover:underline"
+          className="self-start text-[11px] text-muted underline-offset-2 transition-colors duration-150 ease-out hover:text-offwhite hover:underline"
         >
           {value ? "Edit URL" : "or paste a URL"}
         </button>

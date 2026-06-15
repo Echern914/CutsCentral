@@ -47,7 +47,7 @@ export function SyncHealthBanner({ needsRepair }: { needsRepair: boolean }) {
       <button
         onClick={repair}
         disabled={pending}
-        className="shrink-0 rounded-full bg-gold px-5 py-2 text-sm font-semibold text-charcoal hover:bg-gold-muted disabled:opacity-50"
+        className="shrink-0 rounded-full bg-gold px-5 py-2 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50"
       >
         {pending ? "Repairing…" : "Repair sync"}
       </button>

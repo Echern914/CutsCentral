@@ -24,7 +24,7 @@ function Save() {
     <button
       type="submit"
       disabled={pending}
-      className="rounded-full bg-gold px-5 py-2 text-sm font-semibold text-charcoal hover:bg-gold-muted disabled:opacity-50"
+      className="rounded-full bg-gold px-5 py-2 text-sm font-semibold text-charcoal transition-colors duration-200 ease-out hover:bg-gold-muted disabled:opacity-50"
     >
       {pending ? "Saving…" : "Save settings"}
     </button>

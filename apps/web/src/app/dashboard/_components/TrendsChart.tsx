@@ -63,7 +63,7 @@ export function TrendsChart({ series: initial }: { series: TrendPoint[] }) {
                   key={m}
                   onClick={() => pick(m)}
                   disabled={pending}
-                  className={`rounded-full px-2.5 py-1 text-xs ${
+                  className={`rounded-full px-2.5 py-1 text-xs transition-colors duration-150 ease-out ${
                     range === m ? "bg-gold text-charcoal" : "text-muted hover:text-offwhite"
                   }`}
                 >

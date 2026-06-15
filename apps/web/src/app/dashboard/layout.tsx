@@ -25,7 +25,7 @@ export default async function DashboardLayout({
           </Link>
           <DashboardNavLinks isAdmin={isAdmin} />
           <form action={logoutAction} className="shrink-0">
-            <button className="rounded-full border border-subtle px-3.5 py-1.5 text-xs text-muted transition-colors hover:bg-charcoal-700 hover:text-offwhite">
+            <button className="rounded-full border border-subtle px-3.5 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite">
               Sign out
             </button>
           </form>

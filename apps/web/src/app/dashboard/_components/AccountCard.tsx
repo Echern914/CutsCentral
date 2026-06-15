@@ -21,7 +21,7 @@ function Btn({ label }: { label: string }) {
     <button
       type="submit"
       disabled={pending}
-      className="rounded-full bg-gold px-4 py-2 text-sm font-semibold text-charcoal hover:bg-gold-muted disabled:opacity-50"
+      className="rounded-full bg-gold px-4 py-2 text-sm font-semibold text-charcoal transition-colors duration-200 ease-out hover:bg-gold-muted disabled:opacity-50"
     >
       {pending ? "Saving…" : label}
     </button>
@@ -92,7 +92,7 @@ export function AccountCard({
         <button
           type="button"
           onClick={() => window.dispatchEvent(new Event(OPEN_TOUR_EVENT))}
-          className="shrink-0 rounded-full border border-subtle px-4 py-2 text-xs font-medium text-offwhite transition-colors hover:bg-charcoal-700"
+          className="shrink-0 rounded-full border border-subtle px-4 py-2 text-xs font-medium text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
         >
           Replay tour
         </button>
@@ -108,7 +108,7 @@ export function AccountCard({
         {!confirmOpen ? (
           <button
             onClick={() => setConfirmOpen(true)}
-            className="mt-3 rounded-full border border-danger-soft/50 px-4 py-2 text-xs font-medium text-danger-soft hover:bg-danger-soft/10"
+            className="mt-3 rounded-full border border-danger-soft/50 px-4 py-2 text-xs font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10"
           >
             Delete shop
           </button>
@@ -121,14 +121,14 @@ export function AccountCard({
             <div className="flex items-center gap-2">
               <button
                 type="submit"
-                className="rounded-full bg-danger-soft px-4 py-2 text-xs font-semibold text-charcoal hover:opacity-90"
+                className="rounded-full bg-danger-soft px-4 py-2 text-xs font-semibold text-charcoal transition-opacity duration-150 ease-out hover:opacity-90"
               >
                 Permanently delete
               </button>
               <button
                 type="button"
                 onClick={() => setConfirmOpen(false)}
-                className="rounded-full border border-subtle px-4 py-2 text-xs text-muted hover:bg-charcoal-700"
+                className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
               >
                 Cancel
               </button>

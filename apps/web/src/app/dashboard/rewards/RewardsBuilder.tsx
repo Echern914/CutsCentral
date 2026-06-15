@@ -20,9 +20,9 @@ import {
 const field =
   "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 const smallBtn =
-  "rounded-full border border-subtle px-3 py-1.5 text-xs text-muted hover:bg-charcoal-700 hover:text-offwhite disabled:opacity-40";
+  "rounded-full border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite disabled:opacity-40";
 const goldBtn =
-  "rounded-full bg-gold px-4 py-2 text-xs font-semibold text-charcoal hover:bg-gold-muted disabled:opacity-50";
+  "rounded-full bg-gold px-4 py-2 text-xs font-semibold text-charcoal transition-colors duration-200 ease-out hover:bg-gold-muted disabled:opacity-50";
 
 type Reward = LoyaltyConfig["rewards"][number];
 type Rule = LoyaltyConfig["rules"][number];
@@ -125,7 +125,7 @@ function RewardMenu({ rewards }: { rewards: Reward[] }) {
                     aria-label="Move up"
                     disabled={i === 0 || pending}
                     onClick={() => move(i, -1)}
-                    className="text-xs text-muted hover:text-offwhite disabled:opacity-30"
+                    className="text-xs text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-30"
                   >
                     ▲
                   </button>
@@ -133,7 +133,7 @@ function RewardMenu({ rewards }: { rewards: Reward[] }) {
                     aria-label="Move down"
                     disabled={i === rewards.length - 1 || pending}
                     onClick={() => move(i, 1)}
-                    className="text-xs text-muted hover:text-offwhite disabled:opacity-30"
+                    className="text-xs text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-30"
                   >
                     ▼
                   </button>
@@ -192,7 +192,7 @@ function RewardMenu({ rewards }: { rewards: Reward[] }) {
                             else toast("Could not delete", "error");
                           })
                         }
-                        className="rounded-full bg-danger-soft/20 px-3 py-1.5 text-xs font-medium text-danger-soft hover:bg-danger-soft/30"
+                        className="rounded-full bg-danger-soft/20 px-3 py-1.5 text-xs font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/30"
                       >
                         Confirm
                       </button>
@@ -460,7 +460,7 @@ function Earning({
                     aria-label="Move up"
                     disabled={i === 0 || pending}
                     onClick={() => moveRule(i, -1)}
-                    className="text-xs text-muted hover:text-offwhite disabled:opacity-30"
+                    className="text-xs text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-30"
                   >
                     ▲
                   </button>
@@ -468,7 +468,7 @@ function Earning({
                     aria-label="Move down"
                     disabled={i === rules.length - 1 || pending}
                     onClick={() => moveRule(i, 1)}
-                    className="text-xs text-muted hover:text-offwhite disabled:opacity-30"
+                    className="text-xs text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-30"
                   >
                     ▼
                   </button>

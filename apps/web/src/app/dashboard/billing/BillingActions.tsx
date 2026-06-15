@@ -16,7 +16,7 @@ export function UpgradeButton({ label }: { label: string }) {
             if (r?.error) setError(r.error);
           })
         }
-        className="rounded-full bg-gold-gradient px-6 py-2.5 text-sm font-semibold text-charcoal shadow-glow transition-all hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
+        className="rounded-full bg-gold-gradient px-6 py-2.5 text-sm font-semibold text-charcoal shadow-glow transition-all duration-150 ease-out hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
       >
         {pending ? "Opening checkout…" : label}
       </button>
@@ -38,7 +38,7 @@ export function ManageBillingButton() {
             if (r?.error) setError(r.error);
           })
         }
-        className="rounded-full border border-subtle px-5 py-2.5 text-sm text-offwhite transition-colors hover:bg-charcoal-700 disabled:opacity-50"
+        className="rounded-full border border-subtle px-5 py-2.5 text-sm text-offwhite transition-all duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
       >
         {pending ? "Opening…" : "Manage billing"}
       </button>

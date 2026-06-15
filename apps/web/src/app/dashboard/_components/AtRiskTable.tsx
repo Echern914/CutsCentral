@@ -72,7 +72,7 @@ function NudgeRow({ row, appBaseUrl }: { row: AtRiskRow; appBaseUrl: string }) {
       <div className="flex shrink-0 items-center gap-2">
         <button
           onClick={copyLink}
-          className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted hover:bg-charcoal-700"
+          className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
           title="Copy this client's rewards link"
         >
           {copied ? "Copied" : "Copy link"}
@@ -85,7 +85,7 @@ function NudgeRow({ row, appBaseUrl }: { row: AtRiskRow; appBaseUrl: string }) {
               if (res.ok) setSent(true);
             })
           }
-          className="rounded-full border border-gold/50 px-4 py-1.5 text-xs font-medium text-gold hover:bg-gold/10 disabled:opacity-50"
+          className="rounded-full border border-gold/50 px-4 py-1.5 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"
         >
           {sent ? "Sent" : pending ? "Sending…" : "Nudge now"}
         </button>

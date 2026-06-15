@@ -205,13 +205,13 @@ export default function VerticalPage({
           <div className="flex items-center gap-2">
             <Link
               href="/login"
-              className="rounded-full px-4 py-2 text-sm text-muted transition-colors hover:text-offwhite"
+              className="rounded-full px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite"
             >
               Sign in
             </Link>
             <Link
               href="/signup"
-              className="rounded-full bg-gold-gradient px-4 py-2 text-sm font-semibold text-charcoal shadow-glow-sm transition-all hover:shadow-glow hover:brightness-105"
+              className="rounded-full bg-gold-gradient px-4 py-2 text-sm font-semibold text-charcoal shadow-glow-sm transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow hover:brightness-105"
             >
               Get started
             </Link>
@@ -233,13 +233,13 @@ export default function VerticalPage({
           <div className="mt-9 flex flex-wrap items-center justify-center gap-4">
             <Link
               href="/signup"
-              className="rounded-full bg-gold-gradient px-8 py-3.5 text-sm font-semibold text-charcoal shadow-glow transition-all hover:shadow-glow-lg hover:brightness-105"
+              className="rounded-full bg-gold-gradient px-8 py-3.5 text-sm font-semibold text-charcoal shadow-glow transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow-lg hover:brightness-105"
             >
               Start your {BILLING.trialDays}-day free trial
             </Link>
             <Link
               href="/#pricing"
-              className="rounded-full border border-subtle px-7 py-3.5 text-sm font-medium text-offwhite transition-colors hover:bg-charcoal-700"
+              className="rounded-full border border-subtle px-7 py-3.5 text-sm font-medium text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
             >
               See pricing
             </Link>
@@ -276,23 +276,23 @@ export default function VerticalPage({
           </p>
           <Link
             href="/signup"
-            className="mt-7 inline-block rounded-full bg-gold-gradient px-9 py-3.5 text-sm font-semibold text-charcoal shadow-glow transition-all hover:shadow-glow-lg hover:brightness-105"
+            className="mt-7 inline-block rounded-full bg-gold-gradient px-9 py-3.5 text-sm font-semibold text-charcoal shadow-glow transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow-lg hover:brightness-105"
           >
             Get started free
           </Link>
         </section>
 
         <footer className="flex flex-wrap items-center justify-center gap-5 py-10 text-xs text-muted">
-          <Link href="/" className="hover:text-offwhite">
+          <Link href="/" className="transition-colors duration-150 ease-out hover:text-offwhite">
             {APP_NAME} home
           </Link>
-          <Link href="/terms" className="hover:text-offwhite">
+          <Link href="/terms" className="transition-colors duration-150 ease-out hover:text-offwhite">
             Terms
           </Link>
-          <Link href="/privacy" className="hover:text-offwhite">
+          <Link href="/privacy" className="transition-colors duration-150 ease-out hover:text-offwhite">
             Privacy
           </Link>
-          <Link href="/sms" className="hover:text-offwhite">
+          <Link href="/sms" className="transition-colors duration-150 ease-out hover:text-offwhite">
             SMS Policy
           </Link>
         </footer>

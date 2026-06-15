@@ -189,7 +189,7 @@ export function ShopPageClient({
             <a
               href={preview ? undefined : data.bookingUrl}
               onClick={preview ? (e) => e.preventDefault() : undefined}
-              className="block w-full py-3.5 text-center text-sm font-semibold transition-transform hover:scale-[1.01]"
+              className="block w-full py-3.5 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01]"
               style={{
                 backgroundColor: accent,
                 color: theme.scheme === "light" ? "#FFFFFF" : "#101012",
@@ -355,12 +355,12 @@ function Gallery({ data, theme, layout }: { data: ShopPageData; theme: Theme; la
               src={item.url}
               alt={item.caption || `${data.name} work ${i + 1}`}
               loading="lazy"
-              className="aspect-square w-full object-cover transition-transform duration-300 group-hover:scale-105"
+              className="aspect-square w-full object-cover transition-transform duration-200 ease-out group-hover:scale-105"
               style={{ border: `1px solid ${theme.border}`, borderRadius: layout.radius }}
             />
             {item.caption && (
               <figcaption
-                className="absolute inset-x-0 bottom-0 px-3 py-2 text-[11px] font-medium text-white opacity-0 transition-opacity group-hover:opacity-100"
+                className="absolute inset-x-0 bottom-0 px-3 py-2 text-[11px] font-medium text-white opacity-0 transition-opacity duration-200 ease-out group-hover:opacity-100"
                 style={{ background: "linear-gradient(0deg, rgba(0,0,0,0.7), transparent)" }}
               >
                 {item.caption}

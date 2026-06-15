@@ -62,7 +62,7 @@ export function SweepControl({ atRiskCount }: { atRiskCount: number }) {
               </span>
               <button
                 onClick={() => setResult(null)}
-                className="rounded-full border border-subtle px-4 py-2 text-xs text-muted hover:bg-charcoal-700"
+                className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
               >
                 Done
               </button>
@@ -75,13 +75,13 @@ export function SweepControl({ atRiskCount }: { atRiskCount: number }) {
               <button
                 onClick={doSend}
                 disabled={pending}
-                className="rounded-full bg-gold px-4 py-2 text-xs font-semibold text-charcoal hover:bg-gold-muted disabled:opacity-50"
+                className="rounded-full bg-gold px-4 py-2 text-xs font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50"
               >
                 {pending ? "Sending…" : "Confirm send"}
               </button>
               <button
                 onClick={() => setConfirming(false)}
-                className="rounded-full border border-subtle px-4 py-2 text-xs text-muted hover:bg-charcoal-700"
+                className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
               >
                 Cancel
               </button>
@@ -94,14 +94,14 @@ export function SweepControl({ atRiskCount }: { atRiskCount: number }) {
               <button
                 onClick={() => setConfirming(true)}
                 disabled={pending || wouldSend === 0}
-                className="rounded-full bg-gold px-4 py-2 text-xs font-semibold text-charcoal hover:bg-gold-muted disabled:opacity-50"
+                className="rounded-full bg-gold px-4 py-2 text-xs font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50"
               >
                 Send now
               </button>
               <button
                 onClick={doPreview}
                 disabled={pending}
-                className="rounded-full border border-subtle px-4 py-2 text-xs text-muted hover:bg-charcoal-700"
+                className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
               >
                 Refresh
               </button>
@@ -110,7 +110,7 @@ export function SweepControl({ atRiskCount }: { atRiskCount: number }) {
             <button
               onClick={doPreview}
               disabled={pending}
-              className="rounded-full border border-gold/50 px-5 py-2 text-xs font-medium text-gold hover:bg-gold/10 disabled:opacity-50"
+              className="rounded-full border border-gold/50 px-5 py-2 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"
             >
               {pending ? "Checking…" : "Preview today's nudges"}
             </button>

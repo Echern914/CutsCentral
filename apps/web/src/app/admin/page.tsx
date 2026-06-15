@@ -65,7 +65,7 @@ export default async function AdminPage() {
           </span>
           <Link
             href="/dashboard"
-            className="rounded-full border border-subtle px-3.5 py-1.5 text-xs text-muted hover:bg-charcoal-700 hover:text-offwhite"
+            className="rounded-full border border-subtle px-3.5 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
           >
             Back to dashboard
           </Link>

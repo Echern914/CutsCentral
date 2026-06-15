@@ -71,7 +71,7 @@ export function GettingStarted({
             {s.href && !s.done && (
               <Link
                 href={s.href}
-                className="shrink-0 self-center rounded-full border border-subtle px-3 py-1.5 text-xs text-offwhite transition-colors hover:bg-charcoal-700"
+                className="shrink-0 self-center rounded-full border border-subtle px-3 py-1.5 text-xs text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
               >
                 {s.cta}
               </Link>

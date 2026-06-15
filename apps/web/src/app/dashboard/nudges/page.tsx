@@ -18,14 +18,14 @@ export default async function NudgesPage() {
 
   return (
     <main className="mx-auto w-full max-w-3xl px-5 py-8">
-      <Link href="/dashboard" className="text-xs text-muted hover:text-offwhite">
+      <Link href="/dashboard" className="text-xs text-muted transition-colors duration-150 ease-out hover:text-offwhite">
         ← Dashboard
       </Link>
       <div className="mb-1 mt-1 flex items-baseline justify-between">
         <h1 className="font-display text-3xl tracking-tight">Nudge history</h1>
         <a
           href="/dashboard/export/nudges"
-          className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted hover:bg-charcoal-700"
+          className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
         >
           Export CSV
         </a>

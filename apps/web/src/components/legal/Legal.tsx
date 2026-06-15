@@ -23,7 +23,7 @@ export function LegalShell({
   return (
     <main className="mx-auto w-full max-w-3xl px-6 py-14">
       <p className="mb-6 text-xs uppercase tracking-[0.25em] text-gold">
-        <Link href="/" className="transition-opacity hover:opacity-80">
+        <Link href="/" className="transition-opacity duration-200 ease-out hover:opacity-80">
           {APP_NAME}
         </Link>
       </p>
@@ -33,13 +33,13 @@ export function LegalShell({
       <div className="mt-8 flex flex-col gap-2">{children}</div>
       <footer className="mt-14 border-t border-subtle pt-6 text-xs text-muted">
         <div className="flex flex-wrap gap-5">
-          <Link href="/terms" className="transition-colors hover:text-offwhite">
+          <Link href="/terms" className="transition-colors duration-200 ease-out hover:text-offwhite">
             Terms of Service
           </Link>
-          <Link href="/privacy" className="transition-colors hover:text-offwhite">
+          <Link href="/privacy" className="transition-colors duration-200 ease-out hover:text-offwhite">
             Privacy Policy
           </Link>
-          <Link href="/sms" className="transition-colors hover:text-offwhite">
+          <Link href="/sms" className="transition-colors duration-200 ease-out hover:text-offwhite">
             SMS Policy
           </Link>
         </div>

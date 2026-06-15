@@ -32,7 +32,7 @@ export function NotesEditor({
         <button
           onClick={save}
           disabled={!dirty || pending}
-          className="rounded-full bg-gold px-4 py-1.5 text-xs font-semibold text-charcoal hover:bg-gold-muted disabled:opacity-40"
+          className="rounded-full bg-gold px-4 py-1.5 text-xs font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-40"
         >
           {pending ? "Saving…" : "Save"}
         </button>

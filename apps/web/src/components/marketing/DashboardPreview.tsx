@@ -86,7 +86,7 @@ export function DashboardPreview() {
                     initial={{ height: "4%" }}
                     whileInView={{ height: `${v * 100}%` }}
                     viewport={{ once: true, amount: 0.5 }}
-                    transition={{ duration: 0.9, delay: i * 0.08, ease: EASE }}
+                    transition={{ duration: 0.5, delay: i * 0.08, ease: EASE }}
                     className={`w-full rounded-md ${
                       i === BARS.length - 1
                         ? "bg-gold-gradient shadow-glow-sm"

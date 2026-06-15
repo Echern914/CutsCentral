@@ -56,7 +56,7 @@ export function ClientsControls() {
         </select>
         <button
           onClick={() => setAdding((v) => !v)}
-          className="rounded-full bg-gold px-4 py-2 text-sm font-semibold text-charcoal hover:bg-gold-muted"
+          className="rounded-full bg-gold px-4 py-2 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted"
         >
           {adding ? "Close" : "Add client"}
         </button>
@@ -73,7 +73,7 @@ function SubmitBtn() {
     <button
       type="submit"
       disabled={pending}
-      className="rounded-full bg-gold px-5 py-2 text-sm font-semibold text-charcoal hover:bg-gold-muted disabled:opacity-50"
+      className="rounded-full bg-gold px-5 py-2 text-sm font-semibold text-charcoal transition-colors duration-200 ease-out hover:bg-gold-muted disabled:opacity-50"
     >
       {pending ? "Adding…" : "Add client"}
     </button>

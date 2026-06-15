@@ -231,7 +231,7 @@ export function RewardsClient({
                         aria-valuemax={100}
                       >
                         <div
-                          className="h-full rounded-full transition-all"
+                          className="h-full rounded-full transition-all duration-200 ease-out"
                           style={{
                             width: `${progress}%`,
                             backgroundColor: accent,

@@ -34,7 +34,7 @@ export default async function ClientsPage({
   return (
     <main className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-5">
       <header className="mb-6">
-        <Link href="/dashboard" className="text-xs text-muted hover:text-offwhite">
+        <Link href="/dashboard" className="text-xs text-muted transition-colors duration-150 ease-out hover:text-offwhite">
           ← Dashboard
         </Link>
         <div className="mt-1 flex flex-col gap-2 sm:flex-row sm:items-baseline sm:justify-between">
@@ -43,7 +43,7 @@ export default async function ClientsPage({
             <span className="text-sm text-muted">{data?.total ?? 0} total</span>
             <a
               href="/dashboard/export/clients"
-              className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted hover:bg-charcoal-700"
+              className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
             >
               Export CSV
             </a>
@@ -62,7 +62,7 @@ export default async function ClientsPage({
           {page > 1 ? (
             <Link
               href={pageUrl(page - 1)}
-              className="rounded-full border border-subtle px-4 py-2 text-xs text-offwhite hover:bg-charcoal-700"
+              className="rounded-full border border-subtle px-4 py-2 text-xs text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
             >
               ← Prev
             </Link>
@@ -77,7 +77,7 @@ export default async function ClientsPage({
           {page < pageCount ? (
             <Link
               href={pageUrl(page + 1)}
-              className="rounded-full border border-subtle px-4 py-2 text-xs text-offwhite hover:bg-charcoal-700"
+              className="rounded-full border border-subtle px-4 py-2 text-xs text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
             >
               Next →
             </Link>

@@ -158,7 +158,7 @@ export function WelcomeTour({ welcomeSeen }: { welcomeSeen: boolean }) {
                 {SLIDES.map((_, n) => (
                   <span
                     key={n}
-                    className={`h-1.5 rounded-full transition-all ${
+                    className={`h-1.5 rounded-full transition-all duration-150 ease-out ${
                       n === i ? "w-5 bg-gold" : "w-1.5 bg-charcoal-700"
                     }`}
                   />
@@ -166,7 +166,7 @@ export function WelcomeTour({ welcomeSeen }: { welcomeSeen: boolean }) {
               </div>
               <button
                 onClick={close}
-                className="text-xs text-muted transition-colors hover:text-offwhite"
+                className="text-xs text-muted transition-colors duration-150 ease-out hover:text-offwhite"
               >
                 Skip
               </button>
@@ -179,7 +179,7 @@ export function WelcomeTour({ welcomeSeen }: { welcomeSeen: boolean }) {
                 initial={{ opacity: 0, x: 12 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -12 }}
-                transition={{ duration: 0.2 }}
+                transition={{ duration: 0.18, ease: "easeOut" }}
               >
                 <div
                   className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-gold/10 text-2xl"
@@ -210,7 +210,7 @@ export function WelcomeTour({ welcomeSeen }: { welcomeSeen: boolean }) {
               <button
                 onClick={() => setI((n) => Math.max(0, n - 1))}
                 disabled={i === 0}
-                className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors hover:bg-charcoal-700 hover:text-offwhite disabled:cursor-not-allowed disabled:opacity-0"
+                className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-all duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite disabled:cursor-not-allowed disabled:opacity-0"
               >
                 Back
               </button>
@@ -220,14 +220,14 @@ export function WelcomeTour({ welcomeSeen }: { welcomeSeen: boolean }) {
               {isLast ? (
                 <button
                   onClick={close}
-                  className="rounded-full bg-gold-gradient px-5 py-2 text-sm font-semibold text-charcoal shadow-glow transition-all hover:shadow-glow-lg hover:brightness-105"
+                  className="rounded-full bg-gold-gradient px-5 py-2 text-sm font-semibold text-charcoal shadow-glow transition-all duration-150 ease-out hover:shadow-glow-lg hover:brightness-105"
                 >
                   Get started
                 </button>
               ) : (
                 <button
                   onClick={() => setI((n) => Math.min(SLIDES.length - 1, n + 1))}
-                  className="rounded-full bg-gold-gradient px-5 py-2 text-sm font-semibold text-charcoal shadow-glow transition-all hover:shadow-glow-lg hover:brightness-105"
+                  className="rounded-full bg-gold-gradient px-5 py-2 text-sm font-semibold text-charcoal shadow-glow transition-all duration-150 ease-out hover:shadow-glow-lg hover:brightness-105"
                 >
                   Next
                 </button>

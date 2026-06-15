@@ -18,7 +18,7 @@ export function Card({
       className={cn(
         "glass rounded-2xl",
         hover &&
-          "transition-all duration-300 hover:-translate-y-0.5 hover:border-gold/25 hover:shadow-glow-sm",
+          "transition-all duration-200 ease-out hover:-translate-y-0.5 hover:border-gold/25 hover:shadow-glow-sm",
         className,
       )}
     >

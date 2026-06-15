@@ -30,7 +30,7 @@ export async function TrialBanner() {
           </span>
           <Link
             href="/dashboard/billing"
-            className="shrink-0 rounded-full bg-gold px-3.5 py-1.5 font-semibold text-charcoal hover:bg-gold-muted"
+            className="shrink-0 rounded-full bg-gold px-3.5 py-1.5 font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted"
           >
             Upgrade
           </Link>
@@ -48,7 +48,7 @@ export async function TrialBanner() {
         </span>
         <Link
           href="/dashboard/billing"
-          className="shrink-0 rounded-full border border-gold/50 px-3.5 py-1.5 font-medium hover:bg-gold/10"
+          className="shrink-0 rounded-full border border-gold/50 px-3.5 py-1.5 font-medium transition-colors duration-150 ease-out hover:bg-gold/10"
         >
           Set up billing
         </Link>

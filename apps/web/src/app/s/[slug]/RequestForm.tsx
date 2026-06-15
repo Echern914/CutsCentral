@@ -147,7 +147,7 @@ export function RequestForm({
           type="button"
           onClick={submit}
           disabled={pending}
-          className="w-full py-3 text-center text-sm font-semibold transition-transform hover:scale-[1.01] disabled:opacity-50"
+          className="w-full py-3 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01] disabled:opacity-50"
           style={{
             backgroundColor: accent,
             color: theme.scheme === "light" ? "#FFFFFF" : "#101012",

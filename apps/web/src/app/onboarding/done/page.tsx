@@ -49,7 +49,7 @@ export default async function OnboardingDonePage() {
         )}
         <Link
           href="/dashboard"
-          className="w-full rounded-full bg-gold-gradient px-5 py-3 text-sm font-semibold text-charcoal shadow-glow transition-all hover:shadow-glow-lg hover:brightness-105"
+          className="w-full rounded-full bg-gold-gradient px-5 py-3 text-sm font-semibold text-charcoal shadow-glow transition-all duration-200 ease-out hover:shadow-glow-lg hover:brightness-105"
         >
           Go to dashboard
         </Link>

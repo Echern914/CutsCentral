@@ -167,7 +167,7 @@ export function PageEditor({
           <div className="flex items-center gap-2">
             <button
               onClick={copyUrl}
-              className="rounded-full border border-subtle px-4 py-2 text-xs text-muted hover:bg-charcoal-700"
+              className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
             >
               Copy
             </button>
@@ -175,14 +175,14 @@ export function PageEditor({
               href={pageUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="rounded-full border border-gold/50 px-4 py-2 text-xs font-medium text-gold hover:bg-gold/10"
+              className="rounded-full border border-gold/50 px-4 py-2 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
             >
               Open
             </a>
             <button
               onClick={() => setEnabled((v) => !v)}
               className={cn(
-                "rounded-full px-4 py-2 text-xs font-medium",
+                "rounded-full px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out",
                 enabled ? "bg-emerald-soft/15 text-emerald-soft" : "border border-subtle text-muted hover:bg-charcoal-700",
               )}
             >
@@ -207,7 +207,7 @@ export function PageEditor({
                       key={key}
                       onClick={() => setTheme(key)}
                       className={cn(
-                        "rounded-2xl border p-3 text-left transition-all",
+                        "rounded-2xl border p-3 text-left transition-[border-color,box-shadow] duration-150 ease-out",
                         active ? "border-gold/60 shadow-glow-sm" : "border-subtle hover:border-subtle-strong",
                       )}
                       style={{ backgroundColor: t.bg }}
@@ -241,7 +241,7 @@ export function PageEditor({
                       key={key}
                       onClick={() => setFontKey(key)}
                       className={cn(
-                        "rounded-xl border p-3 text-left transition-all",
+                        "rounded-xl border p-3 text-left transition-colors duration-150 ease-out",
                         active ? "border-gold/60 bg-gold/5" : "border-subtle hover:border-subtle-strong",
                       )}
                     >
@@ -269,7 +269,7 @@ export function PageEditor({
                         key={key}
                         onClick={() => setLayoutStyle(key)}
                         className={cn(
-                          "flex flex-1 flex-col items-center gap-2 rounded-xl border p-3 transition-all",
+                          "flex flex-1 flex-col items-center gap-2 rounded-xl border p-3 transition-colors duration-150 ease-out",
                           active ? "border-gold/60 bg-gold/5" : "border-subtle hover:border-subtle-strong",
                         )}
                       >
@@ -305,7 +305,7 @@ export function PageEditor({
                     <button
                       type="button"
                       onClick={() => setAccentColor("")}
-                      className="shrink-0 text-[11px] text-muted hover:text-offwhite"
+                      className="shrink-0 text-[11px] text-muted transition-colors duration-150 ease-out hover:text-offwhite"
                     >
                       Reset
                     </button>
@@ -422,7 +422,7 @@ export function PageEditor({
               <button
                 onClick={() => setTakesRequests((v) => !v)}
                 className={cn(
-                  "shrink-0 rounded-full px-4 py-2 text-xs font-medium",
+                  "shrink-0 rounded-full px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out",
                   takesRequests ? "bg-emerald-soft/15 text-emerald-soft" : "border border-subtle text-muted hover:bg-charcoal-700",
                 )}
               >
@@ -450,13 +450,13 @@ export function PageEditor({
           <button
             disabled={pending || slug.trim().length < 3}
             onClick={save}
-            className="rounded-full bg-gold px-6 py-2.5 text-sm font-semibold text-charcoal hover:bg-gold-muted disabled:opacity-50"
+            className="rounded-full bg-gold px-6 py-2.5 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50"
           >
             {pending ? "Saving…" : "Save page"}
           </button>
           <button
             onClick={() => setShowPreviewMobile((v) => !v)}
-            className="rounded-full border border-subtle px-5 py-2.5 text-sm text-muted hover:bg-charcoal-700 lg:hidden"
+            className="rounded-full border border-subtle px-5 py-2.5 text-sm text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 lg:hidden"
           >
             {showPreviewMobile ? "Hide preview" : "Preview"}
           </button>

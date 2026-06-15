@@ -33,7 +33,7 @@ export function StatusControl({
               })
             }
             className={cn(
-              "rounded-full px-2.5 py-1 text-[10px] uppercase tracking-wide transition-colors disabled:cursor-default",
+              "rounded-full px-2.5 py-1 text-[10px] uppercase tracking-wide transition-colors duration-150 ease-out disabled:cursor-default",
               active
                 ? opt === "NEW"
                   ? "bg-gold/15 text-gold"

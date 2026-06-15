@@ -35,19 +35,19 @@ export function Landing() {
           <div className="flex items-center gap-2">
             <a
               href="#pricing"
-              className="hidden rounded-full px-4 py-2 text-sm text-muted transition-colors hover:text-offwhite sm:inline"
+              className="hidden rounded-full px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite sm:inline"
             >
               Pricing
             </a>
             <Link
               href="/login"
-              className="rounded-full px-4 py-2 text-sm text-muted transition-colors hover:text-offwhite"
+              className="rounded-full px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite"
             >
               Sign in
             </Link>
             <Link
               href="/signup"
-              className="rounded-full bg-gold-gradient px-4 py-2 text-sm font-semibold text-charcoal shadow-glow-sm transition-all hover:shadow-glow hover:brightness-105"
+              className="rounded-full bg-gold-gradient px-4 py-2 text-sm font-semibold text-charcoal shadow-glow-sm transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow hover:brightness-105"
             >
               Get started
             </Link>
@@ -83,14 +83,14 @@ export function Landing() {
               <div className="mt-9 flex flex-wrap items-center justify-center gap-4 lg:justify-start">
                 <Link
                   href="/signup"
-                  className="inline-flex items-center gap-2 rounded-full bg-gold-gradient px-8 py-3.5 text-sm font-semibold text-charcoal shadow-glow transition-all hover:shadow-glow-lg hover:brightness-105"
+                  className="inline-flex items-center gap-2 rounded-full bg-gold-gradient px-8 py-3.5 text-sm font-semibold text-charcoal shadow-glow transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow-lg hover:brightness-105"
                 >
                   Start free
                   <ArrowIcon className="h-4 w-4" />
                 </Link>
                 <Link
                   href="/login"
-                  className="rounded-full border border-subtle px-7 py-3.5 text-sm font-medium text-offwhite transition-colors hover:border-subtle-strong hover:bg-charcoal-700"
+                  className="rounded-full border border-subtle px-7 py-3.5 text-sm font-medium text-offwhite transition-colors duration-150 ease-out hover:border-subtle-strong hover:bg-charcoal-700"
                 >
                   Sign in
                 </Link>
@@ -255,8 +255,8 @@ export function Landing() {
                 key={f.title}
                 className={i === 0 ? "sm:col-span-2 lg:col-span-1" : undefined}
               >
-                <div className="glass group h-full rounded-3xl p-7 transition-all duration-300 hover:-translate-y-1 hover:border-gold/25 hover:shadow-glow-sm">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-gold/25 bg-gold/10 text-gold transition-transform duration-300 group-hover:scale-110">
+                <div className="glass group h-full rounded-3xl p-7 transition-all duration-200 ease-out hover:-translate-y-1 hover:border-gold/25 hover:shadow-glow-sm">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-gold/25 bg-gold/10 text-gold transition-transform duration-200 ease-out group-hover:scale-110">
                     {f.icon}
                   </div>
                   <h3 className="mt-5 font-display text-xl">{f.title}</h3>
@@ -306,7 +306,7 @@ export function Landing() {
                 </ul>
                 <Link
                   href="/signup"
-                  className="mt-7 rounded-full border border-subtle px-7 py-3 text-center text-sm font-medium text-offwhite transition-colors hover:bg-charcoal-700"
+                  className="mt-7 rounded-full border border-subtle px-7 py-3 text-center text-sm font-medium text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
                 >
                   Get started free
                 </Link>
@@ -348,7 +348,7 @@ export function Landing() {
                 </ul>
                 <Link
                   href="/signup"
-                  className="mt-7 inline-flex items-center justify-center gap-2 rounded-full bg-gold-gradient px-7 py-3 text-sm font-semibold text-charcoal shadow-glow transition-all hover:shadow-glow-lg hover:brightness-105"
+                  className="mt-7 inline-flex items-center justify-center gap-2 rounded-full bg-gold-gradient px-7 py-3 text-sm font-semibold text-charcoal shadow-glow transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow-lg hover:brightness-105"
                 >
                   Start your free trial
                   <ArrowIcon className="h-4 w-4" />
@@ -370,11 +370,11 @@ export function Landing() {
             {FAQ.map((f) => (
               <details
                 key={f.q}
-                className="group rounded-2xl border border-subtle bg-charcoal-800/60 px-6 py-4 open:border-gold/25"
+                className="group rounded-2xl border border-subtle bg-charcoal-800/60 px-6 py-4 transition-colors duration-200 ease-out open:border-gold/25"
               >
                 <summary className="flex cursor-pointer list-none items-center justify-between gap-4 text-sm font-medium text-offwhite [&::-webkit-details-marker]:hidden">
                   {f.q}
-                  <span className="text-gold transition-transform duration-200 group-open:rotate-45">
+                  <span className="text-gold transition-transform duration-200 ease-out group-open:rotate-45">
                     <PlusIcon className="h-4 w-4" />
                   </span>
                 </summary>
@@ -407,7 +407,7 @@ export function Landing() {
               <div className="mt-9">
                 <Link
                   href="/signup"
-                  className="inline-flex animate-pulse-glow items-center gap-2 rounded-full bg-gold-gradient px-10 py-4 text-base font-semibold text-charcoal transition-all hover:brightness-105"
+                  className="inline-flex animate-pulse-glow items-center gap-2 rounded-full bg-gold-gradient px-10 py-4 text-base font-semibold text-charcoal transition-[filter] duration-150 ease-out hover:brightness-105"
                 >
                   Get started free
                   <ArrowIcon className="h-4 w-4" />
@@ -430,38 +430,38 @@ export function Landing() {
             {APP_NAME}: built for barbers.
           </span>
           <div className="flex flex-wrap justify-center gap-5">
-            <Link href="/login" className="transition-colors hover:text-offwhite">
+            <Link href="/login" className="transition-colors duration-150 ease-out hover:text-offwhite">
               Sign in
             </Link>
-            <Link href="/signup" className="transition-colors hover:text-offwhite">
+            <Link href="/signup" className="transition-colors duration-150 ease-out hover:text-offwhite">
               Create account
             </Link>
-            <Link href="/terms" className="transition-colors hover:text-offwhite">
+            <Link href="/terms" className="transition-colors duration-150 ease-out hover:text-offwhite">
               Terms
             </Link>
-            <Link href="/privacy" className="transition-colors hover:text-offwhite">
+            <Link href="/privacy" className="transition-colors duration-150 ease-out hover:text-offwhite">
               Privacy
             </Link>
-            <Link href="/sms" className="transition-colors hover:text-offwhite">
+            <Link href="/sms" className="transition-colors duration-150 ease-out hover:text-offwhite">
               SMS Policy
             </Link>
           </div>
         </div>
         <div className="mx-auto mt-5 flex w-full max-w-6xl flex-wrap items-center justify-center gap-x-5 gap-y-2 border-t border-subtle px-6 pt-5 text-xs text-muted sm:justify-start">
           <span className="text-muted/70">Also built for:</span>
-          <Link href="/for/salons" className="transition-colors hover:text-offwhite">
+          <Link href="/for/salons" className="transition-colors duration-150 ease-out hover:text-offwhite">
             Hair salons
           </Link>
-          <Link href="/for/nails" className="transition-colors hover:text-offwhite">
+          <Link href="/for/nails" className="transition-colors duration-150 ease-out hover:text-offwhite">
             Nail studios
           </Link>
-          <Link href="/for/lashes" className="transition-colors hover:text-offwhite">
+          <Link href="/for/lashes" className="transition-colors duration-150 ease-out hover:text-offwhite">
             Lash &amp; brow artists
           </Link>
-          <Link href="/for/spas" className="transition-colors hover:text-offwhite">
+          <Link href="/for/spas" className="transition-colors duration-150 ease-out hover:text-offwhite">
             Spas &amp; skincare
           </Link>
-          <Link href="/for/tattoo" className="transition-colors hover:text-offwhite">
+          <Link href="/for/tattoo" className="transition-colors duration-150 ease-out hover:text-offwhite">
             Tattoo studios
           </Link>
         </div>

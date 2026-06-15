@@ -33,7 +33,7 @@ export function DashboardNavLinks({ isAdmin = false }: { isAdmin?: boolean }) {
             key={l.href}
             href={l.href}
             className={cn(
-              "rounded-full px-3.5 py-1.5 text-xs font-medium transition-colors sm:px-4 sm:text-sm",
+              "rounded-full px-3.5 py-1.5 text-xs font-medium transition-colors duration-150 ease-out sm:px-4 sm:text-sm",
               active
                 ? "bg-gold/15 text-gold"
                 : "text-muted hover:bg-charcoal-700 hover:text-offwhite",

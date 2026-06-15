@@ -85,7 +85,7 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
           <button
             disabled={pending}
             onClick={() => runBulk("nudge")}
-            className="rounded-full bg-gold px-4 py-1.5 text-xs font-semibold text-charcoal hover:bg-gold-muted disabled:opacity-50"
+            className="rounded-full bg-gold px-4 py-1.5 text-xs font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50"
           >
             Nudge
           </button>
@@ -99,27 +99,27 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
               )
                 runBulk("attestConsent");
             }}
-            className="rounded-full border border-emerald-soft/40 px-4 py-1.5 text-xs text-emerald-soft hover:bg-emerald-soft/10 disabled:opacity-50"
+            className="rounded-full border border-emerald-soft/40 px-4 py-1.5 text-xs text-emerald-soft transition-colors duration-150 ease-out hover:bg-emerald-soft/10 disabled:opacity-50"
           >
             Mark consent
           </button>
           <button
             disabled={pending}
             onClick={() => runBulk("optOut")}
-            className="rounded-full border border-subtle px-4 py-1.5 text-xs text-muted hover:bg-charcoal-700 disabled:opacity-50"
+            className="rounded-full border border-subtle px-4 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
           >
             Opt out
           </button>
           <button
             disabled={pending}
             onClick={() => runBulk("optIn")}
-            className="rounded-full border border-subtle px-4 py-1.5 text-xs text-muted hover:bg-charcoal-700 disabled:opacity-50"
+            className="rounded-full border border-subtle px-4 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
           >
             Opt in
           </button>
           <button
             onClick={() => setSelected(new Set())}
-            className="ml-auto text-xs text-muted hover:text-offwhite"
+            className="ml-auto text-xs text-muted transition-colors duration-150 ease-out hover:text-offwhite"
           >
             Clear
           </button>
@@ -149,7 +149,7 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
               />
               <Link
                 href={`/dashboard/clients/${c.id}`}
-                className="flex min-w-0 flex-1 items-center justify-between gap-3 hover:opacity-80"
+                className="flex min-w-0 flex-1 items-center justify-between gap-3 transition-opacity duration-150 ease-out hover:opacity-80"
               >
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium text-offwhite">{c.name}</p>

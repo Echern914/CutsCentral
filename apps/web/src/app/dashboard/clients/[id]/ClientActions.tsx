@@ -55,7 +55,7 @@ export function ClientActions({
     <div className="flex flex-wrap items-center gap-2">
       <button
         onClick={copy}
-        className="rounded-full border border-subtle px-4 py-2 text-xs text-muted hover:bg-charcoal-700"
+        className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
       >
         Copy rewards link
       </button>
@@ -70,7 +70,7 @@ export function ClientActions({
           })
         }
         title={canNudge ? "" : "Opted out or no phone"}
-        className="rounded-full border border-gold/50 px-4 py-2 text-xs font-medium text-gold hover:bg-gold/10 disabled:opacity-50"
+        className="rounded-full border border-gold/50 px-4 py-2 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"
       >
         {nudged ? "Nudge sent" : pending ? "…" : "Nudge now"}
       </button>
@@ -86,7 +86,7 @@ export function ClientActions({
             } else toast("Could not update", "error");
           })
         }
-        className="rounded-full border border-subtle px-4 py-2 text-xs text-muted hover:bg-charcoal-700 disabled:opacity-50"
+        className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
       >
         {isOptedOut ? "Opt back in" : "Opt out"}
       </button>
@@ -101,7 +101,7 @@ export function ClientActions({
           })
         }
         title="Record a visit that happened outside your booking calendar"
-        className="rounded-full border border-gold/50 px-4 py-2 text-xs font-medium text-gold hover:bg-gold/10 disabled:opacity-50"
+        className="rounded-full border border-gold/50 px-4 py-2 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"
       >
         Log visit
       </button>
@@ -115,7 +115,7 @@ export function ClientActions({
             else toast("Could not add punch", "error");
           })
         }
-        className="rounded-full border border-subtle px-4 py-2 text-xs text-muted hover:bg-charcoal-700 disabled:opacity-50"
+        className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
       >
         +1 punch
       </button>
@@ -124,7 +124,7 @@ export function ClientActions({
         <div className="relative">
           <button
             onClick={() => setPickerOpen((v) => !v)}
-            className="rounded-full bg-gold px-4 py-2 text-xs font-semibold text-charcoal hover:bg-gold-muted"
+            className="rounded-full bg-gold px-4 py-2 text-xs font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted"
           >
             Redeem reward{affordable.length > 1 ? ` (${affordable.length})` : ""}
           </button>
@@ -147,7 +147,7 @@ export function ClientActions({
                       } else toast("Could not redeem", "error");
                     })
                   }
-                  className="flex w-full items-center justify-between gap-2 rounded-xl px-2 py-2 text-left text-sm text-offwhite hover:bg-charcoal-700 disabled:opacity-50"
+                  className="flex w-full items-center justify-between gap-2 rounded-xl px-2 py-2 text-left text-sm text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
                 >
                   <span className="truncate">
                     {reward.emoji ? `${reward.emoji} ` : ""}
@@ -170,7 +170,7 @@ export function ClientActions({
         <div className="relative">
           <button
             onClick={() => setPromoPickerOpen((v) => !v)}
-            className="rounded-full border border-subtle px-4 py-2 text-xs text-muted hover:bg-charcoal-700"
+            className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
           >
             Promo used…
           </button>
@@ -191,7 +191,7 @@ export function ClientActions({
                       else toast("Could not record", "error");
                     })
                   }
-                  className="w-full truncate rounded-xl px-2 py-2 text-left text-sm text-offwhite hover:bg-charcoal-700 disabled:opacity-50"
+                  className="w-full truncate rounded-xl px-2 py-2 text-left text-sm text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
                 >
                   {promo.title}
                 </button>

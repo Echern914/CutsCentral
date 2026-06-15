@@ -13,7 +13,7 @@ function SubmitButton({ label }: { label: string }) {
     <button
       type="submit"
       disabled={pending}
-      className="w-full rounded-full bg-gold-gradient px-5 py-3 text-sm font-semibold text-charcoal shadow-glow transition-all hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
+      className="w-full rounded-full bg-gold-gradient px-5 py-3 text-sm font-semibold text-charcoal shadow-glow transition-all duration-200 ease-out hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
     >
       {pending ? "Please wait…" : label}
     </button>
@@ -55,7 +55,7 @@ export function AuthForm({
       />
       <motion.div variants={fadeUp} initial="hidden" animate="show">
         <p className="mb-4 text-center text-xs uppercase tracking-[0.25em] text-gold">
-          <Link href="/" className="transition-opacity hover:opacity-80">
+          <Link href="/" className="transition-opacity duration-200 ease-out hover:opacity-80">
             {APP_NAME}
           </Link>
         </p>
@@ -70,7 +70,7 @@ export function AuthForm({
             <>
               <a
                 href={googleStartUrl}
-                className="flex w-full items-center justify-center gap-2 rounded-xl border border-subtle bg-charcoal-700 px-4 py-3 text-sm font-medium text-offwhite transition-colors hover:bg-charcoal-800"
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-subtle bg-charcoal-700 px-4 py-3 text-sm font-medium text-offwhite transition-colors duration-200 ease-out hover:bg-charcoal-800"
               >
                 <GoogleGlyph />
                 Continue with Google
