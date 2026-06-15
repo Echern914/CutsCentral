@@ -9,7 +9,11 @@ import { createApp } from "../app.js";
  * collision safety), themeable, and the page can be taken offline.
  */
 const app = createApp();
-const suffix = randomToken(4).toLowerCase();
+// randomToken is base64url, which can emit "-"/"_"; the slug regex forbids
+// underscores, so strip to [a-z0-9] for a deterministically slug-safe suffix.
+// `+ "z"` guarantees it's non-empty even in the (vanishingly unlikely) case
+// every random char was stripped, so the derived slug stays valid.
+const suffix = (randomToken(6).toLowerCase().replace(/[^a-z0-9]/g, "") + "z").slice(0, 8);
 const emailA = `pg-a-${suffix}@test.local`;
 const emailB = `pg-b-${suffix}@test.local`;
 const password = "supersecret123";

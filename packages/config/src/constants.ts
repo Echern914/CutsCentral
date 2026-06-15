@@ -52,6 +52,23 @@ export const NUDGE = {
   attributionWindowDays: 7,
 } as const;
 
+/**
+ * TCPA quiet-hours safe harbor: marketing/informational SMS may only be sent
+ * 8:00am-9:00pm in the RECIPIENT's local time. Clients are nearly always local
+ * to the shop, so we gate on the shop's timezone. Sending outside this window
+ * is the kind of violation plaintiffs' firms troll for ($500-$1,500 per text).
+ *
+ * Window is [startHour, endHour): a send is allowed when the recipient-local
+ * hour h satisfies startHour <= h < endHour. With 8..21 that permits any time
+ * from 08:00:00 through 20:59:59 and blocks 21:00:00 through 07:59:59.
+ */
+export const QUIET_HOURS = {
+  /** First allowed local hour (inclusive), 0-23. */
+  startHour: 8,
+  /** First disallowed local hour (i.e. last allowed hour is endHour-1), 0-23. */
+  endHour: 21,
+} as const;
+
 /** Acuity API endpoints (verified against developers.acuityscheduling.com). */
 export const ACUITY = {
   apiBase: "https://acuityscheduling.com/api/v1",

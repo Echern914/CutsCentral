@@ -40,3 +40,42 @@ export function median(values: number[]): number | null {
 export function addDays(date: Date, days: number): Date {
   return new Date(date.getTime() + days * MS_PER_DAY);
 }
+
+/**
+ * The wall-clock hour (0-23) at instant `at` in the given IANA timezone.
+ * Uses Intl (built into Node) so we get correct DST-aware local time with no
+ * dependency and no hand-rolled offset table. Falls back to UTC if the runtime
+ * rejects the timezone string (never throws - a bad tz must not crash a send).
+ */
+export function hourInTimeZone(at: Date, timeZone: string): number {
+  let hourStr: string;
+  try {
+    hourStr = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour: "2-digit",
+      hour12: false,
+    }).format(at);
+  } catch {
+    // Invalid IANA name => format throws a RangeError. Fall back to UTC hour.
+    return at.getUTCHours();
+  }
+  // hour12:false can emit "24" for midnight on some engines; normalize to 0-23.
+  const hour = parseInt(hourStr, 10) % 24;
+  return Number.isNaN(hour) ? at.getUTCHours() : hour;
+}
+
+/**
+ * Is `at` within TCPA quiet hours (i.e. NOT allowed to send) for a recipient in
+ * `timeZone`? Allowed window is [startHour, endHour); anything outside is quiet.
+ * Handles a window that does not wrap (8..21): quiet when hour < start or
+ * hour >= end.
+ */
+export function isQuietHours(
+  at: Date,
+  timeZone: string,
+  startHour: number,
+  endHour: number,
+): boolean {
+  const hour = hourInTimeZone(at, timeZone);
+  return hour < startHour || hour >= endHour;
+}

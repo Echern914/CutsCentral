@@ -154,8 +154,20 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
         typeof session.subscription === "string"
           ? session.subscription
           : session.subscription?.id ?? null;
+      // Replay guard: Stripe redelivers webhooks (up to ~3 days) and delivers
+      // them out of order. Without this, REPLAYING an old checkout.session.
+      // completed after the subscription was canceled would flip the shop back
+      // to "active" - free access for a canceled sub. So we only activate when
+      // this same subscription isn't already recorded as canceled; the
+      // customer.subscription.* events remain the source of truth for status.
       const { count } = await prisma.shop.updateMany({
-        where: { id: shopId },
+        where: {
+          id: shopId,
+          NOT: {
+            stripeSubscriptionId: subscriptionId,
+            subscriptionStatus: "canceled",
+          },
+        },
         data: {
           stripeCustomerId: customerId ?? undefined,
           stripeSubscriptionId: subscriptionId,
@@ -164,7 +176,10 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
         },
       });
       if (count === 0) {
-        logger.warn({ shopId, type: event.type }, "stripe event matched no shop");
+        logger.warn(
+          { shopId, type: event.type },
+          "stripe checkout.completed matched no shop (or was a canceled-sub replay)",
+        );
       }
       return;
     }

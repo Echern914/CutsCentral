@@ -1,10 +1,12 @@
 import { Router } from "express";
 import { z } from "zod";
+import { apiEnv } from "@chairback/config";
 import { forShop, prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { smsLimiter } from "../middleware/rateLimit.js";
 import { loadEligibilityData } from "../engines/nudge.js";
 import { isNudgeEligible } from "../engines/eligibility.js";
+import { inQuietHours } from "../engines/quietHours.js";
 import { buildPromoBody } from "../messaging/templates.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 import { hasActiveAccess } from "../billing/stripe.js";
@@ -229,7 +231,10 @@ promotionsRouter.post("/:id/use", async (req, res) => {
 const blastSchema = z
   .object({
     audience: z.enum(["all", "atRisk"]).default("all"),
-    dryRun: z.boolean().default(false),
+    // Optional (no default) so an omitted value falls back to env.DRY_RUN, the
+    // global kill switch - matching the nudge sweep. An explicit false is still
+    // a deliberate "send for real" from the UI.
+    dryRun: z.boolean().optional(),
   })
   .strict();
 
@@ -246,7 +251,8 @@ promotionsRouter.post("/:id/blast", smsLimiter, async (req, res) => {
     res.status(400).json({ error: "invalid_input" });
     return;
   }
-  const { audience, dryRun } = parsed.data;
+  const { audience } = parsed.data;
+  const dryRun = parsed.data.dryRun ?? apiEnv().DRY_RUN;
   // Previews stay free; real sends require an active trial/subscription.
   if (!dryRun && !hasActiveAccess(shop)) {
     res.status(402).json({
@@ -265,6 +271,15 @@ promotionsRouter.post("/:id/blast", smsLimiter, async (req, res) => {
   const now = new Date();
   if (promoStatus(promo, now) !== "live") {
     res.status(400).json({ error: "not_live", status: promoStatus(promo, now) });
+    return;
+  }
+  // TCPA quiet hours block a REAL blast outside 8am-9pm shop-local time; the
+  // dry-run preview is exempt so a barber can plan a send at any hour.
+  if (!dryRun && inQuietHours(shop.timezone, now)) {
+    res.status(422).json({
+      error: "quiet_hours",
+      reason: "Texting is paused 9pm-8am (client local time). Try again in the morning.",
+    });
     return;
   }
 

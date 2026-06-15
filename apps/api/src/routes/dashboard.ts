@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { forShop, prisma, runWithShop } from "@chairback/db";
-import { NUDGE, randomToken } from "@chairback/config";
+import { NUDGE, apiEnv, randomToken } from "@chairback/config";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireActiveAccess } from "../middleware/billing.js";
 import { hasActiveAccess } from "../billing/stripe.js";
@@ -15,6 +15,7 @@ import {
 import { recomputeCadence } from "../engines/cadence.js";
 import { loadEligibilityData, sweepShop } from "../engines/nudge.js";
 import { isNudgeEligible } from "../engines/eligibility.js";
+import { inQuietHours } from "../engines/quietHours.js";
 import { buildNudgeBody } from "../messaging/templates.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 import { toE164 } from "../acuity/clientKey.js";
@@ -203,6 +204,16 @@ dashboardRouter.post("/nudge/:clientId", smsLimiter, requireActiveAccess, async 
     res.status(400).json({ error: "cannot_nudge", reason: "no SMS consent on file" });
     return;
   }
+  // TCPA quiet hours: block even a deliberate one-off send outside 8am-9pm
+  // shop-local time. 422 (not 400) - the request is valid, just not right now.
+  const now = new Date();
+  if (inQuietHours(shop.timezone, now)) {
+    res.status(422).json({
+      error: "quiet_hours",
+      reason: "Texting is paused 9pm-8am (client local time). Try again in the morning.",
+    });
+    return;
+  }
 
   const body = buildNudgeBody({
     firstName: client.firstName,
@@ -216,13 +227,13 @@ dashboardRouter.post("/nudge/:clientId", smsLimiter, requireActiveAccess, async 
   });
   try {
     const result = await getMessageProvider().send({ to: client.phone, body });
-    await prisma.nudge.update({
+    await db.nudge.update({
       where: { id: nudge.id },
-      data: { status: "SENT", sentAt: new Date(), messageSid: result.sid },
+      data: { status: "SENT", sentAt: now, messageSid: result.sid },
     });
     res.json({ ok: true, sid: result.sid });
   } catch (err) {
-    await prisma.nudge.update({
+    await db.nudge.update({
       where: { id: nudge.id },
       data: { status: "FAILED", failedReason: (err as Error).message },
     });
@@ -547,17 +558,36 @@ dashboardRouter.post("/clients/bulk", smsLimiter, async (req, res) => {
 
   if (action === "attestConsent") {
     // Stamp consent only where it's not already recorded (first attestation
-    // wins; don't overwrite an earlier source/timestamp). Also clear any prior
-    // opt-out, since attesting consent means the barber intends to text them.
+    // wins; don't overwrite an earlier source/timestamp). CRITICAL: never clear
+    // a prior opt-out here. A client who texted STOP has optedOut=true but may
+    // still have smsConsentAt=null (e.g. synced from Acuity, never consented,
+    // then STOPped); attesting must NOT silently un-STOP them - that's the exact
+    // $500-1500/text TCPA exposure. They can only opt back in by texting START.
+    // So we scope to optedOut:false and leave optedOut untouched.
     const { count } = await prisma.client.updateMany({
-      where: { shopId: shop.id, id: { in: clientIds }, smsConsentAt: null },
+      where: {
+        shopId: shop.id,
+        id: { in: clientIds },
+        smsConsentAt: null,
+        optedOut: false,
+      },
       data: {
         smsConsentAt: new Date(),
         smsConsentSource: "barber_attest",
-        optedOut: false,
       },
     });
     res.json({ ok: true, updated: count });
+    return;
+  }
+
+  const now = new Date();
+  // TCPA quiet hours apply to bulk texting too - block the whole batch outside
+  // 8am-9pm shop-local time rather than texting a roomful of clients at 2am.
+  if (inQuietHours(shop.timezone, now)) {
+    res.status(422).json({
+      error: "quiet_hours",
+      reason: "Texting is paused 9pm-8am (client local time). Try again in the morning.",
+    });
     return;
   }
 
@@ -571,10 +601,26 @@ dashboardRouter.post("/clients/bulk", smsLimiter, async (req, res) => {
       phone: { not: null },
     },
   });
+
+  // Enforce the per-shop daily cap, shared with the sweep and promo blasts.
+  // Without this, smsLimiter (10 req/min) x 200 clients/req = 2000 texts/min,
+  // blowing past dailySendCap (default 50) and running up the shop's SMS bill.
+  const startOfDay = new Date(now);
+  startOfDay.setUTCHours(0, 0, 0, 0);
+  const sentToday = await db.nudge.count({
+    where: { status: "SENT", createdAt: { gte: startOfDay } },
+  });
+  let budget = Math.max(0, shop.dailySendCap - sentToday);
+
   const provider = getMessageProvider();
   let sent = 0;
   let failed = 0;
+  let skippedCap = 0;
   for (const client of clients) {
+    if (budget <= 0) {
+      skippedCap++;
+      continue;
+    }
     const body = buildNudgeBody({
       firstName: client.firstName,
       shopName: shop.name,
@@ -587,20 +633,27 @@ dashboardRouter.post("/clients/bulk", smsLimiter, async (req, res) => {
     });
     try {
       const result = await provider.send({ to: client.phone!, body });
-      await prisma.nudge.update({
+      await db.nudge.update({
         where: { id: nudge.id },
-        data: { status: "SENT", sentAt: new Date(), messageSid: result.sid },
+        data: { status: "SENT", sentAt: now, messageSid: result.sid },
       });
       sent++;
+      budget--;
     } catch (err) {
-      await prisma.nudge.update({
+      await db.nudge.update({
         where: { id: nudge.id },
         data: { status: "FAILED", failedReason: (err as Error).message },
       });
       failed++;
     }
   }
-  res.json({ ok: true, sent, failed, skipped: clientIds.length - clients.length });
+  res.json({
+    ok: true,
+    sent,
+    failed,
+    skippedCap,
+    skipped: clientIds.length - clients.length,
+  });
 });
 
 // Punch ledger detail for one client (earned/redeemed/bonus history).

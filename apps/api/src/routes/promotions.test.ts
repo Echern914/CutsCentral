@@ -170,10 +170,13 @@ describe("promotions", () => {
   });
 
   it("real blast texts every eligible client through the audited pipeline", async () => {
+    // Explicit dryRun:false forces a real send: blast now falls back to
+    // env.DRY_RUN (true in tests) when dryRun is omitted, so a real-send
+    // assertion must opt in deliberately.
     const res = await request(app)
       .post(`/api/promos/${promoId}/blast`)
       .set("Cookie", cookieA)
-      .send({ audience: "all" });
+      .send({ audience: "all", dryRun: false });
     expect(res.status).toBe(200);
     expect(res.body.sent).toBe(2);
     expect(res.body.failed).toBe(0);

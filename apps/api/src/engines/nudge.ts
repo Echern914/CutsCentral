@@ -4,6 +4,7 @@ import { logger } from "../logger.js";
 import { buildNudgeBody } from "../messaging/templates.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 import { isNudgeEligible } from "./eligibility.js";
+import { inQuietHours } from "./quietHours.js";
 import { hasActiveAccess } from "../billing/stripe.js";
 
 const env = apiEnv();
@@ -132,6 +133,22 @@ async function doSweepShop(
   const now = opts.now ?? new Date();
   const dryRun = opts.dryRun ?? env.DRY_RUN;
   const db = forShop(shop.id);
+
+  // TCPA quiet hours: never send real SMS outside 8am-9pm shop-local time. A
+  // dry-run preview is exempt - it sends nothing and the barber may be previewing
+  // at any hour to decide whether to enable sending.
+  if (!dryRun && inQuietHours(shop.timezone, now)) {
+    logger.info({ shopId: shop.id }, "sweep skipped: quiet hours");
+    return {
+      shopId: shop.id,
+      considered: 0,
+      sent: 0,
+      skipped: 0,
+      failed: 0,
+      dryRun,
+    };
+  }
+
   // Construct the SMS provider lazily and ONLY for a real send. A dry-run
   // preview sends nothing, so it must work even if Twilio creds are missing or
   // invalid - otherwise the preview that helps a shop decide whether to send

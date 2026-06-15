@@ -185,6 +185,30 @@ describe("sweepShop", () => {
     expect(after.considered).toBe(1);
   });
 
+  it("sends nothing during TCPA quiet hours (real run)", async () => {
+    await makeOverdueClient(shop.id, "tel:+13025551001", "+13025551001");
+    // 06:00 UTC = 02:00 America/New_York (EDT) -> deep in quiet hours.
+    const quietNow = new Date("2026-06-01T06:00:00Z");
+    const summary = await sweepShop(shop, { now: quietNow, dryRun: false });
+    expect(summary.sent).toBe(0);
+    expect(sent.length).toBe(0);
+    // No write-ahead nudge rows either: the shop is skipped before candidates.
+    const nudges = await prisma.nudge.count({ where: { shopId: shop.id } });
+    expect(nudges).toBe(0);
+  });
+
+  it("dry-run preview is exempt from quiet hours (still simulates)", async () => {
+    await makeOverdueClient(shop.id, "tel:+13025551001", "+13025551001");
+    const quietNow = new Date("2026-06-01T06:00:00Z"); // 02:00 EDT
+    const summary = await sweepShop(shop, { now: quietNow, dryRun: true });
+    // Unlike a real run (which is skipped wholesale in quiet hours), the dry-run
+    // still walks candidates and records them as SKIPPED previews. At least the
+    // 1001 client added here is overdue, so the preview is non-empty.
+    expect(summary.skipped).toBeGreaterThanOrEqual(1);
+    expect(summary.sent).toBe(0);
+    expect(sent.length).toBe(0);
+  });
+
   it("suppresses a client already nudged within 21 days", async () => {
     // First real send.
     await sweepShop(shop, { now: NOW, dryRun: false });
