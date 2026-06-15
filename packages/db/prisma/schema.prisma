@@ -60,6 +60,10 @@ model User {
   // Captured at signup (form) or first onboarding step (Google path). The legal
   // basis for ChairBack sending SMS on the shop's behalf.
   smsAttestedAt DateTime?
+  // First-run welcome tour: stamped the first time the barber finishes (or
+  // skips) the dashboard welcome carousel. null = never seen, so the tour
+  // auto-opens once. Replaying it from the account card does NOT clear this.
+  welcomeSeenAt DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

@@ -131,13 +131,25 @@ authRouter.post("/logout", async (req, res) => {
 authRouter.get("/me", requireUser, async (req, res) => {
   const user = await prisma.user.findUnique({
     where: { id: req.userId },
-    select: { id: true, email: true, name: true, isAdmin: true },
+    select: { id: true, email: true, name: true, isAdmin: true, welcomeSeenAt: true },
   });
   if (!user) {
     res.status(401).json({ error: "unauthorized" });
     return;
   }
-  res.json(user);
+  const { welcomeSeenAt, ...rest } = user;
+  res.json({ ...rest, welcomeSeen: welcomeSeenAt !== null });
+});
+
+// Mark the first-run welcome tour as seen so it stops auto-opening. Idempotent:
+// updateMany on the still-null row stamps it once; replays from the account card
+// don't call this (they pass it the flag), so the timestamp reflects first sight.
+authRouter.post("/welcome-seen", requireUser, async (req, res) => {
+  await prisma.user.updateMany({
+    where: { id: req.userId, welcomeSeenAt: null },
+    data: { welcomeSeenAt: new Date() },
+  });
+  res.json({ ok: true });
 });
 
 // Update display name.

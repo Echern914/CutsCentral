@@ -11,6 +11,7 @@ import { AccountCard } from "./_components/AccountCard";
 import { SyncHealthBanner } from "./_components/SyncHealthBanner";
 import { GettingStarted } from "./_components/GettingStarted";
 import { ConsentSetup } from "./_components/ConsentSetup";
+import { WelcomeTour } from "./_components/WelcomeTour";
 
 interface ShopMe extends ShopSettings {
   connected: boolean;
@@ -39,12 +40,17 @@ export default async function DashboardPage() {
     apiGet<{ items: ActivityItem[] }>("/api/dashboard/activity"),
     apiGet<{ leaders: Leader[] }>("/api/dashboard/leaderboard"),
     apiGet<{ series: TrendPoint[] }>("/api/dashboard/trends"),
-    apiGet<{ name: string; email: string }>("/api/auth/me"),
+    apiGet<{ name: string; email: string; welcomeSeen?: boolean }>("/api/auth/me"),
     apiGet<SyncStatus>("/api/acuity/oauth/status"),
   ]);
 
   return (
     <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-5 sm:py-8">
+      {/* First-run welcome carousel. Auto-opens once (welcomeSeen=false); the
+          account card can reopen it anytime. Default true so a failed /me load
+          never pops the tour. */}
+      <WelcomeTour welcomeSeen={me.data?.welcomeSeen ?? true} />
+
       <header className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-xs uppercase tracking-[0.2em] text-muted">

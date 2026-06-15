@@ -9,6 +9,7 @@ import {
   deleteShopAction,
   updateNameAction,
 } from "../actions";
+import { OPEN_TOUR_EVENT } from "./WelcomeTour";
 
 const field =
   "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
@@ -79,6 +80,23 @@ export function AccountCard({
         <div><Btn label="Update password" /></div>
         {pwState.error && <span className="text-xs text-danger-soft">{pwState.error}</span>}
       </form>
+
+      {/* Replay the first-run welcome tour */}
+      <div className="mb-6 flex items-center justify-between gap-3 border-t border-subtle pt-5">
+        <div>
+          <p className="text-sm font-medium text-offwhite">Welcome tour</p>
+          <p className="mt-0.5 text-xs text-muted">
+            A quick refresher on what ChairBack does and how to use it.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => window.dispatchEvent(new Event(OPEN_TOUR_EVENT))}
+          className="shrink-0 rounded-full border border-subtle px-4 py-2 text-xs font-medium text-offwhite transition-colors hover:bg-charcoal-700"
+        >
+          Replay tour
+        </button>
+      </div>
 
       {/* Danger zone */}
       <div className="rounded-xl border border-danger-soft/30 p-4">
