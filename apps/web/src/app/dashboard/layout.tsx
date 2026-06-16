@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { APP_NAME } from "@chairback/config/constants";
 import { apiGet } from "@/lib/api";
 import { logoutAction } from "../(auth)/actions";
@@ -12,6 +13,12 @@ export default async function DashboardLayout({
   children: React.ReactNode;
 }) {
   const me = await apiGet<{ isAdmin?: boolean }>("/api/auth/me");
+  // The edge middleware only checks the cookie EXISTS, not that it's still valid.
+  // A stale/revoked session (e.g. token minted before a tokenVersion bump) keeps
+  // the cookie but 401s every API call - which otherwise dead-ends each child
+  // page on its own error state. Catch it once here, for the whole dashboard, and
+  // send them to log back in (a fresh login mints a current-version token).
+  if (me.status === 401) redirect("/login");
   const isAdmin = me.data?.isAdmin ?? false;
   return (
     <div className="min-h-dvh">

@@ -52,9 +52,11 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
     apiGet<{ entries: LedgerEntry[] }>(`/api/dashboard/clients/${params.id}/ledger`),
   ]);
   if (res.status === 404) notFound();
-  // A dropped/stale session (common on mobile Safari) returns 401 - send them to
-  // log back in rather than dead-ending, matching the dashboard's behavior.
-  if (res.status === 401) redirect("/login");
+  // A dropped/stale/revoked session (e.g. a token minted before a tokenVersion
+  // bump) returns 401 on either call - send them to log back in rather than
+  // dead-ending, matching the dashboard's behavior. (The layout catches this for
+  // the whole dashboard too; this is defense in depth for the parallel calls.)
+  if (res.status === 401 || ledgerRes.status === 401) redirect("/login");
   // Any other failure (5xx, transient network) throws so error.tsx renders its
   // "Try again" card instead of a no-way-forward message.
   if (!res.ok || !res.data) throw new Error("Failed to load client");
