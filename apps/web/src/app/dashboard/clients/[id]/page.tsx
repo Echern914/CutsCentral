@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { apiGet } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
 import { ClientActions } from "./ClientActions";
@@ -52,9 +52,12 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
     apiGet<{ entries: LedgerEntry[] }>(`/api/dashboard/clients/${params.id}/ledger`),
   ]);
   if (res.status === 404) notFound();
-  if (!res.ok || !res.data) {
-    return <main className="p-8 text-muted">Could not load client.</main>;
-  }
+  // A dropped/stale session (common on mobile Safari) returns 401 - send them to
+  // log back in rather than dead-ending, matching the dashboard's behavior.
+  if (res.status === 401) redirect("/login");
+  // Any other failure (5xx, transient network) throws so error.tsx renders its
+  // "Try again" card instead of a no-way-forward message.
+  if (!res.ok || !res.data) throw new Error("Failed to load client");
   const { client, balance, rewards, promotions, visits, nudges } = res.data;
   const ledger = ledgerRes.data?.entries ?? [];
   const appBase = process.env.APP_BASE_URL ?? "";
