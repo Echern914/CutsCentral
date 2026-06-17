@@ -67,12 +67,12 @@ permanently; START re-subscribes.
 
 **Sample message 1 (rebooking reminder):**
 Hey Marcus, it's been a while since your last cut at Dave's Barbershop! Book your
-next one: https://example.com/book • Your rewards: https://example.com/r/abc123
+next one: https://daves.as.me • Your rewards: https://getchairback.com/r/abc123
 Reply STOP to opt out.
 
 **Sample message 2 (offer):**
 Hey Marcus — Dave's Barbershop: Spring Special. 20% off any weekday cut. Show code
-SPRING20. Book: https://example.com/book Reply STOP to opt out.
+SPRING20. Book: https://daves.as.me Reply STOP to opt out.
 
 **How do end users consent / opt in?**
 End users are existing clients of the shop. They provide their phone number

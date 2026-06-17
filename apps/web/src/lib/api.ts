@@ -22,12 +22,40 @@ function authHeader(): Record<string, string> {
   return cookieHeader ? { Cookie: cookieHeader } : {};
 }
 
+/**
+ * Single fetch seam. The Vercel(server) -> Railway(API) hop can fail at the
+ * NETWORK level - DNS, connection refused, or a slow response that exceeds the
+ * timeout - in which case `fetch` THROWS rather than returning a Response. An
+ * unguarded throw here propagates up and trips a page's error boundary (the
+ * "Couldn't load this client" dead-end), and worse, it bypasses HTTP-status
+ * handling like the 401 -> /login redirect because there's no status to read.
+ * So we catch it and return a structured result (status 0) the callers already
+ * know how to treat as a retryable error. A 12s timeout fails fast instead of
+ * hanging the whole server render on one stuck upstream call.
+ */
+const REQUEST_TIMEOUT_MS = 12_000;
+
+async function doFetch<T>(path: string, init: RequestInit): Promise<ApiResult<T>> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    return await toResult<T>(res);
+  } catch {
+    // Network failure / abort / DNS - not an HTTP response. status 0 signals
+    // "the request never completed" so callers can show a retry, not a crash.
+    return { ok: false, status: 0, data: null, error: "network_error" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function apiGet<T>(path: string): Promise<ApiResult<T>> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { ...authHeader() },
-    cache: "no-store",
-  });
-  return toResult<T>(res);
+  return doFetch<T>(path, { headers: { ...authHeader() } });
 }
 
 export async function apiSend<T>(
@@ -35,22 +63,16 @@ export async function apiSend<T>(
   path: string,
   body?: unknown,
 ): Promise<ApiResult<T>> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  return doFetch<T>(path, {
     method,
-    headers: {
-      "Content-Type": "application/json",
-      ...authHeader(),
-    },
+    headers: { "Content-Type": "application/json", ...authHeader() },
     body: body === undefined ? undefined : JSON.stringify(body),
-    cache: "no-store",
   });
-  return toResult<T>(res);
 }
 
 /** Public (no-cookie) GET - used by the rewards page. */
 export async function apiPublicGet<T>(path: string): Promise<ApiResult<T>> {
-  const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
-  return toResult<T>(res);
+  return doFetch<T>(path, {});
 }
 
 /**
@@ -64,13 +86,11 @@ export async function apiPublicSend<T>(
   path: string,
   body?: unknown,
 ): Promise<ApiResult<T>> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  return doFetch<T>(path, {
     method,
     headers: { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
-    cache: "no-store",
   });
-  return toResult<T>(res);
 }
 
 async function toResult<T>(res: Response): Promise<ApiResult<T>> {
