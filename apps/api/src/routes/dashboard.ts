@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { forShop, prisma, runWithShop } from "@chairback/db";
+import { forShop, prisma, runWithShop } from "@chairback/db"; // runWithShop: batch a page's tenant reads into one connection
 import { NUDGE, apiEnv, randomToken } from "@chairback/config";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireActiveAccess } from "../middleware/billing.js";
@@ -659,20 +659,35 @@ dashboardRouter.post("/clients/bulk", smsLimiter, async (req, res) => {
 // Punch ledger detail for one client (earned/redeemed/bonus history).
 dashboardRouter.get("/clients/:clientId/ledger", async (req, res) => {
   const shop = req.shop!;
-  const db = forShop(shop.id);
-  const client = await db.client.findFirst({ where: { id: req.params.clientId } });
-  if (!client) {
+  // One connection for the whole request - same pool-contention fix as the
+  // client-detail route above (findFirst + findMany + balance were 3 separate
+  // transactions). This call runs in parallel with the detail fetch on the page,
+  // so keeping each request to a single connection matters under a small pool.
+  const data = await runWithShop(shop.id, async (tx) => {
+    const client = await tx.client.findFirst({
+      where: { shopId: shop.id, id: req.params.clientId },
+    });
+    if (!client) return null;
+    const entries = await tx.punchLedger.findMany({
+      where: { shopId: shop.id, clientId: client.id },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+    });
+    const agg = await tx.punchLedger.aggregate({
+      where: { shopId: shop.id, clientId: client.id },
+      _sum: { punchesEarned: true, punchesRedeemed: true },
+    });
+    const balance =
+      (agg._sum.punchesEarned ?? 0) - (agg._sum.punchesRedeemed ?? 0);
+    return { entries, balance };
+  });
+  if (!data) {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const entries = await db.punch.findMany({
-    where: { clientId: client.id },
-    orderBy: { createdAt: "desc" },
-    take: 100,
-  });
   res.json({
-    balance: await currentBalance(shop.id, client.id),
-    entries: entries.map((e) => ({
+    balance: data.balance,
+    entries: data.entries.map((e) => ({
       at: e.createdAt.toISOString(),
       earned: e.punchesEarned,
       redeemed: e.punchesRedeemed,
@@ -685,38 +700,61 @@ dashboardRouter.get("/clients/:clientId/ledger", async (req, res) => {
 // Single client detail: profile, visits, punch balance, nudge history.
 dashboardRouter.get("/clients/:clientId", async (req, res) => {
   const shop = req.shop!;
-  const db = forShop(shop.id);
-  const client = await db.client.findFirst({ where: { id: req.params.clientId } });
-  if (!client) {
-    res.status(404).json({ error: "not_found" });
-    return;
-  }
   const now = new Date();
-  const [visits, nudges, balance, rewards, livePromos] = await Promise.all([
-    db.visit.findMany({
-      where: { clientId: client.id },
+  // Read everything this page needs inside ONE tenant transaction (one DB
+  // connection), not the old findFirst + five parallel forShop() calls. Each
+  // forShop()/currentBalance opens its own interactive $transaction, and an
+  // interactive transaction holds its connection for its whole life - so the old
+  // path grabbed 4-5 connections at once PER request. Behind a small pool (the
+  // serverless connection_limit=1 footgun) those contend, hit Prisma's pool
+  // timeout, and the route 500s -> the dashboard's "Couldn't load this client"
+  // dead-end. The lighter clients-list page issues fewer concurrent transactions,
+  // so it survives the same pool - which is why list works but the detail click
+  // fails. Sequential reads on one connection remove that amplification entirely;
+  // the tx is already RLS-scoped (runWithShop sets app.current_shop_id), and we
+  // keep the explicit shopId filters so app-layer scoping holds too.
+  const data = await runWithShop(shop.id, async (tx) => {
+    const client = await tx.client.findFirst({
+      where: { shopId: shop.id, id: req.params.clientId },
+    });
+    if (!client) return null;
+    const visits = await tx.visit.findMany({
+      where: { shopId: shop.id, clientId: client.id },
       orderBy: { scheduledAt: "desc" },
       take: 50,
-    }),
-    db.nudge.findMany({
-      where: { clientId: client.id },
+    });
+    const nudges = await tx.nudge.findMany({
+      where: { shopId: shop.id, clientId: client.id },
       orderBy: { createdAt: "desc" },
       take: 50,
-    }),
-    currentBalance(shop.id, client.id),
-    forShop(shop.id).reward.findMany({
-      where: { active: true },
+    });
+    const agg = await tx.punchLedger.aggregate({
+      where: { shopId: shop.id, clientId: client.id },
+      _sum: { punchesEarned: true, punchesRedeemed: true },
+    });
+    const balance =
+      (agg._sum.punchesEarned ?? 0) - (agg._sum.punchesRedeemed ?? 0);
+    const rewards = await tx.reward.findMany({
+      where: { shopId: shop.id, active: true },
       orderBy: [{ sortOrder: "asc" }, { punchCost: "asc" }],
-    }),
-    forShop(shop.id).promotion.findMany({
+    });
+    const livePromos = await tx.promotion.findMany({
       where: {
+        shopId: shop.id,
         active: true,
         startsAt: { lte: now },
         OR: [{ endsAt: null }, { endsAt: { gt: now } }],
       },
       orderBy: { createdAt: "desc" },
-    }),
-  ]);
+    });
+    return { client, visits, nudges, balance, rewards, livePromos };
+  });
+
+  if (!data) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const { client, visits, nudges, balance, rewards, livePromos } = data;
 
   res.json({
     client: {
