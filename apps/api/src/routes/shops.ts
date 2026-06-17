@@ -316,11 +316,23 @@ publicPageRouter.get("/:slug", async (req, res) => {
     return;
   }
   const now = new Date();
-  const [rewards, promotions] = await Promise.all([
+  const [rewards, approvedReviews, ratingAgg, promotions] = await Promise.all([
     prisma.reward.findMany({
       where: { shopId: shop.id, active: true },
       orderBy: [{ sortOrder: "asc" }, { punchCost: "asc" }],
       select: { id: true, name: true, description: true, emoji: true, punchCost: true },
+    }),
+    // Only APPROVED reviews are ever public. Newest first, capped.
+    prisma.review.findMany({
+      where: { shopId: shop.id, status: "APPROVED" },
+      orderBy: { createdAt: "desc" },
+      take: 30,
+      select: { id: true, rating: true, body: true, authorName: true, createdAt: true },
+    }),
+    prisma.review.aggregate({
+      where: { shopId: shop.id, status: "APPROVED" },
+      _avg: { rating: true },
+      _count: true,
     }),
     prisma.promotion.findMany({
       where: {
@@ -368,6 +380,18 @@ publicPageRouter.get("/:slug", async (req, res) => {
       amountOff: p.amountOff === null ? null : Number(p.amountOff),
       endsAt: p.endsAt?.toISOString() ?? null,
     })),
+    reviews: approvedReviews.map((r) => ({
+      id: r.id,
+      rating: r.rating,
+      body: r.body,
+      authorName: r.authorName,
+      createdAt: r.createdAt.toISOString(),
+    })),
+    // Summary for the star header. avgRating is null when there are no reviews.
+    reviewSummary: {
+      count: ratingAgg._count,
+      avgRating: ratingAgg._avg.rating ?? null,
+    },
   });
 });
 
@@ -434,6 +458,60 @@ publicPageRouter.post("/:slug/request", leadLimiter, async (req, res) => {
         await getMessageProvider().send({ to: shop.notifyPhone, body });
       } catch (err) {
         logger.error({ err, shopId: shop.id }, "lead notify SMS failed");
+      }
+    }
+  }
+
+  res.status(201).json({ ok: true });
+});
+
+// Customer review from the public page. UNauthenticated (slug resolves the shop);
+// the insert uses plain prisma (connection owner, bypasses FORCE RLS) like the
+// lead form. Approve-first: lands as PENDING and is invisible publicly until the
+// barber approves it. Rating 1-5 required; text + name optional. Anti-spam limit.
+const reviewSchema = z
+  .object({
+    rating: z.coerce.number().int().min(1).max(5),
+    body: z.string().trim().max(1000).optional().or(z.literal("")),
+    authorName: z.string().trim().max(80).optional().or(z.literal("")),
+  })
+  .strict();
+
+publicPageRouter.post("/:slug/review", leadLimiter, async (req, res) => {
+  const parsed = reviewSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const slug = String(req.params.slug).toLowerCase();
+  const shop = await prisma.shop.findUnique({ where: { slug } });
+  // Anyone can review a LIVE page; no takesRequests gate. 404 a disabled page.
+  if (!shop || !shop.publicPageEnabled) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const d = parsed.data;
+  await prisma.review.create({
+    data: {
+      shopId: shop.id,
+      rating: d.rating,
+      body: d.body || null,
+      authorName: d.authorName || null,
+      // status defaults to PENDING - barber must approve before it shows.
+    },
+  });
+
+  // Best-effort barber alert (same DRY_RUN-honoring path as the lead notify).
+  if (shop.notifyPhone) {
+    const who = d.authorName?.trim() || "A customer";
+    const body = `New ${d.rating}-star review at ${shop.name} from ${who}. Approve it in your dashboard to publish.`;
+    if (apiEnv().DRY_RUN) {
+      logger.info({ shopId: shop.id, to: shop.notifyPhone }, "review notify SMS (dry-run, not sent)");
+    } else {
+      try {
+        await getMessageProvider().send({ to: shop.notifyPhone, body });
+      } catch (err) {
+        logger.error({ err, shopId: shop.id }, "review notify SMS failed");
       }
     }
   }

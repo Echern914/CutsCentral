@@ -152,6 +152,7 @@ model Shop {
   promotions          Promotion[]
   promoUses           PromotionRedemption[]
   appointmentRequests AppointmentRequest[]
+  reviews             Review[]
 
   @@index([ownerId])
 }
@@ -307,6 +308,28 @@ model AppointmentRequest {
   message       String? // freeform note from the client
   preferredTime String? // freeform ("weekday evenings", "Sat morning")
   status        String   @default("NEW") // "NEW" | "CONTACTED" | "CLOSED"
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([shopId, status])
+  @@index([shopId, createdAt])
+}
+
+// Customer review submitted from the public shop page. Same trust model as
+// AppointmentRequest: created via the UNauthenticated public route (resolved by
+// slug, runs as the connection owner, bypasses FORCE RLS), then the barber
+// reads/moderates through forShop() (RLS-enforced). Approve-first: a review is
+// PENDING until the barber approves it; only APPROVED reviews are ever returned
+// on the public page. authorName is optional (blank -> shown as "Anonymous").
+model Review {
+  id         String   @id @default(cuid())
+  shopId     String
+  shop       Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  rating     Int // 1-5 stars (validated at the API boundary)
+  body       String? // freeform review text; optional (a rating alone is allowed)
+  authorName String? // optional display name; null/blank -> "Anonymous"
+  status     String   @default("PENDING") // "PENDING" | "APPROVED" | "HIDDEN"
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

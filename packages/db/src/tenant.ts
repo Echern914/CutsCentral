@@ -355,6 +355,27 @@ export function forShop(shopId: string) {
           }),
         ),
     },
+
+    // Reviews: created on the UNauthenticated public route (plain prisma, no shop
+    // context), then read/moderated here through the scoped accessor (RLS).
+    review: {
+      findMany: (args: Prisma.ReviewFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.review.findMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      findFirst: (args: Prisma.ReviewFindFirstArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.review.findFirst({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      count: (args: Prisma.ReviewCountArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.review.count({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      update: (args: Prisma.ReviewUpdateArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.review.update({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+    },
   };
 }
 

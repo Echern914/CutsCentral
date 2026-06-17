@@ -28,3 +28,27 @@ export async function submitRequestAction(
   if (!res.ok) return { ok: false, error: res.error ?? "failed" };
   return { ok: true };
 }
+
+export interface ReviewInput {
+  rating: number;
+  body?: string;
+  authorName?: string;
+}
+
+/**
+ * Submit a customer review from the public shop page. Like the request form, it
+ * POSTs via the server (CSP blocks a direct browser fetch). The review lands as
+ * PENDING in the barber's dashboard and only appears publicly once approved.
+ */
+export async function submitReviewAction(
+  slug: string,
+  input: ReviewInput,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiPublicSend(
+    "POST",
+    `/api/page/${encodeURIComponent(slug)}/review`,
+    input,
+  );
+  if (!res.ok) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true };
+}

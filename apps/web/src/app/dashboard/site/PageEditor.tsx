@@ -96,6 +96,10 @@ export function PageEditor({
       // what's editable on THIS screen.
       rewards: [],
       promotions: [],
+      // Empty here so the Reviews section renders its labeled EXAMPLE block in the
+      // preview (preview + no real reviews -> examples), showing how it will look.
+      reviews: [],
+      reviewSummary: { count: 0, avgRating: null },
     }),
     [
       settings.name,

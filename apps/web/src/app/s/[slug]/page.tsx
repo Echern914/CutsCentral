@@ -39,6 +39,15 @@ export interface ShopPageData {
     extraPunches: number | null;
     endsAt: string | null;
   }[];
+  // Approved reviews only (the API never returns pending/hidden publicly).
+  reviews: {
+    id: string;
+    rating: number;
+    body: string | null;
+    authorName: string | null;
+    createdAt: string;
+  }[];
+  reviewSummary: { count: number; avgRating: number | null };
 }
 
 async function getData(slug: string): Promise<ShopPageData | null> {

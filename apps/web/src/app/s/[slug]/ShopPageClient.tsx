@@ -17,6 +17,7 @@ import {
 } from "@chairback/config/constants";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { RequestForm } from "./RequestForm";
+import { ReviewForm } from "./ReviewForm";
 import type { ShopPageData } from "./page";
 
 /**
@@ -79,6 +80,7 @@ export function ShopPageClient({
   const sections: Record<PageSectionKey, React.ReactNode> = {
     promotions: <Promotions key="promotions" data={data} accent={accent} theme={theme} layout={layout} mounted={mounted} />,
     rewards: <Rewards key="rewards" data={data} accent={accent} theme={theme} surface={surface} />,
+    reviews: <Reviews key="reviews" data={data} accent={accent} theme={theme} layout={layout} surface={surface} preview={preview} />,
     gallery: <Gallery key="gallery" data={data} theme={theme} layout={layout} />,
     hours: <Hours key="hours" data={data} theme={theme} surface={surface} />,
   };
@@ -339,6 +341,116 @@ function Rewards({
         </p>
       </div>
     </motion.section>
+  );
+}
+
+/** Static, clearly-labeled sample reviews. Shown ONLY in the editor preview when
+ *  a shop has no approved reviews yet, so the barber can see how the section will
+ *  look. These are NEVER rendered on the live public page (guarded by `preview`),
+ *  so real visitors never see fabricated reviews presented as real. */
+const EXAMPLE_REVIEWS = [
+  { id: "ex1", rating: 5, authorName: "Jordan M.", body: "Best fade I've gotten in years. In and out, super clean." },
+  { id: "ex2", rating: 5, authorName: "Sam R.", body: "Great with my kids and always on time. Highly recommend." },
+  { id: "ex3", rating: 4, authorName: "Alex P.", body: "Solid cut and good conversation. Will be back." },
+];
+
+function Reviews({
+  data,
+  accent,
+  theme,
+  layout,
+  surface,
+  preview,
+}: {
+  data: ShopPageData;
+  accent: string;
+  theme: Theme;
+  layout: Layout;
+  surface: CSSProperties;
+  preview: boolean;
+}) {
+  const real = data.reviews;
+  const hasReal = real.length > 0;
+  // In the editor preview with no real reviews yet, show labeled examples so the
+  // barber sees the layout. Live page with no reviews: just the form, no examples.
+  const showExamples = preview && !hasReal;
+  const list = hasReal ? real : showExamples ? EXAMPLE_REVIEWS : [];
+  const avg = data.reviewSummary.avgRating;
+
+  return (
+    <motion.section variants={fadeUp} className="mt-8">
+      <SectionTitle muted={theme.muted}>Reviews</SectionTitle>
+
+      {/* Average rating header (real data only). */}
+      {hasReal && avg != null && (
+        <div className="mb-3 flex items-center gap-2 px-1">
+          <Stars value={Math.round(avg)} accent={accent} border={theme.border} />
+          <span className="text-sm font-semibold">{avg.toFixed(1)}</span>
+          <span className="text-xs" style={{ color: theme.muted }}>
+            ({data.reviewSummary.count} {data.reviewSummary.count === 1 ? "review" : "reviews"})
+          </span>
+        </div>
+      )}
+
+      {showExamples && (
+        <p className="mb-3 px-1 text-[11px] uppercase tracking-wide" style={{ color: theme.muted }}>
+          Example — your approved reviews will appear here
+        </p>
+      )}
+
+      {list.length > 0 && (
+        <div className="flex flex-col gap-3">
+          {list.map((r) => (
+            <div
+              key={r.id}
+              className="p-4"
+              style={{ ...surface, ...(showExamples ? { opacity: 0.65 } : null) }}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <Stars value={r.rating} accent={accent} border={theme.border} />
+                {r.authorName && (
+                  <span className="text-xs font-medium" style={{ color: theme.muted }}>
+                    {r.authorName}
+                  </span>
+                )}
+              </div>
+              {r.body && <p className="mt-2 text-sm">{r.body}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Anyone can leave a review; it lands pending until the barber approves. */}
+      <div className="mt-3">
+        <ReviewForm
+          slug={data.slug}
+          shopName={data.name}
+          accent={accent}
+          preview={preview}
+          theme={{
+            surface: theme.surface,
+            border: theme.border,
+            muted: theme.muted,
+            scheme: theme.scheme,
+            radius: layout.radius,
+            buttonRadius: layout.buttonRadius,
+          }}
+        />
+      </div>
+    </motion.section>
+  );
+}
+
+/** Five stars, filled up to `value`. Presentational only. */
+function Stars({ value, accent, border }: { value: number; accent: string; border: string }) {
+  return (
+    <span className="text-sm leading-none" aria-label={`${value} out of 5 stars`}>
+      {[1, 2, 3, 4, 5].map((n) => (
+        <span key={n} style={{ color: n <= value ? accent : border }}>
+          ★
+        </span>
+      ))}
+    </span>
   );
 }
 

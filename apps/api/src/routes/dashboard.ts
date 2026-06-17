@@ -883,6 +883,54 @@ dashboardRouter.get("/requests", async (req, res) => {
   });
 });
 
+// Reviews inbox: every review for moderation, newest first. Includes PENDING
+// (awaiting approval), APPROVED (live on the public page), and HIDDEN. The public
+// page only ever shows APPROVED - this is the barber's full moderation view.
+dashboardRouter.get("/reviews", async (req, res) => {
+  const db = forShop(req.shop!.id);
+  const reviews = await db.review.findMany({
+    orderBy: { createdAt: "desc" },
+    take: 200,
+  });
+  // Count pending so the dashboard can badge "N awaiting approval".
+  const pendingCount = reviews.filter((r) => r.status === "PENDING").length;
+  res.json({
+    reviews: reviews.map((r) => ({
+      id: r.id,
+      rating: r.rating,
+      body: r.body,
+      authorName: r.authorName,
+      status: r.status,
+      createdAt: r.createdAt.toISOString(),
+    })),
+    pendingCount,
+  });
+});
+
+// Moderate a review: approve (publish), hide (un-publish), or send back to
+// pending. Tenant-scoped: findFirst through forShop 404s another shop's review.
+const reviewStatusSchema = z
+  .object({ status: z.enum(["APPROVED", "HIDDEN", "PENDING"]) })
+  .strict();
+dashboardRouter.post("/reviews/:id", async (req, res) => {
+  const parsed = reviewStatusSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const db = forShop(req.shop!.id);
+  const existing = await db.review.findFirst({ where: { id: req.params.id } });
+  if (!existing) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  await db.review.update({
+    where: { id: existing.id },
+    data: { status: parsed.data.status },
+  });
+  res.json({ ok: true, status: parsed.data.status });
+});
+
 // Update a lead's status (NEW -> CONTACTED -> CLOSED). Tenant-scoped: the
 // findFirst through forShop returns 404 for another shop's request.
 const requestStatusSchema = z

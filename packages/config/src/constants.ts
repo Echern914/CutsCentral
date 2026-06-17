@@ -215,6 +215,7 @@ export const DEFAULT_LAYOUT_STYLE: LayoutStyleKey = "soft";
 export const PAGE_SECTIONS = {
   promotions: { label: "Promotions", hint: "Live deals" },
   rewards: { label: "Loyalty rewards", hint: "Your rewards menu" },
+  reviews: { label: "Reviews", hint: "What clients say" },
   gallery: { label: "Gallery", hint: "Your work" },
   hours: { label: "Hours", hint: "When you're open" },
 } as const;
@@ -226,6 +227,7 @@ export const PAGE_SECTION_KEYS = Object.keys(PAGE_SECTIONS) as PageSectionKey[];
 export const DEFAULT_SECTION_ORDER: PageSectionKey[] = [
   "promotions",
   "rewards",
+  "reviews",
   "gallery",
   "hours",
 ];
