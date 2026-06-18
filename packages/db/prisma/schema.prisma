@@ -382,8 +382,26 @@ model PunchLedger {
   note            String?
   createdAt       DateTime @default(now())
 
+  // Barber-correctable ledger. The ledger stays append-only - the barber never
+  // deletes a row. "Undo a punch" writes a NEW offsetting correction row and
+  // stamps reversedAt on the original, so the balance self-heals and the full
+  // history (including what was undone) is preserved for audit.
+  //
+  // reversedAt: set on an ORIGINAL row once a correction has reversed it. A
+  // reversed row no longer counts toward "is this still undoable" - it can't be
+  // reversed twice. The aggregate balance still sums it (it's offset by its
+  // correction), so the snapshot math is unchanged.
+  reversedAt   DateTime?
+  // reversalOf: set on a CORRECTION row, pointing at the original it reverses.
+  // Self-relation; SetNull so deleting history (shop teardown cascades) can't
+  // dangle. A correction's note carries the human reason ("undo: visit").
+  reversalOfId String?
+  reversalOf   PunchLedger?  @relation("LedgerReversal", fields: [reversalOfId], references: [id], onDelete: SetNull)
+  reversedBy   PunchLedger[] @relation("LedgerReversal")
+
   @@index([shopId, clientId])
   @@index([rewardId])
+  @@index([reversalOfId])
 }
 
 model Nudge {

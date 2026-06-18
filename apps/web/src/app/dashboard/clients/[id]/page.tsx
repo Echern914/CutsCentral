@@ -4,6 +4,7 @@ import { apiGet } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
 import { ClientActions } from "./ClientActions";
 import { NotesEditor } from "./NotesEditor";
+import { PunchHistory } from "./PunchHistory";
 
 interface ClientDetail {
   client: {
@@ -39,11 +40,15 @@ function fmt(d: string | null) {
 }
 
 interface LedgerEntry {
+  id: string;
   at: string;
   earned: number;
   redeemed: number;
   runningBalance: number;
   note: string | null;
+  reversed: boolean;
+  isCorrection: boolean;
+  editable: boolean;
 }
 
 export default async function ClientDetailPage({ params }: { params: { id: string } }) {
@@ -65,7 +70,6 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
   const appBase = process.env.APP_BASE_URL ?? "";
   const rewardsUrl = `${appBase}/r/${client.magicToken}`;
   const readyCount = rewards.filter((r) => r.affordable).length;
-  const totalEarned = ledger.reduce((sum, e) => sum + e.earned, 0);
 
   return (
     <main className="mx-auto w-full max-w-3xl px-5 py-8">
@@ -172,29 +176,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
       </div>
 
       <div className="mt-6">
-        <Card className="overflow-hidden">
-          <div className="border-b border-subtle px-5 py-3">
-            <h2 className="font-display text-lg">Punch history</h2>
-          </div>
-          {ledger.length === 0 ? (
-            <p className="px-5 py-5 text-sm text-muted">No punch activity yet.</p>
-          ) : (
-            <ul className="max-h-80 divide-y divide-subtle overflow-y-auto">
-              {ledger.map((e, i) => (
-                <li key={i} className="flex items-center justify-between px-5 py-3">
-                  <span className="text-sm text-offwhite">
-                    {e.earned > 0 ? `+${e.earned} earned` : ""}
-                    {e.redeemed > 0 ? `-${e.redeemed} redeemed` : ""}
-                    {e.note ? <span className="ml-2 text-xs text-muted">({e.note})</span> : null}
-                  </span>
-                  <span className="text-xs text-muted">
-                    bal {e.runningBalance} · {fmt(e.at)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
+        <PunchHistory clientId={client.id} entries={ledger} />
       </div>
 
       <div className="mt-6">

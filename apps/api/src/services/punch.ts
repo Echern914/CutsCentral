@@ -220,3 +220,172 @@ export async function currentBalance(
   });
   return (agg._sum.punchesEarned ?? 0) - (agg._sum.punchesRedeemed ?? 0);
 }
+
+export type ReverseResult =
+  | { ok: true; newBalance: number; correction: { id: string; punchesEarned: number; punchesRedeemed: number } }
+  | { ok: false; reason: "entry_not_found" }
+  | { ok: false; reason: "already_reversed" }
+  | { ok: false; reason: "is_a_correction" };
+
+/**
+ * Undo a single ledger entry the barber shouldn't have given (a mis-clicked
+ * +1, a visit that didn't happen, a redemption keyed to the wrong client).
+ *
+ * The ledger is append-only by design - balances are snapshots, and other rows
+ * (and the running totals already shown to the client) depend on it - so we
+ * never delete. Instead we write ONE offsetting correction row with earned and
+ * redeemed swapped, then stamp `reversedAt` on the original. Net effect on the
+ * balance is exactly the original entry zeroed out, and both rows remain in the
+ * history with a clear link between them.
+ *
+ * Guards (all inside the lock, so two tabs can't double-undo):
+ *  - the entry must belong to this shop+client (foreign ids -> entry_not_found)
+ *  - an already-reversed original can't be reversed again (idempotent-ish)
+ *  - a correction row itself can't be reversed (no undo-the-undo; the barber
+ *    re-grants instead, which reads more honestly in the history)
+ */
+export async function reverseLedgerEntry(
+  shopId: string,
+  clientId: string,
+  entryId: string,
+): Promise<ReverseResult> {
+  return runWithShop(shopId, async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "Client" WHERE id = ${clientId} FOR UPDATE`;
+    // Scope by shopId+clientId (not findUnique by id) so a foreign/other-client
+    // entry id 404s instead of touching someone else's ledger.
+    const entry = await tx.punchLedger.findFirst({
+      where: { id: entryId, shopId, clientId },
+    });
+    if (!entry) return { ok: false, reason: "entry_not_found" as const };
+    if (entry.reversalOfId !== null) return { ok: false, reason: "is_a_correction" as const };
+    if (entry.reversedAt !== null) return { ok: false, reason: "already_reversed" as const };
+
+    const agg = await tx.punchLedger.aggregate({
+      where: { shopId, clientId },
+      _sum: { punchesEarned: true, punchesRedeemed: true },
+    });
+    const balance =
+      (agg._sum.punchesEarned ?? 0) - (agg._sum.punchesRedeemed ?? 0);
+    // Swap earned<->redeemed so the correction's net is the original's negation.
+    const correctionEarned = entry.punchesRedeemed;
+    const correctionRedeemed = entry.punchesEarned;
+    const newBalance = balance - entry.punchesEarned + entry.punchesRedeemed;
+
+    const correction = await tx.punchLedger.create({
+      data: {
+        shopId,
+        clientId,
+        visitId: null, // not an earn-for-visit; leaves the visit's own earn unique intact
+        rewardId: entry.rewardId, // keep the link for redemption reversals (reporting)
+        punchesEarned: correctionEarned,
+        punchesRedeemed: correctionRedeemed,
+        runningBalance: newBalance,
+        note: `undo: ${entry.note ?? "entry"}`,
+        reversalOfId: entry.id,
+      },
+    });
+    await tx.punchLedger.update({
+      where: { id: entry.id },
+      data: { reversedAt: new Date() },
+    });
+
+    return {
+      ok: true as const,
+      newBalance,
+      correction: {
+        id: correction.id,
+        punchesEarned: correction.punchesEarned,
+        punchesRedeemed: correction.punchesRedeemed,
+      },
+    };
+  });
+}
+
+export type AdjustResult =
+  | { ok: true; newBalance: number }
+  | { ok: false; reason: "entry_not_found" }
+  | { ok: false; reason: "already_reversed" }
+  | { ok: false; reason: "is_a_correction" }
+  | { ok: false; reason: "not_an_earn" }
+  | { ok: false; reason: "would_go_negative"; balance: number };
+
+/**
+ * Edit how many punches an EARN entry granted (e.g. a visit logged as 1 punch
+ * that should have been 2). Modeled as reverse-then-regrant in ONE transaction:
+ * the original earn is reversed (offsetting correction + reversedAt) and a fresh
+ * earn for `newPunches` is written. History reads "original / undo / corrected",
+ * which is the honest trail.
+ *
+ * Only earns are adjustable - redemptions are tied to a specific reward's cost,
+ * so "change the amount" is meaningless there (undo + redeem the right reward
+ * instead). Refuses if the corrected balance would go negative (the extra
+ * punches were already spent on a reward).
+ */
+export async function adjustLedgerEntry(
+  shopId: string,
+  clientId: string,
+  entryId: string,
+  newPunches: number,
+): Promise<AdjustResult> {
+  return runWithShop(shopId, async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "Client" WHERE id = ${clientId} FOR UPDATE`;
+    const entry = await tx.punchLedger.findFirst({
+      where: { id: entryId, shopId, clientId },
+    });
+    if (!entry) return { ok: false, reason: "entry_not_found" as const };
+    if (entry.reversalOfId !== null) return { ok: false, reason: "is_a_correction" as const };
+    if (entry.reversedAt !== null) return { ok: false, reason: "already_reversed" as const };
+    // An earn is a row that granted punches and redeemed none. Redemptions
+    // (punchesRedeemed > 0) aren't editable this way.
+    if (entry.punchesEarned <= 0 || entry.punchesRedeemed !== 0) {
+      return { ok: false, reason: "not_an_earn" as const };
+    }
+
+    const agg = await tx.punchLedger.aggregate({
+      where: { shopId, clientId },
+      _sum: { punchesEarned: true, punchesRedeemed: true },
+    });
+    const balance =
+      (agg._sum.punchesEarned ?? 0) - (agg._sum.punchesRedeemed ?? 0);
+    // Net change of replacing `entry.punchesEarned` with `newPunches`.
+    const finalBalance = balance - entry.punchesEarned + newPunches;
+    if (finalBalance < 0) {
+      return { ok: false, reason: "would_go_negative" as const, balance };
+    }
+
+    // Step 1: reverse the original (offsetting correction at the pre-regrant
+    // balance), then mark it reversed.
+    const afterReversal = balance - entry.punchesEarned;
+    await tx.punchLedger.create({
+      data: {
+        shopId,
+        clientId,
+        visitId: null,
+        rewardId: entry.rewardId,
+        punchesEarned: 0,
+        punchesRedeemed: entry.punchesEarned,
+        runningBalance: afterReversal,
+        note: `edit: ${entry.note ?? "entry"}`,
+        reversalOfId: entry.id,
+      },
+    });
+    await tx.punchLedger.update({
+      where: { id: entry.id },
+      data: { reversedAt: new Date() },
+    });
+    // Step 2: re-grant the corrected amount as a fresh earn.
+    await tx.punchLedger.create({
+      data: {
+        shopId,
+        clientId,
+        visitId: null,
+        punchesEarned: newPunches,
+        punchesRedeemed: 0,
+        runningBalance: finalBalance,
+        note: `corrected: ${entry.note ?? "entry"}`,
+      },
+    });
+
+    return { ok: true as const, newBalance: finalBalance };
+  });
+}

@@ -7,10 +7,12 @@ import { requireActiveAccess } from "../middleware/billing.js";
 import { hasActiveAccess } from "../billing/stripe.js";
 import { smsLimiter } from "../middleware/rateLimit.js";
 import {
+  adjustLedgerEntry,
   currentBalance,
   earnPunchForVisitInTx,
   grantBonusPunches,
   redeemReward,
+  reverseLedgerEntry,
 } from "../services/punch.js";
 import { recomputeCadence } from "../engines/cadence.js";
 import { loadEligibilityData, sweepShop } from "../engines/nudge.js";
@@ -688,13 +690,86 @@ dashboardRouter.get("/clients/:clientId/ledger", async (req, res) => {
   res.json({
     balance: data.balance,
     entries: data.entries.map((e) => ({
+      id: e.id,
       at: e.createdAt.toISOString(),
       earned: e.punchesEarned,
       redeemed: e.punchesRedeemed,
       runningBalance: e.runningBalance,
       note: e.note,
+      // Reversal state for the editing UI:
+      //  - reversed: this ORIGINAL row was undone (show struck-through, no controls)
+      //  - isCorrection: this row IS an undo/edit of another (show dimmed, no controls)
+      //  - editable: a live earn the barber can re-count (earn, not yet reversed)
+      reversed: e.reversedAt !== null,
+      isCorrection: e.reversalOfId !== null,
+      editable:
+        e.reversalOfId === null &&
+        e.reversedAt === null &&
+        e.punchesEarned > 0 &&
+        e.punchesRedeemed === 0,
     })),
   });
+});
+
+// Undo a single ledger entry (mis-clicked punch, wrong visit, wrong client).
+// Writes an offsetting correction row and marks the original reversed - the
+// balance self-heals and the history is preserved. forShop-scoped via the
+// service (entry must belong to this shop + this client).
+dashboardRouter.post("/clients/:clientId/ledger/:entryId/reverse", async (req, res) => {
+  const shop = req.shop!;
+  const db = forShop(shop.id);
+  const client = await db.client.findFirst({ where: { id: req.params.clientId } });
+  if (!client) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const result = await reverseLedgerEntry(shop.id, client.id, req.params.entryId);
+  if (!result.ok) {
+    const status = result.reason === "entry_not_found" ? 404 : 409;
+    res.status(status).json({ error: result.reason });
+    return;
+  }
+  res.json({ ok: true, newBalance: result.newBalance });
+});
+
+// Edit how many punches an EARN entry granted. Reverses the original and
+// re-grants the corrected amount in one transaction.
+dashboardRouter.post("/clients/:clientId/ledger/:entryId/adjust", async (req, res) => {
+  const shop = req.shop!;
+  const parsed = z
+    .object({ punches: z.number().int().min(1).max(20) })
+    .strict()
+    .safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const db = forShop(shop.id);
+  const client = await db.client.findFirst({ where: { id: req.params.clientId } });
+  if (!client) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const result = await adjustLedgerEntry(
+    shop.id,
+    client.id,
+    req.params.entryId,
+    parsed.data.punches,
+  );
+  if (!result.ok) {
+    if (result.reason === "entry_not_found") {
+      res.status(404).json({ error: result.reason });
+      return;
+    }
+    if (result.reason === "would_go_negative") {
+      res.status(409).json({ error: result.reason, balance: result.balance });
+      return;
+    }
+    // already_reversed | is_a_correction | not_an_earn: the entry isn't editable.
+    res.status(409).json({ error: result.reason });
+    return;
+  }
+  res.json({ ok: true, newBalance: result.newBalance });
 });
 
 // Single client detail: profile, visits, punch balance, nudge history.

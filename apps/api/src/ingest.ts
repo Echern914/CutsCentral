@@ -144,6 +144,20 @@ export async function ingestAppointment(
     if (revokeCompleted) {
       // Remove the visit's earn entry (visitId is unique; balance is always
       // derived from the aggregate, so deleting keeps it consistent).
+      //
+      // If the barber had MANUALLY undone this earn (reverseLedgerEntry), an
+      // offsetting correction row exists with visitId=null and reversalOfId
+      // pointing at the earn. Deleting only the earn would orphan that
+      // correction (it's a standalone -N redemption now), driving the balance N
+      // below correct. So delete the correction(s) tied to this earn FIRST, then
+      // the earn itself - the phantom visit's whole ledger footprint goes.
+      const earn = await tx.punchLedger.findUnique({
+        where: { visitId: visit.id },
+        select: { id: true },
+      });
+      if (earn) {
+        await tx.punchLedger.deleteMany({ where: { reversalOfId: earn.id } });
+      }
       await tx.punchLedger.deleteMany({ where: { visitId: visit.id } });
     }
 

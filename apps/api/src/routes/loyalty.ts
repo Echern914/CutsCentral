@@ -48,9 +48,21 @@ loyaltyRouter.get("/", async (req, res) => {
   const [rewards, rules, redemptionCounts] = await Promise.all([
     db.reward.findMany({ orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] }),
     db.earnRule.findMany({ orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] }),
+    // timesRedeemed per reward = real redemptions that are still standing:
+    //  - punchesRedeemed > 0     : an actual redemption (not an earn/bonus)
+    //  - reversedAt: null        : not since undone by the barber
+    //  - reversalOfId: null      : not itself a correction row
+    // A redeemed-then-undone reward correctly reports 0 (the original is
+    // reversedAt, its correction is a reversalOf row).
     prisma.punchLedger.groupBy({
       by: ["rewardId"],
-      where: { shopId: shop.id, rewardId: { not: null } },
+      where: {
+        shopId: shop.id,
+        rewardId: { not: null },
+        punchesRedeemed: { gt: 0 },
+        reversedAt: null,
+        reversalOfId: null,
+      },
       _count: { _all: true },
     }),
   ]);
