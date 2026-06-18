@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "turbo run build",
+    "predev": "node scripts/guard-dev-db.mjs",
     "dev": "turbo run dev",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
