@@ -126,10 +126,20 @@ adminPortalRouter.get("/analytics", async (req, res) => {
       where: { status: "COMPLETED", completedAt: { gte: since } },
       _count: { _all: true },
     }),
-    // Reward redemptions: ledger rows that spent punches. note carries the
+    // Reward redemptions: real redemptions still standing. note carries the
     // reward name even after the Reward row is deleted (rewardId -> null).
+    //  - reversalOfId: null  excludes CORRECTION rows (undoing an earn/bonus
+    //    writes an offsetting punchesRedeemed > 0 row with an "undo:"/"edit:"
+    //    note that would otherwise inflate the total).
+    //  - reversedAt: null    excludes redemptions the barber later undid (the
+    //    redemption didn't ultimately happen).
     prisma.punchLedger.findMany({
-      where: { punchesRedeemed: { gt: 0 }, createdAt: { gte: since } },
+      where: {
+        punchesRedeemed: { gt: 0 },
+        createdAt: { gte: since },
+        reversalOfId: null,
+        reversedAt: null,
+      },
       select: { note: true },
     }),
     // Promo redemptions recorded at the chair.
@@ -165,8 +175,9 @@ adminPortalRouter.get("/analytics", async (req, res) => {
     .sort((a, b) => b.count - a.count)
     .slice(0, 10);
 
-  // Collapse redemptions by reward name (note). Drops the system "visit"/"bonus"
-  // earn notes by construction - those rows have punchesRedeemed = 0.
+  // Collapse redemptions by reward name (note). The query already excludes earn
+  // rows (punchesRedeemed = 0) and correction rows (reversalOfId not null), so
+  // only real redemptions reach here.
   const rewardCounts = new Map<string, number>();
   for (const r of redemptionRows) {
     const name = r.note?.trim() || "Reward";

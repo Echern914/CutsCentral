@@ -5,7 +5,7 @@
 1. Create a free project at https://supabase.com (note your DB password).
 2. In the dashboard: **Project Settings to Database to Connection string**.
 3. Copy two strings into `.env` (copy `.env.example` to `.env` first):
-   - **`DATABASE_URL`** - the **Transaction pooler** string (host contains `-pooler`, port **6543**). Append `?pgbouncer=true&connection_limit=1`.
+   - **`DATABASE_URL`** - the **Transaction pooler** string (host contains `-pooler`, port **6543**). Append `?pgbouncer=true&connection_limit=10`. (Local dev can use `1`; **production must use a real pool** — the Railway API is one long-lived process and every tenant query runs in a transaction, so a pool of 1 serializes all concurrent requests. See the sizing note in `.env.example`.)
    - **`DIRECT_URL`** - the **Direct connection** string (port **5432**). Used only by `prisma migrate`.
 4. Run migrations + generate client + seed:
    ```

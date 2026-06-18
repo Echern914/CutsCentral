@@ -140,6 +140,36 @@ export async function logVisitAction(
   return { ok: res.ok, balance: res.data?.balance };
 }
 
+export async function reversePunchAction(
+  clientId: string,
+  entryId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiSend(
+    "POST",
+    `/api/dashboard/clients/${clientId}/ledger/${entryId}/reverse`,
+  );
+  revalidatePath(`/dashboard/clients/${clientId}`);
+  revalidatePath("/dashboard/clients");
+  revalidatePath("/dashboard");
+  return { ok: res.ok, error: res.error };
+}
+
+export async function adjustPunchAction(
+  clientId: string,
+  entryId: string,
+  punches: number,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiSend(
+    "POST",
+    `/api/dashboard/clients/${clientId}/ledger/${entryId}/adjust`,
+    { punches },
+  );
+  revalidatePath(`/dashboard/clients/${clientId}`);
+  revalidatePath("/dashboard/clients");
+  revalidatePath("/dashboard");
+  return { ok: res.ok, error: res.error };
+}
+
 export async function updateNameAction(
   _prev: { ok?: boolean; error?: string },
   formData: FormData,

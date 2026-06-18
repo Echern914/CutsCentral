@@ -144,6 +144,36 @@ export async function ingestAppointment(
     if (revokeCompleted) {
       // Remove the visit's earn entry (visitId is unique; balance is always
       // derived from the aggregate, so deleting keeps it consistent).
+      //
+      // The barber may have MANUALLY corrected this earn before the visit was
+      // canceled, leaving extra rows that all trace back to it:
+      //   - "undo a punch" (reverseLedgerEntry): a correction row, visitId=null,
+      //     reversalOfId = earn.id.
+      //   - "edit count" (adjustLedgerEntry): a correction row (reversalOfId =
+      //     earn.id) PLUS a fresh re-granted earn (visitId=null, reversalOfId=null,
+      //     correctionOfId = that correction's id).
+      // Deleting only the earn would orphan the correction (a standalone -N) and/or
+      // the regrant (a standalone +M), throwing the balance off. So tear the phantom
+      // visit's WHOLE ledger footprint down, deepest link first:
+      //   regrant -> correction -> earn.
+      const earn = await tx.punchLedger.findUnique({
+        where: { visitId: visit.id },
+        select: { id: true },
+      });
+      if (earn) {
+        const corrections = await tx.punchLedger.findMany({
+          where: { reversalOfId: earn.id },
+          select: { id: true },
+        });
+        const correctionIds = corrections.map((c) => c.id);
+        if (correctionIds.length > 0) {
+          // Re-granted earns from an "edit count" point at these corrections.
+          await tx.punchLedger.deleteMany({
+            where: { correctionOfId: { in: correctionIds } },
+          });
+          await tx.punchLedger.deleteMany({ where: { id: { in: correctionIds } } });
+        }
+      }
       await tx.punchLedger.deleteMany({ where: { visitId: visit.id } });
     }
 
