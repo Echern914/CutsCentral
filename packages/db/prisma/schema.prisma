@@ -399,9 +399,21 @@ model PunchLedger {
   reversalOf   PunchLedger?  @relation("LedgerReversal", fields: [reversalOfId], references: [id], onDelete: SetNull)
   reversedBy   PunchLedger[] @relation("LedgerReversal")
 
+  // correctionOf: set on the FRESH re-granted earn that "edit count" writes after
+  // reversing the original (adjustLedgerEntry). It points at the correction row of
+  // that edit, so a later visit claw-back (ingest) can find and remove this regrant
+  // too. Without it, canceling a visit whose punch was edited would delete the
+  // original earn + its correction but ORPHAN this regrant, overstating the balance.
+  // Distinct from reversalOf so this regrant is NOT mislabeled a correction in the
+  // ledger UI or excluded from redemption/earn counts. SetNull mirrors reversalOf.
+  correctionOfId String?
+  correctionOf   PunchLedger?  @relation("LedgerCorrection", fields: [correctionOfId], references: [id], onDelete: SetNull)
+  correctedBy    PunchLedger[] @relation("LedgerCorrection")
+
   @@index([shopId, clientId])
   @@index([rewardId])
   @@index([reversalOfId])
+  @@index([correctionOfId])
 }
 
 model Nudge {

@@ -273,6 +273,56 @@ describe("reverseLedgerEntry (undo a punch)", () => {
     expect(leftover).toHaveLength(0);
     expect(await balance()).toBe(before);
   });
+
+  // Regression for the audit-found sibling bug: when a barber EDITS a visit-earn's
+  // count (adjustLedgerEntry, not just undo) and Acuity later cancels that visit,
+  // the claw-back must remove THREE rows: the original earn (visitId set), its
+  // correction (reversalOfId = earn.id), AND the fresh re-granted earn
+  // (correctionOfId = correction.id, visitId null, reversalOfId null). Deleting only
+  // earn+correction would orphan the regrant and OVERSTATE the balance. This pins
+  // the regrant being reachable via correctionOfId -> correction -> earn, the exact
+  // chain ingest's claw-back now walks (regrant first, then correction, then earn).
+  it("an edited visit-earn's regrant is removable by the visit claw-back", async () => {
+    const before = await balance();
+    const visitId = await makeVisit("Standard Haircut");
+    await earnPunchForVisit(earnShop(), clientId, visitId, "Standard Haircut"); // +2
+    const earn = await prisma.punchLedger.findUnique({ where: { visitId } });
+    await adjustLedgerEntry(shopId, clientId, earn!.id, 5); // edit 2 -> 5
+    expect(await balance()).toBe(before + 5); // original offset, regrant of +5 stands
+
+    // The regrant links to the correction, which links to the earn.
+    const correction = await prisma.punchLedger.findFirst({
+      where: { shopId, clientId, reversalOfId: earn!.id },
+    });
+    expect(correction).not.toBeNull();
+    const regrant = await prisma.punchLedger.findFirst({
+      where: { shopId, clientId, correctionOfId: correction!.id },
+    });
+    expect(regrant).not.toBeNull();
+    expect(regrant!.visitId).toBeNull(); // why visitId-only delete misses it
+    expect(regrant!.reversalOfId).toBeNull(); // and why reversalOfId delete misses it too
+
+    // Simulate ingest's claw-back: regrant(s) -> correction(s) -> earn.
+    const corrections = await prisma.punchLedger.findMany({
+      where: { reversalOfId: earn!.id },
+      select: { id: true },
+    });
+    const correctionIds = corrections.map((c) => c.id);
+    await prisma.punchLedger.deleteMany({ where: { correctionOfId: { in: correctionIds } } });
+    await prisma.punchLedger.deleteMany({ where: { id: { in: correctionIds } } });
+    await prisma.punchLedger.deleteMany({ where: { visitId } });
+
+    // Whole footprint gone; balance exactly back to start (not over).
+    const leftover = await prisma.punchLedger.findMany({
+      where: {
+        shopId,
+        clientId,
+        OR: [{ visitId }, { reversalOfId: earn!.id }, { correctionOfId: { in: correctionIds } }],
+      },
+    });
+    expect(leftover).toHaveLength(0);
+    expect(await balance()).toBe(before);
+  });
 });
 
 describe("adjustLedgerEntry (edit an earn's punch count)", () => {

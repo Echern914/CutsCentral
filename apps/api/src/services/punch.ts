@@ -356,7 +356,7 @@ export async function adjustLedgerEntry(
     // Step 1: reverse the original (offsetting correction at the pre-regrant
     // balance), then mark it reversed.
     const afterReversal = balance - entry.punchesEarned;
-    await tx.punchLedger.create({
+    const correction = await tx.punchLedger.create({
       data: {
         shopId,
         clientId,
@@ -373,7 +373,10 @@ export async function adjustLedgerEntry(
       where: { id: entry.id },
       data: { reversedAt: new Date() },
     });
-    // Step 2: re-grant the corrected amount as a fresh earn.
+    // Step 2: re-grant the corrected amount as a fresh earn. Link it back to the
+    // correction (correctionOfId) so that if the underlying visit is later
+    // canceled, ingest's claw-back can remove this regrant too instead of
+    // orphaning it (which would overstate the balance).
     await tx.punchLedger.create({
       data: {
         shopId,
@@ -383,6 +386,7 @@ export async function adjustLedgerEntry(
         punchesRedeemed: 0,
         runningBalance: finalBalance,
         note: `corrected: ${entry.note ?? "entry"}`,
+        correctionOfId: correction.id,
       },
     });
 
