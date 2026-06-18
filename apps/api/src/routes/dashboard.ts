@@ -14,6 +14,7 @@ import {
   redeemReward,
   reverseLedgerEntry,
 } from "../services/punch.js";
+import { deleteVisit, editVisit } from "../services/visit.js";
 import { recomputeCadence } from "../engines/cadence.js";
 import { loadEligibilityData, sweepShop } from "../engines/nudge.js";
 import { isNudgeEligible } from "../engines/eligibility.js";
@@ -772,6 +773,79 @@ dashboardRouter.post("/clients/:clientId/ledger/:entryId/adjust", async (req, re
   res.json({ ok: true, newBalance: result.newBalance });
 });
 
+// Edit a past visit's date and/or service. For a COMPLETED visit this can change
+// the punch amount (rules/promos), so the service reverses-and-re-earns and
+// refuses if the corrected balance would go negative. At least one field required.
+const editVisitSchema = z
+  .object({
+    when: z.coerce.date().optional(),
+    // Distinguish "omitted" (leave service) from "" (clear it). The service
+    // treats undefined as unchanged and "" as null.
+    serviceName: z.string().trim().max(120).nullable().optional(),
+  })
+  .strict()
+  .refine((d) => d.when !== undefined || d.serviceName !== undefined, {
+    message: "Provide a new date or service.",
+  });
+
+dashboardRouter.patch("/clients/:clientId/visits/:visitId", async (req, res) => {
+  const shop = req.shop!;
+  const parsed = editVisitSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  if (parsed.data.when) {
+    const now = new Date();
+    // Same 10-minute clock-skew allowance as logging a visit.
+    if (parsed.data.when.getTime() > now.getTime() + 10 * 60 * 1000) {
+      res.status(400).json({ error: "future_visit", message: "Visit date can't be in the future." });
+      return;
+    }
+  }
+  const db = forShop(shop.id);
+  const client = await db.client.findFirst({ where: { id: req.params.clientId } });
+  if (!client) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const result = await editVisit(shop, client.id, req.params.visitId, {
+    when: parsed.data.when,
+    serviceName: parsed.data.serviceName,
+  });
+  if (!result.ok) {
+    if (result.reason === "not_found") {
+      res.status(404).json({ error: result.reason });
+      return;
+    }
+    res.status(409).json({ error: result.reason, balance: result.balance });
+    return;
+  }
+  res.json({ ok: true, balance: result.balance });
+});
+
+// Delete a past visit. A COMPLETED visit's punch is clawed back first (refuses if
+// that would drive the balance negative - those punches were spent on a reward).
+dashboardRouter.delete("/clients/:clientId/visits/:visitId", async (req, res) => {
+  const shop = req.shop!;
+  const db = forShop(shop.id);
+  const client = await db.client.findFirst({ where: { id: req.params.clientId } });
+  if (!client) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const result = await deleteVisit(shop.id, client.id, req.params.visitId);
+  if (!result.ok) {
+    if (result.reason === "not_found") {
+      res.status(404).json({ error: result.reason });
+      return;
+    }
+    res.status(409).json({ error: result.reason, balance: result.balance });
+    return;
+  }
+  res.json({ ok: true, balance: result.balance });
+});
+
 // Single client detail: profile, visits, punch balance, nudge history.
 dashboardRouter.get("/clients/:clientId", async (req, res) => {
   const shop = req.shop!;
@@ -859,6 +933,7 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
     rewardReady: rewards.some((r) => balance >= r.punchCost),
     promotions: livePromos.map((p) => ({ id: p.id, title: p.title })),
     visits: visits.map((v) => ({
+      id: v.id,
       date: v.scheduledAt.toISOString(),
       status: v.status,
       service: v.serviceName,

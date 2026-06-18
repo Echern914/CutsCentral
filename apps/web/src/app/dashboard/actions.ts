@@ -170,6 +170,36 @@ export async function adjustPunchAction(
   return { ok: res.ok, error: res.error };
 }
 
+export async function editVisitAction(
+  clientId: string,
+  visitId: string,
+  fields: { when?: string; serviceName?: string | null },
+): Promise<{ ok: boolean; error?: string; balance?: number }> {
+  const res = await apiSend<{ ok: boolean; balance: number }>(
+    "PATCH",
+    `/api/dashboard/clients/${clientId}/visits/${visitId}`,
+    fields,
+  );
+  revalidatePath(`/dashboard/clients/${clientId}`);
+  revalidatePath("/dashboard/clients");
+  revalidatePath("/dashboard");
+  return { ok: res.ok, error: res.error, balance: res.data?.balance };
+}
+
+export async function deleteVisitAction(
+  clientId: string,
+  visitId: string,
+): Promise<{ ok: boolean; error?: string; balance?: number }> {
+  const res = await apiSend<{ ok: boolean; balance: number }>(
+    "DELETE",
+    `/api/dashboard/clients/${clientId}/visits/${visitId}`,
+  );
+  revalidatePath(`/dashboard/clients/${clientId}`);
+  revalidatePath("/dashboard/clients");
+  revalidatePath("/dashboard");
+  return { ok: res.ok, error: res.error, balance: res.data?.balance };
+}
+
 export async function updateNameAction(
   _prev: { ok?: boolean; error?: string },
   formData: FormData,

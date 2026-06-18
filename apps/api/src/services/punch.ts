@@ -49,7 +49,7 @@ export async function visitEarnAmount(
  * Extra punches per visit from LIVE "extra punches" promotions (double-punch
  * weeks etc.). Stacks on top of the rule/base amount.
  */
-async function liveExtraPunches(
+export async function liveExtraPunches(
   tx: Prisma.TransactionClient,
   shopId: string,
   now: Date,
@@ -105,6 +105,50 @@ export async function earnPunchForVisitInTx(
       note: "visit",
     },
   });
+}
+
+/**
+ * Tear down a visit's ENTIRE punch-ledger footprint inside an already-open shop
+ * transaction. Used whenever a completed visit stops counting: a retroactive
+ * Acuity cancel/no-show (ingest) or a barber deleting/re-earning the visit from
+ * the dashboard. ONE implementation so the two callers can never drift.
+ *
+ * A visit's earn can have grown extra rows if the barber corrected it first:
+ *   - "undo a punch" (reverseLedgerEntry): a correction row, reversalOfId = earn.id.
+ *   - "edit count" (adjustLedgerEntry): a correction row (reversalOfId = earn.id)
+ *     PLUS a fresh re-granted earn (correctionOfId = that correction's id).
+ * Deleting only the earn would orphan the correction (a standalone -N) and/or the
+ * regrant (a standalone +M), throwing the aggregate balance off. So we delete the
+ * whole chain deepest-link-first: regrant -> correction -> earn.
+ *
+ * Balance is always derived from the aggregate (sum earned - sum redeemed), so
+ * removing these rows keeps it exactly consistent. The caller is responsible for
+ * recomputeCadence afterwards (it reads Visit, not the ledger).
+ */
+export async function clawBackVisitEarn(
+  tx: Prisma.TransactionClient,
+  shopId: string,
+  visitId: string,
+): Promise<void> {
+  const earn = await tx.punchLedger.findUnique({
+    where: { visitId },
+    select: { id: true },
+  });
+  if (earn) {
+    const corrections = await tx.punchLedger.findMany({
+      where: { reversalOfId: earn.id },
+      select: { id: true },
+    });
+    const correctionIds = corrections.map((c) => c.id);
+    if (correctionIds.length > 0) {
+      // Re-granted earns from an "edit count" point at these corrections.
+      await tx.punchLedger.deleteMany({
+        where: { correctionOfId: { in: correctionIds } },
+      });
+      await tx.punchLedger.deleteMany({ where: { id: { in: correctionIds } } });
+    }
+  }
+  await tx.punchLedger.deleteMany({ where: { visitId } });
 }
 
 /** Earn for a visit (status-promotion path). Opens its own locked transaction. */
