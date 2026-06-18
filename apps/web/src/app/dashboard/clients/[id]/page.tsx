@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/Card";
 import { ClientActions } from "./ClientActions";
 import { NotesEditor } from "./NotesEditor";
 import { PunchHistory } from "./PunchHistory";
+import { VisitHistory } from "./VisitHistory";
 
 interface ClientDetail {
   client: {
@@ -31,7 +32,7 @@ interface ClientDetail {
   }[];
   rewardReady: boolean;
   promotions: { id: string; title: string }[];
-  visits: { date: string; status: string; service: string | null }[];
+  visits: { id: string; date: string; status: string; service: string | null }[];
   nudges: { sentAt: string; status: string; resultedInBooking: boolean }[];
 }
 
@@ -129,26 +130,8 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
       )}
 
       <div className="mt-6 grid gap-6 md:grid-cols-2">
-        {/* Visit history */}
-        <Card className="overflow-hidden">
-          <div className="border-b border-subtle px-5 py-3">
-            <h2 className="font-display text-lg">Visits</h2>
-          </div>
-          {visits.length === 0 ? (
-            <p className="px-5 py-5 text-sm text-muted">No visits yet.</p>
-          ) : (
-            <ul className="max-h-80 divide-y divide-subtle overflow-y-auto">
-              {visits.map((v, i) => (
-                <li key={i} className="flex items-center justify-between px-5 py-3">
-                  <span className="text-sm text-offwhite">{v.service ?? "Visit"}</span>
-                  <span className="text-xs text-muted">
-                    {fmt(v.date)} · {v.status.toLowerCase()}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
+        {/* Visit history (per-row edit/delete) */}
+        <VisitHistory clientId={client.id} visits={visits} />
 
         {/* Nudge history */}
         <Card className="overflow-hidden">
