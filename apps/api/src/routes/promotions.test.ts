@@ -49,6 +49,18 @@ beforeAll(async () => {
   const b = await signupAndShop(emailB, "Promo Cuts B");
   cookieB = b.cookie;
 
+  // Pin shop A to a timezone where "now" is mid-day, so the real-send blast
+  // never trips the TCPA quiet-hours guard (8am-9pm local). Without this the
+  // "real blast" test failed whenever the suite ran after 9pm local time. We
+  // pick the fixed-offset Etc/GMT zone that lands the current instant near noon.
+  // (Etc/GMT signs are inverted: Etc/GMT-5 == UTC+5; valid range -12..+14.)
+  const offsetForNoon = Math.max(-12, Math.min(14, 12 - new Date().getUTCHours()));
+  const noonZone = `Etc/GMT${offsetForNoon <= 0 ? "+" : "-"}${Math.abs(offsetForNoon)}`;
+  await prisma.shop.update({
+    where: { id: shopIdA },
+    data: { timezone: noonZone },
+  });
+
   // Two reachable (consented) clients + one opted out + one with no consent;
   // the last two must never get a blast.
   const mk = async (
