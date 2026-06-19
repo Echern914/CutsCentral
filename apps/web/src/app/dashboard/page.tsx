@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { apiGet } from "@/lib/api";
+import { getMe } from "@/lib/me";
 import { StatCards, type Stats } from "./_components/StatCards";
 import { TrendsChart, type TrendPoint } from "./_components/TrendsChart";
 import { SweepControl } from "./_components/SweepControl";
@@ -40,7 +41,8 @@ export default async function DashboardPage() {
     apiGet<{ items: ActivityItem[] }>("/api/dashboard/activity"),
     apiGet<{ leaders: Leader[] }>("/api/dashboard/leaderboard"),
     apiGet<{ series: TrendPoint[] }>("/api/dashboard/trends"),
-    apiGet<{ name: string; email: string; welcomeSeen?: boolean }>("/api/auth/me"),
+    // Memoized: shares the layout's /api/auth/me round-trip for this render.
+    getMe(),
     apiGet<SyncStatus>("/api/acuity/oauth/status"),
   ]);
 
