@@ -1,4 +1,5 @@
-import { forShop } from "@chairback/db";
+import { forShop, runWithShop } from "@chairback/db";
+import { recomputeCadence } from "../engines/cadence.js";
 import { toE164 } from "../acuity/clientKey.js";
 
 /**
@@ -120,4 +121,117 @@ export async function unarchiveClient(
     });
   }
   return { ok: true, archived: false };
+}
+
+export type MergeResult =
+  | { ok: true; balance: number; movedVisits: number }
+  | { ok: false; reason: "not_found" }
+  | { ok: false; reason: "same_client" };
+
+/**
+ * Merge a duplicate client (the LOSER) into the one to keep (the WINNER). The
+ * loser's entire footprint - visits, the whole punch ledger, nudges, and promo
+ * uses - is reassigned to the winner, the winner's profile/consent is reconciled,
+ * its cadence is recomputed, and the loser is soft-archived (not deleted) so the
+ * merge leaves a recoverable trail.
+ *
+ * Why moving rows wholesale is safe:
+ *  - PunchLedger balance is the AGGREGATE sum(earned)-sum(redeemed); reassigning
+ *    every row of the loser makes the winner's balance the exact sum of the two.
+ *    The reversal/correction chains move together (we move by clientId, not by
+ *    visitId), so no offsetting row is ever orphaned.
+ *  - Visit's unique is (shopId, acuityAppointmentId); we only change clientId, and
+ *    both clients live in the same shop, so appointment ids can't collide.
+ *  - PunchLedger.visitId @unique is per-visit; moving by clientId never touches it.
+ *
+ * Consent reconciliation (TCPA-safe, the locked rule):
+ *  - optedOut = winner.optedOut OR loser.optedOut  (a STOP on EITHER record wins)
+ *  - smsConsentAt = the EARLIEST non-null of the two (and keep that record's
+ *    source). We never fabricate consent or advance its date by merging.
+ *
+ * Acuity re-split is accepted: the loser keeps its acuityClientKey, so a future
+ * booking under it re-creates/un-archives a separate client. No alias mechanism.
+ *
+ * Both client rows are locked (id-ascending to avoid deadlocks) for the whole
+ * move, so a concurrent earn/redeem on either can't race the reassignment.
+ */
+export async function mergeClients(
+  shopId: string,
+  winnerId: string,
+  loserId: string,
+): Promise<MergeResult> {
+  if (winnerId === loserId) return { ok: false, reason: "same_client" };
+
+  const result = await runWithShop(shopId, async (tx) => {
+    // Lock both rows, lowest id first, so two concurrent merges of the same pair
+    // can't deadlock (both acquire in the same order). Separate statements give a
+    // deterministic acquisition order that a single IN-list FOR UPDATE does not.
+    const [firstId, secondId] = [winnerId, loserId].sort();
+    await tx.$queryRaw`SELECT id FROM "Client" WHERE id = ${firstId} FOR UPDATE`;
+    await tx.$queryRaw`SELECT id FROM "Client" WHERE id = ${secondId} FOR UPDATE`;
+
+    const winner = await tx.client.findFirst({ where: { id: winnerId, shopId } });
+    const loser = await tx.client.findFirst({ where: { id: loserId, shopId } });
+    if (!winner || !loser) return { ok: false as const, reason: "not_found" as const };
+
+    // Reassign the loser's entire footprint to the winner.
+    const moved = await tx.visit.updateMany({
+      where: { clientId: loserId, shopId },
+      data: { clientId: winnerId },
+    });
+    await tx.punchLedger.updateMany({
+      where: { clientId: loserId, shopId },
+      data: { clientId: winnerId },
+    });
+    await tx.nudge.updateMany({
+      where: { clientId: loserId, shopId },
+      data: { clientId: winnerId },
+    });
+    await tx.promotionRedemption.updateMany({
+      where: { clientId: loserId, shopId },
+      data: { clientId: winnerId },
+    });
+
+    // Consent reconciliation: opted-out-wins + earliest-consent-wins.
+    const optedOut = winner.optedOut || loser.optedOut;
+    let smsConsentAt = winner.smsConsentAt;
+    let smsConsentSource = winner.smsConsentSource;
+    if (
+      loser.smsConsentAt !== null &&
+      (winner.smsConsentAt === null || loser.smsConsentAt < winner.smsConsentAt)
+    ) {
+      smsConsentAt = loser.smsConsentAt;
+      smsConsentSource = loser.smsConsentSource;
+    }
+
+    // Fill any blank winner contact field from the loser (don't overwrite).
+    const update: Record<string, unknown> = { optedOut, smsConsentAt, smsConsentSource };
+    if (!winner.phone && loser.phone) update.phone = loser.phone;
+    if (!winner.email && loser.email) update.email = loser.email;
+    if (!winner.lastName && loser.lastName) update.lastName = loser.lastName;
+    if (winner.notes && loser.notes) {
+      update.notes = `${winner.notes}\n\n[merged] ${loser.notes}`;
+    } else if (!winner.notes && loser.notes) {
+      update.notes = loser.notes;
+    }
+    await tx.client.update({ where: { id: winnerId }, data: update });
+
+    // Soft-archive the loser (recoverable trail; not a hard delete).
+    await tx.client.update({
+      where: { id: loserId },
+      data: { archivedAt: new Date() },
+    });
+
+    const agg = await tx.punchLedger.aggregate({
+      where: { shopId, clientId: winnerId },
+      _sum: { punchesEarned: true, punchesRedeemed: true },
+    });
+    const balance = (agg._sum.punchesEarned ?? 0) - (agg._sum.punchesRedeemed ?? 0);
+    return { ok: true as const, balance, movedVisits: moved.count };
+  });
+
+  if (!result.ok) return result;
+  // The winner's completed-visit set changed; recompute cadence (reads Visit).
+  await recomputeCadence(shopId, winnerId);
+  return { ok: true, balance: result.balance, movedVisits: result.movedVisits };
 }
