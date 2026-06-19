@@ -53,6 +53,7 @@ export function ClientsControls() {
           <option value="active">Active only</option>
           <option value="optedOut">Opted out</option>
           <option value="needsConsent">Needs SMS consent</option>
+          <option value="archived">Archived</option>
         </select>
         <button
           onClick={() => setAdding((v) => !v)}

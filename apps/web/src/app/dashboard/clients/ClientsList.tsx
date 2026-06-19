@@ -14,6 +14,7 @@ export interface ClientRow {
   email: string | null;
   optedOut: boolean;
   smsConsent: boolean;
+  archived?: boolean;
   source: string;
   lastVisitAt: string | null;
   medianIntervalDays: number | null;
@@ -155,8 +156,13 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
                   <p className="truncate text-sm font-medium text-offwhite">{c.name}</p>
                   {/* Badges on their own wrapping line so a long name can't push
                       them off-screen (they carry the consent/opt-out signal). */}
-                  {(c.source === "manual" || c.optedOut || !c.smsConsent) && (
+                  {(c.source === "manual" || c.optedOut || !c.smsConsent || c.archived) && (
                     <span className="mt-1 flex flex-wrap gap-1.5">
+                      {c.archived && (
+                        <span className="rounded-full bg-charcoal-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted/80">
+                          archived
+                        </span>
+                      )}
                       {c.source === "manual" && (
                         <span className="rounded-full bg-charcoal-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted">
                           manual

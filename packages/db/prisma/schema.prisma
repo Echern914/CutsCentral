@@ -274,6 +274,15 @@ model Client {
   source          String   @default("acuity") // "acuity" | "manual"
   magicToken      String   @unique // GLOBAL - rewards auth resolves without a shop
 
+  // Soft-archive. A barber can hide a client they no longer want in their active
+  // book (duplicate, one-off walk-in, moved away) WITHOUT destroying history -
+  // archivedAt is set, never the row deleted. An archived client is excluded from
+  // every "active" surface (clients list default, stats, leaderboard, at-risk, all
+  // SMS sends) but is still reachable by id (detail page) so it can be un-archived.
+  // Archive is sticky through Acuity re-sync: a new booking updates the row but
+  // does NOT auto-unarchive (un-hiding is an explicit barber choice).
+  archivedAt DateTime?
+
   // cadence (recomputed by the engine; null until >=2 completed visits)
   medianIntervalDays Int?
   lastVisitAt        DateTime?
@@ -290,6 +299,7 @@ model Client {
   @@unique([shopId, acuityClientKey]) // tenant-scoped identity + idempotent upsert
   @@index([shopId])
   @@index([shopId, lastVisitAt])
+  @@index([shopId, archivedAt]) // default list/stats filter on (shop, not archived)
 }
 
 // A lead submitted from the public shop page's "Request an appointment" form.

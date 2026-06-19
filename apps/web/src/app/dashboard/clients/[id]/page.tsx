@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { apiGet } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
 import { ClientActions } from "./ClientActions";
+import { EditClient } from "./EditClient";
 import { NotesEditor } from "./NotesEditor";
 import { PunchHistory } from "./PunchHistory";
 import { VisitHistory } from "./VisitHistory";
@@ -12,9 +13,11 @@ interface ClientDetail {
     id: string;
     name: string;
     firstName: string | null;
+    lastName: string | null;
     phone: string | null;
     email: string | null;
     optedOut: boolean;
+    archived: boolean;
     notes: string;
     source: string;
     magicToken: string;
@@ -80,7 +83,14 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
 
       <header className="mb-6 mt-2 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="font-display text-3xl tracking-tight">{client.name}</h1>
+          <h1 className="font-display text-3xl tracking-tight">
+            {client.name}
+            {client.archived && (
+              <span className="ml-2 align-middle text-[10px] uppercase tracking-wide text-muted/80">
+                archived
+              </span>
+            )}
+          </h1>
           <p className="mt-1 text-sm text-muted">
             {client.phone ?? "no phone"}
             {client.email ? ` · ${client.email}` : ""}
@@ -100,6 +110,24 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           promotions={promotions}
         />
       </header>
+
+      {client.archived && (
+        <div className="mb-4 rounded-2xl border border-subtle bg-charcoal-800 px-5 py-3 text-sm text-muted">
+          This client is archived — hidden from your active book, stats, and all
+          texts. Their history is kept. Restore them below to bring them back.
+        </div>
+      )}
+
+      <div className="mb-6">
+        <EditClient
+          clientId={client.id}
+          firstName={client.firstName}
+          lastName={client.lastName}
+          phone={client.phone}
+          email={client.email}
+          archived={client.archived}
+        />
+      </div>
 
       {/* Snapshot */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">

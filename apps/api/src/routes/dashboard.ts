@@ -15,6 +15,7 @@ import {
   reverseLedgerEntry,
 } from "../services/punch.js";
 import { deleteVisit, editVisit } from "../services/visit.js";
+import { archiveClient, editClient, unarchiveClient } from "../services/client.js";
 import { recomputeCadence } from "../engines/cadence.js";
 import { loadEligibilityData, sweepShop } from "../engines/nudge.js";
 import { isNudgeEligible } from "../engines/eligibility.js";
@@ -48,7 +49,7 @@ dashboardRouter.get("/stats", async (req, res) => {
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
   const [activeClients, nudgesThisMonth, recovered, avgTicket] = await Promise.all([
-    db.client.count({ where: { optedOut: false } }),
+    db.client.count({ where: { optedOut: false, archivedAt: null } }),
     db.nudge.count({ where: { status: "SENT", createdAt: { gte: startOfMonth } } }),
     db.nudge.count({ where: { resultedInBookingAt: { not: null } } }),
     prisma.visit.aggregate({
@@ -172,20 +173,24 @@ dashboardRouter.get("/leaderboard", async (req, res) => {
       balance: (g._sum.punchesEarned ?? 0) - (g._sum.punchesRedeemed ?? 0),
     }))
     .filter((r) => r.balance > 0)
-    .sort((a, b) => b.balance - a.balance)
-    .slice(0, limit);
+    .sort((a, b) => b.balance - a.balance);
 
+  // Resolve names, dropping archived clients (they're hidden from the leaderboard
+  // too). Filter BEFORE slicing so an archived high-scorer doesn't shrink the list.
   const clients = await prisma.client.findMany({
-    where: { id: { in: ranked.map((r) => r.clientId) } },
+    where: { id: { in: ranked.map((r) => r.clientId) }, archivedAt: null },
     select: { id: true, firstName: true, lastName: true },
   });
   const byId = new Map(clients.map((c) => [c.id, c]));
 
   res.json({
-    leaders: ranked.map((r) => ({
-      name: name(byId.get(r.clientId)),
-      balance: r.balance,
-    })),
+    leaders: ranked
+      .filter((r) => byId.has(r.clientId))
+      .slice(0, limit)
+      .map((r) => ({
+        name: name(byId.get(r.clientId)),
+        balance: r.balance,
+      })),
   });
 });
 
@@ -289,7 +294,7 @@ dashboardRouter.get("/clients", async (req, res) => {
   const shop = req.shop!;
   const q = String(req.query.q ?? "").trim();
   const sortKey = (String(req.query.sort ?? "recent") as keyof typeof SORTS);
-  const filter = String(req.query.filter ?? "all"); // all | optedOut | active | needsConsent
+  const filter = String(req.query.filter ?? "all"); // all | optedOut | active | needsConsent | archived
   const page = intQuery(req.query.page, 1, 1, 100000);
   const pageSize = 50;
 
@@ -307,6 +312,10 @@ dashboardRouter.get("/clients", async (req, res) => {
   // Clients ChairBack can't text yet because no consent is on file - the set a
   // barber would bulk-attest or collect consent for.
   if (filter === "needsConsent") where.smsConsentAt = null;
+  // Archived clients are hidden from every other view; only the explicit
+  // "archived" filter surfaces them (so they can be restored). All non-archived
+  // filters default to hiding archived rows.
+  where.archivedAt = filter === "archived" ? { not: null } : null;
 
   const db = forShop(shop.id);
   const [total, clients] = await Promise.all([
@@ -336,6 +345,7 @@ dashboardRouter.get("/clients", async (req, res) => {
       email: c.email,
       optedOut: c.optedOut,
       smsConsent: c.smsConsentAt !== null,
+      archived: c.archivedAt !== null,
       source: c.source,
       lastVisitAt: c.lastVisitAt?.toISOString() ?? null,
       medianIntervalDays: c.medianIntervalDays,
@@ -492,6 +502,83 @@ dashboardRouter.post("/clients/:clientId/opt", async (req, res) => {
   res.json({ ok: true, optedOut });
 });
 
+// Edit a client's profile (name / phone / email). Consent and the Acuity sync
+// key are deliberately left untouched (see services/client.ts). A non-empty but
+// unparseable phone is refused; an empty string clears a field.
+const editClientSchema = z
+  .object({
+    firstName: z.string().trim().min(1).max(80).optional(),
+    lastName: z.string().trim().max(80).nullable().optional(),
+    phone: z.string().trim().max(40).nullable().optional(),
+    // Allow "" (clears) or a valid email; reject malformed non-empty input.
+    email: z.string().trim().max(160).email().nullable().optional().or(z.literal("")),
+  })
+  .strict()
+  .refine(
+    (d) =>
+      d.firstName !== undefined ||
+      d.lastName !== undefined ||
+      d.phone !== undefined ||
+      d.email !== undefined,
+    { message: "Provide at least one field to change." },
+  );
+
+dashboardRouter.patch("/clients/:clientId", async (req, res) => {
+  const shop = req.shop!;
+  const parsed = editClientSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  // z.literal("") on email yields "" - normalize to null (clear) for the service.
+  const email =
+    parsed.data.email === undefined
+      ? undefined
+      : parsed.data.email === ""
+        ? null
+        : parsed.data.email;
+  const result = await editClient(shop.id, req.params.clientId, {
+    firstName: parsed.data.firstName,
+    lastName: parsed.data.lastName,
+    phone: parsed.data.phone,
+    email,
+  });
+  if (!result.ok) {
+    if (result.reason === "not_found") {
+      res.status(404).json({ error: result.reason });
+      return;
+    }
+    res.status(400).json({
+      error: result.reason,
+      message: "That phone number doesn't look valid. Use a US number like (302) 555-0142.",
+    });
+    return;
+  }
+  res.json({ ok: true });
+});
+
+// Soft-archive a client: hide it from every active surface without deleting
+// history. Reversible via /unarchive. Both are idempotent.
+dashboardRouter.post("/clients/:clientId/archive", async (req, res) => {
+  const shop = req.shop!;
+  const result = await archiveClient(shop.id, req.params.clientId);
+  if (!result.ok) {
+    res.status(404).json({ error: result.reason });
+    return;
+  }
+  res.json({ ok: true, archived: result.archived });
+});
+
+dashboardRouter.post("/clients/:clientId/unarchive", async (req, res) => {
+  const shop = req.shop!;
+  const result = await unarchiveClient(shop.id, req.params.clientId);
+  if (!result.ok) {
+    res.status(404).json({ error: result.reason });
+    return;
+  }
+  res.json({ ok: true, archived: result.archived });
+});
+
 // Save private notes on a client.
 dashboardRouter.patch("/clients/:clientId/notes", async (req, res) => {
   const shop = req.shop!;
@@ -573,6 +660,7 @@ dashboardRouter.post("/clients/bulk", smsLimiter, async (req, res) => {
         id: { in: clientIds },
         smsConsentAt: null,
         optedOut: false,
+        archivedAt: null, // never attest consent for an archived (hidden) client
       },
       data: {
         smsConsentAt: new Date(),
@@ -602,6 +690,7 @@ dashboardRouter.post("/clients/bulk", smsLimiter, async (req, res) => {
       optedOut: false,
       smsConsentAt: { not: null },
       phone: { not: null },
+      archivedAt: null, // never bulk-text an archived (hidden) client
     },
   });
 
@@ -910,9 +999,11 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
       id: client.id,
       name: name(client),
       firstName: client.firstName,
+      lastName: client.lastName,
       phone: client.phone,
       email: client.email,
       optedOut: client.optedOut,
+      archived: client.archivedAt !== null,
       smsConsent: client.smsConsentAt !== null,
       smsConsentSource: client.smsConsentSource,
       notes: client.notes ?? "",
@@ -950,6 +1041,7 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
 dashboardRouter.get("/export/clients.csv", async (req, res) => {
   const shop = req.shop!;
   const clients = await forShop(shop.id).client.findMany({
+    where: { archivedAt: null }, // export the active book, not hidden clients
     orderBy: { lastVisitAt: { sort: "desc", nulls: "last" } },
   });
   const balances = await prisma.punchLedger.groupBy({
@@ -1163,6 +1255,7 @@ async function buildAtRiskRows(shopId: string, bufferDays: number, now: Date) {
       phone: { not: null },
       medianIntervalDays: { not: null },
       lastVisitAt: { not: null },
+      archivedAt: null, // archived clients drop off the at-risk list
     },
   });
   if (candidates.length === 0) return [];

@@ -173,6 +173,7 @@ async function doSweepShop(
       phone: { not: null },
       medianIntervalDays: { not: null },
       lastVisitAt: { not: null },
+      archivedAt: null, // an archived (hidden) client is never swept/texted
     },
   });
 
