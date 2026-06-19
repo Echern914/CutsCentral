@@ -200,6 +200,36 @@ export async function deleteVisitAction(
   return { ok: res.ok, error: res.error, balance: res.data?.balance };
 }
 
+export async function editClientAction(
+  clientId: string,
+  fields: { firstName?: string; lastName?: string | null; phone?: string | null; email?: string | null },
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiSend("PATCH", `/api/dashboard/clients/${clientId}`, fields);
+  revalidatePath(`/dashboard/clients/${clientId}`);
+  revalidatePath("/dashboard/clients");
+  return { ok: res.ok, error: res.error };
+}
+
+export async function archiveClientAction(
+  clientId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiSend("POST", `/api/dashboard/clients/${clientId}/archive`);
+  revalidatePath(`/dashboard/clients/${clientId}`);
+  revalidatePath("/dashboard/clients");
+  revalidatePath("/dashboard");
+  return { ok: res.ok, error: res.error };
+}
+
+export async function unarchiveClientAction(
+  clientId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiSend("POST", `/api/dashboard/clients/${clientId}/unarchive`);
+  revalidatePath(`/dashboard/clients/${clientId}`);
+  revalidatePath("/dashboard/clients");
+  revalidatePath("/dashboard");
+  return { ok: res.ok, error: res.error };
+}
+
 export async function updateNameAction(
   _prev: { ok?: boolean; error?: string },
   formData: FormData,

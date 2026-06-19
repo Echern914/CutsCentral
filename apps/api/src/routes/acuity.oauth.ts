@@ -140,9 +140,15 @@ acuityOAuthRouter.get("/status", requireUser, requireShop, async (req, res) => {
     prisma.visit.count({ where: { shopId: shop.id } }),
     // Clients with a phone but no consent yet - the ones a barber must collect
     // consent for (or attest) before they can be texted. Drives the consent
-    // setup prompt. Opted-out clients are deliberately excluded.
+    // setup prompt. Opted-out and archived clients are deliberately excluded.
     prisma.client.count({
-      where: { shopId: shop.id, optedOut: false, smsConsentAt: null, phone: { not: null } },
+      where: {
+        shopId: shop.id,
+        optedOut: false,
+        smsConsentAt: null,
+        phone: { not: null },
+        archivedAt: null,
+      },
     }),
   ]);
   const connected = conn !== null;
