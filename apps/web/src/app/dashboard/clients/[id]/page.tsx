@@ -4,6 +4,7 @@ import { apiGet } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
 import { ClientActions } from "./ClientActions";
 import { EditClient } from "./EditClient";
+import { MergeClient } from "./MergeClient";
 import { NotesEditor } from "./NotesEditor";
 import { PunchHistory } from "./PunchHistory";
 import { VisitHistory } from "./VisitHistory";
@@ -118,7 +119,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         </div>
       )}
 
-      <div className="mb-6">
+      <div className="mb-6 flex flex-col gap-3">
         <EditClient
           clientId={client.id}
           firstName={client.firstName}
@@ -127,6 +128,11 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           email={client.email}
           archived={client.archived}
         />
+        {/* Merge folds a duplicate INTO this client; it makes no sense to merge
+            into an archived (hidden) record, so only offer it on active ones. */}
+        {!client.archived && (
+          <MergeClient clientId={client.id} clientName={client.name} />
+        )}
       </div>
 
       {/* Snapshot */}

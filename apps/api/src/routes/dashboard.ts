@@ -15,7 +15,12 @@ import {
   reverseLedgerEntry,
 } from "../services/punch.js";
 import { deleteVisit, editVisit } from "../services/visit.js";
-import { archiveClient, editClient, unarchiveClient } from "../services/client.js";
+import {
+  archiveClient,
+  editClient,
+  mergeClients,
+  unarchiveClient,
+} from "../services/client.js";
 import { recomputeCadence } from "../engines/cadence.js";
 import { loadEligibilityData, sweepShop } from "../engines/nudge.js";
 import { isNudgeEligible } from "../engines/eligibility.js";
@@ -577,6 +582,32 @@ dashboardRouter.post("/clients/:clientId/unarchive", async (req, res) => {
     return;
   }
   res.json({ ok: true, archived: result.archived });
+});
+
+// Merge a duplicate client into this one. :clientId is the WINNER (kept); the
+// body's loserId is folded in (its visits/ledger/nudges/promo uses move here,
+// consent reconciles opted-out-wins + earliest-consent-wins, then the loser is
+// soft-archived). Tenant-scoped: a foreign winner or loser id 404s.
+const mergeSchema = z.object({ loserId: z.string().min(1) }).strict();
+
+dashboardRouter.post("/clients/:clientId/merge", async (req, res) => {
+  const shop = req.shop!;
+  const parsed = mergeSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const result = await mergeClients(shop.id, req.params.clientId, parsed.data.loserId);
+  if (!result.ok) {
+    if (result.reason === "not_found") {
+      res.status(404).json({ error: result.reason });
+      return;
+    }
+    // same_client: winner and loser are the same row.
+    res.status(400).json({ error: result.reason });
+    return;
+  }
+  res.json({ ok: true, balance: result.balance, movedVisits: result.movedVisits });
 });
 
 // Save private notes on a client.

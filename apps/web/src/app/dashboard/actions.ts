@@ -230,6 +230,43 @@ export async function unarchiveClientAction(
   return { ok: res.ok, error: res.error };
 }
 
+/** Search the active client book by name/phone/email - powers the merge picker. */
+export async function searchClientsAction(
+  q: string,
+): Promise<{ id: string; name: string; phone: string | null; email: string | null }[]> {
+  const trimmed = q.trim();
+  if (!trimmed) return [];
+  const res = await apiGet<{
+    clients: { id: string; name: string; phone: string | null; email: string | null }[];
+  }>(`/api/dashboard/clients?q=${encodeURIComponent(trimmed)}`);
+  return (res.data?.clients ?? []).map((c) => ({
+    id: c.id,
+    name: c.name,
+    phone: c.phone,
+    email: c.email,
+  }));
+}
+
+/**
+ * Merge a duplicate (loser) into this client (winner). The loser's history moves
+ * here and the loser is archived. Revalidates both detail pages and the list.
+ */
+export async function mergeClientAction(
+  winnerId: string,
+  loserId: string,
+): Promise<{ ok: boolean; error?: string; balance?: number }> {
+  const res = await apiSend<{ ok: boolean; balance: number }>(
+    "POST",
+    `/api/dashboard/clients/${winnerId}/merge`,
+    { loserId },
+  );
+  revalidatePath(`/dashboard/clients/${winnerId}`);
+  revalidatePath(`/dashboard/clients/${loserId}`);
+  revalidatePath("/dashboard/clients");
+  revalidatePath("/dashboard");
+  return { ok: res.ok, error: res.error, balance: res.data?.balance };
+}
+
 export async function updateNameAction(
   _prev: { ok?: boolean; error?: string },
   formData: FormData,
