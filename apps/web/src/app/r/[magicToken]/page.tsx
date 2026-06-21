@@ -47,7 +47,8 @@ export interface RewardsData {
     windowDays: number;
     upcomingAt: string | null;
   };
-  visits: { date: string; service: string | null }[];
+  visits: { date: string; service: string | null; punches: number | null }[];
+  redemptions: { date: string; reward: string | null; punches: number }[];
 }
 
 async function getData(magicToken: string): Promise<RewardsData | null> {

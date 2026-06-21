@@ -70,6 +70,7 @@ export async function saveSettingsAction(
     dailySendCap: Number(formData.get("dailySendCap") ?? 50),
     rebookWindowDays: Number(formData.get("rebookWindowDays") ?? 14),
     smsTemplate: smsTemplate === "" ? null : smsTemplate,
+    loyaltyTextsEnabled: formData.get("loyaltyTextsEnabled") === "on",
   });
   revalidatePath("/dashboard");
   return res.ok ? { saved: true } : { error: "Could not save settings." };

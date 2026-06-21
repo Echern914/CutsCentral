@@ -1,6 +1,7 @@
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import { earnPunchForVisit } from "../services/punch.js";
+import { notifyPunchEarned } from "../services/loyaltyNotify.js";
 import { recomputeCadence } from "./cadence.js";
 
 /**
@@ -37,7 +38,7 @@ export async function promoteCompletedVisits(now = new Date()): Promise<number> 
     });
     // The shop must exist - visits cascade-delete with their shop. The visit
     // "happened" when it ended, which is what promo windows check against.
-    await earnPunchForVisit(
+    const earn = await earnPunchForVisit(
       shopById.get(v.shopId)!,
       v.clientId,
       v.id,
@@ -45,6 +46,18 @@ export async function promoteCompletedVisits(now = new Date()): Promise<number> 
       v.endAt ?? now,
     );
     await recomputeCadence(v.shopId, v.clientId);
+    // Tell the client they earned punches (gated by the shop toggle + consent +
+    // quiet hours inside notify). Only on a genuine first earn - a re-run of this
+    // job returns null and stays silent. Awaited but never throws.
+    if (earn) {
+      await notifyPunchEarned({
+        shopId: v.shopId,
+        clientId: v.clientId,
+        earned: earn.earned,
+        balance: earn.balance,
+        now,
+      });
+    }
   }
 
   logger.info({ promoted: due.length }, "promoted completed visits");

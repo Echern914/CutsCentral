@@ -121,6 +121,44 @@ describe("sweepShop", () => {
     expect(sent.length).toBe(2);
   });
 
+  it("does NOT count loyalty texts against the daily cap", async () => {
+    // Fresh isolated shop so leftover nudges from other cases can't skew the
+    // budget math. Cap 1: exactly one marketing send is allowed.
+    const capShop = await prisma.shop.create({
+      data: {
+        ownerId: userId,
+        name: "Cap Shop",
+        bookingUrl: "https://cap.test",
+        webhookSecret: randomToken(),
+        dailySendCap: 1,
+        nudgeBufferDays: 7,
+      },
+    });
+    // One overdue marketing candidate.
+    await makeOverdueClient(capShop.id, "tel:+13025551011", "+13025551011");
+    // A transactional loyalty send to a DIFFERENT client, already on the books
+    // today. If it counted against the cap of 1, the candidate would be skipped
+    // (budget 0). It must not. (On a different client so it can't trip the
+    // candidate's own R4 "no nudge in 21d" suppression - we're isolating the
+    // cap behavior, not R4.)
+    const other = await makeOverdueClient(capShop.id, "tel:+13025551012", "+13025551012");
+    await forShop(capShop.id).nudge.create({
+      data: {
+        clientId: other.id,
+        channel: "SMS",
+        status: "SENT",
+        kind: "loyalty",
+        body: "earned a punch",
+      },
+    });
+    const summary = await sweepShop(capShop, { now: NOW, dryRun: false });
+    // Cap 1, and `other` already has a SENT (loyalty) row so R4 suppresses it;
+    // only the fresh candidate is eligible. It sends because loyalty didn't
+    // consume the budget.
+    expect(summary.sent).toBe(1);
+    expect(sent.length).toBe(1);
+  });
+
   it("excludes a client with no recorded SMS consent (R7)", async () => {
     // Fresh, isolated shop so the assertion is order-independent: the ONLY
     // candidate-shaped client here is one with no consent on file.

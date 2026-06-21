@@ -42,12 +42,20 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
 
   const now = new Date();
   const balance = await currentBalance(client.shopId, client.id);
-  const [visits, upcoming, rewards, promotions] = await Promise.all([
+  const [visits, upcoming, rewards, promotions, redemptions] = await Promise.all([
     prisma.visit.findMany({
       where: { shopId: client.shopId, clientId: client.id, status: "COMPLETED" },
       orderBy: { scheduledAt: "desc" },
       take: 10,
-      select: { scheduledAt: true, serviceName: true },
+      // punch: the EARN row for this visit (if any), so the client sees "+2"
+      // next to the cut that earned it. A visit whose punch was undone has a
+      // reversed earn; we still show what it originally granted (the row stays).
+      select: {
+        id: true,
+        scheduledAt: true,
+        serviceName: true,
+        punch: { select: { punchesEarned: true } },
+      },
     }),
     prisma.visit.findFirst({
       where: {
@@ -90,6 +98,23 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
         extraPunches: true,
         endsAt: true,
       },
+    }),
+    // Rewards the client has actually claimed, newest first. Same "real, still
+    // standing" predicate as the dashboard ledger: a real redemption
+    // (punchesRedeemed > 0), not since undone (reversedAt null), and not itself
+    // a correction row (reversalOfId null). `note` carries the reward name even
+    // if the reward was later deleted.
+    prisma.punchLedger.findMany({
+      where: {
+        shopId: client.shopId,
+        clientId: client.id,
+        punchesRedeemed: { gt: 0 },
+        reversedAt: null,
+        reversalOfId: null,
+      },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+      select: { createdAt: true, punchesRedeemed: true, note: true },
     }),
   ]);
 
@@ -174,6 +199,17 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
     visits: visits.map((v) => ({
       date: v.scheduledAt.toISOString(),
       service: v.serviceName,
+      // Punches this visit earned, so the history reads as activity ("+2") not
+      // just a date. null when no earn row exists (e.g. a no-show that slipped
+      // through, or a visit predating loyalty); the UI then shows no chip.
+      punches: v.punch?.punchesEarned ?? null,
+    })),
+    // Claimed rewards, for the "Rewards claimed" list. Each is one redemption
+    // with the reward name (from the ledger note) and how many punches it cost.
+    redemptions: redemptions.map((r) => ({
+      date: r.createdAt.toISOString(),
+      reward: r.note,
+      punches: r.punchesRedeemed,
     })),
   });
 });

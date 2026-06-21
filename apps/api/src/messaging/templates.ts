@@ -25,16 +25,13 @@ export function buildNudgeBody(params: {
   const rewardsUrl = `${env.APP_BASE_URL}/r/${params.magicToken}`;
   const tpl = params.template?.trim() || DEFAULT_SMS_TEMPLATE;
 
-  let body = tpl
+  const body = tpl
     .replaceAll("{firstName}", params.firstName ?? "there")
     .replaceAll("{shop}", params.shopName)
     .replaceAll("{bookingUrl}", params.bookingUrl)
     .replaceAll("{rewardsUrl}", rewardsUrl);
 
-  if (!/reply stop/i.test(body)) {
-    body = `${body} Reply STOP to opt out.`;
-  }
-  return body;
+  return withStopNotice(body);
 }
 
 /** Render a template for a settings preview (sample data, no real client). */
@@ -46,6 +43,67 @@ export function previewNudgeBody(template: string | null, shopName: string, book
     magicToken: "PREVIEW",
     template,
   });
+}
+
+/** Append the compliance opt-out line unless the copy already carries one. */
+function withStopNotice(body: string): string {
+  return /reply stop/i.test(body) ? body : `${body} Reply STOP to opt out.`;
+}
+
+/**
+ * "You earned a punch" confirmation, sent right after a completed visit earns
+ * loyalty punches. Transactional (the client just paid for a service), but it
+ * still carries the STOP notice and a link to their live rewards page so the
+ * balance it quotes is always verifiable. `earned` is how many this visit added;
+ * `balance` is the new running total. `nextReward`, when present, gives the
+ * client a concrete "X to go" goal (the cheapest reward still out of reach).
+ */
+export function buildPunchEarnedBody(params: {
+  firstName: string | null;
+  shopName: string;
+  magicToken: string;
+  earned: number;
+  balance: number;
+  nextReward?: { name: string; remaining: number } | null;
+}): string {
+  const rewardsUrl = `${env.APP_BASE_URL}/r/${params.magicToken}`;
+  const who = params.firstName ?? "there";
+  const punchWord = params.earned === 1 ? "punch" : "punches";
+  const totalWord = params.balance === 1 ? "punch" : "punches";
+  const parts = [
+    `Hey ${who}, you just earned ${params.earned} ${punchWord} at ${params.shopName}!`,
+    `You're at ${params.balance} ${totalWord}.`,
+  ];
+  // nextReward is always a reward still out of reach (remaining > 0); the caller
+  // (nextRewardFor) filters to punchCost > balance, so there's no "ready" case
+  // here - a just-affordable reward simply has no nextReward.
+  if (params.nextReward) {
+    parts.push(`${params.nextReward.remaining} more for your ${params.nextReward.name}.`);
+  }
+  parts.push(`See your rewards: ${rewardsUrl}`);
+  return withStopNotice(parts.join(" "));
+}
+
+/**
+ * "Reward redeemed" confirmation, sent when the barber cashes in a reward for
+ * the client at the chair. Reassures the client the redemption registered and
+ * shows what's left, with the rewards link for the full picture.
+ */
+export function buildRewardRedeemedBody(params: {
+  firstName: string | null;
+  shopName: string;
+  magicToken: string;
+  rewardName: string;
+  balance: number;
+}): string {
+  const rewardsUrl = `${env.APP_BASE_URL}/r/${params.magicToken}`;
+  const who = params.firstName ?? "there";
+  const totalWord = params.balance === 1 ? "punch" : "punches";
+  const body =
+    `Hey ${who}, you just redeemed ${params.rewardName} at ${params.shopName}! ` +
+    `Enjoy. You have ${params.balance} ${totalWord} left. ` +
+    `Your rewards: ${rewardsUrl}`;
+  return withStopNotice(body);
 }
 
 /**
@@ -66,9 +124,5 @@ export function buildPromoBody(params: {
   if (params.description?.trim()) parts.push(params.description.trim());
   if (params.code?.trim()) parts.push(`Show code ${params.code.trim()}.`);
   parts.push(`Book: ${params.bookingUrl}`);
-  let body = parts.join(" ");
-  if (!/reply stop/i.test(body)) {
-    body = `${body} Reply STOP to opt out.`;
-  }
-  return body;
+  return withStopNotice(parts.join(" "));
 }

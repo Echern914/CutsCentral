@@ -68,6 +68,15 @@ export async function liveExtraPunches(
 }
 
 /**
+ * Result of an earn: how many punches this visit added and the client's balance
+ * AFTER it. `null` means nothing was written because the visit had already
+ * earned (the idempotent no-op) - callers use this to fire a "you earned a
+ * punch" text exactly once per visit, never on a re-delivered webhook or a
+ * promotion-job re-run.
+ */
+export type EarnResult = { earned: number; balance: number } | null;
+
+/**
  * Earn inside an ALREADY-OPEN shop transaction (ingest path - its tx already
  * wrote the client + visit). Idempotent via the visitId unique. `visitedAt` is
  * when the visit actually happened - promo windows are checked against IT, so
@@ -80,9 +89,9 @@ export async function earnPunchForVisitInTx(
   visitId: string,
   serviceName: string | null,
   visitedAt: Date,
-): Promise<void> {
+): Promise<EarnResult> {
   const existing = await tx.punchLedger.findUnique({ where: { visitId } });
-  if (existing) return; // already earned
+  if (existing) return null; // already earned
 
   const ruleAmount = await visitEarnAmount(tx, shop.id, serviceName);
   const extra = await liveExtraPunches(tx, shop.id, visitedAt);
@@ -105,6 +114,7 @@ export async function earnPunchForVisitInTx(
       note: "visit",
     },
   });
+  return { earned, balance: balance + earned };
 }
 
 /**
@@ -158,10 +168,10 @@ export async function earnPunchForVisit(
   visitId: string,
   serviceName: string | null,
   visitedAt: Date = new Date(),
-): Promise<void> {
-  await runWithShop(shop.id, async (tx) => {
+): Promise<EarnResult> {
+  return runWithShop(shop.id, async (tx) => {
     await tx.$queryRaw`SELECT id FROM "Client" WHERE id = ${clientId} FOR UPDATE`;
-    await earnPunchForVisitInTx(tx, shop, clientId, visitId, serviceName, visitedAt);
+    return earnPunchForVisitInTx(tx, shop, clientId, visitId, serviceName, visitedAt);
   });
 }
 

@@ -156,10 +156,13 @@ async function doSweepShop(
   const provider = dryRun ? null : getMessageProvider();
 
   // Per-day global cap: count real sends today, send up to the remainder.
+  // Only MARKETING sends count - kind="loyalty" (transactional earn/redeem
+  // confirmations) are exempt, so a busy day of cuts can't exhaust the cap and
+  // silently drop rebooking nudges. See services/loyaltyNotify.ts.
   const startOfDay = new Date(now);
   startOfDay.setUTCHours(0, 0, 0, 0);
   const sentToday = await db.nudge.count({
-    where: { status: "SENT", createdAt: { gte: startOfDay } },
+    where: { status: "SENT", createdAt: { gte: startOfDay }, kind: { not: "loyalty" } },
   });
   let budget = Math.max(0, shop.dailySendCap - sentToday);
 

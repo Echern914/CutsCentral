@@ -12,6 +12,7 @@ export interface ShopSettings {
   dailySendCap: number;
   rebookWindowDays: number;
   smsTemplate: string | null;
+  loyaltyTextsEnabled: boolean;
 }
 
 const field =
@@ -95,6 +96,22 @@ export function SettingsCard({ settings }: { settings: ShopSettings }) {
             defaultValue={settings.rebookWindowDays}
             className={`mt-1 ${field} sm:max-w-[160px]`}
           />
+        </label>
+
+        {/* Loyalty texts: confirm a punch / redemption to the client */}
+        <label className="flex items-start gap-3">
+          <input
+            type="checkbox"
+            name="loyaltyTextsEnabled"
+            defaultChecked={settings.loyaltyTextsEnabled}
+            className="mt-0.5 h-4 w-4 shrink-0 accent-gold"
+          />
+          <span className="text-sm text-offwhite">
+            Text clients when they earn a punch or redeem a reward
+            <span className="mt-0.5 block text-xs text-muted">
+              Only clients who&apos;ve agreed to texts get these, and never outside 8am–9pm.
+            </span>
+          </span>
         </label>
 
         {/* SMS template + live preview */}

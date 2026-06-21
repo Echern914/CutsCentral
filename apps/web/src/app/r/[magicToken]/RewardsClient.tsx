@@ -7,6 +7,7 @@ import { CountUp } from "@/components/motion/CountUp";
 import { PunchGrid } from "@/components/rewards/PunchGrid";
 import { RebookCountdown } from "@/components/rewards/RebookCountdown";
 import { RewardCelebration } from "@/components/rewards/RewardCelebration";
+import { RewardsClaimed } from "@/components/rewards/RewardsClaimed";
 import { VisitHistory } from "@/components/rewards/VisitHistory";
 import { LinkButton } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -44,8 +45,17 @@ export function RewardsClient({
   data: RewardsData;
   magicToken: string;
 }) {
-  const { shop, client, consent, punches, rewards, promotions, visits, rebook } =
-    data;
+  const {
+    shop,
+    client,
+    consent,
+    punches,
+    rewards,
+    promotions,
+    visits,
+    redemptions,
+    rebook,
+  } = data;
   const accent = shop.accentColor || "#D4AF37"; // shop brand color or default gold
   const ready = rewards.filter((r) => r.ready);
   const next = punches.nextTarget;
@@ -270,10 +280,19 @@ export function RewardsClient({
           </LinkButton>
         </motion.div>
 
-        {/* Visit history */}
+        {/* Rewards the client has claimed - their loyalty payoff, shown only
+            once they've redeemed at least one. */}
+        {redemptions.length > 0 && (
+          <motion.section variants={fadeUp} className="flex flex-col gap-3">
+            <h2 className="px-1 text-sm font-medium text-muted">Rewards claimed</h2>
+            <RewardsClaimed redemptions={redemptions} accent={accent} />
+          </motion.section>
+        )}
+
+        {/* Visit history - each cut annotated with the punches it earned */}
         <motion.section variants={fadeUp} className="flex flex-col gap-3">
           <h2 className="px-1 text-sm font-medium text-muted">Recent visits</h2>
-          <VisitHistory visits={visits} />
+          <VisitHistory visits={visits} accent={accent} />
         </motion.section>
 
         {/* The shop's own mini-site */}
