@@ -16,6 +16,10 @@ import {
 } from "../services/punch.js";
 import { deleteVisit, editVisit } from "../services/visit.js";
 import {
+  notifyPunchEarned,
+  notifyRewardRedeemed,
+} from "../services/loyaltyNotify.js";
+import {
   archiveClient,
   editClient,
   mergeClients,
@@ -285,6 +289,15 @@ dashboardRouter.post("/redeem/:clientId", async (req, res) => {
     });
     return;
   }
+  // Text the client their redemption confirmation (gated by the shop toggle +
+  // consent + quiet hours inside notify). Fire-and-forget after responding so
+  // the barber's redeem button is instant and a send issue can't fail it.
+  void notifyRewardRedeemed({
+    shopId: shop.id,
+    clientId: client.id,
+    rewardName: result.reward.name,
+    balance: result.newBalance,
+  });
   res.json({ ok: true, newBalance: result.newBalance, reward: result.reward });
 });
 
@@ -467,7 +480,7 @@ dashboardRouter.post("/clients/:clientId/visits", async (req, res) => {
     return;
   }
 
-  const visit = await runWithShop(shop.id, async (tx) => {
+  const { visit, earn } = await runWithShop(shop.id, async (tx) => {
     // Same client row lock as every other ledger write (serializes earns).
     await tx.$queryRaw`SELECT id FROM "Client" WHERE id = ${client.id} FOR UPDATE`;
     const created = await tx.visit.create({
@@ -484,12 +497,23 @@ dashboardRouter.post("/clients/:clientId/visits", async (req, res) => {
         serviceName,
       },
     });
-    await earnPunchForVisitInTx(tx, shop, client.id, created.id, serviceName, when);
-    return created;
+    const earned = await earnPunchForVisitInTx(tx, shop, client.id, created.id, serviceName, when);
+    return { visit: created, earn: earned };
   });
   // Outside the tx - recomputeCadence opens its own shop-scoped transaction.
   await recomputeCadence(shop.id, client.id);
   const balance = await currentBalance(shop.id, client.id);
+  // Text the client their punch (gated by the shop toggle + consent + quiet
+  // hours inside notify). Fire-and-forget AFTER responding: a walk-in entry
+  // shouldn't wait on Twilio, and a send issue must never fail the visit log.
+  if (earn) {
+    void notifyPunchEarned({
+      shopId: shop.id,
+      clientId: client.id,
+      earned: earn.earned,
+      balance: earn.balance,
+    });
+  }
   res.status(201).json({ ok: true, visitId: visit.id, balance });
 });
 

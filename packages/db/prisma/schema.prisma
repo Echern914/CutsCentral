@@ -87,6 +87,12 @@ model Shop {
   punchesPerVisit Int      @default(1)
   nudgeBufferDays Int      @default(7)
   dailySendCap    Int      @default(50)
+  // Transactional loyalty SMS to CLIENTS: a text the moment a completed visit
+  // earns punches, or a reward is redeemed ("You earned 1 punch - 4/10 toward a
+  // Free Cut"). Off by default - opt-in per shop. Independent of the marketing
+  // nudge/promo sends: still gated by client SMS consent + quiet hours, but NOT
+  // counted against dailySendCap (it's triggered by a real visit, not a blast).
+  loyaltyTextsEnabled Boolean @default(false)
   smsTemplate     String? // custom nudge copy; null = built-in default. Placeholders: {firstName} {shop} {bookingUrl} {rewardsUrl}
   logoUrl         String? // shop logo shown on the rewards + public pages (white-label)
   accentColor     String? // hex accent (e.g. "#D4AF37"); null = the theme's accent
@@ -434,8 +440,10 @@ model Nudge {
   client              Client         @relation(fields: [clientId], references: [id], onDelete: Cascade)
   channel             MessageChannel @default(SMS)
   status              NudgeStatus    @default(PENDING)
-  // What kind of outbound text this was: "nudge" (rebooking) or "promo"
-  // (promotion blast). Both count against the same daily send cap.
+  // What kind of outbound text this was: "nudge" (rebooking), "promo" (promotion
+  // blast), or "loyalty" (transactional earn/redeem confirmation). Nudge + promo
+  // count against the shop's daily send cap; loyalty does NOT (it's triggered by
+  // a real visit/redemption, not a blast) - see services/loyaltyNotify.ts.
   kind                String         @default("nudge")
   // Set on promo blasts so rebookings can be attributed to a SPECIFIC promo.
   promotionId         String?

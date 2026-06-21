@@ -141,6 +141,10 @@ const updateShopSchema = createShopSchema
     // = inbox only.
     takesRequests: z.boolean(),
     notifyPhone: z.string().max(40).nullish().or(z.literal("")),
+    // Transactional loyalty SMS to clients (earn/redeem confirmations). Off by
+    // default; gated by client consent + quiet hours regardless. See
+    // services/loyaltyNotify.ts.
+    loyaltyTextsEnabled: z.boolean(),
   })
   .partial();
 
@@ -568,6 +572,7 @@ function serializeShop(shop: {
   sectionOrder: string[];
   takesRequests: boolean;
   notifyPhone: string | null;
+  loyaltyTextsEnabled: boolean;
 }) {
   // Note: webhookSecret is intentionally NOT exposed to the client.
   return {
@@ -597,5 +602,6 @@ function serializeShop(shop: {
     sectionOrder: readSectionOrder(shop.sectionOrder),
     takesRequests: shop.takesRequests,
     notifyPhone: shop.notifyPhone,
+    loyaltyTextsEnabled: shop.loyaltyTextsEnabled,
   };
 }
