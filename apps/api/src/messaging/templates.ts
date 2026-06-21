@@ -74,13 +74,11 @@ export function buildPunchEarnedBody(params: {
     `Hey ${who}, you just earned ${params.earned} ${punchWord} at ${params.shopName}!`,
     `You're at ${params.balance} ${totalWord}.`,
   ];
-  if (params.nextReward && params.nextReward.remaining > 0) {
-    const left = params.nextReward.remaining;
-    parts.push(
-      `${left} more for your ${params.nextReward.name}.`,
-    );
-  } else if (params.nextReward && params.nextReward.remaining <= 0) {
-    parts.push(`Your ${params.nextReward.name} is ready!`);
+  // nextReward is always a reward still out of reach (remaining > 0); the caller
+  // (nextRewardFor) filters to punchCost > balance, so there's no "ready" case
+  // here - a just-affordable reward simply has no nextReward.
+  if (params.nextReward) {
+    parts.push(`${params.nextReward.remaining} more for your ${params.nextReward.name}.`);
   }
   parts.push(`See your rewards: ${rewardsUrl}`);
   return withStopNotice(parts.join(" "));
