@@ -58,6 +58,21 @@ function connectionLimitOf(url) {
   }
 }
 
+// The connection_limit that actually matters in prod lives on the POOLED url the
+// Railway process runs with (Supabase pooler: "pooler" host / port 6543). When
+// this script is run locally it's almost always pointed at the DIRECT url (5432,
+// no pool param) - reading connection_limit there tells you nothing about the
+// deployed pool and would false-warn every run. So only grade the pool when the
+// url IS the pooled one (or the operator explicitly opts in via CHECK_POOL=1).
+function isPooledUrl(url) {
+  try {
+    const u = new URL(url);
+    return u.port === "6543" || u.host.includes("pooler");
+  } catch {
+    return false;
+  }
+}
+
 const prisma = new PrismaClient();
 let problems = 0;
 
@@ -79,10 +94,20 @@ async function main() {
 
   // ---- 1. Connection pool ----------------------------------------------
   console.log("1) Connection pool");
+  const checkPool = isPooledUrl(dbUrl) || process.env.CHECK_POOL === "1";
   const limit = connectionLimitOf(dbUrl);
-  if (limit === null) {
+  if (!checkPool) {
+    // Not the deployed pooled url - grading connection_limit here is meaningless
+    // (and the role cap below already shows what Postgres allows). Skip cleanly
+    // instead of false-warning.
+    console.log(
+      "  ⏭️  skipped — this isn't the pooled DATABASE_URL the app runs with. " +
+        "To check the deployed pool size, run with the Railway pooler URL " +
+        "(or CHECK_POOL=1 to force).",
+    );
+  } else if (limit === null) {
     warn(
-      "DATABASE_URL has no connection_limit param. Prisma defaults to (num_cpus*2+1), " +
+      "Pooled DATABASE_URL has no connection_limit param. Prisma defaults to (num_cpus*2+1), " +
         "which is often just 1-3 on a small host. Set ?connection_limit=10 explicitly.",
     );
   } else if (limit < 10) {
