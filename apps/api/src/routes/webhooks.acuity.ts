@@ -1,7 +1,11 @@
 import express, { Router } from "express";
+import { apiEnv } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import { ingestAppointment } from "../ingest.js";
+import { verifyAcuitySignature } from "../acuity/signature.js";
+
+const env = apiEnv();
 
 /**
  * Per-shop Acuity webhook receiver.
@@ -34,8 +38,22 @@ acuityWebhookRouter.post(
       return;
     }
 
-    // req.body is a Buffer (raw). Parse the four form fields.
+    // req.body is a Buffer (raw). Keep the bytes for HMAC before parsing.
     const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
+
+    // Defense-in-depth: when a signing key is configured, the X-Acuity-Signature
+    // HMAC must match the raw bytes or we reject. While unset (today's reality -
+    // OAuth apps have no documented key), the unguessable URL path token that
+    // already matched a shop above is the authenticator and we fall through.
+    if (env.ACUITY_WEBHOOK_SIGNING_KEY) {
+      const sig = req.header("X-Acuity-Signature");
+      if (!verifyAcuitySignature(raw, sig, env.ACUITY_WEBHOOK_SIGNING_KEY)) {
+        logger.warn({ shopId: shop.id }, "acuity webhook bad signature");
+        res.sendStatus(401);
+        return;
+      }
+    }
+
     const params = new URLSearchParams(raw.toString("utf8"));
     const action = params.get("action") ?? "";
     const id = params.get("id") ?? "";

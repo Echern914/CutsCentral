@@ -30,7 +30,16 @@ const apiSchema = z.object({
   API_BASE_URL: cleanUrl(),
 
   SESSION_SECRET: z.string().min(16),
-  TOKEN_ENCRYPTION_KEY: z.string().min(1),
+  // Must decode to exactly 32 bytes (AES-256 key). Validate at boot so a
+  // malformed key crashes the process loudly here rather than at the first
+  // token encrypt/decrypt deep in a request. Mirrors loadKey() in crypto.ts.
+  TOKEN_ENCRYPTION_KEY: z
+    .string()
+    .min(1)
+    .refine((v) => Buffer.from(v, "base64").length === 32, {
+      message:
+        "must decode to 32 bytes (base64). Generate with: openssl rand -base64 32",
+    }),
   // Platform-operator token guarding /admin/* (backfill, sweeps, promotion).
   ADMIN_TOKEN: z.string().min(8).optional(),
   // Optional IP allowlist for the operator surface (/admin + /api/admin-portal).
@@ -42,6 +51,12 @@ const apiSchema = z.object({
   ACUITY_OAUTH_CLIENT_ID: z.string().min(1),
   ACUITY_OAUTH_CLIENT_SECRET: z.string().min(1),
   ACUITY_OAUTH_REDIRECT_URI: cleanUrl(),
+  // Acuity webhook HMAC signing key. OAuth dynamic webhooks don't document a
+  // per-app key today, so this is optional: while UNSET the unguessable per-shop
+  // URL path token is the authenticator (see webhooks.acuity.ts). The MOMENT a
+  // key is set, every inbound webhook must carry a valid X-Acuity-Signature or
+  // it's rejected - no code change needed to harden, just set the env var.
+  ACUITY_WEBHOOK_SIGNING_KEY: z.string().min(1).optional(),
 
   // Google sign-in (optional - barber auth works with email/password without it).
   GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
