@@ -25,6 +25,7 @@ export interface ShopPageSettings {
   takesRequests: boolean;
   notifyPhone: string | null;
   bookingUrl: string;
+  bookingMode: "link" | "acuity" | "native";
   punchesPerVisit: number;
 }
 

@@ -19,6 +19,7 @@ export interface ShopPageData {
   layoutStyle: string | null;
   sectionOrder: string[];
   bookingUrl: string;
+  bookingMode: "link" | "acuity" | "native";
   takesRequests: boolean;
   punchesPerVisit: number;
   rewards: {
