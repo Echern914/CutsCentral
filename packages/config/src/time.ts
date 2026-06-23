@@ -79,3 +79,111 @@ export function isQuietHours(
   const hour = hourInTimeZone(at, timeZone);
   return hour < startHour || hour >= endHour;
 }
+
+/**
+ * The UTC offset (in minutes, e.g. -240 for EDT) of `timeZone` at instant `at`.
+ * Computed via Intl by reading the same instant rendered in the zone and in UTC,
+ * so it is DST-aware with no offset table. Falls back to 0 (UTC) on a bad zone.
+ */
+function tzOffsetMinutes(at: Date, timeZone: string): number {
+  try {
+    const dtf = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+    const parts = dtf.formatToParts(at);
+    const get = (type: string) =>
+      Number(parts.find((p) => p.type === type)?.value);
+    let hour = get("hour");
+    if (hour === 24) hour = 0; // some engines emit 24 for midnight
+    // The wall-clock the zone shows for this instant, read as if it were UTC.
+    const asUtc = Date.UTC(
+      get("year"),
+      get("month") - 1,
+      get("day"),
+      hour,
+      get("minute"),
+      get("second"),
+    );
+    return Math.round((asUtc - at.getTime()) / 60000);
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Convert a LOCAL wall-clock time in `timeZone` to the corresponding UTC instant.
+ * The local time is given as a calendar date (year/month0/day) plus minutes from
+ * local midnight. DST-correct: the offset is resolved at the target instant
+ * itself (two-pass, since the offset can depend on the date we're computing).
+ *
+ * Used by the slot engine so a stored "9:00am" availability rule maps to the
+ * right UTC instant on both sides of a daylight-saving transition. (Around the
+ * 1-hour DST gap/overlap the mapping is approximate by at most an hour, which is
+ * acceptable for appointment slots and never produces an invalid Date.)
+ */
+export function zonedWallTimeToUtc(
+  year: number,
+  month0: number,
+  day: number,
+  minutesFromMidnight: number,
+  timeZone: string,
+): Date {
+  const hour = Math.floor(minutesFromMidnight / 60);
+  const minute = minutesFromMidnight % 60;
+  // First guess: treat the wall time as if it were UTC, then correct by the
+  // offset at that guessed instant. A second pass handles the rare case where
+  // the offset differs between the guess and the corrected instant (DST edges).
+  const guess = Date.UTC(year, month0, day, hour, minute, 0);
+  const offset1 = tzOffsetMinutes(new Date(guess), timeZone);
+  const corrected = guess - offset1 * 60000;
+  const offset2 = tzOffsetMinutes(new Date(corrected), timeZone);
+  if (offset2 === offset1) return new Date(corrected);
+  return new Date(guess - offset2 * 60000);
+}
+
+/** The shop-local calendar parts (year, month0 0-11, day, weekday 0-6) at `at`. */
+export function zonedDateParts(
+  at: Date,
+  timeZone: string,
+): { year: number; month0: number; day: number; weekday: number } {
+  try {
+    const dtf = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      weekday: "short",
+    });
+    const parts = dtf.formatToParts(at);
+    const get = (type: string) => parts.find((p) => p.type === type)?.value;
+    const weekdayMap: Record<string, number> = {
+      Sun: 0,
+      Mon: 1,
+      Tue: 2,
+      Wed: 3,
+      Thu: 4,
+      Fri: 5,
+      Sat: 6,
+    };
+    return {
+      year: Number(get("year")),
+      month0: Number(get("month")) - 1,
+      day: Number(get("day")),
+      weekday: weekdayMap[get("weekday") ?? "Sun"] ?? 0,
+    };
+  } catch {
+    return {
+      year: at.getUTCFullYear(),
+      month0: at.getUTCMonth(),
+      day: at.getUTCDate(),
+      weekday: at.getUTCDay(),
+    };
+  }
+}

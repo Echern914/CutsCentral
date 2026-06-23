@@ -4,6 +4,8 @@ import { logger } from "./logger.js";
 import { promoteCompletedVisits } from "./engines/statusPromotion.js";
 import { runNudgeSweep } from "./engines/nudge.js";
 import { linkBookingsToNudges } from "./engines/attribution.js";
+import { promoteFulfilledAppointments } from "./engines/appointmentPromotion.js";
+import { runAppointmentReminders } from "./engines/appointmentReminders.js";
 
 const env = apiEnv();
 
@@ -38,6 +40,22 @@ export function startScheduler(): void {
   cron.schedule("0 * * * *", () => {
     void linkBookingsToNudges().catch((err) =>
       logger.error({ err }, "attribution job failed"),
+    );
+  });
+
+  // Native booking: promote past-end appointments to COMPLETED Visits + punches
+  // every 15 minutes (same idempotent pattern as the visit promotion job).
+  cron.schedule("*/15 * * * *", () => {
+    void promoteFulfilledAppointments().catch((err) =>
+      logger.error({ err }, "appointment promotion job failed"),
+    );
+  });
+
+  // Native booking: send ~24h reminders every 20 minutes. Idempotent
+  // (reminderSentAt) and quiet-hours-deferring; respects DRY_RUN.
+  cron.schedule("*/20 * * * *", () => {
+    void runAppointmentReminders().catch((err) =>
+      logger.error({ err }, "appointment reminder job failed"),
     );
   });
 

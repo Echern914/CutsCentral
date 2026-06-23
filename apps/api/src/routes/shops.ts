@@ -148,6 +148,12 @@ const updateShopSchema = createShopSchema
     // default; gated by client consent + quiet hours regardless. See
     // services/loyaltyNotify.ts.
     loyaltyTextsEnabled: z.boolean(),
+    // Native booking engine. bookingMode picks the ONE active source; the bounds
+    // shape the public slot picker (all interpreted in the shop's timezone).
+    bookingMode: z.enum(["link", "acuity", "native"]),
+    bookingLeadHours: z.number().int().min(0).max(720),
+    bookingMaxDays: z.number().int().min(1).max(365),
+    bookingBufferMin: z.number().int().min(0).max(240),
     // Client rewards page content. rewardsWelcome: optional short greeting
     // ("" clears it). rewardsSections: visible REWARDS_SECTIONS keys (de-duped,
     // known keys only); [] = show all.
@@ -392,6 +398,9 @@ publicPageRouter.get("/:slug", async (req, res) => {
     layoutStyle: shop.layoutStyle,
     sectionOrder: readSectionOrder(shop.sectionOrder),
     bookingUrl: shop.bookingUrl,
+    // When native booking is on, the page CTA points at /book/[slug] instead of
+    // the external bookingUrl, and the lead form is hidden.
+    bookingMode: shop.bookingMode,
     // notifyPhone is intentionally NOT exposed - it's the barber's private number.
     takesRequests: shop.takesRequests,
     punchesPerVisit: shop.punchesPerVisit,
@@ -592,6 +601,10 @@ function serializeShop(shop: {
   takesRequests: boolean;
   notifyPhone: string | null;
   loyaltyTextsEnabled: boolean;
+  bookingMode: string;
+  bookingLeadHours: number;
+  bookingMaxDays: number;
+  bookingBufferMin: number;
 }) {
   // Note: webhookSecret is intentionally NOT exposed to the client.
   return {
@@ -624,5 +637,9 @@ function serializeShop(shop: {
     takesRequests: shop.takesRequests,
     notifyPhone: shop.notifyPhone,
     loyaltyTextsEnabled: shop.loyaltyTextsEnabled,
+    bookingMode: shop.bookingMode,
+    bookingLeadHours: shop.bookingLeadHours,
+    bookingMaxDays: shop.bookingMaxDays,
+    bookingBufferMin: shop.bookingBufferMin,
   };
 }

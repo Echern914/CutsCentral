@@ -59,7 +59,7 @@ export async function apiGet<T>(path: string): Promise<ApiResult<T>> {
 }
 
 export async function apiSend<T>(
-  method: "POST" | "PATCH" | "DELETE",
+  method: "POST" | "PUT" | "PATCH" | "DELETE",
   path: string,
   body?: unknown,
 ): Promise<ApiResult<T>> {
@@ -82,7 +82,7 @@ export async function apiPublicGet<T>(path: string): Promise<ApiResult<T>> {
  * the CSP (connect-src 'self') blocks a direct browser fetch to the API origin.
  */
 export async function apiPublicSend<T>(
-  method: "POST" | "PATCH" | "DELETE",
+  method: "POST" | "PUT" | "PATCH" | "DELETE",
   path: string,
   body?: unknown,
 ): Promise<ApiResult<T>> {

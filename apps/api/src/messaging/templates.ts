@@ -107,6 +107,71 @@ export function buildRewardRedeemedBody(params: {
 }
 
 /**
+ * Render an appointment instant as a short, human "Sat, Jun 28 at 2:30 PM" in
+ * the shop's timezone. Falls back to the raw locale string on a bad zone (never
+ * throws - a copy issue must not break a send).
+ */
+function formatApptTime(at: Date, timezone: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(at);
+  } catch {
+    return at.toUTCString();
+  }
+}
+
+/**
+ * "Booking confirmed" SMS, sent right after a customer self-books on the native
+ * page. Transactional (the customer just asked for this), but it still carries
+ * the STOP notice and a link to manage (cancel/reschedule) the appointment.
+ */
+export function buildAppointmentConfirmationBody(params: {
+  firstName: string | null;
+  shopName: string;
+  serviceName: string;
+  startsAt: Date;
+  timezone: string;
+  staffName?: string | null;
+  manageToken: string;
+}): string {
+  const when = formatApptTime(params.startsAt, params.timezone);
+  const manageUrl = `${env.APP_BASE_URL}/book/manage/${params.manageToken}`;
+  const who = params.firstName ?? "there";
+  const withWhom = params.staffName ? ` with ${params.staffName}` : "";
+  const body =
+    `Hi ${who}, your ${params.serviceName} at ${params.shopName}${withWhom} is booked for ${when}. ` +
+    `Need to change it? ${manageUrl}`;
+  return withStopNotice(body);
+}
+
+/**
+ * "Appointment reminder" SMS, sent ~24h before a native booking. Same manage
+ * link so the customer can cancel/reschedule if plans changed.
+ */
+export function buildAppointmentReminderBody(params: {
+  firstName: string | null;
+  shopName: string;
+  serviceName: string;
+  startsAt: Date;
+  timezone: string;
+  manageToken: string;
+}): string {
+  const when = formatApptTime(params.startsAt, params.timezone);
+  const manageUrl = `${env.APP_BASE_URL}/book/manage/${params.manageToken}`;
+  const who = params.firstName ?? "there";
+  const body =
+    `Reminder, ${who}: your ${params.serviceName} at ${params.shopName} is ${when}. ` +
+    `See you then! Manage: ${manageUrl}`;
+  return withStopNotice(body);
+}
+
+/**
  * Promotion blast SMS copy. Same compliance safety net as nudges (STOP is
  * always present); the booking link is the call to action.
  */

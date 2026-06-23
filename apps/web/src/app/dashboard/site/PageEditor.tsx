@@ -102,6 +102,7 @@ export function PageEditor({
       layoutStyle,
       sectionOrder,
       bookingUrl: settings.bookingUrl,
+      bookingMode: settings.bookingMode,
       takesRequests,
       punchesPerVisit: settings.punchesPerVisit,
       // Rewards/promotions aren't edited here; the preview shows the page chrome.

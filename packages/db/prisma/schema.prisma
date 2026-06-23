@@ -29,6 +29,27 @@ enum NudgeStatus {
   SKIPPED // dry-run / cap-hit, recorded for audit
 }
 
+// Where a shop takes its bookings. Exactly ONE source is active per shop - the
+// native engine and Acuity never run together (no merged-calendar reconciliation).
+//   link   = link out to bookingUrl (Acuity/Squarespace/etc.) - today's default.
+//   acuity = the Acuity OAuth + webhook sync owns the calendar (read into Visits).
+//   native = ChairBack's own booking engine (Staff/Service/Availability/Appointment).
+enum BookingMode {
+  link
+  acuity
+  native
+}
+
+// Lifecycle of a NATIVE Appointment (separate from VisitStatus on purpose - a
+// booking is a future hold, not yet a loyalty event). No RESCHEDULED state: a
+// reschedule mutates startsAt/endsAt in place and stays BOOKED.
+enum AppointmentStatus {
+  BOOKED
+  CANCELED
+  COMPLETED
+  NO_SHOW
+}
+
 enum MessageChannel {
   SMS
   // EMAIL - future seam, not implemented
@@ -44,17 +65,17 @@ enum PromotionKind {
 //  Identity / tenancy 
 
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique // login identity (global)
-  passwordHash String? // argon2id; null for Google-only accounts
-  googleId     String?  @unique // Google "sub"; set for Google sign-in
-  name         String
+  id            String    @id @default(cuid())
+  email         String    @unique // login identity (global)
+  passwordHash  String? // argon2id; null for Google-only accounts
+  googleId      String?   @unique // Google "sub"; set for Google sign-in
+  name          String
   // Session revocation: bumped on password change, which invalidates every
   // previously issued session token (tokens embed the version they were minted with).
-  tokenVersion Int      @default(0)
+  tokenVersion  Int       @default(0)
   // Platform operator. Gates the /admin portal. Set by hand (or the bootstrap
   // script) - never settable through any self-serve endpoint.
-  isAdmin      Boolean  @default(false)
+  isAdmin       Boolean   @default(false)
   // Explicit SMS attestation: the barber affirmed they will only add/text
   // clients who consented and that they're authorized to send on their behalf.
   // Captured at signup (form) or first onboarding step (Google path). The legal
@@ -64,45 +85,45 @@ model User {
   // skips) the dashboard welcome carousel. null = never seen, so the tour
   // auto-opens once. Replaying it from the account card does NOT clear this.
   welcomeSeenAt DateTime?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   shops Shop[] @relation("ShopOwner") // one today; FK clean for N later
 }
 
 model Shop {
-  id              String   @id @default(cuid())
-  ownerId         String
-  owner           User     @relation("ShopOwner", fields: [ownerId], references: [id])
-  name            String // appears in SMS body
-  timezone        String   @default("America/New_York")
-  bookingUrl      String
+  id                  String  @id @default(cuid())
+  ownerId             String
+  owner               User    @relation("ShopOwner", fields: [ownerId], references: [id])
+  name                String // appears in SMS body
+  timezone            String  @default("America/New_York")
+  bookingUrl          String
   // DEPRECATED single-reward config: superseded by the Reward table (each shop
   // designs its own menu). Columns kept so the previously deployed API keeps
   // working through the migration window; no current code reads them.
-  rewardThreshold Int      @default(10)
-  rewardLabel     String   @default("Free Cut")
+  rewardThreshold     Int     @default(10)
+  rewardLabel         String  @default("Free Cut")
   // Base loyalty earn rate: punches per completed visit. Service-specific
   // EarnRule rows override it for matching services.
-  punchesPerVisit Int      @default(1)
-  nudgeBufferDays Int      @default(7)
-  dailySendCap    Int      @default(50)
+  punchesPerVisit     Int     @default(1)
+  nudgeBufferDays     Int     @default(7)
+  dailySendCap        Int     @default(50)
   // Transactional loyalty SMS to CLIENTS: a text the moment a completed visit
   // earns punches, or a reward is redeemed ("You earned 1 punch - 4/10 toward a
   // Free Cut"). Off by default - opt-in per shop. Independent of the marketing
   // nudge/promo sends: still gated by client SMS consent + quiet hours, but NOT
   // counted against dailySendCap (it's triggered by a real visit, not a blast).
   loyaltyTextsEnabled Boolean @default(false)
-  smsTemplate     String? // custom nudge copy; null = built-in default. Placeholders: {firstName} {shop} {bookingUrl} {rewardsUrl}
-  logoUrl         String? // shop logo shown on the rewards + public pages (white-label)
-  accentColor     String? // hex accent (e.g. "#D4AF37"); null = the theme's accent
+  smsTemplate         String? // custom nudge copy; null = built-in default. Placeholders: {firstName} {shop} {bookingUrl} {rewardsUrl}
+  logoUrl             String? // shop logo shown on the rewards + public pages (white-label)
+  accentColor         String? // hex accent (e.g. "#D4AF37"); null = the theme's accent
   // Rebooking countdown: target window (days) for a client to rebook after their
   // last visit. Drives the urgency timer on the rewards page. Default 14 (<2 wks).
-  rebookWindowDays Int     @default(14)
-  plan            String   @default("free") // "free" | "pro"; kept in sync by the Stripe webhook
+  rebookWindowDays    Int     @default(14)
+  plan                String  @default("free") // "free" | "pro"; kept in sync by the Stripe webhook
   // Vertical (INDUSTRIES key in packages/config). Flavors onboarding defaults
   // and copy only - the data model is service-business generic.
-  industry        String   @default("barber")
+  industry            String  @default("barber")
 
   // Billing (Stripe). Access = active/trialing/past_due subscription OR an
   // unexpired trial. When the STRIPE_* env vars are absent, billing is
@@ -140,8 +161,8 @@ model Shop {
   // rewardsWelcome: optional short greeting at the top; null = no custom line.
   // rewardsSections: visible REWARDS_SECTIONS keys; [] = show all (the default).
   // The punch balance + SMS consent card are always shown (not in this list).
-  rewardsWelcome    String?
-  rewardsSections   String[] @default([])
+  rewardsWelcome  String?
+  rewardsSections String[] @default([])
 
   // Appointment requests (lead form on the public page). When takesRequests is
   // on, /s/[slug] shows a "Request an appointment" form instead of the booking
@@ -153,6 +174,15 @@ model Shop {
   // per-shop webhook routing (the body has no account id, so the URL path routes)
   webhookSecret    String   @unique // 32-byte random, used in the webhook URL path
   acuityWebhookIds String[] @default([]) // subscription ids returned by Acuity (teardown)
+
+  // Native booking engine. bookingMode picks the ONE active source (see enum);
+  // default `link` so every existing shop keeps its bookingUrl behavior until the
+  // barber explicitly switches to `native`. The bounds below shape the public
+  // slot picker - all interpreted in this shop's `timezone`.
+  bookingMode      BookingMode @default(link)
+  bookingLeadHours Int         @default(2) // earliest bookable slot = now + this many hours
+  bookingMaxDays   Int         @default(60) // how far ahead a customer may book
+  bookingBufferMin Int         @default(0) // turnover gap added after each appointment
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -168,6 +198,14 @@ model Shop {
   promoUses           PromotionRedemption[]
   appointmentRequests AppointmentRequest[]
   reviews             Review[]
+
+  // Native booking engine relations
+  staff                  Staff[]
+  services               Service[]
+  serviceStaff           ServiceStaff[]
+  availabilityRules      AvailabilityRule[]
+  availabilityExceptions AvailabilityException[]
+  appointments           Appointment[]
 
   @@index([ownerId])
 }
@@ -270,24 +308,24 @@ model AcuityConnection {
 //  Tenant-owned domain (every table carries shopId) 
 
 model Client {
-  id              String   @id @default(cuid())
-  shopId          String
-  shop            Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  acuityClientKey String // normalized phone || email || anon slug
-  firstName       String?
-  lastName        String?
-  phone           String? // E.164
-  email           String?
-  optedOut        Boolean  @default(false)
+  id               String    @id @default(cuid())
+  shopId           String
+  shop             Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  acuityClientKey  String // normalized phone || email || anon slug
+  firstName        String?
+  lastName         String?
+  phone            String? // E.164
+  email            String?
+  optedOut         Boolean   @default(false)
   // SMS consent (TCPA). A client is textable only when optedOut == false AND
   // smsConsentAt != null. optedOut is the live STOP/START gate; smsConsentAt is
   // the proof-of-opt-in gate. New clients (e.g. synced from Acuity) have no
   // consent until it is granted, so they are NOT textable by default.
   smsConsentAt     DateTime? // when opt-in was captured; null = never consented
   smsConsentSource String? // "acuity_intake" | "barber_attest" | "manual" | "join_page"
-  notes           String? // barber's private notes about the client
-  source          String   @default("acuity") // "acuity" | "manual"
-  magicToken      String   @unique // GLOBAL - rewards auth resolves without a shop
+  notes            String? // barber's private notes about the client
+  source           String    @default("acuity") // "acuity" | "manual"
+  magicToken       String    @unique // GLOBAL - rewards auth resolves without a shop
 
   // Soft-archive. A barber can hide a client they no longer want in their active
   // book (duplicate, one-off walk-in, moved away) WITHOUT destroying history -
@@ -306,10 +344,11 @@ model Client {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  visits    Visit[]
-  ledger    PunchLedger[]
-  nudges    Nudge[]
-  promoUses PromotionRedemption[]
+  visits       Visit[]
+  ledger       PunchLedger[]
+  nudges       Nudge[]
+  promoUses    PromotionRedemption[]
+  appointments Appointment[]
 
   @@unique([shopId, acuityClientKey]) // tenant-scoped identity + idempotent upsert
   @@index([shopId])
@@ -323,16 +362,16 @@ model Client {
 // rewards/Twilio writes use. The barber reads/updates these through forShop()
 // (RLS-enforced). Not a booking - just a contact the barber follows up on.
 model AppointmentRequest {
-  id            String   @id @default(cuid())
+  id            String  @id @default(cuid())
   shopId        String
-  shop          Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  shop          Shop    @relation(fields: [shopId], references: [id], onDelete: Cascade)
   firstName     String
   lastName      String?
   phone         String? // E.164 when parseable, else raw input
   email         String?
   message       String? // freeform note from the client
   preferredTime String? // freeform ("weekday evenings", "Sat morning")
-  status        String   @default("NEW") // "NEW" | "CONTACTED" | "CLOSED"
+  status        String  @default("NEW") // "NEW" | "CONTACTED" | "CLOSED"
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -348,13 +387,13 @@ model AppointmentRequest {
 // PENDING until the barber approves it; only APPROVED reviews are ever returned
 // on the public page. authorName is optional (blank -> shown as "Anonymous").
 model Review {
-  id         String   @id @default(cuid())
+  id         String  @id @default(cuid())
   shopId     String
-  shop       Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  shop       Shop    @relation(fields: [shopId], references: [id], onDelete: Cascade)
   rating     Int // 1-5 stars (validated at the API boundary)
   body       String? // freeform review text; optional (a rating alone is allowed)
   authorName String? // optional display name; null/blank -> "Anonymous"
-  status     String   @default("PENDING") // "PENDING" | "APPROVED" | "HIDDEN"
+  status     String  @default("PENDING") // "PENDING" | "APPROVED" | "HIDDEN"
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -382,7 +421,8 @@ model Visit {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  punch PunchLedger?
+  punch       PunchLedger?
+  appointment Appointment? // the native booking this Visit was promoted from (if any)
 
   @@unique([shopId, acuityAppointmentId]) // IDEMPOTENCY (per shop): webhook re-delivery + backfill safe
   @@index([shopId, clientId, scheduledAt]) // cadence + future-booking checks
@@ -468,4 +508,151 @@ model Nudge {
   @@index([shopId, clientId, createdAt]) // "no nudge in 21d" + attribution lookback
   @@index([status, createdAt]) // daily send-cap count
   @@index([promotionId])
+}
+
+//  Native booking engine (only used when Shop.bookingMode == native)
+
+// A barber/chair within a shop. Multi-staff from the start: services,
+// availability, and appointments all hang off a Staff, and the customer picks
+// one before a slot. Soft-deleted (active=false) so historical appointments keep
+// a valid FK. userId optionally links a single-barber shop's owner User.
+model Staff {
+  id        String   @id @default(cuid())
+  shopId    String
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  name      String
+  bio       String?
+  imageUrl  String? // http(s) only (same boundary guard as shop branding)
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0)
+  userId    String? // optional link to the owning User (single-barber shops)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  services          ServiceStaff[]
+  availabilityRules AvailabilityRule[]
+  exceptions        AvailabilityException[]
+  appointments      Appointment[]
+
+  @@index([shopId, active])
+}
+
+// A bookable service (haircut, beard trim) with a duration that drives the slot
+// step and a display price. `name` is copied onto the promoted Visit.serviceName,
+// so the existing EarnRule substring matching keeps working unchanged.
+model Service {
+  id          String   @id @default(cuid())
+  shopId      String
+  shop        Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  durationMin Int // length of the appointment (drives the slot step)
+  price       Decimal? @db.Decimal(10, 2) // display only in v1 (no payment capture)
+  active      Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  staff        ServiceStaff[]
+  appointments Appointment[]
+
+  @@index([shopId, active])
+}
+
+// Which staff offer which service (explicit join, multi-staff). shopId is
+// denormalized so RLS is uniform across every booking table.
+model ServiceStaff {
+  id        String  @id @default(cuid())
+  shopId    String
+  shop      Shop    @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  serviceId String
+  service   Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  staffId   String
+  staff     Staff   @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@unique([serviceId, staffId])
+  @@index([shopId])
+  @@index([staffId])
+}
+
+// Recurring weekly availability for a staff member. Stored as LOCAL wall-clock
+// minutes from midnight in the SHOP's timezone (not instants) so a "9-5" shift
+// stays correct across DST - the concrete UTC instant is computed per date.
+// weekday is 0=Sun..6=Sat (JS getDay). Multiple rows per (staff, weekday) model
+// split shifts (e.g. a lunch gap).
+model AvailabilityRule {
+  id        String   @id @default(cuid())
+  shopId    String
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  staffId   String
+  staff     Staff    @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  weekday   Int // 0-6 (Sun-Sat), in shop-local time
+  startMin  Int // minutes from local midnight, inclusive (e.g. 540 = 09:00)
+  endMin    Int // minutes from local midnight, exclusive (e.g. 1020 = 17:00)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([shopId, staffId, weekday])
+}
+
+// A one-off override on a staff member's calendar. isBlock=true subtracts time
+// (vacation, a day off, a lunch break on a specific date); isBlock=false adds a
+// one-off open window (e.g. an extra Saturday). Stored as concrete UTC instants.
+model AvailabilityException {
+  id        String   @id @default(cuid())
+  shopId    String
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  staffId   String
+  staff     Staff    @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  startsAt  DateTime
+  endsAt    DateTime
+  isBlock   Boolean  @default(true)
+  reason    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([shopId, staffId, startsAt])
+}
+
+// A native booking. A future hold until its time passes (or the barber marks it
+// done), when promoteFulfilledAppointments creates a COMPLETED Visit
+// (acuityAppointmentId = "booking:{id}") and runs the SAME earn+cadence+loyalty
+// pipeline as Acuity/manual visits. clientId may be null briefly if the Client
+// upsert is decoupled, but is normally set at booking time. manageToken is the
+// cancel/reschedule auth (like Client.magicToken). visitId back-points at the
+// promoted Visit so cancel/no-show claw-back can find it.
+model Appointment {
+  id                 String            @id @default(cuid())
+  shopId             String
+  shop               Shop              @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  staffId            String
+  staff              Staff             @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  serviceId          String
+  service            Service           @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  clientId           String?
+  client             Client?           @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  // What the booker typed (kept even if the Client row is later archived/merged).
+  firstName          String
+  lastName           String?
+  phone              String? // E.164 when parseable
+  email              String?
+  status             AppointmentStatus @default(BOOKED)
+  startsAt           DateTime // UTC instant
+  endsAt             DateTime // startsAt + service.durationMin
+  priceAtBooking     Decimal?          @db.Decimal(10, 2)
+  manageToken        String            @unique // cancel/reschedule auth (no login)
+  visitId            String?           @unique // the Visit promoted from this appointment
+  visit              Visit?            @relation(fields: [visitId], references: [id], onDelete: SetNull)
+  confirmationSentAt DateTime?
+  reminderSentAt     DateTime?
+  canceledAt         DateTime?
+  completedAt        DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  // The double-booking guard (a partial unique on BOOKED rows) is added by hand
+  // in the migration - Prisma can't express a WHERE-filtered unique index.
+  @@index([shopId, staffId, startsAt]) // overlap checks + barber day view
+  @@index([status, startsAt]) // reminder + promotion scans
+  @@index([shopId, status, startsAt]) // dashboard upcoming list
 }

@@ -1,0 +1,404 @@
+"use client";
+
+import { useMemo, useState, useTransition } from "react";
+import Link from "next/link";
+import type { BookShopData } from "./page";
+import { bookAction, getSlotsAction, type SlotsResult } from "./actions";
+
+/**
+ * Public native booking picker: pick service -> barber -> day -> open slot ->
+ * enter contact + SMS consent -> confirm. Slots come from the server action
+ * (CSP blocks a direct browser fetch); the create action returns a manage token
+ * so we can link the customer to cancel/reschedule. Accent-themed to the shop.
+ */
+export function BookingClient({ data }: { data: BookShopData }) {
+  const accent = data.shop.accentColor || "#D4AF37";
+  const tz = data.shop.timezone;
+
+  const [serviceId, setServiceId] = useState<string | null>(null);
+  const [staffId, setStaffId] = useState<string | null>(null);
+  const [day, setDay] = useState<string | null>(null); // YYYY-MM-DD (local)
+  const [slot, setSlot] = useState<string | null>(null); // ISO startsAt
+  const [slotsByDay, setSlotsByDay] = useState<Map<string, { startsAt: string }[]>>(new Map());
+  const [loadingSlots, setLoadingSlots] = useState(false);
+
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [consent, setConsent] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmedToken, setConfirmedToken] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  // Which staff offer the chosen service, and which services a chosen staff offers.
+  const staffForService = useMemo(() => {
+    if (!serviceId) return data.staff;
+    const ids = new Set(
+      data.offerings.filter((o) => o.serviceId === serviceId).map((o) => o.staffId),
+    );
+    return data.staff.filter((s) => ids.has(s.id));
+  }, [serviceId, data]);
+
+  const dateFmt = useMemo(
+    () =>
+      new Intl.DateTimeFormat("en-US", {
+        timeZone: tz,
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+      }),
+    [tz],
+  );
+  const timeFmt = useMemo(
+    () =>
+      new Intl.DateTimeFormat("en-US", {
+        timeZone: tz,
+        hour: "numeric",
+        minute: "2-digit",
+      }),
+    [tz],
+  );
+
+  /** Local (shop-tz) YYYY-MM-DD bucket key for an instant. */
+  function dayKey(iso: string): string {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date(iso));
+    return parts; // en-CA yields YYYY-MM-DD
+  }
+
+  function loadSlots(svc: string, stf: string) {
+    setLoadingSlots(true);
+    setError(null);
+    const from = new Date().toISOString();
+    const to = new Date(
+      Date.now() + data.shop.bookingMaxDays * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    startTransition(async () => {
+      const res = await getSlotsAction(data.shop.slug, stf, svc, from, to);
+      if (!res.ok || !res.data) {
+        setError("Couldn't load times. Please try again.");
+        setLoadingSlots(false);
+        return;
+      }
+      bucketSlots(res.data);
+      setLoadingSlots(false);
+    });
+  }
+
+  function bucketSlots(result: SlotsResult) {
+    const map = new Map<string, { startsAt: string }[]>();
+    for (const s of result.slots) {
+      const key = dayKey(s.startsAt);
+      const list = map.get(key) ?? [];
+      list.push({ startsAt: s.startsAt });
+      map.set(key, list);
+    }
+    setSlotsByDay(map);
+    // Auto-select the first day with availability.
+    const firstDay = [...map.keys()].sort()[0] ?? null;
+    setDay(firstDay);
+    setSlot(null);
+  }
+
+  function pickService(id: string) {
+    setServiceId(id);
+    setStaffId(null);
+    setSlotsByDay(new Map());
+    setDay(null);
+    setSlot(null);
+  }
+
+  function pickStaff(id: string) {
+    setStaffId(id);
+    setSlot(null);
+    if (serviceId) loadSlots(serviceId, id);
+  }
+
+  function submit() {
+    setError(null);
+    if (!firstName.trim()) {
+      setError("Please add your name.");
+      return;
+    }
+    if (!phone.trim() && !email.trim()) {
+      setError("Add a phone or email so we can confirm.");
+      return;
+    }
+    if (!serviceId || !staffId || !slot) return;
+    startTransition(async () => {
+      const res = await bookAction(data.shop.slug, {
+        staffId,
+        serviceId,
+        startsAt: slot,
+        firstName: firstName.trim(),
+        lastName: lastName.trim() || undefined,
+        phone: phone.trim() || undefined,
+        email: email.trim() || undefined,
+        smsConsent: consent && Boolean(phone.trim()),
+      });
+      if (!res.ok) {
+        if (res.error === "slot_taken") {
+          setError("That time was just taken. Pick another slot.");
+          // Refresh availability so the taken slot disappears.
+          if (serviceId && staffId) loadSlots(serviceId, staffId);
+          setSlot(null);
+        } else {
+          setError("Something went wrong. Please try again.");
+        }
+        return;
+      }
+      setConfirmedToken(res.manageToken ?? null);
+    });
+  }
+
+  const days = [...slotsByDay.keys()].sort();
+  const daySlots = day ? (slotsByDay.get(day) ?? []) : [];
+  const primaryBtn =
+    "w-full rounded-xl py-3 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01] disabled:opacity-50";
+  const input =
+    "w-full rounded-lg border border-white/15 bg-white/5 px-4 py-2.5 text-sm text-offwhite placeholder:text-muted focus:border-white/40 focus:outline-none";
+
+  // ---- Confirmation screen ----
+  if (confirmedToken !== null) {
+    return (
+      <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-5 py-10 text-offwhite">
+        <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
+          <div
+            className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full text-2xl"
+            style={{ backgroundColor: `${accent}22`, color: accent }}
+          >
+            ✓
+          </div>
+          <h1 className="font-display text-2xl">You're booked!</h1>
+          <p className="mt-2 text-sm text-muted">
+            {data.shop.name} has your appointment.
+            {consent && phone.trim()
+              ? " We'll text you a confirmation and a reminder."
+              : " Save this page to manage your appointment."}
+          </p>
+          <Link
+            href={`/book/manage/${confirmedToken}`}
+            className="mt-5 inline-block rounded-xl px-5 py-2.5 text-sm font-semibold"
+            style={{ backgroundColor: accent, color: "#101012" }}
+          >
+            View / change my appointment
+          </Link>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="mx-auto max-w-md px-5 py-8 text-offwhite">
+      <header className="mb-6 text-center">
+        {data.shop.logoUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={data.shop.logoUrl}
+            alt={data.shop.name}
+            className="mx-auto mb-3 h-14 w-14 rounded-full object-cover"
+          />
+        ) : null}
+        <h1 className="font-display text-2xl tracking-tight">Book at {data.shop.name}</h1>
+      </header>
+
+      {/* Step 1: service */}
+      <Section title="1 · Choose a service">
+        <div className="flex flex-col gap-2">
+          {data.services.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => pickService(s.id)}
+              className="flex items-center justify-between rounded-xl border px-4 py-3 text-left transition-colors"
+              style={{
+                borderColor: serviceId === s.id ? accent : "rgba(255,255,255,0.12)",
+                backgroundColor: serviceId === s.id ? `${accent}14` : "transparent",
+              }}
+            >
+              <span>
+                <span className="block text-sm font-medium">{s.name}</span>
+                <span className="block text-xs text-muted">{s.durationMin} min</span>
+              </span>
+              {s.price !== null && (
+                <span className="text-sm text-muted">${s.price.toFixed(0)}</span>
+              )}
+            </button>
+          ))}
+          {data.services.length === 0 && (
+            <p className="text-sm text-muted">No services available yet.</p>
+          )}
+        </div>
+      </Section>
+
+      {/* Step 2: barber */}
+      {serviceId && (
+        <Section title="2 · Choose your barber">
+          <div className="flex flex-col gap-2">
+            {staffForService.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => pickStaff(s.id)}
+                className="flex items-center gap-3 rounded-xl border px-4 py-3 text-left transition-colors"
+                style={{
+                  borderColor: staffId === s.id ? accent : "rgba(255,255,255,0.12)",
+                  backgroundColor: staffId === s.id ? `${accent}14` : "transparent",
+                }}
+              >
+                {s.imageUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={s.imageUrl} alt={s.name} className="h-9 w-9 rounded-full object-cover" />
+                ) : (
+                  <span
+                    className="flex h-9 w-9 items-center justify-center rounded-full text-sm font-semibold"
+                    style={{ backgroundColor: `${accent}22`, color: accent }}
+                  >
+                    {s.name.charAt(0)}
+                  </span>
+                )}
+                <span className="text-sm font-medium">{s.name}</span>
+              </button>
+            ))}
+          </div>
+        </Section>
+      )}
+
+      {/* Step 3: day + slot */}
+      {serviceId && staffId && (
+        <Section title="3 · Pick a time">
+          {loadingSlots ? (
+            <p className="text-sm text-muted">Loading available times…</p>
+          ) : days.length === 0 ? (
+            <p className="text-sm text-muted">
+              No open times in the next {data.shop.bookingMaxDays} days. Try another barber.
+            </p>
+          ) : (
+            <>
+              <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
+                {days.map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => {
+                      setDay(d);
+                      setSlot(null);
+                    }}
+                    className="shrink-0 rounded-lg border px-3 py-2 text-xs transition-colors"
+                    style={{
+                      borderColor: day === d ? accent : "rgba(255,255,255,0.12)",
+                      backgroundColor: day === d ? `${accent}14` : "transparent",
+                    }}
+                  >
+                    {/* Label from the first slot's real instant (correct in the
+                        shop tz) - never synthesize a date from the key string,
+                        which would be parsed in the viewer's local zone. */}
+                    {dateFmt.format(new Date((slotsByDay.get(d) ?? [])[0]?.startsAt ?? d))}
+                  </button>
+                ))}
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {daySlots.map((s) => (
+                  <button
+                    key={s.startsAt}
+                    type="button"
+                    onClick={() => setSlot(s.startsAt)}
+                    className="rounded-lg border py-2 text-center text-sm transition-colors"
+                    style={{
+                      borderColor: slot === s.startsAt ? accent : "rgba(255,255,255,0.12)",
+                      backgroundColor: slot === s.startsAt ? accent : "transparent",
+                      color: slot === s.startsAt ? "#101012" : undefined,
+                    }}
+                  >
+                    {timeFmt.format(new Date(s.startsAt))}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </Section>
+      )}
+
+      {/* Step 4: contact + consent */}
+      {slot && (
+        <Section title="4 · Your details">
+          <div className="flex flex-col gap-3">
+            <div className="flex gap-2">
+              <input
+                className={input}
+                placeholder="First name"
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+                aria-label="First name"
+              />
+              <input
+                className={input}
+                placeholder="Last name (optional)"
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+                aria-label="Last name"
+              />
+            </div>
+            <input
+              className={input}
+              type="tel"
+              inputMode="tel"
+              autoComplete="tel"
+              placeholder="Mobile number"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              aria-label="Mobile number"
+            />
+            <input
+              className={input}
+              type="email"
+              autoComplete="email"
+              placeholder="Email (optional)"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              aria-label="Email"
+            />
+            <label className="flex items-start gap-2 text-xs text-muted">
+              <input
+                type="checkbox"
+                checked={consent}
+                onChange={(e) => setConsent(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                Text me my confirmation and a reminder. Msg &amp; data rates may
+                apply. Reply STOP to opt out.
+              </span>
+            </label>
+            {error && <p className="text-xs text-red-400">{error}</p>}
+            <button
+              type="button"
+              onClick={submit}
+              disabled={pending}
+              className={primaryBtn}
+              style={{ backgroundColor: accent, color: "#101012" }}
+            >
+              {pending ? "Booking…" : "Confirm booking"}
+            </button>
+          </div>
+        </Section>
+      )}
+
+      {error && !slot && <p className="mt-3 text-center text-xs text-red-400">{error}</p>}
+    </main>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="mb-5">
+      <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">{title}</h2>
+      {children}
+    </section>
+  );
+}

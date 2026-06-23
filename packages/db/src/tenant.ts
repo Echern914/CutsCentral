@@ -73,6 +73,20 @@ type PromoUseCreateNoShop = Omit<
   Prisma.PromotionRedemptionUncheckedCreateInput,
   "shopId"
 >;
+type StaffCreateNoShop = Omit<Prisma.StaffUncheckedCreateInput, "shopId">;
+type ServiceCreateNoShop = Omit<Prisma.ServiceUncheckedCreateInput, "shopId">;
+type ServiceStaffCreateNoShop = Omit<
+  Prisma.ServiceStaffUncheckedCreateInput,
+  "shopId"
+>;
+type AvailabilityRuleCreateNoShop = Omit<
+  Prisma.AvailabilityRuleUncheckedCreateInput,
+  "shopId"
+>;
+type AvailabilityExceptionCreateNoShop = Omit<
+  Prisma.AvailabilityExceptionUncheckedCreateInput,
+  "shopId"
+>;
 
 export function forShop(shopId: string) {
   return {
@@ -374,6 +388,171 @@ export function forShop(shopId: string) {
       update: (args: Prisma.ReviewUpdateArgs) =>
         runWithShop(shopId, (tx) =>
           tx.review.update({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+    },
+
+    //  Native booking engine (only used when shop.bookingMode == native)
+
+    staff: {
+      findMany: (args: Prisma.StaffFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.staff.findMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      findFirst: (args: Prisma.StaffFindFirstArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.staff.findFirst({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      count: (args: Prisma.StaffCountArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.staff.count({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      create: (args: { data: StaffCreateNoShop }) =>
+        runWithShop(shopId, (tx) =>
+          tx.staff.create({
+            data: stamp(args.data, shopId) as Prisma.StaffUncheckedCreateInput,
+          }),
+        ),
+      updateMany: (args: Prisma.StaffUpdateManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.staff.updateMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+    },
+
+    service: {
+      findMany: (args: Prisma.ServiceFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.service.findMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      findFirst: (args: Prisma.ServiceFindFirstArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.service.findFirst({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      count: (args: Prisma.ServiceCountArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.service.count({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      create: (args: { data: ServiceCreateNoShop }) =>
+        runWithShop(shopId, (tx) =>
+          tx.service.create({
+            data: stamp(args.data, shopId) as Prisma.ServiceUncheckedCreateInput,
+          }),
+        ),
+      updateMany: (args: Prisma.ServiceUpdateManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.service.updateMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+    },
+
+    serviceStaff: {
+      findMany: (args: Prisma.ServiceStaffFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.serviceStaff.findMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      create: (args: { data: ServiceStaffCreateNoShop }) =>
+        runWithShop(shopId, (tx) =>
+          tx.serviceStaff.create({
+            data: stamp(
+              args.data,
+              shopId,
+            ) as Prisma.ServiceStaffUncheckedCreateInput,
+          }),
+        ),
+      deleteMany: (args: Prisma.ServiceStaffDeleteManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.serviceStaff.deleteMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+    },
+
+    availabilityRule: {
+      findMany: (args: Prisma.AvailabilityRuleFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.availabilityRule.findMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      create: (args: { data: AvailabilityRuleCreateNoShop }) =>
+        runWithShop(shopId, (tx) =>
+          tx.availabilityRule.create({
+            data: stamp(
+              args.data,
+              shopId,
+            ) as Prisma.AvailabilityRuleUncheckedCreateInput,
+          }),
+        ),
+      deleteMany: (args: Prisma.AvailabilityRuleDeleteManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.availabilityRule.deleteMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+    },
+
+    availabilityException: {
+      findMany: (args: Prisma.AvailabilityExceptionFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.availabilityException.findMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      create: (args: { data: AvailabilityExceptionCreateNoShop }) =>
+        runWithShop(shopId, (tx) =>
+          tx.availabilityException.create({
+            data: stamp(
+              args.data,
+              shopId,
+            ) as Prisma.AvailabilityExceptionUncheckedCreateInput,
+          }),
+        ),
+      deleteMany: (args: Prisma.AvailabilityExceptionDeleteManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.availabilityException.deleteMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+    },
+
+    // Native appointments. No create here on purpose: the public booking insert
+    // runs on the UNauthenticated route (no shop context) via plain prisma in a
+    // single transaction (the same trust model as appointmentRequest/review).
+    // The barber reads/cancels/completes through this scoped accessor (RLS).
+    appointment: {
+      findMany: (args: Prisma.AppointmentFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.appointment.findMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      findFirst: (args: Prisma.AppointmentFindFirstArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.appointment.findFirst({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      count: (args: Prisma.AppointmentCountArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.appointment.count({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      update: (args: Prisma.AppointmentUpdateArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.appointment.update({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
         ),
     },
   };

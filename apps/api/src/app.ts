@@ -19,6 +19,8 @@ import { acuityOAuthRouter } from "./routes/acuity.oauth.js";
 import { adminRouter } from "./routes/admin.js";
 import { rewardsRouter } from "./routes/rewards.js";
 import { dashboardRouter } from "./routes/dashboard.js";
+import { bookingPublicRouter } from "./routes/booking.public.js";
+import { bookingDashboardRouter } from "./routes/booking.dashboard.js";
 import { loyaltyRouter } from "./routes/loyalty.js";
 import { promotionsRouter } from "./routes/promotions.js";
 import { billingRouter } from "./routes/billing.js";
@@ -83,7 +85,9 @@ export function createApp(): Express {
   app.use("/api/acuity/oauth", oauthLimiter, acuityOAuthRouter);
   app.use("/api/rewards", rewardsLimiter, rewardsRouter);
   app.use("/api/page", rewardsLimiter, publicPageRouter); // public shop pages
+  app.use("/api/book", bookingPublicRouter); // public native booking (per-route limits inside)
   app.use("/api/dashboard", dashboardLimiter, dashboardRouter);
+  app.use("/api/booking", dashboardLimiter, bookingDashboardRouter); // barber booking config
   app.use("/api/loyalty", dashboardLimiter, loyaltyRouter);
   app.use("/api/promos", dashboardLimiter, promotionsRouter);
   app.use("/api/billing", dashboardLimiter, billingRouter);

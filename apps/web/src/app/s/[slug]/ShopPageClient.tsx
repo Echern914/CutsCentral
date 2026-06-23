@@ -42,6 +42,11 @@ export function ShopPageClient({
     PAGE_THEMES[(data.theme as PageThemeKey) in PAGE_THEMES ? (data.theme as PageThemeKey) : "classic"];
   const accent = data.accentColor || theme.accent;
 
+  // Native booking: the CTA points at the in-app slot picker instead of the
+  // external bookingUrl, and the lead-request form is replaced by real booking.
+  const bookIsNative = data.bookingMode === "native";
+  const bookHref = bookIsNative ? `/book/${data.slug}` : data.bookingUrl;
+
   const fontKey: PageFontKey =
     (data.fontKey as PageFontKey) in PAGE_FONTS ? (data.fontKey as PageFontKey) : DEFAULT_PAGE_FONT;
   const font = PAGE_FONTS[fontKey];
@@ -160,9 +165,10 @@ export function ShopPageClient({
           </div>
         </motion.header>
 
-        {/* Primary CTA */}
+        {/* Primary CTA. Native booking and the lead form are mutually exclusive:
+            native is real self-serve booking, so it replaces the request form. */}
         <motion.div variants={fadeUp} className="mt-6">
-          {data.takesRequests ? (
+          {data.takesRequests && !bookIsNative ? (
             <>
               <RequestForm
                 slug={data.slug}
@@ -179,7 +185,7 @@ export function ShopPageClient({
                 }}
               />
               <a
-                href={preview ? undefined : data.bookingUrl}
+                href={preview ? undefined : bookHref}
                 onClick={preview ? (e) => e.preventDefault() : undefined}
                 className="mt-3 block text-center text-xs underline-offset-2 hover:underline"
                 style={{ color: theme.muted }}
@@ -189,7 +195,7 @@ export function ShopPageClient({
             </>
           ) : (
             <a
-              href={preview ? undefined : data.bookingUrl}
+              href={preview ? undefined : bookHref}
               onClick={preview ? (e) => e.preventDefault() : undefined}
               className="block w-full py-3.5 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01]"
               style={{
@@ -210,7 +216,7 @@ export function ShopPageClient({
         {/* Bottom CTA + footer */}
         <motion.footer variants={fadeUp} className="mt-10 text-center">
           <a
-            href={preview ? undefined : data.bookingUrl}
+            href={preview ? undefined : bookHref}
             onClick={preview ? (e) => e.preventDefault() : undefined}
             className="inline-block px-8 py-3 text-sm font-semibold"
             style={{ border: `1px solid ${accent}`, color: accent, borderRadius: layout.buttonRadius }}
