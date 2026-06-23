@@ -71,6 +71,7 @@ export async function createServiceAction(input: {
   description?: string;
   durationMin: number;
   price?: number | null;
+  priceOverrides?: Record<string, number>;
   staffIds?: string[];
 }): Promise<Result> {
   return done(await apiSend("POST", "/api/booking/services", input));
@@ -83,6 +84,7 @@ export async function updateServiceAction(
     description?: string;
     durationMin?: number;
     price?: number | null;
+    priceOverrides?: Record<string, number>;
     active?: boolean;
     staffIds?: string[];
   },

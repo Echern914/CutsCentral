@@ -4,6 +4,11 @@ import { randomToken } from "@chairback/config";
 import { prisma, Prisma } from "@chairback/db";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
+import {
+  effectivePriceForDate,
+  parsePriceOverrides,
+  priceRangeForService,
+} from "../engines/pricing.js";
 import { hasActiveAccess } from "../billing/stripe.js";
 import { notifyAppointmentConfirmation } from "../services/appointmentNotify.js";
 import { cancelAppointment } from "../engines/appointmentPromotion.js";
@@ -64,6 +69,7 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
         description: true,
         durationMin: true,
         price: true,
+        priceOverrides: true,
       },
     }),
     prisma.serviceStaff.findMany({
@@ -82,10 +88,22 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
       bookingMaxDays: shop.bookingMaxDays,
     },
     staff,
-    services: services.map((s) => ({
-      ...s,
-      price: s.price === null ? null : Number(s.price),
-    })),
+    services: services.map((s) => {
+      const base = s.price === null ? null : Number(s.price);
+      const overrides = parsePriceOverrides(s.priceOverrides);
+      return {
+        id: s.id,
+        name: s.name,
+        description: s.description,
+        durationMin: s.durationMin,
+        price: base,
+        // Per-weekday overrides ({weekday: price}); the client computes the exact
+        // price for the day the customer picks (in the shop tz). priceRange lets
+        // the menu show "from $X" / "$45-$55" before a day is chosen.
+        priceOverrides: overrides,
+        priceRange: priceRangeForService(base, overrides),
+      };
+    }),
     // The (service, staff) offering matrix so the UI can filter either way.
     offerings: links,
   });
@@ -178,7 +196,7 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
   // Validate staff offers an active service, compute the end time, bounds-check.
   const service = await prisma.service.findFirst({
     where: { id: d.serviceId, shopId: shop.id, active: true },
-    select: { id: true, durationMin: true, price: true, name: true },
+    select: { id: true, durationMin: true, price: true, priceOverrides: true, name: true },
   });
   const offering = await prisma.serviceStaff.findFirst({
     where: { shopId: shop.id, serviceId: d.serviceId, staffId: d.staffId },
@@ -196,6 +214,15 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
   const now = new Date();
   const startsAt = d.startsAt;
   const endsAt = new Date(startsAt.getTime() + service.durationMin * 60_000);
+  // Snapshot the price for the DATE the customer picked (weekday override in the
+  // shop tz, else base) - so a Sunday surcharge is locked in at exactly what the
+  // customer was shown, not the base price.
+  const effectivePrice = effectivePriceForDate(
+    service.price === null ? null : Number(service.price),
+    service.priceOverrides,
+    startsAt,
+    shop.timezone,
+  );
   const earliest = now.getTime() + shop.bookingLeadHours * 60 * 60_000;
   const latest = now.getTime() + shop.bookingMaxDays * 24 * 60 * 60_000;
   if (startsAt.getTime() < earliest) {
@@ -303,7 +330,7 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
           status: "BOOKED",
           startsAt,
           endsAt,
-          priceAtBooking: service.price ?? undefined,
+          priceAtBooking: effectivePrice ?? undefined,
           manageToken: token,
         },
         select: { id: true, manageToken: true },
@@ -424,9 +451,10 @@ bookingPublicRouter.post(
         serviceId: true,
         status: true,
         startsAt: true,
-        service: { select: { durationMin: true } },
+        service: { select: { durationMin: true, price: true, priceOverrides: true } },
         shop: {
           select: {
+            timezone: true,
             bookingLeadHours: true,
             bookingMaxDays: true,
             bookingBufferMin: true,
@@ -457,6 +485,13 @@ bookingPublicRouter.post(
     const startsAt = parsed.data.startsAt;
     const endsAt = new Date(
       startsAt.getTime() + appt.service.durationMin * 60_000,
+    );
+    // The new date may fall on a different-priced weekday - reprice to match.
+    const effectivePrice = effectivePriceForDate(
+      appt.service.price === null ? null : Number(appt.service.price),
+      appt.service.priceOverrides,
+      startsAt,
+      appt.shop.timezone,
     );
     const earliest = now.getTime() + appt.shop.bookingLeadHours * 60 * 60_000;
     const latest = now.getTime() + appt.shop.bookingMaxDays * 24 * 60 * 60_000;
@@ -504,12 +539,14 @@ bookingPublicRouter.post(
                        AND "endsAt" > ${overlapStart}`,
         );
         if (overlap.length > 0) throw new SlotTakenError();
-        // Move it and reset send-state so a fresh confirmation/reminder go out.
+        // Move it, reprice for the new date, and reset send-state so a fresh
+        // confirmation/reminder go out.
         await tx.appointment.update({
           where: { id: appt.id },
           data: {
             startsAt,
             endsAt,
+            priceAtBooking: effectivePrice ?? null,
             confirmationSentAt: null,
             reminderSentAt: null,
           },

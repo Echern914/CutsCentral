@@ -283,27 +283,43 @@ function ServicesTab({
   const [name, setName] = useState("");
   const [duration, setDuration] = useState(30);
   const [price, setPrice] = useState("");
+  // Per-weekday price overrides the barber sets explicitly (weekday -> price
+  // string). Empty = that day uses the base price. Built into the API payload.
+  const [dayPrices, setDayPrices] = useState<Record<number, string>>({});
   // Empty = "offered by everyone" (resolved at submit). Starting empty avoids a
   // stale snapshot of the staff list - a barber added later is included by default.
   const [staffIds, setStaffIds] = useState<string[]>([]);
   const [pending, start] = useTransition();
   const activeStaff = staff.filter((s) => s.active);
 
+  /** Build the {weekday: price} override map from the day inputs (valid only). */
+  function buildOverrides(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const [wd, val] of Object.entries(dayPrices)) {
+      const n = Number(val);
+      if (val.trim() !== "" && Number.isFinite(n) && n >= 0) out[wd] = n;
+    }
+    return out;
+  }
+
   function add() {
     if (!name.trim()) return;
     // No explicit selection -> offer it via every active barber.
     const offeredBy = staffIds.length > 0 ? staffIds : activeStaff.map((s) => s.id);
+    const overrides = buildOverrides();
     start(async () => {
       const r = await createServiceAction({
         name: name.trim(),
         durationMin: duration,
         price: price.trim() ? Number(price) : null,
+        priceOverrides: Object.keys(overrides).length > 0 ? overrides : undefined,
         staffIds: offeredBy,
       });
       if (r.ok) {
         toast("Service added", "success");
         setName("");
         setPrice("");
+        setDayPrices({});
         setStaffIds([]);
       } else toast("Couldn't add", "error");
     });
@@ -368,6 +384,33 @@ function ServicesTab({
           </div>
         </div>
       )}
+
+      {/* Optional per-day pricing. Leave a day blank to use the base price; fill
+          one in to charge differently (e.g. a Sunday premium). The customer sees
+          the right price for the day they pick. */}
+      <div className="mt-3">
+        <span className={labelCls}>Different price on certain days? (optional)</span>
+        <div className="mt-1 grid grid-cols-4 gap-2 sm:grid-cols-7">
+          {WEEKDAYS.map((label, wd) => (
+            <label key={wd} className="flex flex-col gap-1">
+              <span className="text-[10px] text-muted">{label}</span>
+              <input
+                type="number"
+                min={0}
+                inputMode="decimal"
+                placeholder={price.trim() ? `$${price}` : "base"}
+                value={dayPrices[wd] ?? ""}
+                onChange={(e) =>
+                  setDayPrices((cur) => ({ ...cur, [wd]: e.target.value }))
+                }
+                className="w-full rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50"
+                aria-label={`${label} price`}
+              />
+            </label>
+          ))}
+        </div>
+      </div>
+
       <button
         onClick={add}
         disabled={pending}
@@ -386,6 +429,11 @@ function ServicesTab({
               {s.name}{" "}
               <span className="text-xs text-muted">
                 · {s.durationMin} min{s.price !== null ? ` · $${s.price}` : ""}
+                {Object.keys(s.priceOverrides ?? {}).length > 0 &&
+                  " · " +
+                    Object.entries(s.priceOverrides)
+                      .map(([wd, p]) => `${WEEKDAYS[Number(wd)]} $${p}`)
+                      .join(", ")}
               </span>
             </span>
             <button

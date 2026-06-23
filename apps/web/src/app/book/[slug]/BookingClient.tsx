@@ -158,6 +158,38 @@ export function BookingClient({ data }: { data: BookShopData }) {
 
   const days = [...slotsByDay.keys()].sort();
   const daySlots = day ? (slotsByDay.get(day) ?? []) : [];
+
+  const selectedService = data.services.find((s) => s.id === serviceId) ?? null;
+
+  /** Shop-tz weekday (0=Sun..6=Sat) for an ISO instant, matching the API. */
+  function weekdayInTz(iso: string): number {
+    const wd = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(
+      new Date(iso),
+    );
+    return { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[wd] ?? 0;
+  }
+
+  /** The effective price for a service on a given ISO date (override else base). */
+  function priceForDay(
+    svc: { price: number | null; priceOverrides: Record<string, number> },
+    iso: string,
+  ): number | null {
+    const wd = String(weekdayInTz(iso));
+    if (Object.prototype.hasOwnProperty.call(svc.priceOverrides, wd)) return svc.priceOverrides[wd]!;
+    return svc.price;
+  }
+
+  /** Menu label: "$45", "from $45", or "$45-$55" depending on the range. */
+  function priceLabel(svc: { priceRange: { min: number; max: number } | null }): string | null {
+    if (!svc.priceRange) return null;
+    const { min, max } = svc.priceRange;
+    if (min === max) return `$${min.toFixed(0)}`;
+    return `$${min.toFixed(0)}-$${max.toFixed(0)}`;
+  }
+
+  // The exact price for the slot the customer has chosen (so no surprise).
+  const selectedPrice =
+    selectedService && slot ? priceForDay(selectedService, slot) : null;
   const primaryBtn =
     "w-full rounded-xl py-3 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01] disabled:opacity-50";
   const input =
@@ -225,8 +257,8 @@ export function BookingClient({ data }: { data: BookShopData }) {
                 <span className="block text-sm font-medium">{s.name}</span>
                 <span className="block text-xs text-muted">{s.durationMin} min</span>
               </span>
-              {s.price !== null && (
-                <span className="text-sm text-muted">${s.price.toFixed(0)}</span>
+              {priceLabel(s) && (
+                <span className="text-sm text-muted">{priceLabel(s)}</span>
               )}
             </button>
           ))}
@@ -327,6 +359,15 @@ export function BookingClient({ data }: { data: BookShopData }) {
       {/* Step 4: contact + consent */}
       {slot && (
         <Section title="4 · Your details">
+          {selectedPrice !== null && (
+            <div
+              className="mb-3 flex items-center justify-between rounded-xl px-4 py-3 text-sm"
+              style={{ backgroundColor: `${accent}14`, color: accent }}
+            >
+              <span>{selectedService?.name}</span>
+              <span className="font-semibold">${selectedPrice.toFixed(0)}</span>
+            </div>
+          )}
           <div className="flex flex-col gap-3">
             <div className="flex gap-2">
               <input

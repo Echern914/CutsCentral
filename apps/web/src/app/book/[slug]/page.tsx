@@ -21,6 +21,10 @@ export interface BookShopData {
     description: string | null;
     durationMin: number;
     price: number | null;
+    // Per-weekday price overrides ({ "0": 55 } = Sunday $55); the client picks the
+    // right one for the chosen day. priceRange spans base + overrides for the menu.
+    priceOverrides: Record<string, number>;
+    priceRange: { min: number; max: number } | null;
   }[];
   offerings: { serviceId: string; staffId: string }[];
 }
