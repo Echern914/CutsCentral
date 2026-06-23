@@ -10,6 +10,7 @@ const LINKS = [
   { href: "/dashboard/rewards", label: "Rewards" },
   { href: "/dashboard/promotions", label: "Promos" },
   { href: "/dashboard/booking", label: "Booking" },
+  { href: "/dashboard/payments", label: "Payments" },
   { href: "/dashboard/site", label: "Page" },
   { href: "/dashboard/requests", label: "Requests" },
   { href: "/dashboard/reviews", label: "Reviews" },
