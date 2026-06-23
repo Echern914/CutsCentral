@@ -13,10 +13,15 @@ import { cn } from "@/lib/cn";
  * are NOT reorderable (the rewards page has a deliberate emotional order). The
  * punch balance and the SMS consent card are always shown and aren't listed here.
  *
- * `value` is the list of VISIBLE keys; toggling off removes a key. We never let
- * the list become empty (an empty list means "show all" on the API), so the last
- * remaining toggle stays on - turning everything off would silently show
- * everything, which is confusing. Barbers hide individual blocks, not all.
+ * `value` is the list of VISIBLE keys. Pure visibility: toggling appends or
+ * removes a key and NOTHING reorders (the rewards page renders sections in a
+ * fixed order regardless of this list's order, so order here is irrelevant).
+ * The earlier version re-canonicalized the order on every "on" click, which made
+ * the switches feel like they jumped/flipped the wrong row - that's gone now.
+ *
+ * Last-one guard: the API reads an empty list as "show all", so we can't let the
+ * list reach []. We block hiding the final visible section AND show a hint on
+ * that row so the disabled switch reads as intentional, not broken.
  */
 export function RewardsSectionToggles({
   value,
@@ -29,12 +34,10 @@ export function RewardsSectionToggles({
 
   function toggle(key: RewardsSectionKey) {
     if (visible.has(key)) {
-      // Don't allow hiding the very last visible section (would read as "all").
-      if (visible.size <= 1) return;
-      onChange(value.filter((k) => k !== key));
+      if (visible.size <= 1) return; // keep at least one (empty = "show all")
+      onChange(value.filter((k) => k !== key)); // remove, no reorder
     } else {
-      // Keep a stable canonical order regardless of click order.
-      onChange(REWARDS_SECTION_KEYS.filter((k) => visible.has(k) || k === key));
+      onChange([...value, key]); // append, no reorder
     }
   }
 
@@ -54,7 +57,9 @@ export function RewardsSectionToggles({
           >
             <div className="min-w-0">
               <p className="truncate text-sm text-offwhite">{section.label}</p>
-              <p className="truncate text-[11px] text-muted">{section.hint}</p>
+              <p className="truncate text-[11px] text-muted">
+                {isLastOn ? "Always on — keep at least one section" : section.hint}
+              </p>
             </div>
             <button
               type="button"
@@ -64,16 +69,20 @@ export function RewardsSectionToggles({
               onClick={() => toggle(key)}
               disabled={isLastOn}
               title={isLastOn ? "Keep at least one section" : undefined}
+              style={{ width: 36, height: 20 }}
               className={cn(
-                "relative h-5 w-9 shrink-0 rounded-full transition-colors duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-60",
+                // Explicit px box + box-border so a stray border/box-sizing can't
+                // widen the track (which pushed the knob past the right edge). The
+                // knob is absolutely placed by left/right insets - no translate or
+                // baseline math, so it can't detach or overflow in any context.
+                "relative box-border shrink-0 rounded-full transition-colors duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-60",
                 isVisible ? "bg-emerald-soft/70" : "bg-charcoal-600",
               )}
             >
               <span
-                className={cn(
-                  "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform duration-150 ease-out",
-                  isVisible ? "translate-x-4" : "translate-x-0.5",
-                )}
+                aria-hidden
+                style={{ width: 16, height: 16, top: 2, [isVisible ? "right" : "left"]: 2 }}
+                className="absolute rounded-full bg-white shadow-sm transition-all duration-150 ease-out"
               />
             </button>
           </div>
