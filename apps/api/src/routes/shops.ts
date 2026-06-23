@@ -12,6 +12,9 @@ import {
   PAGE_FONT_KEYS,
   PAGE_SECTION_KEYS,
   PAGE_THEME_KEYS,
+  REWARDS_SECTION_DEFAULT,
+  REWARDS_SECTION_KEYS,
+  REWARDS_WELCOME_MAX,
   apiEnv,
   randomToken,
   type GalleryItem,
@@ -145,6 +148,13 @@ const updateShopSchema = createShopSchema
     // default; gated by client consent + quiet hours regardless. See
     // services/loyaltyNotify.ts.
     loyaltyTextsEnabled: z.boolean(),
+    // Client rewards page content. rewardsWelcome: optional short greeting
+    // ("" clears it). rewardsSections: visible REWARDS_SECTIONS keys (de-duped,
+    // known keys only); [] = show all.
+    rewardsWelcome: z.string().trim().max(REWARDS_WELCOME_MAX).nullish().or(z.literal("")),
+    rewardsSections: z
+      .array(z.enum(REWARDS_SECTION_KEYS as [string, ...string[]]))
+      .max(REWARDS_SECTION_KEYS.length),
   })
   .partial();
 
@@ -181,6 +191,11 @@ function readGallery(shop: {
 /** Section order for the public page: stored order if set, else the default. */
 function readSectionOrder(order: string[] | null | undefined): string[] {
   return order && order.length > 0 ? order : DEFAULT_SECTION_ORDER;
+}
+
+/** Visible rewards-page sections: stored list if set, else all (the default). */
+function readRewardsSections(sections: string[] | null | undefined): string[] {
+  return sections && sections.length > 0 ? sections : REWARDS_SECTION_DEFAULT;
 }
 
 // Create the barber's shop (one per barber for now).
@@ -270,6 +285,8 @@ shopsRouter.patch("/me", requireUser, requireShop, async (req, res) => {
   // Optional style keys: "" means "clear it" (fall back to the page default).
   if (data.fontKey === "") data.fontKey = null;
   if (data.layoutStyle === "") data.layoutStyle = null;
+  // Rewards welcome: blank clears the custom line.
+  if (data.rewardsWelcome === "") data.rewardsWelcome = null;
   // When the new `gallery` payload is present, it's the source of truth: write
   // galleryItems (captions stripped to undefined when blank) and keep the legacy
   // galleryUrls column mirrored so a rollback still renders photos.
@@ -570,6 +587,8 @@ function serializeShop(shop: {
   fontKey: string | null;
   layoutStyle: string | null;
   sectionOrder: string[];
+  rewardsWelcome: string | null;
+  rewardsSections: string[];
   takesRequests: boolean;
   notifyPhone: string | null;
   loyaltyTextsEnabled: boolean;
@@ -600,6 +619,8 @@ function serializeShop(shop: {
     fontKey: shop.fontKey,
     layoutStyle: shop.layoutStyle,
     sectionOrder: readSectionOrder(shop.sectionOrder),
+    rewardsWelcome: shop.rewardsWelcome,
+    rewardsSections: readRewardsSections(shop.rewardsSections),
     takesRequests: shop.takesRequests,
     notifyPhone: shop.notifyPhone,
     loyaltyTextsEnabled: shop.loyaltyTextsEnabled,

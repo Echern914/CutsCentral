@@ -2,19 +2,21 @@
 
 import { motion } from "framer-motion";
 import { punchFill, staggerContainer } from "@/components/motion/variants";
-import { cn } from "@/lib/cn";
+import type { RewardsTheme } from "@/app/r/[magicToken]/theme";
 
 /**
- * Animated punch card grid. `threshold` slots; the first `filled` are gold with
- * a scale-in pop, the rest are empty outlines. Fixed dimensions so there's no
- * layout shift on load.
+ * Animated punch card grid. `threshold` slots; the first `filled` are the shop's
+ * accent with a scale-in pop, the rest are empty outlines in the theme's border
+ * color. Fixed dimensions so there's no layout shift on load.
  */
 export function PunchGrid({
   filled,
   threshold,
+  theme,
 }: {
   filled: number;
   threshold: number;
+  theme: RewardsTheme;
 }) {
   const slots = Array.from({ length: threshold }, (_, i) => i < filled);
   // Choose columns that keep the grid balanced for common thresholds.
@@ -34,14 +36,25 @@ export function PunchGrid({
           variants={punchFill}
           initial="empty"
           animate={isFilled ? "filled" : "empty"}
-          className={cn(
-            "aspect-square rounded-full border flex items-center justify-center",
+          className="flex aspect-square items-center justify-center rounded-full border"
+          style={
             isFilled
-              ? "bg-gold border-gold text-charcoal shadow-glow"
-              : "border-subtle bg-charcoal-700 text-muted",
-          )}
+              ? {
+                  backgroundColor: theme.accent,
+                  borderColor: theme.accent,
+                  color: theme.onAccent,
+                  boxShadow: `0 8px 24px -12px ${theme.accent}`,
+                }
+              : {
+                  backgroundColor: theme.bg,
+                  borderColor: theme.border,
+                  color: theme.muted,
+                }
+          }
         >
-          <span className="font-display text-lg">{i + 1}</span>
+          <span className="text-lg" style={{ fontFamily: "var(--page-display)" }}>
+            {i + 1}
+          </span>
         </motion.div>
       ))}
     </motion.div>

@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { REWARDS_SECTION_DEFAULT } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { currentBalance } from "../services/punch.js";
 import { toE164 } from "../acuity/clientKey.js";
@@ -156,6 +157,20 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
       bookingUrl: client.shop.bookingUrl,
       logoUrl: client.shop.logoUrl,
       accentColor: client.shop.accentColor,
+      // The barber's full page identity, so the client rewards page renders in
+      // THEIR theme/typography/shape - not the generic app chrome. Same fields
+      // the public /s/[slug] mini-site reads; the web side resolves keys to
+      // PAGE_THEMES / PAGE_FONTS / LAYOUT_STYLES.
+      theme: client.shop.theme,
+      fontKey: client.shop.fontKey,
+      layoutStyle: client.shop.layoutStyle,
+      // Content control: the barber's optional welcome line + which optional
+      // sections to show. [] in the DB means "show all" -> the default list.
+      rewardsWelcome: client.shop.rewardsWelcome,
+      rewardsSections:
+        client.shop.rewardsSections.length > 0
+          ? client.shop.rewardsSections
+          : REWARDS_SECTION_DEFAULT,
       // Link to the shop's public mini-site when it's live.
       pageSlug: client.shop.publicPageEnabled ? client.shop.slug : null,
     },

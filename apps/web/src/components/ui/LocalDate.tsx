@@ -11,10 +11,12 @@ export function LocalDate({
   iso,
   options,
   className,
+  style,
 }: {
   iso: string;
   options?: Intl.DateTimeFormatOptions;
   className?: string;
+  style?: React.CSSProperties;
 }) {
   const [text, setText] = useState(() =>
     new Date(iso).toLocaleDateString("en-US", { ...options, timeZone: "UTC" }),
@@ -26,7 +28,7 @@ export function LocalDate({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [iso]);
   return (
-    <time dateTime={iso} className={className}>
+    <time dateTime={iso} className={className} style={style}>
       {text}
     </time>
   );

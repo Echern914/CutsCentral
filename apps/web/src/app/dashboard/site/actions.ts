@@ -17,6 +17,8 @@ export interface PageSettingsInput {
   fontKey: string;
   layoutStyle: string;
   sectionOrder: string[];
+  rewardsWelcome: string;
+  rewardsSections: string[];
   takesRequests: boolean;
   notifyPhone: string;
 }
@@ -38,6 +40,8 @@ export async function savePageAction(
     fontKey: input.fontKey,
     layoutStyle: input.layoutStyle,
     sectionOrder: input.sectionOrder,
+    rewardsWelcome: input.rewardsWelcome,
+    rewardsSections: input.rewardsSections,
     takesRequests: input.takesRequests,
     notifyPhone: input.notifyPhone,
   });

@@ -10,6 +10,15 @@ export interface RewardsData {
     bookingUrl: string;
     logoUrl: string | null;
     accentColor: string | null;
+    // The barber's page identity (PAGE_THEMES / PAGE_FONTS / LAYOUT_STYLES keys).
+    // The rewards page renders in these so it matches the shop's public mini-site.
+    theme: string | null;
+    fontKey: string | null;
+    layoutStyle: string | null;
+    // Content control set by the barber: an optional welcome line and the list of
+    // visible REWARDS_SECTIONS keys (always non-empty from the API; defaults to all).
+    rewardsWelcome: string | null;
+    rewardsSections: string[];
     pageSlug: string | null;
   };
   client: { firstName: string | null };

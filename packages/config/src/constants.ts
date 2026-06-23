@@ -232,6 +232,34 @@ export const DEFAULT_SECTION_ORDER: PageSectionKey[] = [
   "hours",
 ];
 
+/**
+ * Optional blocks on the CLIENT rewards page (/r/[magicToken]) the barber can
+ * show or hide. Unlike the public page's PAGE_SECTIONS these are NOT reorderable
+ * - the rewards page has a deliberate emotional order (balance -> consent ->
+ * urgency -> rewards) - so the control is visibility only. The punch balance and
+ * the SMS consent card are FIXED (never hideable): the balance is the whole point
+ * of the page, and consent is the TCPA lever we must always offer. `rewardsSections`
+ * on the shop is the list of VISIBLE keys; [] = "use REWARDS_SECTION_DEFAULT".
+ */
+export const REWARDS_SECTIONS = {
+  rebook: { label: "Rebooking countdown", hint: "Timer urging the next booking" },
+  promotions: { label: "Promotions", hint: "Your live deals" },
+  rewardMenu: { label: "Reward menu", hint: "What punches unlock" },
+  punchGrid: { label: "Punch grid", hint: "Visual progress to the next reward" },
+  claimed: { label: "Rewards claimed", hint: "Rewards they've already redeemed" },
+  visits: { label: "Recent visits", hint: "Their visit history" },
+} as const;
+
+export type RewardsSectionKey = keyof typeof REWARDS_SECTIONS;
+
+export const REWARDS_SECTION_KEYS = Object.keys(REWARDS_SECTIONS) as RewardsSectionKey[];
+
+/** Default visible rewards-page sections (everything on), in declaration order. */
+export const REWARDS_SECTION_DEFAULT: RewardsSectionKey[] = [...REWARDS_SECTION_KEYS];
+
+/** Max length of the barber's custom welcome line on the rewards page. */
+export const REWARDS_WELCOME_MAX = 140;
+
 /** Max gallery photos a shop can show on its public page. */
 export const GALLERY_MAX = 16;
 
