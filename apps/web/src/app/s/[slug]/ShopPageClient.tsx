@@ -114,7 +114,7 @@ export function ShopPageClient({
             />
           )}
 
-          <div className={`text-center ${data.heroImageUrl ? "-mt-10" : "-mt-6"}`}>
+          <div className={`relative z-10 text-center ${data.heroImageUrl ? "-mt-10" : "-mt-6"}`}>
             {data.logoUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img

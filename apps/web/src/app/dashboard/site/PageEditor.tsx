@@ -22,6 +22,7 @@ import {
 import { Card, CardHeader } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
+import { pageFontVars } from "@/lib/pageFonts";
 import type { ShopPageSettings } from "./page";
 import type { ShopPageData } from "@/app/s/[slug]/page";
 import { savePageAction } from "./actions";
@@ -174,7 +175,7 @@ export function PageEditor({
   }
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_400px]">
+    <div className={`grid gap-6 lg:grid-cols-[minmax(0,1fr)_400px] ${pageFontVars}`}>
       {/* ---------------- Controls ---------------- */}
       <div className="flex flex-col gap-6">
         {/* Live link */}
