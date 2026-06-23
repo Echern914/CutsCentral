@@ -541,17 +541,24 @@ model Staff {
 // step and a display price. `name` is copied onto the promoted Visit.serviceName,
 // so the existing EarnRule substring matching keeps working unchanged.
 model Service {
-  id          String   @id @default(cuid())
-  shopId      String
-  shop        Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  name        String
-  description String?
-  durationMin Int // length of the appointment (drives the slot step)
-  price       Decimal? @db.Decimal(10, 2) // display only in v1 (no payment capture)
-  active      Boolean  @default(true)
-  sortOrder   Int      @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id             String   @id @default(cuid())
+  shopId         String
+  shop           Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  name           String
+  description    String?
+  durationMin    Int // length of the appointment (drives the slot step)
+  price          Decimal? @db.Decimal(10, 2) // base/display price (no payment capture yet)
+  // Per-weekday price overrides: a JSON map of shop-local weekday (0=Sun..6=Sat,
+  // as string keys) to the price charged that day, e.g. {"0": 55} for a Sunday
+  // premium. Only days that differ from `price` need an entry; any weekday absent
+  // uses the base price. The customer is shown the effective price for the date
+  // they pick (so a Sunday surcharge is never a surprise), and it's snapshotted
+  // onto Appointment.priceAtBooking. See engines/pricing.ts (effectivePriceForDate).
+  priceOverrides Json     @default("{}")
+  active         Boolean  @default(true)
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   staff        ServiceStaff[]
   appointments Appointment[]

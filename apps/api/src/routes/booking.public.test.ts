@@ -447,3 +447,89 @@ describe("manage by token + tenant isolation", () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe("day-of-week pricing", () => {
+  let premiumId: string;
+
+  /** Next UTC date whose weekday == target, at hourUtc, at least minDaysAhead out.
+   *  Defaults to 9 days out so these slots never collide with the other tests'
+   *  bookings (which use day+1..day+5 on the same shared staff calendar). */
+  function nextWeekdayAt(targetWeekday: number, hourUtc: number, minDaysAhead = 9): Date {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() + minDaysAhead);
+    d.setUTCHours(hourUtc, 0, 0, 0);
+    while (d.getUTCDay() !== targetWeekday) d.setUTCDate(d.getUTCDate() + 1);
+    return d;
+  }
+
+  beforeAll(async () => {
+    // $45 base, $55 on Sundays (weekday 0).
+    const svc = await request(app)
+      .post("/api/booking/services")
+      .set("Cookie", cookieA)
+      .send({
+        name: "Premium Cut",
+        durationMin: 30,
+        price: 45,
+        priceOverrides: { "0": 55 },
+        staffIds: [staffId],
+      });
+    expect(svc.status).toBe(201);
+    premiumId = svc.body.id;
+  });
+
+  it("exposes overrides + a price range on the public menu", async () => {
+    const res = await request(app).get(`/api/book/${slugA}`);
+    const svc = res.body.services.find((s: { id: string }) => s.id === premiumId);
+    expect(svc.price).toBe(45);
+    expect(svc.priceOverrides).toEqual({ "0": 55 });
+    expect(svc.priceRange).toEqual({ min: 45, max: 55 });
+  });
+
+  it("snapshots the SUNDAY price ($55) when booking on a Sunday", async () => {
+    const sunday = nextWeekdayAt(0, 10); // Sunday 10:00 UTC, in 09-17 window
+    const res = await request(app)
+      .post(`/api/book/${slugA}`)
+      .send({ staffId, serviceId: premiumId, startsAt: sunday.toISOString(), firstName: "SunPay", phone: "(302) 555-0801" });
+    expect(res.status).toBe(201);
+    const appt = await prisma.appointment.findFirst({
+      where: { phone: "+13025550801" },
+      select: { priceAtBooking: true },
+    });
+    expect(Number(appt!.priceAtBooking)).toBe(55);
+  });
+
+  it("snapshots the BASE price ($45) on a non-Sunday", async () => {
+    const saturday = nextWeekdayAt(6, 11); // Saturday 11:00 UTC
+    const res = await request(app)
+      .post(`/api/book/${slugA}`)
+      .send({ staffId, serviceId: premiumId, startsAt: saturday.toISOString(), firstName: "SatPay", phone: "(302) 555-0802" });
+    expect(res.status).toBe(201);
+    const appt = await prisma.appointment.findFirst({
+      where: { phone: "+13025550802" },
+      select: { priceAtBooking: true },
+    });
+    expect(Number(appt!.priceAtBooking)).toBe(45);
+  });
+
+  it("REPRICES to $55 when a Saturday booking is moved to a Sunday", async () => {
+    const saturday = nextWeekdayAt(6, 13);
+    const booking = await request(app)
+      .post(`/api/book/${slugA}`)
+      .send({ staffId, serviceId: premiumId, startsAt: saturday.toISOString(), firstName: "Mover", phone: "(302) 555-0803" });
+    expect(booking.status).toBe(201);
+    const token = booking.body.manageToken;
+
+    const sunday = nextWeekdayAt(0, 13);
+    const move = await request(app)
+      .post(`/api/book/manage/${token}/reschedule`)
+      .send({ startsAt: sunday.toISOString() });
+    expect(move.status).toBe(200);
+
+    const appt = await prisma.appointment.findFirst({
+      where: { phone: "+13025550803" },
+      select: { priceAtBooking: true },
+    });
+    expect(Number(appt!.priceAtBooking)).toBe(55);
+  });
+});

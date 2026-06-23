@@ -22,12 +22,20 @@ bookingDashboardRouter.use(requireUser, requireShop);
 
 //  Services
 
+// Per-weekday price overrides: keys are weekdays "0".."6" (0=Sun), values are
+// the price for that day. Only days that differ from the base price need an
+// entry. Validated to keep the JSON column clean (known keys, non-negative).
+const priceOverridesSchema = z
+  .record(z.enum(["0", "1", "2", "3", "4", "5", "6"]), z.number().min(0).max(100000))
+  .optional();
+
 const serviceSchema = z
   .object({
     name: z.string().trim().min(1).max(120),
     description: z.string().trim().max(500).optional().or(z.literal("")),
     durationMin: z.number().int().min(5).max(600),
     price: z.number().min(0).max(100000).nullable().optional(),
+    priceOverrides: priceOverridesSchema,
     active: z.boolean().optional(),
     sortOrder: z.number().int().min(0).max(1000).optional(),
     // Which staff offer this service (ids). Replaces the offering set on write.
@@ -47,6 +55,7 @@ bookingDashboardRouter.get("/services", async (req, res) => {
     services: services.map((s) => ({
       ...s,
       price: s.price === null ? null : Number(s.price),
+      priceOverrides: s.priceOverrides ?? {},
       staffIds: links.filter((l) => l.serviceId === s.id).map((l) => l.staffId),
     })),
   });
@@ -66,6 +75,9 @@ bookingDashboardRouter.post("/services", async (req, res) => {
       description: d.description || null,
       durationMin: d.durationMin,
       price: d.price ?? null,
+      // Per-weekday overrides ({} = base price every day). Stored verbatim; the
+      // zod schema already constrained it to known weekday keys + valid prices.
+      priceOverrides: d.priceOverrides ?? {},
       active: d.active ?? true,
       sortOrder: d.sortOrder ?? 0,
     },
@@ -89,6 +101,7 @@ bookingDashboardRouter.patch("/services/:id", async (req, res) => {
       ...(d.description !== undefined ? { description: d.description || null } : {}),
       ...(d.durationMin !== undefined ? { durationMin: d.durationMin } : {}),
       ...(d.price !== undefined ? { price: d.price } : {}),
+      ...(d.priceOverrides !== undefined ? { priceOverrides: d.priceOverrides } : {}),
       ...(d.active !== undefined ? { active: d.active } : {}),
       ...(d.sortOrder !== undefined ? { sortOrder: d.sortOrder } : {}),
     },

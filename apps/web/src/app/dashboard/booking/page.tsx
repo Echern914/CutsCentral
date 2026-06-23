@@ -25,6 +25,8 @@ export interface ServiceRow {
   description: string | null;
   durationMin: number;
   price: number | null;
+  // Per-weekday price overrides ({ "0": 55 } = Sunday $55). {} = base every day.
+  priceOverrides: Record<string, number>;
   active: boolean;
   sortOrder: number;
   staffIds: string[];
