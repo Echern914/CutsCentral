@@ -94,16 +94,20 @@ export function SectionOrderEditor({
               role="switch"
               aria-checked={isVisible}
               onClick={() => toggle(key)}
+              style={{ width: 36, height: 20 }}
               className={cn(
-                "relative h-5 w-9 shrink-0 rounded-full transition-colors duration-150 ease-out",
+                // Explicit px box + box-border + inset-pinned knob so the knob
+                // can't detach/overflow inside the card's form context (the old
+                // top-0.5 + translate-x approach broke here). Mirrors the rewards
+                // section toggles.
+                "relative box-border shrink-0 rounded-full transition-colors duration-150 ease-out",
                 isVisible ? "bg-emerald-soft/70" : "bg-charcoal-600",
               )}
             >
               <span
-                className={cn(
-                  "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform duration-150 ease-out",
-                  isVisible ? "translate-x-4" : "translate-x-0.5",
-                )}
+                aria-hidden
+                style={{ width: 16, height: 16, top: 2, [isVisible ? "right" : "left"]: 2 }}
+                className="absolute rounded-full bg-white shadow-sm transition-all duration-150 ease-out"
               />
             </button>
           </div>
