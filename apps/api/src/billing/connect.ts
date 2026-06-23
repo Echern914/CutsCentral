@@ -3,6 +3,7 @@ import { apiEnv } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import { connectEnabled, stripeClient } from "./stripe.js";
+import { applyPaymentEvent } from "./payments.js";
 
 /**
  * Stripe Connect for per-barber CUSTOMER payments. Each shop gets ONE Express
@@ -136,7 +137,8 @@ export async function applyConnectEvent(event: Stripe.Event): Promise<void> {
       return;
     }
     default:
-      // payment_intent.* / charge.* are handled in Phase 2.
+      // payment_intent / charge events are reconciled by the payments module.
+      await applyPaymentEvent(event);
       return;
   }
 }

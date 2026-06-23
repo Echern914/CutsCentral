@@ -9,7 +9,8 @@ import {
   parsePriceOverrides,
   priceRangeForService,
 } from "../engines/pricing.js";
-import { hasActiveAccess } from "../billing/stripe.js";
+import { connectEnabled, hasActiveAccess } from "../billing/stripe.js";
+import { createAheadPaymentIntent, toCents } from "../billing/payments.js";
 import { notifyAppointmentConfirmation } from "../services/appointmentNotify.js";
 import { cancelAppointment } from "../engines/appointmentPromotion.js";
 import { rewardsLimiter, leadLimiter } from "../middleware/rateLimit.js";
@@ -362,11 +363,38 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
   // booking, which is already durably saved.
   void notifyAppointmentConfirmation({ shopId: shop.id, appointmentId });
 
+  // Pay-ahead: create a PaymentIntent for the customer to confirm (card/Apple
+  // Pay) and return its client secret. Gated on the shop being in `ahead` mode
+  // with a connected, charges-enabled account, Connect configured, and a real
+  // price. AFTER commit (no Stripe call inside the booking tx). A failure here
+  // never fails the booking — the customer falls back to paying in person.
+  let payment: { clientSecret: string } | null = null;
+  const amountCents = toCents(effectivePrice);
+  if (
+    connectEnabled() &&
+    shop.paymentsMode === "ahead" &&
+    shop.connectChargesEnabled &&
+    shop.stripeConnectAccountId &&
+    amountCents !== null
+  ) {
+    const created = await createAheadPaymentIntent({
+      shopId: shop.id,
+      appointmentId,
+      connectAccountId: shop.stripeConnectAccountId,
+      amountCents,
+      platformFeeBps: shop.platformFeeBps,
+      description: `${service.name} at ${shop.name}`,
+    });
+    if (created) payment = { clientSecret: created.clientSecret };
+  }
+
   res.status(201).json({
     ok: true,
     manageToken,
     startsAt: startsAt.toISOString(),
     endsAt: endsAt.toISOString(),
+    // When present, the client must confirm payment with the Payment Element.
+    payment,
   });
 });
 
@@ -425,7 +453,11 @@ bookingPublicRouter.post(
       res.status(409).json({ error: "not_cancelable" });
       return;
     }
-    await cancelAppointment(appt.shopId, appt.id, "CANCELED");
+    // Customer-initiated: honor the shop's cancellation policy (a fee may apply
+    // if they cancel inside the window). A paid booking is refunded accordingly.
+    await cancelAppointment(appt.shopId, appt.id, "CANCELED", new Date(), {
+      applyPolicyFee: true,
+    });
     res.json({ ok: true });
   },
 );
