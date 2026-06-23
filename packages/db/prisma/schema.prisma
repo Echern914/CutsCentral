@@ -134,6 +134,15 @@ model Shop {
   layoutStyle       String? // LAYOUT_STYLES key (corner/button shape)
   sectionOrder      String[] @default([]) // PAGE_SECTIONS keys in render order; [] = default order
 
+  // Client rewards page (/r/[magicToken]) content control. The rewards page
+  // already inherits the shop's theme/font/shape (see PAGE_* fields above); these
+  // let the barber tailor what it SAYS and SHOWS.
+  // rewardsWelcome: optional short greeting at the top; null = no custom line.
+  // rewardsSections: visible REWARDS_SECTIONS keys; [] = show all (the default).
+  // The punch balance + SMS consent card are always shown (not in this list).
+  rewardsWelcome    String?
+  rewardsSections   String[] @default([])
+
   // Appointment requests (lead form on the public page). When takesRequests is
   // on, /s/[slug] shows a "Request an appointment" form instead of the booking
   // link - for barbers with no online booking. notifyPhone (E.164) is texted on

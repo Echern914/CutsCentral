@@ -10,10 +10,14 @@ import {
   PAGE_FONTS,
   PAGE_FONT_KEYS,
   PAGE_THEMES,
+  REWARDS_SECTION_DEFAULT,
+  REWARDS_SECTION_KEYS,
+  REWARDS_WELCOME_MAX,
   type LayoutStyleKey,
   type PageFontKey,
   type PageSectionKey,
   type PageThemeKey,
+  type RewardsSectionKey,
 } from "@chairback/config/constants";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
@@ -24,6 +28,7 @@ import { savePageAction } from "./actions";
 import { GalleryEditor } from "./GalleryEditor";
 import { ImageField } from "./ImageField";
 import { SectionOrderEditor } from "./SectionOrderEditor";
+import { RewardsSectionToggles } from "./RewardsSectionToggles";
 import { LivePreview } from "./LivePreview";
 
 const field =
@@ -59,6 +64,14 @@ export function PageEditor({
   );
   const [sectionOrder, setSectionOrder] = useState<PageSectionKey[]>(
     settings.sectionOrder?.length ? (settings.sectionOrder as PageSectionKey[]) : DEFAULT_SECTION_ORDER,
+  );
+  const [rewardsWelcome, setRewardsWelcome] = useState(settings.rewardsWelcome ?? "");
+  const [rewardsSections, setRewardsSections] = useState<RewardsSectionKey[]>(
+    settings.rewardsSections?.length
+      ? (settings.rewardsSections.filter((k) =>
+          REWARDS_SECTION_KEYS.includes(k as RewardsSectionKey),
+        ) as RewardsSectionKey[])
+      : REWARDS_SECTION_DEFAULT,
   );
   const [takesRequests, setTakesRequests] = useState(settings.takesRequests);
   const [notifyPhone, setNotifyPhone] = useState(settings.notifyPhone ?? "");
@@ -139,6 +152,8 @@ export function PageEditor({
         fontKey,
         layoutStyle,
         sectionOrder,
+        rewardsWelcome: rewardsWelcome.trim(),
+        rewardsSections,
         takesRequests,
         notifyPhone: notifyPhone.trim(),
       });
@@ -406,6 +421,41 @@ export function PageEditor({
           <CardHeader title="Sections" subtitle="Show, hide, and reorder what's on your page." />
           <div className="px-5 py-5">
             <SectionOrderEditor value={sectionOrder} onChange={setSectionOrder} />
+          </div>
+        </Card>
+
+        {/* Client rewards page (/r/...) - the loyalty page each client sees. It
+            already inherits the theme/font/shape above; this tailors what it says
+            and shows. */}
+        <Card className="overflow-hidden">
+          <CardHeader
+            title="Client rewards page"
+            subtitle="The loyalty page your clients open from their text link. It matches the look you set above."
+          />
+          <div className="flex flex-col gap-6 px-5 py-5">
+            <label className={labelCls}>
+              Welcome message (optional)
+              <textarea
+                value={rewardsWelcome}
+                onChange={(e) => setRewardsWelcome(e.target.value)}
+                rows={2}
+                maxLength={REWARDS_WELCOME_MAX}
+                placeholder="Thanks for being a regular — see you in the chair soon!"
+                className={`mt-1 ${field} resize-none`}
+              />
+              <span className="mt-1 block text-[11px] text-muted/80">
+                Shown at the top of the page, under their name. {rewardsWelcome.length}/
+                {REWARDS_WELCOME_MAX}
+              </span>
+            </label>
+            <div>
+              <p className={`mb-2 ${labelCls}`}>Show these sections</p>
+              <RewardsSectionToggles value={rewardsSections} onChange={setRewardsSections} />
+              <p className="mt-2 text-[11px] text-muted/80">
+                The punch balance and the text-opt-in card always show. Keep at
+                least one section on.
+              </p>
+            </div>
           </div>
         </Card>
 

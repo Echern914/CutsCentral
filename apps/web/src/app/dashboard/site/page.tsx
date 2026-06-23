@@ -19,6 +19,9 @@ export interface ShopPageSettings {
   fontKey: string | null;
   layoutStyle: string | null;
   sectionOrder: string[];
+  // Client rewards page content control.
+  rewardsWelcome: string | null;
+  rewardsSections: string[];
   takesRequests: boolean;
   notifyPhone: string | null;
   bookingUrl: string;

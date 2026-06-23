@@ -2,7 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
-import { Card } from "@/components/ui/Card";
+import { surfaceStyle, type RewardsTheme } from "@/app/r/[magicToken]/theme";
+
+/** Urgency colors. Normal countdown uses the shop's accent; urgent/overdue use a
+ *  universal danger red and "booked" a universal green - these read as their
+ *  meaning regardless of the shop's accent (you don't want "overdue" rendered in
+ *  a cheerful brand color). */
+const DANGER = "#ef4444";
+const SUCCESS = "#10b981";
 
 export interface RebookInfo {
   state: "booked" | "counting" | "overdue" | "none";
@@ -35,14 +42,18 @@ function diff(toISO: string): Remaining {
  * Live rebooking countdown. Ticks every second toward the shop's rebook window
  * deadline. Color/urgency escalates as time runs low. The whole point: nudge the
  * client to rebook inside a tight window so an in-demand barber keeps their chair
- * full. Respects reduced motion (no pulsing).
+ * full. Respects reduced motion (no pulsing). Surfaces are theme-driven; the
+ * urgency accents are intentionally fixed (danger/success) so they read clearly
+ * on any shop theme.
  */
 export function RebookCountdown({
   rebook,
   bookingUrl,
+  theme,
 }: {
   rebook: RebookInfo;
   bookingUrl: string;
+  theme: RewardsTheme;
 }) {
   const reduce = useReducedMotion();
   const [now, setNow] = useState(0); // tick trigger
@@ -60,6 +71,8 @@ export function RebookCountdown({
   // reference now so the lint/render re-runs each tick
   void now;
 
+  void bookingUrl; // parent renders the booking CTA; kept for API stability.
+
   // Already rebooked - celebrate, no timer.
   if (rebook.state === "booked" && rebook.upcomingAt) {
     const when = mounted
@@ -72,14 +85,17 @@ export function RebookCountdown({
         })
       : "";
     return (
-      <Card className="border-emerald-soft/30 p-5 text-center">
-        <p className="text-xs uppercase tracking-[0.18em] text-emerald-soft">
+      <div
+        className="p-5 text-center"
+        style={{ ...surfaceStyle(theme), borderColor: `${SUCCESS}4D` }}
+      >
+        <p className="text-xs uppercase tracking-[0.18em]" style={{ color: SUCCESS }}>
           You&apos;re booked
         </p>
-        <p className="mt-1 min-h-5 text-sm text-offwhite">
+        <p className="mt-1 min-h-5 text-sm">
           {when ? `Next visit: ${when}` : "See you soon."}
         </p>
-      </Card>
+      </div>
     );
   }
 
@@ -91,45 +107,49 @@ export function RebookCountdown({
   if (!mounted) {
     // Same-size placeholder so the card doesn't jump when the clock appears.
     return (
-      <Card className="border-gold/30 p-5">
+      <div
+        className="p-5"
+        style={{ ...surfaceStyle(theme), borderColor: `${theme.accent}4D` }}
+      >
         <div className="text-center">
-          <p className="text-xs uppercase tracking-[0.18em] text-muted">
+          <p className="text-xs uppercase tracking-[0.18em]" style={{ color: theme.muted }}>
             Time left to rebook
           </p>
-          <div className="skeleton mx-auto mt-3 h-14 w-64 max-w-full rounded-xl" />
-          <p className="mt-3 text-xs text-muted">
+          <div
+            className="mx-auto mt-3 h-14 w-64 max-w-full rounded-xl"
+            style={{ backgroundColor: theme.border }}
+          />
+          <p className="mt-3 text-xs" style={{ color: theme.muted }}>
             Rebook within {rebook.windowDays} days to keep your streak.
           </p>
         </div>
-      </Card>
+      </div>
     );
   }
 
   const r = diff(rebook.deadline);
   const overdue = rebook.state === "overdue" || r.totalMs === 0;
 
-  // Urgency tiers drive the accent color + label.
+  // Urgency tiers drive the accent color + label. Normal = shop accent; urgent
+  // or overdue = danger red.
   const urgent = !overdue && r.days < 2;
-  const accent = overdue
-    ? "text-danger-soft"
-    : urgent
-      ? "text-danger-soft"
-      : "text-gold";
-  const ring = overdue
-    ? "border-danger-soft/40"
-    : urgent
-      ? "border-danger-soft/40"
-      : "border-gold/30";
+  const urgencyColor = overdue || urgent ? DANGER : theme.accent;
 
   return (
-    <Card className={`${ring} p-5`}>
+    <div
+      className="p-5"
+      style={{ ...surfaceStyle(theme), borderColor: `${urgencyColor}4D` }}
+    >
       <div className="text-center">
-        <p className="text-xs uppercase tracking-[0.18em] text-muted">
+        <p className="text-xs uppercase tracking-[0.18em]" style={{ color: theme.muted }}>
           {overdue ? "It's time for your next cut" : "Time left to rebook"}
         </p>
 
         {overdue ? (
-          <p className={`mt-2 font-display text-2xl ${accent}`}>
+          <p
+            className="mt-2 text-2xl"
+            style={{ color: urgencyColor, fontFamily: "var(--page-display)" }}
+          >
             Don&apos;t lose your spot
           </p>
         ) : (
@@ -138,17 +158,17 @@ export function RebookCountdown({
             animate={urgent && !reduce ? { scale: [1, 1.03, 1] } : undefined}
             transition={urgent && !reduce ? { duration: 1.4, repeat: Infinity } : undefined}
           >
-            <TimeBlock value={r.days} label="days" accent={accent} />
-            <Colon />
-            <TimeBlock value={r.hours} label="hrs" accent={accent} />
-            <Colon />
-            <TimeBlock value={r.minutes} label="min" accent={accent} />
-            <Colon />
-            <TimeBlock value={r.seconds} label="sec" accent={accent} />
+            <TimeBlock value={r.days} label="days" color={urgencyColor} muted={theme.muted} />
+            <Colon muted={theme.muted} />
+            <TimeBlock value={r.hours} label="hrs" color={urgencyColor} muted={theme.muted} />
+            <Colon muted={theme.muted} />
+            <TimeBlock value={r.minutes} label="min" color={urgencyColor} muted={theme.muted} />
+            <Colon muted={theme.muted} />
+            <TimeBlock value={r.seconds} label="sec" color={urgencyColor} muted={theme.muted} />
           </motion.div>
         )}
 
-        <p className="mt-3 text-xs text-muted">
+        <p className="mt-3 text-xs" style={{ color: theme.muted }}>
           {overdue
             ? `Book now to stay on track.`
             : urgent
@@ -156,31 +176,40 @@ export function RebookCountdown({
               : `Rebook within ${rebook.windowDays} days to keep your streak.`}
         </p>
       </div>
-    </Card>
+    </div>
   );
 }
 
 function TimeBlock({
   value,
   label,
-  accent,
+  color,
+  muted,
 }: {
   value: number;
   label: string;
-  accent: string;
+  color: string;
+  muted: string;
 }) {
   return (
     <div className="flex w-14 flex-col items-center">
-      <span className={`font-display text-3xl tabular-nums ${accent}`}>
+      <span
+        className="text-3xl tabular-nums"
+        style={{ color, fontFamily: "var(--page-display)" }}
+      >
         {String(value).padStart(2, "0")}
       </span>
-      <span className="mt-0.5 text-[10px] uppercase tracking-wide text-muted">
+      <span className="mt-0.5 text-[10px] uppercase tracking-wide" style={{ color: muted }}>
         {label}
       </span>
     </div>
   );
 }
 
-function Colon() {
-  return <span className="font-display text-2xl text-muted/50">:</span>;
+function Colon({ muted }: { muted: string }) {
+  return (
+    <span className="text-2xl" style={{ color: muted, fontFamily: "var(--page-display)" }}>
+      :
+    </span>
+  );
 }
