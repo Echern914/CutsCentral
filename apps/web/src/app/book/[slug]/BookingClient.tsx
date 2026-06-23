@@ -4,6 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import type { BookShopData } from "./page";
 import { bookAction, getSlotsAction, type SlotsResult } from "./actions";
+import { PaymentStep } from "./PaymentStep";
 
 /**
  * Public native booking picker: pick service -> barber -> day -> open slot ->
@@ -29,6 +30,11 @@ export function BookingClient({ data }: { data: BookShopData }) {
   const [consent, setConsent] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [confirmedToken, setConfirmedToken] = useState<string | null>(null);
+  // Set when the shop charges at booking: the booking is created (BOOKED) and we
+  // collect payment before showing the confirmation screen.
+  const [paymentSecret, setPaymentSecret] = useState<string | null>(null);
+  // The manage token of a booking awaiting payment (shown after the card clears).
+  const [manageTokenPending, setManageTokenPending] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   // Which staff offer the chosen service, and which services a chosen staff offers.
@@ -152,6 +158,12 @@ export function BookingClient({ data }: { data: BookShopData }) {
         }
         return;
       }
+      // Pay-ahead: the booking is created; collect payment before confirming.
+      if (res.paymentClientSecret) {
+        setManageTokenPending(res.manageToken ?? null);
+        setPaymentSecret(res.paymentClientSecret);
+        return;
+      }
       setConfirmedToken(res.manageToken ?? null);
     });
   }
@@ -194,6 +206,30 @@ export function BookingClient({ data }: { data: BookShopData }) {
     "w-full rounded-xl py-3 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01] disabled:opacity-50";
   const input =
     "w-full rounded-lg border border-white/15 bg-white/5 px-4 py-2.5 text-sm text-offwhite placeholder:text-muted focus:border-white/40 focus:outline-none";
+
+  // ---- Payment screen (pay-ahead: booking created, collect card/Apple Pay) ----
+  if (paymentSecret !== null && confirmedToken === null) {
+    return (
+      <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-5 py-10 text-offwhite">
+        <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
+          <h1 className="font-display text-2xl">Pay to confirm</h1>
+          <p className="mt-1 mb-4 text-sm text-muted">
+            Your time is held. Enter payment to lock in your appointment with{" "}
+            {data.shop.name}.
+          </p>
+          <PaymentStep
+            clientSecret={paymentSecret}
+            amountLabel={selectedPrice !== null ? `$${selectedPrice.toFixed(0)}` : null}
+            accent={accent}
+            onPaid={() => setConfirmedToken(manageTokenPending)}
+          />
+          <p className="mt-3 text-center text-[11px] text-muted">
+            Powered by Stripe. Your card details never touch {data.shop.name}.
+          </p>
+        </div>
+      </main>
+    );
+  }
 
   // ---- Confirmation screen ----
   if (confirmedToken !== null) {
