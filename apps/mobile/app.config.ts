@@ -47,6 +47,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     infoPlist: {
       // Allow the WebView to load the (https) site; ATS stays on for the rest.
       NSAppTransportSecurity: { NSAllowsArbitraryLoads: false },
+      // We only use Apple's OS-provided HTTPS/TLS (no custom/standard crypto of
+      // our own), which is exempt from export compliance. Declaring it here means
+      // App Store Connect stops asking the "App Encryption Documentation"
+      // question on every upload.
+      ITSAppUsesNonExemptEncryption: false,
     },
   },
   android: {
