@@ -527,10 +527,20 @@ model Nudge {
   @@index([promotionId])
 }
 
-// A Web Push subscription for one installed-PWA device of one client. The browser
-// permission grant + this row ARE the push consent - independent of SMS consent
-// (smsConsentAt/optedOut), so a client who replied STOP to texts but installed the
-// app and allowed notifications is still push-reachable (and still no SMS).
+// How a push subscription is delivered. One table holds both transports so the
+// send path treats every device uniformly:
+//   web  = browser/PWA Web Push (VAPID; endpoint + p256dh + auth).
+//   expo = native iOS/Android app via Expo's push service (expoPushToken).
+enum PushKind {
+  web
+  expo
+}
+
+// A push subscription for ONE device of one client - a PWA browser (web) OR the
+// native app (expo). The OS permission grant + this row ARE the push consent,
+// independent of SMS consent (smsConsentAt/optedOut), so a client who replied
+// STOP to texts but installed and allowed notifications is still push-reachable
+// (and still no SMS).
 //
 // Tenant-owned (shopId, FORCE RLS) like the rest. Created on the PUBLIC rewards
 // route (resolved by the global magicToken, runs as the connection owner, bypasses
@@ -543,14 +553,19 @@ model PushSubscription {
   shop         Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
   clientId     String
   client       Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  // The push service endpoint URL (FCM/Mozilla/Apple). Globally unique per device
-  // subscription; a re-subscribe on the same browser upserts on it.
-  endpoint     String   @unique
-  p256dh       String // client public key (base64url) for payload encryption
-  auth         String // client auth secret (base64url) for payload encryption
+  kind         PushKind @default(web)
+  // WEB transport: the push service endpoint URL (FCM/Mozilla/Apple) + the keys
+  // used to encrypt the payload. Null for expo rows. endpoint is unique so a
+  // re-subscribe on the same browser upserts rather than duplicating.
+  endpoint     String?  @unique
+  p256dh       String? // client public key (base64url) for payload encryption
+  auth         String? // client auth secret (base64url) for payload encryption
+  // EXPO transport: the Expo push token (ExponentPushToken[...]). Null for web
+  // rows. Unique so re-registering the same device upserts.
+  expoPushToken String? @unique
   userAgent    String? // captured at subscribe time, for debugging/pruning
   // Dead-subscription pruning: bumped on a transient send error, reset on success.
-  // A 404/410 from the push service deletes the row outright (subscription gone).
+  // A gone receipt (web 404/410, or an expo DeviceNotRegistered) deletes the row.
   failureCount Int      @default(0)
   createdAt    DateTime @default(now())
   lastSeenAt   DateTime @default(now()) // refreshed on re-subscribe + successful send

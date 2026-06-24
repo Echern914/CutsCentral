@@ -4,14 +4,16 @@ import { forShop, prisma, type Shop } from "@chairback/db";
 import {
   sendPushToClient,
   __setPushSenderForTests,
+  __setExpoSenderForTests,
   type PushSender,
+  type ExpoSender,
 } from "./push.js";
 
 /**
- * Web Push send service: fan-out to a client's devices, prune dead subscriptions
- * (404/410), bump lastSeenAt on success, and record one WEB_PUSH Nudge for audit.
- * Real send via a FAKE PushSender (injected, so it bypasses DRY_RUN exactly like
- * the SMS suite's fake provider).
+ * Push send service: fan-out to a client's devices across BOTH transports (web
+ * VAPID + native Expo), prune dead subscriptions, bump lastSeenAt on success, and
+ * record one WEB_PUSH Nudge for audit. Real send via FAKE senders (injected, so
+ * they bypass DRY_RUN exactly like the SMS suite's fake provider).
  */
 
 const NOW = new Date("2026-06-01T16:00:00Z");
@@ -31,6 +33,17 @@ const fakeSender: PushSender = {
   async send(sub, payload) {
     calls.push({ endpoint: sub.endpoint, payload });
     behavior(sub.endpoint); // may throw a FakePushError to simulate a reject
+  },
+};
+
+// Native (Expo) fake sender. Records the token it was asked to send to and runs
+// the same per-recipient `expoBehavior` hook so a test can simulate a reject.
+let expoCalls: string[] = [];
+let expoBehavior: (token: string) => void = () => {};
+const fakeExpoSender: ExpoSender = {
+  async send(token) {
+    expoCalls.push(token);
+    expoBehavior(token);
   },
 };
 
@@ -75,8 +88,16 @@ async function addSub(shopId: string, clientId: string, endpoint: string) {
   });
 }
 
+/** A native (Expo) subscription row for a device. */
+async function addExpoSub(shopId: string, clientId: string, token: string) {
+  return prisma.pushSubscription.create({
+    data: { shopId, clientId, kind: "expo", expoPushToken: token },
+  });
+}
+
 beforeAll(async () => {
   __setPushSenderForTests(fakeSender);
+  __setExpoSenderForTests(fakeExpoSender);
   const user = await prisma.user.create({
     data: { email: `push-${randomToken(6)}@test.local`, passwordHash: "x", name: "P" },
   });
@@ -86,6 +107,8 @@ beforeAll(async () => {
 beforeEach(() => {
   calls = [];
   behavior = () => {};
+  expoCalls = [];
+  expoBehavior = () => {};
 });
 
 afterEach(async () => {
@@ -95,6 +118,7 @@ afterEach(async () => {
 
 afterAll(async () => {
   __setPushSenderForTests(undefined);
+  __setExpoSenderForTests(undefined);
   await prisma.shop.deleteMany({ where: { ownerId: userId } });
   await prisma.user.delete({ where: { id: userId } });
   await prisma.$disconnect();
@@ -199,5 +223,56 @@ describe("sendPushToClient", () => {
     expect(res).toMatchObject({ sent: 1, pruned: 1, anyDelivered: true });
     const remaining = await prisma.pushSubscription.findMany({ where: { clientId: client.id } });
     expect(remaining.map((s) => s.endpoint)).toEqual(["https://push.example/live"]);
+  });
+});
+
+// Native (Expo) transport: the same fan-out/prune contract as web, routed through
+// the Expo sender instead of VAPID. Proves a client reachable ONLY via the app
+// (no web subscription) still gets push.
+describe("sendPushToClient - native (expo)", () => {
+  it("delivers to an expo device and logs a WEB_PUSH Nudge", async () => {
+    const shop = await makeShop();
+    const client = await makeClient(shop.id);
+    await addExpoSub(shop.id, client.id, "ExponentPushToken[abc]");
+
+    const res = await sendPushToClient({
+      shopId: shop.id,
+      clientId: client.id,
+      kind: "loyalty",
+      payload,
+    });
+
+    expect(res).toMatchObject({ sent: 1, anyDelivered: true });
+    expect(expoCalls).toEqual(["ExponentPushToken[abc]"]);
+    expect(calls.length).toBe(0); // no web send
+    const nudge = await prisma.nudge.findFirst({ where: { shopId: shop.id } });
+    expect(nudge?.channel).toBe("WEB_PUSH");
+  });
+
+  it("PRUNES an expo device Expo reports as gone (DeviceNotRegistered -> 410)", async () => {
+    const shop = await makeShop();
+    const client = await makeClient(shop.id);
+    await addExpoSub(shop.id, client.id, "ExponentPushToken[dead]");
+    expoBehavior = () => {
+      throw Object.assign(new Error("DeviceNotRegistered"), { statusCode: 410 });
+    };
+
+    const res = await sendPushToClient({ shopId: shop.id, clientId: client.id, payload });
+    expect(res).toMatchObject({ sent: 0, pruned: 1, anyDelivered: false });
+    expect(await prisma.pushSubscription.count({ where: { clientId: client.id } })).toBe(0);
+  });
+
+  it("fans out across BOTH transports for one client", async () => {
+    const shop = await makeShop();
+    const client = await makeClient(shop.id);
+    await addSub(shop.id, client.id, "https://push.example/web");
+    await addExpoSub(shop.id, client.id, "ExponentPushToken[app]");
+
+    const res = await sendPushToClient({ shopId: shop.id, clientId: client.id, payload });
+    expect(res).toMatchObject({ sent: 2, anyDelivered: true });
+    expect(calls.length).toBe(1);
+    expect(expoCalls.length).toBe(1);
+    // One audit Nudge for the whole delivery, not one per device.
+    expect(await prisma.nudge.count({ where: { shopId: shop.id } })).toBe(1);
   });
 });

@@ -397,3 +397,55 @@ rewardsRouter.post("/:magicToken/push-unsubscribe", async (req, res) => {
   });
   res.json({ ok: true });
 });
+
+const pushNativeSchema = z
+  .object({
+    expoPushToken: z.string().min(1).max(255),
+    platform: z.string().max(20).optional(),
+  })
+  .strict();
+
+/**
+ * Register a NATIVE-app (Expo) push token for one device of this client - the
+ * iOS/Android app twin of push-subscribe. Same trust model: the magicToken in
+ * the URL is the auth, plain prisma stamps shopId from the resolved client, and
+ * the Expo token IS the push consent (independent of SMS). kind:"expo" so the
+ * send path routes it through Expo's push service. Upsert by token so the same
+ * device re-registering refreshes rather than duplicating.
+ */
+rewardsRouter.post("/:magicToken/push-native", async (req, res) => {
+  const parsed = pushNativeSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const client = await prisma.client.findUnique({
+    where: { magicToken: req.params.magicToken },
+  });
+  if (!client) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+
+  const { expoPushToken, platform } = parsed.data;
+  await prisma.pushSubscription.upsert({
+    where: { expoPushToken },
+    create: {
+      shopId: client.shopId,
+      clientId: client.id,
+      kind: "expo",
+      expoPushToken,
+      userAgent: platform ?? null,
+    },
+    update: {
+      shopId: client.shopId,
+      clientId: client.id,
+      kind: "expo",
+      userAgent: platform ?? null,
+      failureCount: 0,
+      lastSeenAt: new Date(),
+    },
+  });
+
+  res.json({ ok: true });
+});
