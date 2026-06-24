@@ -33,7 +33,10 @@ export function billingEnabled(): boolean {
  */
 export function connectEnabled(): boolean {
   const env = apiEnv();
-  return Boolean(env.STRIPE_SECRET_KEY && env.STRIPE_CONNECT_WEBHOOK_SECRET);
+  return Boolean(
+    env.STRIPE_SECRET_KEY &&
+      (env.STRIPE_CONNECT_WEBHOOK_SECRET || env.STRIPE_PLATFORM_WEBHOOK_SECRET),
+  );
 }
 
 let client: Stripe | null = null;

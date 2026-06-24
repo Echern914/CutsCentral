@@ -113,13 +113,30 @@ async function mirrorAccountFlags(
   });
 }
 
-/** Verify a Connect webhook payload against the Connect webhook secret. */
+/**
+ * Verify a webhook delivered to /webhooks/stripe-connect. We accept TWO secrets
+ * on this one route: the Connected-accounts endpoint secret AND (optionally) a
+ * platform "Your account" endpoint secret pointed at the same URL. This is
+ * required because a DESTINATION charge's payment_intent.* events fire on the
+ * PLATFORM account and only a "Your account" endpoint receives them. We try each
+ * configured secret and accept the first that verifies.
+ */
 export function verifyConnectWebhook(payload: Buffer, signature: string): Stripe.Event {
-  return stripeClient().webhooks.constructEvent(
-    payload,
-    signature,
-    apiEnv().STRIPE_CONNECT_WEBHOOK_SECRET!,
-  );
+  const env = apiEnv();
+  const secrets = [
+    env.STRIPE_CONNECT_WEBHOOK_SECRET,
+    env.STRIPE_PLATFORM_WEBHOOK_SECRET,
+  ].filter((s): s is string => Boolean(s));
+  if (secrets.length === 0) throw new Error("no_connect_webhook_secret");
+  let lastErr: unknown;
+  for (const secret of secrets) {
+    try {
+      return stripeClient().webhooks.constructEvent(payload, signature, secret);
+    } catch (err) {
+      lastErr = err; // signature didn't match this secret; try the next
+    }
+  }
+  throw lastErr ?? new Error("webhook_signature_verification_failed");
 }
 
 /**

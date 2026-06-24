@@ -79,6 +79,12 @@ const apiSchema = z.object({
   // payments feature is dark (CI/tests run without it). STRIPE_PRICE_ID is NOT
   // required for Connect — only the secret key + this connect webhook secret.
   STRIPE_CONNECT_WEBHOOK_SECRET: z.string().min(1).optional(),
+  // Optional SECOND signing secret for a platform ("Your account") webhook
+  // endpoint pointed at the SAME /webhooks/stripe-connect URL. A DESTINATION
+  // charge's payment_intent.* events fire on the PLATFORM account (not the
+  // connected account), so they arrive via a "Your account" endpoint with its
+  // own secret. The connect route tries both secrets when verifying.
+  STRIPE_PLATFORM_WEBHOOK_SECRET: z.string().min(1).optional(),
 
   // Supabase Storage for shop photo uploads (logo / hero / gallery). Optional:
   // while any of these is unset, the upload endpoint returns 503 and the page
