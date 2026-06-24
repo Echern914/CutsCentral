@@ -1,9 +1,13 @@
 import { Router } from "express";
 import { z } from "zod";
-import { REWARDS_SECTION_DEFAULT } from "@chairback/config";
+import { REWARDS_SECTION_DEFAULT, apiEnv } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { currentBalance } from "../services/punch.js";
 import { toE164 } from "../acuity/clientKey.js";
+import { getMessageProvider } from "../messaging/twilio.js";
+import { logger } from "../logger.js";
+
+const env = apiEnv();
 
 /**
  * Public rewards endpoint. The magicToken in the path IS the auth - it resolves
@@ -303,4 +307,214 @@ rewardsRouter.post("/:magicToken/opt-out", async (req, res) => {
   res.json({
     consent: { state: "opted_out", hasPhone: Boolean(client.phone) },
   });
+});
+
+const pushSubscribeSchema = z
+  .object({
+    endpoint: z.string().url().max(2000),
+    keys: z.object({
+      p256dh: z.string().min(1).max(255),
+      auth: z.string().min(1).max(255),
+    }),
+    userAgent: z.string().max(500).optional(),
+  })
+  .strict();
+
+/**
+ * Store a Web Push subscription for one installed-PWA device of this client. The
+ * browser permission grant the page just obtained IS the push consent - so this
+ * is allowed regardless of SMS optedOut/smsConsentAt (push and SMS are separate
+ * channels). Plain prisma like the opt-in above: resolves the client + shop by
+ * the global magicToken, runs as the connection owner (RLS-safe insert), and
+ * stamps shopId from the resolved client - NEVER from the request body. Upsert by
+ * endpoint so re-subscribing on the same browser refreshes keys instead of
+ * duplicating. 404 (not 403) on a bad token, like every public rewards handler.
+ */
+rewardsRouter.post("/:magicToken/push-subscribe", async (req, res) => {
+  const parsed = pushSubscribeSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const client = await prisma.client.findUnique({
+    where: { magicToken: req.params.magicToken },
+  });
+  if (!client) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+
+  const { endpoint, keys, userAgent } = parsed.data;
+  await prisma.pushSubscription.upsert({
+    where: { endpoint },
+    create: {
+      shopId: client.shopId,
+      clientId: client.id,
+      endpoint,
+      p256dh: keys.p256dh,
+      auth: keys.auth,
+      userAgent: userAgent ?? null,
+    },
+    // Re-subscribe on the same device: refresh keys/userAgent, mark it live, and
+    // clear any prior failure strikes. clientId is re-stamped in case the same
+    // browser endpoint is reused by a different client (shared device).
+    update: {
+      shopId: client.shopId,
+      clientId: client.id,
+      p256dh: keys.p256dh,
+      auth: keys.auth,
+      userAgent: userAgent ?? null,
+      failureCount: 0,
+      lastSeenAt: new Date(),
+    },
+  });
+
+  res.json({ ok: true });
+});
+
+const pushUnsubscribeSchema = z
+  .object({ endpoint: z.string().url().max(2000) })
+  .strict();
+
+/**
+ * Remove a Web Push subscription. PER-CLIENT + per-endpoint (keyed by the
+ * magicToken AND the device endpoint): a web action removes only the caller's own
+ * device, never another client who might share the same browser endpoint - the
+ * same narrowing as opt-out above. Idempotent: deleting an unknown endpoint is a
+ * no-op success.
+ */
+rewardsRouter.post("/:magicToken/push-unsubscribe", async (req, res) => {
+  const parsed = pushUnsubscribeSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const client = await prisma.client.findUnique({
+    where: { magicToken: req.params.magicToken },
+  });
+  if (!client) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  await prisma.pushSubscription.deleteMany({
+    where: { endpoint: parsed.data.endpoint, clientId: client.id },
+  });
+  res.json({ ok: true });
+});
+
+const resolveByPhoneSchema = z
+  .object({ phone: z.string().min(1).max(40) })
+  .strict();
+
+/**
+ * Cold-start entry for the mobile app: a customer who opens the app without a
+ * magic link enters their phone number, and we text them their rewards link
+ * (which then deep-links back into the app). Public + unauthenticated like the
+ * rest of the rewards routes.
+ *
+ * PRIVACY: this must not become a phone-enumeration oracle, so the response is
+ * ALWAYS the same `{ ok: true }` whether or not a matching, textable client
+ * exists. We only actually send when there's a match that consented to SMS and
+ * isn't opted out (texting the link is itself a transactional reply to their own
+ * request, but we still respect a STOP). If the same phone maps to clients at
+ * multiple shops, we text the most recently active one's link.
+ */
+rewardsRouter.post("/resolve-by-phone", async (req, res) => {
+  const parsed = resolveByPhoneSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const phone = toE164(parsed.data.phone);
+  // Uniform response regardless of validity/existence (no enumeration signal).
+  const ok = { ok: true };
+
+  if (phone) {
+    // Most recently active matching client that can be texted.
+    const client = await prisma.client.findFirst({
+      where: { phone, optedOut: false, smsConsentAt: { not: null }, archivedAt: null },
+      orderBy: [{ lastVisitAt: { sort: "desc", nulls: "last" } }, { updatedAt: "desc" }],
+      include: { shop: { select: { id: true, name: true } } },
+    });
+    if (client) {
+      const rewardsUrl = `${env.APP_BASE_URL}/r/${client.magicToken}`;
+      const who = client.firstName ?? "there";
+      const body =
+        `Hi ${who}, here's your ${client.shop.name} rewards link: ${rewardsUrl} ` +
+        `Reply STOP to opt out.`;
+      try {
+        const result = await getMessageProvider().send({ to: phone, body });
+        // Audit as a loyalty-kind Nudge (transactional, not a marketing blast).
+        await prisma.nudge.create({
+          data: {
+            shopId: client.shop.id,
+            clientId: client.id,
+            channel: "SMS",
+            status: "SENT",
+            kind: "loyalty",
+            body,
+            sentAt: new Date(),
+            messageSid: result.sid,
+          },
+        });
+      } catch (err) {
+        // Never leak failure to the caller (still return ok); just log it.
+        logger.error({ err, shopId: client.shop.id, clientId: client.id }, "resolve-by-phone send failed");
+      }
+    }
+  }
+
+  res.json(ok);
+});
+
+const pushNativeSchema = z
+  .object({
+    expoPushToken: z.string().min(1).max(255),
+    platform: z.string().max(20).optional(),
+  })
+  .strict();
+
+/**
+ * Register a NATIVE-app (Expo) push token for one device of this client - the
+ * iOS/Android app twin of push-subscribe. Same trust model: the magicToken in
+ * the URL is the auth, plain prisma stamps shopId from the resolved client, and
+ * the Expo token IS the push consent (independent of SMS). kind:"expo" so the
+ * send path routes it through Expo's push service. Upsert by token so the same
+ * device re-registering refreshes rather than duplicating.
+ */
+rewardsRouter.post("/:magicToken/push-native", async (req, res) => {
+  const parsed = pushNativeSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const client = await prisma.client.findUnique({
+    where: { magicToken: req.params.magicToken },
+  });
+  if (!client) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+
+  const { expoPushToken, platform } = parsed.data;
+  await prisma.pushSubscription.upsert({
+    where: { expoPushToken },
+    create: {
+      shopId: client.shopId,
+      clientId: client.id,
+      kind: "expo",
+      expoPushToken,
+      userAgent: platform ?? null,
+    },
+    update: {
+      shopId: client.shopId,
+      clientId: client.id,
+      kind: "expo",
+      userAgent: platform ?? null,
+      failureCount: 0,
+      lastSeenAt: new Date(),
+    },
+  });
+
+  res.json({ ok: true });
 });

@@ -27,7 +27,15 @@ export interface EligibilityInput {
   smsConsentAt: Date | null;
 }
 
-export function isNudgeEligible(input: EligibilityInput): boolean {
+/**
+ * The CHANNEL-AGNOSTIC rails (R1-R4): is this client due for a rebooking nudge
+ * by cadence, and not recently nudged? These are about WHEN to nudge, not HOW.
+ * Both the SMS gate (isNudgeEligible) and the push-first leg of the sweep reuse
+ * this so the "due to rebook" + R4-suppression logic lives in exactly one place.
+ * R4 reads the SAME Nudge ledger for any channel, so a push and an SMS suppress
+ * each other - a client is never double-nudged across channels in one window.
+ */
+export function isNudgeDueByCadence(input: EligibilityInput): boolean {
   // R1
   if (input.completedVisitCount < NUDGE.minCompletedVisits) return false;
   // R2
@@ -49,12 +57,18 @@ export function isNudgeEligible(input: EligibilityInput): boolean {
   ) {
     return false;
   }
-  // R5
+  return true;
+}
+
+export function isNudgeEligible(input: EligibilityInput): boolean {
+  // R1-R4: due by cadence + not recently nudged (channel-agnostic).
+  if (!isNudgeDueByCadence(input)) return false;
+  // R5 - SMS only
   if (input.optedOut) return false;
-  // R6
+  // R6 - SMS only
   if (!input.phone) return false;
-  // R7 - no recorded consent => never textable (TCPA). This is the gate that
-  // makes Acuity-synced clients (consent unknown) un-textable by default.
+  // R7 - SMS only: no recorded consent => never textable (TCPA). This is the
+  // gate that makes Acuity-synced clients (consent unknown) un-textable by default.
   if (input.smsConsentAt === null) return false;
 
   return true;

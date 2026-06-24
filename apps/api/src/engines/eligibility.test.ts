@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isNudgeEligible, type EligibilityInput } from "./eligibility.js";
+import {
+  isNudgeEligible,
+  isNudgeDueByCadence,
+  type EligibilityInput,
+} from "./eligibility.js";
 
 // A baseline ELIGIBLE client; each test flips ONE rail to false.
 const base: EligibilityInput = {
@@ -67,5 +71,46 @@ describe("isNudgeEligible", () => {
     expect(
       isNudgeEligible({ ...base, smsConsentAt: new Date("2026-02-02T00:00:00Z") }),
     ).toBe(true);
+  });
+});
+
+// The channel-agnostic cadence gate (R1-R4) used by BOTH the SMS path and the
+// push-first leg of the sweep. Push reuses this so a push-only client (no SMS
+// consent/phone, or even an SMS-STOP'd one) is still "due to rebook" and gets a
+// free push - while the SMS-only rails (R5-R7) below it stay enforced for SMS.
+describe("isNudgeDueByCadence", () => {
+  it("passes on the same cadence rails as full eligibility", () => {
+    expect(isNudgeDueByCadence(base)).toBe(true);
+  });
+
+  it("IGNORES the SMS-only rails (optedOut / phone / smsConsentAt)", () => {
+    // A client who replied STOP, has no phone, and never gave SMS consent is NOT
+    // SMS-eligible, but IS due by cadence - so push can still reach them.
+    const pushOnly: EligibilityInput = {
+      ...base,
+      optedOut: true,
+      phone: null,
+      smsConsentAt: null,
+    };
+    expect(isNudgeEligible(pushOnly)).toBe(false); // SMS blocked
+    expect(isNudgeDueByCadence(pushOnly)).toBe(true); // push allowed
+  });
+
+  it("still enforces R1 (needs >= 2 completed visits)", () => {
+    expect(isNudgeDueByCadence({ ...base, completedVisitCount: 1 })).toBe(false);
+  });
+
+  it("still enforces R2 (must be overdue)", () => {
+    expect(isNudgeDueByCadence({ ...base, daysSinceLastVisit: 37 })).toBe(false);
+  });
+
+  it("still enforces R3 (no upcoming booking)", () => {
+    expect(isNudgeDueByCadence({ ...base, hasUpcomingVisit: true })).toBe(false);
+  });
+
+  it("still enforces R4 (cross-channel suppression window)", () => {
+    // R4 reads the shared Nudge ledger, so a recent push OR SMS suppresses both.
+    expect(isNudgeDueByCadence({ ...base, daysSinceLastNudge: 20 })).toBe(false);
+    expect(isNudgeDueByCadence({ ...base, daysSinceLastNudge: 21 })).toBe(true);
   });
 });

@@ -52,6 +52,7 @@ enum AppointmentStatus {
 
 enum MessageChannel {
   SMS
+  WEB_PUSH // installed-PWA push (free); the push-first leg of a loyalty/nudge send
   // EMAIL - future seam, not implemented
 }
 
@@ -67,8 +68,9 @@ enum PromotionKind {
 model User {
   id            String    @id @default(cuid())
   email         String    @unique // login identity (global)
-  passwordHash  String? // argon2id; null for Google-only accounts
+  passwordHash  String? // argon2id; null for social-only accounts
   googleId      String?   @unique // Google "sub"; set for Google sign-in
+  appleId       String?   @unique // Apple "sub"; set for Sign in with Apple (native iOS)
   name          String
   // Session revocation: bumped on password change, which invalidates every
   // previously issued session token (tokens embed the version they were minted with).
@@ -211,6 +213,7 @@ model Shop {
   promoUses           PromotionRedemption[]
   appointmentRequests AppointmentRequest[]
   reviews             Review[]
+  pushSubscriptions   PushSubscription[]
 
   // Native booking engine relations
   staff                  Staff[]
@@ -358,11 +361,12 @@ model Client {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  visits       Visit[]
-  ledger       PunchLedger[]
-  nudges       Nudge[]
-  promoUses    PromotionRedemption[]
-  appointments Appointment[]
+  visits            Visit[]
+  ledger            PunchLedger[]
+  nudges            Nudge[]
+  promoUses         PromotionRedemption[]
+  appointments      Appointment[]
+  pushSubscriptions PushSubscription[]
 
   @@unique([shopId, acuityClientKey]) // tenant-scoped identity + idempotent upsert
   @@index([shopId])
@@ -522,6 +526,52 @@ model Nudge {
   @@index([shopId, clientId, createdAt]) // "no nudge in 21d" + attribution lookback
   @@index([status, createdAt]) // daily send-cap count
   @@index([promotionId])
+}
+
+// How a push subscription is delivered. One table holds both transports so the
+// send path treats every device uniformly:
+//   web  = browser/PWA Web Push (VAPID; endpoint + p256dh + auth).
+//   expo = native iOS/Android app via Expo's push service (expoPushToken).
+enum PushKind {
+  web
+  expo
+}
+
+// A push subscription for ONE device of one client - a PWA browser (web) OR the
+// native app (expo). The OS permission grant + this row ARE the push consent,
+// independent of SMS consent (smsConsentAt/optedOut), so a client who replied
+// STOP to texts but installed and allowed notifications is still push-reachable
+// (and still no SMS).
+//
+// Tenant-owned (shopId, FORCE RLS) like the rest. Created on the PUBLIC rewards
+// route (resolved by the global magicToken, runs as the connection owner, bypasses
+// RLS - same trust model as the rewards opt-in / AppointmentRequest / Review
+// writes); the send path reads it through forShop() (RLS-enforced). shopId is
+// always derived from the resolved client, never from the request.
+model PushSubscription {
+  id           String   @id @default(cuid())
+  shopId       String
+  shop         Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  clientId     String
+  client       Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  kind         PushKind @default(web)
+  // WEB transport: the push service endpoint URL (FCM/Mozilla/Apple) + the keys
+  // used to encrypt the payload. Null for expo rows. endpoint is unique so a
+  // re-subscribe on the same browser upserts rather than duplicating.
+  endpoint     String?  @unique
+  p256dh       String? // client public key (base64url) for payload encryption
+  auth         String? // client auth secret (base64url) for payload encryption
+  // EXPO transport: the Expo push token (ExponentPushToken[...]). Null for web
+  // rows. Unique so re-registering the same device upserts.
+  expoPushToken String? @unique
+  userAgent    String? // captured at subscribe time, for debugging/pruning
+  // Dead-subscription pruning: bumped on a transient send error, reset on success.
+  // A gone receipt (web 404/410, or an expo DeviceNotRegistered) deletes the row.
+  failureCount Int      @default(0)
+  createdAt    DateTime @default(now())
+  lastSeenAt   DateTime @default(now()) // refreshed on re-subscribe + successful send
+
+  @@index([shopId, clientId]) // the send-path lookup ("subs for this client")
 }
 
 //  Native booking engine (only used when Shop.bookingMode == native)

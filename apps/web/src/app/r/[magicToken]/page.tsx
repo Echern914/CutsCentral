@@ -84,6 +84,18 @@ export async function generateMetadata({
     description,
     openGraph: { title, description, type: "website" },
     twitter: { card: "summary", title, description },
+    // Per-shop installable PWA: the manifest is generated per magicToken so the
+    // home-screen app is branded for THIS shop (name + theme color).
+    manifest: `/r/${params.magicToken}/manifest.webmanifest`,
+    // iOS ignores parts of the manifest, so set the Apple bits explicitly: a
+    // capable web app, the shop name as the title, and a PNG touch icon (iOS
+    // ignores SVG apple icons).
+    appleWebApp: {
+      capable: true,
+      title: data.shop.name,
+      statusBarStyle: "default",
+    },
+    icons: { apple: [{ url: "/apple-touch-icon-180.png", sizes: "180x180" }] },
   };
 }
 
@@ -94,5 +106,15 @@ export default async function RewardsPage({
 }) {
   const data = await getData(params.magicToken);
   if (!data) notFound();
-  return <RewardsClient data={data} magicToken={params.magicToken} />;
+  // VAPID public key (safe to expose - it's a PUBLIC key) threaded to the client
+  // so the push opt-in can subscribe. Absent => the push UI stays hidden and
+  // everything falls back to SMS.
+  const vapidPublicKey = process.env.PUSH_VAPID_PUBLIC_KEY ?? null;
+  return (
+    <RewardsClient
+      data={data}
+      magicToken={params.magicToken}
+      vapidPublicKey={vapidPublicKey}
+    />
+  );
 }

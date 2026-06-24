@@ -107,6 +107,64 @@ export function buildRewardRedeemedBody(params: {
 }
 
 /**
+ * Web Push notification copy. Distinct from the SMS builders above: no STOP
+ * notice (push has its own per-device unsubscribe - the browser permission and
+ * the in-app toggle) and no URL in the body (the click target is carried as the
+ * notification's `url`, not pasted as text). Short by design - a notification is
+ * a glance, with the full picture one tap away on the rewards page. title/body
+ * map straight onto showNotification(title, { body }) in the service worker.
+ */
+export interface PushCopy {
+  title: string;
+  body: string;
+}
+
+/** "You earned a punch" push - the push-first twin of buildPunchEarnedBody. */
+export function buildPunchEarnedPush(params: {
+  firstName: string | null;
+  shopName: string;
+  earned: number;
+  balance: number;
+  nextReward?: { name: string; remaining: number } | null;
+}): PushCopy {
+  const punchWord = params.earned === 1 ? "punch" : "punches";
+  const totalWord = params.balance === 1 ? "punch" : "punches";
+  const parts = [`You're at ${params.balance} ${totalWord}.`];
+  if (params.nextReward) {
+    parts.push(`${params.nextReward.remaining} more for your ${params.nextReward.name}.`);
+  }
+  return {
+    title: `+${params.earned} ${punchWord} at ${params.shopName}`,
+    body: parts.join(" "),
+  };
+}
+
+/** "Reward redeemed" push - the push-first twin of buildRewardRedeemedBody. */
+export function buildRewardRedeemedPush(params: {
+  shopName: string;
+  rewardName: string;
+  balance: number;
+}): PushCopy {
+  const totalWord = params.balance === 1 ? "punch" : "punches";
+  return {
+    title: `${params.rewardName} redeemed`,
+    body: `Enjoy your reward at ${params.shopName}. ${params.balance} ${totalWord} left.`,
+  };
+}
+
+/** Rebooking-nudge push - the push-first twin of buildNudgeBody. */
+export function buildNudgePush(params: {
+  firstName: string | null;
+  shopName: string;
+}): PushCopy {
+  const who = params.firstName ?? "there";
+  return {
+    title: `Time for your next cut, ${who}?`,
+    body: `It's been a while since ${params.shopName}. Tap to book your next one.`,
+  };
+}
+
+/**
  * Render an appointment instant as a short, human "Sat, Jun 28 at 2:30 PM" in
  * the shop's timezone. Falls back to the raw locale string on a bad zone (never
  * throws - a copy issue must not break a send).
