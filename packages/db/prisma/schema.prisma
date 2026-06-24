@@ -184,6 +184,19 @@ model Shop {
   bookingMaxDays   Int         @default(60) // how far ahead a customer may book
   bookingBufferMin Int         @default(0) // turnover gap added after each appointment
 
+  // Customer payments (Stripe Connect Express). All default to "off"/absent so
+  // existing shops are unchanged until the barber connects + turns payments on.
+  stripeConnectAccountId String?      @unique // the shop's acct_ (NOT stripeCustomerId)
+  connectChargesEnabled  Boolean      @default(false) // mirrors account.charges_enabled
+  payoutsEnabled         Boolean      @default(false) // mirrors account.payouts_enabled
+  paymentsMode           PaymentsMode @default(off)
+  platformFeeBps         Int          @default(0) // platform cut, basis points (0 = barber keeps 100%)
+  // Per-shop cancellation policy. A customer can always cancel; if they cancel
+  // INSIDE this window (hours before the appointment), cancelFeeBps of the price
+  // is kept as a fee (rest refunded). 0 hours = no fee window (always full refund).
+  cancelWindowHours      Int          @default(0)
+  cancelFeeBps           Int          @default(0) // 10000 bps = 100% (no refund inside window)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -206,6 +219,7 @@ model Shop {
   availabilityRules      AvailabilityRule[]
   availabilityExceptions AvailabilityException[]
   appointments           Appointment[]
+  payments               Payment[]
 
   @@index([ownerId])
 }
@@ -657,9 +671,61 @@ model Appointment {
   createdAt          DateTime          @default(now())
   updatedAt          DateTime          @updatedAt
 
+  payment Payment? // the customer payment for this booking (if any)
+
   // The double-booking guard (a partial unique on BOOKED rows) is added by hand
   // in the migration - Prisma can't express a WHERE-filtered unique index.
   @@index([shopId, staffId, startsAt]) // overlap checks + barber day view
   @@index([status, startsAt]) // reminder + promotion scans
   @@index([shopId, status, startsAt]) // dashboard upcoming list
+}
+
+// How a shop takes CUSTOMER payments for native bookings (distinct from the
+// platform SUBSCRIPTION billing). Default off = customer pays in person.
+//   off   = no charge; pay in person (every existing + new shop).
+//   ahead = charge the full price at booking time.
+//   hold  = authorize at booking, capture when the barber marks the appt done
+//           (only for appts < ~6 days out; card auths expire ~7 days).
+enum PaymentsMode {
+  off
+  ahead
+  hold
+}
+
+// One customer payment for one native Appointment, via the shop's connected
+// Stripe (Connect Express) account. Money settles to the BARBER (destination
+// charge + on_behalf_of); the platform is the control plane only. FORCE RLS like
+// the other tenant tables; the public booking route + the Connect webhook write
+// as the connection owner (same bypass the Appointment insert uses), the barber
+// reads via forShop(). Amounts are integer CENTS. mode/amount/connectAccountId
+// are SNAPSHOTTED so an in-flight charge is immune to later toggle/account flips.
+model Payment {
+  id                     String       @id @default(cuid())
+  shopId                 String
+  shop                   Shop         @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  appointmentId          String       @unique
+  appointment            Appointment  @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  stripePaymentIntentId  String       @unique
+  stripeChargeId         String?
+  stripeConnectAccountId String // snapshot of the shop's acct_ at charge time
+  mode                   PaymentsMode // snapshot (ahead | hold)
+  amount                 Int // cents, snapshot from Appointment.priceAtBooking
+  currency               String       @default("usd")
+  applicationFeeAmount   Int          @default(0) // platform fee in cents (0 for v1)
+  // Mirrors the Stripe PaymentIntent status:
+  // requires_payment_method | requires_action | requires_capture | processing |
+  // succeeded | canceled | failed | refunded | partially_refunded
+  status                 String       @default("requires_payment_method")
+  capturedAmount         Int? // cents actually captured (hold mode)
+  refundedAmount         Int          @default(0) // cents refunded so far
+  authorizedAt           DateTime? // when the hold was placed (hold mode)
+  holdExpiresAt          DateTime? // ~auth+6.5d; the release sweep watches this
+  capturedAt             DateTime?
+  // Webhook replay guard: last processed Stripe event id for this row.
+  lastWebhookEventId     String?
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+
+  @@index([shopId, status])
+  @@index([status, holdExpiresAt]) // the hold-release/capture-retry sweep
 }

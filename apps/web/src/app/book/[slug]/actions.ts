@@ -41,17 +41,28 @@ export interface BookInput {
 /**
  * Create a native booking. Returns the manage token on success so the UI can
  * link the customer to their cancel/reschedule page. A 409 maps to a friendly
- * "that time was just taken" so the picker can refresh slots.
+ * "that time was just taken" so the picker can refresh slots. When the shop
+ * charges at booking, `paymentClientSecret` is returned for the Payment Element
+ * to confirm the card / Apple Pay.
  */
 export async function bookAction(
   slug: string,
   input: BookInput,
-): Promise<{ ok: boolean; manageToken?: string; error?: string }> {
-  const res = await apiPublicSend<{ ok: boolean; manageToken: string }>(
-    "POST",
-    `/api/book/${encodeURIComponent(slug)}`,
-    input,
-  );
+): Promise<{
+  ok: boolean;
+  manageToken?: string;
+  paymentClientSecret?: string | null;
+  error?: string;
+}> {
+  const res = await apiPublicSend<{
+    ok: boolean;
+    manageToken: string;
+    payment: { clientSecret: string } | null;
+  }>("POST", `/api/book/${encodeURIComponent(slug)}`, input);
   if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
-  return { ok: true, manageToken: res.data.manageToken };
+  return {
+    ok: true,
+    manageToken: res.data.manageToken,
+    paymentClientSecret: res.data.payment?.clientSecret ?? null,
+  };
 }

@@ -25,6 +25,8 @@ import { loyaltyRouter } from "./routes/loyalty.js";
 import { promotionsRouter } from "./routes/promotions.js";
 import { billingRouter } from "./routes/billing.js";
 import { stripeWebhookRouter } from "./routes/webhooks.stripe.js";
+import { connectWebhookRouter } from "./routes/webhooks.connect.js";
+import { paymentsDashboardRouter } from "./routes/payments.dashboard.js";
 import { adminPortalRouter } from "./routes/adminPortal.js";
 import { captureError } from "./sentry.js";
 import { corsMiddleware } from "./middleware/cors.js";
@@ -71,6 +73,7 @@ export function createApp(): Express {
   app.use("/webhooks/acuity", webhookLimiter, acuityWebhookRouter);
   app.use("/webhooks/twilio", webhookLimiter, twilioWebhookRouter);
   app.use("/webhooks/stripe", webhookLimiter, stripeWebhookRouter);
+  app.use("/webhooks/stripe-connect", webhookLimiter, connectWebhookRouter);
 
   // (2) Global parsers for the rest of the app.
   app.use(express.json({ limit: "100kb" }));
@@ -88,6 +91,7 @@ export function createApp(): Express {
   app.use("/api/book", bookingPublicRouter); // public native booking (per-route limits inside)
   app.use("/api/dashboard", dashboardLimiter, dashboardRouter);
   app.use("/api/booking", dashboardLimiter, bookingDashboardRouter); // barber booking config
+  app.use("/api/payments", dashboardLimiter, paymentsDashboardRouter); // barber payment settings
   app.use("/api/loyalty", dashboardLimiter, loyaltyRouter);
   app.use("/api/promos", dashboardLimiter, promotionsRouter);
   app.use("/api/billing", dashboardLimiter, billingRouter);

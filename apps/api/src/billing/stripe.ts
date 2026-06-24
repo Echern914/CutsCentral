@@ -25,12 +25,33 @@ export function billingEnabled(): boolean {
   );
 }
 
+/**
+ * Connect (per-barber CUSTOMER payments) is enabled independently of the
+ * platform SUBSCRIPTION billing: it needs the secret key + a Connect webhook
+ * secret, but NOT STRIPE_PRICE_ID. Kept separate so a shop can take customer
+ * payments even before (or without) the platform charging the barber a sub.
+ */
+export function connectEnabled(): boolean {
+  const env = apiEnv();
+  return Boolean(env.STRIPE_SECRET_KEY && env.STRIPE_CONNECT_WEBHOOK_SECRET);
+}
+
 let client: Stripe | null = null;
 function stripe(): Stripe {
   const key = apiEnv().STRIPE_SECRET_KEY;
   if (!key) throw new Error("stripe_not_configured");
+  // The API version is pinned by the `stripe` SDK dependency (v22 -> a fixed
+  // version), so on_behalf_of / transfer_data / application_fee / manual-capture
+  // behavior only changes on a DELIBERATE SDK bump (+ test), never implicitly.
+  // We don't pass an explicit apiVersion: that would have to be hand-synced to
+  // the SDK's typed version string and drift on every upgrade.
   if (!client) client = new Stripe(key);
   return client;
+}
+
+/** Shared Stripe client for the Connect/payments module (same key, pinned version). */
+export function stripeClient(): Stripe {
+  return stripe();
 }
 
 /**

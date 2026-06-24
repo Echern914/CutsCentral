@@ -12,6 +12,8 @@
   },
   "dependencies": {
     "@chairback/config": "workspace:*",
+    "@stripe/react-stripe-js": "^6.6.0",
+    "@stripe/stripe-js": "^9.8.0",
     "framer-motion": "^11.5.4",
     "next": "^14.2.13",
     "react": "^18.3.1",

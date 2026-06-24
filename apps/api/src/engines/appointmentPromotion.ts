@@ -7,6 +7,7 @@ import {
 } from "../services/punch.js";
 import { recomputeCadence } from "./cadence.js";
 import { notifyPunchEarned } from "../services/loyaltyNotify.js";
+import { refundForCancellation } from "../billing/payments.js";
 
 /**
  * Turn a fulfilled native Appointment into a COMPLETED Visit that earns loyalty
@@ -175,11 +176,24 @@ export async function cancelAppointment(
   appointmentId: string,
   outcome: "CANCELED" | "NO_SHOW",
   now = new Date(),
+  // applyPolicyFee: a CUSTOMER cancel honors the shop's cancellation policy (a
+  // fee may be kept if inside the window). A BARBER cancel (default) refunds in
+  // full - the customer shouldn't be penalized for the shop canceling. NO_SHOW
+  // never auto-refunds here (an already-captured ahead payment stays; the barber
+  // can refund by hand, and uncaptured-hold release is a Phase-3 concern).
+  opts: { applyPolicyFee?: boolean } = {},
 ): Promise<boolean> {
   const result = await runWithShop(shopId, async (tx) => {
     const appt = await tx.appointment.findFirst({
       where: { id: appointmentId, shopId },
-      select: { id: true, clientId: true, visitId: true, status: true },
+      select: {
+        id: true,
+        clientId: true,
+        visitId: true,
+        status: true,
+        startsAt: true,
+        payment: { select: { id: true } },
+      },
     });
     if (!appt) return null;
 
@@ -207,13 +221,43 @@ export async function cancelAppointment(
       });
       await clawBackVisitEarn(tx, shopId, appt.visitId);
     }
-    return { clientId: appt.clientId, hadVisit: Boolean(appt.visitId) };
+    return {
+      clientId: appt.clientId,
+      hadVisit: Boolean(appt.visitId),
+      paymentId: appt.payment?.id ?? null,
+      startsAt: appt.startsAt,
+    };
   });
 
   if (!result) return false;
   // The completed-visit set changed: recompute cadence (outside the tx).
   if (result.hadVisit && result.clientId) {
     await recomputeCadence(shopId, result.clientId);
+  }
+
+  // Refund a paid booking on cancellation, AFTER the tx (Stripe network call).
+  // Only on CANCELED (not NO_SHOW) and only when there's a payment row.
+  if (outcome === "CANCELED" && result.paymentId) {
+    let feeCents = 0;
+    if (opts.applyPolicyFee) {
+      const shop = await prisma.shop.findUnique({
+        where: { id: shopId },
+        select: { cancelWindowHours: true, cancelFeeBps: true },
+      });
+      if (shop && shop.cancelWindowHours > 0 && shop.cancelFeeBps > 0) {
+        const windowMs = shop.cancelWindowHours * 60 * 60 * 1000;
+        const insideWindow = result.startsAt.getTime() - now.getTime() < windowMs;
+        if (insideWindow) {
+          const payment = await prisma.payment.findUnique({
+            where: { id: result.paymentId },
+            select: { amount: true, capturedAmount: true },
+          });
+          const collected = payment?.capturedAmount ?? payment?.amount ?? 0;
+          feeCents = Math.floor((collected * shop.cancelFeeBps) / 10000);
+        }
+      }
+    }
+    await refundForCancellation({ paymentId: result.paymentId, feeCents });
   }
   return true;
 }

@@ -73,6 +73,12 @@ const apiSchema = z.object({
   STRIPE_SECRET_KEY: z.string().min(1).optional(),
   STRIPE_PRICE_ID: z.string().min(1).optional(),
   STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
+  // Stripe Connect (per-barber CUSTOMER payments — distinct from the platform
+  // subscription above). Connect uses the same STRIPE_SECRET_KEY but a SEPARATE
+  // webhook endpoint/secret. While unset, connectEnabled() is false and the
+  // payments feature is dark (CI/tests run without it). STRIPE_PRICE_ID is NOT
+  // required for Connect — only the secret key + this connect webhook secret.
+  STRIPE_CONNECT_WEBHOOK_SECRET: z.string().min(1).optional(),
 
   // Supabase Storage for shop photo uploads (logo / hero / gallery). Optional:
   // while any of these is unset, the upload endpoint returns 503 and the page
