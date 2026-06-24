@@ -32,6 +32,14 @@ export async function ensureConnectAccount(shop: ConnectShop): Promise<string> {
     type: "express",
     metadata: { shopId: shop.id },
     business_profile: { name: shop.name },
+    // Both capabilities are REQUIRED for our destination charge + on_behalf_of
+    // flow: card_payments lets the barber's account process the customer's card,
+    // transfers lets funds settle to it. Without card_payments, Stripe rejects
+    // the charge ("on_behalf_of ... without the card_payments capability").
+    capabilities: {
+      card_payments: { requested: true },
+      transfers: { requested: true },
+    },
   });
   await prisma.shop.update({
     where: { id: shop.id },
