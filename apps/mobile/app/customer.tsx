@@ -1,0 +1,139 @@
+import { useEffect, useRef, useState, useCallback } from "react";
+import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { WebView } from "react-native-webview";
+import { useLocalSearchParams } from "expo-router";
+import * as Linking from "expo-linking";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { rewardsUrl, WEB_ORIGIN, STORAGE } from "@/src/config";
+import { registerCustomerPush } from "@/src/push";
+
+/**
+ * Customer mode: a WebView of the existing /r/[magicToken] rewards page - the
+ * SAME page customers see on the web, so there is no second UI to maintain.
+ *
+ * Identity (a customer has no password): the magic token comes from
+ *  1. a deep link (chairback://r/<token> or the https universal link), else
+ *  2. the last token we saw (stored), else
+ *  3. a "text me my link" fallback that POSTs to the public resolver so the
+ *     barber's system texts them their link, which then deep-links back in.
+ * Once we have a token we register the device for native push, keyed to it.
+ */
+export default function CustomerScreen() {
+  const params = useLocalSearchParams<{ token?: string }>();
+  const [token, setToken] = useState<string | null>(null);
+  const [resolving, setResolving] = useState(true);
+  const [phone, setPhone] = useState("");
+  const [sentMsg, setSentMsg] = useState<string | null>(null);
+  const registered = useRef(false);
+
+  // Resolve a token from the deep link that launched/opened us, the route param,
+  // or storage. Listen for links that arrive while the app is already open too.
+  const adopt = useCallback(async (t: string) => {
+    setToken(t);
+    await AsyncStorage.setItem(STORAGE.lastToken, t);
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      if (params.token) { await adopt(params.token); setResolving(false); return; }
+      const initial = await Linking.getInitialURL();
+      const fromLink = initial ? parseToken(initial) : null;
+      if (fromLink) { await adopt(fromLink); setResolving(false); return; }
+      const saved = await AsyncStorage.getItem(STORAGE.lastToken);
+      if (saved) setToken(saved);
+      setResolving(false);
+    })();
+    const sub = Linking.addEventListener("url", ({ url }) => {
+      const t = parseToken(url);
+      if (t) adopt(t);
+    });
+    return () => sub.remove();
+  }, [params.token, adopt]);
+
+  // Register for native push once we know who this is.
+  useEffect(() => {
+    if (token && !registered.current) {
+      registered.current = true;
+      registerCustomerPush(token);
+    }
+  }, [token]);
+
+  async function textMeMyLink() {
+    setSentMsg(null);
+    const p = phone.trim();
+    if (!p) { setSentMsg("Enter your mobile number."); return; }
+    // Public resolver: looks the customer up by phone and texts their link.
+    const res = await fetch(`${WEB_ORIGIN}/api/rewards/resolve-by-phone`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phone: p }),
+    }).catch(() => null);
+    setSentMsg(
+      res && res.ok
+        ? "Check your texts for your rewards link, then tap it to open here."
+        : "We couldn't find that number. Ask your barber for your rewards link.",
+    );
+  }
+
+  if (resolving) {
+    return (
+      <View style={styles.center}><ActivityIndicator color="#fff" /></View>
+    );
+  }
+
+  if (token) {
+    return (
+      <SafeAreaView style={styles.flex} edges={["top"]}>
+        <WebView
+          source={{ uri: rewardsUrl(token) }}
+          style={styles.flex}
+          startInLoadingState
+          renderLoading={() => (
+            <View style={styles.center}><ActivityIndicator color="#fff" /></View>
+          )}
+        />
+      </SafeAreaView>
+    );
+  }
+
+  // No token yet: the "text me my link" fallback.
+  return (
+    <SafeAreaView style={[styles.flex, styles.pad]}>
+      <Text style={styles.title}>Your rewards</Text>
+      <Text style={styles.sub}>
+        Open the rewards link your barber texted you, or get it sent again:
+      </Text>
+      <TextInput
+        value={phone}
+        onChangeText={setPhone}
+        placeholder="Your mobile number"
+        placeholderTextColor="#6b6b70"
+        keyboardType="phone-pad"
+        style={styles.input}
+      />
+      {sentMsg && <Text style={styles.note}>{sentMsg}</Text>}
+      <Pressable style={styles.button} onPress={textMeMyLink}>
+        <Text style={styles.buttonText}>Text me my link</Text>
+      </Pressable>
+    </SafeAreaView>
+  );
+}
+
+/** Pull the magic token out of chairback://r/<token> or https://host/r/<token>. */
+function parseToken(url: string): string | null {
+  const m = url.match(/\/r\/([^/?#]+)/);
+  return m ? decodeURIComponent(m[1]!) : null;
+}
+
+const styles = StyleSheet.create({
+  flex: { flex: 1, backgroundColor: "#0A0A0B" },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#0A0A0B" },
+  pad: { padding: 24, justifyContent: "center" },
+  title: { color: "#fff", fontSize: 26, fontWeight: "700" },
+  sub: { color: "#8a8a8f", fontSize: 14, marginTop: 8, marginBottom: 20 },
+  input: { backgroundColor: "#151517", borderWidth: 1, borderColor: "#26262b", borderRadius: 12, color: "#fff", padding: 14, fontSize: 16 },
+  note: { color: "#8a8a8f", fontSize: 13, marginTop: 10 },
+  button: { backgroundColor: "#fff", borderRadius: 12, padding: 15, alignItems: "center", marginTop: 16 },
+  buttonText: { color: "#0A0A0B", fontSize: 16, fontWeight: "600" },
+});

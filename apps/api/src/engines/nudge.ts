@@ -1,9 +1,10 @@
 import { NUDGE, apiEnv } from "@chairback/config";
 import { forShop, prisma, type Shop } from "@chairback/db";
 import { logger } from "../logger.js";
-import { buildNudgeBody } from "../messaging/templates.js";
+import { buildNudgeBody, buildNudgePush } from "../messaging/templates.js";
 import { getMessageProvider } from "../messaging/twilio.js";
-import { isNudgeEligible } from "./eligibility.js";
+import { sendPushToClient } from "../messaging/push.js";
+import { isNudgeEligible, isNudgeDueByCadence } from "./eligibility.js";
 import { inQuietHours } from "./quietHours.js";
 import { hasActiveAccess } from "../billing/stripe.js";
 
@@ -134,19 +135,15 @@ async function doSweepShop(
   const dryRun = opts.dryRun ?? env.DRY_RUN;
   const db = forShop(shop.id);
 
-  // TCPA quiet hours: never send real SMS outside 8am-9pm shop-local time. A
-  // dry-run preview is exempt - it sends nothing and the barber may be previewing
-  // at any hour to decide whether to enable sending.
-  if (!dryRun && inQuietHours(shop.timezone, now)) {
-    logger.info({ shopId: shop.id }, "sweep skipped: quiet hours");
-    return {
-      shopId: shop.id,
-      considered: 0,
-      sent: 0,
-      skipped: 0,
-      failed: 0,
-      dryRun,
-    };
+  // TCPA quiet hours gate the SMS leg ONLY: never send real SMS outside 8am-9pm
+  // shop-local time. Web Push is a silent-capable notification, not a call/text,
+  // so it is NOT bound by TCPA quiet hours and still fires (this is also what
+  // lets a push-only client be rebooked at any hour). A dry-run preview is exempt
+  // - it sends nothing and the barber may preview at any hour. Previously this
+  // short-circuited the WHOLE sweep; now it only suppresses the SMS fallback.
+  const smsBlocked = !dryRun && inQuietHours(shop.timezone, now);
+  if (smsBlocked) {
+    logger.info({ shopId: shop.id }, "sweep: quiet hours - SMS leg suppressed, push still active");
   }
 
   // Construct the SMS provider lazily and ONLY for a real send. A dry-run
@@ -162,21 +159,35 @@ async function doSweepShop(
   const startOfDay = new Date(now);
   startOfDay.setUTCHours(0, 0, 0, 0);
   const sentToday = await db.nudge.count({
-    where: { status: "SENT", createdAt: { gte: startOfDay }, kind: { not: "loyalty" } },
+    where: {
+      status: "SENT",
+      createdAt: { gte: startOfDay },
+      kind: { not: "loyalty" },
+      // The cap is about SMS COST: only SMS sends count against it. WEB_PUSH
+      // rebooking nudges are free, so they must not consume the daily budget.
+      channel: "SMS",
+    },
   });
   let budget = Math.max(0, shop.dailySendCap - sentToday);
 
-  // Cheap candidate pre-filter; full eligibility checked per client.
-  // smsConsentAt must be set (TCPA): a client with no recorded consent is never
-  // textable, so exclude them before the per-client eligibility pass.
+  // Cheap candidate pre-filter; full eligibility checked per client. A candidate
+  // must be cadence-trackable (median + last visit) and not archived. For the
+  // CHANNEL, either rail qualifies them:
+  //   - SMS-reachable: opted in (optedOut false), SMS consent on file, has phone.
+  //   - push-reachable: has at least one installed-device PushSubscription.
+  // Push is its own opt-in, so a push-only client (no SMS consent/phone, or even
+  // an SMS-STOP'd client who installed the app) is now swept too - the per-client
+  // pass below decides push-vs-SMS. The old query required the SMS rails and so
+  // silently excluded every push-only installer.
   const candidates = await db.client.findMany({
     where: {
-      optedOut: false,
-      smsConsentAt: { not: null },
-      phone: { not: null },
       medianIntervalDays: { not: null },
       lastVisitAt: { not: null },
       archivedAt: null, // an archived (hidden) client is never swept/texted
+      OR: [
+        { optedOut: false, smsConsentAt: { not: null }, phone: { not: null } },
+        { pushSubscriptions: { some: {} } },
+      ],
     },
   });
 
@@ -200,13 +211,8 @@ async function doSweepShop(
   );
 
   for (const client of candidates) {
-    if (budget <= 0) {
-      logger.info({ shopId: shop.id }, "daily send cap reached");
-      break;
-    }
-
     const lastNudge = data.lastNudgeAt.get(client.id);
-    const eligible = isNudgeEligible({
+    const eligInput = {
       completedVisitCount: data.completedCounts.get(client.id) ?? 0,
       medianIntervalDays: client.medianIntervalDays,
       daysSinceLastVisit: client.lastVisitAt
@@ -218,7 +224,44 @@ async function doSweepShop(
       phone: client.phone,
       nudgeBufferDays: shop.nudgeBufferDays,
       smsConsentAt: client.smsConsentAt,
-    });
+    };
+
+    // PUSH-FIRST: if the client is due by cadence (R1-R4, channel-agnostic), try
+    // a free push to their installed devices before considering SMS. A delivered
+    // push records its own WEB_PUSH Nudge (which also trips R4 for next sweep),
+    // costs nothing, and does NOT consume the SMS daily cap. No devices ->
+    // anyDelivered false -> fall through to the SMS rails below. Dry-run routes
+    // through the push service's own dry-run (sends nothing, reports nothing).
+    if (isNudgeDueByCadence(eligInput) && !dryRun) {
+      const push = buildNudgePush({ firstName: client.firstName, shopName: shop.name });
+      const res = await sendPushToClient({
+        shopId: shop.id,
+        clientId: client.id,
+        kind: "nudge",
+        payload: {
+          ...push,
+          // The rebooking CTA: send them to book. Fall back to the rewards page
+          // when the shop has no booking URL configured.
+          url: shop.bookingUrl || `${env.APP_BASE_URL}/r/${client.magicToken}`,
+          tag: "rebook",
+        },
+      });
+      if (res.anyDelivered) {
+        summary.sent++;
+        continue; // push handled it; skip SMS, do NOT decrement the SMS budget
+      }
+    }
+
+    // SMS fallback. Quiet hours suppress it (push above already ran); the daily
+    // cap bounds it. A push-only client (no SMS consent/phone) fails isNudgeEligible
+    // here and is simply skipped - they were reached by push or not at all.
+    // NOTE: `continue` (not `break`) on an exhausted budget - the SMS cap must not
+    // stop the loop, or later push-reachable candidates would never get their
+    // (free, uncapped) push attempt above.
+    if (smsBlocked) continue;
+    if (budget <= 0) continue;
+
+    const eligible = isNudgeEligible(eligInput);
     if (!eligible) continue;
 
     const body = buildNudgeBody({

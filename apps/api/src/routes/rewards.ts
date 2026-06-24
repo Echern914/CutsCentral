@@ -304,3 +304,96 @@ rewardsRouter.post("/:magicToken/opt-out", async (req, res) => {
     consent: { state: "opted_out", hasPhone: Boolean(client.phone) },
   });
 });
+
+const pushSubscribeSchema = z
+  .object({
+    endpoint: z.string().url().max(2000),
+    keys: z.object({
+      p256dh: z.string().min(1).max(255),
+      auth: z.string().min(1).max(255),
+    }),
+    userAgent: z.string().max(500).optional(),
+  })
+  .strict();
+
+/**
+ * Store a Web Push subscription for one installed-PWA device of this client. The
+ * browser permission grant the page just obtained IS the push consent - so this
+ * is allowed regardless of SMS optedOut/smsConsentAt (push and SMS are separate
+ * channels). Plain prisma like the opt-in above: resolves the client + shop by
+ * the global magicToken, runs as the connection owner (RLS-safe insert), and
+ * stamps shopId from the resolved client - NEVER from the request body. Upsert by
+ * endpoint so re-subscribing on the same browser refreshes keys instead of
+ * duplicating. 404 (not 403) on a bad token, like every public rewards handler.
+ */
+rewardsRouter.post("/:magicToken/push-subscribe", async (req, res) => {
+  const parsed = pushSubscribeSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const client = await prisma.client.findUnique({
+    where: { magicToken: req.params.magicToken },
+  });
+  if (!client) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+
+  const { endpoint, keys, userAgent } = parsed.data;
+  await prisma.pushSubscription.upsert({
+    where: { endpoint },
+    create: {
+      shopId: client.shopId,
+      clientId: client.id,
+      endpoint,
+      p256dh: keys.p256dh,
+      auth: keys.auth,
+      userAgent: userAgent ?? null,
+    },
+    // Re-subscribe on the same device: refresh keys/userAgent, mark it live, and
+    // clear any prior failure strikes. clientId is re-stamped in case the same
+    // browser endpoint is reused by a different client (shared device).
+    update: {
+      shopId: client.shopId,
+      clientId: client.id,
+      p256dh: keys.p256dh,
+      auth: keys.auth,
+      userAgent: userAgent ?? null,
+      failureCount: 0,
+      lastSeenAt: new Date(),
+    },
+  });
+
+  res.json({ ok: true });
+});
+
+const pushUnsubscribeSchema = z
+  .object({ endpoint: z.string().url().max(2000) })
+  .strict();
+
+/**
+ * Remove a Web Push subscription. PER-CLIENT + per-endpoint (keyed by the
+ * magicToken AND the device endpoint): a web action removes only the caller's own
+ * device, never another client who might share the same browser endpoint - the
+ * same narrowing as opt-out above. Idempotent: deleting an unknown endpoint is a
+ * no-op success.
+ */
+rewardsRouter.post("/:magicToken/push-unsubscribe", async (req, res) => {
+  const parsed = pushUnsubscribeSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const client = await prisma.client.findUnique({
+    where: { magicToken: req.params.magicToken },
+  });
+  if (!client) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  await prisma.pushSubscription.deleteMany({
+    where: { endpoint: parsed.data.endpoint, clientId: client.id },
+  });
+  res.json({ ok: true });
+});

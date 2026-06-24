@@ -73,6 +73,10 @@ type PromoUseCreateNoShop = Omit<
   Prisma.PromotionRedemptionUncheckedCreateInput,
   "shopId"
 >;
+type PushSubscriptionCreateNoShop = Omit<
+  Prisma.PushSubscriptionUncheckedCreateInput,
+  "shopId"
+>;
 type StaffCreateNoShop = Omit<Prisma.StaffUncheckedCreateInput, "shopId">;
 type ServiceCreateNoShop = Omit<Prisma.ServiceUncheckedCreateInput, "shopId">;
 type ServiceStaffCreateNoShop = Omit<
@@ -333,6 +337,50 @@ export function forShop(shopId: string) {
       update: (args: Prisma.NudgeUpdateArgs) =>
         runWithShop(shopId, (tx) =>
           tx.nudge.update({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+    },
+
+    // Web Push subscriptions. No create here on purpose: the subscribe insert
+    // happens on the PUBLIC rewards route (resolved by magicToken, no shop
+    // context) via plain prisma. The send path reads them here (RLS), bumps
+    // lastSeenAt/failureCount on send, and prunes dead ones via deleteMany.
+    pushSubscription: {
+      findMany: (args: Prisma.PushSubscriptionFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.pushSubscription.findMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      count: (args: Prisma.PushSubscriptionCountArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.pushSubscription.count({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      create: (args: { data: PushSubscriptionCreateNoShop }) =>
+        runWithShop(shopId, (tx) =>
+          tx.pushSubscription.create({
+            data: stamp(
+              args.data,
+              shopId,
+            ) as Prisma.PushSubscriptionUncheckedCreateInput,
+          }),
+        ),
+      updateMany: (args: Prisma.PushSubscriptionUpdateManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.pushSubscription.updateMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      deleteMany: (args: Prisma.PushSubscriptionDeleteManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.pushSubscription.deleteMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
         ),
     },
 

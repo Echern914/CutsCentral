@@ -10,6 +10,7 @@ import { RewardCelebration } from "@/components/rewards/RewardCelebration";
 import { RewardsClaimed } from "@/components/rewards/RewardsClaimed";
 import { VisitHistory } from "@/components/rewards/VisitHistory";
 import { ConsentCard } from "./ConsentCard";
+import { PushOptIn } from "./PushOptIn";
 import { resolveRewardsTheme, rewardsFontVars, surfaceStyle } from "./theme";
 import type { RewardsData } from "./page";
 
@@ -40,9 +41,12 @@ function endsLabel(endsAt: string | null): string | null {
 export function RewardsClient({
   data,
   magicToken,
+  vapidPublicKey,
 }: {
   data: RewardsData;
   magicToken: string;
+  /** VAPID public key (null when push isn't configured -> opt-in UI hidden). */
+  vapidPublicKey: string | null;
 }) {
   const {
     shop,
@@ -172,6 +176,20 @@ export function RewardsClient({
               initialHasPhone={consent.hasPhone}
             />
           </motion.div>
+
+          {/* Push opt-in - the free, no-SMS alternative. Only when push is
+              configured; the component itself further hides on unsupported
+              browsers, so most of the time it renders nothing. */}
+          {vapidPublicKey && (
+            <motion.div variants={fadeUp}>
+              <PushOptIn
+                magicToken={magicToken}
+                shopName={shop.name}
+                theme={t}
+                vapidPublicKey={vapidPublicKey}
+              />
+            </motion.div>
+          )}
 
           {/* Rebooking countdown - drives urgency to book the next visit */}
           {show("rebook") && (

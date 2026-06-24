@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { randomToken } from "@chairback/config";
 import { forShop, prisma, type Shop } from "@chairback/db";
 import { __setMessageProviderForTests } from "../messaging/twilio.js";
+import { __setPushSenderForTests, type PushSender } from "../messaging/push.js";
 import type { MessageProvider } from "../messaging/provider.js";
 import { notifyPunchEarned, notifyRewardRedeemed } from "./loyaltyNotify.js";
 
@@ -25,6 +26,30 @@ const fakeProvider: MessageProvider = {
     return { sid: `SM${sent.length}`, status: "queued" };
   },
 };
+
+// Fake push sender: always accepts. Whether a push is DELIVERED for a given
+// client is therefore decided purely by whether the test created a
+// PushSubscription row - so the existing SMS tests (which create none) are
+// unchanged (anyDelivered=false -> SMS path runs), and the push tests add a sub.
+let pushed: string[] = [];
+const fakePushSender: PushSender = {
+  async send(sub) {
+    pushed.push(sub.endpoint);
+  },
+};
+
+/** Give a client one installed-device subscription so push-first kicks in. */
+async function addPushSub(shopId: string, clientId: string) {
+  await prisma.pushSubscription.create({
+    data: {
+      shopId,
+      clientId,
+      endpoint: `https://push.example/${randomToken(8)}`,
+      p256dh: "p256dh",
+      auth: "auth",
+    },
+  });
+}
 
 let userId: string;
 
@@ -67,6 +92,7 @@ async function makeClient(
 
 beforeAll(async () => {
   __setMessageProviderForTests(fakeProvider);
+  __setPushSenderForTests(fakePushSender);
   const user = await prisma.user.create({
     data: { email: `loyal-${randomToken(6)}@test.local`, passwordHash: "x", name: "L" },
   });
@@ -75,11 +101,14 @@ beforeAll(async () => {
 
 afterEach(async () => {
   sent = [];
+  pushed = [];
   await prisma.nudge.deleteMany({ where: { shop: { ownerId: userId } } });
+  await prisma.pushSubscription.deleteMany({ where: { shop: { ownerId: userId } } });
 });
 
 afterAll(async () => {
   __setMessageProviderForTests(undefined);
+  __setPushSenderForTests(undefined);
   await prisma.shop.deleteMany({ where: { ownerId: userId } });
   await prisma.user.delete({ where: { id: userId } });
   await prisma.$disconnect();
@@ -150,5 +179,70 @@ describe("notifyRewardRedeemed", () => {
     expect(sent[0]!.body).toContain("Free Cut");
     const nudge = await prisma.nudge.findFirst({ where: { shopId: shop.id } });
     expect(nudge?.kind).toBe("loyalty");
+  });
+});
+
+// Push-first / SMS-fallback: the cost saving. When a client has an installed
+// device, an earn/redeem fires a free push and the SMS is SKIPPED. Push is its
+// own opt-in, so it reaches a client who could never (or no longer) be texted.
+describe("push-first / SMS-fallback", () => {
+  it("sends PUSH and skips SMS when the client has a subscription", async () => {
+    const shop = await makeShop();
+    const client = await makeClient(shop.id);
+    await addPushSub(shop.id, client.id);
+
+    await notifyPunchEarned({
+      shopId: shop.id,
+      clientId: client.id,
+      earned: 1,
+      balance: 3,
+      now: NOON,
+    });
+
+    expect(pushed.length).toBe(1); // push delivered
+    expect(sent.length).toBe(0); // SMS skipped (the saving)
+    const nudge = await prisma.nudge.findFirst({ where: { shopId: shop.id } });
+    expect(nudge?.channel).toBe("WEB_PUSH");
+    expect(nudge?.kind).toBe("loyalty");
+  });
+
+  it("falls back to SMS when the client has no subscription", async () => {
+    const shop = await makeShop();
+    const client = await makeClient(shop.id); // no push sub
+    await notifyPunchEarned({ shopId: shop.id, clientId: client.id, earned: 1, balance: 1, now: NOON });
+    expect(pushed.length).toBe(0);
+    expect(sent.length).toBe(1); // SMS as before
+  });
+
+  it("reaches an SMS-OPTED-OUT client by push (push is its own consent)", async () => {
+    const shop = await makeShop();
+    // optedOut + no SMS consent: never textable. But they installed the app.
+    const client = await makeClient(shop.id, { optedOut: true, consented: false });
+    await addPushSub(shop.id, client.id);
+
+    await notifyPunchEarned({ shopId: shop.id, clientId: client.id, earned: 1, balance: 1, now: NOON });
+
+    expect(pushed.length).toBe(1); // push still reaches them
+    expect(sent.length).toBe(0); // and no SMS (they're opted out anyway)
+  });
+
+  it("still respects the shop loyalty toggle for push (no push when off)", async () => {
+    const shop = await makeShop(false); // loyalty texts/push disabled for the shop
+    const client = await makeClient(shop.id);
+    await addPushSub(shop.id, client.id);
+    await notifyPunchEarned({ shopId: shop.id, clientId: client.id, earned: 1, balance: 1, now: NOON });
+    expect(pushed.length).toBe(0);
+    expect(sent.length).toBe(0);
+  });
+
+  it("push ignores quiet hours (a silent notification, not a text)", async () => {
+    const shop = await makeShop();
+    const client = await makeClient(shop.id);
+    await addPushSub(shop.id, client.id);
+    // NIGHT is outside the SMS quiet-hours window - SMS would be skipped, but
+    // push is not bound by TCPA quiet hours, so it still goes.
+    await notifyPunchEarned({ shopId: shop.id, clientId: client.id, earned: 1, balance: 1, now: NIGHT });
+    expect(pushed.length).toBe(1);
+    expect(sent.length).toBe(0);
   });
 });

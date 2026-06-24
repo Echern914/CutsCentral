@@ -52,6 +52,7 @@ enum AppointmentStatus {
 
 enum MessageChannel {
   SMS
+  WEB_PUSH // installed-PWA push (free); the push-first leg of a loyalty/nudge send
   // EMAIL - future seam, not implemented
 }
 
@@ -211,6 +212,7 @@ model Shop {
   promoUses           PromotionRedemption[]
   appointmentRequests AppointmentRequest[]
   reviews             Review[]
+  pushSubscriptions   PushSubscription[]
 
   // Native booking engine relations
   staff                  Staff[]
@@ -358,11 +360,12 @@ model Client {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  visits       Visit[]
-  ledger       PunchLedger[]
-  nudges       Nudge[]
-  promoUses    PromotionRedemption[]
-  appointments Appointment[]
+  visits            Visit[]
+  ledger            PunchLedger[]
+  nudges            Nudge[]
+  promoUses         PromotionRedemption[]
+  appointments      Appointment[]
+  pushSubscriptions PushSubscription[]
 
   @@unique([shopId, acuityClientKey]) // tenant-scoped identity + idempotent upsert
   @@index([shopId])
@@ -522,6 +525,37 @@ model Nudge {
   @@index([shopId, clientId, createdAt]) // "no nudge in 21d" + attribution lookback
   @@index([status, createdAt]) // daily send-cap count
   @@index([promotionId])
+}
+
+// A Web Push subscription for one installed-PWA device of one client. The browser
+// permission grant + this row ARE the push consent - independent of SMS consent
+// (smsConsentAt/optedOut), so a client who replied STOP to texts but installed the
+// app and allowed notifications is still push-reachable (and still no SMS).
+//
+// Tenant-owned (shopId, FORCE RLS) like the rest. Created on the PUBLIC rewards
+// route (resolved by the global magicToken, runs as the connection owner, bypasses
+// RLS - same trust model as the rewards opt-in / AppointmentRequest / Review
+// writes); the send path reads it through forShop() (RLS-enforced). shopId is
+// always derived from the resolved client, never from the request.
+model PushSubscription {
+  id           String   @id @default(cuid())
+  shopId       String
+  shop         Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  clientId     String
+  client       Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  // The push service endpoint URL (FCM/Mozilla/Apple). Globally unique per device
+  // subscription; a re-subscribe on the same browser upserts on it.
+  endpoint     String   @unique
+  p256dh       String // client public key (base64url) for payload encryption
+  auth         String // client auth secret (base64url) for payload encryption
+  userAgent    String? // captured at subscribe time, for debugging/pruning
+  // Dead-subscription pruning: bumped on a transient send error, reset on success.
+  // A 404/410 from the push service deletes the row outright (subscription gone).
+  failureCount Int      @default(0)
+  createdAt    DateTime @default(now())
+  lastSeenAt   DateTime @default(now()) // refreshed on re-subscribe + successful send
+
+  @@index([shopId, clientId]) // the send-path lookup ("subs for this client")
 }
 
 //  Native booking engine (only used when Shop.bookingMode == native)

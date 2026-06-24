@@ -1,12 +1,23 @@
 import { forShop, prisma } from "@chairback/db";
+import { apiEnv } from "@chairback/config";
 import { logger } from "../logger.js";
 import {
   buildPunchEarnedBody,
+  buildPunchEarnedPush,
   buildRewardRedeemedBody,
+  buildRewardRedeemedPush,
 } from "../messaging/templates.js";
 import { getMessageProvider } from "../messaging/twilio.js";
+import { sendPushToClient } from "../messaging/push.js";
 import { inQuietHours } from "../engines/quietHours.js";
 import { hasActiveAccess } from "../billing/stripe.js";
+
+const env = apiEnv();
+
+/** The client's live rewards page - the click target for a loyalty push. */
+function rewardsUrl(magicToken: string): string {
+  return `${env.APP_BASE_URL}/r/${magicToken}`;
+}
 
 /**
  * Transactional loyalty SMS to a barber's CLIENTS: a text the instant a
@@ -92,6 +103,29 @@ function skipReason(
   // the cut reads as stale. The rewards page still reflects it immediately.
   if (inQuietHours(shop.timezone, now)) return "quiet_hours";
   return null;
+}
+
+/**
+ * Whether a loyalty PUSH may go to this client. Push is its own opt-in: the
+ * browser permission grant + a stored PushSubscription ARE the consent, so this
+ * deliberately OMITS the SMS-only gates that skipReason enforces - optedOut (the
+ * SMS STOP/START flag), smsConsentAt (SMS proof-of-opt-in), phone, and TCPA
+ * quiet hours (which govern calls/texts, not a silent-capable notification). A
+ * client who replied STOP to SMS but installed the app and allowed notifications
+ * is therefore still push-reachable. The non-SMS-specific guards still apply: the
+ * shop must have loyalty texts on, active billing, and the client not archived.
+ * (sendPushToClient itself no-ops when the client has no subscriptions, so this
+ * gate is only about the shop/client-level policy, not device presence.)
+ */
+function loyaltyPushEligible(
+  shop: LoyaltyShop,
+  client: LoyaltyClient,
+  now: Date,
+): boolean {
+  if (!shop.loyaltyTextsEnabled) return false;
+  if (!hasActiveAccess(shop, { now })) return false;
+  if (client.archivedAt !== null) return false;
+  return true;
 }
 
 /**
@@ -181,6 +215,29 @@ export async function notifyPunchEarned(params: {
     });
     if (!client) return;
 
+    const nextReward = await nextRewardFor(shop.id, params.balance);
+
+    // Push-first: try a free notification to the client's installed devices. If
+    // any device accepts, we're done - skip the SMS (the cost saving). Push has
+    // its own consent (see loyaltyPushEligible), so it can reach an SMS-STOP'd
+    // client. No devices subscribed -> anyDelivered is false -> fall to SMS.
+    if (loyaltyPushEligible(shop, client, now)) {
+      const push = buildPunchEarnedPush({
+        firstName: client.firstName,
+        shopName: shop.name,
+        earned: params.earned,
+        balance: params.balance,
+        nextReward,
+      });
+      const res = await sendPushToClient({
+        shopId: shop.id,
+        clientId: client.id,
+        kind: "loyalty",
+        payload: { ...push, url: rewardsUrl(client.magicToken) },
+      });
+      if (res.anyDelivered) return;
+    }
+
     const skip = skipReason(shop, client, now);
     if (skip) {
       logger.info(
@@ -190,7 +247,6 @@ export async function notifyPunchEarned(params: {
       return;
     }
 
-    const nextReward = await nextRewardFor(shop.id, params.balance);
     const body = buildPunchEarnedBody({
       firstName: client.firstName,
       shopName: shop.name,
@@ -234,6 +290,23 @@ export async function notifyRewardRedeemed(params: {
       select: CLIENT_SELECT,
     });
     if (!client) return;
+
+    // Push-first (see notifyPunchEarned for the rationale): a free notification
+    // to installed devices, SMS only as the fallback.
+    if (loyaltyPushEligible(shop, client, now)) {
+      const push = buildRewardRedeemedPush({
+        shopName: shop.name,
+        rewardName: params.rewardName,
+        balance: params.balance,
+      });
+      const res = await sendPushToClient({
+        shopId: shop.id,
+        clientId: client.id,
+        kind: "loyalty",
+        payload: { ...push, url: rewardsUrl(client.magicToken) },
+      });
+      if (res.anyDelivered) return;
+    }
 
     const skip = skipReason(shop, client, now);
     if (skip) {

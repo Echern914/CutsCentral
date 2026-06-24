@@ -10,7 +10,14 @@ const csp = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' https: data:",
   "font-src 'self' data:",
+  // connect-src stays 'self': push subscribe/unsubscribe go to same-origin Next
+  // route handlers (which forward to the API server-side), and push DELIVERY is
+  // an OS channel, not a page fetch - so no API origin is needed here.
   "connect-src 'self'",
+  // The rewards PWA service worker (public/sw.js, same origin).
+  "worker-src 'self'",
+  // The per-shop dynamic manifest route (same origin).
+  "manifest-src 'self'",
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",
@@ -31,7 +38,15 @@ const nextConfig = {
   // Compile the shared workspace package from source.
   transpilePackages: ["@chairback/config"],
   async headers() {
-    return [{ source: "/(.*)", headers: securityHeaders }];
+    return [
+      { source: "/(.*)", headers: securityHeaders },
+      // Never let a stale service worker stick around behind a CDN: the SW is the
+      // update mechanism for the PWA, so it must always revalidate.
+      {
+        source: "/sw.js",
+        headers: [{ key: "Cache-Control", value: "no-cache, no-store, must-revalidate" }],
+      },
+    ];
   },
   // On Vercel (monorepo, "include files outside root" on), `next build` can pull
   // sibling workspace TS (apps/api) into its typecheck and fail on Node-vs-DOM

@@ -95,6 +95,16 @@ const apiSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1).optional(),
   SUPABASE_STORAGE_BUCKET: z.string().min(1).default("shop-media"),
 
+  // Web Push (VAPID). Optional - while any of the three is unset, pushEnabled()
+  // is false and sends fall back to SMS (no code change to turn on, just set all
+  // three). Generate the keypair with: npx web-push generate-vapid-keys.
+  // The PUBLIC key is also exposed to the browser (it's a public key) via the web
+  // app's PUSH_VAPID_PUBLIC_KEY; the PRIVATE key is server-only. SUBJECT must be a
+  // mailto: or https URL (the Web Push spec requires a contact in the VAPID JWT).
+  PUSH_VAPID_PUBLIC_KEY: z.string().min(1).optional(),
+  PUSH_VAPID_PRIVATE_KEY: z.string().min(1).optional(),
+  PUSH_VAPID_SUBJECT: z.string().min(1).optional(),
+
   // Error monitoring (optional).
   SENTRY_DSN: cleanUrl().optional(),
 
@@ -135,6 +145,10 @@ export function apiEnv(source: NodeJS.ProcessEnv = process.env): ApiEnv {
 const webSchema = z.object({
   APP_BASE_URL: cleanUrl(),
   API_BASE_URL: cleanUrl(),
+  // VAPID public key, threaded to the browser so the rewards page can subscribe
+  // for push. Public by design (it's the server's PUBLIC key). Optional: while
+  // unset, the push opt-in UI stays hidden and everything falls back to SMS.
+  PUSH_VAPID_PUBLIC_KEY: z.string().min(1).optional(),
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),
