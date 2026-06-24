@@ -62,6 +62,15 @@ const apiSchema = z.object({
   GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
   GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
   GOOGLE_OAUTH_REDIRECT_URI: cleanUrl().optional(),
+  // NATIVE iOS sign-in (the mobile app). Both optional - while unset, the native
+  // sign-in endpoints 503 and the app falls back to email/password.
+  //  - Google native: the iOS OAuth client id (SEPARATE from the web client
+  //    above); the idToken the app sends must have this as its audience.
+  //  - Apple native: Sign in with Apple verifies a JWT against Apple's public
+  //    keys; the audience is the app's bundle id. No private key needed for the
+  //    sign-in (token) flow - only the bundle id to check the audience.
+  GOOGLE_OAUTH_IOS_CLIENT_ID: z.string().optional(),
+  APPLE_BUNDLE_ID: z.string().optional(),
 
   TWILIO_ACCOUNT_SID: z.string().min(1),
   TWILIO_AUTH_TOKEN: z.string().min(1),

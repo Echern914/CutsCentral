@@ -19,6 +19,14 @@ import {
   verifyGoogleState,
   verifyHandoffCode,
 } from "../auth/google.js";
+import {
+  NativeAuthError,
+  appleNativeEnabled,
+  googleNativeEnabled,
+  signInWithProfile,
+  verifyApple,
+  verifyGoogle,
+} from "../auth/native.js";
 import { requireUser } from "../middleware/auth.js";
 import { authLimiter } from "../middleware/rateLimit.js";
 
@@ -300,4 +308,65 @@ authRouter.post("/google/exchange", authLimiter, async (req, res) => {
   }
   const token = setSessionCookie(res, user.id, user.tokenVersion);
   res.json({ token });
+});
+
+// Native iOS sign-in (the mobile app). The app obtains an identity token from
+// Apple/Google's native SDK and POSTs it here; we verify it against the
+// provider's public keys, find-or-create the barber, and return a session token
+// the app stores as a bearer. Distinct from the web redirect flow above (which
+// needs the cross-origin handoff dance). The token is returned in JSON; the
+// cookie is also set, harmlessly, for parity with the other login routes.
+authRouter.get("/native/available", (_req, res) => {
+  res.json({ apple: appleNativeEnabled(), google: googleNativeEnabled() });
+});
+
+authRouter.post("/apple/native", authLimiter, async (req, res) => {
+  const parsed = z
+    .object({
+      identityToken: z.string().min(1).max(5000),
+      // Apple sends the name only on the FIRST authorization; the app forwards
+      // it if present so we can set it on a freshly-created account.
+      name: z.string().max(120).optional(),
+    })
+    .strict()
+    .safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  try {
+    const profile = await verifyApple(parsed.data.identityToken, parsed.data.name);
+    const { token, user } = await signInWithProfile("apple", profile);
+    setSessionCookie(res, user.id);
+    res.json({ token, ...user });
+  } catch (err) {
+    if (err instanceof NativeAuthError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
+});
+
+authRouter.post("/google/native", authLimiter, async (req, res) => {
+  const parsed = z
+    .object({ idToken: z.string().min(1).max(5000) })
+    .strict()
+    .safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  try {
+    const profile = await verifyGoogle(parsed.data.idToken);
+    const { token, user } = await signInWithProfile("google", profile);
+    setSessionCookie(res, user.id);
+    res.json({ token, ...user });
+  } catch (err) {
+    if (err instanceof NativeAuthError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
 });

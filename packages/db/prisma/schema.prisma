@@ -68,8 +68,9 @@ enum PromotionKind {
 model User {
   id            String    @id @default(cuid())
   email         String    @unique // login identity (global)
-  passwordHash  String? // argon2id; null for Google-only accounts
+  passwordHash  String? // argon2id; null for social-only accounts
   googleId      String?   @unique // Google "sub"; set for Google sign-in
+  appleId       String?   @unique // Apple "sub"; set for Sign in with Apple (native iOS)
   name          String
   // Session revocation: bumped on password change, which invalidates every
   // previously issued session token (tokens embed the version they were minted with).
