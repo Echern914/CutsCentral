@@ -1,0 +1,11 @@
+<svg width="96" height="96" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- White-on-transparent silhouette: OS notification icons are alpha masks
+       (color is ignored), so only the shape matters. -->
+  <g fill="#ffffff" stroke="#ffffff" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="372" y="250" width="280" height="320" rx="70" fill="none" stroke-width="44"/>
+    <rect x="452" y="186" width="120" height="60" rx="30"/>
+    <path d="M328 612 H696 a36 36 0 0 1 36 36 v40 a36 36 0 0 1 -36 36 H328 a36 36 0 0 1 -36 -36 v-40 a36 36 0 0 1 36 -36 Z"/>
+    <rect x="486" y="724" width="52" height="92" rx="14"/>
+    <path d="M388 838 H636" fill="none" stroke-width="46"/>
+  </g>
+</svg>

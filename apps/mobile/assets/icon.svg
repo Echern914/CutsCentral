@@ -1,0 +1,40 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- ChairBack app icon: a minimal barber-chair-back mark on a charcoal->gold
+       gradient. Distinctive (the literal "chair back" the brand is named for),
+       on-brand (charcoal #0A0A0B + gold #D4AF37 accent), full-bleed for iOS. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#16140E"/>
+      <stop offset="55%" stop-color="#0A0A0B"/>
+      <stop offset="100%" stop-color="#000000"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#F4D67A"/>
+      <stop offset="50%" stop-color="#D4AF37"/>
+      <stop offset="100%" stop-color="#A6841F"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="42%" r="55%">
+      <stop offset="0%" stop-color="#D4AF37" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#D4AF37" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Full-bleed background (iOS masks the corners itself) -->
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#glow)"/>
+
+  <!-- Stylized barber chair, centered. Backrest + headrest + seat + base, in a
+       single confident gold treatment so it reads at small sizes. -->
+  <g fill="none" stroke="url(#gold)" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Backrest: tall rounded panel -->
+    <rect x="372" y="250" width="280" height="320" rx="70" stroke-width="44"/>
+    <!-- Headrest pill on top -->
+    <rect x="452" y="186" width="120" height="60" rx="30" fill="url(#gold)" stroke-width="0"/>
+    <!-- Seat -->
+    <path d="M328 612 H696 a36 36 0 0 1 36 36 v40 a36 36 0 0 1 -36 36 H328 a36 36 0 0 1 -36 -36 v-40 a36 36 0 0 1 36 -36 Z" fill="url(#gold)" stroke-width="0"/>
+    <!-- Central pedestal -->
+    <rect x="486" y="724" width="52" height="92" rx="14" fill="url(#gold)" stroke-width="0"/>
+    <!-- Base -->
+    <path d="M388 838 H636" stroke-width="46"/>
+  </g>
+</svg>
