@@ -9,7 +9,6 @@ import {
   deleteShopAction,
   updateNameAction,
 } from "../actions";
-import { OPEN_TOUR_EVENT } from "./WelcomeTour";
 
 const field =
   "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
@@ -89,13 +88,12 @@ export function AccountCard({
             A quick refresher on what ChairBack does and how to use it.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => window.dispatchEvent(new Event(OPEN_TOUR_EVENT))}
+        <a
+          href="/welcome?replay=1"
           className="shrink-0 rounded-full border border-subtle px-4 py-2 text-xs font-medium text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
         >
           Replay tour
-        </button>
+        </a>
       </div>
 
       {/* Danger zone */}
