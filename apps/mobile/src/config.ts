@@ -24,3 +24,11 @@ export const STORAGE = {
   mode: "cb.mode", // "customer" | "barber"
   lastToken: "cb.customerToken", // last magic token seen, for cold launches
 } as const;
+
+/**
+ * Barber mode is OFF for v1: it logs into the dashboard WebView where Google's
+ * OAuth is blocked (embedded-WebView policy). It turns back on once native
+ * Apple+Google sign-in lands (v2). While off, the app is purely the customer
+ * rewards experience (magic link -> rewards), which needs no login at all.
+ */
+export const BARBER_MODE_ENABLED = false;

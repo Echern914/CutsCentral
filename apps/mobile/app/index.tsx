@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { View, Text, Pressable, StyleSheet, ActivityIndicator } from "react-native";
 import { router } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { STORAGE } from "@/src/config";
+import { STORAGE, BARBER_MODE_ENABLED } from "@/src/config";
 
 /**
  * First screen: "Customer or Barber?". The choice is remembered, so a returning
@@ -10,12 +10,21 @@ import { STORAGE } from "@/src/config";
  * right away" behavior) - they only see this picker the first time, or after
  * switching modes. A deep link (chairback://r/<token> or the universal link)
  * bypasses this entirely and lands in customer mode.
+ *
+ * v1: barber mode is disabled (BARBER_MODE_ENABLED=false), so there is only one
+ * destination - we skip the picker entirely and go straight to the customer
+ * rewards experience.
  */
 export default function ModePicker() {
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
     (async () => {
+      // v1: only customer mode exists - route straight in, no picker.
+      if (!BARBER_MODE_ENABLED) {
+        router.replace("/customer");
+        return;
+      }
       const saved = await AsyncStorage.getItem(STORAGE.mode);
       if (saved === "customer") router.replace("/customer");
       else if (saved === "barber") router.replace("/barber");
