@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { WebView } from "react-native-webview";
+import { AppWebView } from "@/src/AppWebView";
 import { useLocalSearchParams } from "expo-router";
 import * as Linking from "expo-linking";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -85,14 +85,7 @@ export default function CustomerScreen() {
   if (token) {
     return (
       <SafeAreaView style={styles.flex} edges={["top"]}>
-        <WebView
-          source={{ uri: rewardsUrl(token) }}
-          style={styles.flex}
-          startInLoadingState
-          renderLoading={() => (
-            <View style={styles.center}><ActivityIndicator color="#fff" /></View>
-          )}
-        />
+        <AppWebView source={{ uri: rewardsUrl(token) }} style={styles.flex} />
       </SafeAreaView>
     );
   }

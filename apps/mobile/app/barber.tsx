@@ -1,7 +1,8 @@
 import { useRef } from "react";
-import { View, StyleSheet, ActivityIndicator } from "react-native";
+import { StyleSheet } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { WebView, type WebViewMessageEvent } from "react-native-webview";
+import { type WebViewMessageEvent } from "react-native-webview";
+import { AppWebView } from "@/src/AppWebView";
 import { dashboardUrl } from "@/src/config";
 import { registerBarberPush } from "@/src/push";
 
@@ -35,17 +36,13 @@ export default function BarberScreen() {
 
   return (
     <SafeAreaView style={styles.flex} edges={["top"]}>
-      <WebView
+      <AppWebView
         source={{ uri: dashboardUrl() }}
         style={styles.flex}
-        startInLoadingState
         sharedCookiesEnabled
         // Persist cookies across launches so the login sticks.
         thirdPartyCookiesEnabled
         onMessage={onMessage}
-        renderLoading={() => (
-          <View style={styles.center}><ActivityIndicator color="#fff" /></View>
-        )}
       />
     </SafeAreaView>
   );
@@ -53,5 +50,4 @@ export default function BarberScreen() {
 
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: "#0A0A0B" },
-  center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#0A0A0B" },
 });

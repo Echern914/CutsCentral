@@ -1,4 +1,20 @@
+import type { Viewport } from "next";
 import { pageFontVars } from "@/lib/pageFonts";
+
+/**
+ * Lock zoom on the rewards page so it feels like an app, not a zoomable web page
+ * - both inside the native WebView (which also injects this) and for customers
+ * who open the SMS link in mobile Safari. Scoped to /r/* only (this layout), so
+ * the marketing site + dashboard stay pinch-zoomable for accessibility.
+ */
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: "cover",
+  themeColor: "#0A0A0B",
+};
 
 /**
  * Client rewards page font loader. Declares the curated PAGE_FONTS families as
