@@ -5,7 +5,7 @@ import { AppWebView } from "@/src/AppWebView";
 import { useLocalSearchParams } from "expo-router";
 import * as Linking from "expo-linking";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { rewardsUrl, WEB_ORIGIN, STORAGE } from "@/src/config";
+import { rewardsUrl, API_ORIGIN, STORAGE } from "@/src/config";
 import { registerCustomerPush } from "@/src/push";
 
 /**
@@ -63,16 +63,18 @@ export default function CustomerScreen() {
     setSentMsg(null);
     const p = phone.trim();
     if (!p) { setSentMsg("Enter your mobile number."); return; }
-    // Public resolver: looks the customer up by phone and texts their link.
-    const res = await fetch(`${WEB_ORIGIN}/api/rewards/resolve-by-phone`, {
+    // Public resolver on the API: looks the customer up by phone and texts their
+    // link. Privacy-safe - it returns ok regardless, so we show the same
+    // reassuring message either way (never reveal whether a number is on file).
+    const res = await fetch(`${API_ORIGIN}/api/rewards/resolve-by-phone`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ phone: p }),
     }).catch(() => null);
     setSentMsg(
       res && res.ok
-        ? "Check your texts for your rewards link, then tap it to open here."
-        : "We couldn't find that number. Ask your barber for your rewards link.",
+        ? "If that number's on file, we just texted your rewards link. Tap it to open here."
+        : "Something went wrong. Please try again.",
     );
   }
 

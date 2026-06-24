@@ -18,6 +18,8 @@ import type { ExpoConfig, ConfigContext } from "expo/config";
 // physical device against a local server.
 const WEB_ORIGIN = process.env.EXPO_PUBLIC_WEB_ORIGIN ?? "https://getchairback.com";
 const WEB_HOST = WEB_ORIGIN.replace(/^https?:\/\//, "");
+// The API origin the native app calls directly (no browser CSP in a native app).
+const API_ORIGIN = process.env.EXPO_PUBLIC_API_ORIGIN ?? "https://api.getchairback.com";
 
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
@@ -83,6 +85,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   ],
   extra: {
     webOrigin: WEB_ORIGIN,
+    apiOrigin: API_ORIGIN,
     // EAS project (created on expo.dev). Links this app to the cloud build/project.
     eas: { projectId: "6919de0f-3dba-4966-bf62-05e328f248e3" },
   },

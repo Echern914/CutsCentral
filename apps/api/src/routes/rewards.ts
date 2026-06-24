@@ -1,9 +1,13 @@
 import { Router } from "express";
 import { z } from "zod";
-import { REWARDS_SECTION_DEFAULT } from "@chairback/config";
+import { REWARDS_SECTION_DEFAULT, apiEnv } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { currentBalance } from "../services/punch.js";
 import { toE164 } from "../acuity/clientKey.js";
+import { getMessageProvider } from "../messaging/twilio.js";
+import { logger } from "../logger.js";
+
+const env = apiEnv();
 
 /**
  * Public rewards endpoint. The magicToken in the path IS the auth - it resolves
@@ -396,6 +400,71 @@ rewardsRouter.post("/:magicToken/push-unsubscribe", async (req, res) => {
     where: { endpoint: parsed.data.endpoint, clientId: client.id },
   });
   res.json({ ok: true });
+});
+
+const resolveByPhoneSchema = z
+  .object({ phone: z.string().min(1).max(40) })
+  .strict();
+
+/**
+ * Cold-start entry for the mobile app: a customer who opens the app without a
+ * magic link enters their phone number, and we text them their rewards link
+ * (which then deep-links back into the app). Public + unauthenticated like the
+ * rest of the rewards routes.
+ *
+ * PRIVACY: this must not become a phone-enumeration oracle, so the response is
+ * ALWAYS the same `{ ok: true }` whether or not a matching, textable client
+ * exists. We only actually send when there's a match that consented to SMS and
+ * isn't opted out (texting the link is itself a transactional reply to their own
+ * request, but we still respect a STOP). If the same phone maps to clients at
+ * multiple shops, we text the most recently active one's link.
+ */
+rewardsRouter.post("/resolve-by-phone", async (req, res) => {
+  const parsed = resolveByPhoneSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const phone = toE164(parsed.data.phone);
+  // Uniform response regardless of validity/existence (no enumeration signal).
+  const ok = { ok: true };
+
+  if (phone) {
+    // Most recently active matching client that can be texted.
+    const client = await prisma.client.findFirst({
+      where: { phone, optedOut: false, smsConsentAt: { not: null }, archivedAt: null },
+      orderBy: [{ lastVisitAt: { sort: "desc", nulls: "last" } }, { updatedAt: "desc" }],
+      include: { shop: { select: { id: true, name: true } } },
+    });
+    if (client) {
+      const rewardsUrl = `${env.APP_BASE_URL}/r/${client.magicToken}`;
+      const who = client.firstName ?? "there";
+      const body =
+        `Hi ${who}, here's your ${client.shop.name} rewards link: ${rewardsUrl} ` +
+        `Reply STOP to opt out.`;
+      try {
+        const result = await getMessageProvider().send({ to: phone, body });
+        // Audit as a loyalty-kind Nudge (transactional, not a marketing blast).
+        await prisma.nudge.create({
+          data: {
+            shopId: client.shop.id,
+            clientId: client.id,
+            channel: "SMS",
+            status: "SENT",
+            kind: "loyalty",
+            body,
+            sentAt: new Date(),
+            messageSid: result.sid,
+          },
+        });
+      } catch (err) {
+        // Never leak failure to the caller (still return ok); just log it.
+        logger.error({ err, shopId: client.shop.id, clientId: client.id }, "resolve-by-phone send failed");
+      }
+    }
+  }
+
+  res.json(ok);
 });
 
 const pushNativeSchema = z

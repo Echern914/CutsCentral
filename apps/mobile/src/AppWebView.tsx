@@ -1,4 +1,5 @@
-import { View, ActivityIndicator, StyleSheet } from "react-native";
+import { useState } from "react";
+import { View, Text, Pressable, ActivityIndicator, StyleSheet } from "react-native";
 import { WebView, type WebViewProps } from "react-native-webview";
 
 /**
@@ -10,6 +11,8 @@ import { WebView, type WebViewProps } from "react-native-webview";
  *  - NO automatic content insets (we own the safe-area, so iOS must not add its
  *    own — that was the "moving around" drift)
  *  - text size fixed to 100% so iOS Dynamic Type can't reflow the page
+ *  - a real ERROR state instead of an eternal spinner: if the page can't load
+ *    (offline, bad URL, server error) we show a retry, never an endless circle
  *
  * The viewport lock is injected BEFORE the page's own scripts run, so it wins.
  */
@@ -26,30 +29,54 @@ const LOCK_VIEWPORT = `
     document.head.appendChild(meta);
   }
   meta.setAttribute('content', content);
-  // Also stop the document text from auto-resizing.
   document.documentElement.style.webkitTextSizeAdjust = '100%';
 })();
 true;
 `;
 
 export function AppWebView(props: WebViewProps) {
+  const [errored, setErrored] = useState(false);
+  const [key, setKey] = useState(0); // bump to force a fresh WebView on retry
+
+  if (errored) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.title}>Couldn&apos;t load</Text>
+        <Text style={styles.sub}>Check your connection and try again.</Text>
+        <Pressable
+          style={styles.button}
+          onPress={() => {
+            setErrored(false);
+            setKey((k) => k + 1);
+          }}
+        >
+          <Text style={styles.buttonText}>Retry</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
   return (
     <WebView
+      key={key}
       // App-feel defaults; any caller prop still overrides via the spread below.
       startInLoadingState
-      // iOS: don't let the OS inject scroll insets / let content scale to fit.
       contentInsetAdjustmentBehavior="never"
       automaticallyAdjustContentInsets={false}
       scalesPageToFit={false}
-      // Kill pinch / double-tap zoom on both platforms.
       setBuiltInZoomControls={false}
       setDisplayZoomControls={false}
       injectedJavaScriptBeforeContentLoaded={LOCK_VIEWPORT}
-      // Kill rubber-band bounce so it doesn't feel like a scrollable web page.
       bounces={false}
       overScrollMode="never"
-      // Don't fight iOS Dynamic Type reflow.
       textInteractionEnabled
+      // Surface load failures instead of spinning forever. onError = native load
+      // failure; onHttpError with a 5xx = the server failed (a 404 for a bad
+      // token is handled by the page itself, so don't treat <500 as fatal).
+      onError={() => setErrored(true)}
+      onHttpError={(e) => {
+        if (e.nativeEvent.statusCode >= 500) setErrored(true);
+      }}
       renderLoading={() => (
         <View style={styles.center}>
           <ActivityIndicator color="#fff" />
@@ -66,5 +93,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#0A0A0B",
+    padding: 24,
   },
+  title: { color: "#fff", fontSize: 18, fontWeight: "600" },
+  sub: { color: "#8a8a8f", fontSize: 14, marginTop: 6, textAlign: "center" },
+  button: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 28,
+    marginTop: 18,
+  },
+  buttonText: { color: "#0A0A0B", fontSize: 15, fontWeight: "600" },
 });

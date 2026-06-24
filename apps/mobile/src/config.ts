@@ -9,6 +9,15 @@ export const WEB_ORIGIN: string =
   (Constants.expoConfig?.extra?.webOrigin as string | undefined) ??
   "https://getchairback.com";
 
+/**
+ * The API origin (api.getchairback.com). A native app has no browser CSP, so it
+ * calls the Express API directly (no Next proxy needed) for things like the
+ * cold-start "text me my link" resolver and native push registration.
+ */
+export const API_ORIGIN: string =
+  (Constants.expoConfig?.extra?.apiOrigin as string | undefined) ??
+  "https://api.getchairback.com";
+
 /** The customer rewards page for a given magic token. */
 export function rewardsUrl(magicToken: string): string {
   return `${WEB_ORIGIN}/r/${magicToken}`;

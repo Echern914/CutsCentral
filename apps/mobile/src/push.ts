@@ -2,7 +2,7 @@ import { Platform } from "react-native";
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import Constants from "expo-constants";
-import { WEB_ORIGIN } from "./config";
+import { API_ORIGIN } from "./config";
 
 /**
  * Native push (APNs/FCM via Expo's push service). This is the iOS-app twin of
@@ -54,11 +54,16 @@ export async function getExpoPushToken(): Promise<string | null> {
 export async function registerCustomerPush(magicToken: string): Promise<void> {
   const token = await getExpoPushToken();
   if (!token) return;
-  await fetch(`${WEB_ORIGIN}/r/${encodeURIComponent(magicToken)}/push/native`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ expoPushToken: token, platform: Platform.OS }),
-  }).catch(() => {});
+  // The native app calls the API directly (no browser CSP). This is the public,
+  // magicToken-keyed Express endpoint (routes/rewards.ts push-native).
+  await fetch(
+    `${API_ORIGIN}/api/rewards/${encodeURIComponent(magicToken)}/push-native`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expoPushToken: token, platform: Platform.OS }),
+    },
+  ).catch(() => {});
 }
 
 /**
@@ -70,7 +75,7 @@ export async function registerCustomerPush(magicToken: string): Promise<void> {
 export async function registerBarberPush(bearer: string): Promise<void> {
   const token = await getExpoPushToken();
   if (!token) return;
-  await fetch(`${WEB_ORIGIN}/api/dashboard/push/native`, {
+  await fetch(`${API_ORIGIN}/api/dashboard/push/native`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
