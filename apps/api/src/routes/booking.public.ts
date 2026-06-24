@@ -483,6 +483,7 @@ bookingPublicRouter.post(
         serviceId: true,
         status: true,
         startsAt: true,
+        payment: { select: { status: true, amount: true } },
         service: { select: { durationMin: true, price: true, priceOverrides: true } },
         shop: {
           select: {
@@ -534,6 +535,20 @@ bookingPublicRouter.post(
     if (startsAt.getTime() > latest) {
       res.status(400).json({ error: "too_far" });
       return;
+    }
+
+    // If the booking is already PAID and the new date costs a different amount,
+    // a self-serve reschedule can't reconcile the captured charge in v1 (no
+    // partial capture/top-up here). Block it and point the customer at the shop,
+    // rather than silently leaving them over/under-charged.
+    const paidAmount =
+      appt.payment && appt.payment.status === "succeeded" ? appt.payment.amount : null;
+    if (paidAmount !== null) {
+      const newCents = toCents(effectivePrice);
+      if (newCents !== null && newCents !== paidAmount) {
+        res.status(409).json({ error: "price_changed", message: "That day has a different price. Please contact the shop to move a paid booking." });
+        return;
+      }
     }
 
     // Re-validate the new time against availability (excluding this appointment's

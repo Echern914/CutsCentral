@@ -131,19 +131,67 @@ export async function refundForCancellation(params: {
         refundedAmount: true,
         status: true,
         capturedAmount: true,
+        applicationFeeAmount: true,
       },
     });
     if (!payment) return 0;
-    // Only money actually collected can be refunded.
+
+    // The payment may still be IN FLIGHT when the customer cancels (they paid
+    // then immediately canceled before payment_intent.succeeded arrived). A
+    // refund can't apply to a not-yet-collected charge, so instead CANCEL the
+    // PaymentIntent - which voids an authorization or aborts a processing charge
+    // so the customer is never left charged-without-refund. Terminal states
+    // (canceled/refunded/failed) are no-ops.
+    const inFlight = new Set([
+      "requires_payment_method",
+      "requires_confirmation",
+      "requires_action",
+      "processing",
+      "requires_capture",
+    ]);
+    if (inFlight.has(payment.status)) {
+      try {
+        await stripeClient().paymentIntents.cancel(payment.stripePaymentIntentId);
+        await prisma.payment.update({
+          where: { id: payment.id },
+          data: { status: "canceled" },
+        });
+      } catch (err) {
+        // If it succeeded in the gap between our read and the cancel, Stripe
+        // refuses the cancel; the charge.succeeded webhook will mark it succeeded
+        // and a later manual refund can recover it. Log, don't throw.
+        logger.warn(
+          { err, paymentId: payment.id },
+          "in-flight PI cancel failed (likely already captured); needs manual review",
+        );
+      }
+      return 0;
+    }
+
+    // A refund is valid against money actually collected. succeeded =
+    // ahead-mode auto-capture; partially_refunded = a prior partial refund.
+    const refundableStatuses = new Set(["succeeded", "partially_refunded"]);
     const collected = payment.capturedAmount ?? payment.amount;
-    if (payment.status !== "succeeded" || collected <= 0) return 0;
+    if (!refundableStatuses.has(payment.status) || collected <= 0) return 0;
 
     const fee = Math.max(0, Math.min(params.feeCents, collected));
     const refundable = collected - payment.refundedAmount - fee;
     if (refundable <= 0) return 0;
 
     const refund = await stripeClient().refunds.create(
-      { payment_intent: payment.stripePaymentIntentId, amount: refundable },
+      {
+        payment_intent: payment.stripePaymentIntentId,
+        amount: refundable,
+        // CRITICAL for destination charges: the charge lives on the PLATFORM
+        // balance but the funds were transferred to the barber. reverse_transfer
+        // claws the refund back out of the BARBER's connected balance, so the
+        // platform never eats the refund. Without it, every refund is a straight
+        // platform loss while the barber keeps the original payment.
+        reverse_transfer: true,
+        // When a platform fee was taken, refund our proportional cut too, so we
+        // don't keep a fee on a (partly) refunded charge. No-op when fee is 0.
+        ...(payment.applicationFeeAmount > 0 ? { refund_application_fee: true } : {}),
+      },
       { idempotencyKey: `refund:${payment.id}:${payment.refundedAmount}` },
     );
     const newRefunded = payment.refundedAmount + (refund.amount ?? refundable);
@@ -175,11 +223,22 @@ export async function applyPaymentEvent(event: Stripe.Event): Promise<boolean> {
       const pi = event.data.object as Stripe.PaymentIntent;
       const chargeId =
         typeof pi.latest_charge === "string" ? pi.latest_charge : pi.latest_charge?.id ?? null;
-      await reconcile(event.id, { paymentId: pi.metadata?.paymentId, piId: pi.id }, {
-        status: pi.status,
-        ...(chargeId ? { stripeChargeId: chargeId } : {}),
-        ...(pi.status === "succeeded" ? { capturedAmount: pi.amount_received } : {}),
-      });
+      // Stripe redelivers webhooks for ~3 days and out of order. A stale
+      // processing/canceled/failed event arriving AFTER succeeded must NOT flip
+      // the row off "succeeded" - that would silently block its refund
+      // (refundForCancellation gates on succeeded). So only the succeeded event
+      // may write a terminal/collected row; the others no-op against one.
+      const noDowngrade = pi.status !== "succeeded";
+      await reconcile(
+        event.id,
+        { paymentId: pi.metadata?.paymentId, piId: pi.id },
+        {
+          status: pi.status,
+          ...(chargeId ? { stripeChargeId: chargeId } : {}),
+          ...(pi.status === "succeeded" ? { capturedAmount: pi.amount_received } : {}),
+        },
+        noDowngrade ? ["succeeded", "refunded", "partially_refunded"] : undefined,
+      );
       return true;
     }
     case "charge.refunded": {
@@ -198,11 +257,17 @@ export async function applyPaymentEvent(event: Stripe.Event): Promise<boolean> {
   }
 }
 
-/** Update the matching Payment row, with a webhook-id replay guard. */
+/**
+ * Update the matching Payment row, with a webhook-id replay guard. When
+ * `noDowngradeFrom` is given, the update is additionally refused if the row is
+ * already in one of those statuses - so a stale/out-of-order non-succeeded event
+ * cannot downgrade an already-collected/refunded payment.
+ */
 async function reconcile(
   eventId: string,
   key: { paymentId?: string; piId?: string },
   data: Record<string, unknown>,
+  noDowngradeFrom?: string[],
 ): Promise<void> {
   const where = key.paymentId
     ? { id: key.paymentId }
@@ -211,12 +276,22 @@ async function reconcile(
       : null;
   if (!where) return;
   // Replay guard: skip if we've already applied this exact event to this row.
+  // Downgrade guard: skip if the row is already terminal/collected.
   const { count } = await prisma.payment.updateMany({
-    where: { ...where, NOT: { lastWebhookEventId: eventId } },
+    where: {
+      ...where,
+      NOT: { lastWebhookEventId: eventId },
+      ...(noDowngradeFrom && noDowngradeFrom.length > 0
+        ? { status: { notIn: noDowngradeFrom } }
+        : {}),
+    },
     data: { ...data, lastWebhookEventId: eventId },
   });
   if (count === 0) {
-    logger.info({ eventId, key }, "payment webhook matched no row or was a replay");
+    logger.info(
+      { eventId, key },
+      "payment webhook matched no row, was a replay, or was a refused downgrade",
+    );
   }
 }
 
