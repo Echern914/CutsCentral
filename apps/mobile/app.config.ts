@@ -22,7 +22,8 @@ const WEB_HOST = WEB_ORIGIN.replace(/^https?:\/\//, "");
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
   name: "ChairBack Rewards",
-  slug: "chairback-rewards",
+  // Must match the slug of the EAS project (projectId below), created on expo.dev.
+  slug: "chairback",
   scheme: "chairback", // custom-scheme deep links: chairback://r/<token>
   version: "1.0.0",
   orientation: "portrait",
