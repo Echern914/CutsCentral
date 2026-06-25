@@ -90,9 +90,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         color: "#0A0A0B",
       },
     ],
-    // Fix the {fmt} consteval compile error on the Xcode 26 build image (the
-    // image Apple now requires). See plugins/withFmtConstevalFix.js.
-    "./plugins/withFmtConstevalFix",
+    // NOTE: the fmt-consteval workaround plugin was removed on the SDK 54 upgrade
+    // (RN 0.81 ships an fmt that compiles cleanly on Xcode 26 - no patch needed).
   ],
   extra: {
     webOrigin: WEB_ORIGIN,
