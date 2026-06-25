@@ -90,8 +90,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         color: "#0A0A0B",
       },
     ],
-    // NOTE: the fmt-consteval workaround plugin was removed on the SDK 54 upgrade
-    // (RN 0.81 ships an fmt that compiles cleanly on Xcode 26 - no patch needed).
+    // SDK 54 / RN 0.81 STILL ships the fmt that breaks on Xcode 26 (the upstream
+    // RN fix is 0.82.1+). Re-added: compile fmt/RCT-Folly as C++17 (no consteval)
+    // + patch the header. See plugins/withFmtConstevalFix.js.
+    "./plugins/withFmtConstevalFix",
   ],
   extra: {
     webOrigin: WEB_ORIGIN,
