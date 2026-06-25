@@ -27,7 +27,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   // Must match the slug of the EAS project (projectId below), created on expo.dev.
   slug: "chairback",
   scheme: "chairback", // custom-scheme deep links: chairback://r/<token>
-  version: "1.0.0",
+  // Bumped so the launch-hang-fixed build is visually distinguishable from the
+  // earlier broken one in TestFlight (the iOS buildNumber is auto-incremented by
+  // EAS remotely, so this user-facing version is the reliable marker).
+  version: "1.0.1",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
