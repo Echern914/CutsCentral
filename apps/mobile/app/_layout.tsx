@@ -1,29 +1,51 @@
 import { useEffect } from "react";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
+import { SafeAreaProvider } from "react-native-safe-area-context";
+import * as SplashScreen from "expo-splash-screen";
 import * as Notifications from "expo-notifications";
 
 /**
- * Root layout. Configures how notifications behave while the app is foregrounded
- * (still show the banner) and hosts the stack: the mode picker, then the two
- * WebView screens. Everything else (push registration, deep links) lives in the
- * screens so it runs with the right identity in scope.
+ * Root layout.
+ *
+ * Three things here are load-bearing for the app to actually appear (their
+ * absence presented as a permanent "buffering"/blank launch):
+ *  1. SplashScreen control: keep the native splash up, then hide it once the
+ *     tree has mounted. Without expo-splash-screen + an explicit hide, the
+ *     native splash could stay up indefinitely on a release build.
+ *  2. SafeAreaProvider: the screens use <SafeAreaView> from
+ *     react-native-safe-area-context, which REQUIRES this provider as an
+ *     ancestor; without it the safe-area frame can collapse and the WebView
+ *     gets zero height (blank screen with the spinner overlay on top).
+ *  3. The notification handler is registered in an effect (not at module scope),
+ *     so a failure there can never block the first render.
  */
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
+
+// Keep the native splash visible until the first layout effect hides it. Called
+// at module load (before the component) as the splash API requires; guarded so a
+// failure never throws at startup.
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export default function RootLayout() {
   useEffect(() => {
-    // Tapping a notification routes via its data.url, handled per-screen.
+    // Configure foreground notification behavior once, safely.
+    try {
+      Notifications.setNotificationHandler({
+        handleNotification: async () => ({
+          shouldShowAlert: true,
+          shouldPlaySound: true,
+          shouldSetBadge: false,
+        }),
+      });
+    } catch {
+      /* non-fatal */
+    }
+    // Tree is mounted - reveal the app.
+    SplashScreen.hideAsync().catch(() => {});
   }, []);
 
   return (
-    <>
+    <SafeAreaProvider>
       <StatusBar style="auto" />
       <Stack
         screenOptions={{
@@ -35,6 +57,6 @@ export default function RootLayout() {
         <Stack.Screen name="customer" />
         <Stack.Screen name="barber" />
       </Stack>
-    </>
+    </SafeAreaProvider>
   );
 }
