@@ -2,6 +2,10 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
+    // baseUrl anchors the path alias. Expo's Metro reads tsconfig paths to
+    // resolve "@/..." at RUNTIME, but needs baseUrl set (expo/tsconfig.base does
+    // not set it). Without this the bundle can fail to resolve @/src/* at launch.
+    "baseUrl": ".",
     "paths": {
       "@/*": ["./*"]
     }
