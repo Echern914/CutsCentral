@@ -33,7 +33,12 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   version: "1.0.1",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
-  newArchEnabled: true,
+  // New Architecture OFF: this is a WebView-wrapper app that uses NO Fabric/
+  // TurboModule features, and the New Arch is what drags in the folly/{fmt}
+  // native compile path that breaks on Xcode 26 (the fmt consteval error). Off =
+  // that whole failure class is gone, with zero feature cost for this app. The
+  // withFmtConstevalFix plugin remains as belt-and-suspenders.
+  newArchEnabled: false,
   icon: "./assets/icon.png",
   splash: {
     image: "./assets/splash.png",
