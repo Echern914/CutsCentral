@@ -2,10 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import { View, Text, Pressable, ActivityIndicator, StyleSheet } from "react-native";
 import { WebView, type WebViewProps } from "react-native-webview";
 
-// If the page hasn't finished loading within this long, stop spinning and offer
-// a retry. A WebView whose load-finished event never fires (a hung request, a
-// page that never settles) would otherwise show renderLoading's spinner forever.
-const LOAD_TIMEOUT_MS = 15000;
+// If the real page content hasn't signaled ready within this long, stop spinning
+// and offer a retry. The page posts "cb:ready" when its real UI mounts; we do NOT
+// trust the WebView's onLoadEnd, because Next streams a loading.tsx shell whose
+// load "finishes" while the real content is still rendering (clearing the spinner
+// on that was what stranded users on a perpetual spinner).
+const LOAD_TIMEOUT_MS = 20000;
+// Pages that should emit the cb:ready handshake. For URLs that don't (e.g. the
+// barber dashboard, which we don't control as tightly), onLoadEnd is the signal.
+const READY_MESSAGE = "cb:ready";
 
 /**
  * The shared WebView for every screen, tuned to feel like a native app rather
@@ -39,23 +44,40 @@ const LOCK_VIEWPORT = `
 true;
 `;
 
-export function AppWebView(props: WebViewProps) {
+/**
+ * `awaitsReady`: when true (the rewards page), the spinner clears ONLY on the
+ * page's "cb:ready" postMessage - not on onLoadEnd, which fires on the streamed
+ * loading shell. When false (e.g. the dashboard, which doesn't emit the
+ * handshake), onLoadEnd clears it as usual.
+ */
+export function AppWebView({
+  awaitsReady = false,
+  onMessage: callerOnMessage,
+  ...props
+}: WebViewProps & { awaitsReady?: boolean }) {
   const [errored, setErrored] = useState(false);
   const [loading, setLoading] = useState(true);
   const [key, setKey] = useState(0); // bump to force a fresh WebView on retry
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Arm a watchdog whenever a fresh load starts. If it fires before the page
-  // finishes, we show the error/retry instead of spinning forever.
+  // Arm the watchdog ONCE per load attempt (keyed by `key`), not per onLoadStart
+  // - a streaming Next page emits repeated starts that would otherwise keep
+  // pushing the deadline out forever. If real content never signals ready within
+  // the timeout, fall to the Retry screen instead of an eternal spinner.
   useEffect(() => {
+    if (errored) return;
+    setLoading(true);
     if (timer.current) clearTimeout(timer.current);
-    if (loading && !errored) {
-      timer.current = setTimeout(() => setErrored(true), LOAD_TIMEOUT_MS);
-    }
+    timer.current = setTimeout(() => setErrored(true), LOAD_TIMEOUT_MS);
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [loading, errored, key]);
+  }, [key, errored]);
+
+  function clearLoading() {
+    setLoading(false);
+    if (timer.current) clearTimeout(timer.current);
+  }
 
   function retry() {
     setErrored(false);
@@ -89,16 +111,24 @@ export function AppWebView(props: WebViewProps) {
         bounces={false}
         overScrollMode="never"
         textInteractionEnabled
-        // We manage the loading overlay ourselves (below) so a stuck load can
-        // time out, rather than using startInLoadingState's uncancellable spinner.
+        // We manage the loading overlay ourselves so a stuck load can time out.
         onLoadStart={() => setLoading(true)}
-        onLoadEnd={() => setLoading(false)}
+        // onLoadEnd clears the spinner ONLY for pages that don't emit the ready
+        // handshake (awaitsReady=false). For the rewards page (awaitsReady=true)
+        // onLoadEnd fires on the streamed loading.tsx shell while the real UI is
+        // still rendering, so we ignore it and wait for "cb:ready" instead.
+        onLoadEnd={() => {
+          if (!awaitsReady) clearLoading();
+        }}
+        // The page posts "cb:ready" when its REAL content mounts - the reliable
+        // signal that we can hide the spinner. Chain any caller-provided onMessage.
+        onMessage={(e) => {
+          if (e.nativeEvent.data === READY_MESSAGE) clearLoading();
+          callerOnMessage?.(e);
+        }}
         // Surface load failures instead of spinning forever. onError = native
         // load failure (DNS, offline, blocked). onHttpError >= 400 catches both
-        // 5xx (server) AND 404 (a stale/expired magic token -> Next notFound()),
-        // which can otherwise leave WKWebView on a dead page or a silent stall.
-        // react-native-webview only fires onHttpError for the main document, so
-        // this won't trip on sub-resource 4xx.
+        // 5xx (server) AND 404 (a stale/expired magic token -> Next notFound()).
         onError={() => setErrored(true)}
         onHttpError={(e) => {
           if (e.nativeEvent.statusCode >= 400) setErrored(true);

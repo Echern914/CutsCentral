@@ -112,7 +112,9 @@ export default function CustomerScreen() {
   if (token) {
     return (
       <SafeAreaView style={styles.flex} edges={["top"]}>
-        <AppWebView source={{ uri: rewardsUrl(token) }} style={styles.flex} />
+        {/* awaitsReady: the rewards page posts "cb:ready" when its real UI mounts,
+            so the spinner clears on that - not on the streamed loading shell. */}
+        <AppWebView source={{ uri: rewardsUrl(token) }} style={styles.flex} awaitsReady />
       </SafeAreaView>
     );
   }
