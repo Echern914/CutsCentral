@@ -93,12 +93,15 @@ export function AppWebView(props: WebViewProps) {
         // time out, rather than using startInLoadingState's uncancellable spinner.
         onLoadStart={() => setLoading(true)}
         onLoadEnd={() => setLoading(false)}
-        // Surface load failures instead of spinning forever. onError = native load
-        // failure (DNS, offline, blocked). onHttpError: a 5xx means the server
-        // failed; a 404 (bad/expired token) is a real Next page we let render.
+        // Surface load failures instead of spinning forever. onError = native
+        // load failure (DNS, offline, blocked). onHttpError >= 400 catches both
+        // 5xx (server) AND 404 (a stale/expired magic token -> Next notFound()),
+        // which can otherwise leave WKWebView on a dead page or a silent stall.
+        // react-native-webview only fires onHttpError for the main document, so
+        // this won't trip on sub-resource 4xx.
         onError={() => setErrored(true)}
         onHttpError={(e) => {
-          if (e.nativeEvent.statusCode >= 500) setErrored(true);
+          if (e.nativeEvent.statusCode >= 400) setErrored(true);
         }}
         {...props}
       />
