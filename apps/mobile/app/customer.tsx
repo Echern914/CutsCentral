@@ -75,11 +75,12 @@ export default function CustomerScreen() {
     return () => sub.remove();
   }, [params.token, adopt]);
 
-  // Register for native push once we know who this is.
+  // Register for native push once we know who this is. Fire-and-forget, and
+  // .catch'd so a push failure can never surface as an unhandled rejection.
   useEffect(() => {
     if (token && !registered.current) {
       registered.current = true;
-      registerCustomerPush(token);
+      registerCustomerPush(token).catch(() => {});
     }
   }, [token]);
 

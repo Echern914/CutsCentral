@@ -19,11 +19,19 @@ export async function getExpoPushToken(): Promise<string | null> {
   // Push only works on a physical device (simulators have no APNs token).
   if (!Device.isDevice) return null;
 
-  const existing = await Notifications.getPermissionsAsync();
-  let status = existing.status;
-  if (status !== "granted") {
-    const req = await Notifications.requestPermissionsAsync();
-    status = req.status;
+  // Permission calls are wrapped: a rejection here (OS quirk, first launch)
+  // must NOT become an unhandled rejection that surfaces at cold launch - this
+  // whole module is best-effort and must never destabilize the app.
+  let status: string;
+  try {
+    const existing = await Notifications.getPermissionsAsync();
+    status = existing.status;
+    if (status !== "granted") {
+      const req = await Notifications.requestPermissionsAsync();
+      status = req.status;
+    }
+  } catch {
+    return null;
   }
   if (status !== "granted") return null;
 
