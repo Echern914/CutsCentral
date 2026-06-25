@@ -17,7 +17,7 @@
       "autoIncrement": true,
       "env": { "EAS_BUILD_NO_EXPO_GO_WARNING": "true" },
       "ios": {
-        "image": "macos-sequoia-15.3-xcode-16.2"
+        "image": "latest"
       }
     }
   },
