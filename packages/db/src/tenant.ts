@@ -51,6 +51,35 @@ export async function runWithShop<T>(
   });
 }
 
+/**
+ * Run a unit of work that must read/write a GLOBALLY-unique row with NO shop
+ * context - the public-by-magicToken endpoints (rewards view, SMS opt-in/out,
+ * push subscribe, resolve-by-phone). These resolve a Client by its global token
+ * BEFORE any shop is known, so they cannot use forShop().
+ *
+ * The catch: the tenant tables are FORCE ROW LEVEL SECURITY, and FORCE means even
+ * the table OWNER is subject to the policy. With no `app.current_shop_id` set, the
+ * policy `shopId = current_shop_id()` matches ZERO rows - so a plain owner query
+ * silently returns nothing (every magicToken 404s). We connect as the owner, so
+ * the sanctioned escape is `SET LOCAL row_security = off` (owner-only, scoped to
+ * this transaction). This restores the documented "magicToken resolves without a
+ * shop" behavior WITHOUT weakening tenant isolation anywhere else: forShop() still
+ * SET ROLEs to the non-owner app role where row_security can't be turned off.
+ *
+ * Use ONLY for genuinely global, unguessable-key lookups - never for a query that
+ * should be shop-scoped.
+ */
+export async function runAsOwner<T>(
+  fn: (tx: Prisma.TransactionClient) => Promise<T>,
+): Promise<T> {
+  return prisma.$transaction(async (tx) => {
+    // Owner + row_security off => FORCE RLS does not filter this transaction.
+    // Transaction-scoped (LOCAL), so it never leaks to other connections/queries.
+    await tx.$executeRawUnsafe("SET LOCAL row_security = off");
+    return fn(tx);
+  });
+}
+
 function stamp<T>(data: T, shopId: string): T {
   return { ...data, shopId } as T;
 }

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { REWARDS_SECTION_DEFAULT, apiEnv } from "@chairback/config";
-import { prisma } from "@chairback/db";
+import { prisma, runAsOwner } from "@chairback/db";
 import { currentBalance } from "../services/punch.js";
 import { toE164 } from "../acuity/clientKey.js";
 import { getMessageProvider } from "../messaging/twilio.js";
@@ -36,19 +36,21 @@ function consentView(c: {
 }
 
 rewardsRouter.get("/:magicToken", async (req, res) => {
-  const client = await prisma.client.findUnique({
-    where: { magicToken: req.params.magicToken },
-    include: { shop: true },
-  });
-  if (!client) {
-    res.status(404).json({ error: "not_found" });
-    return;
-  }
+  // All reads run via runAsOwner: the tenant tables are FORCE RLS, and this
+  // public endpoint resolves a GLOBAL magicToken with no shop context, so a plain
+  // owner query is filtered to zero rows by the RLS policy (every token would
+  // 404). runAsOwner does SET LOCAL row_security=off for this transaction only.
+  const data = await runAsOwner(async (tx) => {
+    const client = await tx.client.findUnique({
+      where: { magicToken: req.params.magicToken },
+      include: { shop: true },
+    });
+    if (!client) return null;
 
-  const now = new Date();
-  const balance = await currentBalance(client.shopId, client.id);
-  const [visits, upcoming, rewards, promotions, redemptions] = await Promise.all([
-    prisma.visit.findMany({
+    const now = new Date();
+    const balance = await currentBalance(client.shopId, client.id, tx);
+    const [visits, upcoming, rewards, promotions, redemptions] = await Promise.all([
+      tx.visit.findMany({
       where: { shopId: client.shopId, clientId: client.id, status: "COMPLETED" },
       orderBy: { scheduledAt: "desc" },
       take: 10,
@@ -62,7 +64,7 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
         punch: { select: { punchesEarned: true } },
       },
     }),
-    prisma.visit.findFirst({
+    tx.visit.findFirst({
       where: {
         shopId: client.shopId,
         clientId: client.id,
@@ -72,7 +74,7 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
       orderBy: { scheduledAt: "asc" },
       select: { scheduledAt: true },
     }),
-    prisma.reward.findMany({
+    tx.reward.findMany({
       where: { shopId: client.shopId, active: true },
       orderBy: [{ sortOrder: "asc" }, { punchCost: "asc" }],
       select: {
@@ -83,7 +85,7 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
         punchCost: true,
       },
     }),
-    prisma.promotion.findMany({
+    tx.promotion.findMany({
       where: {
         shopId: client.shopId,
         active: true,
@@ -109,7 +111,7 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
     // (punchesRedeemed > 0), not since undone (reversedAt null), and not itself
     // a correction row (reversalOfId null). `note` carries the reward name even
     // if the reward was later deleted.
-    prisma.punchLedger.findMany({
+    tx.punchLedger.findMany({
       where: {
         shopId: client.shopId,
         clientId: client.id,
@@ -121,7 +123,16 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
       take: 10,
       select: { createdAt: true, punchesRedeemed: true, note: true },
     }),
-  ]);
+    ]);
+    return { client, balance, visits, upcoming, rewards, promotions, redemptions };
+  });
+
+  if (!data) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const { client, balance, visits, upcoming, rewards, promotions, redemptions } = data;
+  const now = new Date();
 
   // The punch grid counts toward the cheapest reward the client can't afford
   // yet; with everything in reach (or an empty menu) there's no next target.
@@ -242,8 +253,9 @@ const optInSchema = z.object({ phone: z.string().max(40).optional() }).strict();
  * stamp is FIRST-WINS (guarded on smsConsentAt: null) so a re-opt-in never
  * overwrites an earlier source/timestamp - matching the barber-attest path.
  *
- * Plain prisma (connection owner, no SET ROLE) like the GET above: resolves by
- * the global magicToken without a shop context, RLS-safe.
+ * Runs via runAsOwner: resolves the global magicToken with no shop context. The
+ * tenant tables are FORCE RLS, so a plain owner query (no app.current_shop_id)
+ * is filtered to zero rows - runAsOwner turns row_security off for this tx only.
  */
 rewardsRouter.post("/:magicToken/opt-in", async (req, res) => {
   const parsed = optInSchema.safeParse(req.body ?? {});
@@ -251,38 +263,40 @@ rewardsRouter.post("/:magicToken/opt-in", async (req, res) => {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
     return;
   }
-  const client = await prisma.client.findUnique({
-    where: { magicToken: req.params.magicToken },
-  });
-  if (!client) {
-    res.status(404).json({ error: "not_found" });
-    return;
-  }
-
   const rawPhone = parsed.data.phone?.trim();
   const bodyPhone = toE164(parsed.data.phone);
   if (rawPhone && !bodyPhone) {
     res.status(400).json({ error: "invalid_phone" });
     return;
   }
-  const effectivePhone = client.phone ?? bodyPhone;
-  if (!effectivePhone) {
-    res.status(400).json({ error: "needs_phone" });
+
+  const result = await runAsOwner(async (tx) => {
+    const client = await tx.client.findUnique({
+      where: { magicToken: req.params.magicToken },
+    });
+    if (!client) return { error: "not_found" as const };
+
+    const effectivePhone = client.phone ?? bodyPhone;
+    if (!effectivePhone) return { error: "needs_phone" as const };
+
+    // Two writes, deliberately kept separate:
+    //  1. Unconditional: clear any prior STOP and set the phone on first opt-in.
+    //  2. Guarded (smsConsentAt: null): stamp consent FIRST-WINS, never overwrite.
+    await tx.client.update({
+      where: { id: client.id },
+      data: { optedOut: false, ...(client.phone ? {} : { phone: bodyPhone }) },
+    });
+    await tx.client.updateMany({
+      where: { id: client.id, smsConsentAt: null },
+      data: { smsConsentAt: new Date(), smsConsentSource: "client_self_serve" },
+    });
+    return { ok: true as const };
+  });
+
+  if ("error" in result) {
+    res.status(result.error === "not_found" ? 404 : 400).json({ error: result.error });
     return;
   }
-
-  // Two writes, deliberately kept separate:
-  //  1. Unconditional: clear any prior STOP and set the phone on first opt-in.
-  //  2. Guarded (smsConsentAt: null): stamp consent FIRST-WINS, never overwrite.
-  await prisma.client.update({
-    where: { id: client.id },
-    data: { optedOut: false, ...(client.phone ? {} : { phone: bodyPhone }) },
-  });
-  await prisma.client.updateMany({
-    where: { id: client.id, smsConsentAt: null },
-    data: { smsConsentAt: new Date(), smsConsentSource: "client_self_serve" },
-  });
-
   res.json({ consent: { state: "opted_in", hasPhone: true } });
 });
 
@@ -293,20 +307,22 @@ rewardsRouter.post("/:magicToken/opt-in", async (req, res) => {
  * happens to share that number.
  */
 rewardsRouter.post("/:magicToken/opt-out", async (req, res) => {
-  const client = await prisma.client.findUnique({
-    where: { magicToken: req.params.magicToken },
+  const result = await runAsOwner(async (tx) => {
+    const client = await tx.client.findUnique({
+      where: { magicToken: req.params.magicToken },
+    });
+    if (!client) return null;
+    await tx.client.update({
+      where: { id: client.id },
+      data: { optedOut: true },
+    });
+    return { hasPhone: Boolean(client.phone) };
   });
-  if (!client) {
+  if (!result) {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  await prisma.client.update({
-    where: { id: client.id },
-    data: { optedOut: true },
-  });
-  res.json({
-    consent: { state: "opted_out", hasPhone: Boolean(client.phone) },
-  });
+  res.json({ consent: { state: "opted_out", hasPhone: result.hasPhone } });
 });
 
 const pushSubscribeSchema = z
@@ -336,39 +352,42 @@ rewardsRouter.post("/:magicToken/push-subscribe", async (req, res) => {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
     return;
   }
-  const client = await prisma.client.findUnique({
-    where: { magicToken: req.params.magicToken },
+  const { endpoint, keys, userAgent } = parsed.data;
+  const ok = await runAsOwner(async (tx) => {
+    const client = await tx.client.findUnique({
+      where: { magicToken: req.params.magicToken },
+    });
+    if (!client) return false;
+    await tx.pushSubscription.upsert({
+      where: { endpoint },
+      create: {
+        shopId: client.shopId,
+        clientId: client.id,
+        endpoint,
+        p256dh: keys.p256dh,
+        auth: keys.auth,
+        userAgent: userAgent ?? null,
+      },
+      // Re-subscribe on the same device: refresh keys/userAgent, mark it live,
+      // and clear any prior failure strikes. clientId is re-stamped in case the
+      // same browser endpoint is reused by a different client (shared device).
+      update: {
+        shopId: client.shopId,
+        clientId: client.id,
+        p256dh: keys.p256dh,
+        auth: keys.auth,
+        userAgent: userAgent ?? null,
+        failureCount: 0,
+        lastSeenAt: new Date(),
+      },
+    });
+    return true;
   });
-  if (!client) {
+
+  if (!ok) {
     res.status(404).json({ error: "not_found" });
     return;
   }
-
-  const { endpoint, keys, userAgent } = parsed.data;
-  await prisma.pushSubscription.upsert({
-    where: { endpoint },
-    create: {
-      shopId: client.shopId,
-      clientId: client.id,
-      endpoint,
-      p256dh: keys.p256dh,
-      auth: keys.auth,
-      userAgent: userAgent ?? null,
-    },
-    // Re-subscribe on the same device: refresh keys/userAgent, mark it live, and
-    // clear any prior failure strikes. clientId is re-stamped in case the same
-    // browser endpoint is reused by a different client (shared device).
-    update: {
-      shopId: client.shopId,
-      clientId: client.id,
-      p256dh: keys.p256dh,
-      auth: keys.auth,
-      userAgent: userAgent ?? null,
-      failureCount: 0,
-      lastSeenAt: new Date(),
-    },
-  });
-
   res.json({ ok: true });
 });
 
@@ -389,16 +408,20 @@ rewardsRouter.post("/:magicToken/push-unsubscribe", async (req, res) => {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
     return;
   }
-  const client = await prisma.client.findUnique({
-    where: { magicToken: req.params.magicToken },
+  const ok = await runAsOwner(async (tx) => {
+    const client = await tx.client.findUnique({
+      where: { magicToken: req.params.magicToken },
+    });
+    if (!client) return false;
+    await tx.pushSubscription.deleteMany({
+      where: { endpoint: parsed.data.endpoint, clientId: client.id },
+    });
+    return true;
   });
-  if (!client) {
+  if (!ok) {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  await prisma.pushSubscription.deleteMany({
-    where: { endpoint: parsed.data.endpoint, clientId: client.id },
-  });
   res.json({ ok: true });
 });
 
@@ -430,12 +453,15 @@ rewardsRouter.post("/resolve-by-phone", async (req, res) => {
   const ok = { ok: true };
 
   if (phone) {
-    // Most recently active matching client that can be texted.
-    const client = await prisma.client.findFirst({
-      where: { phone, optedOut: false, smsConsentAt: { not: null }, archivedAt: null },
-      orderBy: [{ lastVisitAt: { sort: "desc", nulls: "last" } }, { updatedAt: "desc" }],
-      include: { shop: { select: { id: true, name: true } } },
-    });
+    // Lookup via runAsOwner (FORCE RLS; no shop context). The SMS send happens
+    // OUTSIDE the transaction so we never hold a DB tx open across a network call.
+    const client = await runAsOwner((tx) =>
+      tx.client.findFirst({
+        where: { phone, optedOut: false, smsConsentAt: { not: null }, archivedAt: null },
+        orderBy: [{ lastVisitAt: { sort: "desc", nulls: "last" } }, { updatedAt: "desc" }],
+        include: { shop: { select: { id: true, name: true } } },
+      }),
+    );
     if (client) {
       const rewardsUrl = `${env.APP_BASE_URL}/r/${client.magicToken}`;
       const who = client.firstName ?? "there";
@@ -445,18 +471,20 @@ rewardsRouter.post("/resolve-by-phone", async (req, res) => {
       try {
         const result = await getMessageProvider().send({ to: phone, body });
         // Audit as a loyalty-kind Nudge (transactional, not a marketing blast).
-        await prisma.nudge.create({
-          data: {
-            shopId: client.shop.id,
-            clientId: client.id,
-            channel: "SMS",
-            status: "SENT",
-            kind: "loyalty",
-            body,
-            sentAt: new Date(),
-            messageSid: result.sid,
-          },
-        });
+        await runAsOwner((tx) =>
+          tx.nudge.create({
+            data: {
+              shopId: client.shop.id,
+              clientId: client.id,
+              channel: "SMS",
+              status: "SENT",
+              kind: "loyalty",
+              body,
+              sentAt: new Date(),
+              messageSid: result.sid,
+            },
+          }),
+        );
       } catch (err) {
         // Never leak failure to the caller (still return ok); just log it.
         logger.error({ err, shopId: client.shop.id, clientId: client.id }, "resolve-by-phone send failed");
@@ -488,33 +516,36 @@ rewardsRouter.post("/:magicToken/push-native", async (req, res) => {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
     return;
   }
-  const client = await prisma.client.findUnique({
-    where: { magicToken: req.params.magicToken },
+  const { expoPushToken, platform } = parsed.data;
+  const ok = await runAsOwner(async (tx) => {
+    const client = await tx.client.findUnique({
+      where: { magicToken: req.params.magicToken },
+    });
+    if (!client) return false;
+    await tx.pushSubscription.upsert({
+      where: { expoPushToken },
+      create: {
+        shopId: client.shopId,
+        clientId: client.id,
+        kind: "expo",
+        expoPushToken,
+        userAgent: platform ?? null,
+      },
+      update: {
+        shopId: client.shopId,
+        clientId: client.id,
+        kind: "expo",
+        userAgent: platform ?? null,
+        failureCount: 0,
+        lastSeenAt: new Date(),
+      },
+    });
+    return true;
   });
-  if (!client) {
+
+  if (!ok) {
     res.status(404).json({ error: "not_found" });
     return;
   }
-
-  const { expoPushToken, platform } = parsed.data;
-  await prisma.pushSubscription.upsert({
-    where: { expoPushToken },
-    create: {
-      shopId: client.shopId,
-      clientId: client.id,
-      kind: "expo",
-      expoPushToken,
-      userAgent: platform ?? null,
-    },
-    update: {
-      shopId: client.shopId,
-      clientId: client.id,
-      kind: "expo",
-      userAgent: platform ?? null,
-      failureCount: 0,
-      lastSeenAt: new Date(),
-    },
-  });
-
   res.json({ ok: true });
 });

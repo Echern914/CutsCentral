@@ -263,12 +263,18 @@ export async function grantBonusPunches(
   });
 }
 
-/** Current punch balance = sum(earned) - sum(redeemed) for a client. */
+/**
+ * Current punch balance = sum(earned) - sum(redeemed) for a client. Accepts an
+ * optional transaction client so a caller that has bypassed RLS (the public
+ * rewards endpoint via runAsOwner) can run this aggregate in that same context;
+ * defaults to the module prisma for normal callers.
+ */
 export async function currentBalance(
   shopId: string,
   clientId: string,
+  db: Pick<typeof prisma, "punchLedger"> | Prisma.TransactionClient = prisma,
 ): Promise<number> {
-  const agg = await prisma.punchLedger.aggregate({
+  const agg = await db.punchLedger.aggregate({
     where: { shopId, clientId },
     _sum: { punchesEarned: true, punchesRedeemed: true },
   });

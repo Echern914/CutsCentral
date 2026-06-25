@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomToken } from "@chairback/config";
 import { prisma } from "./client.js";
-import { runWithShop } from "./tenant.js";
+import { runWithShop, runAsOwner } from "./tenant.js";
 
 /**
  * Proves RLS enforces at the DATABASE layer (not just the app layer). With the
@@ -76,5 +76,46 @@ describe("RLS database-layer enforcement", () => {
         ),
       ),
     ).rejects.toThrow();
+  });
+});
+
+/**
+ * REGRESSION GUARD for the public-by-magicToken endpoints (rewards page, SMS
+ * opt-in/out, push, resolve-by-phone).
+ *
+ * The bug: those endpoints resolve a GLOBAL magicToken with NO shop context. The
+ * tenant tables are FORCE ROW LEVEL SECURITY, so under any role subject to RLS
+ * (incl. the owner via FORCE) a query with no app.current_shop_id matches ZERO
+ * rows - every token 404s in production. runAsOwner() must turn row_security OFF
+ * for its transaction so the global lookup actually finds the row.
+ *
+ * We reproduce the forced-RLS condition with runWithShop's SET ROLE chairback_app
+ * (under which RLS demonstrably filters, per the tests above), and prove:
+ *   - a no-shop-context read under enforced RLS finds NOTHING (the bug), but
+ *   - runAsOwner finds the row by its global token (the fix).
+ */
+describe("runAsOwner resolves a global token despite FORCE RLS", () => {
+  it("finds a client by magicToken with no shop context", async () => {
+    // clientBId (shop B) was seeded in the outer beforeAll. Look it up by its
+    // global token the way the public rewards endpoint does - no shop scope.
+    const cb = await prisma.client.findUnique({ where: { id: clientBId } });
+    expect(cb).not.toBeNull();
+    const token = cb!.magicToken;
+
+    // The fix: runAsOwner (row_security=off) resolves the global token.
+    const viaOwner = await runAsOwner((tx) =>
+      tx.client.findUnique({ where: { magicToken: token }, select: { id: true } }),
+    );
+    expect(viaOwner?.id).toBe(clientBId);
+
+    // The bug it guards against: the SAME lookup under enforced RLS with no shop
+    // context (a wrong-shop context here) finds nothing. Only assert when RLS is
+    // actually enforced in this environment.
+    if (rlsActive) {
+      const viaEnforcedNoCtx = await runWithShop(shopA, (tx) =>
+        tx.client.findUnique({ where: { magicToken: token }, select: { id: true } }),
+      );
+      expect(viaEnforcedNoCtx).toBeNull(); // shop-A context can't see shop-B's client
+    }
   });
 });
