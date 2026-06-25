@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { View, Text, Pressable, StyleSheet, ActivityIndicator } from "react-native";
-import { router } from "expo-router";
+import { router, Redirect } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { STORAGE, BARBER_MODE_ENABLED } from "@/src/config";
 
@@ -16,21 +16,33 @@ import { STORAGE, BARBER_MODE_ENABLED } from "@/src/config";
  * rewards experience.
  */
 export default function ModePicker() {
-  const [checking, setChecking] = useState(true);
+  const [checking, setChecking] = useState(BARBER_MODE_ENABLED);
 
+  // Hooks must run unconditionally (rules of hooks), so this effect is declared
+  // before any early return. Its body is a no-op in the customer-only v1 case.
   useEffect(() => {
+    if (!BARBER_MODE_ENABLED) return; // the <Redirect> below handles v1
     (async () => {
-      // v1: only customer mode exists - route straight in, no picker.
-      if (!BARBER_MODE_ENABLED) {
-        router.replace("/customer");
-        return;
+      try {
+        const saved = await AsyncStorage.getItem(STORAGE.mode);
+        if (saved === "customer") router.replace("/customer");
+        else if (saved === "barber") router.replace("/barber");
+        else setChecking(false);
+      } catch {
+        // Storage failed - show the picker rather than hanging on a spinner.
+        setChecking(false);
       }
-      const saved = await AsyncStorage.getItem(STORAGE.mode);
-      if (saved === "customer") router.replace("/customer");
-      else if (saved === "barber") router.replace("/barber");
-      else setChecking(false);
     })();
   }, []);
+
+  // v1: only customer mode exists. A DECLARATIVE <Redirect> (mount-safe) instead
+  // of an imperative router.replace() inside an on-mount effect - the imperative
+  // call can be silently dropped if it fires before the Root Layout has mounted,
+  // leaving the app stuck on this screen's spinner forever (a classic expo-router
+  // launch hang). <Redirect> fires correctly post-mount.
+  if (!BARBER_MODE_ENABLED) {
+    return <Redirect href="/customer" />;
+  }
 
   async function choose(mode: "customer" | "barber") {
     await AsyncStorage.setItem(STORAGE.mode, mode);

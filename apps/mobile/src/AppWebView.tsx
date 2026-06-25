@@ -1,6 +1,11 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { View, Text, Pressable, ActivityIndicator, StyleSheet } from "react-native";
 import { WebView, type WebViewProps } from "react-native-webview";
+
+// If the page hasn't finished loading within this long, stop spinning and offer
+// a retry. A WebView whose load-finished event never fires (a hung request, a
+// page that never settles) would otherwise show renderLoading's spinner forever.
+const LOAD_TIMEOUT_MS = 15000;
 
 /**
  * The shared WebView for every screen, tuned to feel like a native app rather
@@ -36,20 +41,34 @@ true;
 
 export function AppWebView(props: WebViewProps) {
   const [errored, setErrored] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [key, setKey] = useState(0); // bump to force a fresh WebView on retry
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Arm a watchdog whenever a fresh load starts. If it fires before the page
+  // finishes, we show the error/retry instead of spinning forever.
+  useEffect(() => {
+    if (timer.current) clearTimeout(timer.current);
+    if (loading && !errored) {
+      timer.current = setTimeout(() => setErrored(true), LOAD_TIMEOUT_MS);
+    }
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, [loading, errored, key]);
+
+  function retry() {
+    setErrored(false);
+    setLoading(true);
+    setKey((k) => k + 1);
+  }
 
   if (errored) {
     return (
       <View style={styles.center}>
         <Text style={styles.title}>Couldn&apos;t load</Text>
         <Text style={styles.sub}>Check your connection and try again.</Text>
-        <Pressable
-          style={styles.button}
-          onPress={() => {
-            setErrored(false);
-            setKey((k) => k + 1);
-          }}
-        >
+        <Pressable style={styles.button} onPress={retry}>
           <Text style={styles.buttonText}>Retry</Text>
         </Pressable>
       </View>
@@ -57,37 +76,44 @@ export function AppWebView(props: WebViewProps) {
   }
 
   return (
-    <WebView
-      key={key}
-      // App-feel defaults; any caller prop still overrides via the spread below.
-      startInLoadingState
-      contentInsetAdjustmentBehavior="never"
-      automaticallyAdjustContentInsets={false}
-      scalesPageToFit={false}
-      setBuiltInZoomControls={false}
-      setDisplayZoomControls={false}
-      injectedJavaScriptBeforeContentLoaded={LOCK_VIEWPORT}
-      bounces={false}
-      overScrollMode="never"
-      textInteractionEnabled
-      // Surface load failures instead of spinning forever. onError = native load
-      // failure; onHttpError with a 5xx = the server failed (a 404 for a bad
-      // token is handled by the page itself, so don't treat <500 as fatal).
-      onError={() => setErrored(true)}
-      onHttpError={(e) => {
-        if (e.nativeEvent.statusCode >= 500) setErrored(true);
-      }}
-      renderLoading={() => (
-        <View style={styles.center}>
+    <View style={styles.flex}>
+      <WebView
+        key={key}
+        // App-feel defaults; any caller prop still overrides via the spread below.
+        contentInsetAdjustmentBehavior="never"
+        automaticallyAdjustContentInsets={false}
+        scalesPageToFit={false}
+        setBuiltInZoomControls={false}
+        setDisplayZoomControls={false}
+        injectedJavaScriptBeforeContentLoaded={LOCK_VIEWPORT}
+        bounces={false}
+        overScrollMode="never"
+        textInteractionEnabled
+        // We manage the loading overlay ourselves (below) so a stuck load can
+        // time out, rather than using startInLoadingState's uncancellable spinner.
+        onLoadStart={() => setLoading(true)}
+        onLoadEnd={() => setLoading(false)}
+        // Surface load failures instead of spinning forever. onError = native load
+        // failure (DNS, offline, blocked). onHttpError: a 5xx means the server
+        // failed; a 404 (bad/expired token) is a real Next page we let render.
+        onError={() => setErrored(true)}
+        onHttpError={(e) => {
+          if (e.nativeEvent.statusCode >= 500) setErrored(true);
+        }}
+        {...props}
+      />
+      {loading && (
+        <View style={[styles.center, styles.overlay]}>
           <ActivityIndicator color="#fff" />
         </View>
       )}
-      {...props}
-    />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  flex: { flex: 1, backgroundColor: "#0A0A0B" },
+  overlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
   center: {
     flex: 1,
     alignItems: "center",

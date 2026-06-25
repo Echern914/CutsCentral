@@ -36,13 +36,37 @@ export default function CustomerScreen() {
 
   useEffect(() => {
     (async () => {
-      if (params.token) { await adopt(params.token); setResolving(false); return; }
-      const initial = await Linking.getInitialURL();
-      const fromLink = initial ? parseToken(initial) : null;
-      if (fromLink) { await adopt(fromLink); setResolving(false); return; }
-      const saved = await AsyncStorage.getItem(STORAGE.lastToken);
-      if (saved) setToken(saved);
-      setResolving(false);
+      // CRITICAL: every await here is wrapped so that resolving ALWAYS settles.
+      // If getInitialURL() or AsyncStorage ever throws/hangs, an unguarded await
+      // would leave `resolving` true forever - a permanent launch spinner that
+      // never even reaches the error screen. try/finally guarantees we exit the
+      // loading state no matter what.
+      try {
+        if (params.token) {
+          await adopt(params.token);
+          return;
+        }
+        let initial: string | null = null;
+        try {
+          initial = await Linking.getInitialURL();
+        } catch {
+          initial = null;
+        }
+        const fromLink = initial ? parseToken(initial) : null;
+        if (fromLink) {
+          await adopt(fromLink);
+          return;
+        }
+        let saved: string | null = null;
+        try {
+          saved = await AsyncStorage.getItem(STORAGE.lastToken);
+        } catch {
+          saved = null;
+        }
+        if (saved) setToken(saved);
+      } finally {
+        setResolving(false);
+      }
     })();
     const sub = Linking.addEventListener("url", ({ url }) => {
       const t = parseToken(url);
