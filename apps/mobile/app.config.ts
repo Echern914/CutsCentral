@@ -85,6 +85,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         color: "#0A0A0B",
       },
     ],
+    // Makes fmt 11.0.2 (bundled by RN 0.76) compile under Xcode 26's Clang,
+    // which Apple now requires for App Store builds. See the plugin for details.
+    "./plugins/withFmtConstevalFix",
   ],
   extra: {
     webOrigin: WEB_ORIGIN,
