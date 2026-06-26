@@ -34,7 +34,19 @@ const shopArgIdx = process.argv.indexOf("--shop");
 const shopFilter = shopArgIdx !== -1 ? process.argv[shopArgIdx + 1] : null;
 
 // A source we'd be comfortable defending if a carrier or regulator asked.
-const DEFENSIBLE = new Set(["acuity_intake", "barber_attest", "join_page"]);
+// Must mirror the sources the app actually stamps on a real opt-in:
+//   booking          - booking.public.ts (client checked the box on the page)
+//   acuity_intake    - acuity/consent.ts (intake-form consent checkbox)
+//   client_self_serve- rewards.ts (client opted in on their rewards page)
+//   barber_attest    - barber attested they have permission
+// (Older "join_page" kept for backward-compat with any pre-rename rows.)
+const DEFENSIBLE = new Set([
+  "booking",
+  "acuity_intake",
+  "client_self_serve",
+  "barber_attest",
+  "join_page",
+]);
 
 function hostOf(url) {
   try {
