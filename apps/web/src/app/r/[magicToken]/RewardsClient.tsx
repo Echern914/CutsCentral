@@ -11,6 +11,7 @@ import { RewardsClaimed } from "@/components/rewards/RewardsClaimed";
 import { VisitHistory } from "@/components/rewards/VisitHistory";
 import { ConsentCard } from "./ConsentCard";
 import { PushOptIn } from "./PushOptIn";
+import { GetTheApp } from "./GetTheApp";
 import { resolveRewardsTheme, rewardsFontVars, surfaceStyle } from "./theme";
 import type { RewardsData } from "./page";
 
@@ -42,11 +43,17 @@ export function RewardsClient({
   data,
   magicToken,
   vapidPublicKey,
+  appStoreUrl,
+  playStoreUrl,
 }: {
   data: RewardsData;
   magicToken: string;
   /** VAPID public key (null when push isn't configured -> opt-in UI hidden). */
   vapidPublicKey: string | null;
+  /** iOS App Store link for the "Get the app" banner (null => banner hidden). */
+  appStoreUrl: string | null;
+  /** Android Play Store link (optional). */
+  playStoreUrl: string | null;
 }) {
   const {
     shop,
@@ -178,6 +185,16 @@ export function RewardsClient({
               </p>
             </div>
           </motion.div>
+
+          {/* Get-the-app nudge - only on a mobile browser without the app, and
+              only once an App Store link is configured. Renders nothing inside
+              the native app or on desktop. */}
+          <GetTheApp
+            shopName={shop.name}
+            theme={t}
+            appStoreUrl={appStoreUrl}
+            playStoreUrl={playStoreUrl}
+          />
 
           {/* SMS consent - prominent when not yet opted in, quiet once handled */}
           <motion.div variants={fadeUp}>

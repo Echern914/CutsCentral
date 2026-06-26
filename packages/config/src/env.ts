@@ -158,6 +158,12 @@ const webSchema = z.object({
   // for push. Public by design (it's the server's PUBLIC key). Optional: while
   // unset, the push opt-in UI stays hidden and everything falls back to SMS.
   PUSH_VAPID_PUBLIC_KEY: z.string().min(1).optional(),
+  // Native-app store links for the "Get the app" banner on the rewards page.
+  // Both optional: while APP_STORE_URL is unset the banner never renders (safe
+  // before the app is live). Set APP_STORE_URL the moment the iOS app is on the
+  // App Store; PLAY_STORE_URL only if/when an Android build ships.
+  APP_STORE_URL: cleanUrl().optional(),
+  PLAY_STORE_URL: cleanUrl().optional(),
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),
