@@ -33,12 +33,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   version: "1.0.1",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
-  // New Architecture OFF: this is a WebView-wrapper app that uses NO Fabric/
-  // TurboModule features, and the New Arch is what drags in the folly/{fmt}
-  // native compile path that breaks on Xcode 26 (the fmt consteval error). Off =
-  // that whole failure class is gone, with zero feature cost for this app. The
-  // withFmtConstevalFix plugin remains as belt-and-suspenders.
-  newArchEnabled: false,
+  newArchEnabled: true,
   icon: "./assets/icon.png",
   splash: {
     image: "./assets/splash.png",
@@ -90,9 +85,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         color: "#0A0A0B",
       },
     ],
-    // SDK 54 / RN 0.81 STILL ships the fmt that breaks on Xcode 26 (the upstream
-    // RN fix is 0.82.1+). Re-added: compile fmt/RCT-Folly as C++17 (no consteval)
-    // + patch the header. See plugins/withFmtConstevalFix.js.
+    // Makes fmt 11.0.2 (bundled by RN 0.76) compile under Xcode 26's Clang,
+    // which Apple now requires for App Store builds. See the plugin for details.
     "./plugins/withFmtConstevalFix",
   ],
   extra: {
