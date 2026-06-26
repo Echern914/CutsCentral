@@ -32,7 +32,10 @@ export default function RootLayout() {
     try {
       Notifications.setNotificationHandler({
         handleNotification: async () => ({
-          shouldShowAlert: true,
+          // SDK 54 / expo-notifications 0.32 split the old shouldShowAlert into
+          // banner + list (both control foreground presentation on iOS).
+          shouldShowBanner: true,
+          shouldShowList: true,
           shouldPlaySound: true,
           shouldSetBadge: false,
         }),

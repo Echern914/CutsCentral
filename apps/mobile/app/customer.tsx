@@ -25,6 +25,8 @@ export default function CustomerScreen() {
   const [resolving, setResolving] = useState(true);
   const [phone, setPhone] = useState("");
   const [sentMsg, setSentMsg] = useState<string | null>(null);
+  const [linkInput, setLinkInput] = useState("");
+  const [linkErr, setLinkErr] = useState<string | null>(null);
   const registered = useRef(false);
 
   // Resolve a token from the deep link that launched/opened us, the route param,
@@ -84,6 +86,21 @@ export default function CustomerScreen() {
     }
   }, [token]);
 
+  // Direct entry: the customer pastes the rewards link (or just the token) they
+  // already have. No SMS/Twilio needed - this is the cold-start path that works
+  // even before texting is live, and the recovery path when a text goes missing.
+  // parseToken() accepts a full https/chairback URL; we also accept a bare token.
+  async function openPastedLink() {
+    setLinkErr(null);
+    const raw = linkInput.trim();
+    if (!raw) { setLinkErr("Paste your rewards link."); return; }
+    // A full URL → pull the token out of /r/<token>; otherwise treat the input
+    // as the bare token itself (what's after /r/).
+    const t = parseToken(raw) ?? (/^[A-Za-z0-9_-]+$/.test(raw) ? raw : null);
+    if (!t) { setLinkErr("That doesn't look like a rewards link."); return; }
+    await adopt(t);
+  }
+
   async function textMeMyLink() {
     setSentMsg(null);
     const p = phone.trim();
@@ -119,13 +136,37 @@ export default function CustomerScreen() {
     );
   }
 
-  // No token yet: the "text me my link" fallback.
+  // No token yet. Two ways in:
+  //  1. PASTE the rewards link the barber texted (primary - works with no SMS).
+  //  2. "Text me my link" (fallback - needs texting to be live).
   return (
     <SafeAreaView style={[styles.flex, styles.pad]}>
       <Text style={styles.title}>Your rewards</Text>
       <Text style={styles.sub}>
-        Open the rewards link your barber texted you, or get it sent again:
+        Paste the rewards link your barber texted you:
       </Text>
+      <TextInput
+        value={linkInput}
+        onChangeText={setLinkInput}
+        placeholder="getchairback.com/r/..."
+        placeholderTextColor="#6b6b70"
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType="url"
+        style={styles.input}
+      />
+      {linkErr && <Text style={styles.note}>{linkErr}</Text>}
+      <Pressable style={styles.button} onPress={openPastedLink}>
+        <Text style={styles.buttonText}>Open my rewards</Text>
+      </Pressable>
+
+      <View style={styles.divider}>
+        <View style={styles.line} />
+        <Text style={styles.dividerText}>or</Text>
+        <View style={styles.line} />
+      </View>
+
+      <Text style={styles.sub}>Don&apos;t have the link? Get it texted to you:</Text>
       <TextInput
         value={phone}
         onChangeText={setPhone}
@@ -135,8 +176,8 @@ export default function CustomerScreen() {
         style={styles.input}
       />
       {sentMsg && <Text style={styles.note}>{sentMsg}</Text>}
-      <Pressable style={styles.button} onPress={textMeMyLink}>
-        <Text style={styles.buttonText}>Text me my link</Text>
+      <Pressable style={[styles.button, styles.buttonSecondary]} onPress={textMeMyLink}>
+        <Text style={styles.buttonSecondaryText}>Text me my link</Text>
       </Pressable>
     </SafeAreaView>
   );
@@ -158,4 +199,9 @@ const styles = StyleSheet.create({
   note: { color: "#8a8a8f", fontSize: 13, marginTop: 10 },
   button: { backgroundColor: "#fff", borderRadius: 12, padding: 15, alignItems: "center", marginTop: 16 },
   buttonText: { color: "#0A0A0B", fontSize: 16, fontWeight: "600" },
+  buttonSecondary: { backgroundColor: "transparent", borderWidth: 1, borderColor: "#26262b" },
+  buttonSecondaryText: { color: "#fff", fontSize: 16, fontWeight: "600" },
+  divider: { flexDirection: "row", alignItems: "center", marginVertical: 28 },
+  line: { flex: 1, height: 1, backgroundColor: "#26262b" },
+  dividerText: { color: "#6b6b70", fontSize: 13, marginHorizontal: 12 },
 });

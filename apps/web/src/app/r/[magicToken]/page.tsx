@@ -110,11 +110,17 @@ export default async function RewardsPage({
   // so the push opt-in can subscribe. Absent => the push UI stays hidden and
   // everything falls back to SMS.
   const vapidPublicKey = process.env.PUSH_VAPID_PUBLIC_KEY ?? null;
+  // Store links for the "Get the app" banner. Absent => banner never shows, so
+  // this is safe to ship before the app is live (set APP_STORE_URL to turn on).
+  const appStoreUrl = process.env.APP_STORE_URL ?? null;
+  const playStoreUrl = process.env.PLAY_STORE_URL ?? null;
   return (
     <RewardsClient
       data={data}
       magicToken={params.magicToken}
       vapidPublicKey={vapidPublicKey}
+      appStoreUrl={appStoreUrl}
+      playStoreUrl={playStoreUrl}
     />
   );
 }
