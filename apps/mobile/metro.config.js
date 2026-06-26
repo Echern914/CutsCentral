@@ -17,4 +17,33 @@ config.resolver.nodeModulesPaths = [
   path.resolve(workspaceRoot, "node_modules"),
 ];
 
+// Force a SINGLE copy of React (and react/jsx-runtime, react-dom) for the whole
+// bundle. This monorepo is intentionally dual-React: the root node_modules holds
+// React 18 (the web app needs it), while apps/mobile pins React 19 (required by
+// RN 0.81 / SDK 54). Because react-native lives in the ROOT node_modules, its
+// internal `require('react')` would otherwise resolve the root React 18 - a
+// mismatched, dual-React bundle that breaks on EAS. We pin every react/react-dom
+// request to apps/mobile's copy by resolving it as if from the app root.
+const pinnedReactOrigin = path.join(projectRoot, "index.js");
+const defaultResolveRequest = config.resolver.resolveRequest;
+config.resolver.resolveRequest = (context, moduleName, platform) => {
+  if (
+    moduleName === "react" ||
+    moduleName.startsWith("react/") ||
+    moduleName === "react-dom" ||
+    moduleName.startsWith("react-dom/")
+  ) {
+    return context.resolveRequest(
+      { ...context, originModulePath: pinnedReactOrigin },
+      moduleName,
+      platform
+    );
+  }
+  return (defaultResolveRequest ?? context.resolveRequest)(
+    context,
+    moduleName,
+    platform
+  );
+};
+
 module.exports = config;
