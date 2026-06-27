@@ -7,18 +7,14 @@ Every finding below is verified against the source (file:line). Ranked by "will 
 
 ---
 
-## 🔴 P0 — Hurting you RIGHT NOW (not a "someday at scale" problem)
+## ✅ Already resolved — the #1 risk is CLOSED
 
-### 1. Production database runs a pool of **ONE connection**
-**Evidence:** [`DEPLOY.md:21`](../DEPLOY.md#L21) — prod `DATABASE_URL` ends in `connection_limit=1`.
-Your own [`.env.example:12-19`](../.env.example#L12-L19) warns, verbatim:
-> "a pool of 1 SERIALIZES all concurrent requests behind a single connection and the API stalls under load. `connection_limit=1` is the *serverless* recipe ... Use a real pool: 10 is a safe one-replica default."
+### 1. Production database connection pool — **already at `connection_limit=10`** (verified 2026-06-25)
+The live Railway `DATABASE_URL` runs a real pool of 10. This was the top scale bottleneck and it's **done.** Verify via the **Railway dashboard**, not the local script — local `.env` uses the direct `5432` URL and can't grade the pool.
 
-**Why it matters:** The API is one long-lived Railway process, and *every* tenant query runs inside a transaction ([`tenant.ts:43`](../packages/db/src/tenant.ts#L43)). With a pool of 1, request #2 waits for request #1 to fully finish before its query even starts. Two barbers loading dashboards at once already feel it. This is almost certainly behind the "client won't load / spinner" symptoms you've chased before.
+> ⚠️ **Doc-staleness lesson (this is the actual takeaway):** `DEPLOY.md` showed `connection_limit=1` until this pass — a stale copy of the original template. The first version of this audit wrongly flagged the pool as broken because a sub-agent trusted that doc over the live config. `DEPLOY.md:21` has now been corrected to `=10`. **Lesson: grade the running env (Railway), never a checked-in doc, when auditing prod config.**
 
-**Fix:** Change the Railway env var `DATABASE_URL` to `...&connection_limit=10`. One-line config change, no deploy. Single biggest win in this whole doc. (Boot-time check already warns about this — [`index.ts:37-55`](../apps/api/src/index.ts#L37-L55) — it's been telling you.)
-
-**Effort:** 2 minutes. **Impact:** Enormous.
+For context on why this mattered: the API is one long-lived Railway process and *every* tenant query runs inside a transaction ([`tenant.ts:43`](../packages/db/src/tenant.ts#L43)), so a pool of 1 would serialize all concurrent requests. A boot-time check warns if it's ever set too low — [`index.ts:37-55`](../apps/api/src/index.ts#L37-L55).
 
 ---
 
@@ -78,8 +74,8 @@ The architecture has a sharp edge: **every `forShop(...).model.op()` opens its o
 
 ## What I'd actually do, in order
 
-1. **Today, 2 min:** flip prod `connection_limit=1` → `10` on Railway. Re-run [`verify-prod-config.mjs`](../apps/api/scripts/verify-prod-config.mjs).
-2. **This week:** introduce **pg-boss** (queue in your existing Postgres). Move SMS/push sends + the cron schedule onto it. This single change resolves #2, #3, and most of #4 — and unlocks horizontal scaling.
+1. ~~Flip the prod connection pool to 10~~ — **already done** (verified at the top). The #1 risk is closed.
+2. **Next, the real top priority:** introduce **pg-boss** (queue in your existing Postgres). Move SMS/push sends + the cron schedule onto it. This single change resolves #2, #3, and most of #4 — and unlocks horizontal scaling (today you literally can't add a replica without double-texting).
 3. **Same PR or next:** dedup constraint on `Nudge` + idempotency key on booking (#5).
 4. **Then:** batch the per-row loops and paginate the exports (#6, #7, #8) as you touch those routes.
 
