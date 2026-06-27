@@ -19,8 +19,8 @@ export const DEFAULTS = {
  */
 export const BILLING = {
   planName: "Pro",
-  priceMonthlyUsd: 29,
-  trialDays: 14,
+  priceMonthlyUsd: 34.99,
+  trialDays: 30,
 } as const;
 
 /**
