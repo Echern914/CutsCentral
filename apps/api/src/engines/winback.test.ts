@@ -125,7 +125,7 @@ describe("sweepShopWinback", () => {
     expect(sent.length).toBe(0);
   });
 
-  it("dry-run records SKIPPED and sends nothing", async () => {
+  it("dry-run records SKIPPED, sends nothing, and returns the preview list", async () => {
     const shop = await makeShop();
     await makeLapsedClient(shop.id, "tel:+13025552003", "+13025552003", 120);
     const summary = await sweepShopWinback(shop, { now: NOW, dryRun: true });
@@ -135,6 +135,19 @@ describe("sweepShopWinback", () => {
     const nudge = await prisma.nudge.findFirst({ where: { shopId: shop.id } });
     expect(nudge?.status).toBe("SKIPPED");
     expect(nudge?.kind).toBe("winback");
+    // The dry-run returns who it WOULD text in-memory (the dashboard preview
+    // reads this directly, not the accumulating SKIPPED rows).
+    expect(summary.preview).toHaveLength(1);
+    expect(summary.preview?.[0]?.name).toBe("Lapsed");
+    expect(summary.preview?.[0]?.daysLapsed).toBe(120);
+  });
+
+  it("a REAL run does not populate the preview list", async () => {
+    const shop = await makeShop();
+    await makeLapsedClient(shop.id, "tel:+13025552007", "+13025552007", 120);
+    const summary = await sweepShopWinback(shop, { now: NOW, dryRun: false });
+    expect(summary.sent).toBe(1);
+    expect(summary.preview).toBeUndefined();
   });
 
   it("suppresses a client already won back within the 90-day window", async () => {

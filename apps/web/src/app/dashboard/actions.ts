@@ -89,6 +89,18 @@ export async function runSweepAction(): Promise<SweepSummary | null> {
   return res.data;
 }
 
+export interface WinbackPreview {
+  summary: SweepSummary;
+  clients: { name: string; daysLapsed: number | null }[];
+}
+
+/** Dry-run the win-back ("Growth Agent") sweep: who WOULD be re-engaged, no send.
+ *  Preview-only - real win-back sends happen on the daily cron, not from here. */
+export async function winbackPreviewAction(): Promise<WinbackPreview | null> {
+  const res = await apiSend<WinbackPreview>("POST", "/api/dashboard/winback-preview");
+  return res.data;
+}
+
 export async function saveSettingsAction(
   _prev: { saved?: boolean; error?: string },
   formData: FormData,
