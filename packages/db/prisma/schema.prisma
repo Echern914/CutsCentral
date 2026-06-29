@@ -851,3 +851,26 @@ model Payment {
   @@index([shopId, status])
   @@index([status, holdExpiresAt]) // the hold-release/capture-retry sweep
 }
+
+// Cross-replica mutex for the in-process node-cron scheduler. One row per named
+// job. A replica "wins" a tick by UPDATE-ing the row only when the lease is free
+// or expired (expiresAt < now); if 0 rows update, another replica holds it and
+// this one no-ops. This is what makes the API safe to run on >1 replica without
+// every replica re-firing the same cron tick (= duplicate customer texts).
+//
+// Pooler-safe by design: the acquire is a single atomic UPDATE, NOT a session
+// advisory lock (a bare pg_advisory_lock can't be held across queries through
+// PgBouncer transaction-mode). Self-healing: a crashed holder's lease simply
+// expires and the next tick re-acquires. See apps/api/src/scheduler/lease.ts.
+//
+// Non-tenant utility table: RLS is ENABLED with NO policy (deny-all for the
+// Supabase data API roles; the postgres owner the app connects as bypasses RLS),
+// matching the 20260609000000 lockdown pattern. NOT force-RLS.
+model JobLease {
+  name      String   @id // e.g. "nudge-sweep", "appointment-reminders"
+  holder    String   @default("") // replica id (hostname:pid); "" = never held
+  expiresAt DateTime @default(now()) // now+ttl while held; past = free
+  updatedAt DateTime @updatedAt
+
+  @@map("job_lease")
+}
