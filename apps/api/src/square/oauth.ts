@@ -100,9 +100,23 @@ export async function exchangeCodeForToken(code: string): Promise<SquareToken> {
     }),
   });
   if (!res.ok) {
-    throw new Error(`Square token exchange failed: ${res.status}`);
+    // Capture Square's error body — it carries the real reason (e.g. "invalid_client"
+    // for a bad client_id/secret pair, "invalid_grant" for a stale/reused code or
+    // redirect_uri mismatch). Without it the callback only sees an opaque status.
+    const body = await res.text().catch(() => "");
+    throw new SquareTokenExchangeError(res.status, body);
   }
   return squareTokenSchema.parse(await res.json());
+}
+
+/** Token-exchange failure that carries Square's HTTP status + raw error body. */
+export class SquareTokenExchangeError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly body: string,
+  ) {
+    super(`Square token exchange failed: ${status} ${body}`);
+  }
 }
 
 export const OAUTH_STATE_COOKIE = "cb_square_oauth_state";
