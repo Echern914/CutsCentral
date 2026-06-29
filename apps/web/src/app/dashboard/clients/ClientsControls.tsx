@@ -6,6 +6,7 @@ import { useFormState, useFormStatus } from "react-dom";
 import { Card } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
 import { addClientAction } from "../actions";
+import { ImportClients } from "./ImportClients";
 
 const field =
   "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
@@ -15,6 +16,7 @@ export function ClientsControls() {
   const router = useRouter();
   const params = useSearchParams();
   const [adding, setAdding] = useState(false);
+  const [importing, setImporting] = useState(false);
 
   function setParam(key: string, value: string) {
     const next = new URLSearchParams(params.toString());
@@ -56,14 +58,27 @@ export function ClientsControls() {
           <option value="archived">Archived</option>
         </select>
         <button
-          onClick={() => setAdding((v) => !v)}
+          onClick={() => {
+            setAdding((v) => !v);
+            setImporting(false);
+          }}
           className="rounded-full bg-gold px-4 py-2 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted"
         >
           {adding ? "Close" : "Add client"}
         </button>
+        <button
+          onClick={() => {
+            setImporting((v) => !v);
+            setAdding(false);
+          }}
+          className="rounded-full border border-subtle px-4 py-2 text-sm font-semibold text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
+        >
+          {importing ? "Close" : "Import CSV"}
+        </button>
       </div>
 
       {adding && <AddClientForm onDone={() => setAdding(false)} />}
+      {importing && <ImportClients onDone={() => setImporting(false)} />}
     </div>
   );
 }
