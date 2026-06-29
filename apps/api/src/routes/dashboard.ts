@@ -1,7 +1,15 @@
 import { Router } from "express";
 import { z } from "zod";
 import { forShop, prisma, runWithShop } from "@chairback/db"; // runWithShop: batch a page's tenant reads into one connection
-import { NUDGE, apiEnv, randomToken } from "@chairback/config";
+import {
+  NUDGE,
+  apiEnv,
+  randomToken,
+  frequencySegment,
+  cadenceToDays,
+  LOYALTY_TIER_KEYS,
+  type LoyaltyTierKey,
+} from "@chairback/config";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireActiveAccess } from "../middleware/billing.js";
 import { hasActiveAccess } from "../billing/stripe.js";
@@ -334,6 +342,12 @@ dashboardRouter.get("/clients", async (req, res) => {
   // "archived" filter surfaces them (so they can be restored). All non-archived
   // filters default to hiding archived rows.
   where.archivedAt = filter === "archived" ? { not: null } : null;
+  // Loyalty tier filter (a stored column, so it's a cheap WHERE). Ignored unless
+  // it's a real tier key, so a junk ?tier= never narrows the list to nothing.
+  const tier = String(req.query.tier ?? "");
+  if ((LOYALTY_TIER_KEYS as readonly string[]).includes(tier)) {
+    where.loyaltyTier = tier as LoyaltyTierKey;
+  }
 
   const db = forShop(shop.id);
   const [total, clients] = await Promise.all([
@@ -367,6 +381,13 @@ dashboardRouter.get("/clients", async (req, res) => {
       source: c.source,
       lastVisitAt: c.lastVisitAt?.toISOString() ?? null,
       medianIntervalDays: c.medianIntervalDays,
+      // Loyalty status (stored) + a coarse frequency segment derived from the
+      // computed cadence, falling back to the self-reported one.
+      loyaltyTier: c.loyaltyTier,
+      frequencySegment: frequencySegment(
+        c.medianIntervalDays ??
+          (c.preferredCadence ? cadenceToDays(c.preferredCadence) : null),
+      ),
       balance: balById.get(c.id) ?? 0,
     })),
     total,
@@ -1068,6 +1089,8 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
       lastVisitAt: client.lastVisitAt?.toISOString() ?? null,
       medianIntervalDays: client.medianIntervalDays,
       nextExpectedAt: client.nextExpectedAt?.toISOString() ?? null,
+      loyaltyTier: client.loyaltyTier,
+      preferredCadence: client.preferredCadence,
     },
     balance,
     rewards: rewards.map((r) => ({

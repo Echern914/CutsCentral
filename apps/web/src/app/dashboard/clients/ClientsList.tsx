@@ -2,6 +2,12 @@
 
 import Link from "next/link";
 import { useState, useTransition } from "react";
+import {
+  LOYALTY_TIERS,
+  FREQUENCY_SEGMENTS,
+  type LoyaltyTierKey,
+  type FrequencySegmentKey,
+} from "@chairback/config/constants";
 import { Card } from "@/components/ui/Card";
 import { LocalDate } from "@/components/ui/LocalDate";
 import { useToast } from "@/components/ui/Toast";
@@ -18,6 +24,10 @@ export interface ClientRow {
   source: string;
   lastVisitAt: string | null;
   medianIntervalDays: number | null;
+  /** Loyalty status tier (stored), null below the first threshold. */
+  loyaltyTier: LoyaltyTierKey | null;
+  /** Coarse visit-frequency segment, derived from cadence; null when unknown. */
+  frequencySegment: FrequencySegmentKey | null;
   balance: number;
 }
 
@@ -156,8 +166,33 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
                   <p className="truncate text-sm font-medium text-offwhite">{c.name}</p>
                   {/* Badges on their own wrapping line so a long name can't push
                       them off-screen (they carry the consent/opt-out signal). */}
-                  {(c.source === "manual" || c.optedOut || !c.smsConsent || c.archived) && (
+                  {(c.source === "manual" ||
+                    c.optedOut ||
+                    !c.smsConsent ||
+                    c.archived ||
+                    c.loyaltyTier ||
+                    c.frequencySegment) && (
                     <span className="mt-1 flex flex-wrap gap-1.5">
+                      {c.loyaltyTier && (
+                        <span
+                          className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                          style={{
+                            color: LOYALTY_TIERS[c.loyaltyTier].color,
+                            backgroundColor: `${LOYALTY_TIERS[c.loyaltyTier].color}1A`,
+                          }}
+                          title="Loyalty tier (by lifetime completed visits)"
+                        >
+                          {LOYALTY_TIERS[c.loyaltyTier].label}
+                        </span>
+                      )}
+                      {c.frequencySegment && (
+                        <span
+                          className="rounded-full bg-charcoal-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted"
+                          title="How often this client visits"
+                        >
+                          {FREQUENCY_SEGMENTS[c.frequencySegment].label}
+                        </span>
+                      )}
                       {c.archived && (
                         <span className="rounded-full bg-charcoal-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted/80">
                           archived

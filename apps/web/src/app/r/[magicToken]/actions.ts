@@ -37,3 +37,21 @@ export async function optOutAction(magicToken: string): Promise<ConsentResult> {
   }
   return { ok: true, ...res.data.consent };
 }
+
+/**
+ * Client self-reports their haircut cadence (the one-tap prompt). The API
+ * validates the key against the allowed set; we just relay ok/error. The page
+ * then re-fetches so the personalized rebook countdown reflects the new cadence.
+ */
+export async function setCadenceAction(
+  magicToken: string,
+  cadence: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiPublicSend<{ ok: boolean; cadence: string }>(
+    "POST",
+    `/api/rewards/${magicToken}/cadence`,
+    { cadence },
+  );
+  if (!res.ok) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true };
+}

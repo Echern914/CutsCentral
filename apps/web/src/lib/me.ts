@@ -7,6 +7,10 @@ export interface Me {
   name: string;
   isAdmin: boolean;
   welcomeSeen: boolean;
+  /** Shops this user owns (oldest first). 1 for a normal barber; >1 = manager. */
+  shops: { id: string; name: string }[];
+  /** The shop the dashboard is currently acting on (the switcher's selection). */
+  activeShopId: string | null;
 }
 
 /**

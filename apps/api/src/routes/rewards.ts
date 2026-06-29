@@ -1,6 +1,15 @@
 import { Router } from "express";
 import { z } from "zod";
-import { REWARDS_SECTION_DEFAULT, apiEnv } from "@chairback/config";
+import {
+  REWARDS_SECTION_DEFAULT,
+  apiEnv,
+  CADENCE_KEYS,
+  cadenceToDays,
+  type CadenceKey,
+  LOYALTY_TIERS,
+  LOYALTY_TIER_KEYS,
+  loyaltyTierForVisits,
+} from "@chairback/config";
 import { prisma, runAsOwner } from "@chairback/db";
 import { currentBalance } from "../services/punch.js";
 import { toE164 } from "../acuity/clientKey.js";
@@ -49,7 +58,8 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
 
     const now = new Date();
     const balance = await currentBalance(client.shopId, client.id, tx);
-    const [visits, upcoming, rewards, promotions, redemptions] = await Promise.all([
+    const [visits, upcoming, rewards, promotions, redemptions, completedCount] =
+      await Promise.all([
       tx.visit.findMany({
       where: { shopId: client.shopId, clientId: client.id, status: "COMPLETED" },
       orderBy: { scheduledAt: "desc" },
@@ -123,16 +133,52 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
       take: 10,
       select: { createdAt: true, punchesRedeemed: true, note: true },
     }),
+    // Lifetime completed visits drive the loyalty status tier. Counted here
+    // (the `visits` list above is capped at 10) so the tier is always exact,
+    // independent of whether the engine has stamped Client.loyaltyTier yet.
+    tx.visit.count({
+      where: { shopId: client.shopId, clientId: client.id, status: "COMPLETED" },
+    }),
     ]);
-    return { client, balance, visits, upcoming, rewards, promotions, redemptions };
+    return {
+      client,
+      balance,
+      visits,
+      upcoming,
+      rewards,
+      promotions,
+      redemptions,
+      completedCount,
+    };
   });
 
   if (!data) {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const { client, balance, visits, upcoming, rewards, promotions, redemptions } = data;
+  const { client, balance, visits, upcoming, rewards, promotions, redemptions, completedCount } =
+    data;
   const now = new Date();
+
+  // Loyalty status tier (Bronze/Silver/Gold by lifetime completed visits) + how
+  // far to the next tier, so the page can show "Gold member" and "2 visits to
+  // Gold". Tier is null below the first threshold (a brand-new client).
+  const loyaltyTierKey = loyaltyTierForVisits(completedCount);
+  const nextTierKey =
+    LOYALTY_TIER_KEYS[(loyaltyTierKey ? LOYALTY_TIER_KEYS.indexOf(loyaltyTierKey) : -1) + 1] ??
+    null;
+  const loyalty = {
+    tier: loyaltyTierKey,
+    label: loyaltyTierKey ? LOYALTY_TIERS[loyaltyTierKey].label : null,
+    color: loyaltyTierKey ? LOYALTY_TIERS[loyaltyTierKey].color : null,
+    visits: completedCount,
+    nextTier: nextTierKey
+      ? {
+          label: LOYALTY_TIERS[nextTierKey].label,
+          visitsAway: Math.max(1, LOYALTY_TIERS[nextTierKey].minVisits - completedCount),
+        }
+      : null,
+  };
 
   // The punch grid counts toward the cheapest reward the client can't afford
   // yet; with everything in reach (or an empty menu) there's no next target.
@@ -145,7 +191,13 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
   // timer ticks down to this ISO instant. We surface the state so the UI can show
   // the right message (booked / counting down / overdue / no-data).
   const lastVisitAt = client.lastVisitAt ?? visits[0]?.scheduledAt ?? null;
-  const windowDays = client.shop.rebookWindowDays;
+  // Personalized rebook window: a client's self-reported cadence (captured with
+  // one tap at first open) overrides the shop's flat default, so a "monthly"
+  // client counts down over ~30 days, not everyone's 14. Falls back to the shop
+  // window when there's no self-report.
+  const windowDays = client.preferredCadence
+    ? cadenceToDays(client.preferredCadence)
+    : client.shop.rebookWindowDays;
   let rebook: {
     state: "booked" | "counting" | "overdue" | "none";
     deadline: string | null;
@@ -192,6 +244,14 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
     client: {
       firstName: client.firstName,
     },
+    // Self-reported visit cadence. Drives whether the page shows the one-tap
+    // "how often do you get a cut?" prompt: only when there's no preference yet
+    // AND no computed cadence (medianIntervalDays null) - i.e. a cold-start client.
+    cadence: {
+      preference: client.preferredCadence,
+      computed: client.medianIntervalDays != null,
+    },
+    loyalty,
     consent: consentView(client),
     punches: {
       balance,
@@ -298,6 +358,62 @@ rewardsRouter.post("/:magicToken/opt-in", async (req, res) => {
     return;
   }
   res.json({ consent: { state: "opted_in", hasPhone: true } });
+});
+
+const cadenceSchema = z
+  .object({ cadence: z.enum(CADENCE_KEYS as [CadenceKey, ...CadenceKey[]]) })
+  .strict();
+
+/**
+ * Client self-reports how often they get a cut (one tap at first app open). Used
+ * as a COLD-START seed: it personalizes the rebook countdown window immediately
+ * and seeds nextExpectedAt until the client has enough completed visits for the
+ * engine (engines/cadence.ts) to compute a real cadence, which then wins.
+ *
+ * Deliberately NON-sensitive: it touches neither SMS consent nor
+ * medianIntervalDays, so it can NEVER make a client textable or trip the nudge
+ * gate - it only shapes what THIS client sees on their own page. Safe to
+ * overwrite (a later settings change). runAsOwner: resolves the global
+ * magicToken with no shop context (the tenant tables are FORCE RLS).
+ */
+rewardsRouter.post("/:magicToken/cadence", async (req, res) => {
+  const parsed = cadenceSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const cadence = parsed.data.cadence;
+
+  const result = await runAsOwner(async (tx) => {
+    const client = await tx.client.findUnique({
+      where: { magicToken: req.params.magicToken },
+      select: { id: true, medianIntervalDays: true, lastVisitAt: true },
+    });
+    if (!client) return { error: "not_found" as const };
+
+    // Seed nextExpectedAt ONLY as a cold-start: never override a real computed
+    // cadence (medianIntervalDays set), and only when there's a last visit to
+    // count from. The engine recomputes/overwrites this once history exists.
+    const seedNextExpected =
+      client.medianIntervalDays === null && client.lastVisitAt
+        ? new Date(client.lastVisitAt.getTime() + cadenceToDays(cadence) * 86_400_000)
+        : undefined;
+
+    await tx.client.update({
+      where: { id: client.id },
+      data: {
+        preferredCadence: cadence,
+        ...(seedNextExpected ? { nextExpectedAt: seedNextExpected } : {}),
+      },
+    });
+    return { ok: true as const };
+  });
+
+  if ("error" in result) {
+    res.status(404).json({ error: result.error });
+    return;
+  }
+  res.json({ ok: true, cadence });
 });
 
 /**

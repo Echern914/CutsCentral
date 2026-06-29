@@ -1,5 +1,11 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import {
+  LOYALTY_TIERS,
+  CADENCE_OPTIONS,
+  type LoyaltyTierKey,
+  type CadenceKey,
+} from "@chairback/config/constants";
 import { apiGet } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
 import { ClientActions } from "./ClientActions";
@@ -25,6 +31,8 @@ interface ClientDetail {
     lastVisitAt: string | null;
     medianIntervalDays: number | null;
     nextExpectedAt: string | null;
+    loyaltyTier: LoyaltyTierKey | null;
+    preferredCadence: CadenceKey | null;
   };
   balance: number;
   rewards: {
@@ -92,6 +100,18 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
               </span>
             )}
           </h1>
+          {client.loyaltyTier && (
+            <span
+              className="mt-1.5 inline-block rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+              style={{
+                color: LOYALTY_TIERS[client.loyaltyTier].color,
+                backgroundColor: `${LOYALTY_TIERS[client.loyaltyTier].color}1A`,
+              }}
+              title="Loyalty tier (by lifetime completed visits)"
+            >
+              {LOYALTY_TIERS[client.loyaltyTier].label} member
+            </span>
+          )}
           <p className="mt-1 text-sm text-muted">
             {client.phone ?? "no phone"}
             {client.email ? ` · ${client.email}` : ""}
@@ -142,7 +162,16 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           label="Rewards ready"
           value={rewards.length === 0 ? "n/a" : String(readyCount)}
         />
-        <Stat label="Visits every" value={client.medianIntervalDays ? `~${client.medianIntervalDays}d` : "n/a"} />
+        <Stat
+          label="Visits every"
+          value={
+            client.medianIntervalDays
+              ? `~${client.medianIntervalDays}d`
+              : client.preferredCadence
+                ? CADENCE_OPTIONS[client.preferredCadence].short
+                : "n/a"
+          }
+        />
         <Stat label="Last visit" value={fmt(client.lastVisitAt)} />
       </div>
 

@@ -10,6 +10,7 @@ import { RewardCelebration } from "@/components/rewards/RewardCelebration";
 import { RewardsClaimed } from "@/components/rewards/RewardsClaimed";
 import { VisitHistory } from "@/components/rewards/VisitHistory";
 import { ConsentCard } from "./ConsentCard";
+import { CadenceCard } from "./CadenceCard";
 import { PushOptIn } from "./PushOptIn";
 import { GetTheApp } from "./GetTheApp";
 import { resolveRewardsTheme, rewardsFontVars, surfaceStyle } from "./theme";
@@ -58,6 +59,8 @@ export function RewardsClient({
   const {
     shop,
     client,
+    cadence,
+    loyalty,
     consent,
     punches,
     rewards,
@@ -154,6 +157,28 @@ export function RewardsClient({
                 {welcome}
               </p>
             )}
+            {/* Loyalty status: a colored "member" pill once they've reached a
+                tier, plus a gentle nudge toward the next one (which doubles as a
+                "1 visit to Bronze" prompt for a brand-new client). */}
+            {loyalty.tier && loyalty.color && (
+              <span
+                className="mt-3 inline-block rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide"
+                style={{
+                  color: loyalty.color,
+                  backgroundColor: `${loyalty.color}1A`,
+                  border: `1px solid ${loyalty.color}55`,
+                }}
+              >
+                {loyalty.label} member
+              </span>
+            )}
+            {loyalty.nextTier && (
+              <p className="mt-2 text-xs" style={{ color: t.muted }}>
+                {loyalty.nextTier.visitsAway}{" "}
+                {loyalty.nextTier.visitsAway === 1 ? "visit" : "visits"} to{" "}
+                {loyalty.nextTier.label}
+              </p>
+            )}
           </motion.header>
 
           {/* Punch balance */}
@@ -185,6 +210,14 @@ export function RewardsClient({
               </p>
             </div>
           </motion.div>
+
+          {/* One-tap cadence capture (cold start): only for a client with no
+              stated cadence and not enough visit history to have computed one.
+              The card self-suppresses after a skip (localStorage), so this
+              server-side gate just keeps it out of the tree once it's moot. */}
+          {cadence.preference === null && !cadence.computed && (
+            <CadenceCard magicToken={magicToken} theme={t} />
+          )}
 
           {/* Get-the-app nudge - only on a mobile browser without the app, and
               only once an App Store link is configured. Renders nothing inside

@@ -13,10 +13,10 @@ interface ClientsResponse {
 export default async function ClientsPage({
   searchParams,
 }: {
-  searchParams: { q?: string; sort?: string; filter?: string; page?: string };
+  searchParams: { q?: string; sort?: string; filter?: string; tier?: string; page?: string };
 }) {
   const qs = new URLSearchParams();
-  for (const k of ["q", "sort", "filter", "page"] as const) {
+  for (const k of ["q", "sort", "filter", "tier", "page"] as const) {
     if (searchParams[k]) qs.set(k, searchParams[k]!);
   }
   const res = await apiGet<ClientsResponse>(`/api/dashboard/clients?${qs.toString()}`);

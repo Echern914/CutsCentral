@@ -4,6 +4,7 @@ import { APP_NAME } from "@chairback/config/constants";
 import { getMe } from "@/lib/me";
 import { logoutAction } from "../(auth)/actions";
 import { DashboardNavLinks } from "./_components/DashboardNav";
+import { ShopSwitcher } from "./_components/ShopSwitcher";
 import { TrialBanner } from "./_components/TrialBanner";
 
 /** Shared dashboard chrome: sticky glass top nav with brand, links, sign out. */
@@ -20,6 +21,10 @@ export default async function DashboardLayout({
   // send them to log back in (a fresh login mints a current-version token).
   if (me.status === 401) redirect("/login");
   const isAdmin = me.data?.isAdmin ?? false;
+  // Multi-shop managers get a shop switcher; a normal single-shop barber never
+  // sees it (list has one entry).
+  const shops = me.data?.shops ?? [];
+  const activeShopId = me.data?.activeShopId ?? null;
   return (
     <div className="min-h-dvh">
       <header className="sticky top-0 z-20 px-4">
@@ -31,6 +36,9 @@ export default async function DashboardLayout({
             </span>
           </Link>
           <DashboardNavLinks isAdmin={isAdmin} />
+          {shops.length > 1 && (
+            <ShopSwitcher shops={shops} activeShopId={activeShopId} />
+          )}
           <form action={logoutAction} className="shrink-0">
             <button className="rounded-full border border-subtle px-3.5 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite">
               Sign out

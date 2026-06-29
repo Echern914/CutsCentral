@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { apiEnv } from "@chairback/config";
+import { apiEnv, ACTIVE_SHOP_COOKIE_NAME } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { hashPassword, verifyPassword } from "../auth/password.js";
 import {
@@ -27,7 +27,7 @@ import {
   verifyApple,
   verifyGoogle,
 } from "../auth/native.js";
-import { requireUser } from "../middleware/auth.js";
+import { requireUser, resolveOwnedShop } from "../middleware/auth.js";
 import { authLimiter } from "../middleware/rateLimit.js";
 
 const env = apiEnv();
@@ -145,8 +145,26 @@ authRouter.get("/me", requireUser, async (req, res) => {
     res.status(401).json({ error: "unauthorized" });
     return;
   }
+  // Owned shops + the currently active one, so the dashboard can render a shop
+  // switcher for a multi-shop manager (single-shop owners get a 1-item list).
+  // activeShopId is resolved the SAME way requireShop resolves it (cookie hint
+  // re-verified against ownership), so the switcher highlights the real active shop.
+  const shops = await prisma.shop.findMany({
+    where: { ownerId: req.userId },
+    orderBy: { createdAt: "asc" },
+    select: { id: true, name: true },
+  });
+  const activeShop = await resolveOwnedShop(
+    req.userId!,
+    req.cookies?.[ACTIVE_SHOP_COOKIE_NAME] as string | undefined,
+  );
   const { welcomeSeenAt, ...rest } = user;
-  res.json({ ...rest, welcomeSeen: welcomeSeenAt !== null });
+  res.json({
+    ...rest,
+    welcomeSeen: welcomeSeenAt !== null,
+    shops,
+    activeShopId: activeShop?.id ?? null,
+  });
 });
 
 // Mark the first-run welcome tour as seen so it stops auto-opening. Idempotent:
