@@ -14,8 +14,10 @@ import { healthRouter } from "./routes/health.js";
 import { publicPageRouter, shopsRouter } from "./routes/shops.js";
 import { uploadRouter } from "./routes/upload.js";
 import { acuityWebhookRouter } from "./routes/webhooks.acuity.js";
+import { squareWebhookRouter } from "./routes/webhooks.square.js";
 import { twilioWebhookRouter } from "./routes/webhooks.twilio.js";
 import { acuityOAuthRouter } from "./routes/acuity.oauth.js";
+import { squareOAuthRouter } from "./routes/square.oauth.js";
 import { adminRouter } from "./routes/admin.js";
 import { rewardsRouter } from "./routes/rewards.js";
 import { dashboardRouter } from "./routes/dashboard.js";
@@ -71,6 +73,7 @@ export function createApp(): Express {
   // (1) Webhooks - each mounts its own body parser internally. Rate-limited per
   // IP (generous; legit bursts happen) to bound DoS if a secret leaks.
   app.use("/webhooks/acuity", webhookLimiter, acuityWebhookRouter);
+  app.use("/webhooks/square", webhookLimiter, squareWebhookRouter);
   app.use("/webhooks/twilio", webhookLimiter, twilioWebhookRouter);
   app.use("/webhooks/stripe", webhookLimiter, stripeWebhookRouter);
   app.use("/webhooks/stripe-connect", webhookLimiter, connectWebhookRouter);
@@ -86,6 +89,7 @@ export function createApp(): Express {
   // global express.json() above leaves its body untouched. Limited per-user.
   app.use("/api", uploadRouter);
   app.use("/api/acuity/oauth", oauthLimiter, acuityOAuthRouter);
+  app.use("/api/square/oauth", oauthLimiter, squareOAuthRouter);
   app.use("/api/rewards", rewardsLimiter, rewardsRouter);
   app.use("/api/page", rewardsLimiter, publicPageRouter); // public shop pages
   app.use("/api/book", bookingPublicRouter); // public native booking (per-route limits inside)

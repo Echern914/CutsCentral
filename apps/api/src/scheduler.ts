@@ -6,6 +6,7 @@ import { runNudgeSweep } from "./engines/nudge.js";
 import { linkBookingsToNudges } from "./engines/attribution.js";
 import { promoteFulfilledAppointments } from "./engines/appointmentPromotion.js";
 import { runAppointmentReminders } from "./engines/appointmentReminders.js";
+import { refreshExpiringSquareTokens } from "./engines/squareTokenRefresh.js";
 
 const env = apiEnv();
 
@@ -56,6 +57,14 @@ export function startScheduler(): void {
   cron.schedule("*/20 * * * *", () => {
     void runAppointmentReminders().catch((err) =>
       logger.error({ err }, "appointment reminder job failed"),
+    );
+  });
+
+  // Square: proactively refresh OAuth access tokens nearing their ~30-day expiry
+  // (daily at 03:00). No-op when no Square shops are connected.
+  cron.schedule("0 3 * * *", () => {
+    void refreshExpiringSquareTokens().catch((err) =>
+      logger.error({ err }, "square token refresh sweep failed"),
     );
   });
 

@@ -90,6 +90,41 @@ export const ACUITY = {
   ] as const,
 } as const;
 
+/**
+ * Square Appointments OAuth + Bookings API. Mirrors the ACUITY block. Square
+ * splits sandbox vs production by HOST (different creds + webhook signature key
+ * per env), selected by SQUARE_ENV. The connect host serves BOTH the REST API
+ * and the OAuth endpoints.
+ *
+ * [VERIFY IN SANDBOX] the pinned apiVersion, the exact ObtainToken request shape,
+ * and whether ListBookings returns cancelled bookings (see square/backfill.ts).
+ */
+export const SQUARE = {
+  hosts: {
+    sandbox: "https://connect.squareupsandbox.com",
+    production: "https://connect.squareup.com",
+  },
+  // Pinned Square-Version header sent on every API call. Bump deliberately (+test).
+  apiVersion: "2025-01-23",
+  // OAuth + token paths (appended to the env-selected host).
+  authorizePath: "/oauth2/authorize",
+  tokenPath: "/oauth2/token",
+  // BOTH appointment scopes are required: APPOINTMENTS_READ alone only surfaces
+  // bookings OUR app created — APPOINTMENTS_ALL_READ is what delivers a seller's
+  // EXISTING bookings via ListBookings + webhooks. CUSTOMERS_READ for contacts.
+  scope: "APPOINTMENTS_READ APPOINTMENTS_ALL_READ CUSTOMERS_READ MERCHANT_PROFILE_READ",
+  // Booking webhook events. booking.updated carries cancellations (status flips
+  // to a CANCELLED_* value); there is no separate booking.canceled event.
+  webhookEvents: ["booking.created", "booking.updated"] as const,
+} as const;
+
+export type SquareEnv = "sandbox" | "production";
+
+/** The connect host (REST + OAuth) for the selected Square environment. */
+export function squareHost(env: SquareEnv): string {
+  return SQUARE.hosts[env];
+}
+
 /** Far-past date the backfill walks from. */
 export const BACKFILL_MIN_DATE = "2015-01-01";
 
