@@ -4,6 +4,7 @@ import { logger } from "./logger.js";
 import { withLease } from "./scheduler/lease.js";
 import { promoteCompletedVisits } from "./engines/statusPromotion.js";
 import { runNudgeSweep } from "./engines/nudge.js";
+import { runWinbackSweep } from "./engines/winback.js";
 import { linkBookingsToNudges } from "./engines/attribution.js";
 import { promoteFulfilledAppointments } from "./engines/appointmentPromotion.js";
 import { runAppointmentReminders } from "./engines/appointmentReminders.js";
@@ -52,6 +53,17 @@ export function startScheduler(): void {
   cron.schedule("0 10 * * *", () => {
     void withLease("nudge-sweep", 30 * MINUTE, () => runNudgeSweep()).catch((err) =>
       logger.error({ err }, "nudge sweep failed"),
+    );
+  });
+
+  // Daily win-back ("Growth Agent") sweep at 11:00 — one hour AFTER the nudge
+  // sweep so the two SMS blasts don't overlap (they share the per-shop daily
+  // cap; running nudge first lets win-back see the remaining budget). Opt-in per
+  // shop (winbackTextsEnabled), respects DRY_RUN + caps + quiet hours. Same
+  // generous TTL as the nudge sweep — it's the other mass-SMS job.
+  cron.schedule("0 11 * * *", () => {
+    void withLease("winback-sweep", 30 * MINUTE, () => runWinbackSweep()).catch((err) =>
+      logger.error({ err }, "winback sweep failed"),
     );
   });
 
