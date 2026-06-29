@@ -4,6 +4,7 @@ import { getMe } from "@/lib/me";
 import { StatCards, type Stats } from "./_components/StatCards";
 import { TrendsChart, type TrendPoint } from "./_components/TrendsChart";
 import { SweepControl } from "./_components/SweepControl";
+import { WinbackPreview } from "./_components/WinbackPreview";
 import { AtRiskTable, type AtRiskRow } from "./_components/AtRiskTable";
 import { ActivityFeed, type ActivityItem } from "./_components/ActivityFeed";
 import { Leaderboard, type Leader } from "./_components/Leaderboard";
@@ -88,6 +89,10 @@ export default async function DashboardPage() {
 
       <div className="mt-6">
         <SweepControl atRiskCount={atRisk.data?.clients?.length ?? 0} />
+      </div>
+
+      <div className="mt-6">
+        <WinbackPreview />
       </div>
 
       {trends.data && (

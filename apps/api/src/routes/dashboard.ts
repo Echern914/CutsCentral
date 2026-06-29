@@ -35,6 +35,7 @@ import {
 } from "../services/client.js";
 import { recomputeCadence } from "../engines/cadence.js";
 import { loadEligibilityData, sweepShop } from "../engines/nudge.js";
+import { sweepShopWinback } from "../engines/winback.js";
 import { isNudgeEligible } from "../engines/eligibility.js";
 import { inQuietHours } from "../engines/quietHours.js";
 import { buildNudgeBody } from "../messaging/templates.js";
@@ -65,18 +66,47 @@ dashboardRouter.get("/stats", async (req, res) => {
   const now = new Date();
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-  const [activeClients, nudgesThisMonth, recovered, avgTicket] = await Promise.all([
-    db.client.count({ where: { optedOut: false, archivedAt: null } }),
-    db.nudge.count({ where: { status: "SENT", createdAt: { gte: startOfMonth } } }),
-    db.nudge.count({ where: { resultedInBookingAt: { not: null } } }),
-    prisma.visit.aggregate({
-      where: { shopId: shop.id, status: "COMPLETED", price: { not: null } },
-      _avg: { price: true },
-    }),
-  ]);
+  const [activeClients, nudgesThisMonth, recovered, avgTicket, winbackRows] =
+    await Promise.all([
+      db.client.count({ where: { optedOut: false, archivedAt: null } }),
+      db.nudge.count({ where: { status: "SENT", createdAt: { gte: startOfMonth } } }),
+      // Rebookings recovered THIS MONTH. Was previously unbounded (all-time) while
+      // the card reads as monthly - attribute by the rebooking date, not all time.
+      db.nudge.count({
+        where: { resultedInBookingAt: { gte: startOfMonth } },
+      }),
+      prisma.visit.aggregate({
+        where: { shopId: shop.id, status: "COMPLETED", price: { not: null } },
+        _avg: { price: true },
+      }),
+      // Win-back ("Growth Agent") rebookings THIS MONTH: the attributed visit ids
+      // for kind="winback" nudges that led to a booking this month. We sum the
+      // REAL Visit.price on those visits (not avg-ticket) so the recovered-$ is
+      // actual money, falling back to nothing rather than an estimate.
+      db.nudge.findMany({
+        where: { kind: "winback", resultedInBookingAt: { gte: startOfMonth } },
+        select: { resultedVisitId: true },
+      }),
+    ]);
 
   const atRisk = await countAtRisk(shop.id, shop.nudgeBufferDays, now);
   const ticket = Number(avgTicket._avg.price ?? 0);
+
+  // Real recovered $ from win-backs: sum the price of the actually-booked visits.
+  // A win-back rebooking that's still SCHEDULED (no price yet) simply contributes
+  // 0 to the $ total but still counts as a re-engaged client.
+  const winbackVisitIds = winbackRows
+    .map((n) => n.resultedVisitId)
+    .filter((id): id is string => Boolean(id));
+  const winbackClientsRecovered = winbackRows.length;
+  let winbackDollarsRecovered = 0;
+  if (winbackVisitIds.length > 0) {
+    const sum = await prisma.visit.aggregate({
+      where: { shopId: shop.id, id: { in: winbackVisitIds }, price: { not: null } },
+      _sum: { price: true },
+    });
+    winbackDollarsRecovered = Math.round(Number(sum._sum.price ?? 0));
+  }
 
   res.json({
     activeClients,
@@ -85,6 +115,11 @@ dashboardRouter.get("/stats", async (req, res) => {
     rebookingsRecovered: recovered,
     estDollarsRecovered: Math.round(recovered * ticket),
     avgTicket: ticket,
+    // Win-back Growth Agent payoff (this month). Clients re-engaged is always
+    // accurate; dollars are REAL summed Visit.price (0 when the rebooking hasn't
+    // completed/priced yet), distinct from the avg-ticket estimate above.
+    winbackClientsRecovered,
+    winbackDollarsRecovered,
   });
 });
 
@@ -1401,6 +1436,19 @@ dashboardRouter.post("/requests/:id", async (req, res) => {
 dashboardRouter.post("/sweep-preview", smsLimiter, async (req, res) => {
   const summary = await sweepShop(req.shop!, { dryRun: true });
   res.json(summary);
+});
+
+// Win-back ("Growth Agent") preview: a dry-run win-back sweep that shows WHO the
+// agent would re-engage, without sending anything. Lets a barber see the value
+// today, before 10DLC / before turning on real sends. The dry-run writes SKIPPED
+// kind="winback" rows; we read them back to list the previewed clients + how
+// lapsed each is. smsLimiter even though nothing sends - it's an expensive sweep.
+dashboardRouter.post("/winback-preview", smsLimiter, async (req, res) => {
+  const summary = await sweepShopWinback(req.shop!, { dryRun: true });
+  // The dry-run sweep returns the exact clients it would text on summary.preview
+  // (collected in-memory), so the list is precisely this run's - no read-back of
+  // accumulating SKIPPED rows, no double-listing on a rapid re-preview.
+  res.json({ summary, clients: summary.preview ?? [] });
 });
 
 // Run the real sweep now - texts every eligible client (respects daily cap).

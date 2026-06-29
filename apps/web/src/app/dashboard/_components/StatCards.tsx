@@ -12,6 +12,8 @@ export interface Stats {
   rebookingsRecovered: number;
   estDollarsRecovered: number;
   avgTicket: number;
+  winbackClientsRecovered: number;
+  winbackDollarsRecovered: number;
 }
 
 export function StatCards({ stats }: { stats: Stats }) {
@@ -21,6 +23,10 @@ export function StatCards({ stats }: { stats: Stats }) {
     { label: "Nudges this month", value: stats.nudgesThisMonth },
     { label: "Rebookings recovered", value: stats.rebookingsRecovered },
   ];
+
+  // Only surface the win-back ("Growth Agent") result once it has actually
+  // re-engaged someone this month - an empty card reads as a dead feature.
+  const showWinback = stats.winbackClientsRecovered > 0;
 
   return (
     <motion.div
@@ -70,6 +76,39 @@ export function StatCards({ stats }: { stats: Stats }) {
           ))}
         </div>
       </motion.div>
+
+      {/* Win-back ("Growth Agent") payoff - the clients it brought back this
+          month + the real dollars recovered. Only shown once it's done something. */}
+      {showWinback && (
+        <motion.div variants={fadeUp} className="lg:col-span-3">
+          <Card className="relative overflow-hidden p-6">
+            <div
+              className="absolute -left-10 -bottom-10 h-40 w-40 rounded-full bg-gold/15 blur-3xl"
+              aria-hidden
+            />
+            <p className="text-xs uppercase tracking-wide text-muted">
+              Win-back · brought back this month
+            </p>
+            <div className="mt-2 flex flex-wrap items-baseline gap-x-6 gap-y-1">
+              <p className="font-display text-4xl text-offwhite">
+                <CountUp value={stats.winbackClientsRecovered} />
+                <span className="ml-2 text-lg text-muted">
+                  {stats.winbackClientsRecovered === 1 ? "client" : "clients"} re-engaged
+                </span>
+              </p>
+              {stats.winbackDollarsRecovered > 0 && (
+                <p className="font-display text-4xl text-gradient-gold">
+                  $<CountUp value={stats.winbackDollarsRecovered} />
+                  <span className="ml-2 text-lg text-muted">recovered</span>
+                </p>
+              )}
+            </div>
+            <p className="mt-3 text-xs text-muted">
+              Lapsed clients ChairBack automatically texted back to the chair.
+            </p>
+          </Card>
+        </motion.div>
+      )}
     </motion.div>
   );
 }

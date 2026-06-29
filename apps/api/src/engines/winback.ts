@@ -16,6 +16,12 @@ export interface WinbackOptions {
   dryRun?: boolean;
 }
 
+/** One previewed client a dry-run win-back WOULD text (for the dashboard list). */
+export interface WinbackPreviewClient {
+  name: string;
+  daysLapsed: number | null;
+}
+
 export interface WinbackSummary {
   shopId: string;
   considered: number;
@@ -23,6 +29,10 @@ export interface WinbackSummary {
   skipped: number;
   failed: number;
   dryRun: boolean;
+  // Populated ONLY on a dry-run: the clients this sweep would have texted, in
+  // order. Collected in-memory during the sweep so the preview never has to read
+  // back accumulating SKIPPED rows (which double-listed on rapid re-previews).
+  preview?: WinbackPreviewClient[];
 }
 
 function daysBetween(from: Date, to: Date): number {
@@ -199,6 +209,8 @@ async function doSweepShopWinback(
     skipped: 0,
     failed: 0,
     dryRun,
+    // Only collected on a dry-run; left undefined on a real send.
+    ...(dryRun ? { preview: [] as WinbackPreviewClient[] } : {}),
   };
   if (candidates.length === 0) {
     logger.info(summary, "winback sweep complete");
@@ -279,6 +291,13 @@ async function doSweepShopWinback(
     if (dryRun) {
       await prisma.nudge.update({ where: { id: nudge.id }, data: { status: "SKIPPED" } });
       summary.skipped++;
+      // Record who this run WOULD text, in-memory, so the dashboard preview reads
+      // it straight off the summary instead of re-querying SKIPPED rows.
+      summary.preview?.push({
+        name:
+          [client.firstName, client.lastName].filter(Boolean).join(" ") || "Unknown",
+        daysLapsed: client.lastVisitAt ? daysBetween(client.lastVisitAt, now) : null,
+      });
       // Consume the simulated cap so the preview matches a real run.
       budget--;
       logger.info({ shopId: shop.id, clientId: client.id }, "[dry-run] would winback");
