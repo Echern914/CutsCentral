@@ -1,8 +1,11 @@
 "use client";
 
 import { useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { Card, CardHeader } from "@/components/ui/Card";
+import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
+import { disconnectAcuityAction, disconnectSquareAction } from "./actions";
 import type { BookingShop, ConnectStatus } from "./page";
 
 /**
@@ -36,6 +39,8 @@ export function ConnectPlatforms({
   apiBase: string;
 }) {
   const [pending, start] = useTransition();
+  const router = useRouter();
+  const { toast } = useToast();
 
   const isConnected: Record<Mode, boolean> = {
     native: true, // always "ready" — it's us
@@ -84,6 +89,26 @@ export function ConnectPlatforms({
       // Full-page nav to the API OAuth start (it 302s to the provider). Not a
       // fetch — CSP + the redirect chain need a real navigation.
       window.location.href = `${apiBase}${path}`;
+    });
+  }
+
+  function disconnect(mode: Mode, name: string) {
+    if (
+      !window.confirm(
+        `Disconnect ${name}? New bookings will stop syncing. Your existing clients and visit history are kept, and you can reconnect anytime.`,
+      )
+    ) {
+      return;
+    }
+    start(async () => {
+      const action = mode === "acuity" ? disconnectAcuityAction : disconnectSquareAction;
+      const r = await action();
+      if (r.ok) {
+        toast(`${name} disconnected.`, "success");
+        router.refresh();
+      } else {
+        toast(r.error ?? `Couldn't disconnect ${name}.`, "error");
+      }
     });
   }
 
@@ -157,6 +182,46 @@ export function ConnectPlatforms({
                 >
                   {pending ? "Opening…" : `Connect ${c.name.split(" ")[0]}`}
                 </span>
+              )}
+
+              {/* Connected provider (Acuity/Square): offer reconnect + disconnect. */}
+              {c.connectPath && connected && (
+                <div className="mt-auto flex flex-wrap items-center gap-2">
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      connectOAuth(c.connectPath!);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.stopPropagation();
+                        connectOAuth(c.connectPath!);
+                      }
+                    }}
+                    className="inline-flex w-fit items-center rounded-full border border-subtle px-3 py-1.5 text-xs font-medium text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
+                  >
+                    Reconnect
+                  </span>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      disconnect(c.key, c.name.split(" ")[0]);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.stopPropagation();
+                        disconnect(c.key, c.name.split(" ")[0]);
+                      }
+                    }}
+                    className="inline-flex w-fit items-center rounded-full border border-rose-400/30 px-3 py-1.5 text-xs font-medium text-rose-300 transition-colors duration-150 ease-out hover:bg-rose-500/10"
+                  >
+                    {pending ? "Working…" : "Disconnect"}
+                  </span>
+                </div>
               )}
             </button>
           );

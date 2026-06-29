@@ -165,11 +165,11 @@ const SECTIONS: Section[] = [
   {
     Icon: Icons.link,
     eyebrow: "Go live",
-    title: "Connect Acuity & you're set",
-    body: "Linking your Acuity calendar imports your client history and auto-syncs new visits, so punches and rebooking just happen. Connect it now or anytime from your Overview - that's the whole tour.",
-    doThis: "Connect Acuity to go live, or jump into your dashboard.",
+    title: "Connect your booking & you're set",
+    body: "Linking your booking system - Acuity, Square, or ChairBack's own - imports your client history and auto-syncs new visits, so punches and rebooking just happen. Connect it now or anytime from your Overview - that's the whole tour.",
+    doThis: "Connect your booking to go live, or jump into your dashboard.",
     href: "/onboarding/connect",
-    cta: "Connect Acuity",
+    cta: "Connect booking",
     art: "from-gold/25 via-gold/10 to-transparent",
   },
 ];
@@ -317,7 +317,7 @@ export function WelcomeFlow({
             }
             className="rounded-full bg-gold-gradient px-6 py-2.5 text-sm font-semibold text-charcoal shadow-glow transition-all duration-150 ease-out hover:shadow-glow-lg hover:brightness-105"
           >
-            {connected ? "Go to dashboard" : "Connect Acuity"}
+            {connected ? "Go to dashboard" : "Connect booking"}
           </button>
         ) : (
           <button

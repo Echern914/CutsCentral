@@ -107,6 +107,18 @@ export async function saveAvailabilityAction(
   );
 }
 
+//  Connect / disconnect booking platforms
+
+/** Disconnect Acuity: tears down webhooks + deletes the stored token. Visits kept. */
+export async function disconnectAcuityAction(): Promise<Result> {
+  return done(await apiSend("POST", "/api/acuity/oauth/disconnect"));
+}
+
+/** Disconnect Square: deletes the stored token. Visits kept. */
+export async function disconnectSquareAction(): Promise<Result> {
+  return done(await apiSend("POST", "/api/square/oauth/disconnect"));
+}
+
 //  Appointments
 
 export async function cancelAppointmentAction(id: string): Promise<Result> {

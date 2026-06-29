@@ -160,3 +160,15 @@ squareOAuthRouter.post("/repair", requireUser, requireShop, async (req, res) => 
   );
   res.json({ ok: true, backfillStarted: true });
 });
+
+// Disconnect: delete the stored Square connection so the shop can reconnect (or
+// switch booking sources). Visits/clients already ingested are KEPT — disconnect
+// only stops future sync. Webhooks are app-level (one endpoint for all merchants),
+// so there's no per-shop subscription to tear down: once the row is gone, inbound
+// events for this merchant simply 200 as "unknown merchant". Idempotent.
+squareOAuthRouter.post("/disconnect", requireUser, requireShop, async (req, res) => {
+  const shop = req.shop!;
+  await prisma.squareConnection.deleteMany({ where: { shopId: shop.id } });
+  logger.info({ shopId: shop.id }, "square disconnected");
+  res.json({ ok: true });
+});
