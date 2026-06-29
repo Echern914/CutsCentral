@@ -36,7 +36,7 @@ afterAll(async () => {
   await prisma.user.deleteMany({ where: { email } });
 });
 
-function imp(body: unknown) {
+function imp(body: object) {
   return request(app).post("/api/dashboard/clients/import").set("Cookie", cookie).send(body);
 }
 
