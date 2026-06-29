@@ -7,9 +7,11 @@ import { cn } from "@/lib/cn";
 import type {
   AppointmentRow,
   BookingShop,
+  ConnectStatus,
   ServiceRow,
   StaffRow,
 } from "./page";
+import { ConnectPlatforms } from "./ConnectPlatforms";
 import {
   cancelAppointmentAction,
   completeAppointmentAction,
@@ -26,7 +28,7 @@ import {
 const field =
   "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 const labelCls = "text-xs text-muted";
-const tabs = ["Settings", "Barbers", "Services", "Hours", "Appointments"] as const;
+const tabs = ["Settings", "Staff", "Services", "Hours", "Appointments"] as const;
 type Tab = (typeof tabs)[number];
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -34,12 +36,16 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 export function BookingManager({
   shop,
   appBase,
+  apiBase,
+  connect,
   initialStaff,
   initialServices,
   initialAppointments,
 }: {
   shop: BookingShop;
   appBase: string;
+  apiBase: string;
+  connect: ConnectStatus;
   initialStaff: StaffRow[];
   initialServices: ServiceRow[];
   initialAppointments: AppointmentRow[];
@@ -78,9 +84,15 @@ export function BookingManager({
       </div>
 
       {tab === "Settings" && (
-        <SettingsTab shop={shop} bookUrl={bookUrl} toast={toast} />
+        <SettingsTab
+          shop={shop}
+          bookUrl={bookUrl}
+          connect={connect}
+          apiBase={apiBase}
+          toast={toast}
+        />
       )}
-      {tab === "Barbers" && <StaffTab initial={initialStaff} toast={toast} />}
+      {tab === "Staff" && <StaffTab initial={initialStaff} toast={toast} />}
       {tab === "Services" && (
         <ServicesTab initial={initialServices} staff={initialStaff} toast={toast} />
       )}
@@ -99,10 +111,14 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
 function SettingsTab({
   shop,
   bookUrl,
+  connect,
+  apiBase,
   toast,
 }: {
   shop: BookingShop;
   bookUrl: string;
+  connect: ConnectStatus;
+  apiBase: string;
   toast: Toast;
 }) {
   const [mode, setMode] = useState(shop.bookingMode);
@@ -111,10 +127,10 @@ function SettingsTab({
   const [buffer, setBuffer] = useState(shop.bookingBufferMin);
   const [pending, start] = useTransition();
 
-  function save() {
+  function persist(nextMode: typeof mode) {
     start(async () => {
       const r = await saveBookingSettingsAction({
-        bookingMode: mode,
+        bookingMode: nextMode,
         bookingLeadHours: lead,
         bookingMaxDays: maxDays,
         bookingBufferMin: buffer,
@@ -123,36 +139,25 @@ function SettingsTab({
     });
   }
 
-  const modes: { key: typeof mode; label: string; desc: string }[] = [
-    { key: "link", label: "Link out", desc: "Send customers to your own booking link." },
-    { key: "acuity", label: "Acuity", desc: "Sync appointments from your Acuity account." },
-    { key: "native", label: "ChairBack booking", desc: "Take bookings right here." },
-  ];
+  function save() {
+    persist(mode);
+  }
+
+  // Picking a platform card both selects AND saves the mode (so the choice
+  // sticks without a separate Save click); native config below has its own Save.
+  function pickMode(next: typeof mode) {
+    setMode(next);
+    persist(next);
+  }
 
   return (
-    <Card className="p-5">
-      <CardHeader title="How customers book" />
-      <div className="mt-3 grid gap-2 sm:grid-cols-3">
-        {modes.map((m) => (
-          <button
-            key={m.key}
-            onClick={() => setMode(m.key)}
-            className={cn(
-              "rounded-xl border p-3 text-left transition-colors",
-              mode === m.key
-                ? "border-gold/60 bg-gold/10"
-                : "border-subtle hover:bg-charcoal-700",
-            )}
-          >
-            <span className="block text-sm font-medium">{m.label}</span>
-            <span className="mt-0.5 block text-xs text-muted">{m.desc}</span>
-          </button>
-        ))}
-      </div>
+    <div className="flex flex-col gap-5">
+      <ConnectPlatforms mode={mode} onPick={pickMode} connect={connect} apiBase={apiBase} />
 
       {mode === "native" && (
-        <>
-          <div className="mt-5 grid gap-4 sm:grid-cols-3">
+        <Card className="p-5">
+          <CardHeader title="Booking rules" subtitle="How far out and how tight customers can book." />
+          <div className="mt-4 grid gap-4 sm:grid-cols-3">
             <label className="block">
               <span className={labelCls}>Min notice (hours)</span>
               <input
@@ -190,17 +195,16 @@ function SettingsTab({
               {bookUrl}
             </a>
           </p>
-        </>
+          <button
+            onClick={save}
+            disabled={pending}
+            className="mt-5 rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+          >
+            {pending ? "Saving…" : "Save booking rules"}
+          </button>
+        </Card>
       )}
-
-      <button
-        onClick={save}
-        disabled={pending}
-        className="mt-5 rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
-      >
-        {pending ? "Saving…" : "Save"}
-      </button>
-    </Card>
+    </div>
   );
 }
 

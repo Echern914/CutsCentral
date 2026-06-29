@@ -1,19 +1,30 @@
-import { apiEnv } from "@chairback/config";
+import { apiEnv, serviceNounFor } from "@chairback/config";
 
 const env = apiEnv();
 
 /** Placeholders a barber can use in a custom SMS template. */
 export const SMS_PLACEHOLDERS = ["{firstName}", "{shop}", "{bookingUrl}", "{rewardsUrl}"] as const;
 
-/** The built-in default template (used when a shop hasn't set a custom one). */
-export const DEFAULT_SMS_TEMPLATE =
-  "Hey {firstName}, it's been a while since your last cut at {shop}! " +
-  "Book your next one: {bookingUrl} • Your rewards: {rewardsUrl} Reply STOP to opt out.";
+/**
+ * The built-in default template (used when a shop hasn't set a custom one),
+ * keyed by the vertical's service noun so a nail/spa client isn't texted about a
+ * "cut". `industry` is optional → falls back to the neutral "visit".
+ */
+export function defaultSmsTemplate(industry?: string | null): string {
+  const noun = serviceNounFor(industry);
+  return (
+    `Hey {firstName}, it's been a while since your last ${noun} at {shop}! ` +
+    "Book your next one: {bookingUrl} • Your rewards: {rewardsUrl} Reply STOP to opt out."
+  );
+}
+
+/** Back-compat export: the barber-default text (kept for any callers/tests). */
+export const DEFAULT_SMS_TEMPLATE = defaultSmsTemplate("barber");
 
 /**
  * Nudge SMS copy. Substitutes placeholders into the shop's custom template, or
- * the built-in default. "Reply STOP to opt out." is appended if the template
- * omits it (compliance safety net).
+ * the vertical-aware built-in default. "Reply STOP to opt out." is appended if
+ * the template omits it (compliance safety net).
  */
 export function buildNudgeBody(params: {
   firstName: string | null;
@@ -21,9 +32,10 @@ export function buildNudgeBody(params: {
   bookingUrl: string;
   magicToken: string;
   template?: string | null;
+  industry?: string | null;
 }): string {
   const rewardsUrl = `${env.APP_BASE_URL}/r/${params.magicToken}`;
-  const tpl = params.template?.trim() || DEFAULT_SMS_TEMPLATE;
+  const tpl = params.template?.trim() || defaultSmsTemplate(params.industry);
 
   const body = tpl
     .replaceAll("{firstName}", params.firstName ?? "there")
@@ -35,13 +47,19 @@ export function buildNudgeBody(params: {
 }
 
 /** Render a template for a settings preview (sample data, no real client). */
-export function previewNudgeBody(template: string | null, shopName: string, bookingUrl: string): string {
+export function previewNudgeBody(
+  template: string | null,
+  shopName: string,
+  bookingUrl: string,
+  industry?: string | null,
+): string {
   return buildNudgeBody({
     firstName: "Marcus",
     shopName,
     bookingUrl: bookingUrl || "https://book.example.com",
     magicToken: "PREVIEW",
     template,
+    industry,
   });
 }
 
@@ -156,10 +174,12 @@ export function buildRewardRedeemedPush(params: {
 export function buildNudgePush(params: {
   firstName: string | null;
   shopName: string;
+  industry?: string | null;
 }): PushCopy {
   const who = params.firstName ?? "there";
+  const noun = serviceNounFor(params.industry);
   return {
-    title: `Time for your next cut, ${who}?`,
+    title: `Time for your next ${noun}, ${who}?`,
     body: `It's been a while since ${params.shopName}. Tap to book your next one.`,
   };
 }

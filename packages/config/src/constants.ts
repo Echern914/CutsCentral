@@ -26,21 +26,34 @@ export const BILLING = {
 /**
  * Shop verticals. The product is service-business generic (Shop/Client/Visit);
  * industry only flavors defaults and copy. `defaultReward` seeds the first
- * loyalty menu item during onboarding.
+ * loyalty menu item during onboarding. `serviceNoun` is the singular word for a
+ * visit in that vertical ("cut", "appointment") used in customer-facing copy
+ * (e.g. the default rebooking text "since your last {serviceNoun}") so a nail
+ * studio's clients aren't texted about a "cut".
  */
 export const INDUSTRIES = {
-  barber: { label: "Barbershop", defaultReward: "Free Cut", emoji: "✂️" },
-  salon: { label: "Hair Salon", defaultReward: "Free Blowout", emoji: "💇" },
-  nails: { label: "Nail Studio", defaultReward: "Free Manicure", emoji: "💅" },
-  lashes: { label: "Lash & Brow Studio", defaultReward: "Free Lash Fill", emoji: "👁️" },
-  spa: { label: "Spa & Skincare", defaultReward: "Free Facial Add-On", emoji: "🧖" },
-  tattoo: { label: "Tattoo & Piercing", defaultReward: "$25 Off Next Session", emoji: "🖋️" },
-  other: { label: "Other", defaultReward: "Free Service", emoji: "⭐" },
+  barber: { label: "Barbershop", defaultReward: "Free Cut", emoji: "✂️", serviceNoun: "cut" },
+  salon: { label: "Hair Salon", defaultReward: "Free Blowout", emoji: "💇", serviceNoun: "appointment" },
+  nails: { label: "Nail Studio", defaultReward: "Free Manicure", emoji: "💅", serviceNoun: "appointment" },
+  lashes: { label: "Lash & Brow Studio", defaultReward: "Free Lash Fill", emoji: "👁️", serviceNoun: "appointment" },
+  spa: { label: "Spa & Skincare", defaultReward: "Free Facial Add-On", emoji: "🧖", serviceNoun: "appointment" },
+  tattoo: { label: "Tattoo & Piercing", defaultReward: "$25 Off Next Session", emoji: "🖋️", serviceNoun: "session" },
+  other: { label: "Other", defaultReward: "Free Service", emoji: "⭐", serviceNoun: "visit" },
 } as const;
 
 export type IndustryKey = keyof typeof INDUSTRIES;
 
 export const INDUSTRY_KEYS = Object.keys(INDUSTRIES) as IndustryKey[];
+
+/**
+ * The singular visit-noun for a vertical ("cut" | "appointment" | "session" |
+ * "visit"). Falls back to a neutral "visit" for an unknown/empty industry, so
+ * customer copy is never wrong (just generic). Used by the SMS/push nudge.
+ */
+export function serviceNounFor(industry: string | null | undefined): string {
+  if (!industry) return "visit";
+  return (INDUSTRIES as Record<string, { serviceNoun?: string }>)[industry]?.serviceNoun ?? "visit";
+}
 
 /** Nudge engine windows. */
 export const NUDGE = {

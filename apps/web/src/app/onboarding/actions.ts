@@ -19,7 +19,7 @@ export async function createShopAction(
   }
   const res = await apiSend("POST", "/api/shops", {
     name: String(formData.get("name") ?? ""),
-    industry: String(formData.get("industry") ?? "barber"),
+    industry: String(formData.get("industry") ?? "other"),
     bookingUrl: String(formData.get("bookingUrl") ?? ""),
     timezone: String(formData.get("timezone") ?? "America/New_York"),
     rewardThreshold: Number(formData.get("rewardThreshold") ?? 10),

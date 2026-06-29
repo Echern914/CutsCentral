@@ -233,7 +233,11 @@ async function doSweepShop(
     // anyDelivered false -> fall through to the SMS rails below. Dry-run routes
     // through the push service's own dry-run (sends nothing, reports nothing).
     if (isNudgeDueByCadence(eligInput) && !dryRun) {
-      const push = buildNudgePush({ firstName: client.firstName, shopName: shop.name });
+      const push = buildNudgePush({
+        firstName: client.firstName,
+        shopName: shop.name,
+        industry: shop.industry,
+      });
       const res = await sendPushToClient({
         shopId: shop.id,
         clientId: client.id,
@@ -270,6 +274,7 @@ async function doSweepShop(
       bookingUrl: shop.bookingUrl,
       magicToken: client.magicToken,
       template: shop.smsTemplate,
+      industry: shop.industry,
     });
 
     // WRITE-AHEAD: persist a PENDING nudge BEFORE dispatch so a crash can't

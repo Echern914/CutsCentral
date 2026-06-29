@@ -80,7 +80,7 @@ const createShopSchema = z
     bookingUrl: httpUrl(500),
     timezone: z.string().min(1).default(DEFAULTS.timezone),
     // Vertical: flavors the seeded reward + copy, nothing structural.
-    industry: z.enum(INDUSTRY_KEYS as [string, ...string[]]).default("barber"),
+    industry: z.enum(INDUSTRY_KEYS as [string, ...string[]]).default("other"),
     // Seeds the FIRST reward on the shop's menu (the Reward table is the
     // source of truth; the legacy field names keep onboarding compatible).
     // rewardLabel falls back to the industry's default when omitted.
@@ -566,7 +566,7 @@ shopsRouter.delete("/me", requireUser, requireShop, async (req, res) => {
 shopsRouter.post("/me/sms-preview", requireUser, requireShop, (req, res) => {
   const template = typeof req.body?.template === "string" ? req.body.template : null;
   res.json({
-    preview: previewNudgeBody(template, req.shop!.name, req.shop!.bookingUrl),
+    preview: previewNudgeBody(template, req.shop!.name, req.shop!.bookingUrl, req.shop!.industry),
   });
 });
 
