@@ -142,7 +142,7 @@ export function RebookCountdown({
     >
       <div className="text-center">
         <p className="text-xs uppercase tracking-[0.18em]" style={{ color: theme.muted }}>
-          {overdue ? "It's time for your next cut" : "Time left to rebook"}
+          {overdue ? "It's time for your next visit" : "Time left to rebook"}
         </p>
 
         {overdue ? (

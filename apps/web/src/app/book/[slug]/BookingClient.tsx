@@ -307,9 +307,9 @@ export function BookingClient({ data }: { data: BookShopData }) {
         </div>
       </Section>
 
-      {/* Step 2: barber */}
+      {/* Step 2: provider */}
       {serviceId && (
-        <Section title="2 · Choose your barber">
+        <Section title="2 · Choose your provider">
           <div className="flex flex-col gap-2">
             {staffForService.map((s) => (
               <button
@@ -347,7 +347,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
             <p className="text-sm text-muted">Loading available times…</p>
           ) : days.length === 0 ? (
             <p className="text-sm text-muted">
-              No open times in the next {data.shop.bookingMaxDays} days. Try another barber.
+              No open times in the next {data.shop.bookingMaxDays} days. Try another provider.
             </p>
           ) : (
             <>
