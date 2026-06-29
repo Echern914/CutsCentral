@@ -118,7 +118,11 @@ export const SQUARE = {
     production: "https://connect.squareup.com",
   },
   // Pinned Square-Version header sent on every API call. Bump deliberately (+test).
-  apiVersion: "2025-01-23",
+  // 2026-05-20 = the version the sandbox app's webhook subscription is built
+  // against (Square ties webhook payload shape + API responses to the version),
+  // so the Square-Version header and the webhook stay consistent. Override per
+  // env with SQUARE_API_VERSION if Square advances the app's default again.
+  apiVersion: "2026-05-20",
   // OAuth + token paths (appended to the env-selected host).
   authorizePath: "/oauth2/authorize",
   tokenPath: "/oauth2/token",
