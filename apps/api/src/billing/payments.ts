@@ -244,12 +244,28 @@ export async function applyPaymentEvent(event: Stripe.Event): Promise<boolean> {
     case "charge.refunded": {
       const charge = event.data.object as Stripe.Charge;
       const piId = typeof charge.payment_intent === "string" ? charge.payment_intent : charge.payment_intent?.id;
+      // amount_refunded is the CUMULATIVE refund total on the charge, so the
+      // write is absolute (not additive). Stripe redelivers + reorders events for
+      // ~3 days, so an OLDER charge.refunded (lower cumulative total) can arrive
+      // AFTER a newer one. Without a guard, the older event would overwrite a
+      // higher refundedAmount with a lower one - moving it BACKWARD - which then
+      // inflates refundForCancellation's `refundable = collected - refundedAmount
+      // - fee` and risks an over-refund, and can flip status refunded ->
+      // partially_refunded. So only apply when this total is >= what's stored
+      // (monotonic). Mirrors the noDowngrade guard the payment_intent.* events
+      // already use for the same out-of-order reason.
       const refunded = charge.amount_refunded ?? 0;
       const fullyRefunded = charge.refunded === true;
-      await reconcile(event.id, { piId }, {
-        refundedAmount: refunded,
-        status: fullyRefunded ? "refunded" : "partially_refunded",
-      });
+      await reconcile(
+        event.id,
+        { piId },
+        {
+          refundedAmount: refunded,
+          status: fullyRefunded ? "refunded" : "partially_refunded",
+        },
+        undefined,
+        { refundedAmount: { lte: refunded } },
+      );
       return true;
     }
     default:
@@ -261,13 +277,17 @@ export async function applyPaymentEvent(event: Stripe.Event): Promise<boolean> {
  * Update the matching Payment row, with a webhook-id replay guard. When
  * `noDowngradeFrom` is given, the update is additionally refused if the row is
  * already in one of those statuses - so a stale/out-of-order non-succeeded event
- * cannot downgrade an already-collected/refunded payment.
+ * cannot downgrade an already-collected/refunded payment. `extraWhere` adds an
+ * arbitrary extra predicate the row must satisfy for the write to apply (used by
+ * charge.refunded to enforce monotonic refundedAmount against reordered events);
+ * if it doesn't match, the update is a safe no-op (logged, like a replay).
  */
 async function reconcile(
   eventId: string,
   key: { paymentId?: string; piId?: string },
   data: Record<string, unknown>,
   noDowngradeFrom?: string[],
+  extraWhere?: Record<string, unknown>,
 ): Promise<void> {
   const where = key.paymentId
     ? { id: key.paymentId }
@@ -275,15 +295,28 @@ async function reconcile(
       ? { stripePaymentIntentId: key.piId }
       : null;
   if (!where) return;
-  // Replay guard: skip if we've already applied this exact event to this row.
-  // Downgrade guard: skip if the row is already terminal/collected.
+  // Replay guard: skip ONLY if we've already applied this exact event to this
+  // row. Downgrade guard: skip if the row is already terminal/collected.
+  //
+  // NULL TRAP (this caused a prod outage): for a NULLABLE column, BOTH
+  // `NOT: { lastWebhookEventId: id }` AND `lastWebhookEventId: { not: id }`
+  // compile to SQL that is NULL — not TRUE — for a row whose value IS NULL, so a
+  // brand-new payment (lastWebhookEventId NULL = never reconciled) matched 0
+  // rows and the charge silently never reconciled (status stuck at
+  // requires_payment_method while the card SUCCEEDED on Stripe). The replay
+  // guard must EXPLICITLY treat NULL as "not yet seen → allow": match rows where
+  // the id is NULL OR differs from this event.
   const { count } = await prisma.payment.updateMany({
     where: {
       ...where,
-      NOT: { lastWebhookEventId: eventId },
+      OR: [
+        { lastWebhookEventId: null },
+        { lastWebhookEventId: { not: eventId } },
+      ],
       ...(noDowngradeFrom && noDowngradeFrom.length > 0
         ? { status: { notIn: noDowngradeFrom } }
         : {}),
+      ...(extraWhere ?? {}),
     },
     data: { ...data, lastWebhookEventId: eventId },
   });

@@ -42,20 +42,40 @@ twilioWebhookRouter.post(
     const from = toE164((req.body as { From?: string }).From);
     const text = ((req.body as { Body?: string }).Body ?? "").trim().toUpperCase();
 
+    // Opt-in confirmation copy (matches the A2P campaign's registered opt-in
+    // message). Sent ONLY on START/YES/UNSTOP - carriers (esp. T-Mobile) send
+    // their own mandatory auto-reply for STOP and HELP and may filter a second
+    // app-sent reply, so we leave those to the carrier and never double-text.
+    const OPT_IN_REPLY =
+      "ChairBack: You're opted in to appointment reminders and rewards updates " +
+      "from your shop. Msg & data rates may apply. Reply HELP for help, STOP to opt out.";
+
+    let reply = "";
     if (from && STOP_WORDS.has(text)) {
       const { count } = await prisma.client.updateMany({
         where: { phone: from },
         data: { optedOut: true },
       });
       logger.info({ from, count }, "twilio STOP - opted out");
+      // No app reply: the carrier auto-sends the mandatory opt-out confirmation.
     } else if (from && START_WORDS.has(text)) {
-      await prisma.client.updateMany({
+      const { count } = await prisma.client.updateMany({
         where: { phone: from },
         data: { optedOut: false },
       });
+      logger.info({ from, count }, "twilio START - opted in");
+      // Confirm the opt-in (carriers do NOT auto-reply to START).
+      if (count > 0) reply = OPT_IN_REPLY;
     }
 
-    // Empty TwiML response.
-    res.type("text/xml").send("<Response></Response>");
+    // Escape the body for XML (the copy is static + safe, but keep it correct
+    // if it ever changes). Empty reply => empty TwiML (no message sent).
+    const xml = reply
+      ? `<Response><Message>${reply
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")}</Message></Response>`
+      : "<Response></Response>";
+    res.type("text/xml").send(xml);
   },
 );

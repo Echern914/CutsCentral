@@ -2,7 +2,7 @@ import request from "supertest";
 import Stripe from "stripe";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
-import { __resetEnvCacheForTests, randomToken } from "@chairback/config";
+import { BILLING, __resetEnvCacheForTests, randomToken } from "@chairback/config";
 import {
   applyStripeEvent,
   hasActiveAccess,
@@ -112,14 +112,17 @@ describe("hasActiveAccess (pure)", () => {
 });
 
 describe("billing HTTP surface", () => {
-  it("reports a fresh ~14-day trial on a new shop", async () => {
+  it("reports a fresh full-length trial on a new shop", async () => {
     const res = await request(app).get("/api/billing").set("Cookie", cookie);
     expect(res.status).toBe(200);
     expect(res.body.billingEnabled).toBe(true);
     expect(res.body.hasAccess).toBe(true);
     expect(res.body.subscribed).toBe(false);
-    expect(res.body.trialDaysLeft).toBeGreaterThanOrEqual(13);
-    expect(res.body.trialDaysLeft).toBeLessThanOrEqual(14);
+    // Derive from config so this never breaks when BILLING.trialDays changes.
+    // A brand-new shop's trial is BILLING.trialDays out; allow 1 day of slack
+    // for the ceil() in trialDaysLeft + any clock skew between create and read.
+    expect(res.body.trialDaysLeft).toBeGreaterThanOrEqual(BILLING.trialDays - 1);
+    expect(res.body.trialDaysLeft).toBeLessThanOrEqual(BILLING.trialDays);
   });
 
   it("requires auth", async () => {

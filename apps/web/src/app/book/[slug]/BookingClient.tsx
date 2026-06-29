@@ -27,7 +27,10 @@ export function BookingClient({ data }: { data: BookShopData }) {
   const [lastName, setLastName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
-  const [consent, setConsent] = useState(true);
+  // MUST default to false: a pre-checked consent box is not valid consent under
+  // TCPA and is explicitly rejected by 10DLC campaign vetting (the box must be
+  // actively selected by the user). See the booking consent label below.
+  const [consent, setConsent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmedToken, setConfirmedToken] = useState<string | null>(null);
   // Set when the shop charges at booking: the booking is created (BOOKED) and we
@@ -304,9 +307,9 @@ export function BookingClient({ data }: { data: BookShopData }) {
         </div>
       </Section>
 
-      {/* Step 2: barber */}
+      {/* Step 2: provider */}
       {serviceId && (
-        <Section title="2 · Choose your barber">
+        <Section title="2 · Choose your provider">
           <div className="flex flex-col gap-2">
             {staffForService.map((s) => (
               <button
@@ -344,7 +347,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
             <p className="text-sm text-muted">Loading available times…</p>
           ) : days.length === 0 ? (
             <p className="text-sm text-muted">
-              No open times in the next {data.shop.bookingMaxDays} days. Try another barber.
+              No open times in the next {data.shop.bookingMaxDays} days. Try another provider.
             </p>
           ) : (
             <>
@@ -448,8 +451,27 @@ export function BookingClient({ data }: { data: BookShopData }) {
                 className="mt-0.5"
               />
               <span>
-                Text me my confirmation and a reminder. Msg &amp; data rates may
-                apply. Reply STOP to opt out.
+                Text me appointment confirmations, reminders, and rewards
+                updates (a few messages per visit). Msg &amp; data rates may
+                apply. Reply HELP for help, STOP to opt out. See our{" "}
+                <Link
+                  href="/sms"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline"
+                >
+                  Terms
+                </Link>{" "}
+                and{" "}
+                <Link
+                  href="/privacy"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline"
+                >
+                  Privacy Policy
+                </Link>
+                .
               </span>
             </label>
             {error && <p className="text-xs text-red-400">{error}</p>}

@@ -58,6 +58,19 @@ const apiSchema = z.object({
   // it's rejected - no code change needed to harden, just set the env var.
   ACUITY_WEBHOOK_SIGNING_KEY: z.string().min(1).optional(),
 
+  // Square Appointments OAuth (optional - while any of CLIENT_ID/SECRET/REDIRECT
+  // is unset, squareEnabled() is false and the Square connect option is dark, so
+  // the app boots + CI runs without it; mirrors the Acuity + Stripe optional
+  // seams). SQUARE_ENV picks sandbox vs production hosts/creds. The webhook
+  // signature key is optional like Acuity's (in production it should be set; see
+  // square/signature.ts). SQUARE_API_VERSION overrides the pinned default.
+  SQUARE_OAUTH_CLIENT_ID: z.string().min(1).optional(),
+  SQUARE_OAUTH_CLIENT_SECRET: z.string().min(1).optional(),
+  SQUARE_OAUTH_REDIRECT_URI: cleanUrl().optional(),
+  SQUARE_WEBHOOK_SIGNATURE_KEY: z.string().min(1).optional(),
+  SQUARE_ENV: z.enum(["sandbox", "production"]).default("sandbox"),
+  SQUARE_API_VERSION: z.string().min(1).optional(),
+
   // Google sign-in (optional - barber auth works with email/password without it).
   GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
   GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),

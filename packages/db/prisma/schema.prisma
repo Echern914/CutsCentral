@@ -38,6 +38,7 @@ enum BookingMode {
   link
   acuity
   native
+  square // Square Appointments OAuth + webhook sync owns the calendar
 }
 
 // Lifecycle of a NATIVE Appointment (separate from VisitStatus on purpose - a
@@ -203,6 +204,7 @@ model Shop {
   updatedAt DateTime @updatedAt
 
   acuity              AcuityConnection?
+  square              SquareConnection?
   clients             Client[]
   visits              Visit[]
   ledger              PunchLedger[]
@@ -320,6 +322,30 @@ model AcuityConnection {
   updatedAt       DateTime  @updatedAt
 
   @@index([acuityAccountId])
+}
+
+// Square Appointments connection. Mirrors AcuityConnection: one per shop, holds
+// the OAuth tokens (encrypted) + the Square merchant/location ids. Distinct from
+// Acuity in two ways the code must respect: (1) the refresh token is REQUIRED
+// and long-lived (access token expires every ~30 days, so we refresh
+// proactively), (2) bookings are scoped to a single Square LOCATION, so we pin
+// one. Like AcuityConnection this is a secrets table looked up by shopId/
+// merchantId (NOT a tenant-RLS table): ENABLE RLS only, no FORCE/policy/GRANT.
+model SquareConnection {
+  id               String   @id @default(cuid())
+  shopId           String   @unique
+  shop             Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  squareMerchantId String // from the OAuth token response; webhook merchant_id -> shop
+  squareLocationId String? // the chosen location; bookings are location-scoped
+  accessToken      String // AES-256-GCM encrypted (expires ~30 days)
+  refreshToken     String // AES-256-GCM encrypted; REQUIRED (long-lived, multi-use)
+  scope            String   @default("APPOINTMENTS_READ APPOINTMENTS_ALL_READ CUSTOMERS_READ MERCHANT_PROFILE_READ")
+  tokenExpiresAt   DateTime // from expires_at; drives the proactive refresh sweep
+  revokedAt        DateTime? // set on oauth.authorization.revoked (seller disconnect)
+  connectedAt      DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([squareMerchantId])
 }
 
 //  Tenant-owned domain (every table carries shopId)

@@ -19,23 +19,26 @@ export const DEFAULTS = {
  */
 export const BILLING = {
   planName: "Pro",
-  priceMonthlyUsd: 29,
-  trialDays: 14,
+  priceMonthlyUsd: 34.99,
+  trialDays: 30,
 } as const;
 
 /**
  * Shop verticals. The product is service-business generic (Shop/Client/Visit);
  * industry only flavors defaults and copy. `defaultReward` seeds the first
- * loyalty menu item during onboarding.
+ * loyalty menu item during onboarding. `serviceNoun` is the singular word for a
+ * visit in that vertical ("cut", "appointment") used in customer-facing copy
+ * (e.g. the default rebooking text "since your last {serviceNoun}") so a nail
+ * studio's clients aren't texted about a "cut".
  */
 export const INDUSTRIES = {
-  barber: { label: "Barbershop", defaultReward: "Free Cut", emoji: "✂️" },
-  salon: { label: "Hair Salon", defaultReward: "Free Blowout", emoji: "💇" },
-  nails: { label: "Nail Studio", defaultReward: "Free Manicure", emoji: "💅" },
-  lashes: { label: "Lash & Brow Studio", defaultReward: "Free Lash Fill", emoji: "👁️" },
-  spa: { label: "Spa & Skincare", defaultReward: "Free Facial Add-On", emoji: "🧖" },
-  tattoo: { label: "Tattoo & Piercing", defaultReward: "$25 Off Next Session", emoji: "🖋️" },
-  other: { label: "Other", defaultReward: "Free Service", emoji: "⭐" },
+  barber: { label: "Barbershop", defaultReward: "Free Cut", emoji: "✂️", serviceNoun: "cut" },
+  salon: { label: "Hair Salon", defaultReward: "Free Blowout", emoji: "💇", serviceNoun: "appointment" },
+  nails: { label: "Nail Studio", defaultReward: "Free Manicure", emoji: "💅", serviceNoun: "appointment" },
+  lashes: { label: "Lash & Brow Studio", defaultReward: "Free Lash Fill", emoji: "👁️", serviceNoun: "appointment" },
+  spa: { label: "Spa & Skincare", defaultReward: "Free Facial Add-On", emoji: "🧖", serviceNoun: "appointment" },
+  tattoo: { label: "Tattoo & Piercing", defaultReward: "$25 Off Next Session", emoji: "🖋️", serviceNoun: "session" },
+  other: { label: "Other", defaultReward: "Free Service", emoji: "⭐", serviceNoun: "visit" },
 } as const;
 
 export type IndustryKey = keyof typeof INDUSTRIES;
@@ -125,6 +128,16 @@ export function frequencySegment(
   return "occasional";
 }
 
+/**
+ * The singular visit-noun for a vertical ("cut" | "appointment" | "session" |
+ * "visit"). Falls back to a neutral "visit" for an unknown/empty industry, so
+ * customer copy is never wrong (just generic). Used by the SMS/push nudge.
+ */
+export function serviceNounFor(industry: string | null | undefined): string {
+  if (!industry) return "visit";
+  return (INDUSTRIES as Record<string, { serviceNoun?: string }>)[industry]?.serviceNoun ?? "visit";
+}
+
 /** Nudge engine windows. */
 export const NUDGE = {
   /** Minimum completed visits before a client has enough history for a cadence. */
@@ -172,6 +185,45 @@ export const ACUITY = {
     "appointment.changed",
   ] as const,
 } as const;
+
+/**
+ * Square Appointments OAuth + Bookings API. Mirrors the ACUITY block. Square
+ * splits sandbox vs production by HOST (different creds + webhook signature key
+ * per env), selected by SQUARE_ENV. The connect host serves BOTH the REST API
+ * and the OAuth endpoints.
+ *
+ * [VERIFY IN SANDBOX] the pinned apiVersion, the exact ObtainToken request shape,
+ * and whether ListBookings returns cancelled bookings (see square/backfill.ts).
+ */
+export const SQUARE = {
+  hosts: {
+    sandbox: "https://connect.squareupsandbox.com",
+    production: "https://connect.squareup.com",
+  },
+  // Pinned Square-Version header sent on every API call. Bump deliberately (+test).
+  // 2026-05-20 = the version the sandbox app's webhook subscription is built
+  // against (Square ties webhook payload shape + API responses to the version),
+  // so the Square-Version header and the webhook stay consistent. Override per
+  // env with SQUARE_API_VERSION if Square advances the app's default again.
+  apiVersion: "2026-05-20",
+  // OAuth + token paths (appended to the env-selected host).
+  authorizePath: "/oauth2/authorize",
+  tokenPath: "/oauth2/token",
+  // BOTH appointment scopes are required: APPOINTMENTS_READ alone only surfaces
+  // bookings OUR app created — APPOINTMENTS_ALL_READ is what delivers a seller's
+  // EXISTING bookings via ListBookings + webhooks. CUSTOMERS_READ for contacts.
+  scope: "APPOINTMENTS_READ APPOINTMENTS_ALL_READ CUSTOMERS_READ MERCHANT_PROFILE_READ",
+  // Booking webhook events. booking.updated carries cancellations (status flips
+  // to a CANCELLED_* value); there is no separate booking.canceled event.
+  webhookEvents: ["booking.created", "booking.updated"] as const,
+} as const;
+
+export type SquareEnv = "sandbox" | "production";
+
+/** The connect host (REST + OAuth) for the selected Square environment. */
+export function squareHost(env: SquareEnv): string {
+  return SQUARE.hosts[env];
+}
 
 /** Far-past date the backfill walks from. */
 export const BACKFILL_MIN_DATE = "2015-01-01";

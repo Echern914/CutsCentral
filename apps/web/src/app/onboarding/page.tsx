@@ -30,7 +30,9 @@ function Submit() {
 
 export default function OnboardingShopPage() {
   const [state, action] = useFormState(createShopAction, {});
-  const [industry, setIndustry] = useState<IndustryKey>("barber");
+  // No default vertical: force an explicit pick so a non-barber shop never
+  // silently inherits "barber" (which would wrong-foot its seeded reward + SMS).
+  const [industry, setIndustry] = useState<IndustryKey | "">("");
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center px-5">
@@ -48,8 +50,12 @@ export default function OnboardingShopPage() {
               name="industry"
               value={industry}
               onChange={(e) => setIndustry(e.target.value as IndustryKey)}
+              required
               className={field}
             >
+              <option value="" disabled>
+                What kind of business?
+              </option>
               {INDUSTRY_KEYS.map((k) => (
                 <option key={k} value={k}>
                   {INDUSTRIES[k].label}
@@ -85,7 +91,7 @@ export default function OnboardingShopPage() {
                 <input
                   name="rewardLabel"
                   key={industry}
-                  defaultValue={INDUSTRIES[industry].defaultReward}
+                  defaultValue={industry ? INDUSTRIES[industry].defaultReward : ""}
                   placeholder="Reward name"
                   className={field}
                 />

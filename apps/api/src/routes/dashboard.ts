@@ -246,6 +246,7 @@ dashboardRouter.post("/nudge/:clientId", smsLimiter, requireActiveAccess, async 
     bookingUrl: shop.bookingUrl,
     magicToken: client.magicToken,
     template: shop.smsTemplate,
+    industry: shop.industry,
   });
   const nudge = await db.nudge.create({
     data: { clientId: client.id, channel: "SMS", status: "PENDING", body },
@@ -466,6 +467,123 @@ dashboardRouter.post("/clients", async (req, res) => {
   } catch {
     res.status(500).json({ error: "create_failed" });
   }
+});
+
+// Bulk import a client list (migrating off Booksy/Fresha/Vagaro/a spreadsheet —
+// every platform lets a barber export their contacts to CSV; the WEB layer parses
+// the file and POSTs the rows as JSON here). This is how a barber brings their
+// book WITH them — the whole "you own your clients" wedge — without needing the
+// old platform's API.
+//
+// TCPA-CRITICAL: imported clients are NOT textable by default. A spreadsheet of
+// contacts is NOT proof of SMS consent. smsConsent applies per-row ONLY when the
+// barber explicitly attests they have consent for these clients (one checkbox in
+// the UI), and even then we stamp it only on rows with a phone and NEVER
+// overwrite an existing consent record (first-consent-wins, like the manual-add
+// + Acuity paths). Default = null, source = "import".
+const importRowSchema = z.object({
+  firstName: z.string().trim().min(1).max(80),
+  lastName: z.string().trim().max(80).optional().or(z.literal("")),
+  phone: z.string().trim().max(40).optional().or(z.literal("")),
+  email: z.string().trim().max(160).optional().or(z.literal("")),
+  notes: z.string().trim().max(2000).optional().or(z.literal("")),
+});
+const importClientsSchema = z
+  .object({
+    // Cap per request so one upload can't hold a tenant transaction open forever
+    // or OOM the parse. The web layer chunks larger files into multiple calls.
+    rows: z.array(importRowSchema).min(1).max(1000),
+    // The barber affirms they have SMS consent for EVERY row in this batch.
+    // Default false: imported clients are not textable unless this is true.
+    attestConsentForAll: z.boolean().optional().default(false),
+  })
+  .strict();
+
+dashboardRouter.post("/clients/import", async (req, res) => {
+  const shop = req.shop!;
+  const parsed = importClientsSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const { rows, attestConsentForAll } = parsed.data;
+  const now = new Date();
+
+  let created = 0;
+  let updated = 0;
+  const skipped: { row: number; reason: string }[] = [];
+
+  // One tenant transaction for the whole batch: RLS context set once, all upserts
+  // atomic + a single connection (the connection-amplification lesson). Each row
+  // is upserted by the same stable key scheme as manual-add so a re-import (or a
+  // client who already exists from Acuity/booking) merges instead of duplicating.
+  await runWithShop(shop.id, async (tx) => {
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i]!;
+      const rawPhone = r.phone?.trim() || "";
+      const email = r.email?.trim() || "";
+      const phone = rawPhone ? toE164(rawPhone) : null;
+      // A supplied-but-unparseable phone is skipped (not silently stored null —
+      // the barber would think the client is reachable). A row with neither a
+      // valid phone nor an email still imports under a random manual key (it's a
+      // real client in the book, just not yet textable).
+      if (rawPhone && !phone) {
+        skipped.push({ row: i + 1, reason: "invalid_phone" });
+        continue;
+      }
+      const key = phone
+        ? `tel:${phone}`
+        : email
+          ? `mail:${email.toLowerCase()}`
+          : `import:${randomToken(8)}`;
+      const consent = attestConsentForAll && phone ? now : null;
+      try {
+        const existing = await tx.client.findUnique({
+          where: { shopId_acuityClientKey: { shopId: shop.id, acuityClientKey: key } },
+          select: { id: true },
+        });
+        await tx.client.upsert({
+          where: { shopId_acuityClientKey: { shopId: shop.id, acuityClientKey: key } },
+          create: {
+            shopId: shop.id,
+            acuityClientKey: key,
+            magicToken: randomToken(),
+            firstName: r.firstName,
+            lastName: r.lastName?.trim() || null,
+            phone,
+            email: email || null,
+            notes: r.notes?.trim() || null,
+            source: "import",
+            smsConsentAt: consent,
+            smsConsentSource: consent ? "import_attested" : null,
+          },
+          update: {
+            // Fill in contact details but NEVER clobber an existing record's
+            // identity; and deliberately do NOT touch consent on update (re-import
+            // must not re-stamp). Only fill blanks.
+            firstName: r.firstName,
+            lastName: r.lastName?.trim() || undefined,
+            email: email || undefined,
+            notes: r.notes?.trim() || undefined,
+          },
+        });
+        if (existing) updated++;
+        else created++;
+        // If attesting consent for an EXISTING client that has none yet, grant it
+        // with the same first-consent-wins guard the bulk-attest path uses.
+        if (consent && existing) {
+          await tx.client.updateMany({
+            where: { id: existing.id, smsConsentAt: null },
+            data: { smsConsentAt: consent, smsConsentSource: "import_attested" },
+          });
+        }
+      } catch {
+        skipped.push({ row: i + 1, reason: "write_failed" });
+      }
+    }
+  });
+
+  res.status(200).json({ created, updated, skipped, total: rows.length });
 });
 
 // Log a visit by hand (walk-ins / shops not on Acuity). Creates a real
@@ -796,6 +914,7 @@ dashboardRouter.post("/clients/bulk", smsLimiter, async (req, res) => {
       bookingUrl: shop.bookingUrl,
       magicToken: client.magicToken,
       template: shop.smsTemplate,
+      industry: shop.industry,
     });
     const nudge = await db.nudge.create({
       data: { clientId: client.id, channel: "SMS", status: "PENDING", body },

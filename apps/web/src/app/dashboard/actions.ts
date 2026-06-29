@@ -129,6 +129,47 @@ export async function addClientAction(
   };
 }
 
+export interface ImportClientRow {
+  firstName: string;
+  lastName?: string;
+  phone?: string;
+  email?: string;
+  notes?: string;
+}
+
+export interface ImportResult {
+  ok: boolean;
+  created?: number;
+  updated?: number;
+  total?: number;
+  skipped?: { row: number; reason: string }[];
+  error?: string;
+}
+
+/**
+ * Bulk-import a parsed client list (the file is parsed in the browser; we send
+ * JSON rows). Consent defaults OFF on the server; attestConsentForAll only when
+ * the barber explicitly affirms they have SMS consent for the whole batch.
+ */
+export async function importClientsAction(
+  rows: ImportClientRow[],
+  attestConsentForAll: boolean,
+): Promise<ImportResult> {
+  if (rows.length === 0) return { ok: false, error: "No rows to import." };
+  const res = await apiSend<{
+    created: number;
+    updated: number;
+    total: number;
+    skipped: { row: number; reason: string }[];
+  }>("POST", "/api/dashboard/clients/import", { rows, attestConsentForAll });
+  revalidatePath("/dashboard/clients");
+  revalidatePath("/dashboard");
+  if (res.ok && res.data) {
+    return { ok: true, ...res.data };
+  }
+  return { ok: false, error: "Import failed. Check the file and try again." };
+}
+
 export async function toggleOptOutAction(
   clientId: string,
   optedOut: boolean,
