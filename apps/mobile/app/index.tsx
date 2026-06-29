@@ -32,9 +32,9 @@ import { STORAGE } from "@/src/config";
  * first, then the rows cascade.
  *
  * THREE roles, TWO destinations:
- *   - "I own a barbershop"      -> mode "barber"   -> /barber
- *   - "I manage multiple shops" -> mode "manager"  -> /barber  (same dashboard;
- *                                                     a shop-switcher lands later)
+ *   - "I own a barbershop"      -> mode "barber"   -> /login -> /barber
+ *   - "I manage multiple shops" -> mode "manager"  -> /login -> /barber  (same
+ *                                                     dashboard; switcher later)
  *   - "I'm a customer"          -> mode "customer" -> /customer
  *
  * The choice is remembered: a returning user is sent straight to their mode on
@@ -53,10 +53,15 @@ import { STORAGE } from "@/src/config";
 
 type Mode = "barber" | "manager" | "customer";
 
-/** Where each saved mode sends the user. Manager shares the barber dashboard. */
-const DESTINATION: Record<Mode, "/barber" | "/customer"> = {
-  barber: "/barber",
-  manager: "/barber",
+/**
+ * Where each saved mode sends the user. Barber AND manager route to /login
+ * first: the dashboard is a WebView and Google blocks OAuth inside embedded
+ * WebViews, so they sign in NATIVELY on /login, which hands off to /barber (the
+ * dashboard WebView) once authenticated. Manager shares the barber dashboard.
+ */
+const DESTINATION: Record<Mode, "/login" | "/customer"> = {
+  barber: "/login",
+  manager: "/login",
   customer: "/customer",
 };
 
@@ -86,7 +91,7 @@ export default function ModePicker() {
   // Three render states: still reading storage (Loading), redirect a returning
   // user (declarative <Redirect>), or show the picker. The effect only flips
   // state - it never navigates imperatively, so there is no on-mount launch-hang.
-  const [redirectTo, setRedirectTo] = useState<"/barber" | "/customer" | null>(
+  const [redirectTo, setRedirectTo] = useState<"/login" | "/customer" | null>(
     null,
   );
   const [checking, setChecking] = useState(true);

@@ -32,7 +32,20 @@ export function dashboardUrl(): string {
 export const STORAGE = {
   mode: "cb.mode", // "barber" | "manager" | "customer"
   lastToken: "cb.customerToken", // last magic token seen, for cold launches
+  // The barber/manager cb_session JWT from native sign-in. The WebView's httpOnly
+  // cookie can't be read by native, so we keep a copy here to forward as the push
+  // registration bearer.
+  session: "cb.session",
 } as const;
+
+/**
+ * The Google iOS OAuth client id (from app.config `extra`). Passed to
+ * GoogleSignin.configure({ iosClientId }); with no webClientId, the resulting
+ * idToken's `aud` equals this value - exactly what the backend verifies against
+ * its GOOGLE_OAUTH_IOS_CLIENT_ID env.
+ */
+export const GOOGLE_IOS_CLIENT_ID: string =
+  (Constants.expoConfig?.extra?.googleIosClientId as string | undefined) ?? "";
 
 /**
  * The 3-way role picker (app/index.tsx) is LIVE: "barber" and "manager" route to

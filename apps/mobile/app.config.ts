@@ -21,6 +21,22 @@ const WEB_HOST = WEB_ORIGIN.replace(/^https?:\/\//, "");
 // The API origin the native app calls directly (no browser CSP in a native app).
 const API_ORIGIN = process.env.EXPO_PUBLIC_API_ORIGIN ?? "https://api.getchairback.com";
 
+// The Google iOS OAuth client id (Google Cloud Console > Credentials > iOS client,
+// bundle com.getchairback.rewards). ONE source of truth for three things that must
+// agree: the backend's GOOGLE_OAUTH_IOS_CLIENT_ID env, GoogleSignin.configure({
+// iosClientId }), and the reversed URL scheme below. We configure Google with
+// iosClientId ONLY (no webClientId), so the returned idToken's `aud` equals this
+// id, which is exactly what the backend verifies.
+const GOOGLE_IOS_CLIENT_ID =
+  process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ??
+  "435440347259-d8vfpb97rv53vuvu7nh46nc4s0fs1d68.apps.googleusercontent.com";
+// The reversed-client-id URL scheme iOS registers so Google can redirect back:
+// the client id with its two dot-halves swapped.
+const GOOGLE_IOS_URL_SCHEME = `com.googleusercontent.apps.${GOOGLE_IOS_CLIENT_ID.replace(
+  ".apps.googleusercontent.com",
+  "",
+)}`;
+
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
   name: "ChairBack Rewards",
@@ -30,7 +46,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   // Bumped so the launch-hang-fixed build is visually distinguishable from the
   // earlier broken one in TestFlight (the iOS buildNumber is auto-incremented by
   // EAS remotely, so this user-facing version is the reliable marker).
-  version: "1.0.1",
+  version: "1.0.2",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
@@ -85,13 +101,27 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         color: "#0A0A0B",
       },
     ],
-    // Makes fmt 11.0.2 (bundled by RN 0.76) compile under Xcode 26's Clang,
-    // which Apple now requires for App Store builds. See the plugin for details.
+    // Native Sign in with Apple. Bare string; the plugin auto-adds the
+    // com.apple.developer.applesignin entitlement (["Default"]) to the generated
+    // iOS project - no hand-edited .entitlements file.
+    "expo-apple-authentication",
+    // Native Google Sign-In. iosUrlScheme is the REVERSED iOS OAuth client id;
+    // the plugin injects it into CFBundleURLTypes at prebuild so Google can
+    // redirect back into the app.
+    [
+      "@react-native-google-signin/google-signin",
+      { iosUrlScheme: GOOGLE_IOS_URL_SCHEME },
+    ],
+    // Keep LAST: makes fmt 11.0.2 (bundled by RN 0.81) compile under Xcode 26's
+    // Clang, which Apple now requires for App Store builds. See the plugin.
     "./plugins/withFmtConstevalFix",
   ],
   extra: {
     webOrigin: WEB_ORIGIN,
     apiOrigin: API_ORIGIN,
+    // Surfaced to JS (expo-constants) so GoogleSignin.configure({ iosClientId })
+    // reads the SAME id the iosUrlScheme plugin used - they can never drift.
+    googleIosClientId: GOOGLE_IOS_CLIENT_ID,
     // EAS project (created on expo.dev). Links this app to the cloud build/project.
     eas: { projectId: "6919de0f-3dba-4966-bf62-05e328f248e3" },
   },
