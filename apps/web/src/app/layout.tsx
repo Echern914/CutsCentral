@@ -19,11 +19,11 @@ const display = Bricolage_Grotesque({
 
 export const metadata: Metadata = {
   title: {
-    default: `${APP_NAME}: loyalty & rebooking for barbershops`,
+    default: `${APP_NAME}: loyalty & rebooking for barbershops, salons & studios`,
     template: `%s | ${APP_NAME}`,
   },
   description:
-    "Automatic loyalty punch cards and perfectly-timed rebooking texts for barbershops. Built on top of your Acuity scheduling.",
+    "Automatic loyalty punch cards and perfectly-timed rebooking texts for barbershops, salons, and studios. Syncs with your Acuity or Square scheduling.",
   // Declaring `icons` turns OFF Next's auto-injection of the icon.svg file
   // convention, so list BOTH here. The favicon (icon.svg, still served at
   // /icon.svg) plus an Apple touch icon from public/ (the apple-icon.svg file
