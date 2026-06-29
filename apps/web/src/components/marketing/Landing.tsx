@@ -75,8 +75,8 @@ export function Landing() {
             <StaggerItem>
               <p className="mx-auto mt-6 max-w-xl text-lg leading-relaxed text-muted lg:mx-0">
                 Automatic loyalty punch cards and perfectly-timed rebooking
-                texts for barbershops. No paper cards, no manual follow-up.
-                Every cut counts itself.
+                texts for barbershops, salons, and studios. No paper cards, no
+                manual follow-up. Every visit counts itself.
               </p>
             </StaggerItem>
             <StaggerItem>
@@ -427,7 +427,7 @@ export function Landing() {
         <div className="mx-auto flex w-full max-w-6xl flex-col items-center justify-between gap-4 px-6 text-xs text-muted sm:flex-row">
           <span className="flex items-center gap-2">
             <ScissorsMark className="h-3.5 w-3.5 text-gold/60" />
-            {APP_NAME}: built for barbers.
+            {APP_NAME}: built for barbershops, salons & studios.
           </span>
           <div className="flex flex-wrap justify-center gap-5">
             <Link href="/login" className="transition-colors duration-150 ease-out hover:text-offwhite">
@@ -561,7 +561,7 @@ const FAQ = [
   },
   {
     q: "How much does it cost?",
-    a: `The loyalty program (punch cards, rewards page, public mini-site, client book) is free forever, no card required. Premium ($${BILLING.priceMonthlyUsd}/month) adds the texting that brings clients back: rebooking nudges, promo blasts, and Acuity auto-sync. Every new shop gets a ${BILLING.trialDays}-day full Premium trial, and one rebooked regular typically covers the month.`,
+    a: `The loyalty program (punch cards, rewards page, public mini-site, client book) is free forever, no card required. Premium ($${BILLING.priceMonthlyUsd}/month) adds the texting that brings clients back: rebooking nudges, promo blasts, and auto-sync with Acuity or Square. Every new shop gets a ${BILLING.trialDays}-day full Premium trial, and one rebooked regular typically covers the month.`,
   },
   {
     q: "Is it only for barbershops?",
