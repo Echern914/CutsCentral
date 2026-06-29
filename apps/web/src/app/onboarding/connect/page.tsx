@@ -8,8 +8,13 @@ interface ShopStatus {
 }
 
 export default async function ConnectPage() {
-  const res = await apiGet<ShopStatus>("/api/shops/me");
-  const connected = res.data?.connected ?? false;
+  const [shopRes, squareRes] = await Promise.all([
+    apiGet<ShopStatus>("/api/shops/me"),
+    // Square is optional/dark until configured; treat any non-ok as unavailable.
+    apiGet<{ available: boolean }>("/api/square/oauth/status"),
+  ]);
+  const connected = shopRes.data?.connected ?? false;
+  const squareAvailable = Boolean(squareRes.data?.available);
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center px-5">
@@ -17,36 +22,50 @@ export default async function ConnectPage() {
         Step 2 of 3
       </p>
       <h1 className="mb-2 mt-2 text-center font-display text-3xl tracking-tight">
-        Connect Acuity
+        Connect your booking
       </h1>
       <p className="mb-6 text-center text-sm text-muted">
-        Authorize {APP_NAME} to read your appointments. We&apos;ll auto-track
-        every visit and start your loyalty engine.
+        Link the system you already use and {APP_NAME} auto-tracks every visit,
+        so loyalty and rebooking just happen. Pick one - you can switch anytime.
       </p>
-      <Card className="flex flex-col items-center gap-4 p-8">
+      <Card className="flex flex-col items-center gap-3 p-8">
         {connected ? (
           <>
-            <p className="text-emerald-soft">Acuity connected</p>
+            <p className="text-emerald-soft">Booking connected</p>
             <LinkButton href="/onboarding/done" className="w-full">
               Continue
             </LinkButton>
           </>
         ) : (
           <>
-            {/* Hits the API OAuth start, which redirects to Acuity consent. */}
+            {/* Each hits the API OAuth start, which redirects to the provider's consent. */}
             <LinkButton href={`${API_BASE}/api/acuity/oauth/start`} className="w-full">
               Connect Acuity
             </LinkButton>
+            {squareAvailable && (
+              <a
+                href={`${API_BASE}/api/square/oauth/start`}
+                className="inline-flex w-full items-center justify-center rounded-full border border-subtle px-6 py-3 text-sm font-semibold text-offwhite transition-all duration-150 ease-out hover:border-subtle-strong hover:bg-charcoal-700"
+              >
+                Connect Square
+              </a>
+            )}
+            <a
+              href="/dashboard/booking"
+              className="text-xs text-muted hover:underline"
+            >
+              Use {APP_NAME}&apos;s own booking, or your own link
+            </a>
             <a
               href="/onboarding/done"
               className="text-xs text-muted hover:underline"
             >
-              Not on Acuity? Skip and log visits with one tap instead
+              Not connecting now? Skip and log visits with one tap instead
             </a>
             <p className="text-center text-[11px] leading-relaxed text-muted">
-              On Booksy, Square, or pen &amp; paper? Everything still works: add
+              On Booksy, Vagaro, or pen &amp; paper? Everything still works: add
               clients and tap “Log visit” after each appointment. You can
-              connect Acuity later in Settings.
+              connect a booking system later in Settings.
             </p>
           </>
         )}
