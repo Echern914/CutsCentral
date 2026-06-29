@@ -35,7 +35,7 @@ function done(res: { ok: boolean; error?: string }): Result {
 //  Booking mode + bounds (patches the shop)
 
 export async function saveBookingSettingsAction(input: {
-  bookingMode: "link" | "acuity" | "native";
+  bookingMode: "link" | "acuity" | "native" | "square";
   bookingLeadHours: number;
   bookingMaxDays: number;
   bookingBufferMin: number;

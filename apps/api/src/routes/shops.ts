@@ -150,7 +150,7 @@ const updateShopSchema = createShopSchema
     loyaltyTextsEnabled: z.boolean(),
     // Native booking engine. bookingMode picks the ONE active source; the bounds
     // shape the public slot picker (all interpreted in the shop's timezone).
-    bookingMode: z.enum(["link", "acuity", "native"]),
+    bookingMode: z.enum(["link", "acuity", "native", "square"]),
     bookingLeadHours: z.number().int().min(0).max(720),
     bookingMaxDays: z.number().int().min(1).max(365),
     bookingBufferMin: z.number().int().min(0).max(240),
