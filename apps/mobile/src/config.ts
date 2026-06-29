@@ -28,6 +28,17 @@ export function dashboardUrl(): string {
   return `${WEB_ORIGIN}/dashboard`;
 }
 
+/**
+ * Native-app session handoff URL. After native Apple/Google sign-in the app has
+ * the cb_session JWT but it's in the app's fetch cookie jar, not the WebView's.
+ * The barber WebView loads THIS url with the JWT as a Bearer header; the route
+ * sets the cb_session cookie and redirects to /dashboard, so the WebView lands
+ * authenticated without any native cookie module.
+ */
+export function appAuthUrl(): string {
+  return `${WEB_ORIGIN}/app-auth`;
+}
+
 /** Persisted-choice keys. */
 export const STORAGE = {
   mode: "cb.mode", // "barber" | "manager" | "customer"

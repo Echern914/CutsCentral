@@ -9,7 +9,6 @@ import {
 } from "@react-native-google-signin/google-signin";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { API_ORIGIN, GOOGLE_IOS_CLIENT_ID, STORAGE } from "@/src/config";
-import { installSessionCookie } from "@/src/session";
 
 /**
  * Barber/manager native sign-in. Google blocks its OAuth inside an embedded
@@ -45,14 +44,13 @@ export default function LoginScreen() {
     }
   }, []);
 
-  // Common tail: persist the bearer (for push), install the cookie, route to the
-  // dashboard. Awaiting installSessionCookie BEFORE navigating guarantees the
-  // WebView's first /dashboard request carries cb_session.
+  // Common tail: persist the session JWT, then route to /barber. The barber
+  // screen hands this JWT to the dashboard WebView via the /app-auth route,
+  // which sets the cb_session cookie - so no native cookie module is needed.
   async function completeSignIn(token: string) {
     if (handing.current) return;
     handing.current = true;
     await AsyncStorage.setItem(STORAGE.session, token).catch(() => {});
-    await installSessionCookie(token).catch(() => {});
     router.replace("/barber");
   }
 

@@ -1,38 +1,54 @@
-import { useEffect, useRef } from "react";
-import { StyleSheet } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { type WebViewMessageEvent } from "react-native-webview";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { AppWebView } from "@/src/AppWebView";
-import { dashboardUrl, STORAGE } from "@/src/config";
+import { appAuthUrl, dashboardUrl, STORAGE } from "@/src/config";
 import { registerBarberPush } from "@/src/push";
 
 /**
  * Barber mode: a WebView of the existing /dashboard. The barber reaches here via
- * the native sign-in screen (app/login.tsx), which already installed the
- * cb_session cookie into the WebView store - so the FIRST /dashboard request is
- * authenticated (no in-page login). The WebView's cookie jar persists it, so
- * later launches still land in the dashboard.
+ * the native sign-in screen (app/login.tsx) which persisted the cb_session JWT.
+ * Because that JWT lives in the app's cookie jar and not the WebView's, we load
+ * the dashboard THROUGH /app-auth, passing the JWT as a Bearer header: that
+ * route sets the cb_session cookie on its redirect to /dashboard, so the WebView
+ * lands authenticated - no native cookie module required. The WebView's cookie
+ * jar then persists it for later launches.
  *
- * Native push for barbers needs the device tied to their account. The WebView
- * can't expose its httpOnly session cookie to native, so we forward the bearer
- * from EITHER (a) the cb_session JWT login.tsx persisted, or (b) a postMessage
- * "cb:auth" the dashboard emits - whichever arrives first.
+ * Native push: we also forward the stored JWT as the push bearer, or use a
+ * postMessage "cb:auth" the dashboard emits - whichever arrives first.
  */
 export default function BarberScreen() {
   const registered = useRef(false);
+  // Resolved after reading the stored session: the WebView entry point + (when
+  // we have a token) the Bearer header that /app-auth consumes. Null until ready
+  // so the first request always carries the right thing (no cookie-less flash).
+  const [source, setSource] = useState<
+    { uri: string; headers?: Record<string, string> } | null
+  >(null);
 
-  // (a) Forward the stored native-sign-in session JWT as the push bearer.
   useEffect(() => {
     (async () => {
+      let token: string | null = null;
       try {
-        const token = await AsyncStorage.getItem(STORAGE.session);
-        if (token && !registered.current) {
+        token = await AsyncStorage.getItem(STORAGE.session);
+      } catch {
+        token = null;
+      }
+      if (token) {
+        if (!registered.current) {
           registered.current = true;
           registerBarberPush(token);
         }
-      } catch {
-        /* best-effort */
+        setSource({
+          uri: appAuthUrl(),
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      } else {
+        // No native session (shouldn't happen on the barber path); load the
+        // dashboard directly - it falls back to the in-page web login.
+        setSource({ uri: dashboardUrl() });
       }
     })();
   }, []);
@@ -49,10 +65,18 @@ export default function BarberScreen() {
     }
   }
 
+  if (!source) {
+    return (
+      <View style={[styles.flex, styles.center]}>
+        <ActivityIndicator color="#fff" />
+      </View>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.flex} edges={["top"]}>
       <AppWebView
-        source={{ uri: dashboardUrl() }}
+        source={source}
         style={styles.flex}
         sharedCookiesEnabled
         // Persist cookies across launches so the login sticks.
@@ -65,4 +89,5 @@ export default function BarberScreen() {
 
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: "#0A0A0B" },
+  center: { alignItems: "center", justifyContent: "center" },
 });
