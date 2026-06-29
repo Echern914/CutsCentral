@@ -27,6 +27,27 @@ export async function savePaymentSettingsAction(input: {
   return res.ok ? { ok: true } : { ok: false, error: res.error ?? "failed" };
 }
 
+export interface PayDirectSettings {
+  enabled: boolean;
+  zelle: string | null;
+  venmo: string | null;
+  cashApp: string | null;
+  note: string | null;
+}
+
+/** Save fee-free pay-direct handles (Zelle/Venmo/Cash App). No Stripe needed. */
+export async function savePayDirectAction(input: {
+  enabled?: boolean;
+  zelle?: string | null;
+  venmo?: string | null;
+  cashApp?: string | null;
+  note?: string | null;
+}): Promise<Result> {
+  const res = await apiSend("PATCH", "/api/payments/pay-direct", input);
+  if (res.ok) revalidatePath("/dashboard/payments");
+  return res.ok ? { ok: true } : { ok: false, error: res.error ?? "failed" };
+}
+
 export interface PaymentStatus {
   connectAvailable: boolean;
   connect: {
@@ -39,6 +60,7 @@ export interface PaymentStatus {
   platformFeeBps: number;
   cancelWindowHours: number;
   cancelFeeBps: number;
+  payDirect: PayDirectSettings;
 }
 
 /** Read live Connect status + current settings (used by the page on load). */

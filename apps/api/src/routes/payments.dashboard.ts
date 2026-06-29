@@ -27,6 +27,11 @@ paymentsDashboardRouter.get("/status", async (req, res) => {
       platformFeeBps: true,
       cancelWindowHours: true,
       cancelFeeBps: true,
+      payDirectEnabled: true,
+      payDirectZelle: true,
+      payDirectVenmo: true,
+      payDirectCashApp: true,
+      payDirectNote: true,
     },
   });
   if (!shop) {
@@ -43,6 +48,14 @@ paymentsDashboardRouter.get("/status", async (req, res) => {
     platformFeeBps: shop.platformFeeBps,
     cancelWindowHours: shop.cancelWindowHours,
     cancelFeeBps: shop.cancelFeeBps,
+    // Fee-free pay-direct (Zelle/Venmo/Cash App) — display-only, no Stripe needed.
+    payDirect: {
+      enabled: shop.payDirectEnabled,
+      zelle: shop.payDirectZelle,
+      venmo: shop.payDirectVenmo,
+      cashApp: shop.payDirectCashApp,
+      note: shop.payDirectNote,
+    },
   });
 });
 
@@ -113,6 +126,60 @@ paymentsDashboardRouter.patch("/settings", async (req, res) => {
       ...(d.paymentsMode !== undefined ? { paymentsMode: d.paymentsMode } : {}),
       ...(d.cancelWindowHours !== undefined ? { cancelWindowHours: d.cancelWindowHours } : {}),
       ...(d.cancelFeeBps !== undefined ? { cancelFeeBps: d.cancelFeeBps } : {}),
+    },
+  });
+  res.json({ ok: true });
+});
+
+// PATCH /api/payments/pay-direct - fee-free "pay the barber directly" handles
+// (Zelle/Venmo/Cash App). NOT Connect-gated: these need no Stripe (ChairBack
+// never processes or verifies them; the barber confirms payment themselves). ""
+// clears a handle. Handles are stored bare (no leading @ / $), normalized here.
+const payDirectSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    // Zelle is an email or US phone; keep it permissive but bounded (display-only).
+    zelle: z.string().trim().max(120).nullish().or(z.literal("")),
+    venmo: z
+      .string()
+      .trim()
+      .transform((s) => s.replace(/^@/, ""))
+      .pipe(z.string().max(60).regex(/^[A-Za-z0-9._-]*$/, "Letters, numbers, . _ -"))
+      .nullish()
+      .or(z.literal("")),
+    cashApp: z
+      .string()
+      .trim()
+      .transform((s) => s.replace(/^\$/, ""))
+      .pipe(z.string().max(60).regex(/^[A-Za-z0-9._-]*$/, "Letters, numbers, . _ -"))
+      .nullish()
+      .or(z.literal("")),
+    note: z.string().trim().max(280).nullish().or(z.literal("")),
+  })
+  .strict();
+
+// Normalize ""/whitespace -> null so a cleared field stores as NULL, not "".
+function blankToNull(v: string | null | undefined): string | null {
+  if (v === undefined || v === null) return null;
+  const t = v.trim();
+  return t === "" ? null : t;
+}
+
+paymentsDashboardRouter.patch("/pay-direct", async (req, res) => {
+  const parsed = payDirectSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const d = parsed.data;
+  await prisma.shop.update({
+    where: { id: req.shop!.id },
+    data: {
+      ...(d.enabled !== undefined ? { payDirectEnabled: d.enabled } : {}),
+      ...(d.zelle !== undefined ? { payDirectZelle: blankToNull(d.zelle) } : {}),
+      ...(d.venmo !== undefined ? { payDirectVenmo: blankToNull(d.venmo) } : {}),
+      ...(d.cashApp !== undefined ? { payDirectCashApp: blankToNull(d.cashApp) } : {}),
+      ...(d.note !== undefined ? { payDirectNote: blankToNull(d.note) } : {}),
     },
   });
   res.json({ ok: true });
