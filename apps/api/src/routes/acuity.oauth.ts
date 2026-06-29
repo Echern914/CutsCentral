@@ -222,3 +222,42 @@ acuityOAuthRouter.post("/repair", requireUser, requireShop, async (req, res) => 
   }
   res.json({ ok: true, subscribed: ids.length, backfillStarted: true });
 });
+
+// Disconnect: tear down Acuity webhooks (best-effort) and delete the stored
+// connection so the shop can reconnect (or switch to another booking source).
+// Visits/clients already ingested are KEPT — disconnect only stops future sync,
+// it never deletes loyalty history. Idempotent: a missing connection still 200s.
+acuityOAuthRouter.post("/disconnect", requireUser, requireShop, async (req, res) => {
+  const shop = req.shop!;
+  const conn = await prisma.acuityConnection.findUnique({ where: { shopId: shop.id } });
+
+  // Best-effort: remove our webhook subscriptions at Acuity so it stops sending
+  // events for a shop we no longer track. Failure here must not block disconnect.
+  if (conn && shop.acuityWebhookIds.length) {
+    let accessToken: string | null = null;
+    try {
+      accessToken = decrypt(conn.accessToken, env.TOKEN_ENCRYPTION_KEY);
+    } catch {
+      accessToken = null;
+    }
+    if (accessToken) {
+      for (const id of shop.acuityWebhookIds) {
+        try {
+          await fetch(`${ACUITY.apiBase}/webhooks/${id}`, {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+        } catch {
+          /* ignore - we delete the connection regardless */
+        }
+      }
+    }
+  }
+
+  await prisma.shop.update({ where: { id: shop.id }, data: { acuityWebhookIds: [] } });
+  if (conn) {
+    await prisma.acuityConnection.delete({ where: { shopId: shop.id } });
+  }
+  logger.info({ shopId: shop.id }, "acuity disconnected");
+  res.json({ ok: true });
+});

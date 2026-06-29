@@ -84,7 +84,7 @@ export default async function BookingPage() {
       <header className="mb-6">
         <h1 className="font-display text-3xl tracking-tight">Booking</h1>
         <p className="mt-1 text-sm text-muted">
-          Run your own online booking: add your barbers, services, and hours, then
+          Run your own online booking: add your staff, services, and hours, then
           flip booking on. Customers book real times at your page and earn loyalty
           automatically.
         </p>

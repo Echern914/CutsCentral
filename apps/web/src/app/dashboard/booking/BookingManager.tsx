@@ -60,8 +60,8 @@ export function BookingManager({
       {shop.bookingMode === "native" && needsSetup && (
         <Card className="border-gold/30 bg-gold/5 px-5 py-4">
           <p className="text-sm text-gold">
-            Booking is on, but you need at least one barber and one service before
-            customers can book. Add them in the tabs below.
+            Booking is on, but you need at least one staff member and one service
+            before customers can book. Add them in the tabs below.
           </p>
         </Card>
       )}
@@ -219,7 +219,7 @@ function StaffTab({ initial, toast }: { initial: StaffRow[]; toast: Toast }) {
     start(async () => {
       const r = await createStaffAction({ name: name.trim() });
       if (r.ok) {
-        toast("Barber added", "success");
+        toast("Staff member added", "success");
         setName("");
       } else toast("Couldn't add", "error");
     });
@@ -227,17 +227,17 @@ function StaffTab({ initial, toast }: { initial: StaffRow[]; toast: Toast }) {
   function remove(id: string) {
     start(async () => {
       const r = await deleteStaffAction(id);
-      toast(r.ok ? "Barber removed" : "Couldn't remove", r.ok ? "success" : "error");
+      toast(r.ok ? "Staff member removed" : "Couldn't remove", r.ok ? "success" : "error");
     });
   }
 
   return (
     <Card className="p-5">
-      <CardHeader title="Barbers" subtitle="Everyone who takes appointments." />
+      <CardHeader title="Staff" subtitle="Everyone who takes appointments." />
       <div className="mt-3 flex gap-2">
         <input
           className={field}
-          placeholder="Barber name"
+          placeholder="Staff member name"
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && add()}
@@ -266,7 +266,7 @@ function StaffTab({ initial, toast }: { initial: StaffRow[]; toast: Toast }) {
           </li>
         ))}
         {initial.filter((s) => s.active).length === 0 && (
-          <li className="text-sm text-muted">No barbers yet.</li>
+          <li className="text-sm text-muted">No staff yet.</li>
         )}
       </ul>
     </Card>
@@ -368,7 +368,7 @@ function ServicesTab({
       {activeStaff.length > 0 && (
         <div className="mt-3">
           <span className={labelCls}>
-            Offered by {staffIds.length === 0 ? "(all barbers)" : ""}
+            Offered by {staffIds.length === 0 ? "(all staff)" : ""}
           </span>
           <div className="mt-1 flex flex-wrap gap-2">
             {activeStaff.map((s) => (
@@ -506,13 +506,13 @@ function HoursTab({ staff, toast }: { staff: StaffRow[]; toast: Toast }) {
 
   if (activeStaff.length === 0) {
     return (
-      <Card className="p-5 text-sm text-muted">Add a barber first to set hours.</Card>
+      <Card className="p-5 text-sm text-muted">Add a staff member first to set hours.</Card>
     );
   }
 
   return (
     <Card className="p-5">
-      <CardHeader title="Weekly hours" subtitle="When each barber is available to book." />
+      <CardHeader title="Weekly hours" subtitle="When each staff member is available to book." />
       <div className="mt-3 flex flex-wrap gap-2">
         {activeStaff.map((s) => (
           <button
@@ -531,7 +531,7 @@ function HoursTab({ staff, toast }: { staff: StaffRow[]; toast: Toast }) {
       </div>
 
       {!loaded ? (
-        <p className="mt-4 text-sm text-muted">Pick a barber to edit their hours.</p>
+        <p className="mt-4 text-sm text-muted">Pick a staff member to edit their hours.</p>
       ) : (
         <>
           <div className="mt-4 flex flex-col gap-2">

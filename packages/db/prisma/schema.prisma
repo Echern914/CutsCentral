@@ -388,7 +388,10 @@ model Client {
   smsConsentAt     DateTime? // when opt-in was captured; null = never consented
   smsConsentSource String? // "acuity_intake" | "barber_attest" | "manual" | "join_page"
   notes            String? // barber's private notes about the client
-  source           String    @default("acuity") // "acuity" | "manual"
+  // Soft origin label. "acuity" (default; also where Square-synced clients land
+  // today since the Square ingest doesn't override it) | "manual" (dashboard
+  // add / native booking) | "import" (CSV import).
+  source           String    @default("acuity")
   magicToken       String    @unique // GLOBAL - rewards auth resolves without a shop
 
   // Soft-archive. A barber can hide a client they no longer want in their active
