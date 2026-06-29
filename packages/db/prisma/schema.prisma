@@ -200,6 +200,18 @@ model Shop {
   cancelWindowHours      Int          @default(0)
   cancelFeeBps           Int          @default(0) // 10000 bps = 100% (no refund inside window)
 
+  // Fee-free "pay the barber DIRECTLY" handles (Zelle / Venmo / Cash App). These
+  // are DISPLAY-ONLY: shown on the booking confirmation so a customer can pay the
+  // barber bank-to-bank with 0% fee. ChairBack does NOT process, verify, or
+  // reconcile them — Zelle/Venmo/Cash App have no third-party platform API, so the
+  // barber confirms payment themselves. Independent of the Stripe paymentsMode
+  // flow above; a shop can offer card (Stripe) AND/OR pay-direct.
+  payDirectEnabled Boolean @default(false)
+  payDirectZelle   String? // Zelle email or phone number
+  payDirectVenmo   String? // Venmo @handle (without the leading @)
+  payDirectCashApp String? // Cash App $cashtag (without the leading $)
+  payDirectNote    String? // freeform instruction, e.g. "Zelle or cash on arrival"
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

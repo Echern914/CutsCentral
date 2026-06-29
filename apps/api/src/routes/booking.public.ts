@@ -87,6 +87,16 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
       accentColor: shop.accentColor,
       bookingLeadHours: shop.bookingLeadHours,
       bookingMaxDays: shop.bookingMaxDays,
+      // Fee-free pay-direct handles (display-only) so the confirmation screen can
+      // show "pay the barber directly". Only surfaced when the barber enabled it.
+      payDirect: shop.payDirectEnabled
+        ? {
+            zelle: shop.payDirectZelle,
+            venmo: shop.payDirectVenmo,
+            cashApp: shop.payDirectCashApp,
+            note: shop.payDirectNote,
+          }
+        : null,
     },
     staff,
     services: services.map((s) => {

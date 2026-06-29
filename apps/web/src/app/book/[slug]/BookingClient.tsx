@@ -259,6 +259,14 @@ export function BookingClient({ data }: { data: BookShopData }) {
           >
             View / change my appointment
           </Link>
+
+          {data.shop.payDirect && (
+            <PayDirectInfo
+              payDirect={data.shop.payDirect}
+              shopName={data.shop.name}
+              accent={accent}
+            />
+          )}
         </div>
       </main>
     );
@@ -499,5 +507,64 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">{title}</h2>
       {children}
     </section>
+  );
+}
+
+/**
+ * Fee-free "pay the barber directly" block on the confirmation screen. Lists the
+ * shop's Zelle/Venmo/Cash App handles (tap to copy). Display-only — the shop
+ * confirms payment themselves; we never claim ChairBack processed it.
+ */
+function PayDirectInfo({
+  payDirect,
+  shopName,
+  accent,
+}: {
+  payDirect: NonNullable<BookShopData["shop"]["payDirect"]>;
+  shopName: string;
+  accent: string;
+}) {
+  const [copied, setCopied] = useState<string | null>(null);
+  const rows = [
+    payDirect.zelle ? { label: "Zelle", value: payDirect.zelle } : null,
+    payDirect.venmo ? { label: "Venmo", value: `@${payDirect.venmo}` } : null,
+    payDirect.cashApp ? { label: "Cash App", value: `$${payDirect.cashApp}` } : null,
+  ].filter((r): r is { label: string; value: string } => r !== null);
+
+  if (rows.length === 0 && !payDirect.note) return null;
+
+  function copy(value: string) {
+    navigator.clipboard?.writeText(value).then(
+      () => {
+        setCopied(value);
+        setTimeout(() => setCopied(null), 1500);
+      },
+      () => {},
+    );
+  }
+
+  return (
+    <div className="mt-5 rounded-xl border border-white/10 bg-white/5 p-4 text-left">
+      <p className="text-sm font-semibold">Pay {shopName} directly — no fees</p>
+      {rows.map((r) => (
+        <button
+          key={r.label}
+          type="button"
+          onClick={() => copy(r.value)}
+          className="mt-2 flex w-full items-center justify-between rounded-lg border border-white/10 px-3 py-2 text-sm transition-colors hover:bg-white/5"
+        >
+          <span className="text-muted">{r.label}</span>
+          <span className="flex items-center gap-2 font-medium" style={{ color: accent }}>
+            {r.value}
+            <span className="text-[11px] text-muted">
+              {copied === r.value ? "copied!" : "tap to copy"}
+            </span>
+          </span>
+        </button>
+      ))}
+      {payDirect.note && (
+        <p className="mt-2 text-xs text-muted">{payDirect.note}</p>
+      )}
+    </div>
   );
 }
