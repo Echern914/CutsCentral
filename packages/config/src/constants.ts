@@ -149,6 +149,31 @@ export const NUDGE = {
 } as const;
 
 /**
+ * Win-back ("Growth Agent") targeting. A win-back is for the DEEPLY lapsed -
+ * clients well past their own cadence whom the regular rebooking nudge already
+ * tried and who are drifting away. Two things separate it from a plain nudge:
+ *  - a much higher overdue bar (a MULTIPLE of their median interval, not just
+ *    median + buffer), so we only "we miss you" the genuinely gone, and
+ *  - a long re-nag suppression (90d, vs the nudge's 21d), so a lapsed client is
+ *    contacted at most a few times a year, never pestered.
+ * The send still passes the SAME consent + quiet-hours + billing gates.
+ */
+export const WINBACK = {
+  /** Need real cadence history (shared bar with the nudge). */
+  minCompletedVisits: 2,
+  /**
+   * Overdue threshold = medianIntervalDays * this multiplier. e.g. a 28-day
+   * client is win-back-eligible only once ~84 days (3x) have passed since their
+   * last visit - well beyond the ordinary "overdue" nudge window.
+   */
+  overdueMultiplier: 3,
+  /** Do not send another win-back to the same client within this many days. */
+  suppressionDays: 90,
+  /** A booking within this many days after a win-back is attributed to it. */
+  attributionWindowDays: 14,
+} as const;
+
+/**
  * TCPA quiet-hours safe harbor: marketing/informational SMS may only be sent
  * 8:00am-9:00pm in the RECIPIENT's local time. Clients are nearly always local
  * to the shop, so we gate on the shop's timezone. Sending outside this window

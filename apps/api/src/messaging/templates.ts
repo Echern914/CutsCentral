@@ -63,6 +63,63 @@ export function previewNudgeBody(
   });
 }
 
+/**
+ * The built-in win-back default (used when a shop hasn't set winbackTemplate).
+ * Warmer + longer-absence framing than the regular rebooking nudge, since the
+ * recipient is DEEPLY lapsed (well past their cadence) rather than just overdue.
+ * Same placeholders + STOP-notice safety net as the nudge default.
+ */
+export function defaultWinbackTemplate(industry?: string | null): string {
+  const noun = serviceNounFor(industry);
+  return (
+    `Hey {firstName}, we've missed you at {shop}! ` +
+    `It's been a while since your last ${noun} - we'd love to see you back. ` +
+    "Book any time: {bookingUrl} • Your rewards: {rewardsUrl} Reply STOP to opt out."
+  );
+}
+
+/**
+ * Win-back SMS copy. Same substitution + STOP-notice rules as buildNudgeBody,
+ * but defaults to the warmer win-back template. A shop's winbackTemplate (when
+ * set) overrides it.
+ */
+export function buildWinbackBody(params: {
+  firstName: string | null;
+  shopName: string;
+  bookingUrl: string;
+  magicToken: string;
+  template?: string | null;
+  industry?: string | null;
+}): string {
+  const rewardsUrl = `${env.APP_BASE_URL}/r/${params.magicToken}`;
+  const tpl = params.template?.trim() || defaultWinbackTemplate(params.industry);
+
+  const body = tpl
+    .replaceAll("{firstName}", params.firstName ?? "there")
+    .replaceAll("{shop}", params.shopName)
+    .replaceAll("{bookingUrl}", params.bookingUrl)
+    .replaceAll("{rewardsUrl}", rewardsUrl);
+
+  return withStopNotice(body);
+}
+
+/** Render a win-back template for a settings preview (sample data). */
+export function previewWinbackBody(
+  template: string | null,
+  shopName: string,
+  bookingUrl: string,
+  industry?: string | null,
+): string {
+  return buildWinbackBody({
+    firstName: "Marcus",
+    shopName,
+    bookingUrl: bookingUrl || "https://book.example.com",
+    magicToken: "PREVIEW",
+    template,
+    industry,
+  });
+}
+
 /** Append the compliance opt-out line unless the copy already carries one. */
 function withStopNotice(body: string): string {
   return /reply stop/i.test(body) ? body : `${body} Reply STOP to opt out.`;
@@ -181,6 +238,20 @@ export function buildNudgePush(params: {
   return {
     title: `Time for your next ${noun}, ${who}?`,
     body: `It's been a while since ${params.shopName}. Tap to book your next one.`,
+  };
+}
+
+/** Win-back push copy: warmer "we've missed you" for the deeply-lapsed client. */
+export function buildWinbackPush(params: {
+  firstName: string | null;
+  shopName: string;
+  industry?: string | null;
+}): PushCopy {
+  const who = params.firstName ?? "there";
+  const noun = serviceNounFor(params.industry);
+  return {
+    title: `We've missed you, ${who}!`,
+    body: `It's been a while since your last ${noun} at ${params.shopName}. Tap to book.`,
   };
 }
 

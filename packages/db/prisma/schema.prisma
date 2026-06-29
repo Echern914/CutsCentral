@@ -117,7 +117,15 @@ model Shop {
   // nudge/promo sends: still gated by client SMS consent + quiet hours, but NOT
   // counted against dailySendCap (it's triggered by a real visit, not a blast).
   loyaltyTextsEnabled Boolean @default(false)
+  // Win-back ("Growth Agent") sends: a warmer "it's been a while" SMS to clients
+  // who are DEEPLY lapsed (well past their own cadence), distinct from the
+  // regular just-overdue rebooking nudge. Off by default - opt-in per shop, same
+  // as loyaltyTextsEnabled. Marketing cost, so it DOES count against dailySendCap.
+  // See engines/winback.ts.
+  winbackTextsEnabled Boolean @default(false)
   smsTemplate         String? // custom nudge copy; null = built-in default. Placeholders: {firstName} {shop} {bookingUrl} {rewardsUrl}
+  // Custom win-back copy; null = built-in default. Same placeholders as smsTemplate.
+  winbackTemplate     String?
   logoUrl             String? // shop logo shown on the rewards + public pages (white-label)
   accentColor         String? // hex accent (e.g. "#D4AF37"); null = the theme's accent
   // Rebooking countdown: target window (days) for a client to rebook after their
