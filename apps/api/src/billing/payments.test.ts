@@ -106,6 +106,22 @@ describe("applyPaymentEvent reconcile (DB)", () => {
     } as unknown as Stripe.Event;
   }
 
+  // A charge.refunded event carrying a CUMULATIVE refund total (amount_refunded).
+  function refundedEvent(eventId: string, piId: string, cumulativeRefunded: number, fully: boolean): Stripe.Event {
+    return {
+      id: eventId,
+      type: "charge.refunded",
+      data: {
+        object: {
+          id: `ch_test_${tag}`,
+          payment_intent: piId,
+          amount_refunded: cumulativeRefunded,
+          refunded: fully,
+        },
+      },
+    } as unknown as Stripe.Event;
+  }
+
   afterAll(async () => {
     // FK cascade from Shop covers appt/payment/staff/service; remove shop + user.
     if (ids.shop) await prisma.shop.deleteMany({ where: { id: ids.shop } });
@@ -137,6 +153,29 @@ describe("applyPaymentEvent reconcile (DB)", () => {
     const row = await prisma.payment.findUnique({ where: { id: paymentId } });
     expect(row?.status).toBe("succeeded");
     expect(row?.lastWebhookEventId).toBe(`evt_${tag}_1`);
+  });
+
+  it("charge.refunded is monotonic: an out-of-order OLDER refund can't move refundedAmount backward", async () => {
+    const paymentId = ids.payment!;
+    const piId = `pi_test_${tag}`;
+    // Apply the NEWER (higher cumulative) refund first: $30 of the $45.
+    await applyPaymentEvent(refundedEvent(`evt_${tag}_r2`, piId, 3000, false));
+    let row = await prisma.payment.findUnique({ where: { id: paymentId } });
+    expect(row?.refundedAmount).toBe(3000);
+    expect(row?.status).toBe("partially_refunded");
+
+    // Now a STALE/redelivered OLDER refund (lower cumulative $10) arrives. The
+    // monotonic guard must refuse it — refundedAmount stays 3000, not 1000.
+    await applyPaymentEvent(refundedEvent(`evt_${tag}_r1`, piId, 1000, false));
+    row = await prisma.payment.findUnique({ where: { id: paymentId } });
+    expect(row?.refundedAmount).toBe(3000); // NOT moved backward
+    expect(row?.status).toBe("partially_refunded");
+
+    // A genuinely newer/equal-or-higher refund (full $45) still applies forward.
+    await applyPaymentEvent(refundedEvent(`evt_${tag}_r3`, piId, 4500, true));
+    row = await prisma.payment.findUnique({ where: { id: paymentId } });
+    expect(row?.refundedAmount).toBe(4500);
+    expect(row?.status).toBe("refunded");
   });
 });
 
