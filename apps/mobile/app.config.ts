@@ -112,6 +112,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       "@react-native-google-signin/google-signin",
       { iosUrlScheme: GOOGLE_IOS_URL_SCHEME },
     ],
+    // GoogleSignIn 9.x pulls in AppCheckCore (Swift) + GoogleUtilities /
+    // RecaptchaInterop (no module maps); under Expo's static-library build that
+    // breaks `pod install` unless those transitive pods get modular headers.
+    "./plugins/withGoogleModularHeaders",
     // Keep LAST: makes fmt 11.0.2 (bundled by RN 0.81) compile under Xcode 26's
     // Clang, which Apple now requires for App Store builds. See the plugin.
     "./plugins/withFmtConstevalFix",
