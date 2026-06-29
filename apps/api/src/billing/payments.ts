@@ -275,12 +275,24 @@ async function reconcile(
       ? { stripePaymentIntentId: key.piId }
       : null;
   if (!where) return;
-  // Replay guard: skip if we've already applied this exact event to this row.
-  // Downgrade guard: skip if the row is already terminal/collected.
+  // Replay guard: skip ONLY if we've already applied this exact event to this
+  // row. Downgrade guard: skip if the row is already terminal/collected.
+  //
+  // NULL TRAP (this caused a prod outage): for a NULLABLE column, BOTH
+  // `NOT: { lastWebhookEventId: id }` AND `lastWebhookEventId: { not: id }`
+  // compile to SQL that is NULL — not TRUE — for a row whose value IS NULL, so a
+  // brand-new payment (lastWebhookEventId NULL = never reconciled) matched 0
+  // rows and the charge silently never reconciled (status stuck at
+  // requires_payment_method while the card SUCCEEDED on Stripe). The replay
+  // guard must EXPLICITLY treat NULL as "not yet seen → allow": match rows where
+  // the id is NULL OR differs from this event.
   const { count } = await prisma.payment.updateMany({
     where: {
       ...where,
-      NOT: { lastWebhookEventId: eventId },
+      OR: [
+        { lastWebhookEventId: null },
+        { lastWebhookEventId: { not: eventId } },
+      ],
       ...(noDowngradeFrom && noDowngradeFrom.length > 0
         ? { status: { notIn: noDowngradeFrom } }
         : {}),
