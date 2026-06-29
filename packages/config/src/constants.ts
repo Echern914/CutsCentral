@@ -46,6 +46,89 @@ export type IndustryKey = keyof typeof INDUSTRIES;
 export const INDUSTRY_KEYS = Object.keys(INDUSTRIES) as IndustryKey[];
 
 /**
+ * Self-reported visit cadence (Client.preferredCadence). Captured as one tap at
+ * the customer's first app open and used as a COLD-START seed for rebook timing
+ * until the client has enough visit history for a computed cadence (see
+ * NUDGE.minCompletedVisits). Keys mirror the Prisma `CadencePreference` enum 1:1.
+ * `days` feeds nextExpectedAt; `label`/`short` are the chip copy. Ordered most ->
+ * least frequent (the order the chips render in).
+ */
+export const CADENCE_OPTIONS = {
+  WEEKLY: { label: "Every week", short: "Weekly", days: 7 },
+  BIWEEKLY: { label: "Every 2 weeks", short: "2 weeks", days: 14 },
+  EVERY_3_WEEKS: { label: "Every 3 weeks", short: "3 weeks", days: 21 },
+  MONTHLY: { label: "Once a month", short: "Monthly", days: 30 },
+  OCCASIONAL: { label: "Every so often", short: "Sometimes", days: 56 },
+} as const;
+
+export type CadenceKey = keyof typeof CADENCE_OPTIONS;
+
+export const CADENCE_KEYS = Object.keys(CADENCE_OPTIONS) as CadenceKey[];
+
+/** Days to seed nextExpectedAt for a self-reported cadence. */
+export function cadenceToDays(key: CadenceKey): number {
+  return CADENCE_OPTIONS[key].days;
+}
+
+/**
+ * Loyalty status tiers (Client.loyaltyTier). Keys mirror the Prisma `LoyaltyTier`
+ * enum 1:1. Default thresholds key off lifetime COMPLETED visits; a shop may
+ * override these later (eventually a per-shop tier table). A client is in the
+ * HIGHEST tier whose `minVisits` they meet, or no tier below the first. Ordered
+ * low -> high. `color` is the accent shown on the rewards page + dashboard chip.
+ */
+export const LOYALTY_TIERS = {
+  BRONZE: { label: "Bronze", minVisits: 1, color: "#B8772F" },
+  SILVER: { label: "Silver", minVisits: 6, color: "#C7CBD1" },
+  GOLD: { label: "Gold", minVisits: 12, color: "#D4AF37" },
+} as const;
+
+export type LoyaltyTierKey = keyof typeof LOYALTY_TIERS;
+
+export const LOYALTY_TIER_KEYS = Object.keys(LOYALTY_TIERS) as LoyaltyTierKey[];
+
+/** The loyalty tier a client earns at a given lifetime completed-visit count (or null). */
+export function loyaltyTierForVisits(completedVisits: number): LoyaltyTierKey | null {
+  let earned: LoyaltyTierKey | null = null;
+  for (const key of LOYALTY_TIER_KEYS) {
+    if (completedVisits >= LOYALTY_TIERS[key].minVisits) earned = key;
+  }
+  return earned;
+}
+
+/**
+ * Coarse "how often do they come" buckets for the dashboard, derived from a
+ * client's cadence in DAYS (the computed medianIntervalDays, else the
+ * self-reported preferredCadence via CADENCE_OPTIONS). Display + light
+ * segmentation only — nudge timing still uses the precise interval. `maxDays` is
+ * the inclusive upper bound of the bucket; ordered tightest -> loosest.
+ */
+export const FREQUENCY_SEGMENTS = {
+  weekly: { label: "Weekly", maxDays: 10 },
+  biweekly: { label: "Every 2 wks", maxDays: 17 },
+  triweekly: { label: "Every 3 wks", maxDays: 24 },
+  monthly: { label: "Monthly", maxDays: 45 },
+  occasional: { label: "Occasional", maxDays: 3650 },
+} as const;
+
+export type FrequencySegmentKey = keyof typeof FREQUENCY_SEGMENTS;
+
+export const FREQUENCY_SEGMENT_KEYS = Object.keys(
+  FREQUENCY_SEGMENTS,
+) as FrequencySegmentKey[];
+
+/** Bucket a cadence (in days) into a coarse segment; null when no cadence is known. */
+export function frequencySegment(
+  days: number | null | undefined,
+): FrequencySegmentKey | null {
+  if (days == null) return null;
+  for (const key of FREQUENCY_SEGMENT_KEYS) {
+    if (days <= FREQUENCY_SEGMENTS[key].maxDays) return key;
+  }
+  return "occasional";
+}
+
+/**
  * The singular visit-noun for a vertical ("cut" | "appointment" | "session" |
  * "visit"). Falls back to a neutral "visit" for an unknown/empty industry, so
  * customer copy is never wrong (just generic). Used by the SMS/push nudge.
@@ -147,6 +230,15 @@ export const BACKFILL_MIN_DATE = "2015-01-01";
 
 /** Barber session cookie name (shared by api + web; plain constant, no node deps). */
 export const SESSION_COOKIE_NAME = "cb_session";
+
+/**
+ * Active-shop selection cookie (shared by api + web). For a manager who owns
+ * more than one shop, this NAMES which owned shop the dashboard is currently
+ * acting on. It is only ever a HINT: requireShop re-verifies that the named shop
+ * is owned by the session user and falls back to their first shop otherwise, so
+ * a forged value can never reach another tenant's data.
+ */
+export const ACTIVE_SHOP_COOKIE_NAME = "cb_active_shop";
 
 /**
  * Public shop page theme presets. The shop's accentColor (if set) overrides

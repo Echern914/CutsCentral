@@ -4,6 +4,10 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import * as SplashScreen from "expo-splash-screen";
 import * as Notifications from "expo-notifications";
+import {
+  useFonts,
+  BricolageGrotesque_700Bold,
+} from "@expo-google-fonts/bricolage-grotesque";
 
 /**
  * Root layout.
@@ -27,6 +31,12 @@ import * as Notifications from "expo-notifications";
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export default function RootLayout() {
+  // Brand display font (Bricolage Grotesque) for the wordmark, so mobile matches
+  // the web --font-display. We hold the native splash until it resolves - but on
+  // EITHER loaded OR error, so a font that never loads can never wedge the app on
+  // a permanent splash (mirrors this file's other launch-safety guards).
+  const [fontsLoaded, fontError] = useFonts({ BricolageGrotesque_700Bold });
+
   useEffect(() => {
     // Configure foreground notification behavior once, safely.
     try {
@@ -43,9 +53,12 @@ export default function RootLayout() {
     } catch {
       /* non-fatal */
     }
-    // Tree is mounted - reveal the app.
-    SplashScreen.hideAsync().catch(() => {});
   }, []);
+
+  useEffect(() => {
+    // Reveal the app once the tree is mounted AND the font has settled.
+    if (fontsLoaded || fontError) SplashScreen.hideAsync().catch(() => {});
+  }, [fontsLoaded, fontError]);
 
   return (
     <SafeAreaProvider>

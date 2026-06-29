@@ -1,6 +1,32 @@
 import type { NextFunction, Request, Response } from "express";
+import { ACTIVE_SHOP_COOKIE_NAME } from "@chairback/config";
 import { prisma, type Shop } from "@chairback/db";
 import { SESSION_COOKIE_NAME, sessionFromToken } from "../auth/session.js";
+
+/**
+ * Resolve which of an owner's shops is "active". A manager who owns several
+ * shops names one via the ACTIVE_SHOP_COOKIE_NAME cookie (set on the web origin,
+ * forwarded to the API). SECURITY: the cookie is only ever a HINT - we re-verify
+ * ownership here (id AND ownerId), so a forged/stale cookie naming someone
+ * else's shop resolves to null and we fall back to this owner's OWN first shop.
+ * Tenant access is therefore still derived solely from the session, never from a
+ * client-supplied id. Fallback order is deterministic (oldest shop first).
+ */
+export async function resolveOwnedShop(
+  userId: string,
+  requestedShopId?: string,
+): Promise<Shop | null> {
+  if (requestedShopId) {
+    const picked = await prisma.shop.findFirst({
+      where: { id: requestedShopId, ownerId: userId },
+    });
+    if (picked) return picked;
+  }
+  return prisma.shop.findFirst({
+    where: { ownerId: userId },
+    orderBy: { createdAt: "asc" },
+  });
+}
 
 /**
  * Auth middleware. requireUser resolves the session to req.userId. requireShop
@@ -68,7 +94,13 @@ export async function requireShop(
     res.status(401).json({ error: "unauthorized" });
     return;
   }
-  const shop = await prisma.shop.findFirst({ where: { ownerId: req.userId } });
+  // Honor the active-shop cookie (a manager switching between their own shops),
+  // re-verified against ownership inside resolveOwnedShop. Single-shop owners
+  // (everyone today) have no cookie and get their one shop unchanged.
+  const requestedShopId = req.cookies?.[ACTIVE_SHOP_COOKIE_NAME] as
+    | string
+    | undefined;
+  const shop = await resolveOwnedShop(req.userId, requestedShopId);
   if (!shop) {
     res.status(404).json({ error: "no_shop", message: "Create a shop first." });
     return;

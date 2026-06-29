@@ -3,6 +3,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState, useTransition } from "react";
 import { useFormState, useFormStatus } from "react-dom";
+import { LOYALTY_TIERS, LOYALTY_TIER_KEYS } from "@chairback/config/constants";
 import { Card } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
 import { addClientAction } from "../actions";
@@ -56,6 +57,19 @@ export function ClientsControls() {
           <option value="optedOut">Opted out</option>
           <option value="needsConsent">Needs SMS consent</option>
           <option value="archived">Archived</option>
+        </select>
+        <select
+          value={params.get("tier") ?? ""}
+          onChange={(e) => setParam("tier", e.target.value)}
+          className={`${field} w-full sm:w-auto`}
+          aria-label="Loyalty tier"
+        >
+          <option value="">All tiers</option>
+          {LOYALTY_TIER_KEYS.map((k) => (
+            <option key={k} value={k}>
+              {LOYALTY_TIERS[k].label}
+            </option>
+          ))}
         </select>
         <button
           onClick={() => {

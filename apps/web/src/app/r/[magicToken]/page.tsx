@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { APP_NAME } from "@chairback/config/constants";
+import { APP_NAME, type CadenceKey } from "@chairback/config/constants";
 import { apiPublicGet } from "@/lib/api";
 import { RewardsClient } from "./RewardsClient";
 
@@ -22,6 +22,23 @@ export interface RewardsData {
     pageSlug: string | null;
   };
   client: { firstName: string | null };
+  // Self-reported visit cadence. `preference` is null until the client answers
+  // the one-tap prompt; `computed` is true once there's enough visit history for
+  // the engine to derive a cadence (after which the prompt is moot).
+  cadence: {
+    preference: CadenceKey | null;
+    computed: boolean;
+  };
+  // Loyalty status tier by lifetime completed visits. `tier` is null below the
+  // first threshold; `nextTier` shows how many visits to the next one (or to the
+  // first tier for a brand-new client), and is null once the top tier is reached.
+  loyalty: {
+    tier: "BRONZE" | "SILVER" | "GOLD" | null;
+    label: string | null;
+    color: string | null;
+    visits: number;
+    nextTier: { label: string; visitsAway: number } | null;
+  };
   consent: {
     state: "opted_in" | "needs_consent" | "opted_out";
     hasPhone: boolean;

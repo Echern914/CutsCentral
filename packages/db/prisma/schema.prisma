@@ -350,6 +350,27 @@ model SquareConnection {
 
 //  Tenant-owned domain (every table carries shopId)
 
+// Self-reported visit cadence, captured as one tap at the customer's first app
+// open (skippable). Internal RANK only; the customer-facing label/day-count live
+// in CADENCE_OPTIONS (@chairback/config) so copy can change without a migration.
+enum CadencePreference {
+  WEEKLY // ~ every 7 days
+  BIWEEKLY // ~ every 14 days
+  EVERY_3_WEEKS // ~ every 21 days
+  MONTHLY // ~ every 30 days
+  OCCASIONAL // 6+ weeks / no fixed schedule
+}
+
+// Loyalty status tier. The enum is the internal RANK only; the display
+// label/color (and per-shop overrides later) come from LOYALTY_TIERS in
+// @chairback/config. Stamped by the loyalty engine from lifetime completed
+// visits; null = not yet computed / below the first tier.
+enum LoyaltyTier {
+  BRONZE
+  SILVER
+  GOLD
+}
+
 model Client {
   id               String    @id @default(cuid())
   shopId           String
@@ -386,6 +407,16 @@ model Client {
   medianIntervalDays Int?
   lastVisitAt        DateTime?
   nextExpectedAt     DateTime?
+
+  // Self-reported cadence captured at the customer's first app open (one tap,
+  // skippable). COLD-START SEED ONLY: the engine prefers the computed
+  // medianIntervalDays once the client clears NUDGE.minCompletedVisits; until
+  // then this seeds nextExpectedAt so a brand-new client gets a working rebook
+  // countdown on day one. null = never asked or skipped. Days via CADENCE_OPTIONS.
+  preferredCadence CadencePreference?
+  // Loyalty status tier, stamped by the loyalty engine from lifetime completed
+  // visits against LOYALTY_TIERS. null = not yet computed / below the first tier.
+  loyaltyTier      LoyaltyTier?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -578,27 +609,27 @@ enum PushKind {
 // writes); the send path reads it through forShop() (RLS-enforced). shopId is
 // always derived from the resolved client, never from the request.
 model PushSubscription {
-  id           String   @id @default(cuid())
-  shopId       String
-  shop         Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  clientId     String
-  client       Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  kind         PushKind @default(web)
+  id            String   @id @default(cuid())
+  shopId        String
+  shop          Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  clientId      String
+  client        Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  kind          PushKind @default(web)
   // WEB transport: the push service endpoint URL (FCM/Mozilla/Apple) + the keys
   // used to encrypt the payload. Null for expo rows. endpoint is unique so a
   // re-subscribe on the same browser upserts rather than duplicating.
-  endpoint     String?  @unique
-  p256dh       String? // client public key (base64url) for payload encryption
-  auth         String? // client auth secret (base64url) for payload encryption
+  endpoint      String?  @unique
+  p256dh        String? // client public key (base64url) for payload encryption
+  auth          String? // client auth secret (base64url) for payload encryption
   // EXPO transport: the Expo push token (ExponentPushToken[...]). Null for web
   // rows. Unique so re-registering the same device upserts.
-  expoPushToken String? @unique
-  userAgent    String? // captured at subscribe time, for debugging/pruning
+  expoPushToken String?  @unique
+  userAgent     String? // captured at subscribe time, for debugging/pruning
   // Dead-subscription pruning: bumped on a transient send error, reset on success.
   // A gone receipt (web 404/410, or an expo DeviceNotRegistered) deletes the row.
-  failureCount Int      @default(0)
-  createdAt    DateTime @default(now())
-  lastSeenAt   DateTime @default(now()) // refreshed on re-subscribe + successful send
+  failureCount  Int      @default(0)
+  createdAt     DateTime @default(now())
+  lastSeenAt    DateTime @default(now()) // refreshed on re-subscribe + successful send
 
   @@index([shopId, clientId]) // the send-path lookup ("subs for this client")
 }

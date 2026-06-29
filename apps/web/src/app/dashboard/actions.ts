@@ -2,7 +2,38 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { cookies, headers } from "next/headers";
+import { ACTIVE_SHOP_COOKIE_NAME } from "@chairback/config/constants";
 import { apiGet, apiSend } from "@/lib/api";
+import { sessionCookieDomain } from "@/lib/sessionCookieDomain";
+
+const ACTIVE_SHOP_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "lax",
+  path: "/",
+  maxAge: 60 * 60 * 24 * 30,
+} as const;
+
+/**
+ * Switch which owned shop the dashboard acts on (a manager with >1 shop). Writes
+ * the active-shop cookie onto our origin so it's forwarded to the API, which
+ * RE-VERIFIES ownership before honoring it — a stale/forged id simply falls back
+ * to the owner's first shop, never another tenant. Set host-only AND domain-wide
+ * (mirroring the session cookie) so API-origin navigations carry the selection.
+ * The picker only ever offers shops from the user's own `me.shops`.
+ */
+export async function switchShopAction(shopId: string): Promise<void> {
+  cookies().set(ACTIVE_SHOP_COOKIE_NAME, shopId, ACTIVE_SHOP_COOKIE_OPTIONS);
+  const domain = sessionCookieDomain(headers().get("host"));
+  if (domain) {
+    cookies().set(ACTIVE_SHOP_COOKIE_NAME, shopId, {
+      ...ACTIVE_SHOP_COOKIE_OPTIONS,
+      domain,
+    });
+  }
+  redirect("/dashboard");
+}
 
 export async function nudgeNowAction(clientId: string): Promise<{ ok: boolean }> {
   const res = await apiSend("POST", `/api/dashboard/nudge/${clientId}`);
