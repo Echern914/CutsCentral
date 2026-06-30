@@ -18,7 +18,7 @@ export interface ShopPageData {
   fontKey: string | null;
   layoutStyle: string | null;
   sectionOrder: string[];
-  bookingUrl: string;
+  bookingUrl: string | null;
   bookingMode: "link" | "acuity" | "native";
   takesRequests: boolean;
   punchesPerVisit: number;

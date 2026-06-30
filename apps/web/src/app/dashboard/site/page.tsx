@@ -24,7 +24,7 @@ export interface ShopPageSettings {
   rewardsSections: string[];
   takesRequests: boolean;
   notifyPhone: string | null;
-  bookingUrl: string;
+  bookingUrl: string | null;
   bookingMode: "link" | "acuity" | "native";
   punchesPerVisit: number;
 }

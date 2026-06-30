@@ -89,6 +89,18 @@ export async function runSweepAction(): Promise<SweepSummary | null> {
   return res.data;
 }
 
+export interface WinbackPreview {
+  summary: SweepSummary;
+  clients: { name: string; daysLapsed: number | null }[];
+}
+
+/** Dry-run the win-back ("Growth Agent") sweep: who WOULD be re-engaged, no send.
+ *  Preview-only - real win-back sends happen on the daily cron, not from here. */
+export async function winbackPreviewAction(): Promise<WinbackPreview | null> {
+  const res = await apiSend<WinbackPreview>("POST", "/api/dashboard/winback-preview");
+  return res.data;
+}
+
 export async function saveSettingsAction(
   _prev: { saved?: boolean; error?: string },
   formData: FormData,
@@ -96,7 +108,10 @@ export async function saveSettingsAction(
   const smsTemplate = String(formData.get("smsTemplate") ?? "").trim();
   const res = await apiSend("PATCH", "/api/shops/me", {
     name: String(formData.get("name") ?? "").trim() || undefined,
-    bookingUrl: String(formData.get("bookingUrl") ?? "").trim() || undefined,
+    // Send "" (not undefined) when blank so the API's clear-to-null branch fires
+    // - otherwise JSON.stringify drops the key and a barber can never REMOVE a
+    // booking link they previously set.
+    bookingUrl: String(formData.get("bookingUrl") ?? "").trim(),
     nudgeBufferDays: Number(formData.get("nudgeBufferDays") ?? 7),
     dailySendCap: Number(formData.get("dailySendCap") ?? 50),
     rebookWindowDays: Number(formData.get("rebookWindowDays") ?? 14),

@@ -10,8 +10,17 @@ export const SMS_PLACEHOLDERS = ["{firstName}", "{shop}", "{bookingUrl}", "{rewa
  * keyed by the vertical's service noun so a nail/spa client isn't texted about a
  * "cut". `industry` is optional → falls back to the neutral "visit".
  */
-export function defaultSmsTemplate(industry?: string | null): string {
+export function defaultSmsTemplate(industry?: string | null, hasBookingLink = true): string {
   const noun = serviceNounFor(industry);
+  // No external booking link: a single CTA to the rewards page (where the client
+  // can rebook/contact), instead of printing the same URL twice for "book" and
+  // "rewards".
+  if (!hasBookingLink) {
+    return (
+      `Hey {firstName}, it's been a while since your last ${noun} at {shop}! ` +
+      "Tap to come back: {rewardsUrl} Reply STOP to opt out."
+    );
+  }
   return (
     `Hey {firstName}, it's been a while since your last ${noun} at {shop}! ` +
     "Book your next one: {bookingUrl} • Your rewards: {rewardsUrl} Reply STOP to opt out."
@@ -29,18 +38,23 @@ export const DEFAULT_SMS_TEMPLATE = defaultSmsTemplate("barber");
 export function buildNudgeBody(params: {
   firstName: string | null;
   shopName: string;
-  bookingUrl: string;
+  bookingUrl: string | null;
   magicToken: string;
   template?: string | null;
   industry?: string | null;
 }): string {
   const rewardsUrl = `${env.APP_BASE_URL}/r/${params.magicToken}`;
-  const tpl = params.template?.trim() || defaultSmsTemplate(params.industry);
+  const hasLink = Boolean(params.bookingUrl?.trim());
+  // The default template drops the duplicate "book" line when there's no link;
+  // a CUSTOM template is honored verbatim (its {bookingUrl} falls back below).
+  const tpl = params.template?.trim() || defaultSmsTemplate(params.industry, hasLink);
 
+  // No external booking link => point "Book" at the client's rewards page.
+  const bookingUrl = params.bookingUrl?.trim() || rewardsUrl;
   const body = tpl
     .replaceAll("{firstName}", params.firstName ?? "there")
     .replaceAll("{shop}", params.shopName)
-    .replaceAll("{bookingUrl}", params.bookingUrl)
+    .replaceAll("{bookingUrl}", bookingUrl)
     .replaceAll("{rewardsUrl}", rewardsUrl);
 
   return withStopNotice(body);
@@ -50,13 +64,78 @@ export function buildNudgeBody(params: {
 export function previewNudgeBody(
   template: string | null,
   shopName: string,
-  bookingUrl: string,
+  bookingUrl: string | null,
   industry?: string | null,
 ): string {
   return buildNudgeBody({
     firstName: "Marcus",
     shopName,
-    bookingUrl: bookingUrl || "https://book.example.com",
+    // Sample link for the preview when the shop has none (the real send falls
+    // back to the rewards page, but the preview shows a representative URL).
+    bookingUrl: bookingUrl?.trim() || "https://book.example.com",
+    magicToken: "PREVIEW",
+    template,
+    industry,
+  });
+}
+
+/**
+ * The built-in win-back default (used when a shop hasn't set winbackTemplate).
+ * Warmer + longer-absence framing than the regular rebooking nudge, since the
+ * recipient is DEEPLY lapsed (well past their cadence) rather than just overdue.
+ * Same placeholders + STOP-notice safety net as the nudge default.
+ */
+export function defaultWinbackTemplate(industry?: string | null, hasBookingLink = true): string {
+  const noun = serviceNounFor(industry);
+  const opener =
+    `Hey {firstName}, we've missed you at {shop}! ` +
+    `It's been a while since your last ${noun} - we'd love to see you back. `;
+  // No booking link: a single rewards-page CTA instead of the same URL twice.
+  if (!hasBookingLink) {
+    return opener + "Tap to come back: {rewardsUrl} Reply STOP to opt out.";
+  }
+  return opener + "Book any time: {bookingUrl} • Your rewards: {rewardsUrl} Reply STOP to opt out.";
+}
+
+/**
+ * Win-back SMS copy. Same substitution + STOP-notice rules as buildNudgeBody,
+ * but defaults to the warmer win-back template. A shop's winbackTemplate (when
+ * set) overrides it.
+ */
+export function buildWinbackBody(params: {
+  firstName: string | null;
+  shopName: string;
+  bookingUrl: string | null;
+  magicToken: string;
+  template?: string | null;
+  industry?: string | null;
+}): string {
+  const rewardsUrl = `${env.APP_BASE_URL}/r/${params.magicToken}`;
+  const hasLink = Boolean(params.bookingUrl?.trim());
+  const tpl = params.template?.trim() || defaultWinbackTemplate(params.industry, hasLink);
+
+  // No external booking link => point "Book" at the client's rewards page.
+  const bookingUrl = params.bookingUrl?.trim() || rewardsUrl;
+  const body = tpl
+    .replaceAll("{firstName}", params.firstName ?? "there")
+    .replaceAll("{shop}", params.shopName)
+    .replaceAll("{bookingUrl}", bookingUrl)
+    .replaceAll("{rewardsUrl}", rewardsUrl);
+
+  return withStopNotice(body);
+}
+
+/** Render a win-back template for a settings preview (sample data). */
+export function previewWinbackBody(
+  template: string | null,
+  shopName: string,
+  bookingUrl: string | null,
+  industry?: string | null,
+): string {
+  return buildWinbackBody({
+    firstName: "Marcus",
+    shopName,
+    bookingUrl: bookingUrl?.trim() || "https://book.example.com",
     magicToken: "PREVIEW",
     template,
     industry,
@@ -184,6 +263,20 @@ export function buildNudgePush(params: {
   };
 }
 
+/** Win-back push copy: warmer "we've missed you" for the deeply-lapsed client. */
+export function buildWinbackPush(params: {
+  firstName: string | null;
+  shopName: string;
+  industry?: string | null;
+}): PushCopy {
+  const who = params.firstName ?? "there";
+  const noun = serviceNounFor(params.industry);
+  return {
+    title: `We've missed you, ${who}!`,
+    body: `It's been a while since your last ${noun} at ${params.shopName}. Tap to book.`,
+  };
+}
+
 /**
  * Render an appointment instant as a short, human "Sat, Jun 28 at 2:30 PM" in
  * the shop's timezone. Falls back to the raw locale string on a bad zone (never
@@ -256,7 +349,7 @@ export function buildAppointmentReminderBody(params: {
 export function buildPromoBody(params: {
   firstName: string | null;
   shopName: string;
-  bookingUrl: string;
+  bookingUrl: string | null;
   title: string;
   description?: string | null;
   code?: string | null;
@@ -266,6 +359,8 @@ export function buildPromoBody(params: {
   ];
   if (params.description?.trim()) parts.push(params.description.trim());
   if (params.code?.trim()) parts.push(`Show code ${params.code.trim()}.`);
-  parts.push(`Book: ${params.bookingUrl}`);
+  // Only add the booking CTA when the shop has an external link; with no link a
+  // promo is informational (the client replies / walks in).
+  if (params.bookingUrl?.trim()) parts.push(`Book: ${params.bookingUrl.trim()}`);
   return withStopNotice(parts.join(" "));
 }

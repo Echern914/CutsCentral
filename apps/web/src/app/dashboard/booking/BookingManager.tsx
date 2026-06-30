@@ -66,6 +66,19 @@ export function BookingManager({
         </Card>
       )}
 
+      {/* Link mode with no link = a public page with no way to book. Nudge the
+          barber to add a link OR switch to ChairBack's own booking. */}
+      {shop.bookingMode === "link" && !shop.bookingUrl && (
+        <Card className="border-gold/30 bg-gold/5 px-5 py-4">
+          <p className="text-sm text-gold">
+            You haven&apos;t added a booking link yet. Paste your Acuity/Booksy/Square
+            link below, or switch to <strong>Run booking on ChairBack</strong> to
+            take appointments right here — otherwise customers can only request a
+            time.
+          </p>
+        </Card>
+      )}
+
       <div className="flex items-center gap-1 overflow-x-auto">
         {tabs.map((t) => (
           <button

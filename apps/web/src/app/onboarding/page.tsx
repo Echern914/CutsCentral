@@ -65,10 +65,13 @@ export default function OnboardingShopPage() {
             <input
               name="bookingUrl"
               type="url"
-              placeholder="Booking link (Acuity, Booksy, Square…)"
-              required
+              placeholder="Booking link (optional — Acuity, Booksy, Square…)"
               className={field}
             />
+            <p className="-mt-1 text-xs text-muted">
+              No booking link? Leave this blank — you can run booking right here
+              on ChairBack (set it up in the Booking tab after signup).
+            </p>
             <select name="timezone" defaultValue="America/New_York" className={field}>
               <option value="America/New_York">Eastern (New York)</option>
               <option value="America/Chicago">Central (Chicago)</option>
