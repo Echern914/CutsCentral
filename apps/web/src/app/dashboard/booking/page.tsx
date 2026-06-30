@@ -7,7 +7,7 @@ export const metadata: Metadata = { title: "Booking" };
 export interface BookingShop {
   slug: string | null;
   bookingMode: "link" | "acuity" | "native" | "square";
-  bookingUrl: string;
+  bookingUrl: string | null;
   bookingLeadHours: number;
   bookingMaxDays: number;
   bookingBufferMin: number;

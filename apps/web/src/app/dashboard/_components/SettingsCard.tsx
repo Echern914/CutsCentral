@@ -7,7 +7,7 @@ import { saveSettingsAction, smsPreviewAction } from "../actions";
 
 export interface ShopSettings {
   name: string;
-  bookingUrl: string;
+  bookingUrl: string | null;
   nudgeBufferDays: number;
   dailySendCap: number;
   rebookWindowDays: number;
@@ -56,11 +56,12 @@ export function SettingsCard({ settings }: { settings: ShopSettings }) {
             <input name="name" defaultValue={settings.name} className={`mt-1 ${field}`} />
           </label>
           <label className={labelCls}>
-            Acuity booking link
+            Booking link <span className="text-muted">(optional)</span>
             <input
               name="bookingUrl"
               type="url"
-              defaultValue={settings.bookingUrl}
+              defaultValue={settings.bookingUrl ?? ""}
+              placeholder="Acuity, Booksy, Square… or leave blank"
               className={`mt-1 ${field}`}
             />
           </label>

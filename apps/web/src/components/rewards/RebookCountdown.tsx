@@ -52,7 +52,7 @@ export function RebookCountdown({
   theme,
 }: {
   rebook: RebookInfo;
-  bookingUrl: string;
+  bookingUrl: string | null;
   theme: RewardsTheme;
 }) {
   const reduce = useReducedMotion();

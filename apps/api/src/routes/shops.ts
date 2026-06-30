@@ -77,7 +77,10 @@ const galleryItemSchema = z.object({
 const createShopSchema = z
   .object({
     name: z.string().min(1).max(120),
-    bookingUrl: httpUrl(500),
+    // Optional: a shop may have no external booking link. "" / omitted => null,
+    // and "Book" CTAs fall back to the rewards page. A provided value must still
+    // be a real http(s) URL (XSS guard - it's rendered as <a href>).
+    bookingUrl: httpUrl(500).nullish().or(z.literal("")),
     timezone: z.string().min(1).default(DEFAULTS.timezone),
     // Vertical: flavors the seeded reward + copy, nothing structural.
     industry: z.enum(INDUSTRY_KEYS as [string, ...string[]]).default("other"),
@@ -219,6 +222,8 @@ shopsRouter.post("/", requireUser, async (req, res) => {
   // smsAttested is a gate, not a Shop column - pull it out before the spread.
   const { rewardLabel, rewardThreshold, smsAttested: _smsAttested, ...shopData } =
     parsed.data;
+  // Normalize an omitted/empty booking link to null (no external booking source).
+  shopData.bookingUrl = shopData.bookingUrl?.trim() ? shopData.bookingUrl.trim() : null;
   const industry = INDUSTRIES[shopData.industry as IndustryKey] ?? INDUSTRIES.other;
   const slug = await availableSlug(parsed.data.name);
   // Shop + its first menu reward land together or not at all.
@@ -282,6 +287,11 @@ shopsRouter.patch("/me", requireUser, requireShop, async (req, res) => {
   const { gallery, ...rest } = parsed.data;
   // Normalize empty strings on optional branding/page fields to null.
   const data: Record<string, unknown> = { ...rest };
+  // Booking link is optional: blank/whitespace clears it (no external booking
+  // source; "Book" CTAs fall back to the rewards page).
+  if (typeof data.bookingUrl === "string" && !data.bookingUrl.trim()) {
+    data.bookingUrl = null;
+  }
   if (data.logoUrl === "") data.logoUrl = null;
   if (data.accentColor === "") data.accentColor = null;
   if (data.bio === "") data.bio = null;
@@ -575,7 +585,7 @@ function serializeShop(shop: {
   name: string;
   timezone: string;
   industry: string;
-  bookingUrl: string;
+  bookingUrl: string | null;
   punchesPerVisit: number;
   nudgeBufferDays: number;
   dailySendCap: number;

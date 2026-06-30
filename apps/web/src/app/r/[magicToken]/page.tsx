@@ -7,7 +7,7 @@ import { RewardsClient } from "./RewardsClient";
 export interface RewardsData {
   shop: {
     name: string;
-    bookingUrl: string;
+    bookingUrl: string | null;
     logoUrl: string | null;
     accentColor: string | null;
     // The barber's page identity (PAGE_THEMES / PAGE_FONTS / LAYOUT_STYLES keys).
