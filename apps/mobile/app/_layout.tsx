@@ -71,6 +71,7 @@ export default function RootLayout() {
       >
         <Stack.Screen name="index" />
         <Stack.Screen name="customer" />
+        <Stack.Screen name="login" />
         <Stack.Screen name="barber" />
       </Stack>
     </SafeAreaProvider>

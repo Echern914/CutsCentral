@@ -28,11 +28,35 @@ export function dashboardUrl(): string {
   return `${WEB_ORIGIN}/dashboard`;
 }
 
+/**
+ * Native-app session handoff URL. After native Apple/Google sign-in the app has
+ * the cb_session JWT but it's in the app's fetch cookie jar, not the WebView's.
+ * The barber WebView loads THIS url with the JWT as a Bearer header; the route
+ * sets the cb_session cookie and redirects to /dashboard, so the WebView lands
+ * authenticated without any native cookie module.
+ */
+export function appAuthUrl(): string {
+  return `${WEB_ORIGIN}/app-auth`;
+}
+
 /** Persisted-choice keys. */
 export const STORAGE = {
   mode: "cb.mode", // "barber" | "manager" | "customer"
   lastToken: "cb.customerToken", // last magic token seen, for cold launches
+  // The barber/manager cb_session JWT from native sign-in. The WebView's httpOnly
+  // cookie can't be read by native, so we keep a copy here to forward as the push
+  // registration bearer.
+  session: "cb.session",
 } as const;
+
+/**
+ * The Google iOS OAuth client id (from app.config `extra`). Passed to
+ * GoogleSignin.configure({ iosClientId }); with no webClientId, the resulting
+ * idToken's `aud` equals this value - exactly what the backend verifies against
+ * its GOOGLE_OAUTH_IOS_CLIENT_ID env.
+ */
+export const GOOGLE_IOS_CLIENT_ID: string =
+  (Constants.expoConfig?.extra?.googleIosClientId as string | undefined) ?? "";
 
 /**
  * The 3-way role picker (app/index.tsx) is LIVE: "barber" and "manager" route to
