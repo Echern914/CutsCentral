@@ -415,21 +415,25 @@ export function RewardsClient({
             </motion.div>
           )}
 
-          {/* CTA */}
-          <motion.div variants={fadeUp} className="text-center">
-            <a
-              href={shop.bookingUrl}
-              className="block w-full py-3.5 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01]"
-              style={{
-                backgroundColor: accent,
-                color: t.onAccent,
-                boxShadow: `0 8px 30px -10px ${accent}AA`,
-                borderRadius: t.buttonRadius,
-              }}
-            >
-              Book your next cut
-            </a>
-          </motion.div>
+          {/* CTA - only when the shop has an external booking link. Without one
+              there's nowhere to send them, so we hide the button rather than
+              render a dead link (they're already on their rewards page). */}
+          {shop.bookingUrl && (
+            <motion.div variants={fadeUp} className="text-center">
+              <a
+                href={shop.bookingUrl}
+                className="block w-full py-3.5 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01]"
+                style={{
+                  backgroundColor: accent,
+                  color: t.onAccent,
+                  boxShadow: `0 8px 30px -10px ${accent}AA`,
+                  borderRadius: t.buttonRadius,
+                }}
+              >
+                Book your next cut
+              </a>
+            </motion.div>
+          )}
 
           {/* Rewards the client has claimed - their loyalty payoff, shown only
               once they've redeemed at least one. */}

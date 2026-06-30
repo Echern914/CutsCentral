@@ -46,6 +46,14 @@ export function ShopPageClient({
   // external bookingUrl, and the lead-request form is replaced by real booking.
   const bookIsNative = data.bookingMode === "native";
   const bookHref = bookIsNative ? `/book/${data.slug}` : data.bookingUrl;
+  // A shop may have NO booking destination (no native, no external link). Then
+  // we hide the "Book" CTAs and lean on the request form instead.
+  const hasBooking = bookIsNative || Boolean(data.bookingUrl);
+  // Show the request form when the barber enabled it OR when there's no booking
+  // path at all - so a no-link shop with requests off still gives clients a way
+  // to reach out, instead of a dead page with no CTA. (Native booking replaces
+  // the form entirely - it IS self-serve booking.)
+  const showRequestForm = !bookIsNative && (data.takesRequests || !hasBooking);
 
   const fontKey: PageFontKey =
     (data.fontKey as PageFontKey) in PAGE_FONTS ? (data.fontKey as PageFontKey) : DEFAULT_PAGE_FONT;
@@ -168,7 +176,7 @@ export function ShopPageClient({
         {/* Primary CTA. Native booking and the lead form are mutually exclusive:
             native is real self-serve booking, so it replaces the request form. */}
         <motion.div variants={fadeUp} className="mt-6">
-          {data.takesRequests && !bookIsNative ? (
+          {showRequestForm ? (
             <>
               <RequestForm
                 slug={data.slug}
@@ -184,18 +192,21 @@ export function ShopPageClient({
                   buttonRadius: layout.buttonRadius,
                 }}
               />
-              <a
-                href={preview ? undefined : bookHref}
-                onClick={preview ? (e) => e.preventDefault() : undefined}
-                className="mt-3 block text-center text-xs underline-offset-2 hover:underline"
-                style={{ color: theme.muted }}
-              >
-                Or book online instantly →
-              </a>
+              {/* The "or book online" shortcut only makes sense with a real link. */}
+              {hasBooking && (
+                <a
+                  href={preview ? undefined : bookHref ?? undefined}
+                  onClick={preview ? (e) => e.preventDefault() : undefined}
+                  className="mt-3 block text-center text-xs underline-offset-2 hover:underline"
+                  style={{ color: theme.muted }}
+                >
+                  Or book online instantly →
+                </a>
+              )}
             </>
-          ) : (
+          ) : hasBooking ? (
             <a
-              href={preview ? undefined : bookHref}
+              href={preview ? undefined : bookHref ?? undefined}
               onClick={preview ? (e) => e.preventDefault() : undefined}
               className="block w-full py-3.5 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01]"
               style={{
@@ -207,7 +218,7 @@ export function ShopPageClient({
             >
               Book an appointment
             </a>
-          )}
+          ) : null}
         </motion.div>
 
         {/* Movable sections, in the shop's chosen order */}
@@ -215,14 +226,16 @@ export function ShopPageClient({
 
         {/* Bottom CTA + footer */}
         <motion.footer variants={fadeUp} className="mt-10 text-center">
-          <a
-            href={preview ? undefined : bookHref}
-            onClick={preview ? (e) => e.preventDefault() : undefined}
-            className="inline-block px-8 py-3 text-sm font-semibold"
-            style={{ border: `1px solid ${accent}`, color: accent, borderRadius: layout.buttonRadius }}
-          >
-            Book with {data.name}
-          </a>
+          {hasBooking && (
+            <a
+              href={preview ? undefined : bookHref ?? undefined}
+              onClick={preview ? (e) => e.preventDefault() : undefined}
+              className="inline-block px-8 py-3 text-sm font-semibold"
+              style={{ border: `1px solid ${accent}`, color: accent, borderRadius: layout.buttonRadius }}
+            >
+              Book with {data.name}
+            </a>
+          )}
           {/* Growth loop: every shop page quietly markets the platform. */}
           <a
             href={preview ? undefined : `/?ref=${encodeURIComponent(data.slug)}`}

@@ -108,7 +108,10 @@ export async function saveSettingsAction(
   const smsTemplate = String(formData.get("smsTemplate") ?? "").trim();
   const res = await apiSend("PATCH", "/api/shops/me", {
     name: String(formData.get("name") ?? "").trim() || undefined,
-    bookingUrl: String(formData.get("bookingUrl") ?? "").trim() || undefined,
+    // Send "" (not undefined) when blank so the API's clear-to-null branch fires
+    // - otherwise JSON.stringify drops the key and a barber can never REMOVE a
+    // booking link they previously set.
+    bookingUrl: String(formData.get("bookingUrl") ?? "").trim(),
     nudgeBufferDays: Number(formData.get("nudgeBufferDays") ?? 7),
     dailySendCap: Number(formData.get("dailySendCap") ?? 50),
     rebookWindowDays: Number(formData.get("rebookWindowDays") ?? 14),

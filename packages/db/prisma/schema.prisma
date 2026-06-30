@@ -100,7 +100,10 @@ model Shop {
   owner               User    @relation("ShopOwner", fields: [ownerId], references: [id])
   name                String // appears in SMS body
   timezone            String  @default("America/New_York")
-  bookingUrl          String
+  // Optional: a shop may have no external booking link (not on Acuity/Square/etc).
+  // When null, "Book" CTAs fall back to the client's ChairBack rewards page and
+  // the public page shows the "request a time" form instead of a Book button.
+  bookingUrl          String?
   // DEPRECATED single-reward config: superseded by the Reward table (each shop
   // designs its own menu). Columns kept so the previously deployed API keeps
   // working through the migration window; no current code reads them.

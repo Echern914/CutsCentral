@@ -55,6 +55,34 @@ describe("default nudge copy is vertical-aware", () => {
     expect(body).toContain("your fade is calling");
   });
 
+  it("with NO booking link, a CUSTOM {bookingUrl} falls back to the rewards page", () => {
+    const body = buildNudgeBody({
+      firstName: "Sam",
+      shopName: "Polished",
+      bookingUrl: null, // shop has no external booking link
+      magicToken: "tok123",
+      template: "Book here: {bookingUrl}",
+    });
+    // The "Book" link points at the client's rewards page, not a dead/empty URL.
+    expect(body).toContain("/r/tok123");
+    expect(body).not.toContain("Book here:  "); // no empty substitution
+  });
+
+  it("with NO booking link, the DEFAULT template uses ONE rewards CTA (not the URL twice)", () => {
+    const body = buildNudgeBody({
+      firstName: "Sam",
+      shopName: "Polished",
+      bookingUrl: null,
+      magicToken: "tok123",
+      // no custom template -> the no-link default
+    });
+    // The rewards URL appears exactly once (no duplicate "Book … • Your rewards …").
+    const occurrences = body.split("/r/tok123").length - 1;
+    expect(occurrences).toBe(1);
+    expect(body).not.toContain("Book your next one");
+    expect(body).toContain("Reply STOP to opt out.");
+  });
+
   it("push title uses the industry noun", () => {
     expect(buildNudgePush({ firstName: "Sam", shopName: "Polished", industry: "nails" }).title).toContain(
       "next appointment",
