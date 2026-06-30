@@ -164,7 +164,18 @@ export default function LoginScreen() {
           {error && <Text style={styles.error}>{error}</Text>}
 
           <Pressable
-            onPress={() => router.replace("/")}
+            onPress={async () => {
+              // Clear the saved "barber"/"manager" role first, otherwise the
+              // picker immediately redirects right back here (it auto-routes a
+              // returning user to their saved mode). Clearing it shows the
+              // 3-way picker so they can choose "customer".
+              try {
+                await AsyncStorage.removeItem(STORAGE.mode);
+              } catch {
+                // best-effort; still go back to the picker
+              }
+              router.replace("/");
+            }}
             style={styles.back}
             accessibilityRole="button"
           >
