@@ -46,7 +46,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   // Bumped so the launch-hang-fixed build is visually distinguishable from the
   // earlier broken one in TestFlight (the iOS buildNumber is auto-incremented by
   // EAS remotely, so this user-facing version is the reliable marker).
-  version: "1.0.2",
+  version: "1.0.3",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
