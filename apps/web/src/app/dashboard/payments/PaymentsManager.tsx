@@ -7,6 +7,7 @@ import { cn } from "@/lib/cn";
 import type { PaymentStatus } from "./actions";
 import {
   savePaymentSettingsAction,
+  savePayDirectAction,
   startConnectOnboardingAction,
 } from "./actions";
 
@@ -22,6 +23,25 @@ export function PaymentsManager({ initial }: { initial: PaymentStatus }) {
   const [cancelFeePct, setCancelFeePct] = useState(
     Math.round(initial.cancelFeeBps / 100),
   );
+
+  // Fee-free pay-direct (Zelle/Venmo/Cash App) — independent of Stripe Connect.
+  const [pd, setPd] = useState(initial.payDirect);
+  function setPdField<K extends keyof typeof pd>(k: K, v: (typeof pd)[K]) {
+    setPd((prev) => ({ ...prev, [k]: v }));
+  }
+  function savePayDirect() {
+    start(async () => {
+      const r = await savePayDirectAction({
+        enabled: pd.enabled,
+        zelle: pd.zelle ?? "",
+        venmo: pd.venmo ?? "",
+        cashApp: pd.cashApp ?? "",
+        note: pd.note ?? "",
+      });
+      if (r.ok) toast("Pay-direct settings saved", "success");
+      else toast("Couldn't save", "error");
+    });
+  }
 
   const { connect, connectAvailable } = initial;
   const ready = connect.chargesEnabled;
@@ -51,12 +71,86 @@ export function PaymentsManager({ initial }: { initial: PaymentStatus }) {
     });
   }
 
+  const payDirectCard = (
+    <Card className="p-5">
+      <CardHeader
+        title="Pay you directly — no fees"
+        subtitle="Let clients send payment straight to your Zelle, Venmo, or Cash App. Money lands in your bank with zero ChairBack or card fees."
+      />
+      <label className="mt-3 flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={pd.enabled}
+          onChange={(e) => setPdField("enabled", e.target.checked)}
+          className="h-4 w-4 accent-gold"
+        />
+        Show my direct-payment info on the booking confirmation
+      </label>
+      {pd.enabled && (
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <label className="block">
+            <span className={labelCls}>Zelle (email or phone)</span>
+            <input
+              className={field}
+              placeholder="you@email.com or 555-123-4567"
+              value={pd.zelle ?? ""}
+              onChange={(e) => setPdField("zelle", e.target.value)}
+            />
+          </label>
+          <label className="block">
+            <span className={labelCls}>Venmo</span>
+            <input
+              className={field}
+              placeholder="@your-handle"
+              value={pd.venmo ?? ""}
+              onChange={(e) => setPdField("venmo", e.target.value)}
+            />
+          </label>
+          <label className="block">
+            <span className={labelCls}>Cash App</span>
+            <input
+              className={field}
+              placeholder="$yourcashtag"
+              value={pd.cashApp ?? ""}
+              onChange={(e) => setPdField("cashApp", e.target.value)}
+            />
+          </label>
+          <label className="block">
+            <span className={labelCls}>Note (optional)</span>
+            <input
+              className={field}
+              placeholder="e.g. Zelle or cash on arrival"
+              value={pd.note ?? ""}
+              onChange={(e) => setPdField("note", e.target.value)}
+            />
+          </label>
+        </div>
+      )}
+      <p className="mt-3 text-[11px] leading-relaxed text-muted">
+        Heads up: ChairBack only shows this info — it doesn&apos;t process or
+        confirm these payments (Zelle, Venmo, and Cash App don&apos;t allow that).
+        You&apos;ll confirm payment yourself, the same as cash.
+      </p>
+      <button
+        onClick={savePayDirect}
+        disabled={pending}
+        className="mt-4 self-start rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+      >
+        {pending ? "Saving…" : "Save pay-direct settings"}
+      </button>
+    </Card>
+  );
+
+  // Pay-direct needs NO Stripe, so it must show even when Connect is unavailable.
   if (!connectAvailable) {
     return (
-      <Card className="p-5 text-sm text-muted">
-        Online payments aren&apos;t enabled on this platform yet. Customers pay in
-        person for now.
-      </Card>
+      <div className="flex flex-col gap-5">
+        <Card className="p-5 text-sm text-muted">
+          Card payments aren&apos;t enabled on this platform yet — but you can still
+          collect payment directly below, with no fees.
+        </Card>
+        {payDirectCard}
+      </div>
     );
   }
 
@@ -169,6 +263,9 @@ export function PaymentsManager({ initial }: { initial: PaymentStatus }) {
       >
         {pending ? "Saving…" : "Save payment settings"}
       </button>
+
+      {/* Fee-free direct payment — shown alongside card payments. */}
+      {payDirectCard}
     </div>
   );
 }

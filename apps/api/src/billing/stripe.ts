@@ -101,6 +101,10 @@ interface CheckoutShop {
   name: string;
   ownerId: string;
   stripeCustomerId: string | null;
+  // The shop's existing app-level trial end (set at signup). When still in the
+  // future, the Stripe subscription trials until THIS instant so the shop isn't
+  // charged until their real trial ends - and isn't granted a fresh trial on top.
+  trialEndsAt: Date | null;
 }
 
 /** Reuse the shop's Stripe customer or create one keyed back via metadata. */
@@ -126,12 +130,27 @@ async function ensureCustomer(shop: CheckoutShop): Promise<string> {
 export async function createCheckoutUrl(shop: CheckoutShop): Promise<string | null> {
   const env = apiEnv();
   const customer = await ensureCustomer(shop);
+
+  // Pay AFTER the trial: if the shop's app-level trial hasn't ended yet, start the
+  // Stripe subscription as `trialing` until that exact instant, so the first charge
+  // lands the day their trial expires (not today). Stripe needs trial_end at least
+  // ~48h out and in the future; if the trial already lapsed (or is too close), omit
+  // it and bill now. We use trial_end (a timestamp to the existing trialEndsAt)
+  // rather than trial_period_days so subscribing mid-trial never grants a fresh
+  // full trial on top of the one they've already partly used.
+  const MIN_TRIAL_LEEWAY_MS = 48 * 60 * 60 * 1000; // Stripe requires trial_end >48h out
+  const trialEndMs = shop.trialEndsAt?.getTime() ?? 0;
+  const useTrial = trialEndMs > Date.now() + MIN_TRIAL_LEEWAY_MS;
+
   const session = await stripe().checkout.sessions.create({
     mode: "subscription",
     customer,
     line_items: [{ price: env.STRIPE_PRICE_ID!, quantity: 1 }],
     client_reference_id: shop.id,
-    subscription_data: { metadata: { shopId: shop.id } },
+    subscription_data: {
+      metadata: { shopId: shop.id },
+      ...(useTrial ? { trial_end: Math.floor(trialEndMs / 1000) } : {}),
+    },
     allow_promotion_codes: true,
     success_url: `${env.APP_BASE_URL}/dashboard/billing?checkout=success`,
     cancel_url: `${env.APP_BASE_URL}/dashboard/billing?checkout=canceled`,

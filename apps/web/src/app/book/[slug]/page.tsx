@@ -13,6 +13,14 @@ export interface BookShopData {
     accentColor: string | null;
     bookingLeadHours: number;
     bookingMaxDays: number;
+    // Fee-free direct-payment handles (display-only); null when the barber hasn't
+    // turned it on. Shown on the confirmation so the customer can pay directly.
+    payDirect: {
+      zelle: string | null;
+      venmo: string | null;
+      cashApp: string | null;
+      note: string | null;
+    } | null;
   };
   staff: { id: string; name: string; bio: string | null; imageUrl: string | null }[];
   services: {
