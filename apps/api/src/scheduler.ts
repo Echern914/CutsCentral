@@ -9,6 +9,7 @@ import { linkBookingsToNudges } from "./engines/attribution.js";
 import { promoteFulfilledAppointments } from "./engines/appointmentPromotion.js";
 import { runAppointmentReminders } from "./engines/appointmentReminders.js";
 import { refreshExpiringSquareTokens } from "./engines/squareTokenRefresh.js";
+import { runTrialReminders } from "./engines/trialReminder.js";
 
 const env = apiEnv();
 
@@ -96,6 +97,17 @@ export function startScheduler(): void {
     void withLease("square-token-refresh", 10 * MINUTE, () =>
       refreshExpiringSquareTokens(),
     ).catch((err) => logger.error({ err }, "square token refresh sweep failed"));
+  });
+
+  // Trial-expiry reminder EMAILS to shop owners, daily at 14:00 (mid-morning
+  // across US timezones - a business email, not a customer text, so quiet hours
+  // don't apply). Hard no-op until BOTH billing (STRIPE_*) and email
+  // (RESEND_API_KEY/EMAIL_FROM) are configured; idempotent per stage via the
+  // monotonic Shop.trialReminderStage compare-and-set.
+  cron.schedule("0 14 * * *", () => {
+    void withLease("trial-reminders", 10 * MINUTE, () => runTrialReminders()).catch(
+      (err) => logger.error({ err }, "trial reminder sweep failed"),
+    );
   });
 
   logger.info("scheduler started");
