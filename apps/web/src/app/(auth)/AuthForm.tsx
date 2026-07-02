@@ -28,6 +28,7 @@ export function AuthForm({
   action,
   googleAvailable,
   googleStartUrl,
+  forgotPasswordAvailable = false,
   initialError,
   next,
 }: {
@@ -38,6 +39,12 @@ export function AuthForm({
   ) => Promise<{ error?: string }>;
   googleAvailable: boolean;
   googleStartUrl: string;
+  /**
+   * Shows the "Forgot password?" link (login only). Discovered the same way as
+   * googleAvailable - the API says whether email is configured - so the link
+   * never dead-ends while the reset flow is dark.
+   */
+  forgotPasswordAvailable?: boolean;
   /** Error carried in from a redirect (e.g. a failed Google sign-in). */
   initialError?: string;
   /** Deep link to return to after login (set by the middleware redirect). */
@@ -102,6 +109,16 @@ export function AuthForm({
               minLength={8}
               className={field}
             />
+            {!isSignup && forgotPasswordAvailable && (
+              <p className="-mt-1 text-right">
+                <Link
+                  href="/forgot-password"
+                  className="text-xs text-muted transition-colors duration-200 ease-out hover:text-gold"
+                >
+                  Forgot password?
+                </Link>
+              </p>
+            )}
             {isSignup && (
               <label className="mt-1 flex items-start gap-2.5 text-xs leading-relaxed text-muted">
                 <input
