@@ -108,6 +108,15 @@ const apiSchema = z.object({
   // own secret. The connect route tries both secrets when verifying.
   STRIPE_PLATFORM_WEBHOOK_SECRET: z.string().min(1).optional(),
 
+  // Transactional email via Resend (optional - while EITHER is unset,
+  // emailEnabled() is false: sendEmail() is a logged no-op, the forgot-password
+  // link hides itself, and the trial-reminder sweep stays dark. Setting both
+  // flips email on without a code change - mirrors the STRIPE_* seam above).
+  // EMAIL_FROM is the From header ("ChairBack <hello@getchairback.com>" or a
+  // bare address); its domain must be DNS-verified in Resend before sends work.
+  RESEND_API_KEY: z.string().min(1).optional(),
+  EMAIL_FROM: z.string().min(1).optional(),
+
   // Supabase Storage for shop photo uploads (logo / hero / gallery). Optional:
   // while any of these is unset, the upload endpoint returns 503 and the page
   // editor falls back to paste-a-URL, so the app still boots and works without
