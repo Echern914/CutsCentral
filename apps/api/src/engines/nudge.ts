@@ -181,7 +181,7 @@ async function doSweepShop(
   // silently excluded every push-only installer.
   const candidates = await db.client.findMany({
     where: {
-      medianIntervalDays: { not: null },
+      medianIntervalDays: { gt: 0 }, // gt also excludes legacy stored-0 rows (no real cadence)
       lastVisitAt: { not: null },
       archivedAt: null, // an archived (hidden) client is never swept/texted
       OR: [

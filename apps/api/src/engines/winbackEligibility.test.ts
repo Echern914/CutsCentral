@@ -34,6 +34,13 @@ describe("isWinbackEligible", () => {
     expect(isWinbackEligible({ ...base, medianIntervalDays: null })).toBe(false);
   });
 
+  it("W2: a 0 median (same-day visit bursts) is no cadence, not instantly-lapsed", () => {
+    // Regression: 0 * multiplier = 0 made everyone 1+ day out "deeply lapsed".
+    expect(isWinbackEligible({ ...base, medianIntervalDays: 0, daysSinceLastVisit: 1 })).toBe(
+      false,
+    );
+  });
+
   it("W2: merely overdue (past median+buffer but NOT past the multiple) is NOT a win-back", () => {
     // 45 days is a regular-nudge candidate (> 37) but not deeply lapsed (<= 90).
     expect(isWinbackEligible({ ...base, daysSinceLastVisit: 45 })).toBe(false);

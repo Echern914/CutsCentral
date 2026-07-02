@@ -38,6 +38,33 @@ export function isAcuityCheckboxChecked(value: AcuityFormValue["value"]): boolea
   return true; // "yes" (probe-confirmed) and any other non-empty affirmative
 }
 
+// Affirmative answers for NON-checkbox widgets (dropdown/radio/text fallback).
+// Consent is a legal record, so the lenient "any non-negative non-empty string
+// is a yes" rule above is only safe for a real checkbox (which echoes its label
+// when ticked). A dropdown answered "No thanks" or "Maybe later" must NOT
+// register consent - require an explicit yes here.
+const AFFIRMATIVE_ANSWERS = new Set([
+  "yes",
+  "y",
+  "true",
+  "1",
+  "agree",
+  "i agree",
+  "opt in",
+  "opt-in",
+  "opted in",
+  "sign me up",
+  "checked",
+  "on",
+]);
+
+export function isAffirmativeConsentAnswer(value: AcuityFormValue["value"]): boolean {
+  if (value === null || value === undefined) return false;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value === 1;
+  return AFFIRMATIVE_ANSWERS.has(value.trim().toLowerCase());
+}
+
 /** Does this field look like the consent checkbox? Widget first, text fallback. */
 function isConsentField(field: AcuityFormValue): boolean {
   if (Number(field.fieldWidget) === CHECKBOX_WIDGET) {
@@ -61,9 +88,14 @@ export function appointmentHasSmsConsent(appt: AcuityAppointment): boolean {
   if (!forms || forms.length === 0) return false;
   for (const form of forms) {
     for (const field of form.values ?? []) {
-      if (isConsentField(field) && isAcuityCheckboxChecked(field.value)) {
-        return true;
-      }
+      if (!isConsentField(field)) continue;
+      // Real checkbox: lenient (a ticked box echoes its label). Anything else
+      // (dropdown/radio/text a barber improvised): explicit affirmative only.
+      const checked =
+        Number(field.fieldWidget) === CHECKBOX_WIDGET
+          ? isAcuityCheckboxChecked(field.value)
+          : isAffirmativeConsentAnswer(field.value);
+      if (checked) return true;
     }
   }
   return false;

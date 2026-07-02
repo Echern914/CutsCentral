@@ -44,8 +44,14 @@ export interface WinbackEligibilityInput {
 export function isWinbackDue(input: WinbackEligibilityInput): boolean {
   // W1
   if (input.completedVisitCount < WINBACK.minCompletedVisits) return false;
-  // W2 - deeply overdue (a MULTIPLE of cadence, not median + buffer)
-  if (input.medianIntervalDays === null || input.daysSinceLastVisit === null) {
+  // W2 - deeply overdue (a MULTIPLE of cadence, not median + buffer). A
+  // non-positive median (same-day visit bursts) is "no cadence", never "due
+  // immediately" - median*multiplier would be 0 and text a day-old client.
+  if (
+    input.medianIntervalDays === null ||
+    input.medianIntervalDays <= 0 ||
+    input.daysSinceLastVisit === null
+  ) {
     return false;
   }
   if (

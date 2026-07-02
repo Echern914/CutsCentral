@@ -701,7 +701,26 @@ dashboardRouter.post("/clients/:clientId/opt", async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  await db.client.update({ where: { id: client.id }, data: { optedOut } });
+  // An SMS STOP is client-owned: only the client can reverse it (by texting
+  // START or from their rewards page). Letting the dashboard clear it is the
+  // re-contact-after-STOP scenario TCPA fines target ($500-1500/text).
+  if (!optedOut && client.optedOut && client.optOutSource === "sms_stop") {
+    res.status(409).json({
+      error: "sms_stop_locked",
+      message:
+        "This client texted STOP. Only they can opt back in - by texting START or from their rewards page.",
+    });
+    return;
+  }
+  // Stamp "barber" only when actually flipping out - re-sending optedOut:true
+  // for an already-out client must not overwrite an existing source (turning
+  // an "sms_stop" row into a barber-reversible one).
+  if (optedOut !== client.optedOut) {
+    await db.client.update({
+      where: { id: client.id },
+      data: { optedOut, optOutSource: optedOut ? "barber" : null },
+    });
+  }
   res.json({ ok: true, optedOut });
 });
 
@@ -865,13 +884,40 @@ dashboardRouter.post("/clients/bulk", smsLimiter, async (req, res) => {
   }
   const db = forShop(shop.id);
 
-  if (action === "optOut" || action === "optIn") {
-    const optedOut = action === "optOut";
+  if (action === "optOut") {
+    // Only stamp "barber" on rows actually flipping out - an already-opted-out
+    // row keeps its original source (overwriting "sms_stop" would make the
+    // client barber-reversible, which STOP rows must never be).
     const { count } = await prisma.client.updateMany({
-      where: { shopId: shop.id, id: { in: clientIds } },
-      data: { optedOut },
+      where: { shopId: shop.id, id: { in: clientIds }, optedOut: false },
+      data: { optedOut: true, optOutSource: "barber" },
     });
     res.json({ ok: true, updated: count });
+    return;
+  }
+
+  if (action === "optIn") {
+    // A client who texted STOP can only be re-enabled by the client (START
+    // webhook / rewards page) - the dashboard must not clear it. NULL-inclusive
+    // OR: a bare not-filter drops NULL rows (legacy opt-outs) in Prisma.
+    const { count } = await prisma.client.updateMany({
+      where: {
+        shopId: shop.id,
+        id: { in: clientIds },
+        optedOut: true,
+        OR: [{ optOutSource: null }, { optOutSource: { not: "sms_stop" } }],
+      },
+      data: { optedOut: false, optOutSource: null },
+    });
+    const lockedByStop = await prisma.client.count({
+      where: {
+        shopId: shop.id,
+        id: { in: clientIds },
+        optedOut: true,
+        optOutSource: "sms_stop",
+      },
+    });
+    res.json({ ok: true, updated: count, lockedByStop });
     return;
   }
 
@@ -1499,7 +1545,7 @@ async function buildAtRiskRows(shopId: string, bufferDays: number, now: Date) {
       optedOut: false,
       smsConsentAt: { not: null },
       phone: { not: null },
-      medianIntervalDays: { not: null },
+      medianIntervalDays: { gt: 0 }, // gt also excludes legacy stored-0 rows (no real cadence)
       lastVisitAt: { not: null },
       archivedAt: null, // archived clients drop off the at-risk list
     },

@@ -92,6 +92,28 @@ describe("manual visit logging", () => {
     expect(Date.now() - last).toBeLessThan(DAY);
   });
 
+  it("same-day visits produce NO cadence (median 0 must not mean instantly-overdue)", async () => {
+    const created = await request(app)
+      .post("/api/dashboard/clients")
+      .set("Cookie", cookieA)
+      .send({ firstName: "Sameday" });
+    expect(created.status).toBe(201);
+    const when = new Date(Date.now() - 2 * DAY).toISOString();
+    for (let i = 0; i < 2; i++) {
+      const res = await request(app)
+        .post(`/api/dashboard/clients/${created.body.id}/visits`)
+        .set("Cookie", cookieA)
+        .send({ when });
+      expect(res.status).toBe(201);
+    }
+    const detail = await request(app)
+      .get(`/api/dashboard/clients/${created.body.id}`)
+      .set("Cookie", cookieA);
+    // Regression: this used to store 0, which made the client "deeply lapsed"
+    // one day later and win-back-textable the day after they were just in.
+    expect(detail.body.client.medianIntervalDays).toBeNull();
+  });
+
   it("respects earn rules for the logged service", async () => {
     const rule = await request(app)
       .post("/api/loyalty/rules")

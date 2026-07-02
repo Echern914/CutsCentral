@@ -192,7 +192,7 @@ async function doSweepShopWinback(
   // push-vs-SMS and the deeply-lapsed W2 bar.
   const candidates = await db.client.findMany({
     where: {
-      medianIntervalDays: { not: null },
+      medianIntervalDays: { gt: 0 }, // gt also excludes legacy stored-0 rows (no real cadence)
       lastVisitAt: { not: null },
       archivedAt: null,
       OR: [

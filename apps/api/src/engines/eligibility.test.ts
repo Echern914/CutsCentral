@@ -31,6 +31,12 @@ describe("isNudgeEligible", () => {
     expect(isNudgeEligible({ ...base, medianIntervalDays: null })).toBe(false);
   });
 
+  it("R2: a 0 median (same-day visit bursts) is no cadence, not instantly-overdue", () => {
+    expect(isNudgeEligible({ ...base, medianIntervalDays: 0, daysSinceLastVisit: 10 })).toBe(
+      false,
+    );
+  });
+
   it("R2: not overdue yet (within median + buffer)", () => {
     expect(isNudgeEligible({ ...base, daysSinceLastVisit: 36 })).toBe(false); // 36 <= 37
   });

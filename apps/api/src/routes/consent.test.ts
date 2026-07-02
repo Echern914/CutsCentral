@@ -14,16 +14,17 @@ const app = createApp();
 const email = `consent-${randomToken(6)}@test.local`.toLowerCase();
 const password = "supersecret123";
 let shopId: string;
+let barberCookie: string;
 
 async function signupAndShop(): Promise<void> {
   const signup = await request(app)
     .post("/api/auth/signup")
     .send({ email, password, name: "Consent", smsAttested: true });
   expect(signup.status).toBe(201);
-  const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
+  barberCookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)
     .post("/api/shops")
-    .set("Cookie", cookie)
+    .set("Cookie", barberCookie)
     .send({ name: "Consent Cuts", bookingUrl: "https://consent.test", smsAttested: true });
   expect(shop.status).toBe(201);
   shopId = shop.body.id;
@@ -181,5 +182,108 @@ describe("unknown token", () => {
     expect(
       (await request(app).post(`/api/rewards/${bogus}/opt-out`).send({})).status,
     ).toBe(404);
+  });
+});
+
+describe("STOP lock (optOutSource)", () => {
+  /** Simulate an inbound Twilio keyword (signature bypassed under VITEST). */
+  async function inbound(from: string, body: string) {
+    return request(app)
+      .post("/webhooks/twilio/inbound")
+      .type("form")
+      .send({ From: from, Body: body });
+  }
+
+  async function clientByToken(token: string) {
+    return prisma.client.findUnique({ where: { magicToken: token } });
+  }
+
+  it("STOP stamps optOutSource=sms_stop; the dashboard cannot clear it", async () => {
+    const phone = "+13025550270";
+    const token = await mkClient({ phone, consentSource: "barber_attest" });
+    const stop = await inbound(phone, "STOP");
+    expect(stop.status).toBe(200);
+    let client = await clientByToken(token);
+    expect(client?.optedOut).toBe(true);
+    expect(client?.optOutSource).toBe("sms_stop");
+
+    // Barber "Opt back in" must be refused - re-contact after STOP is the
+    // $500-1500/text TCPA scenario.
+    const optIn = await request(app)
+      .post(`/api/dashboard/clients/${client!.id}/opt`)
+      .set("Cookie", barberCookie)
+      .send({ optedOut: false });
+    expect(optIn.status).toBe(409);
+    expect(optIn.body.error).toBe("sms_stop_locked");
+    client = await clientByToken(token);
+    expect(client?.optedOut).toBe(true);
+  });
+
+  it("a barber-side opt-out stays barber-reversible", async () => {
+    const token = await mkClient({ phone: "+13025550271" });
+    const client = await clientByToken(token);
+    const out = await request(app)
+      .post(`/api/dashboard/clients/${client!.id}/opt`)
+      .set("Cookie", barberCookie)
+      .send({ optedOut: true });
+    expect(out.status).toBe(200);
+    expect((await clientByToken(token))?.optOutSource).toBe("barber");
+
+    const backIn = await request(app)
+      .post(`/api/dashboard/clients/${client!.id}/opt`)
+      .set("Cookie", barberCookie)
+      .send({ optedOut: false });
+    expect(backIn.status).toBe(200);
+    const after = await clientByToken(token);
+    expect(after?.optedOut).toBe(false);
+    expect(after?.optOutSource).toBeNull();
+  });
+
+  it("bulk optIn skips STOPped clients (and reports them) but clears the rest", async () => {
+    const stopPhone = "+13025550272";
+    const stoppedToken = await mkClient({ phone: stopPhone });
+    await inbound(stopPhone, "STOP");
+    // Legacy row: opted out before optOutSource existed (source null).
+    const legacyToken = await mkClient({ phone: "+13025550273", optedOut: true });
+
+    const stopped = await clientByToken(stoppedToken);
+    const legacy = await clientByToken(legacyToken);
+    const res = await request(app)
+      .post("/api/dashboard/clients/bulk")
+      .set("Cookie", barberCookie)
+      .send({ action: "optIn", clientIds: [stopped!.id, legacy!.id] });
+    expect(res.status).toBe(200);
+    expect(res.body.updated).toBe(1); // only the legacy row
+    expect(res.body.lockedByStop).toBe(1);
+    expect((await clientByToken(stoppedToken))?.optedOut).toBe(true);
+    expect((await clientByToken(legacyToken))?.optedOut).toBe(false);
+  });
+
+  it("the client CAN clear their own STOP: START keyword or rewards opt-in", async () => {
+    // Via START.
+    const phoneA = "+13025550274";
+    const tokenA = await mkClient({ phone: phoneA, consentSource: "acuity_intake" });
+    await inbound(phoneA, "STOP");
+    await inbound(phoneA, "START");
+    const viaStart = await clientByToken(tokenA);
+    expect(viaStart?.optedOut).toBe(false);
+    expect(viaStart?.optOutSource).toBeNull();
+
+    // Via rewards self-serve.
+    const phoneB = "+13025550275";
+    const tokenB = await mkClient({ phone: phoneB, consentSource: "acuity_intake" });
+    await inbound(phoneB, "STOP");
+    const res = await request(app).post(`/api/rewards/${tokenB}/opt-in`).send({});
+    expect(res.status).toBe(200);
+    const viaRewards = await clientByToken(tokenB);
+    expect(viaRewards?.optedOut).toBe(false);
+    expect(viaRewards?.optOutSource).toBeNull();
+  });
+
+  it("rewards self-serve opt-out records client_self_serve, not a STOP lock", async () => {
+    const token = await mkClient({ phone: "+13025550276", consentSource: "manual" });
+    const res = await request(app).post(`/api/rewards/${token}/opt-out`).send({});
+    expect(res.status).toBe(200);
+    expect((await clientByToken(token))?.optOutSource).toBe("client_self_serve");
   });
 });

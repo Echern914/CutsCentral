@@ -103,4 +103,39 @@ describe("appointmentHasSmsConsent", () => {
       ),
     ).toBe(true);
   });
+
+  it("fallback (non-checkbox) widget: a negative-but-non-empty answer is NOT consent", () => {
+    // A dropdown/radio the barber improvised on a consent-named field. The
+    // lenient checkbox rule would read "No thanks" as consent - the fallback
+    // path must require an explicit affirmative instead.
+    for (const value of ["No thanks", "maybe later", "nope", "ask me next time"]) {
+      expect(
+        appointmentHasSmsConsent(
+          appt([
+            {
+              id: 1,
+              name: "Intake",
+              values: [{ fieldWidget: 2, name: CONSENT_Q, value }],
+            },
+          ]),
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it("fallback (non-checkbox) widget: an explicit affirmative IS consent", () => {
+    for (const value of ["Yes", "I agree", "opt in"]) {
+      expect(
+        appointmentHasSmsConsent(
+          appt([
+            {
+              id: 1,
+              name: "Intake",
+              values: [{ fieldWidget: 2, name: CONSENT_Q, value }],
+            },
+          ]),
+        ),
+      ).toBe(true);
+    }
+  });
 });

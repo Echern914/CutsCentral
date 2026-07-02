@@ -38,8 +38,14 @@ export interface EligibilityInput {
 export function isNudgeDueByCadence(input: EligibilityInput): boolean {
   // R1
   if (input.completedVisitCount < NUDGE.minCompletedVisits) return false;
-  // R2
-  if (input.medianIntervalDays === null || input.daysSinceLastVisit === null) {
+  // R2. A non-positive median (same-day visit bursts) is "no cadence yet",
+  // not "overdue after buffer days" - cadence.ts stores null for those, but
+  // guard legacy 0 rows here too.
+  if (
+    input.medianIntervalDays === null ||
+    input.medianIntervalDays <= 0 ||
+    input.daysSinceLastVisit === null
+  ) {
     return false;
   }
   if (

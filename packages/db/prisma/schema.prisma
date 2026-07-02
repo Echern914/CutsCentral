@@ -404,6 +404,11 @@ model Client {
   phone            String? // E.164
   email            String?
   optedOut         Boolean   @default(false)
+  // Why optedOut is set: "sms_stop" (client texted STOP - only the client can
+  // reverse it, via START or their rewards page; the dashboard may NOT),
+  // "client_self_serve" (rewards-page opt-out), "barber" (dashboard toggle),
+  // or null (not opted out / legacy row from before this column existed).
+  optOutSource     String?
   // SMS consent (TCPA). A client is textable only when optedOut == false AND
   // smsConsentAt != null. optedOut is the live STOP/START gate; smsConsentAt is
   // the proof-of-opt-in gate. New clients (e.g. synced from Acuity) have no
