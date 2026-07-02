@@ -92,6 +92,29 @@ model User {
   updatedAt     DateTime  @updatedAt
 
   shops Shop[] @relation("ShopOwner") // one today; FK clean for N later
+
+  passwordResetTokens PasswordResetToken[]
+}
+
+// One-shot forgot-password tokens. Only the sha256 of the token is stored - the
+// raw value exists solely inside the emailed link, so a DB leak can't reset
+// anyone's password. Rows are short-lived (30 min expiry, deleted when a newer
+// request supersedes them) and single-use (usedAt stamped atomically on redeem).
+//
+// Non-tenant table (keyed to User, the global login identity): RLS is ENABLED
+// with NO policy in the migration - deny-all for the Supabase data API roles,
+// while the postgres owner the app connects as bypasses RLS. Matches the
+// 20260609000000 non-tenant lockdown pattern. NOT force-RLS.
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique // sha256 hex of the emailed token; never the raw value
+  expiresAt DateTime
+  usedAt    DateTime? // stamped on redeem; non-null = spent, can never be replayed
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
 }
 
 model Shop {
@@ -150,6 +173,12 @@ model Shop {
   // Premium regardless of Stripe - independent of trial/subscription, survives
   // Stripe going live, and is excluded from paying-revenue counts. Operator-only.
   compAccess           Boolean   @default(false)
+  // Trial-expiry reminder emails: the highest stage already sent (0 = none,
+  // 1 = "a week left", 2 = "ends tomorrow", 3 = "trial ended"). Monotonic - the
+  // sweep only ever advances it (compare-and-set BEFORE sending), so each stage
+  // emails at most once no matter how many times the daily job runs. See
+  // engines/trialReminder.ts.
+  trialReminderStage   Int       @default(0)
 
   // Public shop page (/s/[slug]) - each barber's own mini-site.
   slug              String?  @unique // URL handle; backfilled from name

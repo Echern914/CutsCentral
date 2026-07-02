@@ -12,7 +12,12 @@ export default async function LoginPage({
 }: {
   searchParams: { error?: string; next?: string };
 }) {
-  const res = await apiPublicGet<{ available: boolean }>("/api/auth/google/available");
+  // Capability discovery, same pattern for both: the API says what's
+  // configured, the form only renders entry points that will actually work.
+  const [google, forgot] = await Promise.all([
+    apiPublicGet<{ available: boolean }>("/api/auth/google/available"),
+    apiPublicGet<{ available: boolean }>("/api/auth/password-reset/available"),
+  ]);
   const initialError = searchParams.error
     ? (ERROR_COPY[searchParams.error] ?? "Sign-in failed. Please try again.")
     : undefined;
@@ -20,8 +25,9 @@ export default async function LoginPage({
     <AuthForm
       mode="login"
       action={loginAction}
-      googleAvailable={res.data?.available ?? false}
+      googleAvailable={google.data?.available ?? false}
       googleStartUrl={`${API_BASE}/api/auth/google/start`}
+      forgotPasswordAvailable={forgot.data?.available ?? false}
       initialError={initialError}
       next={searchParams.next}
     />
