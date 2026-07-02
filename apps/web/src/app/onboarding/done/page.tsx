@@ -28,8 +28,9 @@ export default async function OnboardingDonePage() {
       <Card className="mt-4 flex flex-col items-center gap-4 p-8 text-center">
         {!status?.connected ? (
           <p className="text-sm text-muted">
-            Acuity isn&apos;t connected yet. You can connect it anytime from your
-            dashboard settings.
+            No booking platform connected yet. You can connect Acuity or Square
+            anytime from the Booking tab - or use ChairBack&apos;s own booking
+            page instead.
           </p>
         ) : status.visitCount === 0 ? (
           <>

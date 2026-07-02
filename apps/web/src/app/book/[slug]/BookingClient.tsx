@@ -156,6 +156,10 @@ export function BookingClient({ data }: { data: BookShopData }) {
           // Refresh availability so the taken slot disappears.
           if (serviceId && staffId) loadSlots(serviceId, staffId);
           setSlot(null);
+        } else if (res.error === "no_active_access") {
+          setError(
+            `Online booking is paused for ${data.shop.name} right now. Please contact the shop directly to book.`,
+          );
         } else {
           setError("Something went wrong. Please try again.");
         }
@@ -267,6 +271,30 @@ export function BookingClient({ data }: { data: BookShopData }) {
               accent={accent}
             />
           )}
+        </div>
+      </main>
+    );
+  }
+
+  // ---- Booking paused (lapsed shop) - honest notice instead of a flow that
+  // would dead-end with a 403 at the final submit. ----
+  if (data.shop.bookingPaused) {
+    return (
+      <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-5 py-10 text-offwhite">
+        <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
+          {data.shop.logoUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={data.shop.logoUrl}
+              alt={data.shop.name}
+              className="mx-auto mb-3 h-14 w-14 rounded-full object-cover"
+            />
+          ) : null}
+          <h1 className="font-display text-2xl">Online booking is paused</h1>
+          <p className="mt-2 text-sm text-muted">
+            {data.shop.name} isn&apos;t taking online bookings right now. Please
+            contact the shop directly to book your next appointment.
+          </p>
         </div>
       </main>
     );
@@ -461,7 +489,8 @@ export function BookingClient({ data }: { data: BookShopData }) {
               <span>
                 Text me appointment confirmations, reminders, and rewards
                 updates (a few messages per visit). Msg &amp; data rates may
-                apply. Reply HELP for help, STOP to opt out. See our{" "}
+                apply. Reply HELP for help, STOP to opt out. Consent is not a
+                condition of purchase. See our{" "}
                 <Link
                   href="/sms"
                   target="_blank"

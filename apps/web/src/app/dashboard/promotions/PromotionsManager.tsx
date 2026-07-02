@@ -227,8 +227,8 @@ function PromoRow({ promo }: { promo: Promo }) {
               disabled={pending}
               onClick={() =>
                 startTransition(async () => {
-                  const s = await blastPromoAction(promo.id, audience, true);
-                  if (s) setPreview(s);
+                  const r = await blastPromoAction(promo.id, audience, true);
+                  if (r.summary) setPreview(r.summary);
                   else toast("Could not preview", "error");
                 })
               }
@@ -247,10 +247,15 @@ function PromoRow({ promo }: { promo: Promo }) {
                 disabled={pending || preview.sent === 0}
                 onClick={() =>
                   startTransition(async () => {
-                    const s = await blastPromoAction(promo.id, audience, false);
+                    const r = await blastPromoAction(promo.id, audience, false);
                     setBlastOpen(false);
                     setPreview(null);
-                    if (s) toast(`Sent ${s.sent} text${s.sent === 1 ? "" : "s"}`, "success");
+                    if (r.summary)
+                      toast(`Sent ${r.summary.sent} text${r.summary.sent === 1 ? "" : "s"}`, "success");
+                    else if (r.error === "subscription_required")
+                      toast("Promo blasts are a Premium feature - upgrade from the Billing page", "error");
+                    else if (r.error === "quiet_hours")
+                      toast("Texting is paused 9pm-8am (client local time). Try again in the morning.", "error");
                     else toast("Send failed", "error");
                   })
                 }

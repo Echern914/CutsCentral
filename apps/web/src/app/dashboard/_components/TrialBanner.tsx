@@ -25,8 +25,9 @@ export async function TrialBanner() {
       <div className="mx-auto mt-3 w-full max-w-6xl px-4">
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-gold/30 bg-gold/10 px-4 py-2.5 text-xs text-gold sm:text-sm">
           <span>
-            You&apos;re on the Free plan. Go Premium (${b.priceMonthlyUsd}/mo) to
-            text your at-risk clients and run promo blasts.
+            You&apos;re on the Free plan — client texts and your online booking
+            page are paused. Go Premium (${b.priceMonthlyUsd}/mo) to turn them
+            back on.
           </span>
           <Link
             href="/dashboard/billing"

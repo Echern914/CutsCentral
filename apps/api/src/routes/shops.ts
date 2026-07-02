@@ -397,6 +397,9 @@ publicPageRouter.get("/:slug", async (req, res) => {
     name: shop.name,
     slug: shop.slug,
     bio: shop.bio,
+    // For vertical-correct copy on the page + OG description ("book your next
+    // cut" is wrong for a nail studio).
+    industry: shop.industry,
     theme: shop.theme,
     logoUrl: shop.logoUrl,
     heroImageUrl: shop.heroImageUrl,

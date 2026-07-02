@@ -96,6 +96,15 @@ export function AccountCard({
         </a>
       </div>
 
+      {/* Support */}
+      <p className="mb-4 text-xs text-muted">
+        Stuck or found a bug? Email{" "}
+        <a href="mailto:support@getchairback.com" className="text-gold hover:underline">
+          support@getchairback.com
+        </a>{" "}
+        - a human reads every message.
+      </p>
+
       {/* Danger zone */}
       <div className="rounded-xl border border-danger-soft/30 p-4">
         <p className="text-sm font-medium text-danger-soft">Danger zone</p>

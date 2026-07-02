@@ -58,13 +58,13 @@ export async function blastPromoAction(
   promoId: string,
   audience: "all" | "atRisk",
   dryRun: boolean,
-): Promise<BlastSummary | null> {
+): Promise<{ summary: BlastSummary | null; error?: string }> {
   const res = await apiSend<BlastSummary>("POST", `/api/promos/${promoId}/blast`, {
     audience,
     dryRun,
   });
   if (!dryRun) revalidatePath("/dashboard/promotions");
-  return res.data;
+  return { summary: res.data, error: res.error };
 }
 
 export async function recordPromoUseAction(

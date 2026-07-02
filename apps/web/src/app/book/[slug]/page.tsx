@@ -13,6 +13,9 @@ export interface BookShopData {
     accentColor: string | null;
     bookingLeadHours: number;
     bookingMaxDays: number;
+    // True when the shop's subscription/trial has lapsed: the create POST
+    // would 403, so the UI shows a "booking paused" notice instead of the flow.
+    bookingPaused?: boolean;
     // Fee-free direct-payment handles (display-only); null when the barber hasn't
     // turned it on. Shown on the confirmation so the customer can pay directly.
     payDirect: {

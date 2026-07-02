@@ -77,7 +77,18 @@ export async function signupAction(
     smsAttested: true,
   });
   if (!result.ok) {
-    return { error: result.error === "email_taken" ? "That email is already registered." : "Could not sign up." };
+    // Actionable messages for the two fixable inputs; generic for the rest.
+    const email = String(formData.get("email") ?? "");
+    const password = String(formData.get("password") ?? "");
+    const error =
+      result.error === "email_taken"
+        ? "That email is already registered. Try signing in instead."
+        : !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+          ? "That doesn't look like a valid email address."
+          : password.length < 8
+            ? "Password must be at least 8 characters."
+            : "Could not sign up. Please try again.";
+    return { error };
   }
   applySessionCookie(result.setCookie);
   redirect("/onboarding");

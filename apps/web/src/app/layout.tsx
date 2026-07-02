@@ -18,12 +18,29 @@ const display = Bricolage_Grotesque({
 });
 
 export const metadata: Metadata = {
+  // Absolute base for OG/twitter URLs - without it, sharing any page renders a
+  // bare link (no card) in iMessage/Instagram/X, which is where barbers share.
+  metadataBase: new URL("https://getchairback.com"),
   title: {
     default: `${APP_NAME}: loyalty & rebooking for barbershops, salons & studios`,
     template: `%s | ${APP_NAME}`,
   },
   description:
     "Automatic loyalty punch cards and perfectly-timed rebooking texts for barbershops, salons, and studios. Syncs with your Acuity or Square scheduling.",
+  openGraph: {
+    type: "website",
+    siteName: APP_NAME,
+    title: `${APP_NAME}: loyalty & rebooking for barbershops, salons & studios`,
+    description:
+      "Automatic loyalty punch cards and perfectly-timed rebooking texts. 0% commission - you keep 100% of your revenue and own your client list.",
+    url: "https://getchairback.com",
+  },
+  twitter: {
+    card: "summary",
+    title: `${APP_NAME}: keep your chair full`,
+    description:
+      "Automatic loyalty punch cards and perfectly-timed rebooking texts for barbershops, salons, and studios.",
+  },
   // Declaring `icons` turns OFF Next's auto-injection of the icon.svg file
   // convention, so list BOTH here. The favicon (icon.svg, still served at
   // /icon.svg) plus an Apple touch icon from public/ (the apple-icon.svg file

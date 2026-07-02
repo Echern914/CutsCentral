@@ -27,11 +27,14 @@ const FREE_FEATURES = [
   "At-risk radar: see exactly who’s overdue",
 ];
 
-// Premium — the outbound layer that actually brings clients back.
+// Premium — the outbound layer that actually brings clients back. (Acuity/
+// Square visit SYNC is free - the paid part is what we DO with the synced
+// calendar: texts + your own booking page.)
 const PREMIUM_FEATURES = [
   "Smart “time to rebook” texts to at-risk clients",
+  "Win-back texts that recover lapsed clients automatically",
+  "Your own online booking page with confirmation + reminder texts",
   "Promo blasts with results you can attribute",
-  "Automatic visit tracking via Acuity sync",
   "Everything in Free, always included",
 ];
 
