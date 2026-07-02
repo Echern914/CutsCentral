@@ -10,6 +10,7 @@ import { pinoHttp } from "pino-http";
 import { apiEnv } from "@chairback/config";
 import { logger } from "./logger.js";
 import { authRouter } from "./routes/auth.js";
+import { passwordResetRouter } from "./routes/passwordReset.js";
 import { healthRouter } from "./routes/health.js";
 import { publicPageRouter, shopsRouter } from "./routes/shops.js";
 import { uploadRouter } from "./routes/upload.js";
@@ -84,6 +85,9 @@ export function createApp(): Express {
 
   // (3) JSON API.
   app.use("/api/auth", authRouter); // signup/login limited inside the router
+  // Forgot/reset password lives in its own router (composes with authRouter on
+  // the same mount; sensitive POSTs use authLimiter inside, like signup/login).
+  app.use("/api/auth", passwordResetRouter);
   app.use("/api/shops", shopsRouter);
   // Photo upload proxy. Uses a per-route express.raw() parser (image/*), so the
   // global express.json() above leaves its body untouched. Limited per-user.
