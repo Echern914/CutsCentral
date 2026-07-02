@@ -344,7 +344,12 @@ rewardsRouter.post("/:magicToken/opt-in", async (req, res) => {
     //  2. Guarded (smsConsentAt: null): stamp consent FIRST-WINS, never overwrite.
     await tx.client.update({
       where: { id: client.id },
-      data: { optedOut: false, ...(client.phone ? {} : { phone: bodyPhone }) },
+      data: {
+        optedOut: false,
+        // Client-initiated, so it may clear ANY opt-out incl. an SMS STOP.
+        optOutSource: null,
+        ...(client.phone ? {} : { phone: bodyPhone }),
+      },
     });
     await tx.client.updateMany({
       where: { id: client.id, smsConsentAt: null },
@@ -430,7 +435,13 @@ rewardsRouter.post("/:magicToken/opt-out", async (req, res) => {
     if (!client) return null;
     await tx.client.update({
       where: { id: client.id },
-      data: { optedOut: true },
+      data: {
+        optedOut: true,
+        // Keep an existing sms_stop lock; otherwise record the web opt-out.
+        ...(client.optedOut && client.optOutSource === "sms_stop"
+          ? {}
+          : { optOutSource: "client_self_serve" }),
+      },
     });
     return { hasPhone: Boolean(client.phone) };
   });

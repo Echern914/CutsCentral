@@ -19,10 +19,12 @@ export function SweepControl({ atRiskCount }: { atRiskCount: number }) {
   const [pending, startTransition] = useTransition();
   const [preview, setPreview] = useState<SweepSummary | null>(null);
   const [result, setResult] = useState<SweepSummary | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
 
   function doPreview() {
     setResult(null);
+    setError(null);
     startTransition(async () => {
       const s = await sweepPreviewAction();
       setPreview(s);
@@ -32,8 +34,15 @@ export function SweepControl({ atRiskCount }: { atRiskCount: number }) {
 
   function doSend() {
     startTransition(async () => {
-      const s = await runSweepAction();
-      setResult(s);
+      const r = await runSweepAction();
+      setResult(r.summary);
+      setError(
+        r.summary
+          ? null
+          : r.error === "subscription_required"
+            ? "Texting is a Premium feature - upgrade from the Billing page to send nudges."
+            : "Couldn't send right now. Try again in a minute.",
+      );
       setPreview(null);
       setConfirming(false);
     });
@@ -54,7 +63,17 @@ export function SweepControl({ atRiskCount }: { atRiskCount: number }) {
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          {result ? (
+          {error ? (
+            <>
+              <span className="text-sm text-gold">{error}</span>
+              <button
+                onClick={() => setError(null)}
+                className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
+              >
+                Dismiss
+              </button>
+            </>
+          ) : result ? (
             <>
               <span className="text-sm text-emerald-soft">
                 Sent {result.sent} {result.sent === 1 ? "nudge" : "nudges"}

@@ -19,19 +19,19 @@ export function GettingStarted({
   const steps = [
     {
       done: connected,
-      title: connected ? "Acuity connected" : "Connect your booking calendar",
+      title: connected ? "Booking connected" : "Connect your booking calendar",
       body: connected
         ? "Your appointments will sync automatically as clients book."
-        : "Link Acuity so your clients and visits import automatically.",
+        : "Link Acuity or Square so clients and visits import automatically - or set up ChairBack's own booking page.",
       href: connected ? undefined : "/onboarding/connect",
-      cta: "Connect Acuity",
+      cta: "Connect booking",
     },
     {
       done: false,
       title: "Add a client or import history",
       body: connected
         ? "No appointments yet? Add a walk-in by hand to start a punch card."
-        : "Once connected, your history imports. Or add a walk-in by hand now.",
+        : "Import your client list (CSV from Booksy, Fresha, Vagaro…) or add a walk-in by hand now.",
       href: "/dashboard/clients",
       cta: "Go to Clients",
     },

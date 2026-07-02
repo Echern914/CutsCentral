@@ -63,9 +63,10 @@ export default async function ConnectPage() {
               Not connecting now? Skip and log visits with one tap instead
             </a>
             <p className="text-center text-[11px] leading-relaxed text-muted">
-              On Booksy, Vagaro, or pen &amp; paper? Everything still works: add
-              clients and tap “Log visit” after each appointment. You can
-              connect a booking system later in Settings.
+              On Booksy, Fresha, Vagaro, or pen &amp; paper? Everything still
+              works: import your client list as a CSV (Clients → Import), then
+              tap “Log visit” after each appointment. You can connect a booking
+              system later in Settings.
             </p>
           </>
         )}

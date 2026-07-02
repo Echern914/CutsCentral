@@ -66,6 +66,8 @@ export function ClientActions({
           startTransition(async () => {
             const r = await nudgeClientAction(clientId);
             if (r.ok) { setNudged(true); toast("Nudge sent", "success"); }
+            else if (r.error === "subscription_required")
+              toast("Texting is a Premium feature - upgrade from the Billing page", "error");
             else toast("Could not send nudge", "error");
           })
         }
@@ -83,6 +85,11 @@ export function ClientActions({
             if (r.ok) {
               setIsOptedOut(!isOptedOut);
               toast(!isOptedOut ? "Client opted out" : "Client opted back in", "success");
+            } else if (r.error === "sms_stop_locked") {
+              toast(
+                "This client texted STOP - only they can opt back in (by texting START or from their rewards page)",
+                "error",
+              );
             } else toast("Could not update", "error");
           })
         }

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { APP_NAME } from "@chairback/config/constants";
+import { APP_NAME, serviceNounFor } from "@chairback/config/constants";
 import { apiPublicGet } from "@/lib/api";
 import { ShopPageClient } from "./ShopPageClient";
 
@@ -8,6 +8,8 @@ export interface ShopPageData {
   name: string;
   slug: string;
   bio: string | null;
+  // Vertical key ("barber" | "salon" | "nails" | ...) for noun-correct copy.
+  industry: string;
   theme: string;
   logoUrl: string | null;
   heroImageUrl: string | null;
@@ -64,7 +66,8 @@ export async function generateMetadata({
   const data = await getData(params.slug);
   if (!data) return { title: APP_NAME };
   const description =
-    data.bio ?? `Book your next cut at ${data.name} and earn rewards every visit.`;
+    data.bio ??
+    `Book your next ${serviceNounFor(data.industry)} at ${data.name} and earn rewards every visit.`;
   return {
     title: data.name,
     description,

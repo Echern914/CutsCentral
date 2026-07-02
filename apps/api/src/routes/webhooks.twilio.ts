@@ -52,16 +52,18 @@ twilioWebhookRouter.post(
 
     let reply = "";
     if (from && STOP_WORDS.has(text)) {
+      // "sms_stop" locks the row: only the client can reverse it (START here,
+      // or their rewards page) - never the dashboard.
       const { count } = await prisma.client.updateMany({
         where: { phone: from },
-        data: { optedOut: true },
+        data: { optedOut: true, optOutSource: "sms_stop" },
       });
       logger.info({ from, count }, "twilio STOP - opted out");
       // No app reply: the carrier auto-sends the mandatory opt-out confirmation.
     } else if (from && START_WORDS.has(text)) {
       const { count } = await prisma.client.updateMany({
         where: { phone: from },
-        data: { optedOut: false },
+        data: { optedOut: false, optOutSource: null },
       });
       logger.info({ from, count }, "twilio START - opted in");
       // Confirm the opt-in (carriers do NOT auto-reply to START).

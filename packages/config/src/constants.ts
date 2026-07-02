@@ -18,7 +18,10 @@ export const DEFAULTS = {
  * in sync with the Stripe dashboard when the price changes.
  */
 export const BILLING = {
-  planName: "Pro",
+  // "Premium" everywhere the customer can see it - the banner, billing page,
+  // FAQ, and vertical pages all say Premium, so the plan card must too. (The
+  // internal Shop.plan value stays "pro"; this is display-only.)
+  planName: "Premium",
   priceMonthlyUsd: 34.99,
   trialDays: 30,
 } as const;

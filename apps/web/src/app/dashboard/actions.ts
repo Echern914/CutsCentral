@@ -64,10 +64,12 @@ export async function redeemAction(
   return { ok: res.ok, error: res.error };
 }
 
-export async function nudgeClientAction(clientId: string): Promise<{ ok: boolean }> {
+export async function nudgeClientAction(
+  clientId: string,
+): Promise<{ ok: boolean; error?: string }> {
   const res = await apiSend("POST", `/api/dashboard/nudge/${clientId}`);
   revalidatePath(`/dashboard/clients/${clientId}`);
-  return { ok: res.ok };
+  return { ok: res.ok, error: res.error };
 }
 
 export interface SweepSummary {
@@ -83,10 +85,13 @@ export async function sweepPreviewAction(): Promise<SweepSummary | null> {
   return res.data;
 }
 
-export async function runSweepAction(): Promise<SweepSummary | null> {
+export async function runSweepAction(): Promise<{
+  summary: SweepSummary | null;
+  error?: string;
+}> {
   const res = await apiSend<SweepSummary>("POST", "/api/dashboard/sweep");
   revalidatePath("/dashboard");
-  return res.data;
+  return { summary: res.data, error: res.error };
 }
 
 export interface WinbackPreview {
@@ -188,11 +193,11 @@ export async function importClientsAction(
 export async function toggleOptOutAction(
   clientId: string,
   optedOut: boolean,
-): Promise<{ ok: boolean }> {
+): Promise<{ ok: boolean; error?: string }> {
   const res = await apiSend("POST", `/api/dashboard/clients/${clientId}/opt`, { optedOut });
   revalidatePath(`/dashboard/clients/${clientId}`);
   revalidatePath("/dashboard/clients");
-  return { ok: res.ok };
+  return { ok: res.ok, error: res.error };
 }
 
 export async function saveNotesAction(
@@ -406,14 +411,21 @@ export async function trendsAction(
 export async function bulkClientAction(
   action: "optOut" | "optIn" | "attestConsent" | "nudge",
   clientIds: string[],
-): Promise<{ ok: boolean; sent?: number; updated?: number }> {
-  const res = await apiSend<{ ok: boolean; sent?: number; updated?: number }>(
-    "POST",
-    "/api/dashboard/clients/bulk",
-    { action, clientIds },
-  );
+): Promise<{
+  ok: boolean;
+  sent?: number;
+  updated?: number;
+  lockedByStop?: number;
+  error?: string;
+}> {
+  const res = await apiSend<{
+    ok: boolean;
+    sent?: number;
+    updated?: number;
+    lockedByStop?: number;
+  }>("POST", "/api/dashboard/clients/bulk", { action, clientIds });
   revalidatePath("/dashboard/clients");
-  return res.data ?? { ok: res.ok };
+  return res.data ?? { ok: res.ok, error: res.error };
 }
 
 /**

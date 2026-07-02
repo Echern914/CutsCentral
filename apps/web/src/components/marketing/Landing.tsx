@@ -62,7 +62,7 @@ export function Landing() {
             <StaggerItem>
               <p className="inline-flex items-center gap-2 rounded-full border border-gold/30 bg-gold/10 px-3 py-1 text-xs font-medium text-gold-soft">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-gold" />
-                Built on top of your Acuity scheduling
+                Works with Acuity, Square, or ChairBack&apos;s own booking
               </p>
             </StaggerItem>
             <StaggerItem>
@@ -133,7 +133,8 @@ export function Landing() {
               "Smart rebooking texts",
               "Revenue attribution",
               "At-risk client radar",
-              "Acuity sync",
+              "Acuity + Square sync",
+              "Built-in online booking",
               "Magic-link rewards page",
               "STOP handling built in",
               "Daily send caps",
@@ -336,8 +337,9 @@ export function Landing() {
                 <ul className="mt-6 flex flex-1 flex-col gap-2.5 text-left text-sm text-offwhite">
                   {[
                     "Smart rebooking texts, timed per client",
+                    "Win-back texts that recover lapsed clients",
+                    "Your own online booking page + reminder texts",
                     "Promo blasts with revenue attribution",
-                    "Automatic visit tracking via Acuity sync",
                     "Daily send caps & STOP handling built in",
                   ].map((t) => (
                     <li key={t} className="flex items-start gap-2.5">
@@ -414,8 +416,8 @@ export function Landing() {
                 </Link>
               </div>
               <p className="mt-5 text-xs text-muted">
-                No credit card. Connect Acuity and your punch cards fill
-                themselves.
+                No credit card. Connect Acuity or Square - or use {APP_NAME}&apos;s
+                own booking - and your punch cards fill themselves.
               </p>
             </Reveal>
           </div>
@@ -445,6 +447,12 @@ export function Landing() {
             <Link href="/sms" className="transition-colors duration-150 ease-out hover:text-offwhite">
               SMS Policy
             </Link>
+            <a
+              href="mailto:support@getchairback.com"
+              className="transition-colors duration-150 ease-out hover:text-offwhite"
+            >
+              Contact
+            </a>
           </div>
         </div>
         <div className="mx-auto mt-5 flex w-full max-w-6xl flex-wrap items-center justify-center gap-x-5 gap-y-2 border-t border-subtle px-6 pt-5 text-xs text-muted sm:justify-start">
@@ -474,8 +482,8 @@ export function Landing() {
 
 const STEPS = [
   {
-    title: "Connect Acuity",
-    body: "One click links your existing scheduling. Past appointments backfill your clients' punch cards instantly.",
+    title: "Connect your booking",
+    body: "One click links Acuity or Square - past appointments backfill your clients' punch cards instantly. No booking app? Use ChairBack's own booking page, or just log visits with one tap.",
   },
   {
     title: "Set your reward",
@@ -483,7 +491,7 @@ const STEPS = [
   },
   {
     title: "Let it run",
-    body: "Punches add up, smart texts go out, regulars come back. You just cut hair.",
+    body: "Punches add up, smart texts go out, regulars come back. You just do the work you love.",
   },
 ] as const;
 

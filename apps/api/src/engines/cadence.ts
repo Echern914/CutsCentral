@@ -39,7 +39,12 @@ export async function recomputeCadence(
   }
 
   const m = median(dayGaps(dates));
-  const medianIntervalDays = m === null ? null : Math.round(m);
+  const rounded = m === null ? null : Math.round(m);
+  // A median that rounds to 0 (visits logged the same day / in bursts) is not
+  // a real return rhythm — store null ("no cadence yet") rather than 0, which
+  // would make the client look overdue one day after walking out the door and
+  // trigger nudge/win-back texts for someone who was just in.
+  const medianIntervalDays = rounded !== null && rounded >= 1 ? rounded : null;
   const nextExpectedAt =
     lastVisitAt && medianIntervalDays !== null
       ? addDays(lastVisitAt, medianIntervalDays)

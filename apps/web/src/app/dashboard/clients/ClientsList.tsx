@@ -70,7 +70,17 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
                 ? `Marked consent for ${n}`
                 : `Opted in ${n}`;
         toast(verb, "success");
+        if (action === "optIn" && (r.lockedByStop ?? 0) > 0) {
+          toast(
+            `${r.lockedByStop} skipped: they texted STOP, so only they can opt back in`,
+            "error",
+          );
+        }
         setSelected(new Set());
+      } else if (r.error === "subscription_required") {
+        toast("Texting is a Premium feature - upgrade from the Billing page", "error");
+      } else if (r.error === "quiet_hours") {
+        toast("Texting is paused 9pm-8am (client local time)", "error");
       } else {
         toast("Bulk action failed", "error");
       }

@@ -73,10 +73,16 @@ export default function OnboardingShopPage() {
               on ChairBack (set it up in the Booking tab after signup).
             </p>
             <select name="timezone" defaultValue="America/New_York" className={field}>
+              {/* Quiet-hours (TCPA) enforcement keys off this - cover every US
+                  zone so no shop has to pick a wrong one. */}
               <option value="America/New_York">Eastern (New York)</option>
               <option value="America/Chicago">Central (Chicago)</option>
               <option value="America/Denver">Mountain (Denver)</option>
+              <option value="America/Phoenix">Arizona (Phoenix, no DST)</option>
               <option value="America/Los_Angeles">Pacific (Los Angeles)</option>
+              <option value="America/Anchorage">Alaska (Anchorage)</option>
+              <option value="Pacific/Honolulu">Hawaii (Honolulu)</option>
+              <option value="America/Puerto_Rico">Atlantic (Puerto Rico)</option>
             </select>
             <div>
               <p className="mb-2 text-xs text-muted">

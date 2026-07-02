@@ -4,16 +4,21 @@
 // Everything else is locked down; img allows https (shop logos are
 // barber-provided URLs).
 const isDev = process.env.NODE_ENV === "development";
+// Stripe.js (the pay-ahead Payment Element on /book/[slug]) needs three
+// allowances per Stripe's own CSP guidance: its script from js.stripe.com,
+// its iframes (js.stripe.com + hooks.stripe.com), and API calls to
+// api.stripe.com. Without these the payment step dies silently - the script
+// tag loadStripe injects is cross-origin and script-src 'self' blocks it.
 const csp = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
+  `script-src 'self' 'unsafe-inline' https://js.stripe.com${isDev ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' https: data:",
   "font-src 'self' data:",
-  // connect-src stays 'self': push subscribe/unsubscribe go to same-origin Next
-  // route handlers (which forward to the API server-side), and push DELIVERY is
-  // an OS channel, not a page fetch - so no API origin is needed here.
-  "connect-src 'self'",
+  // connect-src: same-origin for the app itself (push subscribe etc. go through
+  // same-origin Next route handlers) + Stripe's API for the Payment Element.
+  "connect-src 'self' https://api.stripe.com",
+  "frame-src https://js.stripe.com https://hooks.stripe.com",
   // The rewards PWA service worker (public/sw.js, same origin).
   "worker-src 'self'",
   // The per-shop dynamic manifest route (same origin).

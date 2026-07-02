@@ -87,6 +87,10 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
       accentColor: shop.accentColor,
       bookingLeadHours: shop.bookingLeadHours,
       bookingMaxDays: shop.bookingMaxDays,
+      // Lapsed shops can't take bookings (the create POST 403s) - tell the UI
+      // up front so a customer isn't walked through the whole flow into a
+      // dead-end at the final submit.
+      bookingPaused: !hasActiveAccess(shop),
       // Fee-free pay-direct handles (display-only) so the confirmation screen can
       // show "pay the barber directly". Only surfaced when the barber enabled it.
       payDirect: shop.payDirectEnabled
