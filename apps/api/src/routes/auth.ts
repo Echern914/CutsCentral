@@ -278,8 +278,15 @@ authRouter.get("/google/callback", authLimiter, async (req, res) => {
 
     // 1) Existing Google user. 2) Existing email user -> link googleId.
     // 3) New user -> create (no password).
+    // Steps 2 and 3 require a VERIFIED provider email: an unverified email
+    // must never link into (take over) the account that owns that address,
+    // nor squat it as a new account.
     let user = await prisma.user.findUnique({ where: { googleId: profile.sub } });
     if (!user) {
+      if (!profile.emailVerified) {
+        res.redirect(`${env.APP_BASE_URL}/login?error=google_email_unverified`);
+        return;
+      }
       const byEmail = await prisma.user.findUnique({ where: { email: profile.email } });
       if (byEmail) {
         user = await prisma.user.update({
@@ -354,8 +361,8 @@ authRouter.post("/apple/native", authLimiter, async (req, res) => {
   }
   try {
     const profile = await verifyApple(parsed.data.identityToken, parsed.data.name);
-    const { token, user } = await signInWithProfile("apple", profile);
-    setSessionCookie(res, user.id);
+    const { token, tokenVersion, user } = await signInWithProfile("apple", profile);
+    setSessionCookie(res, user.id, tokenVersion);
     res.json({ token, ...user });
   } catch (err) {
     if (err instanceof NativeAuthError) {
@@ -377,8 +384,8 @@ authRouter.post("/google/native", authLimiter, async (req, res) => {
   }
   try {
     const profile = await verifyGoogle(parsed.data.idToken);
-    const { token, user } = await signInWithProfile("google", profile);
-    setSessionCookie(res, user.id);
+    const { token, tokenVersion, user } = await signInWithProfile("google", profile);
+    setSessionCookie(res, user.id, tokenVersion);
     res.json({ token, ...user });
   } catch (err) {
     if (err instanceof NativeAuthError) {

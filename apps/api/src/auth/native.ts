@@ -24,6 +24,11 @@ export interface NativeProfile {
   sub: string; // the provider's stable user id
   email: string | null;
   name: string | null;
+  // Whether the PROVIDER attests the email is verified. Linking a social login
+  // into an existing account by email is only safe when this is true —
+  // otherwise a provider account with an unverified (attacker-chosen) email
+  // could take over the ChairBack account that legitimately owns that email.
+  emailVerified: boolean;
 }
 
 export class NativeAuthError extends Error {
@@ -67,6 +72,9 @@ export async function verifyApple(
       sub: payload.sub,
       email: (payload.email as string | undefined) ?? null,
       name: nameFromApp ?? null,
+      // Apple encodes this as boolean true or the string "true".
+      emailVerified:
+        payload.email_verified === true || payload.email_verified === "true",
     };
   } catch (err) {
     if (err instanceof NativeAuthError) throw err;
@@ -92,6 +100,8 @@ export async function verifyGoogle(idToken: string): Promise<NativeProfile> {
       sub: payload.sub,
       email: (payload.email as string | undefined) ?? null,
       name: (payload.name as string | undefined) ?? null,
+      emailVerified:
+        payload.email_verified === true || payload.email_verified === "true",
     };
   } catch (err) {
     if (err instanceof NativeAuthError) throw err;
@@ -108,7 +118,11 @@ export async function verifyGoogle(idToken: string): Promise<NativeProfile> {
 export async function signInWithProfile(
   provider: "apple" | "google",
   profile: NativeProfile,
-): Promise<{ token: string; user: { id: string; email: string; name: string } }> {
+): Promise<{
+  token: string;
+  tokenVersion: number;
+  user: { id: string; email: string; name: string };
+}> {
   // Concrete where/data per provider (Prisma's unique-where type rejects a
   // computed key, so branch explicitly rather than index by a variable).
   const linkData =
@@ -120,8 +134,10 @@ export async function signInWithProfile(
       ? await prisma.user.findUnique({ where: { appleId: profile.sub } })
       : await prisma.user.findUnique({ where: { googleId: profile.sub } });
 
-  // 2) Else, an existing account with this email -> link it.
-  if (!user && profile.email) {
+  // 2) Else, an existing account with this email -> link it. Only when the
+  // provider attests the email is VERIFIED: an unverified provider email must
+  // never be able to claim (take over) the account that owns that address.
+  if (!user && profile.email && profile.emailVerified) {
     const byEmail = await prisma.user.findUnique({ where: { email: profile.email } });
     if (byEmail) {
       user = await prisma.user.update({
@@ -138,6 +154,11 @@ export async function signInWithProfile(
       // safely create or match an account.
       throw new NativeAuthError("no_email_to_create_account", 422);
     }
+    if (!profile.emailVerified) {
+      // Unverified emails can't create accounts either: the address may belong
+      // to someone else who would then be locked out of signing up with it.
+      throw new NativeAuthError("email_unverified", 403);
+    }
     user = await prisma.user.create({
       data: {
         email: profile.email,
@@ -148,5 +169,9 @@ export async function signInWithProfile(
   }
 
   const token = mintSessionToken(user.id, user.tokenVersion);
-  return { token, user: { id: user.id, email: user.email, name: user.name } };
+  return {
+    token,
+    tokenVersion: user.tokenVersion,
+    user: { id: user.id, email: user.email, name: user.name },
+  };
 }
