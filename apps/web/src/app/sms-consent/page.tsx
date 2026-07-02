@@ -62,13 +62,11 @@ export default function SmsConsentPage() {
             className="mt-1 h-5 w-5 shrink-0 rounded border-subtle bg-charcoal-900 accent-gold"
           />
           <span className="text-sm leading-relaxed text-offwhite/90">
-            I agree to receive appointment reminders, loyalty/rewards updates,
-            and occasional promotional texts from{" "}
-            <Strong>[Shop Name]</Strong> sent via {APP_NAME}. Message frequency
-            varies. Message &amp; data rates may apply. Reply <Strong>STOP</Strong>{" "}
-            to cancel, <Strong>HELP</Strong> for help. Consent is not a condition
-            of purchase. See the{" "}
-            <A href="/sms">SMS Messaging Policy</A> and{" "}
+            Text me appointment confirmations, reminders, and rewards updates
+            from <Strong>[Shop Name]</Strong> sent via {APP_NAME} (a few messages
+            per visit). Msg &amp; data rates may apply. Reply <Strong>HELP</Strong>{" "}
+            for help, <Strong>STOP</Strong> to opt out. Consent is not a condition
+            of purchase. See our <A href="/sms">SMS Terms</A> and{" "}
             <A href="/privacy">Privacy Policy</A>.
           </span>
         </label>
