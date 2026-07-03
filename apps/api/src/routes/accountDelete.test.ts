@@ -11,7 +11,7 @@ import { createApp } from "../app.js";
  * the login identity alive.
  */
 const app = createApp();
-const email = `acct-del-${randomToken(6)}@test.local`;
+const email = `acct-del-${randomToken(6)}@test.local`.toLowerCase();
 const password = "supersecret123";
 
 afterAll(async () => {
