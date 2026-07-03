@@ -47,6 +47,7 @@ describe("DELETE /api/auth/me", () => {
         smsAttested: true,
       });
     expect(shop.status).toBe(201);
+    const shopId = shop.body.id as string;
 
     // Tenant data that must cascade away with the shop.
     const client = await request(app)
@@ -78,7 +79,7 @@ describe("DELETE /api/auth/me", () => {
     expect(del.body.ok).toBe(true);
 
     expect(await prisma.user.findUnique({ where: { email } })).toBeNull();
-    expect(await prisma.shop.count({ where: { name: "Deleter's Shop" } })).toBe(0);
+    expect(await prisma.shop.findUnique({ where: { id: shopId } })).toBeNull();
     expect(await prisma.client.findUnique({ where: { id: client.body.id } })).toBeNull();
 
     // The old session is dead (its user no longer exists).
