@@ -94,6 +94,8 @@ model User {
   shops Shop[] @relation("ShopOwner") // one today; FK clean for N later
 
   passwordResetTokens PasswordResetToken[]
+  // Barber/manager devices registered for native push (dashboard app).
+  pushSubscriptions   PushSubscription[]
 }
 
 // One-shot forgot-password tokens. Only the sha256 of the token is stored - the
@@ -654,23 +656,32 @@ enum PushKind {
   expo
 }
 
-// A push subscription for ONE device of one client - a PWA browser (web) OR the
-// native app (expo). The OS permission grant + this row ARE the push consent,
-// independent of SMS consent (smsConsentAt/optedOut), so a client who replied
-// STOP to texts but installed and allowed notifications is still push-reachable
-// (and still no SMS).
+// A push subscription for ONE device of one identity - EITHER a client (the
+// customer rewards page/app) OR a user (the barber/manager dashboard app).
+// Exactly one of clientId/userId is set; the API stamps it server-side. The OS
+// permission grant + this row ARE the push consent, independent of SMS consent
+// (smsConsentAt/optedOut), so a client who replied STOP to texts but installed
+// and allowed notifications is still push-reachable (and still no SMS).
 //
-// Tenant-owned (shopId, FORCE RLS) like the rest. Created on the PUBLIC rewards
-// route (resolved by the global magicToken, runs as the connection owner, bypasses
-// RLS - same trust model as the rewards opt-in / AppointmentRequest / Review
-// writes); the send path reads it through forShop() (RLS-enforced). shopId is
-// always derived from the resolved client, never from the request.
+// Tenant-owned (shopId, FORCE RLS) like the rest. Client rows are created on
+// the PUBLIC rewards route (resolved by the global magicToken, runs as the
+// connection owner, bypasses RLS - same trust model as the rewards opt-in /
+// AppointmentRequest / Review writes); the client send path reads them through
+// forShop() (RLS-enforced). USER rows are created on the authenticated
+// dashboard route and read via runAsOwner: a manager's device serves every
+// shop they own, so the lookup is user-keyed, not shop-scoped - shopId records
+// the shop active at registration. shopId/userId are always derived from the
+// resolved client/session, never from the request body.
 model PushSubscription {
   id            String   @id @default(cuid())
   shopId        String
   shop          Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  clientId      String
-  client        Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  // CUSTOMER transport: the client this device belongs to. Null for barber rows.
+  clientId      String?
+  client        Client?  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  // BARBER transport: the owner/manager this device belongs to. Null for client rows.
+  userId        String?
+  user          User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
   kind          PushKind @default(web)
   // WEB transport: the push service endpoint URL (FCM/Mozilla/Apple) + the keys
   // used to encrypt the payload. Null for expo rows. endpoint is unique so a
@@ -689,6 +700,7 @@ model PushSubscription {
   lastSeenAt    DateTime @default(now()) // refreshed on re-subscribe + successful send
 
   @@index([shopId, clientId]) // the send-path lookup ("subs for this client")
+  @@index([userId]) // the barber send-path lookup ("devices of this user")
 }
 
 //  Native booking engine (only used when Shop.bookingMode == native)

@@ -7,6 +7,8 @@ export interface Me {
   name: string;
   isAdmin: boolean;
   welcomeSeen: boolean;
+  /** False for social-only (Apple/Google) accounts - they SET a password rather than change one. */
+  hasPassword: boolean;
   /** Shops this user owns (oldest first). 1 for a normal barber; >1 = manager. */
   shops: { id: string; name: string }[];
   /** The shop the dashboard is currently acting on (the switcher's selection). */

@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
 import {
   changePasswordAction,
+  deleteAccountAction,
   deleteShopAction,
   updateNameAction,
 } from "../actions";
@@ -31,10 +32,13 @@ export function AccountCard({
   name,
   email,
   shopName,
+  hasPassword,
 }: {
   name: string;
   email: string;
   shopName: string;
+  /** False for social-only (Apple/Google) accounts: no current password to ask for. */
+  hasPassword: boolean;
 }) {
   const { toast } = useToast();
   const [nameState, nameAction] = useFormState(
@@ -53,8 +57,11 @@ export function AccountCard({
     },
     {},
   );
-  const [confirmOpen, setConfirmOpen] = useState(false);
+  // Which danger-zone confirmation is open: the shop delete (type the shop
+  // name) or the account delete (type the account email). Never both.
+  const [confirming, setConfirming] = useState<"shop" | "account" | null>(null);
   const [delState, delAction] = useFormState(deleteShopAction, {});
+  const [delAcctState, delAcctAction] = useFormState(deleteAccountAction, {});
 
   return (
     <Card className="p-5">
@@ -71,12 +78,23 @@ export function AccountCard({
         {nameState.ok ? null : null}
       </form>
 
-      {/* Password */}
+      {/* Password. A social-only (Apple/Google) account has no password yet, so
+          asking for a "current password" would be a dead end - offer to SET one
+          instead (the API skips the current-password check when none exists). */}
       <form action={pwAction} className="mb-6 flex flex-col gap-2 border-t border-subtle pt-5">
-        <p className="text-sm font-medium text-offwhite">Change password</p>
-        <input name="currentPassword" type="password" placeholder="Current password" className={field} />
+        <p className="text-sm font-medium text-offwhite">
+          {hasPassword ? "Change password" : "Set a password"}
+        </p>
+        {hasPassword ? (
+          <input name="currentPassword" type="password" placeholder="Current password" className={field} />
+        ) : (
+          <p className="text-xs text-muted">
+            You signed in with Apple or Google. Add a password to also sign in with
+            your email.
+          </p>
+        )}
         <input name="newPassword" type="password" placeholder="New password (min 8 chars)" className={field} />
-        <div><Btn label="Update password" /></div>
+        <div><Btn label={hasPassword ? "Update password" : "Set password"} /></div>
         {pwState.error && <span className="text-xs text-danger-soft">{pwState.error}</span>}
       </form>
 
@@ -109,17 +127,27 @@ export function AccountCard({
       <div className="rounded-xl border border-danger-soft/30 p-4">
         <p className="text-sm font-medium text-danger-soft">Danger zone</p>
         <p className="mt-1 text-xs text-muted">
-          Deleting your shop removes all clients, visits, punches, and nudges. This
-          cannot be undone.
+          Deleting your shop removes all clients, visits, punches, and nudges.
+          Deleting your account also removes your login and every shop you own.
+          Neither can be undone.
         </p>
-        {!confirmOpen ? (
-          <button
-            onClick={() => setConfirmOpen(true)}
-            className="mt-3 rounded-full border border-danger-soft/50 px-4 py-2 text-xs font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10"
-          >
-            Delete shop
-          </button>
-        ) : (
+        {confirming === null && (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => setConfirming("shop")}
+              className="rounded-full border border-danger-soft/50 px-4 py-2 text-xs font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10"
+            >
+              Delete shop
+            </button>
+            <button
+              onClick={() => setConfirming("account")}
+              className="rounded-full border border-danger-soft/50 px-4 py-2 text-xs font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10"
+            >
+              Delete account
+            </button>
+          </div>
+        )}
+        {confirming === "shop" && (
           <form action={delAction} className="mt-3 flex flex-col gap-2">
             <label className={labelCls}>
               Type <span className="text-offwhite">{shopName}</span> to confirm
@@ -134,13 +162,39 @@ export function AccountCard({
               </button>
               <button
                 type="button"
-                onClick={() => setConfirmOpen(false)}
+                onClick={() => setConfirming(null)}
                 className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
               >
                 Cancel
               </button>
             </div>
             {delState.error && <span className="text-xs text-danger-soft">{delState.error}</span>}
+          </form>
+        )}
+        {confirming === "account" && (
+          <form action={delAcctAction} className="mt-3 flex flex-col gap-2">
+            <label className={labelCls}>
+              Type <span className="text-offwhite">{email}</span> to confirm
+              <input name="confirm" className={`mt-1 ${field}`} autoComplete="off" />
+            </label>
+            <div className="flex items-center gap-2">
+              <button
+                type="submit"
+                className="rounded-full bg-danger-soft px-4 py-2 text-xs font-semibold text-charcoal transition-opacity duration-150 ease-out hover:opacity-90"
+              >
+                Permanently delete account
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirming(null)}
+                className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
+              >
+                Cancel
+              </button>
+            </div>
+            {delAcctState.error && (
+              <span className="text-xs text-danger-soft">{delAcctState.error}</span>
+            )}
           </form>
         )}
       </div>

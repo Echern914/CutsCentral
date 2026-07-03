@@ -1,6 +1,6 @@
 import webpush from "web-push";
 import { apiEnv } from "@chairback/config";
-import { forShop } from "@chairback/db";
+import { forShop, runAsOwner, type Prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 
 const env = apiEnv();
@@ -149,58 +149,51 @@ function sendExpo(expoPushToken: string, payload: PushPayload): Promise<void> {
   return s.send(expoPushToken, payload);
 }
 
+/** The subscription columns the delivery loop needs. */
+interface DeliverableSub {
+  id: string;
+  kind: "web" | "expo";
+  endpoint: string | null;
+  p256dh: string | null;
+  auth: string | null;
+  expoPushToken: string | null;
+}
+
 /**
- * Push a notification to EVERY installed device of one client. Reads the client's
- * subscriptions through forShop (RLS-enforced), sends to each, prunes the ones
- * the push service reports gone (404/410), and bumps failureCount on transient
- * errors (deleting past a small threshold so dead rows can't accumulate). Bumps
- * lastSeenAt on success. Records a single WEB_PUSH Nudge for audit when anything
- * was delivered. Never throws.
+ * The prune/bump writes the delivery loop makes, abstracted over WHO may make
+ * them: the client send path passes the forShop facade (RLS-enforced), the
+ * barber send path passes a runAsOwner-backed writer (user-keyed rows are
+ * cross-shop by design - see the PushSubscription model comment).
  */
-export async function sendPushToClient(params: {
-  shopId: string;
-  clientId: string;
-  payload: PushPayload;
-  /** Ledger discriminator on the Nudge row: "loyalty" | "nudge" | "promo". */
-  kind?: string;
-}): Promise<PushSendResult> {
-  const empty: PushSendResult = { sent: 0, pruned: 0, failed: 0, anyDelivered: false };
-  const db = forShop(params.shopId);
+interface SubWriter {
+  updateMany(args: Prisma.PushSubscriptionUpdateManyArgs): Promise<unknown>;
+  deleteMany(args: Prisma.PushSubscriptionDeleteManyArgs): Promise<unknown>;
+}
 
-  let subs: Array<{
-    id: string;
-    kind: "web" | "expo";
-    endpoint: string | null;
-    p256dh: string | null;
-    auth: string | null;
-    expoPushToken: string | null;
-  }>;
-  try {
-    subs = await db.pushSubscription.findMany({
-      where: { clientId: params.clientId },
-      select: {
-        id: true,
-        kind: true,
-        endpoint: true,
-        p256dh: true,
-        auth: true,
-        expoPushToken: true,
-      },
-    });
-  } catch (err) {
-    logger.error({ err, ...ids(params) }, "push subscription lookup failed");
-    return empty;
-  }
-  if (subs.length === 0) return empty;
+/**
+ * Deliver one payload to a set of devices: send to each, prune the ones the
+ * push service reports gone (404/410 web, DeviceNotRegistered expo), bump
+ * failureCount on transient errors (deleting past a small threshold so dead
+ * rows can't accumulate), and refresh lastSeenAt on success. Honors the global
+ * DRY_RUN kill switch (unless a test sender is injected, so suites can assert
+ * real-send behavior). Never throws.
+ */
+async function deliverToSubs(
+  db: SubWriter,
+  subs: DeliverableSub[],
+  payload: PushPayload,
+  logCtx: Record<string, string | number>,
+): Promise<PushSendResult> {
+  const result: PushSendResult = { sent: 0, pruned: 0, failed: 0, anyDelivered: false };
+  if (subs.length === 0) return result;
 
-  // DRY_RUN kill switch (global): never touch a real device while simulated, and
-  // DELIBERATELY report nothing delivered so the caller still falls back to SMS
-  // (dry runs must mirror the no-push world). An injected test sender (web or
-  // expo) bypasses dry-run so suites can assert real-send behavior.
+  // DRY_RUN: never touch a real device while simulated, and DELIBERATELY report
+  // nothing delivered so callers still fall back to SMS (dry runs must mirror
+  // the no-push world).
   const hasTestSender = Boolean(testSender || testExpoSender);
   if (!hasTestSender && env.DRY_RUN) {
-    logger.info({ ...ids(params), subs: subs.length }, "[dry-run] suppressed push send");
-    return empty;
+    logger.info({ ...logCtx, subs: subs.length }, "[dry-run] suppressed push send");
+    return result;
   }
   // The WEB sender needs VAPID; the EXPO transport does not. So a web sender may
   // be null (no VAPID configured) while expo rows still send fine - we only skip
@@ -208,13 +201,12 @@ export async function sendPushToClient(params: {
   const webSender = senderOrNull();
 
   const body = JSON.stringify({
-    title: params.payload.title,
-    body: params.payload.body,
-    url: params.payload.url,
-    ...(params.payload.tag ? { tag: params.payload.tag } : {}),
+    title: payload.title,
+    body: payload.body,
+    url: payload.url,
+    ...(payload.tag ? { tag: payload.tag } : {}),
   });
 
-  const result: PushSendResult = { ...empty };
   for (const sub of subs) {
     try {
       if (sub.kind === "expo") {
@@ -222,7 +214,7 @@ export async function sendPushToClient(params: {
         // (DeviceNotRegistered) throws with statusCode 410 so the shared prune
         // path below removes it, exactly like a dead web subscription.
         if (!sub.expoPushToken) throw new Error("expo sub missing token");
-        await sendExpo(sub.expoPushToken, params.payload);
+        await sendExpo(sub.expoPushToken, payload);
       } else {
         // Browser/PWA device: VAPID Web Push. Skip if no web sender (no VAPID).
         if (!webSender) continue;
@@ -236,7 +228,7 @@ export async function sendPushToClient(params: {
       }
       result.sent += 1;
       result.anyDelivered = true;
-      await db.pushSubscription
+      await db
         .updateMany({
           where: { id: sub.id },
           data: { lastSeenAt: new Date(), failureCount: 0 },
@@ -248,23 +240,18 @@ export async function sendPushToClient(params: {
         // Subscription is gone (uninstalled / permission revoked / expo
         // DeviceNotRegistered): delete it.
         result.pruned += 1;
-        await db.pushSubscription
-          .deleteMany({ where: { id: sub.id } })
-          .catch(() => {});
+        await db.deleteMany({ where: { id: sub.id } }).catch(() => {});
       } else {
         // Transient: bump the failure count, then prune once it's clearly dead.
         result.failed += 1;
-        logger.warn(
-          { err, status, ...ids(params) },
-          "web-push send error (transient)",
-        );
-        await db.pushSubscription
+        logger.warn({ err, status, ...logCtx }, "web-push send error (transient)");
+        await db
           .updateMany({
             where: { id: sub.id },
             data: { failureCount: { increment: 1 } },
           })
           .catch(() => {});
-        await db.pushSubscription
+        await db
           .deleteMany({
             where: { id: sub.id, failureCount: { gte: PRUNE_AFTER_FAILURES } },
           })
@@ -272,6 +259,51 @@ export async function sendPushToClient(params: {
       }
     }
   }
+  return result;
+}
+
+const SUB_SELECT = {
+  id: true,
+  kind: true,
+  endpoint: true,
+  p256dh: true,
+  auth: true,
+  expoPushToken: true,
+} as const;
+
+/**
+ * Push a notification to EVERY installed device of one client. Reads the client's
+ * subscriptions through forShop (RLS-enforced) and delivers via the shared loop.
+ * Records a single WEB_PUSH Nudge for audit when anything was delivered. Never
+ * throws.
+ */
+export async function sendPushToClient(params: {
+  shopId: string;
+  clientId: string;
+  payload: PushPayload;
+  /** Ledger discriminator on the Nudge row: "loyalty" | "nudge" | "promo". */
+  kind?: string;
+}): Promise<PushSendResult> {
+  const empty: PushSendResult = { sent: 0, pruned: 0, failed: 0, anyDelivered: false };
+  const db = forShop(params.shopId);
+
+  let subs: DeliverableSub[];
+  try {
+    subs = await db.pushSubscription.findMany({
+      where: { clientId: params.clientId },
+      select: SUB_SELECT,
+    });
+  } catch (err) {
+    logger.error({ err, ...ids(params) }, "push subscription lookup failed");
+    return empty;
+  }
+
+  const result = await deliverToSubs(
+    db.pushSubscription,
+    subs,
+    params.payload,
+    ids(params),
+  );
 
   // Audit: one WEB_PUSH Nudge per delivered send, sharing the ledger with SMS so
   // attribution + history treat push as a first-class outbound message.
@@ -294,6 +326,49 @@ export async function sendPushToClient(params: {
   }
 
   return result;
+}
+
+/**
+ * Push a notification to EVERY device a barber/manager registered (the iOS
+ * dashboard app) - business events like a new appointment request. USER-keyed,
+ * not shop-scoped: a manager's device serves every shop they own, so the rows
+ * are read (and pruned) via runAsOwner - the same trust model as the public
+ * client-row writes; the userId comes from the server-resolved shop owner,
+ * never from a request. No Nudge audit row: that ledger is client-keyed and
+ * these sends are to the business, not a client. Never throws.
+ */
+export async function sendPushToUser(params: {
+  userId: string;
+  /** For log context only - the send itself is user-keyed. */
+  shopId: string;
+  payload: PushPayload;
+}): Promise<PushSendResult> {
+  const empty: PushSendResult = { sent: 0, pruned: 0, failed: 0, anyDelivered: false };
+
+  let subs: DeliverableSub[];
+  try {
+    subs = await runAsOwner((tx) =>
+      tx.pushSubscription.findMany({
+        where: { userId: params.userId },
+        select: SUB_SELECT,
+      }),
+    );
+  } catch (err) {
+    logger.error(
+      { err, shopId: params.shopId, userId: params.userId },
+      "barber push subscription lookup failed",
+    );
+    return empty;
+  }
+
+  const ownerWriter: SubWriter = {
+    updateMany: (args) => runAsOwner((tx) => tx.pushSubscription.updateMany(args)),
+    deleteMany: (args) => runAsOwner((tx) => tx.pushSubscription.deleteMany(args)),
+  };
+  return deliverToSubs(ownerWriter, subs, params.payload, {
+    shopId: params.shopId,
+    userId: params.userId,
+  });
 }
 
 /** Delete a transient-failing subscription once it crosses this many strikes. */

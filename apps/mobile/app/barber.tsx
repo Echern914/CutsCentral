@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { type WebViewMessageEvent } from "react-native-webview";
+import {
+  type WebViewMessageEvent,
+  type WebViewNavigation,
+} from "react-native-webview";
+import { router } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { AppWebView } from "@/src/AppWebView";
-import { appAuthUrl, dashboardUrl, STORAGE } from "@/src/config";
+import { appAuthUrl, dashboardUrl, STORAGE, WEB_ORIGIN } from "@/src/config";
 import { registerBarberPush } from "@/src/push";
 
 /**
@@ -65,6 +69,22 @@ export default function BarberScreen() {
     }
   }
 
+  // The dashboard WebView must stay authenticated via the NATIVE session. If it
+  // ever 401s (iOS dropped the WKWebView cookie on app suspension/relaunch, or
+  // the session was revoked), the web layout redirects to the WEB /login page -
+  // whose "Sign in with Google" is the embedded-WebView OAuth that Google BLOCKS
+  // ("Access blocked"). Intercept that navigation and bounce to the NATIVE
+  // sign-in screen instead of dead-ending there. Clear the stale token so /login
+  // shows its buttons and doesn't auto-skip straight back here.
+  function onShouldStartLoad(req: WebViewNavigation): boolean {
+    if (req.url.startsWith(`${WEB_ORIGIN}/login`)) {
+      AsyncStorage.removeItem(STORAGE.session).catch(() => {});
+      router.replace("/login");
+      return false;
+    }
+    return true;
+  }
+
   if (!source) {
     return (
       <View style={[styles.flex, styles.center]}>
@@ -82,6 +102,7 @@ export default function BarberScreen() {
         // Persist cookies across launches so the login sticks.
         thirdPartyCookiesEnabled
         onMessage={onMessage}
+        onShouldStartLoadWithRequest={onShouldStartLoad}
       />
     </SafeAreaView>
   );
