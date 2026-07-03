@@ -60,10 +60,9 @@ export const GOOGLE_IOS_CLIENT_ID: string =
 
 /**
  * The 3-way role picker (app/index.tsx) is LIVE: "barber" and "manager" route to
- * the dashboard WebView, "customer" to the rewards WebView.
- *
- * CAVEAT: Google sign-in is blocked inside the embedded WebView (Google's
- * embedded-WebView policy), so barber/manager users must sign in with email +
- * password until native Apple+Google sign-in lands (v2). The customer path needs
- * no login at all (the magic link IS the auth).
+ * the NATIVE Apple/Google sign-in (app/login.tsx) and then the dashboard
+ * WebView via the /app-auth cookie handoff. The customer path needs no login at
+ * all (the magic link IS the auth). Google's embedded-WebView OAuth block is why
+ * sign-in happens natively and why barber.tsx bounces any web /login navigation
+ * back to the native screen.
  */

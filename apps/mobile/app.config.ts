@@ -60,7 +60,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // Reverse-DNS bundle id, aligned with the getchairback.com domain + brand.
     bundleIdentifier: "com.getchairback.rewards",
     buildNumber: "1",
-    supportsTablet: true,
+    // iPhone-only for v1: the dashboard WebView isn't iPad-optimized, and
+    // supporting tablet would require iPad screenshots + iPad review coverage.
+    supportsTablet: false,
     // Universal links: tapping https://getchairback.com/r/<token> opens the app
     // when installed (requires the matching apple-app-site-association file on
     // the web host - see the runbook).
@@ -73,6 +75,14 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       // App Store Connect stops asking the "App Encryption Documentation"
       // question on every upload.
       ITSAppUsesNonExemptEncryption: false,
+      // The dashboard WebView has <input type="file"> fields (shop logo, gallery,
+      // client CSV import). iOS offers "Take Photo" on image inputs and HARD
+      // CRASHES the app if the camera usage string is missing - these are
+      // required even though no native code touches the camera.
+      NSCameraUsageDescription:
+        "Lets you take photos for your shop page and gallery.",
+      NSPhotoLibraryUsageDescription:
+        "Lets you choose photos for your shop page and gallery.",
     },
   },
   android: {
