@@ -21,6 +21,7 @@ import { acuityOAuthRouter } from "./routes/acuity.oauth.js";
 import { squareOAuthRouter } from "./routes/square.oauth.js";
 import { adminRouter } from "./routes/admin.js";
 import { rewardsRouter } from "./routes/rewards.js";
+import { walletRouter } from "./routes/wallet.js";
 import { dashboardRouter } from "./routes/dashboard.js";
 import { bookingPublicRouter } from "./routes/booking.public.js";
 import { bookingDashboardRouter } from "./routes/booking.dashboard.js";
@@ -95,6 +96,7 @@ export function createApp(): Express {
   app.use("/api/acuity/oauth", oauthLimiter, acuityOAuthRouter);
   app.use("/api/square/oauth", oauthLimiter, squareOAuthRouter);
   app.use("/api/rewards", rewardsLimiter, rewardsRouter);
+  app.use("/api/wallet", rewardsLimiter, walletRouter); // Apple Wallet pass web service (public, ApplePass-token auth)
   app.use("/api/page", rewardsLimiter, publicPageRouter); // public shop pages
   app.use("/api/book", bookingPublicRouter); // public native booking (per-route limits inside)
   app.use("/api/dashboard", dashboardLimiter, dashboardRouter);

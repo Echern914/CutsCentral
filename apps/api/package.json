@@ -29,6 +29,7 @@
     "jose": "^5.9.6",
     "libphonenumber-js": "^1.11.9",
     "node-cron": "^3.0.3",
+    "passkit-generator": "^3.5.7",
     "pino": "^9.4.0",
     "pino-http": "^10.3.0",
     "stripe": "^22.2.0",

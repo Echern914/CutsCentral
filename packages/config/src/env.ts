@@ -136,6 +136,22 @@ const apiSchema = z.object({
   PUSH_VAPID_PRIVATE_KEY: z.string().min(1).optional(),
   PUSH_VAPID_SUBJECT: z.string().min(1).optional(),
 
+  // Apple Wallet punch card (optional - while ANY is unset, walletEnabled() is
+  // false: the rewards page hides its Add-to-Wallet button and the pass/web
+  // service routes 404. All five come from the Apple Developer portal:
+  //   - WALLET_PASS_TYPE_ID: the Pass Type ID (pass.com.getchairback.rewards)
+  //   - WALLET_TEAM_ID: the Apple Developer Team ID
+  //   - WALLET_PASS_CERT_BASE64 / WALLET_PASS_KEY_BASE64: the Pass Type ID
+  //     certificate + private key, PEM, base64-encoded (env-safe single line)
+  //   - WALLET_WWDR_CERT_BASE64: Apple's WWDR G4 intermediate cert, PEM, base64
+  // The SAME certificate also authenticates the APNs pass-update pokes.
+  WALLET_PASS_TYPE_ID: z.string().min(1).optional(),
+  WALLET_TEAM_ID: z.string().min(1).optional(),
+  WALLET_PASS_CERT_BASE64: z.string().min(1).optional(),
+  WALLET_PASS_KEY_BASE64: z.string().min(1).optional(),
+  WALLET_PASS_KEY_PASSPHRASE: z.string().optional(),
+  WALLET_WWDR_CERT_BASE64: z.string().min(1).optional(),
+
   // Error monitoring (optional).
   SENTRY_DSN: cleanUrl().optional(),
 

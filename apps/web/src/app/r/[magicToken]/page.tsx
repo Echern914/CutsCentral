@@ -22,6 +22,9 @@ export interface RewardsData {
     pageSlug: string | null;
   };
   client: { firstName: string | null };
+  // Apple Wallet punch card: available once the API's WALLET_* env is set.
+  // Optional so a web deploy ahead of the API doesn't break the page.
+  wallet?: { available: boolean };
   // Self-reported visit cadence. `preference` is null until the client answers
   // the one-tap prompt; `computed` is true once there's enough visit history for
   // the engine to derive a cadence (after which the prompt is moot).

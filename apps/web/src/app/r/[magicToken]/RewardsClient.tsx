@@ -13,6 +13,7 @@ import { ConsentCard } from "./ConsentCard";
 import { CadenceCard } from "./CadenceCard";
 import { PushOptIn } from "./PushOptIn";
 import { GetTheApp } from "./GetTheApp";
+import { AddToWallet } from "./AddToWallet";
 import { resolveRewardsTheme, rewardsFontVars, surfaceStyle } from "./theme";
 import type { RewardsData } from "./page";
 
@@ -227,6 +228,13 @@ export function RewardsClient({
             theme={t}
             appStoreUrl={appStoreUrl}
             playStoreUrl={playStoreUrl}
+          />
+
+          {/* Apple Wallet punch card - iOS Safari only, and only once the API
+              can mint passes (wallet.available). Renders nothing elsewhere. */}
+          <AddToWallet
+            magicToken={magicToken}
+            available={data.wallet?.available ?? false}
           />
 
           {/* SMS consent - prominent when not yet opted in, quiet once handled */}
