@@ -9,6 +9,7 @@ import {
 } from "../messaging/templates.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 import { sendPushToClient } from "../messaging/push.js";
+import { pokeWalletPass } from "../wallet/pass.js";
 import { inQuietHours } from "../engines/quietHours.js";
 import { hasActiveAccess } from "../billing/stripe.js";
 
@@ -202,6 +203,10 @@ export async function notifyPunchEarned(params: {
   now?: Date;
 }): Promise<void> {
   const now = params.now ?? new Date();
+  // The Apple Wallet punch card refreshes on every balance change - it is not
+  // a message (no consent/quiet-hours gates; the pass in Wallet IS the opt-in),
+  // so it fires before the notify eligibility below. Never throws.
+  void pokeWalletPass(params.clientId);
   try {
     const shop = await prisma.shop.findUnique({
       where: { id: params.shopId },
@@ -278,6 +283,8 @@ export async function notifyRewardRedeemed(params: {
   now?: Date;
 }): Promise<void> {
   const now = params.now ?? new Date();
+  // Wallet pass refresh - same rationale as in notifyPunchEarned.
+  void pokeWalletPass(params.clientId);
   try {
     const shop = await prisma.shop.findUnique({
       where: { id: params.shopId },

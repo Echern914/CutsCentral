@@ -270,6 +270,7 @@ model Shop {
   appointmentRequests AppointmentRequest[]
   reviews             Review[]
   pushSubscriptions   PushSubscription[]
+  walletPasses        WalletPassRegistration[]
 
   // Native booking engine relations
   staff                  Staff[]
@@ -480,12 +481,13 @@ model Client {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  visits            Visit[]
-  ledger            PunchLedger[]
-  nudges            Nudge[]
-  promoUses         PromotionRedemption[]
-  appointments      Appointment[]
-  pushSubscriptions PushSubscription[]
+  visits              Visit[]
+  ledger              PunchLedger[]
+  nudges              Nudge[]
+  promoUses           PromotionRedemption[]
+  appointments        Appointment[]
+  pushSubscriptions   PushSubscription[]
+  walletRegistrations WalletPassRegistration[]
 
   @@unique([shopId, acuityClientKey]) // tenant-scoped identity + idempotent upsert
   @@index([shopId])
@@ -701,6 +703,31 @@ model PushSubscription {
 
   @@index([shopId, clientId]) // the send-path lookup ("subs for this client")
   @@index([userId]) // the barber send-path lookup ("devices of this user")
+}
+
+// One iOS device registered for auto-updates of one client's Apple Wallet punch
+// card (Apple's PassKit Web Service protocol: the device calls our /api/wallet
+// v1 endpoints). deviceLibraryIdentifier is Apple's opaque per-device id;
+// pushToken is the PASS-update APNs token (a different token/topic than app
+// push - pokes go out signed with the Pass Type ID certificate). Tenant-owned
+// via shopId (FORCE RLS home) like PushSubscription; rows are written by the
+// public wallet routes via runAsOwner - the device authenticates with the
+// pass's authenticationToken, an HMAC of the client id (stateless, derived
+// from SESSION_SECRET), the same trust model as the magicToken writes.
+model WalletPassRegistration {
+  id                      String   @id @default(cuid())
+  shopId                  String
+  shop                    Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  clientId                String
+  client                  Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  deviceLibraryIdentifier String
+  pushToken               String
+  createdAt               DateTime @default(now())
+
+  // A device registers a given pass once; re-registering refreshes the token.
+  @@unique([deviceLibraryIdentifier, clientId])
+  @@index([clientId]) // the poke path ("devices holding this client's pass")
+  @@index([shopId])
 }
 
 //  Native booking engine (only used when Shop.bookingMode == native)

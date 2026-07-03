@@ -40,6 +40,7 @@ import { isNudgeEligible } from "../engines/eligibility.js";
 import { inQuietHours } from "../engines/quietHours.js";
 import { buildNudgeBody } from "../messaging/templates.js";
 import { getMessageProvider } from "../messaging/twilio.js";
+import { pokeWalletPass } from "../wallet/pass.js";
 import { toE164 } from "../acuity/clientKey.js";
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
@@ -903,6 +904,9 @@ dashboardRouter.post("/clients/:clientId/bonus", async (req, res) => {
     return;
   }
   const { newBalance } = await grantBonusPunches(shop.id, client.id, count);
+  // Gifted punches change the balance too - refresh the client's Wallet pass
+  // (fire-and-forget; earn/redeem get theirs via loyaltyNotify).
+  void pokeWalletPass(client.id);
   res.json({ ok: true, newBalance });
 });
 
