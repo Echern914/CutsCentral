@@ -125,6 +125,7 @@ export default async function DashboardPage() {
           name={me.data?.name ?? ""}
           email={me.data?.email ?? ""}
           shopName={shop.name}
+          hasPassword={me.data?.hasPassword ?? true}
         />
       </div>
     </main>
