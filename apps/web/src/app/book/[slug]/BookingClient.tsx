@@ -271,6 +271,14 @@ export function BookingClient({ data }: { data: BookShopData }) {
               accent={accent}
             />
           )}
+          <div className="mt-5">
+            <Link
+              href={`/s/${data.shop.slug}`}
+              className="inline-flex items-center gap-1 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite"
+            >
+              ← Back to {data.shop.name}
+            </Link>
+          </div>
         </div>
       </main>
     );
@@ -295,6 +303,12 @@ export function BookingClient({ data }: { data: BookShopData }) {
             {data.shop.name} isn&apos;t taking online bookings right now. Please
             contact the shop directly to book your next appointment.
           </p>
+          <Link
+            href={`/s/${data.shop.slug}`}
+            className="mt-4 inline-flex items-center gap-1 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite"
+          >
+            ← Back to {data.shop.name}
+          </Link>
         </div>
       </main>
     );
@@ -302,6 +316,15 @@ export function BookingClient({ data }: { data: BookShopData }) {
 
   return (
     <main className="mx-auto max-w-md px-5 py-8 text-offwhite">
+      {/* Exit: the booking funnel is often reached in a new tab or the app's
+          WebView, where there is no browser back chrome - without this the
+          customer is stranded on the picker with no way out. */}
+      <Link
+        href={`/s/${data.shop.slug}`}
+        className="mb-4 inline-flex items-center gap-1 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite"
+      >
+        ← Back to {data.shop.name}
+      </Link>
       <header className="mb-6 text-center">
         {data.shop.logoUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
