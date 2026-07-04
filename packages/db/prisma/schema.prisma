@@ -259,6 +259,7 @@ model Shop {
 
   acuity              AcuityConnection?
   square              SquareConnection?
+  googleCalendar      GoogleCalendarConnection?
   clients             Client[]
   visits              Visit[]
   ledger              PunchLedger[]
@@ -401,6 +402,31 @@ model SquareConnection {
   updatedAt        DateTime @updatedAt
 
   @@index([squareMerchantId])
+}
+
+// Google Calendar "bridge" connection. For shops on booking platforms with NO
+// public API (Booksy, GlossGenius, Vagaro, ...): those platforms sync their
+// appointments INTO the barber's Google Calendar, and we read the calendar as
+// the visit source. Unlike Acuity/Square this is NOT a bookingMode — it pairs
+// with `link` mode (the customer still books on the platform) and only feeds
+// Visits. Read-only calendar scope; sync is a polling sweep driven by Google's
+// incremental syncToken (no webhooks/watch channels in v1). Secrets table like
+// AcuityConnection/SquareConnection: ENABLE RLS only, no FORCE/policy/GRANT.
+model GoogleCalendarConnection {
+  id             String    @id @default(cuid())
+  shopId         String    @unique
+  shop           Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  googleEmail    String? // the connected Google account (display only; from the id_token)
+  calendarId     String    @default("primary") // which calendar we read (v1: always primary)
+  accessToken    String // AES-256-GCM encrypted (expires ~1 hour)
+  refreshToken   String // AES-256-GCM encrypted; REQUIRED (access_type=offline)
+  scope          String    @default("openid email https://www.googleapis.com/auth/calendar.events.readonly")
+  tokenExpiresAt DateTime // access-token expiry; refreshed reactively on 401
+  syncToken      String? // Google incremental-sync cursor; null => full windowed resync
+  lastSyncedAt   DateTime? // last successful sweep (dashboard sync-health)
+  revokedAt      DateTime? // set when refresh fails with invalid_grant (user revoked access)
+  connectedAt    DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 }
 
 //  Tenant-owned domain (every table carries shopId)

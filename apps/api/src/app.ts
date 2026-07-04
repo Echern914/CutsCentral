@@ -19,6 +19,7 @@ import { squareWebhookRouter } from "./routes/webhooks.square.js";
 import { twilioWebhookRouter } from "./routes/webhooks.twilio.js";
 import { acuityOAuthRouter } from "./routes/acuity.oauth.js";
 import { squareOAuthRouter } from "./routes/square.oauth.js";
+import { gcalOAuthRouter } from "./routes/gcal.oauth.js";
 import { adminRouter } from "./routes/admin.js";
 import { rewardsRouter } from "./routes/rewards.js";
 import { walletRouter } from "./routes/wallet.js";
@@ -95,6 +96,7 @@ export function createApp(): Express {
   app.use("/api", uploadRouter);
   app.use("/api/acuity/oauth", oauthLimiter, acuityOAuthRouter);
   app.use("/api/square/oauth", oauthLimiter, squareOAuthRouter);
+  app.use("/api/gcal/oauth", oauthLimiter, gcalOAuthRouter);
   app.use("/api/rewards", rewardsLimiter, rewardsRouter);
   app.use("/api/wallet", rewardsLimiter, walletRouter); // Apple Wallet pass web service (public, ApplePass-token auth)
   app.use("/api/page", rewardsLimiter, publicPageRouter); // public shop pages

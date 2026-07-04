@@ -75,6 +75,13 @@ const apiSchema = z.object({
   GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
   GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
   GOOGLE_OAUTH_REDIRECT_URI: cleanUrl().optional(),
+  // Google Calendar bridge (the Booksy/GlossGenius seam). REUSES the sign-in
+  // OAuth client above — same Google Cloud app, just (1) this extra redirect URI
+  // added to it, (2) the Calendar API enabled, and (3) the calendar.events.readonly
+  // scope on the consent screen. While this redirect (or the client id/secret) is
+  // unset, gcalEnabled() is false and the calendar-sync card is dark — mirrors
+  // the SQUARE_* optional seam.
+  GOOGLE_CALENDAR_OAUTH_REDIRECT_URI: cleanUrl().optional(),
   // NATIVE iOS sign-in (the mobile app). Both optional - while unset, the native
   // sign-in endpoints 503 and the app falls back to email/password.
   //  - Google native: the iOS OAuth client id (SEPARATE from the web client

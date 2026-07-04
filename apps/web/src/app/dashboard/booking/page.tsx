@@ -19,6 +19,12 @@ export interface ConnectStatus {
   acuityAvailable: boolean;
   squareConnected: boolean;
   squareAvailable: boolean;
+  // Google Calendar bridge (the Booksy/GlossGenius seam) — an add-on to link
+  // mode, not a bookingMode, so it renders as its own card below the picker.
+  gcalConnected: boolean;
+  gcalAvailable: boolean;
+  gcalEmail: string | null;
+  gcalRevoked: boolean;
 }
 export interface StaffRow {
   id: string;
@@ -54,18 +60,25 @@ export interface AppointmentRow {
 }
 
 export default async function BookingPage() {
-  const [shopRes, staffRes, servicesRes, apptsRes, acuityRes, squareRes] = await Promise.all([
-    apiGet<BookingShop>("/api/shops/me"),
-    apiGet<{ staff: StaffRow[] }>("/api/booking/staff"),
-    apiGet<{ services: ServiceRow[] }>("/api/booking/services"),
-    apiGet<{ appointments: AppointmentRow[] }>(
-      `/api/booking/appointments?from=${encodeURIComponent(new Date().toISOString())}`,
-    ),
-    // Connect status for the branded cards. These can 404/503 when a platform
-    // isn't configured; treat any non-ok as "not connected / unavailable".
-    apiGet<{ connected: boolean }>("/api/acuity/oauth/status"),
-    apiGet<{ connected: boolean; available: boolean }>("/api/square/oauth/status"),
-  ]);
+  const [shopRes, staffRes, servicesRes, apptsRes, acuityRes, squareRes, gcalRes] =
+    await Promise.all([
+      apiGet<BookingShop>("/api/shops/me"),
+      apiGet<{ staff: StaffRow[] }>("/api/booking/staff"),
+      apiGet<{ services: ServiceRow[] }>("/api/booking/services"),
+      apiGet<{ appointments: AppointmentRow[] }>(
+        `/api/booking/appointments?from=${encodeURIComponent(new Date().toISOString())}`,
+      ),
+      // Connect status for the branded cards. These can 404/503 when a platform
+      // isn't configured; treat any non-ok as "not connected / unavailable".
+      apiGet<{ connected: boolean }>("/api/acuity/oauth/status"),
+      apiGet<{ connected: boolean; available: boolean }>("/api/square/oauth/status"),
+      apiGet<{
+        connected: boolean;
+        available: boolean;
+        googleEmail: string | null;
+        revoked: boolean;
+      }>("/api/gcal/oauth/status"),
+    ]);
 
   if (!shopRes.ok || !shopRes.data) {
     return <main className="p-8 text-muted">Could not load your booking setup.</main>;
@@ -77,6 +90,10 @@ export default async function BookingPage() {
     acuityAvailable: acuityRes.ok,
     squareConnected: Boolean(squareRes.data?.connected),
     squareAvailable: Boolean(squareRes.data?.available),
+    gcalConnected: Boolean(gcalRes.data?.connected),
+    gcalAvailable: Boolean(gcalRes.data?.available),
+    gcalEmail: gcalRes.data?.googleEmail ?? null,
+    gcalRevoked: Boolean(gcalRes.data?.revoked),
   };
 
   return (

@@ -9,6 +9,7 @@ import { linkBookingsToNudges } from "./engines/attribution.js";
 import { promoteFulfilledAppointments } from "./engines/appointmentPromotion.js";
 import { runAppointmentReminders } from "./engines/appointmentReminders.js";
 import { refreshExpiringSquareTokens } from "./engines/squareTokenRefresh.js";
+import { runGcalSweep } from "./gcal/sync.js";
 import { runTrialReminders } from "./engines/trialReminder.js";
 
 const env = apiEnv();
@@ -97,6 +98,16 @@ export function startScheduler(): void {
     void withLease("square-token-refresh", 10 * MINUTE, () =>
       refreshExpiringSquareTokens(),
     ).catch((err) => logger.error({ err }, "square token refresh sweep failed"));
+  });
+
+  // Google Calendar bridge (Booksy/GlossGenius/etc): incremental-sync every
+  // connected shop every 10 minutes. With an up-to-date syncToken this is ONE
+  // cheap delta request per shop; no-op while gcalEnabled() is false or no
+  // shop is connected. TTL sized for many shops x a slow Google day.
+  cron.schedule("*/10 * * * *", () => {
+    void withLease("gcal-sync", 8 * MINUTE, () => runGcalSweep()).catch((err) =>
+      logger.error({ err }, "gcal sync sweep failed"),
+    );
   });
 
   // Trial-expiry reminder EMAILS to shop owners, daily at 14:00 (mid-morning

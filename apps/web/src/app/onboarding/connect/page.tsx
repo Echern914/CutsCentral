@@ -8,13 +8,16 @@ interface ShopStatus {
 }
 
 export default async function ConnectPage() {
-  const [shopRes, squareRes] = await Promise.all([
+  const [shopRes, squareRes, gcalRes] = await Promise.all([
     apiGet<ShopStatus>("/api/shops/me"),
-    // Square is optional/dark until configured; treat any non-ok as unavailable.
+    // Square + Google Calendar are optional/dark until configured; treat any
+    // non-ok as unavailable.
     apiGet<{ available: boolean }>("/api/square/oauth/status"),
+    apiGet<{ available: boolean }>("/api/gcal/oauth/status"),
   ]);
   const connected = shopRes.data?.connected ?? false;
   const squareAvailable = Boolean(squareRes.data?.available);
+  const gcalAvailable = Boolean(gcalRes.data?.available);
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center px-5">
@@ -50,6 +53,17 @@ export default async function ConnectPage() {
                 Connect Square
               </a>
             )}
+            {gcalAvailable && (
+              <a
+                href={`${API_BASE}/api/gcal/oauth/start`}
+                className="inline-flex w-full items-center justify-center rounded-full border border-subtle px-6 py-3 text-sm font-semibold text-offwhite transition-all duration-150 ease-out hover:border-subtle-strong hover:bg-charcoal-700"
+              >
+                Connect Google Calendar
+                <span className="ml-1.5 text-xs font-normal text-muted">
+                  Booksy, GlossGenius…
+                </span>
+              </a>
+            )}
             <a
               href="/dashboard/booking"
               className="text-xs text-muted hover:underline"
@@ -63,10 +77,22 @@ export default async function ConnectPage() {
               Not connecting now? Skip and log visits with one tap instead
             </a>
             <p className="text-center text-[11px] leading-relaxed text-muted">
-              On Booksy, Fresha, Vagaro, or pen &amp; paper? Everything still
-              works: import your client list as a CSV (Clients → Import), then
-              tap “Log visit” after each appointment. You can connect a booking
-              system later in Settings.
+              {gcalAvailable ? (
+                <>
+                  On Booksy, GlossGenius, or Vagaro? Turn on their Google
+                  Calendar sync, then Connect Google Calendar above and visits
+                  track automatically. On Fresha or pen &amp; paper? Import your
+                  client list as a CSV (Clients → Import) and tap “Log visit”
+                  after each appointment.
+                </>
+              ) : (
+                <>
+                  On Booksy, Fresha, Vagaro, or pen &amp; paper? Everything still
+                  works: import your client list as a CSV (Clients → Import), then
+                  tap “Log visit” after each appointment. You can connect a booking
+                  system later in Settings.
+                </>
+              )}
             </p>
           </>
         )}

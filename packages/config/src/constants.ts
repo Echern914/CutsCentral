@@ -253,6 +253,32 @@ export function squareHost(env: SquareEnv): string {
   return SQUARE.hosts[env];
 }
 
+/**
+ * Google Calendar bridge. Booksy, GlossGenius, Vagaro etc. have NO public API,
+ * but they all sync their appointments into the merchant's Google Calendar —
+ * so the calendar is the one machine-readable feed of those bookings. We OAuth
+ * into the barber's Google account (read-only events scope), poll the primary
+ * calendar with Google's incremental syncToken, and ingest events as Visits.
+ *
+ * Scopes: calendar.events.readonly is the narrowest calendar scope (sensitive,
+ * not restricted — no security assessment needed for Google verification);
+ * openid+email only to show WHICH account is connected on the dashboard card.
+ */
+export const GCAL = {
+  authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+  tokenUrl: "https://oauth2.googleapis.com/token",
+  revokeUrl: "https://oauth2.googleapis.com/revoke",
+  apiBase: "https://www.googleapis.com/calendar/v3",
+  scope: "openid email https://www.googleapis.com/auth/calendar.events.readonly",
+  /**
+   * Initial sync window in days. Deliberately NOT BACKFILL_MIN_DATE (2015):
+   * unlike Acuity/Square — whose history is bookings only — a personal Google
+   * calendar mixes years of non-booking events. 90 days seeds recent regulars'
+   * visit history without dredging a decade of noise.
+   */
+  backfillDays: 90,
+} as const;
+
 /** Far-past date the backfill walks from. */
 export const BACKFILL_MIN_DATE = "2015-01-01";
 

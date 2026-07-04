@@ -119,6 +119,11 @@ export async function disconnectSquareAction(): Promise<Result> {
   return done(await apiSend("POST", "/api/square/oauth/disconnect"));
 }
 
+/** Disconnect the Google Calendar bridge: revokes + deletes the token. Visits kept. */
+export async function disconnectGcalAction(): Promise<Result> {
+  return done(await apiSend("POST", "/api/gcal/oauth/disconnect"));
+}
+
 //  Appointments
 
 export async function cancelAppointmentAction(id: string): Promise<Result> {

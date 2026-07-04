@@ -12,6 +12,7 @@ import type {
   StaffRow,
 } from "./page";
 import { ConnectPlatforms } from "./ConnectPlatforms";
+import { GoogleCalendarCard } from "./GoogleCalendarCard";
 import {
   cancelAppointmentAction,
   completeAppointmentAction,
@@ -166,6 +167,11 @@ function SettingsTab({
   return (
     <div className="flex flex-col gap-5">
       <ConnectPlatforms mode={mode} onPick={pickMode} connect={connect} apiBase={apiBase} />
+
+      {/* Booksy/GlossGenius bridge — pairs with any mode (typically "link"),
+          so it lives beside the picker rather than in it. Self-hides when the
+          bridge isn't configured on the platform. */}
+      <GoogleCalendarCard connect={connect} apiBase={apiBase} />
 
       {mode === "native" && (
         <Card className="p-5">
