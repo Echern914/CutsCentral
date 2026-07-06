@@ -175,7 +175,11 @@ dashboardRouter.get("/stats", async (req, res) => {
   });
 });
 
-// Monthly trends: completed visits + nudges sent, configurable range (3/6/12).
+// Monthly trends over a configurable range (3/6/12). Per-month series:
+//   visits (COMPLETED), nudges (SENT), newClients (Client.createdAt),
+//   paymentsSucceeded (Payment status=succeeded), rebookingsRecovered
+//   (Nudge.resultedInBookingAt). One fetch per source back to `earliest`, then
+//   bucketed in memory with half-open [start,end) intervals.
 dashboardRouter.get("/trends", async (req, res) => {
   const shop = req.shop!;
   const now = new Date();
@@ -194,7 +198,7 @@ dashboardRouter.get("/trends", async (req, res) => {
   }
 
   const earliest = months[0]!.start;
-  const [visits, nudges] = await Promise.all([
+  const [visits, nudges, newClients, payments, rebookings] = await Promise.all([
     prisma.visit.findMany({
       where: { shopId: shop.id, status: "COMPLETED", scheduledAt: { gte: earliest } },
       select: { scheduledAt: true },
@@ -203,12 +207,36 @@ dashboardRouter.get("/trends", async (req, res) => {
       where: { shopId: shop.id, status: "SENT", createdAt: { gte: earliest } },
       select: { createdAt: true },
     }),
+    // New customers per month, by when the client first landed in ChairBack.
+    prisma.client.findMany({
+      where: { shopId: shop.id, createdAt: { gte: earliest } },
+      select: { createdAt: true },
+    }),
+    // Successful card payments per month. createdAt is the only reliably-written
+    // Payment timestamp (capturedAt/authorizedAt are hold-mode-only, never set).
+    // Empty for shops not on ChairBack payments (opt-in Stripe Connect feature).
+    prisma.payment.findMany({
+      where: { shopId: shop.id, status: "succeeded", createdAt: { gte: earliest } },
+      select: { createdAt: true },
+    }),
+    // Rebookings recovered per month: nudges that led to a booking, by the
+    // booking date. Parallels the /stats "rebookings recovered" scalar over time.
+    prisma.nudge.findMany({
+      where: { shopId: shop.id, resultedInBookingAt: { gte: earliest } },
+      select: { resultedInBookingAt: true },
+    }),
   ]);
+
+  const inMonth = (d: Date | null, m: { start: Date; end: Date }) =>
+    d !== null && d >= m.start && d < m.end;
 
   const series = months.map((m) => ({
     label: m.label,
-    visits: visits.filter((v) => v.scheduledAt >= m.start && v.scheduledAt < m.end).length,
-    nudges: nudges.filter((n) => n.createdAt >= m.start && n.createdAt < m.end).length,
+    visits: visits.filter((v) => inMonth(v.scheduledAt, m)).length,
+    nudges: nudges.filter((n) => inMonth(n.createdAt, m)).length,
+    newClients: newClients.filter((c) => inMonth(c.createdAt, m)).length,
+    paymentsSucceeded: payments.filter((p) => inMonth(p.createdAt, m)).length,
+    rebookingsRecovered: rebookings.filter((n) => inMonth(n.resultedInBookingAt, m)).length,
   }));
   res.json({ series });
 });
