@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import * as AppleAuthentication from "expo-apple-authentication";
@@ -35,6 +42,23 @@ export default function LoginScreen() {
   const [appleAvailable, setAppleAvailable] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const handing = useRef(false); // guard a double handoff
+  // A returning barber already has a stored 30-day session: skip the buttons and
+  // go straight to /barber, which re-asserts the dashboard cookie through
+  // /app-auth. Render nothing until this resolves so the buttons never flash.
+  const [checking, setChecking] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      let token: string | null = null;
+      try {
+        token = await AsyncStorage.getItem(STORAGE.session);
+      } catch {
+        token = null;
+      }
+      if (token) router.replace("/barber");
+      else setChecking(false);
+    })();
+  }, []);
 
   useEffect(() => {
     if (Platform.OS === "ios") {
@@ -123,6 +147,14 @@ export default function LoginScreen() {
     }
   }
 
+  if (checking) {
+    return (
+      <View style={[styles.root, styles.center]}>
+        <ActivityIndicator color="#fff" />
+      </View>
+    );
+  }
+
   return (
     <View style={styles.root}>
       <SafeAreaView style={styles.safe}>
@@ -189,6 +221,7 @@ export default function LoginScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#0A0A0B" },
+  center: { alignItems: "center", justifyContent: "center" },
   safe: { flex: 1, justifyContent: "center" },
   content: { paddingHorizontal: 28, alignItems: "center" },
   title: {

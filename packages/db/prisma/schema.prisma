@@ -92,6 +92,31 @@ model User {
   updatedAt     DateTime  @updatedAt
 
   shops Shop[] @relation("ShopOwner") // one today; FK clean for N later
+
+  passwordResetTokens PasswordResetToken[]
+  // Barber/manager devices registered for native push (dashboard app).
+  pushSubscriptions   PushSubscription[]
+}
+
+// One-shot forgot-password tokens. Only the sha256 of the token is stored - the
+// raw value exists solely inside the emailed link, so a DB leak can't reset
+// anyone's password. Rows are short-lived (30 min expiry, deleted when a newer
+// request supersedes them) and single-use (usedAt stamped atomically on redeem).
+//
+// Non-tenant table (keyed to User, the global login identity): RLS is ENABLED
+// with NO policy in the migration - deny-all for the Supabase data API roles,
+// while the postgres owner the app connects as bypasses RLS. Matches the
+// 20260609000000 non-tenant lockdown pattern. NOT force-RLS.
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique // sha256 hex of the emailed token; never the raw value
+  expiresAt DateTime
+  usedAt    DateTime? // stamped on redeem; non-null = spent, can never be replayed
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
 }
 
 model Shop {
@@ -150,6 +175,12 @@ model Shop {
   // Premium regardless of Stripe - independent of trial/subscription, survives
   // Stripe going live, and is excluded from paying-revenue counts. Operator-only.
   compAccess           Boolean   @default(false)
+  // Trial-expiry reminder emails: the highest stage already sent (0 = none,
+  // 1 = "a week left", 2 = "ends tomorrow", 3 = "trial ended"). Monotonic - the
+  // sweep only ever advances it (compare-and-set BEFORE sending), so each stage
+  // emails at most once no matter how many times the daily job runs. See
+  // engines/trialReminder.ts.
+  trialReminderStage   Int       @default(0)
 
   // Public shop page (/s/[slug]) - each barber's own mini-site.
   slug              String?  @unique // URL handle; backfilled from name
@@ -241,6 +272,7 @@ model Shop {
   appointmentRequests AppointmentRequest[]
   reviews             Review[]
   pushSubscriptions   PushSubscription[]
+  walletPasses        WalletPassRegistration[]
 
   // Native booking engine relations
   staff                  Staff[]
@@ -507,13 +539,14 @@ model Client {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  visits            Visit[]
-  ledger            PunchLedger[]
-  nudges            Nudge[]
-  promoUses         PromotionRedemption[]
-  appointments      Appointment[]
-  pushSubscriptions PushSubscription[]
-  cardGrants        CardGrant[]
+  visits              Visit[]
+  ledger              PunchLedger[]
+  nudges              Nudge[]
+  promoUses           PromotionRedemption[]
+  appointments        Appointment[]
+  pushSubscriptions   PushSubscription[]
+  cardGrants          CardGrant[]
+  walletRegistrations WalletPassRegistration[]
 
   @@unique([shopId, acuityClientKey]) // tenant-scoped identity + idempotent upsert
   @@index([shopId])
@@ -692,23 +725,32 @@ enum PushKind {
   expo
 }
 
-// A push subscription for ONE device of one client - a PWA browser (web) OR the
-// native app (expo). The OS permission grant + this row ARE the push consent,
-// independent of SMS consent (smsConsentAt/optedOut), so a client who replied
-// STOP to texts but installed and allowed notifications is still push-reachable
-// (and still no SMS).
+// A push subscription for ONE device of one identity - EITHER a client (the
+// customer rewards page/app) OR a user (the barber/manager dashboard app).
+// Exactly one of clientId/userId is set; the API stamps it server-side. The OS
+// permission grant + this row ARE the push consent, independent of SMS consent
+// (smsConsentAt/optedOut), so a client who replied STOP to texts but installed
+// and allowed notifications is still push-reachable (and still no SMS).
 //
-// Tenant-owned (shopId, FORCE RLS) like the rest. Created on the PUBLIC rewards
-// route (resolved by the global magicToken, runs as the connection owner, bypasses
-// RLS - same trust model as the rewards opt-in / AppointmentRequest / Review
-// writes); the send path reads it through forShop() (RLS-enforced). shopId is
-// always derived from the resolved client, never from the request.
+// Tenant-owned (shopId, FORCE RLS) like the rest. Client rows are created on
+// the PUBLIC rewards route (resolved by the global magicToken, runs as the
+// connection owner, bypasses RLS - same trust model as the rewards opt-in /
+// AppointmentRequest / Review writes); the client send path reads them through
+// forShop() (RLS-enforced). USER rows are created on the authenticated
+// dashboard route and read via runAsOwner: a manager's device serves every
+// shop they own, so the lookup is user-keyed, not shop-scoped - shopId records
+// the shop active at registration. shopId/userId are always derived from the
+// resolved client/session, never from the request body.
 model PushSubscription {
   id            String   @id @default(cuid())
   shopId        String
   shop          Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  clientId      String
-  client        Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  // CUSTOMER transport: the client this device belongs to. Null for barber rows.
+  clientId      String?
+  client        Client?  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  // BARBER transport: the owner/manager this device belongs to. Null for client rows.
+  userId        String?
+  user          User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
   kind          PushKind @default(web)
   // WEB transport: the push service endpoint URL (FCM/Mozilla/Apple) + the keys
   // used to encrypt the payload. Null for expo rows. endpoint is unique so a
@@ -727,6 +769,32 @@ model PushSubscription {
   lastSeenAt    DateTime @default(now()) // refreshed on re-subscribe + successful send
 
   @@index([shopId, clientId]) // the send-path lookup ("subs for this client")
+  @@index([userId]) // the barber send-path lookup ("devices of this user")
+}
+
+// One iOS device registered for auto-updates of one client's Apple Wallet punch
+// card (Apple's PassKit Web Service protocol: the device calls our /api/wallet
+// v1 endpoints). deviceLibraryIdentifier is Apple's opaque per-device id;
+// pushToken is the PASS-update APNs token (a different token/topic than app
+// push - pokes go out signed with the Pass Type ID certificate). Tenant-owned
+// via shopId (FORCE RLS home) like PushSubscription; rows are written by the
+// public wallet routes via runAsOwner - the device authenticates with the
+// pass's authenticationToken, an HMAC of the client id (stateless, derived
+// from SESSION_SECRET), the same trust model as the magicToken writes.
+model WalletPassRegistration {
+  id                      String   @id @default(cuid())
+  shopId                  String
+  shop                    Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  clientId                String
+  client                  Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  deviceLibraryIdentifier String
+  pushToken               String
+  createdAt               DateTime @default(now())
+
+  // A device registers a given pass once; re-registering refreshes the token.
+  @@unique([deviceLibraryIdentifier, clientId])
+  @@index([clientId]) // the poke path ("devices holding this client's pass")
+  @@index([shopId])
 }
 
 //  Native booking engine (only used when Shop.bookingMode == native)

@@ -13,6 +13,7 @@ import {
 import { prisma, runAsOwner } from "@chairback/db";
 import { toE164 } from "../acuity/clientKey.js";
 import { getMessageProvider } from "../messaging/twilio.js";
+import { buildPassForClient, walletEnabled } from "../wallet/pass.js";
 import { logger } from "../logger.js";
 
 const env = apiEnv();
@@ -362,6 +363,9 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
     },
     loyalty,
     consent: consentView(client),
+    // Whether the API can mint Apple Wallet passes (WALLET_* env configured) -
+    // drives the rewards page's Add-to-Wallet button.
+    wallet: { available: walletEnabled() },
     punches: {
       balance,
       // Grid target: progress toward the next reward out of reach (null when
@@ -736,6 +740,38 @@ rewardsRouter.post("/resolve-by-phone", async (req, res) => {
   }
 
   res.json(ok);
+});
+
+/**
+ * Download the client's Apple Wallet punch card. Same trust model as the rest
+ * of this router: the magicToken IS the auth. 404 while wallet is unconfigured
+ * (the rewards page hides the button then) and on a bad token.
+ */
+rewardsRouter.get("/:magicToken/wallet-pass", async (req, res) => {
+  if (!walletEnabled()) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const client = await runAsOwner((tx) =>
+    tx.client.findUnique({
+      where: { magicToken: req.params.magicToken },
+      select: { id: true },
+    }),
+  );
+  if (!client) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const pass = await buildPassForClient(client.id);
+  if (!pass) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res
+    .set("Content-Type", "application/vnd.apple.pkpass")
+    .set("Content-Disposition", 'attachment; filename="punchcard.pkpass"')
+    .set("Cache-Control", "no-store")
+    .send(pass);
 });
 
 const pushNativeSchema = z

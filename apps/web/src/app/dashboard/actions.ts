@@ -384,6 +384,22 @@ export async function changePasswordAction(
   };
 }
 
+export async function deleteAccountAction(
+  _prev: { error?: string },
+  formData: FormData,
+): Promise<{ error?: string }> {
+  const res = await apiSend("DELETE", "/api/auth/me", {
+    confirm: String(formData.get("confirm") ?? ""),
+  });
+  if (!res.ok) {
+    return { error: "Confirmation didn't match. Type your account email exactly." };
+  }
+  // The account is gone and the API cleared the session cookie; /login is the
+  // only truthful destination. (In the iOS app, barber.tsx intercepts this
+  // /login navigation and hands off to the native sign-in screen.)
+  redirect("/login");
+}
+
 export async function deleteShopAction(
   _prev: { error?: string },
   formData: FormData,

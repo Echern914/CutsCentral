@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { forShop, prisma, runWithShop } from "@chairback/db"; // runWithShop: batch a page's tenant reads into one connection
+import { forShop, prisma, runAsOwner, runWithShop } from "@chairback/db"; // runWithShop: batch a page's tenant reads into one connection
 import {
   NUDGE,
   apiEnv,
@@ -40,12 +40,64 @@ import { isNudgeEligible } from "../engines/eligibility.js";
 import { inQuietHours } from "../engines/quietHours.js";
 import { buildNudgeBody } from "../messaging/templates.js";
 import { getMessageProvider } from "../messaging/twilio.js";
+import { pokeWalletPass } from "../wallet/pass.js";
 import { toE164 } from "../acuity/clientKey.js";
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
 export const dashboardRouter: Router = Router();
 dashboardRouter.use(requireUser, requireShop);
+
+const pushNativeSchema = z
+  .object({
+    expoPushToken: z.string().min(1).max(255),
+    platform: z.string().max(20).optional(),
+  })
+  .strict();
+
+/**
+ * Register THIS barber/manager's device (the iOS dashboard app) for native
+ * push - the authenticated twin of the customer route (routes/rewards.ts
+ * push-native). The row is keyed to the USER, not a client: business events
+ * (new appointment request) fan out to every device this user registered,
+ * across every shop they own. shopId records the shop active at registration
+ * (the table's RLS home); the write goes through runAsOwner because a
+ * re-registering manager's existing row may carry another of their shops'
+ * shopId, which a shop-scoped write couldn't touch. userId/shopId come from
+ * the session, never the body. Upsert by token so re-registering refreshes.
+ */
+dashboardRouter.post("/push/native", async (req, res) => {
+  const parsed = pushNativeSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const { expoPushToken, platform } = parsed.data;
+  await runAsOwner((tx) =>
+    tx.pushSubscription.upsert({
+      where: { expoPushToken },
+      create: {
+        shopId: req.shop!.id,
+        userId: req.userId!,
+        kind: "expo",
+        expoPushToken,
+        userAgent: platform ?? null,
+      },
+      update: {
+        shopId: req.shop!.id,
+        userId: req.userId!,
+        // A device is one identity: if this token ever re-registers from the
+        // barber app after being a customer device, it stops being client-keyed.
+        clientId: null,
+        kind: "expo",
+        userAgent: platform ?? null,
+        failureCount: 0,
+        lastSeenAt: new Date(),
+      },
+    }),
+  );
+  res.json({ ok: true });
+});
 
 function daysSince(d: Date, now: Date): number {
   return Math.floor((now.getTime() - d.getTime()) / MS_PER_DAY);
@@ -887,6 +939,9 @@ dashboardRouter.post("/clients/:clientId/bonus", async (req, res) => {
     res.status(404).json({ error: "card_not_found" });
     return;
   }
+  // Gifted punches change the balance too - refresh the client's Wallet pass
+  // (fire-and-forget; earn/redeem get theirs via loyaltyNotify).
+  void pokeWalletPass(client.id);
   res.json({ ok: true, newBalance: result.newBalance });
 });
 

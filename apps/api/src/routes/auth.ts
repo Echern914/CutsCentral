@@ -29,6 +29,8 @@ import {
 } from "../auth/native.js";
 import { requireUser, resolveOwnedShop } from "../middleware/auth.js";
 import { authLimiter } from "../middleware/rateLimit.js";
+import { billingEnabled, stripeClient } from "../billing/stripe.js";
+import { logger } from "../logger.js";
 
 const env = apiEnv();
 export const authRouter: Router = Router();
@@ -139,7 +141,17 @@ authRouter.post("/logout", async (req, res) => {
 authRouter.get("/me", requireUser, async (req, res) => {
   const user = await prisma.user.findUnique({
     where: { id: req.userId },
-    select: { id: true, email: true, name: true, isAdmin: true, welcomeSeenAt: true },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      isAdmin: true,
+      welcomeSeenAt: true,
+      // Exposed only as the hasPassword boolean below - lets the account card
+      // say "Set a password" instead of asking a social-only (Apple/Google)
+      // account for a current password it doesn't have.
+      passwordHash: true,
+    },
   });
   if (!user) {
     res.status(401).json({ error: "unauthorized" });
@@ -158,10 +170,11 @@ authRouter.get("/me", requireUser, async (req, res) => {
     req.userId!,
     req.cookies?.[ACTIVE_SHOP_COOKIE_NAME] as string | undefined,
   );
-  const { welcomeSeenAt, ...rest } = user;
+  const { welcomeSeenAt, passwordHash, ...rest } = user;
   res.json({
     ...rest,
     welcomeSeen: welcomeSeenAt !== null,
+    hasPassword: passwordHash !== null,
     shops,
     activeShopId: activeShop?.id ?? null,
   });
@@ -231,6 +244,58 @@ authRouter.post("/change-password", requireUser, async (req, res) => {
   });
   const token = setSessionCookie(res, updated.id, updated.tokenVersion);
   res.json({ ok: true, token });
+});
+
+// Danger zone: delete the ACCOUNT - the User row plus every shop it owns (each
+// shop's clients/visits/punches/nudges cascade at the DB level, same as the
+// delete-shop route). This is App Store guideline 5.1.1(v): an account that can
+// be created in the app must be deletable in the app - deleting only the shop
+// would leave the login identity (email + Apple/Google ids) behind. Requires
+// the account email as a typed confirmation, mirroring delete-shop's typed name.
+authRouter.delete("/me", requireUser, async (req, res) => {
+  const user = await prisma.user.findUnique({
+    where: { id: req.userId },
+    select: { id: true, email: true },
+  });
+  if (!user) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  const confirm = String(req.body?.confirm ?? "").trim().toLowerCase();
+  if (confirm !== user.email.toLowerCase()) {
+    res.status(400).json({ error: "confirm_mismatch" });
+    return;
+  }
+
+  // Stop billing FIRST: the Stripe webhook that normally syncs subscription
+  // state has no Shop row left to update after the delete, so an uncanceled
+  // subscription would silently keep charging a deleted account. Best-effort -
+  // a Stripe hiccup must not make the account undeletable; log and continue.
+  if (billingEnabled()) {
+    const billedShops = await prisma.shop.findMany({
+      where: { ownerId: user.id, stripeSubscriptionId: { not: null } },
+      select: { id: true, stripeSubscriptionId: true },
+    });
+    for (const shop of billedShops) {
+      try {
+        await stripeClient().subscriptions.cancel(shop.stripeSubscriptionId!);
+      } catch (err) {
+        logger.error(
+          { err, shopId: shop.id },
+          "account delete: subscription cancel failed",
+        );
+      }
+    }
+  }
+
+  // Shops first (their FK to User has no cascade), then the user. One
+  // transaction so a failure can't leave an orphaned half-deleted account.
+  await prisma.$transaction([
+    prisma.shop.deleteMany({ where: { ownerId: user.id } }),
+    prisma.user.delete({ where: { id: user.id } }),
+  ]);
+  clearSessionCookie(res);
+  res.json({ ok: true });
 });
 
 // Google sign-in

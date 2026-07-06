@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { AppWebView } from "@/src/AppWebView";
-import { useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import * as Linking from "expo-linking";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { rewardsUrl, API_ORIGIN, STORAGE } from "@/src/config";
@@ -179,6 +179,24 @@ export default function CustomerScreen() {
       <Pressable style={[styles.button, styles.buttonSecondary]} onPress={textMeMyLink}>
         <Text style={styles.buttonSecondaryText}>Text me my link</Text>
       </Pressable>
+
+      <Pressable
+        accessibilityRole="button"
+        style={styles.back}
+        onPress={async () => {
+          // Clear the saved "customer" role first, otherwise the picker
+          // immediately redirects right back here (it auto-routes a returning
+          // user to their saved mode) - the same loop login.tsx's back fixes.
+          try {
+            await AsyncStorage.removeItem(STORAGE.mode);
+          } catch {
+            // best-effort; still go back to the picker
+          }
+          router.replace("/");
+        }}
+      >
+        <Text style={styles.backText}>← Not a customer? Go back</Text>
+      </Pressable>
     </SafeAreaView>
   );
 }
@@ -204,4 +222,6 @@ const styles = StyleSheet.create({
   divider: { flexDirection: "row", alignItems: "center", marginVertical: 28 },
   line: { flex: 1, height: 1, backgroundColor: "#26262b" },
   dividerText: { color: "#6b6b70", fontSize: 13, marginHorizontal: 12 },
+  back: { marginTop: 28, alignSelf: "center" },
+  backText: { color: "#6b6b70", fontSize: 13 },
 });

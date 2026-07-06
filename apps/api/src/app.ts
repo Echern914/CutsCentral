@@ -10,6 +10,7 @@ import { pinoHttp } from "pino-http";
 import { apiEnv } from "@chairback/config";
 import { logger } from "./logger.js";
 import { authRouter } from "./routes/auth.js";
+import { passwordResetRouter } from "./routes/passwordReset.js";
 import { healthRouter } from "./routes/health.js";
 import { publicPageRouter, shopsRouter } from "./routes/shops.js";
 import { uploadRouter } from "./routes/upload.js";
@@ -20,6 +21,7 @@ import { acuityOAuthRouter } from "./routes/acuity.oauth.js";
 import { squareOAuthRouter } from "./routes/square.oauth.js";
 import { adminRouter } from "./routes/admin.js";
 import { rewardsRouter } from "./routes/rewards.js";
+import { walletRouter } from "./routes/wallet.js";
 import { dashboardRouter } from "./routes/dashboard.js";
 import { bookingPublicRouter } from "./routes/booking.public.js";
 import { bookingDashboardRouter } from "./routes/booking.dashboard.js";
@@ -84,6 +86,9 @@ export function createApp(): Express {
 
   // (3) JSON API.
   app.use("/api/auth", authRouter); // signup/login limited inside the router
+  // Forgot/reset password lives in its own router (composes with authRouter on
+  // the same mount; sensitive POSTs use authLimiter inside, like signup/login).
+  app.use("/api/auth", passwordResetRouter);
   app.use("/api/shops", shopsRouter);
   // Photo upload proxy. Uses a per-route express.raw() parser (image/*), so the
   // global express.json() above leaves its body untouched. Limited per-user.
@@ -91,6 +96,7 @@ export function createApp(): Express {
   app.use("/api/acuity/oauth", oauthLimiter, acuityOAuthRouter);
   app.use("/api/square/oauth", oauthLimiter, squareOAuthRouter);
   app.use("/api/rewards", rewardsLimiter, rewardsRouter);
+  app.use("/api/wallet", rewardsLimiter, walletRouter); // Apple Wallet pass web service (public, ApplePass-token auth)
   app.use("/api/page", rewardsLimiter, publicPageRouter); // public shop pages
   app.use("/api/book", bookingPublicRouter); // public native booking (per-route limits inside)
   app.use("/api/dashboard", dashboardLimiter, dashboardRouter);

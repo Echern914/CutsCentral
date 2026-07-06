@@ -25,6 +25,7 @@ import { requireShop, requireUser } from "../middleware/auth.js";
 import { previewNudgeBody } from "../messaging/templates.js";
 import { toE164 } from "../acuity/clientKey.js";
 import { getMessageProvider } from "../messaging/twilio.js";
+import { sendPushToUser } from "../messaging/push.js";
 import { leadLimiter } from "../middleware/rateLimit.js";
 import { logger } from "../logger.js";
 
@@ -486,14 +487,15 @@ publicPageRouter.post("/:slug/request", leadLimiter, async (req, res) => {
     },
   });
 
-  // Best-effort barber alert. A failed/absent notify must never fail the lead -
-  // it's already saved and will show in the dashboard inbox. Honors DRY_RUN so
-  // "no SMS sends" holds for EVERY outbound path, not just the nudge engine -
-  // this texts the barber's own number, but it's still a real (billable) send.
+  // Best-effort barber alerts. A failed/absent notify must never fail the lead -
+  // it's already saved and will show in the dashboard inbox.
+  const contact = toE164(d.phone) ?? d.email ?? "no contact info";
+  const note = d.message ? `: ${d.message}` : "";
+  const body = `New appointment request at ${shop.name} from ${d.firstName} (${contact})${note}`;
+  // SMS leg. Honors DRY_RUN so "no SMS sends" holds for EVERY outbound path,
+  // not just the nudge engine - this texts the barber's own number, but it's
+  // still a real (billable) send.
   if (shop.notifyPhone) {
-    const contact = toE164(d.phone) ?? d.email ?? "no contact info";
-    const note = d.message ? `: ${d.message}` : "";
-    const body = `New appointment request at ${shop.name} from ${d.firstName} (${contact})${note}`;
     if (apiEnv().DRY_RUN) {
       logger.info({ shopId: shop.id, to: shop.notifyPhone }, "lead notify SMS (dry-run, not sent)");
     } else {
@@ -504,6 +506,19 @@ publicPageRouter.post("/:slug/request", leadLimiter, async (req, res) => {
       }
     }
   }
+  // Native-app leg: every device the owner registered in the iOS dashboard app.
+  // No-op when none are registered; sendPushToUser honors DRY_RUN internally
+  // and never throws.
+  await sendPushToUser({
+    userId: shop.ownerId,
+    shopId: shop.id,
+    payload: {
+      title: "New appointment request",
+      body,
+      url: `${apiEnv().APP_BASE_URL}/dashboard/requests`,
+      tag: "appt-request",
+    },
+  });
 
   res.status(201).json({ ok: true });
 });

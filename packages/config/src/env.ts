@@ -108,6 +108,15 @@ const apiSchema = z.object({
   // own secret. The connect route tries both secrets when verifying.
   STRIPE_PLATFORM_WEBHOOK_SECRET: z.string().min(1).optional(),
 
+  // Transactional email via Resend (optional - while EITHER is unset,
+  // emailEnabled() is false: sendEmail() is a logged no-op, the forgot-password
+  // link hides itself, and the trial-reminder sweep stays dark. Setting both
+  // flips email on without a code change - mirrors the STRIPE_* seam above).
+  // EMAIL_FROM is the From header ("ChairBack <hello@getchairback.com>" or a
+  // bare address); its domain must be DNS-verified in Resend before sends work.
+  RESEND_API_KEY: z.string().min(1).optional(),
+  EMAIL_FROM: z.string().min(1).optional(),
+
   // Supabase Storage for shop photo uploads (logo / hero / gallery). Optional:
   // while any of these is unset, the upload endpoint returns 503 and the page
   // editor falls back to paste-a-URL, so the app still boots and works without
@@ -126,6 +135,22 @@ const apiSchema = z.object({
   PUSH_VAPID_PUBLIC_KEY: z.string().min(1).optional(),
   PUSH_VAPID_PRIVATE_KEY: z.string().min(1).optional(),
   PUSH_VAPID_SUBJECT: z.string().min(1).optional(),
+
+  // Apple Wallet punch card (optional - while ANY is unset, walletEnabled() is
+  // false: the rewards page hides its Add-to-Wallet button and the pass/web
+  // service routes 404. All five come from the Apple Developer portal:
+  //   - WALLET_PASS_TYPE_ID: the Pass Type ID (pass.com.getchairback.rewards)
+  //   - WALLET_TEAM_ID: the Apple Developer Team ID
+  //   - WALLET_PASS_CERT_BASE64 / WALLET_PASS_KEY_BASE64: the Pass Type ID
+  //     certificate + private key, PEM, base64-encoded (env-safe single line)
+  //   - WALLET_WWDR_CERT_BASE64: Apple's WWDR G4 intermediate cert, PEM, base64
+  // The SAME certificate also authenticates the APNs pass-update pokes.
+  WALLET_PASS_TYPE_ID: z.string().min(1).optional(),
+  WALLET_TEAM_ID: z.string().min(1).optional(),
+  WALLET_PASS_CERT_BASE64: z.string().min(1).optional(),
+  WALLET_PASS_KEY_BASE64: z.string().min(1).optional(),
+  WALLET_PASS_KEY_PASSPHRASE: z.string().optional(),
+  WALLET_WWDR_CERT_BASE64: z.string().min(1).optional(),
 
   // Error monitoring (optional).
   SENTRY_DSN: cleanUrl().optional(),
