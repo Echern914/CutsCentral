@@ -415,10 +415,19 @@ export async function deleteShopAction(
   redirect("/onboarding");
 }
 
-export async function trendsAction(
-  months: number,
-): Promise<{ label: string; visits: number; nudges: number }[]> {
-  const res = await apiGet<{ series: { label: string; visits: number; nudges: number }[] }>(
+// One month bucket from GET /api/dashboard/trends. Kept in sync with the API's
+// series shape + the TrendPoint interface in TrendsChart.tsx.
+interface TrendSeriesPoint {
+  label: string;
+  visits: number;
+  nudges: number;
+  newClients: number;
+  paymentsSucceeded: number;
+  rebookingsRecovered: number;
+}
+
+export async function trendsAction(months: number): Promise<TrendSeriesPoint[]> {
+  const res = await apiGet<{ series: TrendSeriesPoint[] }>(
     `/api/dashboard/trends?months=${months}`,
   );
   return res.data?.series ?? [];

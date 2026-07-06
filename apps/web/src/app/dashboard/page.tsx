@@ -3,6 +3,7 @@ import { apiGet } from "@/lib/api";
 import { getMe } from "@/lib/me";
 import { StatCards, type Stats } from "./_components/StatCards";
 import { TrendsChart, type TrendPoint } from "./_components/TrendsChart";
+import { RevenueTrends } from "./_components/RevenueTrends";
 import { SweepControl } from "./_components/SweepControl";
 import { WinbackPreview } from "./_components/WinbackPreview";
 import { AtRiskTable, type AtRiskRow } from "./_components/AtRiskTable";
@@ -86,6 +87,12 @@ export default async function DashboardPage() {
       <ConsentSetup needConsentCount={sync.data?.clientsNeedingConsent ?? 0} />
 
       {stats.data && <StatCards stats={stats.data} />}
+
+      {trends.data && (
+        <div className="mt-6">
+          <RevenueTrends series={trends.data.series} />
+        </div>
+      )}
 
       <div className="mt-6">
         <SweepControl atRiskCount={atRisk.data?.clients?.length ?? 0} />

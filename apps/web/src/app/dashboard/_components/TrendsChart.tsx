@@ -10,6 +10,12 @@ export interface TrendPoint {
   label: string;
   visits: number;
   nudges: number;
+  // Added for the expandable revenue-trend line charts (RevenueTrends). Optional
+  // so any older cached payload / narrower caller still type-checks; the /trends
+  // endpoint always returns them now.
+  newClients?: number;
+  paymentsSucceeded?: number;
+  rebookingsRecovered?: number;
 }
 
 /**
