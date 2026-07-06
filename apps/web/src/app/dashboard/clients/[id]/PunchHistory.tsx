@@ -12,6 +12,8 @@ export interface LedgerEntry {
   redeemed: number;
   runningBalance: number;
   note: string | null;
+  /** Which punch card this entry sits on; null = the shop's default card. */
+  card: { id: string; name: string; emoji: string | null; accentColor: string | null } | null;
   reversed: boolean;
   isCorrection: boolean;
   editable: boolean;
@@ -124,6 +126,15 @@ export function PunchHistory({
                     {e.note ? (
                       <span className="ml-2 text-xs text-muted">({e.note})</span>
                     ) : null}
+                    {e.card && (
+                      <span
+                        className="ml-2 rounded-full border border-subtle px-2 py-0.5 text-[10px] uppercase tracking-wide"
+                        style={{ color: e.card.accentColor ?? "#D4AF37" }}
+                      >
+                        {e.card.emoji ? `${e.card.emoji} ` : ""}
+                        {e.card.name}
+                      </span>
+                    )}
                     {e.reversed && (
                       <span className="ml-2 text-[10px] uppercase tracking-wide text-danger-soft">
                         undone

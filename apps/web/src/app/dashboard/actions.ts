@@ -212,8 +212,13 @@ export async function saveNotesAction(
 export async function bonusPunchAction(
   clientId: string,
   count: number,
+  // Which punch card to credit; omitted/null = the default card.
+  cardTypeId?: string | null,
 ): Promise<{ ok: boolean }> {
-  const res = await apiSend("POST", `/api/dashboard/clients/${clientId}/bonus`, { count });
+  const res = await apiSend("POST", `/api/dashboard/clients/${clientId}/bonus`, {
+    count,
+    ...(cardTypeId !== undefined && { cardTypeId }),
+  });
   revalidatePath(`/dashboard/clients/${clientId}`);
   return { ok: res.ok };
 }
@@ -221,11 +226,16 @@ export async function bonusPunchAction(
 export async function logVisitAction(
   clientId: string,
   serviceName?: string,
+  // Card override; omitted = auto-route by service, null = force default card.
+  cardTypeId?: string | null,
 ): Promise<{ ok: boolean; balance?: number }> {
   const res = await apiSend<{ ok: boolean; balance: number }>(
     "POST",
     `/api/dashboard/clients/${clientId}/visits`,
-    serviceName ? { serviceName } : {},
+    {
+      ...(serviceName ? { serviceName } : {}),
+      ...(cardTypeId !== undefined && { cardTypeId }),
+    },
   );
   revalidatePath(`/dashboard/clients/${clientId}`);
   revalidatePath("/dashboard/clients");
@@ -415,10 +425,19 @@ export async function deleteShopAction(
   redirect("/onboarding");
 }
 
-export async function trendsAction(
-  months: number,
-): Promise<{ label: string; visits: number; nudges: number }[]> {
-  const res = await apiGet<{ series: { label: string; visits: number; nudges: number }[] }>(
+// One month bucket from GET /api/dashboard/trends. Kept in sync with the API's
+// series shape + the TrendPoint interface in TrendsChart.tsx.
+interface TrendSeriesPoint {
+  label: string;
+  visits: number;
+  nudges: number;
+  newClients: number;
+  paymentsSucceeded: number;
+  rebookingsRecovered: number;
+}
+
+export async function trendsAction(months: number): Promise<TrendSeriesPoint[]> {
+  const res = await apiGet<{ series: TrendSeriesPoint[] }>(
     `/api/dashboard/trends?months=${months}`,
   );
   return res.data?.series ?? [];
