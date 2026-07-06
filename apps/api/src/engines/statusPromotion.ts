@@ -55,6 +55,8 @@ export async function promoteCompletedVisits(now = new Date()): Promise<number> 
         clientId: v.clientId,
         earned: earn.earned,
         balance: earn.balance,
+        cardTypeId: earn.cardTypeId,
+        cardName: earn.cardName,
         now,
       });
     }

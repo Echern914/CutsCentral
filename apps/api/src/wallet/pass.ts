@@ -113,10 +113,13 @@ export async function buildPassForClient(clientId: string): Promise<Buffer | nul
       },
     });
     if (!client) return null;
+    // The pass shows the DEFAULT card's view (cardTypeId null) - same as the
+    // rewards page's top-level balance. Identical to the total for every shop
+    // without custom card types.
     const [balance, rewards] = await Promise.all([
-      currentBalance(client.shop.id, client.id, tx),
+      currentBalance(client.shop.id, client.id, null, tx),
       tx.reward.findMany({
-        where: { shopId: client.shop.id, active: true },
+        where: { shopId: client.shop.id, active: true, cardTypeId: null },
         orderBy: { punchCost: "asc" },
         select: { name: true, punchCost: true },
       }),

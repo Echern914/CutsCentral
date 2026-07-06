@@ -97,6 +97,7 @@ type PunchCreateNoShop = Omit<Prisma.PunchLedgerUncheckedCreateInput, "shopId">;
 type NudgeCreateNoShop = Omit<Prisma.NudgeUncheckedCreateInput, "shopId">;
 type RewardCreateNoShop = Omit<Prisma.RewardUncheckedCreateInput, "shopId">;
 type EarnRuleCreateNoShop = Omit<Prisma.EarnRuleUncheckedCreateInput, "shopId">;
+type CardTypeCreateNoShop = Omit<Prisma.CardTypeUncheckedCreateInput, "shopId">;
 type PromotionCreateNoShop = Omit<Prisma.PromotionUncheckedCreateInput, "shopId">;
 type PromoUseCreateNoShop = Omit<
   Prisma.PromotionRedemptionUncheckedCreateInput,
@@ -286,6 +287,52 @@ export function forShop(shopId: string) {
       deleteMany: (args: Prisma.EarnRuleDeleteManyArgs) =>
         runWithShop(shopId, (tx) =>
           tx.earnRule.deleteMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+    },
+
+    cardType: {
+      findMany: (args: Prisma.CardTypeFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.cardType.findMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      findFirst: (args: Prisma.CardTypeFindFirstArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.cardType.findFirst({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      count: (args: Prisma.CardTypeCountArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.cardType.count({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      create: (args: { data: CardTypeCreateNoShop }) =>
+        runWithShop(shopId, (tx) =>
+          tx.cardType.create({
+            data: stamp(args.data, shopId) as Prisma.CardTypeUncheckedCreateInput,
+          }),
+        ),
+      updateMany: (args: Prisma.CardTypeUpdateManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.cardType.updateMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      deleteMany: (args: Prisma.CardTypeDeleteManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.cardType.deleteMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+    },
+
+    // Exclusive-card memberships. Creation goes through runWithShop directly
+    // (the grant upsert needs the composite unique), reads/deletes live here.
+    cardGrant: {
+      findMany: (args: Prisma.CardGrantFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.cardGrant.findMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      count: (args: Prisma.CardGrantCountArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.cardGrant.count({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      deleteMany: (args: Prisma.CardGrantDeleteManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.cardGrant.deleteMany({ ...args, where: scopeWhere(args.where, shopId) }),
         ),
     },
 

@@ -151,6 +151,8 @@ export async function promoteFulfilledAppointments(
           clientId: a.clientId,
           earned: earn.earned,
           balance: earn.balance,
+          cardTypeId: earn.cardTypeId,
+          cardName: earn.cardName,
           now,
         });
       }

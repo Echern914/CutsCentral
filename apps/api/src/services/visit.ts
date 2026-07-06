@@ -5,7 +5,7 @@ import {
   currentBalance,
   earnPunchForVisitInTx,
   liveExtraPunches,
-  visitEarnAmount,
+  routeVisitEarn,
 } from "./punch.js";
 
 /**
@@ -32,9 +32,10 @@ async function balanceOf(
   tx: Parameters<Parameters<typeof runWithShop>[1]>[0],
   shopId: string,
   clientId: string,
+  cardTypeId: string | null,
 ): Promise<number> {
   const agg = await tx.punchLedger.aggregate({
-    where: { shopId, clientId },
+    where: { shopId, clientId, cardTypeId },
     _sum: { punchesEarned: true, punchesRedeemed: true },
   });
   return (agg._sum.punchesEarned ?? 0) - (agg._sum.punchesRedeemed ?? 0);
@@ -65,14 +66,17 @@ export async function deleteVisit(
     if (!visit) return { ok: false as const, reason: "not_found" as const };
 
     const wasCompleted = visit.status === "COMPLETED";
+    let cardTypeId: string | null = null;
     if (wasCompleted) {
       // The live (non-reversed) earn for this visit, if any.
       const earn = await tx.punchLedger.findUnique({
         where: { visitId },
-        select: { punchesEarned: true, reversedAt: true },
+        select: { punchesEarned: true, reversedAt: true, cardTypeId: true },
       });
       const liveEarned = earn && earn.reversedAt === null ? earn.punchesEarned : 0;
-      const balance = await balanceOf(tx, shopId, clientId);
+      cardTypeId = earn?.cardTypeId ?? null;
+      // Guard the earn's OWN card - the claw-back only touches that balance.
+      const balance = await balanceOf(tx, shopId, clientId, cardTypeId);
       if (balance - liveEarned < 0) {
         return { ok: false as const, reason: "would_go_negative" as const, balance };
       }
@@ -80,13 +84,13 @@ export async function deleteVisit(
     }
     // Now safe: claw-back already removed the earn, so the cascade finds nothing.
     await tx.visit.delete({ where: { id: visit.id } });
-    return { ok: true as const, wasCompleted };
+    return { ok: true as const, wasCompleted, cardTypeId };
   });
 
   if (!result.ok) return result;
   // The completed-visit set changed: cadence must be recomputed (outside the tx).
   if (result.wasCompleted) await recomputeCadence(shopId, clientId);
-  const balance = await currentBalance(shopId, clientId);
+  const balance = await currentBalance(shopId, clientId, result.cardTypeId);
   return { ok: true, balance, wasCompleted: result.wasCompleted };
 }
 
@@ -98,6 +102,12 @@ export interface EditVisitInput {
    * to the shop's base earn rate).
    */
   serviceName?: string | null;
+  /**
+   * Move the earn to a specific card. Undefined = keep the earn's current card
+   * on date-only edits / re-route by service when the service changed; null =
+   * force the default card. Callers must validate the id belongs to the shop.
+   */
+  cardTypeId?: string | null;
 }
 
 export type EditVisitResult =
@@ -144,38 +154,56 @@ export async function editVisit(
     if (visit.status !== "COMPLETED") {
       // No punch impact; just update the fields.
       await tx.visit.update({ where: { id: visit.id }, data: fieldUpdate });
-      const balance = await balanceOf(tx, shop.id, clientId);
+      const balance = await balanceOf(tx, shop.id, clientId, null);
       return { ok: true as const, balance, dateChanged: Boolean(input.when) };
     }
 
-    // Completed: does the earn amount change under the new service/date?
+    // Completed: does the earn amount - or the card it sits on - change under
+    // the new service/date?
     const earn = await tx.punchLedger.findUnique({
       where: { visitId },
-      select: { punchesEarned: true, reversedAt: true },
+      select: { punchesEarned: true, reversedAt: true, cardTypeId: true },
     });
     const currentLiveAmount = earn && earn.reversedAt === null ? earn.punchesEarned : 0;
-    const ruleAmount = await visitEarnAmount(tx, shop.id, newService);
+    const earnCardTypeId = earn?.cardTypeId ?? null;
+    const serviceChanged =
+      input.serviceName !== undefined && newService !== visit.serviceName;
+    // Which card should the edited visit earn on? An explicit input wins; a
+    // service change re-routes (the service is the routing signal); a date-only
+    // edit keeps the earn's current card (it may have been a barber override).
+    const override =
+      input.cardTypeId !== undefined
+        ? { cardTypeId: input.cardTypeId }
+        : serviceChanged || !earn
+          ? undefined
+          : { cardTypeId: earnCardTypeId };
+    const route = await routeVisitEarn(tx, shop, clientId, newService, override);
     const extra = await liveExtraPunches(tx, shop.id, newWhen);
-    const newAmount = (ruleAmount ?? Math.max(1, shop.punchesPerVisit)) + extra;
+    const newAmount = route.baseAmount + extra;
 
-    if (newAmount === currentLiveAmount) {
-      // Amount unchanged - just update fields, leave the ledger alone.
+    if (newAmount === currentLiveAmount && route.cardTypeId === earnCardTypeId) {
+      // Amount and card unchanged - just update fields, leave the ledger alone.
       await tx.visit.update({ where: { id: visit.id }, data: fieldUpdate });
-      const balance = await balanceOf(tx, shop.id, clientId);
+      const balance = await balanceOf(tx, shop.id, clientId, earnCardTypeId);
       return { ok: true as const, balance, dateChanged: Boolean(input.when) };
     }
 
-    // Amount changes: guard negative, then reverse-and-re-earn.
-    const balance = await balanceOf(tx, shop.id, clientId);
-    if (balance - currentLiveAmount + newAmount < 0) {
+    // Amount or card changes: guard the OLD card (the claw-back drains it; a
+    // different destination card only gains), then reverse-and-re-earn.
+    const balance = await balanceOf(tx, shop.id, clientId, earnCardTypeId);
+    const oldCardAfter =
+      route.cardTypeId === earnCardTypeId
+        ? balance - currentLiveAmount + newAmount
+        : balance - currentLiveAmount;
+    if (oldCardAfter < 0) {
       return { ok: false as const, reason: "would_go_negative" as const, balance };
     }
     // Claw back the old earn footprint (frees the visitId @unique slot), update
     // the visit, then re-earn at the new amount via ingest's exact path.
     await clawBackVisitEarn(tx, shop.id, visitId);
     await tx.visit.update({ where: { id: visit.id }, data: fieldUpdate });
-    await earnPunchForVisitInTx(tx, shop, clientId, visit.id, newService, newWhen);
-    const finalBalance = await balanceOf(tx, shop.id, clientId);
+    await earnPunchForVisitInTx(tx, shop, clientId, visit.id, newService, newWhen, override);
+    const finalBalance = await balanceOf(tx, shop.id, clientId, route.cardTypeId);
     return { ok: true as const, balance: finalBalance, dateChanged: Boolean(input.when) };
   });
 

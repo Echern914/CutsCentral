@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { serviceNounFor } from "@chairback/config";
-import { buildNudgeBody, buildNudgePush, defaultSmsTemplate } from "./templates.js";
+import {
+  buildNudgeBody,
+  buildNudgePush,
+  buildPunchEarnedBody,
+  buildPunchEarnedPush,
+  buildRewardRedeemedBody,
+  defaultSmsTemplate,
+} from "./templates.js";
 
 /**
  * Vertical-aware rebooking copy. The default nudge (SMS + push) must use the
@@ -90,5 +97,53 @@ describe("default nudge copy is vertical-aware", () => {
     expect(buildNudgePush({ firstName: "Sam", shopName: "Fades", industry: "barber" }).title).toContain(
       "next cut",
     );
+  });
+});
+
+// Card-aware loyalty copy. The default card (cardName null/absent) must render
+// EXACTLY the pre-cards copy - zero regression for every existing shop. A named
+// card adds "on your X card" so a VIP punch never reads like a default one.
+describe("loyalty copy is card-aware", () => {
+  const base = {
+    firstName: "Sam",
+    shopName: "Fades",
+    magicToken: "tok123",
+    earned: 2,
+    balance: 4,
+  };
+
+  it("default card copy is unchanged (no card phrase)", () => {
+    const body = buildPunchEarnedBody(base);
+    expect(body).toContain("you just earned 2 punches at Fades!");
+    expect(body).not.toContain("card");
+    const withNull = buildPunchEarnedBody({ ...base, cardName: null });
+    expect(withNull).toBe(body);
+  });
+
+  it("a named card is called out in SMS and push", () => {
+    const body = buildPunchEarnedBody({ ...base, cardName: "VIP" });
+    expect(body).toContain("you just earned 2 punches on your VIP card at Fades!");
+    const push = buildPunchEarnedPush({ ...base, cardName: "VIP" });
+    expect(push.body).toContain("You're at 4 punches on your VIP card.");
+  });
+
+  it("redeem copy names the card only when one is set", () => {
+    const plain = buildRewardRedeemedBody({
+      firstName: "Sam",
+      shopName: "Fades",
+      magicToken: "tok123",
+      rewardName: "Free Cut",
+      balance: 1,
+    });
+    expect(plain).toContain("You have 1 punch left.");
+    const carded = buildRewardRedeemedBody({
+      firstName: "Sam",
+      shopName: "Fades",
+      magicToken: "tok123",
+      rewardName: "Free Retwist",
+      balance: 1,
+      cardName: "Retwist",
+    });
+    expect(carded).toContain("You have 1 punch left on your Retwist card.");
   });
 });

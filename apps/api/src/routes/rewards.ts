@@ -11,7 +11,6 @@ import {
   loyaltyTierForVisits,
 } from "@chairback/config";
 import { prisma, runAsOwner } from "@chairback/db";
-import { currentBalance } from "../services/punch.js";
 import { toE164 } from "../acuity/clientKey.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 import { buildPassForClient, walletEnabled } from "../wallet/pass.js";
@@ -58,8 +57,7 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
     if (!client) return null;
 
     const now = new Date();
-    const balance = await currentBalance(client.shopId, client.id, tx);
-    const [visits, upcoming, rewards, promotions, redemptions, completedCount] =
+    const [visits, upcoming, rewards, promotions, redemptions, completedCount, cardTypes, grants, ledgerGroups] =
       await Promise.all([
       tx.visit.findMany({
       where: { shopId: client.shopId, clientId: client.id, status: "COMPLETED" },
@@ -72,7 +70,12 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
         id: true,
         scheduledAt: true,
         serviceName: true,
-        punch: { select: { punchesEarned: true } },
+        punch: {
+          select: {
+            punchesEarned: true,
+            cardType: { select: { name: true } },
+          },
+        },
       },
     }),
     tx.visit.findFirst({
@@ -94,6 +97,7 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
         description: true,
         emoji: true,
         punchCost: true,
+        cardTypeId: true,
       },
     }),
     tx.promotion.findMany({
@@ -132,7 +136,12 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
       },
       orderBy: { createdAt: "desc" },
       take: 10,
-      select: { createdAt: true, punchesRedeemed: true, note: true },
+      select: {
+        createdAt: true,
+        punchesRedeemed: true,
+        note: true,
+        cardType: { select: { name: true } },
+      },
     }),
     // Lifetime completed visits drive the loyalty status tier. Counted here
     // (the `visits` list above is capped at 10) so the tier is always exact,
@@ -140,16 +149,42 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
     tx.visit.count({
       where: { shopId: client.shopId, clientId: client.id, status: "COMPLETED" },
     }),
+    // Punch card types + this client's exclusive-card memberships + per-card
+    // balances, for the stacked-cards view. One groupBy covers every balance
+    // (cardTypeId null = the default card).
+    tx.cardType.findMany({
+      where: { shopId: client.shopId },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      select: {
+        id: true,
+        name: true,
+        emoji: true,
+        accentColor: true,
+        exclusive: true,
+        active: true,
+      },
+    }),
+    tx.cardGrant.findMany({
+      where: { shopId: client.shopId, clientId: client.id },
+      select: { cardTypeId: true },
+    }),
+    tx.punchLedger.groupBy({
+      by: ["cardTypeId"],
+      where: { shopId: client.shopId, clientId: client.id },
+      _sum: { punchesEarned: true, punchesRedeemed: true },
+    }),
     ]);
     return {
       client,
-      balance,
       visits,
       upcoming,
       rewards,
       promotions,
       redemptions,
       completedCount,
+      cardTypes,
+      grants,
+      ledgerGroups,
     };
   });
 
@@ -157,9 +192,33 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const { client, balance, visits, upcoming, rewards, promotions, redemptions, completedCount } =
-    data;
+  const {
+    client,
+    visits,
+    upcoming,
+    rewards,
+    promotions,
+    redemptions,
+    completedCount,
+    cardTypes,
+    grants,
+    ledgerGroups,
+  } = data;
   const now = new Date();
+
+  // Per-card balances; the null key is the default card. The top-level
+  // punches/rewards fields below are the DEFAULT card's view - byte-identical
+  // to the pre-cards payload for every shop with no CardTypes (all rows null).
+  const balanceByCard = new Map(
+    ledgerGroups.map((g) => [
+      g.cardTypeId,
+      (g._sum.punchesEarned ?? 0) - (g._sum.punchesRedeemed ?? 0),
+    ]),
+  );
+  const balance = balanceByCard.get(null) ?? 0;
+  const grantedIds = new Set(grants.map((g) => g.cardTypeId));
+  const rewardsFor = (cardTypeId: string | null) =>
+    rewards.filter((r) => r.cardTypeId === cardTypeId);
 
   // Loyalty status tier (Bronze/Silver/Gold by lifetime completed visits) + how
   // far to the next tier, so the page can show "Gold member" and "2 visits to
@@ -183,10 +242,60 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
 
   // The punch grid counts toward the cheapest reward the client can't afford
   // yet; with everything in reach (or an empty menu) there's no next target.
-  const nextTarget =
-    [...rewards]
+  // Scoped per card: a card's grid only targets that card's own rewards.
+  const nextTargetFor = (cardTypeId: string | null, cardBalance: number) =>
+    [...rewardsFor(cardTypeId)]
       .sort((a, b) => a.punchCost - b.punchCost)
-      .find((r) => r.punchCost > balance) ?? null;
+      .find((r) => r.punchCost > cardBalance) ?? null;
+  const nextTarget = nextTargetFor(null, balance);
+
+  // One stacked-card view per card the client should see: the default card
+  // always, a custom card when it's live for everyone (active + not exclusive),
+  // granted to this client, or holds any of their history (honesty: an archived
+  // or revoked card with punches on it never silently disappears).
+  const cardView = (card: {
+    id: string | null;
+    name: string;
+    emoji: string | null;
+    accentColor: string | null;
+    exclusive: boolean;
+  }) => {
+    const cardBalance = balanceByCard.get(card.id) ?? 0;
+    const target = nextTargetFor(card.id, cardBalance);
+    return {
+      id: card.id,
+      name: card.name,
+      emoji: card.emoji,
+      accentColor: card.accentColor,
+      exclusive: card.exclusive,
+      balance: cardBalance,
+      nextTarget: target
+        ? {
+            name: target.name,
+            punchCost: target.punchCost,
+            remaining: target.punchCost - cardBalance,
+          }
+        : null,
+      rewards: rewardsFor(card.id).map((r) => ({
+        id: r.id,
+        name: r.name,
+        description: r.description,
+        emoji: r.emoji,
+        punchCost: r.punchCost,
+        ready: cardBalance >= r.punchCost,
+        remaining: Math.max(0, r.punchCost - cardBalance),
+      })),
+    };
+  };
+  const cards = [
+    cardView({ id: null, name: "Punch Card", emoji: null, accentColor: null, exclusive: false }),
+    ...cardTypes
+      .filter(
+        (c) =>
+          (c.active && !c.exclusive) || grantedIds.has(c.id) || balanceByCard.has(c.id),
+      )
+      .map((c) => cardView(c)),
+  ];
 
   // Rebooking countdown: deadline = lastVisit + rebookWindowDays. The client-side
   // timer ticks down to this ISO instant. We surface the state so the UI can show
@@ -269,7 +378,7 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
           }
         : null,
     },
-    rewards: rewards.map((r) => ({
+    rewards: rewardsFor(null).map((r) => ({
       id: r.id,
       name: r.name,
       description: r.description,
@@ -278,6 +387,10 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
       ready: balance >= r.punchCost,
       remaining: Math.max(0, r.punchCost - balance),
     })),
+    // One entry per punch card the client can see (default card first). The
+    // web page renders the stacked multi-card view from this when there's more
+    // than one; a single entry falls back to the classic single-card layout.
+    cards,
     promotions: promotions.map((p) => ({
       id: p.id,
       kind: p.kind,
@@ -297,6 +410,8 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
       // just a date. null when no earn row exists (e.g. a no-show that slipped
       // through, or a visit predating loyalty); the UI then shows no chip.
       punches: v.punch?.punchesEarned ?? null,
+      // Which card the punches landed on; null = the default card.
+      card: v.punch?.cardType?.name ?? null,
     })),
     // Claimed rewards, for the "Rewards claimed" list. Each is one redemption
     // with the reward name (from the ledger note) and how many punches it cost.
@@ -304,6 +419,7 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
       date: r.createdAt.toISOString(),
       reward: r.note,
       punches: r.punchesRedeemed,
+      card: r.cardType?.name ?? null,
     })),
   });
 });
