@@ -212,8 +212,13 @@ export async function saveNotesAction(
 export async function bonusPunchAction(
   clientId: string,
   count: number,
+  // Which punch card to credit; omitted/null = the default card.
+  cardTypeId?: string | null,
 ): Promise<{ ok: boolean }> {
-  const res = await apiSend("POST", `/api/dashboard/clients/${clientId}/bonus`, { count });
+  const res = await apiSend("POST", `/api/dashboard/clients/${clientId}/bonus`, {
+    count,
+    ...(cardTypeId !== undefined && { cardTypeId }),
+  });
   revalidatePath(`/dashboard/clients/${clientId}`);
   return { ok: res.ok };
 }
@@ -221,11 +226,16 @@ export async function bonusPunchAction(
 export async function logVisitAction(
   clientId: string,
   serviceName?: string,
+  // Card override; omitted = auto-route by service, null = force default card.
+  cardTypeId?: string | null,
 ): Promise<{ ok: boolean; balance?: number }> {
   const res = await apiSend<{ ok: boolean; balance: number }>(
     "POST",
     `/api/dashboard/clients/${clientId}/visits`,
-    serviceName ? { serviceName } : {},
+    {
+      ...(serviceName ? { serviceName } : {}),
+      ...(cardTypeId !== undefined && { cardTypeId }),
+    },
   );
   revalidatePath(`/dashboard/clients/${clientId}`);
   revalidatePath("/dashboard/clients");

@@ -59,6 +59,28 @@ export interface RewardsData {
     ready: boolean;
     remaining: number;
   }[];
+  // One entry per punch card the client can see (default card first; custom
+  // cards when public/granted/holding history). More than one entry switches
+  // the page to the stacked multi-card layout. Optional so a web deploy ahead
+  // of the API keeps rendering the classic single-card page.
+  cards?: {
+    id: string | null; // null = the default card
+    name: string;
+    emoji: string | null;
+    accentColor: string | null;
+    exclusive: boolean;
+    balance: number;
+    nextTarget: { name: string; punchCost: number; remaining: number } | null;
+    rewards: {
+      id: string;
+      name: string;
+      description: string | null;
+      emoji: string | null;
+      punchCost: number;
+      ready: boolean;
+      remaining: number;
+    }[];
+  }[];
   promotions: {
     id: string;
     kind: "PERCENT_OFF" | "AMOUNT_OFF" | "FREE_ADDON" | "EXTRA_PUNCHES";
@@ -76,8 +98,9 @@ export interface RewardsData {
     windowDays: number;
     upcomingAt: string | null;
   };
-  visits: { date: string; service: string | null; punches: number | null }[];
-  redemptions: { date: string; reward: string | null; punches: number }[];
+  // `card` = which punch card the activity landed on (null = default card).
+  visits: { date: string; service: string | null; punches: number | null; card?: string | null }[];
+  redemptions: { date: string; reward: string | null; punches: number; card?: string | null }[];
 }
 
 async function getData(magicToken: string): Promise<RewardsData | null> {

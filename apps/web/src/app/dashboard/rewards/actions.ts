@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { apiSend } from "@/lib/api";
+import { apiGet, apiSend } from "@/lib/api";
 
 /**
  * Loyalty designer mutations. Every action revalidates the rewards page so the
@@ -13,6 +13,8 @@ export interface RewardInput {
   description?: string;
   emoji?: string;
   punchCost: number;
+  /** Which punch card this reward draws from; null = the default card. */
+  cardTypeId?: string | null;
 }
 
 export async function createRewardAction(
@@ -96,6 +98,90 @@ export async function reorderRewardsAction(ids: string[]): Promise<{ ok: boolean
 
 export async function reorderRulesAction(ids: string[]): Promise<{ ok: boolean }> {
   const res = await apiSend("POST", "/api/loyalty/rules/reorder", { ids });
+  revalidatePath("/dashboard/rewards");
+  return { ok: res.ok };
+}
+
+/*  Punch card types  */
+
+export interface CardInput {
+  name: string;
+  description?: string;
+  emoji?: string;
+  accentColor?: string;
+  serviceMatch?: string[];
+  punchesPerVisit?: number;
+  exclusive?: boolean;
+}
+
+export async function createCardAction(
+  input: CardInput,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiSend("POST", "/api/loyalty/cards", input);
+  revalidatePath("/dashboard/rewards");
+  if (res.ok) return { ok: true };
+  return {
+    ok: false,
+    error:
+      res.error === "limit_reached"
+        ? "You've hit the punch card limit. Remove one to add another."
+        : "Could not add the card. Check the fields.",
+  };
+}
+
+export async function updateCardAction(
+  cardId: string,
+  patch: Partial<CardInput> & { active?: boolean },
+): Promise<{ ok: boolean }> {
+  const res = await apiSend("PATCH", `/api/loyalty/cards/${cardId}`, patch);
+  revalidatePath("/dashboard/rewards");
+  return { ok: res.ok };
+}
+
+export async function deleteCardAction(
+  cardId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiSend("DELETE", `/api/loyalty/cards/${cardId}`);
+  revalidatePath("/dashboard/rewards");
+  if (res.ok) return { ok: true };
+  return { ok: false, error: res.error };
+}
+
+export async function reorderCardsAction(ids: string[]): Promise<{ ok: boolean }> {
+  const res = await apiSend("POST", "/api/loyalty/cards/reorder", { ids });
+  revalidatePath("/dashboard/rewards");
+  return { ok: res.ok };
+}
+
+export interface CardGrantRow {
+  clientId: string;
+  name: string;
+  grantedAt: string;
+}
+
+export async function listCardGrantsAction(
+  cardId: string,
+): Promise<{ ok: boolean; grants: CardGrantRow[] }> {
+  const res = await apiGet<{ grants: CardGrantRow[] }>(
+    `/api/loyalty/cards/${cardId}/grants`,
+  );
+  return { ok: res.ok, grants: res.data?.grants ?? [] };
+}
+
+export async function grantCardAction(
+  cardId: string,
+  clientId: string,
+): Promise<{ ok: boolean }> {
+  const res = await apiSend("POST", `/api/loyalty/cards/${cardId}/grants`, { clientId });
+  revalidatePath("/dashboard/rewards");
+  return { ok: res.ok };
+}
+
+export async function revokeCardAction(
+  cardId: string,
+  clientId: string,
+): Promise<{ ok: boolean }> {
+  const res = await apiSend("DELETE", `/api/loyalty/cards/${cardId}/grants/${clientId}`);
   revalidatePath("/dashboard/rewards");
   return { ok: res.ok };
 }
