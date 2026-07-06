@@ -234,6 +234,8 @@ model Shop {
   nudges              Nudge[]
   rewards             Reward[]
   earnRules           EarnRule[]
+  cardTypes           CardType[]
+  cardGrants          CardGrant[]
   promotions          Promotion[]
   promoUses           PromotionRedemption[]
   appointmentRequests AppointmentRequest[]
@@ -304,6 +306,12 @@ model Reward {
   description String? // optional detail shown under the name on the client page
   emoji       String? // small visual flair on the client page (e.g. "✂️")
   punchCost   Int // punches deducted when the barber redeems it
+  // Which card's balance this reward draws from. NULL = the shop's default
+  // card. Restrict (not SetNull): nulling on card delete would silently move
+  // the reward onto the default card's balance - the delete endpoint refuses
+  // instead ("archive the card").
+  cardTypeId  String?
+  cardType    CardType? @relation(fields: [cardTypeId], references: [id], onDelete: Restrict)
   active      Boolean  @default(true) // inactive = hidden from clients, kept for history
   sortOrder   Int      @default(0)
   createdAt   DateTime @default(now())
@@ -312,11 +320,61 @@ model Reward {
   redemptions PunchLedger[]
 
   @@index([shopId, active])
+  @@index([cardTypeId])
+}
+
+// Barber-designed punch card TYPE ("Haircut card", "Retwist card", "VIP").
+// Each card type is its own balance: PunchLedger rows carry cardTypeId, and a
+// NULL cardTypeId everywhere means the shop's classic/default card - existing
+// shops keep working with zero backfill. A completed visit routes to the first
+// active card (by sortOrder) whose serviceMatch term appears in the visit's
+// serviceName; the barber can override at the chair. Exclusive cards are
+// invite-only: only clients with a CardGrant earn/see them (auto-matching skips
+// everyone else), which is how a barber builds a "VIP" card.
+model CardType {
+  id              String   @id @default(cuid())
+  shopId          String
+  shop            Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  name            String // "VIP", "Retwist Card"
+  description     String?
+  emoji           String?
+  accentColor     String? // "#RRGGBB" shown on the client page; null = shop accent
+  serviceMatch    String[] @default([]) // substring terms vs Visit.serviceName (case-insensitive)
+  punchesPerVisit Int      @default(1) // earn amount for visits routed here (EarnRule is default-card-only)
+  exclusive       Boolean  @default(false) // invite-only: only granted clients earn/see it
+  active          Boolean  @default(true) // inactive = archived; balances/history stay intact
+  sortOrder       Int      @default(0) // routing priority: first match wins
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  ledger  PunchLedger[]
+  rewards Reward[]
+  grants  CardGrant[]
+
+  @@index([shopId, active])
+}
+
+// Membership of one client in one exclusive card. Upserted when the barber
+// invites a client (or override-punches their exclusive card - the punch IS
+// the invite). Unique per (card, client) so granting is idempotent.
+model CardGrant {
+  id         String   @id @default(cuid())
+  shopId     String
+  shop       Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  cardTypeId String
+  cardType   CardType @relation(fields: [cardTypeId], references: [id], onDelete: Cascade)
+  clientId   String
+  client     Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([cardTypeId, clientId])
+  @@index([shopId, clientId])
 }
 
 // Service-specific earn override: a completed visit whose serviceName contains
 // `serviceMatch` (case-insensitive) earns `punches` instead of the shop's base
-// punchesPerVisit. First match by sortOrder wins.
+// punchesPerVisit. First match by sortOrder wins. Applies to the DEFAULT card
+// only - custom CardTypes carry their own flat punchesPerVisit.
 model EarnRule {
   id           String   @id @default(cuid())
   shopId       String
@@ -455,6 +513,7 @@ model Client {
   promoUses         PromotionRedemption[]
   appointments      Appointment[]
   pushSubscriptions PushSubscription[]
+  cardGrants        CardGrant[]
 
   @@unique([shopId, acuityClientKey]) // tenant-scoped identity + idempotent upsert
   @@index([shopId])
@@ -547,9 +606,16 @@ model PunchLedger {
   // intact if the barber later deletes the reward (note still has the name).
   rewardId        String?
   reward          Reward?  @relation(fields: [rewardId], references: [id], onDelete: SetNull)
+  // Which punch card this entry belongs to. NULL = the shop's default card;
+  // balances are per (shopId, clientId, cardTypeId). Restrict (not SetNull):
+  // nulling on card delete would silently merge that card's balance into the
+  // default card - a balance mutation via a delete button. The card delete
+  // endpoint refuses while ledger rows exist ("archive the card" instead).
+  cardTypeId      String?
+  cardType        CardType? @relation(fields: [cardTypeId], references: [id], onDelete: Restrict)
   punchesEarned   Int      @default(0)
   punchesRedeemed Int      @default(0)
-  runningBalance  Int
+  runningBalance  Int // per-card snapshot after this entry (card = this row's cardTypeId)
   note            String?
   createdAt       DateTime @default(now())
 
@@ -583,6 +649,7 @@ model PunchLedger {
 
   @@index([shopId, clientId])
   @@index([rewardId])
+  @@index([cardTypeId])
   @@index([reversalOfId])
   @@index([correctionOfId])
 }

@@ -130,16 +130,19 @@ function loyaltyPushEligible(
 
 /**
  * Cheapest reward the client still can't afford, for the "X more to your Free
- * Cut" line. null when the menu is empty or everything is already in reach.
+ * Cut" line. Scoped to the card the punches landed on - a VIP-card earn must
+ * never advertise progress toward a default-card reward (the balances are
+ * separate). null when that card's menu is empty or everything is in reach.
  * Read through forShop so it stays tenant-scoped/RLS-safe.
  */
 async function nextRewardFor(
   shopId: string,
   balance: number,
+  cardTypeId: string | null,
 ): Promise<{ name: string; remaining: number } | null> {
   const db = forShop(shopId);
   const reward = await db.reward.findFirst({
-    where: { active: true, punchCost: { gt: balance } },
+    where: { active: true, punchCost: { gt: balance }, cardTypeId },
     orderBy: [{ punchCost: "asc" }, { sortOrder: "asc" }],
     select: { name: true, punchCost: true },
   });
@@ -198,7 +201,9 @@ export async function notifyPunchEarned(params: {
   shopId: string;
   clientId: string;
   earned: number;
-  balance: number;
+  balance: number; // the earned CARD's balance (from EarnResult)
+  cardTypeId: string | null;
+  cardName: string | null; // null = default card -> copy reads exactly as before
   now?: Date;
 }): Promise<void> {
   const now = params.now ?? new Date();
@@ -215,7 +220,7 @@ export async function notifyPunchEarned(params: {
     });
     if (!client) return;
 
-    const nextReward = await nextRewardFor(shop.id, params.balance);
+    const nextReward = await nextRewardFor(shop.id, params.balance, params.cardTypeId);
 
     // Push-first: try a free notification to the client's installed devices. If
     // any device accepts, we're done - skip the SMS (the cost saving). Push has
@@ -227,6 +232,7 @@ export async function notifyPunchEarned(params: {
         shopName: shop.name,
         earned: params.earned,
         balance: params.balance,
+        cardName: params.cardName,
         nextReward,
       });
       const res = await sendPushToClient({
@@ -253,6 +259,7 @@ export async function notifyPunchEarned(params: {
       magicToken: client.magicToken,
       earned: params.earned,
       balance: params.balance,
+      cardName: params.cardName,
       nextReward,
     });
     await sendLoyalty(shop.id, client.id, client.phone!, body);
@@ -274,7 +281,9 @@ export async function notifyRewardRedeemed(params: {
   shopId: string;
   clientId: string;
   rewardName: string;
-  balance: number;
+  balance: number; // the redeemed reward's CARD balance after deduction
+  cardTypeId: string | null;
+  cardName: string | null; // null = default card -> copy reads exactly as before
   now?: Date;
 }): Promise<void> {
   const now = params.now ?? new Date();
@@ -298,6 +307,7 @@ export async function notifyRewardRedeemed(params: {
         shopName: shop.name,
         rewardName: params.rewardName,
         balance: params.balance,
+        cardName: params.cardName,
       });
       const res = await sendPushToClient({
         shopId: shop.id,
@@ -323,6 +333,7 @@ export async function notifyRewardRedeemed(params: {
       magicToken: client.magicToken,
       rewardName: params.rewardName,
       balance: params.balance,
+      cardName: params.cardName,
     });
     await sendLoyalty(shop.id, client.id, client.phone!, body);
   } catch (err) {

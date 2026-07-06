@@ -161,14 +161,18 @@ export function buildPunchEarnedBody(params: {
   magicToken: string;
   earned: number;
   balance: number;
+  // Which punch card the earn landed on. null/absent = the default card, and
+  // the copy reads exactly as it did before card types existed.
+  cardName?: string | null;
   nextReward?: { name: string; remaining: number } | null;
 }): string {
   const rewardsUrl = `${env.APP_BASE_URL}/r/${params.magicToken}`;
   const who = params.firstName ?? "there";
   const punchWord = params.earned === 1 ? "punch" : "punches";
   const totalWord = params.balance === 1 ? "punch" : "punches";
+  const onCard = params.cardName ? ` on your ${params.cardName} card` : "";
   const parts = [
-    `Hey ${who}, you just earned ${params.earned} ${punchWord} at ${params.shopName}!`,
+    `Hey ${who}, you just earned ${params.earned} ${punchWord}${onCard} at ${params.shopName}!`,
     `You're at ${params.balance} ${totalWord}.`,
   ];
   // nextReward is always a reward still out of reach (remaining > 0); the caller
@@ -192,13 +196,16 @@ export function buildRewardRedeemedBody(params: {
   magicToken: string;
   rewardName: string;
   balance: number;
+  // null/absent = default card -> copy reads exactly as before card types.
+  cardName?: string | null;
 }): string {
   const rewardsUrl = `${env.APP_BASE_URL}/r/${params.magicToken}`;
   const who = params.firstName ?? "there";
   const totalWord = params.balance === 1 ? "punch" : "punches";
+  const onCard = params.cardName ? ` on your ${params.cardName} card` : "";
   const body =
     `Hey ${who}, you just redeemed ${params.rewardName} at ${params.shopName}! ` +
-    `Enjoy. You have ${params.balance} ${totalWord} left. ` +
+    `Enjoy. You have ${params.balance} ${totalWord} left${onCard}. ` +
     `Your rewards: ${rewardsUrl}`;
   return withStopNotice(body);
 }
@@ -222,11 +229,14 @@ export function buildPunchEarnedPush(params: {
   shopName: string;
   earned: number;
   balance: number;
+  // null/absent = default card -> copy reads exactly as before card types.
+  cardName?: string | null;
   nextReward?: { name: string; remaining: number } | null;
 }): PushCopy {
   const punchWord = params.earned === 1 ? "punch" : "punches";
   const totalWord = params.balance === 1 ? "punch" : "punches";
-  const parts = [`You're at ${params.balance} ${totalWord}.`];
+  const onCard = params.cardName ? ` on your ${params.cardName} card` : "";
+  const parts = [`You're at ${params.balance} ${totalWord}${onCard}.`];
   if (params.nextReward) {
     parts.push(`${params.nextReward.remaining} more for your ${params.nextReward.name}.`);
   }
@@ -241,11 +251,14 @@ export function buildRewardRedeemedPush(params: {
   shopName: string;
   rewardName: string;
   balance: number;
+  // null/absent = default card -> copy reads exactly as before card types.
+  cardName?: string | null;
 }): PushCopy {
   const totalWord = params.balance === 1 ? "punch" : "punches";
+  const onCard = params.cardName ? ` on your ${params.cardName} card` : "";
   return {
     title: `${params.rewardName} redeemed`,
-    body: `Enjoy your reward at ${params.shopName}. ${params.balance} ${totalWord} left.`,
+    body: `Enjoy your reward at ${params.shopName}. ${params.balance} ${totalWord} left${onCard}.`,
   };
 }
 

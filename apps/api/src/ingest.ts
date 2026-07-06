@@ -182,6 +182,8 @@ export async function ingestAppointment(
       clientId,
       earned: earn.earned,
       balance: earn.balance,
+      cardTypeId: earn.cardTypeId,
+      cardName: earn.cardName,
     });
   }
 }

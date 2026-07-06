@@ -341,6 +341,8 @@ dashboardRouter.post("/redeem/:clientId", async (req, res) => {
     clientId: client.id,
     rewardName: result.reward.name,
     balance: result.newBalance,
+    cardTypeId: result.cardTypeId,
+    cardName: result.cardName,
   });
   res.json({ ok: true, newBalance: result.newBalance, reward: result.reward });
 });
@@ -629,6 +631,9 @@ const logVisitSchema = z
   .object({
     when: z.coerce.date().optional(),
     serviceName: z.string().trim().max(120).optional().or(z.literal("")),
+    // Barber's card override: absent = auto-route by service; null = force the
+    // default card; an id = punch that specific card.
+    cardTypeId: z.string().min(1).nullable().optional(),
   })
   .strict();
 
@@ -647,11 +652,22 @@ dashboardRouter.post("/clients/:clientId/visits", async (req, res) => {
     return;
   }
   const serviceName = parsed.data.serviceName || null;
+  const cardOverride = parsed.data.cardTypeId;
   const db = forShop(shop.id);
   const client = await db.client.findFirst({ where: { id: req.params.clientId } });
   if (!client) {
     res.status(404).json({ error: "not_found" });
     return;
+  }
+  if (cardOverride) {
+    const card = await db.cardType.findFirst({
+      where: { id: cardOverride },
+      select: { id: true },
+    });
+    if (!card) {
+      res.status(404).json({ error: "card_not_found" });
+      return;
+    }
   }
 
   const { visit, earn } = await runWithShop(shop.id, async (tx) => {
@@ -671,12 +687,21 @@ dashboardRouter.post("/clients/:clientId/visits", async (req, res) => {
         serviceName,
       },
     });
-    const earned = await earnPunchForVisitInTx(tx, shop, client.id, created.id, serviceName, when);
+    const earned = await earnPunchForVisitInTx(
+      tx,
+      shop,
+      client.id,
+      created.id,
+      serviceName,
+      when,
+      cardOverride === undefined ? undefined : { cardTypeId: cardOverride },
+    );
     return { visit: created, earn: earned };
   });
   // Outside the tx - recomputeCadence opens its own shop-scoped transaction.
   await recomputeCadence(shop.id, client.id);
-  const balance = await currentBalance(shop.id, client.id);
+  // The balance shown is the earned card's (the number the barber just changed).
+  const balance = await currentBalance(shop.id, client.id, earn?.cardTypeId ?? null);
   // Text the client their punch (gated by the shop toggle + consent + quiet
   // hours inside notify). Fire-and-forget AFTER responding: a walk-in entry
   // shouldn't wait on Twilio, and a send issue must never fail the visit log.
@@ -686,6 +711,8 @@ dashboardRouter.post("/clients/:clientId/visits", async (req, res) => {
       clientId: client.id,
       earned: earn.earned,
       balance: earn.balance,
+      cardTypeId: earn.cardTypeId,
+      cardName: earn.cardName,
     });
   }
   res.status(201).json({ ok: true, visitId: visit.id, balance });
@@ -845,14 +872,22 @@ dashboardRouter.patch("/clients/:clientId/notes", async (req, res) => {
 dashboardRouter.post("/clients/:clientId/bonus", async (req, res) => {
   const shop = req.shop!;
   const count = intQuery(req.body?.count, 1, 1, 20);
+  const cardParsed = z
+    .object({ cardTypeId: z.string().min(1).nullable().optional() })
+    .safeParse(req.body ?? {});
+  const cardTypeId = cardParsed.success ? (cardParsed.data.cardTypeId ?? null) : null;
   const db = forShop(shop.id);
   const client = await db.client.findFirst({ where: { id: req.params.clientId } });
   if (!client) {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const { newBalance } = await grantBonusPunches(shop.id, client.id, count);
-  res.json({ ok: true, newBalance });
+  const result = await grantBonusPunches(shop.id, client.id, count, cardTypeId);
+  if (!result.ok) {
+    res.status(404).json({ error: "card_not_found" });
+    return;
+  }
+  res.json({ ok: true, newBalance: result.newBalance });
 });
 
 // Bulk actions over selected clients: opt-out, opt-in, or nudge.
@@ -1041,21 +1076,50 @@ dashboardRouter.get("/clients/:clientId/ledger", async (req, res) => {
       where: { shopId: shop.id, clientId: client.id },
       orderBy: { createdAt: "desc" },
       take: 100,
+      include: {
+        cardType: { select: { id: true, name: true, emoji: true, accentColor: true } },
+      },
     });
-    const agg = await tx.punchLedger.aggregate({
+    // Per-card balances in one groupBy; the total stays the top-level number
+    // (back-compat) and the cards array powers per-card chips in the UI.
+    const groups = await tx.punchLedger.groupBy({
+      by: ["cardTypeId"],
       where: { shopId: shop.id, clientId: client.id },
       _sum: { punchesEarned: true, punchesRedeemed: true },
     });
-    const balance =
-      (agg._sum.punchesEarned ?? 0) - (agg._sum.punchesRedeemed ?? 0);
-    return { entries, balance };
+    const shopCards = await tx.cardType.findMany({
+      where: { shopId: shop.id },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      select: { id: true, name: true, emoji: true, accentColor: true },
+    });
+    return { entries, groups, shopCards };
   });
   if (!data) {
     res.status(404).json({ error: "not_found" });
     return;
   }
+  const balanceByCard = new Map(
+    data.groups.map((g) => [
+      g.cardTypeId,
+      (g._sum.punchesEarned ?? 0) - (g._sum.punchesRedeemed ?? 0),
+    ]),
+  );
+  const balance = [...balanceByCard.values()].reduce((sum, b) => sum + b, 0);
+  // Default card first, then the shop's cards in their configured order. Cards
+  // with no ledger rows show 0 - the barber still sees every card that exists.
+  const cards = [
+    { id: null as string | null, name: "Punch Card", emoji: null as string | null, accentColor: null as string | null, balance: balanceByCard.get(null) ?? 0 },
+    ...data.shopCards.map((c) => ({
+      id: c.id as string | null,
+      name: c.name,
+      emoji: c.emoji,
+      accentColor: c.accentColor,
+      balance: balanceByCard.get(c.id) ?? 0,
+    })),
+  ];
   res.json({
-    balance: data.balance,
+    balance,
+    cards,
     entries: data.entries.map((e) => ({
       id: e.id,
       at: e.createdAt.toISOString(),
@@ -1063,6 +1127,14 @@ dashboardRouter.get("/clients/:clientId/ledger", async (req, res) => {
       redeemed: e.punchesRedeemed,
       runningBalance: e.runningBalance,
       note: e.note,
+      card: e.cardType
+        ? {
+            id: e.cardType.id,
+            name: e.cardType.name,
+            emoji: e.cardType.emoji,
+            accentColor: e.cardType.accentColor,
+          }
+        : null,
       // Reversal state for the editing UI:
       //  - reversed: this ORIGINAL row was undone (show struck-through, no controls)
       //  - isCorrection: this row IS an undo/edit of another (show dimmed, no controls)
@@ -1148,11 +1220,15 @@ const editVisitSchema = z
     // Distinguish "omitted" (leave service) from "" (clear it). The service
     // treats undefined as unchanged and "" as null.
     serviceName: z.string().trim().max(120).nullable().optional(),
+    // Move the earn to a specific card. Omitted = keep/auto (see editVisit);
+    // null = force the default card.
+    cardTypeId: z.string().min(1).nullable().optional(),
   })
   .strict()
-  .refine((d) => d.when !== undefined || d.serviceName !== undefined, {
-    message: "Provide a new date or service.",
-  });
+  .refine(
+    (d) => d.when !== undefined || d.serviceName !== undefined || d.cardTypeId !== undefined,
+    { message: "Provide a new date, service, or card." },
+  );
 
 dashboardRouter.patch("/clients/:clientId/visits/:visitId", async (req, res) => {
   const shop = req.shop!;
@@ -1160,6 +1236,16 @@ dashboardRouter.patch("/clients/:clientId/visits/:visitId", async (req, res) => 
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
     return;
+  }
+  if (parsed.data.cardTypeId) {
+    const card = await forShop(shop.id).cardType.findFirst({
+      where: { id: parsed.data.cardTypeId },
+      select: { id: true },
+    });
+    if (!card) {
+      res.status(404).json({ error: "card_not_found" });
+      return;
+    }
   }
   if (parsed.data.when) {
     const now = new Date();
@@ -1178,6 +1264,7 @@ dashboardRouter.patch("/clients/:clientId/visits/:visitId", async (req, res) => 
   const result = await editVisit(shop, client.id, req.params.visitId, {
     when: parsed.data.when,
     serviceName: parsed.data.serviceName,
+    cardTypeId: parsed.data.cardTypeId,
   });
   if (!result.ok) {
     if (result.reason === "not_found") {
@@ -1243,12 +1330,18 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
       orderBy: { createdAt: "desc" },
       take: 50,
     });
-    const agg = await tx.punchLedger.aggregate({
+    // Per-card balances (cardTypeId null = the default card). Rewards redeem
+    // from their OWN card, so "affordable" must compare against that balance.
+    const groups = await tx.punchLedger.groupBy({
+      by: ["cardTypeId"],
       where: { shopId: shop.id, clientId: client.id },
       _sum: { punchesEarned: true, punchesRedeemed: true },
     });
-    const balance =
-      (agg._sum.punchesEarned ?? 0) - (agg._sum.punchesRedeemed ?? 0);
+    const shopCards = await tx.cardType.findMany({
+      where: { shopId: shop.id },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      select: { id: true, name: true, emoji: true, accentColor: true },
+    });
     const rewards = await tx.reward.findMany({
       where: { shopId: shop.id, active: true },
       orderBy: [{ sortOrder: "asc" }, { punchCost: "asc" }],
@@ -1262,14 +1355,22 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
       },
       orderBy: { createdAt: "desc" },
     });
-    return { client, visits, nudges, balance, rewards, livePromos };
+    return { client, visits, nudges, groups, shopCards, rewards, livePromos };
   });
 
   if (!data) {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const { client, visits, nudges, balance, rewards, livePromos } = data;
+  const { client, visits, nudges, groups, shopCards, rewards, livePromos } = data;
+  const balanceByCard = new Map(
+    groups.map((g) => [
+      g.cardTypeId,
+      (g._sum.punchesEarned ?? 0) - (g._sum.punchesRedeemed ?? 0),
+    ]),
+  );
+  const balance = [...balanceByCard.values()].reduce((sum, b) => sum + b, 0);
+  const cardBalance = (cardTypeId: string | null) => balanceByCard.get(cardTypeId) ?? 0;
 
   res.json({
     client: {
@@ -1293,14 +1394,31 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
       preferredCadence: client.preferredCadence,
     },
     balance,
+    cards: [
+      {
+        id: null as string | null,
+        name: "Punch Card",
+        emoji: null as string | null,
+        accentColor: null as string | null,
+        balance: cardBalance(null),
+      },
+      ...shopCards.map((c) => ({
+        id: c.id as string | null,
+        name: c.name,
+        emoji: c.emoji,
+        accentColor: c.accentColor,
+        balance: cardBalance(c.id),
+      })),
+    ],
     rewards: rewards.map((r) => ({
       id: r.id,
       name: r.name,
       emoji: r.emoji,
       punchCost: r.punchCost,
-      affordable: balance >= r.punchCost,
+      cardTypeId: r.cardTypeId,
+      affordable: cardBalance(r.cardTypeId) >= r.punchCost,
     })),
-    rewardReady: rewards.some((r) => balance >= r.punchCost),
+    rewardReady: rewards.some((r) => cardBalance(r.cardTypeId) >= r.punchCost),
     promotions: livePromos.map((p) => ({ id: p.id, title: p.title })),
     visits: visits.map((v) => ({
       id: v.id,

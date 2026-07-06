@@ -466,6 +466,8 @@ bookingDashboardRouter.post("/appointments/:id/complete", async (req, res) => {
       clientId: result.clientId,
       earned: result.earn.earned,
       balance: result.earn.balance,
+      cardTypeId: result.earn.cardTypeId,
+      cardName: result.earn.cardName,
       now,
     });
   }

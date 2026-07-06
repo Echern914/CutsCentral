@@ -123,6 +123,8 @@ describe("notifyPunchEarned", () => {
       clientId: client.id,
       earned: 2,
       balance: 4,
+      cardTypeId: null,
+      cardName: null,
       now: NOON,
     });
     expect(sent.length).toBe(1);
@@ -137,7 +139,7 @@ describe("notifyPunchEarned", () => {
   it("skips silently when the shop toggle is off", async () => {
     const shop = await makeShop(false);
     const client = await makeClient(shop.id);
-    await notifyPunchEarned({ shopId: shop.id, clientId: client.id, earned: 1, balance: 1, now: NOON });
+    await notifyPunchEarned({ shopId: shop.id, clientId: client.id, earned: 1, balance: 1, cardTypeId: null, cardName: null, now: NOON });
     expect(sent.length).toBe(0);
     expect(await prisma.nudge.count({ where: { shopId: shop.id } })).toBe(0);
   });
@@ -145,21 +147,21 @@ describe("notifyPunchEarned", () => {
   it("skips a client with no recorded consent", async () => {
     const shop = await makeShop();
     const client = await makeClient(shop.id, { consented: false });
-    await notifyPunchEarned({ shopId: shop.id, clientId: client.id, earned: 1, balance: 1, now: NOON });
+    await notifyPunchEarned({ shopId: shop.id, clientId: client.id, earned: 1, balance: 1, cardTypeId: null, cardName: null, now: NOON });
     expect(sent.length).toBe(0);
   });
 
   it("skips an opted-out client", async () => {
     const shop = await makeShop();
     const client = await makeClient(shop.id, { optedOut: true });
-    await notifyPunchEarned({ shopId: shop.id, clientId: client.id, earned: 1, balance: 1, now: NOON });
+    await notifyPunchEarned({ shopId: shop.id, clientId: client.id, earned: 1, balance: 1, cardTypeId: null, cardName: null, now: NOON });
     expect(sent.length).toBe(0);
   });
 
   it("skips outside quiet hours", async () => {
     const shop = await makeShop();
     const client = await makeClient(shop.id);
-    await notifyPunchEarned({ shopId: shop.id, clientId: client.id, earned: 1, balance: 1, now: NIGHT });
+    await notifyPunchEarned({ shopId: shop.id, clientId: client.id, earned: 1, balance: 1, cardTypeId: null, cardName: null, now: NIGHT });
     expect(sent.length).toBe(0);
   });
 });
@@ -173,6 +175,8 @@ describe("notifyRewardRedeemed", () => {
       clientId: client.id,
       rewardName: "Free Cut",
       balance: 0,
+      cardTypeId: null,
+      cardName: null,
       now: NOON,
     });
     expect(sent.length).toBe(1);
@@ -196,6 +200,8 @@ describe("push-first / SMS-fallback", () => {
       clientId: client.id,
       earned: 1,
       balance: 3,
+      cardTypeId: null,
+      cardName: null,
       now: NOON,
     });
 
@@ -209,7 +215,7 @@ describe("push-first / SMS-fallback", () => {
   it("falls back to SMS when the client has no subscription", async () => {
     const shop = await makeShop();
     const client = await makeClient(shop.id); // no push sub
-    await notifyPunchEarned({ shopId: shop.id, clientId: client.id, earned: 1, balance: 1, now: NOON });
+    await notifyPunchEarned({ shopId: shop.id, clientId: client.id, earned: 1, balance: 1, cardTypeId: null, cardName: null, now: NOON });
     expect(pushed.length).toBe(0);
     expect(sent.length).toBe(1); // SMS as before
   });
@@ -220,7 +226,7 @@ describe("push-first / SMS-fallback", () => {
     const client = await makeClient(shop.id, { optedOut: true, consented: false });
     await addPushSub(shop.id, client.id);
 
-    await notifyPunchEarned({ shopId: shop.id, clientId: client.id, earned: 1, balance: 1, now: NOON });
+    await notifyPunchEarned({ shopId: shop.id, clientId: client.id, earned: 1, balance: 1, cardTypeId: null, cardName: null, now: NOON });
 
     expect(pushed.length).toBe(1); // push still reaches them
     expect(sent.length).toBe(0); // and no SMS (they're opted out anyway)
@@ -230,7 +236,7 @@ describe("push-first / SMS-fallback", () => {
     const shop = await makeShop(false); // loyalty texts/push disabled for the shop
     const client = await makeClient(shop.id);
     await addPushSub(shop.id, client.id);
-    await notifyPunchEarned({ shopId: shop.id, clientId: client.id, earned: 1, balance: 1, now: NOON });
+    await notifyPunchEarned({ shopId: shop.id, clientId: client.id, earned: 1, balance: 1, cardTypeId: null, cardName: null, now: NOON });
     expect(pushed.length).toBe(0);
     expect(sent.length).toBe(0);
   });
@@ -241,7 +247,7 @@ describe("push-first / SMS-fallback", () => {
     await addPushSub(shop.id, client.id);
     // NIGHT is outside the SMS quiet-hours window - SMS would be skipped, but
     // push is not bound by TCPA quiet hours, so it still goes.
-    await notifyPunchEarned({ shopId: shop.id, clientId: client.id, earned: 1, balance: 1, now: NIGHT });
+    await notifyPunchEarned({ shopId: shop.id, clientId: client.id, earned: 1, balance: 1, cardTypeId: null, cardName: null, now: NIGHT });
     expect(pushed.length).toBe(1);
     expect(sent.length).toBe(0);
   });

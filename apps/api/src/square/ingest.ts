@@ -179,6 +179,8 @@ export async function ingestSquareBooking(
       clientId,
       earned: earn.earned,
       balance: earn.balance,
+      cardTypeId: earn.cardTypeId,
+      cardName: earn.cardName,
     });
   }
 }
