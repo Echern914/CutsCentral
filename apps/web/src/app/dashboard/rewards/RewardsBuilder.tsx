@@ -5,6 +5,7 @@ import { Card, CardHeader } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
 import type { LoyaltyConfig } from "./page";
+import { PunchCards } from "./PunchCards";
 import {
   createRewardAction,
   createRuleAction,
@@ -26,11 +27,13 @@ const goldBtn =
 
 type Reward = LoyaltyConfig["rewards"][number];
 type Rule = LoyaltyConfig["rules"][number];
+type CardType = LoyaltyConfig["cards"][number];
 
 export function RewardsBuilder({ config }: { config: LoyaltyConfig }) {
   return (
     <div className="flex flex-col gap-6">
-      <RewardMenu rewards={config.rewards} />
+      <PunchCards cards={config.cards} />
+      <RewardMenu rewards={config.rewards} cards={config.cards} />
       <Earning punchesPerVisit={config.punchesPerVisit} rules={config.rules} />
     </div>
   );
@@ -38,7 +41,7 @@ export function RewardsBuilder({ config }: { config: LoyaltyConfig }) {
 
 /*  Reward menu  */
 
-function RewardMenu({ rewards }: { rewards: Reward[] }) {
+function RewardMenu({ rewards, cards }: { rewards: Reward[]; cards: CardType[] }) {
   const { toast } = useToast();
   const [pending, startTransition] = useTransition();
   const [adding, setAdding] = useState(false);
@@ -73,6 +76,7 @@ function RewardMenu({ rewards }: { rewards: Reward[] }) {
       {adding && (
         <div className="border-b border-subtle bg-charcoal-800/60 px-5 py-4">
           <RewardForm
+            cards={cards}
             onCancel={() => setAdding(false)}
             onSave={(input) =>
               startTransition(async () => {
@@ -99,6 +103,7 @@ function RewardMenu({ rewards }: { rewards: Reward[] }) {
               <li key={reward.id} className="bg-charcoal-800/60 px-5 py-4">
                 <RewardForm
                   initial={reward}
+                  cards={cards}
                   onCancel={() => setEditingId(null)}
                   onSave={(input) =>
                     startTransition(async () => {
@@ -157,6 +162,11 @@ function RewardMenu({ rewards }: { rewards: Reward[] }) {
                 <span className="rounded-full bg-gold/15 px-3 py-1 text-xs font-semibold text-gold">
                   {reward.punchCost} {reward.punchCost === 1 ? "punch" : "punches"}
                 </span>
+                {reward.cardTypeId && (
+                  <span className="rounded-full border border-subtle px-2.5 py-0.5 text-[10px] uppercase tracking-wide text-muted">
+                    {cards.find((c) => c.id === reward.cardTypeId)?.name ?? "card"}
+                  </span>
+                )}
                 {reward.timesRedeemed > 0 && (
                   <span className="text-[10px] text-muted">
                     redeemed {reward.timesRedeemed}×
@@ -220,16 +230,19 @@ function RewardMenu({ rewards }: { rewards: Reward[] }) {
 
 function RewardForm({
   initial,
+  cards,
   onSave,
   onCancel,
   pending,
 }: {
   initial?: Reward;
+  cards: CardType[];
   onSave: (input: {
     name: string;
     description?: string;
     emoji?: string;
     punchCost: number;
+    cardTypeId: string | null;
   }) => void;
   onCancel: () => void;
   pending: boolean;
@@ -238,6 +251,7 @@ function RewardForm({
   const [emoji, setEmoji] = useState(initial?.emoji ?? "");
   const [punchCost, setPunchCost] = useState(initial?.punchCost ?? 10);
   const [description, setDescription] = useState(initial?.description ?? "");
+  const [cardTypeId, setCardTypeId] = useState<string | null>(initial?.cardTypeId ?? null);
 
   return (
     <div className="flex flex-col gap-3">
@@ -284,6 +298,24 @@ function RewardForm({
           className={`mt-1 ${field}`}
         />
       </label>
+      {cards.length > 0 && (
+        <label className="text-xs text-muted">
+          Redeems from
+          <select
+            value={cardTypeId ?? ""}
+            onChange={(e) => setCardTypeId(e.target.value || null)}
+            className={`mt-1 ${field}`}
+          >
+            <option value="">Punch Card (default)</option>
+            {cards.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+                {c.exclusive ? " (invite-only)" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <div className="flex items-center gap-2">
         <button
           disabled={pending || name.trim() === "" || !Number.isFinite(punchCost) || punchCost < 1}
@@ -293,6 +325,7 @@ function RewardForm({
               emoji: emoji.trim(),
               description: description.trim(),
               punchCost: Math.trunc(punchCost),
+              cardTypeId,
             })
           }
           className={goldBtn}

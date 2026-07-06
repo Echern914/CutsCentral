@@ -6,12 +6,27 @@ export const metadata: Metadata = { title: "Rewards" };
 
 export interface LoyaltyConfig {
   punchesPerVisit: number;
+  cards: {
+    id: string;
+    name: string;
+    description: string | null;
+    emoji: string | null;
+    accentColor: string | null;
+    serviceMatch: string[];
+    punchesPerVisit: number;
+    exclusive: boolean;
+    active: boolean;
+    sortOrder: number;
+    grantCount: number;
+    hasActivity: boolean;
+  }[];
   rewards: {
     id: string;
     name: string;
     description: string | null;
     emoji: string | null;
     punchCost: number;
+    cardTypeId: string | null;
     active: boolean;
     sortOrder: number;
     timesRedeemed: number;
