@@ -13,6 +13,7 @@ import { EditClient } from "./EditClient";
 import { MergeClient } from "./MergeClient";
 import { NotesEditor } from "./NotesEditor";
 import { PunchHistory } from "./PunchHistory";
+import { RebookPanel } from "./RebookPanel";
 import { VisitHistory } from "./VisitHistory";
 
 interface ClientDetail {
@@ -35,11 +36,19 @@ interface ClientDetail {
     preferredCadence: CadenceKey | null;
   };
   balance: number;
+  cards: {
+    id: string | null; // null = the default card
+    name: string;
+    emoji: string | null;
+    accentColor: string | null;
+    balance: number;
+  }[];
   rewards: {
     id: string;
     name: string;
     emoji: string | null;
     punchCost: number;
+    cardTypeId: string | null;
     affordable: boolean;
   }[];
   rewardReady: boolean;
@@ -59,6 +68,7 @@ interface LedgerEntry {
   redeemed: number;
   runningBalance: number;
   note: string | null;
+  card: { id: string; name: string; emoji: string | null; accentColor: string | null } | null;
   reversed: boolean;
   isCorrection: boolean;
   editable: boolean;
@@ -78,11 +88,24 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
   // Any other failure (5xx, transient network) throws so error.tsx renders its
   // "Try again" card instead of a no-way-forward message.
   if (!res.ok || !res.data) throw new Error("Failed to load client");
-  const { client, balance, rewards, promotions, visits, nudges } = res.data;
+  const { client, balance, cards, rewards, promotions, visits, nudges } = res.data;
   const ledger = ledgerRes.data?.entries ?? [];
   const appBase = process.env.APP_BASE_URL ?? "";
   const rewardsUrl = `${appBase}/r/${client.magicToken}`;
   const readyCount = rewards.filter((r) => r.affordable).length;
+  const hasCards = cards.some((c) => c.id !== null);
+  const balanceByCard = new Map(cards.map((c) => [c.id, c.balance]));
+
+  // Rebook panel: whole days since the last completed visit, labeled with what
+  // that visit was. Server-computed (this is a server component) so the number
+  // can't drift on hydration.
+  const daysSince = client.lastVisitAt
+    ? Math.max(0, Math.floor((Date.now() - new Date(client.lastVisitAt).getTime()) / 86_400_000))
+    : null;
+  const lastService =
+    visits.find((v) => v.status === "COMPLETED")?.service?.trim() || "visit";
+  const overdue =
+    client.nextExpectedAt !== null && new Date(client.nextExpectedAt).getTime() < Date.now();
 
   return (
     <main className="mx-auto w-full max-w-3xl px-5 py-8">
@@ -122,15 +145,27 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
             )}
           </p>
         </div>
+        {/* Right side: the "should I text them?" glance - days since their last
+            cut with the Nudge button right under it. */}
+        <RebookPanel
+          clientId={client.id}
+          daysSince={daysSince}
+          serviceLabel={lastService}
+          overdue={overdue}
+          canNudge={!client.optedOut && Boolean(client.phone)}
+        />
+      </header>
+
+      <div className="mb-6">
         <ClientActions
           clientId={client.id}
           rewardsUrl={rewardsUrl}
           optedOut={client.optedOut}
-          hasPhone={Boolean(client.phone)}
           rewards={rewards}
+          cards={cards}
           promotions={promotions}
         />
-      </header>
+      </div>
 
       {client.archived && (
         <div className="mb-4 rounded-2xl border border-subtle bg-charcoal-800 px-5 py-3 text-sm text-muted">
@@ -175,19 +210,45 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         <Stat label="Last visit" value={fmt(client.lastVisitAt)} />
       </div>
 
-      {/* Where the balance stands against the menu */}
+      {/* Per-card balances - only meaningful once the shop has custom cards. */}
+      {hasCards && (
+        <Card className="mt-4 px-5 py-3">
+          <ul className="flex flex-wrap gap-x-5 gap-y-1.5">
+            {cards.map((c) => (
+              <li key={c.id ?? "default"} className="flex items-center gap-1.5 text-xs">
+                <span
+                  aria-hidden
+                  className="inline-block h-2.5 w-2.5 rounded-full"
+                  style={{ backgroundColor: c.accentColor ?? "#D4AF37" }}
+                />
+                <span className="text-muted">
+                  {c.emoji ? `${c.emoji} ` : ""}
+                  {c.name}
+                </span>
+                <span className="font-medium text-offwhite">{c.balance}</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
+      {/* Where the balance stands against the menu - each reward measures
+          against its OWN card's balance. */}
       {rewards.length > 0 && (
         <Card className="mt-4 px-5 py-3.5">
           <ul className="flex flex-wrap gap-x-5 gap-y-1.5">
-            {rewards.map((r) => (
-              <li key={r.id} className="text-xs">
-                <span className={r.affordable ? "text-emerald-soft" : "text-muted"}>
-                  {r.emoji ? `${r.emoji} ` : ""}
-                  {r.name} · {r.punchCost}
-                  {r.affordable ? ", ready" : ` (${r.punchCost - balance} to go)`}
-                </span>
-              </li>
-            ))}
+            {rewards.map((r) => {
+              const cardBalance = balanceByCard.get(r.cardTypeId) ?? 0;
+              return (
+                <li key={r.id} className="text-xs">
+                  <span className={r.affordable ? "text-emerald-soft" : "text-muted"}>
+                    {r.emoji ? `${r.emoji} ` : ""}
+                    {r.name} · {r.punchCost}
+                    {r.affordable ? ", ready" : ` (${r.punchCost - cardBalance} to go)`}
+                  </span>
+                </li>
+              );
+            })}
           </ul>
         </Card>
       )}

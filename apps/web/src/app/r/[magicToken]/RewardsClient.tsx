@@ -14,7 +14,7 @@ import { CadenceCard } from "./CadenceCard";
 import { PushOptIn } from "./PushOptIn";
 import { GetTheApp } from "./GetTheApp";
 import { AddToWallet } from "./AddToWallet";
-import { resolveRewardsTheme, rewardsFontVars, surfaceStyle } from "./theme";
+import { resolveRewardsTheme, rewardsFontVars, surfaceStyle, type RewardsTheme } from "./theme";
 import type { RewardsData } from "./page";
 
 function promoValue(p: RewardsData["promotions"][number]): string | null {
@@ -104,6 +104,14 @@ export function RewardsClient({
 
   const surface = surfaceStyle(t);
 
+  // Multi-card mode: more than one visible punch card (default + customs).
+  // With one (or a payload from an older API without `cards`), the page renders
+  // the classic single-card tree UNTOUCHED - the zero-regression gate.
+  const cards = data.cards ?? [];
+  const multiCard = cards.length > 1;
+  // "Ready" celebration spans every card the client can see.
+  const readyAll = multiCard ? cards.flatMap((c) => c.rewards.filter((r) => r.ready)) : ready;
+
   // Root style: theme colors + the chosen font families exposed as locals the
   // page reads via `fontFamily: "var(--page-display)"` etc. (the --font-page-*
   // vars are declared by the route layout).
@@ -182,35 +190,52 @@ export function RewardsClient({
             )}
           </motion.header>
 
-          {/* Punch balance */}
-          <motion.div variants={fadeUp}>
-            <div
-              className={`p-6 text-center ${ready.length > 0 ? "ring-conic" : ""}`}
-              style={surface}
-            >
+          {/* Punch balance. Multi-card shops get one stacked surface per card
+              (each with its own balance, accent, rewards, and grid); everyone
+              else gets the classic single-balance card, byte-for-byte. */}
+          {multiCard ? (
+            <motion.div variants={fadeUp} className="flex flex-col gap-4">
+              {cards.map((card) => (
+                <PunchCardSurface
+                  key={card.id ?? "default"}
+                  card={card}
+                  theme={t}
+                  surface={surface}
+                  showRewards={show("rewardMenu")}
+                  showGrid={show("punchGrid")}
+                />
+              ))}
+            </motion.div>
+          ) : (
+            <motion.div variants={fadeUp}>
               <div
-                className="text-6xl leading-none"
-                style={{ color: accent, fontFamily: "var(--page-display)" }}
+                className={`p-6 text-center ${ready.length > 0 ? "ring-conic" : ""}`}
+                style={surface}
               >
-                <CountUp value={punches.balance} />
-                <span className="text-2xl" style={{ color: t.muted }}>
-                  {" "}
-                  {punches.balance === 1 ? "punch" : "punches"}
-                </span>
+                <div
+                  className="text-6xl leading-none"
+                  style={{ color: accent, fontFamily: "var(--page-display)" }}
+                >
+                  <CountUp value={punches.balance} />
+                  <span className="text-2xl" style={{ color: t.muted }}>
+                    {" "}
+                    {punches.balance === 1 ? "punch" : "punches"}
+                  </span>
+                </div>
+                <p className="mt-3 text-sm" style={{ color: t.muted }}>
+                  {ready.length > 0
+                    ? ready.length === 1
+                      ? `Your ${ready[0]!.name} is ready!`
+                      : `${ready.length} rewards ready to claim!`
+                    : next
+                      ? `${next.remaining} more to your ${next.name}`
+                      : rewards.length > 0
+                        ? "Keep visiting to stack up punches"
+                        : "Every visit earns punches"}
+                </p>
               </div>
-              <p className="mt-3 text-sm" style={{ color: t.muted }}>
-                {ready.length > 0
-                  ? ready.length === 1
-                    ? `Your ${ready[0]!.name} is ready!`
-                    : `${ready.length} rewards ready to claim!`
-                  : next
-                    ? `${next.remaining} more to your ${next.name}`
-                    : rewards.length > 0
-                      ? "Keep visiting to stack up punches"
-                      : "Every visit earns punches"}
-              </p>
-            </div>
-          </motion.div>
+            </motion.div>
+          )}
 
           {/* One-tap cadence capture (cold start): only for a client with no
               stated cadence and not enough visit history to have computed one.
@@ -269,10 +294,10 @@ export function RewardsClient({
             </motion.div>
           )}
 
-          {/* Celebration when a reward is unlocked */}
-          {ready.length > 0 && (
+          {/* Celebration when a reward is unlocked (any card) */}
+          {readyAll.length > 0 && (
             <motion.div variants={fadeUp}>
-              <RewardCelebration count={ready.length} label={ready[0]!.name} theme={t} />
+              <RewardCelebration count={readyAll.length} label={readyAll[0]!.name} theme={t} />
             </motion.div>
           )}
 
@@ -335,8 +360,9 @@ export function RewardsClient({
             </motion.section>
           )}
 
-          {/* Reward menu - this shop's own program */}
-          {show("rewardMenu") && rewards.length > 0 && (
+          {/* Reward menu - this shop's own program. In multi-card mode each
+              card surface above already lists its own rewards. */}
+          {!multiCard && show("rewardMenu") && rewards.length > 0 && (
             <motion.section variants={fadeUp} className="flex flex-col gap-3">
               <h2 className="px-1 text-sm font-medium" style={{ color: t.muted }}>
                 Reward menu
@@ -406,8 +432,9 @@ export function RewardsClient({
             </motion.section>
           )}
 
-          {/* Punch grid toward the next reward (decorative for small targets) */}
-          {show("punchGrid") && next && next.punchCost <= 20 && (
+          {/* Punch grid toward the next reward (decorative for small targets).
+              Multi-card mode draws a grid inside each card surface instead. */}
+          {!multiCard && show("punchGrid") && next && next.punchCost <= 20 && (
             <motion.div variants={fadeUp}>
               <div className="p-6" style={surface}>
                 <PunchGrid
@@ -478,6 +505,147 @@ export function RewardsClient({
           )}
         </motion.div>
       </main>
+    </div>
+  );
+}
+
+/**
+ * One punch card in the multi-card stack: its own balance, accent, reward
+ * rows, and (for small targets) a dot grid. The card's accentColor overrides
+ * the shop accent so a "VIP" card can look like ITS card, not the default.
+ */
+function PunchCardSurface({
+  card,
+  theme,
+  surface,
+  showRewards,
+  showGrid,
+}: {
+  card: NonNullable<RewardsData["cards"]>[number];
+  theme: RewardsTheme;
+  surface: CSSProperties;
+  showRewards: boolean;
+  showGrid: boolean;
+}) {
+  const t = theme;
+  const accent = card.accentColor ?? t.accent;
+  const cardTheme: RewardsTheme = { ...t, accent };
+  const readyCount = card.rewards.filter((r) => r.ready).length;
+  const target = card.nextTarget;
+
+  return (
+    <div
+      className={`overflow-hidden ${readyCount > 0 ? "ring-conic" : ""}`}
+      style={surface}
+    >
+      <div className="p-6 text-center">
+        <p
+          className="text-xs font-semibold uppercase tracking-[0.2em]"
+          style={{ color: accent }}
+        >
+          {card.emoji ? `${card.emoji} ` : ""}
+          {card.name}
+          {card.exclusive && (
+            <span
+              className="ml-2 rounded-full px-2 py-0.5 text-[9px] tracking-wide"
+              style={{ border: `1px solid ${accent}66`, color: accent }}
+            >
+              VIP
+            </span>
+          )}
+        </p>
+        <div
+          className="mt-3 text-5xl leading-none"
+          style={{ color: accent, fontFamily: "var(--page-display)" }}
+        >
+          <CountUp value={card.balance} />
+          <span className="text-xl" style={{ color: t.muted }}>
+            {" "}
+            {card.balance === 1 ? "punch" : "punches"}
+          </span>
+        </div>
+        <p className="mt-3 text-sm" style={{ color: t.muted }}>
+          {readyCount > 0
+            ? readyCount === 1
+              ? `Your ${card.rewards.find((r) => r.ready)!.name} is ready!`
+              : `${readyCount} rewards ready to claim!`
+            : target
+              ? `${target.remaining} more to your ${target.name}`
+              : card.rewards.length > 0
+                ? "Keep visiting to stack up punches"
+                : "Every visit earns punches"}
+        </p>
+        {showGrid && target && target.punchCost <= 20 && (
+          <div className="mt-5">
+            <PunchGrid
+              filled={target.punchCost - target.remaining}
+              threshold={target.punchCost}
+              theme={cardTheme}
+            />
+          </div>
+        )}
+      </div>
+
+      {showRewards && card.rewards.length > 0 && (
+        <ul>
+          {card.rewards.map((reward) => {
+            const progress = Math.min(
+              100,
+              Math.round(((reward.punchCost - reward.remaining) / reward.punchCost) * 100),
+            );
+            return (
+              <li
+                key={reward.id}
+                className="px-5 py-4"
+                style={{ borderTop: `1px solid ${t.border}` }}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">
+                      {reward.emoji ? `${reward.emoji} ` : ""}
+                      {reward.name}
+                    </p>
+                    {reward.description && (
+                      <p className="mt-0.5 truncate text-xs" style={{ color: t.muted }}>
+                        {reward.description}
+                      </p>
+                    )}
+                  </div>
+                  {reward.ready ? (
+                    <span
+                      className="shrink-0 rounded-full px-3 py-1 text-xs font-semibold"
+                      style={{ backgroundColor: accent, color: t.onAccent }}
+                    >
+                      Ready!
+                    </span>
+                  ) : (
+                    <span className="shrink-0 text-xs" style={{ color: t.muted }}>
+                      {reward.punchCost - reward.remaining}/{reward.punchCost}
+                    </span>
+                  )}
+                </div>
+                <div
+                  className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full"
+                  style={{ backgroundColor: t.border }}
+                  role="progressbar"
+                  aria-valuenow={progress}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                >
+                  <div
+                    className="h-full rounded-full transition-all duration-200 ease-out"
+                    style={{
+                      width: `${progress}%`,
+                      backgroundColor: accent,
+                      opacity: reward.ready ? 1 : 0.65,
+                    }}
+                  />
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }
