@@ -401,7 +401,9 @@ export async function grantBonusPunches(
     let cardName: string | null = null;
     if (cardTypeId !== null) {
       const card = await tx.cardType.findFirst({ where: { id: cardTypeId, shopId } });
-      if (!card) return { ok: false as const, reason: "card_not_found" as const };
+      // Archived cards are retired: a bonus punch is unambiguously a NEW punch
+      // (never a date-edit re-route), so refuse to fill a retired card.
+      if (!card || !card.active) return { ok: false as const, reason: "card_not_found" as const };
       cardName = card.name;
       if (card.exclusive) {
         await tx.cardGrant.upsert({

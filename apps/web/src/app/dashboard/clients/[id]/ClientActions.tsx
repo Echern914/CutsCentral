@@ -24,6 +24,7 @@ export interface ClientCard {
   name: string;
   emoji: string | null;
   accentColor: string | null;
+  active: boolean; // archived cards (active=false) can't take new punches
   balance: number;
 }
 
@@ -56,8 +57,13 @@ export function ClientActions({
   const [punchPickerOpen, setPunchPickerOpen] = useState(false);
   const [promoPickerOpen, setPromoPickerOpen] = useState(false);
   const [isOptedOut, setIsOptedOut] = useState(optedOut);
+  // Cards you can PUNCH: archived cards are retired and never take a new punch
+  // (mirrors auto-routing, which skips inactive cards). The default card is
+  // always active. Redeeming an existing balance is unaffected (that's driven by
+  // `rewards`, below).
+  const punchableCards = cards.filter((c) => c.active);
   // Custom cards exist -> punching needs a "which card?" choice.
-  const hasCards = cards.some((c) => c.id !== null);
+  const hasCards = punchableCards.some((c) => c.id !== null);
   const cardName = (id: string | null) => cards.find((c) => c.id === id)?.name ?? "card";
   // Group the redeem list by card (default card first, then the shop's card
   // order) so the picker's section headers read cleanly. Stable sort keeps each
@@ -107,7 +113,7 @@ export function ClientActions({
         <p className="px-2 pb-1.5 pt-1 text-[10px] uppercase tracking-wide text-muted">
           {label}
         </p>
-        {cards.map((card) => (
+        {punchableCards.map((card) => (
           <button
             key={card.id ?? "default"}
             disabled={pending}

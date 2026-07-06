@@ -25,6 +25,25 @@ const WEEK_CHOICES = [8, 12, 26] as const;
 const DAY_MS = 86_400_000;
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 
+// Constructing an Intl.DateTimeFormat is expensive (loads ICU data); shopLocalDay
+// is called once per visit AND once per groupBy row, so a busy shop over 26 weeks
+// would build thousands of formatters and stall the single Node thread. Cache one
+// formatter per timezone (a handful of distinct zones across all shops).
+const dayFormatterCache = new Map<string, Intl.DateTimeFormat>();
+function dayFormatter(timezone: string): Intl.DateTimeFormat {
+  let fmt = dayFormatterCache.get(timezone);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    dayFormatterCache.set(timezone, fmt);
+  }
+  return fmt;
+}
+
 /**
  * A visit's calendar day in the shop's timezone. en-CA formats as YYYY-MM-DD,
  * which we reinterpret as a UTC date for stable week math. Weeks must bucket in
@@ -33,12 +52,7 @@ const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
  * wrong to the barber.
  */
 function shopLocalDay(d: Date, timezone: string): Date {
-  const ymd = new Intl.DateTimeFormat("en-CA", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(d);
+  const ymd = dayFormatter(timezone).format(d);
   return new Date(`${ymd}T00:00:00Z`);
 }
 
@@ -68,7 +82,17 @@ insightsRouter.get("/", async (req, res) => {
       select: { scheduledAt: true, serviceName: true, price: true, clientId: true },
     }),
     prisma.punchLedger.aggregate({
-      where: { shopId: shop.id, createdAt: { gte: windowStart } },
+      // Standing activity only: exclude a reversed original (reversedAt set) AND
+      // its offsetting correction (reversalOfId set), so a punch-and-undo pair
+      // nets to 0/0 instead of showing "1 earned, 1 redeemed". A regrant from an
+      // "edit count" (correctionOfId set, reversalOfId null) is a REAL earn and
+      // stays included - mirrors the redemptions predicate just below.
+      where: {
+        shopId: shop.id,
+        createdAt: { gte: windowStart },
+        reversedAt: null,
+        reversalOfId: null,
+      },
       _sum: { punchesEarned: true, punchesRedeemed: true },
     }),
     // Standing redemptions (same predicate as the loyalty designer's

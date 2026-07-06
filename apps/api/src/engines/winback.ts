@@ -1,5 +1,5 @@
 import { WINBACK, apiEnv } from "@chairback/config";
-import { forShop, prisma, type Shop } from "@chairback/db";
+import { forShop, prisma, runWithShop, type Shop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { buildWinbackBody, buildWinbackPush } from "../messaging/templates.js";
 import { getMessageProvider } from "../messaging/twilio.js";
@@ -90,37 +90,44 @@ export async function loadWinbackData(
   clientIds: string[],
   now: Date,
 ): Promise<WinbackEligibilityData> {
-  const db = forShop(shopId);
   const since = new Date(now.getTime() - (WINBACK.suppressionDays + 1) * MS_PER_DAY);
-  const [completed, upcoming, winbacks] = await Promise.all([
-    db.visit.findMany({
-      where: { clientId: { in: clientIds }, status: "COMPLETED" },
-      select: { clientId: true },
-    }),
-    db.visit.findMany({
-      where: { clientId: { in: clientIds }, status: "SCHEDULED", scheduledAt: { gt: now } },
-      select: { clientId: true },
-    }),
-    db.nudge.findMany({
+  // One transaction (one pooled connection) instead of three, and DB-side
+  // groupBy so Postgres returns one row per client - the old findMany streamed
+  // every historical COMPLETED visit into Node just to be tallied.
+  const { completed, upcoming, winbacks } = await runWithShop(shopId, async (tx) => {
+    const completed = await tx.visit.groupBy({
+      by: ["clientId"],
+      where: { shopId, clientId: { in: clientIds }, status: "COMPLETED" },
+      _count: { _all: true },
+    });
+    const upcoming = await tx.visit.groupBy({
+      by: ["clientId"],
       where: {
+        shopId,
+        clientId: { in: clientIds },
+        status: "SCHEDULED",
+        scheduledAt: { gt: now },
+      },
+    });
+    const winbacks = await tx.nudge.groupBy({
+      by: ["clientId"],
+      where: {
+        shopId,
         clientId: { in: clientIds },
         kind: "winback",
         status: { in: ["SENT", "PENDING"] },
         createdAt: { gte: since },
       },
-      select: { clientId: true, createdAt: true },
-      orderBy: { createdAt: "desc" },
-    }),
-  ]);
+      _max: { createdAt: true },
+    });
+    return { completed, upcoming, winbacks };
+  });
 
-  const completedCounts = new Map<string, number>();
-  for (const v of completed) {
-    completedCounts.set(v.clientId, (completedCounts.get(v.clientId) ?? 0) + 1);
-  }
-  const upcomingIds = new Set(upcoming.map((v) => v.clientId));
+  const completedCounts = new Map(completed.map((r) => [r.clientId, r._count._all]));
+  const upcomingIds = new Set(upcoming.map((r) => r.clientId));
   const lastWinbackAt = new Map<string, Date>();
   for (const n of winbacks) {
-    if (!lastWinbackAt.has(n.clientId)) lastWinbackAt.set(n.clientId, n.createdAt);
+    if (n._max.createdAt) lastWinbackAt.set(n.clientId, n._max.createdAt);
   }
   return { completedCounts, upcomingIds, lastWinbackAt };
 }
