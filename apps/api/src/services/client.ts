@@ -192,6 +192,53 @@ export async function mergeClients(
       data: { clientId: winnerId },
     });
 
+    // CardGrant (exclusive-card VIP membership) and WalletPassRegistration both
+    // carry a composite unique that a blind re-point can violate when the winner
+    // already has a matching row. Drop the loser's colliding rows first, then
+    // move the rest. Without this move, a merged client keeps the loser's punch
+    // balance on an exclusive card but loses the membership -> routeVisitEarn
+    // silently skips that card forever; and the loser's Wallet pass keeps
+    // pointing at a now-zeroed client id.
+
+    // CardGrant unique is (cardTypeId, clientId): a loser grant collides with the
+    // winner iff the winner already holds a grant on the same cardType.
+    await tx.cardGrant.deleteMany({
+      where: {
+        shopId,
+        clientId: loserId,
+        cardType: { grants: { some: { clientId: winnerId } } },
+      },
+    });
+    await tx.cardGrant.updateMany({
+      where: { clientId: loserId, shopId },
+      data: { clientId: winnerId },
+    });
+
+    // WalletPassRegistration unique is (deviceLibraryIdentifier, clientId): a
+    // loser registration collides iff the winner already has a registration from
+    // the same device. Drop those, move the rest. (deviceLibraryIdentifier is
+    // not shop-scoped in the unique, but rows are always same-shop here since
+    // both clients belong to `shopId`.)
+    const winnerDevices = await tx.walletPassRegistration.findMany({
+      where: { shopId, clientId: winnerId },
+      select: { deviceLibraryIdentifier: true },
+    });
+    if (winnerDevices.length > 0) {
+      await tx.walletPassRegistration.deleteMany({
+        where: {
+          shopId,
+          clientId: loserId,
+          deviceLibraryIdentifier: {
+            in: winnerDevices.map((d) => d.deviceLibraryIdentifier),
+          },
+        },
+      });
+    }
+    await tx.walletPassRegistration.updateMany({
+      where: { clientId: loserId, shopId },
+      data: { clientId: winnerId },
+    });
+
     // Consent reconciliation: opted-out-wins + earliest-consent-wins.
     const optedOut = winner.optedOut || loser.optedOut;
     let smsConsentAt = winner.smsConsentAt;

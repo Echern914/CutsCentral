@@ -41,6 +41,7 @@ interface ClientDetail {
     name: string;
     emoji: string | null;
     accentColor: string | null;
+    active: boolean; // archived cards can't take new punches
     balance: number;
   }[];
   rewards: {

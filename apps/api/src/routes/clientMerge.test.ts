@@ -196,4 +196,61 @@ describe("client merge routes", () => {
     expect(res.body.balance).toBe(1);
     expect(await balanceOf(cookieA, winner)).toBe(1);
   });
+
+  it("moves the loser's VIP grant + balance, resolving a grant collision", async () => {
+    const winner = await addClient(cookieA, "WVip");
+    const loser = await addClient(cookieA, "LVip");
+
+    // An exclusive (invite-only) card, granted to BOTH clients - so after the
+    // merge the loser's grant would collide with the winner's on the composite
+    // unique (cardTypeId, clientId). This is exactly the case a blind re-point
+    // would throw on.
+    const cardRes = await request(app)
+      .post("/api/loyalty/cards")
+      .set("Cookie", cookieA)
+      .send({ name: "VIP", exclusive: true, punchesPerVisit: 1 });
+    expect(cardRes.status).toBe(201);
+    const cardId = cardRes.body.id as string;
+    for (const id of [winner, loser]) {
+      const g = await request(app)
+        .post(`/api/loyalty/cards/${cardId}/grants`)
+        .set("Cookie", cookieA)
+        .send({ clientId: id });
+      expect(g.status).toBe(201);
+    }
+
+    // Give the loser a VIP-card punch (bonus routed to the exclusive card).
+    const bonus = await request(app)
+      .post(`/api/dashboard/clients/${loser}/bonus`)
+      .set("Cookie", cookieA)
+      .send({ count: 2, cardTypeId: cardId });
+    expect(bonus.status).toBe(200);
+
+    // The merge must SUCCEED despite the colliding grant...
+    const res = await request(app)
+      .post(`/api/dashboard/clients/${winner}/merge`)
+      .set("Cookie", cookieA)
+      .send({ loserId: loser });
+    expect(res.status).toBe(200);
+
+    // ...the winner now holds the VIP grant (membership preserved, so future
+    // auto-routing still lands VIP punches here)...
+    const grants = await forShop(shopIdA).cardGrant.findMany({
+      where: { cardTypeId: cardId },
+    });
+    expect(grants.map((g) => g.clientId)).toContain(winner);
+    expect(grants.map((g) => g.clientId)).not.toContain(loser);
+    // ...exactly one grant remains on the card (the collision was resolved, not
+    // duplicated)...
+    expect(grants).toHaveLength(1);
+
+    // ...and the loser's VIP balance moved onto the winner's VIP card.
+    const detail = await request(app)
+      .get(`/api/dashboard/clients/${winner}`)
+      .set("Cookie", cookieA);
+    const vip = (detail.body.cards as { id: string | null; balance: number }[]).find(
+      (c) => c.id === cardId,
+    );
+    expect(vip?.balance).toBe(2);
+  });
 });

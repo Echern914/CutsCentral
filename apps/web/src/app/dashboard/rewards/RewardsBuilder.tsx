@@ -298,24 +298,34 @@ function RewardForm({
           className={`mt-1 ${field}`}
         />
       </label>
-      {cards.length > 0 && (
-        <label className="text-xs text-muted">
-          Redeems from
-          <select
-            value={cardTypeId ?? ""}
-            onChange={(e) => setCardTypeId(e.target.value || null)}
-            className={`mt-1 ${field}`}
-          >
-            <option value="">Punch Card (default)</option>
-            {cards.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-                {c.exclusive ? " (invite-only)" : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
+      {cards.length > 0 &&
+        (() => {
+          // A new reward can only redeem from a LIVE card; archived cards are
+          // retired. But keep an already-selected archived card in the list so
+          // editing an existing reward doesn't silently re-point it.
+          const selectable = cards.filter(
+            (c) => c.active || c.id === cardTypeId,
+          );
+          return (
+            <label className="text-xs text-muted">
+              Redeems from
+              <select
+                value={cardTypeId ?? ""}
+                onChange={(e) => setCardTypeId(e.target.value || null)}
+                className={`mt-1 ${field}`}
+              >
+                <option value="">Punch Card (default)</option>
+                {selectable.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                    {c.exclusive ? " (invite-only)" : ""}
+                    {!c.active ? " (archived)" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          );
+        })()}
       <div className="flex items-center gap-2">
         <button
           disabled={pending || name.trim() === "" || !Number.isFinite(punchCost) || punchCost < 1}

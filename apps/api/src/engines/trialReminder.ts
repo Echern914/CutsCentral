@@ -82,6 +82,7 @@ interface ReminderShop {
 function buildReminderEmail(
   stage: TrialReminderStage,
   shop: ReminderShop,
+  now: Date,
 ): { subject: string; text: string } {
   const billingUrl = `${env.APP_BASE_URL}/dashboard/billing`;
   const price = `$${BILLING.priceMonthlyUsd}/mo`;
@@ -102,19 +103,28 @@ function buildReminderEmail(
           signoff,
         ].join("\n"),
       };
-    case 2:
+    case 2: {
+      // Stage 2 fires within 24h of expiry, but the daily sweep can first cross
+      // that line ON the expiry day (a trial ending after the sweep hour) - so
+      // "ends tomorrow" is often wrong. Say "today" once the trial ends within
+      // this calendar day (or already has), "tomorrow" otherwise.
+      const endsToday =
+        shop.trialEndsAt.getTime() <= now.getTime() ||
+        friendlyDate(shop.trialEndsAt) === friendlyDate(now);
+      const when = endsToday ? "today" : "tomorrow";
       return {
-        subject: `Your ${APP_NAME} trial ends tomorrow`,
+        subject: `Your ${APP_NAME} trial ends ${when}`,
         text: [
           `Hi ${shop.owner.name},`,
           "",
-          `Heads up - your free trial for ${shop.name} ends tomorrow (${endDate}). When it does, client texts and your online booking page pause.`,
+          `Heads up - your free trial for ${shop.name} ends ${when} (${endDate}). When it does, client texts and your online booking page pause.`,
           "",
           `It takes about a minute to subscribe (${price}): ${billingUrl}`,
           "",
           signoff,
         ].join("\n"),
       };
+    }
     case 3:
       return {
         subject: `Your ${APP_NAME} trial has ended - texts and booking are paused`,
@@ -197,7 +207,7 @@ export async function runTrialReminders(
       });
       if (count === 0) continue;
 
-      const { subject, text } = buildReminderEmail(stage, reminderShop);
+      const { subject, text } = buildReminderEmail(stage, reminderShop, now);
       await sendEmail({ to: shop.owner.email, subject, text });
       summaries.push({ shopId: shop.id, stage, ownerEmail: shop.owner.email });
       logger.info({ shopId: shop.id, stage }, "trial reminder sent");

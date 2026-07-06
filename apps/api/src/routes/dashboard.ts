@@ -34,7 +34,7 @@ import {
   unarchiveClient,
 } from "../services/client.js";
 import { recomputeCadence } from "../engines/cadence.js";
-import { loadEligibilityData, sweepShop } from "../engines/nudge.js";
+import { sweepShop, type EligibilityData } from "../engines/nudge.js";
 import { sweepShopWinback } from "../engines/winback.js";
 import { isNudgeEligible } from "../engines/eligibility.js";
 import { inQuietHours } from "../engines/quietHours.js";
@@ -114,64 +114,82 @@ function intQuery(raw: unknown, def: number, min: number, max: number): number {
 // Aggregate stats for the dashboard cards.
 dashboardRouter.get("/stats", async (req, res) => {
   const shop = req.shop!;
-  const db = forShop(shop.id);
   const now = new Date();
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-  const [activeClients, nudgesThisMonth, recovered, avgTicket, winbackRows] =
-    await Promise.all([
-      db.client.count({ where: { optedOut: false, archivedAt: null } }),
-      db.nudge.count({ where: { status: "SENT", createdAt: { gte: startOfMonth } } }),
-      // Rebookings recovered THIS MONTH. Was previously unbounded (all-time) while
-      // the card reads as monthly - attribute by the rebooking date, not all time.
-      db.nudge.count({
-        where: { resultedInBookingAt: { gte: startOfMonth } },
-      }),
-      prisma.visit.aggregate({
-        where: { shopId: shop.id, status: "COMPLETED", price: { not: null } },
-        _avg: { price: true },
-      }),
-      // Win-back ("Growth Agent") rebookings THIS MONTH: the attributed visit ids
-      // for kind="winback" nudges that led to a booking this month. We sum the
-      // REAL Visit.price on those visits (not avg-ticket) so the recovered-$ is
-      // actual money, falling back to nothing rather than an estimate.
-      db.nudge.findMany({
-        where: { kind: "winback", resultedInBookingAt: { gte: startOfMonth } },
-        select: { resultedVisitId: true },
-      }),
-    ]);
+  // ONE transaction for all the card reads. This route used to fan out 5
+  // parallel forShop calls (each its own pooled connection); with the web
+  // dashboard firing /stats, /at-risk and /trends together, two barbers
+  // loading at once could exhaust the 10-connection pool.
+  const s = await runWithShop(shop.id, async (tx) => {
+    const activeClients = await tx.client.count({
+      where: { shopId: shop.id, optedOut: false, archivedAt: null },
+    });
+    const nudgesThisMonth = await tx.nudge.count({
+      where: { shopId: shop.id, status: "SENT", createdAt: { gte: startOfMonth } },
+    });
+    // Rebookings recovered THIS MONTH. Was previously unbounded (all-time) while
+    // the card reads as monthly - attribute by the rebooking date, not all time.
+    const recovered = await tx.nudge.count({
+      where: { shopId: shop.id, resultedInBookingAt: { gte: startOfMonth } },
+    });
+    const avgTicket = await tx.visit.aggregate({
+      where: { shopId: shop.id, status: "COMPLETED", price: { not: null } },
+      _avg: { price: true },
+    });
+    // Win-back ("Growth Agent") rebookings THIS MONTH: the attributed visit ids
+    // for kind="winback" nudges that led to a booking this month. We sum the
+    // REAL Visit.price on those visits (not avg-ticket) so the recovered-$ is
+    // actual money, falling back to nothing rather than an estimate.
+    const winbackRows = await tx.nudge.findMany({
+      where: {
+        shopId: shop.id,
+        kind: "winback",
+        resultedInBookingAt: { gte: startOfMonth },
+      },
+      select: { resultedVisitId: true },
+    });
+
+    // Real recovered $ from win-backs: sum the price of the actually-booked
+    // visits. A win-back rebooking that's still SCHEDULED (no price yet) simply
+    // contributes 0 to the $ total but still counts as a re-engaged client.
+    const winbackVisitIds = winbackRows
+      .map((n) => n.resultedVisitId)
+      .filter((id): id is string => Boolean(id));
+    let winbackDollarsRecovered = 0;
+    if (winbackVisitIds.length > 0) {
+      const sum = await tx.visit.aggregate({
+        where: { shopId: shop.id, id: { in: winbackVisitIds }, price: { not: null } },
+        _sum: { price: true },
+      });
+      winbackDollarsRecovered = Math.round(Number(sum._sum.price ?? 0));
+    }
+
+    return {
+      activeClients,
+      nudgesThisMonth,
+      recovered,
+      avgTicket,
+      winbackClientsRecovered: winbackRows.length,
+      winbackDollarsRecovered,
+    };
+  });
 
   const atRisk = await countAtRisk(shop.id, shop.nudgeBufferDays, now);
-  const ticket = Number(avgTicket._avg.price ?? 0);
-
-  // Real recovered $ from win-backs: sum the price of the actually-booked visits.
-  // A win-back rebooking that's still SCHEDULED (no price yet) simply contributes
-  // 0 to the $ total but still counts as a re-engaged client.
-  const winbackVisitIds = winbackRows
-    .map((n) => n.resultedVisitId)
-    .filter((id): id is string => Boolean(id));
-  const winbackClientsRecovered = winbackRows.length;
-  let winbackDollarsRecovered = 0;
-  if (winbackVisitIds.length > 0) {
-    const sum = await prisma.visit.aggregate({
-      where: { shopId: shop.id, id: { in: winbackVisitIds }, price: { not: null } },
-      _sum: { price: true },
-    });
-    winbackDollarsRecovered = Math.round(Number(sum._sum.price ?? 0));
-  }
+  const ticket = Number(s.avgTicket._avg.price ?? 0);
 
   res.json({
-    activeClients,
+    activeClients: s.activeClients,
     atRiskClients: atRisk,
-    nudgesThisMonth,
-    rebookingsRecovered: recovered,
-    estDollarsRecovered: Math.round(recovered * ticket),
+    nudgesThisMonth: s.nudgesThisMonth,
+    rebookingsRecovered: s.recovered,
+    estDollarsRecovered: Math.round(s.recovered * ticket),
     avgTicket: ticket,
     // Win-back Growth Agent payoff (this month). Clients re-engaged is always
     // accurate; dollars are REAL summed Visit.price (0 when the rebooking hasn't
     // completed/priced yet), distinct from the avg-ticket estimate above.
-    winbackClientsRecovered,
-    winbackDollarsRecovered,
+    winbackClientsRecovered: s.winbackClientsRecovered,
+    winbackDollarsRecovered: s.winbackDollarsRecovered,
   });
 });
 
@@ -198,34 +216,40 @@ dashboardRouter.get("/trends", async (req, res) => {
   }
 
   const earliest = months[0]!.start;
-  const [visits, nudges, newClients, payments, rebookings] = await Promise.all([
-    prisma.visit.findMany({
-      where: { shopId: shop.id, status: "COMPLETED", scheduledAt: { gte: earliest } },
-      select: { scheduledAt: true },
-    }),
-    prisma.nudge.findMany({
-      where: { shopId: shop.id, status: "SENT", createdAt: { gte: earliest } },
-      select: { createdAt: true },
-    }),
-    // New customers per month, by when the client first landed in ChairBack.
-    prisma.client.findMany({
-      where: { shopId: shop.id, createdAt: { gte: earliest } },
-      select: { createdAt: true },
-    }),
-    // Successful card payments per month. createdAt is the only reliably-written
-    // Payment timestamp (capturedAt/authorizedAt are hold-mode-only, never set).
-    // Empty for shops not on ChairBack payments (opt-in Stripe Connect feature).
-    prisma.payment.findMany({
-      where: { shopId: shop.id, status: "succeeded", createdAt: { gte: earliest } },
-      select: { createdAt: true },
-    }),
-    // Rebookings recovered per month: nudges that led to a booking, by the
-    // booking date. Parallels the /stats "rebookings recovered" scalar over time.
-    prisma.nudge.findMany({
-      where: { shopId: shop.id, resultedInBookingAt: { gte: earliest } },
-      select: { resultedInBookingAt: true },
-    }),
-  ]);
+  // One transaction (one pooled connection) - this fires alongside /stats and
+  // /at-risk on every dashboard load, so it must not fan out 5 connections.
+  const { visits, nudges, newClients, payments, rebookings } = await runWithShop(
+    shop.id,
+    async (tx) => {
+      const visits = await tx.visit.findMany({
+        where: { shopId: shop.id, status: "COMPLETED", scheduledAt: { gte: earliest } },
+        select: { scheduledAt: true },
+      });
+      const nudges = await tx.nudge.findMany({
+        where: { shopId: shop.id, status: "SENT", createdAt: { gte: earliest } },
+        select: { createdAt: true },
+      });
+      // New customers per month, by when the client first landed in ChairBack.
+      const newClients = await tx.client.findMany({
+        where: { shopId: shop.id, createdAt: { gte: earliest } },
+        select: { createdAt: true },
+      });
+      // Successful card payments per month. createdAt is the only reliably-written
+      // Payment timestamp (capturedAt/authorizedAt are hold-mode-only, never set).
+      // Empty for shops not on ChairBack payments (opt-in Stripe Connect feature).
+      const payments = await tx.payment.findMany({
+        where: { shopId: shop.id, status: "succeeded", createdAt: { gte: earliest } },
+        select: { createdAt: true },
+      });
+      // Rebookings recovered per month: nudges that led to a booking, by the
+      // booking date. Parallels the /stats "rebookings recovered" scalar over time.
+      const rebookings = await tx.nudge.findMany({
+        where: { shopId: shop.id, resultedInBookingAt: { gte: earliest } },
+        select: { resultedInBookingAt: true },
+      });
+      return { visits, nudges, newClients, payments, rebookings };
+    },
+  );
 
   const inMonth = (d: Date | null, m: { start: Date; end: Date }) =>
     d !== null && d >= m.start && d < m.end;
@@ -478,11 +502,17 @@ dashboardRouter.get("/clients", async (req, res) => {
     }),
   ]);
 
-  const balances = await prisma.punchLedger.groupBy({
-    by: ["clientId"],
-    where: { shopId: shop.id },
-    _sum: { punchesEarned: true, punchesRedeemed: true },
-  });
+  // Balances for THIS PAGE's clients only. Aggregating the whole shop ledger for
+  // a 50-row page scanned tens of thousands of rows on a long-lived shop.
+  const pageIds = clients.map((c) => c.id);
+  const balances =
+    pageIds.length === 0
+      ? []
+      : await prisma.punchLedger.groupBy({
+          by: ["clientId"],
+          where: { shopId: shop.id, clientId: { in: pageIds } },
+          _sum: { punchesEarned: true, punchesRedeemed: true },
+        });
   const balById = new Map(
     balances.map((b) => [b.clientId, (b._sum.punchesEarned ?? 0) - (b._sum.punchesRedeemed ?? 0)]),
   );
@@ -698,6 +728,11 @@ dashboardRouter.post("/clients/import", async (req, res) => {
         skipped.push({ row: i + 1, reason: "write_failed" });
       }
     }
+  }, {
+    // Up to 1000 rows x ~2-3 sequential round-trips can exceed Prisma's 5s
+    // default interactive-tx timeout and roll back the WHOLE import. Give it
+    // room; the web layer already caps the batch at 1000 rows.
+    timeout: 60_000,
   });
 
   res.status(200).json({ created, updated, skipped, total: rows.length });
@@ -740,8 +775,10 @@ dashboardRouter.post("/clients/:clientId/visits", async (req, res) => {
     return;
   }
   if (cardOverride) {
+    // A deliberate "punch this card" pick can't target a retired (archived)
+    // card - only live cards take new punches (auto-routing already skips them).
     const card = await db.cardType.findFirst({
-      where: { id: cardOverride },
+      where: { id: cardOverride, active: true },
       select: { id: true },
     });
     if (!card) {
@@ -955,7 +992,14 @@ dashboardRouter.post("/clients/:clientId/bonus", async (req, res) => {
   const cardParsed = z
     .object({ cardTypeId: z.string().min(1).nullable().optional() })
     .safeParse(req.body ?? {});
-  const cardTypeId = cardParsed.success ? (cardParsed.data.cardTypeId ?? null) : null;
+  // A malformed cardTypeId is a client bug, not "credit the default card" -
+  // reject it (as log-visit/edit-visit/loyalty CRUD do) rather than silently
+  // crediting the wrong card's balance.
+  if (!cardParsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: cardParsed.error.issues });
+    return;
+  }
+  const cardTypeId = cardParsed.data.cardTypeId ?? null;
   const db = forShop(shop.id);
   const client = await db.client.findFirst({ where: { id: req.params.clientId } });
   if (!client) {
@@ -1173,7 +1217,7 @@ dashboardRouter.get("/clients/:clientId/ledger", async (req, res) => {
     const shopCards = await tx.cardType.findMany({
       where: { shopId: shop.id },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-      select: { id: true, name: true, emoji: true, accentColor: true },
+      select: { id: true, name: true, emoji: true, accentColor: true, active: true },
     });
     return { entries, groups, shopCards };
   });
@@ -1191,12 +1235,13 @@ dashboardRouter.get("/clients/:clientId/ledger", async (req, res) => {
   // Default card first, then the shop's cards in their configured order. Cards
   // with no ledger rows show 0 - the barber still sees every card that exists.
   const cards = [
-    { id: null as string | null, name: "Punch Card", emoji: null as string | null, accentColor: null as string | null, balance: balanceByCard.get(null) ?? 0 },
+    { id: null as string | null, name: "Punch Card", emoji: null as string | null, accentColor: null as string | null, active: true, balance: balanceByCard.get(null) ?? 0 },
     ...data.shopCards.map((c) => ({
       id: c.id as string | null,
       name: c.name,
       emoji: c.emoji,
       accentColor: c.accentColor,
+      active: c.active,
       balance: balanceByCard.get(c.id) ?? 0,
     })),
   ];
@@ -1251,6 +1296,9 @@ dashboardRouter.post("/clients/:clientId/ledger/:entryId/reverse", async (req, r
     res.status(status).json({ error: result.reason });
     return;
   }
+  // Undo changed the balance - refresh the Wallet pass (fire-and-forget), else
+  // it shows the stale higher balance until some later earn/redeem pokes it.
+  void pokeWalletPass(client.id);
   res.json({ ok: true, newBalance: result.newBalance });
 });
 
@@ -1291,6 +1339,8 @@ dashboardRouter.post("/clients/:clientId/ledger/:entryId/adjust", async (req, re
     res.status(409).json({ error: result.reason });
     return;
   }
+  // Adjusted the earn amount -> balance changed; refresh the Wallet pass.
+  void pokeWalletPass(client.id);
   res.json({ ok: true, newBalance: result.newBalance });
 });
 
@@ -1321,8 +1371,12 @@ dashboardRouter.patch("/clients/:clientId/visits/:visitId", async (req, res) => 
     return;
   }
   if (parsed.data.cardTypeId) {
+    // An explicit re-route to a card can't target a retired (archived) one. This
+    // guard only runs when the barber PASSED a cardTypeId; a date-only edit that
+    // internally reuses the earn's existing card doesn't come through here, so a
+    // visit already sitting on an archived card can still have its date fixed.
     const card = await forShop(shop.id).cardType.findFirst({
-      where: { id: parsed.data.cardTypeId },
+      where: { id: parsed.data.cardTypeId, active: true },
       select: { id: true },
     });
     if (!card) {
@@ -1357,6 +1411,9 @@ dashboardRouter.patch("/clients/:clientId/visits/:visitId", async (req, res) => 
     res.status(409).json({ error: result.reason, balance: result.balance });
     return;
   }
+  // Editing a visit can re-earn/claw back its punch -> balance may have changed;
+  // refresh the Wallet pass (fire-and-forget, no-ops while wallet is dark).
+  void pokeWalletPass(client.id);
   res.json({ ok: true, balance: result.balance });
 });
 
@@ -1379,6 +1436,8 @@ dashboardRouter.delete("/clients/:clientId/visits/:visitId", async (req, res) =>
     res.status(409).json({ error: result.reason, balance: result.balance });
     return;
   }
+  // Deleting a COMPLETED visit claws back its punch -> refresh the Wallet pass.
+  void pokeWalletPass(client.id);
   res.json({ ok: true, balance: result.balance });
 });
 
@@ -1423,7 +1482,7 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
     const shopCards = await tx.cardType.findMany({
       where: { shopId: shop.id },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-      select: { id: true, name: true, emoji: true, accentColor: true },
+      select: { id: true, name: true, emoji: true, accentColor: true, active: true },
     });
     const rewards = await tx.reward.findMany({
       where: { shopId: shop.id, active: true },
@@ -1483,6 +1542,7 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
         name: "Punch Card",
         emoji: null as string | null,
         accentColor: null as string | null,
+        active: true,
         balance: cardBalance(null),
       },
       ...shopCards.map((c) => ({
@@ -1490,6 +1550,7 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
         name: c.name,
         emoji: c.emoji,
         accentColor: c.accentColor,
+        active: c.active,
         balance: cardBalance(c.id),
       })),
     ],
@@ -1736,37 +1797,84 @@ async function countAtRisk(shopId: string, bufferDays: number, now: Date): Promi
 }
 
 async function buildAtRiskRows(shopId: string, bufferDays: number, now: Date) {
-  const db = forShop(shopId);
-  // Mirror the sweep's candidate gate (incl. smsConsentAt) so the at-risk count
-  // shown on the dashboard matches who a sweep would actually text - otherwise
-  // "12 at risk" but "0 sent" looks broken. Clients lacking consent are managed
-  // from the clients page (bulk-attest), not this rebooking list.
-  const candidates = await db.client.findMany({
-    where: {
-      optedOut: false,
-      smsConsentAt: { not: null },
-      phone: { not: null },
-      medianIntervalDays: { gt: 0 }, // gt also excludes legacy stored-0 rows (no real cadence)
-      lastVisitAt: { not: null },
-      archivedAt: null, // archived clients drop off the at-risk list
-    },
-  });
-  if (candidates.length === 0) return [];
+  const since = new Date(
+    now.getTime() - (NUDGE.suppressionDays + 1) * MS_PER_DAY,
+  );
+  // Everything this function reads runs in ONE transaction (one pooled
+  // connection). It's called from /at-risk AND from /stats (via countAtRisk),
+  // both of which fire on every dashboard load; keeping it to a single
+  // connection is what stops the pool from being exhausted at 100 shops.
+  // The per-client tallies use DB-side groupBy (Postgres returns one row per
+  // client) rather than streaming every historical visit into Node.
+  const built = await runWithShop(shopId, async (tx) => {
+    // Mirror the sweep's candidate gate (incl. smsConsentAt) so the at-risk
+    // count shown on the dashboard matches who a sweep would actually text -
+    // otherwise "12 at risk" but "0 sent" looks broken. Clients lacking consent
+    // are managed from the clients page (bulk-attest), not this rebooking list.
+    const candidates = await tx.client.findMany({
+      where: {
+        shopId,
+        optedOut: false,
+        smsConsentAt: { not: null },
+        phone: { not: null },
+        medianIntervalDays: { gt: 0 }, // gt also excludes legacy stored-0 rows (no real cadence)
+        lastVisitAt: { not: null },
+        archivedAt: null, // archived clients drop off the at-risk list
+      },
+    });
+    if (candidates.length === 0) return null;
 
-  // Batched lookups (4 queries total) instead of 4 queries PER candidate - the
-  // old N+1 was ~6 round-trips per client per dashboard load.
-  const ids = candidates.map((c) => c.id);
-  const [data, lastVisits] = await Promise.all([
-    loadEligibilityData(shopId, ids, now),
-    db.visit.findMany({
-      where: { clientId: { in: ids }, status: "COMPLETED" },
-      orderBy: [{ clientId: "asc" }, { scheduledAt: "desc" }],
-      distinct: ["clientId"],
-      select: { clientId: true, serviceName: true },
-    }),
-  ]);
+    const ids = candidates.map((c) => c.id);
+    const [completed, upcoming, nudges, lastVisits] = await Promise.all([
+      tx.visit.groupBy({
+        by: ["clientId"],
+        where: { shopId, clientId: { in: ids }, status: "COMPLETED" },
+        _count: { _all: true },
+      }),
+      tx.visit.groupBy({
+        by: ["clientId"],
+        where: {
+          shopId,
+          clientId: { in: ids },
+          status: "SCHEDULED",
+          scheduledAt: { gt: now },
+        },
+      }),
+      tx.nudge.groupBy({
+        by: ["clientId"],
+        where: {
+          shopId,
+          clientId: { in: ids },
+          status: { in: ["SENT", "PENDING"] },
+          createdAt: { gte: since },
+        },
+        _max: { createdAt: true },
+      }),
+      tx.visit.findMany({
+        where: { shopId, clientId: { in: ids }, status: "COMPLETED" },
+        orderBy: [{ clientId: "asc" }, { scheduledAt: "desc" }],
+        distinct: ["clientId"],
+        select: { clientId: true, serviceName: true },
+      }),
+    ]);
+    return { candidates, completed, upcoming, nudges, lastVisits };
+  });
+
+  if (!built) return [];
+  const { candidates } = built;
+  const data: EligibilityData = {
+    completedCounts: new Map(
+      built.completed.map((r) => [r.clientId, r._count._all]),
+    ),
+    upcomingIds: new Set(built.upcoming.map((r) => r.clientId)),
+    lastNudgeAt: new Map(
+      built.nudges
+        .filter((r) => r._max.createdAt)
+        .map((r) => [r.clientId, r._max.createdAt as Date]),
+    ),
+  };
   const lastServiceById = new Map(
-    lastVisits.map((v) => [v.clientId, v.serviceName]),
+    built.lastVisits.map((v) => [v.clientId, v.serviceName]),
   );
 
   const rows: {

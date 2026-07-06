@@ -87,6 +87,30 @@ squareOAuthRouter.get("/callback", async (req, res) => {
     const token = await exchangeCodeForToken(code);
     const locationId = await fetchPrimaryLocationId(token.access_token);
 
+    // Guard against one Square merchant being connected to two shops. Webhooks
+    // route by merchant_id, so a second shop claiming the same merchant would
+    // silently steal (or split, planner-dependent) the first shop's booking
+    // sync. Refuse here; the barber must disconnect the other shop first. (A
+    // merchant legitimately RE-connecting to the SAME shop, or reconnecting
+    // after revoking elsewhere, is allowed - we only block a live claim by a
+    // DIFFERENT shop.)
+    const claimedElsewhere = await prisma.squareConnection.findFirst({
+      where: {
+        squareMerchantId: token.merchant_id,
+        revokedAt: null,
+        shopId: { not: shop.id },
+      },
+      select: { shopId: true },
+    });
+    if (claimedElsewhere) {
+      logger.warn(
+        { shopId: shop.id, otherShopId: claimedElsewhere.shopId, merchantId: token.merchant_id },
+        "square connect blocked: merchant already connected to another shop",
+      );
+      res.status(409).json({ error: "merchant_already_connected" });
+      return;
+    }
+
     await prisma.squareConnection.upsert({
       where: { shopId: shop.id },
       create: {

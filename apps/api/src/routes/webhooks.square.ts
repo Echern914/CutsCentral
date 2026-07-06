@@ -78,6 +78,10 @@ squareWebhookRouter.post("/", express.raw({ type: "*/*" }), async (req, res) => 
 
   const conn = await prisma.squareConnection.findFirst({
     where: { squareMerchantId: envelope.merchant_id, revokedAt: null },
+    // Deterministic pick if a legacy collision exists (the OAuth callback now
+    // blocks new ones): oldest connection wins, so routing can't flip between
+    // shops run-to-run based on the query planner.
+    orderBy: { connectedAt: "asc" },
     select: { shopId: true },
   });
   if (!conn) {

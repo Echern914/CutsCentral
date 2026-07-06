@@ -35,20 +35,36 @@ const ENFORCE_RLS = !["false", "0"].includes(
   (process.env.DB_RLS_ENFORCE ?? "").trim(),
 );
 
+/** Options for a shop-scoped transaction. */
+export interface RunWithShopOptions {
+  /** Max ms the interactive transaction may run before Prisma rolls it back.
+   * Prisma's default is 5s; a large batched write (e.g. CSV import of up to
+   * 1000 rows) legitimately needs more. Leave unset for the normal 5s. */
+  timeout?: number;
+  /** Max ms Prisma waits to acquire a connection from the pool (default 2s). */
+  maxWait?: number;
+}
+
 /** Run a unit of work inside a transaction with the RLS shop context set. */
 export async function runWithShop<T>(
   shopId: string,
   fn: (tx: Prisma.TransactionClient) => Promise<T>,
+  opts?: RunWithShopOptions,
 ): Promise<T> {
-  return prisma.$transaction(async (tx) => {
-    // SET LOCAL role so RLS applies to this transaction (owner bypasses RLS).
-    if (ENFORCE_RLS) {
-      await tx.$executeRawUnsafe("SET LOCAL ROLE chairback_app");
-    }
-    // Transaction-local setting (survives PgBouncer transaction pooling).
-    await tx.$executeRaw`SELECT set_config('app.current_shop_id', ${shopId}, true)`;
-    return fn(tx);
-  });
+  return prisma.$transaction(
+    async (tx) => {
+      // SET LOCAL role so RLS applies to this transaction (owner bypasses RLS).
+      if (ENFORCE_RLS) {
+        await tx.$executeRawUnsafe("SET LOCAL ROLE chairback_app");
+      }
+      // Transaction-local setting (survives PgBouncer transaction pooling).
+      await tx.$executeRaw`SELECT set_config('app.current_shop_id', ${shopId}, true)`;
+      return fn(tx);
+    },
+    opts?.timeout !== undefined || opts?.maxWait !== undefined
+      ? { timeout: opts.timeout, maxWait: opts.maxWait }
+      : undefined,
+  );
 }
 
 /**

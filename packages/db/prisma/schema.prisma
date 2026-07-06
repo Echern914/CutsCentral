@@ -552,6 +552,7 @@ model Client {
   @@index([shopId])
   @@index([shopId, lastVisitAt])
   @@index([shopId, archivedAt]) // default list/stats filter on (shop, not archived)
+  @@index([phone]) // inbound Twilio STOP/START + public resolve-by-phone (cross-tenant phone lookup)
 }
 
 // A lead submitted from the public shop page's "Request an appointment" form.
@@ -624,7 +625,9 @@ model Visit {
 
   @@unique([shopId, acuityAppointmentId]) // IDEMPOTENCY (per shop): webhook re-delivery + backfill safe
   @@index([shopId, clientId, scheduledAt]) // cadence + future-booking checks
+  @@index([shopId, clientId, createdAt]) // attribution booking lookup (createdAt window)
   @@index([status, endAt]) // promotion scan
+  @@index([shopId, status, scheduledAt]) // insights/trends/avg-ticket + activity feed by (shop, status, date)
 }
 
 model PunchLedger {
@@ -713,6 +716,8 @@ model Nudge {
 
   @@index([shopId, clientId, createdAt]) // "no nudge in 21d" + attribution lookback
   @@index([status, createdAt]) // daily send-cap count
+  @@index([status, sentAt]) // hourly attribution fetch (SENT nudges by sentAt window)
+  @@index([shopId, resultedInBookingAt]) // /stats + /trends "rebookings recovered this month"
   @@index([promotionId])
 }
 

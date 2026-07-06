@@ -197,10 +197,18 @@ walletRouter.get(
 );
 
 // Device-side error reports (invaluable when a pass misbehaves in the field).
+// This endpoint is UNauthenticated per Apple's PassKit spec (the log callback
+// carries no token), so the body is attacker-controllable. Log at `info` (not
+// `warn`, which typically drives alerting) and hard-cap what we keep so a
+// flood of junk can't pollute logs or inflate volume: at most 20 entries, each
+// coerced to a string and truncated.
 walletRouter.post("/v1/log", (req, res) => {
   const logs = (req.body as { logs?: unknown })?.logs;
   if (Array.isArray(logs) && logs.length > 0) {
-    logger.warn({ logs: logs.slice(0, 20) }, "wallet pass device log");
+    const capped = logs
+      .slice(0, 20)
+      .map((l) => String(l).slice(0, 500));
+    logger.info({ logs: capped }, "wallet pass device log");
   }
   res.json({ ok: true });
 });
