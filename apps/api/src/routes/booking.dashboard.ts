@@ -13,6 +13,7 @@ import { recomputeCadence } from "../engines/cadence.js";
 import { notifyPunchEarned } from "../services/loyaltyNotify.js";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
+import { resolveAddOns } from "../engines/addOns.js";
 import { effectivePriceForDate } from "../engines/pricing.js";
 import {
   materializeSeries,
@@ -159,6 +160,79 @@ async function setServiceStaff(
     }
   });
 }
+
+//  Service add-ons
+
+const addOnSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+    durationMin: z.number().int().min(0).max(480),
+    price: z.number().min(0).max(100000).nullish(),
+    // null/omitted = offered on every service; set = only with that service.
+    serviceId: z.string().min(1).nullish(),
+    active: z.boolean().optional(),
+    sortOrder: z.number().int().min(0).max(1000).optional(),
+  })
+  .strict();
+
+bookingDashboardRouter.get("/addons", async (req, res) => {
+  const addOns = await forShop(req.shop!.id).serviceAddOn.findMany({
+    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+  });
+  res.json({
+    addOns: addOns.map((a) => ({ ...a, price: a.price === null ? null : Number(a.price) })),
+  });
+});
+
+bookingDashboardRouter.post("/addons", async (req, res) => {
+  const parsed = addOnSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const d = parsed.data;
+  const addOn = await forShop(req.shop!.id).serviceAddOn.create({
+    data: {
+      name: d.name,
+      durationMin: d.durationMin,
+      price: d.price ?? null,
+      serviceId: d.serviceId ?? null,
+      active: d.active ?? true,
+      sortOrder: d.sortOrder ?? 0,
+    },
+  });
+  res.status(201).json({ id: addOn.id });
+});
+
+bookingDashboardRouter.patch("/addons/:id", async (req, res) => {
+  const parsed = addOnSchema.partial().safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const d = parsed.data;
+  const { count } = await forShop(req.shop!.id).serviceAddOn.updateMany({
+    where: { id: req.params.id },
+    data: {
+      ...(d.name !== undefined ? { name: d.name } : {}),
+      ...(d.durationMin !== undefined ? { durationMin: d.durationMin } : {}),
+      ...(d.price !== undefined ? { price: d.price ?? null } : {}),
+      ...(d.serviceId !== undefined ? { serviceId: d.serviceId ?? null } : {}),
+      ...(d.active !== undefined ? { active: d.active } : {}),
+      ...(d.sortOrder !== undefined ? { sortOrder: d.sortOrder } : {}),
+    },
+  });
+  res.status(count > 0 ? 200 : 404).json({ ok: count > 0 });
+});
+
+// Hard delete: add-ons aren't FK'd from Appointment (the choice is snapshotted
+// onto Appointment.addOns), so removing one never orphans booking history.
+bookingDashboardRouter.delete("/addons/:id", async (req, res) => {
+  const { count } = await forShop(req.shop!.id).serviceAddOn.deleteMany({
+    where: { id: req.params.id },
+  });
+  res.json({ ok: count > 0 });
+});
 
 //  Staff
 
@@ -639,6 +713,9 @@ const createApptSchema = z
     // Bypass the availability check (barber forcing a time). Overlap is still
     // enforced so two real appointments can't collide.
     customTime: z.boolean().optional(),
+    // Chosen service add-ons (ids). Extend the appointment length + total; the
+    // choice is snapshotted. Invalid/foreign ids are dropped server-side.
+    addOnIds: z.array(z.string().min(1)).max(20).optional(),
     // Optional "repeats every N weeks" rule. When present, the appointment above
     // is occurrence 0 (its startsAt sets the weekday + time-of-day), and N-1 more
     // are generated. Exactly one of count / until. Capped so a bad rule can't
@@ -764,19 +841,36 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
   }
 
   const startsAt = d.startsAt;
-  const endsAt = new Date(startsAt.getTime() + service.durationMin * 60_000);
-  const effectivePrice = effectivePriceForDate(
+  // Chosen add-ons extend the appointment + total (single create only; a
+  // recurring series is barber-planned and takes no add-ons in v1).
+  const addOns = d.recurrence
+    ? { snapshot: [], extraDurationMin: 0, extraPrice: 0 }
+    : await resolveAddOns(shopId, d.serviceId, d.addOnIds);
+  const endsAt = new Date(
+    startsAt.getTime() + (service.durationMin + addOns.extraDurationMin) * 60_000,
+  );
+  const basePrice = effectivePriceForDate(
     service.price === null ? null : Number(service.price),
     service.priceOverrides,
     startsAt,
     shop.timezone,
   );
+  const effectivePrice =
+    basePrice === null && addOns.extraPrice === 0
+      ? null
+      : (basePrice ?? 0) + addOns.extraPrice;
 
   // Unless the barber forced a custom time, the slot must be genuinely bookable
   // (inside hours, not blocked). Overlap is always enforced below regardless.
   if (
     !d.customTime &&
-    !(await isSlotBookable({ shopId, staffId: d.staffId, serviceId: d.serviceId, startsAt }))
+    !(await isSlotBookable({
+      shopId,
+      staffId: d.staffId,
+      serviceId: d.serviceId,
+      startsAt,
+      extraDurationMin: addOns.extraDurationMin,
+    }))
   ) {
     res.status(400).json({ error: "invalid_slot" });
     return;
@@ -923,6 +1017,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
           startsAt,
           endsAt,
           priceAtBooking: effectivePrice ?? undefined,
+          addOns: addOns.snapshot as unknown as Prisma.InputJsonValue,
           manageToken: randomToken(),
         },
         select: { id: true },

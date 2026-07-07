@@ -42,6 +42,16 @@ export interface ServiceRow {
   sortOrder: number;
   staffIds: string[];
 }
+export interface AddOnRow {
+  id: string;
+  name: string;
+  durationMin: number;
+  price: number | null;
+  // null = offered on every service; set = only with that service.
+  serviceId: string | null;
+  active: boolean;
+  sortOrder: number;
+}
 /**
  * One row of the barber's day-agenda calendar. Normalized on the server from
  * EITHER a native `Appointment` or a synced `Visit` (see /api/booking/agenda), so
@@ -93,11 +103,12 @@ export default async function BookingPage() {
   const agendaFrom = new Date(monthStart.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const agendaTo = new Date(monthEnd.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
-  const [shopRes, staffRes, servicesRes, agendaRes, waitlistRes, acuityRes, squareRes] =
+  const [shopRes, staffRes, servicesRes, addOnsRes, agendaRes, waitlistRes, acuityRes, squareRes] =
     await Promise.all([
       apiGet<BookingShop>("/api/shops/me"),
       apiGet<{ staff: StaffRow[] }>("/api/booking/staff"),
       apiGet<{ services: ServiceRow[] }>("/api/booking/services"),
+      apiGet<{ addOns: AddOnRow[] }>("/api/booking/addons"),
       apiGet<AgendaResponse>(
         `/api/booking/agenda?from=${encodeURIComponent(agendaFrom)}&to=${encodeURIComponent(agendaTo)}`,
       ),
@@ -137,6 +148,7 @@ export default async function BookingPage() {
         connect={connect}
         initialStaff={staffRes.data?.staff ?? []}
         initialServices={servicesRes.data?.services ?? []}
+        initialAddOns={addOnsRes.data?.addOns ?? []}
         initialAgenda={
           agendaRes.data ?? {
             agenda: [],

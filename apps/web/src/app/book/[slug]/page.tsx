@@ -41,6 +41,15 @@ export interface BookShopData {
     priceRange: { min: number; max: number } | null;
   }[];
   offerings: { serviceId: string; staffId: string }[];
+  // Optional extras. serviceId null = offered on every service; set = only with
+  // that one. The client shows those valid for the chosen service.
+  addOns: {
+    id: string;
+    name: string;
+    durationMin: number;
+    price: number | null;
+    serviceId: string | null;
+  }[];
 }
 
 async function getData(slug: string): Promise<BookShopData | null> {
