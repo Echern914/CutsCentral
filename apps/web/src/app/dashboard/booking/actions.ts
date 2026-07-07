@@ -2,8 +2,24 @@
 
 import { revalidatePath } from "next/cache";
 import { apiGet, apiSend } from "@/lib/api";
+import type { AgendaResponse } from "./page";
 
 type Result = { ok: boolean; error?: string };
+
+/**
+ * Load the normalized agenda for a date range (the month calendar calls this
+ * when the barber pages to a different month). from/to are ISO instants.
+ */
+export async function getAgendaAction(
+  from: string,
+  to: string,
+): Promise<{ ok: boolean; data?: AgendaResponse; error?: string }> {
+  const res = await apiGet<AgendaResponse>(
+    `/api/booking/agenda?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+  );
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, data: res.data };
+}
 
 export interface AvailabilityData {
   rules: { id: string; weekday: number; startMin: number; endMin: number }[];
