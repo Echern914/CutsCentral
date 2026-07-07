@@ -221,6 +221,12 @@ model Shop {
   // barber's dashboard. Off by default so existing shops are unchanged. Reuses
   // notifyPhone for the new-entry SMS alert.
   waitlistEnabled Boolean @default(false)
+  // "A slot just opened" auto-notify: when a native appointment is CANCELED,
+  // matching waitlisters get a push/email nudge that the freed slot is open. The
+  // BARBER always gets an alert (their own number/device) when the waitlist is
+  // on; this toggle controls the CUSTOMER-facing blast (outbound to leads), so
+  // it's off by default and separate from waitlistEnabled. See engines/slotOpened.
+  slotOpenedTextsEnabled Boolean @default(false)
 
   // per-shop webhook routing (the body has no account id, so the URL path routes)
   webhookSecret    String   @unique // 32-byte random, used in the webhook URL path

@@ -55,6 +55,7 @@ export async function saveBookingSettingsAction(input: {
   bookingLeadHours: number;
   bookingMaxDays: number;
   bookingBufferMin: number;
+  slotOpenedTextsEnabled?: boolean;
 }): Promise<Result> {
   return done(await apiSend("PATCH", "/api/shops/me", input));
 }
