@@ -28,9 +28,11 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
  */
 
 const WEEKDAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
-// Default planner window when a day has no appointments (barber's local hours).
+// Default planner window (barber's local hours). Runs to midnight because some
+// barbers cut late into the night; the window auto-widens earlier/later to fit
+// any booking outside it (e.g. a 6am or 1am appointment).
 const DEFAULT_START_HOUR = 8;
-const DEFAULT_END_HOUR = 20;
+const DEFAULT_END_HOUR = 23; // 11 PM row shown; midnight+ bookings widen it further
 
 export function BookingCalendar({
   initial,
@@ -292,15 +294,18 @@ function DayPlanner({
   toast: Toast;
 }) {
   // Group appointments into their start hour, then render every hour in the
-  // day's working window (default 8a-8p, widened to fit any early/late booking).
+  // day's working window (default 8a-11p, widened to fit any early/late booking).
   const byHour = new Map<number, AgendaRow[]>();
   for (const r of rows) {
     const h = hourOf(r.start);
     byHour.set(h, [...(byHour.get(h) ?? []), r]);
   }
   const bookedHours = [...byHour.keys()];
+  // We show each appointment on its START hour, and hours are 0-23, so the window
+  // never needs to exceed 23 (an 11 PM cut just needs the 11 PM row to exist -
+  // no +1, which would spill into a bogus hour 24 labelled "12 PM").
   const startHour = Math.min(DEFAULT_START_HOUR, ...bookedHours);
-  const endHour = Math.max(DEFAULT_END_HOUR, ...bookedHours.map((h) => h + 1));
+  const endHour = Math.min(23, Math.max(DEFAULT_END_HOUR, ...bookedHours));
   const hours: number[] = [];
   for (let h = startHour; h <= endHour; h++) hours.push(h);
 

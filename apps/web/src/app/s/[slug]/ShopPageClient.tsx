@@ -126,12 +126,11 @@ export function ShopPageClient({
         {/* Hero */}
         <motion.header variants={fadeUp} className="relative pt-5">
           {data.heroImageUrl ? (
-            // A CONTAINED, framed banner (not a full-bleed strip that dissolves
-            // into the page). Rounded + bordered so it reads as a deliberate card
-            // whatever the photo. A gentle bottom shade adds depth without fading
-            // the image away.
+            // A slim, contained, framed banner - an accent strip, not a wall.
+            // Rounded + bordered so it reads as a deliberate card whatever the
+            // photo; a gentle bottom shade adds depth without fading the image.
             <div
-              className="relative h-40 overflow-hidden sm:h-48"
+              className="relative h-32 overflow-hidden sm:h-36"
               style={{ borderRadius: layout.radius, border: `1px solid ${theme.border}` }}
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -144,7 +143,7 @@ export function ShopPageClient({
             </div>
           ) : (
             <div
-              className="h-28"
+              className="h-24"
               style={{
                 borderRadius: layout.radius,
                 border: `1px solid ${theme.border}`,
@@ -154,16 +153,17 @@ export function ShopPageClient({
             />
           )}
 
-          <div className={`text-center ${data.heroImageUrl ? "-mt-11" : "-mt-10"}`}>
-            {/* Logo "coin": an OPAQUE surface disc with a solid ring so a dark or
-                busy logo always reads and sits cleanly on the banner's edge. */}
+          <div className={`text-center ${data.heroImageUrl ? "-mt-9" : "-mt-8"}`}>
+            {/* Logo "coin": a smaller, opaque disc that sits cleanly on the
+                banner's edge. When there's no logo we show a crisp accent-tinted
+                monogram, which reads far better than a low-quality photo crop. */}
             {data.logoUrl ? (
               <div
-                className="mx-auto h-[92px] w-[92px] overflow-hidden rounded-full"
+                className="mx-auto h-[72px] w-[72px] overflow-hidden rounded-full"
                 style={{
                   backgroundColor: theme.surface,
                   border: `3px solid ${theme.bg}`,
-                  boxShadow: `0 10px 30px -10px rgba(0,0,0,0.45)`,
+                  boxShadow: `0 8px 24px -10px rgba(0,0,0,0.45)`,
                 }}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -175,12 +175,12 @@ export function ShopPageClient({
               </div>
             ) : (
               <div
-                className="mx-auto flex h-[92px] w-[92px] items-center justify-center rounded-full text-3xl font-semibold"
+                className="mx-auto flex h-[72px] w-[72px] items-center justify-center rounded-full text-2xl font-semibold"
                 style={{
-                  backgroundColor: theme.surface,
+                  background: `linear-gradient(145deg, ${accent}, ${accent}CC)`,
                   border: `3px solid ${theme.bg}`,
-                  color: accent,
-                  boxShadow: `0 10px 30px -10px rgba(0,0,0,0.45)`,
+                  color: theme.scheme === "light" ? "#FFFFFF" : "#101012",
+                  boxShadow: `0 8px 24px -10px ${accent}88`,
                   fontFamily: "var(--page-display)",
                 }}
               >
