@@ -356,6 +356,129 @@ export function buildAppointmentReminderBody(params: {
 }
 
 /**
+ * Transactional email for native bookings. Distinct from the SMS builders: email
+ * carries NO STOP notice (that's a TCPA/SMS thing) and returns subject + a plain
+ * text part + an HTML part. The HTML is a single self-contained inline-styled
+ * card - no external CSS/images so it renders the same in every client. Email is
+ * the confirmation channel that works even while SMS is dark (no consent needed).
+ */
+export interface EmailCopy {
+  subject: string;
+  text: string;
+  html: string;
+}
+
+/** A small inline-styled "manage" button + wrapper shared by both emails. */
+function appointmentEmailHtml(params: {
+  heading: string;
+  intro: string;
+  shopName: string;
+  serviceName: string;
+  when: string;
+  staffName?: string | null;
+  manageUrl: string;
+}): string {
+  const withWhom = params.staffName
+    ? `<div style="color:#71717a;font-size:14px;margin-top:2px">with ${escapeHtml(params.staffName)}</div>`
+    : "";
+  return `<!-- appointment email -->
+<div style="background:#0f0f0f;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+  <div style="max-width:480px;margin:0 auto;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:16px;overflow:hidden">
+    <div style="padding:28px 28px 8px">
+      <div style="color:#D4AF37;font-size:13px;font-weight:600;letter-spacing:.04em;text-transform:uppercase">${escapeHtml(params.shopName)}</div>
+      <h1 style="color:#fafafa;font-size:20px;font-weight:700;margin:10px 0 6px">${escapeHtml(params.heading)}</h1>
+      <p style="color:#a1a1aa;font-size:15px;line-height:1.5;margin:0">${escapeHtml(params.intro)}</p>
+    </div>
+    <div style="margin:16px 28px;padding:16px 18px;background:#0f0f0f;border:1px solid #2a2a2a;border-radius:12px">
+      <div style="color:#fafafa;font-size:16px;font-weight:600">${escapeHtml(params.serviceName)}</div>
+      ${withWhom}
+      <div style="color:#D4AF37;font-size:15px;font-weight:600;margin-top:8px">${escapeHtml(params.when)}</div>
+    </div>
+    <div style="padding:4px 28px 28px">
+      <a href="${escapeAttr(params.manageUrl)}" style="display:inline-block;background:#D4AF37;color:#0f0f0f;font-size:14px;font-weight:700;text-decoration:none;padding:11px 20px;border-radius:10px">Manage appointment</a>
+      <p style="color:#71717a;font-size:12px;line-height:1.5;margin:16px 0 0">Need to cancel or reschedule? Use the button above, or reply to this email.</p>
+    </div>
+  </div>
+</div>`;
+}
+
+/** "Booking confirmed" email - the email twin of buildAppointmentConfirmationBody. */
+export function buildAppointmentConfirmationEmail(params: {
+  firstName: string | null;
+  shopName: string;
+  serviceName: string;
+  startsAt: Date;
+  timezone: string;
+  staffName?: string | null;
+  manageToken: string;
+}): EmailCopy {
+  const when = formatApptTime(params.startsAt, params.timezone);
+  const manageUrl = `${env.APP_BASE_URL}/book/manage/${params.manageToken}`;
+  const who = params.firstName ?? "there";
+  const withWhom = params.staffName ? ` with ${params.staffName}` : "";
+  return {
+    subject: `Booking confirmed: ${params.serviceName} at ${params.shopName}`,
+    text:
+      `Hi ${who}, your ${params.serviceName} at ${params.shopName}${withWhom} is booked for ${when}.\n\n` +
+      `Need to change it? ${manageUrl}`,
+    html: appointmentEmailHtml({
+      heading: "You're booked",
+      intro: `Hi ${who}, your appointment is confirmed. Here are the details:`,
+      shopName: params.shopName,
+      serviceName: params.serviceName,
+      when,
+      staffName: params.staffName,
+      manageUrl,
+    }),
+  };
+}
+
+/** "Appointment reminder" email - the email twin of buildAppointmentReminderBody. */
+export function buildAppointmentReminderEmail(params: {
+  firstName: string | null;
+  shopName: string;
+  serviceName: string;
+  startsAt: Date;
+  timezone: string;
+  staffName?: string | null;
+  manageToken: string;
+}): EmailCopy {
+  const when = formatApptTime(params.startsAt, params.timezone);
+  const manageUrl = `${env.APP_BASE_URL}/book/manage/${params.manageToken}`;
+  const who = params.firstName ?? "there";
+  return {
+    subject: `Reminder: ${params.serviceName} at ${params.shopName}`,
+    text:
+      `Reminder, ${who}: your ${params.serviceName} at ${params.shopName} is ${when}. See you then!\n\n` +
+      `Manage: ${manageUrl}`,
+    html: appointmentEmailHtml({
+      heading: "See you soon",
+      intro: `Hi ${who}, this is a reminder about your upcoming appointment:`,
+      shopName: params.shopName,
+      serviceName: params.serviceName,
+      when,
+      staffName: params.staffName,
+      manageUrl,
+    }),
+  };
+}
+
+/** Escape text interpolated into HTML element content. */
+function escapeHtml(s: string): string {
+  return s
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+/** Escape text interpolated into an HTML attribute (the manage URL). */
+function escapeAttr(s: string): string {
+  return escapeHtml(s);
+}
+
+/**
  * Promotion blast SMS copy. Same compliance safety net as nudges (STOP is
  * always present); the booking link is the call to action.
  */

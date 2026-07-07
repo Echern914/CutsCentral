@@ -977,8 +977,13 @@ model Appointment {
   manageToken        String            @unique // cancel/reschedule auth (no login)
   visitId            String?           @unique // the Visit promoted from this appointment
   visit              Visit?            @relation(fields: [visitId], references: [id], onDelete: SetNull)
-  confirmationSentAt DateTime?
-  reminderSentAt     DateTime?
+  confirmationSentAt DateTime? // SMS confirmation stamp (at-most-once)
+  reminderSentAt     DateTime? // SMS reminder stamp (at-most-once)
+  // Email is a SEPARATE channel from SMS with its own idempotency: a customer can
+  // get BOTH a text and an email (like Acuity), and email can go out even while
+  // SMS is dark (no 10DLC / no consent). Email only needs a valid address.
+  confirmationEmailSentAt DateTime?
+  reminderEmailSentAt     DateTime?
   canceledAt         DateTime?
   completedAt        DateTime?
   createdAt          DateTime          @default(now())

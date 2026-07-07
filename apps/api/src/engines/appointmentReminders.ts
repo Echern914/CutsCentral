@@ -26,7 +26,11 @@ export async function runAppointmentReminders(now = new Date()): Promise<number>
   const due = await prisma.appointment.findMany({
     where: {
       status: "BOOKED",
-      reminderSentAt: null,
+      // Either reminder channel still pending: an SMS-dark shop with email on
+      // reminds by email (reminderSentAt stays null, reminderEmailSentAt fills);
+      // once BOTH stamps are set the row drops out. notifyAppointmentReminder
+      // guards each channel by its own stamp, so no duplicates.
+      OR: [{ reminderSentAt: null }, { reminderEmailSentAt: null }],
       startsAt: { gt: now, lte: horizon },
       clientId: { not: null },
     },
