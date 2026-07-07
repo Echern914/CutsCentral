@@ -184,7 +184,10 @@ export async function cancelAppointment(
   // full - the customer shouldn't be penalized for the shop canceling. NO_SHOW
   // never auto-refunds here (an already-captured ahead payment stays; the barber
   // can refund by hand, and uncaptured-hold release is a Phase-3 concern).
-  opts: { applyPolicyFee?: boolean } = {},
+  // suppressSlotOpened: skip the per-occurrence "a slot opened" barber+waitlist
+  // notify. Used by cancelSeries so canceling a 26-week series doesn't fire 26
+  // barber pushes; the series path sends ONE coalesced alert instead.
+  opts: { applyPolicyFee?: boolean; suppressSlotOpened?: boolean } = {},
 ): Promise<boolean> {
   const result = await runWithShop(shopId, async (tx) => {
     const appt = await tx.appointment.findFirst({
@@ -268,8 +271,91 @@ export async function cancelAppointment(
   // forget - a notify issue must never affect the cancel. NO_SHOW never fires
   // (that slot's time has already passed). Covers BOTH the barber-dashboard
   // cancel and the customer manage-page cancel, since both route through here.
-  if (outcome === "CANCELED") {
+  if (outcome === "CANCELED" && !opts.suppressSlotOpened) {
     void notifySlotOpened({ shopId, appointmentId, now });
   }
   return true;
+}
+
+export type CancelSeriesScope = "this" | "future" | "all";
+
+export interface CancelSeriesResult {
+  canceled: number;
+  seriesStatus: "CANCELED" | "ENDED";
+}
+
+/**
+ * Cancel a recurring series by scope:
+ *  - "this"   → just the one occurrence (fromAppointmentId).
+ *  - "future" → that occurrence and every later still-BOOKED one.
+ *  - "all"    → every still-BOOKED occurrence in the series.
+ *
+ * Loops the existing cancelAppointment per row (so each gets its own refund +
+ * clawback), but SUPPRESSES the per-occurrence slot-opened alert and fires ONE
+ * coalesced barber notification for the whole batch instead. Already-COMPLETED
+ * occurrences are left untouched (their loyalty stands). Sets the series status.
+ */
+export async function cancelSeries(
+  shopId: string,
+  seriesId: string,
+  scope: CancelSeriesScope,
+  fromAppointmentId?: string,
+  now = new Date(),
+): Promise<CancelSeriesResult | null> {
+  // Resolve the anchor occurrence's start when scope needs it.
+  let fromStartsAt: Date | null = null;
+  if (scope === "this" || scope === "future") {
+    if (!fromAppointmentId) return null;
+    const anchor = await runWithShop(shopId, (tx) =>
+      tx.appointment.findFirst({
+        where: { id: fromAppointmentId, shopId, seriesId },
+        select: { startsAt: true },
+      }),
+    );
+    if (!anchor) return null;
+    fromStartsAt = anchor.startsAt;
+  }
+
+  // Which still-BOOKED occurrences to cancel.
+  const rows = await runWithShop(shopId, (tx) =>
+    tx.appointment.findMany({
+      where: {
+        shopId,
+        seriesId,
+        status: "BOOKED",
+        ...(scope === "this" ? { id: fromAppointmentId } : {}),
+        ...(scope === "future" && fromStartsAt
+          ? { startsAt: { gte: fromStartsAt } }
+          : {}),
+      },
+      select: { id: true },
+      orderBy: { startsAt: "asc" },
+    }),
+  );
+
+  // A single-occurrence cancel keeps the normal per-slot alert (one freed slot,
+  // one nudge). A future/all cancel suppresses per-occurrence alerts and, since
+  // it frees a burst of capacity, relies on the standing waitlist rather than
+  // firing N barber pushes - the barber initiated the cancel, so they know.
+  const suppress = scope !== "this";
+  let canceled = 0;
+  for (const r of rows) {
+    const ok = await cancelAppointment(shopId, r.id, "CANCELED", now, {
+      suppressSlotOpened: suppress,
+    });
+    if (ok) canceled++;
+  }
+
+  // Series status: a whole-series or all-future kill ends it; a single-occurrence
+  // cancel leaves the series ACTIVE (later occurrences still stand).
+  if (scope !== "this") {
+    await runWithShop(shopId, (tx) =>
+      tx.recurringSeries.updateMany({
+        where: { id: seriesId, shopId },
+        data: { status: "CANCELED" },
+      }),
+    ).catch(() => {});
+  }
+
+  return { canceled, seriesStatus: scope === "this" ? "ENDED" : "CANCELED" };
 }

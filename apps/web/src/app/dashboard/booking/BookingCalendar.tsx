@@ -8,6 +8,7 @@ import { cn } from "@/lib/cn";
 import type { AgendaResponse, AgendaRow, ServiceRow, StaffRow, WaitlistRow } from "./page";
 import {
   cancelAppointmentAction,
+  cancelSeriesAction,
   completeAppointmentAction,
   getAgendaAction,
   noShowAppointmentAction,
@@ -646,8 +647,10 @@ function AppointmentBlock({
   toast: Toast;
 }) {
   const [pending, start] = useTransition();
+  const [seriesMenu, setSeriesMenu] = useState(false);
   const pill = STATUS_PILL[row.status];
   const canAct = row.source === "appointment" && row.status === "upcoming";
+  const isRecurring = Boolean(row.seriesId);
 
   // Blocked-off time: a distinct, muted band (no client/service/actions).
   if (row.source === "block") {
@@ -666,6 +669,19 @@ function AppointmentBlock({
     });
   }
 
+  function cancelScope(scope: "this" | "future" | "all") {
+    if (!row.seriesId) return;
+    start(async () => {
+      const res = await cancelSeriesAction(
+        row.seriesId!,
+        scope,
+        scope === "all" ? undefined : row.id,
+      );
+      setSeriesMenu(false);
+      toast(res.ok ? "Canceled" : "Couldn't cancel", res.ok ? "success" : "error");
+    });
+  }
+
   return (
     <div
       className={cn(
@@ -678,6 +694,14 @@ function AppointmentBlock({
           <p className="flex items-center gap-2 text-sm font-medium">
             <span className="tabular-nums text-muted">{timeLabel}</span>
             <span className="truncate">{row.clientName || "Client"}</span>
+            {isRecurring && (
+              <span
+                title="Repeats weekly"
+                className="shrink-0 rounded-full bg-gold/15 px-1.5 py-0.5 text-[10px] font-medium text-gold"
+              >
+                ↻ Weekly
+              </span>
+            )}
           </p>
           {/* The haircut / service type + price. */}
           <p className="mt-0.5 truncate text-xs text-muted">
@@ -711,13 +735,47 @@ function AppointmentBlock({
           >
             No-show
           </button>
-          <button
-            onClick={() => act(cancelAppointmentAction, "Canceled")}
-            disabled={pending}
-            className="rounded-md border border-danger-soft/40 px-2.5 py-1 text-[11px] text-danger-soft disabled:opacity-50"
-          >
-            Cancel
-          </button>
+          {isRecurring ? (
+            <div className="relative">
+              <button
+                onClick={() => setSeriesMenu((v) => !v)}
+                disabled={pending}
+                className="rounded-md border border-danger-soft/40 px-2.5 py-1 text-[11px] text-danger-soft disabled:opacity-50"
+              >
+                Cancel ▾
+              </button>
+              {seriesMenu && (
+                <div className="absolute right-0 z-20 mt-1 w-44 overflow-hidden rounded-lg border border-subtle bg-charcoal-900 shadow-lg">
+                  <button
+                    onClick={() => cancelScope("this")}
+                    className="block w-full px-3 py-2 text-left text-[11px] text-offwhite hover:bg-charcoal-700"
+                  >
+                    Just this one
+                  </button>
+                  <button
+                    onClick={() => cancelScope("future")}
+                    className="block w-full px-3 py-2 text-left text-[11px] text-offwhite hover:bg-charcoal-700"
+                  >
+                    This &amp; all future
+                  </button>
+                  <button
+                    onClick={() => cancelScope("all")}
+                    className="block w-full px-3 py-2 text-left text-[11px] text-danger-soft hover:bg-charcoal-700"
+                  >
+                    The whole series
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <button
+              onClick={() => act(cancelAppointmentAction, "Canceled")}
+              disabled={pending}
+              className="rounded-md border border-danger-soft/40 px-2.5 py-1 text-[11px] text-danger-soft disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          )}
         </div>
       )}
     </div>

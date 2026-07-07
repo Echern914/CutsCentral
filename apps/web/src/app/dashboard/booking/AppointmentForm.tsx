@@ -59,6 +59,14 @@ export function AppointmentForm({
   const [newName, setNewName] = useState("");
   const [newPhone, setNewPhone] = useState("");
   const [note, setNote] = useState("");
+  // Recurrence: off by default ("Does not repeat"). When on, every N weeks for
+  // `count` times OR until a date. Weekly only to start (the picked day+time is
+  // the pattern). See engines/recurringSeries.ts.
+  const [repeat, setRepeat] = useState(false);
+  const [everyWeeks, setEveryWeeks] = useState(1);
+  const [endMode, setEndMode] = useState<"count" | "until">("count");
+  const [count, setCount] = useState(4);
+  const [until, setUntil] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
 
@@ -136,6 +144,17 @@ export function AppointmentForm({
     if (!staffId) return setError("Pick a provider.");
     if (!startsAt) return setError("Pick a time.");
     if (!clientId && !newName.trim()) return setError("Pick a client or enter a name.");
+    if (repeat && endMode === "until" && !until) return setError("Pick an end date.");
+
+    const recurrence = repeat
+      ? {
+          interval: everyWeeks,
+          ...(endMode === "count"
+            ? { count }
+            : { until: new Date(`${until}T12:00:00`).toISOString() }),
+        }
+      : undefined;
+
     start(async () => {
       const res = await createAppointmentAction({
         staffId,
@@ -146,6 +165,7 @@ export function AppointmentForm({
         phone: clientId ? undefined : newPhone.trim() || undefined,
         note: note.trim() || undefined,
         customTime,
+        recurrence,
       });
       if (!res.ok) {
         setError(
@@ -157,7 +177,22 @@ export function AppointmentForm({
         );
         return;
       }
-      toast("Appointment scheduled", "success");
+      // Recurring: surface partial success (some dates may have been unavailable).
+      if (res.series) {
+        const { booked, skipped } = res.series;
+        if (booked === 0) {
+          setError("None of those dates were available. Try a different time.");
+          return;
+        }
+        toast(
+          skipped.length > 0
+            ? `Booked ${booked} — ${skipped.length} date${skipped.length > 1 ? "s were" : " was"} unavailable`
+            : `Booked ${booked} appointments`,
+          "success",
+        );
+      } else {
+        toast("Appointment scheduled", "success");
+      }
       onCreated();
     });
   }
@@ -348,6 +383,107 @@ export function AppointmentForm({
             value={note}
             onChange={(e) => setNote(e.target.value)}
           />
+        </div>
+
+        {/* Repeat (recurring series) */}
+        <div>
+          <p className={label}>Repeat</p>
+          <div className="mt-1.5 flex gap-1.5">
+            <button
+              type="button"
+              onClick={() => setRepeat(false)}
+              className={cn(
+                "flex-1 rounded-lg border px-3 py-2 text-sm transition-colors",
+                !repeat
+                  ? "border-gold/50 bg-gold/10 text-gold"
+                  : "border-subtle text-muted hover:text-offwhite",
+              )}
+            >
+              Does not repeat
+            </button>
+            <button
+              type="button"
+              onClick={() => setRepeat(true)}
+              className={cn(
+                "flex-1 rounded-lg border px-3 py-2 text-sm transition-colors",
+                repeat
+                  ? "border-gold/50 bg-gold/10 text-gold"
+                  : "border-subtle text-muted hover:text-offwhite",
+              )}
+            >
+              Weekly
+            </button>
+          </div>
+
+          {repeat && (
+            <div className="mt-3 flex flex-col gap-3 rounded-lg border border-subtle bg-charcoal-800/40 p-3">
+              <label className="flex items-center gap-2 text-sm text-offwhite">
+                Every
+                <input
+                  type="number"
+                  min={1}
+                  max={8}
+                  value={everyWeeks}
+                  onChange={(e) =>
+                    setEveryWeeks(Math.min(8, Math.max(1, Number(e.target.value) || 1)))
+                  }
+                  className="w-16 rounded-lg border border-subtle bg-charcoal-700 px-2 py-1.5 text-sm text-offwhite"
+                />
+                {everyWeeks === 1 ? "week" : "weeks"}
+              </label>
+
+              <div>
+                <div className="flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setEndMode("count")}
+                    className={cn(
+                      "flex-1 rounded-lg border px-3 py-1.5 text-sm transition-colors",
+                      endMode === "count"
+                        ? "border-gold/50 bg-gold/10 text-gold"
+                        : "border-subtle text-muted hover:text-offwhite",
+                    )}
+                  >
+                    For a count
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEndMode("until")}
+                    className={cn(
+                      "flex-1 rounded-lg border px-3 py-1.5 text-sm transition-colors",
+                      endMode === "until"
+                        ? "border-gold/50 bg-gold/10 text-gold"
+                        : "border-subtle text-muted hover:text-offwhite",
+                    )}
+                  >
+                    Until a date
+                  </button>
+                </div>
+                {endMode === "count" ? (
+                  <label className="mt-2 flex items-center gap-2 text-sm text-offwhite">
+                    <input
+                      type="number"
+                      min={2}
+                      max={52}
+                      value={count}
+                      onChange={(e) =>
+                        setCount(Math.min(52, Math.max(2, Number(e.target.value) || 2)))
+                      }
+                      className="w-16 rounded-lg border border-subtle bg-charcoal-700 px-2 py-1.5 text-sm text-offwhite"
+                    />
+                    appointments total
+                  </label>
+                ) : (
+                  <input
+                    type="date"
+                    value={until}
+                    onChange={(e) => setUntil(e.target.value)}
+                    className="mt-2 w-full rounded-lg border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite"
+                  />
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {error && <p className="text-sm text-danger-soft">{error}</p>}

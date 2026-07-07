@@ -187,12 +187,51 @@ export interface CreateApptInput {
   email?: string;
   note?: string;
   customTime?: boolean;
+  // "Repeats every N weeks" — exactly one of count / until. Server generates the
+  // occurrences and returns a series summary (booked + any skipped dates).
+  recurrence?: {
+    interval: number;
+    count?: number;
+    until?: string; // ISO
+  };
 }
+
+export interface SeriesSummary {
+  id: string;
+  booked: number;
+  skipped: { startsAt: string; reason: string }[];
+}
+
+export type CreateApptResult = Result & { series?: SeriesSummary };
 
 export async function createAppointmentAction(
   input: CreateApptInput,
+): Promise<CreateApptResult> {
+  const res = await apiSend<{ series?: SeriesSummary }>(
+    "POST",
+    "/api/booking/appointments",
+    input,
+  );
+  if (res.ok) revalidatePath("/dashboard/booking");
+  if (!res.ok) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, series: res.data?.series };
+}
+
+/**
+ * Cancel a recurring series by scope. "this"/"future" need the anchor
+ * occurrence's appointment id; "all" cancels every still-booked occurrence.
+ */
+export async function cancelSeriesAction(
+  seriesId: string,
+  scope: "this" | "future" | "all",
+  fromAppointmentId?: string,
 ): Promise<Result> {
-  return done(await apiSend("POST", "/api/booking/appointments", input));
+  return done(
+    await apiSend("POST", `/api/booking/series/${seriesId}/cancel`, {
+      scope,
+      ...(fromAppointmentId ? { fromAppointmentId } : {}),
+    }),
+  );
 }
 
 export interface BlockOffInput {

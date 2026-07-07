@@ -294,6 +294,7 @@ model Shop {
   availabilityRules      AvailabilityRule[]
   availabilityExceptions AvailabilityException[]
   appointments           Appointment[]
+  recurringSeries        RecurringSeries[]
   payments               Payment[]
 
   @@index([ownerId])
@@ -557,6 +558,7 @@ model Client {
   nudges              Nudge[]
   promoUses           PromotionRedemption[]
   appointments        Appointment[]
+  recurringSeries     RecurringSeries[]
   pushSubscriptions   PushSubscription[]
   cardGrants          CardGrant[]
   walletRegistrations WalletPassRegistration[]
@@ -866,6 +868,7 @@ model Staff {
   availabilityRules AvailabilityRule[]
   exceptions        AvailabilityException[]
   appointments      Appointment[]
+  recurringSeries   RecurringSeries[]
 
   @@index([shopId, active])
 }
@@ -893,8 +896,9 @@ model Service {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  staff        ServiceStaff[]
-  appointments Appointment[]
+  staff           ServiceStaff[]
+  appointments    Appointment[]
+  recurringSeries RecurringSeries[]
 
   @@index([shopId, active])
 }
@@ -992,6 +996,16 @@ model Appointment {
   reminderEmailSentAt     DateTime?
   canceledAt         DateTime?
   completedAt        DateTime?
+  // Recurring series link. null = a one-off appointment (every row before this
+  // feature). Each occurrence of a "every N weeks" booking is a normal
+  // Appointment row so reminders/promotion/loyalty/slot-opened work unchanged;
+  // seriesId just groups them for "cancel this + all future". SetNull (not
+  // Cascade) so canceling a series never deletes an already-COMPLETED occurrence
+  // whose Visit/PunchLedger granted punches. seriesOccurrenceIndex is the 0-based
+  // position for ordering "this and future".
+  seriesId              String?
+  series                RecurringSeries?  @relation(fields: [seriesId], references: [id], onDelete: SetNull)
+  seriesOccurrenceIndex Int?
   createdAt          DateTime          @default(now())
   updatedAt          DateTime          @updatedAt
 
@@ -1002,6 +1016,57 @@ model Appointment {
   @@index([shopId, staffId, startsAt]) // overlap checks + barber day view
   @@index([status, startsAt]) // reminder + promotion scans
   @@index([shopId, status, startsAt]) // dashboard upcoming list
+  @@index([seriesId]) // "future rows of this series" lookups for cancel-scope
+}
+
+enum RecurringSeriesStatus {
+  ACTIVE // still generating / has future occurrences
+  ENDED // ran to its natural count/until
+  CANCELED // barber/customer killed the remaining occurrences
+}
+
+// A "repeats every N weeks" booking. The recurrence RULE lives here; each
+// concrete occurrence is materialized as a normal Appointment row (seriesId FK)
+// so reminders / promotion / loyalty / slot-opened all keep working unchanged -
+// this table only exists to group them for whole-series cancel. The rule is
+// stored SHOP-LOCAL (weekday + minutes from local midnight) so occurrence
+// instants are recomputed per date via zonedWallTimeToUtc and stay correct
+// across DST (never add 7*24h in UTC). Exactly one of count / untilDate is set.
+model RecurringSeries {
+  id        String @id @default(cuid())
+  shopId    String
+  shop      Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  staffId   String
+  staff     Staff  @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  serviceId String
+  service   Service @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  clientId  String?
+  client    Client? @relation(fields: [clientId], references: [id], onDelete: SetNull)
+
+  // Booker snapshot (survives client archive/merge), mirrors Appointment.
+  firstName String
+  lastName  String?
+  phone     String?
+  email     String?
+
+  // Recurrence rule (shop-local). interval = every N weeks; weekday 0=Sun..6=Sat;
+  // startMin = minutes from shop-local midnight. Exactly one of count/untilDate.
+  interval  Int       @default(1)
+  weekday   Int
+  startMin  Int
+  count     Int?
+  untilDate DateTime? // UTC instant; occurrences generated up to this day's end
+
+  status      RecurringSeriesStatus @default(ACTIVE)
+  manageToken String                @unique // login-less whole-series cancel
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  appointments Appointment[]
+
+  @@index([shopId, status])
+  @@index([shopId, staffId])
 }
 
 // How a shop takes CUSTOMER payments for native bookings (distinct from the

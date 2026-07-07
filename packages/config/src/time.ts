@@ -65,6 +65,29 @@ export function hourInTimeZone(at: Date, timeZone: string): number {
 }
 
 /**
+ * Minutes-from-local-midnight (0-1439) of instant `at` in `timeZone`. The
+ * shop-local wall-clock time-of-day, DST-aware. Used to snapshot a recurring
+ * series' pattern (weekday + startMin) from its anchor appointment so occurrences
+ * recompute at the same local time across DST via zonedWallTimeToUtc.
+ */
+export function localMinutesOfDay(at: Date, timeZone: string): number {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(at);
+    const h = parseInt(parts.find((p) => p.type === "hour")?.value ?? "0", 10) % 24;
+    const m = parseInt(parts.find((p) => p.type === "minute")?.value ?? "0", 10);
+    if (Number.isNaN(h) || Number.isNaN(m)) return 0;
+    return h * 60 + m;
+  } catch {
+    return at.getUTCHours() * 60 + at.getUTCMinutes();
+  }
+}
+
+/**
  * Is `at` within TCPA quiet hours (i.e. NOT allowed to send) for a recipient in
  * `timeZone`? Allowed window is [startHour, endHour); anything outside is quiet.
  * Handles a window that does not wrap (8..21): quiet when hour < start or
