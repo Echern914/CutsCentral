@@ -295,7 +295,7 @@ export function buildWinbackPush(params: {
  * the shop's timezone. Falls back to the raw locale string on a bad zone (never
  * throws - a copy issue must not break a send).
  */
-function formatApptTime(at: Date, timezone: string): string {
+export function formatApptTime(at: Date, timezone: string): string {
   try {
     return new Intl.DateTimeFormat("en-US", {
       timeZone: timezone,
@@ -476,6 +476,87 @@ function escapeHtml(s: string): string {
 /** Escape text interpolated into an HTML attribute (the manage URL). */
 function escapeAttr(s: string): string {
   return escapeHtml(s);
+}
+
+/* ----------------------------- "slot just opened" ----------------------------- */
+
+/**
+ * BARBER alert when a native appointment cancels and a slot frees up. Goes to
+ * the barber's own number/device (no consent gate), so no STOP notice. Tells
+ * them how many waitlisters could take the freed time so they can work it.
+ */
+export function buildSlotOpenedBarberBody(params: {
+  shopName: string;
+  serviceName: string | null;
+  when: string;
+  waitlistCount: number;
+}): string {
+  const svc = params.serviceName ? `${params.serviceName} ` : "";
+  const who =
+    params.waitlistCount === 1
+      ? "1 person on your waitlist could take it"
+      : `${params.waitlistCount} people on your waitlist could take it`;
+  return `A ${svc}slot just opened at ${params.shopName} on ${params.when}. ${who}.`;
+}
+
+/** BARBER push twin of buildSlotOpenedBarberBody. */
+export function buildSlotOpenedBarberPush(params: {
+  serviceName: string | null;
+  when: string;
+  waitlistCount: number;
+}): PushCopy {
+  const svc = params.serviceName ? `${params.serviceName} ` : "";
+  const who =
+    params.waitlistCount === 1
+      ? "1 waitlister could fit"
+      : `${params.waitlistCount} waitlisters could fit`;
+  return {
+    title: "A slot just opened",
+    body: `${svc}${params.when} — ${who}. Tap to reach out.`,
+  };
+}
+
+/** CUSTOMER push twin of buildSlotOpenedCustomerEmail (short, link in the tap). */
+export function buildSlotOpenedCustomerPush(params: {
+  firstName: string | null;
+  shopName: string;
+  when: string;
+}): PushCopy {
+  const who = params.firstName ?? "there";
+  return {
+    title: `A slot just opened at ${params.shopName}`,
+    body: `${who}, ${params.when} is now available — tap to grab it before it's gone.`,
+  };
+}
+
+/**
+ * CUSTOMER "a slot just opened" email to a waitlisted lead. No STOP notice
+ * (email), and a direct link to the booking page. Reuses the appointment email
+ * card shell for a consistent look.
+ */
+export function buildSlotOpenedCustomerEmail(params: {
+  firstName: string | null;
+  shopName: string;
+  serviceName: string | null;
+  when: string;
+  bookingUrl: string;
+}): EmailCopy {
+  const who = params.firstName ?? "there";
+  const svc = params.serviceName ?? "appointment";
+  return {
+    subject: `A spot just opened at ${params.shopName}`,
+    text:
+      `Hi ${who}, good news — a ${svc} slot just opened at ${params.shopName} on ${params.when}. ` +
+      `You're on the waitlist, so grab it before someone else does: ${params.bookingUrl}`,
+    html: appointmentEmailHtml({
+      heading: "A slot just opened",
+      intro: `Hi ${who}, you're on the waitlist at ${params.shopName} — and a spot just freed up. Book it before it's gone:`,
+      shopName: params.shopName,
+      serviceName: svc,
+      when: params.when,
+      manageUrl: params.bookingUrl,
+    }),
+  };
 }
 
 /**

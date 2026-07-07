@@ -146,18 +146,27 @@ function SettingsTab({
   const [lead, setLead] = useState(shop.bookingLeadHours);
   const [maxDays, setMaxDays] = useState(shop.bookingMaxDays);
   const [buffer, setBuffer] = useState(shop.bookingBufferMin);
+  const [slotOpened, setSlotOpened] = useState(shop.slotOpenedTextsEnabled);
   const [pending, start] = useTransition();
 
-  function persist(nextMode: typeof mode) {
+  function persist(nextMode: typeof mode, nextSlotOpened = slotOpened) {
     start(async () => {
       const r = await saveBookingSettingsAction({
         bookingMode: nextMode,
         bookingLeadHours: lead,
         bookingMaxDays: maxDays,
         bookingBufferMin: buffer,
+        slotOpenedTextsEnabled: nextSlotOpened,
       });
       toast(r.ok ? "Booking settings saved" : "Couldn't save", r.ok ? "success" : "error");
     });
+  }
+
+  // Flip the "notify waitlist when a slot opens" toggle and save immediately.
+  function toggleSlotOpened() {
+    const next = !slotOpened;
+    setSlotOpened(next);
+    persist(mode, next);
   }
 
   function save() {
@@ -228,6 +237,34 @@ function SettingsTab({
           >
             {pending ? "Saving…" : "Save booking rules"}
           </button>
+        </Card>
+      )}
+
+      {mode === "native" && (
+        <Card className="p-5">
+          <CardHeader
+            title="Notify the waitlist when a slot opens"
+            subtitle="When a booking cancels, matching waitlisters get a push + email that the time is free. You always get an alert either way."
+          />
+          <div className="mt-4 flex items-center justify-between gap-4">
+            <p className="text-sm text-muted">
+              {slotOpened
+                ? "On — waitlisters are auto-notified of freed slots."
+                : "Off — only you are alerted when a slot opens."}
+            </p>
+            <button
+              onClick={toggleSlotOpened}
+              disabled={pending}
+              className={cn(
+                "shrink-0 rounded-full px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-50",
+                slotOpened
+                  ? "bg-emerald-soft/15 text-emerald-soft"
+                  : "border border-subtle text-muted hover:bg-charcoal-700",
+              )}
+            >
+              {slotOpened ? "On" : "Off"}
+            </button>
+          </div>
         </Card>
       )}
     </div>

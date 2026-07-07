@@ -8,6 +8,7 @@ import {
 import { recomputeCadence } from "./cadence.js";
 import { notifyPunchEarned } from "../services/loyaltyNotify.js";
 import { refundForCancellation } from "../billing/payments.js";
+import { notifySlotOpened } from "./slotOpened.js";
 
 /**
  * Turn a fulfilled native Appointment into a COMPLETED Visit that earns loyalty
@@ -260,6 +261,15 @@ export async function cancelAppointment(
       }
     }
     await refundForCancellation({ paymentId: result.paymentId, feeCents });
+  }
+
+  // A CANCELED future slot frees up: alert the barber + nudge matching
+  // waitlisters (both audiences from one pass, all gated inside). Fire-and-
+  // forget - a notify issue must never affect the cancel. NO_SHOW never fires
+  // (that slot's time has already passed). Covers BOTH the barber-dashboard
+  // cancel and the customer manage-page cancel, since both route through here.
+  if (outcome === "CANCELED") {
+    void notifySlotOpened({ shopId, appointmentId, now });
   }
   return true;
 }
