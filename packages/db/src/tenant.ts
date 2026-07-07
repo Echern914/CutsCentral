@@ -510,6 +510,39 @@ export function forShop(shopId: string) {
         ),
     },
 
+    // Waitlist: created on the UNauthenticated public route (plain prisma, no shop
+    // context), then read/worked here through the scoped accessor (RLS).
+    waitlistEntry: {
+      findMany: (args: Prisma.WaitlistEntryFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.waitlistEntry.findMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      findFirst: (args: Prisma.WaitlistEntryFindFirstArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.waitlistEntry.findFirst({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      count: (args: Prisma.WaitlistEntryCountArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.waitlistEntry.count({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      update: (args: Prisma.WaitlistEntryUpdateArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.waitlistEntry.update({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+    },
+
     // Reviews: created on the UNauthenticated public route (plain prisma, no shop
     // context), then read/moderated here through the scoped accessor (RLS).
     review: {

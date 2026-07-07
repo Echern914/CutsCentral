@@ -23,6 +23,7 @@ export interface ShopPageSettings {
   rewardsWelcome: string | null;
   rewardsSections: string[];
   takesRequests: boolean;
+  waitlistEnabled: boolean;
   notifyPhone: string | null;
   bookingUrl: string | null;
   bookingMode: "link" | "acuity" | "native";

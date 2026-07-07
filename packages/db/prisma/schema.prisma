@@ -216,6 +216,12 @@ model Shop {
   takesRequests Boolean @default(false)
   notifyPhone   String? // E.164; barber's number for lead-request texts. null = inbox only
 
+  // Waitlist: when on, the public booking page offers "Join the waitlist" (a
+  // standing button + when a day is fully booked) and entries land in the
+  // barber's dashboard. Off by default so existing shops are unchanged. Reuses
+  // notifyPhone for the new-entry SMS alert.
+  waitlistEnabled Boolean @default(false)
+
   // per-shop webhook routing (the body has no account id, so the URL path routes)
   webhookSecret    String   @unique // 32-byte random, used in the webhook URL path
   acuityWebhookIds String[] @default([]) // subscription ids returned by Acuity (teardown)
@@ -270,6 +276,7 @@ model Shop {
   promotions          Promotion[]
   promoUses           PromotionRedemption[]
   appointmentRequests AppointmentRequest[]
+  waitlist            WaitlistEntry[]
   reviews             Review[]
   pushSubscriptions   PushSubscription[]
   walletPasses        WalletPassRegistration[]
@@ -577,6 +584,34 @@ model AppointmentRequest {
 
   @@index([shopId, status])
   @@index([shopId, createdAt])
+}
+
+// A customer waiting for a spot to open. Created from the public booking page
+// (a standing "Join the waitlist" button, or when a day is fully booked), then
+// worked by the barber from the dashboard. Same public-write trust model as
+// AppointmentRequest (created as the connection owner, read/updated via forShop).
+// serviceId/staffId are captured when the join comes from a full day (so the
+// barber knows exactly what they want) and are reserved for a later
+// auto-notify-on-cancel fast-follow that matches a freed slot to the queue.
+model WaitlistEntry {
+  id            String   @id @default(cuid())
+  shopId        String
+  shop          Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  firstName     String
+  lastName      String?
+  phone         String? // E.164 when parseable, else raw input
+  email         String?
+  serviceId     String? // set when joined from a full day; null for a standing join
+  staffId       String? // "" / null = any provider
+  preferredTime String? // freeform ("Sat morning") for standing joins
+  note          String? // freeform note from the client
+  status        String    @default("WAITING") // WAITING | CONTACTED | BOOKED | REMOVED
+  notifiedAt    DateTime? // reserved for the auto-notify fast-follow (dedupe stamp)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([shopId, status, createdAt])
 }
 
 // Customer review submitted from the public shop page. Same trust model as

@@ -91,6 +91,9 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
       // up front so a customer isn't walked through the whole flow into a
       // dead-end at the final submit.
       bookingPaused: !hasActiveAccess(shop),
+      // When on, the booking page offers "Join the waitlist" (a standing button
+      // and when a day is fully booked).
+      waitlistEnabled: shop.waitlistEnabled,
       // Fee-free pay-direct handles (display-only) so the confirmation screen can
       // show "pay the barber directly". Only surfaced when the barber enabled it.
       payDirect: shop.payDirectEnabled

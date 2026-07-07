@@ -18,6 +18,7 @@ import {
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { BackToDashboard } from "@/components/BackToDashboard";
 import { RequestForm } from "./RequestForm";
+import { ShopWaitlistForm } from "./ShopWaitlistForm";
 import { ReviewForm } from "./ReviewForm";
 import type { ShopPageData } from "./page";
 
@@ -217,6 +218,27 @@ export function ShopPageClient({
             </a>
           ) : null}
         </motion.div>
+
+        {/* Standing waitlist entry: for when they're fully booked. Not shown with
+            the request form (that's already a "reach out" path). */}
+        {data.waitlistEnabled && !showRequestForm && (
+          <motion.div variants={fadeUp} className="mt-3">
+            <ShopWaitlistForm
+              slug={data.slug}
+              shopName={data.name}
+              accent={accent}
+              preview={preview}
+              theme={{
+                surface: theme.surface,
+                border: theme.border,
+                muted: theme.muted,
+                scheme: theme.scheme,
+                radius: layout.radius,
+                buttonRadius: layout.buttonRadius,
+              }}
+            />
+          </motion.div>
+        )}
 
         {/* Movable sections, in the shop's chosen order */}
         {order.map((key) => sections[key])}

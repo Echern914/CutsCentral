@@ -29,6 +29,27 @@ export async function submitRequestAction(
   return { ok: true };
 }
 
+export interface WaitlistInput {
+  firstName: string;
+  phone?: string;
+  email?: string;
+  preferredTime?: string;
+}
+
+/** Join the shop's waitlist from the public shop page (standing / any-time). */
+export async function joinWaitlistAction(
+  slug: string,
+  input: WaitlistInput,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiPublicSend(
+    "POST",
+    `/api/page/${encodeURIComponent(slug)}/waitlist`,
+    input,
+  );
+  if (!res.ok) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true };
+}
+
 export interface ReviewInput {
   rating: number;
   body?: string;

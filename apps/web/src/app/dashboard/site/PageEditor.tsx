@@ -74,6 +74,7 @@ export function PageEditor({
       : REWARDS_SECTION_DEFAULT,
   );
   const [takesRequests, setTakesRequests] = useState(settings.takesRequests);
+  const [waitlistEnabled, setWaitlistEnabled] = useState(settings.waitlistEnabled);
   const [notifyPhone, setNotifyPhone] = useState(settings.notifyPhone ?? "");
   const [error, setError] = useState<string | null>(null);
   const [savedOnce, setSavedOnce] = useState(false);
@@ -104,6 +105,7 @@ export function PageEditor({
       bookingUrl: settings.bookingUrl,
       bookingMode: settings.bookingMode,
       takesRequests,
+      waitlistEnabled,
       punchesPerVisit: settings.punchesPerVisit,
       // Rewards/promotions aren't edited here; the preview shows the page chrome.
       // (They render live on the real page.) Empty keeps the preview honest about
@@ -133,6 +135,7 @@ export function PageEditor({
       layoutStyle,
       sectionOrder,
       takesRequests,
+      waitlistEnabled,
     ],
   );
 
@@ -156,6 +159,7 @@ export function PageEditor({
         rewardsWelcome: rewardsWelcome.trim(),
         rewardsSections,
         takesRequests,
+        waitlistEnabled,
         notifyPhone: notifyPhone.trim(),
       });
       if (r.ok) {
@@ -494,9 +498,29 @@ export function PageEditor({
                 className={`mt-1 ${field}`}
               />
               <span className="mt-1 block text-[11px] text-muted/80">
-                We&apos;ll text this number when a request comes in. Leave blank to just check the Requests inbox.
+                We&apos;ll text this number when a request or waitlist join comes in. Leave blank to just check the dashboard.
               </span>
             </label>
+
+            <div className="flex items-center justify-between gap-3 border-t border-subtle pt-5">
+              <div className="min-w-0">
+                <p className="text-sm text-offwhite">Waitlist</p>
+                <p className="mt-0.5 text-xs text-muted">
+                  Lets clients join a waitlist when you&apos;re fully booked. Joins show at the top of your Appointments calendar.
+                </p>
+              </div>
+              <button
+                onClick={() => setWaitlistEnabled((v) => !v)}
+                className={cn(
+                  "shrink-0 rounded-full px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out",
+                  waitlistEnabled
+                    ? "bg-emerald-soft/15 text-emerald-soft"
+                    : "border border-subtle text-muted hover:bg-charcoal-700",
+                )}
+              >
+                {waitlistEnabled ? "On" : "Off"}
+              </button>
+            </div>
           </div>
         </Card>
 

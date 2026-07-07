@@ -64,6 +64,21 @@ export interface AgendaResponse {
   timezone: string;
 }
 
+/** One person waiting for a spot (barber-facing). */
+export interface WaitlistRow {
+  id: string;
+  firstName: string;
+  lastName: string | null;
+  phone: string | null;
+  email: string | null;
+  serviceName: string | null;
+  staffName: string | null;
+  preferredTime: string | null;
+  note: string | null;
+  status: "WAITING" | "CONTACTED" | "BOOKED" | "REMOVED";
+  createdAt: string;
+}
+
 export default async function BookingPage() {
   // The month calendar loads the current month on first paint (with a week of
   // padding on each side so the visible grid's leading/trailing days are filled),
@@ -74,18 +89,20 @@ export default async function BookingPage() {
   const agendaFrom = new Date(monthStart.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const agendaTo = new Date(monthEnd.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
-  const [shopRes, staffRes, servicesRes, agendaRes, acuityRes, squareRes] = await Promise.all([
-    apiGet<BookingShop>("/api/shops/me"),
-    apiGet<{ staff: StaffRow[] }>("/api/booking/staff"),
-    apiGet<{ services: ServiceRow[] }>("/api/booking/services"),
-    apiGet<AgendaResponse>(
-      `/api/booking/agenda?from=${encodeURIComponent(agendaFrom)}&to=${encodeURIComponent(agendaTo)}`,
-    ),
-    // Connect status for the branded cards. These can 404/503 when a platform
-    // isn't configured; treat any non-ok as "not connected / unavailable".
-    apiGet<{ connected: boolean }>("/api/acuity/oauth/status"),
-    apiGet<{ connected: boolean; available: boolean }>("/api/square/oauth/status"),
-  ]);
+  const [shopRes, staffRes, servicesRes, agendaRes, waitlistRes, acuityRes, squareRes] =
+    await Promise.all([
+      apiGet<BookingShop>("/api/shops/me"),
+      apiGet<{ staff: StaffRow[] }>("/api/booking/staff"),
+      apiGet<{ services: ServiceRow[] }>("/api/booking/services"),
+      apiGet<AgendaResponse>(
+        `/api/booking/agenda?from=${encodeURIComponent(agendaFrom)}&to=${encodeURIComponent(agendaTo)}`,
+      ),
+      apiGet<{ waitlist: WaitlistRow[]; waitingCount: number }>("/api/dashboard/waitlist"),
+      // Connect status for the branded cards. These can 404/503 when a platform
+      // isn't configured; treat any non-ok as "not connected / unavailable".
+      apiGet<{ connected: boolean }>("/api/acuity/oauth/status"),
+      apiGet<{ connected: boolean; available: boolean }>("/api/square/oauth/status"),
+    ]);
 
   if (!shopRes.ok || !shopRes.data) {
     return <main className="p-8 text-muted">Could not load your booking setup.</main>;
@@ -123,6 +140,7 @@ export default async function BookingPage() {
             timezone: "America/New_York",
           }
         }
+        initialWaitlist={waitlistRes.data?.waitlist ?? []}
       />
     </main>
   );

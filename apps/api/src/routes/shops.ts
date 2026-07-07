@@ -147,6 +147,8 @@ const updateShopSchema = createShopSchema
     // notifyPhone is texted on each new lead (normalized to E.164 below); ""/null
     // = inbox only.
     takesRequests: z.boolean(),
+    // Waitlist: when on, the public booking page offers "Join the waitlist".
+    waitlistEnabled: z.boolean(),
     notifyPhone: z.string().max(40).nullish().or(z.literal("")),
     // Transactional loyalty SMS to clients (earn/redeem confirmations). Off by
     // default; gated by client consent + quiet hours regardless. See
@@ -417,6 +419,7 @@ publicPageRouter.get("/:slug", async (req, res) => {
     bookingMode: shop.bookingMode,
     // notifyPhone is intentionally NOT exposed - it's the barber's private number.
     takesRequests: shop.takesRequests,
+    waitlistEnabled: shop.waitlistEnabled,
     punchesPerVisit: shop.punchesPerVisit,
     rewards,
     promotions: promotions.map((p) => ({
@@ -517,6 +520,83 @@ publicPageRouter.post("/:slug/request", leadLimiter, async (req, res) => {
       body,
       url: `${apiEnv().APP_BASE_URL}/dashboard/requests`,
       tag: "appt-request",
+    },
+  });
+
+  res.status(201).json({ ok: true });
+});
+
+// Join the waitlist from the public booking page. UNauthenticated (slug resolves
+// the shop). Same trust model as the lead form: plain-prisma insert (connection
+// owner, bypasses FORCE RLS). serviceId/staffId are captured when the join comes
+// from a fully-booked day so the barber knows exactly what the customer wants.
+const waitlistSchema = z
+  .object({
+    firstName: z.string().trim().min(1).max(80),
+    lastName: z.string().trim().max(80).optional().or(z.literal("")),
+    phone: z.string().trim().max(40).optional().or(z.literal("")),
+    email: z.string().trim().email().max(200).optional().or(z.literal("")),
+    serviceId: z.string().trim().max(60).optional().or(z.literal("")),
+    staffId: z.string().trim().max(60).optional().or(z.literal("")),
+    preferredTime: z.string().trim().max(200).optional().or(z.literal("")),
+    note: z.string().trim().max(1000).optional().or(z.literal("")),
+  })
+  .strict()
+  .refine((d) => Boolean(d.phone?.trim()) || Boolean(d.email?.trim()), {
+    message: "Provide a phone or email so they can reach you back.",
+    path: ["phone"],
+  });
+
+publicPageRouter.post("/:slug/waitlist", leadLimiter, async (req, res) => {
+  const parsed = waitlistSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const slug = String(req.params.slug).toLowerCase();
+  const shop = await prisma.shop.findUnique({ where: { slug } });
+  // 404 unless the page is live AND the barber turned the waitlist on.
+  if (!shop || !shop.publicPageEnabled || !shop.waitlistEnabled) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const d = parsed.data;
+  await prisma.waitlistEntry.create({
+    data: {
+      shopId: shop.id,
+      firstName: d.firstName,
+      lastName: d.lastName || null,
+      phone: toE164(d.phone) ?? (d.phone?.trim() || null),
+      email: d.email || null,
+      serviceId: d.serviceId || null,
+      staffId: d.staffId || null,
+      preferredTime: d.preferredTime || null,
+      note: d.note || null,
+    },
+  });
+
+  // Best-effort barber alert (identical to the lead form). Never fails the join.
+  const contact = toE164(d.phone) ?? d.email ?? "no contact info";
+  const body = `New waitlist join at ${shop.name} from ${d.firstName} (${contact})`;
+  if (shop.notifyPhone) {
+    if (apiEnv().DRY_RUN) {
+      logger.info({ shopId: shop.id, to: shop.notifyPhone }, "waitlist notify SMS (dry-run, not sent)");
+    } else {
+      try {
+        await getMessageProvider().send({ to: shop.notifyPhone, body });
+      } catch (err) {
+        logger.error({ err, shopId: shop.id }, "waitlist notify SMS failed");
+      }
+    }
+  }
+  await sendPushToUser({
+    userId: shop.ownerId,
+    shopId: shop.id,
+    payload: {
+      title: "New waitlist join",
+      body,
+      url: `${apiEnv().APP_BASE_URL}/dashboard/booking`,
+      tag: "waitlist-join",
     },
   });
 
@@ -627,6 +707,7 @@ function serializeShop(shop: {
   rewardsWelcome: string | null;
   rewardsSections: string[];
   takesRequests: boolean;
+  waitlistEnabled: boolean;
   notifyPhone: string | null;
   loyaltyTextsEnabled: boolean;
   bookingMode: string;
@@ -663,6 +744,7 @@ function serializeShop(shop: {
     rewardsWelcome: shop.rewardsWelcome,
     rewardsSections: readRewardsSections(shop.rewardsSections),
     takesRequests: shop.takesRequests,
+    waitlistEnabled: shop.waitlistEnabled,
     notifyPhone: shop.notifyPhone,
     loyaltyTextsEnabled: shop.loyaltyTextsEnabled,
     bookingMode: shop.bookingMode,
