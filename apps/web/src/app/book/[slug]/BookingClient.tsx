@@ -6,6 +6,7 @@ import { BackToDashboard } from "@/components/BackToDashboard";
 import type { BookShopData } from "./page";
 import { bookAction, getSlotsAction, type SlotsResult } from "./actions";
 import { PaymentStep } from "./PaymentStep";
+import { WaitlistForm } from "./WaitlistForm";
 
 /**
  * Public native booking picker: pick service -> barber -> day -> open slot ->
@@ -40,6 +41,9 @@ export function BookingClient({ data }: { data: BookShopData }) {
   // The manage token of a booking awaiting payment (shown after the card clears).
   const [manageTokenPending, setManageTokenPending] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  // Waitlist: null = hidden; "standing" = generic join; "slot" = join for the
+  // currently-chosen service/provider (a fully-booked day).
+  const [waitlistMode, setWaitlistMode] = useState<null | "standing" | "slot">(null);
 
   // Which staff offer the chosen service, and which services a chosen staff offers.
   const staffForService = useMemo(() => {
@@ -313,6 +317,15 @@ export function BookingClient({ data }: { data: BookShopData }) {
             {data.shop.name} isn&apos;t taking online bookings right now. Please
             contact the shop directly to book your next appointment.
           </p>
+          {data.shop.waitlistEnabled && (
+            <div className="mt-5 text-left">
+              <WaitlistForm
+                slug={data.shop.slug}
+                shopName={data.shop.name}
+                accent={accent}
+              />
+            </div>
+          )}
         </div>
       </main>
     );
@@ -337,6 +350,28 @@ export function BookingClient({ data }: { data: BookShopData }) {
         ) : null}
         <h1 className="font-display text-2xl tracking-tight">Book at {data.shop.name}</h1>
       </header>
+
+      {/* Standing waitlist entry: available regardless of slot availability. */}
+      {data.shop.waitlistEnabled && (
+        <div className="mb-6">
+          {waitlistMode === "standing" ? (
+            <WaitlistForm
+              slug={data.shop.slug}
+              shopName={data.shop.name}
+              accent={accent}
+              onDone={() => setWaitlistMode(null)}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => setWaitlistMode("standing")}
+              className="w-full rounded-xl border border-white/15 py-2.5 text-center text-xs font-medium text-muted transition-colors hover:text-offwhite"
+            >
+              Can’t find a time? Join the waitlist →
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Step 1: service */}
       <Section
@@ -422,9 +457,33 @@ export function BookingClient({ data }: { data: BookShopData }) {
           {loadingSlots ? (
             <p className="text-sm text-muted">Loading available times…</p>
           ) : days.length === 0 ? (
-            <p className="text-sm text-muted">
-              No open times in the next {data.shop.bookingMaxDays} days. Try another provider.
-            </p>
+            <div className="flex flex-col gap-3">
+              <p className="text-sm text-muted">
+                No open times in the next {data.shop.bookingMaxDays} days. Try
+                another provider{data.shop.waitlistEnabled ? " — or join the waitlist" : ""}.
+              </p>
+              {data.shop.waitlistEnabled &&
+                (waitlistMode === "slot" ? (
+                  <WaitlistForm
+                    slug={data.shop.slug}
+                    shopName={data.shop.name}
+                    accent={accent}
+                    serviceId={serviceId ?? undefined}
+                    staffId={staffId ?? undefined}
+                    serviceLabel={selectedService?.name}
+                    onDone={() => setWaitlistMode(null)}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setWaitlistMode("slot")}
+                    className="w-full rounded-xl border py-3 text-center text-sm font-semibold transition-colors"
+                    style={{ borderColor: accent, color: accent }}
+                  >
+                    Join the waitlist
+                  </button>
+                ))}
+            </div>
           ) : (
             <>
               <div className="mb-3 flex gap-2 overflow-x-auto pb-1">

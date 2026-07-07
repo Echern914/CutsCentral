@@ -10,6 +10,7 @@ import type {
   ConnectStatus,
   ServiceRow,
   StaffRow,
+  WaitlistRow,
 } from "./page";
 import { BookingCalendar } from "./BookingCalendar";
 import { ConnectPlatforms } from "./ConnectPlatforms";
@@ -39,6 +40,7 @@ export function BookingManager({
   initialStaff,
   initialServices,
   initialAgenda,
+  initialWaitlist,
 }: {
   shop: BookingShop;
   appBase: string;
@@ -47,6 +49,7 @@ export function BookingManager({
   initialStaff: StaffRow[];
   initialServices: ServiceRow[];
   initialAgenda: AgendaResponse;
+  initialWaitlist: WaitlistRow[];
 }) {
   const { toast } = useToast();
   const [tab, setTab] = useState<Tab>("Settings");
@@ -109,7 +112,11 @@ export function BookingManager({
       )}
       {tab === "Hours" && <HoursTab staff={initialStaff} toast={toast} />}
       {tab === "Appointments" && (
-        <BookingCalendar initial={initialAgenda} toast={toast} />
+        <BookingCalendar
+          initial={initialAgenda}
+          initialWaitlist={initialWaitlist}
+          toast={toast}
+        />
       )}
     </div>
   );

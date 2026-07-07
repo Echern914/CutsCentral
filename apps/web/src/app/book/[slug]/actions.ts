@@ -66,3 +66,30 @@ export async function bookAction(
     paymentClientSecret: res.data.payment?.clientSecret ?? null,
   };
 }
+
+export interface WaitlistInput {
+  firstName: string;
+  phone?: string;
+  email?: string;
+  serviceId?: string;
+  staffId?: string;
+  preferredTime?: string;
+  note?: string;
+}
+
+/**
+ * Join the shop's waitlist. serviceId/staffId are passed when the join comes
+ * from a fully-booked day so the barber knows exactly what the customer wants.
+ */
+export async function joinWaitlistAction(
+  slug: string,
+  input: WaitlistInput,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiPublicSend<{ ok: boolean }>(
+    "POST",
+    `/api/page/${encodeURIComponent(slug)}/waitlist`,
+    input,
+  );
+  if (!res.ok) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true };
+}

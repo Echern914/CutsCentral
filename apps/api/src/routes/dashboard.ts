@@ -1740,6 +1740,61 @@ dashboardRouter.post("/requests/:id", async (req, res) => {
   res.json({ ok: true, status: parsed.data.status });
 });
 
+// Waitlist: everyone waiting for a spot, newest first. Resolves the optional
+// serviceId/staffId (plain string columns on the entry) to display names via the
+// shop's current services/staff so the barber sees "what they want" at a glance.
+dashboardRouter.get("/waitlist", async (req, res) => {
+  const db = forShop(req.shop!.id);
+  const [entries, services, staff] = await Promise.all([
+    db.waitlistEntry.findMany({ orderBy: { createdAt: "desc" }, take: 200 }),
+    db.service.findMany({ select: { id: true, name: true } }),
+    db.staff.findMany({ select: { id: true, name: true } }),
+  ]);
+  const serviceName = new Map(services.map((s) => [s.id, s.name]));
+  const staffName = new Map(staff.map((s) => [s.id, s.name]));
+  const waitingCount = entries.filter((e) => e.status === "WAITING").length;
+  res.json({
+    waitlist: entries.map((e) => ({
+      id: e.id,
+      firstName: e.firstName,
+      lastName: e.lastName,
+      phone: e.phone,
+      email: e.email,
+      serviceName: e.serviceId ? serviceName.get(e.serviceId) ?? null : null,
+      staffName: e.staffId ? staffName.get(e.staffId) ?? null : null,
+      preferredTime: e.preferredTime,
+      note: e.note,
+      status: e.status,
+      createdAt: e.createdAt.toISOString(),
+    })),
+    waitingCount,
+  });
+});
+
+// Update a waitlist entry's status as the barber works it. Tenant-scoped: the
+// findFirst through forShop returns 404 for another shop's entry.
+const waitlistStatusSchema = z
+  .object({ status: z.enum(["WAITING", "CONTACTED", "BOOKED", "REMOVED"]) })
+  .strict();
+dashboardRouter.post("/waitlist/:id", async (req, res) => {
+  const parsed = waitlistStatusSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const db = forShop(req.shop!.id);
+  const existing = await db.waitlistEntry.findFirst({ where: { id: req.params.id } });
+  if (!existing) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  await db.waitlistEntry.update({
+    where: { id: existing.id },
+    data: { status: parsed.data.status },
+  });
+  res.json({ ok: true, status: parsed.data.status });
+});
+
 // Run a dry-run sweep preview (who WOULD be nudged) without sending.
 dashboardRouter.post("/sweep-preview", smsLimiter, async (req, res) => {
   const summary = await sweepShop(req.shop!, { dryRun: true });

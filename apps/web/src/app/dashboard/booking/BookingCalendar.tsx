@@ -5,12 +5,13 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Card } from "@/components/ui/Card";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { cn } from "@/lib/cn";
-import type { AgendaResponse, AgendaRow } from "./page";
+import type { AgendaResponse, AgendaRow, WaitlistRow } from "./page";
 import {
   cancelAppointmentAction,
   completeAppointmentAction,
   getAgendaAction,
   noShowAppointmentAction,
+  setWaitlistStatusAction,
 } from "./actions";
 
 type Toast = (msg: string, kind?: "success" | "error") => void;
@@ -36,9 +37,11 @@ const DEFAULT_END_HOUR = 23; // 11 PM row shown; midnight+ bookings widen it fur
 
 export function BookingCalendar({
   initial,
+  initialWaitlist,
   toast,
 }: {
   initial: AgendaResponse;
+  initialWaitlist: WaitlistRow[];
   toast: Toast;
 }) {
   const tz = initial.timezone;
@@ -172,7 +175,11 @@ export function BookingCalendar({
   const selectedRows = selectedDay ? byDay.get(selectedDay) ?? [] : [];
 
   return (
-    <Card className="p-4 sm:p-5">
+    <div className="flex flex-col gap-4">
+      {/* Waitlist dropdown sits ABOVE the calendar. */}
+      <WaitlistPanel initial={initialWaitlist} toast={toast} />
+
+      <Card className="p-4 sm:p-5">
       {/* Month header + nav */}
       <div className="flex items-center justify-between">
         <button
@@ -275,7 +282,157 @@ export function BookingCalendar({
           </motion.div>
         )}
       </AnimatePresence>
+      </Card>
+    </div>
+  );
+}
+
+/**
+ * Collapsible "Waitlist (N)" panel above the calendar. Collapsed by default;
+ * shows the count as a badge. Each row: who + what they want + how to reach them,
+ * with status actions (Contacted / Booked / Remove). REMOVED/BOOKED entries are
+ * hidden from the default view (they've been handled).
+ */
+function WaitlistPanel({
+  initial,
+  toast,
+}: {
+  initial: WaitlistRow[];
+  toast: Toast;
+}) {
+  const [open, setOpen] = useState(false);
+  // Active = still worth showing (waiting or already contacted, not booked/removed).
+  const active = initial.filter((w) => w.status === "WAITING" || w.status === "CONTACTED");
+  const waitingCount = initial.filter((w) => w.status === "WAITING").length;
+
+  // Nothing to show and none ever added: hide the panel entirely to avoid clutter.
+  if (initial.length === 0) return null;
+
+  return (
+    <Card className="overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left"
+      >
+        <span className="flex items-center gap-2">
+          <span className="font-display text-base">Waitlist</span>
+          {waitingCount > 0 && (
+            <span className="rounded-full bg-gold/15 px-2 py-0.5 text-xs font-semibold text-gold">
+              {waitingCount} waiting
+            </span>
+          )}
+        </span>
+        <span className="text-muted transition-transform" style={{ transform: open ? "rotate(180deg)" : "none" }}>
+          ⌄
+        </span>
+      </button>
+
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            className="overflow-hidden"
+          >
+            <div className="border-t border-subtle px-5 py-4">
+              {active.length === 0 ? (
+                <p className="text-sm text-muted">No one waiting right now.</p>
+              ) : (
+                <ul className="flex flex-col gap-2">
+                  {active.map((w) => (
+                    <WaitlistItem key={w.id} entry={w} toast={toast} />
+                  ))}
+                </ul>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </Card>
+  );
+}
+
+function WaitlistItem({ entry, toast }: { entry: WaitlistRow; toast: Toast }) {
+  const [pending, start] = useTransition();
+  const name = `${entry.firstName} ${entry.lastName ?? ""}`.trim() || "Client";
+  // What they want: service (+ provider) when known, else their preferred time.
+  const wants =
+    entry.serviceName || entry.staffName
+      ? [entry.serviceName, entry.staffName ? `with ${entry.staffName}` : null]
+          .filter(Boolean)
+          .join(" ")
+      : entry.preferredTime || "any time";
+
+  function setStatus(
+    status: "CONTACTED" | "BOOKED" | "REMOVED",
+    label: string,
+  ) {
+    start(async () => {
+      const res = await setWaitlistStatusAction(entry.id, status);
+      toast(res.ok ? label : "Couldn't update", res.ok ? "success" : "error");
+    });
+  }
+
+  return (
+    <li className="rounded-xl border border-subtle px-4 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="flex items-center gap-2 text-sm font-medium">
+            {name}
+            {entry.status === "CONTACTED" && (
+              <span className="rounded-full bg-charcoal-700 px-2 py-0.5 text-[10px] text-muted">
+                contacted
+              </span>
+            )}
+          </p>
+          <p className="mt-0.5 text-xs text-muted">{wants}</p>
+          {(entry.phone || entry.email) && (
+            <p className="mt-1 text-xs">
+              {entry.phone && (
+                <a href={`sms:${entry.phone}`} className="text-gold hover:underline">
+                  {entry.phone}
+                </a>
+              )}
+              {entry.phone && entry.email && <span className="text-muted"> · </span>}
+              {entry.email && (
+                <a href={`mailto:${entry.email}`} className="text-gold hover:underline">
+                  {entry.email}
+                </a>
+              )}
+            </p>
+          )}
+          {entry.note && <p className="mt-1 text-xs text-muted">“{entry.note}”</p>}
+        </div>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {entry.status !== "CONTACTED" && (
+          <button
+            onClick={() => setStatus("CONTACTED", "Marked contacted")}
+            disabled={pending}
+            className="rounded-lg border border-subtle px-3 py-1 text-xs text-muted disabled:opacity-50"
+          >
+            Contacted
+          </button>
+        )}
+        <button
+          onClick={() => setStatus("BOOKED", "Marked booked")}
+          disabled={pending}
+          className="rounded-lg border border-emerald-soft/40 px-3 py-1 text-xs text-emerald-soft disabled:opacity-50"
+        >
+          Booked
+        </button>
+        <button
+          onClick={() => setStatus("REMOVED", "Removed")}
+          disabled={pending}
+          className="rounded-lg border border-danger-soft/40 px-3 py-1 text-xs text-danger-soft disabled:opacity-50"
+        >
+          Remove
+        </button>
+      </div>
+    </li>
   );
 }
 

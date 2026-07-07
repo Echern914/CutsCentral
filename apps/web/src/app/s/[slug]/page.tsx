@@ -23,6 +23,7 @@ export interface ShopPageData {
   bookingUrl: string | null;
   bookingMode: "link" | "acuity" | "native";
   takesRequests: boolean;
+  waitlistEnabled: boolean;
   punchesPerVisit: number;
   rewards: {
     id: string;

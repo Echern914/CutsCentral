@@ -20,6 +20,7 @@ export interface PageSettingsInput {
   rewardsWelcome: string;
   rewardsSections: string[];
   takesRequests: boolean;
+  waitlistEnabled: boolean;
   notifyPhone: string;
 }
 
@@ -43,6 +44,7 @@ export async function savePageAction(
     rewardsWelcome: input.rewardsWelcome,
     rewardsSections: input.rewardsSections,
     takesRequests: input.takesRequests,
+    waitlistEnabled: input.waitlistEnabled,
     notifyPhone: input.notifyPhone,
   });
   revalidatePath("/dashboard/site");

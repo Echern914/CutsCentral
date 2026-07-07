@@ -135,6 +135,15 @@ export async function disconnectSquareAction(): Promise<Result> {
   return done(await apiSend("POST", "/api/square/oauth/disconnect"));
 }
 
+//  Waitlist
+
+export async function setWaitlistStatusAction(
+  id: string,
+  status: "WAITING" | "CONTACTED" | "BOOKED" | "REMOVED",
+): Promise<Result> {
+  return done(await apiSend("POST", `/api/dashboard/waitlist/${id}`, { status }));
+}
+
 //  Appointments
 
 export async function cancelAppointmentAction(id: string): Promise<Result> {
