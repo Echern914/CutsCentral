@@ -5,22 +5,20 @@ import { Card, CardHeader } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
 import type {
-  AppointmentRow,
+  AgendaResponse,
   BookingShop,
   ConnectStatus,
   ServiceRow,
   StaffRow,
 } from "./page";
+import { BookingCalendar } from "./BookingCalendar";
 import { ConnectPlatforms } from "./ConnectPlatforms";
 import {
-  cancelAppointmentAction,
-  completeAppointmentAction,
   createServiceAction,
   createStaffAction,
   deleteServiceAction,
   deleteStaffAction,
   getAvailabilityAction,
-  noShowAppointmentAction,
   saveAvailabilityAction,
   saveBookingSettingsAction,
 } from "./actions";
@@ -40,7 +38,7 @@ export function BookingManager({
   connect,
   initialStaff,
   initialServices,
-  initialAppointments,
+  initialAgenda,
 }: {
   shop: BookingShop;
   appBase: string;
@@ -48,7 +46,7 @@ export function BookingManager({
   connect: ConnectStatus;
   initialStaff: StaffRow[];
   initialServices: ServiceRow[];
-  initialAppointments: AppointmentRow[];
+  initialAgenda: AgendaResponse;
 }) {
   const { toast } = useToast();
   const [tab, setTab] = useState<Tab>("Settings");
@@ -111,7 +109,7 @@ export function BookingManager({
       )}
       {tab === "Hours" && <HoursTab staff={initialStaff} toast={toast} />}
       {tab === "Appointments" && (
-        <AppointmentsTab initial={initialAppointments} toast={toast} />
+        <BookingCalendar initial={initialAgenda} toast={toast} />
       )}
     </div>
   );
@@ -204,7 +202,12 @@ function SettingsTab({
           </div>
           <p className="mt-3 text-xs text-muted">
             Your booking page:{" "}
-            <a href={bookUrl} target="_blank" rel="noreferrer" className="text-gold underline">
+            <a
+              href={`${bookUrl}?from=dashboard`}
+              target="_blank"
+              rel="noreferrer"
+              className="text-gold underline"
+            >
               {bookUrl}
             </a>
           </p>
@@ -596,87 +599,6 @@ function HoursTab({ staff, toast }: { staff: StaffRow[]; toast: Toast }) {
             {pending ? "Saving…" : "Save hours"}
           </button>
         </>
-      )}
-    </Card>
-  );
-}
-
-//  Appointments
-
-function AppointmentsTab({
-  initial,
-  toast,
-}: {
-  initial: AppointmentRow[];
-  toast: Toast;
-}) {
-  const [pending, start] = useTransition();
-  const fmt = new Intl.DateTimeFormat("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-
-  function act(
-    id: string,
-    fn: (id: string) => Promise<{ ok: boolean }>,
-    label: string,
-  ) {
-    start(async () => {
-      const r = await fn(id);
-      toast(r.ok ? label : "Couldn't update", r.ok ? "success" : "error");
-    });
-  }
-
-  const upcoming = initial.filter((a) => a.status === "BOOKED");
-
-  return (
-    <Card className="p-5">
-      <CardHeader title="Upcoming appointments" />
-      {upcoming.length === 0 ? (
-        <p className="mt-3 text-sm text-muted">No upcoming appointments.</p>
-      ) : (
-        <ul className="mt-3 flex flex-col gap-2">
-          {upcoming.map((a) => (
-            <li key={a.id} className="rounded-xl border border-subtle px-4 py-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium">
-                    {a.firstName} {a.lastName ?? ""}
-                  </p>
-                  <p className="text-xs text-muted">
-                    {a.service.name} · {a.staff.name} · {fmt.format(new Date(a.startsAt))}
-                  </p>
-                </div>
-              </div>
-              <div className="mt-2 flex gap-2">
-                <button
-                  onClick={() => act(a.id, completeAppointmentAction, "Marked done")}
-                  disabled={pending}
-                  className="rounded-lg border border-emerald-soft/40 px-3 py-1 text-xs text-emerald-soft disabled:opacity-50"
-                >
-                  Mark done
-                </button>
-                <button
-                  onClick={() => act(a.id, noShowAppointmentAction, "Marked no-show")}
-                  disabled={pending}
-                  className="rounded-lg border border-subtle px-3 py-1 text-xs text-muted disabled:opacity-50"
-                >
-                  No-show
-                </button>
-                <button
-                  onClick={() => act(a.id, cancelAppointmentAction, "Canceled")}
-                  disabled={pending}
-                  className="rounded-lg border border-danger-soft/40 px-3 py-1 text-xs text-danger-soft disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-              </div>
-            </li>
-          ))}
-        </ul>
       )}
     </Card>
   );
