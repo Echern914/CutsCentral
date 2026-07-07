@@ -123,71 +123,31 @@ export function ShopPageClient({
         className="mx-auto w-full max-w-lg px-5 pb-16"
         style={{ fontFamily: "var(--page-body)" }}
       >
-        {/* Hero */}
-        <motion.header variants={fadeUp} className="relative pt-5">
+        {/* Hero: a full-bleed banner that fades into the page, then the shop name.
+            No logo coin - the banner + name carry the identity. */}
+        <motion.header variants={fadeUp} className="relative">
           {data.heroImageUrl ? (
-            // A slim, contained, framed banner - an accent strip, not a wall.
-            // Rounded + bordered so it reads as a deliberate card whatever the
-            // photo; a gentle bottom shade adds depth without fading the image.
-            <div
-              className="relative h-32 overflow-hidden sm:h-36"
-              style={{ borderRadius: layout.radius, border: `1px solid ${theme.border}` }}
-            >
+            <div className="relative -mx-5 h-48 overflow-hidden sm:h-56">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={data.heroImageUrl} alt="" className="h-full w-full object-cover" />
+              {/* Fade the bottom of the banner into the page background so it
+                  blends in and the name sits on a clean surface. */}
               <div
                 className="absolute inset-0"
-                style={{ background: `linear-gradient(180deg, transparent 62%, rgba(0,0,0,0.28) 100%)` }}
+                style={{ background: `linear-gradient(180deg, transparent 45%, ${theme.bg} 100%)` }}
                 aria-hidden
               />
             </div>
           ) : (
             <div
-              className="h-24"
-              style={{
-                borderRadius: layout.radius,
-                border: `1px solid ${theme.border}`,
-                background: `radial-gradient(420px 200px at 50% 20%, ${accent}22, ${theme.surface} 75%)`,
-              }}
+              className="-mx-5 h-28"
+              style={{ background: `radial-gradient(420px 200px at 50% 0%, ${accent}26, transparent 70%)` }}
               aria-hidden
             />
           )}
 
-          <div className={`text-center ${data.heroImageUrl ? "-mt-9" : "-mt-8"}`}>
-            {/* Logo "coin": a smaller, opaque disc that sits cleanly on the
-                banner's edge. When there's no logo we show a crisp accent-tinted
-                monogram, which reads far better than a low-quality photo crop. */}
-            {data.logoUrl ? (
-              <div
-                className="mx-auto h-[72px] w-[72px] overflow-hidden rounded-full"
-                style={{
-                  backgroundColor: theme.surface,
-                  border: `3px solid ${theme.bg}`,
-                  boxShadow: `0 8px 24px -10px rgba(0,0,0,0.45)`,
-                }}
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={data.logoUrl}
-                  alt={data.name}
-                  className="h-full w-full object-cover"
-                />
-              </div>
-            ) : (
-              <div
-                className="mx-auto flex h-[72px] w-[72px] items-center justify-center rounded-full text-2xl font-semibold"
-                style={{
-                  background: `linear-gradient(145deg, ${accent}, ${accent}CC)`,
-                  border: `3px solid ${theme.bg}`,
-                  color: theme.scheme === "light" ? "#FFFFFF" : "#101012",
-                  boxShadow: `0 8px 24px -10px ${accent}88`,
-                  fontFamily: "var(--page-display)",
-                }}
-              >
-                {data.name.charAt(0).toUpperCase()}
-              </div>
-            )}
-            <h1 className="mt-4 text-3xl tracking-tight" style={{ fontFamily: "var(--page-display)" }}>
+          <div className="mt-4 text-center">
+            <h1 className="text-3xl tracking-tight" style={{ fontFamily: "var(--page-display)" }}>
               {data.name}
             </h1>
             {data.bio && (
