@@ -40,26 +40,43 @@ export interface ServiceRow {
   sortOrder: number;
   staffIds: string[];
 }
-export interface AppointmentRow {
+/**
+ * One row of the barber's day-agenda calendar. Normalized on the server from
+ * EITHER a native `Appointment` or a synced `Visit` (see /api/booking/agenda), so
+ * the calendar renders identically regardless of how the shop takes bookings.
+ * `source` gates the row actions: only native ("appointment") rows can be
+ * marked done / no-show / canceled here; synced ("visit") rows are read-only.
+ */
+export interface AgendaRow {
   id: string;
-  status: "BOOKED" | "CANCELED" | "COMPLETED" | "NO_SHOW";
-  startsAt: string;
-  endsAt: string;
-  firstName: string;
-  lastName: string | null;
-  phone: string | null;
-  email: string | null;
-  staff: { id: string; name: string };
-  service: { id: string; name: string };
+  source: "appointment" | "visit";
+  start: string; // ISO
+  end: string | null; // ISO
+  clientName: string;
+  serviceName: string | null;
+  price: number | null;
+  status: "upcoming" | "completed" | "canceled" | "no_show";
+}
+
+export interface AgendaResponse {
+  agenda: AgendaRow[];
+  source: "appointment" | "visit";
+  timezone: string;
 }
 
 export default async function BookingPage() {
-  const [shopRes, staffRes, servicesRes, apptsRes, acuityRes, squareRes] = await Promise.all([
+  // The calendar loads a wide window once and buckets by day in-memory: -7d so
+  // today's already-completed cuts still show, +30d for upcoming.
+  const now = Date.now();
+  const agendaFrom = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const agendaTo = new Date(now + 30 * 24 * 60 * 60 * 1000).toISOString();
+
+  const [shopRes, staffRes, servicesRes, agendaRes, acuityRes, squareRes] = await Promise.all([
     apiGet<BookingShop>("/api/shops/me"),
     apiGet<{ staff: StaffRow[] }>("/api/booking/staff"),
     apiGet<{ services: ServiceRow[] }>("/api/booking/services"),
-    apiGet<{ appointments: AppointmentRow[] }>(
-      `/api/booking/appointments?from=${encodeURIComponent(new Date().toISOString())}`,
+    apiGet<AgendaResponse>(
+      `/api/booking/agenda?from=${encodeURIComponent(agendaFrom)}&to=${encodeURIComponent(agendaTo)}`,
     ),
     // Connect status for the branded cards. These can 404/503 when a platform
     // isn't configured; treat any non-ok as "not connected / unavailable".
@@ -96,7 +113,13 @@ export default async function BookingPage() {
         connect={connect}
         initialStaff={staffRes.data?.staff ?? []}
         initialServices={servicesRes.data?.services ?? []}
-        initialAppointments={apptsRes.data?.appointments ?? []}
+        initialAgenda={
+          agendaRes.data ?? {
+            agenda: [],
+            source: shopRes.data.bookingMode === "native" ? "appointment" : "visit",
+            timezone: "America/New_York",
+          }
+        }
       />
     </main>
   );

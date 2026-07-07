@@ -16,6 +16,7 @@ import {
   type PageThemeKey,
 } from "@chairback/config/constants";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
+import { BackToDashboard } from "@/components/BackToDashboard";
 import { RequestForm } from "./RequestForm";
 import { ReviewForm } from "./ReviewForm";
 import type { ShopPageData } from "./page";
@@ -100,6 +101,21 @@ export function ShopPageClient({
 
   return (
     <div className="min-h-dvh" style={rootStyle}>
+      {/* Barber-only "back to dashboard" - shows only when opened from the
+          dashboard (?from=dashboard), never for customers, never in the editor
+          preview. */}
+      {!preview && (
+        <BackToDashboard
+          fallbackHref="/dashboard/site"
+          className="fixed left-4 top-4 z-20 px-3.5 py-2 text-xs font-medium shadow-lg backdrop-blur transition-transform duration-200 ease-out hover:scale-[1.03]"
+          style={{
+            backgroundColor: theme.surface,
+            border: `1px solid ${theme.border}`,
+            color: theme.text,
+            borderRadius: layout.buttonRadius,
+          }}
+        />
+      )}
       <motion.main
         variants={staggerContainer}
         initial="hidden"
@@ -113,9 +129,11 @@ export function ShopPageClient({
             <div className="relative -mx-5 h-48 overflow-hidden sm:h-56">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={data.heroImageUrl} alt="" className="h-full w-full object-cover" />
+              {/* Bottom-anchored scrim only: keeps the top ~60% of the photo crisp
+                  while giving the avatar + name a readable seat on the banner. */}
               <div
                 className="absolute inset-0"
-                style={{ background: `linear-gradient(180deg, transparent 30%, ${theme.bg} 100%)` }}
+                style={{ background: `linear-gradient(180deg, transparent 55%, ${theme.bg} 100%)` }}
                 aria-hidden
               />
             </div>
@@ -127,23 +145,34 @@ export function ShopPageClient({
             />
           )}
 
-          <div className={`text-center ${data.heroImageUrl ? "-mt-10" : "-mt-6"}`}>
+          <div className={`text-center ${data.heroImageUrl ? "-mt-12" : "-mt-8"}`}>
+            {/* Logo "coin": a surface-filled bordered disc so a dark logo always
+                reads against any banner. Circular for consistency with the
+                booking page (which already uses rounded-full). */}
             {data.logoUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={data.logoUrl}
-                alt={data.name}
-                className="mx-auto h-20 w-20 object-cover shadow-lg"
-                style={{ border: `2px solid ${theme.surface}`, borderRadius: layout.radius }}
-              />
-            ) : (
               <div
-                className="mx-auto flex h-20 w-20 items-center justify-center text-3xl font-semibold shadow-lg"
+                className="mx-auto flex h-24 w-24 items-center justify-center rounded-full shadow-lg"
                 style={{
                   backgroundColor: theme.surface,
-                  border: `1px solid ${theme.border}`,
+                  border: `2px solid ${theme.border}`,
+                  boxShadow: `0 8px 30px -12px ${theme.bg}`,
+                }}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={data.logoUrl}
+                  alt={data.name}
+                  className="h-[88%] w-[88%] rounded-full object-cover"
+                />
+              </div>
+            ) : (
+              <div
+                className="mx-auto flex h-24 w-24 items-center justify-center rounded-full text-3xl font-semibold shadow-lg"
+                style={{
+                  backgroundColor: theme.surface,
+                  border: `2px solid ${theme.border}`,
                   color: accent,
-                  borderRadius: layout.radius,
+                  boxShadow: `0 8px 30px -12px ${theme.bg}`,
                   fontFamily: "var(--page-display)",
                 }}
               >

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { forShop, prisma, runWithShop } from "@chairback/db";
+import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import {
   cancelAppointment,
@@ -398,6 +398,167 @@ bookingDashboardRouter.get("/appointments", async (req, res) => {
       startsAt: a.startsAt.toISOString(),
       endsAt: a.endsAt.toISOString(),
     })),
+  });
+});
+
+//  Agenda (the day-to-day calendar that works for ANY booking mode)
+
+/**
+ * Normalized day-agenda for the barber's calendar. A shop's appointments live in
+ * one of two tables depending on how it takes bookings:
+ *   - native booking  -> `Appointment` rows (ChairBack's own engine)
+ *   - Acuity / Square / link -> `Visit` rows (synced from the source of truth)
+ * The `/appointments` endpoint above only reads `Appointment`, so it's empty for
+ * every synced shop. This endpoint reads the RIGHT source per `bookingMode` and
+ * flattens both into one row shape so the calendar renders identically for all.
+ * Read-only for synced shops (we never mutate a Visit the source owns).
+ */
+type AgendaStatus = "upcoming" | "completed" | "canceled" | "no_show";
+
+interface AgendaRow {
+  id: string;
+  source: "appointment" | "visit";
+  start: string; // ISO
+  end: string | null; // ISO
+  clientName: string;
+  serviceName: string | null;
+  price: number | null;
+  status: AgendaStatus;
+}
+
+const agendaQuerySchema = z.object({
+  from: z.coerce.date(),
+  to: z.coerce.date(),
+  staffId: z.string().optional(),
+});
+
+const APPT_STATUS: Record<string, AgendaStatus> = {
+  BOOKED: "upcoming",
+  COMPLETED: "completed",
+  CANCELED: "canceled",
+  NO_SHOW: "no_show",
+};
+// RESCHEDULED -> canceled: the moved slot is defunct; the new time arrives as its
+// own SCHEDULED visit, so treating the old row as canceled avoids a phantom.
+const VISIT_STATUS: Record<string, AgendaStatus> = {
+  SCHEDULED: "upcoming",
+  COMPLETED: "completed",
+  CANCELED: "canceled",
+  NO_SHOW: "no_show",
+  RESCHEDULED: "canceled",
+};
+
+function fullName(first: string | null, last: string | null): string {
+  return `${first ?? ""} ${last ?? ""}`.trim();
+}
+
+// forShop() is a hand-curated tenant wrapper that erases nested-relation types
+// from a `select`, so we spell out the exact selected shapes and cast to them.
+// The cast is safe: it names precisely the fields each `select` below requests.
+type ApptAgendaRow = {
+  id: string;
+  status: string;
+  startsAt: Date;
+  endsAt: Date;
+  firstName: string;
+  lastName: string | null;
+  priceAtBooking: Prisma.Decimal | null;
+  service: { name: string } | null;
+};
+type VisitAgendaRow = {
+  id: string;
+  status: string;
+  scheduledAt: Date;
+  endAt: Date | null;
+  price: Prisma.Decimal | null;
+  serviceName: string | null;
+  client: { firstName: string | null; lastName: string | null } | null;
+};
+
+bookingDashboardRouter.get("/agenda", async (req, res) => {
+  const parsed = agendaQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const { from, to, staffId } = parsed.data;
+
+  // Shop has RLS with no policy, so bookingMode/timezone must be read as the
+  // OWNER (outside forShop), exactly like the /complete handler below.
+  const shop = await prisma.shop.findUnique({
+    where: { id: req.shop!.id },
+    select: { bookingMode: true, timezone: true },
+  });
+  if (!shop) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+
+  const db = forShop(req.shop!.id);
+  let agenda: AgendaRow[];
+
+  if (shop.bookingMode === "native") {
+    const rows = (await db.appointment.findMany({
+      where: {
+        startsAt: { gte: from, lte: to },
+        ...(staffId ? { staffId } : {}),
+      },
+      orderBy: { startsAt: "asc" },
+      take: 500,
+      select: {
+        id: true,
+        status: true,
+        startsAt: true,
+        endsAt: true,
+        firstName: true,
+        lastName: true,
+        priceAtBooking: true,
+        service: { select: { name: true } },
+      },
+    })) as unknown as ApptAgendaRow[];
+    agenda = rows.map((a) => ({
+      id: a.id,
+      source: "appointment" as const,
+      start: a.startsAt.toISOString(),
+      end: a.endsAt.toISOString(),
+      clientName: fullName(a.firstName, a.lastName),
+      serviceName: a.service?.name ?? null,
+      price: a.priceAtBooking == null ? null : Number(a.priceAtBooking),
+      status: APPT_STATUS[a.status] ?? "upcoming",
+    }));
+  } else {
+    // Synced shops (Acuity / Square / link): appointments are Visit rows. There's
+    // no staff relation on Visit, so a staffId filter simply doesn't apply.
+    const rows = (await db.visit.findMany({
+      where: { scheduledAt: { gte: from, lte: to } },
+      orderBy: { scheduledAt: "asc" },
+      take: 500,
+      select: {
+        id: true,
+        status: true,
+        scheduledAt: true,
+        endAt: true,
+        price: true,
+        serviceName: true,
+        client: { select: { firstName: true, lastName: true } },
+      },
+    })) as unknown as VisitAgendaRow[];
+    agenda = rows.map((v) => ({
+      id: v.id,
+      source: "visit" as const,
+      start: v.scheduledAt.toISOString(),
+      end: v.endAt ? v.endAt.toISOString() : null,
+      clientName: fullName(v.client?.firstName ?? null, v.client?.lastName ?? null),
+      serviceName: v.serviceName ?? null,
+      price: v.price == null ? null : Number(v.price),
+      status: VISIT_STATUS[v.status] ?? "upcoming",
+    }));
+  }
+
+  res.json({
+    agenda,
+    source: shop.bookingMode === "native" ? "appointment" : "visit",
+    timezone: shop.timezone,
   });
 });
 

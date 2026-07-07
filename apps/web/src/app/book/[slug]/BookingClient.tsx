@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
+import { BackToDashboard } from "@/components/BackToDashboard";
 import type { BookShopData } from "./page";
 import { bookAction, getSlotsAction, type SlotsResult } from "./actions";
 import { PaymentStep } from "./PaymentStep";
@@ -126,6 +127,23 @@ export function BookingClient({ data }: { data: BookShopData }) {
     setStaffId(id);
     setSlot(null);
     if (serviceId) loadSlots(serviceId, id);
+  }
+
+  // ---- Step-back navigation (customer stepping back a stage). Each clears the
+  // state that gates the current step, collapsing the wizard to the prior one.
+  function backToService() {
+    setServiceId(null);
+    setStaffId(null);
+    setSlotsByDay(new Map());
+    setDay(null);
+    setSlot(null);
+  }
+  function backToProvider() {
+    setStaffId(null);
+    setSlot(null);
+  }
+  function backToTime() {
+    setSlot(null);
   }
 
   function submit() {
@@ -302,20 +320,36 @@ export function BookingClient({ data }: { data: BookShopData }) {
 
   return (
     <main className="mx-auto max-w-md px-5 py-8 text-offwhite">
+      {/* Barber-only "back to dashboard" (only when opened from the dashboard). */}
+      <BackToDashboard
+        fallbackHref="/dashboard/booking"
+        className="mb-4 inline-flex items-center rounded-full border border-white/15 bg-white/5 px-3.5 py-2 text-xs font-medium text-muted transition-colors hover:text-offwhite"
+      />
+
       <header className="mb-6 text-center">
         {data.shop.logoUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={data.shop.logoUrl}
             alt={data.shop.name}
-            className="mx-auto mb-3 h-14 w-14 rounded-full object-cover"
+            className="mx-auto mb-3 h-16 w-16 rounded-full border border-white/10 bg-white/5 object-cover"
           />
         ) : null}
         <h1 className="font-display text-2xl tracking-tight">Book at {data.shop.name}</h1>
       </header>
 
       {/* Step 1: service */}
-      <Section title="1 · Choose a service">
+      <Section
+        title="1 · Choose a service"
+        back={
+          <Link
+            href={`/s/${data.shop.slug}`}
+            className="text-xs text-muted transition-colors hover:text-offwhite"
+          >
+            ← Back to {data.shop.name}
+          </Link>
+        }
+      >
         <div className="flex flex-col gap-2">
           {data.services.map((s) => (
             <button
@@ -345,7 +379,10 @@ export function BookingClient({ data }: { data: BookShopData }) {
 
       {/* Step 2: provider */}
       {serviceId && (
-        <Section title="2 · Choose your provider">
+        <Section
+          title="2 · Choose your provider"
+          back={<BackStep onClick={backToService} />}
+        >
           <div className="flex flex-col gap-2">
             {staffForService.map((s) => (
               <button
@@ -378,7 +415,10 @@ export function BookingClient({ data }: { data: BookShopData }) {
 
       {/* Step 3: day + slot */}
       {serviceId && staffId && (
-        <Section title="3 · Pick a time">
+        <Section
+          title="3 · Pick a time"
+          back={<BackStep onClick={backToProvider} />}
+        >
           {loadingSlots ? (
             <p className="text-sm text-muted">Loading available times…</p>
           ) : days.length === 0 ? (
@@ -433,7 +473,10 @@ export function BookingClient({ data }: { data: BookShopData }) {
 
       {/* Step 4: contact + consent */}
       {slot && (
-        <Section title="4 · Your details">
+        <Section
+          title="4 · Your details"
+          back={<BackStep onClick={backToTime} />}
+        >
           {selectedPrice !== null && (
             <div
               className="mb-3 flex items-center justify-between rounded-xl px-4 py-3 text-sm"
@@ -530,12 +573,37 @@ export function BookingClient({ data }: { data: BookShopData }) {
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  title,
+  children,
+  back,
+}: {
+  title: string;
+  children: React.ReactNode;
+  /** Optional back affordance rendered on the title row (a button or link). */
+  back?: React.ReactNode;
+}) {
   return (
     <section className="mb-5">
-      <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">{title}</h2>
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">{title}</h2>
+        {back}
+      </div>
       {children}
     </section>
+  );
+}
+
+/** A small "← Back" affordance for stepping back a stage in the booking wizard. */
+function BackStep({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="text-xs text-muted transition-colors hover:text-offwhite"
+    >
+      ← Back
+    </button>
   );
 }
 

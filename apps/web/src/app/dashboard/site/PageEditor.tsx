@@ -192,7 +192,7 @@ export function PageEditor({
               Copy
             </button>
             <a
-              href={pageUrl}
+              href={`${pageUrl}?from=dashboard`}
               target="_blank"
               rel="noopener noreferrer"
               className="rounded-full border border-gold/50 px-4 py-2 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
@@ -517,7 +517,7 @@ export function PageEditor({
           </button>
           {savedOnce && !error && !pending && (
             <a
-              href={pageUrl}
+              href={`${pageUrl}?from=dashboard`}
               target="_blank"
               rel="noopener noreferrer"
               className="text-sm font-medium text-emerald-soft underline-offset-2 hover:underline"
