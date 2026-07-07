@@ -503,7 +503,15 @@ function DayPlanner({
                       <AppointmentBlock
                         key={r.id}
                         row={r}
-                        timeLabel={timeFmt.format(new Date(r.start))}
+                        // Show the time RANGE so the barber sees how long each
+                        // cut runs. Guard the cases that specifically hit synced/
+                        // manual visits: no end, or a zero-length end (== start) -
+                        // both fall back to just the start time (no bogus "2–2").
+                        timeLabel={
+                          r.end && r.end !== r.start
+                            ? `${timeFmt.format(new Date(r.start))}–${timeFmt.format(new Date(r.end))}`
+                            : timeFmt.format(new Date(r.start))
+                        }
                         toast={toast}
                       />
                     ))}
