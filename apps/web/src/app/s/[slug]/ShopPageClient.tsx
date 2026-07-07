@@ -124,55 +124,63 @@ export function ShopPageClient({
         style={{ fontFamily: "var(--page-body)" }}
       >
         {/* Hero */}
-        <motion.header variants={fadeUp} className="relative">
+        <motion.header variants={fadeUp} className="relative pt-5">
           {data.heroImageUrl ? (
-            <div className="relative -mx-5 h-48 overflow-hidden sm:h-56">
+            // A CONTAINED, framed banner (not a full-bleed strip that dissolves
+            // into the page). Rounded + bordered so it reads as a deliberate card
+            // whatever the photo. A gentle bottom shade adds depth without fading
+            // the image away.
+            <div
+              className="relative h-40 overflow-hidden sm:h-48"
+              style={{ borderRadius: layout.radius, border: `1px solid ${theme.border}` }}
+            >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={data.heroImageUrl} alt="" className="h-full w-full object-cover" />
-              {/* Bottom-anchored scrim only: keeps the top ~60% of the photo crisp
-                  while giving the avatar + name a readable seat on the banner. */}
               <div
                 className="absolute inset-0"
-                style={{ background: `linear-gradient(180deg, transparent 55%, ${theme.bg} 100%)` }}
+                style={{ background: `linear-gradient(180deg, transparent 62%, rgba(0,0,0,0.28) 100%)` }}
                 aria-hidden
               />
             </div>
           ) : (
             <div
-              className="-mx-5 h-28"
-              style={{ background: `radial-gradient(420px 200px at 50% 0%, ${accent}26, transparent 70%)` }}
+              className="h-28"
+              style={{
+                borderRadius: layout.radius,
+                border: `1px solid ${theme.border}`,
+                background: `radial-gradient(420px 200px at 50% 20%, ${accent}22, ${theme.surface} 75%)`,
+              }}
               aria-hidden
             />
           )}
 
-          <div className={`text-center ${data.heroImageUrl ? "-mt-12" : "-mt-8"}`}>
-            {/* Logo "coin": a surface-filled bordered disc so a dark logo always
-                reads against any banner. Circular for consistency with the
-                booking page (which already uses rounded-full). */}
+          <div className={`text-center ${data.heroImageUrl ? "-mt-11" : "-mt-10"}`}>
+            {/* Logo "coin": an OPAQUE surface disc with a solid ring so a dark or
+                busy logo always reads and sits cleanly on the banner's edge. */}
             {data.logoUrl ? (
               <div
-                className="mx-auto flex h-24 w-24 items-center justify-center rounded-full shadow-lg"
+                className="mx-auto h-[92px] w-[92px] overflow-hidden rounded-full"
                 style={{
                   backgroundColor: theme.surface,
-                  border: `2px solid ${theme.border}`,
-                  boxShadow: `0 8px 30px -12px ${theme.bg}`,
+                  border: `3px solid ${theme.bg}`,
+                  boxShadow: `0 10px 30px -10px rgba(0,0,0,0.45)`,
                 }}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={data.logoUrl}
                   alt={data.name}
-                  className="h-[88%] w-[88%] rounded-full object-cover"
+                  className="h-full w-full object-cover"
                 />
               </div>
             ) : (
               <div
-                className="mx-auto flex h-24 w-24 items-center justify-center rounded-full text-3xl font-semibold shadow-lg"
+                className="mx-auto flex h-[92px] w-[92px] items-center justify-center rounded-full text-3xl font-semibold"
                 style={{
                   backgroundColor: theme.surface,
-                  border: `2px solid ${theme.border}`,
+                  border: `3px solid ${theme.bg}`,
                   color: accent,
-                  boxShadow: `0 8px 30px -12px ${theme.bg}`,
+                  boxShadow: `0 10px 30px -10px rgba(0,0,0,0.45)`,
                   fontFamily: "var(--page-display)",
                 }}
               >

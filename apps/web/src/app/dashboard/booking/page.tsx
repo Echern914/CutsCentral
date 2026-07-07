@@ -65,11 +65,14 @@ export interface AgendaResponse {
 }
 
 export default async function BookingPage() {
-  // The calendar loads a wide window once and buckets by day in-memory: -7d so
-  // today's already-completed cuts still show, +30d for upcoming.
-  const now = Date.now();
-  const agendaFrom = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
-  const agendaTo = new Date(now + 30 * 24 * 60 * 60 * 1000).toISOString();
+  // The month calendar loads the current month on first paint (with a week of
+  // padding on each side so the visible grid's leading/trailing days are filled),
+  // then fetches other months on demand via getAgendaAction as the barber pages.
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  const agendaFrom = new Date(monthStart.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const agendaTo = new Date(monthEnd.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
   const [shopRes, staffRes, servicesRes, agendaRes, acuityRes, squareRes] = await Promise.all([
     apiGet<BookingShop>("/api/shops/me"),
