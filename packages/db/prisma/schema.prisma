@@ -45,6 +45,10 @@ enum BookingMode {
 // booking is a future hold, not yet a loyalty event). No RESCHEDULED state: a
 // reschedule mutates startsAt/endsAt in place and stays BOOKED.
 enum AppointmentStatus {
+  // PENDING = a public request awaiting barber approval (request-before-booking).
+  // Holds the slot like BOOKED, but is NOT reminded/promoted/earns-loyalty; the
+  // barber approves it -> BOOKED (+ confirmation fires) or declines it -> CANCELED.
+  PENDING
   BOOKED
   CANCELED
   COMPLETED
@@ -227,6 +231,10 @@ model Shop {
   // on; this toggle controls the CUSTOMER-facing blast (outbound to leads), so
   // it's off by default and separate from waitlistEnabled. See engines/slotOpened.
   slotOpenedTextsEnabled Boolean @default(false)
+  // Request-before-booking: when on, a public NATIVE booking lands as PENDING
+  // (holds the slot, no confirmation sent) until the barber approves it in the
+  // agenda. Off by default so existing shops are unchanged. Native-only.
+  requireBookingApproval Boolean @default(false)
 
   // per-shop webhook routing (the body has no account id, so the URL path routes)
   webhookSecret    String   @unique // 32-byte random, used in the webhook URL path

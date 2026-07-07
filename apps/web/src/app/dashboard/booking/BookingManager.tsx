@@ -147,9 +147,14 @@ function SettingsTab({
   const [maxDays, setMaxDays] = useState(shop.bookingMaxDays);
   const [buffer, setBuffer] = useState(shop.bookingBufferMin);
   const [slotOpened, setSlotOpened] = useState(shop.slotOpenedTextsEnabled);
+  const [requireApproval, setRequireApproval] = useState(shop.requireBookingApproval);
   const [pending, start] = useTransition();
 
-  function persist(nextMode: typeof mode, nextSlotOpened = slotOpened) {
+  function persist(
+    nextMode: typeof mode,
+    nextSlotOpened = slotOpened,
+    nextRequireApproval = requireApproval,
+  ) {
     start(async () => {
       const r = await saveBookingSettingsAction({
         bookingMode: nextMode,
@@ -157,6 +162,7 @@ function SettingsTab({
         bookingMaxDays: maxDays,
         bookingBufferMin: buffer,
         slotOpenedTextsEnabled: nextSlotOpened,
+        requireBookingApproval: nextRequireApproval,
       });
       toast(r.ok ? "Booking settings saved" : "Couldn't save", r.ok ? "success" : "error");
     });
@@ -167,6 +173,13 @@ function SettingsTab({
     const next = !slotOpened;
     setSlotOpened(next);
     persist(mode, next);
+  }
+
+  // Flip "require my approval before a booking is confirmed" and save.
+  function toggleRequireApproval() {
+    const next = !requireApproval;
+    setRequireApproval(next);
+    persist(mode, slotOpened, next);
   }
 
   function save() {
@@ -263,6 +276,34 @@ function SettingsTab({
               )}
             >
               {slotOpened ? "On" : "Off"}
+            </button>
+          </div>
+        </Card>
+      )}
+
+      {mode === "native" && (
+        <Card className="p-5">
+          <CardHeader
+            title="Require my approval before a booking is confirmed"
+            subtitle="When on, a customer's online booking comes in as a request. You approve or decline it from your calendar, and they're only confirmed once you approve."
+          />
+          <div className="mt-4 flex items-center justify-between gap-4">
+            <p className="text-sm text-muted">
+              {requireApproval
+                ? "On — new bookings wait for your approval."
+                : "Off — customers book confirmed times instantly."}
+            </p>
+            <button
+              onClick={toggleRequireApproval}
+              disabled={pending}
+              className={cn(
+                "shrink-0 rounded-full px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-50",
+                requireApproval
+                  ? "bg-emerald-soft/15 text-emerald-soft"
+                  : "border border-subtle text-muted hover:bg-charcoal-700",
+              )}
+            >
+              {requireApproval ? "On" : "Off"}
             </button>
           </div>
         </Card>

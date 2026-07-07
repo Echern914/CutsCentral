@@ -224,7 +224,9 @@ export async function computeOpenSlots(
     const booked = await db.appointment.findMany({
       where: {
         staffId: input.staffId,
-        status: "BOOKED",
+        // PENDING requests hold their slot too (request-before-booking), so the
+        // picker must subtract them just like confirmed BOOKED appointments.
+        status: { in: ["BOOKED", "PENDING"] },
         startsAt: { lt: new Date(rangeEnd) },
         endsAt: { gt: new Date(rangeStart) },
         ...(input.excludeAppointmentId

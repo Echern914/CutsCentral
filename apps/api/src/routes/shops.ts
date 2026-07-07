@@ -152,6 +152,8 @@ const updateShopSchema = createShopSchema
     // "A slot just opened" auto-notify to matching waitlisters (push + email).
     // Off by default; the barber's own alert doesn't need this. See slotOpened.ts.
     slotOpenedTextsEnabled: z.boolean(),
+    // Request-before-booking: public native bookings land PENDING until approved.
+    requireBookingApproval: z.boolean(),
     notifyPhone: z.string().max(40).nullish().or(z.literal("")),
     // Transactional loyalty SMS to clients (earn/redeem confirmations). Off by
     // default; gated by client consent + quiet hours regardless. See
@@ -712,6 +714,7 @@ function serializeShop(shop: {
   takesRequests: boolean;
   waitlistEnabled: boolean;
   slotOpenedTextsEnabled: boolean;
+  requireBookingApproval: boolean;
   notifyPhone: string | null;
   loyaltyTextsEnabled: boolean;
   bookingMode: string;
@@ -750,6 +753,7 @@ function serializeShop(shop: {
     takesRequests: shop.takesRequests,
     waitlistEnabled: shop.waitlistEnabled,
     slotOpenedTextsEnabled: shop.slotOpenedTextsEnabled,
+    requireBookingApproval: shop.requireBookingApproval,
     notifyPhone: shop.notifyPhone,
     loyaltyTextsEnabled: shop.loyaltyTextsEnabled,
     bookingMode: shop.bookingMode,

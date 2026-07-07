@@ -13,6 +13,7 @@ export interface BookingShop {
   bookingBufferMin: number;
   waitlistEnabled: boolean;
   slotOpenedTextsEnabled: boolean;
+  requireBookingApproval: boolean;
 }
 
 /** Live connect status for the branded platform cards. */
@@ -57,7 +58,7 @@ export interface AgendaRow {
   clientName: string; // for a block: the reason (or "Blocked")
   serviceName: string | null;
   price: number | null;
-  status: "upcoming" | "completed" | "canceled" | "no_show" | "blocked";
+  status: "pending" | "upcoming" | "completed" | "canceled" | "no_show" | "blocked";
   // Non-null = part of a recurring series (drives the ↻ badge + cancel-scope menu).
   seriesId?: string | null;
 }
