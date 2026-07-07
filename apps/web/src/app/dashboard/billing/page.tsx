@@ -1,6 +1,8 @@
 import { BILLING } from "@chairback/config/constants";
 import { apiGet } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
+import { HideInNativeApp } from "@/components/HideInNativeApp";
+import { ShowInNativeApp } from "@/components/ShowInNativeApp";
 import { ManageBillingButton, UpgradeButton } from "./BillingActions";
 
 interface BillingStatus {
@@ -99,13 +101,17 @@ export default async function BillingPage({
                           : "Your punch cards, rewards page, and client book are free forever. Upgrade to Premium to text clients."}
                 </p>
               </div>
-              <div className="text-right">
-                <p className="font-display text-3xl text-gold">
-                  ${b.priceMonthlyUsd}
-                  <span className="text-sm text-muted">/mo</span>
-                </p>
-                <p className="text-xs text-muted">first {b.trialDays} days free</p>
-              </div>
+              {/* Price is hidden in-app: the App Store forbids showing prices
+                  or purchase CTAs for out-of-app (Stripe) billing (3.1.1). */}
+              <HideInNativeApp>
+                <div className="text-right">
+                  <p className="font-display text-3xl text-gold">
+                    ${b.priceMonthlyUsd}
+                    <span className="text-sm text-muted">/mo</span>
+                  </p>
+                  <p className="text-xs text-muted">first {b.trialDays} days free</p>
+                </div>
+              </HideInNativeApp>
             </div>
 
             {!b.compAccess && !b.hasAccess && b.billingEnabled && (
@@ -118,18 +124,32 @@ export default async function BillingPage({
 
             {/* Comped shops have everything already; no checkout CTA. */}
             {!b.compAccess && (
-              <div className="mt-5 flex flex-wrap items-center gap-3">
-                {b.billingEnabled && !b.subscribed && (
-                  <UpgradeButton
-                    label={
-                      b.hasAccess
-                        ? `Go Premium, $${b.priceMonthlyUsd}/mo`
-                        : `Upgrade to Premium, $${b.priceMonthlyUsd}/mo`
-                    }
-                  />
-                )}
-                {b.canManage && <ManageBillingButton />}
-              </div>
+              <>
+                {/* Purchase CTAs (Stripe Checkout / Customer Portal) are hidden
+                    in-app per App Store Guideline 3.1.1. Barbers manage billing
+                    in a browser at getchairback.com. */}
+                <HideInNativeApp>
+                  <div className="mt-5 flex flex-wrap items-center gap-3">
+                    {b.billingEnabled && !b.subscribed && (
+                      <UpgradeButton
+                        label={
+                          b.hasAccess
+                            ? `Go Premium, $${b.priceMonthlyUsd}/mo`
+                            : `Upgrade to Premium, $${b.priceMonthlyUsd}/mo`
+                        }
+                      />
+                    )}
+                    {b.canManage && <ManageBillingButton />}
+                  </div>
+                </HideInNativeApp>
+                <ShowInNativeApp>
+                  <p className="mt-5 rounded-2xl border border-subtle bg-charcoal-800 px-4 py-3 text-sm text-muted">
+                    Manage your plan and payment from{" "}
+                    <span className="text-offwhite">getchairback.com</span> in your
+                    web browser.
+                  </p>
+                </ShowInNativeApp>
+              </>
             )}
           </Card>
 
@@ -149,7 +169,9 @@ export default async function BillingPage({
             </Card>
             <Card className="border-gold/30 p-6">
               <p className="text-xs uppercase tracking-[0.2em] text-gold-soft">
-                {BILLING.planName} · ${BILLING.priceMonthlyUsd}/mo
+                {BILLING.planName}
+                {/* Price omitted in-app (App Store 3.1.1). */}
+                <HideInNativeApp> · ${BILLING.priceMonthlyUsd}/mo</HideInNativeApp>
               </p>
               <ul className="mt-3 flex flex-col gap-2">
                 {PREMIUM_FEATURES.map((item) => (

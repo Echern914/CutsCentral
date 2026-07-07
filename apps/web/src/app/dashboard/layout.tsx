@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { APP_NAME } from "@chairback/config/constants";
 import { getMe } from "@/lib/me";
+import { HideInNativeApp } from "@/components/HideInNativeApp";
 import { logoutAction } from "../(auth)/actions";
 import { DashboardNavLinks } from "./_components/DashboardNav";
 import { ShopSwitcher } from "./_components/ShopSwitcher";
@@ -46,7 +47,10 @@ export default async function DashboardLayout({
           </form>
         </nav>
       </header>
-      <TrialBanner />
+      {/* Hidden inside the native app: it links to Stripe billing (App Store 3.1.1). */}
+      <HideInNativeApp>
+        <TrialBanner />
+      </HideInNativeApp>
       {children}
     </div>
   );
