@@ -135,6 +135,84 @@ export async function disconnectSquareAction(): Promise<Result> {
   return done(await apiSend("POST", "/api/square/oauth/disconnect"));
 }
 
+//  New Appointment (barber-side) + Block Off Time (native booking)
+
+export interface DashSlot {
+  startsAt: string;
+  endsAt: string;
+}
+
+/** Open slots for a (staff, service) over a range - powers the Time picker. */
+export async function getDashSlotsAction(
+  staffId: string,
+  serviceId: string,
+  from: string,
+  to: string,
+): Promise<{ ok: boolean; slots?: DashSlot[]; timezone?: string; error?: string }> {
+  const qs = new URLSearchParams({ staffId, serviceId, from, to }).toString();
+  const res = await apiGet<{ timezone: string; slots: DashSlot[] }>(
+    `/api/booking/slots?${qs}`,
+  );
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, slots: res.data.slots, timezone: res.data.timezone };
+}
+
+export interface ClientOption {
+  id: string;
+  firstName: string | null;
+  lastName: string | null;
+  phone: string | null;
+}
+
+/** Search the shop's clients for the Client picker (reuses the clients list). */
+export async function searchClientsAction(
+  q: string,
+): Promise<{ ok: boolean; clients?: ClientOption[]; error?: string }> {
+  const res = await apiGet<{ clients: ClientOption[] }>(
+    `/api/dashboard/clients?q=${encodeURIComponent(q)}`,
+  );
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, clients: res.data.clients };
+}
+
+export interface CreateApptInput {
+  staffId: string;
+  serviceId: string;
+  startsAt: string;
+  clientId?: string;
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  email?: string;
+  note?: string;
+  customTime?: boolean;
+}
+
+export async function createAppointmentAction(
+  input: CreateApptInput,
+): Promise<Result> {
+  return done(await apiSend("POST", "/api/booking/appointments", input));
+}
+
+export interface BlockOffInput {
+  staffId: string;
+  startsAt: string; // ISO
+  endsAt: string; // ISO
+  reason?: string;
+}
+
+/** Block off time (native). Reuses the existing staff-exceptions endpoint. */
+export async function addBlockAction(input: BlockOffInput): Promise<Result> {
+  return done(
+    await apiSend("POST", `/api/booking/staff/${input.staffId}/exceptions`, {
+      startsAt: input.startsAt,
+      endsAt: input.endsAt,
+      isBlock: true,
+      reason: input.reason,
+    }),
+  );
+}
+
 //  Waitlist
 
 export async function setWaitlistStatusAction(

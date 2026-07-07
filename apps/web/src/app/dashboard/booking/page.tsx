@@ -49,13 +49,13 @@ export interface ServiceRow {
  */
 export interface AgendaRow {
   id: string;
-  source: "appointment" | "visit";
+  source: "appointment" | "visit" | "block";
   start: string; // ISO
   end: string | null; // ISO
-  clientName: string;
+  clientName: string; // for a block: the reason (or "Blocked")
   serviceName: string | null;
   price: number | null;
-  status: "upcoming" | "completed" | "canceled" | "no_show";
+  status: "upcoming" | "completed" | "canceled" | "no_show" | "blocked";
 }
 
 export interface AgendaResponse {

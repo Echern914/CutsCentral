@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { randomToken } from "@chairback/config";
 import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import {
@@ -8,6 +9,10 @@ import {
 } from "../engines/appointmentPromotion.js";
 import { recomputeCadence } from "../engines/cadence.js";
 import { notifyPunchEarned } from "../services/loyaltyNotify.js";
+import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
+import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
+import { effectivePriceForDate } from "../engines/pricing.js";
+import { logger } from "../logger.js";
 
 /**
  * Authenticated dashboard config for the native booking engine: the barber's
@@ -413,14 +418,14 @@ bookingDashboardRouter.get("/appointments", async (req, res) => {
  * flattens both into one row shape so the calendar renders identically for all.
  * Read-only for synced shops (we never mutate a Visit the source owns).
  */
-type AgendaStatus = "upcoming" | "completed" | "canceled" | "no_show";
+type AgendaStatus = "upcoming" | "completed" | "canceled" | "no_show" | "blocked";
 
 interface AgendaRow {
   id: string;
-  source: "appointment" | "visit";
+  source: "appointment" | "visit" | "block";
   start: string; // ISO
   end: string | null; // ISO
-  clientName: string;
+  clientName: string; // for a block: the reason (or "Blocked")
   serviceName: string | null;
   price: number | null;
   status: AgendaStatus;
@@ -526,6 +531,37 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       price: a.priceAtBooking == null ? null : Number(a.priceAtBooking),
       status: APPT_STATUS[a.status] ?? "upcoming",
     }));
+
+    // Blocked time (barber "Block Off Time") shows on the calendar too, as
+    // distinct rows so the day view reflects when the chair is unavailable.
+    const blocks = (await db.availabilityException.findMany({
+      where: {
+        isBlock: true,
+        startsAt: { gte: from, lte: to },
+        ...(staffId ? { staffId } : {}),
+      },
+      orderBy: { startsAt: "asc" },
+      take: 200,
+      select: { id: true, startsAt: true, endsAt: true, reason: true },
+    })) as unknown as {
+      id: string;
+      startsAt: Date;
+      endsAt: Date;
+      reason: string | null;
+    }[];
+    for (const b of blocks) {
+      agenda.push({
+        id: b.id,
+        source: "block",
+        start: b.startsAt.toISOString(),
+        end: b.endsAt.toISOString(),
+        clientName: b.reason || "Blocked",
+        serviceName: null,
+        price: null,
+        status: "blocked",
+      });
+    }
+    agenda.sort((a, b) => a.start.localeCompare(b.start));
   } else {
     // Synced shops (Acuity / Square / link): appointments are Visit rows. There's
     // no staff relation on Visit, so a staffId filter simply doesn't apply.
@@ -559,6 +595,251 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
     agenda,
     source: shop.bookingMode === "native" ? "appointment" : "visit",
     timezone: shop.timezone,
+  });
+});
+
+//  Create an appointment FROM THE DASHBOARD (barber-side "New Appointment")
+
+/**
+ * The barber schedules an appointment directly on their calendar. Native-only:
+ * an Appointment needs a Staff + Service, which Acuity/Square shops don't have.
+ * Mirrors the public create tx (slot lock + overlap check + client upsert), but:
+ *  - it's authenticated (the shop comes from the session, not a slug),
+ *  - `customTime` lets the barber force a time outside computed availability
+ *    (their own calendar - Acuity's "Custom Time"), while still preventing a
+ *    real double-booking via the overlap check,
+ *  - the client can be an existing one (clientId) or created inline from a name.
+ */
+const createApptSchema = z
+  .object({
+    staffId: z.string().min(1),
+    serviceId: z.string().min(1),
+    startsAt: z.coerce.date(),
+    clientId: z.string().min(1).optional(),
+    firstName: z.string().trim().max(80).optional().or(z.literal("")),
+    lastName: z.string().trim().max(80).optional().or(z.literal("")),
+    phone: z.string().trim().max(40).optional().or(z.literal("")),
+    email: z.string().trim().email().max(200).optional().or(z.literal("")),
+    note: z.string().trim().max(1000).optional().or(z.literal("")),
+    // Bypass the availability check (barber forcing a time). Overlap is still
+    // enforced so two real appointments can't collide.
+    customTime: z.boolean().optional(),
+  })
+  .strict()
+  // Either pick an existing client, or give a name to create one.
+  .refine((d) => Boolean(d.clientId) || Boolean(d.firstName?.trim()), {
+    message: "Pick a client or enter a name.",
+    path: ["clientId"],
+  });
+
+bookingDashboardRouter.post("/appointments", async (req, res) => {
+  const parsed = createApptSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const shopId = req.shop!.id;
+  // Read shop as owner (RLS: Shop has no policy) for bookingMode/timezone/bounds.
+  const shop = await prisma.shop.findUnique({
+    where: { id: shopId },
+    select: { id: true, bookingMode: true, timezone: true, bookingBufferMin: true },
+  });
+  if (!shop) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if (shop.bookingMode !== "native") {
+    // Acuity/Square/link: the appointment lives in that system, not here.
+    res.status(400).json({ error: "not_native" });
+    return;
+  }
+  const d = parsed.data;
+
+  // Validate the staff offers an active service; compute end + snapshot price.
+  const service = await prisma.service.findFirst({
+    where: { id: d.serviceId, shopId, active: true },
+    select: { id: true, durationMin: true, price: true, priceOverrides: true, name: true },
+  });
+  const offering = await prisma.serviceStaff.findFirst({
+    where: { shopId, serviceId: d.serviceId, staffId: d.staffId },
+    select: { id: true },
+  });
+  const staff = await prisma.staff.findFirst({
+    where: { id: d.staffId, shopId, active: true },
+    select: { id: true },
+  });
+  if (!service || !offering || !staff) {
+    res.status(400).json({ error: "invalid_slot" });
+    return;
+  }
+
+  const startsAt = d.startsAt;
+  const endsAt = new Date(startsAt.getTime() + service.durationMin * 60_000);
+  const effectivePrice = effectivePriceForDate(
+    service.price === null ? null : Number(service.price),
+    service.priceOverrides,
+    startsAt,
+    shop.timezone,
+  );
+
+  // Unless the barber forced a custom time, the slot must be genuinely bookable
+  // (inside hours, not blocked). Overlap is always enforced below regardless.
+  if (
+    !d.customTime &&
+    !(await isSlotBookable({ shopId, staffId: d.staffId, serviceId: d.serviceId, startsAt }))
+  ) {
+    res.status(400).json({ error: "invalid_slot" });
+    return;
+  }
+
+  const phone = toE164(d.phone);
+  if (d.phone?.trim() && !phone) {
+    res.status(400).json({ error: "invalid_phone" });
+    return;
+  }
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      // Serialize concurrent grabs on this staff's calendar, then overlap-check
+      // with the turnover buffer (same guard as the public create).
+      await tx.$executeRaw(
+        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`appt:${d.staffId}`}))`,
+      );
+      const bufferMs = Math.max(0, shop.bookingBufferMin) * 60_000;
+      const overlapStart = new Date(startsAt.getTime() - bufferMs);
+      const overlapEnd = new Date(endsAt.getTime() + bufferMs);
+      const overlap = await tx.$queryRaw<{ id: string }[]>(
+        Prisma.sql`SELECT id FROM "Appointment"
+                   WHERE "staffId" = ${d.staffId}
+                     AND "status" = 'BOOKED'
+                     AND "startsAt" < ${overlapEnd}
+                     AND "endsAt" > ${overlapStart}`,
+      );
+      if (overlap.length > 0) throw new Error("slot_taken");
+
+      // Resolve the client: an existing one, or create inline from the name.
+      let clientId = d.clientId ?? null;
+      let cFirst = d.firstName?.trim() || "";
+      let cLast = d.lastName?.trim() || null;
+      if (clientId) {
+        const existing = await tx.client.findFirst({
+          where: { id: clientId, shopId },
+          select: { id: true, firstName: true, lastName: true },
+        });
+        if (!existing) throw new Error("client_not_found");
+        cFirst = existing.firstName ?? cFirst;
+        cLast = existing.lastName ?? cLast;
+      } else {
+        const acuityClientKey = deriveAcuityClientKey({
+          phone: d.phone,
+          email: d.email,
+          firstName: cFirst,
+          lastName: cLast ?? undefined,
+        });
+        const client = await tx.client.upsert({
+          where: { shopId_acuityClientKey: { shopId, acuityClientKey } },
+          create: {
+            shopId,
+            acuityClientKey,
+            magicToken: randomToken(),
+            firstName: cFirst,
+            lastName: cLast,
+            phone,
+            email: d.email || null,
+            source: "manual",
+          },
+          update: {
+            firstName: cFirst || undefined,
+            lastName: cLast || undefined,
+            phone: phone ?? undefined,
+            email: d.email || undefined,
+          },
+          select: { id: true },
+        });
+        clientId = client.id;
+      }
+
+      const appt = await tx.appointment.create({
+        data: {
+          shopId,
+          staffId: d.staffId,
+          serviceId: d.serviceId,
+          clientId,
+          firstName: cFirst || "Client",
+          lastName: cLast,
+          phone,
+          email: d.email || null,
+          status: "BOOKED",
+          startsAt,
+          endsAt,
+          priceAtBooking: effectivePrice ?? undefined,
+          manageToken: randomToken(),
+        },
+        select: { id: true },
+      });
+      return appt;
+    });
+    res.status(201).json({ ok: true, id: result.id });
+  } catch (err) {
+    const msg = (err as Error).message;
+    if (msg === "slot_taken") {
+      res.status(409).json({ error: "slot_taken" });
+      return;
+    }
+    if (msg === "client_not_found") {
+      res.status(404).json({ error: "client_not_found" });
+      return;
+    }
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === "P2002"
+    ) {
+      res.status(409).json({ error: "slot_taken" });
+      return;
+    }
+    logger.error({ err, shopId }, "dashboard appointment create failed");
+    res.status(500).json({ error: "create_failed" });
+  }
+});
+
+// Open slots for the barber's "New Appointment" Time picker (native only). Same
+// engine as the public slots route, but authenticated + shop-from-session.
+const dashSlotsSchema = z.object({
+  staffId: z.string().min(1),
+  serviceId: z.string().min(1),
+  from: z.coerce.date(),
+  to: z.coerce.date(),
+});
+
+bookingDashboardRouter.get("/slots", async (req, res) => {
+  const parsed = dashSlotsSchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const shopId = req.shop!.id;
+  const shop = await prisma.shop.findUnique({
+    where: { id: shopId },
+    select: { bookingMode: true, timezone: true },
+  });
+  if (!shop || shop.bookingMode !== "native") {
+    res.status(400).json({ error: "not_native" });
+    return;
+  }
+  const slots = await computeOpenSlots({
+    shopId,
+    staffId: parsed.data.staffId,
+    serviceId: parsed.data.serviceId,
+    fromDate: parsed.data.from,
+    toDate: parsed.data.to,
+    now: new Date(),
+  });
+  res.json({
+    timezone: shop.timezone,
+    slots: slots.map((s) => ({
+      startsAt: s.startsAt.toISOString(),
+      endsAt: s.endsAt.toISOString(),
+    })),
   });
 });
 
