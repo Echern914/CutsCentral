@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/cn";
+import { useIsNativeApp } from "@/lib/useIsNativeApp";
 
 const LINKS = [
   { href: "/dashboard", label: "Overview" },
@@ -22,9 +23,16 @@ const LINKS = [
 /** Pill nav links with active-route highlighting. Admins get an extra Admin pill. */
 export function DashboardNavLinks({ isAdmin = false }: { isAdmin?: boolean }) {
   const pathname = usePathname();
-  const links = isAdmin
-    ? [...LINKS, { href: "/admin", label: "Admin" } as const]
+  // Inside the native app, hide the Billing pill: it leads to prices and the
+  // Stripe Checkout flow, which the App Store forbids in-app (Guideline 3.1.1).
+  // Barbers still manage billing in a browser. `null` (pre-hydration) = show.
+  const inApp = useIsNativeApp();
+  const baseLinks = inApp
+    ? LINKS.filter((l) => l.href !== "/dashboard/billing")
     : LINKS;
+  const links = isAdmin
+    ? [...baseLinks, { href: "/admin", label: "Admin" } as const]
+    : baseLinks;
   return (
     <div className="flex items-center gap-1 overflow-x-auto whitespace-nowrap">
       {links.map((l) => {
