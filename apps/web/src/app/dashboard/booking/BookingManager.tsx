@@ -115,6 +115,9 @@ export function BookingManager({
         <BookingCalendar
           initial={initialAgenda}
           initialWaitlist={initialWaitlist}
+          isNative={shop.bookingMode === "native"}
+          staff={initialStaff}
+          services={initialServices}
           toast={toast}
         />
       )}

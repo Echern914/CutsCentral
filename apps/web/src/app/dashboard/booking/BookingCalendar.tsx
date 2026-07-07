@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Card } from "@/components/ui/Card";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { cn } from "@/lib/cn";
-import type { AgendaResponse, AgendaRow, WaitlistRow } from "./page";
+import type { AgendaResponse, AgendaRow, ServiceRow, StaffRow, WaitlistRow } from "./page";
 import {
   cancelAppointmentAction,
   completeAppointmentAction,
@@ -13,6 +13,9 @@ import {
   noShowAppointmentAction,
   setWaitlistStatusAction,
 } from "./actions";
+import { AppointmentForm } from "./AppointmentForm";
+import { BlockOffForm } from "./BlockOffForm";
+import { useRouter } from "next/navigation";
 
 type Toast = (msg: string, kind?: "success" | "error") => void;
 
@@ -38,13 +41,24 @@ const DEFAULT_END_HOUR = 23; // 11 PM row shown; midnight+ bookings widen it fur
 export function BookingCalendar({
   initial,
   initialWaitlist,
+  isNative,
+  staff,
+  services,
   toast,
 }: {
   initial: AgendaResponse;
   initialWaitlist: WaitlistRow[];
+  /** Native booking = the barber can add appointments + block off time here. */
+  isNative: boolean;
+  staff: StaffRow[];
+  services: ServiceRow[];
   toast: Toast;
 }) {
   const tz = initial.timezone;
+  const router = useRouter();
+  // Which sheet is open, and the ISO instant / day it targets.
+  const [addAt, setAddAt] = useState<string | null>(null);
+  const [blockDay, setBlockDay] = useState<{ dayKey: string; hour: number } | null>(null);
 
   // ---- Shop-tz formatters (a day/hour always means the barber's local one) ----
   const partsFmt = useMemo(
@@ -219,7 +233,9 @@ export function BookingCalendar({
           if (!cell) return <div key={Math.random()} />;
           const { key, dayNum, inMonth } = cell;
           const rows = byDay.get(key) ?? [];
-          const active = rows.filter((r) => r.status !== "canceled").length;
+          const active = rows.filter(
+            (r) => r.source !== "block" && r.status !== "canceled",
+          ).length;
           const isToday = key === todayKey;
           const isSelected = key === selectedDay;
           return (
@@ -278,13 +294,55 @@ export function BookingCalendar({
               hourOf={(iso) => shopParts(iso).h}
               timeFmt={timeFmt}
               toast={toast}
+              isNative={isNative}
+              onAddAt={(hour) => setAddAt(isoForDayHour(selectedDay, hour))}
+              onBlock={() => setBlockDay({ dayKey: selectedDay, hour: 12 })}
             />
           </motion.div>
         )}
       </AnimatePresence>
       </Card>
+
+      {/* New Appointment / Block Off sheets (native only). */}
+      {isNative && addAt && (
+        <AppointmentForm
+          staff={staff}
+          services={services}
+          timezone={tz}
+          prefillISO={addAt}
+          onClose={() => setAddAt(null)}
+          onCreated={() => {
+            setAddAt(null);
+            router.refresh();
+          }}
+          toast={toast}
+        />
+      )}
+      {isNative && blockDay && (
+        <BlockOffForm
+          staff={staff}
+          dayKey={blockDay.dayKey}
+          defaultFromHour={blockDay.hour}
+          onClose={() => setBlockDay(null)}
+          onCreated={() => {
+            setBlockDay(null);
+            router.refresh();
+          }}
+          toast={toast}
+        />
+      )}
     </div>
   );
+}
+
+/**
+ * Build an ISO instant for a (YYYY-MM-DD day, hour) as a prefill. Uses the local
+ * zone (the barber is typically in the shop's zone); the appointment form then
+ * fetches the REAL open slots for that day, so this is only an initial anchor.
+ */
+function isoForDayHour(dayKey: string, hour: number): string {
+  const [y, m, d] = dayKey.split("-").map(Number);
+  return new Date(y!, m! - 1, d!, hour, 0, 0).toISOString();
 }
 
 /**
@@ -443,12 +501,18 @@ function DayPlanner({
   hourOf,
   timeFmt,
   toast,
+  isNative,
+  onAddAt,
+  onBlock,
 }: {
   rows: AgendaRow[];
   title: string;
   hourOf: (iso: string) => number;
   timeFmt: Intl.DateTimeFormat;
   toast: Toast;
+  isNative: boolean;
+  onAddAt: (hour: number) => void;
+  onBlock: () => void;
 }) {
   // Group appointments into their start hour, then render every hour in the
   // day's working window (default 8a-11p, widened to fit any early/late booking).
@@ -466,7 +530,9 @@ function DayPlanner({
   const hours: number[] = [];
   for (let h = startHour; h <= endHour; h++) hours.push(h);
 
-  const activeCount = rows.filter((r) => r.status !== "canceled").length;
+  const activeCount = rows.filter(
+    (r) => r.source !== "block" && r.status !== "canceled",
+  ).length;
 
   return (
     <div className="mt-4 border-t border-subtle pt-4">
@@ -476,6 +542,26 @@ function DayPlanner({
           {activeCount} {activeCount === 1 ? "appointment" : "appointments"}
         </span>
       </div>
+
+      {/* Barber actions (native booking only). */}
+      {isNative && (
+        <div className="mb-3 flex gap-2">
+          <button
+            type="button"
+            onClick={() => onAddAt(DEFAULT_START_HOUR)}
+            className="rounded-lg bg-gold/15 px-3 py-1.5 text-xs font-medium text-gold transition-colors hover:bg-gold/25"
+          >
+            + New appointment
+          </button>
+          <button
+            type="button"
+            onClick={onBlock}
+            className="rounded-lg border border-subtle px-3 py-1.5 text-xs font-medium text-muted transition-colors hover:text-offwhite"
+          >
+            Block off time
+          </button>
+        </div>
+      )}
 
       <motion.div
         variants={staggerContainer}
@@ -496,7 +582,23 @@ function DayPlanner({
               </div>
               <div className="min-w-0 flex-1">
                 {slot.length === 0 ? (
-                  <div className="py-1 text-xs text-muted/40">— open —</div>
+                  isNative ? (
+                    // A "+" bubble to add an appointment at this open hour.
+                    <button
+                      type="button"
+                      onClick={() => onAddAt(h)}
+                      className="group flex w-full items-center gap-2 py-1 text-xs text-muted/40 transition-colors hover:text-gold"
+                    >
+                      <span className="flex h-5 w-5 items-center justify-center rounded-full border border-subtle text-muted transition-colors group-hover:border-gold/50 group-hover:text-gold">
+                        +
+                      </span>
+                      <span className="opacity-0 transition-opacity group-hover:opacity-100">
+                        Add appointment
+                      </span>
+                    </button>
+                  ) : (
+                    <div className="py-1 text-xs text-muted/40">— open —</div>
+                  )
                 ) : (
                   <div className="flex flex-col gap-1.5">
                     {slot.map((r) => (
@@ -531,6 +633,7 @@ const STATUS_PILL: Record<AgendaRow["status"], { label: string; cls: string }> =
   completed: { label: "Done", cls: "bg-emerald-soft/15 text-emerald-soft" },
   canceled: { label: "Canceled", cls: "bg-charcoal-700 text-muted" },
   no_show: { label: "No-show", cls: "bg-danger-soft/15 text-danger-soft" },
+  blocked: { label: "Blocked", cls: "bg-charcoal-700 text-muted" },
 };
 
 function AppointmentBlock({
@@ -545,6 +648,16 @@ function AppointmentBlock({
   const [pending, start] = useTransition();
   const pill = STATUS_PILL[row.status];
   const canAct = row.source === "appointment" && row.status === "upcoming";
+
+  // Blocked-off time: a distinct, muted band (no client/service/actions).
+  if (row.source === "block") {
+    return (
+      <div className="flex items-center gap-2 rounded-lg border border-dashed border-subtle bg-charcoal-800/30 px-3 py-2 text-xs text-muted">
+        <span className="tabular-nums">{timeLabel}</span>
+        <span className="font-medium">⛔ {row.clientName || "Blocked"}</span>
+      </div>
+    );
+  }
 
   function act(fn: (id: string) => Promise<{ ok: boolean }>, label: string) {
     start(async () => {
