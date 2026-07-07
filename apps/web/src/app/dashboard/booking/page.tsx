@@ -11,6 +11,8 @@ export interface BookingShop {
   bookingLeadHours: number;
   bookingMaxDays: number;
   bookingBufferMin: number;
+  waitlistEnabled: boolean;
+  slotOpenedTextsEnabled: boolean;
 }
 
 /** Live connect status for the branded platform cards. */
