@@ -58,6 +58,8 @@ export interface AgendaRow {
   serviceName: string | null;
   price: number | null;
   status: "upcoming" | "completed" | "canceled" | "no_show" | "blocked";
+  // Non-null = part of a recurring series (drives the ↻ badge + cancel-scope menu).
+  seriesId?: string | null;
 }
 
 export interface AgendaResponse {

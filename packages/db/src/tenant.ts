@@ -137,6 +137,10 @@ type AvailabilityExceptionCreateNoShop = Omit<
   Prisma.AvailabilityExceptionUncheckedCreateInput,
   "shopId"
 >;
+type RecurringSeriesCreateNoShop = Omit<
+  Prisma.RecurringSeriesUncheckedCreateInput,
+  "shopId"
+>;
 
 export function forShop(shopId: string) {
   return {
@@ -723,6 +727,50 @@ export function forShop(shopId: string) {
       update: (args: Prisma.AppointmentUpdateArgs) =>
         runWithShop(shopId, (tx) =>
           tx.appointment.update({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+    },
+
+    recurringSeries: {
+      findMany: (args: Prisma.RecurringSeriesFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.recurringSeries.findMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      findFirst: (args: Prisma.RecurringSeriesFindFirstArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.recurringSeries.findFirst({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      count: (args: Prisma.RecurringSeriesCountArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.recurringSeries.count({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      create: (args: { data: RecurringSeriesCreateNoShop }) =>
+        runWithShop(shopId, (tx) =>
+          tx.recurringSeries.create({
+            data: stamp(args.data, shopId) as Prisma.RecurringSeriesUncheckedCreateInput,
+          }),
+        ),
+      update: (args: Prisma.RecurringSeriesUpdateArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.recurringSeries.update({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      updateMany: (args: Prisma.RecurringSeriesUpdateManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.recurringSeries.updateMany({
             ...args,
             where: scopeWhere(args.where, shopId),
           }),

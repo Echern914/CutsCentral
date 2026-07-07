@@ -5,13 +5,20 @@ import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import {
   cancelAppointment,
+  cancelSeries,
   promoteOneAppointmentInTx,
+  type CancelSeriesScope,
 } from "../engines/appointmentPromotion.js";
 import { recomputeCadence } from "../engines/cadence.js";
 import { notifyPunchEarned } from "../services/loyaltyNotify.js";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import { effectivePriceForDate } from "../engines/pricing.js";
+import {
+  materializeSeries,
+  type RecurrencePattern,
+} from "../engines/recurringSeries.js";
+import { zonedDateParts, localMinutesOfDay } from "@chairback/config";
 import { logger } from "../logger.js";
 
 /**
@@ -429,6 +436,9 @@ interface AgendaRow {
   serviceName: string | null;
   price: number | null;
   status: AgendaStatus;
+  // Non-null when this occurrence is part of a recurring series (native only).
+  // Drives the ↻ badge + the "cancel this / future / all" menu on the calendar.
+  seriesId: string | null;
 }
 
 const agendaQuerySchema = z.object({
@@ -468,6 +478,7 @@ type ApptAgendaRow = {
   firstName: string;
   lastName: string | null;
   priceAtBooking: Prisma.Decimal | null;
+  seriesId: string | null;
   service: { name: string } | null;
 };
 type VisitAgendaRow = {
@@ -518,6 +529,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         firstName: true,
         lastName: true,
         priceAtBooking: true,
+        seriesId: true,
         service: { select: { name: true } },
       },
     })) as unknown as ApptAgendaRow[];
@@ -530,6 +542,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       serviceName: a.service?.name ?? null,
       price: a.priceAtBooking == null ? null : Number(a.priceAtBooking),
       status: APPT_STATUS[a.status] ?? "upcoming",
+      seriesId: a.seriesId,
     }));
 
     // Blocked time (barber "Block Off Time") shows on the calendar too, as
@@ -559,6 +572,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         serviceName: null,
         price: null,
         status: "blocked",
+        seriesId: null,
       });
     }
     agenda.sort((a, b) => a.start.localeCompare(b.start));
@@ -588,6 +602,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       serviceName: v.serviceName ?? null,
       price: v.price == null ? null : Number(v.price),
       status: VISIT_STATUS[v.status] ?? "upcoming",
+      seriesId: null,
     }));
   }
 
@@ -624,6 +639,21 @@ const createApptSchema = z
     // Bypass the availability check (barber forcing a time). Overlap is still
     // enforced so two real appointments can't collide.
     customTime: z.boolean().optional(),
+    // Optional "repeats every N weeks" rule. When present, the appointment above
+    // is occurrence 0 (its startsAt sets the weekday + time-of-day), and N-1 more
+    // are generated. Exactly one of count / until. Capped so a bad rule can't
+    // generate a runaway series.
+    recurrence: z
+      .object({
+        interval: z.number().int().min(1).max(8),
+        count: z.number().int().min(2).max(52).optional(),
+        until: z.coerce.date().optional(),
+      })
+      .strict()
+      .refine((r) => (r.count == null) !== (r.until == null), {
+        message: "Set exactly one of count or until.",
+      })
+      .optional(),
   })
   .strict()
   // Either pick an existing client, or give a name to create one.
@@ -631,6 +661,66 @@ const createApptSchema = z
     message: "Pick a client or enter a name.",
     path: ["clientId"],
   });
+
+/**
+ * Resolve the client for a recurring series ONCE (before generating occurrences)
+ * - either an existing client, or an inline upsert from the typed name. Mirrors
+ * the inline resolution in the single-create tx but standalone. Returns the id +
+ * the name snapshot to copy onto each occurrence, or null if a given clientId
+ * doesn't belong to the shop.
+ */
+async function resolveSeriesClient(input: {
+  shopId: string;
+  clientId: string | null;
+  firstName: string;
+  lastName: string | null;
+  phone: string | null;
+  email: string | null;
+}): Promise<{ clientId: string; firstName: string; lastName: string | null } | null> {
+  if (input.clientId) {
+    const existing = await prisma.client.findFirst({
+      where: { id: input.clientId, shopId: input.shopId },
+      select: { id: true, firstName: true, lastName: true },
+    });
+    if (!existing) return null;
+    return {
+      clientId: existing.id,
+      firstName: existing.firstName || input.firstName || "Client",
+      lastName: existing.lastName ?? input.lastName,
+    };
+  }
+  const acuityClientKey = deriveAcuityClientKey({
+    phone: input.phone ?? undefined,
+    email: input.email ?? undefined,
+    firstName: input.firstName,
+    lastName: input.lastName ?? undefined,
+  });
+  const client = await prisma.client.upsert({
+    where: { shopId_acuityClientKey: { shopId: input.shopId, acuityClientKey } },
+    create: {
+      shopId: input.shopId,
+      acuityClientKey,
+      magicToken: randomToken(),
+      firstName: input.firstName,
+      lastName: input.lastName,
+      phone: input.phone,
+      email: input.email,
+      source: "manual",
+    },
+    update: {
+      firstName: input.firstName || undefined,
+      lastName: input.lastName || undefined,
+      phone: input.phone ?? undefined,
+      email: input.email || undefined,
+    },
+    select: { id: true },
+  });
+  return {
+    clientId: client.id,
+    firstName: input.firstName || "Client",
+    lastName: input.lastName,
+  };
+}
 
 bookingDashboardRouter.post("/appointments", async (req, res) => {
   const parsed = createApptSchema.safeParse(req.body ?? {});
@@ -699,6 +789,66 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
   }
 
   try {
+    // RECURRING: build the whole series (occurrence 0 included). The client is
+    // upserted once, then materializeSeries generates each occurrence in its own
+    // tx (per-occurrence overlap guard, skip-and-report). customTime skips the
+    // per-occurrence bounds/availability check for the barber-forced case.
+    if (d.recurrence) {
+      const resolved = await resolveSeriesClient({
+        shopId,
+        clientId: d.clientId ?? null,
+        firstName: d.firstName?.trim() || "",
+        lastName: d.lastName?.trim() || null,
+        phone,
+        email: d.email || null,
+      });
+      if (!resolved) {
+        res.status(404).json({ error: "client_not_found" });
+        return;
+      }
+      const parts = zonedDateParts(startsAt, shop.timezone);
+      const startMin = localMinutesOfDay(startsAt, shop.timezone);
+      const pattern: RecurrencePattern = {
+        interval: d.recurrence.interval,
+        weekday: parts.weekday,
+        startMin,
+        count: d.recurrence.count,
+        untilDate: d.recurrence.until,
+      };
+      const series = await materializeSeries({
+        shopId,
+        staffId: d.staffId,
+        serviceId: d.serviceId,
+        clientId: resolved.clientId,
+        firstName: resolved.firstName,
+        lastName: resolved.lastName,
+        phone,
+        email: d.email || null,
+        durationMin: service.durationMin,
+        basePrice: service.price === null ? null : Number(service.price),
+        priceOverrides: service.priceOverrides,
+        timezone: shop.timezone,
+        bookingBufferMin: shop.bookingBufferMin,
+        // customTime bypasses the per-occurrence availability gate (barber force).
+        checkAvailability: !d.customTime,
+        pattern,
+        anchor: startsAt,
+      });
+      res.status(201).json({
+        ok: true,
+        id: series.booked[0]?.appointmentId ?? null,
+        series: {
+          id: series.seriesId,
+          booked: series.booked.length,
+          skipped: series.skipped.map((s) => ({
+            startsAt: s.startsAt.toISOString(),
+            reason: s.reason,
+          })),
+        },
+      });
+      return;
+    }
+
     const result = await prisma.$transaction(async (tx) => {
       // Serialize concurrent grabs on this staff's calendar, then overlap-check
       // with the turnover buffer (same guard as the public create).
@@ -851,6 +1001,39 @@ bookingDashboardRouter.post("/appointments/:id/cancel", async (req, res) => {
 bookingDashboardRouter.post("/appointments/:id/no-show", async (req, res) => {
   const ok = await cancelAppointment(req.shop!.id, req.params.id!, "NO_SHOW");
   res.status(ok ? 200 : 404).json({ ok });
+});
+
+// Cancel a recurring series by scope: "this" one occurrence, "future" (this and
+// all later), or "all" (every still-booked occurrence). "this"/"future" need the
+// anchor occurrence's id. Each canceled row refunds/claws-back on its own.
+const cancelSeriesSchema = z
+  .object({
+    scope: z.enum(["this", "future", "all"]),
+    fromAppointmentId: z.string().min(1).optional(),
+  })
+  .strict()
+  .refine((d) => d.scope === "all" || Boolean(d.fromAppointmentId), {
+    message: "fromAppointmentId is required for 'this' and 'future'.",
+    path: ["fromAppointmentId"],
+  });
+
+bookingDashboardRouter.post("/series/:id/cancel", async (req, res) => {
+  const parsed = cancelSeriesSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const result = await cancelSeries(
+    req.shop!.id,
+    req.params.id!,
+    parsed.data.scope as CancelSeriesScope,
+    parsed.data.fromAppointmentId,
+  );
+  if (!result) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.status(200).json({ ok: true, ...result });
 });
 
 // Mark an appointment done NOW (earn the punch while the client is still in the
