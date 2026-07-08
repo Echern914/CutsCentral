@@ -39,19 +39,23 @@ export default function SmsConsentPage() {
     >
       <H2>Where consent is collected</H2>
       <P>
-        A client opts in when they give their mobile number to their shop and
-        affirmatively agree to receive texts — for example when booking an
-        appointment or enrolling in the shop’s rewards program. The opt-in
-        checkbox is <Strong>unchecked by default</Strong> and the client must
-        check it themselves. Consent to receive texts is never a condition of
-        booking an appointment or buying any product or service.
+        A client opts in on their shop&rsquo;s public booking page at{" "}
+        <Strong>getchairback.com/book/&lt;shop&gt;</Strong>. In the{" "}
+        <Strong>&ldquo;Your details&rdquo;</Strong> step — the same screen where
+        the client types their name and mobile number to finish booking — the
+        consent checkbox below appears directly beneath the phone-number field.
+        The checkbox is <Strong>unchecked by default</Strong> and the client
+        must check it themselves; the timestamp and source of consent are
+        stored. Consent to receive texts is never a condition of booking an
+        appointment or buying any product or service — the booking completes
+        either way.
       </P>
 
       <H2>The opt-in a client sees</H2>
       <P>
-        This is a visual sample of the consent control as it appears at the
-        point of collection (shown disabled here — this page documents the flow
-        and does not collect consent):
+        This is the exact consent control as it appears at the point of
+        collection (shown disabled here — this page documents the flow and does
+        not collect consent):
       </P>
       <div className="mt-4 rounded-xl border border-subtle bg-charcoal-700 p-5">
         <label className="flex items-start gap-3">
@@ -63,8 +67,8 @@ export default function SmsConsentPage() {
           />
           <span className="text-sm leading-relaxed text-offwhite/90">
             Text me appointment confirmations, reminders, and rewards updates
-            from <Strong>[Shop Name]</Strong> sent via {APP_NAME} (a few messages
-            per visit). Msg &amp; data rates may apply. Reply <Strong>HELP</Strong>{" "}
+            from <Strong>[Shop Name]</Strong> via {APP_NAME} (a few messages per
+            visit). Msg &amp; data rates may apply. Reply <Strong>HELP</Strong>{" "}
             for help, <Strong>STOP</Strong> to opt out. Consent is not a condition
             of purchase. See our <A href="/sms">SMS Terms</A> and{" "}
             <A href="/privacy">Privacy Policy</A>.
@@ -74,7 +78,8 @@ export default function SmsConsentPage() {
       <P>
         <em>
           [Shop Name] is replaced with the actual name of the barbershop or
-          salon collecting consent.
+          salon collecting consent — every message a client receives names that
+          same shop.
         </em>
       </P>
 
@@ -100,13 +105,32 @@ export default function SmsConsentPage() {
       <H2>Sample messages</H2>
       <Notice>
         <P>
-          <Strong>Reminder:</Strong> Hi Jordan, it’s been a few weeks since your
-          last cut at Drick Cuttin Up. Ready to book your next one? [booking
-          link] Reply STOP to opt out.
+          <Strong>Booking confirmation:</Strong> Hi Marcus, your Haircut at
+          Drick&rsquo;s Barbershop with Drick is booked for Sat, Jun 28 at 2:30
+          PM. Need to change it? https://getchairback.com/book/manage/abc123
+          Reply STOP to opt out.
         </P>
         <P>
-          <Strong>Rewards:</Strong> Nice — you’ve earned a free cut at Drick
-          Cuttin Up! Show this text on your next visit. Reply STOP to opt out.
+          <Strong>Appointment reminder:</Strong> Reminder, Marcus: your Haircut
+          at Drick&rsquo;s Barbershop is Sat, Jun 28 at 2:30 PM. See you then!
+          Manage: https://getchairback.com/book/manage/abc123 Reply STOP to opt
+          out.
+        </P>
+        <P>
+          <Strong>Rewards earned:</Strong> Hey Marcus, you just earned 2 punches
+          at Drick&rsquo;s Barbershop! You&rsquo;re at 6 punches. See your
+          rewards: https://getchairback.com/r/abc123 Reply STOP to opt out.
+        </P>
+        <P>
+          <Strong>Reward redeemed:</Strong> Hey Marcus, you just redeemed a Free
+          Haircut at Drick&rsquo;s Barbershop! Enjoy. You have 2 punches left.
+          Your rewards: https://getchairback.com/r/abc123 Reply STOP to opt out.
+        </P>
+        <P>
+          <Strong>Rebooking reminder:</Strong> Hey Marcus, it&rsquo;s been a
+          while since your last cut at Drick&rsquo;s Barbershop! Book your next
+          one: https://getchairback.com/book/dricks &bull; Your rewards:
+          https://getchairback.com/r/abc123 Reply STOP to opt out.
         </P>
       </Notice>
 
