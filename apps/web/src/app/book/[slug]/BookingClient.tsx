@@ -3,6 +3,7 @@
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { BackToDashboard } from "@/components/BackToDashboard";
+import { useSignalNativeReady } from "@/lib/nativeReady";
 import type { BookShopData } from "./page";
 import { bookAction, getSlotsAction, type SlotsResult } from "./actions";
 import { PaymentStep } from "./PaymentStep";
@@ -15,6 +16,10 @@ import { WaitlistForm } from "./WaitlistForm";
  * so we can link the customer to cancel/reschedule. Accent-themed to the shop.
  */
 export function BookingClient({ data }: { data: BookShopData }) {
+  // Clear the native app's WebView spinner (reachable from the shop page's Book
+  // CTA inside the app; the shell may be waiting on this ready signal).
+  useSignalNativeReady();
+
   const accent = data.shop.accentColor || "#D4AF37";
   const tz = data.shop.timezone;
 

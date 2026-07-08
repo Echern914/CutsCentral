@@ -44,11 +44,23 @@ const LOCK_VIEWPORT = `
 true;
 `;
 
+/** Compare URLs ignoring query/hash/trailing-slash differences. */
+function normalizeUrl(u: string): string {
+  return u.replace(/[?#].*$/, "").replace(/\/+$/, "");
+}
+
 /**
  * `awaitsReady`: when true (the rewards page), the spinner clears ONLY on the
  * page's "cb:ready" postMessage - not on onLoadEnd, which fires on the streamed
  * loading shell. When false (e.g. the dashboard, which doesn't emit the
  * handshake), onLoadEnd clears it as usual.
+ *
+ * That trust extends ONLY to the original source page. When the user NAVIGATES
+ * inside the WebView (a link to the shop page, an external booking site), the
+ * new page may never post cb:ready - so off-source loads clear on onLoadEnd,
+ * and every navigation re-arms the watchdog. Without both, tapping any link on
+ * an awaitsReady page stranded the user on a spinner with no timeout (the
+ * "More from {shop}" bug).
  */
 export function AppWebView({
   awaitsReady = false,
@@ -59,24 +71,44 @@ export function AppWebView({
   const [loading, setLoading] = useState(true);
   const [key, setKey] = useState(0); // bump to force a fresh WebView on retry
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The URL the pending watchdog is guarding (null = none pending). A genuine
+  // navigation (different URL) re-arms; repeated onLoadStarts from one streamed
+  // page match this and do NOT keep pushing the deadline out.
+  const guarding = useRef<string | null>(null);
 
-  // Arm the watchdog ONCE per load attempt (keyed by `key`), not per onLoadStart
-  // - a streaming Next page emits repeated starts that would otherwise keep
-  // pushing the deadline out forever. If real content never signals ready within
-  // the timeout, fall to the Retry screen instead of an eternal spinner.
+  const sourceUri =
+    typeof props.source === "object" && props.source !== null && "uri" in props.source
+      ? ((props.source as { uri?: string }).uri ?? null)
+      : null;
+
+  function armWatchdog(url: string) {
+    guarding.current = url;
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setErrored(true), LOAD_TIMEOUT_MS);
+  }
+
+  // Arm the watchdog for the initial load of each attempt (keyed by `key`). If
+  // real content never signals ready within the timeout, fall to the Retry
+  // screen instead of an eternal spinner.
   useEffect(() => {
     if (errored) return;
     setLoading(true);
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => setErrored(true), LOAD_TIMEOUT_MS);
+    armWatchdog(sourceUri ?? "");
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, errored]);
 
   function clearLoading() {
     setLoading(false);
+    guarding.current = null;
     if (timer.current) clearTimeout(timer.current);
+  }
+
+  /** Is this the page we were originally asked to load (the handshake page)? */
+  function isSourcePage(url: string): boolean {
+    return sourceUri !== null && normalizeUrl(url) === normalizeUrl(sourceUri);
   }
 
   function retry() {
@@ -112,13 +144,22 @@ export function AppWebView({
         overScrollMode="never"
         textInteractionEnabled
         // We manage the loading overlay ourselves so a stuck load can time out.
-        onLoadStart={() => setLoading(true)}
-        // onLoadEnd clears the spinner ONLY for pages that don't emit the ready
-        // handshake (awaitsReady=false). For the rewards page (awaitsReady=true)
-        // onLoadEnd fires on the streamed loading.tsx shell while the real UI is
-        // still rendering, so we ignore it and wait for "cb:ready" instead.
-        onLoadEnd={() => {
-          if (!awaitsReady) clearLoading();
+        // A genuine navigation (different URL than the guarded one, or nothing
+        // pending because the last load settled) re-arms the watchdog so a link
+        // tap can never hang without a timeout.
+        onLoadStart={(e) => {
+          setLoading(true);
+          const url = e.nativeEvent.url;
+          if (guarding.current === null || url !== guarding.current) {
+            armWatchdog(url);
+          }
+        }}
+        // onLoadEnd clears the spinner EXCEPT on the original awaitsReady page,
+        // where it fires on the streamed loading.tsx shell while the real UI is
+        // still rendering - there we wait for "cb:ready" instead. Off-source
+        // pages (in-webview navigations, external sites) clear here.
+        onLoadEnd={(e) => {
+          if (!awaitsReady || !isSourcePage(e.nativeEvent.url)) clearLoading();
         }}
         // The page posts "cb:ready" when its REAL content mounts - the reliable
         // signal that we can hide the spinner. Chain any caller-provided onMessage.

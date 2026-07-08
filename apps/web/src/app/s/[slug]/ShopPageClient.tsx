@@ -16,6 +16,7 @@ import {
   type PageThemeKey,
 } from "@chairback/config/constants";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
+import { useSignalNativeReady } from "@/lib/nativeReady";
 import { BackToDashboard } from "@/components/BackToDashboard";
 import { RequestForm } from "./RequestForm";
 import { ShopWaitlistForm } from "./ShopWaitlistForm";
@@ -40,6 +41,10 @@ export function ShopPageClient({
   data: ShopPageData;
   preview?: boolean;
 }) {
+  // Clear the native app's WebView spinner (reachable from the rewards page via
+  // "More from {shop}"; without this the shell waits for a ready signal forever).
+  useSignalNativeReady();
+
   const theme =
     PAGE_THEMES[(data.theme as PageThemeKey) in PAGE_THEMES ? (data.theme as PageThemeKey) : "classic"];
   const accent = data.accentColor || theme.accent;
