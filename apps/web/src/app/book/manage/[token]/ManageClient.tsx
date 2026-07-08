@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
+import { useSignalNativeReady } from "@/lib/nativeReady";
 import type { ManageData } from "./page";
 import { cancelBookingAction } from "./actions";
 
@@ -18,6 +19,10 @@ export function ManageClient({
   token: string;
   data: ManageData;
 }) {
+  // Clear the native app's WebView spinner (reachable from a booking
+  // confirmation link opened inside the app).
+  useSignalNativeReady();
+
   const [canceled, setCanceled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();

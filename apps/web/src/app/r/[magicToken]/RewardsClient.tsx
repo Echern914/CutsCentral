@@ -3,6 +3,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { motion } from "framer-motion";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
+import { useSignalNativeReady } from "@/lib/nativeReady";
 import { CountUp } from "@/components/motion/CountUp";
 import { PunchGrid } from "@/components/rewards/PunchGrid";
 import { RebookCountdown } from "@/components/rewards/RebookCountdown";
@@ -89,18 +90,9 @@ export function RewardsClient({
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
-  // Tell the native iOS shell (react-native-webview) that the REAL rewards UI has
-  // mounted - NOT the streamed loading.tsx shell. The app clears its loading
-  // spinner only on this message; without it, the WebView's onLoadEnd fires on
-  // the loading shell and the app would believe loading finished while the page
-  // is still rendering, stranding the user on a spinner. Harmless in a normal
-  // browser (ReactNativeWebView is undefined there).
-  useEffect(() => {
-    const w = window as unknown as {
-      ReactNativeWebView?: { postMessage: (m: string) => void };
-    };
-    w.ReactNativeWebView?.postMessage("cb:ready");
-  }, []);
+  // Tell the native iOS shell the REAL rewards UI has mounted - NOT the streamed
+  // loading.tsx shell (see the hook for why every public page must send this).
+  useSignalNativeReady();
 
   const surface = surfaceStyle(t);
 
