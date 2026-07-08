@@ -153,8 +153,14 @@ export async function computeOpenSlots(
   });
   if (!staff) return [];
 
-  // Service length + any chosen add-ons (a longer appointment needs more room).
-  const duration = service.durationMin + Math.max(0, input.extraDurationMin ?? 0);
+  // The slot GRID steps by the service length (the start times the picker
+  // offers); chosen add-ons extend how much room the appointment needs, NOT
+  // which start times exist. The customer picks a slot from the service grid
+  // FIRST and add-ons in the details step after - re-stepping the grid by the
+  // extended total would reject most already-offered starts (e.g. a 30-min
+  // service + 15-min add-on would only accept :00/:45 starts).
+  const baseDuration = service.durationMin;
+  const duration = baseDuration + Math.max(0, input.extraDurationMin ?? 0);
   const buffer = Math.max(0, shop.bookingBufferMin);
 
   // Bounds: earliest = now + lead; latest = now + maxDays (and never past toDate).
@@ -250,22 +256,31 @@ export async function computeOpenSlots(
     }
   }
 
-  // free = windows - blocks, clipped to [earliest, rangeEnd].
+  // free = windows - blocks, clipped to [max(earliest, rangeStart), rangeEnd].
+  // The window walk starts a day BEFORE rangeStart (tz-straddle slack), so the
+  // lower clip must honor the caller's fromDate too - clipping only to
+  // `earliest` (now + lead) leaked the day-before's windows into a FUTURE-dated
+  // query (e.g. asking for tomorrow returned today's remaining slots, anchored
+  // at odd now-based minutes). The public page queries from=now (unaffected);
+  // the barber's Time picker for a future day was the visible victim.
   const free = clipRanges(
     subtractRanges(windows, blocks),
-    earliest,
+    Math.max(earliest, rangeStart),
     rangeEnd,
   );
 
-  // Slice each free window into service-duration steps; require the buffer to
-  // also fit after the slot so back-to-back bookings honor turnover.
+  // Slice each free window into SERVICE-duration steps (the grid the picker
+  // shows); require the full extended span + buffer to also fit after the slot
+  // so add-ons and turnover are honored. With no add-ons this is identical to
+  // the original step/tail math. endsAt reflects the real (extended) end.
   const slots: Slot[] = [];
-  const stepMs = duration * MS_PER_MIN;
+  const stepMs = baseDuration * MS_PER_MIN;
+  const spanMs = duration * MS_PER_MIN;
   const tailMs = (duration + buffer) * MS_PER_MIN;
   for (const w of free) {
     let t = w.start;
     while (t + tailMs <= w.end) {
-      slots.push({ startsAt: new Date(t), endsAt: new Date(t + stepMs) });
+      slots.push({ startsAt: new Date(t), endsAt: new Date(t + spanMs) });
       t += stepMs;
     }
   }

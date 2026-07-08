@@ -14,6 +14,7 @@ import { createApp } from "../app.js";
 const app = createApp();
 const password = "supersecret123";
 let cookie: string;
+let slug: string;
 let staffId: string;
 let serviceId: string;
 let otherServiceId: string;
@@ -48,6 +49,20 @@ beforeAll(async () => {
     .set("Cookie", cookie)
     .send({ name: "Color", durationMin: 60, price: 80, staffIds: [staffId] });
   otherServiceId = other.body.id;
+  // Availability 09:00-17:00 every day (shop tz = UTC) + the public slug, so the
+  // PUBLIC create path (which runs the real isSlotBookable gate, unlike the
+  // barber's customTime path) can be exercised with add-ons.
+  const rules = [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({
+    weekday,
+    startMin: 9 * 60,
+    endMin: 17 * 60,
+  }));
+  await request(app)
+    .put(`/api/booking/staff/${staffId}/availability`)
+    .set("Cookie", cookie)
+    .send({ rules });
+  const me = await request(app).get("/api/shops/me").set("Cookie", cookie);
+  slug = me.body.slug;
 });
 
 afterAll(async () => {
@@ -147,5 +162,47 @@ describe("booking with add-ons", () => {
     // Color is 60 min; the Haircut-scoped add-on must NOT apply.
     expect(appt!.endsAt.getTime() - appt!.startsAt.getTime()).toBe(60 * 60 * 1000);
     expect((appt!.addOns as unknown as unknown[]).length).toBe(0);
+  });
+});
+
+describe("public booking with add-ons (real availability gate)", () => {
+  it("accepts a SERVICE-grid slot with an add-on (grid steps by service, not total)", async () => {
+    // 30-min service + 15-min add-on at 10:00: 10:00 is on the 30-min grid the
+    // picker offered but NOT on a 45-min grid — the regression that motivated
+    // stepping by baseDuration. The extended 45-min span fits 09:00-17:00 fine.
+    const addOn = await createAddOn({ name: "Wash", durationMin: 15, price: 12 });
+    const res = await request(app)
+      .post(`/api/book/${slug}`)
+      .send({
+        staffId,
+        serviceId,
+        startsAt: tomorrowAt(10),
+        firstName: "Grid",
+        phone: "(302) 555-0421",
+        addOnIds: [addOn.body.id],
+      });
+    expect(res.status).toBe(201);
+    const appt = await prisma.appointment.findFirst({ where: { firstName: "Grid" } });
+    expect(appt!.endsAt.getTime() - appt!.startsAt.getTime()).toBe(45 * 60 * 1000);
+    expect(Number(appt!.priceAtBooking)).toBe(47); // 35 + 12
+    expect((appt!.addOns as unknown as { name: string }[])[0]!.name).toBe("Wash");
+  });
+
+  it("rejects when the add-on pushes the appointment past closing", async () => {
+    // 16:30 fits the bare 30-min service ([16:30,17:00]) but +15 add-on needs
+    // until 17:15 — past the 17:00 close → invalid_slot, not a silent overrun.
+    const addOn = await createAddOn({ name: "Long extra", durationMin: 15, price: 5 });
+    const res = await request(app)
+      .post(`/api/book/${slug}`)
+      .send({
+        staffId,
+        serviceId,
+        startsAt: new Date(new Date(tomorrowAt(16)).getTime() + 30 * 60 * 1000).toISOString(),
+        firstName: "Overflow",
+        phone: "(302) 555-0422",
+        addOnIds: [addOn.body.id],
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_slot");
   });
 });

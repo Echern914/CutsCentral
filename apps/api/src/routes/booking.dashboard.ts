@@ -960,12 +960,15 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
       const bufferMs = Math.max(0, shop.bookingBufferMin) * 60_000;
       const overlapStart = new Date(startsAt.getTime() - bufferMs);
       const overlapEnd = new Date(endsAt.getTime() + bufferMs);
+      // ISO + ::timestamp (not Date params): $queryRaw serializes a JS Date in
+      // the PROCESS timezone, silently shifting the comparison against the
+      // naive-UTC column on non-UTC machines. See the public create guard.
       const overlap = await tx.$queryRaw<{ id: string }[]>(
         Prisma.sql`SELECT id FROM "Appointment"
                    WHERE "staffId" = ${d.staffId}
                      AND "status" IN ('BOOKED', 'PENDING')
-                     AND "startsAt" < ${overlapEnd}
-                     AND "endsAt" > ${overlapStart}`,
+                     AND "startsAt" < ${overlapEnd.toISOString()}::timestamp
+                     AND "endsAt" > ${overlapStart.toISOString()}::timestamp`,
       );
       if (overlap.length > 0) throw new Error("slot_taken");
 
@@ -1149,13 +1152,14 @@ bookingDashboardRouter.post("/appointments/:id/approve", async (req, res) => {
       const bufferMs = Math.max(0, shop.bookingBufferMin) * 60_000;
       const overlapStart = new Date(appt.startsAt.getTime() - bufferMs);
       const overlapEnd = new Date(appt.endsAt.getTime() + bufferMs);
+      // ISO + ::timestamp (not Date params) - see the create guard's comment.
       const overlap = await tx.$queryRaw<{ id: string }[]>(
         Prisma.sql`SELECT id FROM "Appointment"
                    WHERE "staffId" = ${appt.staffId}
                      AND "status" = 'BOOKED'
                      AND "id" <> ${appt.id}
-                     AND "startsAt" < ${overlapEnd}
-                     AND "endsAt" > ${overlapStart}`,
+                     AND "startsAt" < ${overlapEnd.toISOString()}::timestamp
+                     AND "endsAt" > ${overlapStart.toISOString()}::timestamp`,
       );
       if (overlap.length > 0) throw new Error("slot_taken");
 

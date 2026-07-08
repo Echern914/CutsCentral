@@ -206,6 +206,33 @@ describe("request-before-booking", () => {
     expect(sent.length).toBe(0); // PENDING is not reminded
   });
 
+  it("a PENDING request with ADD-ONS holds the extended span (#68 x #69)", async () => {
+    // Cross-feature: approval shop + a 15-min add-on. The request lands PENDING
+    // with the EXTENDED endsAt + snapshot, and the hold blocks a second booking
+    // inside the extension (10:30 fits the bare 30-min service but collides
+    // with the 45-min extended hold).
+    const addOn = await request(app)
+      .post("/api/booking/addons")
+      .set("Cookie", cookie)
+      .send({ name: "Beard trim", durationMin: 15, price: 10 });
+    expect(addOn.status).toBe(201);
+
+    const at = futureAtHour(1, 10);
+    const first = await book(at, "Extended Hold", { addOnIds: [addOn.body.id] });
+    expect(first.status).toBe(201);
+    expect(first.body.pending).toBe(true);
+    const appt = await prisma.appointment.findFirst({ where: { firstName: "Extended Hold" } });
+    expect(appt?.status).toBe("PENDING");
+    expect(appt!.endsAt.getTime() - appt!.startsAt.getTime()).toBe(45 * 60 * 1000);
+    expect((appt!.addOns as unknown as { name: string }[])[0]!.name).toBe("Beard trim");
+
+    // 10:30 collides with the extended [10:00, 10:45) hold -> 409.
+    const inside = new Date(at.getTime() + 30 * 60 * 1000);
+    const second = await book(inside, "Collider");
+    expect(second.status).toBe(409);
+    expect(second.body.error).toBe("slot_taken");
+  });
+
   it("promotion SKIPS a past PENDING row (no Visit, no punch)", async () => {
     await book(futureAtHour(1, 16), "Pending Promote");
     const appt = await prisma.appointment.findFirst({ where: { firstName: "Pending Promote" } });

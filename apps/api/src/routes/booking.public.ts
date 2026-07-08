@@ -324,12 +324,18 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
       const bufferMs = Math.max(0, shop.bookingBufferMin) * 60_000;
       const overlapStart = new Date(startsAt.getTime() - bufferMs);
       const overlapEnd = new Date(endsAt.getTime() + bufferMs);
+      // Timestamps as UTC ISO text + ::timestamp cast, NOT raw Date params:
+      // $queryRaw serializes a JS Date in the PROCESS timezone, which shifts the
+      // comparison against the naive-UTC column on any non-UTC machine (the
+      // overlap silently never matched locally; prod only worked because
+      // Railway+Supabase run UTC). toISOString() is always UTC and the
+      // ::timestamp cast drops the zone suffix, so this is deterministic.
       const overlap = await tx.$queryRaw<{ id: string }[]>(
         Prisma.sql`SELECT id FROM "Appointment"
                    WHERE "staffId" = ${d.staffId}
                      AND "status" IN ('BOOKED', 'PENDING')
-                     AND "startsAt" < ${overlapEnd}
-                     AND "endsAt" > ${overlapStart}`,
+                     AND "startsAt" < ${overlapEnd.toISOString()}::timestamp
+                     AND "endsAt" > ${overlapStart.toISOString()}::timestamp`,
       );
       if (overlap.length > 0) {
         throw new SlotTakenError();
@@ -640,13 +646,14 @@ bookingPublicRouter.post(
         const bufferMs = Math.max(0, appt.shop.bookingBufferMin) * 60_000;
         const overlapStart = new Date(startsAt.getTime() - bufferMs);
         const overlapEnd = new Date(endsAt.getTime() + bufferMs);
+        // ISO + ::timestamp (not Date params) - see the create guard's comment.
         const overlap = await tx.$queryRaw<{ id: string }[]>(
           Prisma.sql`SELECT id FROM "Appointment"
                      WHERE "staffId" = ${appt.staffId}
                        AND "status" IN ('BOOKED', 'PENDING')
                        AND "id" <> ${appt.id}
-                       AND "startsAt" < ${overlapEnd}
-                       AND "endsAt" > ${overlapStart}`,
+                       AND "startsAt" < ${overlapEnd.toISOString()}::timestamp
+                       AND "endsAt" > ${overlapStart.toISOString()}::timestamp`,
         );
         if (overlap.length > 0) throw new SlotTakenError();
         // Move it, reprice for the new date, and reset send-state so a fresh
