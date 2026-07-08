@@ -35,6 +35,9 @@ export function BookingClient({ data }: { data: BookShopData }) {
   const [consent, setConsent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmedToken, setConfirmedToken] = useState<string | null>(null);
+  // true when the shop requires approval: the customer submitted a REQUEST, not a
+  // confirmed booking, so the success screen reads "Request sent".
+  const [wasRequest, setWasRequest] = useState(false);
   // Set when the shop charges at booking: the booking is created (BOOKED) and we
   // collect payment before showing the confirmation screen.
   const [paymentSecret, setPaymentSecret] = useState<string | null>(null);
@@ -193,6 +196,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
         setPaymentSecret(res.paymentClientSecret);
         return;
       }
+      setWasRequest(Boolean(res.pending));
       setConfirmedToken(res.manageToken ?? null);
     });
   }
@@ -271,12 +275,25 @@ export function BookingClient({ data }: { data: BookShopData }) {
           >
             ✓
           </div>
-          <h1 className="font-display text-2xl">You're booked!</h1>
+          <h1 className="font-display text-2xl">
+            {wasRequest ? "Request sent" : "You're booked!"}
+          </h1>
           <p className="mt-2 text-sm text-muted">
-            {data.shop.name} has your appointment.
-            {consent && phone.trim()
-              ? " We'll text you a confirmation and a reminder."
-              : " Save this page to manage your appointment."}
+            {wasRequest ? (
+              <>
+                {data.shop.name} will review your request and confirm your time.
+                {consent && phone.trim()
+                  ? " We'll text you as soon as it's approved."
+                  : " Save this page to check the status."}
+              </>
+            ) : (
+              <>
+                {data.shop.name} has your appointment.
+                {consent && phone.trim()
+                  ? " We'll text you a confirmation and a reminder."
+                  : " Save this page to manage your appointment."}
+              </>
+            )}
           </p>
           <Link
             href={`/book/manage/${confirmedToken}`}

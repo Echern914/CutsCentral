@@ -56,6 +56,7 @@ export async function saveBookingSettingsAction(input: {
   bookingMaxDays: number;
   bookingBufferMin: number;
   slotOpenedTextsEnabled?: boolean;
+  requireBookingApproval?: boolean;
 }): Promise<Result> {
   return done(await apiSend("PATCH", "/api/shops/me", input));
 }
@@ -215,6 +216,16 @@ export async function createAppointmentAction(
   if (res.ok) revalidatePath("/dashboard/booking");
   if (!res.ok) return { ok: false, error: res.error ?? "failed" };
   return { ok: true, series: res.data?.series };
+}
+
+/** Approve a PENDING request → BOOKED (fires the customer confirmation). */
+export async function approveAppointmentAction(id: string): Promise<Result> {
+  return done(await apiSend("POST", `/api/booking/appointments/${id}/approve`));
+}
+
+/** Decline a PENDING request → CANCELED (light flip, no refund/clawback). */
+export async function declineAppointmentAction(id: string): Promise<Result> {
+  return done(await apiSend("POST", `/api/booking/appointments/${id}/decline`));
 }
 
 /**

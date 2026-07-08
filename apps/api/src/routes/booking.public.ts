@@ -293,7 +293,7 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
       const overlap = await tx.$queryRaw<{ id: string }[]>(
         Prisma.sql`SELECT id FROM "Appointment"
                    WHERE "staffId" = ${d.staffId}
-                     AND "status" = 'BOOKED'
+                     AND "status" IN ('BOOKED', 'PENDING')
                      AND "startsAt" < ${overlapEnd}
                      AND "endsAt" > ${overlapStart}`,
       );
@@ -345,7 +345,9 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
           lastName: d.lastName || null,
           phone,
           email: d.email || null,
-          status: "BOOKED",
+          // Request-before-booking: land as PENDING (holds the slot, no
+          // confirmation) until the barber approves; else confirm immediately.
+          status: shop.requireBookingApproval ? "PENDING" : "BOOKED",
           startsAt,
           endsAt,
           priceAtBooking: effectivePrice ?? undefined,
@@ -377,8 +379,11 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
 
   // Confirmation SMS after commit (gated by consent/quiet-hours/billing inside
   // notify; honors DRY_RUN). Fire-and-forget: a send issue must not fail the
-  // booking, which is already durably saved.
-  void notifyAppointmentConfirmation({ shopId: shop.id, appointmentId });
+  // booking, which is already durably saved. SKIPPED for an approval-required
+  // request - the confirmation fires when the barber APPROVES it, not before.
+  if (!shop.requireBookingApproval) {
+    void notifyAppointmentConfirmation({ shopId: shop.id, appointmentId });
+  }
 
   // Pay-ahead: create a PaymentIntent for the customer to confirm (card/Apple
   // Pay) and return its client secret. Gated on the shop being in `ahead` mode
@@ -389,6 +394,9 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
   const amountCents = toCents(effectivePrice);
   if (
     connectEnabled() &&
+    // Don't charge a card for a hold that may be declined - pay-ahead is
+    // collected on/after approval (or the shop runs approval + pay-in-person).
+    !shop.requireBookingApproval &&
     shop.paymentsMode === "ahead" &&
     shop.connectChargesEnabled &&
     shop.stripeConnectAccountId &&
@@ -410,6 +418,9 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
     manageToken,
     startsAt: startsAt.toISOString(),
     endsAt: endsAt.toISOString(),
+    // true = it's a REQUEST awaiting approval (no confirmation yet); the client
+    // renders "Request sent" instead of "You're booked".
+    pending: shop.requireBookingApproval,
     // When present, the client must confirm payment with the Payment Element.
     payment,
   });
@@ -597,7 +608,7 @@ bookingPublicRouter.post(
         const overlap = await tx.$queryRaw<{ id: string }[]>(
           Prisma.sql`SELECT id FROM "Appointment"
                      WHERE "staffId" = ${appt.staffId}
-                       AND "status" = 'BOOKED'
+                       AND "status" IN ('BOOKED', 'PENDING')
                        AND "id" <> ${appt.id}
                        AND "startsAt" < ${overlapEnd}
                        AND "endsAt" > ${overlapStart}`,

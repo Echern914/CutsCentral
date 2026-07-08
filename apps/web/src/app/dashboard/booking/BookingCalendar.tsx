@@ -7,9 +7,11 @@ import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { cn } from "@/lib/cn";
 import type { AgendaResponse, AgendaRow, ServiceRow, StaffRow, WaitlistRow } from "./page";
 import {
+  approveAppointmentAction,
   cancelAppointmentAction,
   cancelSeriesAction,
   completeAppointmentAction,
+  declineAppointmentAction,
   getAgendaAction,
   noShowAppointmentAction,
   setWaitlistStatusAction,
@@ -630,6 +632,7 @@ function DayPlanner({
 }
 
 const STATUS_PILL: Record<AgendaRow["status"], { label: string; cls: string }> = {
+  pending: { label: "Requested", cls: "bg-amber-400/15 text-amber-300" },
   upcoming: { label: "Upcoming", cls: "bg-gold/15 text-gold" },
   completed: { label: "Done", cls: "bg-emerald-soft/15 text-emerald-soft" },
   canceled: { label: "Canceled", cls: "bg-charcoal-700 text-muted" },
@@ -650,6 +653,8 @@ function AppointmentBlock({
   const [seriesMenu, setSeriesMenu] = useState(false);
   const pill = STATUS_PILL[row.status];
   const canAct = row.source === "appointment" && row.status === "upcoming";
+  // A PENDING request (request-before-booking) gets Approve / Decline instead.
+  const canApprove = row.source === "appointment" && row.status === "pending";
   const isRecurring = Boolean(row.seriesId);
 
   // Blocked-off time: a distinct, muted band (no client/service/actions).
@@ -718,6 +723,25 @@ function AppointmentBlock({
           {pill.label}
         </span>
       </div>
+
+      {canApprove && (
+        <div className="mt-2 flex gap-2">
+          <button
+            onClick={() => act(approveAppointmentAction, "Approved")}
+            disabled={pending}
+            className="rounded-md border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-1 text-[11px] font-medium text-emerald-soft disabled:opacity-50"
+          >
+            Approve
+          </button>
+          <button
+            onClick={() => act(declineAppointmentAction, "Declined")}
+            disabled={pending}
+            className="rounded-md border border-danger-soft/40 px-2.5 py-1 text-[11px] text-danger-soft disabled:opacity-50"
+          >
+            Decline
+          </button>
+        </div>
+      )}
 
       {canAct && (
         <div className="mt-2 flex gap-2">

@@ -52,18 +52,22 @@ export async function bookAction(
   ok: boolean;
   manageToken?: string;
   paymentClientSecret?: string | null;
+  // true = the shop requires approval; this is a REQUEST awaiting confirmation.
+  pending?: boolean;
   error?: string;
 }> {
   const res = await apiPublicSend<{
     ok: boolean;
     manageToken: string;
     payment: { clientSecret: string } | null;
+    pending?: boolean;
   }>("POST", `/api/book/${encodeURIComponent(slug)}`, input);
   if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
   return {
     ok: true,
     manageToken: res.data.manageToken,
     paymentClientSecret: res.data.payment?.clientSecret ?? null,
+    pending: Boolean(res.data.pending),
   };
 }
 

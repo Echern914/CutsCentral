@@ -11,6 +11,7 @@ import {
 } from "../engines/appointmentPromotion.js";
 import { recomputeCadence } from "../engines/cadence.js";
 import { notifyPunchEarned } from "../services/loyaltyNotify.js";
+import { notifyAppointmentConfirmation } from "../services/appointmentNotify.js";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import { effectivePriceForDate } from "../engines/pricing.js";
@@ -370,7 +371,7 @@ const listQuerySchema = z.object({
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
   staffId: z.string().optional(),
-  status: z.enum(["BOOKED", "CANCELED", "COMPLETED", "NO_SHOW"]).optional(),
+  status: z.enum(["PENDING", "BOOKED", "CANCELED", "COMPLETED", "NO_SHOW"]).optional(),
 });
 
 bookingDashboardRouter.get("/appointments", async (req, res) => {
@@ -425,7 +426,13 @@ bookingDashboardRouter.get("/appointments", async (req, res) => {
  * flattens both into one row shape so the calendar renders identically for all.
  * Read-only for synced shops (we never mutate a Visit the source owns).
  */
-type AgendaStatus = "upcoming" | "completed" | "canceled" | "no_show" | "blocked";
+type AgendaStatus =
+  | "pending"
+  | "upcoming"
+  | "completed"
+  | "canceled"
+  | "no_show"
+  | "blocked";
 
 interface AgendaRow {
   id: string;
@@ -448,6 +455,7 @@ const agendaQuerySchema = z.object({
 });
 
 const APPT_STATUS: Record<string, AgendaStatus> = {
+  PENDING: "pending", // a request awaiting the barber's approve/decline
   BOOKED: "upcoming",
   COMPLETED: "completed",
   CANCELED: "canceled",
@@ -861,7 +869,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
       const overlap = await tx.$queryRaw<{ id: string }[]>(
         Prisma.sql`SELECT id FROM "Appointment"
                    WHERE "staffId" = ${d.staffId}
-                     AND "status" = 'BOOKED'
+                     AND "status" IN ('BOOKED', 'PENDING')
                      AND "startsAt" < ${overlapEnd}
                      AND "endsAt" > ${overlapStart}`,
       );
@@ -999,8 +1007,97 @@ bookingDashboardRouter.post("/appointments/:id/cancel", async (req, res) => {
 });
 
 bookingDashboardRouter.post("/appointments/:id/no-show", async (req, res) => {
-  const ok = await cancelAppointment(req.shop!.id, req.params.id!, "NO_SHOW");
+  const shopId = req.shop!.id;
+  // A no-show only applies to a CONFIRMED booking - a never-approved PENDING
+  // request can't be a no-show (decline it instead). Reject non-BOOKED.
+  const appt = await forShop(shopId).appointment.findFirst({
+    where: { id: req.params.id!, shopId },
+    select: { status: true },
+  });
+  if (!appt) {
+    res.status(404).json({ ok: false });
+    return;
+  }
+  if (appt.status !== "BOOKED") {
+    res.status(409).json({ ok: false, error: "not_booked" });
+    return;
+  }
+  const ok = await cancelAppointment(shopId, req.params.id!, "NO_SHOW");
   res.status(ok ? 200 : 404).json({ ok });
+});
+
+// Approve a PENDING request (request-before-booking): flip it to BOOKED in place
+// and fire the customer's confirmation. Re-checks the slot is still free (a
+// concurrent booking may have taken it) under the per-staff advisory lock.
+bookingDashboardRouter.post("/appointments/:id/approve", async (req, res) => {
+  const shopId = req.shop!.id;
+  const shop = await prisma.shop.findUnique({
+    where: { id: shopId },
+    select: { bookingBufferMin: true },
+  });
+  if (!shop) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  try {
+    const approved = await runWithShop(shopId, async (tx) => {
+      const appt = await tx.appointment.findFirst({
+        where: { id: req.params.id!, shopId, status: "PENDING" },
+        select: { id: true, staffId: true, startsAt: true, endsAt: true },
+      });
+      if (!appt) return null; // not found / already handled (idempotent)
+
+      // Re-verify the slot under the lock, excluding self, counting BOOKED+PENDING.
+      await tx.$executeRaw(
+        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`appt:${appt.staffId}`}))`,
+      );
+      const bufferMs = Math.max(0, shop.bookingBufferMin) * 60_000;
+      const overlapStart = new Date(appt.startsAt.getTime() - bufferMs);
+      const overlapEnd = new Date(appt.endsAt.getTime() + bufferMs);
+      const overlap = await tx.$queryRaw<{ id: string }[]>(
+        Prisma.sql`SELECT id FROM "Appointment"
+                   WHERE "staffId" = ${appt.staffId}
+                     AND "status" = 'BOOKED'
+                     AND "id" <> ${appt.id}
+                     AND "startsAt" < ${overlapEnd}
+                     AND "endsAt" > ${overlapStart}`,
+      );
+      if (overlap.length > 0) throw new Error("slot_taken");
+
+      await tx.appointment.update({
+        where: { id: appt.id },
+        data: { status: "BOOKED" },
+      });
+      return appt.id;
+    });
+    if (!approved) {
+      res.status(404).json({ ok: false });
+      return;
+    }
+    // First customer confirmation fires now (approval is the confirm event).
+    void notifyAppointmentConfirmation({ shopId, appointmentId: approved });
+    res.status(200).json({ ok: true });
+  } catch (err) {
+    if ((err as Error).message === "slot_taken") {
+      res.status(409).json({ ok: false, error: "slot_taken" });
+      return;
+    }
+    logger.error({ err, shopId }, "approve appointment failed");
+    res.status(500).json({ ok: false, error: "approve_failed" });
+  }
+});
+
+// Decline a PENDING request: a LIGHT terminal flip to CANCELED. Deliberately NOT
+// routed through cancelAppointment - nothing was ever confirmed, so there's no
+// payment to refund, no Visit to claw back, and firing a "slot opened" waitlist
+// blast for a slot no one really held would be wrong.
+bookingDashboardRouter.post("/appointments/:id/decline", async (req, res) => {
+  const shopId = req.shop!.id;
+  const updated = await forShop(shopId).appointment.updateMany({
+    where: { id: req.params.id!, shopId, status: "PENDING" },
+    data: { status: "CANCELED", canceledAt: new Date() },
+  });
+  res.status(updated.count > 0 ? 200 : 404).json({ ok: updated.count > 0 });
 });
 
 // Cancel a recurring series by scope: "this" one occurrence, "future" (this and

@@ -211,7 +211,7 @@ export async function materializeSeries(
         const overlap = await tx.$queryRaw<{ id: string }[]>(
           Prisma.sql`SELECT id FROM "Appointment"
                      WHERE "staffId" = ${input.staffId}
-                       AND "status" = 'BOOKED'
+                       AND "status" IN ('BOOKED', 'PENDING')
                        AND "startsAt" < ${overlapEnd}
                        AND "endsAt" > ${overlapStart}`,
         );

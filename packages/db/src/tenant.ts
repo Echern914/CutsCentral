@@ -731,6 +731,13 @@ export function forShop(shopId: string) {
             where: scopeWhere(args.where, shopId),
           }),
         ),
+      updateMany: (args: Prisma.AppointmentUpdateManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.appointment.updateMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
     },
 
     recurringSeries: {
