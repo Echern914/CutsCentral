@@ -5,6 +5,7 @@ import { Card, CardHeader } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
 import type {
+  AddOnRow,
   AgendaResponse,
   BookingShop,
   ConnectStatus,
@@ -15,8 +16,10 @@ import type {
 import { BookingCalendar } from "./BookingCalendar";
 import { ConnectPlatforms } from "./ConnectPlatforms";
 import {
+  createAddOnAction,
   createServiceAction,
   createStaffAction,
+  deleteAddOnAction,
   deleteServiceAction,
   deleteStaffAction,
   getAvailabilityAction,
@@ -39,6 +42,7 @@ export function BookingManager({
   connect,
   initialStaff,
   initialServices,
+  initialAddOns,
   initialAgenda,
   initialWaitlist,
 }: {
@@ -48,6 +52,7 @@ export function BookingManager({
   connect: ConnectStatus;
   initialStaff: StaffRow[];
   initialServices: ServiceRow[];
+  initialAddOns: AddOnRow[];
   initialAgenda: AgendaResponse;
   initialWaitlist: WaitlistRow[];
 }) {
@@ -108,7 +113,12 @@ export function BookingManager({
       )}
       {tab === "Staff" && <StaffTab initial={initialStaff} toast={toast} />}
       {tab === "Services" && (
-        <ServicesTab initial={initialServices} staff={initialStaff} toast={toast} />
+        <ServicesTab
+          initial={initialServices}
+          staff={initialStaff}
+          initialAddOns={initialAddOns}
+          toast={toast}
+        />
       )}
       {tab === "Hours" && <HoursTab staff={initialStaff} toast={toast} />}
       {tab === "Appointments" && (
@@ -382,10 +392,12 @@ function StaffTab({ initial, toast }: { initial: StaffRow[]; toast: Toast }) {
 function ServicesTab({
   initial,
   staff,
+  initialAddOns,
   toast,
 }: {
   initial: ServiceRow[];
   staff: StaffRow[];
+  initialAddOns: AddOnRow[];
   toast: Toast;
 }) {
   const [name, setName] = useState("");
@@ -443,7 +455,8 @@ function ServicesTab({
   }
 
   return (
-    <Card className="p-5">
+    <div className="flex flex-col gap-5">
+      <Card className="p-5">
       <CardHeader title="Services" subtitle="What customers can book, with a length." />
       <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_120px_120px]">
         <input
@@ -554,6 +567,140 @@ function ServicesTab({
         ))}
         {initial.filter((s) => s.active).length === 0 && (
           <li className="text-sm text-muted">No services yet.</li>
+        )}
+      </ul>
+      </Card>
+
+      <AddOnsManager initial={initialAddOns} services={initial} toast={toast} />
+    </div>
+  );
+}
+
+//  Add-ons (optional extras that add time + price to a service)
+
+function AddOnsManager({
+  initial,
+  services,
+  toast,
+}: {
+  initial: AddOnRow[];
+  services: ServiceRow[];
+  toast: Toast;
+}) {
+  const [name, setName] = useState("");
+  const [duration, setDuration] = useState(15);
+  const [price, setPrice] = useState("");
+  // "" = offered on every service; a service id scopes it to that one.
+  const [serviceId, setServiceId] = useState<string>("");
+  const [pending, start] = useTransition();
+  const activeServices = services.filter((s) => s.active);
+  const serviceName = (id: string | null) =>
+    id === null ? "All services" : (services.find((s) => s.id === id)?.name ?? "A service");
+
+  function add() {
+    if (!name.trim()) return;
+    start(async () => {
+      const r = await createAddOnAction({
+        name: name.trim(),
+        durationMin: duration,
+        price: price.trim() ? Number(price) : null,
+        serviceId: serviceId || null,
+      });
+      if (r.ok) {
+        toast("Add-on added", "success");
+        setName("");
+        setPrice("");
+        setServiceId("");
+      } else toast("Couldn't add", "error");
+    });
+  }
+  function remove(id: string) {
+    start(async () => {
+      const r = await deleteAddOnAction(id);
+      toast(r.ok ? "Add-on removed" : "Couldn't remove", r.ok ? "success" : "error");
+    });
+  }
+
+  return (
+    <Card className="p-5">
+      <CardHeader
+        title="Add-ons"
+        subtitle="Optional extras a customer can add to a service (e.g. beard trim). Adds time and price."
+      />
+      <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_110px_110px]">
+        <input
+          className={field}
+          placeholder="Add-on name (e.g. Beard trim)"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <input
+          className={field}
+          type="number"
+          min={0}
+          placeholder="+ min"
+          value={duration}
+          onChange={(e) => setDuration(Number(e.target.value))}
+          aria-label="Extra minutes"
+        />
+        <input
+          className={field}
+          type="number"
+          min={0}
+          inputMode="decimal"
+          placeholder="+ price"
+          value={price}
+          onChange={(e) => setPrice(e.target.value)}
+          aria-label="Extra price"
+        />
+      </div>
+      <div className="mt-2">
+        <span className={labelCls}>Offer on</span>
+        <select
+          className={cn(field, "mt-1")}
+          value={serviceId}
+          onChange={(e) => setServiceId(e.target.value)}
+          aria-label="Offer add-on on"
+        >
+          <option value="">All services</option>
+          {activeServices.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name} only
+            </option>
+          ))}
+        </select>
+      </div>
+      <button
+        onClick={add}
+        disabled={pending}
+        className="mt-4 rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+      >
+        Add add-on
+      </button>
+
+      <ul className="mt-5 flex flex-col gap-2">
+        {initial.filter((a) => a.active).map((a) => (
+          <li
+            key={a.id}
+            className="flex items-center justify-between rounded-xl border border-subtle px-4 py-2.5"
+          >
+            <span className="text-sm">
+              {a.name}{" "}
+              <span className="text-xs text-muted">
+                · +{a.durationMin} min{a.price !== null ? ` · +$${a.price}` : ""} ·{" "}
+                {serviceName(a.serviceId)}
+              </span>
+            </span>
+            <button
+              onClick={() => remove(a.id)}
+              className="text-xs text-danger-soft hover:underline"
+            >
+              Remove
+            </button>
+          </li>
+        ))}
+        {initial.filter((a) => a.active).length === 0 && (
+          <li className="text-sm text-muted">No add-ons yet.</li>
         )}
       </ul>
     </Card>

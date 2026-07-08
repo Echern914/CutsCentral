@@ -4,6 +4,7 @@ import { randomToken } from "@chairback/config";
 import { prisma, Prisma } from "@chairback/db";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
+import { resolveAddOns } from "../engines/addOns.js";
 import {
   effectivePriceForDate,
   parsePriceOverrides,
@@ -55,7 +56,7 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const [staff, services, links] = await Promise.all([
+  const [staff, services, links, addOns] = await Promise.all([
     prisma.staff.findMany({
       where: { shopId: shop.id, active: true },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
@@ -76,6 +77,11 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
     prisma.serviceStaff.findMany({
       where: { shopId: shop.id },
       select: { serviceId: true, staffId: true },
+    }),
+    prisma.serviceAddOn.findMany({
+      where: { shopId: shop.id, active: true },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      select: { id: true, name: true, durationMin: true, price: true, serviceId: true },
     }),
   ]);
   res.json({
@@ -124,6 +130,15 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
     }),
     // The (service, staff) offering matrix so the UI can filter either way.
     offerings: links,
+    // Optional add-ons. serviceId null = offered on every service; set = only
+    // with that one. The client shows the ones valid for the chosen service.
+    addOns: addOns.map((a) => ({
+      id: a.id,
+      name: a.name,
+      durationMin: a.durationMin,
+      price: a.price === null ? null : Number(a.price),
+      serviceId: a.serviceId,
+    })),
   });
 });
 
@@ -180,6 +195,8 @@ const createSchema = z
     phone: z.string().trim().max(40).optional().or(z.literal("")),
     email: z.string().trim().email().max(200).optional().or(z.literal("")),
     smsConsent: z.boolean().optional(),
+    // Chosen service add-ons (ids). Invalid/foreign ids are dropped server-side.
+    addOnIds: z.array(z.string().min(1)).max(20).optional(),
   })
   .strict()
   .refine((d) => Boolean(d.phone?.trim()) || Boolean(d.email?.trim()), {
@@ -231,16 +248,24 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
 
   const now = new Date();
   const startsAt = d.startsAt;
-  const endsAt = new Date(startsAt.getTime() + service.durationMin * 60_000);
+  // Chosen add-ons extend the appointment + total. Invalid/foreign ids drop.
+  const addOns = await resolveAddOns(shop.id, d.serviceId, d.addOnIds);
+  const endsAt = new Date(
+    startsAt.getTime() + (service.durationMin + addOns.extraDurationMin) * 60_000,
+  );
   // Snapshot the price for the DATE the customer picked (weekday override in the
   // shop tz, else base) - so a Sunday surcharge is locked in at exactly what the
-  // customer was shown, not the base price.
-  const effectivePrice = effectivePriceForDate(
+  // customer was shown, not the base price. Add-on prices are added on top.
+  const basePrice = effectivePriceForDate(
     service.price === null ? null : Number(service.price),
     service.priceOverrides,
     startsAt,
     shop.timezone,
   );
+  const effectivePrice =
+    basePrice === null && addOns.extraPrice === 0
+      ? null
+      : (basePrice ?? 0) + addOns.extraPrice;
   const earliest = now.getTime() + shop.bookingLeadHours * 60 * 60_000;
   const latest = now.getTime() + shop.bookingMaxDays * 24 * 60 * 60_000;
   if (startsAt.getTime() < earliest) {
@@ -254,8 +279,17 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
 
   // Authoritative availability check: the requested time must be a REAL open slot
   // (inside the staff's hours, not on a blocked exception, honoring the buffer).
-  // The browser's slot list is advisory; a crafted POST must not bypass it.
-  if (!(await isSlotBookable({ shopId: shop.id, staffId: d.staffId, serviceId: d.serviceId, startsAt }))) {
+  // The browser's slot list is advisory; a crafted POST must not bypass it. The
+  // extra add-on duration means the appointment needs a bigger free window.
+  if (
+    !(await isSlotBookable({
+      shopId: shop.id,
+      staffId: d.staffId,
+      serviceId: d.serviceId,
+      startsAt,
+      extraDurationMin: addOns.extraDurationMin,
+    }))
+  ) {
     res.status(400).json({ error: "invalid_slot" });
     return;
   }
@@ -351,6 +385,7 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
           startsAt,
           endsAt,
           priceAtBooking: effectivePrice ?? undefined,
+          addOns: addOns.snapshot as unknown as Prisma.InputJsonValue,
           manageToken: token,
         },
         select: { id: true, manageToken: true },

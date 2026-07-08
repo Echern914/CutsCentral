@@ -303,6 +303,7 @@ model Shop {
   availabilityExceptions AvailabilityException[]
   appointments           Appointment[]
   recurringSeries        RecurringSeries[]
+  serviceAddOns          ServiceAddOn[]
   payments               Payment[]
 
   @@index([ownerId])
@@ -907,8 +908,34 @@ model Service {
   staff           ServiceStaff[]
   appointments    Appointment[]
   recurringSeries RecurringSeries[]
+  addOns          ServiceAddOn[]
 
   @@index([shopId, active])
+}
+
+// An optional extra a customer can tack onto a service at booking (e.g. "+ beard
+// trim", "+ hot towel"). Adds its durationMin to the appointment length and its
+// price to the total. Shop-wide by default (serviceId null = offered on every
+// service); scope to one service by setting serviceId. The CHOSEN add-ons are
+// snapshotted onto Appointment.addOns at booking time (name/duration/price), so
+// editing or deleting an add-on later never rewrites a past appointment.
+model ServiceAddOn {
+  id          String   @id @default(cuid())
+  shopId      String
+  shop        Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  // null = available on ALL services; set = only offered with that one service.
+  serviceId   String?
+  service     Service? @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  name        String
+  durationMin Int      @default(0) // extra minutes added to the appointment
+  price       Decimal? @db.Decimal(10, 2) // extra charge added to the total
+  active      Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([shopId, active])
+  @@index([shopId, serviceId])
 }
 
 // Which staff offer which service (explicit join, multi-staff). shopId is
@@ -992,6 +1019,11 @@ model Appointment {
   startsAt           DateTime // UTC instant
   endsAt             DateTime // startsAt + service.durationMin
   priceAtBooking     Decimal?          @db.Decimal(10, 2)
+  // Snapshot of the add-ons chosen at booking: [{name, durationMin, price}].
+  // endsAt already includes their duration and priceAtBooking already includes
+  // their price; this JSON preserves the itemized list for display even if an
+  // add-on is later edited/deleted. [] = no add-ons (every pre-feature row).
+  addOns             Json              @default("[]")
   manageToken        String            @unique // cancel/reschedule auth (no login)
   visitId            String?           @unique // the Visit promoted from this appointment
   visit              Visit?            @relation(fields: [visitId], references: [id], onDelete: SetNull)

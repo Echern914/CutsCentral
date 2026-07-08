@@ -105,6 +105,12 @@ export interface ComputeSlotsInput {
    * already taken surfaces as a 409 "slot_taken" there, not a 400 here.
    */
   ignoreBooked?: boolean;
+  /**
+   * Extra minutes from chosen add-ons, added to the service duration. A longer
+   * appointment needs a bigger free window, so the picker only offers slots that
+   * can fit service + add-ons (and the write-path check validates the same).
+   */
+  extraDurationMin?: number;
 }
 
 /**
@@ -147,7 +153,8 @@ export async function computeOpenSlots(
   });
   if (!staff) return [];
 
-  const duration = service.durationMin;
+  // Service length + any chosen add-ons (a longer appointment needs more room).
+  const duration = service.durationMin + Math.max(0, input.extraDurationMin ?? 0);
   const buffer = Math.max(0, shop.bookingBufferMin);
 
   // Bounds: earliest = now + lead; latest = now + maxDays (and never past toDate).
@@ -286,6 +293,8 @@ export async function isSlotBookable(input: {
   startsAt: Date;
   now?: Date;
   excludeAppointmentId?: string;
+  /** Extra minutes from chosen add-ons (the appointment must fit service + these). */
+  extraDurationMin?: number;
 }): Promise<boolean> {
   const target = input.startsAt.getTime();
   // A tight window bracketing the requested start keeps the computation cheap
@@ -301,6 +310,7 @@ export async function isSlotBookable(input: {
     toDate: new Date(target + 24 * 60 * MS_PER_MIN),
     now: input.now,
     excludeAppointmentId: input.excludeAppointmentId,
+    extraDurationMin: input.extraDurationMin,
     ignoreBooked: true,
   });
   return slots.some((s) => s.startsAt.getTime() === target);

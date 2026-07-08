@@ -245,6 +245,32 @@ export async function cancelSeriesAction(
   );
 }
 
+//  Service add-ons
+
+export interface AddOnInput {
+  name: string;
+  durationMin: number;
+  price?: number | null;
+  serviceId?: string | null;
+  active?: boolean;
+  sortOrder?: number;
+}
+
+export async function createAddOnAction(input: AddOnInput): Promise<Result> {
+  return done(await apiSend("POST", "/api/booking/addons", input));
+}
+
+export async function updateAddOnAction(
+  id: string,
+  input: Partial<AddOnInput>,
+): Promise<Result> {
+  return done(await apiSend("PATCH", `/api/booking/addons/${id}`, input));
+}
+
+export async function deleteAddOnAction(id: string): Promise<Result> {
+  return done(await apiSend("DELETE", `/api/booking/addons/${id}`));
+}
+
 export interface BlockOffInput {
   staffId: string;
   startsAt: string; // ISO

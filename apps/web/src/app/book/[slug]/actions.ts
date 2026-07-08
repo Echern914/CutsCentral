@@ -36,6 +36,7 @@ export interface BookInput {
   phone?: string;
   email?: string;
   smsConsent: boolean;
+  addOnIds?: string[];
 }
 
 /**

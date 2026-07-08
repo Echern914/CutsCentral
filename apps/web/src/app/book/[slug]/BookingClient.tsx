@@ -25,6 +25,10 @@ export function BookingClient({ data }: { data: BookShopData }) {
   const [slotsByDay, setSlotsByDay] = useState<Map<string, { startsAt: string }[]>>(new Map());
   const [loadingSlots, setLoadingSlots] = useState(false);
 
+  // Chosen add-ons (ids) for the picked service. Add-ons extend the appointment
+  // and the total; validated at create (if they overflow the slot, the create
+  // returns invalid_slot and the customer picks another time).
+  const [addOnIds, setAddOnIds] = useState<string[]>([]);
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [phone, setPhone] = useState("");
@@ -128,6 +132,17 @@ export function BookingClient({ data }: { data: BookShopData }) {
     setSlotsByDay(new Map());
     setDay(null);
     setSlot(null);
+    setAddOnIds([]); // add-ons are per-service; clear on change
+  }
+
+  // Add-ons valid for the chosen service (shop-wide null, or scoped to it).
+  const addOnsForService = useMemo(() => {
+    if (!serviceId) return [];
+    return data.addOns.filter((a) => a.serviceId === null || a.serviceId === serviceId);
+  }, [serviceId, data.addOns]);
+
+  function toggleAddOn(id: string) {
+    setAddOnIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
   }
 
   function pickStaff(id: string) {
@@ -174,6 +189,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
         phone: phone.trim() || undefined,
         email: email.trim() || undefined,
         smsConsent: consent && Boolean(phone.trim()),
+        addOnIds: addOnIds.length > 0 ? addOnIds : undefined,
       });
       if (!res.ok) {
         if (res.error === "slot_taken") {
@@ -184,6 +200,10 @@ export function BookingClient({ data }: { data: BookShopData }) {
         } else if (res.error === "no_active_access") {
           setError(
             `Online booking is paused for ${data.shop.name} right now. Please contact the shop directly to book.`,
+          );
+        } else if (res.error === "invalid_slot" && addOnIds.length > 0) {
+          setError(
+            "With those add-ons this appointment runs longer than that slot. Try fewer add-ons or a different time.",
           );
         } else {
           setError("Something went wrong. Please try again.");
@@ -235,6 +255,11 @@ export function BookingClient({ data }: { data: BookShopData }) {
   // The exact price for the slot the customer has chosen (so no surprise).
   const selectedPrice =
     selectedService && slot ? priceForDay(selectedService, slot) : null;
+  // Chosen add-ons' extra price + the combined total shown before booking.
+  const addOnsTotal = addOnsForService
+    .filter((a) => addOnIds.includes(a.id))
+    .reduce((sum, a) => sum + (a.price ?? 0), 0);
+  const grandTotal = selectedPrice === null ? null : selectedPrice + addOnsTotal;
   const primaryBtn =
     "w-full rounded-xl py-3 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01] disabled:opacity-50";
   const input =
@@ -553,13 +578,60 @@ export function BookingClient({ data }: { data: BookShopData }) {
           title="4 · Your details"
           back={<BackStep onClick={backToTime} />}
         >
-          {selectedPrice !== null && (
+          {/* Optional add-ons for the chosen service. */}
+          {addOnsForService.length > 0 && (
+            <div className="mb-3 rounded-xl border border-white/10 p-3">
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide opacity-60">
+                Add-ons
+              </p>
+              <div className="flex flex-col gap-1.5">
+                {addOnsForService.map((a) => {
+                  const on = addOnIds.includes(a.id);
+                  return (
+                    <button
+                      key={a.id}
+                      type="button"
+                      onClick={() => toggleAddOn(a.id)}
+                      className="flex items-center justify-between rounded-lg border px-3 py-2 text-left text-sm transition-colors"
+                      style={{
+                        borderColor: on ? accent : "rgba(255,255,255,0.1)",
+                        backgroundColor: on ? `${accent}14` : "transparent",
+                      }}
+                    >
+                      <span className="flex items-center gap-2">
+                        <span
+                          className="flex h-4 w-4 items-center justify-center rounded border text-[10px]"
+                          style={{ borderColor: on ? accent : "rgba(255,255,255,0.3)", color: accent }}
+                        >
+                          {on ? "✓" : ""}
+                        </span>
+                        <span>
+                          {a.name}
+                          {a.durationMin > 0 && (
+                            <span className="opacity-50"> · +{a.durationMin} min</span>
+                          )}
+                        </span>
+                      </span>
+                      {a.price != null && a.price > 0 && (
+                        <span className="opacity-80">+${a.price.toFixed(0)}</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {grandTotal !== null && (
             <div
               className="mb-3 flex items-center justify-between rounded-xl px-4 py-3 text-sm"
               style={{ backgroundColor: `${accent}14`, color: accent }}
             >
-              <span>{selectedService?.name}</span>
-              <span className="font-semibold">${selectedPrice.toFixed(0)}</span>
+              <span>
+                {selectedService?.name}
+                {addOnIds.length > 0 && ` + ${addOnIds.length} add-on${addOnIds.length > 1 ? "s" : ""}`}
+              </span>
+              <span className="font-semibold">${grandTotal.toFixed(0)}</span>
             </div>
           )}
           <div className="flex flex-col gap-3">
