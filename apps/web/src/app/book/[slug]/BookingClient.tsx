@@ -677,18 +677,24 @@ export function BookingClient({ data }: { data: BookShopData }) {
                 onChange={(e) => setConsent(e.target.checked)}
                 className="mt-0.5"
               />
+              {/* A2P 10DLC CTA: this label must stay IDENTICAL to the facsimile
+                  on /sms-consent and to the text registered in the campaign
+                  (brand + shop named, frequency, rates, HELP/STOP, not-a-
+                  condition, linked SMS Terms + Privacy). Carriers verify all
+                  three match - see the 30909 rejection that taught us this. */}
               <span>
                 Text me appointment confirmations, reminders, and rewards
-                updates (a few messages per visit). Msg &amp; data rates may
-                apply. Reply HELP for help, STOP to opt out. Consent is not a
-                condition of purchase. See our{" "}
+                updates from {data.shop.name} via ChairBack (a few messages per
+                visit). Msg &amp; data rates may apply. Reply HELP for help,
+                STOP to opt out. Consent is not a condition of purchase. See
+                our{" "}
                 <Link
                   href="/sms"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="underline"
                 >
-                  Terms
+                  SMS Terms
                 </Link>{" "}
                 and{" "}
                 <Link
