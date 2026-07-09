@@ -10,6 +10,7 @@ import { promoteFulfilledAppointments } from "./engines/appointmentPromotion.js"
 import { runAppointmentReminders } from "./engines/appointmentReminders.js";
 import { refreshExpiringSquareTokens } from "./engines/squareTokenRefresh.js";
 import { runTrialReminders } from "./engines/trialReminder.js";
+import { autoCloseIdleConversations } from "./receptionist/conversation.js";
 
 const env = apiEnv();
 
@@ -108,6 +109,15 @@ export function startScheduler(): void {
     void withLease("trial-reminders", 10 * MINUTE, () => runTrialReminders()).catch(
       (err) => logger.error({ err }, "trial reminder sweep failed"),
     );
+  });
+
+  // AI receptionist: close conversation threads idle >24h (hourly) so a
+  // months-later text starts fresh instead of resuming a stale thread.
+  cron.schedule("30 * * * *", () => {
+    void withLease("receptionist-conversation-close", 5 * MINUTE, async () => {
+      const closed = await autoCloseIdleConversations();
+      if (closed > 0) logger.info({ closed }, "receptionist conversations auto-closed");
+    }).catch((err) => logger.error({ err }, "receptionist conversation close failed"));
   });
 
   logger.info("scheduler started");
