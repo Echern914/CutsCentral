@@ -105,23 +105,28 @@ export async function appendMessage(params: {
  * Rebuild the Anthropic messages array from persisted turns. Text turns only:
  * tool_use/tool_result loops are intra-turn (they never span webhook turns), so
  * the persisted assistant TEXT is all the next turn needs. system_note rows are
- * audit-only and skipped. The caller prepends its own context user-turn, so an
- * assistant-first history (a gap-fill offer) is still a valid message list.
+ * replayed as bracketed user-side context (that's how a gap-fill turn learns
+ * which slot_id is held for this client). The caller prepends its own context
+ * user-turn, so an assistant-first history (a gap-fill offer) is still valid.
  */
 export async function buildHistory(
   conversationId: string,
 ): Promise<Anthropic.Messages.MessageParam[]> {
   const rows = await prisma.receptionistMessage.findMany({
-    where: { conversationId, role: { in: ["user", "assistant"] } },
+    where: { conversationId },
     orderBy: { createdAt: "desc" },
     take: HISTORY_LIMIT,
     select: { role: true, content: true },
   });
   rows.reverse();
-  return rows.map((r) => ({
-    role: r.role as "user" | "assistant",
-    content: r.content,
-  }));
+  return rows.map((r) =>
+    r.role === "system_note"
+      ? {
+          role: "user" as const,
+          content: `[context - not from the client] ${r.content}`,
+        }
+      : { role: r.role as "user" | "assistant", content: r.content },
+  );
 }
 
 /** STOP handling: silence the AI on every live thread for this number. */

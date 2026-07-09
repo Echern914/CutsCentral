@@ -188,7 +188,8 @@ async function doSweepShopWinback(
     where: {
       status: "SENT",
       createdAt: { gte: startOfDay },
-      kind: { not: "loyalty" },
+      // loyalty + receptionist replies are exempt (see nudge.ts cap comment).
+      kind: { notIn: ["loyalty", "receptionist_reply"] },
       channel: "SMS",
     },
   });

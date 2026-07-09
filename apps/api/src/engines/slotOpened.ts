@@ -13,6 +13,11 @@ import { sendPushToClient, sendPushToUser } from "../messaging/push.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
 import { isSlotBookable } from "./slots.js";
 import { hasActiveAccess } from "../billing/stripe.js";
+import {
+  receptionistConfigured,
+  receptionistEnabledForShop,
+} from "../receptionist/config.js";
+import { runGapFill } from "../receptionist/gapfill.js";
 
 /**
  * "A slot just opened" auto-notify. Fired (fire-and-forget) after a NATIVE
@@ -53,6 +58,12 @@ const SHOP_SELECT = {
   subscriptionStatus: true,
   trialEndsAt: true,
   compAccess: true,
+  // AI-receptionist gate + gap-fill budget (see receptionist/config.ts).
+  dailySendCap: true,
+  receptionistEnabled: true,
+  receptionistSubscriptionStatus: true,
+  receptionistCompAccess: true,
+  receptionistTermsAcceptedAt: true,
 } as const;
 
 export async function notifySlotOpened(params: {
@@ -69,7 +80,11 @@ export async function notifySlotOpened(params: {
     });
     if (!shop) return;
     if (shop.bookingMode !== "native") return; // no native slots/waitlist
-    if (!shop.waitlistEnabled) return; // waitlist off -> nothing to notify
+    // The AI receptionist fills gaps even for shops with the waitlist off
+    // (its candidate pool starts with loyalty/overdue clients, not the list).
+    const receptionistOn =
+      receptionistConfigured() && receptionistEnabledForShop(shop, { now });
+    if (!shop.waitlistEnabled && !receptionistOn) return;
     if (!hasActiveAccess(shop, { now })) return;
 
     // The freed appointment (narrowed relation select via runWithShop).
@@ -82,6 +97,7 @@ export async function notifySlotOpened(params: {
           serviceId: true,
           startsAt: true,
           service: { select: { name: true } },
+          staff: { select: { name: true } },
         },
       }),
     );
@@ -139,7 +155,33 @@ export async function notifySlotOpened(params: {
     // --- BARBER alert (always, when the waitlist is on) ---
     // Count every currently-waiting matcher (not just the ones we'll nudge) so
     // the barber sees the true depth of interest.
-    await alertBarber(shop, serviceName, when, candidates.length);
+    if (shop.waitlistEnabled) {
+      await alertBarber(shop, serviceName, when, candidates.length);
+    }
+
+    // --- AI RECEPTIONIST gap-fill: it OWNS customer outreach when enabled ---
+    // (loyalty-due -> overdue -> waitlist, one held offer over SMS). The legacy
+    // push/email waitlist nudges below are superseded for these shops.
+    if (receptionistOn) {
+      void runGapFill({
+        shop: {
+          id: shop.id,
+          name: shop.name,
+          timezone: shop.timezone,
+          dailySendCap: shop.dailySendCap,
+        },
+        appt: {
+          id: appt.id,
+          staffId: appt.staffId,
+          serviceId: appt.serviceId,
+          startsAt: appt.startsAt,
+          serviceName,
+          staffName: appt.staff?.name ?? null,
+        },
+        now,
+      });
+      return;
+    }
 
     // --- CUSTOMER nudges (behind the per-shop toggle + DRY_RUN) ---
     if (!shop.slotOpenedTextsEnabled) return;

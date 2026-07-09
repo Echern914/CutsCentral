@@ -1134,11 +1134,16 @@ dashboardRouter.post("/clients/bulk", smsLimiter, async (req, res) => {
   // Enforce the per-shop daily cap, shared with the sweep and promo blasts.
   // Without this, smsLimiter (10 req/min) x 200 clients/req = 2000 texts/min,
   // blowing past dailySendCap (default 50) and running up the shop's SMS bill.
-  // kind="loyalty" transactional texts are exempt (don't count against the cap).
+  // loyalty (transactional) + receptionist_reply (client-initiated thread
+  // answers) are exempt from the cap; see engines/nudge.ts for the rationale.
   const startOfDay = new Date(now);
   startOfDay.setUTCHours(0, 0, 0, 0);
   const sentToday = await db.nudge.count({
-    where: { status: "SENT", createdAt: { gte: startOfDay }, kind: { not: "loyalty" } },
+    where: {
+      status: "SENT",
+      createdAt: { gte: startOfDay },
+      kind: { notIn: ["loyalty", "receptionist_reply"] },
+    },
   });
   let budget = Math.max(0, shop.dailySendCap - sentToday);
 

@@ -170,7 +170,10 @@ async function doSweepShop(
     where: {
       status: "SENT",
       createdAt: { gte: startOfDay },
-      kind: { not: "loyalty" },
+      // Exempt: loyalty (transactional) AND receptionist_reply (answers in a
+      // client-initiated text thread). Proactive kind="receptionist" gap-fill
+      // offers DO count - they're marketing-cost outbound like nudges/promos.
+      kind: { notIn: ["loyalty", "receptionist_reply"] },
       // The cap is about SMS COST: only SMS sends count against it. WEB_PUSH
       // rebooking nudges are free, so they must not consume the daily budget.
       channel: "SMS",

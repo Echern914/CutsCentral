@@ -322,11 +322,15 @@ promotionsRouter.post("/:id/blast", smsLimiter, async (req, res) => {
   }
 
   // Shared daily budget with nudges - promos can't blow past the cap.
-  // kind="loyalty" transactional texts are exempt (don't count against the cap).
+  // loyalty + receptionist_reply are exempt; see engines/nudge.ts.
   const startOfDay = new Date(now);
   startOfDay.setUTCHours(0, 0, 0, 0);
   const sentToday = await db.nudge.count({
-    where: { status: "SENT", createdAt: { gte: startOfDay }, kind: { not: "loyalty" } },
+    where: {
+      status: "SENT",
+      createdAt: { gte: startOfDay },
+      kind: { notIn: ["loyalty", "receptionist_reply"] },
+    },
   });
   let budget = Math.max(0, shop.dailySendCap - sentToday);
 
