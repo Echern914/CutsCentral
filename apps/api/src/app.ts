@@ -117,8 +117,18 @@ export function createApp(): Express {
     res.status(404).json({ error: "not_found" });
   });
 
-  // (4) Final error handler: log everything, leak nothing.
+  // (4) Final error handler: log everything, leak nothing. Body-parser
+  // failures (broken JSON, >100kb payloads) are caller mistakes any client can
+  // trigger at will - answer 4xx and skip Sentry, or they'd be endless noise.
   app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
+    const bodyErrorType = (err as { type?: string } | null)?.type;
+    if (bodyErrorType === "entity.parse.failed" || bodyErrorType === "entity.too.large") {
+      logger.warn({ path: req.path, method: req.method, bodyErrorType }, "unreadable request body");
+      if (res.headersSent) return;
+      if (bodyErrorType === "entity.parse.failed") res.status(400).json({ error: "bad_json" });
+      else res.status(413).json({ error: "payload_too_large" });
+      return;
+    }
     logger.error({ err, path: req.path, method: req.method }, "request failed");
     captureError(err, { path: req.path, method: req.method });
     if (res.headersSent) return;

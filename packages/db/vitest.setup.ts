@@ -26,3 +26,29 @@ try {
 } catch {
   // No .env (e.g. CI with env injected directly) - fine.
 }
+
+// These tests create and delete Users/Shops freely, so they must never run
+// against a hosted (dev OR prod) database. Same stance as apps/api's setup:
+// TEST_DATABASE_URL wins; without it, refuse anything that looks hosted.
+// (2026-07-08: the missing guard let this suite write @test.local users into
+// the dev Supabase project.)
+const PROD_HOST_FRAGMENTS = ["supabase.co", "supabase.com"];
+const testUrl = process.env.TEST_DATABASE_URL;
+if (testUrl) {
+  process.env.DATABASE_URL = testUrl;
+  process.env.DIRECT_URL = testUrl;
+} else {
+  let host = "";
+  try {
+    host = new URL(process.env.DATABASE_URL ?? "").host;
+  } catch {
+    // Unparseable/absent URL: let Prisma produce its own connection error.
+  }
+  if (PROD_HOST_FRAGMENTS.some((f) => host.includes(f))) {
+    throw new Error(
+      `Refusing to run @chairback/db tests against hosted database "${host}". ` +
+        "Set TEST_DATABASE_URL to a disposable local database " +
+        "(e.g. postgresql://postgres:postgres@localhost:5432/chairback_test).",
+    );
+  }
+}
