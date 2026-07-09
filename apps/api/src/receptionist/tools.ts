@@ -5,6 +5,7 @@ import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { computeOpenSlots, isSlotBookable, type Slot } from "../engines/slots.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
+import { cancelAppointment } from "../engines/appointmentPromotion.js";
 import { effectivePriceForDate } from "../engines/pricing.js";
 import { formatApptTime } from "../messaging/templates.js";
 import { sendPushToUser } from "../messaging/push.js";
@@ -179,6 +180,13 @@ const bookInput = z.object({
   slot_id: z.string().min(1),
   client_name: z.string().min(1).max(80).optional(),
 });
+
+const rescheduleInput = z.object({
+  appointment_id: z.string().min(1),
+  new_slot_id: z.string().min(1),
+});
+
+const cancelInput = z.object({ appointment_id: z.string().min(1) });
 
 const escalateInput = z.object({ reason: z.string().min(1) });
 
@@ -743,6 +751,155 @@ async function bookAppointment(
   }
 }
 
+/**
+ * The client's own upcoming appointment, or an error string. Ownership is by
+ * the conversation's DB-resolved clientId - a texter can never touch someone
+ * else's booking no matter what id the model passes.
+ */
+async function loadOwnAppointment(ctx: ToolContext, appointmentId: string) {
+  if (!ctx.clientId) return "no client record for this number" as const;
+  const appt = await runWithShop(ctx.shopId, (tx) =>
+    tx.appointment.findFirst({
+      where: {
+        id: appointmentId,
+        shopId: ctx.shopId,
+        clientId: ctx.clientId!,
+        holdExpiresAt: null, // holds aren't appointments
+      },
+      select: {
+        id: true,
+        status: true,
+        staffId: true,
+        serviceId: true,
+        startsAt: true,
+        endsAt: true,
+        payment: { select: { status: true, amount: true } },
+      },
+    }),
+  );
+  if (!appt) {
+    return "no such appointment for this client - use get_client_history to list theirs" as const;
+  }
+  return appt;
+}
+
+async function rescheduleTool(
+  ctx: ToolContext,
+  rawInput: unknown,
+): Promise<ToolExecutionResult> {
+  const parsed = rescheduleInput.safeParse(rawInput);
+  if (!parsed.success) return fail("invalid input: appointment_id and new_slot_id required");
+
+  const appt = await loadOwnAppointment(ctx, parsed.data.appointment_id);
+  if (typeof appt === "string") return fail(appt);
+  if (appt.status !== "BOOKED" || appt.startsAt.getTime() <= ctx.now.getTime()) {
+    return fail("that appointment can't be moved (not an upcoming booked appointment)");
+  }
+
+  const slot = await loadSlotContext(ctx, parsed.data.new_slot_id);
+  if (typeof slot === "string") return fail(slot);
+  if (slot.serviceId !== appt.serviceId) {
+    return fail(
+      "a reschedule keeps the same service - to change services, cancel and book fresh",
+    );
+  }
+
+  // Paid booking + different price on the new date: self-serve can't reconcile
+  // the captured charge (same rule as the public manage page) - hand off.
+  const paidCents =
+    appt.payment && appt.payment.status === "succeeded" ? appt.payment.amount : null;
+  if (paidCents !== null) {
+    const newCents = slot.price === null ? null : Math.round(slot.price * 100);
+    if (newCents !== null && newCents !== paidCents) {
+      return fail(
+        "this booking is already paid and the new date has a different price - " +
+          "escalate_to_human so the barber can move it",
+      );
+    }
+  }
+
+  const bookable = await isSlotBookable({
+    shopId: ctx.shopId,
+    staffId: slot.staffId,
+    serviceId: slot.serviceId,
+    startsAt: slot.startsAt,
+    now: ctx.now,
+    excludeAppointmentId: appt.id,
+  });
+  if (!bookable) return fail("that new time is outside the shop's bookable hours");
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      await lockStaffAndAssertSlotFree(tx, {
+        staffId: slot.staffId,
+        startsAt: slot.startsAt,
+        endsAt: slot.endsAt,
+        bufferMin: slot.bufferMin,
+        excludeAppointmentId: appt.id,
+        now: ctx.now,
+      });
+      await tx.appointment.update({
+        where: { id: appt.id },
+        data: {
+          staffId: slot.staffId, // the new slot may be with a different barber
+          startsAt: slot.startsAt,
+          endsAt: slot.endsAt,
+          priceAtBooking: slot.price ?? null,
+          // The agent's SMS is the fresh confirmation; the ~24h reminder
+          // re-arms for the new time.
+          confirmationSentAt: ctx.now,
+          reminderSentAt: null,
+        },
+      });
+    });
+  } catch (err) {
+    if (err instanceof SlotTakenError) return fail(SLOT_LOST);
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      return fail(SLOT_LOST);
+    }
+    throw err;
+  }
+
+  return ok({
+    rescheduled: true,
+    appointment_id: appt.id,
+    new_time: formatApptTime(slot.startsAt, slot.timezone),
+    barber: slot.staffName,
+    service: slot.serviceName,
+    note: "confirm the new date+time back to the client",
+  });
+}
+
+async function cancelTool(ctx: ToolContext, rawInput: unknown): Promise<ToolExecutionResult> {
+  const parsed = cancelInput.safeParse(rawInput);
+  if (!parsed.success) return fail("invalid input: appointment_id required");
+
+  const appt = await loadOwnAppointment(ctx, parsed.data.appointment_id);
+  if (typeof appt === "string") return fail(appt);
+  if (appt.status !== "BOOKED" || appt.startsAt.getTime() <= ctx.now.getTime()) {
+    return fail("that appointment can't be cancelled (not an upcoming booked appointment)");
+  }
+
+  // Customer-initiated: the shop's cancellation policy applies (a fee may be
+  // kept inside the window), and the freed slot fires the slot-opened flow -
+  // which is exactly what feeds the gap-filler.
+  const okCancel = await cancelAppointment(ctx.shopId, appt.id, "CANCELED", ctx.now, {
+    applyPolicyFee: true,
+  });
+  if (!okCancel) return fail("cancel failed - escalate_to_human");
+
+  const shop = await prisma.shop.findUnique({
+    where: { id: ctx.shopId },
+    select: { timezone: true },
+  });
+  return ok({
+    cancelled: true,
+    appointment_id: appt.id,
+    was: formatApptTime(appt.startsAt, shop?.timezone ?? "America/New_York"),
+    note: "keep it warm - no guilt-trip, leave the door open",
+  });
+}
+
 async function escalateToHuman(
   ctx: ToolContext,
   rawInput: unknown,
@@ -833,10 +990,6 @@ export async function escalateConversation(params: {
 // Dispatch
 // ---------------------------------------------------------------------------
 
-const NOT_YET_ENABLED =
-  "this action isn't enabled for this shop yet - apologize briefly and use " +
-  "escalate_to_human so the barber can handle it directly";
-
 /** Bind a ToolExecutor to one conversation's context. */
 export function makeToolExecutor(ctx: ToolContext): ToolExecutor {
   return async (name, input) => {
@@ -852,10 +1005,10 @@ export function makeToolExecutor(ctx: ToolContext): ToolExecutor {
           return await holdSlot(ctx, input);
         case "book_appointment":
           return await bookAppointment(ctx, input);
-        // Reschedule/cancel land in Phase 3; keep the model on a graceful path.
         case "reschedule":
+          return await rescheduleTool(ctx, input);
         case "cancel":
-          return fail(NOT_YET_ENABLED);
+          return await cancelTool(ctx, input);
         default:
           return fail(`unknown tool: ${name}`);
       }

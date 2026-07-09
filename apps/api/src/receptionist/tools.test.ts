@@ -229,6 +229,79 @@ describe("book_appointment", () => {
   });
 });
 
+describe("reschedule", () => {
+  it("moves the client's own appointment: new time, fresh reminder state, slot freed", async () => {
+    const exec = makeToolExecutor(ctxFor(clientId, "+15551230001"));
+    const booked = await exec("book_appointment", { slot_id: slotIdAt(20, 0) });
+    const apptId = JSON.parse(booked.result).appointment_id as string;
+
+    const moved = await exec("reschedule", {
+      appointment_id: apptId,
+      new_slot_id: slotIdAt(21, 0),
+    });
+    expect(moved.isError).toBe(false);
+
+    const row = await prisma.appointment.findUnique({ where: { id: apptId } });
+    expect(row!.startsAt.getTime()).toBe(T(21, 0).getTime());
+    expect(row!.status).toBe("BOOKED");
+    expect(row!.reminderSentAt).toBeNull();
+
+    // The old 20:00 slot is offerable again.
+    const slots = await computeOpenSlots({
+      shopId,
+      staffId,
+      serviceId,
+      fromDate: T(0, 0),
+      toDate: T(23, 59),
+      now: NOW,
+    });
+    expect(slots.some((s) => s.startsAt.getTime() === T(20, 0).getTime())).toBe(true);
+  });
+
+  it("refuses to touch ANOTHER client's appointment no matter what id the model passes", async () => {
+    const mine = makeToolExecutor(ctxFor(clientId, "+15551230001"));
+    const booked = await mine("book_appointment", { slot_id: slotIdAt(22, 0) });
+    const apptId = JSON.parse(booked.result).appointment_id as string;
+
+    const rival = makeToolExecutor(ctxFor(otherClientId, "+15551230002"));
+    const res = await rival("reschedule", {
+      appointment_id: apptId,
+      new_slot_id: slotIdAt(23, 0),
+    });
+    expect(res.isError).toBe(true);
+    const cancelRes = await rival("cancel", { appointment_id: apptId });
+    expect(cancelRes.isError).toBe(true);
+    const row = await prisma.appointment.findUnique({ where: { id: apptId } });
+    expect(row!.status).toBe("BOOKED");
+    expect(row!.startsAt.getTime()).toBe(T(22, 0).getTime());
+  });
+});
+
+describe("cancel", () => {
+  it("cancels the client's own upcoming appointment and frees the slot", async () => {
+    const exec = makeToolExecutor(ctxFor(clientId, "+15551230001"));
+    const booked = await exec("book_appointment", { slot_id: slotIdAt(8, 0) });
+    const apptId = JSON.parse(booked.result).appointment_id as string;
+
+    const res = await exec("cancel", { appointment_id: apptId });
+    expect(res.isError).toBe(false);
+    expect(JSON.parse(res.result).cancelled).toBe(true);
+
+    const row = await prisma.appointment.findUnique({ where: { id: apptId } });
+    expect(row!.status).toBe("CANCELED");
+
+    const slots = await computeOpenSlots({
+      shopId,
+      staffId,
+      serviceId,
+      fromDate: T(0, 0),
+      toDate: T(23, 59),
+      now: NOW,
+    });
+    expect(slots.some((s) => s.startsAt.getTime() === T(8, 0).getTime())).toBe(true);
+  });
+});
+
 describe("expired holds release + sweep", () => {
   it("an expired hold's slot is offerable again BEFORE any sweep; the sweep then flips it to CANCELED", async () => {
     const exec = makeToolExecutor(ctxFor(clientId, "+15551230001"));
