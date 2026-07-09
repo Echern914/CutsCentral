@@ -236,6 +236,26 @@ model Shop {
   // agenda. Off by default so existing shops are unchanged. Native-only.
   requireBookingApproval Boolean @default(false)
 
+  // AI receptionist (paid add-on). The master toggle is receptionistEnabled;
+  // the feature additionally requires bookingMode=native, active base billing,
+  // the add-on entitlement (receptionistCompAccess OR an active add-on
+  // subscription), an accepted liability acknowledgment, and ANTHROPIC_API_KEY
+  // set - all evaluated in ONE place (apps/api/src/receptionist/config.ts).
+  receptionistEnabled Boolean @default(false)
+  // Optional voice knob injected into the prompt file's {{TONE}} placeholder
+  // (e.g. "relaxed & friendly"); null = the prompt's default voice.
+  receptionistTone String?
+  // Add-on billing (mirrors subscriptionStatus for the $40/mo receptionist
+  // price). "none" until the shop subscribes; kept in sync by the Stripe
+  // webhook. receptionistCompAccess = comped entitlement (pilot shops).
+  receptionistSubscriptionStatus String  @default("none")
+  receptionistCompAccess         Boolean @default(false)
+  // Liability click-through: the barber acknowledged the AI can make scheduling
+  // mistakes (double-bookings, misses) and ChairBack isn't liable. Stamped by
+  // the settings route when receptionistEnabled is first turned on; enabling is
+  // REJECTED without it. null = never accepted.
+  receptionistTermsAcceptedAt DateTime?
+
   // per-shop webhook routing (the body has no account id, so the URL path routes)
   webhookSecret    String   @unique // 32-byte random, used in the webhook URL path
   acuityWebhookIds String[] @default([]) // subscription ids returned by Acuity (teardown)
@@ -292,6 +312,8 @@ model Shop {
   appointmentRequests AppointmentRequest[]
   waitlist            WaitlistEntry[]
   reviews             Review[]
+  receptionistConversations ReceptionistConversation[]
+  receptionistMessages      ReceptionistMessage[]
   pushSubscriptions   PushSubscription[]
   walletPasses        WalletPassRegistration[]
 
@@ -571,6 +593,7 @@ model Client {
   pushSubscriptions   PushSubscription[]
   cardGrants          CardGrant[]
   walletRegistrations WalletPassRegistration[]
+  receptionistConversations ReceptionistConversation[]
 
   @@unique([shopId, acuityClientKey]) // tenant-scoped identity + idempotent upsert
   @@index([shopId])
@@ -1046,6 +1069,15 @@ model Appointment {
   seriesId              String?
   series                RecurringSeries?  @relation(fields: [seriesId], references: [id], onDelete: SetNull)
   seriesOccurrenceIndex Int?
+  // AI-receptionist soft-lock. non-null = this PENDING row is a HOLD placed by
+  // the receptionist while a client decides ("want Thu 2:30?"), not a real
+  // request-before-booking request. An ACTIVE hold (holdExpiresAt > now) blocks
+  // the slot exactly like any PENDING row; an EXPIRED one is excluded from the
+  // busy set + overlap guards (and swept to CANCELED) so it releases the slot
+  // without a slot-opened blast. Cleared (set null) when the hold is booked.
+  holdExpiresAt DateTime?
+  // Origin marker: "receptionist" for AI-created rows; null for everything else.
+  bookedVia     String?
   createdAt          DateTime          @default(now())
   updatedAt          DateTime          @updatedAt
 
@@ -1057,6 +1089,7 @@ model Appointment {
   @@index([status, startsAt]) // reminder + promotion scans
   @@index([shopId, status, startsAt]) // dashboard upcoming list
   @@index([seriesId]) // "future rows of this series" lookups for cancel-scope
+  @@index([status, holdExpiresAt]) // expired-hold sweep + busy-set exclusion
 }
 
 enum RecurringSeriesStatus {
@@ -1180,4 +1213,59 @@ model JobLease {
   updatedAt DateTime @updatedAt
 
   @@map("job_lease")
+}
+
+//  AI receptionist
+
+// One SMS thread between a client phone number and ONE shop's AI receptionist.
+// The row pins the shop for the thread's lifetime, which is what makes replies
+// on the SHARED platform number route deterministically (an active conversation
+// wins over any client-phone-match heuristic). Created from the Twilio webhook
+// path (no shop session), so inserts run as the connection owner and bypass
+// FORCE RLS - the same trust model as WaitlistEntry/AppointmentRequest - and
+// the barber reads transcripts back through forShop() (RLS-enforced).
+model ReceptionistConversation {
+  id       String  @id @default(cuid())
+  shopId   String
+  shop     Shop    @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  clientId String?
+  client   Client? @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  phone    String // E.164
+  // active    = the AI answers inbound texts on this thread
+  // escalated = handed to the barber; the AI stays silent until reopened
+  // closed    = ended (24h inactivity sweep, STOP, or resolved)
+  status String @default("active")
+  // Optimistic per-conversation turn lock: a worker claims a turn by setting
+  // this from null; a second inbound while claimed just persists its message
+  // (the running turn's rebuilt history picks it up). Stale (> ~2 min) = free.
+  processingSince DateTime?
+  lastMessageAt   DateTime @default(now())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  messages ReceptionistMessage[]
+
+  @@index([shopId, phone, status])
+  @@index([phone, status, lastMessageAt]) // inbound routing: active-conversation pin
+  @@index([status, lastMessageAt]) // auto-close sweep
+}
+
+// One turn in a receptionist conversation. The full audit trail: every inbound
+// client text (role "user"), every AI reply (role "assistant", with the tool
+// calls it made that turn in toolCalls), and system notes (escalations, holds
+// expiring, gap-fill seeds) as role "system_note". toolCalls is an array of
+// {name, input, result, isError} - the complete record of what the AI did.
+model ReceptionistMessage {
+  id             String                   @id @default(cuid())
+  shopId         String // denormalized from the conversation for uniform RLS
+  shop           Shop                     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  conversationId String
+  conversation   ReceptionistConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String // "user" | "assistant" | "system_note"
+  content        String
+  toolCalls      Json                     @default("[]")
+  createdAt      DateTime                 @default(now())
+
+  @@index([conversationId, createdAt])
+  @@index([shopId, createdAt])
 }

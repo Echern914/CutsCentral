@@ -551,6 +551,57 @@ export function forShop(shopId: string) {
         ),
     },
 
+    // AI receptionist threads: created on the Twilio-webhook path (plain prisma,
+    // no shop context - same trust model as the waitlist join), then read back
+    // here for the dashboard transcript view (RLS).
+    receptionistConversation: {
+      findMany: (args: Prisma.ReceptionistConversationFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.receptionistConversation.findMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      findFirst: (args: Prisma.ReceptionistConversationFindFirstArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.receptionistConversation.findFirst({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      count: (args: Prisma.ReceptionistConversationCountArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.receptionistConversation.count({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      update: (args: Prisma.ReceptionistConversationUpdateArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.receptionistConversation.update({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+    },
+
+    receptionistMessage: {
+      findMany: (args: Prisma.ReceptionistMessageFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.receptionistMessage.findMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      count: (args: Prisma.ReceptionistMessageCountArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.receptionistMessage.count({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+    },
+
     // Reviews: created on the UNauthenticated public route (plain prisma, no shop
     // context), then read/moderated here through the scoped accessor (RLS).
     review: {
