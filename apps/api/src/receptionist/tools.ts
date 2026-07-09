@@ -1,9 +1,11 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
-import { apiEnv, zonedWallTimeToUtc } from "@chairback/config";
-import { forShop, prisma, runWithShop } from "@chairback/db";
+import { apiEnv, randomToken, zonedWallTimeToUtc } from "@chairback/config";
+import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
-import { computeOpenSlots, type Slot } from "../engines/slots.js";
+import { computeOpenSlots, isSlotBookable, type Slot } from "../engines/slots.js";
+import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
+import { effectivePriceForDate } from "../engines/pricing.js";
 import { formatApptTime } from "../messaging/templates.js";
 import { sendPushToUser } from "../messaging/push.js";
 import { getMessageProvider } from "../messaging/twilio.js";
@@ -169,6 +171,13 @@ const checkAvailabilityInput = z.object({
   from_date: z.string().regex(DATE_RE),
   to_date: z.string().regex(DATE_RE).optional(),
   barber: z.string().min(1).optional(),
+});
+
+const holdInput = z.object({ slot_id: z.string().min(1) });
+
+const bookInput = z.object({
+  slot_id: z.string().min(1),
+  client_name: z.string().min(1).max(80).optional(),
 });
 
 const escalateInput = z.object({ reason: z.string().min(1) });
@@ -449,6 +458,291 @@ async function getClientHistory(ctx: ToolContext): Promise<ToolExecutionResult> 
   });
 }
 
+/** Everything a hold/book write needs about the decoded slot. */
+async function loadSlotContext(
+  ctx: ToolContext,
+  slotId: string,
+): Promise<
+  | {
+      staffId: string;
+      serviceId: string;
+      startsAt: Date;
+      endsAt: Date;
+      price: number | null;
+      bufferMin: number;
+      timezone: string;
+      serviceName: string;
+      staffName: string;
+    }
+  | string
+> {
+  const decoded = decodeSlotId(slotId);
+  if (!decoded) return "invalid slot_id - use one returned by check_availability";
+  if (decoded.startsAt.getTime() <= ctx.now.getTime()) {
+    return "that slot is in the past";
+  }
+  const shop = await prisma.shop.findUnique({
+    where: { id: ctx.shopId },
+    select: { timezone: true, bookingBufferMin: true },
+  });
+  if (!shop) return "shop not found";
+  const db = forShop(ctx.shopId);
+  const [service, staff] = await Promise.all([
+    db.service.findFirst({
+      where: { id: decoded.serviceId, active: true },
+      select: { id: true, name: true, durationMin: true, price: true, priceOverrides: true },
+    }),
+    db.staff.findFirst({
+      where: { id: decoded.staffId, active: true },
+      select: { id: true, name: true },
+    }),
+  ]);
+  if (!service || !staff) return "that slot's barber or service is no longer offered";
+  const price = effectivePriceForDate(
+    service.price === null ? null : Number(service.price),
+    service.priceOverrides,
+    decoded.startsAt,
+    shop.timezone,
+  );
+  return {
+    staffId: decoded.staffId,
+    serviceId: decoded.serviceId,
+    startsAt: decoded.startsAt,
+    endsAt: new Date(decoded.startsAt.getTime() + service.durationMin * 60_000),
+    price,
+    bufferMin: shop.bookingBufferMin,
+    timezone: shop.timezone,
+    serviceName: service.name,
+    staffName: staff.name,
+  };
+}
+
+/** The conversation's DB-resolved client - the ONLY identity a write may use. */
+async function loadBookingIdentity(ctx: ToolContext): Promise<{
+  clientId: string;
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
+} | null> {
+  if (!ctx.clientId) return null;
+  const client = await forShop(ctx.shopId).client.findFirst({
+    where: { id: ctx.clientId },
+    select: { id: true, firstName: true, lastName: true, email: true },
+  });
+  if (!client) return null;
+  return {
+    clientId: client.id,
+    firstName: client.firstName,
+    lastName: client.lastName,
+    email: client.email,
+  };
+}
+
+const SLOT_LOST =
+  "that slot just got taken - apologize once, run check_availability again and " +
+  "offer the next-closest times";
+
+async function holdSlot(ctx: ToolContext, rawInput: unknown): Promise<ToolExecutionResult> {
+  const parsed = holdInput.safeParse(rawInput);
+  if (!parsed.success) return fail("invalid input: slot_id required");
+  const slot = await loadSlotContext(ctx, parsed.data.slot_id);
+  if (typeof slot === "string") return fail(slot);
+  const identity = await loadBookingIdentity(ctx);
+  if (!identity) return fail("no client record for this number - escalate_to_human");
+
+  // Hours/exceptions/bounds re-check (conflicts are the tx guard's job).
+  const bookable = await isSlotBookable({
+    shopId: ctx.shopId,
+    staffId: slot.staffId,
+    serviceId: slot.serviceId,
+    startsAt: slot.startsAt,
+    now: ctx.now,
+  });
+  if (!bookable) return fail("that time is outside the shop's bookable hours now");
+
+  const expiresAt = new Date(ctx.now.getTime() + CONVERSATIONAL_HOLD_TTL_MS);
+  try {
+    const held = await prisma.$transaction(async (tx) => {
+      await lockStaffAndAssertSlotFree(tx, {
+        staffId: slot.staffId,
+        startsAt: slot.startsAt,
+        endsAt: slot.endsAt,
+        bufferMin: slot.bufferMin,
+        now: ctx.now,
+      });
+      return tx.appointment.create({
+        data: {
+          shopId: ctx.shopId,
+          staffId: slot.staffId,
+          serviceId: slot.serviceId,
+          clientId: identity.clientId,
+          firstName: identity.firstName ?? "Client",
+          lastName: identity.lastName,
+          phone: ctx.phone,
+          email: identity.email,
+          status: "PENDING",
+          holdExpiresAt: expiresAt,
+          bookedVia: "receptionist",
+          startsAt: slot.startsAt,
+          endsAt: slot.endsAt,
+          priceAtBooking: slot.price ?? undefined,
+          manageToken: randomToken(),
+        },
+        select: { id: true },
+      });
+    });
+    return ok({
+      held: true,
+      slot_id: parsed.data.slot_id,
+      when: formatApptTime(slot.startsAt, slot.timezone),
+      expires_in_minutes: Math.round(CONVERSATIONAL_HOLD_TTL_MS / 60_000),
+      hold_id: held.id,
+    });
+  } catch (err) {
+    if (err instanceof SlotTakenError) {
+      // Idempotent re-hold: if the "conflict" is OUR OWN live hold on this
+      // exact slot for this client, refresh its expiry instead of failing.
+      const own = await prisma.appointment.findFirst({
+        where: {
+          shopId: ctx.shopId,
+          staffId: slot.staffId,
+          startsAt: slot.startsAt,
+          clientId: identity.clientId,
+          status: "PENDING",
+          bookedVia: "receptionist",
+          holdExpiresAt: { gt: ctx.now },
+        },
+        select: { id: true },
+      });
+      if (own) {
+        await prisma.appointment.update({
+          where: { id: own.id },
+          data: { holdExpiresAt: expiresAt },
+        });
+        return ok({
+          held: true,
+          slot_id: parsed.data.slot_id,
+          when: formatApptTime(slot.startsAt, slot.timezone),
+          expires_in_minutes: Math.round(CONVERSATIONAL_HOLD_TTL_MS / 60_000),
+          hold_id: own.id,
+        });
+      }
+      return fail(SLOT_LOST);
+    }
+    throw err;
+  }
+}
+
+async function bookAppointment(
+  ctx: ToolContext,
+  rawInput: unknown,
+): Promise<ToolExecutionResult> {
+  const parsed = bookInput.safeParse(rawInput);
+  if (!parsed.success) return fail("invalid input: slot_id required");
+  const slot = await loadSlotContext(ctx, parsed.data.slot_id);
+  if (typeof slot === "string") return fail(slot);
+  const identity = await loadBookingIdentity(ctx);
+  if (!identity) return fail("no client record for this number - escalate_to_human");
+  // Identity comes from the DB; the model may only FILL a missing first name.
+  const firstName = identity.firstName ?? parsed.data.client_name ?? "Client";
+
+  try {
+    const bookedId = await prisma.$transaction(async (tx) => {
+      // Our own live-or-expired hold on this exact slot, if any.
+      const hold = await tx.appointment.findFirst({
+        where: {
+          shopId: ctx.shopId,
+          staffId: slot.staffId,
+          startsAt: slot.startsAt,
+          clientId: identity.clientId,
+          status: "PENDING",
+          bookedVia: "receptionist",
+          holdExpiresAt: { not: null },
+        },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, holdExpiresAt: true },
+      });
+
+      if (hold) {
+        // ACTIVE hold: BOOKED-only re-check (approve-path parity - our own row
+        // is the PENDING one, and any conflicting PENDING would have failed its
+        // create guard while our hold was live). EXPIRED hold: the slot was
+        // released, so a new PENDING may exist - count BOOKED+PENDING again.
+        const active =
+          hold.holdExpiresAt !== null && hold.holdExpiresAt.getTime() > ctx.now.getTime();
+        await lockStaffAndAssertSlotFree(tx, {
+          staffId: slot.staffId,
+          startsAt: slot.startsAt,
+          endsAt: slot.endsAt,
+          bufferMin: slot.bufferMin,
+          excludeAppointmentId: hold.id,
+          statuses: active ? ["BOOKED"] : ["BOOKED", "PENDING"],
+          now: ctx.now,
+        });
+        await tx.appointment.update({
+          where: { id: hold.id },
+          data: {
+            status: "BOOKED",
+            holdExpiresAt: null, // no longer a hold - a real booking
+            firstName,
+            // The agent's SMS IS the confirmation - stamp so no other path
+            // double-sends. The ~24h reminder flow stays untouched.
+            confirmationSentAt: ctx.now,
+          },
+        });
+        return hold.id;
+      }
+
+      // No hold (the model skipped hold_slot): book directly under the guard.
+      await lockStaffAndAssertSlotFree(tx, {
+        staffId: slot.staffId,
+        startsAt: slot.startsAt,
+        endsAt: slot.endsAt,
+        bufferMin: slot.bufferMin,
+        now: ctx.now,
+      });
+      const appt = await tx.appointment.create({
+        data: {
+          shopId: ctx.shopId,
+          staffId: slot.staffId,
+          serviceId: slot.serviceId,
+          clientId: identity.clientId,
+          firstName,
+          lastName: identity.lastName,
+          phone: ctx.phone,
+          email: identity.email,
+          status: "BOOKED",
+          bookedVia: "receptionist",
+          startsAt: slot.startsAt,
+          endsAt: slot.endsAt,
+          priceAtBooking: slot.price ?? undefined,
+          manageToken: randomToken(),
+          confirmationSentAt: ctx.now,
+        },
+        select: { id: true },
+      });
+      return appt.id;
+    });
+
+    return ok({
+      booked: true,
+      appointment_id: bookedId,
+      when: formatApptTime(slot.startsAt, slot.timezone),
+      service: slot.serviceName,
+      barber: slot.staffName,
+      price: slot.price,
+      note: "confirm the exact date+time+service back to the client in your reply",
+    });
+  } catch (err) {
+    if (err instanceof SlotTakenError) return fail(SLOT_LOST);
+    // P2002 = the partial-unique backstop fired on an identical-start race.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      return fail(SLOT_LOST);
+    }
+    throw err;
+  }
+}
+
 async function escalateToHuman(
   ctx: ToolContext,
   rawInput: unknown,
@@ -554,9 +848,11 @@ export function makeToolExecutor(ctx: ToolContext): ToolExecutor {
           return await getClientHistory(ctx);
         case "escalate_to_human":
           return await escalateToHuman(ctx, input);
-        // Booking writes land in Phase 2/3; keep the model on a graceful path.
         case "hold_slot":
+          return await holdSlot(ctx, input);
         case "book_appointment":
+          return await bookAppointment(ctx, input);
+        // Reschedule/cancel land in Phase 3; keep the model on a graceful path.
         case "reschedule":
         case "cancel":
           return fail(NOT_YET_ENABLED);

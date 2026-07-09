@@ -7,6 +7,7 @@ import { prisma, Prisma, runWithShop } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
 import { isSlotBookable } from "./slots.js";
+import { lockStaffAndAssertSlotFree } from "./bookingWrite.js";
 import { effectivePriceForDate } from "./pricing.js";
 
 /**
@@ -166,7 +167,6 @@ export async function materializeSeries(
 
   const booked: SeriesResult["booked"] = [];
   const skipped: SeriesResult["skipped"] = [];
-  const bufferMs = Math.max(0, input.bookingBufferMin) * MS_PER_MIN;
 
   for (const occ of occurrences) {
     const startsAt = occ.startsAt;
@@ -203,22 +203,15 @@ export async function materializeSeries(
 
     try {
       const appt = await prisma.$transaction(async (tx) => {
-        await tx.$executeRaw(
-          Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`appt:${input.staffId}`}))`,
-        );
-        const overlapStart = new Date(startsAt.getTime() - bufferMs);
-        const overlapEnd = new Date(endsAt.getTime() + bufferMs);
-        // ISO + ::timestamp (not Date params): $queryRaw serializes a JS Date in
-        // the PROCESS timezone, silently shifting the comparison against the
-        // naive-UTC column on non-UTC machines. See the public create guard.
-        const overlap = await tx.$queryRaw<{ id: string }[]>(
-          Prisma.sql`SELECT id FROM "Appointment"
-                     WHERE "staffId" = ${input.staffId}
-                       AND "status" IN ('BOOKED', 'PENDING')
-                       AND "startsAt" < ${overlapEnd.toISOString()}::timestamp
-                       AND "endsAt" > ${overlapStart.toISOString()}::timestamp`,
-        );
-        if (overlap.length > 0) throw new Error("slot_taken");
+        // Shared advisory-lock + overlap guard (throws SlotTakenError, whose
+        // message is "slot_taken" - the catch below matches unchanged).
+        await lockStaffAndAssertSlotFree(tx, {
+          staffId: input.staffId,
+          startsAt,
+          endsAt,
+          bufferMin: input.bookingBufferMin,
+          now,
+        });
         return tx.appointment.create({
           data: {
             shopId: input.shopId,

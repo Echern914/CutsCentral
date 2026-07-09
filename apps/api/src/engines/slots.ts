@@ -240,6 +240,11 @@ export async function computeOpenSlots(
         // PENDING requests hold their slot too (request-before-booking), so the
         // picker must subtract them just like confirmed BOOKED appointments.
         status: { in: ["BOOKED", "PENDING"] },
+        // AI-receptionist holds: an ACTIVE hold (holdExpiresAt > now) blocks
+        // like any PENDING row; an EXPIRED one releases its slot immediately -
+        // the CANCELED flip by the sweep is hygiene, not what frees the time.
+        // (Booking a hold clears holdExpiresAt, so BOOKED rows never carry one.)
+        AND: [{ OR: [{ holdExpiresAt: null }, { holdExpiresAt: { gt: now } }] }],
         startsAt: { lt: new Date(rangeEnd) },
         endsAt: { gt: new Date(rangeStart) },
         ...(input.excludeAppointmentId

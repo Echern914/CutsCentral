@@ -14,6 +14,7 @@ import { notifyPunchEarned } from "../services/loyaltyNotify.js";
 import { notifyAppointmentConfirmation } from "../services/appointmentNotify.js";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
+import { lockStaffAndAssertSlotFree } from "../engines/bookingWrite.js";
 import { resolveAddOns } from "../engines/addOns.js";
 import { effectivePriceForDate } from "../engines/pricing.js";
 import {
@@ -463,6 +464,10 @@ bookingDashboardRouter.get("/appointments", async (req, res) => {
       ...(q.from || q.to
         ? { startsAt: { ...(q.from ? { gte: q.from } : {}), ...(q.to ? { lte: q.to } : {}) } }
         : {}),
+      // AI-receptionist holds are PENDING rows but NOT requests - keep them out
+      // of the list (esp. the requests inbox). Booking clears holdExpiresAt, so
+      // this filter never hides a real appointment.
+      holdExpiresAt: null,
     },
     orderBy: { startsAt: "asc" },
     take: 500,
@@ -600,6 +605,8 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       where: {
         startsAt: { gte: from, lte: to },
         ...(staffId ? { staffId } : {}),
+        // Keep AI-receptionist holds off the calendar (see the list above).
+        holdExpiresAt: null,
       },
       orderBy: { startsAt: "asc" },
       take: 500,
@@ -952,25 +959,14 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      // Serialize concurrent grabs on this staff's calendar, then overlap-check
-      // with the turnover buffer (same guard as the public create).
-      await tx.$executeRaw(
-        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`appt:${d.staffId}`}))`,
-      );
-      const bufferMs = Math.max(0, shop.bookingBufferMin) * 60_000;
-      const overlapStart = new Date(startsAt.getTime() - bufferMs);
-      const overlapEnd = new Date(endsAt.getTime() + bufferMs);
-      // ISO + ::timestamp (not Date params): $queryRaw serializes a JS Date in
-      // the PROCESS timezone, silently shifting the comparison against the
-      // naive-UTC column on non-UTC machines. See the public create guard.
-      const overlap = await tx.$queryRaw<{ id: string }[]>(
-        Prisma.sql`SELECT id FROM "Appointment"
-                   WHERE "staffId" = ${d.staffId}
-                     AND "status" IN ('BOOKED', 'PENDING')
-                     AND "startsAt" < ${overlapEnd.toISOString()}::timestamp
-                     AND "endsAt" > ${overlapStart.toISOString()}::timestamp`,
-      );
-      if (overlap.length > 0) throw new Error("slot_taken");
+      // Shared advisory-lock + overlap guard (same as the public create);
+      // SlotTakenError's message is "slot_taken", so the catch below matches.
+      await lockStaffAndAssertSlotFree(tx, {
+        staffId: d.staffId,
+        startsAt,
+        endsAt,
+        bufferMin: shop.bookingBufferMin,
+      });
 
       // Resolve the client: an existing one, or create inline from the name.
       let clientId = d.clientId ?? null;
@@ -1140,28 +1136,25 @@ bookingDashboardRouter.post("/appointments/:id/approve", async (req, res) => {
   try {
     const approved = await runWithShop(shopId, async (tx) => {
       const appt = await tx.appointment.findFirst({
-        where: { id: req.params.id!, shopId, status: "PENDING" },
+        // holdExpiresAt null: an AI-receptionist HOLD is also PENDING but is
+        // not a request - it must never be approvable (it's already excluded
+        // from the requests list; this is the belt-and-suspenders).
+        where: { id: req.params.id!, shopId, status: "PENDING", holdExpiresAt: null },
         select: { id: true, staffId: true, startsAt: true, endsAt: true },
       });
       if (!appt) return null; // not found / already handled (idempotent)
 
-      // Re-verify the slot under the lock, excluding self, counting BOOKED+PENDING.
-      await tx.$executeRaw(
-        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`appt:${appt.staffId}`}))`,
-      );
-      const bufferMs = Math.max(0, shop.bookingBufferMin) * 60_000;
-      const overlapStart = new Date(appt.startsAt.getTime() - bufferMs);
-      const overlapEnd = new Date(appt.endsAt.getTime() + bufferMs);
-      // ISO + ::timestamp (not Date params) - see the create guard's comment.
-      const overlap = await tx.$queryRaw<{ id: string }[]>(
-        Prisma.sql`SELECT id FROM "Appointment"
-                   WHERE "staffId" = ${appt.staffId}
-                     AND "status" = 'BOOKED'
-                     AND "id" <> ${appt.id}
-                     AND "startsAt" < ${overlapEnd.toISOString()}::timestamp
-                     AND "endsAt" > ${overlapStart.toISOString()}::timestamp`,
-      );
-      if (overlap.length > 0) throw new Error("slot_taken");
+      // Re-verify under the shared guard, excluding self. BOOKED-only: the row
+      // being approved is itself PENDING, and any conflicting PENDING would
+      // have failed its own create guard (see engines/bookingWrite.ts).
+      await lockStaffAndAssertSlotFree(tx, {
+        staffId: appt.staffId,
+        startsAt: appt.startsAt,
+        endsAt: appt.endsAt,
+        bufferMin: shop.bookingBufferMin,
+        excludeAppointmentId: appt.id,
+        statuses: ["BOOKED"],
+      });
 
       await tx.appointment.update({
         where: { id: appt.id },

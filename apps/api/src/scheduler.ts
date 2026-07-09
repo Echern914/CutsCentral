@@ -11,6 +11,7 @@ import { runAppointmentReminders } from "./engines/appointmentReminders.js";
 import { refreshExpiringSquareTokens } from "./engines/squareTokenRefresh.js";
 import { runTrialReminders } from "./engines/trialReminder.js";
 import { autoCloseIdleConversations } from "./receptionist/conversation.js";
+import { sweepExpiredHolds } from "./engines/holdSweep.js";
 
 const env = apiEnv();
 
@@ -118,6 +119,15 @@ export function startScheduler(): void {
       const closed = await autoCloseIdleConversations();
       if (closed > 0) logger.info({ closed }, "receptionist conversations auto-closed");
     }).catch((err) => logger.error({ err }, "receptionist conversation close failed"));
+  });
+
+  // AI receptionist: sweep expired slot holds every 5 minutes. Hygiene only -
+  // the slot engine + overlap guards already ignore expired holds, so the slot
+  // is free the moment a hold lapses regardless of this job's cadence.
+  cron.schedule("*/5 * * * *", () => {
+    void withLease("receptionist-hold-sweep", 2 * MINUTE, () => sweepExpiredHolds()).catch(
+      (err) => logger.error({ err }, "receptionist hold sweep failed"),
+    );
   });
 
   logger.info("scheduler started");

@@ -4,6 +4,7 @@ import { randomToken } from "@chairback/config";
 import { prisma, Prisma } from "@chairback/db";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
+import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import { resolveAddOns } from "../engines/addOns.js";
 import {
   effectivePriceForDate,
@@ -310,36 +311,16 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
     // lock + overlap check guard against concurrent conflicts, and the partial
     // unique is the final backstop on an identical-start race.
     const result = await prisma.$transaction(async (tx) => {
-      // Serialize ALL concurrent grabs on this staff's calendar. A bare overlap
-      // SELECT ... FOR UPDATE locks nothing when the slot is free, so two
-      // overlapping-but-different-start bookings could both pass; an advisory
-      // xact lock keyed on the staff id closes that race (released on commit).
-      await tx.$executeRaw(
-        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`appt:${d.staffId}`}))`,
-      );
-      // Now no other booking for this staff can interleave: re-check overlap,
-      // padding existing appointments by the shop's turnover buffer so back-to-
-      // back bookings keep the required gap (the availability check ignores
-      // bookings, so the buffer is enforced HERE).
-      const bufferMs = Math.max(0, shop.bookingBufferMin) * 60_000;
-      const overlapStart = new Date(startsAt.getTime() - bufferMs);
-      const overlapEnd = new Date(endsAt.getTime() + bufferMs);
-      // Timestamps as UTC ISO text + ::timestamp cast, NOT raw Date params:
-      // $queryRaw serializes a JS Date in the PROCESS timezone, which shifts the
-      // comparison against the naive-UTC column on any non-UTC machine (the
-      // overlap silently never matched locally; prod only worked because
-      // Railway+Supabase run UTC). toISOString() is always UTC and the
-      // ::timestamp cast drops the zone suffix, so this is deterministic.
-      const overlap = await tx.$queryRaw<{ id: string }[]>(
-        Prisma.sql`SELECT id FROM "Appointment"
-                   WHERE "staffId" = ${d.staffId}
-                     AND "status" IN ('BOOKED', 'PENDING')
-                     AND "startsAt" < ${overlapEnd.toISOString()}::timestamp
-                     AND "endsAt" > ${overlapStart.toISOString()}::timestamp`,
-      );
-      if (overlap.length > 0) {
-        throw new SlotTakenError();
-      }
+      // Advisory lock + buffer-padded overlap re-check (throws SlotTakenError).
+      // Shared with every other Appointment write - see engines/bookingWrite.ts
+      // for the full protocol (and the PR #70 timestamp rule it encapsulates).
+      await lockStaffAndAssertSlotFree(tx, {
+        staffId: d.staffId,
+        startsAt,
+        endsAt,
+        bufferMin: shop.bookingBufferMin,
+        now,
+      });
 
       // Upsert the client (tenant-scoped key). Stamp consent only when none is
       // recorded yet (first consent wins - never overwrite an earlier source).
@@ -467,8 +448,7 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
   });
 });
 
-/** Thrown inside the booking tx to roll back + map to a 409. */
-class SlotTakenError extends Error {}
+// SlotTakenError moved to engines/bookingWrite.ts (shared by every write site).
 
 //  Manage by token (cancel / reschedule) - the token IS the authorization.
 
@@ -637,25 +617,14 @@ bookingPublicRouter.post(
 
     try {
       await prisma.$transaction(async (tx) => {
-        // Advisory xact lock serializes concurrent grabs on this staff calendar
-        // (a bare overlap SELECT locks nothing when the target slot is free).
-        await tx.$executeRaw(
-          Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`appt:${appt.staffId}`}))`,
-        );
-        // Same overlap guard as create (buffer-padded), EXCLUDING this appt.
-        const bufferMs = Math.max(0, appt.shop.bookingBufferMin) * 60_000;
-        const overlapStart = new Date(startsAt.getTime() - bufferMs);
-        const overlapEnd = new Date(endsAt.getTime() + bufferMs);
-        // ISO + ::timestamp (not Date params) - see the create guard's comment.
-        const overlap = await tx.$queryRaw<{ id: string }[]>(
-          Prisma.sql`SELECT id FROM "Appointment"
-                     WHERE "staffId" = ${appt.staffId}
-                       AND "status" IN ('BOOKED', 'PENDING')
-                       AND "id" <> ${appt.id}
-                       AND "startsAt" < ${overlapEnd.toISOString()}::timestamp
-                       AND "endsAt" > ${overlapStart.toISOString()}::timestamp`,
-        );
-        if (overlap.length > 0) throw new SlotTakenError();
+        // Same shared guard as create, EXCLUDING this appt's own row.
+        await lockStaffAndAssertSlotFree(tx, {
+          staffId: appt.staffId,
+          startsAt,
+          endsAt,
+          bufferMin: appt.shop.bookingBufferMin,
+          excludeAppointmentId: appt.id,
+        });
         // Move it, reprice for the new date, and reset send-state so a fresh
         // confirmation/reminder go out.
         await tx.appointment.update({
