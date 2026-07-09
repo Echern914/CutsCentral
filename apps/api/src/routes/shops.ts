@@ -27,6 +27,7 @@ import { toE164 } from "../acuity/clientKey.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 import { sendPushToUser } from "../messaging/push.js";
 import { leadLimiter } from "../middleware/rateLimit.js";
+import { hasReceptionistEntitlement } from "../receptionist/config.js";
 import { logger } from "../logger.js";
 
 export const shopsRouter: Router = Router();
@@ -172,6 +173,14 @@ const updateShopSchema = createShopSchema
     rewardsSections: z
       .array(z.enum(REWARDS_SECTION_KEYS as [string, ...string[]]))
       .max(REWARDS_SECTION_KEYS.length),
+    // AI receptionist (paid add-on). Turning it ON the first time REQUIRES the
+    // liability acknowledgment (acceptReceptionistTerms) - the barber accepts
+    // that the AI can make scheduling mistakes and ChairBack isn't liable; the
+    // acceptance is stamped once (receptionistTermsAcceptedAt) and enforced
+    // again at runtime by receptionist/config.ts.
+    receptionistEnabled: z.boolean(),
+    receptionistTone: z.string().trim().max(120).nullish().or(z.literal("")),
+    acceptReceptionistTerms: z.boolean(),
   })
   .partial();
 
@@ -333,6 +342,22 @@ shopsRouter.patch("/me", requireUser, requireShop, async (req, res) => {
       return;
     }
     data.notifyPhone = normalized;
+  }
+  // AI receptionist: acceptReceptionistTerms isn't a Shop column - it stamps
+  // receptionistTermsAcceptedAt (once, first acceptance wins). Enabling without
+  // an acceptance on record is rejected: the barber must acknowledge that the
+  // AI can make scheduling mistakes (double-bookings, misses) and that
+  // ChairBack isn't liable for them, BEFORE the AI ever touches their calendar.
+  const acceptedNow = data.acceptReceptionistTerms === true;
+  delete data.acceptReceptionistTerms;
+  if (data.receptionistTone === "") data.receptionistTone = null;
+  const alreadyAccepted = req.shop!.receptionistTermsAcceptedAt !== null;
+  if (acceptedNow && !alreadyAccepted) {
+    data.receptionistTermsAcceptedAt = new Date();
+  }
+  if (data.receptionistEnabled === true && !alreadyAccepted && !acceptedNow) {
+    res.status(400).json({ error: "receptionist_terms_required" });
+    return;
   }
   try {
     const shop = await prisma.shop.update({
@@ -721,6 +746,11 @@ function serializeShop(shop: {
   bookingLeadHours: number;
   bookingMaxDays: number;
   bookingBufferMin: number;
+  receptionistEnabled: boolean;
+  receptionistTone: string | null;
+  receptionistTermsAcceptedAt: Date | null;
+  receptionistSubscriptionStatus: string;
+  receptionistCompAccess: boolean;
 }) {
   // Note: webhookSecret is intentionally NOT exposed to the client.
   return {
@@ -760,5 +790,10 @@ function serializeShop(shop: {
     bookingLeadHours: shop.bookingLeadHours,
     bookingMaxDays: shop.bookingMaxDays,
     bookingBufferMin: shop.bookingBufferMin,
+    receptionistEnabled: shop.receptionistEnabled,
+    receptionistTone: shop.receptionistTone,
+    receptionistTermsAcceptedAt: shop.receptionistTermsAcceptedAt?.toISOString() ?? null,
+    // Entitlement summary for the settings UI (comp pilots or the $40/mo add-on).
+    receptionistEntitled: hasReceptionistEntitlement(shop),
   };
 }

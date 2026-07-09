@@ -158,6 +158,43 @@ export async function createCheckoutUrl(shop: CheckoutShop): Promise<string | nu
   return session.url;
 }
 
+/**
+ * Whether the $40/mo AI-receptionist ADD-ON can be sold self-serve. Needs base
+ * billing configured PLUS its own price id. While unset, the add-on is dark and
+ * only receptionistCompAccess (comped pilots) unlocks the feature.
+ */
+export function receptionistBillingEnabled(): boolean {
+  return billingEnabled() && Boolean(apiEnv().STRIPE_RECEPTIONIST_PRICE_ID);
+}
+
+/**
+ * Hosted Checkout for the AI-receptionist add-on subscription. A SECOND
+ * subscription on the shop's existing Stripe customer, tagged
+ * metadata.addon="receptionist" on BOTH the session and the subscription so
+ * applyStripeEvent routes its lifecycle to receptionistSubscriptionStatus and
+ * never touches the base plan. No trial - the add-on bills from day one.
+ */
+export async function createReceptionistCheckoutUrl(
+  shop: CheckoutShop,
+): Promise<string | null> {
+  const env = apiEnv();
+  const customer = await ensureCustomer(shop);
+  const session = await stripe().checkout.sessions.create({
+    mode: "subscription",
+    customer,
+    line_items: [{ price: env.STRIPE_RECEPTIONIST_PRICE_ID!, quantity: 1 }],
+    client_reference_id: shop.id,
+    metadata: { addon: "receptionist" },
+    subscription_data: {
+      metadata: { shopId: shop.id, addon: "receptionist" },
+    },
+    allow_promotion_codes: true,
+    success_url: `${env.APP_BASE_URL}/dashboard/billing?receptionist=success`,
+    cancel_url: `${env.APP_BASE_URL}/dashboard/billing?receptionist=canceled`,
+  });
+  return session.url;
+}
+
 /** Hosted Customer Portal URL (update card, cancel, invoices). */
 export async function createPortalUrl(shop: {
   stripeCustomerId: string | null;
@@ -191,6 +228,23 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
       const session = event.data.object as Stripe.Checkout.Session;
       const shopId = session.client_reference_id;
       if (!shopId || session.mode !== "subscription") return;
+      // AI-receptionist ADD-ON checkout: routes to its own status column and
+      // must NEVER touch the base plan/subscription. The subscription.* events
+      // below (tagged via subscription_data.metadata) converge the status.
+      if (session.metadata?.addon === "receptionist") {
+        const customerId =
+          typeof session.customer === "string"
+            ? session.customer
+            : session.customer?.id ?? null;
+        await prisma.shop.updateMany({
+          where: { id: shopId, NOT: { receptionistSubscriptionStatus: "canceled" } },
+          data: {
+            stripeCustomerId: customerId ?? undefined,
+            receptionistSubscriptionStatus: "active",
+          },
+        });
+        return;
+      }
       const customerId =
         typeof session.customer === "string" ? session.customer : session.customer?.id ?? null;
       const subscriptionId =
@@ -234,6 +288,14 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
         typeof sub.customer === "string" ? sub.customer : sub.customer.id;
       const shopId = sub.metadata?.shopId;
       const status = sub.status; // "canceled" on the deleted event
+      // AI-receptionist ADD-ON subscription lifecycle: its own column only.
+      if (sub.metadata?.addon === "receptionist") {
+        await prisma.shop.updateMany({
+          where: shopId ? { id: shopId } : { stripeCustomerId: customerId },
+          data: { receptionistSubscriptionStatus: status },
+        });
+        return;
+      }
       const { count } = await prisma.shop.updateMany({
         // metadata.shopId is authoritative; customer id covers subs created
         // outside checkout (e.g. from the Stripe dashboard).

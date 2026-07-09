@@ -6,9 +6,12 @@ import {
   billingEnabled,
   createCheckoutUrl,
   createPortalUrl,
+  createReceptionistCheckoutUrl,
   hasActiveAccess,
+  receptionistBillingEnabled,
   trialDaysLeft,
 } from "../billing/stripe.js";
+import { hasReceptionistEntitlement } from "../receptionist/config.js";
 
 export const billingRouter: Router = Router();
 billingRouter.use(requireUser, requireShop);
@@ -31,7 +34,34 @@ billingRouter.get("/", (req, res) => {
     trialDaysLeft: trialDaysLeft(shop),
     hasAccess: hasActiveAccess(shop),
     canManage: Boolean(shop.stripeCustomerId),
+    // AI receptionist add-on ($40/mo). Dark until STRIPE_RECEPTIONIST_PRICE_ID
+    // is set; comped pilots pass via receptionistCompAccess.
+    receptionist: {
+      billingEnabled: receptionistBillingEnabled(),
+      subscriptionStatus: shop.receptionistSubscriptionStatus,
+      compAccess: shop.receptionistCompAccess,
+      entitled: hasReceptionistEntitlement(shop),
+    },
   });
+});
+
+// Start a hosted Checkout for the AI-receptionist ADD-ON -> { url }.
+billingRouter.post("/receptionist/checkout", async (req, res) => {
+  if (!receptionistBillingEnabled()) {
+    res.status(409).json({ error: "receptionist_billing_disabled" });
+    return;
+  }
+  const shop = req.shop!;
+  if (ACTIVE_STATUSES.has(shop.receptionistSubscriptionStatus)) {
+    res.status(409).json({ error: "already_subscribed" });
+    return;
+  }
+  const url = await createReceptionistCheckoutUrl(shop);
+  if (!url) {
+    res.status(502).json({ error: "checkout_failed" });
+    return;
+  }
+  res.json({ url });
 });
 
 // Start a hosted Checkout for the subscription -> { url }.

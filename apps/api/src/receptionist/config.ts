@@ -35,7 +35,10 @@ export function receptionistConfigured(): boolean {
  * when platform billing itself is off (pre-revenue/dev), where everything is
  * unlocked to mirror hasActiveAccess()'s behavior.
  */
-export function hasReceptionistEntitlement(shop: ReceptionistShop): boolean {
+export function hasReceptionistEntitlement(shop: {
+  receptionistCompAccess: boolean;
+  receptionistSubscriptionStatus: string;
+}): boolean {
   if (shop.receptionistCompAccess) return true;
   if (!billingEnabled()) return true;
   return ACTIVE_STATUSES.has(shop.receptionistSubscriptionStatus);
