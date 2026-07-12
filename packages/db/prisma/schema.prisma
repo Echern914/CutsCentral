@@ -940,6 +940,12 @@ model Service {
   // they pick (so a Sunday surcharge is never a surprise), and it's snapshotted
   // onto Appointment.priceAtBooking. See engines/pricing.ts (effectivePriceForDate).
   priceOverrides Json     @default("{}")
+  // Per-weekday DURATION overrides, the same shape/semantics as priceOverrides:
+  // {"5": 20} = Friday cuts take 20 min. Drives the slot grid for that day (a
+  // Friday service consumes a 20-min block) and the appointment's endsAt, which
+  // is the duration snapshot - editing this later never rewrites a booked row.
+  // See engines/pricing.ts (effectiveDurationForDate).
+  durationOverrides Json  @default("{}")
   active         Boolean  @default(true)
   sortOrder      Int      @default(0)
   createdAt      DateTime @default(now())

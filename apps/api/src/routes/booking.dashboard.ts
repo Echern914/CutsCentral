@@ -22,7 +22,7 @@ import {
   sendAppointmentNudge,
 } from "../engines/appointmentNudge.js";
 import { resolveAddOns } from "../engines/addOns.js";
-import { effectivePriceForDate } from "../engines/pricing.js";
+import { effectiveDurationForDate, effectivePriceForDate } from "../engines/pricing.js";
 import {
   materializeSeries,
   type RecurrencePattern,
@@ -50,11 +50,18 @@ const priceOverridesSchema = z
   .record(z.enum(["0", "1", "2", "3", "4", "5", "6"]), z.number().min(0).max(100000))
   .optional();
 
+// Per-weekday DURATION overrides, same key shape ({weekday: minutes}). Bounds
+// mirror durationMin's 5..600.
+const durationOverridesSchema = z
+  .record(z.enum(["0", "1", "2", "3", "4", "5", "6"]), z.number().int().min(5).max(600))
+  .optional();
+
 const serviceSchema = z
   .object({
     name: z.string().trim().min(1).max(120),
     description: z.string().trim().max(500).optional().or(z.literal("")),
     durationMin: z.number().int().min(5).max(600),
+    durationOverrides: durationOverridesSchema,
     price: z.number().min(0).max(100000).nullable().optional(),
     priceOverrides: priceOverridesSchema,
     active: z.boolean().optional(),
@@ -77,6 +84,7 @@ bookingDashboardRouter.get("/services", async (req, res) => {
       ...s,
       price: s.price === null ? null : Number(s.price),
       priceOverrides: s.priceOverrides ?? {},
+      durationOverrides: s.durationOverrides ?? {},
       staffIds: links.filter((l) => l.serviceId === s.id).map((l) => l.staffId),
     })),
   });
@@ -95,9 +103,10 @@ bookingDashboardRouter.post("/services", async (req, res) => {
       name: d.name,
       description: d.description || null,
       durationMin: d.durationMin,
+      // Per-weekday overrides ({} = base every day). Stored verbatim; the zod
+      // schemas already constrained them to known weekday keys + valid values.
+      durationOverrides: d.durationOverrides ?? {},
       price: d.price ?? null,
-      // Per-weekday overrides ({} = base price every day). Stored verbatim; the
-      // zod schema already constrained it to known weekday keys + valid prices.
       priceOverrides: d.priceOverrides ?? {},
       active: d.active ?? true,
       sortOrder: d.sortOrder ?? 0,
@@ -121,6 +130,9 @@ bookingDashboardRouter.patch("/services/:id", async (req, res) => {
       ...(d.name !== undefined ? { name: d.name } : {}),
       ...(d.description !== undefined ? { description: d.description || null } : {}),
       ...(d.durationMin !== undefined ? { durationMin: d.durationMin } : {}),
+      ...(d.durationOverrides !== undefined
+        ? { durationOverrides: d.durationOverrides }
+        : {}),
       ...(d.price !== undefined ? { price: d.price } : {}),
       ...(d.priceOverrides !== undefined ? { priceOverrides: d.priceOverrides } : {}),
       ...(d.active !== undefined ? { active: d.active } : {}),
@@ -911,7 +923,14 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
   // Validate the staff offers an active service; compute end + snapshot price.
   const service = await prisma.service.findFirst({
     where: { id: d.serviceId, shopId, active: true },
-    select: { id: true, durationMin: true, price: true, priceOverrides: true, name: true },
+    select: {
+      id: true,
+      durationMin: true,
+      durationOverrides: true,
+      price: true,
+      priceOverrides: true,
+      name: true,
+    },
   });
   const offering = await prisma.serviceStaff.findFirst({
     where: { shopId, serviceId: d.serviceId, staffId: d.staffId },
@@ -932,8 +951,16 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
   const addOns = d.recurrence
     ? { snapshot: [], extraDurationMin: 0, extraPrice: 0 }
     : await resolveAddOns(shopId, d.serviceId, d.addOnIds);
+  // Effective duration for the picked date's shop-local weekday (mirrors the
+  // effectivePriceForDate snapshot just below).
+  const effectiveDuration = effectiveDurationForDate(
+    service.durationMin,
+    service.durationOverrides,
+    startsAt,
+    shop.timezone,
+  );
   const endsAt = new Date(
-    startsAt.getTime() + (service.durationMin + addOns.extraDurationMin) * 60_000,
+    startsAt.getTime() + (effectiveDuration + addOns.extraDurationMin) * 60_000,
   );
   const basePrice = effectivePriceForDate(
     service.price === null ? null : Number(service.price),
@@ -1005,6 +1032,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         phone,
         email: d.email || null,
         durationMin: service.durationMin,
+        durationOverrides: service.durationOverrides,
         basePrice: service.price === null ? null : Number(service.price),
         priceOverrides: service.priceOverrides,
         timezone: shop.timezone,

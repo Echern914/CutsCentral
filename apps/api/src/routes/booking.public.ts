@@ -7,7 +7,10 @@ import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import { resolveAddOns } from "../engines/addOns.js";
 import {
+  durationRangeForService,
+  effectiveDurationForDate,
   effectivePriceForDate,
+  parseDurationOverrides,
   parsePriceOverrides,
   priceRangeForService,
 } from "../engines/pricing.js";
@@ -72,6 +75,7 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
         name: true,
         description: true,
         durationMin: true,
+        durationOverrides: true,
         price: true,
         priceOverrides: true,
       },
@@ -117,6 +121,7 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
     services: services.map((s) => {
       const base = s.price === null ? null : Number(s.price);
       const overrides = parsePriceOverrides(s.priceOverrides);
+      const durOverrides = parseDurationOverrides(s.durationOverrides);
       return {
         id: s.id,
         name: s.name,
@@ -128,6 +133,10 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
         // the menu show "from $X" / "$45-$55" before a day is chosen.
         priceOverrides: overrides,
         priceRange: priceRangeForService(base, overrides),
+        // Same idea for duration ({weekday: minutes}) - the menu can show
+        // "20-30 min" and the picker the exact length for the chosen day.
+        durationOverrides: durOverrides,
+        durationRange: durationRangeForService(s.durationMin, durOverrides),
       };
     }),
     // The (service, staff) offering matrix so the UI can filter either way.
@@ -233,7 +242,14 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
   // Validate staff offers an active service, compute the end time, bounds-check.
   const service = await prisma.service.findFirst({
     where: { id: d.serviceId, shopId: shop.id, active: true },
-    select: { id: true, durationMin: true, price: true, priceOverrides: true, name: true },
+    select: {
+      id: true,
+      durationMin: true,
+      durationOverrides: true,
+      price: true,
+      priceOverrides: true,
+      name: true,
+    },
   });
   const offering = await prisma.serviceStaff.findFirst({
     where: { shopId: shop.id, serviceId: d.serviceId, staffId: d.staffId },
@@ -252,8 +268,17 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
   const startsAt = d.startsAt;
   // Chosen add-ons extend the appointment + total. Invalid/foreign ids drop.
   const addOns = await resolveAddOns(shop.id, d.serviceId, d.addOnIds);
+  // The duration for the DATE the customer picked (weekday override in the shop
+  // tz, else base) - a Friday 20-min cut books a 20-min block. endsAt is the
+  // duration snapshot: editing the service later never rewrites this row.
+  const effectiveDuration = effectiveDurationForDate(
+    service.durationMin,
+    service.durationOverrides,
+    startsAt,
+    shop.timezone,
+  );
   const endsAt = new Date(
-    startsAt.getTime() + (service.durationMin + addOns.extraDurationMin) * 60_000,
+    startsAt.getTime() + (effectiveDuration + addOns.extraDurationMin) * 60_000,
   );
   // Snapshot the price for the DATE the customer picked (weekday override in the
   // shop tz, else base) - so a Sunday surcharge is locked in at exactly what the
@@ -794,7 +819,14 @@ bookingPublicRouter.post(
         status: true,
         startsAt: true,
         payment: { select: { status: true, amount: true } },
-        service: { select: { durationMin: true, price: true, priceOverrides: true } },
+        service: {
+          select: {
+            durationMin: true,
+            durationOverrides: true,
+            price: true,
+            priceOverrides: true,
+          },
+        },
         shop: {
           select: {
             timezone: true,
@@ -826,8 +858,18 @@ bookingPublicRouter.post(
 
     const now = new Date();
     const startsAt = parsed.data.startsAt;
+    // The new date may fall on a different-duration weekday - re-measure, like
+    // the reprice below. (Add-on minutes aren't carried through a reschedule
+    // today - endsAt was already service-only on this path.)
     const endsAt = new Date(
-      startsAt.getTime() + appt.service.durationMin * 60_000,
+      startsAt.getTime() +
+        effectiveDurationForDate(
+          appt.service.durationMin,
+          appt.service.durationOverrides,
+          startsAt,
+          appt.shop.timezone,
+        ) *
+          60_000,
     );
     // The new date may fall on a different-priced weekday - reprice to match.
     const effectivePrice = effectivePriceForDate(

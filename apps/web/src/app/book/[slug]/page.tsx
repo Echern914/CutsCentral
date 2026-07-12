@@ -39,6 +39,10 @@ export interface BookShopData {
     // right one for the chosen day. priceRange spans base + overrides for the menu.
     priceOverrides: Record<string, number>;
     priceRange: { min: number; max: number } | null;
+    // Same for duration ({ "5": 20 } = Friday 20 min) - the menu shows the
+    // range, the picker the exact length for the chosen day.
+    durationOverrides: Record<string, number>;
+    durationRange: { min: number; max: number };
   }[];
   offerings: { serviceId: string; staffId: string }[];
   // Optional extras. serviceId null = offered on every service; set = only with

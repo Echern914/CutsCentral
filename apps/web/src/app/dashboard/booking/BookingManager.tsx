@@ -463,9 +463,10 @@ function ServicesTab({
   const [name, setName] = useState("");
   const [duration, setDuration] = useState(30);
   const [price, setPrice] = useState("");
-  // Per-weekday price overrides the barber sets explicitly (weekday -> price
-  // string). Empty = that day uses the base price. Built into the API payload.
+  // Per-weekday overrides the barber sets explicitly (weekday -> string).
+  // Empty = that day uses the base price/length. Built into the API payload.
   const [dayPrices, setDayPrices] = useState<Record<number, string>>({});
+  const [dayDurations, setDayDurations] = useState<Record<number, string>>({});
   // Empty = "offered by everyone" (resolved at submit). Starting empty avoids a
   // stale snapshot of the staff list - a barber added later is included by default.
   const [staffIds, setStaffIds] = useState<string[]>([]);
@@ -482,17 +483,30 @@ function ServicesTab({
     return out;
   }
 
+  /** Same for {weekday: minutes} - whole minutes, 5 min floor (API bound). */
+  function buildDurationOverrides(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const [wd, val] of Object.entries(dayDurations)) {
+      const n = Number(val);
+      if (val.trim() !== "" && Number.isInteger(n) && n >= 5) out[wd] = n;
+    }
+    return out;
+  }
+
   function add() {
     if (!name.trim()) return;
     // No explicit selection -> offer it via every active barber.
     const offeredBy = staffIds.length > 0 ? staffIds : activeStaff.map((s) => s.id);
     const overrides = buildOverrides();
+    const durOverrides = buildDurationOverrides();
     start(async () => {
       const r = await createServiceAction({
         name: name.trim(),
         durationMin: duration,
         price: price.trim() ? Number(price) : null,
         priceOverrides: Object.keys(overrides).length > 0 ? overrides : undefined,
+        durationOverrides:
+          Object.keys(durOverrides).length > 0 ? durOverrides : undefined,
         staffIds: offeredBy,
       });
       if (r.ok) {
@@ -500,6 +514,7 @@ function ServicesTab({
         setName("");
         setPrice("");
         setDayPrices({});
+        setDayDurations({});
         setStaffIds([]);
       } else toast("Couldn't add", "error");
     });
@@ -566,29 +581,61 @@ function ServicesTab({
         </div>
       )}
 
-      {/* Optional per-day pricing. Leave a day blank to use the base price; fill
-          one in to charge differently (e.g. a Sunday premium). The customer sees
-          the right price for the day they pick. */}
+      {/* Optional per-day overrides ("Vary by day"). Leave a day blank to use
+          the base price/length; fill one in to differ (e.g. Sunday premium, or
+          "Friday cuts are 20 min"). A filled day lights up so it's obvious at a
+          glance which days are customized. Duration drives the slot grid: a
+          20-min Friday makes Friday book in 20-min blocks. */}
       <div className="mt-3">
-        <span className={labelCls}>Different price on certain days? (optional)</span>
+        <span className={labelCls}>Vary by day? (optional — price and/or minutes)</span>
         <div className="mt-1 grid grid-cols-4 gap-2 sm:grid-cols-7">
-          {WEEKDAYS.map((label, wd) => (
-            <label key={wd} className="flex flex-col gap-1">
-              <span className="text-[10px] text-muted">{label}</span>
-              <input
-                type="number"
-                min={0}
-                inputMode="decimal"
-                placeholder={price.trim() ? `$${price}` : "base"}
-                value={dayPrices[wd] ?? ""}
-                onChange={(e) =>
-                  setDayPrices((cur) => ({ ...cur, [wd]: e.target.value }))
-                }
-                className="w-full rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50"
-                aria-label={`${label} price`}
-              />
-            </label>
-          ))}
+          {WEEKDAYS.map((label, wd) => {
+            const customized =
+              (dayPrices[wd] ?? "").trim() !== "" ||
+              (dayDurations[wd] ?? "").trim() !== "";
+            return (
+              <div
+                key={wd}
+                className={cn(
+                  "flex flex-col gap-1 rounded-lg p-1",
+                  customized && "bg-gold/10 ring-1 ring-gold/40",
+                )}
+              >
+                <span
+                  className={cn(
+                    "text-[10px]",
+                    customized ? "font-semibold text-gold" : "text-muted",
+                  )}
+                >
+                  {label}
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  inputMode="decimal"
+                  placeholder={price.trim() ? `$${price}` : "$ base"}
+                  value={dayPrices[wd] ?? ""}
+                  onChange={(e) =>
+                    setDayPrices((cur) => ({ ...cur, [wd]: e.target.value }))
+                  }
+                  className="w-full rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50"
+                  aria-label={`${label} price`}
+                />
+                <input
+                  type="number"
+                  min={5}
+                  inputMode="numeric"
+                  placeholder={`${duration || "?"} min`}
+                  value={dayDurations[wd] ?? ""}
+                  onChange={(e) =>
+                    setDayDurations((cur) => ({ ...cur, [wd]: e.target.value }))
+                  }
+                  className="w-full rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50"
+                  aria-label={`${label} minutes`}
+                />
+              </div>
+            );
+          })}
         </div>
       </div>
 
@@ -614,6 +661,11 @@ function ServicesTab({
                   " · " +
                     Object.entries(s.priceOverrides)
                       .map(([wd, p]) => `${WEEKDAYS[Number(wd)]} $${p}`)
+                      .join(", ")}
+                {Object.keys(s.durationOverrides ?? {}).length > 0 &&
+                  " · " +
+                    Object.entries(s.durationOverrides ?? {})
+                      .map(([wd, m]) => `${WEEKDAYS[Number(wd)]} ${m}min`)
                       .join(", ")}
               </span>
             </span>

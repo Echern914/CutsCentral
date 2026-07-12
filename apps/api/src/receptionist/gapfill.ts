@@ -2,6 +2,7 @@ import { randomToken } from "@chairback/config";
 import { forShop, prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { inQuietHours } from "../engines/quietHours.js";
+import { effectiveDurationForDate } from "../engines/pricing.js";
 import { remainingMonthlySms } from "../billing/quota.js";
 import {
   lockStaffAndAssertSlotFree,
@@ -250,10 +251,19 @@ export async function runGapFill(input: GapFillInput): Promise<void> {
     // add-ons; the OFFER is for the plain service).
     const service = await forShop(shop.id).service.findFirst({
       where: { id: appt.serviceId },
-      select: { durationMin: true, price: true },
+      select: { durationMin: true, durationOverrides: true, price: true },
     });
     if (!service) return;
-    const endsAt = new Date(appt.startsAt.getTime() + service.durationMin * 60_000);
+    const endsAt = new Date(
+      appt.startsAt.getTime() +
+        effectiveDurationForDate(
+          service.durationMin,
+          service.durationOverrides,
+          appt.startsAt,
+          shop.timezone,
+        ) *
+          60_000,
+    );
 
     // HOLD the slot for the candidate (60 min - a human may take a while to
     // reply) under the same guard as every write. Losing the race here just

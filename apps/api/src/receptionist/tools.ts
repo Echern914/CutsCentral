@@ -6,7 +6,7 @@ import { logger } from "../logger.js";
 import { computeOpenSlots, isSlotBookable, type Slot } from "../engines/slots.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import { cancelAppointment } from "../engines/appointmentPromotion.js";
-import { effectivePriceForDate } from "../engines/pricing.js";
+import { effectiveDurationForDate, effectivePriceForDate } from "../engines/pricing.js";
 import { formatApptTime } from "../messaging/templates.js";
 import { sendPushToUser } from "../messaging/push.js";
 import { getMessageProvider } from "../messaging/twilio.js";
@@ -498,7 +498,14 @@ async function loadSlotContext(
   const [service, staff] = await Promise.all([
     db.service.findFirst({
       where: { id: decoded.serviceId, active: true },
-      select: { id: true, name: true, durationMin: true, price: true, priceOverrides: true },
+      select: {
+        id: true,
+        name: true,
+        durationMin: true,
+        durationOverrides: true,
+        price: true,
+        priceOverrides: true,
+      },
     }),
     db.staff.findFirst({
       where: { id: decoded.staffId, active: true },
@@ -516,7 +523,17 @@ async function loadSlotContext(
     staffId: decoded.staffId,
     serviceId: decoded.serviceId,
     startsAt: decoded.startsAt,
-    endsAt: new Date(decoded.startsAt.getTime() + service.durationMin * 60_000),
+    // Effective duration for the slot's shop-local weekday (mirrors the price).
+    endsAt: new Date(
+      decoded.startsAt.getTime() +
+        effectiveDurationForDate(
+          service.durationMin,
+          service.durationOverrides,
+          decoded.startsAt,
+          shop.timezone,
+        ) *
+          60_000,
+    ),
     price,
     bufferMin: shop.bookingBufferMin,
     timezone: shop.timezone,

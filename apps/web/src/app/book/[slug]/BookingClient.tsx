@@ -446,7 +446,11 @@ export function BookingClient({ data }: { data: BookShopData }) {
             >
               <span>
                 <span className="block text-sm font-medium">{s.name}</span>
-                <span className="block text-xs text-muted">{s.durationMin} min</span>
+                <span className="block text-xs text-muted">
+                  {s.durationRange.min === s.durationRange.max
+                    ? `${s.durationMin} min`
+                    : `${s.durationRange.min}-${s.durationRange.max} min`}
+                </span>
               </span>
               {priceLabel(s) && (
                 <span className="text-sm text-muted">{priceLabel(s)}</span>

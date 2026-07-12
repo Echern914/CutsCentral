@@ -90,6 +90,7 @@ export async function createServiceAction(input: {
   name: string;
   description?: string;
   durationMin: number;
+  durationOverrides?: Record<string, number>;
   price?: number | null;
   priceOverrides?: Record<string, number>;
   staffIds?: string[];
@@ -103,6 +104,7 @@ export async function updateServiceAction(
     name?: string;
     description?: string;
     durationMin?: number;
+    durationOverrides?: Record<string, number>;
     price?: number | null;
     priceOverrides?: Record<string, number>;
     active?: boolean;
