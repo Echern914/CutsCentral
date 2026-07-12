@@ -5,7 +5,7 @@ import { apiPublicGet } from "@/lib/api";
 import { ManageClient } from "./ManageClient";
 
 export interface ManageData {
-  status: "BOOKED" | "CANCELED" | "COMPLETED" | "NO_SHOW";
+  status: "BOOKED" | "CANCELED" | "COMPLETED" | "NO_SHOW" | "PENDING";
   firstName: string;
   startsAt: string;
   endsAt: string;
@@ -14,6 +14,14 @@ export interface ManageData {
   staff: { name: string };
   canCancel: boolean;
   canReschedule: boolean;
+  // Check-in ("On my way"). open is computed server-side (60 min before start
+  // through 15 min after) so this component does no timezone math.
+  checkin: {
+    open: boolean;
+    status: "en_route" | "arrived" | null;
+    etaMinutes: number | null;
+    runningLate: boolean;
+  };
 }
 
 export const metadata: Metadata = {

@@ -71,6 +71,11 @@ export interface AgendaRow {
   status: "pending" | "upcoming" | "completed" | "canceled" | "no_show" | "blocked";
   // Non-null = part of a recurring series (drives the ↻ badge + cancel-scope menu).
   seriesId?: string | null;
+  // Check-in sub-state of an upcoming native appointment (live pill:
+  // Booked -> En route -> Arrived). null/absent on visit + block rows.
+  checkInStatus?: "en_route" | "arrived" | null;
+  etaMinutes?: number | null;
+  runningLate?: boolean;
 }
 
 export interface AgendaResponse {

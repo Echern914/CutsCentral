@@ -1079,6 +1079,18 @@ model Appointment {
   holdExpiresAt DateTime?
   // Origin marker: "receptionist" for AI-created rows; null for everything else.
   bookedVia     String?
+  // Client check-in ("On my way"). A nullable TEXT sub-state of BOOKED, not an
+  // AppointmentStatus value (enum adds need an isolated migration; the string
+  // mirrors bookedVia). null = not checked in; 'en_route' = the client tapped
+  // "On my way" on the manage page (checkedInAt stamps the FIRST tap and never
+  // moves; repeat taps only refresh the ETA); 'arrived' = the barber marked
+  // them in the chair. The client route can ONLY write 'en_route' on their own
+  // manageToken; 'arrived' is dashboard-only. etaMinutes is the optional chip
+  // (5/10/15); runningLate is the "Running late" chip - both purely advisory.
+  checkInStatus String?
+  checkedInAt   DateTime?
+  etaMinutes    Int?
+  runningLate   Boolean   @default(false)
   createdAt          DateTime          @default(now())
   updatedAt          DateTime          @updatedAt
 

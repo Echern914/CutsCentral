@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { randomToken } from "@chairback/config";
+import { apiEnv, randomToken } from "@chairback/config";
 import { prisma, Prisma } from "@chairback/db";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
@@ -14,6 +14,7 @@ import {
 import { connectEnabled, hasActiveAccess } from "../billing/stripe.js";
 import { createAheadPaymentIntent, toCents } from "../billing/payments.js";
 import { notifyAppointmentConfirmation } from "../services/appointmentNotify.js";
+import { sendPushToUser } from "../messaging/push.js";
 import { cancelAppointment } from "../engines/appointmentPromotion.js";
 import { rewardsLimiter, leadLimiter } from "../middleware/rateLimit.js";
 import { logger } from "../logger.js";
@@ -461,6 +462,9 @@ bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
       startsAt: true,
       endsAt: true,
       firstName: true,
+      checkInStatus: true,
+      etaMinutes: true,
+      runningLate: true,
       shop: { select: { name: true, timezone: true, slug: true } },
       service: { select: { name: true, durationMin: true } },
       staff: { select: { name: true } },
@@ -482,8 +486,134 @@ bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
     staff: appt.staff,
     canCancel: canChange,
     canReschedule: canChange,
+    // Check-in ("On my way"): the window is computed HERE so the client needs
+    // no timezone math - it just renders the button when open is true.
+    checkin: {
+      open: checkInWindowOpen(appt.status, appt.startsAt, now),
+      status: appt.checkInStatus,
+      etaMinutes: appt.etaMinutes,
+      runningLate: appt.runningLate,
+    },
   });
 });
+
+//  Check-in ("On my way") - push-only, never SMS.
+
+/** Tap window: from 60 min before the start until 15 min after (grace). */
+const CHECKIN_OPEN_BEFORE_MS = 60 * 60_000;
+const CHECKIN_GRACE_AFTER_MS = 15 * 60_000;
+
+function checkInWindowOpen(status: string, startsAt: Date, now: Date): boolean {
+  return (
+    status === "BOOKED" &&
+    now.getTime() >= startsAt.getTime() - CHECKIN_OPEN_BEFORE_MS &&
+    now.getTime() <= startsAt.getTime() + CHECKIN_GRACE_AFTER_MS
+  );
+}
+
+// POST /api/book/manage/:token/checkin - the customer marks themselves en
+// route. The manageToken scopes the write to exactly ONE appointment (a foreign
+// token 404s like every other manage route), and the handler can only ever
+// write 'en_route' - 'arrived' is the barber's dashboard action. One-way: a
+// repeat tap may refresh the ETA chips but checkedInAt stays at the FIRST tap
+// and there is no un-check-in.
+const checkinSchema = z
+  .object({
+    etaMinutes: z
+      .union([z.literal(5), z.literal(10), z.literal(15)])
+      .optional(),
+    runningLate: z.boolean().optional(),
+  })
+  .strict();
+
+bookingPublicRouter.post(
+  "/manage/:token/checkin",
+  leadLimiter,
+  async (req, res) => {
+    const parsed = checkinSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid_input" });
+      return;
+    }
+    const appt = await prisma.appointment.findUnique({
+      where: { manageToken: String(req.params.token) },
+      select: {
+        id: true,
+        shopId: true,
+        status: true,
+        startsAt: true,
+        firstName: true,
+        checkInStatus: true,
+        checkedInAt: true,
+        etaMinutes: true,
+        runningLate: true,
+        staff: { select: { userId: true } },
+        shop: { select: { ownerId: true } },
+      },
+    });
+    if (!appt) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    const now = new Date();
+    if (!checkInWindowOpen(appt.status, appt.startsAt, now)) {
+      res.status(409).json({ error: "checkin_window_closed" });
+      return;
+    }
+    // 'arrived' is barber-set and final - the client can't regress it.
+    if (appt.checkInStatus === "arrived") {
+      res.status(409).json({ error: "already_arrived" });
+      return;
+    }
+
+    const firstTap = appt.checkInStatus === null;
+    const eta = parsed.data.etaMinutes ?? null;
+    const late = parsed.data.runningLate ?? false;
+    await prisma.appointment.update({
+      where: { id: appt.id },
+      data: {
+        checkInStatus: "en_route",
+        // Stamped once, on the first tap; ETA-chip re-taps never move it.
+        ...(appt.checkedInAt ? {} : { checkedInAt: now }),
+        etaMinutes: eta,
+        runningLate: late,
+      },
+    });
+
+    // Push the barber (the staff's linked user, else the owner) - push ONLY,
+    // no SMS leg by design. Fires on the first tap and again when the ETA
+    // chips add real information (eta first set / late first flagged); the
+    // shared collapse tag makes the update REPLACE the earlier notification
+    // instead of stacking a second buzz-per-chip.
+    const meaningfulUpdate =
+      (appt.etaMinutes === null && eta !== null) ||
+      (!appt.runningLate && late);
+    if (firstTap || meaningfulUpdate) {
+      const body = late
+        ? "Running a little late"
+        : eta
+          ? `About ${eta} min out`
+          : "Heads up - they tapped “On my way”";
+      await sendPushToUser({
+        userId: appt.staff.userId ?? appt.shop.ownerId,
+        shopId: appt.shopId,
+        payload: {
+          title: `${appt.firstName} is on the way`,
+          body,
+          url: `${apiEnv().APP_BASE_URL}/dashboard/booking`,
+          tag: `checkin-${appt.id}`,
+        },
+      }).catch((err) =>
+        logger.error(
+          { err, appointmentId: appt.id },
+          "check-in barber push failed",
+        ),
+      );
+    }
+
+    res.json({ ok: true, status: "en_route" });
+  },
+);
 
 // POST /api/book/manage/:token/cancel - the customer cancels their own booking.
 bookingPublicRouter.post(

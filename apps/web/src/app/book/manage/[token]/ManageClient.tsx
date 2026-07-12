@@ -4,7 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useSignalNativeReady } from "@/lib/nativeReady";
 import type { ManageData } from "./page";
-import { cancelBookingAction } from "./actions";
+import { cancelBookingAction, checkInAction } from "./actions";
 
 /**
  * Customer self-service for a single booking (auth = the manage token in the
@@ -98,6 +98,7 @@ export function ManageClient({
           </p>
         ) : (
           <div className="mt-6 flex flex-col gap-2">
+            <CheckInCard token={token} checkin={data.checkin} />
             {data.canReschedule && data.shop.slug && (
               <Link
                 href={`/book/${data.shop.slug}`}
@@ -125,6 +126,108 @@ export function ManageClient({
         )}
       </div>
     </main>
+  );
+}
+
+/**
+ * "On my way" check-in. Renders only inside the tap window (open computed
+ * server-side: 60 min before start through 15 min after) or once already
+ * checked in. One-way: after the tap the button becomes a confirmation and the
+ * optional ETA chips appear - no toggle-off, no spam (the API collapses repeat
+ * pushes under one notification tag).
+ */
+function CheckInCard({
+  token,
+  checkin,
+}: {
+  token: string;
+  checkin: ManageData["checkin"];
+}) {
+  const [status, setStatus] = useState(checkin.status);
+  const [eta, setEta] = useState<number | null>(checkin.etaMinutes);
+  const [late, setLate] = useState(checkin.runningLate);
+  const [error, setError] = useState(false);
+  const [pending, start] = useTransition();
+
+  if (!checkin.open && status === null) return null;
+
+  if (status === "arrived") {
+    return (
+      <div className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 py-3 text-center text-sm font-semibold text-emerald-300">
+        You&apos;re checked in ✓
+      </div>
+    );
+  }
+
+  function tap(opts?: { etaMinutes?: 5 | 10 | 15; runningLate?: boolean }) {
+    setError(false);
+    start(async () => {
+      const res = await checkInAction(token, opts);
+      if (!res.ok) {
+        setError(true);
+        return;
+      }
+      setStatus("en_route");
+      setEta(opts?.etaMinutes ?? null);
+      setLate(opts?.runningLate ?? false);
+    });
+  }
+
+  if (status === null) {
+    return (
+      <div>
+        <button
+          type="button"
+          onClick={() => tap()}
+          disabled={pending}
+          className="w-full rounded-xl bg-emerald-500 py-3 text-center text-sm font-semibold text-black disabled:opacity-50"
+        >
+          {pending ? "One sec…" : "On my way"}
+        </button>
+        {error && (
+          <p className="mt-2 text-center text-xs text-red-400">
+            Couldn&apos;t send that - try again.
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  // en_route: locked confirmation + optional ETA precision chips.
+  const chips: { label: string; opts: { etaMinutes?: 5 | 10 | 15; runningLate?: boolean }; active: boolean }[] = [
+    { label: "5 min", opts: { etaMinutes: 5 }, active: eta === 5 && !late },
+    { label: "10 min", opts: { etaMinutes: 10 }, active: eta === 10 && !late },
+    { label: "15 min", opts: { etaMinutes: 15 }, active: eta === 15 && !late },
+    { label: "Running late", opts: { runningLate: true }, active: late },
+  ];
+  return (
+    <div>
+      <div className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 py-3 text-center text-sm font-semibold text-emerald-300">
+        You&apos;re marked on the way ✓
+      </div>
+      <div className="mt-2 flex gap-1.5">
+        {chips.map((c) => (
+          <button
+            key={c.label}
+            type="button"
+            onClick={() => tap(c.opts)}
+            disabled={pending}
+            className={
+              c.active
+                ? "flex-1 rounded-lg border border-emerald-400/60 bg-emerald-400/20 px-1 py-1.5 text-[11px] font-semibold text-emerald-200"
+                : "flex-1 rounded-lg border border-white/15 px-1 py-1.5 text-[11px] text-muted disabled:opacity-50"
+            }
+          >
+            {c.label}
+          </button>
+        ))}
+      </div>
+      {error && (
+        <p className="mt-2 text-center text-xs text-red-400">
+          Couldn&apos;t send that - try again.
+        </p>
+      )}
+    </div>
   );
 }
 

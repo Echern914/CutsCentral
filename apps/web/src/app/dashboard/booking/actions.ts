@@ -312,3 +312,8 @@ export async function noShowAppointmentAction(id: string): Promise<Result> {
 export async function completeAppointmentAction(id: string): Promise<Result> {
   return done(await apiSend("POST", `/api/booking/appointments/${id}/complete`));
 }
+
+/** Barber marks the client as physically arrived (check-in pill -> Arrived). */
+export async function markArrivedAction(id: string): Promise<Result> {
+  return done(await apiSend("POST", `/api/booking/appointments/${id}/arrived`));
+}

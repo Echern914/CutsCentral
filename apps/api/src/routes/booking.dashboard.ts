@@ -525,6 +525,12 @@ interface AgendaRow {
   // Non-null when this occurrence is part of a recurring series (native only).
   // Drives the ↻ badge + the "cancel this / future / all" menu on the calendar.
   seriesId: string | null;
+  // Check-in sub-state of an upcoming appointment (native only; null on visit/
+  // block rows): null | 'en_route' | 'arrived', plus the client's ETA chips.
+  // Drives the live pill (Booked -> En route -> Arrived) in the day view.
+  checkInStatus: string | null;
+  etaMinutes: number | null;
+  runningLate: boolean;
 }
 
 const agendaQuerySchema = z.object({
@@ -566,6 +572,9 @@ type ApptAgendaRow = {
   lastName: string | null;
   priceAtBooking: Prisma.Decimal | null;
   seriesId: string | null;
+  checkInStatus: string | null;
+  etaMinutes: number | null;
+  runningLate: boolean;
   service: { name: string } | null;
 };
 type VisitAgendaRow = {
@@ -619,6 +628,9 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         lastName: true,
         priceAtBooking: true,
         seriesId: true,
+        checkInStatus: true,
+        etaMinutes: true,
+        runningLate: true,
         service: { select: { name: true } },
       },
     })) as unknown as ApptAgendaRow[];
@@ -632,6 +644,9 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       price: a.priceAtBooking == null ? null : Number(a.priceAtBooking),
       status: APPT_STATUS[a.status] ?? "upcoming",
       seriesId: a.seriesId,
+      checkInStatus: a.checkInStatus,
+      etaMinutes: a.etaMinutes,
+      runningLate: a.runningLate,
     }));
 
     // Blocked time (barber "Block Off Time") shows on the calendar too, as
@@ -662,6 +677,9 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         price: null,
         status: "blocked",
         seriesId: null,
+        checkInStatus: null,
+        etaMinutes: null,
+        runningLate: false,
       });
     }
     agenda.sort((a, b) => a.start.localeCompare(b.start));
@@ -692,6 +710,9 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       price: v.price == null ? null : Number(v.price),
       status: VISIT_STATUS[v.status] ?? "upcoming",
       seriesId: null,
+      checkInStatus: null,
+      etaMinutes: null,
+      runningLate: false,
     }));
   }
 
@@ -1118,6 +1139,20 @@ bookingDashboardRouter.post("/appointments/:id/no-show", async (req, res) => {
   }
   const ok = await cancelAppointment(shopId, req.params.id!, "NO_SHOW");
   res.status(ok ? 200 : 404).json({ ok });
+});
+
+// Mark the client as physically in the chair/shop. Barber-only counterpart to
+// the public "On my way" check-in (which can only ever write 'en_route'); works
+// from ANY prior check-in state because walk-ins arrive without tapping the
+// button. checkedInAt is deliberately untouched - it records the CLIENT's tap,
+// not the barber's confirmation.
+bookingDashboardRouter.post("/appointments/:id/arrived", async (req, res) => {
+  const shopId = req.shop!.id;
+  const updated = await forShop(shopId).appointment.updateMany({
+    where: { id: req.params.id!, shopId, status: "BOOKED" },
+    data: { checkInStatus: "arrived" },
+  });
+  res.status(updated.count > 0 ? 200 : 404).json({ ok: updated.count > 0 });
 });
 
 // Approve a PENDING request (request-before-booking): flip it to BOOKED in place

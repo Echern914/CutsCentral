@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Card } from "@/components/ui/Card";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
@@ -13,6 +13,7 @@ import {
   completeAppointmentAction,
   declineAppointmentAction,
   getAgendaAction,
+  markArrivedAction,
   noShowAppointmentAction,
   setWaitlistStatusAction,
 } from "./actions";
@@ -164,6 +165,38 @@ export function BookingCalendar({
     });
   }
 
+  // Refetch the visible month and REPLACE loaded rows by id (the merge in
+  // ensureMonthLoaded only de-dupes - it would never refresh a stale row).
+  // Used by the poll below and fired immediately after a row action.
+  const refreshAgenda = useCallback(() => {
+    const start = new Date(viewYear, viewMonth - 1, 1);
+    const end = new Date(viewYear, viewMonth, 0);
+    const from = new Date(start.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const to = new Date(end.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    void getAgendaAction(from, to).then((res) => {
+      if (!res.ok || !res.data) return;
+      const rows = res.data.agenda;
+      setAgenda((prev) => {
+        const fresh = new Map(rows.map((r) => [r.id, r]));
+        const merged = prev.map((r) => fresh.get(r.id) ?? r);
+        const seen = new Set(prev.map((r) => r.id));
+        for (const r of rows) if (!seen.has(r.id)) merged.push(r);
+        return merged;
+      });
+    });
+  }, [viewYear, viewMonth]);
+
+  // Live check-in updates: a light poll while the tab is showing. This is what
+  // flips the Booked -> En route -> Arrived pill without a manual refresh when
+  // a client taps "On my way".
+  useEffect(() => {
+    const iv = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      refreshAgenda();
+    }, 20_000);
+    return () => clearInterval(iv);
+  }, [refreshAgenda]);
+
   function gotoMonth(delta: number) {
     let y = viewYear;
     let m = viewMonth + delta;
@@ -300,6 +333,7 @@ export function BookingCalendar({
               isNative={isNative}
               onAddAt={(hour) => setAddAt(isoForDayHour(selectedDay, hour))}
               onBlock={() => setBlockDay({ dayKey: selectedDay, hour: 12 })}
+              onChanged={refreshAgenda}
             />
           </motion.div>
         )}
@@ -507,6 +541,7 @@ function DayPlanner({
   isNative,
   onAddAt,
   onBlock,
+  onChanged,
 }: {
   rows: AgendaRow[];
   title: string;
@@ -516,6 +551,8 @@ function DayPlanner({
   isNative: boolean;
   onAddAt: (hour: number) => void;
   onBlock: () => void;
+  /** Refetch the agenda so a row mutation shows without waiting for the poll. */
+  onChanged: () => void;
 }) {
   // Group appointments into their start hour, then render every hour in the
   // day's working window (default 8a-11p, widened to fit any early/late booking).
@@ -618,6 +655,7 @@ function DayPlanner({
                             : timeFmt.format(new Date(r.start))
                         }
                         toast={toast}
+                        onChanged={onChanged}
                       />
                     ))}
                   </div>
@@ -644,14 +682,30 @@ function AppointmentBlock({
   row,
   timeLabel,
   toast,
+  onChanged,
 }: {
   row: AgendaRow;
   timeLabel: string;
   toast: Toast;
+  onChanged: () => void;
 }) {
   const [pending, start] = useTransition();
   const [seriesMenu, setSeriesMenu] = useState(false);
-  const pill = STATUS_PILL[row.status];
+  // Check-in overrides the plain "Upcoming" pill: the live client status
+  // (Booked -> En route (~eta) -> Arrived) polled in from the agenda.
+  const pill =
+    row.status === "upcoming" && row.checkInStatus === "arrived"
+      ? { label: "Arrived", cls: "bg-emerald-soft/15 text-emerald-soft" }
+      : row.status === "upcoming" && row.checkInStatus === "en_route"
+        ? {
+            label: row.runningLate
+              ? "En route · late"
+              : row.etaMinutes
+                ? `En route ~${row.etaMinutes}m`
+                : "En route",
+            cls: "bg-amber-400/15 text-amber-300",
+          }
+        : STATUS_PILL[row.status];
   const canAct = row.source === "appointment" && row.status === "upcoming";
   // A PENDING request (request-before-booking) gets Approve / Decline instead.
   const canApprove = row.source === "appointment" && row.status === "pending";
@@ -671,6 +725,7 @@ function AppointmentBlock({
     start(async () => {
       const res = await fn(row.id);
       toast(res.ok ? label : "Couldn't update", res.ok ? "success" : "error");
+      if (res.ok) onChanged();
     });
   }
 
@@ -684,6 +739,7 @@ function AppointmentBlock({
       );
       setSeriesMenu(false);
       toast(res.ok ? "Canceled" : "Couldn't cancel", res.ok ? "success" : "error");
+      if (res.ok) onChanged();
     });
   }
 
@@ -745,6 +801,15 @@ function AppointmentBlock({
 
       {canAct && (
         <div className="mt-2 flex gap-2">
+          {row.checkInStatus !== "arrived" && (
+            <button
+              onClick={() => act(markArrivedAction, "Marked arrived")}
+              disabled={pending}
+              className="rounded-md border border-amber-400/40 px-2.5 py-1 text-[11px] text-amber-300 disabled:opacity-50"
+            >
+              Arrived
+            </button>
+          )}
           <button
             onClick={() => act(completeAppointmentAction, "Marked done")}
             disabled={pending}
