@@ -4,7 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useSignalNativeReady } from "@/lib/nativeReady";
 import type { ManageData } from "./page";
-import { cancelBookingAction, checkInAction } from "./actions";
+import { cancelBookingAction, checkInAction, nudgeReplyAction } from "./actions";
 
 /**
  * Customer self-service for a single booking (auth = the manage token in the
@@ -26,6 +26,9 @@ export function ManageClient({
   const [canceled, setCanceled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  // Check-in state is shared between the nudge banner and the check-in card so
+  // answering "On my way" in one place updates both.
+  const [checkinStatus, setCheckinStatus] = useState(data.checkin.status);
 
   const whenFmt = useMemo(
     () =>
@@ -98,7 +101,21 @@ export function ManageClient({
           </p>
         ) : (
           <div className="mt-6 flex flex-col gap-2">
-            <CheckInCard token={token} checkin={data.checkin} />
+            {data.nudges.length > 0 && (
+              <NudgeBanner
+                token={token}
+                nudge={data.nudges[0]!}
+                replied={data.nudgeReplied}
+                checkedIn={checkinStatus !== null}
+                onCheckedIn={() => setCheckinStatus("en_route")}
+              />
+            )}
+            <CheckInCard
+              token={token}
+              checkin={data.checkin}
+              status={checkinStatus}
+              onStatus={setCheckinStatus}
+            />
             {data.canReschedule && data.shop.slug && (
               <Link
                 href={`/book/${data.shop.slug}`}
@@ -130,6 +147,96 @@ export function ManageClient({
 }
 
 /**
+ * The barber's latest "come early" nudge, with one-tap answers. "On my way"
+ * reuses the check-in flow (a nudge opens the check-in window early, server-
+ * side); "Can't make it early" pushes the decline back to the barber. Both
+ * settle into a quiet confirmation - no re-tap spam.
+ */
+function NudgeBanner({
+  token,
+  nudge,
+  replied,
+  checkedIn,
+  onCheckedIn,
+}: {
+  token: string;
+  nudge: { body: string | null; sentAt: string };
+  replied: boolean;
+  checkedIn: boolean;
+  onCheckedIn: () => void;
+}) {
+  const [answer, setAnswer] = useState<"on_my_way" | "declined" | null>(
+    checkedIn ? "on_my_way" : replied ? "declined" : null,
+  );
+  const [error, setError] = useState(false);
+  const [pending, start] = useTransition();
+
+  function onMyWay() {
+    setError(false);
+    start(async () => {
+      const res = await checkInAction(token);
+      if (!res.ok) {
+        setError(true);
+        return;
+      }
+      setAnswer("on_my_way");
+      onCheckedIn();
+    });
+  }
+  function cantMakeIt() {
+    setError(false);
+    start(async () => {
+      const res = await nudgeReplyAction(token);
+      if (!res.ok) {
+        setError(true);
+        return;
+      }
+      setAnswer("declined");
+    });
+  }
+
+  return (
+    <div className="rounded-xl border border-gold/30 bg-gold/10 p-3">
+      <p className="text-xs uppercase tracking-wide text-gold/80">
+        From your barber
+      </p>
+      <p className="mt-1 text-sm text-offwhite">{nudge.body ?? "Come early if you can"}</p>
+      {answer === "on_my_way" ? (
+        <p className="mt-2 text-xs font-semibold text-emerald-300">
+          You&apos;re marked on the way ✓
+        </p>
+      ) : answer === "declined" ? (
+        <p className="mt-2 text-xs font-semibold text-muted">
+          Got it - they&apos;ll expect you at the original time.
+        </p>
+      ) : (
+        <div className="mt-2 flex gap-2">
+          <button
+            type="button"
+            onClick={onMyWay}
+            disabled={pending}
+            className="flex-1 rounded-lg bg-emerald-500 py-2 text-xs font-semibold text-black disabled:opacity-50"
+          >
+            On my way
+          </button>
+          <button
+            type="button"
+            onClick={cantMakeIt}
+            disabled={pending}
+            className="flex-1 rounded-lg border border-white/20 py-2 text-xs font-semibold text-offwhite disabled:opacity-50"
+          >
+            Can&apos;t make it early
+          </button>
+        </div>
+      )}
+      {error && (
+        <p className="mt-2 text-xs text-red-400">Couldn&apos;t send that - try again.</p>
+      )}
+    </div>
+  );
+}
+
+/**
  * "On my way" check-in. Renders only inside the tap window (open computed
  * server-side: 60 min before start through 15 min after) or once already
  * checked in. One-way: after the tap the button becomes a confirmation and the
@@ -139,11 +246,14 @@ export function ManageClient({
 function CheckInCard({
   token,
   checkin,
+  status,
+  onStatus,
 }: {
   token: string;
   checkin: ManageData["checkin"];
+  status: ManageData["checkin"]["status"];
+  onStatus: (s: "en_route") => void;
 }) {
-  const [status, setStatus] = useState(checkin.status);
   const [eta, setEta] = useState<number | null>(checkin.etaMinutes);
   const [late, setLate] = useState(checkin.runningLate);
   const [error, setError] = useState(false);
@@ -167,7 +277,7 @@ function CheckInCard({
         setError(true);
         return;
       }
-      setStatus("en_route");
+      onStatus("en_route");
       setEta(opts?.etaMinutes ?? null);
       setLate(opts?.runningLate ?? false);
     });

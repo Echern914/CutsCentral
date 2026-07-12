@@ -15,6 +15,7 @@ import {
   getAgendaAction,
   markArrivedAction,
   noShowAppointmentAction,
+  nudgeAppointmentAction,
   setWaitlistStatusAction,
 } from "./actions";
 import { AppointmentForm } from "./AppointmentForm";
@@ -669,6 +670,15 @@ function DayPlanner({
   );
 }
 
+// Preset "come early" nudge messages (the pilot barber's own words). Custom
+// text is capped at 140 chars to match the server's zod limit.
+const NUDGE_PRESETS = [
+  "I'm running 15 min ahead — come early if you can",
+  "Running about 20 min behind, no rush",
+  "Chair's open, pull up whenever",
+];
+const NUDGE_MAX_LEN = 140;
+
 const STATUS_PILL: Record<AgendaRow["status"], { label: string; cls: string }> = {
   pending: { label: "Requested", cls: "bg-amber-400/15 text-amber-300" },
   upcoming: { label: "Upcoming", cls: "bg-gold/15 text-gold" },
@@ -691,6 +701,8 @@ function AppointmentBlock({
 }) {
   const [pending, start] = useTransition();
   const [seriesMenu, setSeriesMenu] = useState(false);
+  const [nudgeMenu, setNudgeMenu] = useState(false);
+  const [customNudge, setCustomNudge] = useState("");
   // Check-in overrides the plain "Upcoming" pill: the live client status
   // (Booked -> En route (~eta) -> Arrived) polled in from the agenda.
   const pill =
@@ -726,6 +738,30 @@ function AppointmentBlock({
       const res = await fn(row.id);
       toast(res.ok ? label : "Couldn't update", res.ok ? "success" : "error");
       if (res.ok) onChanged();
+    });
+  }
+
+  function sendNudge(body: string) {
+    const trimmed = body.trim().slice(0, NUDGE_MAX_LEN);
+    if (!trimmed) return;
+    setNudgeMenu(false);
+    setCustomNudge("");
+    start(async () => {
+      const res = await nudgeAppointmentAction(row.id, trimmed);
+      if (!res.ok) {
+        toast(
+          res.error === "nudge_limit"
+            ? "Nudge limit reached for this appointment"
+            : "Couldn't send the nudge",
+          "error",
+        );
+        return;
+      }
+      toast(
+        res.delivered ? "Nudge sent" : "Logged — their notifications are off",
+        res.delivered ? "success" : "error",
+      );
+      onChanged();
     });
   }
 
@@ -800,7 +836,58 @@ function AppointmentBlock({
       )}
 
       {canAct && (
-        <div className="mt-2 flex gap-2">
+        <div className="mt-2 flex flex-wrap gap-2">
+          {row.hasPush === false ? (
+            <span
+              title="This client hasn't allowed notifications, so a nudge won't reach them."
+              className="rounded-md border border-subtle px-2.5 py-1 text-[11px] text-muted/60"
+            >
+              Notifications off
+            </span>
+          ) : (row.nudgesSent ?? 0) < (row.nudgeLimit ?? 2) ? (
+            <div className="relative">
+              <button
+                onClick={() => setNudgeMenu((v) => !v)}
+                disabled={pending}
+                className="rounded-md border border-gold/40 px-2.5 py-1 text-[11px] text-gold disabled:opacity-50"
+              >
+                Nudge{(row.nudgesSent ?? 0) > 0 ? " (1 left)" : ""}
+              </button>
+              {nudgeMenu && (
+                <div className="absolute left-0 z-20 mt-1 w-64 overflow-hidden rounded-lg border border-subtle bg-charcoal-900 p-1 shadow-lg">
+                  {NUDGE_PRESETS.map((preset) => (
+                    <button
+                      key={preset}
+                      onClick={() => sendNudge(preset)}
+                      className="block w-full rounded-md px-3 py-2 text-left text-[11px] text-offwhite hover:bg-charcoal-700"
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                  <div className="mt-1 flex gap-1 border-t border-subtle/60 p-1.5">
+                    <input
+                      value={customNudge}
+                      onChange={(e) => setCustomNudge(e.target.value.slice(0, NUDGE_MAX_LEN))}
+                      placeholder="Custom message…"
+                      maxLength={NUDGE_MAX_LEN}
+                      className="min-w-0 flex-1 rounded-md border border-subtle bg-charcoal-800 px-2 py-1 text-[11px] text-offwhite placeholder:text-muted/50"
+                    />
+                    <button
+                      onClick={() => sendNudge(customNudge)}
+                      disabled={!customNudge.trim() || pending}
+                      className="rounded-md bg-gold/20 px-2 py-1 text-[11px] font-medium text-gold disabled:opacity-40"
+                    >
+                      Send
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <span className="rounded-md border border-subtle px-2.5 py-1 text-[11px] text-muted/60">
+              Nudged ×2
+            </span>
+          )}
           {row.checkInStatus !== "arrived" && (
             <button
               onClick={() => act(markArrivedAction, "Marked arrived")}

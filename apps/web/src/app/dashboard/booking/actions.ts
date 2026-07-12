@@ -57,6 +57,8 @@ export async function saveBookingSettingsAction(input: {
   bookingBufferMin: number;
   slotOpenedTextsEnabled?: boolean;
   requireBookingApproval?: boolean;
+  pushReminder24hEnabled?: boolean;
+  pushReminder2hEnabled?: boolean;
 }): Promise<Result> {
   return done(await apiSend("PATCH", "/api/shops/me", input));
 }
@@ -316,4 +318,22 @@ export async function completeAppointmentAction(id: string): Promise<Result> {
 /** Barber marks the client as physically arrived (check-in pill -> Arrived). */
 export async function markArrivedAction(id: string): Promise<Result> {
   return done(await apiSend("POST", `/api/booking/appointments/${id}/arrived`));
+}
+
+/**
+ * Push a "come early" nudge to the appointment's client. Max 2 per appointment
+ * (server-enforced; surfaces as error "nudge_limit"). delivered:false = the
+ * client has no registered push device.
+ */
+export async function nudgeAppointmentAction(
+  id: string,
+  body: string,
+): Promise<Result & { delivered?: boolean }> {
+  const res = await apiSend<{ ok: boolean; delivered?: boolean }>(
+    "POST",
+    `/api/booking/appointments/${id}/nudge`,
+    { body },
+  );
+  if (!res.ok) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, delivered: res.data?.delivered };
 }

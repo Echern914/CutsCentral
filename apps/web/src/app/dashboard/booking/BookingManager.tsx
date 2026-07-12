@@ -158,21 +158,29 @@ function SettingsTab({
   const [buffer, setBuffer] = useState(shop.bookingBufferMin);
   const [slotOpened, setSlotOpened] = useState(shop.slotOpenedTextsEnabled);
   const [requireApproval, setRequireApproval] = useState(shop.requireBookingApproval);
+  const [remind24h, setRemind24h] = useState(shop.pushReminder24hEnabled);
+  const [remind2h, setRemind2h] = useState(shop.pushReminder2hEnabled);
   const [pending, start] = useTransition();
 
   function persist(
-    nextMode: typeof mode,
-    nextSlotOpened = slotOpened,
-    nextRequireApproval = requireApproval,
+    next: Partial<{
+      mode: typeof mode;
+      slotOpened: boolean;
+      requireApproval: boolean;
+      remind24h: boolean;
+      remind2h: boolean;
+    }> = {},
   ) {
     start(async () => {
       const r = await saveBookingSettingsAction({
-        bookingMode: nextMode,
+        bookingMode: next.mode ?? mode,
         bookingLeadHours: lead,
         bookingMaxDays: maxDays,
         bookingBufferMin: buffer,
-        slotOpenedTextsEnabled: nextSlotOpened,
-        requireBookingApproval: nextRequireApproval,
+        slotOpenedTextsEnabled: next.slotOpened ?? slotOpened,
+        requireBookingApproval: next.requireApproval ?? requireApproval,
+        pushReminder24hEnabled: next.remind24h ?? remind24h,
+        pushReminder2hEnabled: next.remind2h ?? remind2h,
       });
       toast(r.ok ? "Booking settings saved" : "Couldn't save", r.ok ? "success" : "error");
     });
@@ -182,25 +190,37 @@ function SettingsTab({
   function toggleSlotOpened() {
     const next = !slotOpened;
     setSlotOpened(next);
-    persist(mode, next);
+    persist({ slotOpened: next });
   }
 
   // Flip "require my approval before a booking is confirmed" and save.
   function toggleRequireApproval() {
     const next = !requireApproval;
     setRequireApproval(next);
-    persist(mode, slotOpened, next);
+    persist({ requireApproval: next });
+  }
+
+  // Flip one of the automatic push-reminder tiers (24h / 2h) and save.
+  function toggleRemind24h() {
+    const next = !remind24h;
+    setRemind24h(next);
+    persist({ remind24h: next });
+  }
+  function toggleRemind2h() {
+    const next = !remind2h;
+    setRemind2h(next);
+    persist({ remind2h: next });
   }
 
   function save() {
-    persist(mode);
+    persist();
   }
 
   // Picking a platform card both selects AND saves the mode (so the choice
   // sticks without a separate Save click); native config below has its own Save.
   function pickMode(next: typeof mode) {
     setMode(next);
-    persist(next);
+    persist({ mode: next });
   }
 
   return (
@@ -287,6 +307,46 @@ function SettingsTab({
             >
               {slotOpened ? "On" : "Off"}
             </button>
+          </div>
+        </Card>
+      )}
+
+      {mode === "native" && (
+        <Card className="p-5">
+          <CardHeader
+            title="Automatic appointment reminders"
+            subtitle="Free push notifications to the client's phone. No texts are sent."
+          />
+          <div className="mt-4 flex flex-col gap-3">
+            {(
+              [
+                {
+                  label: "24 hours before",
+                  on: remind24h,
+                  toggle: toggleRemind24h,
+                },
+                { label: "2 hours before", on: remind2h, toggle: toggleRemind2h },
+              ] as const
+            ).map((tier) => (
+              <div
+                key={tier.label}
+                className="flex items-center justify-between gap-4"
+              >
+                <p className="text-sm text-muted">{tier.label}</p>
+                <button
+                  onClick={tier.toggle}
+                  disabled={pending}
+                  className={cn(
+                    "shrink-0 rounded-full px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-50",
+                    tier.on
+                      ? "bg-emerald-soft/15 text-emerald-soft"
+                      : "border border-subtle text-muted hover:bg-charcoal-700",
+                  )}
+                >
+                  {tier.on ? "On" : "Off"}
+                </button>
+              </div>
+            ))}
           </div>
         </Card>
       )}

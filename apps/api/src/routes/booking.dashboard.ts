@@ -15,6 +15,12 @@ import { notifyAppointmentConfirmation } from "../services/appointmentNotify.js"
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import { lockStaffAndAssertSlotFree } from "../engines/bookingWrite.js";
+import {
+  APPOINTMENT_NUDGE_KIND,
+  APPOINTMENT_NUDGE_LIMIT,
+  NudgeLimitError,
+  sendAppointmentNudge,
+} from "../engines/appointmentNudge.js";
 import { resolveAddOns } from "../engines/addOns.js";
 import { effectivePriceForDate } from "../engines/pricing.js";
 import {
@@ -531,6 +537,12 @@ interface AgendaRow {
   checkInStatus: string | null;
   etaMinutes: number | null;
   runningLate: boolean;
+  // Nudge affordance (native upcoming rows): whether the client has ANY
+  // registered push device ("Notifications off" when false - a nudge won't
+  // land), and how many of the max-2 nudges this appointment already used.
+  hasPush: boolean;
+  nudgesSent: number;
+  nudgeLimit: number;
 }
 
 const agendaQuerySchema = z.object({
@@ -570,6 +582,7 @@ type ApptAgendaRow = {
   endsAt: Date;
   firstName: string;
   lastName: string | null;
+  clientId: string | null;
   priceAtBooking: Prisma.Decimal | null;
   seriesId: string | null;
   checkInStatus: string | null;
@@ -626,6 +639,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         endsAt: true,
         firstName: true,
         lastName: true,
+        clientId: true,
         priceAtBooking: true,
         seriesId: true,
         checkInStatus: true,
@@ -634,6 +648,33 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         service: { select: { name: true } },
       },
     })) as unknown as ApptAgendaRow[];
+
+    // Nudge affordances, batched: which clients have a push device at all, and
+    // how many nudges each appointment already used (max 2, server-enforced).
+    const clientIds = [...new Set(rows.map((r) => r.clientId).filter(Boolean))] as string[];
+    const pushClients = new Set(
+      clientIds.length === 0
+        ? []
+        : (
+            (await db.pushSubscription.findMany({
+              where: { clientId: { in: clientIds } },
+              select: { clientId: true },
+            })) as unknown as { clientId: string | null }[]
+          ).map((s) => s.clientId),
+    );
+    const apptIds = rows.map((r) => r.id);
+    const nudgeCounts = new Map<string, number>();
+    if (apptIds.length > 0) {
+      const nudgeRows = (await db.nudge.findMany({
+        where: { appointmentId: { in: apptIds }, kind: APPOINTMENT_NUDGE_KIND },
+        select: { appointmentId: true },
+      })) as unknown as { appointmentId: string | null }[];
+      for (const n of nudgeRows) {
+        if (!n.appointmentId) continue;
+        nudgeCounts.set(n.appointmentId, (nudgeCounts.get(n.appointmentId) ?? 0) + 1);
+      }
+    }
+
     agenda = rows.map((a) => ({
       id: a.id,
       source: "appointment" as const,
@@ -647,6 +688,9 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       checkInStatus: a.checkInStatus,
       etaMinutes: a.etaMinutes,
       runningLate: a.runningLate,
+      hasPush: a.clientId !== null && pushClients.has(a.clientId),
+      nudgesSent: nudgeCounts.get(a.id) ?? 0,
+      nudgeLimit: APPOINTMENT_NUDGE_LIMIT,
     }));
 
     // Blocked time (barber "Block Off Time") shows on the calendar too, as
@@ -680,6 +724,9 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         checkInStatus: null,
         etaMinutes: null,
         runningLate: false,
+        hasPush: false,
+        nudgesSent: 0,
+        nudgeLimit: APPOINTMENT_NUDGE_LIMIT,
       });
     }
     agenda.sort((a, b) => a.start.localeCompare(b.start));
@@ -713,6 +760,9 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       checkInStatus: null,
       etaMinutes: null,
       runningLate: false,
+      hasPush: false,
+      nudgesSent: 0,
+      nudgeLimit: APPOINTMENT_NUDGE_LIMIT,
     }));
   }
 
@@ -1139,6 +1189,41 @@ bookingDashboardRouter.post("/appointments/:id/no-show", async (req, res) => {
   }
   const ok = await cancelAppointment(shopId, req.params.id!, "NO_SHOW");
   res.status(ok ? 200 : 404).json({ ok });
+});
+
+// Barber -> client "come early" push nudge on one appointment. Max 2 per
+// appointment, enforced in the engine under an advisory lock (server-side, not
+// just UI). 402-free: push costs nothing and never counts against SMS caps.
+const nudgeSchema = z.object({ body: z.string().min(1).max(140) }).strict();
+
+bookingDashboardRouter.post("/appointments/:id/nudge", async (req, res) => {
+  const parsed = nudgeSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  try {
+    const result = await sendAppointmentNudge({
+      shopId: req.shop!.id,
+      appointmentId: req.params.id!,
+      body: parsed.data.body.trim(),
+    });
+    if (!result.ok) {
+      res.status(404).json({ ok: false });
+      return;
+    }
+    // delivered:false = the client has no registered push device. The nudge is
+    // still logged (FAILED) and counts toward the cap - surfaced so the barber
+    // knows it won't land.
+    res.json({ ok: true, delivered: result.delivered });
+  } catch (err) {
+    if (err instanceof NudgeLimitError) {
+      res.status(429).json({ ok: false, error: "nudge_limit" });
+      return;
+    }
+    logger.error({ err, shopId: req.shop!.id }, "appointment nudge failed");
+    res.status(500).json({ ok: false, error: "nudge_failed" });
+  }
 });
 
 // Mark the client as physically in the chair/shop. Barber-only counterpart to

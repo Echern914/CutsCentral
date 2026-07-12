@@ -254,6 +254,129 @@ describe("POST /api/book/manage/:token/checkin", () => {
   });
 });
 
+describe("nudge routes", () => {
+  /** An appointment attached to a client (nudging needs a push target). */
+  async function seedClientAppt(): Promise<{ id: string; token: string }> {
+    const client = await prisma.client.create({
+      data: {
+        shopId: shopIdA,
+        acuityClientKey: `checkin-${randomToken(6)}`,
+        magicToken: randomToken(),
+        firstName: "Marcus",
+      },
+      select: { id: true },
+    });
+    await prisma.pushSubscription.create({
+      data: {
+        shopId: shopIdA,
+        clientId: client.id,
+        kind: "web",
+        endpoint: `https://push.test/${randomToken(8)}`,
+        p256dh: "k",
+        auth: "a",
+      },
+    });
+    const startsAt = new Date(Date.now() + 3 * 60 * 60_000); // 3h out
+    const token = randomToken();
+    const appt = await prisma.appointment.create({
+      data: {
+        shopId: shopIdA,
+        staffId,
+        serviceId,
+        clientId: client.id,
+        firstName: "Marcus",
+        status: "BOOKED",
+        startsAt,
+        endsAt: new Date(startsAt.getTime() + 30 * 60_000),
+        manageToken: token,
+      },
+      select: { id: true },
+    });
+    return { id: appt.id, token };
+  }
+
+  it("nudges push-only, enforces the cap at 429, and rejects cross-tenant", async () => {
+    const appt = await seedClientAppt();
+
+    // Foreign shop can't nudge it.
+    const foreign = await request(app)
+      .post(`/api/booking/appointments/${appt.id}/nudge`)
+      .set("Cookie", cookieB)
+      .send({ body: "hey" });
+    expect(foreign.status).toBe(404);
+
+    // Over-long body rejected.
+    const long = await request(app)
+      .post(`/api/booking/appointments/${appt.id}/nudge`)
+      .set("Cookie", cookieA)
+      .send({ body: "x".repeat(141) });
+    expect(long.status).toBe(400);
+
+    for (let i = 0; i < 2; i++) {
+      const ok = await request(app)
+        .post(`/api/booking/appointments/${appt.id}/nudge`)
+        .set("Cookie", cookieA)
+        .send({ body: "Chair's open, pull up whenever" });
+      expect(ok.status).toBe(200);
+      expect(ok.body.delivered).toBe(true);
+    }
+    const third = await request(app)
+      .post(`/api/booking/appointments/${appt.id}/nudge`)
+      .set("Cookie", cookieA)
+      .send({ body: "again" });
+    expect(third.status).toBe(429);
+    expect(third.body.error).toBe("nudge_limit");
+
+    expect(pushes).toHaveLength(2);
+    expect(sent).toHaveLength(0); // never SMS
+  });
+
+  it("nudge opens the check-in window early and the decline reply pushes back once", async () => {
+    const appt = await seedClientAppt(); // 3h out - normally outside the window
+
+    // Before any nudge: check-in is window-closed.
+    const early = await request(app)
+      .post(`/api/book/manage/${appt.token}/checkin`)
+      .send({});
+    expect(early.status).toBe(409);
+    // ...and a reply without a nudge is rejected.
+    const noNudge = await request(app)
+      .post(`/api/book/manage/${appt.token}/nudge-reply`)
+      .send({ reply: "cant_make_it_early" });
+    expect(noNudge.status).toBe(409);
+
+    await request(app)
+      .post(`/api/booking/appointments/${appt.id}/nudge`)
+      .set("Cookie", cookieA)
+      .send({ body: "I'm running 15 min ahead — come early if you can" });
+
+    // The manage payload now surfaces the nudge and opens check-in.
+    const manage = await request(app).get(`/api/book/manage/${appt.token}`);
+    expect(manage.body.nudges).toHaveLength(1);
+    expect(manage.body.checkin.open).toBe(true);
+
+    // Decline reply: pushes the barber, then a second reply is throttled.
+    pushes = [];
+    const reply = await request(app)
+      .post(`/api/book/manage/${appt.token}/nudge-reply`)
+      .send({ reply: "cant_make_it_early" });
+    expect(reply.status).toBe(200);
+    expect(pushes).toHaveLength(1);
+    expect(pushes[0]!.title).toContain("can't make it early");
+    const replyAgain = await request(app)
+      .post(`/api/book/manage/${appt.token}/nudge-reply`)
+      .send({ reply: "cant_make_it_early" });
+    expect(replyAgain.status).toBe(429);
+
+    // "On my way" now works despite being 3h out (the nudge invited it).
+    const checkin = await request(app)
+      .post(`/api/book/manage/${appt.token}/checkin`)
+      .send({});
+    expect(checkin.status).toBe(200);
+    expect(sent).toHaveLength(0); // zero SMS across the whole flow
+  });
+});
+
 describe("POST /api/booking/appointments/:id/arrived (barber)", () => {
   it("marks arrived for its own shop, 404s cross-tenant and non-BOOKED", async () => {
     const appt = await seedAppt({ startsInMin: 30 });

@@ -231,6 +231,15 @@ model Shop {
   // on; this toggle controls the CUSTOMER-facing blast (outbound to leads), so
   // it's off by default and separate from waitlistEnabled. See engines/slotOpened.
   slotOpenedTextsEnabled Boolean @default(false)
+  // Automatic appointment reminder PUSHES (24h + 2h before start), per tier.
+  // Deliberately default TRUE (unlike every other toggle): reminders are
+  // expected table-stakes behavior, push is free/uncapped, and the column
+  // default backfills every existing shop ON. Barbers who want neither flip
+  // both off in booking settings. SMS/email reminders are separate and keep
+  // their own gates. See engines/pushReminders.ts.
+  pushReminder24hEnabled Boolean @default(true)
+  pushReminder2hEnabled  Boolean @default(true)
+
   // Request-before-booking: when on, a public NATIVE booking lands as PENDING
   // (holds the slot, no confirmation sent) until the barber approves it in the
   // agenda. Off by default so existing shops are unchanged. Native-only.
@@ -781,6 +790,12 @@ model Nudge {
   // Set on promo blasts so rebookings can be attributed to a SPECIFIC promo.
   promotionId         String?
   promotion           Promotion?     @relation(fields: [promotionId], references: [id], onDelete: SetNull)
+  // Set on appointment-scoped sends (kind "checkin_nudge" / "checkin_nudge_reply"):
+  // the barber's "come early" push + the client's one-tap reply. The per-
+  // appointment nudge rate limit (max 2) counts rows by this FK. SetNull keeps
+  // the audit row if the appointment is ever deleted.
+  appointmentId       String?
+  appointment         Appointment?   @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
   body                String?
   messageSid          String?
   failedReason        String?
@@ -795,6 +810,7 @@ model Nudge {
   @@index([shopId, resultedInBookingAt]) // /stats + /trends "rebookings recovered this month"
   @@index([promotionId])
   @@index([shopId, kind, createdAt]) // monthly SMS quota count + receptionist reply caps
+  @@index([appointmentId, kind]) // per-appointment nudge rate limit
 }
 
 // How a push subscription is delivered. One table holds both transports so the
@@ -1058,6 +1074,12 @@ model Appointment {
   // SMS is dark (no 10DLC / no consent). Email only needs a valid address.
   confirmationEmailSentAt DateTime?
   reminderEmailSentAt     DateTime?
+  // PUSH reminders (engines/pushReminders.ts) - a third channel with two tiers
+  // (24h + 2h before start), each with its own at-most-once stamp claimed via
+  // an atomic updateMany-where-null, so a double/concurrent run can never send
+  // twice. Gated per shop by pushReminder24h/2hEnabled.
+  reminder24hPushSentAt DateTime?
+  reminder2hPushSentAt  DateTime?
   canceledAt         DateTime?
   completedAt        DateTime?
   // Recurring series link. null = a one-off appointment (every row before this
@@ -1095,6 +1117,7 @@ model Appointment {
   updatedAt          DateTime          @updatedAt
 
   payment Payment? // the customer payment for this booking (if any)
+  nudges  Nudge[] // appointment-scoped sends (checkin_nudge + replies)
 
   // The double-booking guard (a partial unique on BOOKED rows) is added by hand
   // in the migration - Prisma can't express a WHERE-filtered unique index.

@@ -22,6 +22,10 @@ export interface ManageData {
     etaMinutes: number | null;
     runningLate: boolean;
   };
+  // The barber's "come early" nudges for this appointment (newest first) and
+  // whether the one-tap decline was already sent.
+  nudges: { body: string | null; sentAt: string }[];
+  nudgeReplied: boolean;
 }
 
 export const metadata: Metadata = {

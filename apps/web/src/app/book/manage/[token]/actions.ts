@@ -31,6 +31,19 @@ export async function checkInAction(
   return { ok: true };
 }
 
+/** One-tap decline to a barber "come early" nudge (pushes back to the barber). */
+export async function nudgeReplyAction(
+  token: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiPublicSend(
+    "POST",
+    `/api/book/manage/${encodeURIComponent(token)}/nudge-reply`,
+    { reply: "cant_make_it_early" },
+  );
+  if (!res.ok) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true };
+}
+
 // NOTE: the API exposes POST /api/book/manage/:token/reschedule (validated +
 // availability-checked), but V1's manage page uses cancel-and-rebook instead of
 // an in-page slot picker (the manage GET doesn't expose staff/service ids needed

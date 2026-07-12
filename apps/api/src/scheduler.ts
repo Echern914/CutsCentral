@@ -8,6 +8,7 @@ import { runWinbackSweep } from "./engines/winback.js";
 import { linkBookingsToNudges } from "./engines/attribution.js";
 import { promoteFulfilledAppointments } from "./engines/appointmentPromotion.js";
 import { runAppointmentReminders } from "./engines/appointmentReminders.js";
+import { runPushReminders } from "./engines/pushReminders.js";
 import { refreshExpiringSquareTokens } from "./engines/squareTokenRefresh.js";
 import { runTrialReminders } from "./engines/trialReminder.js";
 import { autoCloseIdleConversations } from "./receptionist/conversation.js";
@@ -91,6 +92,15 @@ export function startScheduler(): void {
     void withLease("appointment-reminders", 5 * MINUTE, () =>
       runAppointmentReminders(),
     ).catch((err) => logger.error({ err }, "appointment reminder job failed"));
+  });
+
+  // Native booking: PUSH reminders (24h + 2h tiers, per-shop toggles) every 10
+  // minutes - the 2h tier needs a tighter cadence than the SMS/email job.
+  // Idempotent via the per-tier stamps; push-only, respects DRY_RUN.
+  cron.schedule("*/10 * * * *", () => {
+    void withLease("push-reminders", 5 * MINUTE, () => runPushReminders()).catch(
+      (err) => logger.error({ err }, "push reminder job failed"),
+    );
   });
 
   // Square: proactively refresh OAuth access tokens nearing their ~30-day expiry

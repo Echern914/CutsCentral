@@ -476,6 +476,30 @@ bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
   }
   const now = new Date();
   const canChange = appt.status === "BOOKED" && appt.startsAt > now;
+
+  // The barber's "come early" nudges for THIS appointment, newest first, plus
+  // whether the client already sent their one-tap reply. Shown as a banner with
+  // "On my way" / "Can't make it early" buttons.
+  const nudges =
+    appt.status === "BOOKED"
+      ? await prisma.nudge.findMany({
+          where: {
+            appointmentId: appt.id,
+            kind: "checkin_nudge",
+            status: { in: ["PENDING", "SENT", "FAILED"] },
+          },
+          orderBy: { createdAt: "desc" },
+          take: 2,
+          select: { body: true, createdAt: true },
+        })
+      : [];
+  const replied =
+    nudges.length === 0
+      ? false
+      : (await prisma.nudge.count({
+          where: { appointmentId: appt.id, kind: "checkin_nudge_reply" },
+        })) > 0;
+
   res.json({
     status: appt.status,
     firstName: appt.firstName,
@@ -487,13 +511,19 @@ bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
     canCancel: canChange,
     canReschedule: canChange,
     // Check-in ("On my way"): the window is computed HERE so the client needs
-    // no timezone math - it just renders the button when open is true.
+    // no timezone math - it just renders the button when open is true. A
+    // received nudge opens the window early (the barber ASKED them to come).
     checkin: {
-      open: checkInWindowOpen(appt.status, appt.startsAt, now),
+      open: checkInWindowOpen(appt.status, appt.startsAt, now, nudges.length > 0),
       status: appt.checkInStatus,
       etaMinutes: appt.etaMinutes,
       runningLate: appt.runningLate,
     },
+    nudges: nudges.map((n) => ({
+      body: n.body,
+      sentAt: n.createdAt.toISOString(),
+    })),
+    nudgeReplied: replied,
   });
 });
 
@@ -503,12 +533,21 @@ bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
 const CHECKIN_OPEN_BEFORE_MS = 60 * 60_000;
 const CHECKIN_GRACE_AFTER_MS = 15 * 60_000;
 
-function checkInWindowOpen(status: string, startsAt: Date, now: Date): boolean {
-  return (
-    status === "BOOKED" &&
-    now.getTime() >= startsAt.getTime() - CHECKIN_OPEN_BEFORE_MS &&
-    now.getTime() <= startsAt.getTime() + CHECKIN_GRACE_AFTER_MS
-  );
+/**
+ * `nudged` widens the window: a barber "come early" nudge IS an invitation to
+ * head over now, so a nudged client may check in any time before the grace
+ * cutoff - not just inside the standard 60-min window.
+ */
+function checkInWindowOpen(
+  status: string,
+  startsAt: Date,
+  now: Date,
+  nudged = false,
+): boolean {
+  if (status !== "BOOKED") return false;
+  if (now.getTime() > startsAt.getTime() + CHECKIN_GRACE_AFTER_MS) return false;
+  if (nudged) return true;
+  return now.getTime() >= startsAt.getTime() - CHECKIN_OPEN_BEFORE_MS;
 }
 
 // POST /api/book/manage/:token/checkin - the customer marks themselves en
@@ -557,8 +596,15 @@ bookingPublicRouter.post(
     }
     const now = new Date();
     if (!checkInWindowOpen(appt.status, appt.startsAt, now)) {
-      res.status(409).json({ error: "checkin_window_closed" });
-      return;
+      // A barber nudge opens the window early - re-check before rejecting.
+      const nudged =
+        (await prisma.nudge.count({
+          where: { appointmentId: appt.id, kind: "checkin_nudge" },
+        })) > 0;
+      if (!checkInWindowOpen(appt.status, appt.startsAt, now, nudged)) {
+        res.status(409).json({ error: "checkin_window_closed" });
+        return;
+      }
     }
     // 'arrived' is barber-set and final - the client can't regress it.
     if (appt.checkInStatus === "arrived") {
@@ -612,6 +658,91 @@ bookingPublicRouter.post(
     }
 
     res.json({ ok: true, status: "en_route" });
+  },
+);
+
+// POST /api/book/manage/:token/nudge-reply - the client's one-tap answer to a
+// barber "come early" nudge. "On my way" reuses /checkin; this endpoint carries
+// the decline ("can't make it early") back to the barber as a push. Only valid
+// while a nudge exists, and capped at one reply per nudge received (a spam
+// guard - the button is one-tap, so a client could otherwise buzz the barber
+// repeatedly).
+const nudgeReplySchema = z
+  .object({ reply: z.enum(["cant_make_it_early"]) })
+  .strict();
+
+bookingPublicRouter.post(
+  "/manage/:token/nudge-reply",
+  leadLimiter,
+  async (req, res) => {
+    const parsed = nudgeReplySchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid_input" });
+      return;
+    }
+    const appt = await prisma.appointment.findUnique({
+      where: { manageToken: String(req.params.token) },
+      select: {
+        id: true,
+        shopId: true,
+        status: true,
+        firstName: true,
+        clientId: true,
+        staff: { select: { userId: true } },
+        shop: { select: { ownerId: true } },
+      },
+    });
+    if (!appt) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    if (appt.status !== "BOOKED") {
+      res.status(409).json({ error: "not_active" });
+      return;
+    }
+    const [nudgeCount, replyCount] = await Promise.all([
+      prisma.nudge.count({
+        where: { appointmentId: appt.id, kind: "checkin_nudge" },
+      }),
+      prisma.nudge.count({
+        where: { appointmentId: appt.id, kind: "checkin_nudge_reply" },
+      }),
+    ]);
+    if (nudgeCount === 0) {
+      res.status(409).json({ error: "no_nudge" });
+      return;
+    }
+    if (replyCount >= nudgeCount) {
+      res.status(429).json({ error: "already_replied" });
+      return;
+    }
+
+    const body = `${appt.firstName}: can't make it early`;
+    await prisma.nudge.create({
+      data: {
+        shopId: appt.shopId,
+        clientId: appt.clientId!,
+        appointmentId: appt.id,
+        channel: "WEB_PUSH",
+        kind: "checkin_nudge_reply",
+        status: "SENT",
+        body,
+        sentAt: new Date(),
+      },
+    });
+    await sendPushToUser({
+      userId: appt.staff.userId ?? appt.shop.ownerId,
+      shopId: appt.shopId,
+      payload: {
+        title: body,
+        body: "They'll keep the original time.",
+        url: `${apiEnv().APP_BASE_URL}/dashboard/booking`,
+        tag: `nudge-reply-${appt.id}`,
+      },
+    }).catch((err) =>
+      logger.error({ err, appointmentId: appt.id }, "nudge reply push failed"),
+    );
+    res.json({ ok: true });
   },
 );
 

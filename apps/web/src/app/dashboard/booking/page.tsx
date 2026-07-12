@@ -14,6 +14,8 @@ export interface BookingShop {
   waitlistEnabled: boolean;
   slotOpenedTextsEnabled: boolean;
   requireBookingApproval: boolean;
+  pushReminder24hEnabled: boolean;
+  pushReminder2hEnabled: boolean;
 }
 
 /** Live connect status for the branded platform cards. */
@@ -76,6 +78,11 @@ export interface AgendaRow {
   checkInStatus?: "en_route" | "arrived" | null;
   etaMinutes?: number | null;
   runningLate?: boolean;
+  // Nudge affordance: false = client has no push device ("Notifications off");
+  // nudgesSent/nudgeLimit drive the remaining-nudges state (max 2, server-enforced).
+  hasPush?: boolean;
+  nudgesSent?: number;
+  nudgeLimit?: number;
 }
 
 export interface AgendaResponse {
