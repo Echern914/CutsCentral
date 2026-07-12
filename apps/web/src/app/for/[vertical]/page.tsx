@@ -245,7 +245,7 @@ export default function VerticalPage({
             </Link>
           </div>
           <p className="mt-5 text-xs text-muted">
-            Loyalty is free forever · Premium texting ${BILLING.priceMonthlyUsd}/mo after a{" "}
+            Loyalty is free forever · Premium from ${BILLING.priceMonthlyUsd}/mo after a{" "}
             {BILLING.trialDays}-day trial · no card to start
           </p>
         </section>

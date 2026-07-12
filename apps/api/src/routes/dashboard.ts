@@ -13,6 +13,7 @@ import {
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireActiveAccess } from "../middleware/billing.js";
 import { hasActiveAccess } from "../billing/stripe.js";
+import { remainingMonthlySms } from "../billing/quota.js";
 import { smsLimiter } from "../middleware/rateLimit.js";
 import {
   adjustLedgerEntry,
@@ -375,6 +376,16 @@ dashboardRouter.post("/nudge/:clientId", smsLimiter, requireActiveAccess, async 
     res.status(422).json({
       error: "quiet_hours",
       reason: "Texting is paused 9pm-8am (client local time). Try again in the morning.",
+    });
+    return;
+  }
+  // Per-tier MONTHLY quota (hard stop + upgrade CTA; distinct from the 402
+  // subscription_required gate above). Infinity while billing is off.
+  if ((await remainingMonthlySms(shop.id, now)) <= 0) {
+    res.status(402).json({
+      error: "sms_quota_exhausted",
+      message:
+        "You've used all of this month's included texts. Upgrade to Premium AI for 2,500 texts a month.",
     });
     return;
   }
@@ -1143,9 +1154,16 @@ dashboardRouter.post("/clients/bulk", smsLimiter, async (req, res) => {
       status: "SENT",
       createdAt: { gte: startOfDay },
       kind: { notIn: ["loyalty", "receptionist_reply"] },
+      // The cap is about SMS COST: WEB_PUSH nudge rows must not consume it
+      // (the sweep/winback counts already filter this way).
+      channel: "SMS",
     },
   });
   let budget = Math.max(0, shop.dailySendCap - sentToday);
+
+  // Per-tier MONTHLY quota shared with the sweep/promo sends (hard stop, no
+  // overage). Infinity while billing is off, so min() is a dev/CI no-op.
+  budget = Math.min(budget, await remainingMonthlySms(shop.id, now));
 
   const provider = getMessageProvider();
   let sent = 0;

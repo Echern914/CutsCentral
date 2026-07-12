@@ -17,6 +17,7 @@ import {
   type ConversationRow,
 } from "./conversation.js";
 import { sendReceptionistSms } from "./outbound.js";
+import { receptionistReplyCapReason } from "./replyCap.js";
 
 /**
  * Inbound orchestration: a non-keyword text arrives on the SHARED platform
@@ -40,6 +41,7 @@ const GATE_SELECT = {
   name: true,
   timezone: true,
   bookingMode: true,
+  plan: true,
   receptionistEnabled: true,
   receptionistSubscriptionStatus: true,
   receptionistCompAccess: true,
@@ -54,6 +56,7 @@ type GateShop = {
   name: string;
   timezone: string;
   bookingMode: string;
+  plan: string;
   receptionistEnabled: boolean;
   receptionistSubscriptionStatus: string;
   receptionistCompAccess: boolean;
@@ -205,6 +208,37 @@ export async function processInboundText(params: {
         { conversationId: conversation.id },
         "receptionist: no client for thread; staying silent",
       );
+      return;
+    }
+
+    // Abuse guard BEFORE claiming the turn: a capped inbound skips the
+    // Anthropic call entirely, not just the SMS. See replyCap.ts.
+    const capReason = await receptionistReplyCapReason(shop.id, clientId, now);
+    if (capReason === "shop_daily_cap") {
+      // Distributed flood: AI goes quiet shop-wide until tomorrow. No
+      // escalation (that would page the barber once per thread) and no SMS.
+      logger.warn(
+        { shopId: shop.id, conversationId: conversation.id },
+        "receptionist: shop daily reply cap hit; staying silent",
+      );
+      return;
+    }
+    if (capReason === "client_daily_cap") {
+      // Single number hammering the line: hand the thread to the barber
+      // (escalated status silences all future AI turns at zero cost) and send
+      // NO reply - a "you hit the limit" text would itself be a reply the
+      // abuser keeps triggering. escalateConversation records the system note
+      // and alerts the barber so a legitimate chatty client isn't ghosted.
+      logger.warn(
+        { shopId: shop.id, conversationId: conversation.id, clientId },
+        "receptionist: per-client daily reply cap hit; escalating",
+      );
+      await escalateConversation({
+        shopId: shop.id,
+        conversationId: conversation.id,
+        phone: params.phone,
+        reason: "reply_cap",
+      });
       return;
     }
 

@@ -166,6 +166,10 @@ const apiSchema = z.object({
   // self-serve upgrade is unavailable and only receptionistCompAccess shops
   // (pilots) can use the feature.
   STRIPE_RECEPTIONIST_PRICE_ID: z.string().min(1).optional(),
+  // Stripe price for the $74.99/mo Premium AI tier (receptionist included).
+  // While unset, the tier is dark: checkout/upgrade to pro_ai 409s and the
+  // receptionist only sells via the $40 add-on path above.
+  STRIPE_PREMIUM_AI_PRICE_ID: z.string().min(1).optional(),
 
   // Error monitoring (optional).
   SENTRY_DSN: cleanUrl().optional(),

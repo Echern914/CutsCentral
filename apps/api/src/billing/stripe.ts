@@ -4,8 +4,10 @@ import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 
 /**
- * Stripe billing. One plan, subscription mode, Checkout + Customer Portal -
- * Stripe hosts every payment surface, we never touch card data.
+ * Stripe billing. Two base tiers ("pro" = Premium, "pro_ai" = Premium AI) on
+ * one subscription, plus the $40 receptionist add-on as a second subscription.
+ * Subscription mode, Checkout + Customer Portal - Stripe hosts every payment
+ * surface, we never touch card data.
  *
  * The whole module is an OPTIONAL seam: with the STRIPE_* env vars absent,
  * billingEnabled() is false and hasActiveAccess() always passes, which is the
@@ -126,8 +128,21 @@ async function ensureCustomer(shop: CheckoutShop): Promise<string> {
   return customer.id;
 }
 
-/** Hosted Checkout URL for the subscription. */
-export async function createCheckoutUrl(shop: CheckoutShop): Promise<string | null> {
+/** The two base-subscription tiers a checkout can buy. */
+export type CheckoutTier = "pro" | "pro_ai";
+
+/**
+ * Hosted Checkout URL for the base subscription. `tier` picks the price:
+ * "pro" (Premium $34.99) or "pro_ai" (Premium AI $74.99, receptionist
+ * included). The tier rides metadata on BOTH the session and the subscription
+ * (mirroring the add-on's metadata.addon pattern) so applyStripeEvent can map
+ * subscription lifecycle events to the right Shop.plan value. Subscriptions
+ * that predate tiers carry no metadata.tier and default to "pro".
+ */
+export async function createCheckoutUrl(
+  shop: CheckoutShop,
+  tier: CheckoutTier = "pro",
+): Promise<string | null> {
   const env = apiEnv();
   const customer = await ensureCustomer(shop);
 
@@ -137,18 +152,22 @@ export async function createCheckoutUrl(shop: CheckoutShop): Promise<string | nu
   // ~48h out and in the future; if the trial already lapsed (or is too close), omit
   // it and bill now. We use trial_end (a timestamp to the existing trialEndsAt)
   // rather than trial_period_days so subscribing mid-trial never grants a fresh
-  // full trial on top of the one they've already partly used.
+  // full trial on top of the one they've already partly used. Applies to both
+  // tiers - buying Premium AI mid-trial still bills only when the trial ends.
   const MIN_TRIAL_LEEWAY_MS = 48 * 60 * 60 * 1000; // Stripe requires trial_end >48h out
   const trialEndMs = shop.trialEndsAt?.getTime() ?? 0;
   const useTrial = trialEndMs > Date.now() + MIN_TRIAL_LEEWAY_MS;
 
+  const price =
+    tier === "pro_ai" ? env.STRIPE_PREMIUM_AI_PRICE_ID! : env.STRIPE_PRICE_ID!;
   const session = await stripe().checkout.sessions.create({
     mode: "subscription",
     customer,
-    line_items: [{ price: env.STRIPE_PRICE_ID!, quantity: 1 }],
+    line_items: [{ price, quantity: 1 }],
     client_reference_id: shop.id,
+    metadata: { tier },
     subscription_data: {
-      metadata: { shopId: shop.id },
+      metadata: { shopId: shop.id, tier },
       ...(useTrial ? { trial_end: Math.floor(trialEndMs / 1000) } : {}),
     },
     allow_promotion_codes: true,
@@ -156,6 +175,53 @@ export async function createCheckoutUrl(shop: CheckoutShop): Promise<string | nu
     cancel_url: `${env.APP_BASE_URL}/dashboard/billing?checkout=canceled`,
   });
   return session.url;
+}
+
+/**
+ * Whether the $74.99/mo Premium AI TIER can be sold self-serve. Needs base
+ * billing configured PLUS its own price id. While unset, the tier is dark and
+ * the receptionist only sells via the $40 add-on path.
+ */
+export function premiumAiBillingEnabled(): boolean {
+  return billingEnabled() && Boolean(apiEnv().STRIPE_PREMIUM_AI_PRICE_ID);
+}
+
+/**
+ * Upgrade an ACTIVE base subscription in place: swap its single item to the
+ * Premium AI price and stamp metadata.tier="pro_ai" in the SAME update call
+ * (two calls would race the customer.subscription.updated webhook - the
+ * webhook fired by the items swap must already see the new tier).
+ * always_invoice bills the prorated difference immediately. We also write
+ * plan="pro_ai" optimistically so the UI flips at once; the webhook converges
+ * to the same value. Returns false (logged) on any Stripe error.
+ */
+export async function upgradeSubscriptionToPremiumAi(shop: {
+  id: string;
+  stripeSubscriptionId: string | null;
+}): Promise<boolean> {
+  const env = apiEnv();
+  if (!shop.stripeSubscriptionId || !env.STRIPE_PREMIUM_AI_PRICE_ID) return false;
+  try {
+    const sub = await stripe().subscriptions.retrieve(shop.stripeSubscriptionId);
+    const item = sub.items.data[0];
+    if (!item) return false;
+    await stripe().subscriptions.update(sub.id, {
+      items: [{ id: item.id, price: env.STRIPE_PREMIUM_AI_PRICE_ID }],
+      metadata: { ...sub.metadata, tier: "pro_ai" },
+      proration_behavior: "always_invoice",
+    });
+    await prisma.shop.update({
+      where: { id: shop.id },
+      data: { plan: "pro_ai" },
+    });
+    return true;
+  } catch (err) {
+    logger.error(
+      { err, shopId: shop.id, subscriptionId: shop.stripeSubscriptionId },
+      "premium-ai upgrade failed",
+    );
+    return false;
+  }
 }
 
 /**
@@ -269,7 +335,9 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
           stripeCustomerId: customerId ?? undefined,
           stripeSubscriptionId: subscriptionId,
           subscriptionStatus: "active",
-          plan: "pro",
+          // Sessions created before tiers existed carry no metadata.tier ->
+          // "pro" (the legacy default). Only an explicit pro_ai tag upgrades.
+          plan: session.metadata?.tier === "pro_ai" ? "pro_ai" : "pro",
         },
       });
       if (count === 0) {
@@ -296,6 +364,8 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
         });
         return;
       }
+      // Legacy subs (created before tiers) have no metadata.tier -> "pro".
+      const tier = sub.metadata?.tier === "pro_ai" ? "pro_ai" : "pro";
       const { count } = await prisma.shop.updateMany({
         // metadata.shopId is authoritative; customer id covers subs created
         // outside checkout (e.g. from the Stripe dashboard).
@@ -303,7 +373,7 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
         data: {
           subscriptionStatus: status,
           stripeSubscriptionId: status === "canceled" ? null : sub.id,
-          plan: ACTIVE_STATUSES.has(status) ? "pro" : "free",
+          plan: ACTIVE_STATUSES.has(status) ? tier : "free",
         },
       });
       if (count === 0) {

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { APP_NAME, BILLING } from "@chairback/config/constants";
+import { APP_NAME, BILLING, PLANS } from "@chairback/config/constants";
 import { DashboardPreview } from "./DashboardPreview";
 import { Marquee } from "./Marquee";
 import { PhoneDemo } from "./PhoneDemo";
@@ -281,10 +281,12 @@ export function Landing() {
               }
               sub="Run a real loyalty program free forever. Add the texts that bring clients back whenever you're ready. One rebooked regular covers the month."
             />
-            <Reveal delay={0.1} className="mx-auto mt-12 grid max-w-3xl gap-6 sm:grid-cols-2">
+            <Reveal delay={0.1} className="mx-auto mt-12 grid max-w-6xl gap-6 md:grid-cols-3">
               {/* Free */}
               <div className="glass flex flex-col rounded-3xl p-8">
-                <p className="text-xs uppercase tracking-[0.25em] text-muted">Free</p>
+                <p className="text-xs uppercase tracking-[0.25em] text-muted">
+                  {PLANS.free.name}
+                </p>
                 <p className="mt-4 font-display text-5xl tracking-tight">
                   $0<span className="text-lg text-muted">/forever</span>
                 </p>
@@ -298,6 +300,7 @@ export function Landing() {
                     "Client book, notes & CSV export",
                     "One-tap visit logging, no booking app needed",
                     "At-risk radar: see who's overdue",
+                    "Free web push notifications",
                   ].map((t) => (
                     <li key={t} className="flex items-start gap-2.5">
                       <CheckIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted" />
@@ -321,26 +324,30 @@ export function Landing() {
                 />
                 <div className="flex items-center justify-between">
                   <p className="text-xs uppercase tracking-[0.25em] text-gold-soft">
-                    {BILLING.planName}
+                    {PLANS.pro.name}
                   </p>
                   <span className="rounded-full bg-gold/15 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-gold">
-                    {BILLING.trialDays}-day free trial
+                    Most popular
                   </span>
                 </div>
                 <p className="mt-4 font-display text-5xl tracking-tight">
-                  ${BILLING.priceMonthlyUsd}
+                  ${PLANS.pro.priceMonthlyUsd}
                   <span className="text-lg text-muted">/month</span>
                 </p>
                 <p className="mt-2 text-sm text-muted">
-                  Everything in Free, plus the part that brings clients back.
+                  Everything in Free, plus the part that brings clients back.{" "}
+                  {BILLING.trialDays}-day free trial.
                 </p>
                 <ul className="mt-6 flex flex-1 flex-col gap-2.5 text-left text-sm text-offwhite">
                   {[
+                    `${PLANS.pro.smsMonthlyQuota} texts a month included`,
+                    "Your own online booking page + confirmation & reminder texts and emails",
                     "Smart rebooking texts, timed per client",
                     "Win-back texts that recover lapsed clients",
-                    "Your own online booking page + reminder texts",
                     "Promo blasts with revenue attribution",
-                    "Daily send caps & STOP handling built in",
+                    "Waitlist with “a slot just opened” alerts",
+                    "Recurring appointments, add-ons, day pricing & request approval",
+                    "Square, Acuity & CSV import",
                   ].map((t) => (
                     <li key={t} className="flex items-start gap-2.5">
                       <CheckIcon className="mt-0.5 h-4 w-4 shrink-0 text-gold" />
@@ -356,11 +363,56 @@ export function Landing() {
                   <ArrowIcon className="h-4 w-4" />
                 </Link>
               </div>
+
+              {/* Premium AI */}
+              <div className="glass relative flex flex-col overflow-hidden rounded-3xl border border-gold/50 p-8">
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute inset-x-0 -top-24 -z-10 h-48 rounded-full bg-gold/20 blur-3xl"
+                />
+                <div className="flex items-center justify-between">
+                  <p className="text-xs uppercase tracking-[0.25em] text-gold">
+                    {PLANS.pro_ai.name}
+                  </p>
+                  <span className="rounded-full bg-gold/15 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-gold">
+                    New
+                  </span>
+                </div>
+                <p className="mt-4 font-display text-5xl tracking-tight">
+                  ${PLANS.pro_ai.priceMonthlyUsd}
+                  <span className="text-lg text-muted">/month</span>
+                </p>
+                <p className="mt-2 text-sm text-muted">
+                  Everything in Premium, plus an AI receptionist on your line
+                  around the clock.
+                </p>
+                <ul className="mt-6 flex flex-1 flex-col gap-2.5 text-left text-sm text-offwhite">
+                  {[
+                    "AI receptionist answers client texts 24/7",
+                    "Books, reschedules & cancels by text",
+                    "Fills freed slots automatically when someone cancels",
+                    `${PLANS.pro_ai.smsMonthlyQuota.toLocaleString()} texts a month included`,
+                    "Everything in Premium",
+                  ].map((t) => (
+                    <li key={t} className="flex items-start gap-2.5">
+                      <CheckIcon className="mt-0.5 h-4 w-4 shrink-0 text-gold" />
+                      {t}
+                    </li>
+                  ))}
+                </ul>
+                <Link
+                  href="/signup"
+                  className="mt-7 inline-flex items-center justify-center gap-2 rounded-full border border-gold/50 px-7 py-3 text-sm font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
+                >
+                  Start your free trial
+                  <ArrowIcon className="h-4 w-4" />
+                </Link>
+              </div>
             </Reveal>
             <p className="mx-auto mt-6 max-w-md text-center text-xs text-muted">
-              No per-text fees, no contracts, cancel anytime. The average shop
-              recovers several no-show-again clients a month: the whole bill, many
-              times over.
+              Generous monthly text allowances, no contracts, cancel anytime. The
+              average shop recovers several no-show-again clients a month: the
+              whole bill, many times over.
             </p>
           </div>
         </section>
@@ -569,7 +621,7 @@ const FAQ = [
   },
   {
     q: "How much does it cost?",
-    a: `The loyalty program (punch cards, rewards page, public mini-site, client book) is free forever, no card required. Premium ($${BILLING.priceMonthlyUsd}/month) adds the texting that brings clients back: rebooking nudges, promo blasts, and auto-sync with Acuity or Square. Every new shop gets a ${BILLING.trialDays}-day full Premium trial, and one rebooked regular typically covers the month.`,
+    a: `The loyalty program (punch cards, rewards page, public mini-site, client book) is free forever, no card required. Premium ($${PLANS.pro.priceMonthlyUsd}/month, ${PLANS.pro.smsMonthlyQuota} texts included) adds the texting that brings clients back: rebooking nudges, promo blasts, and auto-sync with Acuity or Square. Premium AI ($${PLANS.pro_ai.priceMonthlyUsd}/month, ${PLANS.pro_ai.smsMonthlyQuota.toLocaleString()} texts included) adds an AI receptionist that answers client texts and books appointments 24/7. Every new shop gets a ${BILLING.trialDays}-day full Premium trial, and one rebooked regular typically covers the month.`,
   },
   {
     q: "Is it only for barbershops?",

@@ -15,6 +15,7 @@ import {
 
 /** The slice of Shop the receptionist gate needs. */
 export interface ReceptionistShop extends BillingShop {
+  plan: string;
   receptionistEnabled: boolean;
   receptionistSubscriptionStatus: string;
   receptionistCompAccess: boolean;
@@ -28,19 +29,21 @@ export function receptionistConfigured(): boolean {
 }
 
 /**
- * The $40/mo add-on entitlement. Comped pilots pass unconditionally; otherwise
- * the shop needs an active add-on subscription. While the add-on price is not
- * configured in Stripe (STRIPE_RECEPTIONIST_PRICE_ID unset) there is no
+ * The receptionist entitlement: comped pilot, the Premium AI tier (plan
+ * "pro_ai" includes the receptionist), or an active $40/mo add-on
+ * subscription. While neither price is configured in Stripe there is no
  * self-serve way to subscribe, so comp access is the only entitlement -- EXCEPT
  * when platform billing itself is off (pre-revenue/dev), where everything is
  * unlocked to mirror hasActiveAccess()'s behavior.
  */
 export function hasReceptionistEntitlement(shop: {
+  plan: string;
   receptionistCompAccess: boolean;
   receptionistSubscriptionStatus: string;
 }): boolean {
   if (shop.receptionistCompAccess) return true;
   if (!billingEnabled()) return true;
+  if (shop.plan === "pro_ai") return true;
   return ACTIVE_STATUSES.has(shop.receptionistSubscriptionStatus);
 }
 

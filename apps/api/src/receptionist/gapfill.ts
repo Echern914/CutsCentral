@@ -2,6 +2,7 @@ import { randomToken } from "@chairback/config";
 import { forShop, prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { inQuietHours } from "../engines/quietHours.js";
+import { remainingMonthlySms } from "../billing/quota.js";
 import {
   lockStaffAndAssertSlotFree,
   SlotTakenError,
@@ -228,6 +229,14 @@ export async function runGapFill(input: GapFillInput): Promise<void> {
     });
     if (sentToday >= shop.dailySendCap) {
       logger.info({ shopId: shop.id, sentToday }, "gap-fill skipped: daily cap");
+      return;
+    }
+
+    // Per-tier MONTHLY quota: the proactive offer is marketing-cost outbound
+    // (kind="receptionist" counts), so it shares the monthly budget with
+    // nudges/win-backs/promos. Infinity while billing is off.
+    if ((await remainingMonthlySms(shop.id, now)) <= 0) {
+      logger.info({ shopId: shop.id }, "gap-fill skipped: monthly SMS quota");
       return;
     }
 

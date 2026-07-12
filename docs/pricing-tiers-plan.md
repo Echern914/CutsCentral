@@ -1,6 +1,23 @@
 # ChairBack Pricing & Tier Plan (v2 — grounded financials)
 
-**Status:** PLAN (not built). Tiered subscription model that funds SMS cost and protects margin at scale.
+**Status:** SUPERSEDED — implemented 2026-07-10 (branch feat/ai-receptionist), with deltas:
+
+- Tiers shipped as **Free $0 / Premium $34.99 (kept, not $39) / Premium AI $74.99**
+  (not $79 — with the $40 receptionist add-on retained for Premium shops,
+  $74.99 = exactly pro + add-on, so pricing above that would be dominated).
+  Internal plan strings: `free` / `pro` / `pro_ai` (PLANS map in
+  packages/config/src/constants.ts).
+- Monthly SMS quotas: Premium **600**, Premium AI **2,500**, per UTC calendar
+  month, counting SENT marketing kinds only (nudge/winback/promo/receptionist
+  gap-fill). **Hard stop + upgrade CTA at the quota — NO metered overage**
+  (deviates from §1/§3 of this doc; overage billing can be added later).
+  Enforcement: apps/api/src/billing/quota.ts.
+- Receptionist replies (client-initiated) stay quota-exempt but got their own
+  abuse caps (30/client/day, 200/shop/day — apps/api/src/receptionist/replyCap.ts).
+- The cost model below (~$0.018/msg all-in) remains the reference for the
+  quota sizing and is still current.
+
+**Original status:** PLAN (not built). Tiered subscription model that funds SMS cost and protects margin at scale.
 **Date:** 2026-06-26
 **Author:** Eric + Claude
 **v2 change:** all margins rebuilt on *verified June 2026 Twilio pricing* (not estimates), with a

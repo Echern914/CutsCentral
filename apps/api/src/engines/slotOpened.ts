@@ -59,6 +59,7 @@ const SHOP_SELECT = {
   trialEndsAt: true,
   compAccess: true,
   // AI-receptionist gate + gap-fill budget (see receptionist/config.ts).
+  plan: true,
   dailySendCap: true,
   receptionistEnabled: true,
   receptionistSubscriptionStatus: true,

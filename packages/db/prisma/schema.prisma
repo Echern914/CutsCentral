@@ -163,7 +163,7 @@ model Shop {
   // Rebooking countdown: target window (days) for a client to rebook after their
   // last visit. Drives the urgency timer on the rewards page. Default 14 (<2 wks).
   rebookWindowDays    Int     @default(14)
-  plan                String  @default("free") // "free" | "pro"; kept in sync by the Stripe webhook
+  plan                String  @default("free") // "free" | "pro" | "pro_ai"; kept in sync by the Stripe webhook
   // Vertical (INDUSTRIES key in packages/config). Flavors onboarding defaults
   // and copy only - the data model is service-business generic.
   industry            String  @default("barber")
@@ -794,6 +794,7 @@ model Nudge {
   @@index([status, sentAt]) // hourly attribution fetch (SENT nudges by sentAt window)
   @@index([shopId, resultedInBookingAt]) // /stats + /trends "rebookings recovered this month"
   @@index([promotionId])
+  @@index([shopId, kind, createdAt]) // monthly SMS quota count + receptionist reply caps
 }
 
 // How a push subscription is delivered. One table holds both transports so the

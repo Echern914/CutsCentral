@@ -11,6 +11,7 @@ import {
 } from "./agent.js";
 import { hasLiveConversation, processInboundText } from "./inbound.js";
 import { closeConversationsForPhone } from "./conversation.js";
+import { RECEPTIONIST_REPLY_LIMITS } from "./replyCap.js";
 
 /**
  * End-to-end inbound pipeline with a SCRIPTED model (no API key, fully
@@ -396,6 +397,95 @@ describe("processInboundText", () => {
 
     const convo = await prisma.receptionistConversation.findFirst({ where: { phone } });
     expect(convo!.shopId).toBe(newShop.id);
+  });
+});
+
+describe("reply abuse caps", () => {
+  it("escalates a client at the daily reply cap BEFORE calling the model or sending SMS", async () => {
+    const shop = await makeShop();
+    const phone = freshPhone();
+    const client = await makeClient(shop.id, phone);
+
+    // The client already burned today's reply allowance.
+    await prisma.nudge.createMany({
+      data: Array.from(
+        { length: RECEPTIONIST_REPLY_LIMITS.perClientPerDay },
+        () => ({
+          shopId: shop.id,
+          clientId: client.id,
+          channel: "SMS" as const,
+          status: "SENT" as const,
+          kind: "receptionist_reply",
+          createdAt: NOW,
+        }),
+      ),
+    });
+
+    const model = scriptedModel([textMsg("must never be requested")]);
+    __setModelClientForTests(model);
+
+    await processInboundText({ phone, text: "and another thing", now: NOW });
+
+    // No Anthropic call, no SMS - the inbound is persisted and the thread is
+    // handed to the barber (escalated silences all future AI turns).
+    expect(model.requests).toHaveLength(0);
+    expect(sms.find((s) => s.to === phone)).toBeUndefined();
+    const convo = await prisma.receptionistConversation.findFirst({
+      where: { shopId: shop.id, phone },
+      include: { messages: true },
+    });
+    expect(convo!.status).toBe("escalated");
+    expect(convo!.messages.some((m) => m.role === "user")).toBe(true);
+    expect(
+      convo!.messages.some(
+        (m) => m.role === "system_note" && m.content.includes("reply_cap"),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("premium AI tier entitlement (billing enabled)", () => {
+  it("plan=pro_ai runs the receptionist with NO add-on subscription or comp", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
+    process.env.STRIPE_PRICE_ID = "price_test_dummy";
+    process.env.STRIPE_WEBHOOK_SECRET = "whsec_test_secret";
+    __resetEnvCacheForTests();
+    try {
+      const shop = await prisma.shop.create({
+        data: {
+          ownerId: userId,
+          name: "Tier Cuts",
+          slug: `tier-${randomToken(5)}`,
+          webhookSecret: randomToken(),
+          bookingMode: "native",
+          plan: "pro_ai",
+          subscriptionStatus: "active",
+          stripeSubscriptionId: `sub_test_${randomToken(6)}`,
+          compAccess: false,
+          receptionistEnabled: true,
+          receptionistCompAccess: false,
+          receptionistSubscriptionStatus: "none",
+          receptionistTermsAcceptedAt: NOW,
+        },
+        select: { id: true },
+      });
+      const phone = freshPhone();
+      await makeClient(shop.id, phone);
+      __setModelClientForTests(scriptedModel([textMsg("hey, what can I book you for?")]));
+
+      await processInboundText({ phone, text: "hi", now: NOW });
+
+      expect(sms.find((s) => s.to === phone)).toBeDefined();
+      const convo = await prisma.receptionistConversation.findFirst({
+        where: { shopId: shop.id, phone },
+      });
+      expect(convo).not.toBeNull();
+    } finally {
+      delete process.env.STRIPE_SECRET_KEY;
+      delete process.env.STRIPE_PRICE_ID;
+      delete process.env.STRIPE_WEBHOOK_SECRET;
+      __resetEnvCacheForTests();
+    }
   });
 });
 

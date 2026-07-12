@@ -2,7 +2,12 @@ import request from "supertest";
 import Stripe from "stripe";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
-import { BILLING, __resetEnvCacheForTests, randomToken } from "@chairback/config";
+import {
+  BILLING,
+  PLANS,
+  __resetEnvCacheForTests,
+  randomToken,
+} from "@chairback/config";
 import {
   applyStripeEvent,
   hasActiveAccess,
@@ -278,5 +283,261 @@ describe("402 gate once the trial lapses", () => {
     const billing = await request(app).get("/api/billing").set("Cookie", cookie);
     expect(billing.body.hasAccess).toBe(false);
     expect(billing.body.trialDaysLeft).toBe(0);
+  });
+});
+
+describe("tier mapping in stripe events", () => {
+  it("subscription events with metadata.tier=pro_ai set plan pro_ai", async () => {
+    await applyStripeEvent({
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: `${SUB_ID}_ai`,
+          status: "active",
+          customer: CUSTOMER_ID,
+          metadata: { shopId, tier: "pro_ai" },
+        },
+      },
+    } as never);
+    const shop = await prisma.shop.findUnique({ where: { id: shopId } });
+    expect(shop!.plan).toBe("pro_ai");
+    expect(shop!.subscriptionStatus).toBe("active");
+  });
+
+  it("LEGACY subs without metadata.tier stay plan pro (the critical default)", async () => {
+    await applyStripeEvent({
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: `${SUB_ID}_legacy`,
+          status: "active",
+          customer: CUSTOMER_ID,
+          metadata: { shopId },
+        },
+      },
+    } as never);
+    const shop = await prisma.shop.findUnique({ where: { id: shopId } });
+    expect(shop!.plan).toBe("pro");
+  });
+
+  it("checkout.session.completed with metadata.tier=pro_ai activates as pro_ai", async () => {
+    const { payload, header } = signedPayload({
+      id: `evt_${randomToken(6)}`,
+      object: "event",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          object: "checkout.session",
+          mode: "subscription",
+          client_reference_id: shopId,
+          customer: CUSTOMER_ID,
+          subscription: `${SUB_ID}_ai2`,
+          metadata: { tier: "pro_ai" },
+        },
+      },
+    });
+    const res = await request(app)
+      .post("/webhooks/stripe")
+      .set("Content-Type", "application/json")
+      .set("stripe-signature", header)
+      .send(payload);
+    expect(res.status).toBe(200);
+    const shop = await prisma.shop.findUnique({ where: { id: shopId } });
+    expect(shop!.plan).toBe("pro_ai");
+  });
+
+  it("cancellation drops pro_ai back to free", async () => {
+    await applyStripeEvent({
+      type: "customer.subscription.deleted",
+      data: {
+        object: {
+          id: `${SUB_ID}_ai2`,
+          status: "canceled",
+          customer: CUSTOMER_ID,
+          metadata: { shopId, tier: "pro_ai" },
+        },
+      },
+    } as never);
+    const shop = await prisma.shop.findUnique({ where: { id: shopId } });
+    expect(shop!.plan).toBe("free");
+    expect(shop!.subscriptionStatus).toBe("canceled");
+  });
+
+  it("add-on events still touch only receptionistSubscriptionStatus", async () => {
+    await applyStripeEvent({
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: `${SUB_ID}_addon`,
+          status: "active",
+          customer: CUSTOMER_ID,
+          metadata: { shopId, addon: "receptionist" },
+        },
+      },
+    } as never);
+    const shop = await prisma.shop.findUnique({ where: { id: shopId } });
+    expect(shop!.receptionistSubscriptionStatus).toBe("active");
+    expect(shop!.plan).toBe("free"); // untouched by the add-on branch
+    // Reset for the suites below.
+    await prisma.shop.update({
+      where: { id: shopId },
+      data: { receptionistSubscriptionStatus: "none" },
+    });
+  });
+});
+
+describe("premium AI HTTP surface", () => {
+  beforeAll(async () => {
+    // Restore an ACTIVE pro subscription (earlier suites left the shop lapsed).
+    await prisma.shop.update({
+      where: { id: shopId },
+      data: {
+        subscriptionStatus: "active",
+        stripeSubscriptionId: SUB_ID,
+        plan: "pro",
+        receptionistSubscriptionStatus: "none",
+      },
+    });
+  });
+
+  it("GET /api/billing reports smsUsage + premiumAi + receptionist.included", async () => {
+    const res = await request(app).get("/api/billing").set("Cookie", cookie);
+    expect(res.status).toBe(200);
+    expect(res.body.smsUsage.quota).toBe(PLANS.pro.smsMonthlyQuota);
+    expect(res.body.smsUsage.used).toBeTypeOf("number");
+    expect(new Date(res.body.smsUsage.resetsAt).getTime()).toBeGreaterThan(Date.now());
+    // STRIPE_PREMIUM_AI_PRICE_ID is unset here -> the tier is dark.
+    expect(res.body.premiumAi.billingEnabled).toBe(false);
+    expect(res.body.premiumAi.priceMonthlyUsd).toBe(PLANS.pro_ai.priceMonthlyUsd);
+    expect(res.body.receptionist.included).toBe(false);
+  });
+
+  it("pro_ai checkout and upgrade 409 while the tier price is unset", async () => {
+    const checkout = await request(app)
+      .post("/api/billing/checkout")
+      .set("Cookie", cookie)
+      .send({ tier: "pro_ai" });
+    expect(checkout.status).toBe(409);
+    expect(checkout.body.error).toBe("premium_ai_unavailable");
+
+    const upgrade = await request(app)
+      .post("/api/billing/upgrade")
+      .set("Cookie", cookie);
+    expect(upgrade.status).toBe(409);
+    expect(upgrade.body.error).toBe("premium_ai_unavailable");
+  });
+
+  describe("with the tier price configured", () => {
+    beforeAll(() => {
+      process.env.STRIPE_PREMIUM_AI_PRICE_ID = "price_test_premium_ai";
+      process.env.STRIPE_RECEPTIONIST_PRICE_ID = "price_test_receptionist";
+      __resetEnvCacheForTests();
+    });
+    afterAll(() => {
+      delete process.env.STRIPE_PREMIUM_AI_PRICE_ID;
+      delete process.env.STRIPE_RECEPTIONIST_PRICE_ID;
+      __resetEnvCacheForTests();
+    });
+
+    it("upgrade 409s already_entitled on a pro_ai shop", async () => {
+      await prisma.shop.update({ where: { id: shopId }, data: { plan: "pro_ai" } });
+      const res = await request(app)
+        .post("/api/billing/upgrade")
+        .set("Cookie", cookie);
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe("already_entitled");
+    });
+
+    it("the add-on checkout 409s already_entitled on a pro_ai shop", async () => {
+      const res = await request(app)
+        .post("/api/billing/receptionist/checkout")
+        .set("Cookie", cookie);
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe("already_entitled");
+    });
+
+    it("upgrade 409s already_entitled when the $40 add-on is active", async () => {
+      await prisma.shop.update({
+        where: { id: shopId },
+        data: { plan: "pro", receptionistSubscriptionStatus: "active" },
+      });
+      const res = await request(app)
+        .post("/api/billing/upgrade")
+        .set("Cookie", cookie);
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe("already_entitled");
+      await prisma.shop.update({
+        where: { id: shopId },
+        data: { receptionistSubscriptionStatus: "none" },
+      });
+    });
+
+    it("upgrade 409s no_subscription for a trial/free shop", async () => {
+      await prisma.shop.update({
+        where: { id: shopId },
+        data: {
+          plan: "free",
+          subscriptionStatus: "canceled",
+          stripeSubscriptionId: null,
+        },
+      });
+      const res = await request(app)
+        .post("/api/billing/upgrade")
+        .set("Cookie", cookie);
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe("no_subscription");
+      // Restore the active pro sub for the quota suite below.
+      await prisma.shop.update({
+        where: { id: shopId },
+        data: { plan: "pro", subscriptionStatus: "active", stripeSubscriptionId: SUB_ID },
+      });
+    });
+  });
+});
+
+describe("monthly SMS quota hard stop", () => {
+  it("402s the manual nudge once the month's quota is spent", async () => {
+    // A timezone whose local hour is ~midday right now, so the quiet-hours
+    // gate (which runs before the quota check) never trips regardless of when
+    // the suite runs. Etc/GMT+X = UTC-X (sign inverted by IANA convention).
+    const utcHour = new Date().getUTCHours();
+    let offset = utcHour - 12; // local = utc - offset = ~12
+    if (offset < -12) offset += 24;
+    if (offset > 12) offset -= 24;
+    const middayTz =
+      offset === 0 ? "Etc/GMT" : offset > 0 ? `Etc/GMT+${offset}` : `Etc/GMT-${-offset}`;
+    await prisma.shop.update({
+      where: { id: shopId },
+      data: { timezone: middayTz, dailySendCap: 1000 },
+    });
+
+    const client = await prisma.client.create({
+      data: {
+        shopId,
+        acuityClientKey: `quota-http-${randomToken(6)}`,
+        magicToken: randomToken(),
+        firstName: "Q",
+        phone: "+13025550188",
+        smsConsentAt: new Date(),
+        smsConsentSource: "barber_attest",
+      },
+    });
+
+    // Spend the whole monthly quota with SENT marketing rows from this month.
+    await prisma.nudge.createMany({
+      data: Array.from({ length: PLANS.pro.smsMonthlyQuota }, () => ({
+        shopId,
+        clientId: client.id,
+        channel: "SMS" as const,
+        status: "SENT" as const,
+        kind: "nudge",
+      })),
+    });
+
+    const res = await request(app)
+      .post(`/api/dashboard/nudge/${client.id}`)
+      .set("Cookie", cookie);
+    expect(res.status).toBe(402);
+    expect(res.body.error).toBe("sms_quota_exhausted");
   });
 });
