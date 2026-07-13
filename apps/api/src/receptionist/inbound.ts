@@ -5,6 +5,8 @@ import { renderPromptForShop } from "./prompt.js";
 import { runAgentTurn } from "./agent.js";
 import {
   RECEPTIONIST_TOOLS,
+  describeActiveHolds,
+  describeUpcomingAppointments,
   escalateConversation,
   makeToolExecutor,
 } from "./tools.js";
@@ -131,7 +133,13 @@ async function resolveInbound(phone: string, now: Date): Promise<ResolvedInbound
 }
 
 /** The volatile per-turn context (kept OUT of the cached system prompt). */
-function buildContextTurn(shop: GateShop, phone: string, now: Date): string {
+function buildContextTurn(
+  shop: GateShop,
+  phone: string,
+  now: Date,
+  holdsNote: string | null,
+  apptsNote: string | null,
+): string {
   const local = new Intl.DateTimeFormat("en-US", {
     timeZone: shop.timezone,
     weekday: "long",
@@ -141,12 +149,25 @@ function buildContextTurn(shop: GateShop, phone: string, now: Date): string {
     hour: "numeric",
     minute: "2-digit",
   }).format(now);
-  return (
+  let out =
     `[context - not from the client] Current date/time at the shop: ${local} ` +
     `(${shop.timezone}). You are texting with ${phone} over SMS. Use ` +
     `get_client_history to see who they are. Dates you pass to tools are ` +
-    `YYYY-MM-DD in the shop's timezone.`
-  );
+    `YYYY-MM-DD in the shop's timezone.`;
+  if (apptsNote) {
+    out +=
+      `\nThis client's upcoming appointments - to move one use ` +
+      `reschedule(appointment_id, new_slot_id); NEVER book a second ` +
+      `appointment when they asked to move:\n${apptsNote}`;
+  }
+  if (holdsNote) {
+    out +=
+      `\nSlots you currently HOLD for this client - these do NOT appear in ` +
+      `check_availability while held. When the client accepts one, call ` +
+      `book_appointment (or reschedule) with its slot_id directly; do NOT ` +
+      `re-check availability first:\n${holdsNote}`;
+  }
+  return out;
 }
 
 /** Fallback line when a turn dies and the barber has to take over. */
@@ -248,9 +269,21 @@ export async function processInboundText(params: {
       const system = await renderPromptForShop(shop.id);
       if (!system) return; // prompt file missing -> feature off
 
+      const [holdsNote, apptsNote] = await Promise.all([
+        describeActiveHolds({ shopId: shop.id, clientId, timezone: shop.timezone, now }),
+        describeUpcomingAppointments({
+          shopId: shop.id,
+          clientId,
+          timezone: shop.timezone,
+          now,
+        }),
+      ]);
       const history = await buildHistory(conversation.id);
       const messages = [
-        { role: "user" as const, content: buildContextTurn(shop, params.phone, now) },
+        {
+          role: "user" as const,
+          content: buildContextTurn(shop, params.phone, now, holdsNote, apptsNote),
+        },
         ...history,
       ];
 

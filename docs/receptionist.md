@@ -16,6 +16,9 @@ client texts the shared Twilio number
             │  at a receptionist-enabled native shop, most-recent visit)
             ├─ render ai/receptionist-prompt.md with the shop's config
             ├─ rebuild thread history from ReceptionistMessage rows
+            ├─ inject the client's ACTIVE HOLDS (slot_ids) into the per-turn
+            │  context - held slots are hidden from check_availability, so this
+            │  note is how an accept turn ("yeah") books the exact slot offered
             └─ agent.ts: Anthropic tool-use loop (claude-sonnet-5)
                  └─ tools.ts -> the REAL engine
                       check_availability -> engines/slots.ts

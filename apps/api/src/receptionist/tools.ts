@@ -48,7 +48,10 @@ export const RECEPTIONIST_TOOLS: Anthropic.Messages.Tool[] = [
     description:
       "Look up REAL open appointment slots. Call this before offering ANY time - " +
       "never invent a slot. Returns bookable slots (each with a slot_id) per barber " +
-      "for the requested service and date range, in the shop's timezone.",
+      "for the requested service and date range, in the shop's timezone. Slots YOU " +
+      "are holding do NOT appear here (the hold hides them) - your active holds are " +
+      "listed in the [context] note; book those by their held slot_id instead of " +
+      "re-checking.",
     input_schema: {
       type: "object",
       properties: {
@@ -90,7 +93,9 @@ export const RECEPTIONIST_TOOLS: Anthropic.Messages.Tool[] = [
   {
     name: "book_appointment",
     description:
-      "Write the booking for a slot you hold. Availability is re-verified at write " +
+      "Write the booking for a slot you hold. When the client accepts a time you " +
+      "offered, call this DIRECTLY with the held slot_id from the [context] note - " +
+      "do not re-run check_availability first. Availability is re-verified at write " +
       "time; if the slot was lost you'll get an error - apologize once and offer the " +
       "next-closest times. Always confirm date + time + service with the client first.",
     input_schema: {
@@ -206,6 +211,94 @@ export function decodeSlotId(
   const startsAt = new Date(parts[2]!);
   if (Number.isNaN(startsAt.getTime())) return null;
   return { staffId: parts[0]!, serviceId: parts[1]!, startsAt };
+}
+
+/**
+ * The client's live holds, rendered for the per-turn context note. History
+ * replays TEXT only (tool loops are intra-turn) and the slot engine hides a
+ * held slot from check_availability - so without this note, an accept turn
+ * ("yeah" / "the later one") has no way to recover the slot_id it holds, and
+ * re-checking availability actively misleads the model into offering a
+ * different time or barber. Returns null when the client holds nothing.
+ */
+export async function describeActiveHolds(params: {
+  shopId: string;
+  clientId: string;
+  timezone: string;
+  now: Date;
+}): Promise<string | null> {
+  const holds = await prisma.appointment.findMany({
+    where: {
+      shopId: params.shopId,
+      clientId: params.clientId,
+      status: "PENDING",
+      bookedVia: "receptionist",
+      holdExpiresAt: { gt: params.now },
+    },
+    orderBy: { startsAt: "asc" },
+    take: 6,
+    select: {
+      staffId: true,
+      serviceId: true,
+      startsAt: true,
+      holdExpiresAt: true,
+      staff: { select: { name: true } },
+      service: { select: { name: true } },
+    },
+  });
+  if (holds.length === 0) return null;
+  return holds
+    .map((h) => {
+      const minutes = Math.max(
+        1,
+        Math.round((h.holdExpiresAt!.getTime() - params.now.getTime()) / 60_000),
+      );
+      return (
+        `- ${formatApptTime(h.startsAt, params.timezone)} with ${h.staff.name} ` +
+        `(${h.service.name}) - slot_id ${encodeSlotId(h.staffId, h.serviceId, h.startsAt)} ` +
+        `- hold expires in ${minutes} min`
+      );
+    })
+    .join("\n");
+}
+
+/**
+ * The client's upcoming BOOKED appointments for the same context note, with
+ * their appointment_ids. "Can we move it to Saturday?" needs an
+ * appointment_id for reschedule - and the model (correctly) no longer
+ * re-pulls get_client_history every turn, so without this it books a SECOND
+ * appointment instead of moving the first. Returns null when there are none.
+ */
+export async function describeUpcomingAppointments(params: {
+  shopId: string;
+  clientId: string;
+  timezone: string;
+  now: Date;
+}): Promise<string | null> {
+  const appts = await prisma.appointment.findMany({
+    where: {
+      shopId: params.shopId,
+      clientId: params.clientId,
+      status: "BOOKED",
+      startsAt: { gt: params.now },
+    },
+    orderBy: { startsAt: "asc" },
+    take: 5,
+    select: {
+      id: true,
+      startsAt: true,
+      staff: { select: { name: true } },
+      service: { select: { name: true } },
+    },
+  });
+  if (appts.length === 0) return null;
+  return appts
+    .map(
+      (a) =>
+        `- ${formatApptTime(a.startsAt, params.timezone)} with ${a.staff.name} ` +
+        `(${a.service.name}) - appointment_id ${a.id}`,
+    )
+    .join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -624,7 +717,13 @@ async function holdSlot(ctx: ToolContext, rawInput: unknown): Promise<ToolExecut
       hold_id: held.id,
     });
   } catch (err) {
-    if (err instanceof SlotTakenError) {
+    // P2002 = the (staffId, startsAt) partial-unique backstop fired under a
+    // race the guard couldn't see. Same graceful degradation as book/
+    // reschedule - a constraint violation must read as "slot lost", never as
+    // an internal error that pushes the model to escalate.
+    const uniqueRace =
+      err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002";
+    if (err instanceof SlotTakenError || uniqueRace) {
       // Idempotent re-hold: if the "conflict" is OUR OWN live hold on this
       // exact slot for this client, refresh its expiry instead of failing.
       const own = await prisma.appointment.findFirst({
@@ -686,6 +785,24 @@ async function bookAppointment(
         },
         orderBy: { createdAt: "desc" },
         select: { id: true, holdExpiresAt: true },
+      });
+
+      // The client is committing to ONE slot - release their OTHER live holds
+      // (the alternates offered alongside it) so those slots free instantly
+      // and later context turns don't show stale holds that confuse the model
+      // into re-offering. Before the guard, so a buffer-adjacent own hold
+      // can't false-positive it. Light flip, never notifySlotOpened; rolls
+      // back with the tx if the booking fails.
+      await tx.appointment.updateMany({
+        where: {
+          shopId: ctx.shopId,
+          clientId: identity.clientId,
+          status: "PENDING",
+          bookedVia: "receptionist",
+          holdExpiresAt: { not: null },
+          ...(hold ? { id: { not: hold.id } } : {}),
+        },
+        data: { status: "CANCELED", canceledAt: ctx.now },
       });
 
       if (hold) {
@@ -847,6 +964,21 @@ async function rescheduleTool(
 
   try {
     await prisma.$transaction(async (tx) => {
+      // Consume the client's live holds first. The normal flow holds the
+      // target before asking ("want Sat 10 instead?"), and that own hold
+      // would otherwise block its own reschedule as an active PENDING
+      // overlap. Alternates are moot once the move commits; the flip rolls
+      // back with the tx if it doesn't. Never notifySlotOpened.
+      await tx.appointment.updateMany({
+        where: {
+          shopId: ctx.shopId,
+          clientId: ctx.clientId!,
+          status: "PENDING",
+          bookedVia: "receptionist",
+          holdExpiresAt: { not: null },
+        },
+        data: { status: "CANCELED", canceledAt: ctx.now },
+      });
       await lockStaffAndAssertSlotFree(tx, {
         staffId: slot.staffId,
         startsAt: slot.startsAt,

@@ -155,4 +155,64 @@ describe("lockStaffAndAssertSlotFree", () => {
       assertFree({ startsAt: T(16, 0), endsAt: T(16, 30) }),
     ).resolves.toBeUndefined();
   });
+
+  it("clears an EXPIRED hold's ghost row so the exact-start write can't P2002", async () => {
+    // The trap: the guard passes on an expired hold (correct - slot is free),
+    // but the unswept PENDING row still occupies the (staffId, startsAt)
+    // partial unique, so the caller's create used to die with P2002 until the
+    // 5-min sweep ran. The guard now flips the ghost inline.
+    const ghost = await seedAppt({
+      startsAt: T(17, 0),
+      endsAt: T(17, 30),
+      status: "PENDING",
+      holdExpiresAt: new Date(NOW.getTime() - 60_000), // lapsed, not yet swept
+    });
+
+    // The real write shape: guard + create inside ONE tx.
+    const created = await prisma.$transaction(async (tx) => {
+      await lockStaffAndAssertSlotFree(tx, {
+        staffId,
+        startsAt: T(17, 0),
+        endsAt: T(17, 30),
+        bufferMin: 0,
+        now: NOW,
+      });
+      return tx.appointment.create({
+        data: {
+          shopId,
+          staffId,
+          serviceId,
+          firstName: "Next",
+          status: "PENDING",
+          holdExpiresAt: new Date(NOW.getTime() + 10 * 60_000),
+          bookedVia: "receptionist",
+          startsAt: T(17, 0),
+          endsAt: T(17, 30),
+          manageToken: randomToken(),
+        },
+        select: { id: true },
+      });
+    });
+    expect(created.id).toBeTruthy();
+
+    // The ghost was flipped sweep-style (CANCELED + canceledAt) - and NOT
+    // via cancelAppointment, so no slot-opened blast fired.
+    const swept = await prisma.appointment.findUnique({ where: { id: ghost } });
+    expect(swept!.status).toBe("CANCELED");
+    expect(swept!.canceledAt).not.toBeNull();
+  });
+
+  it("never touches a pending approval REQUEST (holdExpiresAt null) - it blocks instead", async () => {
+    const request = await seedAppt({
+      startsAt: T(18, 0),
+      endsAt: T(18, 30),
+      status: "PENDING",
+      holdExpiresAt: null,
+    });
+    await expect(assertFree({ startsAt: T(18, 0), endsAt: T(18, 30) })).rejects.toThrow(
+      SlotTakenError,
+    );
+    const row = await prisma.appointment.findUnique({ where: { id: request } });
+    expect(row!.status).toBe("PENDING");
+  });
 });

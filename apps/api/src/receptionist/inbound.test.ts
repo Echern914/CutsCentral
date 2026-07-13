@@ -271,6 +271,196 @@ describe("processInboundText", () => {
     expect(sys[0]!.text).toContain("front desk");
   });
 
+  it("surfaces active holds in the per-turn context so an accept books the held slot", async () => {
+    const shop = await makeShop();
+    const { staffId, serviceId } = await makeBookable(shop.id);
+    const phone = freshPhone();
+    const client = await makeClient(shop.id, phone);
+
+    // The hold a previous turn placed while offering this time. History replays
+    // text only, so the context note is the model's ONLY way to recover it.
+    const startsAt = new Date("2026-06-02T18:00:00Z"); // Tue 2:00 PM EDT
+    await prisma.appointment.create({
+      data: {
+        shopId: shop.id,
+        staffId,
+        serviceId,
+        clientId: client.id,
+        firstName: "Marcus",
+        phone,
+        status: "PENDING",
+        holdExpiresAt: new Date(NOW.getTime() + 9 * 60_000),
+        bookedVia: "receptionist",
+        startsAt,
+        endsAt: new Date(startsAt.getTime() + 30 * 60_000),
+        manageToken: randomToken(),
+      },
+    });
+
+    const slotId = `${staffId}~${serviceId}~${startsAt.toISOString()}`;
+    const model = scriptedModel([
+      toolUseMsg([{ id: "tu_1", name: "book_appointment", input: { slot_id: slotId } }]),
+      textMsg("locked in - Tue 2:00 with Drick"),
+    ]);
+    __setModelClientForTests(model);
+
+    await processInboundText({ phone, text: "yeah", now: NOW });
+
+    // The context turn lists the hold: time, barber, and the exact slot_id.
+    const first = model.requests[0]!.messages[0]!;
+    expect(first.role).toBe("user");
+    expect(first.content).toContain("HOLD");
+    expect(first.content).toContain(slotId);
+    expect(first.content).toContain("Drick");
+
+    // Booking the held slot_id flipped the SAME row to BOOKED - no new row,
+    // no leaked PENDING hold.
+    const appts = await prisma.appointment.findMany({ where: { shopId: shop.id } });
+    expect(appts).toHaveLength(1);
+    expect(appts[0]!.status).toBe("BOOKED");
+    expect(appts[0]!.holdExpiresAt).toBeNull();
+    expect(sms).toHaveLength(1);
+  });
+
+  it("booking one held slot releases the client's alternate holds in the same tx", async () => {
+    const shop = await makeShop();
+    const { staffId, serviceId } = await makeBookable(shop.id);
+    const phone = freshPhone();
+    const client = await makeClient(shop.id, phone);
+
+    const mkHold = (startsAt: Date) =>
+      prisma.appointment.create({
+        data: {
+          shopId: shop.id,
+          staffId,
+          serviceId,
+          clientId: client.id,
+          firstName: "Marcus",
+          phone,
+          status: "PENDING",
+          holdExpiresAt: new Date(NOW.getTime() + 9 * 60_000),
+          bookedVia: "receptionist",
+          startsAt,
+          endsAt: new Date(startsAt.getTime() + 30 * 60_000),
+          manageToken: randomToken(),
+        },
+        select: { id: true },
+      });
+    const target = await mkHold(new Date("2026-06-02T18:00:00Z"));
+    const alternate = await mkHold(new Date("2026-06-02T19:00:00Z"));
+
+    const slotId = `${staffId}~${serviceId}~2026-06-02T18:00:00.000Z`;
+    __setModelClientForTests(
+      scriptedModel([
+        toolUseMsg([{ id: "tu_1", name: "book_appointment", input: { slot_id: slotId } }]),
+        textMsg("2:00 Tuesday locked in"),
+      ]),
+    );
+
+    await processInboundText({ phone, text: "the earlier one", now: NOW });
+
+    const rows = await prisma.appointment.findMany({
+      where: { shopId: shop.id },
+      select: { id: true, status: true, holdExpiresAt: true, canceledAt: true },
+    });
+    const booked = rows.find((r) => r.id === target.id)!;
+    const released = rows.find((r) => r.id === alternate.id)!;
+    expect(booked.status).toBe("BOOKED");
+    expect(booked.holdExpiresAt).toBeNull();
+    expect(released.status).toBe("CANCELED");
+    expect(released.canceledAt).not.toBeNull();
+  });
+
+  it("context lists upcoming appointment_ids; reschedule into the client's own held slot works", async () => {
+    const shop = await makeShop();
+    const { staffId, serviceId } = await makeBookable(shop.id);
+    const phone = freshPhone();
+    const client = await makeClient(shop.id, phone);
+
+    // An existing booked appointment (Tue 2:00)...
+    const appt = await prisma.appointment.create({
+      data: {
+        shopId: shop.id,
+        staffId,
+        serviceId,
+        clientId: client.id,
+        firstName: "Marcus",
+        phone,
+        status: "BOOKED",
+        startsAt: new Date("2026-06-02T18:00:00Z"),
+        endsAt: new Date("2026-06-02T18:30:00Z"),
+        manageToken: randomToken(),
+      },
+      select: { id: true },
+    });
+    // ...and the hold a previous turn placed on the proposed new time (Sat 3:00).
+    const newStart = new Date("2026-06-06T19:00:00Z");
+    const hold = await prisma.appointment.create({
+      data: {
+        shopId: shop.id,
+        staffId,
+        serviceId,
+        clientId: client.id,
+        firstName: "Marcus",
+        phone,
+        status: "PENDING",
+        holdExpiresAt: new Date(NOW.getTime() + 9 * 60_000),
+        bookedVia: "receptionist",
+        startsAt: newStart,
+        endsAt: new Date(newStart.getTime() + 30 * 60_000),
+        manageToken: randomToken(),
+      },
+      select: { id: true },
+    });
+
+    const newSlotId = `${staffId}~${serviceId}~${newStart.toISOString()}`;
+    const model = scriptedModel([
+      toolUseMsg([
+        {
+          id: "tu_1",
+          name: "reschedule",
+          input: { appointment_id: appt.id, new_slot_id: newSlotId },
+        },
+      ]),
+      textMsg("moved you to Sat 3:00"),
+    ]);
+    __setModelClientForTests(model);
+
+    await processInboundText({ phone, text: "perfect", now: NOW });
+
+    // Fix A: the context turn handed the model the appointment_id.
+    const first = model.requests[0]!.messages[0]!;
+    expect(first.content).toContain(`appointment_id ${appt.id}`);
+
+    // Fix C: the move landed even though the client's own hold sat on the
+    // target slot - the hold was consumed, not treated as a conflict.
+    const moved = await prisma.appointment.findUnique({ where: { id: appt.id } });
+    expect(moved!.status).toBe("BOOKED");
+    expect(moved!.startsAt.toISOString()).toBe(newStart.toISOString());
+    const consumed = await prisma.appointment.findUnique({ where: { id: hold.id } });
+    expect(consumed!.status).toBe("CANCELED");
+    // Still exactly ONE booked appointment - no second booking on a move.
+    const bookedCount = await prisma.appointment.count({
+      where: { shopId: shop.id, status: "BOOKED" },
+    });
+    expect(bookedCount).toBe(1);
+  });
+
+  it("omits the holds note when the client holds nothing", async () => {
+    const shop = await makeShop();
+    await makeBookable(shop.id);
+    const phone = freshPhone();
+    await makeClient(shop.id, phone);
+
+    const model = scriptedModel([textMsg("hey - what can I get you?")]);
+    __setModelClientForTests(model);
+
+    await processInboundText({ phone, text: "hi", now: NOW });
+
+    const first = model.requests[0]!.messages[0]!;
+    expect(first.content).not.toContain("HOLD");
+  });
+
   it("stays silent for unknown numbers (shared-number v1 routing)", async () => {
     await makeShop();
     const phone = freshPhone();
