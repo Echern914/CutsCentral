@@ -26,10 +26,17 @@ import { readTourStep, useDemoTour, writeTourStep } from "./state";
 export function DemoTour({
   route,
   tour = "client",
+  prospect = false,
 }: {
   route: string;
   /** Which tour this page belongs to (registry id — serializable from RSC). */
   tour?: TourId;
+  /**
+   * Anonymous prospect on the read-only demo session: the finish button
+   * becomes the signup CTA (spec.prospectFinish*). Only the page hosting the
+   * LAST step needs to pass this — the finish button renders nowhere else.
+   */
+  prospect?: boolean;
 }) {
   const router = useRouter();
   const spec = TOURS[tour];
@@ -123,8 +130,10 @@ export function DemoTour({
 
   const finish = useCallback(() => {
     writeTourStep(tour, null);
-    router.push(spec.finishHref);
-  }, [router, spec, tour]);
+    router.push(
+      prospect ? (spec.prospectFinishHref ?? spec.finishHref) : spec.finishHref,
+    );
+  }, [prospect, router, spec, tour]);
 
   if (!mounted || step === null || !active || active.route !== route) return null;
 
@@ -167,7 +176,7 @@ export function DemoTour({
       >
         <div className="flex items-center justify-between gap-3">
           <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-gold">
-            Live demo · {step} of {spec.steps.length}
+            {spec.label} · {step} of {spec.steps.length}
           </p>
           <button
             type="button"
@@ -200,7 +209,11 @@ export function DemoTour({
             onClick={() => (isLast ? finish() : go(step + 1))}
             className="flex-1 rounded-xl bg-offwhite py-2 text-center text-sm font-semibold text-black transition-transform duration-200 ease-out hover:scale-[1.01]"
           >
-            {isLast ? spec.finishLabel : "Next"}
+            {isLast
+              ? prospect
+                ? (spec.prospectFinishLabel ?? spec.finishLabel)
+                : spec.finishLabel
+              : "Next"}
           </button>
         </div>
       </motion.div>

@@ -138,19 +138,28 @@ export function demoTourStepNumber(id: string): number {
   return DEMO_TOUR_STEPS.findIndex((s) => s.id === id) + 1;
 }
 
-/** Pages of the DASHBOARD tour (the barber side, on the demo tenant). */
+/** Pages of the DASHBOARD tour (the barber side). */
 export type DashboardTourRoute =
   | "overview"
   | "agenda"
   | "clients"
   | "rewards-manager"
-  | "insights";
+  | "nudges"
+  | "site"
+  | "payments"
+  | "insights"
+  | "billing";
 
 /**
- * The barber-side walkthrough: what a prospect sees exploring the demo shop's
- * dashboard through a read-only demo session (/demo/dashboard), and what a
- * signed-up barber can replay on their own dashboard to learn where things
- * live. Same DemoTour overlay, its own step list and storage key.
+ * The barber-side walkthrough: the interactive first-run tour every new barber
+ * gets on THEIR OWN dashboard (auto-armed via /dashboard?tour=1 on first
+ * visit), replayable from the Overview header — and what a prospect sees
+ * exploring the demo shop's dashboard through a read-only demo session
+ * (/demo/dashboard). Same DemoTour overlay, its own step list and storage key.
+ *
+ * Copy rule: every line must be TRUE on a brand-new empty shop AND on the
+ * seeded demo tenant — describe what the page does, never seeded data.
+ * No prices (the barber dashboard renders inside the native app — 3.1.1).
  */
 export const DASHBOARD_TOUR_STEPS: DemoTourStep<DashboardTourRoute>[] = [
   {
@@ -158,7 +167,7 @@ export const DASHBOARD_TOUR_STEPS: DemoTourStep<DashboardTourRoute>[] = [
     route: "overview",
     anchor: "stats",
     title: "Your command center",
-    body: "Visits, revenue, active clients, and rewards this month — the pulse you check with your morning coffee.",
+    body: "Visits, revenue, active clients, and rewards this month — the pulse you check with your morning coffee. Let's walk the whole shop; Next moves you page to page.",
   },
   {
     id: "dash-at-risk",
@@ -179,7 +188,7 @@ export const DASHBOARD_TOUR_STEPS: DemoTourStep<DashboardTourRoute>[] = [
     route: "agenda",
     anchor: "agenda",
     title: "Your day, live",
-    body: "Tomorrow's lineup — and Will is already marked on the way. That green pill updates the second a client taps “On my way.”",
+    body: "Every appointment for the day lines up here — and when a client taps “On my way,” a green pill appears on their row the second they do.",
   },
   {
     id: "dash-services",
@@ -203,11 +212,39 @@ export const DASHBOARD_TOUR_STEPS: DemoTourStep<DashboardTourRoute>[] = [
     body: "Design your reward menu and VIP cards once — punches earn themselves after every completed visit.",
   },
   {
+    id: "dash-nudges",
+    route: "nudges",
+    anchor: "nudge-history",
+    title: "Texts that bring them back",
+    body: "Every rebooking nudge and win-back text logs here, with which ones turned into bookings. Only clients who've opted in, within limits you set.",
+  },
+  {
+    id: "dash-site",
+    route: "site",
+    anchor: "site-setup",
+    title: "Your page, your brand",
+    body: "A public mini-site with your colors, photos, rewards, and booking link. Drop it in your Instagram bio — that's your whole web presence, done.",
+  },
+  {
+    id: "dash-payments",
+    route: "payments",
+    anchor: "payments-setup",
+    title: "Get paid your way",
+    body: "Take cards and Apple Pay up front through your own Stripe account, or go fee-free with Zelle, Venmo, or Cash App. Money goes straight to you — never through us.",
+  },
+  {
     id: "dash-insights",
     route: "insights",
     anchor: "charts",
     title: "Know your numbers",
-    body: "Cuts per week, revenue trends, top services, busiest days. That's the whole owner side — ready to run your shop?",
+    body: "Cuts per week, revenue trends, top services, busiest days — the numbers that tell you what's working.",
+  },
+  {
+    id: "dash-billing",
+    route: "billing",
+    anchor: "plan",
+    title: "Your plan — and the AI receptionist",
+    body: "Everything you just toured, in simple tiers. The top tier adds an AI receptionist that answers client texts and books them 24/7. That's the full tour — want to see what your CLIENTS get? There's a live demo on your Overview page.",
   },
 ];
 

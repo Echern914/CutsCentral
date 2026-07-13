@@ -11,7 +11,7 @@ export default function robots(): MetadataRoute.Robots {
       {
         userAgent: "*",
         allow: "/",
-        disallow: ["/dashboard", "/admin", "/r/", "/book/manage/", "/onboarding", "/welcome"],
+        disallow: ["/dashboard", "/admin", "/r/", "/book/manage/", "/onboarding"],
       },
     ],
     sitemap: "https://getchairback.com/sitemap.xml",

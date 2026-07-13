@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { apiGet } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
+import { DemoTour } from "@/components/tour/DemoTour";
 
 interface NudgeRow {
   who: string;
@@ -18,6 +19,9 @@ export default async function NudgesPage() {
 
   return (
     <main className="mx-auto w-full max-w-3xl px-5 py-8">
+      {/* Barber-side guided tour. data-tour: keep in sync with
+          packages/config/src/demoTour.ts (DASHBOARD_TOUR_STEPS). */}
+      <DemoTour tour="dashboard" route="nudges" />
       <Link href="/dashboard" className="text-xs text-muted transition-colors duration-150 ease-out hover:text-offwhite">
         ← Dashboard
       </Link>
@@ -35,49 +39,51 @@ export default async function NudgesPage() {
         {sent > 0 ? ` · ${rate}% conversion` : ""}
       </p>
 
-      <Card className="overflow-hidden">
-        {nudges.length === 0 ? (
-          <p className="px-5 py-8 text-center text-sm text-muted">
-            No nudges sent yet.
-          </p>
-        ) : (
-          <ul className="divide-y divide-subtle">
-            {nudges.map((n, i) => (
-              <li key={i} className="flex items-center justify-between px-5 py-3.5">
-                <div>
-                  <p className="text-sm text-offwhite">{n.who}</p>
-                  <p className="text-xs text-muted">
-                    {new Date(n.at).toLocaleString(undefined, {
-                      month: "short",
-                      day: "numeric",
-                      hour: "numeric",
-                      minute: "2-digit",
-                    })}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  {n.resultedInBooking && (
-                    <span className="rounded-full bg-emerald-soft/15 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-soft">
-                      rebooked
+      <div data-tour="nudge-history">
+        <Card className="overflow-hidden">
+          {nudges.length === 0 ? (
+            <p className="px-5 py-8 text-center text-sm text-muted">
+              No nudges sent yet.
+            </p>
+          ) : (
+            <ul className="divide-y divide-subtle">
+              {nudges.map((n, i) => (
+                <li key={i} className="flex items-center justify-between px-5 py-3.5">
+                  <div>
+                    <p className="text-sm text-offwhite">{n.who}</p>
+                    <p className="text-xs text-muted">
+                      {new Date(n.at).toLocaleString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {n.resultedInBooking && (
+                      <span className="rounded-full bg-emerald-soft/15 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-soft">
+                        rebooked
+                      </span>
+                    )}
+                    <span
+                      className={`text-xs ${
+                        n.status === "SENT"
+                          ? "text-muted"
+                          : n.status === "FAILED"
+                            ? "text-danger-soft"
+                            : "text-muted/60"
+                      }`}
+                    >
+                      {n.status.toLowerCase()}
                     </span>
-                  )}
-                  <span
-                    className={`text-xs ${
-                      n.status === "SENT"
-                        ? "text-muted"
-                        : n.status === "FAILED"
-                          ? "text-danger-soft"
-                          : "text-muted/60"
-                    }`}
-                  >
-                    {n.status.toLowerCase()}
-                  </span>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
     </main>
   );
 }

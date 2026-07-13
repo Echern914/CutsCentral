@@ -34,8 +34,16 @@ export function pathForDashboardTourRoute(route: DashboardTourRoute): string {
       return "/dashboard/clients";
     case "rewards-manager":
       return "/dashboard/rewards";
+    case "nudges":
+      return "/dashboard/nudges";
+    case "site":
+      return "/dashboard/site";
+    case "payments":
+      return "/dashboard/payments";
     case "insights":
       return "/dashboard/insights";
+    case "billing":
+      return "/dashboard/billing";
   }
 }
 
@@ -43,9 +51,12 @@ export function pathForDashboardTourRoute(route: DashboardTourRoute): string {
  * The two guided tours, keyed by id (components pass the id — a plain string —
  * across the server/client boundary; the spec itself holds functions).
  *  - client: the demo shop's public pages (what a barber's CUSTOMERS get).
- *  - dashboard: the barber side — prospects explore it through a read-only
- *    demo session (/demo/dashboard); signed-up barbers can replay it on their
- *    own dashboard. Finishes on the signup CTA.
+ *  - dashboard: the barber side — every new barber's interactive first-run
+ *    walk of their OWN dashboard (auto-armed on first visit, replayable from
+ *    the Overview header), and what prospects explore through a read-only
+ *    demo session (/demo/dashboard). Barbers finish back home; prospects get
+ *    the signup CTA instead (the last-step page passes `prospect` to
+ *    DemoTour).
  */
 export type TourId = "client" | "dashboard";
 
@@ -54,9 +65,14 @@ export interface TourSpec {
   steps: DemoTourStep[];
   /** sessionStorage key holding the 1-based step (distinct per tour). */
   storageKey: string;
+  /** Eyebrow label on the callout bubble ("<label> · 3 of 12"). */
+  label: string;
   pathFor(route: string): string;
   finishLabel: string;
   finishHref: string;
+  /** Finish overrides for anonymous prospects on the read-only demo session. */
+  prospectFinishLabel?: string;
+  prospectFinishHref?: string;
 }
 
 export const TOURS: Record<TourId, TourSpec> = {
@@ -64,6 +80,7 @@ export const TOURS: Record<TourId, TourSpec> = {
     id: "client",
     steps: DEMO_TOUR_STEPS,
     storageKey: "cb_demo_tour",
+    label: "Live demo",
     pathFor: (route) => pathForTourRoute(route as ClientTourRoute),
     finishLabel: "Finish",
     finishHref: "/dashboard",
@@ -72,8 +89,11 @@ export const TOURS: Record<TourId, TourSpec> = {
     id: "dashboard",
     steps: DASHBOARD_TOUR_STEPS,
     storageKey: "cb_dash_tour",
+    label: "Dashboard tour",
     pathFor: (route) => pathForDashboardTourRoute(route as DashboardTourRoute),
-    finishLabel: "Create your shop →",
-    finishHref: "/signup",
+    finishLabel: "Done — it's all yours",
+    finishHref: "/dashboard",
+    prospectFinishLabel: "Create your shop →",
+    prospectFinishHref: "/signup",
   },
 };

@@ -8,7 +8,17 @@ import {
 } from "./demoTour.js";
 
 const CLIENT_ROUTES = ["shop", "book", "manage", "rewards"];
-const DASHBOARD_ROUTES = ["overview", "agenda", "clients", "rewards-manager", "insights"];
+const DASHBOARD_ROUTES = [
+  "overview",
+  "agenda",
+  "clients",
+  "rewards-manager",
+  "nudges",
+  "site",
+  "payments",
+  "insights",
+  "billing",
+];
 
 const TOURS: { name: string; steps: DemoTourStep[]; routes: string[] }[] = [
   { name: "client", steps: DEMO_TOUR_STEPS, routes: CLIENT_ROUTES },

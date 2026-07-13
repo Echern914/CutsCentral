@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { apiGet } from "@/lib/api";
+import { DemoTour } from "@/components/tour/DemoTour";
 import { PaymentsManager } from "./PaymentsManager";
 import type { PaymentStatus } from "./actions";
 
@@ -13,6 +14,9 @@ export default async function PaymentsPage() {
 
   return (
     <main className="mx-auto w-full max-w-3xl px-5 py-8">
+      {/* Barber-side guided tour. data-tour: keep in sync with
+          packages/config/src/demoTour.ts (DASHBOARD_TOUR_STEPS). */}
+      <DemoTour tour="dashboard" route="payments" />
       <header className="mb-6">
         <h1 className="font-display text-3xl tracking-tight">Payments</h1>
         <p className="mt-1 text-sm text-muted">
@@ -21,7 +25,9 @@ export default async function PaymentsPage() {
           payment in person.
         </p>
       </header>
-      <PaymentsManager initial={res.data} />
+      <div data-tour="payments-setup">
+        <PaymentsManager initial={res.data} />
+      </div>
     </main>
   );
 }

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { apiGet } from "@/lib/api";
+import { DemoTour } from "@/components/tour/DemoTour";
 import { PageEditor } from "./PageEditor";
 
 export const metadata: Metadata = { title: "Your page" };
@@ -38,6 +39,9 @@ export default async function PageSettingsPage() {
 
   return (
     <main className="mx-auto w-full max-w-6xl px-5 py-8">
+      {/* Barber-side guided tour. data-tour: keep in sync with
+          packages/config/src/demoTour.ts (DASHBOARD_TOUR_STEPS). */}
+      <DemoTour tour="dashboard" route="site" />
       <header className="mb-6">
         <h1 className="font-display text-3xl tracking-tight">Your page</h1>
         <p className="mt-1 text-sm text-muted">
@@ -45,7 +49,9 @@ export default async function PageSettingsPage() {
           like and watch it update live. Drop the link in your Instagram bio.
         </p>
       </header>
-      <PageEditor settings={res.data} appBase={process.env.APP_BASE_URL ?? ""} />
+      <div data-tour="site-setup">
+        <PageEditor settings={res.data} appBase={process.env.APP_BASE_URL ?? ""} />
+      </div>
     </main>
   );
 }
