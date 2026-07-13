@@ -59,6 +59,61 @@ export function ReceptionistControls({
         </button>
       </div>
 
+      {/* How it works - so a barber knows exactly what turning this on does. */}
+      <div className="mt-4 rounded-xl border border-subtle bg-charcoal-900/50 p-4">
+        <p className="text-xs font-semibold uppercase tracking-[0.15em] text-gold-soft">
+          How it works
+        </p>
+        <ol className="mt-3 flex flex-col gap-2 text-xs text-muted">
+          <li className="flex gap-2">
+            <span className="text-gold">1.</span>
+            <span>
+              A client texts your shop&apos;s number like they always have - no app,
+              no link.
+            </span>
+          </li>
+          <li className="flex gap-2">
+            <span className="text-gold">2.</span>
+            <span>
+              The AI texts back, checks your real calendar, and{" "}
+              <span className="text-offwhite">books, reschedules, or cancels</span>{" "}
+              the appointment for them - 24/7, even while you&apos;re with a client.
+            </span>
+          </li>
+          <li className="flex gap-2">
+            <span className="text-gold">3.</span>
+            <span>
+              When someone cancels, it quietly texts a regular who&apos;s due to{" "}
+              <span className="text-offwhite">fill the open slot</span>.
+            </span>
+          </li>
+          <li className="flex gap-2">
+            <span className="text-gold">4.</span>
+            <span>
+              Anything it can&apos;t handle, it{" "}
+              <span className="text-offwhite">hands off to you</span> and sends you an
+              alert - you only step in when a person needs you.
+            </span>
+          </li>
+        </ol>
+
+        {/* One concrete example so "AI receptionist" isn't abstract. */}
+        <div className="mt-4 flex flex-col gap-1.5 rounded-lg bg-charcoal-800 p-3">
+          <div className="self-start rounded-2xl rounded-bl-sm bg-charcoal-700 px-3 py-1.5 text-xs text-offwhite">
+            you got anything sat?
+          </div>
+          <div className="self-end rounded-2xl rounded-br-sm bg-gold/15 px-3 py-1.5 text-xs text-offwhite">
+            Hey! I&apos;ve got 2pm or 4pm open with you Saturday - want me to grab one?
+          </div>
+          <div className="self-start rounded-2xl rounded-bl-sm bg-charcoal-700 px-3 py-1.5 text-xs text-offwhite">
+            2 works
+          </div>
+          <div className="self-end rounded-2xl rounded-br-sm bg-gold/15 px-3 py-1.5 text-xs text-offwhite">
+            Done - you&apos;re booked Saturday at 2pm. See you then!
+          </div>
+        </div>
+      </div>
+
       {needsTerms && (
         <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-xl border border-subtle bg-charcoal-900/60 px-4 py-3 text-xs text-muted">
           <input
@@ -81,11 +136,19 @@ export function ReceptionistControls({
       )}
 
       {!nativeReady && (
-        <p className="mt-3 text-xs text-muted">
-          Heads up: the receptionist books on your ChairBack booking page. Switch
-          booking to <span className="text-offwhite">ChairBack Booking</span> in
-          Settings for it to take appointments.
-        </p>
+        <div className="mt-4 rounded-xl border border-gold/30 bg-gold/10 px-4 py-3 text-xs text-gold">
+          <span className="font-semibold">Before it can book:</span> your booking is
+          set to an outside calendar right now, so the AI can answer questions but
+          can&apos;t take appointments. Switch booking to{" "}
+          <span className="text-offwhite">ChairBack Booking</span> in{" "}
+          <a
+            href="/dashboard/booking"
+            className="text-offwhite underline underline-offset-2 hover:text-gold"
+          >
+            Settings
+          </a>{" "}
+          to let it book, reschedule, and fill cancellations.
+        </div>
       )}
 
       {error && <p className="mt-3 text-xs text-danger-soft">{error}</p>}

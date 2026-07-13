@@ -83,3 +83,21 @@ export async function portalAction(): Promise<{ error?: string }> {
   if (res.ok && res.data?.url) redirect(res.data.url); // Stripe-hosted portal
   return { error: "Could not open the billing portal. Try again in a moment." };
 }
+
+/**
+ * Cancel membership: opens the Stripe portal DEEP-LINKED to the cancel flow,
+ * where Stripe handles the confirmation, proration, and cancellation email.
+ * (Requires cancellation enabled in the Stripe portal settings.)
+ */
+export async function cancelAction(): Promise<{ error?: string }> {
+  const res = await apiSend<{ url: string }>("POST", "/api/billing/portal", {
+    flow: "cancel",
+  });
+  if (res.ok && res.data?.url) redirect(res.data.url);
+  return {
+    error:
+      res.error === "no_billing_account"
+        ? "No active membership to cancel."
+        : "Could not open the cancellation page. Try again in a moment.",
+  };
+}
