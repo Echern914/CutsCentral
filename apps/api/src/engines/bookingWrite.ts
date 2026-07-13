@@ -13,7 +13,9 @@ import { Prisma } from "@chairback/db";
  *     pass without it). Released automatically at commit/rollback.
  *  2. Overlap re-check, padding both sides by the shop's turnover buffer.
  *     Throws SlotTakenError on a conflict. The partial unique index on
- *     (staffId, startsAt) WHERE status='BOOKED' remains the final backstop.
+ *     (staffId, startsAt) WHERE status IN ('BOOKED','PENDING') remains the
+ *     final backstop - which is also why this guard clears expired holds at
+ *     the exact target start (see the flip at the bottom).
  *
  * Timestamps go over as UTC ISO text + ::timestamp casts, NEVER raw JS Dates:
  * $queryRaw serializes a Date in the PROCESS timezone, silently shifting the
@@ -109,4 +111,24 @@ export async function lockStaffAndAssertSlotFree(
                  AND ("startsAt" + "durationMin" * interval '1 minute') > ${overlapStart.toISOString()}::timestamp`,
   );
   if (targetedOverlap.length > 0) throw new SlotTakenError();
+
+  // The overlap predicate above correctly ignores EXPIRED holds (the slot
+  // freed the moment the hold lapsed) - but until the 5-min sweep flips them
+  // to CANCELED they still occupy the (staffId, startsAt) partial-unique key,
+  // which the approval migration widened to PENDING rows. Left alone, the
+  // caller's write would pass this guard and then P2002 on the ghost row.
+  // Clear any expired hold at OUR exact start while we hold the advisory
+  // lock. Same light flip as sweepExpiredHolds - and like the sweep it must
+  // NEVER fire notifySlotOpened (offer->hold->expire->offer loop). A pending
+  // approval REQUEST has holdExpiresAt NULL and is never touched here.
+  await tx.appointment.updateMany({
+    where: {
+      staffId: opts.staffId,
+      startsAt: opts.startsAt,
+      status: "PENDING",
+      holdExpiresAt: { lte: now },
+      ...(opts.excludeAppointmentId ? { id: { not: opts.excludeAppointmentId } } : {}),
+    },
+    data: { status: "CANCELED", canceledAt: now },
+  });
 }
