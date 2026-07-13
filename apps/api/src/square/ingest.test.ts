@@ -52,6 +52,7 @@ beforeAll(async () => {
   userId = user.id;
   const shop = await prisma.shop.create({
     data: {
+      rewardsEnabled: true, // rewards are opt-IN for new shops; this suite exercises loyalty
       ownerId: userId,
       name: "SQ Shop",
       bookingUrl: "https://sq.test",

@@ -555,6 +555,12 @@ interface AgendaRow {
   hasPush: boolean;
   nudgesSent: number;
   nudgeLimit: number;
+  // Needed by the Apply-reward action (redeem is client-keyed).
+  clientId: string | null;
+  // The cheapest reward this row's client can afford RIGHT NOW (rewardsEnabled
+  // shops only) - drives the "Reward ready - apply to this visit?" prompt.
+  // Skipping is a UI dismiss; the reward stays ready until actually applied.
+  rewardReady: { rewardId: string; rewardName: string; punchCost: number } | null;
 }
 
 const agendaQuerySchema = z.object({
@@ -624,7 +630,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
   // OWNER (outside forShop), exactly like the /complete handler below.
   const shop = await prisma.shop.findUnique({
     where: { id: req.shop!.id },
-    select: { bookingMode: true, timezone: true },
+    select: { bookingMode: true, timezone: true, rewardsEnabled: true },
   });
   if (!shop) {
     res.status(404).json({ error: "not_found" });
@@ -687,6 +693,56 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       }
     }
 
+    // "Reward ready" prompts (rewardsEnabled shops only): the cheapest active
+    // reward each row's client can already afford, per that reward's OWN card
+    // balance. Batched: one reward list + one grouped ledger aggregate.
+    const rewardReadyByClient = new Map<
+      string,
+      { rewardId: string; rewardName: string; punchCost: number }
+    >();
+    if (shop.rewardsEnabled && clientIds.length > 0) {
+      const rewardRows = (await db.reward.findMany({
+        where: { active: true },
+        orderBy: { punchCost: "asc" },
+        select: { id: true, name: true, punchCost: true, cardTypeId: true },
+      })) as unknown as {
+        id: string;
+        name: string;
+        punchCost: number;
+        cardTypeId: string | null;
+      }[];
+      if (rewardRows.length > 0) {
+        const groups = await runWithShop(req.shop!.id, (tx) =>
+          tx.punchLedger.groupBy({
+            by: ["clientId", "cardTypeId"],
+            where: { shopId: req.shop!.id, clientId: { in: clientIds } },
+            _sum: { punchesEarned: true, punchesRedeemed: true },
+          }),
+        );
+        const balances = new Map<string, number>();
+        for (const g of groups) {
+          balances.set(
+            `${g.clientId}:${g.cardTypeId ?? ""}`,
+            (g._sum.punchesEarned ?? 0) - (g._sum.punchesRedeemed ?? 0),
+          );
+        }
+        for (const clientId of clientIds) {
+          const affordable = rewardRows.find(
+            (r) =>
+              (balances.get(`${clientId}:${r.cardTypeId ?? ""}`) ?? 0) >=
+              r.punchCost,
+          );
+          if (affordable) {
+            rewardReadyByClient.set(clientId, {
+              rewardId: affordable.id,
+              rewardName: affordable.name,
+              punchCost: affordable.punchCost,
+            });
+          }
+        }
+      }
+    }
+
     agenda = rows.map((a) => ({
       id: a.id,
       source: "appointment" as const,
@@ -703,6 +759,11 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       hasPush: a.clientId !== null && pushClients.has(a.clientId),
       nudgesSent: nudgeCounts.get(a.id) ?? 0,
       nudgeLimit: APPOINTMENT_NUDGE_LIMIT,
+      clientId: a.clientId,
+      rewardReady:
+        a.clientId !== null
+          ? (rewardReadyByClient.get(a.clientId) ?? null)
+          : null,
     }));
 
     // Blocked time (barber "Block Off Time") shows on the calendar too, as
@@ -739,6 +800,8 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         hasPush: false,
         nudgesSent: 0,
         nudgeLimit: APPOINTMENT_NUDGE_LIMIT,
+        clientId: null,
+        rewardReady: null,
       });
     }
     agenda.sort((a, b) => a.start.localeCompare(b.start));
@@ -775,6 +838,8 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       hasPush: false,
       nudgesSent: 0,
       nudgeLimit: APPOINTMENT_NUDGE_LIMIT,
+      clientId: null,
+      rewardReady: null,
     }));
   }
 

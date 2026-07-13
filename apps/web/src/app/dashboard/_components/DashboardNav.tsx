@@ -21,15 +21,24 @@ const LINKS = [
 ] as const;
 
 /** Pill nav links with active-route highlighting. Admins get an extra Admin pill. */
-export function DashboardNavLinks({ isAdmin = false }: { isAdmin?: boolean }) {
+export function DashboardNavLinks({
+  isAdmin = false,
+  rewardsEnabled = true,
+}: {
+  isAdmin?: boolean;
+  rewardsEnabled?: boolean;
+}) {
   const pathname = usePathname();
   // Inside the native app, hide the Billing pill: it leads to prices and the
   // Stripe Checkout flow, which the App Store forbids in-app (Guideline 3.1.1).
   // Barbers still manage billing in a browser. `null` (pre-hydration) = show.
   const inApp = useIsNativeApp();
-  const baseLinks = inApp
-    ? LINKS.filter((l) => l.href !== "/dashboard/billing")
-    : LINKS;
+  const baseLinks = LINKS.filter(
+    (l) =>
+      // Rewards-off shop: no Rewards pill (the page itself also redirects).
+      (rewardsEnabled || l.href !== "/dashboard/rewards") &&
+      (!inApp || l.href !== "/dashboard/billing"),
+  );
   const links = isAdmin
     ? [...baseLinks, { href: "/admin", label: "Admin" } as const]
     : baseLinks;

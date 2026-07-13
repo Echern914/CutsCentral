@@ -121,6 +121,7 @@ export async function saveSettingsAction(
     dailySendCap: Number(formData.get("dailySendCap") ?? 50),
     rebookWindowDays: Number(formData.get("rebookWindowDays") ?? 14),
     smsTemplate: smsTemplate === "" ? null : smsTemplate,
+    rewardsEnabled: formData.get("rewardsEnabled") === "on",
     loyaltyTextsEnabled: formData.get("loyaltyTextsEnabled") === "on",
   });
   revalidatePath("/dashboard");

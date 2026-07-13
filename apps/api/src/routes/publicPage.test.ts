@@ -32,6 +32,11 @@ async function signupAndShop(email: string, shopName: string): Promise<{ cookie:
     .set("Cookie", cookie)
     .send({ name: shopName, bookingUrl: "https://page.test", smsAttested: true });
   expect(shop.status).toBe(201);
+  // Rewards are opt-IN for new shops (default off); this suite exercises loyalty.
+  await request(app)
+    .patch("/api/shops/me")
+    .set("Cookie", cookie)
+    .send({ rewardsEnabled: true });
   return { cookie, slug: shop.body.slug };
 }
 

@@ -7,6 +7,10 @@ import { RewardsClient } from "./RewardsClient";
 export interface RewardsData {
   shop: {
     name: string;
+    // Master rewards switch. False = this page is a booking/visit hub with NO
+    // punch/reward surfaces (the API also empties rewards/cards/redemptions).
+    // Optional so a web deploy ahead of the API defaults to the old behavior.
+    rewardsEnabled?: boolean;
     bookingUrl: string | null;
     logoUrl: string | null;
     accentColor: string | null;

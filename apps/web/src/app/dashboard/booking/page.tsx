@@ -85,6 +85,11 @@ export interface AgendaRow {
   hasPush?: boolean;
   nudgesSent?: number;
   nudgeLimit?: number;
+  // For the Apply-reward action (redeem is client-keyed).
+  clientId?: string | null;
+  // Cheapest reward the row's client can afford right now (rewards shops only).
+  // Drives "Reward ready - apply to this visit?" Apply/Skip on the row.
+  rewardReady?: { rewardId: string; rewardName: string; punchCost: number } | null;
 }
 
 export interface AgendaResponse {

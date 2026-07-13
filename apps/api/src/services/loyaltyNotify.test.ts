@@ -57,6 +57,7 @@ let userId: string;
 async function makeShop(loyaltyTextsEnabled = true): Promise<Shop> {
   return prisma.shop.create({
     data: {
+      rewardsEnabled: true, // rewards are opt-IN for new shops; this suite exercises loyalty
       ownerId: userId,
       name: "Loyalty Shop",
       bookingUrl: "https://loyal.test",

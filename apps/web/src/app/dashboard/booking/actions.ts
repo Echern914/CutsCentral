@@ -322,6 +322,20 @@ export async function markArrivedAction(id: string): Promise<Result> {
   return done(await apiSend("POST", `/api/booking/appointments/${id}/arrived`));
 }
 
+/**
+ * Apply a ready reward to a client from the day view ("Reward ready - apply to
+ * this visit?"). Reuses the client-page redeem endpoint; Skip is UI-only (the
+ * reward stays ready).
+ */
+export async function applyRewardAction(
+  clientId: string,
+  rewardId: string,
+): Promise<Result> {
+  return done(
+    await apiSend("POST", `/api/dashboard/redeem/${clientId}`, { rewardId }),
+  );
+}
+
 //  Targeted slots (one-off special-priced bookable slots)
 
 export interface TargetedSlotRow {

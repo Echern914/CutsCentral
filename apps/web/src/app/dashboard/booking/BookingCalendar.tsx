@@ -7,6 +7,7 @@ import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { cn } from "@/lib/cn";
 import type { AgendaResponse, AgendaRow, ServiceRow, StaffRow, WaitlistRow } from "./page";
 import {
+  applyRewardAction,
   approveAppointmentAction,
   cancelAppointmentAction,
   cancelSeriesAction,
@@ -703,6 +704,9 @@ function AppointmentBlock({
   const [seriesMenu, setSeriesMenu] = useState(false);
   const [nudgeMenu, setNudgeMenu] = useState(false);
   const [customNudge, setCustomNudge] = useState("");
+  // Skip = dismiss for THIS render only; the reward stays ready and the prompt
+  // returns on reload (deliberate - skipping never consumes anything).
+  const [rewardSkipped, setRewardSkipped] = useState(false);
   // Check-in overrides the plain "Upcoming" pill: the live client status
   // (Booked -> En route (~eta) -> Arrived) polled in from the agenda.
   const pill =
@@ -832,6 +836,44 @@ function AppointmentBlock({
           >
             Decline
           </button>
+        </div>
+      )}
+
+      {/* Reward ready - the manual-mode prompt. Apply redeems via the existing
+          endpoint; Skip just hides it here (the reward stays available). */}
+      {canAct && row.rewardReady && row.clientId && !rewardSkipped && (
+        <div className="mt-2 flex items-center justify-between gap-2 rounded-md border border-gold/30 bg-gold/10 px-2.5 py-1.5">
+          <span className="min-w-0 truncate text-[11px] text-gold">
+            Reward ready — apply {row.rewardReady.rewardName} to this visit?
+          </span>
+          <span className="flex shrink-0 gap-1.5">
+            <button
+              disabled={pending}
+              onClick={() =>
+                start(async () => {
+                  const res = await applyRewardAction(
+                    row.clientId!,
+                    row.rewardReady!.rewardId,
+                  );
+                  toast(
+                    res.ok ? `${row.rewardReady!.rewardName} applied` : "Couldn't apply",
+                    res.ok ? "success" : "error",
+                  );
+                  if (res.ok) onChanged();
+                })
+              }
+              className="rounded bg-gold px-2 py-0.5 text-[11px] font-semibold text-charcoal-900 disabled:opacity-50"
+            >
+              Apply
+            </button>
+            <button
+              disabled={pending}
+              onClick={() => setRewardSkipped(true)}
+              className="rounded border border-subtle px-2 py-0.5 text-[11px] text-muted disabled:opacity-50"
+            >
+              Skip
+            </button>
+          </span>
         </div>
       )}
 

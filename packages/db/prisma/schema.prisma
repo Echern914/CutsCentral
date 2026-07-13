@@ -138,6 +138,14 @@ model Shop {
   // working through the migration window; no current code reads them.
   rewardThreshold     Int     @default(10)
   rewardLabel         String  @default("Free Cut")
+  // Master rewards/loyalty switch. OFF: no punches earn, no redemptions, no
+  // rewards UI anywhere (barber dashboard or client pages), no loyalty
+  // notifications - booking/check-in/nudges/reminders all keep working. Pure
+  // GATE: toggling never mutates the ledger, so balances survive an off/on
+  // round-trip intact. Default FALSE for new shops (rewards are opt-IN - some
+  // barbers just want a booking app); the migration backfilled every existing
+  // shop to TRUE so nothing changed for them.
+  rewardsEnabled      Boolean @default(false)
   // Base loyalty earn rate: punches per completed visit. Service-specific
   // EarnRule rows override it for matching services.
   punchesPerVisit     Int     @default(1)
