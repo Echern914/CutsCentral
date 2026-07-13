@@ -261,15 +261,31 @@ export async function createReceptionistCheckoutUrl(
   return session.url;
 }
 
-/** Hosted Customer Portal URL (update card, cancel, invoices). */
-export async function createPortalUrl(shop: {
-  stripeCustomerId: string | null;
-}): Promise<string | null> {
+/**
+ * Hosted Customer Portal URL (update card, cancel, invoices). With
+ * flow="cancel" the portal opens straight into the subscription-cancellation
+ * flow for the shop's base subscription (deep-link), so a "Cancel membership"
+ * button lands on the confirm-cancel screen instead of the generic overview.
+ * Falls back to the overview when there's no base subscription to target.
+ * Note: the portal must have cancellation enabled in the Stripe Dashboard
+ * (Settings -> Billing -> Customer portal) for the cancel option to appear.
+ */
+export async function createPortalUrl(
+  shop: { stripeCustomerId: string | null; stripeSubscriptionId?: string | null },
+  opts: { flow?: "cancel" } = {},
+): Promise<string | null> {
   if (!shop.stripeCustomerId) return null;
-  const session = await stripe().billingPortal.sessions.create({
+  const params: Stripe.BillingPortal.SessionCreateParams = {
     customer: shop.stripeCustomerId,
     return_url: `${apiEnv().APP_BASE_URL}/dashboard/billing`,
-  });
+  };
+  if (opts.flow === "cancel" && shop.stripeSubscriptionId) {
+    params.flow_data = {
+      type: "subscription_cancel",
+      subscription_cancel: { subscription: shop.stripeSubscriptionId },
+    };
+  }
+  const session = await stripe().billingPortal.sessions.create(params);
   return session.url;
 }
 

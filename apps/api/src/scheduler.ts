@@ -13,6 +13,7 @@ import { refreshExpiringSquareTokens } from "./engines/squareTokenRefresh.js";
 import { runTrialReminders } from "./engines/trialReminder.js";
 import { autoCloseIdleConversations } from "./receptionist/conversation.js";
 import { sweepExpiredHolds } from "./engines/holdSweep.js";
+import { runDemoReset } from "./engines/demoReset.js";
 
 const env = apiEnv();
 
@@ -137,6 +138,15 @@ export function startScheduler(): void {
   cron.schedule("*/5 * * * *", () => {
     void withLease("receptionist-hold-sweep", 2 * MINUTE, () => sweepExpiredHolds()).catch(
       (err) => logger.error({ err }, "receptionist hold sweep failed"),
+    );
+  });
+
+  // Live-demo shop: nightly restore to canonical state at 04:00 (quietest
+  // hour). Clears viewer-submitted junk and re-rolls the seeded dates so the
+  // demo never goes stale. No-op on envs without a seeded demo tenant.
+  cron.schedule("0 4 * * *", () => {
+    void withLease("demo-reset", 10 * MINUTE, () => runDemoReset()).catch((err) =>
+      logger.error({ err }, "demo reset failed"),
     );
   });
 

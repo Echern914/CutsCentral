@@ -1,9 +1,12 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
+import { DEMO } from "@chairback/config/demo";
 import { BackToDashboard } from "@/components/BackToDashboard";
 import { useSignalNativeReady } from "@/lib/nativeReady";
+import { DemoTour } from "@/components/tour/DemoTour";
+import { useDemoTour } from "@/components/tour/state";
 import type { BookShopData } from "./page";
 import { bookAction, getSlotsAction, type SlotsResult } from "./actions";
 import { PaymentStep } from "./PaymentStep";
@@ -65,6 +68,65 @@ export function BookingClient({ data }: { data: BookShopData }) {
   // Waitlist: null = hidden; "standing" = generic join; "slot" = join for the
   // currently-chosen service/provider (a fully-booked day).
   const [waitlistMode, setWaitlistMode] = useState<null | "standing" | "slot">(null);
+
+  // ---- Guided demo-tour mode (demo tenant only). While the tour runs, this
+  // wizard never writes: submit() short-circuits to the seeded showcase
+  // appointment's confirmation, and reaching the confirmation STEP forces that
+  // same state. The wizard is also auto-driven (service/provider/slot picked,
+  // contact prefilled) so every tour anchor exists without the viewer having
+  // to fill a form — while staying fully interactive to play with.
+  const { stepId: tourStepId } = useDemoTour();
+  const demoTour = tourStepId !== null && data.shop.slug === DEMO.SHOP_SLUG;
+  const autoDrove = useRef(false);
+  useEffect(() => {
+    if (!demoTour || autoDrove.current) return;
+    autoDrove.current = true;
+    setFirstName((cur) => cur || "Jordan");
+    setLastName((cur) => cur || "D.");
+    setEmail((cur) => cur || "jordan@example.com");
+    if (!serviceId && data.services.length > 0) {
+      const svc = data.services[0]!;
+      const staffIds = new Set(
+        data.offerings.filter((o) => o.serviceId === svc.id).map((o) => o.staffId),
+      );
+      const stf = data.staff.find((s) => staffIds.has(s.id));
+      pickService(svc.id);
+      if (stf) {
+        setStaffId(stf.id);
+        loadSlots(svc.id, stf.id);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [demoTour]);
+  // Once slots load, land on a day that shows a targeted "special" slot (so the
+  // tour's badge step has one in view) and pre-pick a normal time.
+  const autoPicked = useRef(false);
+  useEffect(() => {
+    if (!demoTour || autoPicked.current || slot !== null || slotsByDay.size === 0) return;
+    autoPicked.current = true;
+    const sorted = [...slotsByDay.keys()].sort();
+    const specialDay = sorted.find((d) => (slotsByDay.get(d) ?? []).some((s) => s.targeted));
+    const d = specialDay ?? sorted[0]!;
+    setDay(d);
+    const options = slotsByDay.get(d) ?? [];
+    const first = options.find((s) => !s.targeted) ?? options[0];
+    if (first) {
+      setSlot(first.startsAt);
+      setSlotTargeted(first.targeted ?? null);
+    }
+  }, [demoTour, slot, slotsByDay]);
+  // The tour's confirmation step forces the confirmation screen (and stepping
+  // Back from it restores the wizard). Only ever toggles the DEMO token, so a
+  // real booking's confirmation can never be undone by tour navigation.
+  useEffect(() => {
+    if (!demoTour) return;
+    if (tourStepId === "book-confirmation" && confirmedToken === null) {
+      setWasRequest(false);
+      setConfirmedToken(DEMO.MANAGE_TOKEN);
+    } else if (tourStepId !== "book-confirmation" && confirmedToken === DEMO.MANAGE_TOKEN) {
+      setConfirmedToken(null);
+    }
+  }, [demoTour, tourStepId, confirmedToken]);
 
   // Which staff offer the chosen service, and which services a chosen staff offers.
   const staffForService = useMemo(() => {
@@ -217,6 +279,13 @@ export function BookingClient({ data }: { data: BookShopData }) {
       return;
     }
     if (!serviceId || !staffId || !slot) return;
+    // Demo tour: show the REAL confirmation screen with zero writes — the
+    // manage link points at the seeded showcase appointment.
+    if (demoTour) {
+      setWasRequest(false);
+      setConfirmedToken(DEMO.MANAGE_TOKEN);
+      return;
+    }
     startTransition(async () => {
       const res = await bookAction(data.shop.slug, {
         staffId,
@@ -338,7 +407,12 @@ export function BookingClient({ data }: { data: BookShopData }) {
   if (confirmedToken !== null) {
     return (
       <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-5 py-10 text-offwhite">
-        <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
+        {data.shop.slug === DEMO.SHOP_SLUG && <DemoTour route="book" />}
+        {/* data-tour: keep in sync with packages/config/src/demoTour.ts */}
+        <div
+          className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center"
+          data-tour="confirmation"
+        >
           <div
             className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full text-2xl"
             style={{ backgroundColor: `${accent}22`, color: accent }}
@@ -420,6 +494,10 @@ export function BookingClient({ data }: { data: BookShopData }) {
 
   return (
     <main className="mx-auto max-w-md px-5 py-8 text-offwhite">
+      {/* Guided client-experience tour — demo tenant only. Step anchors are the
+          data-tour attributes below (keep in sync with
+          packages/config/src/demoTour.ts). */}
+      {data.shop.slug === DEMO.SHOP_SLUG && <DemoTour route="book" />}
       {/* Barber-only "back to dashboard" (only when opened from the dashboard). */}
       <BackToDashboard
         fallbackHref="/dashboard/booking"
@@ -440,7 +518,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
 
       {/* Standing waitlist entry: available regardless of slot availability. */}
       {data.shop.waitlistEnabled && (
-        <div className="mb-6">
+        <div className="mb-6" data-tour="waitlist">
           {waitlistMode === "standing" ? (
             <WaitlistForm
               slug={data.shop.slug}
@@ -463,6 +541,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
       {/* Step 1: service */}
       <Section
         title="1 · Choose a service"
+        tour="services"
         back={
           <Link
             href={`/s/${data.shop.slug}`}
@@ -543,6 +622,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
       {serviceId && staffId && (
         <Section
           title="3 · Pick a time"
+          tour="slots"
           back={<BackStep onClick={backToProvider} />}
         >
           {loadingSlots ? (
@@ -653,7 +733,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
           {/* Optional add-ons for the chosen service (a targeted slot's
               length/price are fixed, so add-ons don't apply there). */}
           {!slotTargeted && addOnsForService.length > 0 && (
-            <div className="mb-3 rounded-xl border border-white/10 p-3">
+            <div className="mb-3 rounded-xl border border-white/10 p-3" data-tour="addons">
               <p className="mb-2 text-xs font-medium uppercase tracking-wide opacity-60">
                 Add-ons
               </p>
@@ -707,7 +787,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
               <span className="font-semibold">${grandTotal.toFixed(0)}</span>
             </div>
           )}
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-3" data-tour="checkout">
             <div className="flex gap-2">
               <input
                 className={input}
@@ -804,14 +884,17 @@ function Section({
   title,
   children,
   back,
+  tour,
 }: {
   title: string;
   children: React.ReactNode;
   /** Optional back affordance rendered on the title row (a button or link). */
   back?: React.ReactNode;
+  /** Optional demo-tour anchor (a data-tour attribute on the section). */
+  tour?: string;
 }) {
   return (
-    <section className="mb-5">
+    <section className="mb-5" data-tour={tour}>
       <div className="mb-2 flex items-center justify-between gap-3">
         <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">{title}</h2>
         {back}

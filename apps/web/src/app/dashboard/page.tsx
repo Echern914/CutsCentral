@@ -11,6 +11,7 @@ import { ActivityFeed, type ActivityItem } from "./_components/ActivityFeed";
 import { Leaderboard, type Leader } from "./_components/Leaderboard";
 import { SettingsCard, type ShopSettings } from "./_components/SettingsCard";
 import { AccountCard } from "./_components/AccountCard";
+import { ClientDemoCard } from "./_components/ClientDemoCard";
 import { SyncHealthBanner } from "./_components/SyncHealthBanner";
 import { GettingStarted } from "./_components/GettingStarted";
 import { ConsentSetup } from "./_components/ConsentSetup";
@@ -130,6 +131,10 @@ export default async function DashboardPage() {
           />
         )}
         <SettingsCard settings={shop} />
+      </div>
+
+      <div className="mt-6">
+        <ClientDemoCard />
       </div>
 
       <div className="mt-6">

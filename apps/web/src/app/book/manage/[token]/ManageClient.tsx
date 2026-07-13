@@ -2,7 +2,10 @@
 
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
+import { DEMO } from "@chairback/config/demo";
 import { useSignalNativeReady } from "@/lib/nativeReady";
+import { DemoTour } from "@/components/tour/DemoTour";
+import { useDemoTour } from "@/components/tour/state";
 import type { ManageData } from "./page";
 import { cancelBookingAction, checkInAction, nudgeReplyAction } from "./actions";
 
@@ -29,6 +32,19 @@ export function ManageClient({
   // Check-in state is shared between the nudge banner and the check-in card so
   // answering "On my way" in one place updates both.
   const [checkinStatus, setCheckinStatus] = useState(data.checkin.status);
+
+  // ---- Guided demo-tour mode (the seeded showcase appointment only). The
+  // check-in card is forced open (the real window is 60 min before start; the
+  // demo appointment is always "tomorrow") and every tap settles locally — no
+  // server writes. A sample barber nudge is injected so the banner shows, and
+  // cancel/reschedule are inert so the seeded appointment survives the tour.
+  const { stepId: tourStepId } = useDemoTour();
+  const demoTour = tourStepId !== null && token === DEMO.MANAGE_TOKEN;
+  const checkin = demoTour ? { ...data.checkin, open: true } : data.checkin;
+  const nudges: typeof data.nudges =
+    demoTour && data.nudges.length === 0
+      ? [{ body: "Chair's open early if you can make it — come through!", sentAt: new Date().toISOString() }]
+      : data.nudges;
 
   const whenFmt = useMemo(
     () =>
@@ -61,6 +77,9 @@ export function ManageClient({
 
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-5 py-10 text-offwhite">
+      {/* Guided client-experience tour — the seeded demo appointment only.
+          data-tour anchors: keep in sync with packages/config/src/demoTour.ts */}
+      {token === DEMO.MANAGE_TOKEN && <DemoTour route="manage" />}
       <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
         <p className="text-xs uppercase tracking-wide text-muted">Your appointment</p>
         <h1 className="mt-1 font-display text-2xl">{data.shop.name}</h1>
@@ -100,23 +119,25 @@ export function ManageClient({
             Thanks for visiting {data.shop.name}!
           </p>
         ) : (
-          <div className="mt-6 flex flex-col gap-2">
-            {data.nudges.length > 0 && (
+          <div className="mt-6 flex flex-col gap-2" data-tour="checkin">
+            {nudges.length > 0 && (
               <NudgeBanner
                 token={token}
-                nudge={data.nudges[0]!}
+                nudge={nudges[0]!}
                 replied={data.nudgeReplied}
                 checkedIn={checkinStatus !== null}
                 onCheckedIn={() => setCheckinStatus("en_route")}
+                demoMode={demoTour}
               />
             )}
             <CheckInCard
               token={token}
-              checkin={data.checkin}
+              checkin={checkin}
               status={checkinStatus}
               onStatus={setCheckinStatus}
+              demoMode={demoTour}
             />
-            {data.canReschedule && data.shop.slug && (
+            {data.canReschedule && data.shop.slug && !demoTour && (
               <Link
                 href={`/book/${data.shop.slug}`}
                 className="rounded-xl border border-white/20 py-3 text-center text-sm font-semibold"
@@ -124,7 +145,7 @@ export function ManageClient({
                 Reschedule (pick a new time)
               </Link>
             )}
-            {data.canCancel && (
+            {data.canCancel && !demoTour && (
               <button
                 type="button"
                 onClick={cancel}
@@ -134,7 +155,12 @@ export function ManageClient({
                 {pending ? "Canceling…" : "Cancel appointment"}
               </button>
             )}
-            {data.canReschedule && (
+            {demoTour && (
+              <p className="text-center text-[11px] text-muted">
+                Cancel and reschedule live here too — parked during the demo.
+              </p>
+            )}
+            {data.canReschedule && !demoTour && (
               <p className="text-center text-[11px] text-muted">
                 To reschedule, book a new time and cancel this one.
               </p>
@@ -158,12 +184,15 @@ function NudgeBanner({
   replied,
   checkedIn,
   onCheckedIn,
+  demoMode = false,
 }: {
   token: string;
   nudge: { body: string | null; sentAt: string };
   replied: boolean;
   checkedIn: boolean;
   onCheckedIn: () => void;
+  /** Demo tour: answers settle locally, nothing is sent to the barber. */
+  demoMode?: boolean;
 }) {
   const [answer, setAnswer] = useState<"on_my_way" | "declined" | null>(
     checkedIn ? "on_my_way" : replied ? "declined" : null,
@@ -173,6 +202,11 @@ function NudgeBanner({
 
   function onMyWay() {
     setError(false);
+    if (demoMode) {
+      setAnswer("on_my_way");
+      onCheckedIn();
+      return;
+    }
     start(async () => {
       const res = await checkInAction(token);
       if (!res.ok) {
@@ -185,6 +219,10 @@ function NudgeBanner({
   }
   function cantMakeIt() {
     setError(false);
+    if (demoMode) {
+      setAnswer("declined");
+      return;
+    }
     start(async () => {
       const res = await nudgeReplyAction(token);
       if (!res.ok) {
@@ -248,11 +286,14 @@ function CheckInCard({
   checkin,
   status,
   onStatus,
+  demoMode = false,
 }: {
   token: string;
   checkin: ManageData["checkin"];
   status: ManageData["checkin"]["status"];
   onStatus: (s: "en_route") => void;
+  /** Demo tour: taps flip the UI locally, nothing is sent to the barber. */
+  demoMode?: boolean;
 }) {
   const [eta, setEta] = useState<number | null>(checkin.etaMinutes);
   const [late, setLate] = useState(checkin.runningLate);
@@ -271,6 +312,12 @@ function CheckInCard({
 
   function tap(opts?: { etaMinutes?: 5 | 10 | 15; runningLate?: boolean }) {
     setError(false);
+    if (demoMode) {
+      onStatus("en_route");
+      setEta(opts?.etaMinutes ?? null);
+      setLate(opts?.runningLate ?? false);
+      return;
+    }
     start(async () => {
       const res = await checkInAction(token, opts);
       if (!res.ok) {

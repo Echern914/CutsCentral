@@ -4,6 +4,7 @@ import { Card } from "@/components/ui/Card";
 import { HideInNativeApp } from "@/components/HideInNativeApp";
 import { ShowInNativeApp } from "@/components/ShowInNativeApp";
 import {
+  CancelMembershipButton,
   ManageBillingButton,
   ReceptionistAddonButton,
   UpgradeButton,
@@ -266,6 +267,14 @@ export default async function BillingPage({
                       ))}
                     {b.canManage && <ManageBillingButton />}
                   </div>
+                  {/* Cancel is only meaningful for a real paid subscription
+                      (trial/free shops have nothing to cancel). Understated,
+                      set apart from the upgrade CTAs. Also hidden in-app. */}
+                  {b.subscribed && (
+                    <div className="mt-4 border-t border-subtle pt-4">
+                      <CancelMembershipButton />
+                    </div>
+                  )}
                 </HideInNativeApp>
                 <ShowInNativeApp>
                   <p className="mt-5 rounded-2xl border border-subtle bg-charcoal-800 px-4 py-3 text-sm text-muted">

@@ -5,6 +5,7 @@ import { getMe } from "@/lib/me";
 import { HideInNativeApp } from "@/components/HideInNativeApp";
 import { logoutAction } from "../(auth)/actions";
 import { DashboardNavLinks } from "./_components/DashboardNav";
+import { FeatureSearch } from "./_components/FeatureSearch";
 import { ShopSwitcher } from "./_components/ShopSwitcher";
 import { TrialBanner } from "./_components/TrialBanner";
 
@@ -40,6 +41,7 @@ export default async function DashboardLayout({
             </span>
           </Link>
           <DashboardNavLinks isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} />
+          <FeatureSearch />
           {shops.length > 1 && (
             <ShopSwitcher shops={shops} activeShopId={activeShopId} />
           )}

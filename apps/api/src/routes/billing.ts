@@ -170,7 +170,16 @@ billingRouter.post("/portal", async (req, res) => {
     res.status(409).json({ error: "billing_disabled" });
     return;
   }
-  const url = await createPortalUrl(req.shop!);
+  // flow="cancel" deep-links the portal to the cancel-subscription screen
+  // (used by the "Cancel membership" button); default opens the overview.
+  const parsed = z
+    .object({ flow: z.enum(["cancel"]).optional() })
+    .safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const url = await createPortalUrl(req.shop!, { flow: parsed.data.flow });
   if (!url) {
     res.status(409).json({ error: "no_billing_account" });
     return;
