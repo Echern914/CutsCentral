@@ -14,18 +14,21 @@
  * Copy is barber-facing ("your clients") — the tour's primary job is showing a
  * shop owner what their customers get — but reads fine for a curious client too.
  */
-export interface DemoTourStep {
+export interface DemoTourStep<Route extends string = string> {
   /** Unique id; FEATURE_INDEX entries reference these to deep-link. */
   id: string;
-  /** Which client page hosts the step (resolved to a path by the web app). */
-  route: "shop" | "book" | "manage" | "rewards";
+  /** Which page hosts the step (resolved to a concrete path by the web app). */
+  route: Route;
   /** data-tour attribute the spotlight anchors to on that page. */
   anchor: string;
   title: string;
   body: string;
 }
 
-export const DEMO_TOUR_STEPS: DemoTourStep[] = [
+/** Pages of the CLIENT tour (the demo shop's public surfaces). */
+export type ClientTourRoute = "shop" | "book" | "manage" | "rewards";
+
+export const DEMO_TOUR_STEPS: DemoTourStep<ClientTourRoute>[] = [
   {
     id: "shop-hero",
     route: "shop",
@@ -133,4 +136,82 @@ export const DEMO_TOUR_STEPS: DemoTourStep[] = [
  */
 export function demoTourStepNumber(id: string): number {
   return DEMO_TOUR_STEPS.findIndex((s) => s.id === id) + 1;
+}
+
+/** Pages of the DASHBOARD tour (the barber side, on the demo tenant). */
+export type DashboardTourRoute =
+  | "overview"
+  | "agenda"
+  | "clients"
+  | "rewards-manager"
+  | "insights";
+
+/**
+ * The barber-side walkthrough: what a prospect sees exploring the demo shop's
+ * dashboard through a read-only demo session (/demo/dashboard), and what a
+ * signed-up barber can replay on their own dashboard to learn where things
+ * live. Same DemoTour overlay, its own step list and storage key.
+ */
+export const DASHBOARD_TOUR_STEPS: DemoTourStep<DashboardTourRoute>[] = [
+  {
+    id: "dash-stats",
+    route: "overview",
+    anchor: "stats",
+    title: "Your command center",
+    body: "Visits, revenue, active clients, and rewards this month — the pulse you check with your morning coffee.",
+  },
+  {
+    id: "dash-at-risk",
+    route: "overview",
+    anchor: "at-risk",
+    title: "Win-backs, queued for you",
+    body: "Regulars drifting past their usual rhythm surface here automatically — a rebooking nudge is one tap away.",
+  },
+  {
+    id: "dash-activity",
+    route: "overview",
+    anchor: "activity",
+    title: "Everything, as it happens",
+    body: "Visits, punches, nudges that turned into bookings — your shop's live feed.",
+  },
+  {
+    id: "dash-agenda",
+    route: "agenda",
+    anchor: "agenda",
+    title: "Your day, live",
+    body: "Tomorrow's lineup — and Will is already marked on the way. That green pill updates the second a client taps “On my way.”",
+  },
+  {
+    id: "dash-services",
+    route: "agenda",
+    anchor: "booking-setup",
+    title: "Prices that work like you do",
+    body: "Services with per-day pricing and durations, add-ons that upsell, and one-off special slots — all managed here.",
+  },
+  {
+    id: "dash-clients",
+    route: "clients",
+    anchor: "client-book",
+    title: "Your book, forever yours",
+    body: "Every client with history, punch balances, and loyalty status. Filter it, export it — it's your list, not ours.",
+  },
+  {
+    id: "dash-rewards",
+    route: "rewards-manager",
+    anchor: "menu",
+    title: "The loyalty engine",
+    body: "Design your reward menu and VIP cards once — punches earn themselves after every completed visit.",
+  },
+  {
+    id: "dash-insights",
+    route: "insights",
+    anchor: "charts",
+    title: "Know your numbers",
+    body: "Cuts per week, revenue trends, top services, busiest days. That's the whole owner side — ready to run your shop?",
+  },
+];
+
+/** 1-based position of a step id in the dashboard tour (0 = unknown id). */
+export function dashboardTourStepNumber(id: string): number {
+  return DASHBOARD_TOUR_STEPS.findIndex((s) => s.id === id) + 1;
 }

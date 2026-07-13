@@ -36,8 +36,14 @@ export interface DemoSeedResult {
 export async function seedDemoShop(): Promise<DemoSeedResult> {
   const owner = await prisma.user.upsert({
     where: { email: DEMO.OWNER_EMAIL },
-    update: {},
-    create: { email: DEMO.OWNER_EMAIL, name: "Fade District (Demo)" },
+    // welcomeSeenAt: the read-only demo session lands prospects straight on the
+    // dashboard — never bounce them into the barber onboarding tour.
+    update: { welcomeSeenAt: new Date() },
+    create: {
+      email: DEMO.OWNER_EMAIL,
+      name: "Fade District (Demo)",
+      welcomeSeenAt: new Date(),
+    },
   });
 
   // Refuse to touch a `demo`-slugged shop we don't own: the wipe below is
@@ -94,7 +100,11 @@ export async function seedDemoShop(): Promise<DemoSeedResult> {
     payDirectVenmo: "fadedistrict",
     payDirectCashApp: "fadedistrict",
     payDirectNote: "Zelle or cash on arrival — no fees.",
-    // Every outbound-text switch stays OFF: the demo must never send.
+    // Every outbound-text switch stays OFF: the demo must never send. The
+    // dashboard demo also seeds CONSENTED clients (so the at-risk table has
+    // rows), so dailySendCap 0 is the hard kill switch that stops the core
+    // nudge sweep from ever attempting SMS to their fictional numbers.
+    dailySendCap: 0,
     loyaltyTextsEnabled: false,
     winbackTextsEnabled: false,
     slotOpenedTextsEnabled: false,
@@ -225,7 +235,7 @@ export async function seedDemoShop(): Promise<DemoSeedResult> {
           sortOrder: 0,
         },
       });
-      await tx.reward.create({
+      const freeCut = await tx.reward.create({
         data: { shopId: shop.id, name: "Free Cut", description: "Ten punches, on the house.", emoji: "✂️", punchCost: 10, sortOrder: 0 },
       });
       await tx.reward.create({
@@ -312,6 +322,154 @@ export async function seedDemoShop(): Promise<DemoSeedResult> {
         });
       }
 
+      // --- Supporting cast (the DASHBOARD demo needs a living client book:
+      // stats, leaderboard, at-risk table, activity feed). All numbers are
+      // 202-555 fictional-range and sends are dead anyway (dailySendCap 0). ---
+      // Andre: the weekly regular — Gold tier, already cashed in a Free Cut.
+      const andre = await tx.client.create({
+        data: {
+          shopId: shop.id,
+          acuityClientKey: "+12025550131",
+          firstName: "Andre",
+          lastName: "Bell",
+          phone: "+12025550131",
+          smsConsentAt: new Date(),
+          smsConsentSource: "manual",
+          source: "manual",
+          magicToken: crypto.randomUUID(),
+          preferredCadence: "WEEKLY",
+          loyaltyTier: "GOLD",
+          medianIntervalDays: 7,
+          lastVisitAt: localTime(-3, 14 * 60),
+          nextExpectedAt: addDays(localTime(-3, 14 * 60), 7),
+        },
+      });
+      for (let i = 1; i <= 12; i++) {
+        const scheduledAt = localTime(-3 - (12 - i) * 7, 14 * 60);
+        const visit = await tx.visit.create({
+          data: {
+            shopId: shop.id,
+            clientId: andre.id,
+            acuityAppointmentId: `demo:andre:${i}`,
+            status: "COMPLETED",
+            scheduledAt,
+            endAt: new Date(scheduledAt.getTime() + 30 * 60_000),
+            completedAt: new Date(scheduledAt.getTime() + 30 * 60_000),
+            price: 35,
+            serviceName: "Haircut",
+          },
+        });
+        await tx.punchLedger.create({
+          data: {
+            shopId: shop.id,
+            clientId: andre.id,
+            visitId: visit.id,
+            punchesEarned: 1,
+            runningBalance: i,
+            createdAt: visit.endAt!,
+          },
+        });
+      }
+      await tx.punchLedger.create({
+        data: {
+          shopId: shop.id,
+          clientId: andre.id,
+          rewardId: freeCut.id,
+          punchesRedeemed: 10,
+          runningBalance: 2,
+          note: "Free Cut",
+          createdAt: localTime(-3, 15 * 60),
+        },
+      });
+      // Sofia: drifting — 21-day cadence, 50 days quiet → the at-risk table.
+      const sofia = await tx.client.create({
+        data: {
+          shopId: shop.id,
+          acuityClientKey: "+12025550119",
+          firstName: "Sofia",
+          lastName: "Reyes",
+          phone: "+12025550119",
+          smsConsentAt: new Date(),
+          smsConsentSource: "manual",
+          source: "manual",
+          magicToken: crypto.randomUUID(),
+          loyaltyTier: "BRONZE",
+          medianIntervalDays: 21,
+          lastVisitAt: localTime(-50, 13 * 60),
+          nextExpectedAt: addDays(localTime(-50, 13 * 60), 21),
+        },
+      });
+      for (let i = 1; i <= 5; i++) {
+        const scheduledAt = localTime(-50 - (5 - i) * 21, 13 * 60);
+        const visit = await tx.visit.create({
+          data: {
+            shopId: shop.id,
+            clientId: sofia.id,
+            acuityAppointmentId: `demo:sofia:${i}`,
+            status: "COMPLETED",
+            scheduledAt,
+            endAt: new Date(scheduledAt.getTime() + 45 * 60_000),
+            completedAt: new Date(scheduledAt.getTime() + 45 * 60_000),
+            price: 50,
+            serviceName: "Haircut + Beard",
+          },
+        });
+        await tx.punchLedger.create({
+          data: {
+            shopId: shop.id,
+            clientId: sofia.id,
+            visitId: visit.id,
+            punchesEarned: 1,
+            runningBalance: i,
+            createdAt: visit.endAt!,
+          },
+        });
+      }
+      // Will: newer face — and tomorrow's live "on my way" showcase.
+      const will = await tx.client.create({
+        data: {
+          shopId: shop.id,
+          acuityClientKey: "+12025550142",
+          firstName: "Will",
+          lastName: "Park",
+          phone: "+12025550142",
+          smsConsentAt: new Date(),
+          smsConsentSource: "manual",
+          source: "manual",
+          magicToken: crypto.randomUUID(),
+          loyaltyTier: "BRONZE",
+          medianIntervalDays: 21,
+          lastVisitAt: localTime(-9, 16 * 60),
+          nextExpectedAt: addDays(localTime(-9, 16 * 60), 21),
+        },
+      });
+      for (let i = 1; i <= 2; i++) {
+        const scheduledAt = localTime(i === 1 ? -30 : -9, 16 * 60);
+        const visit = await tx.visit.create({
+          data: {
+            shopId: shop.id,
+            clientId: will.id,
+            acuityAppointmentId: `demo:will:${i}`,
+            status: "COMPLETED",
+            scheduledAt,
+            endAt: new Date(scheduledAt.getTime() + 15 * 60_000),
+            completedAt: new Date(scheduledAt.getTime() + 15 * 60_000),
+            price: 20,
+            serviceName: "Beard Trim",
+          },
+        });
+        await tx.punchLedger.create({
+          data: {
+            shopId: shop.id,
+            clientId: will.id,
+            visitId: visit.id,
+            punchesEarned: 1,
+            runningBalance: i,
+            createdAt: visit.endAt!,
+          },
+        });
+      }
+
       // --- Social proof + a live promotion ---
       const reviews: [number, string, string, number][] = [
         [5, "Marcus is the truth. Cleanest fade in the city, every single time.", "Chris T.", -40],
@@ -344,9 +502,10 @@ export async function seedDemoShop(): Promise<DemoSeedResult> {
         },
       });
 
-      // --- The showcase appointment: tomorrow 11:00, fixed manage token ---
-      // Drives the /book/manage step (check-in + summary). Every send-stamp is
-      // pre-set so the reminder/confirmation engines never touch it.
+      // --- The showcase appointments: tomorrow, fixed manage token on
+      // Jordan's (drives the client tour's /book/manage step). Every
+      // send-stamp is pre-set so the reminder/confirmation engines never
+      // touch them.
       const startsAt = localTime(1, 11 * 60);
       const stamped = new Date();
       await tx.appointment.create({
@@ -364,6 +523,34 @@ export async function seedDemoShop(): Promise<DemoSeedResult> {
           priceAtBooking: 45,
           addOns: [{ name: "Hot Towel Finish", durationMin: 5, price: 10 }],
           manageToken: DEMO.MANAGE_TOKEN,
+          confirmationSentAt: stamped,
+          reminderSentAt: stamped,
+          confirmationEmailSentAt: stamped,
+          reminderEmailSentAt: stamped,
+          reminder24hPushSentAt: stamped,
+          reminder2hPushSentAt: stamped,
+        },
+      });
+      // Will at noon, already "on my way" — the agenda's live check-in pill
+      // for the dashboard tour.
+      const willStartsAt = localTime(1, 12 * 60);
+      await tx.appointment.create({
+        data: {
+          shopId: shop.id,
+          staffId: marcus.id,
+          serviceId: beard.id,
+          clientId: will.id,
+          firstName: "Will",
+          lastName: "Park",
+          phone: "+12025550142",
+          status: "BOOKED",
+          startsAt: willStartsAt,
+          endsAt: new Date(willStartsAt.getTime() + 15 * 60_000),
+          priceAtBooking: 20,
+          manageToken: crypto.randomBytes(16).toString("hex"),
+          checkInStatus: "en_route",
+          checkedInAt: stamped,
+          etaMinutes: 10,
           confirmationSentAt: stamped,
           reminderSentAt: stamped,
           confirmationEmailSentAt: stamped,

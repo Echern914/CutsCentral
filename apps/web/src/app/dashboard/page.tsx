@@ -15,6 +15,7 @@ import { ClientDemoCard } from "./_components/ClientDemoCard";
 import { SyncHealthBanner } from "./_components/SyncHealthBanner";
 import { GettingStarted } from "./_components/GettingStarted";
 import { ConsentSetup } from "./_components/ConsentSetup";
+import { DemoTour } from "@/components/tour/DemoTour";
 
 interface ShopMe extends ShopSettings {
   connected: boolean;
@@ -55,6 +56,10 @@ export default async function DashboardPage() {
 
   return (
     <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-5 sm:py-8">
+      {/* Barber-side guided tour (prospects via /demo/dashboard; barbers can
+          replay it). data-tour anchors: keep in sync with
+          packages/config/src/demoTour.ts (DASHBOARD_TOUR_STEPS). */}
+      <DemoTour tour="dashboard" route="overview" />
       <header className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-xs uppercase tracking-[0.2em] text-muted">
@@ -88,7 +93,11 @@ export default async function DashboardPage() {
 
       <ConsentSetup needConsentCount={sync.data?.clientsNeedingConsent ?? 0} />
 
-      {stats.data && <StatCards stats={stats.data} />}
+      {stats.data && (
+        <div data-tour="stats">
+          <StatCards stats={stats.data} />
+        </div>
+      )}
 
       {trends.data && (
         <div className="mt-6">
@@ -111,14 +120,18 @@ export default async function DashboardPage() {
       )}
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
-        <AtRiskTable
-          rows={atRisk.data?.clients ?? []}
-          appBaseUrl={process.env.APP_BASE_URL ?? ""}
-        />
-        <ActivityFeed
-          items={activity.data?.items ?? []}
-          seeAllHref="/dashboard/activity"
-        />
+        <div data-tour="at-risk">
+          <AtRiskTable
+            rows={atRisk.data?.clients ?? []}
+            appBaseUrl={process.env.APP_BASE_URL ?? ""}
+          />
+        </div>
+        <div data-tour="activity">
+          <ActivityFeed
+            items={activity.data?.items ?? []}
+            seeAllHref="/dashboard/activity"
+          />
+        </div>
       </div>
 
       {/* The punch leaderboard is a rewards surface - a rewards-off shop gets
@@ -137,14 +150,19 @@ export default async function DashboardPage() {
         <ClientDemoCard />
       </div>
 
-      <div className="mt-6">
-        <AccountCard
-          name={me.data?.name ?? ""}
-          email={me.data?.email ?? ""}
-          shopName={shop.name}
-          hasPassword={me.data?.hasPassword ?? true}
-        />
-      </div>
+      {/* A public read-only demo session gets no account surface: the shared
+          demo owner's email/password/delete forms would only confuse (every
+          mutation is refused server-side anyway). */}
+      {!me.data?.demo && (
+        <div className="mt-6">
+          <AccountCard
+            name={me.data?.name ?? ""}
+            email={me.data?.email ?? ""}
+            shopName={shop.name}
+            hasPassword={me.data?.hasPassword ?? true}
+          />
+        </div>
+      )}
     </main>
   );
 }

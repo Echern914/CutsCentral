@@ -122,7 +122,10 @@ authRouter.post("/logout", async (req, res) => {
   const authHeader = req.header("Authorization");
   const bearer = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
   const payload = sessionFromToken(cookie) ?? sessionFromToken(bearer);
-  if (payload) {
+  // Read-only demo sessions share ONE account (the demo tenant's owner): a
+  // version bump here would revoke every other prospect's live demo session.
+  // Their logout is just a cookie clear.
+  if (payload && payload.demo !== true) {
     const user = await prisma.user.findUnique({
       where: { id: payload.userId },
       select: { tokenVersion: true },
@@ -186,6 +189,9 @@ authRouter.get("/me", requireUser, async (req, res) => {
     shops,
     activeShopId: activeShop?.id ?? null,
     rewardsEnabled: activeShopRewards?.rewardsEnabled ?? false,
+    // Read-only demo session (the public dashboard tour) — the web chrome
+    // shows the demo banner + signup CTA and hides account-level actions.
+    demo: req.demoSession === true,
   });
 });
 

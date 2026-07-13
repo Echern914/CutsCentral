@@ -3,6 +3,7 @@
 import { useEffect, useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
+import { useDemoTour } from "@/components/tour/state";
 import { cn } from "@/lib/cn";
 import type {
   AddOnRow,
@@ -65,6 +66,14 @@ export function BookingManager({
   const bookUrl = `${appBase}/book/${shop.slug ?? "your-shop"}`;
   const needsSetup = initialStaff.length === 0 || initialServices.length === 0;
 
+  // Dashboard demo tour: its steps on this page live behind tabs, so follow
+  // the tour by switching to the tab that hosts the active step's anchor.
+  const { stepId: dashTourStepId } = useDemoTour("dashboard");
+  useEffect(() => {
+    if (dashTourStepId === "dash-agenda") setTab("Appointments");
+    else if (dashTourStepId === "dash-services") setTab("Services");
+  }, [dashTourStepId]);
+
   return (
     <div className="flex flex-col gap-5">
       {shop.bookingMode === "native" && needsSetup && (
@@ -117,23 +126,28 @@ export function BookingManager({
       )}
       {tab === "Staff" && <StaffTab initial={initialStaff} toast={toast} />}
       {tab === "Services" && (
-        <ServicesTab
-          initial={initialServices}
-          staff={initialStaff}
-          initialAddOns={initialAddOns}
-          toast={toast}
-        />
+        /* data-tour: keep in sync with packages/config/src/demoTour.ts */
+        <div data-tour="booking-setup">
+          <ServicesTab
+            initial={initialServices}
+            staff={initialStaff}
+            initialAddOns={initialAddOns}
+            toast={toast}
+          />
+        </div>
       )}
       {tab === "Hours" && <HoursTab staff={initialStaff} toast={toast} />}
       {tab === "Appointments" && (
-        <BookingCalendar
-          initial={initialAgenda}
-          initialWaitlist={initialWaitlist}
-          isNative={shop.bookingMode === "native"}
-          staff={initialStaff}
-          services={initialServices}
-          toast={toast}
-        />
+        <div data-tour="agenda">
+          <BookingCalendar
+            initial={initialAgenda}
+            initialWaitlist={initialWaitlist}
+            isNative={shop.bookingMode === "native"}
+            staff={initialStaff}
+            services={initialServices}
+            toast={toast}
+          />
+        </div>
       )}
     </div>
   );

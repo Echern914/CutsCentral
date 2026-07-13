@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { apiGet } from "@/lib/api";
 import { getMe } from "@/lib/me";
+import { DemoTour } from "@/components/tour/DemoTour";
 import { RewardsBuilder } from "./RewardsBuilder";
 
 export const metadata: Metadata = { title: "Rewards" };
@@ -72,6 +73,9 @@ export default async function RewardsPage() {
 
   return (
     <main className="mx-auto w-full max-w-4xl px-5 py-8">
+      {/* Barber-side guided tour. data-tour: keep in sync with
+          packages/config/src/demoTour.ts */}
+      <DemoTour tour="dashboard" route="rewards-manager" />
       <header className="mb-6">
         <h1 className="font-display text-3xl tracking-tight">Rewards</h1>
         <p className="mt-1 text-sm text-muted">
@@ -79,7 +83,9 @@ export default async function RewardsPage() {
           Everything here shows up on your clients&apos; rewards page.
         </p>
       </header>
-      <RewardsBuilder config={res.data} />
+      <div data-tour="menu">
+        <RewardsBuilder config={res.data} />
+      </div>
     </main>
   );
 }

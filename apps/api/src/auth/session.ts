@@ -43,6 +43,34 @@ export function setSessionCookie(
   return token;
 }
 
+/** Demo dashboard sessions are short-lived — long enough for a look around. */
+export const DEMO_SESSION_TTL_SECONDS = 60 * 60 * 2;
+
+/**
+ * Mint a READ-ONLY demo session (the public dashboard tour) and set the cookie.
+ * The `demo` claim makes requireUser reject every mutating request, and the
+ * short TTL keeps stray demo cookies from lingering.
+ */
+export function setDemoSessionCookie(
+  res: Response,
+  userId: string,
+  tokenVersion = 0,
+): string {
+  const token = createSession(
+    userId,
+    env.SESSION_SECRET,
+    nowSeconds(),
+    DEMO_SESSION_TTL_SECONDS,
+    tokenVersion,
+    true,
+  );
+  res.cookie(SESSION_COOKIE_NAME, token, {
+    ...COOKIE_OPTIONS,
+    maxAge: DEMO_SESSION_TTL_SECONDS * 1000,
+  });
+  return token;
+}
+
 /** Clear the session cookie (logout). */
 export function clearSessionCookie(res: Response): void {
   res.clearCookie(SESSION_COOKIE_NAME, { ...COOKIE_OPTIONS, maxAge: undefined });

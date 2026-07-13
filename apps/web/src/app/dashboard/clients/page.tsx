@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { apiGet } from "@/lib/api";
+import { DemoTour } from "@/components/tour/DemoTour";
 import { ClientsControls } from "./ClientsControls";
 import { ClientsList, type ClientRow } from "./ClientsList";
 
@@ -51,11 +52,16 @@ export default async function ClientsPage({
         </div>
       </header>
 
+      {/* Barber-side guided tour. data-tour: keep in sync with
+          packages/config/src/demoTour.ts */}
+      <DemoTour tour="dashboard" route="clients" />
       <ClientsControls />
 
       {/* Keyed by the query so selection state resets when the visible rows
           change - otherwise bulk actions could hit clients from a previous page. */}
-      <ClientsList key={qs.toString() || "all"} clients={clients} />
+      <div data-tour="client-book">
+        <ClientsList key={qs.toString() || "all"} clients={clients} />
+      </div>
 
       {pageCount > 1 && (
         <div className="mt-4 flex items-center justify-center gap-3">

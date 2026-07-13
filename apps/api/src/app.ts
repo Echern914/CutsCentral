@@ -33,6 +33,7 @@ import { stripeWebhookRouter } from "./routes/webhooks.stripe.js";
 import { connectWebhookRouter } from "./routes/webhooks.connect.js";
 import { paymentsDashboardRouter } from "./routes/payments.dashboard.js";
 import { adminPortalRouter } from "./routes/adminPortal.js";
+import { demoRouter } from "./routes/demo.js";
 import { captureError } from "./sentry.js";
 import { corsMiddleware } from "./middleware/cors.js";
 import { requireAdminIp } from "./middleware/adminIp.js";
@@ -87,6 +88,7 @@ export function createApp(): Express {
 
   // (3) JSON API.
   app.use("/api/auth", authRouter); // signup/login limited inside the router
+  app.use("/api/demo", demoRouter); // public read-only demo dashboard session (limited inside)
   // Forgot/reset password lives in its own router (composes with authRouter on
   // the same mount; sensitive POSTs use authLimiter inside, like signup/login).
   app.use("/api/auth", passwordResetRouter);

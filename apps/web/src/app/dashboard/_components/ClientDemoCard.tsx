@@ -1,9 +1,9 @@
 import { Card } from "@/components/ui/Card";
 
 /**
- * Overview entry into the guided client-experience tour (/demo): a standing
- * "see what your clients see" card so a barber can re-walk the live demo any
- * time — where the mini-site, booking flow, check-in, and rewards page live.
+ * Overview entry into the guided tours: the client-experience demo (/demo) and
+ * a replayable dashboard walkthrough (?tour=1 on this page) so a barber can
+ * always come back and see where things live.
  */
 export function ClientDemoCard() {
   return (
@@ -15,6 +15,12 @@ export function ClientDemoCard() {
             Walk the live demo shop — your mini-site, one-tap booking, &ldquo;on my
             way&rdquo; check-in, and the punch card that fills itself.
           </p>
+          <a
+            href="/dashboard?tour=1"
+            className="mt-2 inline-block text-xs font-medium text-gold hover:underline"
+          >
+            Or tour this dashboard — where everything lives →
+          </a>
         </div>
         <a
           href="/demo"
