@@ -7,6 +7,7 @@ import {
   type CadenceKey,
 } from "@chairback/config/constants";
 import { apiGet } from "@/lib/api";
+import { getMe } from "@/lib/me";
 import { Card } from "@/components/ui/Card";
 import { ClientActions } from "./ClientActions";
 import { EditClient } from "./EditClient";
@@ -76,9 +77,10 @@ interface LedgerEntry {
 }
 
 export default async function ClientDetailPage({ params }: { params: { id: string } }) {
-  const [res, ledgerRes] = await Promise.all([
+  const [res, ledgerRes, me] = await Promise.all([
     apiGet<ClientDetail>(`/api/dashboard/clients/${params.id}`),
     apiGet<{ entries: LedgerEntry[] }>(`/api/dashboard/clients/${params.id}/ledger`),
+    getMe(),
   ]);
   if (res.status === 404) notFound();
   // A dropped/stale/revoked session (e.g. a token minted before a tokenVersion
@@ -91,6 +93,9 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
   if (!res.ok || !res.data) throw new Error("Failed to load client");
   const { client, balance, cards, rewards, promotions, visits, nudges } = res.data;
   const ledger = ledgerRes.data?.entries ?? [];
+  // Gate for every punch/reward surface on this page (default true so a
+  // transient /me failure never blanks a rewards shop's data).
+  const rewardsOn = me.data?.rewardsEnabled ?? true;
   const appBase = process.env.APP_BASE_URL ?? "";
   const rewardsUrl = `${appBase}/r/${client.magicToken}`;
   const readyCount = rewards.filter((r) => r.affordable).length;
@@ -165,6 +170,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           rewards={rewards}
           cards={cards}
           promotions={promotions}
+          rewardsEnabled={rewardsOn}
         />
       </div>
 
@@ -191,13 +197,15 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         )}
       </div>
 
-      {/* Snapshot */}
+      {/* Snapshot (punch/reward stats only exist for rewards shops) */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <Stat label="Punch balance" value={String(balance)} accent />
-        <Stat
-          label="Rewards ready"
-          value={rewards.length === 0 ? "n/a" : String(readyCount)}
-        />
+        {rewardsOn && <Stat label="Punch balance" value={String(balance)} accent />}
+        {rewardsOn && (
+          <Stat
+            label="Rewards ready"
+            value={rewards.length === 0 ? "n/a" : String(readyCount)}
+          />
+        )}
         <Stat
           label="Visits every"
           value={
@@ -212,7 +220,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
       </div>
 
       {/* Per-card balances - only meaningful once the shop has custom cards. */}
-      {hasCards && (
+      {rewardsOn && hasCards && (
         <Card className="mt-4 px-5 py-3">
           <ul className="flex flex-wrap gap-x-5 gap-y-1.5">
             {cards.map((c) => (
@@ -235,7 +243,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
 
       {/* Where the balance stands against the menu - each reward measures
           against its OWN card's balance. */}
-      {rewards.length > 0 && (
+      {rewardsOn && rewards.length > 0 && (
         <Card className="mt-4 px-5 py-3.5">
           <ul className="flex flex-wrap gap-x-5 gap-y-1.5">
             {rewards.map((r) => {
@@ -283,9 +291,11 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         </Card>
       </div>
 
-      <div className="mt-6">
-        <PunchHistory clientId={client.id} entries={ledger} />
-      </div>
+      {rewardsOn && (
+        <div className="mt-6">
+          <PunchHistory clientId={client.id} entries={ledger} />
+        </div>
+      )}
 
       <div className="mt-6">
         <NotesEditor clientId={client.id} initial={client.notes} />

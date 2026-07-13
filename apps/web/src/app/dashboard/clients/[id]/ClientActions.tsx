@@ -41,6 +41,7 @@ export function ClientActions({
   rewards,
   cards,
   promotions,
+  rewardsEnabled = true,
 }: {
   clientId: string;
   rewardsUrl: string;
@@ -48,6 +49,8 @@ export function ClientActions({
   rewards: RedeemableReward[];
   cards: ClientCard[];
   promotions: { id: string; title: string }[];
+  /** Rewards-off shop: no punch/redeem actions (Log visit stays - it's history). */
+  rewardsEnabled?: boolean;
 }) {
   const { toast } = useToast();
   const [pending, startTransition] = useTransition();
@@ -173,18 +176,20 @@ export function ClientActions({
         {visitPickerOpen && <CardPicker label="Punch which card?" onPick={logVisit} />}
       </div>
 
-      <div className="relative">
-        <button
-          disabled={pending}
-          onClick={() => (hasCards ? setPunchPickerOpen((v) => !v) : bonusPunch())}
-          className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
-        >
-          +1 punch
-        </button>
-        {punchPickerOpen && <CardPicker label="Add the punch to…" onPick={bonusPunch} />}
-      </div>
+      {rewardsEnabled && (
+        <div className="relative">
+          <button
+            disabled={pending}
+            onClick={() => (hasCards ? setPunchPickerOpen((v) => !v) : bonusPunch())}
+            className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+          >
+            +1 punch
+          </button>
+          {punchPickerOpen && <CardPicker label="Add the punch to…" onPick={bonusPunch} />}
+        </div>
+      )}
 
-      {affordable.length > 0 && !redeemedName && (
+      {rewardsEnabled && affordable.length > 0 && !redeemedName && (
         <div className="relative">
           <button
             onClick={() => setPickerOpen((v) => !v)}

@@ -25,7 +25,7 @@ export default function TermsPage() {
         <Notice>
           PLEASE READ THESE TERMS CAREFULLY. BY CREATING AN ACCOUNT OR USING THE
           SERVICE, YOU AGREE TO BE BOUND BY THESE TERMS, INCLUDING THE
-          ARBITRATION AGREEMENT AND CLASS ACTION WAIVER IN SECTION 17. IF YOU DO
+          ARBITRATION AGREEMENT AND CLASS ACTION WAIVER IN SECTION 18. IF YOU DO
           NOT AGREE, DO NOT USE THE SERVICE.
         </Notice>
       }
@@ -193,7 +193,59 @@ export default function TermsPage() {
         apply to message recipients.
       </P>
 
-      <H2>6. Rewards, punch cards, and promotions are your offers</H2>
+      <H2>6. AI Receptionist and automated booking</H2>
+      <P>
+        The Service offers an optional, paid AI receptionist feature that can
+        read and reply to text messages from your clients on your behalf,
+        check your calendar, place, move, and cancel appointments, and
+        proactively offer open appointment slots to your clients. The AI
+        receptionist is an automated assistant powered by third-party
+        artificial-intelligence models. It acts on your behalf and at your
+        instruction: you choose to enable it, you configure the services,
+        prices, and hours it works from, and every appointment it books,
+        moves, or cancels is an appointment on <Strong>your</Strong> calendar
+        with <Strong>your</Strong> client.
+      </P>
+      <UL>
+        <li>
+          <Strong>AI output can be wrong.</Strong> Artificial-intelligence
+          systems generate responses automatically and can make mistakes,
+          including misunderstanding a request, quoting incorrect times,
+          prices, or service information, booking, moving, or canceling the
+          wrong appointment, double-booking a time slot, failing to respond,
+          or failing to hand a conversation to you when it should. You must
+          review the appointments and conversations it produces and correct
+          errors with your clients directly.
+        </li>
+        <li>
+          <Strong>You remain solely responsible</Strong> for your calendar,
+          your appointments, and every communication sent to your clients
+          through the feature, exactly as if you had sent it yourself
+          (including the messaging-law responsibilities in Section 5).
+        </li>
+        <li>
+          <Strong>
+            TO THE MAXIMUM EXTENT PERMITTED BY LAW, WE ARE NOT LIABLE TO YOU
+            OR TO ANY CLIENT FOR SCHEDULING ERRORS OF ANY KIND ARISING FROM
+            THE AI RECEPTIONIST
+          </Strong>
+          {" "}&mdash; including double-bookings, missed, failed, or incorrect
+          bookings, reschedules, or cancellations, incorrect times, prices, or
+          service information, a failure to contact or respond to a client, or
+          a failed or delayed handoff to you. Any dispute with a client
+          arising from an action the AI receptionist took on your behalf is
+          between you and your client.
+        </li>
+        <li>
+          Client messages handled by the feature are processed by our
+          AI-model subprocessor to generate replies (see the{" "}
+          <A href="/privacy">Privacy Policy</A>). We may suspend or limit the
+          feature at any time to protect clients, platform deliverability, or
+          compliance.
+        </li>
+      </UL>
+
+      <H2>7. Rewards, punch cards, and promotions are your offers</H2>
       <UL>
         <li>
           Rewards, punch values, earn rules, and promotions configured in the
@@ -218,7 +270,7 @@ export default function TermsPage() {
         </li>
       </UL>
 
-      <H2>7. Public pages and your content</H2>
+      <H2>8. Public pages and your content</H2>
       <P>
         The Service lets you publish a public page for your shop (including a
         bio, hours, photos, logo, and links) and personalized rewards pages for
@@ -249,7 +301,7 @@ export default function TermsPage() {
         </li>
       </UL>
 
-      <H2>8. Acceptable use</H2>
+      <H2>9. Acceptable use</H2>
       <P>You will not, and will not permit anyone to:</P>
       <UL>
         <li>use the Service to violate any law or regulation;</li>
@@ -279,7 +331,7 @@ export default function TermsPage() {
         </li>
       </UL>
 
-      <H2>9. Third-party services</H2>
+      <H2>10. Third-party services</H2>
       <P>
         The Service interoperates with third-party services such as Acuity
         Scheduling (Squarespace), Twilio, Google (optional sign-in), and our
@@ -293,7 +345,7 @@ export default function TermsPage() {
         with that provider.
       </P>
 
-      <H2>10. Fees</H2>
+      <H2>11. Fees</H2>
       <P>
         The Service is currently offered free of charge. We may introduce paid
         plans, fees, or usage limits in the future. If we do, we will give you
@@ -302,7 +354,7 @@ export default function TermsPage() {
         message recipients are always outside our control.
       </P>
 
-      <H2>11. Intellectual property; feedback</H2>
+      <H2>12. Intellectual property; feedback</H2>
       <P>
         The Service — including its software, design, themes, and branding — is
         owned by {LEGAL_ENTITY} and its licensors and is protected by
@@ -312,13 +364,13 @@ export default function TermsPage() {
         royalty-free license to use them without restriction or compensation.
       </P>
 
-      <H2>12. Privacy</H2>
+      <H2>13. Privacy</H2>
       <P>
         Our <A href="/privacy">Privacy Policy</A> describes how we collect, use,
         and share personal information, and is incorporated into these Terms.
       </P>
 
-      <H2>13. Term, suspension, and termination</H2>
+      <H2>14. Term, suspension, and termination</H2>
       <UL>
         <li>
           You may stop using the Service and close your account at any time by
@@ -333,11 +385,11 @@ export default function TermsPage() {
         <li>
           Upon termination we may delete your account data and Client Data
           after a reasonable period. Sections that by their nature should
-          survive (including Sections 4–8 and 14–18) survive termination.
+          survive (including Sections 4–9 and 15–19) survive termination.
         </li>
       </UL>
 
-      <H2>14. Disclaimers</H2>
+      <H2>15. Disclaimers</H2>
       <Notice>
         THE SERVICE IS PROVIDED “AS IS” AND “AS AVAILABLE,” WITHOUT WARRANTY OF
         ANY KIND. TO THE MAXIMUM EXTENT PERMITTED BY LAW, WE DISCLAIM ALL
@@ -345,12 +397,14 @@ export default function TermsPage() {
         PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT. WE DO NOT WARRANT THAT
         THE SERVICE WILL BE UNINTERRUPTED, ERROR-FREE, OR SECURE; THAT MESSAGES
         WILL BE DELIVERED; THAT DATA SYNCED FROM THIRD-PARTY SERVICES WILL BE
-        ACCURATE OR COMPLETE; OR THAT USE OF THE SERVICE WILL PRODUCE ANY
-        PARTICULAR BUSINESS RESULT, INCLUDING CLIENT RETENTION OR REBOOKINGS.
-        NOTHING IN THE SERVICE IS LEGAL ADVICE.
+        ACCURATE OR COMPLETE; THAT AI-GENERATED RESPONSES, BOOKINGS, OR OTHER
+        AI-RECEPTIONIST ACTIONS WILL BE ACCURATE, COMPLETE, OR ERROR-FREE; OR
+        THAT USE OF THE SERVICE WILL PRODUCE ANY PARTICULAR BUSINESS RESULT,
+        INCLUDING CLIENT RETENTION OR REBOOKINGS. NOTHING IN THE SERVICE IS
+        LEGAL ADVICE.
       </Notice>
 
-      <H2>15. Limitation of liability</H2>
+      <H2>16. Limitation of liability</H2>
       <Notice>
         TO THE MAXIMUM EXTENT PERMITTED BY LAW: (A) NEITHER {LEGAL_ENTITY} NOR
         ITS OWNERS, OFFICERS, EMPLOYEES, OR SUPPLIERS WILL BE LIABLE FOR ANY
@@ -367,7 +421,7 @@ export default function TermsPage() {
         NOT APPLY TO YOU.
       </Notice>
 
-      <H2>16. Indemnification</H2>
+      <H2>17. Indemnification</H2>
       <P>
         You will defend, indemnify, and hold harmless {LEGAL_ENTITY} and its
         owners, officers, employees, and agents from and against any claims,
@@ -377,11 +431,13 @@ export default function TermsPage() {
         messages sent to your clients through the Service, including claims
         under the TCPA or similar laws; (c) your rewards and promotions,
         including any failure to honor them; (d) Your Content; (e) your services
-        to and interactions with your clients; or (f) your breach of these Terms
-        or violation of law.
+        to and interactions with your clients; (f) your breach of these Terms
+        or violation of law; or (g) actions taken by the AI receptionist on
+        your behalf, including any appointment it books, moves, cancels, or
+        fails to book.
       </P>
 
-      <H2>17. Dispute resolution — arbitration and class action waiver</H2>
+      <H2>18. Dispute resolution — arbitration and class action waiver</H2>
       <P>
         <Strong>Informal resolution first.</Strong> Before filing a claim,
         contact us at <A href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</A>{" "}
@@ -416,7 +472,7 @@ export default function TermsPage() {
         any other provision of these Terms.
       </P>
 
-      <H2>18. Governing law and venue</H2>
+      <H2>19. Governing law and venue</H2>
       <P>
         These Terms are governed by the laws of the State of Delaware, without
         regard to conflict-of-law rules. For any claim not subject to
@@ -424,7 +480,7 @@ export default function TermsPage() {
         exclusive jurisdiction, and you consent to personal jurisdiction there.
       </P>
 
-      <H2>19. Changes to the Service or these Terms</H2>
+      <H2>20. Changes to the Service or these Terms</H2>
       <P>
         We may modify the Service at any time, and we may update these Terms
         from time to time. If a change is material, we will give notice (for
@@ -434,7 +490,7 @@ export default function TermsPage() {
         Service and close your account.
       </P>
 
-      <H2>20. General</H2>
+      <H2>21. General</H2>
       <UL>
         <li>
           <Strong>Entire agreement.</Strong> These Terms, the Privacy Policy,
@@ -468,7 +524,7 @@ export default function TermsPage() {
         </li>
       </UL>
 
-      <H2>21. Contact</H2>
+      <H2>22. Contact</H2>
       <P>
         Questions about these Terms:{" "}
         <A href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</A>.

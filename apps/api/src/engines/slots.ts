@@ -4,6 +4,7 @@ import {
   zonedDateParts,
   zonedWallTimeToUtc,
 } from "@chairback/config";
+import { effectiveDurationForDate } from "./pricing.js";
 
 /**
  * Open-slot computation for the native booking engine.
@@ -160,7 +161,7 @@ export async function computeOpenSlots(
   const data = await runWithShop(input.shopId, async (tx) => {
     const service = await tx.service.findFirst({
       where: { id: input.serviceId, shopId: input.shopId, active: true },
-      select: { id: true, durationMin: true },
+      select: { id: true, durationMin: true, durationOverrides: true },
     });
     if (!service || service.durationMin <= 0) return null;
 
@@ -196,6 +197,25 @@ export async function computeOpenSlots(
       select: { startsAt: true, endsAt: true, isBlock: true },
     });
 
+    // Barber-published targeted slots: while ACTIVE and UNBOOKED they own
+    // their span, so the normal grid never offers a slot over them (they're
+    // sold separately, at their own price, via the targetedSlots payload).
+    // Booked ones are excluded - the claimed Appointment row below blocks
+    // instead. Skipped by the write-path check like booked rows (the tx guard
+    // in bookingWrite.ts is authoritative there).
+    const targeted = input.ignoreBooked
+      ? []
+      : await tx.targetedSlot.findMany({
+          where: {
+            staffId: input.staffId,
+            shopId: input.shopId,
+            active: true,
+            bookedAppointmentId: null,
+            startsAt: { lt: new Date(rangeEnd) },
+          },
+          select: { startsAt: true, durationMin: true },
+        });
+
     // Existing BOOKED appointments occupy their span + the turnover buffer.
     // (Skipped by the write-path check - see ignoreBooked.)
     const booked = input.ignoreBooked
@@ -208,6 +228,11 @@ export async function computeOpenSlots(
             // the picker must subtract them just like confirmed BOOKED
             // appointments.
             status: { in: ["BOOKED", "PENDING"] },
+            // AI-receptionist holds: an ACTIVE hold (holdExpiresAt > now) blocks
+            // like any PENDING row; an EXPIRED one releases its slot immediately -
+            // the CANCELED flip by the sweep is hygiene, not what frees the time.
+            // (Booking a hold clears holdExpiresAt, so BOOKED rows never carry one.)
+            AND: [{ OR: [{ holdExpiresAt: null }, { holdExpiresAt: { gt: now } }] }],
             startsAt: { lt: new Date(rangeEnd) },
             endsAt: { gt: new Date(rangeStart) },
             ...(input.excludeAppointmentId
@@ -217,10 +242,10 @@ export async function computeOpenSlots(
           select: { startsAt: true, endsAt: true },
         });
 
-    return { service, rules, exceptions, booked };
+    return { service, rules, exceptions, booked, targeted };
   });
   if (!data) return [];
-  const { service, rules, exceptions, booked } = data;
+  const { service, rules, exceptions, booked, targeted } = data;
 
   // The slot GRID steps by the service length (the start times the picker
   // offers); chosen add-ons extend how much room the appointment needs, NOT
@@ -228,8 +253,14 @@ export async function computeOpenSlots(
   // FIRST and add-ons in the details step after - re-stepping the grid by the
   // extended total would reject most already-offered starts (e.g. a 30-min
   // service + 15-min add-on would only accept :00/:45 starts).
+  //
+  // The service length itself can vary by weekday (durationOverrides - "cuts
+  // are 30 min Mon-Thu but 20 min Friday"), so the step/span are resolved PER
+  // CANDIDATE SLOT from its own start instant's shop-local weekday (see the
+  // loop at the bottom). A free window that crosses shop-local midnight simply
+  // switches step size mid-window.
   const baseDuration = service.durationMin;
-  const duration = baseDuration + Math.max(0, input.extraDurationMin ?? 0);
+  const extraMin = Math.max(0, input.extraDurationMin ?? 0);
   const buffer = Math.max(0, shop.bookingBufferMin);
 
   // Build the recurring windows by walking each shop-local calendar date across
@@ -285,6 +316,12 @@ export async function computeOpenSlots(
       end: b.endsAt.getTime() + buffer * MS_PER_MIN,
     });
   }
+  for (const t of targeted) {
+    blocks.push({
+      start: t.startsAt.getTime(),
+      end: t.startsAt.getTime() + (t.durationMin + buffer) * MS_PER_MIN,
+    });
+  }
 
   // free = windows - blocks, clipped to [max(earliest, rangeStart), rangeEnd].
   // The window walk starts a day BEFORE rangeStart (tz-straddle slack), so the
@@ -301,17 +338,27 @@ export async function computeOpenSlots(
 
   // Slice each free window into SERVICE-duration steps (the grid the picker
   // shows); require the full extended span + buffer to also fit after the slot
-  // so add-ons and turnover are honored. With no add-ons this is identical to
-  // the original step/tail math. endsAt reflects the real (extended) end.
+  // so add-ons and turnover are honored. The step/span come from the EFFECTIVE
+  // duration for each candidate slot's own start instant (shop-local weekday) -
+  // Friday's 20-min override makes Friday windows step and span by 20 while
+  // Thursday still steps by 30. With no overrides and no add-ons this is
+  // identical to the original constant step/tail math.
   const slots: Slot[] = [];
-  const stepMs = baseDuration * MS_PER_MIN;
-  const spanMs = duration * MS_PER_MIN;
-  const tailMs = (duration + buffer) * MS_PER_MIN;
   for (const w of free) {
     let t = w.start;
-    while (t + tailMs <= w.end) {
+    for (;;) {
+      const effDur = effectiveDurationForDate(
+        baseDuration,
+        service.durationOverrides,
+        new Date(t),
+        shop.timezone,
+      );
+      if (effDur <= 0) break; // defensive: a bad override must not spin forever
+      const spanMs = (effDur + extraMin) * MS_PER_MIN;
+      const tailMs = spanMs + buffer * MS_PER_MIN;
+      if (t + tailMs > w.end) break;
       slots.push({ startsAt: new Date(t), endsAt: new Date(t + spanMs) });
-      t += stepMs;
+      t += effDur * MS_PER_MIN;
     }
   }
   slots.sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime());

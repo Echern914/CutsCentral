@@ -138,6 +138,14 @@ model Shop {
   // working through the migration window; no current code reads them.
   rewardThreshold     Int     @default(10)
   rewardLabel         String  @default("Free Cut")
+  // Master rewards/loyalty switch. OFF: no punches earn, no redemptions, no
+  // rewards UI anywhere (barber dashboard or client pages), no loyalty
+  // notifications - booking/check-in/nudges/reminders all keep working. Pure
+  // GATE: toggling never mutates the ledger, so balances survive an off/on
+  // round-trip intact. Default FALSE for new shops (rewards are opt-IN - some
+  // barbers just want a booking app); the migration backfilled every existing
+  // shop to TRUE so nothing changed for them.
+  rewardsEnabled      Boolean @default(false)
   // Base loyalty earn rate: punches per completed visit. Service-specific
   // EarnRule rows override it for matching services.
   punchesPerVisit     Int     @default(1)
@@ -163,7 +171,7 @@ model Shop {
   // Rebooking countdown: target window (days) for a client to rebook after their
   // last visit. Drives the urgency timer on the rewards page. Default 14 (<2 wks).
   rebookWindowDays    Int     @default(14)
-  plan                String  @default("free") // "free" | "pro"; kept in sync by the Stripe webhook
+  plan                String  @default("free") // "free" | "pro" | "pro_ai"; kept in sync by the Stripe webhook
   // Vertical (INDUSTRIES key in packages/config). Flavors onboarding defaults
   // and copy only - the data model is service-business generic.
   industry            String  @default("barber")
@@ -231,10 +239,39 @@ model Shop {
   // on; this toggle controls the CUSTOMER-facing blast (outbound to leads), so
   // it's off by default and separate from waitlistEnabled. See engines/slotOpened.
   slotOpenedTextsEnabled Boolean @default(false)
+  // Automatic appointment reminder PUSHES (24h + 2h before start), per tier.
+  // Deliberately default TRUE (unlike every other toggle): reminders are
+  // expected table-stakes behavior, push is free/uncapped, and the column
+  // default backfills every existing shop ON. Barbers who want neither flip
+  // both off in booking settings. SMS/email reminders are separate and keep
+  // their own gates. See engines/pushReminders.ts.
+  pushReminder24hEnabled Boolean @default(true)
+  pushReminder2hEnabled  Boolean @default(true)
+
   // Request-before-booking: when on, a public NATIVE booking lands as PENDING
   // (holds the slot, no confirmation sent) until the barber approves it in the
   // agenda. Off by default so existing shops are unchanged. Native-only.
   requireBookingApproval Boolean @default(false)
+
+  // AI receptionist (paid add-on). The master toggle is receptionistEnabled;
+  // the feature additionally requires bookingMode=native, active base billing,
+  // the add-on entitlement (receptionistCompAccess OR an active add-on
+  // subscription), an accepted liability acknowledgment, and ANTHROPIC_API_KEY
+  // set - all evaluated in ONE place (apps/api/src/receptionist/config.ts).
+  receptionistEnabled Boolean @default(false)
+  // Optional voice knob injected into the prompt file's {{TONE}} placeholder
+  // (e.g. "relaxed & friendly"); null = the prompt's default voice.
+  receptionistTone String?
+  // Add-on billing (mirrors subscriptionStatus for the $40/mo receptionist
+  // price). "none" until the shop subscribes; kept in sync by the Stripe
+  // webhook. receptionistCompAccess = comped entitlement (pilot shops).
+  receptionistSubscriptionStatus String  @default("none")
+  receptionistCompAccess         Boolean @default(false)
+  // Liability click-through: the barber acknowledged the AI can make scheduling
+  // mistakes (double-bookings, misses) and ChairBack isn't liable. Stamped by
+  // the settings route when receptionistEnabled is first turned on; enabling is
+  // REJECTED without it. null = never accepted.
+  receptionistTermsAcceptedAt DateTime?
 
   // per-shop webhook routing (the body has no account id, so the URL path routes)
   webhookSecret    String   @unique // 32-byte random, used in the webhook URL path
@@ -292,6 +329,8 @@ model Shop {
   appointmentRequests AppointmentRequest[]
   waitlist            WaitlistEntry[]
   reviews             Review[]
+  receptionistConversations ReceptionistConversation[]
+  receptionistMessages      ReceptionistMessage[]
   pushSubscriptions   PushSubscription[]
   walletPasses        WalletPassRegistration[]
 
@@ -304,6 +343,7 @@ model Shop {
   appointments           Appointment[]
   recurringSeries        RecurringSeries[]
   serviceAddOns          ServiceAddOn[]
+  targetedSlots          TargetedSlot[]
   payments               Payment[]
 
   @@index([ownerId])
@@ -571,6 +611,7 @@ model Client {
   pushSubscriptions   PushSubscription[]
   cardGrants          CardGrant[]
   walletRegistrations WalletPassRegistration[]
+  receptionistConversations ReceptionistConversation[]
 
   @@unique([shopId, acuityClientKey]) // tenant-scoped identity + idempotent upsert
   @@index([shopId])
@@ -758,6 +799,12 @@ model Nudge {
   // Set on promo blasts so rebookings can be attributed to a SPECIFIC promo.
   promotionId         String?
   promotion           Promotion?     @relation(fields: [promotionId], references: [id], onDelete: SetNull)
+  // Set on appointment-scoped sends (kind "checkin_nudge" / "checkin_nudge_reply"):
+  // the barber's "come early" push + the client's one-tap reply. The per-
+  // appointment nudge rate limit (max 2) counts rows by this FK. SetNull keeps
+  // the audit row if the appointment is ever deleted.
+  appointmentId       String?
+  appointment         Appointment?   @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
   body                String?
   messageSid          String?
   failedReason        String?
@@ -771,6 +818,8 @@ model Nudge {
   @@index([status, sentAt]) // hourly attribution fetch (SENT nudges by sentAt window)
   @@index([shopId, resultedInBookingAt]) // /stats + /trends "rebookings recovered this month"
   @@index([promotionId])
+  @@index([shopId, kind, createdAt]) // monthly SMS quota count + receptionist reply caps
+  @@index([appointmentId, kind]) // per-appointment nudge rate limit
 }
 
 // How a push subscription is delivered. One table holds both transports so the
@@ -878,6 +927,7 @@ model Staff {
   exceptions        AvailabilityException[]
   appointments      Appointment[]
   recurringSeries   RecurringSeries[]
+  targetedSlots     TargetedSlot[]
 
   @@index([shopId, active])
 }
@@ -900,6 +950,12 @@ model Service {
   // they pick (so a Sunday surcharge is never a surprise), and it's snapshotted
   // onto Appointment.priceAtBooking. See engines/pricing.ts (effectivePriceForDate).
   priceOverrides Json     @default("{}")
+  // Per-weekday DURATION overrides, the same shape/semantics as priceOverrides:
+  // {"5": 20} = Friday cuts take 20 min. Drives the slot grid for that day (a
+  // Friday service consumes a 20-min block) and the appointment's endsAt, which
+  // is the duration snapshot - editing this later never rewrites a booked row.
+  // See engines/pricing.ts (effectiveDurationForDate).
+  durationOverrides Json  @default("{}")
   active         Boolean  @default(true)
   sortOrder      Int      @default(0)
   createdAt      DateTime @default(now())
@@ -909,6 +965,7 @@ model Service {
   appointments    Appointment[]
   recurringSeries RecurringSeries[]
   addOns          ServiceAddOn[]
+  targetedSlots   TargetedSlot[]
 
   @@index([shopId, active])
 }
@@ -993,6 +1050,51 @@ model AvailabilityException {
   @@index([shopId, staffId, startsAt])
 }
 
+// A barber-published ONE-OFF bookable slot with its own time/duration/price,
+// under a parent service ("two retwist slots this week at a special price").
+// Clients see it in the picker under that service, badged, at slot.price.
+//
+// Capacity is exactly ONE: booking claims bookedAppointmentId with a
+// conditional update inside the SAME transaction as the shared booking guard,
+// so two simultaneous bookings can't both win. While ACTIVE and UNBOOKED the
+// slot also BLOCKS normal bookings over its span - enforced inside
+// lockStaffAndAssertSlotFree (the one source of truth), so every write path
+// (public, dashboard, recurring, receptionist) respects it with no extra code.
+// Once booked, the created Appointment row does the blocking instead (the
+// claimed slot stops matching the guard's unbooked predicate - no double
+// count). A canceled targeted-slot appointment does NOT reopen the slot (the
+// barber recreates one deliberately; auto-relisting a promo price is wrong).
+//
+// Deliberately allowed OUTSIDE availability rules (only lead-time checked):
+// publishing a late-night special the normal grid would never offer is the
+// point. Recurrence is materialized at creation (one row per week, same
+// shop-local wall time via zonedWallTimeToUtc) - each row is independently
+// bookable/deletable; no open-ended recurrence in v1.
+model TargetedSlot {
+  id          String   @id @default(cuid())
+  shopId      String
+  shop        Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  staffId     String
+  staff       Staff    @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  // The parent category the slot is listed under.
+  serviceId   String
+  service     Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  label       String? // "Late night retwist", "Model rate"
+  startsAt    DateTime
+  durationMin Int
+  price       Decimal  @db.Decimal(10, 2)
+  active      Boolean  @default(true) // false = deactivated by the barber (unbooked only)
+  // The winning booking. Unique = the capacity-1 claim; SetNull keeps the slot
+  // row (as a consumed record) if the appointment is ever hard-deleted.
+  bookedAppointmentId String?      @unique
+  bookedAppointment   Appointment? @relation(fields: [bookedAppointmentId], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([shopId, staffId, startsAt]) // guard overlap + barber list
+  @@index([shopId, serviceId, startsAt]) // public picker per service
+}
+
 // A native booking. A future hold until its time passes (or the barber marks it
 // done), when promoteFulfilledAppointments creates a COMPLETED Visit
 // (acuityAppointmentId = "booking:{id}") and runs the SAME earn+cadence+loyalty
@@ -1034,6 +1136,12 @@ model Appointment {
   // SMS is dark (no 10DLC / no consent). Email only needs a valid address.
   confirmationEmailSentAt DateTime?
   reminderEmailSentAt     DateTime?
+  // PUSH reminders (engines/pushReminders.ts) - a third channel with two tiers
+  // (24h + 2h before start), each with its own at-most-once stamp claimed via
+  // an atomic updateMany-where-null, so a double/concurrent run can never send
+  // twice. Gated per shop by pushReminder24h/2hEnabled.
+  reminder24hPushSentAt DateTime?
+  reminder2hPushSentAt  DateTime?
   canceledAt         DateTime?
   completedAt        DateTime?
   // Recurring series link. null = a one-off appointment (every row before this
@@ -1046,10 +1154,34 @@ model Appointment {
   seriesId              String?
   series                RecurringSeries?  @relation(fields: [seriesId], references: [id], onDelete: SetNull)
   seriesOccurrenceIndex Int?
+  // AI-receptionist soft-lock. non-null = this PENDING row is a HOLD placed by
+  // the receptionist while a client decides ("want Thu 2:30?"), not a real
+  // request-before-booking request. An ACTIVE hold (holdExpiresAt > now) blocks
+  // the slot exactly like any PENDING row; an EXPIRED one is excluded from the
+  // busy set + overlap guards (and swept to CANCELED) so it releases the slot
+  // without a slot-opened blast. Cleared (set null) when the hold is booked.
+  holdExpiresAt DateTime?
+  // Origin marker: "receptionist" for AI-created rows; null for everything else.
+  bookedVia     String?
+  // Client check-in ("On my way"). A nullable TEXT sub-state of BOOKED, not an
+  // AppointmentStatus value (enum adds need an isolated migration; the string
+  // mirrors bookedVia). null = not checked in; 'en_route' = the client tapped
+  // "On my way" on the manage page (checkedInAt stamps the FIRST tap and never
+  // moves; repeat taps only refresh the ETA); 'arrived' = the barber marked
+  // them in the chair. The client route can ONLY write 'en_route' on their own
+  // manageToken; 'arrived' is dashboard-only. etaMinutes is the optional chip
+  // (5/10/15); runningLate is the "Running late" chip - both purely advisory.
+  checkInStatus String?
+  checkedInAt   DateTime?
+  etaMinutes    Int?
+  runningLate   Boolean   @default(false)
   createdAt          DateTime          @default(now())
   updatedAt          DateTime          @updatedAt
 
   payment Payment? // the customer payment for this booking (if any)
+  nudges  Nudge[] // appointment-scoped sends (checkin_nudge + replies)
+  // Set when this booking claimed a barber-published targeted slot.
+  targetedSlot TargetedSlot?
 
   // The double-booking guard (a partial unique on BOOKED rows) is added by hand
   // in the migration - Prisma can't express a WHERE-filtered unique index.
@@ -1057,6 +1189,7 @@ model Appointment {
   @@index([status, startsAt]) // reminder + promotion scans
   @@index([shopId, status, startsAt]) // dashboard upcoming list
   @@index([seriesId]) // "future rows of this series" lookups for cancel-scope
+  @@index([status, holdExpiresAt]) // expired-hold sweep + busy-set exclusion
 }
 
 enum RecurringSeriesStatus {
@@ -1180,4 +1313,59 @@ model JobLease {
   updatedAt DateTime @updatedAt
 
   @@map("job_lease")
+}
+
+//  AI receptionist
+
+// One SMS thread between a client phone number and ONE shop's AI receptionist.
+// The row pins the shop for the thread's lifetime, which is what makes replies
+// on the SHARED platform number route deterministically (an active conversation
+// wins over any client-phone-match heuristic). Created from the Twilio webhook
+// path (no shop session), so inserts run as the connection owner and bypass
+// FORCE RLS - the same trust model as WaitlistEntry/AppointmentRequest - and
+// the barber reads transcripts back through forShop() (RLS-enforced).
+model ReceptionistConversation {
+  id       String  @id @default(cuid())
+  shopId   String
+  shop     Shop    @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  clientId String?
+  client   Client? @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  phone    String // E.164
+  // active    = the AI answers inbound texts on this thread
+  // escalated = handed to the barber; the AI stays silent until reopened
+  // closed    = ended (24h inactivity sweep, STOP, or resolved)
+  status String @default("active")
+  // Optimistic per-conversation turn lock: a worker claims a turn by setting
+  // this from null; a second inbound while claimed just persists its message
+  // (the running turn's rebuilt history picks it up). Stale (> ~2 min) = free.
+  processingSince DateTime?
+  lastMessageAt   DateTime @default(now())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  messages ReceptionistMessage[]
+
+  @@index([shopId, phone, status])
+  @@index([phone, status, lastMessageAt]) // inbound routing: active-conversation pin
+  @@index([status, lastMessageAt]) // auto-close sweep
+}
+
+// One turn in a receptionist conversation. The full audit trail: every inbound
+// client text (role "user"), every AI reply (role "assistant", with the tool
+// calls it made that turn in toolCalls), and system notes (escalations, holds
+// expiring, gap-fill seeds) as role "system_note". toolCalls is an array of
+// {name, input, result, isError} - the complete record of what the AI did.
+model ReceptionistMessage {
+  id             String                   @id @default(cuid())
+  shopId         String // denormalized from the conversation for uniform RLS
+  shop           Shop                     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  conversationId String
+  conversation   ReceptionistConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String // "user" | "assistant" | "system_note"
+  content        String
+  toolCalls      Json                     @default("[]")
+  createdAt      DateTime                 @default(now())
+
+  @@index([conversationId, createdAt])
+  @@index([shopId, createdAt])
 }

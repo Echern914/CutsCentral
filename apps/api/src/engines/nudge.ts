@@ -7,6 +7,7 @@ import { sendPushToClient } from "../messaging/push.js";
 import { isNudgeEligible, isNudgeDueByCadence } from "./eligibility.js";
 import { inQuietHours } from "./quietHours.js";
 import { hasActiveAccess } from "../billing/stripe.js";
+import { remainingMonthlySms } from "../billing/quota.js";
 
 const env = apiEnv();
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
@@ -170,13 +171,26 @@ async function doSweepShop(
     where: {
       status: "SENT",
       createdAt: { gte: startOfDay },
-      kind: { not: "loyalty" },
+      // Exempt: loyalty (transactional) AND receptionist_reply (answers in a
+      // client-initiated text thread). Proactive kind="receptionist" gap-fill
+      // offers DO count - they're marketing-cost outbound like nudges/promos.
+      kind: { notIn: ["loyalty", "receptionist_reply"] },
       // The cap is about SMS COST: only SMS sends count against it. WEB_PUSH
       // rebooking nudges are free, so they must not consume the daily budget.
       channel: "SMS",
     },
   });
   let budget = Math.max(0, shop.dailySendCap - sentToday);
+
+  // Per-tier MONTHLY quota on top of the daily cap (hard stop, no overage).
+  // Infinity while billing is off, so min() is a no-op in dev/CI. Previews
+  // (dryRun) still respect it so the preview never promises sends the real
+  // sweep would refuse.
+  const monthlyLeft = await remainingMonthlySms(shop.id, now);
+  if (monthlyLeft <= 0 && budget > 0) {
+    logger.info({ shopId: shop.id }, "sweep: monthly SMS quota exhausted");
+  }
+  budget = Math.min(budget, monthlyLeft);
 
   // Cheap candidate pre-filter; full eligibility checked per client. A candidate
   // must be cadence-trackable (median + last visit) and not archived. For the

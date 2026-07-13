@@ -13,6 +13,8 @@ export interface Me {
   shops: { id: string; name: string }[];
   /** The shop the dashboard is currently acting on (the switcher's selection). */
   activeShopId: string | null;
+  /** Whether the ACTIVE shop has rewards on - gates every rewards surface. */
+  rewardsEnabled: boolean;
 }
 
 /**

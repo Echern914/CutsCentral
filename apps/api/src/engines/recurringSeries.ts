@@ -7,7 +7,8 @@ import { prisma, Prisma, runWithShop } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
 import { isSlotBookable } from "./slots.js";
-import { effectivePriceForDate } from "./pricing.js";
+import { lockStaffAndAssertSlotFree } from "./bookingWrite.js";
+import { effectiveDurationForDate, effectivePriceForDate } from "./pricing.js";
 
 /**
  * Recurring-appointment series generation.
@@ -111,8 +112,10 @@ export interface MaterializeInput {
   lastName: string | null;
   phone: string | null;
   email: string | null;
-  // Service facts for end/price computation.
+  // Service facts for end/price computation. Duration + price both resolve
+  // per-occurrence by the occurrence's own shop-local weekday.
   durationMin: number;
+  durationOverrides: unknown;
   basePrice: number | null;
   priceOverrides: unknown;
   // Shop facts.
@@ -166,11 +169,21 @@ export async function materializeSeries(
 
   const booked: SeriesResult["booked"] = [];
   const skipped: SeriesResult["skipped"] = [];
-  const bufferMs = Math.max(0, input.bookingBufferMin) * MS_PER_MIN;
 
   for (const occ of occurrences) {
     const startsAt = occ.startsAt;
-    const endsAt = new Date(startsAt.getTime() + input.durationMin * MS_PER_MIN);
+    // Each occurrence measures by ITS OWN weekday's duration (a weekly-on-
+    // Friday series with a Friday override books 20-min blocks throughout).
+    const endsAt = new Date(
+      startsAt.getTime() +
+        effectiveDurationForDate(
+          input.durationMin,
+          input.durationOverrides,
+          startsAt,
+          input.timezone,
+        ) *
+          MS_PER_MIN,
+    );
 
     // Occurrences in the past are always skipped (a "3pm Tuesday" pattern whose
     // anchor is today shouldn't try to book an already-elapsed occurrence 0).
@@ -203,22 +216,15 @@ export async function materializeSeries(
 
     try {
       const appt = await prisma.$transaction(async (tx) => {
-        await tx.$executeRaw(
-          Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`appt:${input.staffId}`}))`,
-        );
-        const overlapStart = new Date(startsAt.getTime() - bufferMs);
-        const overlapEnd = new Date(endsAt.getTime() + bufferMs);
-        // ISO + ::timestamp (not Date params): $queryRaw serializes a JS Date in
-        // the PROCESS timezone, silently shifting the comparison against the
-        // naive-UTC column on non-UTC machines. See the public create guard.
-        const overlap = await tx.$queryRaw<{ id: string }[]>(
-          Prisma.sql`SELECT id FROM "Appointment"
-                     WHERE "staffId" = ${input.staffId}
-                       AND "status" IN ('BOOKED', 'PENDING')
-                       AND "startsAt" < ${overlapEnd.toISOString()}::timestamp
-                       AND "endsAt" > ${overlapStart.toISOString()}::timestamp`,
-        );
-        if (overlap.length > 0) throw new Error("slot_taken");
+        // Shared advisory-lock + overlap guard (throws SlotTakenError, whose
+        // message is "slot_taken" - the catch below matches unchanged).
+        await lockStaffAndAssertSlotFree(tx, {
+          staffId: input.staffId,
+          startsAt,
+          endsAt,
+          bufferMin: input.bookingBufferMin,
+          now,
+        });
         return tx.appointment.create({
           data: {
             shopId: input.shopId,

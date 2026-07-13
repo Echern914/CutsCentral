@@ -10,6 +10,7 @@ import { inQuietHours } from "../engines/quietHours.js";
 import { buildPromoBody } from "../messaging/templates.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 import { hasActiveAccess } from "../billing/stripe.js";
+import { remainingMonthlySms } from "../billing/quota.js";
 
 /**
  * Shop-designed promotions: percent/amount off, free add-ons, or extra-punch
@@ -322,13 +323,24 @@ promotionsRouter.post("/:id/blast", smsLimiter, async (req, res) => {
   }
 
   // Shared daily budget with nudges - promos can't blow past the cap.
-  // kind="loyalty" transactional texts are exempt (don't count against the cap).
+  // loyalty + receptionist_reply are exempt; see engines/nudge.ts.
   const startOfDay = new Date(now);
   startOfDay.setUTCHours(0, 0, 0, 0);
   const sentToday = await db.nudge.count({
-    where: { status: "SENT", createdAt: { gte: startOfDay }, kind: { not: "loyalty" } },
+    where: {
+      status: "SENT",
+      createdAt: { gte: startOfDay },
+      kind: { notIn: ["loyalty", "receptionist_reply"] },
+      // The cap is about SMS COST: WEB_PUSH nudge rows must not consume it
+      // (the nudge/winback counts already filter this way).
+      channel: "SMS",
+    },
   });
   let budget = Math.max(0, shop.dailySendCap - sentToday);
+
+  // Per-tier MONTHLY quota shared with nudges/win-backs (hard stop, no
+  // overage). Infinity while billing is off, so min() is a dev/CI no-op.
+  budget = Math.min(budget, await remainingMonthlySms(shop.id, now));
 
   // Lazy + real-send-only: a dry-run preview must work even with missing/invalid
   // Twilio creds (same reasoning as the nudge sweep).

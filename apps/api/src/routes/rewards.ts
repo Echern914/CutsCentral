@@ -328,9 +328,16 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
     rebook = { state: "none", deadline: null, windowDays, upcomingAt: null };
   }
 
+  // Master rewards gate: with rewards OFF the page stays a useful hub (shop
+  // identity, booking CTA, visit history, consent, promotions) but carries NO
+  // punch/reward surfaces at all - the web page branches on this flag and the
+  // emptied fields below mean nothing leaks even to a raw API reader.
+  const rewardsOn = client.shop.rewardsEnabled;
+
   res.json({
     shop: {
       name: client.shop.name,
+      rewardsEnabled: rewardsOn,
       bookingUrl: client.shop.bookingUrl,
       logoUrl: client.shop.logoUrl,
       accentColor: client.shop.accentColor,
@@ -364,33 +371,37 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
     loyalty,
     consent: consentView(client),
     // Whether the API can mint Apple Wallet passes (WALLET_* env configured) -
-    // drives the rewards page's Add-to-Wallet button.
-    wallet: { available: walletEnabled() },
+    // drives the rewards page's Add-to-Wallet button. Hidden while rewards are
+    // off (already-installed passes keep working via the wallet routes).
+    wallet: { available: rewardsOn && walletEnabled() },
     punches: {
-      balance,
+      balance: rewardsOn ? balance : 0,
       // Grid target: progress toward the next reward out of reach (null when
       // the menu is empty or everything is already affordable).
-      nextTarget: nextTarget
-        ? {
-            name: nextTarget.name,
-            punchCost: nextTarget.punchCost,
-            remaining: nextTarget.punchCost - balance,
-          }
-        : null,
+      nextTarget:
+        rewardsOn && nextTarget
+          ? {
+              name: nextTarget.name,
+              punchCost: nextTarget.punchCost,
+              remaining: nextTarget.punchCost - balance,
+            }
+          : null,
     },
-    rewards: rewardsFor(null).map((r) => ({
-      id: r.id,
-      name: r.name,
-      description: r.description,
-      emoji: r.emoji,
-      punchCost: r.punchCost,
-      ready: balance >= r.punchCost,
-      remaining: Math.max(0, r.punchCost - balance),
-    })),
+    rewards: rewardsOn
+      ? rewardsFor(null).map((r) => ({
+          id: r.id,
+          name: r.name,
+          description: r.description,
+          emoji: r.emoji,
+          punchCost: r.punchCost,
+          ready: balance >= r.punchCost,
+          remaining: Math.max(0, r.punchCost - balance),
+        }))
+      : [],
     // One entry per punch card the client can see (default card first). The
     // web page renders the stacked multi-card view from this when there's more
     // than one; a single entry falls back to the classic single-card layout.
-    cards,
+    cards: rewardsOn ? cards : [],
     promotions: promotions.map((p) => ({
       id: p.id,
       kind: p.kind,
@@ -409,18 +420,21 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
       // Punches this visit earned, so the history reads as activity ("+2") not
       // just a date. null when no earn row exists (e.g. a no-show that slipped
       // through, or a visit predating loyalty); the UI then shows no chip.
-      punches: v.punch?.punchesEarned ?? null,
+      // Rewards off: no punch chips - the history stays a plain visit list.
+      punches: rewardsOn ? (v.punch?.punchesEarned ?? null) : null,
       // Which card the punches landed on; null = the default card.
-      card: v.punch?.cardType?.name ?? null,
+      card: rewardsOn ? (v.punch?.cardType?.name ?? null) : null,
     })),
     // Claimed rewards, for the "Rewards claimed" list. Each is one redemption
     // with the reward name (from the ledger note) and how many punches it cost.
-    redemptions: redemptions.map((r) => ({
-      date: r.createdAt.toISOString(),
-      reward: r.note,
-      punches: r.punchesRedeemed,
-      card: r.cardType?.name ?? null,
-    })),
+    redemptions: rewardsOn
+      ? redemptions.map((r) => ({
+          date: r.createdAt.toISOString(),
+          reward: r.note,
+          punches: r.punchesRedeemed,
+          card: r.cardType?.name ?? null,
+        }))
+      : [],
   });
 });
 

@@ -169,8 +169,10 @@ export default function PrivacyPage() {
           the Service under contractual confidentiality obligations — currently:
           Supabase (database hosting), Vercel (web hosting), Railway (API
           hosting), Twilio (SMS delivery), Squarespace / Acuity Scheduling
-          (scheduling data sync, only for Shops that connect it), and Google
-          (only if you sign in with Google).
+          (scheduling data sync, only for Shops that connect it), Anthropic
+          (AI model processing — only for Shops that enable the AI
+          receptionist, whose client text-message conversations are processed
+          to generate replies), and Google (only if you sign in with Google).
         </li>
         <li>
           <Strong>The Shop you patronize:</Strong> if you are a Client, your

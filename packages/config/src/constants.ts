@@ -13,16 +13,51 @@ export const DEFAULTS = {
 } as const;
 
 /**
- * The one paid plan. Stripe owns the live price (STRIPE_PRICE_ID); these
- * numbers are what the marketing site and billing page DISPLAY, so keep them
- * in sync with the Stripe dashboard when the price changes.
+ * The pricing tiers. Stripe owns the live prices (STRIPE_PRICE_ID /
+ * STRIPE_PREMIUM_AI_PRICE_ID); the numbers here are what the marketing site
+ * and billing page DISPLAY, so keep them in sync with the Stripe dashboard
+ * when a price changes. `key` doubles as the internal Shop.plan value (the
+ * display name differs: "pro" shows as "Premium", "pro_ai" as "Premium AI").
+ *
+ * smsMonthlyQuota = included marketing texts per UTC calendar month (nudge /
+ * win-back / promo / receptionist gap-fill kinds). Hard stop at the quota -
+ * no metered overage; the dashboard shows a usage meter + upgrade CTA. See
+ * apps/api/src/billing/quota.ts for enforcement.
+ */
+export const PLANS = {
+  free: {
+    key: "free",
+    name: "Free",
+    priceMonthlyUsd: 0,
+    smsMonthlyQuota: 0,
+    receptionistIncluded: false,
+  },
+  pro: {
+    key: "pro",
+    name: "Premium",
+    priceMonthlyUsd: 34.99,
+    smsMonthlyQuota: 600,
+    receptionistIncluded: false,
+  },
+  pro_ai: {
+    key: "pro_ai",
+    name: "Premium AI",
+    priceMonthlyUsd: 74.99,
+    smsMonthlyQuota: 2500,
+    receptionistIncluded: true,
+  },
+} as const;
+
+export type PlanKey = keyof typeof PLANS;
+
+/**
+ * Back-compat alias over PLANS.pro (the original single paid plan). Existing
+ * call sites (billing route, web banner/FAQ/vertical pages) read this; new
+ * code should use PLANS directly.
  */
 export const BILLING = {
-  // "Premium" everywhere the customer can see it - the banner, billing page,
-  // FAQ, and vertical pages all say Premium, so the plan card must too. (The
-  // internal Shop.plan value stays "pro"; this is display-only.)
-  planName: "Premium",
-  priceMonthlyUsd: 34.99,
+  planName: PLANS.pro.name,
+  priceMonthlyUsd: PLANS.pro.priceMonthlyUsd,
   trialDays: 30,
 } as const;
 

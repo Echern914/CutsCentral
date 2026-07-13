@@ -13,6 +13,7 @@ import {
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireActiveAccess } from "../middleware/billing.js";
 import { hasActiveAccess } from "../billing/stripe.js";
+import { remainingMonthlySms } from "../billing/quota.js";
 import { smsLimiter } from "../middleware/rateLimit.js";
 import {
   adjustLedgerEntry,
@@ -378,6 +379,16 @@ dashboardRouter.post("/nudge/:clientId", smsLimiter, requireActiveAccess, async 
     });
     return;
   }
+  // Per-tier MONTHLY quota (hard stop + upgrade CTA; distinct from the 402
+  // subscription_required gate above). Infinity while billing is off.
+  if ((await remainingMonthlySms(shop.id, now)) <= 0) {
+    res.status(402).json({
+      error: "sms_quota_exhausted",
+      message:
+        "You've used all of this month's included texts. Upgrade to Premium AI for 2,500 texts a month.",
+    });
+    return;
+  }
 
   const body = buildNudgeBody({
     firstName: client.firstName,
@@ -428,6 +439,10 @@ dashboardRouter.post("/redeem/:clientId", async (req, res) => {
   if (!result.ok) {
     if (result.reason === "reward_not_found") {
       res.status(404).json({ error: "reward_not_found" });
+      return;
+    }
+    if (result.reason === "rewards_disabled") {
+      res.status(403).json({ error: "rewards_disabled" });
       return;
     }
     res.status(400).json({
@@ -1008,6 +1023,10 @@ dashboardRouter.post("/clients/:clientId/bonus", async (req, res) => {
   }
   const result = await grantBonusPunches(shop.id, client.id, count, cardTypeId);
   if (!result.ok) {
+    if (result.reason === "rewards_disabled") {
+      res.status(403).json({ error: "rewards_disabled" });
+      return;
+    }
     res.status(404).json({ error: "card_not_found" });
     return;
   }
@@ -1134,13 +1153,25 @@ dashboardRouter.post("/clients/bulk", smsLimiter, async (req, res) => {
   // Enforce the per-shop daily cap, shared with the sweep and promo blasts.
   // Without this, smsLimiter (10 req/min) x 200 clients/req = 2000 texts/min,
   // blowing past dailySendCap (default 50) and running up the shop's SMS bill.
-  // kind="loyalty" transactional texts are exempt (don't count against the cap).
+  // loyalty (transactional) + receptionist_reply (client-initiated thread
+  // answers) are exempt from the cap; see engines/nudge.ts for the rationale.
   const startOfDay = new Date(now);
   startOfDay.setUTCHours(0, 0, 0, 0);
   const sentToday = await db.nudge.count({
-    where: { status: "SENT", createdAt: { gte: startOfDay }, kind: { not: "loyalty" } },
+    where: {
+      status: "SENT",
+      createdAt: { gte: startOfDay },
+      kind: { notIn: ["loyalty", "receptionist_reply"] },
+      // The cap is about SMS COST: WEB_PUSH nudge rows must not consume it
+      // (the sweep/winback counts already filter this way).
+      channel: "SMS",
+    },
   });
   let budget = Math.max(0, shop.dailySendCap - sentToday);
+
+  // Per-tier MONTHLY quota shared with the sweep/promo sends (hard stop, no
+  // overage). Infinity while billing is off, so min() is a dev/CI no-op.
+  budget = Math.min(budget, await remainingMonthlySms(shop.id, now));
 
   const provider = getMessageProvider();
   let sent = 0;

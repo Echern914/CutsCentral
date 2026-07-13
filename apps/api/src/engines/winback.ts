@@ -7,6 +7,7 @@ import { sendPushToClient } from "../messaging/push.js";
 import { isWinbackDue, isWinbackEligible } from "./winbackEligibility.js";
 import { inQuietHours } from "./quietHours.js";
 import { hasActiveAccess } from "../billing/stripe.js";
+import { remainingMonthlySms } from "../billing/quota.js";
 
 const env = apiEnv();
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
@@ -188,11 +189,20 @@ async function doSweepShopWinback(
     where: {
       status: "SENT",
       createdAt: { gte: startOfDay },
-      kind: { not: "loyalty" },
+      // loyalty + receptionist replies are exempt (see nudge.ts cap comment).
+      kind: { notIn: ["loyalty", "receptionist_reply"] },
       channel: "SMS",
     },
   });
   let budget = Math.max(0, shop.dailySendCap - sentToday);
+
+  // Per-tier MONTHLY quota shared with the nudge/promo sends (hard stop, no
+  // overage). Infinity while billing is off, so min() is a dev/CI no-op.
+  const monthlyLeft = await remainingMonthlySms(shop.id, now);
+  if (monthlyLeft <= 0 && budget > 0) {
+    logger.info({ shopId: shop.id }, "winback: monthly SMS quota exhausted");
+  }
+  budget = Math.min(budget, monthlyLeft);
 
   // Candidate pre-filter: cadence-trackable, not archived, reachable by SOME
   // channel (SMS rails OR an installed push device). The per-client pass decides

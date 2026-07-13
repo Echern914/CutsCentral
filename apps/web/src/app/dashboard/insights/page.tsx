@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { apiGet } from "@/lib/api";
+import { getMe } from "@/lib/me";
 import { InsightsClient } from "./InsightsClient";
 
 export const metadata: Metadata = { title: "Insights" };
@@ -20,7 +21,7 @@ export interface InsightsData {
 }
 
 export default async function InsightsPage() {
-  const res = await apiGet<InsightsData>("/api/insights");
+  const [res, me] = await Promise.all([apiGet<InsightsData>("/api/insights"), getMe()]);
   if (!res.ok || !res.data) {
     return <main className="p-8 text-muted">Could not load your insights.</main>;
   }
@@ -34,7 +35,10 @@ export default async function InsightsPage() {
           the money comes from. Revenue counts priced visits only.
         </p>
       </header>
-      <InsightsClient initial={res.data} />
+      <InsightsClient
+        initial={res.data}
+        rewardsEnabled={me.data?.rewardsEnabled ?? true}
+      />
     </main>
   );
 }

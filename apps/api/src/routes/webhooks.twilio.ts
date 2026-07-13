@@ -4,13 +4,18 @@ import { apiEnv } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { toE164 } from "../acuity/clientKey.js";
 import { logger } from "../logger.js";
+import { closeConversationsForPhone } from "../receptionist/conversation.js";
+import { hasLiveConversation, processInboundText } from "../receptionist/inbound.js";
 
 const env = apiEnv();
 
 /**
- * Twilio inbound webhook for STOP handling. On a stop keyword we set optedOut on
- * every client matching the sender's phone (shared number -> opt out all matches,
- * the safe choice). Validates the Twilio signature.
+ * Twilio inbound webhook. Compliance keywords (STOP/START) are handled FIRST
+ * and synchronously, exactly as before; any other text is offered to the AI
+ * receptionist, which runs AFTER the TwiML ACK (LLM latency vs Twilio's ~15s
+ * webhook timeout) and replies via the REST send path. Numbers that don't
+ * resolve to a receptionist-enabled shop keep today's behavior: no reply.
+ * Validates the Twilio signature.
  */
 export const twilioWebhookRouter: Router = Router();
 
@@ -50,6 +55,13 @@ twilioWebhookRouter.post(
       "ChairBack: You're opted in to appointment reminders and rewards updates " +
       "from your shop. Msg & data rates may apply. Reply HELP for help, STOP to opt out.";
 
+    // "YES" is BOTH an opt-in keyword and the most natural way to accept a
+    // booking offer ("want Thu 2:30?" -> "yes"). Inside a live receptionist
+    // thread it means the booking; standalone it keeps its opt-in meaning.
+    // STOP words and START/UNSTOP are absolute either way (carrier compliance).
+    const yesInConversation =
+      text === "YES" && from !== null && (await hasLiveConversation(from));
+
     let reply = "";
     if (from && STOP_WORDS.has(text)) {
       // "sms_stop" locks the row: only the client can reverse it (START here,
@@ -58,9 +70,11 @@ twilioWebhookRouter.post(
         where: { phone: from },
         data: { optedOut: true, optOutSource: "sms_stop" },
       });
-      logger.info({ from, count }, "twilio STOP - opted out");
+      // The AI goes silent on every live thread for this number, immediately.
+      const closed = await closeConversationsForPhone(from).catch(() => 0);
+      logger.info({ from, count, closedConversations: closed }, "twilio STOP - opted out");
       // No app reply: the carrier auto-sends the mandatory opt-out confirmation.
-    } else if (from && START_WORDS.has(text)) {
+    } else if (from && START_WORDS.has(text) && !yesInConversation) {
       const { count } = await prisma.client.updateMany({
         where: { phone: from },
         data: { optedOut: false, optOutSource: null },
@@ -68,6 +82,11 @@ twilioWebhookRouter.post(
       logger.info({ from, count }, "twilio START - opted in");
       // Confirm the opt-in (carriers do NOT auto-reply to START).
       if (count > 0) reply = OPT_IN_REPLY;
+    } else if (from) {
+      // Not a compliance keyword: offer it to the AI receptionist. Fire and
+      // forget AFTER we ACK - the reply (if any) goes out via REST, not TwiML.
+      const rawBody = ((req.body as { Body?: string }).Body ?? "").trim();
+      if (rawBody) void processInboundText({ phone: from, text: rawBody });
     }
 
     // Escape the body for XML (the copy is static + safe, but keep it correct

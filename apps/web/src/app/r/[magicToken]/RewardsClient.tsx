@@ -82,6 +82,10 @@ export function RewardsClient({
   // defaults to all), but treat empty as "show all" defensively.
   const visible = new Set(shop.rewardsSections);
   const show = (key: string) => visible.size === 0 || visible.has(key);
+  // Master rewards switch: off = this page is a booking/visit hub with zero
+  // punch/reward surfaces (the API already empties rewards/cards/redemptions;
+  // this flag removes the always-shown balance card + loyalty tier too).
+  const rewardsOn = shop.rewardsEnabled ?? true;
   const welcome = shop.rewardsWelcome?.trim();
   const ready = rewards.filter((r) => r.ready);
   const next = punches.nextTarget;
@@ -151,7 +155,11 @@ export function RewardsClient({
               className="mt-2 text-3xl tracking-tight"
               style={{ fontFamily: "var(--page-display)" }}
             >
-              {client.firstName ? `Hey ${client.firstName}` : "Your rewards"}
+              {client.firstName
+                ? `Hey ${client.firstName}`
+                : rewardsOn
+                  ? "Your rewards"
+                  : "Welcome"}
             </h1>
             {welcome && (
               <p className="mx-auto mt-2 max-w-xs text-sm" style={{ color: t.muted }}>
@@ -161,7 +169,7 @@ export function RewardsClient({
             {/* Loyalty status: a colored "member" pill once they've reached a
                 tier, plus a gentle nudge toward the next one (which doubles as a
                 "1 visit to Bronze" prompt for a brand-new client). */}
-            {loyalty.tier && loyalty.color && (
+            {rewardsOn && loyalty.tier && loyalty.color && (
               <span
                 className="mt-3 inline-block rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide"
                 style={{
@@ -173,7 +181,7 @@ export function RewardsClient({
                 {loyalty.label} member
               </span>
             )}
-            {loyalty.nextTier && (
+            {rewardsOn && loyalty.nextTier && (
               <p className="mt-2 text-xs" style={{ color: t.muted }}>
                 {loyalty.nextTier.visitsAway}{" "}
                 {loyalty.nextTier.visitsAway === 1 ? "visit" : "visits"} to{" "}
@@ -184,8 +192,9 @@ export function RewardsClient({
 
           {/* Punch balance. Multi-card shops get one stacked surface per card
               (each with its own balance, accent, rewards, and grid); everyone
-              else gets the classic single-balance card, byte-for-byte. */}
-          {multiCard ? (
+              else gets the classic single-balance card, byte-for-byte. A
+              rewards-off shop renders NO balance card at all. */}
+          {!rewardsOn ? null : multiCard ? (
             <motion.div variants={fadeUp} className="flex flex-col gap-4">
               {cards.map((card) => (
                 <PunchCardSurface

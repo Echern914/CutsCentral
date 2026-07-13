@@ -8,8 +8,11 @@ import { runWinbackSweep } from "./engines/winback.js";
 import { linkBookingsToNudges } from "./engines/attribution.js";
 import { promoteFulfilledAppointments } from "./engines/appointmentPromotion.js";
 import { runAppointmentReminders } from "./engines/appointmentReminders.js";
+import { runPushReminders } from "./engines/pushReminders.js";
 import { refreshExpiringSquareTokens } from "./engines/squareTokenRefresh.js";
 import { runTrialReminders } from "./engines/trialReminder.js";
+import { autoCloseIdleConversations } from "./receptionist/conversation.js";
+import { sweepExpiredHolds } from "./engines/holdSweep.js";
 
 const env = apiEnv();
 
@@ -91,6 +94,15 @@ export function startScheduler(): void {
     ).catch((err) => logger.error({ err }, "appointment reminder job failed"));
   });
 
+  // Native booking: PUSH reminders (24h + 2h tiers, per-shop toggles) every 10
+  // minutes - the 2h tier needs a tighter cadence than the SMS/email job.
+  // Idempotent via the per-tier stamps; push-only, respects DRY_RUN.
+  cron.schedule("*/10 * * * *", () => {
+    void withLease("push-reminders", 5 * MINUTE, () => runPushReminders()).catch(
+      (err) => logger.error({ err }, "push reminder job failed"),
+    );
+  });
+
   // Square: proactively refresh OAuth access tokens nearing their ~30-day expiry
   // (daily at 03:00). No-op when no Square shops are connected.
   cron.schedule("0 3 * * *", () => {
@@ -107,6 +119,24 @@ export function startScheduler(): void {
   cron.schedule("0 14 * * *", () => {
     void withLease("trial-reminders", 10 * MINUTE, () => runTrialReminders()).catch(
       (err) => logger.error({ err }, "trial reminder sweep failed"),
+    );
+  });
+
+  // AI receptionist: close conversation threads idle >24h (hourly) so a
+  // months-later text starts fresh instead of resuming a stale thread.
+  cron.schedule("30 * * * *", () => {
+    void withLease("receptionist-conversation-close", 5 * MINUTE, async () => {
+      const closed = await autoCloseIdleConversations();
+      if (closed > 0) logger.info({ closed }, "receptionist conversations auto-closed");
+    }).catch((err) => logger.error({ err }, "receptionist conversation close failed"));
+  });
+
+  // AI receptionist: sweep expired slot holds every 5 minutes. Hygiene only -
+  // the slot engine + overlap guards already ignore expired holds, so the slot
+  // is free the moment a hold lapses regardless of this job's cadence.
+  cron.schedule("*/5 * * * *", () => {
+    void withLease("receptionist-hold-sweep", 2 * MINUTE, () => sweepExpiredHolds()).catch(
+      (err) => logger.error({ err }, "receptionist hold sweep failed"),
     );
   });
 

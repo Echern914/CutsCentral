@@ -27,6 +27,7 @@ import { toE164 } from "../acuity/clientKey.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 import { sendPushToUser } from "../messaging/push.js";
 import { leadLimiter } from "../middleware/rateLimit.js";
+import { hasReceptionistEntitlement } from "../receptionist/config.js";
 import { logger } from "../logger.js";
 
 export const shopsRouter: Router = Router();
@@ -154,7 +155,14 @@ const updateShopSchema = createShopSchema
     slotOpenedTextsEnabled: z.boolean(),
     // Request-before-booking: public native bookings land PENDING until approved.
     requireBookingApproval: z.boolean(),
+    // Automatic appointment reminder PUSHES, per tier (24h / 2h before start).
+    // Default ON (push is free; reminders are expected) - see pushReminders.ts.
+    pushReminder24hEnabled: z.boolean(),
+    pushReminder2hEnabled: z.boolean(),
     notifyPhone: z.string().max(40).nullish().or(z.literal("")),
+    // Master rewards/loyalty switch (pure gate - balances survive toggling).
+    // Default false for NEW shops; existing shops were backfilled true.
+    rewardsEnabled: z.boolean(),
     // Transactional loyalty SMS to clients (earn/redeem confirmations). Off by
     // default; gated by client consent + quiet hours regardless. See
     // services/loyaltyNotify.ts.
@@ -172,6 +180,14 @@ const updateShopSchema = createShopSchema
     rewardsSections: z
       .array(z.enum(REWARDS_SECTION_KEYS as [string, ...string[]]))
       .max(REWARDS_SECTION_KEYS.length),
+    // AI receptionist (paid add-on). Turning it ON the first time REQUIRES the
+    // liability acknowledgment (acceptReceptionistTerms) - the barber accepts
+    // that the AI can make scheduling mistakes and ChairBack isn't liable; the
+    // acceptance is stamped once (receptionistTermsAcceptedAt) and enforced
+    // again at runtime by receptionist/config.ts.
+    receptionistEnabled: z.boolean(),
+    receptionistTone: z.string().trim().max(120).nullish().or(z.literal("")),
+    acceptReceptionistTerms: z.boolean(),
   })
   .partial();
 
@@ -334,6 +350,22 @@ shopsRouter.patch("/me", requireUser, requireShop, async (req, res) => {
     }
     data.notifyPhone = normalized;
   }
+  // AI receptionist: acceptReceptionistTerms isn't a Shop column - it stamps
+  // receptionistTermsAcceptedAt (once, first acceptance wins). Enabling without
+  // an acceptance on record is rejected: the barber must acknowledge that the
+  // AI can make scheduling mistakes (double-bookings, misses) and that
+  // ChairBack isn't liable for them, BEFORE the AI ever touches their calendar.
+  const acceptedNow = data.acceptReceptionistTerms === true;
+  delete data.acceptReceptionistTerms;
+  if (data.receptionistTone === "") data.receptionistTone = null;
+  const alreadyAccepted = req.shop!.receptionistTermsAcceptedAt !== null;
+  if (acceptedNow && !alreadyAccepted) {
+    data.receptionistTermsAcceptedAt = new Date();
+  }
+  if (data.receptionistEnabled === true && !alreadyAccepted && !acceptedNow) {
+    res.status(400).json({ error: "receptionist_terms_required" });
+    return;
+  }
   try {
     const shop = await prisma.shop.update({
       where: { id: req.shop!.id },
@@ -362,11 +394,15 @@ publicPageRouter.get("/:slug", async (req, res) => {
   }
   const now = new Date();
   const [rewards, approvedReviews, ratingAgg, promotions] = await Promise.all([
-    prisma.reward.findMany({
-      where: { shopId: shop.id, active: true },
-      orderBy: [{ sortOrder: "asc" }, { punchCost: "asc" }],
-      select: { id: true, name: true, description: true, emoji: true, punchCost: true },
-    }),
+    // Rewards off = the public page simply has no rewards section (no empty
+    // card, no dead copy) - everything else renders as usual.
+    shop.rewardsEnabled
+      ? prisma.reward.findMany({
+          where: { shopId: shop.id, active: true },
+          orderBy: [{ sortOrder: "asc" }, { punchCost: "asc" }],
+          select: { id: true, name: true, description: true, emoji: true, punchCost: true },
+        })
+      : Promise.resolve([]),
     // Only APPROVED reviews are ever public. Newest first, capped.
     prisma.review.findMany({
       where: { shopId: shop.id, status: "APPROVED" },
@@ -426,6 +462,7 @@ publicPageRouter.get("/:slug", async (req, res) => {
     takesRequests: shop.takesRequests,
     waitlistEnabled: shop.waitlistEnabled,
     punchesPerVisit: shop.punchesPerVisit,
+    rewardsEnabled: shop.rewardsEnabled,
     rewards,
     promotions: promotions.map((p) => ({
       ...p,
@@ -715,12 +752,20 @@ function serializeShop(shop: {
   waitlistEnabled: boolean;
   slotOpenedTextsEnabled: boolean;
   requireBookingApproval: boolean;
+  pushReminder24hEnabled: boolean;
+  pushReminder2hEnabled: boolean;
   notifyPhone: string | null;
+  rewardsEnabled: boolean;
   loyaltyTextsEnabled: boolean;
   bookingMode: string;
   bookingLeadHours: number;
   bookingMaxDays: number;
   bookingBufferMin: number;
+  receptionistEnabled: boolean;
+  receptionistTone: string | null;
+  receptionistTermsAcceptedAt: Date | null;
+  receptionistSubscriptionStatus: string;
+  receptionistCompAccess: boolean;
 }) {
   // Note: webhookSecret is intentionally NOT exposed to the client.
   return {
@@ -754,11 +799,19 @@ function serializeShop(shop: {
     waitlistEnabled: shop.waitlistEnabled,
     slotOpenedTextsEnabled: shop.slotOpenedTextsEnabled,
     requireBookingApproval: shop.requireBookingApproval,
+    pushReminder24hEnabled: shop.pushReminder24hEnabled,
+    pushReminder2hEnabled: shop.pushReminder2hEnabled,
     notifyPhone: shop.notifyPhone,
+    rewardsEnabled: shop.rewardsEnabled,
     loyaltyTextsEnabled: shop.loyaltyTextsEnabled,
     bookingMode: shop.bookingMode,
     bookingLeadHours: shop.bookingLeadHours,
     bookingMaxDays: shop.bookingMaxDays,
     bookingBufferMin: shop.bookingBufferMin,
+    receptionistEnabled: shop.receptionistEnabled,
+    receptionistTone: shop.receptionistTone,
+    receptionistTermsAcceptedAt: shop.receptionistTermsAcceptedAt?.toISOString() ?? null,
+    // Entitlement summary for the settings UI (comp pilots or the $40/mo add-on).
+    receptionistEntitled: hasReceptionistEntitlement(shop),
   };
 }

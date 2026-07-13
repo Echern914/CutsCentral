@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
@@ -19,12 +19,16 @@ import {
   createAddOnAction,
   createServiceAction,
   createStaffAction,
+  createTargetedSlotAction,
   deleteAddOnAction,
   deleteServiceAction,
   deleteStaffAction,
+  deleteTargetedSlotAction,
   getAvailabilityAction,
+  listTargetedSlotsAction,
   saveAvailabilityAction,
   saveBookingSettingsAction,
+  type TargetedSlotRow,
 } from "./actions";
 
 const field =
@@ -158,21 +162,29 @@ function SettingsTab({
   const [buffer, setBuffer] = useState(shop.bookingBufferMin);
   const [slotOpened, setSlotOpened] = useState(shop.slotOpenedTextsEnabled);
   const [requireApproval, setRequireApproval] = useState(shop.requireBookingApproval);
+  const [remind24h, setRemind24h] = useState(shop.pushReminder24hEnabled);
+  const [remind2h, setRemind2h] = useState(shop.pushReminder2hEnabled);
   const [pending, start] = useTransition();
 
   function persist(
-    nextMode: typeof mode,
-    nextSlotOpened = slotOpened,
-    nextRequireApproval = requireApproval,
+    next: Partial<{
+      mode: typeof mode;
+      slotOpened: boolean;
+      requireApproval: boolean;
+      remind24h: boolean;
+      remind2h: boolean;
+    }> = {},
   ) {
     start(async () => {
       const r = await saveBookingSettingsAction({
-        bookingMode: nextMode,
+        bookingMode: next.mode ?? mode,
         bookingLeadHours: lead,
         bookingMaxDays: maxDays,
         bookingBufferMin: buffer,
-        slotOpenedTextsEnabled: nextSlotOpened,
-        requireBookingApproval: nextRequireApproval,
+        slotOpenedTextsEnabled: next.slotOpened ?? slotOpened,
+        requireBookingApproval: next.requireApproval ?? requireApproval,
+        pushReminder24hEnabled: next.remind24h ?? remind24h,
+        pushReminder2hEnabled: next.remind2h ?? remind2h,
       });
       toast(r.ok ? "Booking settings saved" : "Couldn't save", r.ok ? "success" : "error");
     });
@@ -182,25 +194,37 @@ function SettingsTab({
   function toggleSlotOpened() {
     const next = !slotOpened;
     setSlotOpened(next);
-    persist(mode, next);
+    persist({ slotOpened: next });
   }
 
   // Flip "require my approval before a booking is confirmed" and save.
   function toggleRequireApproval() {
     const next = !requireApproval;
     setRequireApproval(next);
-    persist(mode, slotOpened, next);
+    persist({ requireApproval: next });
+  }
+
+  // Flip one of the automatic push-reminder tiers (24h / 2h) and save.
+  function toggleRemind24h() {
+    const next = !remind24h;
+    setRemind24h(next);
+    persist({ remind24h: next });
+  }
+  function toggleRemind2h() {
+    const next = !remind2h;
+    setRemind2h(next);
+    persist({ remind2h: next });
   }
 
   function save() {
-    persist(mode);
+    persist();
   }
 
   // Picking a platform card both selects AND saves the mode (so the choice
   // sticks without a separate Save click); native config below has its own Save.
   function pickMode(next: typeof mode) {
     setMode(next);
-    persist(next);
+    persist({ mode: next });
   }
 
   return (
@@ -287,6 +311,46 @@ function SettingsTab({
             >
               {slotOpened ? "On" : "Off"}
             </button>
+          </div>
+        </Card>
+      )}
+
+      {mode === "native" && (
+        <Card className="p-5">
+          <CardHeader
+            title="Automatic appointment reminders"
+            subtitle="Free push notifications to the client's phone. No texts are sent."
+          />
+          <div className="mt-4 flex flex-col gap-3">
+            {(
+              [
+                {
+                  label: "24 hours before",
+                  on: remind24h,
+                  toggle: toggleRemind24h,
+                },
+                { label: "2 hours before", on: remind2h, toggle: toggleRemind2h },
+              ] as const
+            ).map((tier) => (
+              <div
+                key={tier.label}
+                className="flex items-center justify-between gap-4"
+              >
+                <p className="text-sm text-muted">{tier.label}</p>
+                <button
+                  onClick={tier.toggle}
+                  disabled={pending}
+                  className={cn(
+                    "shrink-0 rounded-full px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-50",
+                    tier.on
+                      ? "bg-emerald-soft/15 text-emerald-soft"
+                      : "border border-subtle text-muted hover:bg-charcoal-700",
+                  )}
+                >
+                  {tier.on ? "On" : "Off"}
+                </button>
+              </div>
+            ))}
           </div>
         </Card>
       )}
@@ -403,9 +467,10 @@ function ServicesTab({
   const [name, setName] = useState("");
   const [duration, setDuration] = useState(30);
   const [price, setPrice] = useState("");
-  // Per-weekday price overrides the barber sets explicitly (weekday -> price
-  // string). Empty = that day uses the base price. Built into the API payload.
+  // Per-weekday overrides the barber sets explicitly (weekday -> string).
+  // Empty = that day uses the base price/length. Built into the API payload.
   const [dayPrices, setDayPrices] = useState<Record<number, string>>({});
+  const [dayDurations, setDayDurations] = useState<Record<number, string>>({});
   // Empty = "offered by everyone" (resolved at submit). Starting empty avoids a
   // stale snapshot of the staff list - a barber added later is included by default.
   const [staffIds, setStaffIds] = useState<string[]>([]);
@@ -422,17 +487,30 @@ function ServicesTab({
     return out;
   }
 
+  /** Same for {weekday: minutes} - whole minutes, 5 min floor (API bound). */
+  function buildDurationOverrides(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const [wd, val] of Object.entries(dayDurations)) {
+      const n = Number(val);
+      if (val.trim() !== "" && Number.isInteger(n) && n >= 5) out[wd] = n;
+    }
+    return out;
+  }
+
   function add() {
     if (!name.trim()) return;
     // No explicit selection -> offer it via every active barber.
     const offeredBy = staffIds.length > 0 ? staffIds : activeStaff.map((s) => s.id);
     const overrides = buildOverrides();
+    const durOverrides = buildDurationOverrides();
     start(async () => {
       const r = await createServiceAction({
         name: name.trim(),
         durationMin: duration,
         price: price.trim() ? Number(price) : null,
         priceOverrides: Object.keys(overrides).length > 0 ? overrides : undefined,
+        durationOverrides:
+          Object.keys(durOverrides).length > 0 ? durOverrides : undefined,
         staffIds: offeredBy,
       });
       if (r.ok) {
@@ -440,6 +518,7 @@ function ServicesTab({
         setName("");
         setPrice("");
         setDayPrices({});
+        setDayDurations({});
         setStaffIds([]);
       } else toast("Couldn't add", "error");
     });
@@ -506,29 +585,61 @@ function ServicesTab({
         </div>
       )}
 
-      {/* Optional per-day pricing. Leave a day blank to use the base price; fill
-          one in to charge differently (e.g. a Sunday premium). The customer sees
-          the right price for the day they pick. */}
+      {/* Optional per-day overrides ("Vary by day"). Leave a day blank to use
+          the base price/length; fill one in to differ (e.g. Sunday premium, or
+          "Friday cuts are 20 min"). A filled day lights up so it's obvious at a
+          glance which days are customized. Duration drives the slot grid: a
+          20-min Friday makes Friday book in 20-min blocks. */}
       <div className="mt-3">
-        <span className={labelCls}>Different price on certain days? (optional)</span>
+        <span className={labelCls}>Vary by day? (optional — price and/or minutes)</span>
         <div className="mt-1 grid grid-cols-4 gap-2 sm:grid-cols-7">
-          {WEEKDAYS.map((label, wd) => (
-            <label key={wd} className="flex flex-col gap-1">
-              <span className="text-[10px] text-muted">{label}</span>
-              <input
-                type="number"
-                min={0}
-                inputMode="decimal"
-                placeholder={price.trim() ? `$${price}` : "base"}
-                value={dayPrices[wd] ?? ""}
-                onChange={(e) =>
-                  setDayPrices((cur) => ({ ...cur, [wd]: e.target.value }))
-                }
-                className="w-full rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50"
-                aria-label={`${label} price`}
-              />
-            </label>
-          ))}
+          {WEEKDAYS.map((label, wd) => {
+            const customized =
+              (dayPrices[wd] ?? "").trim() !== "" ||
+              (dayDurations[wd] ?? "").trim() !== "";
+            return (
+              <div
+                key={wd}
+                className={cn(
+                  "flex flex-col gap-1 rounded-lg p-1",
+                  customized && "bg-gold/10 ring-1 ring-gold/40",
+                )}
+              >
+                <span
+                  className={cn(
+                    "text-[10px]",
+                    customized ? "font-semibold text-gold" : "text-muted",
+                  )}
+                >
+                  {label}
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  inputMode="decimal"
+                  placeholder={price.trim() ? `$${price}` : "$ base"}
+                  value={dayPrices[wd] ?? ""}
+                  onChange={(e) =>
+                    setDayPrices((cur) => ({ ...cur, [wd]: e.target.value }))
+                  }
+                  className="w-full rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50"
+                  aria-label={`${label} price`}
+                />
+                <input
+                  type="number"
+                  min={5}
+                  inputMode="numeric"
+                  placeholder={`${duration || "?"} min`}
+                  value={dayDurations[wd] ?? ""}
+                  onChange={(e) =>
+                    setDayDurations((cur) => ({ ...cur, [wd]: e.target.value }))
+                  }
+                  className="w-full rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50"
+                  aria-label={`${label} minutes`}
+                />
+              </div>
+            );
+          })}
         </div>
       </div>
 
@@ -555,6 +666,11 @@ function ServicesTab({
                     Object.entries(s.priceOverrides)
                       .map(([wd, p]) => `${WEEKDAYS[Number(wd)]} $${p}`)
                       .join(", ")}
+                {Object.keys(s.durationOverrides ?? {}).length > 0 &&
+                  " · " +
+                    Object.entries(s.durationOverrides ?? {})
+                      .map(([wd, m]) => `${WEEKDAYS[Number(wd)]} ${m}min`)
+                      .join(", ")}
               </span>
             </span>
             <button
@@ -572,7 +688,222 @@ function ServicesTab({
       </Card>
 
       <AddOnsManager initial={initialAddOns} services={initial} toast={toast} />
+
+      <TargetedSlotsManager services={initial} staff={staff} toast={toast} />
     </div>
+  );
+}
+
+//  Targeted slots (one-off special-priced bookable slots under a service)
+
+function TargetedSlotsManager({
+  services,
+  staff,
+  toast,
+}: {
+  services: ServiceRow[];
+  staff: StaffRow[];
+  toast: Toast;
+}) {
+  const activeServices = services.filter((s) => s.active);
+  const activeStaff = staff.filter((s) => s.active);
+  const [slots, setSlots] = useState<TargetedSlotRow[] | null>(null);
+  const [serviceId, setServiceId] = useState("");
+  const [staffId, setStaffId] = useState("");
+  const [label, setLabel] = useState("");
+  const [when, setWhen] = useState(""); // datetime-local string
+  const [minutes, setMinutes] = useState(30);
+  const [price, setPrice] = useState("");
+  const [repeatWeeks, setRepeatWeeks] = useState(0);
+  const [pending, start] = useTransition();
+
+  function refresh() {
+    start(async () => {
+      const res = await listTargetedSlotsAction();
+      if (res.ok && res.slots) setSlots(res.slots);
+    });
+  }
+  // First load on mount (no server plumbing needed for a settings subsection).
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function add() {
+    if (!serviceId || !staffId || !when || !price.trim()) {
+      toast("Pick a service, barber, time, and price", "error");
+      return;
+    }
+    const startsAt = new Date(when);
+    if (Number.isNaN(startsAt.getTime()) || startsAt.getTime() <= Date.now()) {
+      toast("Pick a future time", "error");
+      return;
+    }
+    start(async () => {
+      const r = await createTargetedSlotAction({
+        staffId,
+        serviceId,
+        label: label.trim() || undefined,
+        startsAt: startsAt.toISOString(),
+        durationMin: minutes,
+        price: Number(price),
+        repeatWeeks: repeatWeeks > 0 ? repeatWeeks : undefined,
+      });
+      if (r.ok) {
+        toast("Slot published", "success");
+        setLabel("");
+        setWhen("");
+        setPrice("");
+        setRepeatWeeks(0);
+        refresh();
+      } else toast("Couldn't publish", "error");
+    });
+  }
+
+  function remove(id: string) {
+    start(async () => {
+      const r = await deleteTargetedSlotAction(id);
+      toast(r.ok ? "Slot removed" : "Couldn't remove (already booked?)", r.ok ? "success" : "error");
+      refresh();
+    });
+  }
+
+  const whenFmt = new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const nameOf = (list: { id: string; name: string }[], id: string) =>
+    list.find((x) => x.id === id)?.name ?? "?";
+
+  return (
+    <Card className="p-5">
+      <CardHeader
+        title="Targeted slots"
+        subtitle="Publish specific one-off times at their own price - a late-night special, a model rate. They show under the service with a badge, can be booked exactly once, and block that time from normal booking."
+      />
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <select
+          className={field}
+          value={serviceId}
+          onChange={(e) => setServiceId(e.target.value)}
+        >
+          <option value="">Service…</option>
+          {activeServices.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+        <select
+          className={field}
+          value={staffId}
+          onChange={(e) => setStaffId(e.target.value)}
+        >
+          <option value="">Barber…</option>
+          {activeStaff.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+        <input
+          className={field}
+          type="datetime-local"
+          value={when}
+          onChange={(e) => setWhen(e.target.value)}
+          aria-label="Date and time"
+        />
+        <input
+          className={field}
+          placeholder="Label (optional, e.g. Late night retwist)"
+          maxLength={60}
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+        />
+        <input
+          className={field}
+          type="number"
+          min={5}
+          inputMode="numeric"
+          placeholder="Minutes"
+          value={minutes}
+          onChange={(e) => setMinutes(Number(e.target.value))}
+          aria-label="Minutes"
+        />
+        <input
+          className={field}
+          type="number"
+          min={0}
+          inputMode="decimal"
+          placeholder="Price ($)"
+          value={price}
+          onChange={(e) => setPrice(e.target.value)}
+          aria-label="Price"
+        />
+        <label className="flex items-center gap-2 text-xs text-muted sm:col-span-2">
+          Repeat weekly for
+          <input
+            type="number"
+            min={0}
+            max={26}
+            className="w-16 rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
+            value={repeatWeeks}
+            onChange={(e) => setRepeatWeeks(Number(e.target.value))}
+            aria-label="Repeat weeks"
+          />
+          more week{repeatWeeks === 1 ? "" : "s"} (same day &amp; time)
+        </label>
+      </div>
+      <button
+        onClick={add}
+        disabled={pending}
+        className="mt-4 rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+      >
+        Publish slot
+      </button>
+
+      <ul className="mt-5 flex flex-col gap-2">
+        {(slots ?? []).map((t) => (
+          <li
+            key={t.id}
+            className="flex items-center justify-between rounded-xl border border-subtle px-4 py-2.5"
+          >
+            <span className="text-sm">
+              {whenFmt.format(new Date(t.startsAt))}{" "}
+              <span className="text-xs text-muted">
+                · {nameOf(activeServices, t.serviceId)} · {nameOf(activeStaff, t.staffId)} ·{" "}
+                {t.durationMin} min · ${t.price.toFixed(0)}
+                {t.label ? ` · ${t.label}` : ""}
+              </span>{" "}
+              <span
+                className={cn(
+                  "ml-1 rounded-full px-2 py-0.5 text-[10px] font-medium",
+                  t.booked
+                    ? "bg-emerald-soft/15 text-emerald-soft"
+                    : "bg-gold/15 text-gold",
+                )}
+              >
+                {t.booked ? "Booked" : "Open"}
+              </span>
+            </span>
+            {!t.booked && (
+              <button
+                onClick={() => remove(t.id)}
+                className="text-xs text-danger-soft hover:underline"
+              >
+                Remove
+              </button>
+            )}
+          </li>
+        ))}
+        {slots !== null && slots.length === 0 && (
+          <li className="text-sm text-muted">No targeted slots yet.</li>
+        )}
+      </ul>
+    </Card>
   );
 }
 

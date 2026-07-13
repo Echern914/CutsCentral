@@ -45,6 +45,7 @@ const SHOP_SELECT = {
   id: true,
   name: true,
   timezone: true,
+  rewardsEnabled: true,
   loyaltyTextsEnabled: true,
   // billing gate (SMS costs real money - mirror the nudge sweep)
   subscriptionStatus: true,
@@ -67,6 +68,7 @@ type LoyaltyShop = {
   id: string;
   name: string;
   timezone: string;
+  rewardsEnabled: boolean;
   loyaltyTextsEnabled: boolean;
   subscriptionStatus: string;
   trialEndsAt: Date | null;
@@ -93,6 +95,9 @@ function skipReason(
   client: LoyaltyClient,
   now: Date,
 ): string | null {
+  // Master rewards gate first: a rewards-off shop sends NO loyalty messages on
+  // any channel (there's nothing earned to announce anyway - earning is gated).
+  if (!shop.rewardsEnabled) return "rewards_disabled";
   if (!shop.loyaltyTextsEnabled) return "loyalty_texts_disabled";
   if (!hasActiveAccess(shop, { now })) return "no_active_access";
   if (client.archivedAt !== null) return "client_archived";
@@ -123,6 +128,7 @@ function loyaltyPushEligible(
   client: LoyaltyClient,
   now: Date,
 ): boolean {
+  if (!shop.rewardsEnabled) return false;
   if (!shop.loyaltyTextsEnabled) return false;
   if (!hasActiveAccess(shop, { now })) return false;
   if (client.archivedAt !== null) return false;

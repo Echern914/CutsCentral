@@ -171,12 +171,21 @@ authRouter.get("/me", requireUser, async (req, res) => {
     req.cookies?.[ACTIVE_SHOP_COOKIE_NAME] as string | undefined,
   );
   const { welcomeSeenAt, passwordHash, ...rest } = user;
+  // Whether the ACTIVE shop has rewards on - the dashboard chrome hides every
+  // rewards surface (nav tab etc.) for a rewards-off shop.
+  const activeShopRewards = activeShop
+    ? await prisma.shop.findUnique({
+        where: { id: activeShop.id },
+        select: { rewardsEnabled: true },
+      })
+    : null;
   res.json({
     ...rest,
     welcomeSeen: welcomeSeenAt !== null,
     hasPassword: passwordHash !== null,
     shops,
     activeShopId: activeShop?.id ?? null,
+    rewardsEnabled: activeShopRewards?.rewardsEnabled ?? false,
   });
 });
 
