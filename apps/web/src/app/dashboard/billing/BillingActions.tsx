@@ -126,9 +126,11 @@ export function CancelMembershipButton() {
   if (!confirming) {
     return (
       <div className="flex flex-col items-start gap-2">
+        {/* A real, findable button (it sits beside "Manage billing") — calm
+            by default, warns on hover. The 2-tap confirm still guards it. */}
         <button
           onClick={() => setConfirming(true)}
-          className="text-xs text-muted underline-offset-2 transition-colors duration-150 ease-out hover:text-danger-soft hover:underline"
+          className="rounded-full border border-subtle px-5 py-2.5 text-sm text-muted transition-all duration-150 ease-out hover:border-danger-soft/40 hover:bg-danger-soft/10 hover:text-danger-soft"
         >
           Cancel membership
         </button>
