@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { apiGet } from "@/lib/api";
 import { getMe } from "@/lib/me";
+import { DemoTour } from "@/components/tour/DemoTour";
 import { InsightsClient } from "./InsightsClient";
 
 export const metadata: Metadata = { title: "Insights" };
@@ -28,6 +29,9 @@ export default async function InsightsPage() {
 
   return (
     <main className="mx-auto w-full max-w-4xl px-5 py-8">
+      {/* Barber-side guided tour. data-tour: keep in sync with
+          packages/config/src/demoTour.ts */}
+      <DemoTour tour="dashboard" route="insights" />
       <header className="mb-6">
         <h1 className="font-display text-3xl tracking-tight">Insights</h1>
         <p className="mt-1 text-sm text-muted">
@@ -35,10 +39,12 @@ export default async function InsightsPage() {
           the money comes from. Revenue counts priced visits only.
         </p>
       </header>
-      <InsightsClient
-        initial={res.data}
-        rewardsEnabled={me.data?.rewardsEnabled ?? true}
-      />
+      <div data-tour="charts">
+        <InsightsClient
+          initial={res.data}
+          rewardsEnabled={me.data?.rewardsEnabled ?? true}
+        />
+      </div>
     </main>
   );
 }

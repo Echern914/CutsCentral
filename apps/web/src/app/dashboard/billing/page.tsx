@@ -1,6 +1,8 @@
 import { PLANS } from "@chairback/config/constants";
 import { apiGet } from "@/lib/api";
+import { getMe } from "@/lib/me";
 import { Card } from "@/components/ui/Card";
+import { DemoTour } from "@/components/tour/DemoTour";
 import { HideInNativeApp } from "@/components/HideInNativeApp";
 import { ShowInNativeApp } from "@/components/ShowInNativeApp";
 import {
@@ -92,9 +94,11 @@ export default async function BillingPage({
 }: {
   searchParams?: { checkout?: string; upgrade?: string; receptionist?: string };
 }) {
-  const [res, shopRes] = await Promise.all([
+  const [res, shopRes, me] = await Promise.all([
     apiGet<BillingStatus>("/api/billing"),
     apiGet<ShopSettings>("/api/shops/me"),
+    // Memoized: shares the layout's /api/auth/me round-trip for this render.
+    getMe(),
   ]);
   const b = res.data;
   const shop = shopRes.data;
@@ -112,6 +116,10 @@ export default async function BillingPage({
 
   return (
     <main className="mx-auto w-full max-w-4xl px-5 py-10">
+      {/* Barber-side guided tour (this page hosts the LAST step, so it passes
+          `prospect` — read-only demo sessions finish on the signup CTA).
+          data-tour: keep in sync with packages/config/src/demoTour.ts. */}
+      <DemoTour tour="dashboard" route="billing" prospect={Boolean(me.data?.demo)} />
       <h1 className="font-display text-2xl tracking-tight">Billing</h1>
       <p className="mb-6 mt-1 text-sm text-muted">
         Simple tiers, no per-text surprises. Cancel anytime.
@@ -145,7 +153,10 @@ export default async function BillingPage({
       ) : (
         <div className="flex flex-col gap-5">
           <Card className="p-6">
-            <div className="flex flex-wrap items-start justify-between gap-4">
+            <div
+              data-tour="plan"
+              className="flex flex-wrap items-start justify-between gap-4"
+            >
               <div>
                 <p className="text-xs uppercase tracking-[0.2em] text-muted">
                   Current plan

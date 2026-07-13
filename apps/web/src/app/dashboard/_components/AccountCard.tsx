@@ -98,16 +98,17 @@ export function AccountCard({
         {pwState.error && <span className="text-xs text-danger-soft">{pwState.error}</span>}
       </form>
 
-      {/* Replay the first-run welcome tour */}
+      {/* Replay the interactive dashboard tour (plain <a>: the full navigation
+          remounts the DemoTour overlay, whose ?tour=1 bootstrap starts it). */}
       <div className="mb-6 flex items-center justify-between gap-3 border-t border-subtle pt-5">
         <div>
-          <p className="text-sm font-medium text-offwhite">Welcome tour</p>
+          <p className="text-sm font-medium text-offwhite">Dashboard tour</p>
           <p className="mt-0.5 text-xs text-muted">
-            A quick refresher on what ChairBack does and how to use it.
+            A guided walk of every page — right on your real dashboard.
           </p>
         </div>
         <a
-          href="/welcome?replay=1"
+          href="/dashboard?tour=1"
           className="shrink-0 rounded-full border border-subtle px-4 py-2 text-xs font-medium text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
         >
           Replay tour

@@ -464,16 +464,6 @@ export async function bulkClientAction(
   return res.data ?? { ok: res.ok, error: res.error };
 }
 
-/**
- * Stamp the first-run welcome tour as seen so it stops auto-opening. Fire once
- * when the barber finishes or skips the carousel; the API is idempotent (only
- * the still-null row gets stamped), so replays from the account card are free.
- */
-export async function markWelcomeSeenAction(): Promise<{ ok: boolean }> {
-  const res = await apiSend("POST", "/api/auth/welcome-seen");
-  return { ok: res.ok };
-}
-
 export async function smsPreviewAction(template: string): Promise<string> {
   const res = await apiSend<{ preview: string }>("POST", "/api/shops/me/sms-preview", {
     template: template.trim() === "" ? null : template,

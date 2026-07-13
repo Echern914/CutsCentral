@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { API_BASE, apiGet } from "@/lib/api";
+import { DemoTour } from "@/components/tour/DemoTour";
 import { BookingManager } from "./BookingManager";
 
 export const metadata: Metadata = { title: "Booking" };
@@ -153,6 +154,8 @@ export default async function BookingPage() {
 
   return (
     <main className="mx-auto w-full max-w-4xl px-5 py-8">
+      {/* Barber-side guided tour — anchors live inside BookingManager. */}
+      <DemoTour tour="dashboard" route="agenda" />
       <header className="mb-6">
         <h1 className="font-display text-3xl tracking-tight">Booking</h1>
         <p className="mt-1 text-sm text-muted">

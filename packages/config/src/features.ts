@@ -249,4 +249,11 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     description: "Walk through everything your clients get, on a real demo shop",
     href: "/demo",
   },
+  {
+    id: "dashboard-tour",
+    name: "Dashboard walkthrough",
+    synonyms: ["dashboard demo", "owner demo", "where is", "orientation", "tour the dashboard"],
+    description: "A guided lap of the barber side — agenda, clients, rewards, insights",
+    href: "/dashboard?tour=1",
+  },
 ];

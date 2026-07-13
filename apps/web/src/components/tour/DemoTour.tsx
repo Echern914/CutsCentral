@@ -4,8 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
-import { DEMO_TOUR_STEPS, type DemoTourStep } from "@chairback/config/demoTour";
-import { pathForTourRoute } from "./tourPaths";
+import { TOURS, type TourId } from "./tourPaths";
 import { readTourStep, useDemoTour, writeTourStep } from "./state";
 
 /**
@@ -24,36 +23,54 @@ import { readTourStep, useDemoTour, writeTourStep } from "./state";
  * pages animate ancestors with framer-motion transforms, which would otherwise
  * re-anchor position:fixed to the transformed ancestor.
  */
-export function DemoTour({ route }: { route: DemoTourStep["route"] }) {
+export function DemoTour({
+  route,
+  tour = "client",
+  prospect = false,
+}: {
+  route: string;
+  /** Which tour this page belongs to (registry id — serializable from RSC). */
+  tour?: TourId;
+  /**
+   * Anonymous prospect on the read-only demo session: the finish button
+   * becomes the signup CTA (spec.prospectFinish*). Only the page hosting the
+   * LAST step needs to pass this — the finish button renders nowhere else.
+   */
+  prospect?: boolean;
+}) {
   const router = useRouter();
-  const { step } = useDemoTour();
+  const spec = TOURS[tour];
+  const { step } = useDemoTour(tour);
   const [mounted, setMounted] = useState(false);
   const [rect, setRect] = useState<{ top: number; left: number; width: number; height: number } | null>(null);
   const lastScrolledStep = useRef<number | null>(null);
 
   useEffect(() => setMounted(true), []);
 
-  // Bootstrap from a ?tour=N link (the /demo entry, feature-search deep links,
-  // or a shared mid-tour URL). Query beats storage so a deep link always lands
-  // on its step. Read once on mount — client-side step changes own the URL after.
+  // Bootstrap from a ?tour=N link (the /demo entries, feature-search deep
+  // links, or a shared mid-tour URL). Which TOUR the number belongs to is
+  // decided by the page that mounts this component, so ?tour=N is unambiguous.
+  // Query beats storage so a deep link always lands on its step. Read once on
+  // mount — client-side step changes own the URL after.
   useEffect(() => {
     const raw = new URLSearchParams(window.location.search).get("tour");
     if (raw === null) return;
     const n = Number(raw);
-    if (Number.isInteger(n) && n >= 1 && n <= DEMO_TOUR_STEPS.length && n !== readTourStep()) {
-      writeTourStep(n);
+    if (Number.isInteger(n) && n >= 1 && n <= spec.steps.length && n !== readTourStep(tour)) {
+      writeTourStep(tour, n);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const active = step === null ? null : DEMO_TOUR_STEPS[step - 1] ?? null;
+  const active = step === null ? null : spec.steps[step - 1] ?? null;
 
   // If the running step belongs to another page (viewer clicked a real link
   // mid-tour), follow them: jump to this page's first step.
   useEffect(() => {
     if (!active || active.route === route) return;
-    const first = DEMO_TOUR_STEPS.findIndex((s) => s.route === route);
-    if (first !== -1) writeTourStep(first + 1);
-  }, [active, route]);
+    const first = spec.steps.findIndex((s) => s.route === route);
+    if (first !== -1) writeTourStep(tour, first + 1);
+  }, [active, route, spec, tour]);
 
   // Track the anchor's rect every frame while the tour runs. The client pages
   // stagger-animate sections into place (springs, not fixed durations), so a
@@ -93,33 +110,35 @@ export function DemoTour({ route }: { route: DemoTourStep["route"] }) {
 
   const go = useCallback(
     (n: number) => {
-      const target = DEMO_TOUR_STEPS[n - 1];
+      const target = spec.steps[n - 1];
       if (!target) return;
-      writeTourStep(n);
+      writeTourStep(tour, n);
       if (target.route !== route) {
-        router.push(`${pathForTourRoute(target.route)}?tour=${n}`);
+        router.push(`${spec.pathFor(target.route)}?tour=${n}`);
       }
     },
-    [route, router],
+    [route, router, spec, tour],
   );
 
   const end = useCallback(() => {
-    writeTourStep(null);
+    writeTourStep(tour, null);
     // Strip ?tour so a reload doesn't resurrect the tour from the URL.
     if (window.location.search.includes("tour=")) {
       router.replace(window.location.pathname);
     }
-  }, [router]);
+  }, [router, tour]);
 
   const finish = useCallback(() => {
-    writeTourStep(null);
-    router.push("/dashboard");
-  }, [router]);
+    writeTourStep(tour, null);
+    router.push(
+      prospect ? (spec.prospectFinishHref ?? spec.finishHref) : spec.finishHref,
+    );
+  }, [prospect, router, spec, tour]);
 
   if (!mounted || step === null || !active || active.route !== route) return null;
 
   const isFirst = step === 1;
-  const isLast = step === DEMO_TOUR_STEPS.length;
+  const isLast = step === spec.steps.length;
   const pad = 6;
 
   return createPortal(
@@ -157,7 +176,7 @@ export function DemoTour({ route }: { route: DemoTourStep["route"] }) {
       >
         <div className="flex items-center justify-between gap-3">
           <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-gold">
-            Live demo · {step} of {DEMO_TOUR_STEPS.length}
+            {spec.label} · {step} of {spec.steps.length}
           </p>
           <button
             type="button"
@@ -172,7 +191,7 @@ export function DemoTour({ route }: { route: DemoTourStep["route"] }) {
         <div className="mt-2 h-0.5 w-full overflow-hidden rounded-full bg-white/10" aria-hidden>
           <div
             className="h-full rounded-full bg-gold transition-all duration-200 ease-out"
-            style={{ width: `${(step / DEMO_TOUR_STEPS.length) * 100}%` }}
+            style={{ width: `${(step / spec.steps.length) * 100}%` }}
           />
         </div>
         <div className="mt-3 flex items-center gap-2">
@@ -190,7 +209,11 @@ export function DemoTour({ route }: { route: DemoTourStep["route"] }) {
             onClick={() => (isLast ? finish() : go(step + 1))}
             className="flex-1 rounded-xl bg-offwhite py-2 text-center text-sm font-semibold text-black transition-transform duration-200 ease-out hover:scale-[1.01]"
           >
-            {isLast ? "Finish" : "Next"}
+            {isLast
+              ? prospect
+                ? (spec.prospectFinishLabel ?? spec.finishLabel)
+                : spec.finishLabel
+              : "Next"}
           </button>
         </div>
       </motion.div>

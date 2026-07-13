@@ -59,6 +59,23 @@ if (testUrl) {
   process.env.DATABASE_URL = process.env.DIRECT_URL;
 }
 
+// Billing must be OFF in the suite regardless of the local .env — CI runs with
+// no STRIPE_* and the assertions assume the pre-revenue default (quota
+// Infinity, trial reminders no-op); tests that exercise billing pass
+// {enabled: true} explicitly. Without this, a developer who drops Stripe keys
+// into .env to view the billing UI locally silently flips billingEnabled()
+// and fails 20 unrelated engine tests (free-plan test shops get SMS quota 0).
+for (const key of [
+  "STRIPE_SECRET_KEY",
+  "STRIPE_PRICE_ID",
+  "STRIPE_WEBHOOK_SECRET",
+  "STRIPE_PREMIUM_AI_PRICE_ID",
+  "STRIPE_CONNECT_WEBHOOK_SECRET",
+  "STRIPE_PLATFORM_WEBHOOK_SECRET",
+]) {
+  delete process.env[key];
+}
+
 // Hard stop: never let the suite touch a production database.
 if (looksLikeProd(process.env.DATABASE_URL)) {
   throw new Error(

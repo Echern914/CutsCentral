@@ -5,6 +5,7 @@ import { getMe } from "@/lib/me";
 import { HideInNativeApp } from "@/components/HideInNativeApp";
 import { logoutAction } from "../(auth)/actions";
 import { DashboardNavLinks } from "./_components/DashboardNav";
+import { DemoBanner } from "./_components/DemoBanner";
 import { FeatureSearch } from "./_components/FeatureSearch";
 import { ShopSwitcher } from "./_components/ShopSwitcher";
 import { TrialBanner } from "./_components/TrialBanner";
@@ -52,10 +53,18 @@ export default async function DashboardLayout({
           </form>
         </nav>
       </header>
-      {/* Hidden inside the native app: it links to Stripe billing (App Store 3.1.1). */}
-      <HideInNativeApp>
-        <TrialBanner />
-      </HideInNativeApp>
+      {/* Read-only demo session: the ribbon replaces the trial banner (a demo
+          session has no trial to nag about). */}
+      {me.data?.demo ? (
+        <div className="px-4">
+          <DemoBanner />
+        </div>
+      ) : (
+        /* Hidden inside the native app: it links to Stripe billing (App Store 3.1.1). */
+        <HideInNativeApp>
+          <TrialBanner />
+        </HideInNativeApp>
+      )}
       {children}
     </div>
   );

@@ -17,6 +17,12 @@ export interface SessionPayload {
   exp: number;
   /** token version for revocation; tokens minted before the field default to 0 */
   v?: number;
+  /**
+   * Read-only DEMO session (the public "explore the dashboard" tour): the API
+   * rejects every mutating request carried by a token with this flag. Absent
+   * on all real sessions.
+   */
+  demo?: boolean;
 }
 
 const DEFAULT_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
@@ -39,12 +45,16 @@ export function createSession(
   nowSeconds: number,
   ttlSeconds: number = DEFAULT_TTL_SECONDS,
   version = 0,
+  demo = false,
 ): string {
   const payload: SessionPayload = {
     userId,
     iat: nowSeconds,
     exp: nowSeconds + ttlSeconds,
     v: version,
+    // Only stamped when true so every real session token is byte-identical to
+    // the pre-demo format.
+    ...(demo ? { demo: true } : null),
   };
   const payloadB64 = b64url(Buffer.from(JSON.stringify(payload), "utf8"));
   return `${payloadB64}.${sign(payloadB64, secret)}`;

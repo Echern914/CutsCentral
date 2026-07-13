@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { apiGet } from "@/lib/api";
+import { apiGet, apiSend } from "@/lib/api";
 import { getMe } from "@/lib/me";
 import { StatCards, type Stats } from "./_components/StatCards";
 import { TrendsChart, type TrendPoint } from "./_components/TrendsChart";
@@ -12,9 +12,11 @@ import { Leaderboard, type Leader } from "./_components/Leaderboard";
 import { SettingsCard, type ShopSettings } from "./_components/SettingsCard";
 import { AccountCard } from "./_components/AccountCard";
 import { ClientDemoCard } from "./_components/ClientDemoCard";
+import { TourReplayButton } from "./_components/TourReplayButton";
 import { SyncHealthBanner } from "./_components/SyncHealthBanner";
 import { GettingStarted } from "./_components/GettingStarted";
 import { ConsentSetup } from "./_components/ConsentSetup";
+import { DemoTour } from "@/components/tour/DemoTour";
 
 interface ShopMe extends ShopSettings {
   connected: boolean;
@@ -28,7 +30,11 @@ interface SyncStatus {
   clientsNeedingConsent: number;
 }
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams?: { tour?: string };
+}) {
   const shopRes = await apiGet<ShopMe>("/api/shops/me");
   if (shopRes.status === 401) redirect("/login");
   if (shopRes.status === 404) redirect("/onboarding");
@@ -48,19 +54,37 @@ export default async function DashboardPage() {
     apiGet<SyncStatus>("/api/acuity/oauth/status"),
   ]);
 
-  // Brand-new barber? Send them through the full-screen first-run tour (/welcome
-  // stamps welcomeSeen on finish/skip, so they only land here once). Default true
-  // so a failed /me load never bounces an existing barber into the tour.
-  if (!(me.data?.welcomeSeen ?? true)) redirect("/welcome");
+  // Brand-new barber? Arm the interactive dashboard tour right here on their
+  // real pages (?tour=1 bootstraps the DemoTour overlay below). Stamp seen
+  // FIRST so this fires exactly once; the ?tour guard makes a failed stamp
+  // unable to redirect-loop. Default true so a failed /me load never hijacks
+  // an existing barber into the tour. Demo sessions are excluded: the shared
+  // demo user can't be stamped (read-only), so without the guard every plain
+  // /dashboard visit would re-arm the tour on prospects.
+  if (
+    !(me.data?.welcomeSeen ?? true) &&
+    !me.data?.demo &&
+    searchParams?.tour === undefined
+  ) {
+    await apiSend("POST", "/api/auth/welcome-seen");
+    redirect("/dashboard?tour=1");
+  }
 
   return (
     <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-5 sm:py-8">
+      {/* Barber-side guided tour (prospects via /demo/dashboard; barbers can
+          replay it). data-tour anchors: keep in sync with
+          packages/config/src/demoTour.ts (DASHBOARD_TOUR_STEPS). */}
+      <DemoTour tour="dashboard" route="overview" />
       <header className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
+        <div className="flex flex-col">
           <p className="text-xs uppercase tracking-[0.2em] text-muted">
             Your shop
           </p>
           <h1 className="font-display text-4xl tracking-tight">{shop.name}</h1>
+          <div className="mt-2">
+            <TourReplayButton />
+          </div>
         </div>
         {shop.connected ? (
           <span className="inline-flex w-fit items-center gap-2 rounded-full border border-emerald-soft/40 bg-emerald-soft/10 px-4 py-2 text-xs font-medium text-emerald-soft">
@@ -88,7 +112,11 @@ export default async function DashboardPage() {
 
       <ConsentSetup needConsentCount={sync.data?.clientsNeedingConsent ?? 0} />
 
-      {stats.data && <StatCards stats={stats.data} />}
+      {stats.data && (
+        <div data-tour="stats">
+          <StatCards stats={stats.data} />
+        </div>
+      )}
 
       {trends.data && (
         <div className="mt-6">
@@ -111,14 +139,18 @@ export default async function DashboardPage() {
       )}
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
-        <AtRiskTable
-          rows={atRisk.data?.clients ?? []}
-          appBaseUrl={process.env.APP_BASE_URL ?? ""}
-        />
-        <ActivityFeed
-          items={activity.data?.items ?? []}
-          seeAllHref="/dashboard/activity"
-        />
+        <div data-tour="at-risk">
+          <AtRiskTable
+            rows={atRisk.data?.clients ?? []}
+            appBaseUrl={process.env.APP_BASE_URL ?? ""}
+          />
+        </div>
+        <div data-tour="activity">
+          <ActivityFeed
+            items={activity.data?.items ?? []}
+            seeAllHref="/dashboard/activity"
+          />
+        </div>
       </div>
 
       {/* The punch leaderboard is a rewards surface - a rewards-off shop gets
@@ -137,14 +169,19 @@ export default async function DashboardPage() {
         <ClientDemoCard />
       </div>
 
-      <div className="mt-6">
-        <AccountCard
-          name={me.data?.name ?? ""}
-          email={me.data?.email ?? ""}
-          shopName={shop.name}
-          hasPassword={me.data?.hasPassword ?? true}
-        />
-      </div>
+      {/* A public read-only demo session gets no account surface: the shared
+          demo owner's email/password/delete forms would only confuse (every
+          mutation is refused server-side anyway). */}
+      {!me.data?.demo && (
+        <div className="mt-6">
+          <AccountCard
+            name={me.data?.name ?? ""}
+            email={me.data?.email ?? ""}
+            shopName={shop.name}
+            hasPassword={me.data?.hasPassword ?? true}
+          />
+        </div>
+      )}
     </main>
   );
 }

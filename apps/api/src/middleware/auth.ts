@@ -40,8 +40,23 @@ declare global {
     interface Request {
       userId?: string;
       shop?: Shop;
+      /** True when the session carries the read-only demo claim. */
+      demoSession?: boolean;
     }
   }
+}
+
+/**
+ * The read-only wall for public demo-dashboard sessions. One choke point:
+ * every authenticated route runs through requireUser, so blocking mutating
+ * METHODS here makes the whole dashboard read-only for a demo session without
+ * touching individual routes. OAuth starts/callbacks are GETs with side
+ * effects (they could CONNECT a real Acuity/Square account to the demo shop),
+ * so those paths are refused outright.
+ */
+function demoSessionAllowed(req: Request): boolean {
+  if (req.originalUrl.includes("/oauth/")) return false;
+  return req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS";
 }
 
 export async function requireUser(
@@ -76,6 +91,16 @@ export async function requireUser(
       versions.set(payload.userId, version);
     }
     if (version !== null && (payload.v ?? 0) === version) {
+      if (payload.demo === true) {
+        if (!demoSessionAllowed(req)) {
+          res.status(403).json({
+            error: "demo_read_only",
+            message: "This is a read-only demo. Create your own shop to make changes.",
+          });
+          return;
+        }
+        req.demoSession = true;
+      }
       req.userId = payload.userId;
       next();
       return;

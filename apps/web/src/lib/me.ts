@@ -15,6 +15,8 @@ export interface Me {
   activeShopId: string | null;
   /** Whether the ACTIVE shop has rewards on - gates every rewards surface. */
   rewardsEnabled: boolean;
+  /** Read-only public demo session (/demo/dashboard) — banner + hidden account UI. */
+  demo?: boolean;
 }
 
 /**
