@@ -46,3 +46,6 @@ Thumbs.db
 
 # operational backups written by maintenance scripts (contain real prod data)
 apps/api/scripts/backup-*.json
+
+# private founder/legal documents - never commit
+FOUNDER-AGREEMENT-TERMSHEET.md
