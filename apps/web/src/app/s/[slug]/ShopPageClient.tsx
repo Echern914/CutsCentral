@@ -15,9 +15,11 @@ import {
   type PageSectionKey,
   type PageThemeKey,
 } from "@chairback/config/constants";
+import { DEMO } from "@chairback/config/demo";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { useSignalNativeReady } from "@/lib/nativeReady";
 import { BackToDashboard } from "@/components/BackToDashboard";
+import { DemoTour } from "@/components/tour/DemoTour";
 import { RequestForm } from "./RequestForm";
 import { ShopWaitlistForm } from "./ShopWaitlistForm";
 import { ReviewForm } from "./ReviewForm";
@@ -107,6 +109,10 @@ export function ShopPageClient({
 
   return (
     <div className="min-h-dvh" style={rootStyle}>
+      {/* Guided client-experience tour — demo tenant only, never the editor
+          preview. Step anchors are the data-tour attributes below (keep in
+          sync with packages/config/src/demoTour.ts). */}
+      {!preview && data.slug === DEMO.SHOP_SLUG && <DemoTour route="shop" />}
       {/* Barber-only "back to dashboard" - shows only when opened from the
           dashboard (?from=dashboard), never for customers, never in the editor
           preview. */}
@@ -131,7 +137,7 @@ export function ShopPageClient({
       >
         {/* Hero: a full-bleed banner that fades into the page, then the shop name.
             No logo coin - the banner + name carry the identity. */}
-        <motion.header variants={fadeUp} className="relative">
+        <motion.header variants={fadeUp} className="relative" data-tour="hero">
           {data.heroImageUrl ? (
             <div className="relative -mx-5 h-48 overflow-hidden sm:h-56">
               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -178,7 +184,7 @@ export function ShopPageClient({
 
         {/* Primary CTA. Native booking and the lead form are mutually exclusive:
             native is real self-serve booking, so it replaces the request form. */}
-        <motion.div variants={fadeUp} className="mt-6">
+        <motion.div variants={fadeUp} className="mt-6" data-tour="book-cta">
           {showRequestForm ? (
             <>
               <RequestForm
@@ -293,7 +299,7 @@ function Promotions({
 }) {
   if (data.promotions.length === 0) return null;
   return (
-    <motion.section variants={fadeUp} className="mt-8">
+    <motion.section variants={fadeUp} className="mt-8" data-tour="promotions">
       <SectionTitle muted={theme.muted}>Right now</SectionTitle>
       <div className="flex flex-col gap-3">
         {data.promotions.map((promo) => {
@@ -349,7 +355,7 @@ function Rewards({
 }) {
   if (data.rewards.length === 0) return null;
   return (
-    <motion.section variants={fadeUp} className="mt-8">
+    <motion.section variants={fadeUp} className="mt-8" data-tour="rewards-menu">
       <SectionTitle muted={theme.muted}>Loyalty rewards</SectionTitle>
       <div className="overflow-hidden" style={surface}>
         {data.rewards.map((reward, i) => (
@@ -421,7 +427,7 @@ function Reviews({
   const avg = data.reviewSummary.avgRating;
 
   return (
-    <motion.section variants={fadeUp} className="mt-8">
+    <motion.section variants={fadeUp} className="mt-8" data-tour="reviews">
       <SectionTitle muted={theme.muted}>Reviews</SectionTitle>
 
       {/* Average rating header (real data only). */}

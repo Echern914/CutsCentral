@@ -2,8 +2,10 @@
 
 import { useEffect, useState, type CSSProperties } from "react";
 import { motion } from "framer-motion";
+import { DEMO } from "@chairback/config/demo";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { useSignalNativeReady } from "@/lib/nativeReady";
+import { DemoTour } from "@/components/tour/DemoTour";
 import { CountUp } from "@/components/motion/CountUp";
 import { PunchGrid } from "@/components/rewards/PunchGrid";
 import { RebookCountdown } from "@/components/rewards/RebookCountdown";
@@ -122,6 +124,10 @@ export function RewardsClient({
 
   return (
     <div className="min-h-dvh" style={rootStyle}>
+      {/* Guided client-experience tour — demo tenant only. Step anchors are the
+          data-tour attributes below (keep in sync with
+          packages/config/src/demoTour.ts). */}
+      {magicToken === DEMO.MAGIC_TOKEN && <DemoTour route="rewards" />}
       <main
         className="relative mx-auto w-full max-w-md px-5 py-10"
         style={{ fontFamily: "var(--page-body)" }}
@@ -195,7 +201,7 @@ export function RewardsClient({
               else gets the classic single-balance card, byte-for-byte. A
               rewards-off shop renders NO balance card at all. */}
           {!rewardsOn ? null : multiCard ? (
-            <motion.div variants={fadeUp} className="flex flex-col gap-4">
+            <motion.div variants={fadeUp} className="flex flex-col gap-4" data-tour="punch-card">
               {cards.map((card) => (
                 <PunchCardSurface
                   key={card.id ?? "default"}
@@ -208,7 +214,7 @@ export function RewardsClient({
               ))}
             </motion.div>
           ) : (
-            <motion.div variants={fadeUp}>
+            <motion.div variants={fadeUp} data-tour="punch-card">
               <div
                 className={`p-6 text-center ${ready.length > 0 ? "ring-conic" : ""}`}
                 style={surface}
@@ -290,7 +296,7 @@ export function RewardsClient({
 
           {/* Rebooking countdown - drives urgency to book the next visit */}
           {show("rebook") && (
-            <motion.div variants={fadeUp}>
+            <motion.div variants={fadeUp} data-tour="loyalty-extras">
               <RebookCountdown rebook={rebook} bookingUrl={shop.bookingUrl} theme={t} />
             </motion.div>
           )}

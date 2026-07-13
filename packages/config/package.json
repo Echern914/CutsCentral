@@ -11,7 +11,10 @@
     "./constants": "./src/constants.ts",
     "./time": "./src/time.ts",
     "./crypto": "./src/crypto.ts",
-    "./session": "./src/session.ts"
+    "./session": "./src/session.ts",
+    "./demo": "./src/demo.ts",
+    "./demoTour": "./src/demoTour.ts",
+    "./features": "./src/features.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

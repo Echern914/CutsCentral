@@ -75,6 +75,12 @@ const Icons = {
       <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
     </svg>
   ),
+  eye: ({ className }: IconProps) => (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  ),
 } as const;
 
 interface Section {
@@ -170,6 +176,16 @@ const SECTIONS: Section[] = [
     doThis: "Connect your booking to go live, or jump into your dashboard.",
     href: "/onboarding/connect",
     cta: "Connect booking",
+    art: "from-gold/25 via-gold/10 to-transparent",
+  },
+  {
+    Icon: Icons.eye,
+    eyebrow: "Live demo",
+    title: "See what your clients get",
+    body: "Everything you just toured has a client side: a branded mini-site, one-tap booking with your real prices, an 'on my way' check-in, and a punch card that fills itself. Walk through it on a real demo shop, exactly as your clients will see it.",
+    doThis: "Two minutes, on live pages - not screenshots.",
+    href: "/demo",
+    cta: "Take the live demo",
     art: "from-gold/25 via-gold/10 to-transparent",
   },
 ];
@@ -311,14 +327,22 @@ export function WelcomeFlow({
           {i + 1} of {total}
         </span>
         {isLast ? (
-          <button
-            onClick={() =>
-              finish(connected ? "/dashboard" : "/onboarding/connect")
-            }
-            className="rounded-full bg-gold-gradient px-6 py-2.5 text-sm font-semibold text-charcoal shadow-glow transition-all duration-150 ease-out hover:shadow-glow-lg hover:brightness-105"
-          >
-            {connected ? "Go to dashboard" : "Connect booking"}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() =>
+                finish(connected ? "/dashboard" : "/onboarding/connect")
+              }
+              className="rounded-full border border-subtle px-5 py-2.5 text-sm text-muted transition-all duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
+            >
+              {connected ? "Skip to dashboard" : "Connect booking"}
+            </button>
+            <button
+              onClick={() => finish("/demo")}
+              className="rounded-full bg-gold-gradient px-6 py-2.5 text-sm font-semibold text-charcoal shadow-glow transition-all duration-150 ease-out hover:shadow-glow-lg hover:brightness-105"
+            >
+              Take the live demo
+            </button>
+          </div>
         ) : (
           <button
             onClick={next}
