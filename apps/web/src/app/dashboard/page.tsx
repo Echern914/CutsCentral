@@ -82,6 +82,7 @@ export default async function DashboardPage() {
       <GettingStarted
         connected={shop.connected}
         hasClients={(sync.data?.clientCount ?? 0) > 0}
+        rewardsEnabled={shop.rewardsEnabled}
       />
 
       <ConsentSetup needConsentCount={sync.data?.clientsNeedingConsent ?? 0} />
@@ -119,11 +120,15 @@ export default async function DashboardPage() {
         />
       </div>
 
+      {/* The punch leaderboard is a rewards surface - a rewards-off shop gets
+          the settings card at full width instead of an empty column. */}
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
-        <Leaderboard
-          leaders={leaderboard.data?.leaders ?? []}
-          seeAllHref="/dashboard/leaderboard"
-        />
+        {shop.rewardsEnabled && (
+          <Leaderboard
+            leaders={leaderboard.data?.leaders ?? []}
+            seeAllHref="/dashboard/leaderboard"
+          />
+        )}
         <SettingsCard settings={shop} />
       </div>
 

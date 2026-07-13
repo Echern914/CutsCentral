@@ -8,7 +8,7 @@ import { randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
 import { isSlotBookable } from "./slots.js";
 import { lockStaffAndAssertSlotFree } from "./bookingWrite.js";
-import { effectivePriceForDate } from "./pricing.js";
+import { effectiveDurationForDate, effectivePriceForDate } from "./pricing.js";
 
 /**
  * Recurring-appointment series generation.
@@ -112,8 +112,10 @@ export interface MaterializeInput {
   lastName: string | null;
   phone: string | null;
   email: string | null;
-  // Service facts for end/price computation.
+  // Service facts for end/price computation. Duration + price both resolve
+  // per-occurrence by the occurrence's own shop-local weekday.
   durationMin: number;
+  durationOverrides: unknown;
   basePrice: number | null;
   priceOverrides: unknown;
   // Shop facts.
@@ -170,7 +172,18 @@ export async function materializeSeries(
 
   for (const occ of occurrences) {
     const startsAt = occ.startsAt;
-    const endsAt = new Date(startsAt.getTime() + input.durationMin * MS_PER_MIN);
+    // Each occurrence measures by ITS OWN weekday's duration (a weekly-on-
+    // Friday series with a Friday override books 20-min blocks throughout).
+    const endsAt = new Date(
+      startsAt.getTime() +
+        effectiveDurationForDate(
+          input.durationMin,
+          input.durationOverrides,
+          startsAt,
+          input.timezone,
+        ) *
+          MS_PER_MIN,
+    );
 
     // Occurrences in the past are always skipped (a "3pm Tuesday" pattern whose
     // anchor is today shouldn't try to book an already-elapsed occurrence 0).

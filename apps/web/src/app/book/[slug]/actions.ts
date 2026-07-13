@@ -37,6 +37,8 @@ export interface BookInput {
   email?: string;
   smsConsent: boolean;
   addOnIds?: string[];
+  // Booking a barber-published targeted slot (fixed time/length/price).
+  targetedSlotId?: string;
 }
 
 /**

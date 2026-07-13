@@ -15,7 +15,13 @@ const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
  * TrendsChart: scaled divs, no chart library. The default (12w) range renders
  * the server prop; other ranges re-fetch and never go stale.
  */
-export function InsightsClient({ initial }: { initial: InsightsData }) {
+export function InsightsClient({
+  initial,
+  rewardsEnabled = true,
+}: {
+  initial: InsightsData;
+  rewardsEnabled?: boolean;
+}) {
   const [range, setRange] = useState(12);
   const [override, setOverride] = useState<InsightsData | null>(null);
   const [pending, setPending] = useState(false);
@@ -113,8 +119,12 @@ export function InsightsClient({ initial }: { initial: InsightsData }) {
             <Row label="Clients seen" value={String(totals.uniqueClients)} />
             <Row label="New clients" value={String(totals.newClients)} emphasize />
             <Row label="Returning" value={String(totals.returningClients)} />
-            <Row label="Punches earned" value={String(loyalty.punchesEarned)} />
-            <Row label="Rewards redeemed" value={String(loyalty.redemptions)} />
+            {rewardsEnabled && (
+              <Row label="Punches earned" value={String(loyalty.punchesEarned)} />
+            )}
+            {rewardsEnabled && (
+              <Row label="Rewards redeemed" value={String(loyalty.redemptions)} />
+            )}
           </dl>
         </Card>
       </motion.div>

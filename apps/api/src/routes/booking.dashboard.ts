@@ -15,13 +15,19 @@ import { notifyAppointmentConfirmation } from "../services/appointmentNotify.js"
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import { lockStaffAndAssertSlotFree } from "../engines/bookingWrite.js";
+import {
+  APPOINTMENT_NUDGE_KIND,
+  APPOINTMENT_NUDGE_LIMIT,
+  NudgeLimitError,
+  sendAppointmentNudge,
+} from "../engines/appointmentNudge.js";
 import { resolveAddOns } from "../engines/addOns.js";
-import { effectivePriceForDate } from "../engines/pricing.js";
+import { effectiveDurationForDate, effectivePriceForDate } from "../engines/pricing.js";
 import {
   materializeSeries,
   type RecurrencePattern,
 } from "../engines/recurringSeries.js";
-import { zonedDateParts, localMinutesOfDay } from "@chairback/config";
+import { zonedDateParts, zonedWallTimeToUtc, localMinutesOfDay } from "@chairback/config";
 import { logger } from "../logger.js";
 
 /**
@@ -44,11 +50,18 @@ const priceOverridesSchema = z
   .record(z.enum(["0", "1", "2", "3", "4", "5", "6"]), z.number().min(0).max(100000))
   .optional();
 
+// Per-weekday DURATION overrides, same key shape ({weekday: minutes}). Bounds
+// mirror durationMin's 5..600.
+const durationOverridesSchema = z
+  .record(z.enum(["0", "1", "2", "3", "4", "5", "6"]), z.number().int().min(5).max(600))
+  .optional();
+
 const serviceSchema = z
   .object({
     name: z.string().trim().min(1).max(120),
     description: z.string().trim().max(500).optional().or(z.literal("")),
     durationMin: z.number().int().min(5).max(600),
+    durationOverrides: durationOverridesSchema,
     price: z.number().min(0).max(100000).nullable().optional(),
     priceOverrides: priceOverridesSchema,
     active: z.boolean().optional(),
@@ -71,6 +84,7 @@ bookingDashboardRouter.get("/services", async (req, res) => {
       ...s,
       price: s.price === null ? null : Number(s.price),
       priceOverrides: s.priceOverrides ?? {},
+      durationOverrides: s.durationOverrides ?? {},
       staffIds: links.filter((l) => l.serviceId === s.id).map((l) => l.staffId),
     })),
   });
@@ -89,9 +103,10 @@ bookingDashboardRouter.post("/services", async (req, res) => {
       name: d.name,
       description: d.description || null,
       durationMin: d.durationMin,
+      // Per-weekday overrides ({} = base every day). Stored verbatim; the zod
+      // schemas already constrained them to known weekday keys + valid values.
+      durationOverrides: d.durationOverrides ?? {},
       price: d.price ?? null,
-      // Per-weekday overrides ({} = base price every day). Stored verbatim; the
-      // zod schema already constrained it to known weekday keys + valid prices.
       priceOverrides: d.priceOverrides ?? {},
       active: d.active ?? true,
       sortOrder: d.sortOrder ?? 0,
@@ -115,6 +130,9 @@ bookingDashboardRouter.patch("/services/:id", async (req, res) => {
       ...(d.name !== undefined ? { name: d.name } : {}),
       ...(d.description !== undefined ? { description: d.description || null } : {}),
       ...(d.durationMin !== undefined ? { durationMin: d.durationMin } : {}),
+      ...(d.durationOverrides !== undefined
+        ? { durationOverrides: d.durationOverrides }
+        : {}),
       ...(d.price !== undefined ? { price: d.price } : {}),
       ...(d.priceOverrides !== undefined ? { priceOverrides: d.priceOverrides } : {}),
       ...(d.active !== undefined ? { active: d.active } : {}),
@@ -525,6 +543,24 @@ interface AgendaRow {
   // Non-null when this occurrence is part of a recurring series (native only).
   // Drives the ↻ badge + the "cancel this / future / all" menu on the calendar.
   seriesId: string | null;
+  // Check-in sub-state of an upcoming appointment (native only; null on visit/
+  // block rows): null | 'en_route' | 'arrived', plus the client's ETA chips.
+  // Drives the live pill (Booked -> En route -> Arrived) in the day view.
+  checkInStatus: string | null;
+  etaMinutes: number | null;
+  runningLate: boolean;
+  // Nudge affordance (native upcoming rows): whether the client has ANY
+  // registered push device ("Notifications off" when false - a nudge won't
+  // land), and how many of the max-2 nudges this appointment already used.
+  hasPush: boolean;
+  nudgesSent: number;
+  nudgeLimit: number;
+  // Needed by the Apply-reward action (redeem is client-keyed).
+  clientId: string | null;
+  // The cheapest reward this row's client can afford RIGHT NOW (rewardsEnabled
+  // shops only) - drives the "Reward ready - apply to this visit?" prompt.
+  // Skipping is a UI dismiss; the reward stays ready until actually applied.
+  rewardReady: { rewardId: string; rewardName: string; punchCost: number } | null;
 }
 
 const agendaQuerySchema = z.object({
@@ -564,8 +600,12 @@ type ApptAgendaRow = {
   endsAt: Date;
   firstName: string;
   lastName: string | null;
+  clientId: string | null;
   priceAtBooking: Prisma.Decimal | null;
   seriesId: string | null;
+  checkInStatus: string | null;
+  etaMinutes: number | null;
+  runningLate: boolean;
   service: { name: string } | null;
 };
 type VisitAgendaRow = {
@@ -590,7 +630,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
   // OWNER (outside forShop), exactly like the /complete handler below.
   const shop = await prisma.shop.findUnique({
     where: { id: req.shop!.id },
-    select: { bookingMode: true, timezone: true },
+    select: { bookingMode: true, timezone: true, rewardsEnabled: true },
   });
   if (!shop) {
     res.status(404).json({ error: "not_found" });
@@ -617,11 +657,92 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         endsAt: true,
         firstName: true,
         lastName: true,
+        clientId: true,
         priceAtBooking: true,
         seriesId: true,
+        checkInStatus: true,
+        etaMinutes: true,
+        runningLate: true,
         service: { select: { name: true } },
       },
     })) as unknown as ApptAgendaRow[];
+
+    // Nudge affordances, batched: which clients have a push device at all, and
+    // how many nudges each appointment already used (max 2, server-enforced).
+    const clientIds = [...new Set(rows.map((r) => r.clientId).filter(Boolean))] as string[];
+    const pushClients = new Set(
+      clientIds.length === 0
+        ? []
+        : (
+            (await db.pushSubscription.findMany({
+              where: { clientId: { in: clientIds } },
+              select: { clientId: true },
+            })) as unknown as { clientId: string | null }[]
+          ).map((s) => s.clientId),
+    );
+    const apptIds = rows.map((r) => r.id);
+    const nudgeCounts = new Map<string, number>();
+    if (apptIds.length > 0) {
+      const nudgeRows = (await db.nudge.findMany({
+        where: { appointmentId: { in: apptIds }, kind: APPOINTMENT_NUDGE_KIND },
+        select: { appointmentId: true },
+      })) as unknown as { appointmentId: string | null }[];
+      for (const n of nudgeRows) {
+        if (!n.appointmentId) continue;
+        nudgeCounts.set(n.appointmentId, (nudgeCounts.get(n.appointmentId) ?? 0) + 1);
+      }
+    }
+
+    // "Reward ready" prompts (rewardsEnabled shops only): the cheapest active
+    // reward each row's client can already afford, per that reward's OWN card
+    // balance. Batched: one reward list + one grouped ledger aggregate.
+    const rewardReadyByClient = new Map<
+      string,
+      { rewardId: string; rewardName: string; punchCost: number }
+    >();
+    if (shop.rewardsEnabled && clientIds.length > 0) {
+      const rewardRows = (await db.reward.findMany({
+        where: { active: true },
+        orderBy: { punchCost: "asc" },
+        select: { id: true, name: true, punchCost: true, cardTypeId: true },
+      })) as unknown as {
+        id: string;
+        name: string;
+        punchCost: number;
+        cardTypeId: string | null;
+      }[];
+      if (rewardRows.length > 0) {
+        const groups = await runWithShop(req.shop!.id, (tx) =>
+          tx.punchLedger.groupBy({
+            by: ["clientId", "cardTypeId"],
+            where: { shopId: req.shop!.id, clientId: { in: clientIds } },
+            _sum: { punchesEarned: true, punchesRedeemed: true },
+          }),
+        );
+        const balances = new Map<string, number>();
+        for (const g of groups) {
+          balances.set(
+            `${g.clientId}:${g.cardTypeId ?? ""}`,
+            (g._sum.punchesEarned ?? 0) - (g._sum.punchesRedeemed ?? 0),
+          );
+        }
+        for (const clientId of clientIds) {
+          const affordable = rewardRows.find(
+            (r) =>
+              (balances.get(`${clientId}:${r.cardTypeId ?? ""}`) ?? 0) >=
+              r.punchCost,
+          );
+          if (affordable) {
+            rewardReadyByClient.set(clientId, {
+              rewardId: affordable.id,
+              rewardName: affordable.name,
+              punchCost: affordable.punchCost,
+            });
+          }
+        }
+      }
+    }
+
     agenda = rows.map((a) => ({
       id: a.id,
       source: "appointment" as const,
@@ -632,6 +753,17 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       price: a.priceAtBooking == null ? null : Number(a.priceAtBooking),
       status: APPT_STATUS[a.status] ?? "upcoming",
       seriesId: a.seriesId,
+      checkInStatus: a.checkInStatus,
+      etaMinutes: a.etaMinutes,
+      runningLate: a.runningLate,
+      hasPush: a.clientId !== null && pushClients.has(a.clientId),
+      nudgesSent: nudgeCounts.get(a.id) ?? 0,
+      nudgeLimit: APPOINTMENT_NUDGE_LIMIT,
+      clientId: a.clientId,
+      rewardReady:
+        a.clientId !== null
+          ? (rewardReadyByClient.get(a.clientId) ?? null)
+          : null,
     }));
 
     // Blocked time (barber "Block Off Time") shows on the calendar too, as
@@ -662,6 +794,14 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         price: null,
         status: "blocked",
         seriesId: null,
+        checkInStatus: null,
+        etaMinutes: null,
+        runningLate: false,
+        hasPush: false,
+        nudgesSent: 0,
+        nudgeLimit: APPOINTMENT_NUDGE_LIMIT,
+        clientId: null,
+        rewardReady: null,
       });
     }
     agenda.sort((a, b) => a.start.localeCompare(b.start));
@@ -692,6 +832,14 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       price: v.price == null ? null : Number(v.price),
       status: VISIT_STATUS[v.status] ?? "upcoming",
       seriesId: null,
+      checkInStatus: null,
+      etaMinutes: null,
+      runningLate: false,
+      hasPush: false,
+      nudgesSent: 0,
+      nudgeLimit: APPOINTMENT_NUDGE_LIMIT,
+      clientId: null,
+      rewardReady: null,
     }));
   }
 
@@ -840,7 +988,14 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
   // Validate the staff offers an active service; compute end + snapshot price.
   const service = await prisma.service.findFirst({
     where: { id: d.serviceId, shopId, active: true },
-    select: { id: true, durationMin: true, price: true, priceOverrides: true, name: true },
+    select: {
+      id: true,
+      durationMin: true,
+      durationOverrides: true,
+      price: true,
+      priceOverrides: true,
+      name: true,
+    },
   });
   const offering = await prisma.serviceStaff.findFirst({
     where: { shopId, serviceId: d.serviceId, staffId: d.staffId },
@@ -861,8 +1016,16 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
   const addOns = d.recurrence
     ? { snapshot: [], extraDurationMin: 0, extraPrice: 0 }
     : await resolveAddOns(shopId, d.serviceId, d.addOnIds);
+  // Effective duration for the picked date's shop-local weekday (mirrors the
+  // effectivePriceForDate snapshot just below).
+  const effectiveDuration = effectiveDurationForDate(
+    service.durationMin,
+    service.durationOverrides,
+    startsAt,
+    shop.timezone,
+  );
   const endsAt = new Date(
-    startsAt.getTime() + (service.durationMin + addOns.extraDurationMin) * 60_000,
+    startsAt.getTime() + (effectiveDuration + addOns.extraDurationMin) * 60_000,
   );
   const basePrice = effectivePriceForDate(
     service.price === null ? null : Number(service.price),
@@ -934,6 +1097,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         phone,
         email: d.email || null,
         durationMin: service.durationMin,
+        durationOverrides: service.durationOverrides,
         basePrice: service.price === null ? null : Number(service.price),
         priceOverrides: service.priceOverrides,
         timezone: shop.timezone,
@@ -1118,6 +1282,182 @@ bookingDashboardRouter.post("/appointments/:id/no-show", async (req, res) => {
   }
   const ok = await cancelAppointment(shopId, req.params.id!, "NO_SHOW");
   res.status(ok ? 200 : 404).json({ ok });
+});
+
+//  Targeted slots (one-off special-priced bookable slots under a service)
+
+const targetedSlotSchema = z
+  .object({
+    staffId: z.string().min(1),
+    serviceId: z.string().min(1),
+    label: z.string().trim().max(60).optional().or(z.literal("")),
+    startsAt: z.coerce.date().refine((dt) => !Number.isNaN(dt.getTime())),
+    durationMin: z.number().int().min(5).max(600),
+    price: z.number().min(0).max(100000),
+    // Weekly recurrence, materialized at creation: 0 = just this one; N = this
+    // one + N more weeks at the same shop-local wall time (DST-stable).
+    repeatWeeks: z.number().int().min(0).max(26).optional(),
+  })
+  .strict();
+
+bookingDashboardRouter.get("/targeted-slots", async (req, res) => {
+  const db = forShop(req.shop!.id);
+  const slots = (await db.targetedSlot.findMany({
+    where: { startsAt: { gt: new Date() } },
+    orderBy: { startsAt: "asc" },
+    take: 200,
+    select: {
+      id: true,
+      staffId: true,
+      serviceId: true,
+      label: true,
+      startsAt: true,
+      durationMin: true,
+      price: true,
+      active: true,
+      bookedAppointmentId: true,
+    },
+  })) as unknown as {
+    id: string;
+    staffId: string;
+    serviceId: string;
+    label: string | null;
+    startsAt: Date;
+    durationMin: number;
+    price: Prisma.Decimal;
+    active: boolean;
+    bookedAppointmentId: string | null;
+  }[];
+  res.json({
+    targetedSlots: slots.map((t) => ({
+      ...t,
+      startsAt: t.startsAt.toISOString(),
+      price: Number(t.price),
+      booked: t.bookedAppointmentId !== null,
+    })),
+  });
+});
+
+bookingDashboardRouter.post("/targeted-slots", async (req, res) => {
+  const parsed = targetedSlotSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const d = parsed.data;
+  const shopId = req.shop!.id;
+  const shop = await prisma.shop.findUnique({
+    where: { id: shopId },
+    select: { timezone: true, bookingMode: true },
+  });
+  if (!shop || shop.bookingMode !== "native") {
+    res.status(400).json({ error: "not_native" });
+    return;
+  }
+  if (d.startsAt.getTime() <= Date.now()) {
+    res.status(400).json({ error: "in_the_past" });
+    return;
+  }
+  const db = forShop(shopId);
+  const [service, staff] = await Promise.all([
+    db.service.findFirst({ where: { id: d.serviceId, active: true }, select: { id: true } }),
+    db.staff.findFirst({ where: { id: d.staffId, active: true }, select: { id: true } }),
+  ]);
+  if (!service || !staff) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+
+  // Materialize the weekly repeats at the SAME shop-local wall time (a naive
+  // +7d of the UTC instant would drift an hour across a DST change).
+  const anchor = zonedDateParts(d.startsAt, shop.timezone);
+  const wallMin = localMinutesOfDay(d.startsAt, shop.timezone);
+  const rows = [];
+  for (let week = 0; week <= (d.repeatWeeks ?? 0); week++) {
+    const startsAt =
+      week === 0
+        ? d.startsAt
+        : zonedWallTimeToUtc(
+            anchor.year,
+            anchor.month0,
+            anchor.day + week * 7, // Date.UTC in the helper normalizes overflow
+            wallMin,
+            shop.timezone,
+          );
+    rows.push({
+      staffId: d.staffId,
+      serviceId: d.serviceId,
+      label: d.label?.trim() || null,
+      startsAt,
+      durationMin: d.durationMin,
+      price: d.price,
+    });
+  }
+  await db.targetedSlot.createMany({ data: rows });
+  res.status(201).json({ ok: true, created: rows.length });
+});
+
+// Delete an UNBOOKED targeted slot (a booked one is history - 409).
+bookingDashboardRouter.delete("/targeted-slots/:id", async (req, res) => {
+  const db = forShop(req.shop!.id);
+  const { count } = await db.targetedSlot.deleteMany({
+    where: { id: req.params.id, bookedAppointmentId: null },
+  });
+  if (count === 0) {
+    const exists = await db.targetedSlot.count({ where: { id: req.params.id } });
+    res.status(exists > 0 ? 409 : 404).json({ ok: false });
+    return;
+  }
+  res.json({ ok: true });
+});
+
+// Barber -> client "come early" push nudge on one appointment. Max 2 per
+// appointment, enforced in the engine under an advisory lock (server-side, not
+// just UI). 402-free: push costs nothing and never counts against SMS caps.
+const nudgeSchema = z.object({ body: z.string().min(1).max(140) }).strict();
+
+bookingDashboardRouter.post("/appointments/:id/nudge", async (req, res) => {
+  const parsed = nudgeSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  try {
+    const result = await sendAppointmentNudge({
+      shopId: req.shop!.id,
+      appointmentId: req.params.id!,
+      body: parsed.data.body.trim(),
+    });
+    if (!result.ok) {
+      res.status(404).json({ ok: false });
+      return;
+    }
+    // delivered:false = the client has no registered push device. The nudge is
+    // still logged (FAILED) and counts toward the cap - surfaced so the barber
+    // knows it won't land.
+    res.json({ ok: true, delivered: result.delivered });
+  } catch (err) {
+    if (err instanceof NudgeLimitError) {
+      res.status(429).json({ ok: false, error: "nudge_limit" });
+      return;
+    }
+    logger.error({ err, shopId: req.shop!.id }, "appointment nudge failed");
+    res.status(500).json({ ok: false, error: "nudge_failed" });
+  }
+});
+
+// Mark the client as physically in the chair/shop. Barber-only counterpart to
+// the public "On my way" check-in (which can only ever write 'en_route'); works
+// from ANY prior check-in state because walk-ins arrive without tapping the
+// button. checkedInAt is deliberately untouched - it records the CLIENT's tap,
+// not the barber's confirmation.
+bookingDashboardRouter.post("/appointments/:id/arrived", async (req, res) => {
+  const shopId = req.shop!.id;
+  const updated = await forShop(shopId).appointment.updateMany({
+    where: { id: req.params.id!, shopId, status: "BOOKED" },
+    data: { checkInStatus: "arrived" },
+  });
+  res.status(updated.count > 0 ? 200 : 404).json({ ok: updated.count > 0 });
 });
 
 // Approve a PENDING request (request-before-booking): flip it to BOOKED in place

@@ -208,6 +208,19 @@ export async function earnPunchForVisitInTx(
   visitedAt: Date,
   opts?: { cardTypeId?: string | null }, // undefined = auto-route; null = force default card
 ): Promise<EarnResult> {
+  // Master rewards gate, checked HERE so all seven earn call sites (Acuity/
+  // Square ingest, both promotions, manual log-visit, visit edit, mark-done)
+  // are covered by one line. Plain prisma on purpose: Shop is default-deny
+  // inside the tenant transaction, and this is a read on a separate
+  // connection, not part of the tx. Visits still record normally - only the
+  // LEDGER write is skipped, so toggling rewards on later starts earning
+  // from the next visit with all old balances intact.
+  const gate = await prisma.shop.findUnique({
+    where: { id: shop.id },
+    select: { rewardsEnabled: true },
+  });
+  if (!gate?.rewardsEnabled) return null;
+
   const existing = await tx.punchLedger.findUnique({ where: { visitId } });
   if (existing) return null; // already earned
 
@@ -315,6 +328,7 @@ export type RedeemResult =
       cardName: string | null;
     }
   | { ok: false; reason: "reward_not_found" }
+  | { ok: false; reason: "rewards_disabled" }
   | { ok: false; reason: "insufficient_punches"; balance: number; required: number };
 
 /**
@@ -331,6 +345,14 @@ export async function redeemReward(
   clientId: string,
   rewardId: string,
 ): Promise<RedeemResult> {
+  // Same master gate as earning: no redemptions while rewards are off (the
+  // balance is untouched either way - redeeming is just refused).
+  const gate = await prisma.shop.findUnique({
+    where: { id: shopId },
+    select: { rewardsEnabled: true },
+  });
+  if (!gate?.rewardsEnabled) return { ok: false, reason: "rewards_disabled" as const };
+
   return runWithShop(shopId, async (tx) => {
     await tx.$queryRaw`SELECT id FROM "Client" WHERE id = ${clientId} FOR UPDATE`;
     // findFirst with shopId (not findUnique by id) so a foreign reward id 404s.

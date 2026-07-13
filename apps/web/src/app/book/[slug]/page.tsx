@@ -39,8 +39,23 @@ export interface BookShopData {
     // right one for the chosen day. priceRange spans base + overrides for the menu.
     priceOverrides: Record<string, number>;
     priceRange: { min: number; max: number } | null;
+    // Same for duration ({ "5": 20 } = Friday 20 min) - the menu shows the
+    // range, the picker the exact length for the chosen day.
+    durationOverrides: Record<string, number>;
+    durationRange: { min: number; max: number };
   }[];
   offerings: { serviceId: string; staffId: string }[];
+  // Barber-published one-off special slots (future, active, unbooked), shown
+  // under their parent service with a badge + their own price.
+  targetedSlots: {
+    id: string;
+    staffId: string;
+    serviceId: string;
+    label: string | null;
+    startsAt: string;
+    durationMin: number;
+    price: number;
+  }[];
   // Optional extras. serviceId null = offered on every service; set = only with
   // that one. The client shows those valid for the chosen service.
   addOns: {

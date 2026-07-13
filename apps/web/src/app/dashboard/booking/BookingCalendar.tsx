@@ -1,19 +1,22 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Card } from "@/components/ui/Card";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { cn } from "@/lib/cn";
 import type { AgendaResponse, AgendaRow, ServiceRow, StaffRow, WaitlistRow } from "./page";
 import {
+  applyRewardAction,
   approveAppointmentAction,
   cancelAppointmentAction,
   cancelSeriesAction,
   completeAppointmentAction,
   declineAppointmentAction,
   getAgendaAction,
+  markArrivedAction,
   noShowAppointmentAction,
+  nudgeAppointmentAction,
   setWaitlistStatusAction,
 } from "./actions";
 import { AppointmentForm } from "./AppointmentForm";
@@ -164,6 +167,38 @@ export function BookingCalendar({
     });
   }
 
+  // Refetch the visible month and REPLACE loaded rows by id (the merge in
+  // ensureMonthLoaded only de-dupes - it would never refresh a stale row).
+  // Used by the poll below and fired immediately after a row action.
+  const refreshAgenda = useCallback(() => {
+    const start = new Date(viewYear, viewMonth - 1, 1);
+    const end = new Date(viewYear, viewMonth, 0);
+    const from = new Date(start.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const to = new Date(end.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    void getAgendaAction(from, to).then((res) => {
+      if (!res.ok || !res.data) return;
+      const rows = res.data.agenda;
+      setAgenda((prev) => {
+        const fresh = new Map(rows.map((r) => [r.id, r]));
+        const merged = prev.map((r) => fresh.get(r.id) ?? r);
+        const seen = new Set(prev.map((r) => r.id));
+        for (const r of rows) if (!seen.has(r.id)) merged.push(r);
+        return merged;
+      });
+    });
+  }, [viewYear, viewMonth]);
+
+  // Live check-in updates: a light poll while the tab is showing. This is what
+  // flips the Booked -> En route -> Arrived pill without a manual refresh when
+  // a client taps "On my way".
+  useEffect(() => {
+    const iv = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      refreshAgenda();
+    }, 20_000);
+    return () => clearInterval(iv);
+  }, [refreshAgenda]);
+
   function gotoMonth(delta: number) {
     let y = viewYear;
     let m = viewMonth + delta;
@@ -300,6 +335,7 @@ export function BookingCalendar({
               isNative={isNative}
               onAddAt={(hour) => setAddAt(isoForDayHour(selectedDay, hour))}
               onBlock={() => setBlockDay({ dayKey: selectedDay, hour: 12 })}
+              onChanged={refreshAgenda}
             />
           </motion.div>
         )}
@@ -507,6 +543,7 @@ function DayPlanner({
   isNative,
   onAddAt,
   onBlock,
+  onChanged,
 }: {
   rows: AgendaRow[];
   title: string;
@@ -516,6 +553,8 @@ function DayPlanner({
   isNative: boolean;
   onAddAt: (hour: number) => void;
   onBlock: () => void;
+  /** Refetch the agenda so a row mutation shows without waiting for the poll. */
+  onChanged: () => void;
 }) {
   // Group appointments into their start hour, then render every hour in the
   // day's working window (default 8a-11p, widened to fit any early/late booking).
@@ -618,6 +657,7 @@ function DayPlanner({
                             : timeFmt.format(new Date(r.start))
                         }
                         toast={toast}
+                        onChanged={onChanged}
                       />
                     ))}
                   </div>
@@ -630,6 +670,15 @@ function DayPlanner({
     </div>
   );
 }
+
+// Preset "come early" nudge messages (the pilot barber's own words). Custom
+// text is capped at 140 chars to match the server's zod limit.
+const NUDGE_PRESETS = [
+  "I'm running 15 min ahead — come early if you can",
+  "Running about 20 min behind, no rush",
+  "Chair's open, pull up whenever",
+];
+const NUDGE_MAX_LEN = 140;
 
 const STATUS_PILL: Record<AgendaRow["status"], { label: string; cls: string }> = {
   pending: { label: "Requested", cls: "bg-amber-400/15 text-amber-300" },
@@ -644,14 +693,35 @@ function AppointmentBlock({
   row,
   timeLabel,
   toast,
+  onChanged,
 }: {
   row: AgendaRow;
   timeLabel: string;
   toast: Toast;
+  onChanged: () => void;
 }) {
   const [pending, start] = useTransition();
   const [seriesMenu, setSeriesMenu] = useState(false);
-  const pill = STATUS_PILL[row.status];
+  const [nudgeMenu, setNudgeMenu] = useState(false);
+  const [customNudge, setCustomNudge] = useState("");
+  // Skip = dismiss for THIS render only; the reward stays ready and the prompt
+  // returns on reload (deliberate - skipping never consumes anything).
+  const [rewardSkipped, setRewardSkipped] = useState(false);
+  // Check-in overrides the plain "Upcoming" pill: the live client status
+  // (Booked -> En route (~eta) -> Arrived) polled in from the agenda.
+  const pill =
+    row.status === "upcoming" && row.checkInStatus === "arrived"
+      ? { label: "Arrived", cls: "bg-emerald-soft/15 text-emerald-soft" }
+      : row.status === "upcoming" && row.checkInStatus === "en_route"
+        ? {
+            label: row.runningLate
+              ? "En route · late"
+              : row.etaMinutes
+                ? `En route ~${row.etaMinutes}m`
+                : "En route",
+            cls: "bg-amber-400/15 text-amber-300",
+          }
+        : STATUS_PILL[row.status];
   const canAct = row.source === "appointment" && row.status === "upcoming";
   // A PENDING request (request-before-booking) gets Approve / Decline instead.
   const canApprove = row.source === "appointment" && row.status === "pending";
@@ -671,6 +741,31 @@ function AppointmentBlock({
     start(async () => {
       const res = await fn(row.id);
       toast(res.ok ? label : "Couldn't update", res.ok ? "success" : "error");
+      if (res.ok) onChanged();
+    });
+  }
+
+  function sendNudge(body: string) {
+    const trimmed = body.trim().slice(0, NUDGE_MAX_LEN);
+    if (!trimmed) return;
+    setNudgeMenu(false);
+    setCustomNudge("");
+    start(async () => {
+      const res = await nudgeAppointmentAction(row.id, trimmed);
+      if (!res.ok) {
+        toast(
+          res.error === "nudge_limit"
+            ? "Nudge limit reached for this appointment"
+            : "Couldn't send the nudge",
+          "error",
+        );
+        return;
+      }
+      toast(
+        res.delivered ? "Nudge sent" : "Logged — their notifications are off",
+        res.delivered ? "success" : "error",
+      );
+      onChanged();
     });
   }
 
@@ -684,6 +779,7 @@ function AppointmentBlock({
       );
       setSeriesMenu(false);
       toast(res.ok ? "Canceled" : "Couldn't cancel", res.ok ? "success" : "error");
+      if (res.ok) onChanged();
     });
   }
 
@@ -743,8 +839,106 @@ function AppointmentBlock({
         </div>
       )}
 
+      {/* Reward ready - the manual-mode prompt. Apply redeems via the existing
+          endpoint; Skip just hides it here (the reward stays available). */}
+      {canAct && row.rewardReady && row.clientId && !rewardSkipped && (
+        <div className="mt-2 flex items-center justify-between gap-2 rounded-md border border-gold/30 bg-gold/10 px-2.5 py-1.5">
+          <span className="min-w-0 truncate text-[11px] text-gold">
+            Reward ready — apply {row.rewardReady.rewardName} to this visit?
+          </span>
+          <span className="flex shrink-0 gap-1.5">
+            <button
+              disabled={pending}
+              onClick={() =>
+                start(async () => {
+                  const res = await applyRewardAction(
+                    row.clientId!,
+                    row.rewardReady!.rewardId,
+                  );
+                  toast(
+                    res.ok ? `${row.rewardReady!.rewardName} applied` : "Couldn't apply",
+                    res.ok ? "success" : "error",
+                  );
+                  if (res.ok) onChanged();
+                })
+              }
+              className="rounded bg-gold px-2 py-0.5 text-[11px] font-semibold text-charcoal-900 disabled:opacity-50"
+            >
+              Apply
+            </button>
+            <button
+              disabled={pending}
+              onClick={() => setRewardSkipped(true)}
+              className="rounded border border-subtle px-2 py-0.5 text-[11px] text-muted disabled:opacity-50"
+            >
+              Skip
+            </button>
+          </span>
+        </div>
+      )}
+
       {canAct && (
-        <div className="mt-2 flex gap-2">
+        <div className="mt-2 flex flex-wrap gap-2">
+          {row.hasPush === false ? (
+            <span
+              title="This client hasn't allowed notifications, so a nudge won't reach them."
+              className="rounded-md border border-subtle px-2.5 py-1 text-[11px] text-muted/60"
+            >
+              Notifications off
+            </span>
+          ) : (row.nudgesSent ?? 0) < (row.nudgeLimit ?? 2) ? (
+            <div className="relative">
+              <button
+                onClick={() => setNudgeMenu((v) => !v)}
+                disabled={pending}
+                className="rounded-md border border-gold/40 px-2.5 py-1 text-[11px] text-gold disabled:opacity-50"
+              >
+                Nudge{(row.nudgesSent ?? 0) > 0 ? " (1 left)" : ""}
+              </button>
+              {nudgeMenu && (
+                <div className="absolute left-0 z-20 mt-1 w-64 overflow-hidden rounded-lg border border-subtle bg-charcoal-900 p-1 shadow-lg">
+                  {NUDGE_PRESETS.map((preset) => (
+                    <button
+                      key={preset}
+                      onClick={() => sendNudge(preset)}
+                      className="block w-full rounded-md px-3 py-2 text-left text-[11px] text-offwhite hover:bg-charcoal-700"
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                  <div className="mt-1 flex gap-1 border-t border-subtle/60 p-1.5">
+                    <input
+                      value={customNudge}
+                      onChange={(e) => setCustomNudge(e.target.value.slice(0, NUDGE_MAX_LEN))}
+                      placeholder="Custom message…"
+                      maxLength={NUDGE_MAX_LEN}
+                      className="min-w-0 flex-1 rounded-md border border-subtle bg-charcoal-800 px-2 py-1 text-[11px] text-offwhite placeholder:text-muted/50"
+                    />
+                    <button
+                      onClick={() => sendNudge(customNudge)}
+                      disabled={!customNudge.trim() || pending}
+                      className="rounded-md bg-gold/20 px-2 py-1 text-[11px] font-medium text-gold disabled:opacity-40"
+                    >
+                      Send
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <span className="rounded-md border border-subtle px-2.5 py-1 text-[11px] text-muted/60">
+              Nudged ×2
+            </span>
+          )}
+          {row.checkInStatus !== "arrived" && (
+            <button
+              onClick={() => act(markArrivedAction, "Marked arrived")}
+              disabled={pending}
+              className="rounded-md border border-amber-400/40 px-2.5 py-1 text-[11px] text-amber-300 disabled:opacity-50"
+            >
+              Arrived
+            </button>
+          )}
           <button
             onClick={() => act(completeAppointmentAction, "Marked done")}
             disabled={pending}

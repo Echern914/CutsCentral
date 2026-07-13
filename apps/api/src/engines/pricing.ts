@@ -43,6 +43,72 @@ export function effectivePriceForDate(
 }
 
 /**
+ * Per-weekday DURATION overrides - the exact same shape and semantics as the
+ * price overrides above ({"5": 20} = Friday takes 20 minutes), so the two
+ * "vary by day" knobs stay one idiom. The effective duration drives the slot
+ * GRID (a Friday 20-min cut consumes a 20-min block, and slots step by 20)
+ * and the appointment's endsAt, which IS the duration snapshot at booking.
+ */
+
+/** Parse the JSON override blob defensively into a clean weekday->minutes map. */
+export function parseDurationOverrides(raw: unknown): Record<number, number> {
+  const out: Record<number, number> = {};
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      const day = Number(k);
+      const minutes = typeof v === "number" ? v : Number(v);
+      if (
+        Number.isInteger(day) &&
+        day >= 0 &&
+        day <= 6 &&
+        Number.isInteger(minutes) &&
+        minutes >= 5
+      ) {
+        out[day] = minutes;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The duration (minutes) for a service on the calendar date of `at`, resolved
+ * by the SHOP-timezone weekday - a 9pm Thursday booking in the shop's timezone
+ * uses Thursday's duration even when that instant is already Friday in UTC.
+ */
+export function effectiveDurationForDate(
+  baseDurationMin: number,
+  overridesRaw: unknown,
+  at: Date,
+  timezone: string,
+): number {
+  const { weekday } = zonedDateParts(at, timezone);
+  const overrides = parseDurationOverrides(overridesRaw);
+  if (Object.prototype.hasOwnProperty.call(overrides, weekday)) {
+    return overrides[weekday]!;
+  }
+  return baseDurationMin;
+}
+
+/**
+ * Distinct durations a service can have across the week, for menu display
+ * ("30 min" or "20-30 min"). Mirrors priceRangeForService.
+ */
+export function durationRangeForService(
+  baseDurationMin: number,
+  overridesRaw: unknown,
+): { min: number; max: number } {
+  const overrides = parseDurationOverrides(overridesRaw);
+  const values: number[] = [baseDurationMin];
+  const allSevenOverridden = [0, 1, 2, 3, 4, 5, 6].every((d) =>
+    Object.prototype.hasOwnProperty.call(overrides, d),
+  );
+  if (allSevenOverridden) values.pop();
+  values.push(...Object.values(overrides));
+  return { min: Math.min(...values), max: Math.max(...values) };
+}
+
+/**
  * Distinct prices a service can have across the week, for the booking menu.
  * Returns the base plus any override values, deduped and sorted, so the customer
  * can be shown "from $45" or "$45-$55" before they pick a day. null entries (no

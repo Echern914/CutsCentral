@@ -10,9 +10,11 @@ import { Card } from "@/components/ui/Card";
 export function GettingStarted({
   connected,
   hasClients,
+  rewardsEnabled = true,
 }: {
   connected: boolean;
   hasClients: boolean;
+  rewardsEnabled?: boolean;
 }) {
   if (hasClients) return null;
 
@@ -35,13 +37,18 @@ export function GettingStarted({
       href: "/dashboard/clients",
       cta: "Go to Clients",
     },
-    {
-      done: false,
-      title: "Set up your rewards",
-      body: "Decide how many visits earn a reward, and clients see it on their card.",
-      href: "/dashboard/rewards",
-      cta: "Build rewards",
-    },
+    // Rewards are opt-in - a booking-only shop has no rewards step to do.
+    ...(rewardsEnabled
+      ? [
+          {
+            done: false,
+            title: "Set up your rewards",
+            body: "Decide how many visits earn a reward, and clients see it on their card.",
+            href: "/dashboard/rewards",
+            cta: "Build rewards",
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -50,7 +57,9 @@ export function GettingStarted({
         Welcome, let&apos;s get your shop set up
       </h2>
       <p className="mt-1 text-sm text-muted">
-        Your dashboard fills in as clients book and earn rewards. Three quick steps:
+        {rewardsEnabled
+          ? "Your dashboard fills in as clients book and earn rewards. Three quick steps:"
+          : "Your dashboard fills in as clients book. Two quick steps:"}
       </p>
       <ol className="mt-5 flex flex-col gap-4">
         {steps.map((s, i) => (

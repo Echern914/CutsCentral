@@ -1,9 +1,10 @@
-import { forShop, prisma } from "@chairback/db";
+import { prisma, runWithShop } from "@chairback/db";
 import {
   addDays,
   zonedDateParts,
   zonedWallTimeToUtc,
 } from "@chairback/config";
+import { effectiveDurationForDate } from "./pricing.js";
 
 /**
  * Open-slot computation for the native booking engine.
@@ -116,14 +117,17 @@ export interface ComputeSlotsInput {
 /**
  * Compute bookable slots for one staff member + service over [fromDate, toDate].
  * Returns [] when the staff doesn't offer the service, the service is inactive,
- * or there's no open time. All reads are tenant-scoped through forShop.
+ * or there's no open time. All reads run in one shop-scoped (RLS) transaction.
  */
 export async function computeOpenSlots(
   input: ComputeSlotsInput,
 ): Promise<Slot[]> {
   const now = input.now ?? new Date();
-  const db = forShop(input.shopId);
 
+  // The shop row is read on the OWNER connection (plain prisma), never inside
+  // runWithShop: Shop has RLS ENABLED with no per-shop policy (and no FORCE),
+  // so the owner sees it but the SET-ROLE'd app role is default-denied - a
+  // tx.shop read inside the scoped transaction silently returns null.
   const shop = await prisma.shop.findUnique({
     where: { id: input.shopId },
     select: {
@@ -135,23 +139,113 @@ export async function computeOpenSlots(
   });
   if (!shop) return [];
 
-  const service = await db.service.findFirst({
-    where: { id: input.serviceId, active: true },
-    select: { id: true, durationMin: true },
-  });
-  if (!service || service.durationMin <= 0) return [];
+  // Bounds: earliest = now + lead; latest = now + maxDays (and never past
+  // toDate). Only shop fields are needed, so an out-of-range query exits
+  // before touching the tenant tables at all.
+  const earliest = now.getTime() + shop.bookingLeadHours * 60 * MS_PER_MIN;
+  const maxHorizon = addDays(now, shop.bookingMaxDays).getTime();
+  const rangeStart = Math.max(input.fromDate.getTime(), now.getTime());
+  const rangeEnd = Math.min(input.toDate.getTime(), maxHorizon);
+  if (rangeEnd <= earliest) return [];
 
-  // The staff must exist, be active, and actually offer this service.
-  const offers = await db.serviceStaff.findMany({
-    where: { staffId: input.staffId, serviceId: input.serviceId },
-    select: { id: true },
+  // ALL tenant reads share ONE shop-scoped transaction. This is the hottest
+  // public path (every booking-page slot fetch, plus the write-path
+  // availability check): the per-read forShop accessors would open up to 6
+  // transactions per call - each a pool checkout plus BEGIN / SET ROLE /
+  // set_config / COMMIT round trips - which is what caps concurrent booking
+  // traffic on the fixed connection pool. Same queries, same order, same
+  // early-outs (null -> []), one checkout. The wheres carry shopId explicitly
+  // (the app-layer scoping forShop would add) and RLS still applies via
+  // runWithShop. The pure interval math below runs OUTSIDE the transaction so
+  // the connection is held only for the reads.
+  const data = await runWithShop(input.shopId, async (tx) => {
+    const service = await tx.service.findFirst({
+      where: { id: input.serviceId, shopId: input.shopId, active: true },
+      select: { id: true, durationMin: true, durationOverrides: true },
+    });
+    if (!service || service.durationMin <= 0) return null;
+
+    // The staff must exist, be active, and actually offer this service.
+    const offers = await tx.serviceStaff.findMany({
+      where: {
+        staffId: input.staffId,
+        serviceId: input.serviceId,
+        shopId: input.shopId,
+      },
+      select: { id: true },
+    });
+    if (offers.length === 0) return null;
+    const staff = await tx.staff.findFirst({
+      where: { id: input.staffId, shopId: input.shopId, active: true },
+      select: { id: true },
+    });
+    if (!staff) return null;
+
+    const rules = await tx.availabilityRule.findMany({
+      where: { staffId: input.staffId, shopId: input.shopId },
+      select: { weekday: true, startMin: true, endMin: true },
+    });
+
+    // Exceptions over the (slightly padded) window range.
+    const exceptions = await tx.availabilityException.findMany({
+      where: {
+        staffId: input.staffId,
+        shopId: input.shopId,
+        startsAt: { lt: new Date(rangeEnd + 24 * 60 * MS_PER_MIN) },
+        endsAt: { gt: new Date(rangeStart - 24 * 60 * MS_PER_MIN) },
+      },
+      select: { startsAt: true, endsAt: true, isBlock: true },
+    });
+
+    // Barber-published targeted slots: while ACTIVE and UNBOOKED they own
+    // their span, so the normal grid never offers a slot over them (they're
+    // sold separately, at their own price, via the targetedSlots payload).
+    // Booked ones are excluded - the claimed Appointment row below blocks
+    // instead. Skipped by the write-path check like booked rows (the tx guard
+    // in bookingWrite.ts is authoritative there).
+    const targeted = input.ignoreBooked
+      ? []
+      : await tx.targetedSlot.findMany({
+          where: {
+            staffId: input.staffId,
+            shopId: input.shopId,
+            active: true,
+            bookedAppointmentId: null,
+            startsAt: { lt: new Date(rangeEnd) },
+          },
+          select: { startsAt: true, durationMin: true },
+        });
+
+    // Existing BOOKED appointments occupy their span + the turnover buffer.
+    // (Skipped by the write-path check - see ignoreBooked.)
+    const booked = input.ignoreBooked
+      ? []
+      : await tx.appointment.findMany({
+          where: {
+            staffId: input.staffId,
+            shopId: input.shopId,
+            // PENDING requests hold their slot too (request-before-booking), so
+            // the picker must subtract them just like confirmed BOOKED
+            // appointments.
+            status: { in: ["BOOKED", "PENDING"] },
+            // AI-receptionist holds: an ACTIVE hold (holdExpiresAt > now) blocks
+            // like any PENDING row; an EXPIRED one releases its slot immediately -
+            // the CANCELED flip by the sweep is hygiene, not what frees the time.
+            // (Booking a hold clears holdExpiresAt, so BOOKED rows never carry one.)
+            AND: [{ OR: [{ holdExpiresAt: null }, { holdExpiresAt: { gt: now } }] }],
+            startsAt: { lt: new Date(rangeEnd) },
+            endsAt: { gt: new Date(rangeStart) },
+            ...(input.excludeAppointmentId
+              ? { id: { not: input.excludeAppointmentId } }
+              : {}),
+          },
+          select: { startsAt: true, endsAt: true },
+        });
+
+    return { service, rules, exceptions, booked, targeted };
   });
-  if (offers.length === 0) return [];
-  const staff = await db.staff.findFirst({
-    where: { id: input.staffId, active: true },
-    select: { id: true },
-  });
-  if (!staff) return [];
+  if (!data) return [];
+  const { service, rules, exceptions, booked, targeted } = data;
 
   // The slot GRID steps by the service length (the start times the picker
   // offers); chosen add-ons extend how much room the appointment needs, NOT
@@ -159,21 +253,15 @@ export async function computeOpenSlots(
   // FIRST and add-ons in the details step after - re-stepping the grid by the
   // extended total would reject most already-offered starts (e.g. a 30-min
   // service + 15-min add-on would only accept :00/:45 starts).
+  //
+  // The service length itself can vary by weekday (durationOverrides - "cuts
+  // are 30 min Mon-Thu but 20 min Friday"), so the step/span are resolved PER
+  // CANDIDATE SLOT from its own start instant's shop-local weekday (see the
+  // loop at the bottom). A free window that crosses shop-local midnight simply
+  // switches step size mid-window.
   const baseDuration = service.durationMin;
-  const duration = baseDuration + Math.max(0, input.extraDurationMin ?? 0);
+  const extraMin = Math.max(0, input.extraDurationMin ?? 0);
   const buffer = Math.max(0, shop.bookingBufferMin);
-
-  // Bounds: earliest = now + lead; latest = now + maxDays (and never past toDate).
-  const earliest = now.getTime() + shop.bookingLeadHours * 60 * MS_PER_MIN;
-  const maxHorizon = addDays(now, shop.bookingMaxDays).getTime();
-  const rangeStart = Math.max(input.fromDate.getTime(), now.getTime());
-  const rangeEnd = Math.min(input.toDate.getTime(), maxHorizon);
-  if (rangeEnd <= earliest) return [];
-
-  const rules = await db.availabilityRule.findMany({
-    where: { staffId: input.staffId },
-    select: { weekday: true, startMin: true, endMin: true },
-  });
 
   // Build the recurring windows by walking each shop-local calendar date across
   // the range (plus a day of slack on each side so a window that straddles
@@ -215,15 +303,6 @@ export async function computeOpenSlots(
     }
   }
 
-  // Exceptions over the (slightly padded) window range.
-  const exceptions = await db.availabilityException.findMany({
-    where: {
-      staffId: input.staffId,
-      startsAt: { lt: new Date(rangeEnd + 24 * 60 * MS_PER_MIN) },
-      endsAt: { gt: new Date(rangeStart - 24 * 60 * MS_PER_MIN) },
-    },
-    select: { startsAt: true, endsAt: true, isBlock: true },
-  });
   const blocks: TimeRange[] = [];
   for (const ex of exceptions) {
     const r = { start: ex.startsAt.getTime(), end: ex.endsAt.getTime() };
@@ -231,34 +310,17 @@ export async function computeOpenSlots(
     else windows.push(r); // one-off open window
   }
 
-  // Existing BOOKED appointments occupy their span + the turnover buffer.
-  // (Skipped by the write-path check - see ignoreBooked.)
-  if (!input.ignoreBooked) {
-    const booked = await db.appointment.findMany({
-      where: {
-        staffId: input.staffId,
-        // PENDING requests hold their slot too (request-before-booking), so the
-        // picker must subtract them just like confirmed BOOKED appointments.
-        status: { in: ["BOOKED", "PENDING"] },
-        // AI-receptionist holds: an ACTIVE hold (holdExpiresAt > now) blocks
-        // like any PENDING row; an EXPIRED one releases its slot immediately -
-        // the CANCELED flip by the sweep is hygiene, not what frees the time.
-        // (Booking a hold clears holdExpiresAt, so BOOKED rows never carry one.)
-        AND: [{ OR: [{ holdExpiresAt: null }, { holdExpiresAt: { gt: now } }] }],
-        startsAt: { lt: new Date(rangeEnd) },
-        endsAt: { gt: new Date(rangeStart) },
-        ...(input.excludeAppointmentId
-          ? { id: { not: input.excludeAppointmentId } }
-          : {}),
-      },
-      select: { startsAt: true, endsAt: true },
+  for (const b of booked) {
+    blocks.push({
+      start: b.startsAt.getTime(),
+      end: b.endsAt.getTime() + buffer * MS_PER_MIN,
     });
-    for (const b of booked) {
-      blocks.push({
-        start: b.startsAt.getTime(),
-        end: b.endsAt.getTime() + buffer * MS_PER_MIN,
-      });
-    }
+  }
+  for (const t of targeted) {
+    blocks.push({
+      start: t.startsAt.getTime(),
+      end: t.startsAt.getTime() + (t.durationMin + buffer) * MS_PER_MIN,
+    });
   }
 
   // free = windows - blocks, clipped to [max(earliest, rangeStart), rangeEnd].
@@ -276,17 +338,27 @@ export async function computeOpenSlots(
 
   // Slice each free window into SERVICE-duration steps (the grid the picker
   // shows); require the full extended span + buffer to also fit after the slot
-  // so add-ons and turnover are honored. With no add-ons this is identical to
-  // the original step/tail math. endsAt reflects the real (extended) end.
+  // so add-ons and turnover are honored. The step/span come from the EFFECTIVE
+  // duration for each candidate slot's own start instant (shop-local weekday) -
+  // Friday's 20-min override makes Friday windows step and span by 20 while
+  // Thursday still steps by 30. With no overrides and no add-ons this is
+  // identical to the original constant step/tail math.
   const slots: Slot[] = [];
-  const stepMs = baseDuration * MS_PER_MIN;
-  const spanMs = duration * MS_PER_MIN;
-  const tailMs = (duration + buffer) * MS_PER_MIN;
   for (const w of free) {
     let t = w.start;
-    while (t + tailMs <= w.end) {
+    for (;;) {
+      const effDur = effectiveDurationForDate(
+        baseDuration,
+        service.durationOverrides,
+        new Date(t),
+        shop.timezone,
+      );
+      if (effDur <= 0) break; // defensive: a bad override must not spin forever
+      const spanMs = (effDur + extraMin) * MS_PER_MIN;
+      const tailMs = spanMs + buffer * MS_PER_MIN;
+      if (t + tailMs > w.end) break;
       slots.push({ startsAt: new Date(t), endsAt: new Date(t + spanMs) });
-      t += stepMs;
+      t += effDur * MS_PER_MIN;
     }
   }
   slots.sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime());

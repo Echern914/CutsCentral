@@ -41,6 +41,11 @@ beforeAll(async () => {
     .set("Cookie", cookie)
     .send({ name: "Wallet Cuts", bookingUrl: "https://wallet.test", smsAttested: true });
   expect(shop.status).toBe(201);
+  // Rewards are opt-IN for new shops (default off); this suite exercises loyalty.
+  await request(app)
+    .patch("/api/shops/me")
+    .set("Cookie", cookie)
+    .send({ rewardsEnabled: true });
   const client = await request(app)
     .post("/api/dashboard/clients")
     .set("Cookie", cookie)

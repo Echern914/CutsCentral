@@ -22,6 +22,9 @@ export default async function DashboardLayout({
   // send them to log back in (a fresh login mints a current-version token).
   if (me.status === 401) redirect("/login");
   const isAdmin = me.data?.isAdmin ?? false;
+  // Rewards-off shops get no Rewards nav pill (default true so a transient /me
+  // failure never hides a paying shop's tab).
+  const rewardsEnabled = me.data?.rewardsEnabled ?? true;
   // Multi-shop managers get a shop switcher; a normal single-shop barber never
   // sees it (list has one entry).
   const shops = me.data?.shops ?? [];
@@ -36,7 +39,7 @@ export default async function DashboardLayout({
               {APP_NAME}
             </span>
           </Link>
-          <DashboardNavLinks isAdmin={isAdmin} />
+          <DashboardNavLinks isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} />
           {shops.length > 1 && (
             <ShopSwitcher shops={shops} activeShopId={activeShopId} />
           )}

@@ -441,6 +441,10 @@ dashboardRouter.post("/redeem/:clientId", async (req, res) => {
       res.status(404).json({ error: "reward_not_found" });
       return;
     }
+    if (result.reason === "rewards_disabled") {
+      res.status(403).json({ error: "rewards_disabled" });
+      return;
+    }
     res.status(400).json({
       error: "insufficient_punches",
       balance: result.balance,

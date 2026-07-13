@@ -67,8 +67,8 @@ The architecture has a sharp edge: **every `forShop(...).model.op()` opens its o
 
 **Why it matters:** Fine at 50 clients, a memory spike at 10k. **Fix:** cursor-paginate or stream.
 
-### 8. Slots/availability does ~7 sequential scoped queries per slot fetch
-**Evidence:** [`slots.ts:115-265`](../apps/api/src/engines/slots.ts#L115-L265). Each booking-page load = 7 transactions. Booking volume is lower than the sweep, so this is P2 not P1 — but it's the customer-facing path, so latency here is felt directly. **Fix:** batch into one transaction.
+### 8. ~~Slots/availability does ~7 sequential scoped queries per slot fetch~~ — **RESOLVED (2026-07-08)**
+**Was:** each booking-page slot fetch = 7 transactions (7 pool checkouts + ~35 round trips). Now all tenant reads share ONE `runWithShop` transaction (the shop row stays on the owner connection — `Shop` has RLS enabled with no app-role policy, so it is invisible inside the scoped tx). See [`slots.ts`](../apps/api/src/engines/slots.ts) `computeOpenSlots`.
 
 ---
 

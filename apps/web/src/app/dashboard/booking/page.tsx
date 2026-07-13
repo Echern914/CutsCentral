@@ -14,6 +14,8 @@ export interface BookingShop {
   waitlistEnabled: boolean;
   slotOpenedTextsEnabled: boolean;
   requireBookingApproval: boolean;
+  pushReminder24hEnabled: boolean;
+  pushReminder2hEnabled: boolean;
 }
 
 /** Live connect status for the branded platform cards. */
@@ -39,6 +41,8 @@ export interface ServiceRow {
   price: number | null;
   // Per-weekday price overrides ({ "0": 55 } = Sunday $55). {} = base every day.
   priceOverrides: Record<string, number>;
+  // Per-weekday duration overrides ({ "5": 20 } = Friday 20 min). {} = base.
+  durationOverrides: Record<string, number>;
   active: boolean;
   sortOrder: number;
   staffIds: string[];
@@ -71,6 +75,21 @@ export interface AgendaRow {
   status: "pending" | "upcoming" | "completed" | "canceled" | "no_show" | "blocked";
   // Non-null = part of a recurring series (drives the ↻ badge + cancel-scope menu).
   seriesId?: string | null;
+  // Check-in sub-state of an upcoming native appointment (live pill:
+  // Booked -> En route -> Arrived). null/absent on visit + block rows.
+  checkInStatus?: "en_route" | "arrived" | null;
+  etaMinutes?: number | null;
+  runningLate?: boolean;
+  // Nudge affordance: false = client has no push device ("Notifications off");
+  // nudgesSent/nudgeLimit drive the remaining-nudges state (max 2, server-enforced).
+  hasPush?: boolean;
+  nudgesSent?: number;
+  nudgeLimit?: number;
+  // For the Apply-reward action (redeem is client-keyed).
+  clientId?: string | null;
+  // Cheapest reward the row's client can afford right now (rewards shops only).
+  // Drives "Reward ready - apply to this visit?" Apply/Skip on the row.
+  rewardReady?: { rewardId: string; rewardName: string; punchCost: number } | null;
 }
 
 export interface AgendaResponse {

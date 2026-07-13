@@ -283,6 +283,14 @@ export async function sendPushToClient(params: {
   payload: PushPayload;
   /** Ledger discriminator on the Nudge row: "loyalty" | "nudge" | "promo". */
   kind?: string;
+  /**
+   * A PRE-CREATED Nudge row to resolve instead of inserting a fresh audit row.
+   * Used by flows that must write the ledger row inside their own transaction
+   * (e.g. the per-appointment nudge rate limit counts rows in-tx before the
+   * send): on delivery that row flips PENDING -> SENT (+sentAt); on a no-device
+   * result it flips to FAILED so the audit trail shows the attempt.
+   */
+  auditNudgeId?: string;
 }): Promise<PushSendResult> {
   const empty: PushSendResult = { sent: 0, pruned: 0, failed: 0, anyDelivered: false };
   const db = forShop(params.shopId);
@@ -307,7 +315,19 @@ export async function sendPushToClient(params: {
 
   // Audit: one WEB_PUSH Nudge per delivered send, sharing the ledger with SMS so
   // attribution + history treat push as a first-class outbound message.
-  if (result.anyDelivered) {
+  if (params.auditNudgeId) {
+    // Caller pre-created the row (in its own tx) - resolve it either way.
+    await db.nudge
+      .update({
+        where: { id: params.auditNudgeId },
+        data: result.anyDelivered
+          ? { status: "SENT", sentAt: new Date() }
+          : { status: "FAILED", failedReason: "no_push_device" },
+      })
+      .catch((err) => {
+        logger.error({ err, ...ids(params) }, "web-push Nudge audit update failed");
+      });
+  } else if (result.anyDelivered) {
     await db.nudge
       .create({
         data: {
