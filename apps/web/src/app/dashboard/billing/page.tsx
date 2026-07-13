@@ -44,37 +44,77 @@ interface ShopSettings {
   bookingMode: string;
 }
 
+// Tier feature: a bold lead + an optional muted detail line, so every row
+// SELLS instead of just listing. Keep details one line at card width.
+interface TierFeature {
+  lead: string;
+  detail?: string;
+}
+
 // Free forever — the stuff that costs us nothing and hooks the shop.
-const FREE_FEATURES = [
-  "Digital punch cards and your loyalty menu",
-  "Your branded rewards page and public mini-site",
-  "Client book with notes, history, and CSV export",
-  "One-tap “Log visit” for walk-ins (no booking app needed)",
-  "At-risk radar: see exactly who’s overdue",
-  "Free web push notifications to installed devices",
+const FREE_FEATURES: TierFeature[] = [
+  { lead: "Digital punch cards", detail: "loyalty that runs itself, visit by visit" },
+  { lead: "Branded rewards page + mini-site", detail: "your colors, your fonts, one shareable link" },
+  { lead: "A client book that's YOURS", detail: "notes, history, CSV export — never locked in" },
+  { lead: "One-tap visit logging", detail: "walk-ins counted, no booking app needed" },
+  { lead: "At-risk radar", detail: "see who's overdue before they drift away" },
+  { lead: "Free web push notifications" },
 ];
 
 // Premium — the outbound layer that actually brings clients back. (Acuity/
 // Square visit SYNC is free - the paid part is what we DO with the synced
 // calendar: texts + your own booking page.)
-const PREMIUM_FEATURES = [
-  "Everything in Free, always included",
-  `${PLANS.pro.smsMonthlyQuota} texts a month included`,
-  "Your own online booking page with confirmation + reminder texts and emails",
-  "Smart “time to rebook” texts to at-risk clients",
-  "Win-back texts that recover lapsed clients automatically",
-  "Promo blasts with results you can attribute",
-  "Waitlist with “a slot just opened” alerts",
-  "Recurring appointments, add-ons, day pricing, and request approval",
+const PREMIUM_FEATURES: TierFeature[] = [
+  { lead: "Everything in Free, always" },
+  {
+    lead: `${PLANS.pro.smsMonthlyQuota} texts a month included`,
+    detail: "confirmations, reminders, nudges, win-backs",
+  },
+  {
+    lead: "Your own online booking page",
+    detail: "add-ons, waitlist, recurring, per-day pricing",
+  },
+  {
+    lead: "Smart rebooking texts",
+    detail: "timed to each client's own visit rhythm",
+  },
+  {
+    lead: "Win-backs on autopilot",
+    detail: "quiet regulars get pulled back to the chair",
+  },
+  {
+    lead: "Promo blasts with receipts",
+    detail: "see the exact bookings every blast brought in",
+  },
+  {
+    lead: "“A slot just opened” alerts",
+    detail: "cancellations backfill from your waitlist",
+  },
 ];
 
-// Premium AI — Premium plus the receptionist and a bigger text allowance.
-const PREMIUM_AI_FEATURES = [
-  "Everything in Premium",
-  "AI receptionist answers client texts 24/7",
-  "Books, reschedules, and cancels appointments by text",
-  "Automatically offers freed slots when someone cancels",
-  `${PLANS.pro_ai.smsMonthlyQuota.toLocaleString()} texts a month included`,
+// Premium AI — the receptionist tier. This card has to feel like the shop
+// hiring front-desk staff, not a bigger text bundle.
+const PREMIUM_AI_FEATURES: TierFeature[] = [
+  {
+    lead: "An AI receptionist on your line 24/7",
+    detail: "answers every client text in seconds — mid-cut, midnight, Monday",
+  },
+  {
+    lead: "Books, reschedules & cancels by text",
+    detail: "straight onto your real calendar, no double-booking",
+  },
+  {
+    lead: "Refills canceled slots on its own",
+    detail: "texts a regular who's due the moment a gap opens",
+  },
+  {
+    lead: "Knows when to hand off",
+    detail: "anything it can't handle comes to you with an alert",
+  },
+  {
+    lead: `${PLANS.pro_ai.smsMonthlyQuota.toLocaleString()} texts a month — 4× Premium`,
+  },
+  { lead: "Everything in Premium" },
 ];
 
 /** Human label for the shop's current tier state. */
@@ -237,54 +277,28 @@ export default async function BillingPage({
               </div>
             )}
 
-            {/* Comped shops have everything already; no checkout CTA. */}
+            {/* Comped shops have everything already; no billing surface. */}
             {!b.compAccess && (
               <>
-                {/* Purchase CTAs (Stripe Checkout / Customer Portal) are hidden
-                    in-app per App Store Guideline 3.1.1. Barbers manage billing
-                    in a browser at getchairback.com. */}
+                {/* Account management only — the buy/upgrade buttons live on
+                    the tier cards below, where the comparison is. All of it is
+                    hidden in-app per App Store Guideline 3.1.1. */}
                 <HideInNativeApp>
                   <div className="mt-5 flex flex-wrap items-center gap-3">
-                    {b.billingEnabled && !b.subscribed && (
-                      <>
-                        <UpgradeButton
-                          tier="pro"
-                          label={
-                            b.hasAccess
-                              ? `Go Premium, $${b.priceMonthlyUsd}/mo`
-                              : `Upgrade to Premium, $${b.priceMonthlyUsd}/mo`
-                          }
-                        />
-                        {b.premiumAi.billingEnabled && (
-                          <UpgradeButton
-                            tier="pro_ai"
-                            variant="secondary"
-                            label={`Go Premium AI, $${b.premiumAi.priceMonthlyUsd}/mo`}
-                          />
-                        )}
-                      </>
-                    )}
-                    {b.subscribed &&
-                      b.plan !== "pro_ai" &&
-                      !b.receptionist.entitled &&
-                      (b.premiumAi.billingEnabled ? (
-                        <UpgradeToPremiumAiButton
-                          label={`Upgrade to Premium AI, $${b.premiumAi.priceMonthlyUsd}/mo`}
-                        />
-                      ) : (
-                        b.receptionist.billingEnabled && (
-                          <ReceptionistAddonButton label="Add the AI receptionist, $40/mo" />
-                        )
-                      ))}
                     {b.canManage && <ManageBillingButton />}
+                    {/* Cancel: visible, honest, still calm — a real button
+                        next to Manage billing, with its own 2-tap confirm. */}
+                    {b.subscribed && <CancelMembershipButton />}
                   </div>
-                  {/* Cancel is only meaningful for a real paid subscription
-                      (trial/free shops have nothing to cancel). Understated,
-                      set apart from the upgrade CTAs. Also hidden in-app. */}
-                  {b.subscribed && (
-                    <div className="mt-4 border-t border-subtle pt-4">
-                      <CancelMembershipButton />
-                    </div>
+                  {b.billingEnabled && !b.subscribed && (
+                    <p className="mt-5 text-sm text-muted">
+                      Ready to grow?{" "}
+                      <span className="text-offwhite">
+                        Pick your plan below
+                      </span>{" "}
+                      — every tier keeps your loyalty program and client book
+                      free forever.
+                    </p>
                   )}
                 </HideInNativeApp>
                 <ShowInNativeApp>
@@ -309,53 +323,186 @@ export default async function BillingPage({
             )}
           </Card>
 
-          <div className="grid gap-5 sm:grid-cols-3">
-            <Card className="p-6">
-              <p className="text-xs uppercase tracking-[0.2em] text-muted">
-                Free, always
-              </p>
-              <ul className="mt-3 flex flex-col gap-2">
+          {/* The plan switcher: every card carries its own state-aware action
+              (current-plan chip / upgrade / checkout), so switching tiers or
+              comparing them never requires hunting elsewhere on the page.
+              Prices + purchase buttons stay inside HideInNativeApp (3.1.1). */}
+          <div className="grid items-stretch gap-5 sm:grid-cols-3">
+            <Card className="flex flex-col p-6">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs uppercase tracking-[0.2em] text-muted">
+                  Free, always
+                </p>
+                {!b.subscribed && b.plan !== "pro_ai" && (
+                  <span className="rounded-full border border-subtle px-2.5 py-1 text-[10px] uppercase tracking-wide text-muted">
+                    Your plan today
+                  </span>
+                )}
+              </div>
+              <ul className="mt-3 flex flex-col gap-2.5">
                 {FREE_FEATURES.map((item) => (
-                  <li key={item} className="flex items-start gap-2 text-sm text-offwhite">
-                    <span className="mt-0.5 text-muted">✓</span>
-                    {item}
+                  <li key={item.lead} className="flex items-start gap-2">
+                    <span className="mt-0.5 text-sm text-muted">✓</span>
+                    <span>
+                      <span className="block text-sm text-offwhite">{item.lead}</span>
+                      {item.detail && (
+                        <span className="block text-xs text-muted">{item.detail}</span>
+                      )}
+                    </span>
                   </li>
                 ))}
               </ul>
             </Card>
-            <Card className="border-gold/30 p-6">
-              <p className="text-xs uppercase tracking-[0.2em] text-gold-soft">
-                {PLANS.pro.name}
-                {/* Price omitted in-app (App Store 3.1.1). */}
-                <HideInNativeApp> · ${PLANS.pro.priceMonthlyUsd}/mo</HideInNativeApp>
+
+            <Card className="relative flex flex-col border-gold/30 p-6">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs uppercase tracking-[0.2em] text-gold-soft">
+                  {PLANS.pro.name}
+                  {/* Price omitted in-app (App Store 3.1.1). */}
+                  <HideInNativeApp> · ${PLANS.pro.priceMonthlyUsd}/mo</HideInNativeApp>
+                </p>
+                {b.subscribed && b.plan === "pro" ? (
+                  <span className="rounded-full border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-soft">
+                    Current plan
+                  </span>
+                ) : (
+                  <span className="rounded-full bg-gold/15 px-2.5 py-1 text-[10px] uppercase tracking-wide text-gold">
+                    Most popular
+                  </span>
+                )}
+              </div>
+              <p className="mt-2 text-sm text-offwhite">
+                The part that brings clients back.
               </p>
-              <ul className="mt-3 flex flex-col gap-2">
+              <ul className="mt-3 flex flex-col gap-2.5">
                 {PREMIUM_FEATURES.map((item) => (
-                  <li key={item} className="flex items-start gap-2 text-sm text-offwhite">
-                    <span className="mt-0.5 text-gold">✓</span>
-                    {item}
+                  <li key={item.lead} className="flex items-start gap-2">
+                    <span className="mt-0.5 text-sm text-gold">✓</span>
+                    <span>
+                      <span className="block text-sm text-offwhite">{item.lead}</span>
+                      {item.detail && (
+                        <span className="block text-xs text-muted">{item.detail}</span>
+                      )}
+                    </span>
                   </li>
                 ))}
               </ul>
+              {!b.compAccess && b.billingEnabled && !b.subscribed && (
+                <HideInNativeApp>
+                  <div className="mt-5 pt-1">
+                    <UpgradeButton
+                      tier="pro"
+                      label={`Go Premium — $${b.priceMonthlyUsd}/mo`}
+                    />
+                  </div>
+                </HideInNativeApp>
+              )}
             </Card>
-            <Card className="border-gold/50 p-6">
-              <p className="text-xs uppercase tracking-[0.2em] text-gold">
-                {PLANS.pro_ai.name}
-                {/* Price omitted in-app (App Store 3.1.1). */}
-                <HideInNativeApp> · ${PLANS.pro_ai.priceMonthlyUsd}/mo</HideInNativeApp>
+
+            {/* Premium AI — the showcase card. This should read like hiring
+                front-desk staff for the price of a few cuts, not like a
+                bigger text bundle. */}
+            <Card className="relative flex flex-col overflow-hidden border-gold/60 p-6 shadow-glow">
+              <div
+                className="pointer-events-none absolute inset-0 bg-gradient-to-b from-gold/10 via-transparent to-transparent"
+                aria-hidden
+              />
+              <div className="relative flex items-center justify-between gap-2">
+                <p className="text-xs uppercase tracking-[0.2em] text-gold">
+                  {PLANS.pro_ai.name}
+                  {/* Price omitted in-app (App Store 3.1.1). */}
+                  <HideInNativeApp> · ${PLANS.pro_ai.priceMonthlyUsd}/mo</HideInNativeApp>
+                </p>
+                {b.plan === "pro_ai" ? (
+                  <span className="rounded-full border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-soft">
+                    Current plan
+                  </span>
+                ) : (
+                  <span className="rounded-full bg-gold-gradient px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-charcoal">
+                    Most powerful
+                  </span>
+                )}
+              </div>
+              <p className="relative mt-2 font-display text-lg text-offwhite">
+                Your shop answers its own texts.
               </p>
-              <ul className="mt-3 flex flex-col gap-2">
+              <ul className="relative mt-3 flex flex-col gap-2.5">
                 {PREMIUM_AI_FEATURES.map((item) => (
-                  <li key={item} className="flex items-start gap-2 text-sm text-offwhite">
-                    <span className="mt-0.5 text-gold">✓</span>
-                    {item}
+                  <li key={item.lead} className="flex items-start gap-2">
+                    <span className="mt-0.5 text-sm text-gold">✓</span>
+                    <span>
+                      <span className="block text-sm text-offwhite">{item.lead}</span>
+                      {item.detail && (
+                        <span className="block text-xs text-muted">{item.detail}</span>
+                      )}
+                    </span>
                   </li>
                 ))}
               </ul>
-              <p className="mt-4 text-xs text-muted">
-                One filled cancellation usually covers the month. Payments are
-                handled by Stripe. We never see your card.
-              </p>
+
+              {/* One tiny live exchange — the wow is SEEING it work. */}
+              <div className="relative mt-4 flex flex-col gap-1.5 rounded-xl bg-charcoal-900/60 p-3">
+                <div className="self-start rounded-2xl rounded-bl-sm bg-charcoal-700 px-3 py-1.5 text-xs text-offwhite">
+                  you got anything saturday?
+                </div>
+                <div className="self-end rounded-2xl rounded-br-sm bg-gold/15 px-3 py-1.5 text-xs text-offwhite">
+                  2pm or 4pm — want me to grab one?
+                </div>
+                <p className="mt-1 text-[10px] uppercase tracking-wide text-muted">
+                  Answered, booked, confirmed — while you were cutting.
+                </p>
+              </div>
+
+              <div className="relative mt-auto">
+                <HideInNativeApp>
+                  <p className="mt-4 text-xs text-gold-soft">
+                    One filled cancellation usually covers the month. The rest
+                    is profit.
+                  </p>
+                  {!b.compAccess && (
+                    <div className="mt-3">
+                      {b.plan !== "pro_ai" &&
+                        b.subscribed &&
+                        !b.receptionist.entitled &&
+                        (b.premiumAi.billingEnabled ? (
+                          <UpgradeToPremiumAiButton
+                            label={`Upgrade now — $${b.premiumAi.priceMonthlyUsd}/mo`}
+                          />
+                        ) : b.receptionist.billingEnabled ? (
+                          <ReceptionistAddonButton label="Add the AI receptionist, $40/mo" />
+                        ) : (
+                          <p className="text-xs text-muted">
+                            Almost here — check back soon.
+                          </p>
+                        ))}
+                      {b.subscribed &&
+                        b.plan !== "pro_ai" &&
+                        b.receptionist.entitled && (
+                          <p className="text-xs text-muted">
+                            You already have the AI receptionist via your add-on
+                            — same power, nothing more to buy.
+                          </p>
+                        )}
+                      {b.billingEnabled &&
+                        !b.subscribed &&
+                        (b.premiumAi.billingEnabled ? (
+                          <UpgradeButton
+                            tier="pro_ai"
+                            label={`Go Premium AI — $${b.premiumAi.priceMonthlyUsd}/mo`}
+                          />
+                        ) : (
+                          <p className="text-xs text-muted">
+                            Almost here — check back soon.
+                          </p>
+                        ))}
+                    </div>
+                  )}
+                  <p className="mt-3 text-[11px] text-muted">
+                    Payments handled by Stripe. We never see your card. Cancel
+                    anytime.
+                  </p>
+                </HideInNativeApp>
+              </div>
             </Card>
           </div>
         </div>
