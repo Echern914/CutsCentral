@@ -68,11 +68,16 @@ export async function sendAppointmentNudge(params: {
     await tx.$executeRaw(
       Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`nudge:${params.appointmentId}`}))`,
     );
+    // FAILED rows (no reachable device) don't count: two attempts into the
+    // void must not lock the barber out once the client re-enables push. The
+    // anti-spam property holds - only deliverable sends (SENT, plus in-flight
+    // PENDING) consume the cap.
     const sentSoFar = await tx.nudge.count({
       where: {
         shopId: params.shopId,
         appointmentId: params.appointmentId,
         kind: APPOINTMENT_NUDGE_KIND,
+        status: { in: ["PENDING", "SENT"] },
       },
     });
     if (sentSoFar >= APPOINTMENT_NUDGE_LIMIT) throw new NudgeLimitError();

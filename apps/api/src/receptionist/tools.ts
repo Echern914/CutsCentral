@@ -863,9 +863,16 @@ async function rescheduleTool(
           endsAt: slot.endsAt,
           priceAtBooking: slot.price ?? null,
           // The agent's SMS is the fresh confirmation; the ~24h reminder
-          // re-arms for the new time.
+          // re-arms for the new time - including the PUSH reminder stamps.
+          // Check-in state from the old time is cleared too.
           confirmationSentAt: ctx.now,
           reminderSentAt: null,
+          reminder24hPushSentAt: null,
+          reminder2hPushSentAt: null,
+          checkInStatus: null,
+          checkedInAt: null,
+          etaMinutes: null,
+          runningLate: false,
         },
       });
     });

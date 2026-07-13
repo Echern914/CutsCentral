@@ -1023,6 +1023,10 @@ dashboardRouter.post("/clients/:clientId/bonus", async (req, res) => {
   }
   const result = await grantBonusPunches(shop.id, client.id, count, cardTypeId);
   if (!result.ok) {
+    if (result.reason === "rewards_disabled") {
+      res.status(403).json({ error: "rewards_disabled" });
+      return;
+    }
     res.status(404).json({ error: "card_not_found" });
     return;
   }

@@ -111,6 +111,19 @@ beforeAll(async () => {
   expect(service.status).toBe(201);
   serviceId = service.body.id;
 
+  // Availability every day 09:00-17:00 (shop tz = UTC) - the reschedule test
+  // needs a genuinely bookable target slot.
+  await request(app)
+    .put(`/api/booking/staff/${staffId}/availability`)
+    .set("Cookie", cookieA)
+    .send({
+      rules: [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({
+        weekday,
+        startMin: 9 * 60,
+        endMin: 17 * 60,
+      })),
+    });
+
   // A registered barber device, so the check-in push has somewhere to land.
   const owner = await prisma.user.findUnique({
     where: { email: emailA },
@@ -251,6 +264,85 @@ describe("POST /api/book/manage/:token/checkin", () => {
       .send({});
     expect(res.status).toBe(409);
     expect(res.body.error).toBe("already_arrived");
+  });
+});
+
+describe("reschedule resets check-in + push-reminder state", () => {
+  it("clears push stamps and check-in fields so the new time re-arms everything", async () => {
+    // A checked-in, already-push-reminded appointment tomorrow at 10:00 UTC.
+    const startsAt = new Date();
+    startsAt.setUTCDate(startsAt.getUTCDate() + 1);
+    startsAt.setUTCHours(10, 0, 0, 0);
+    const token = randomToken();
+    const appt = await prisma.appointment.create({
+      data: {
+        shopId: shopIdA,
+        staffId,
+        serviceId,
+        firstName: "Marcus",
+        status: "BOOKED",
+        startsAt,
+        endsAt: new Date(startsAt.getTime() + 30 * 60_000),
+        manageToken: token,
+        checkInStatus: "en_route",
+        checkedInAt: new Date(),
+        etaMinutes: 10,
+        runningLate: true,
+        reminder24hPushSentAt: new Date(),
+        reminder2hPushSentAt: new Date(),
+      },
+      select: { id: true },
+    });
+
+    const newStart = new Date(startsAt.getTime() + 2 * 60 * 60_000); // 12:00
+    const res = await request(app)
+      .post(`/api/book/manage/${token}/reschedule`)
+      .send({ startsAt: newStart.toISOString() });
+    expect(res.status).toBe(200);
+
+    const row = await prisma.appointment.findUnique({
+      where: { id: appt.id },
+      select: {
+        checkInStatus: true,
+        checkedInAt: true,
+        etaMinutes: true,
+        runningLate: true,
+        reminder24hPushSentAt: true,
+        reminder2hPushSentAt: true,
+      },
+    });
+    expect(row).toEqual({
+      checkInStatus: null,
+      checkedInAt: null,
+      etaMinutes: null,
+      runningLate: false,
+      reminder24hPushSentAt: null,
+      reminder2hPushSentAt: null,
+    });
+  });
+});
+
+describe("ETA revisions re-notify the barber", () => {
+  it("pushes again when the eta CHANGES, not just when first set", async () => {
+    const appt = await seedAppt({ startsInMin: 30 });
+    await request(app).post(`/api/book/manage/${appt.token}/checkin`).send({});
+    expect(pushes).toHaveLength(1);
+    await request(app)
+      .post(`/api/book/manage/${appt.token}/checkin`)
+      .send({ etaMinutes: 5 });
+    expect(pushes).toHaveLength(2);
+    // Revision 5 -> 15 must re-notify (the barber would otherwise keep "5 min").
+    await request(app)
+      .post(`/api/book/manage/${appt.token}/checkin`)
+      .send({ etaMinutes: 15 });
+    expect(pushes).toHaveLength(3);
+    expect(pushes[2]!.body).toContain("15 min");
+    // Identical re-tap still doesn't buzz.
+    await request(app)
+      .post(`/api/book/manage/${appt.token}/checkin`)
+      .send({ etaMinutes: 15 });
+    expect(pushes).toHaveLength(3);
+    expect(sent).toHaveLength(0);
   });
 });
 

@@ -227,3 +227,25 @@ describe("rewardsEnabled gate", () => {
     expect(row2.rewardReady).toBeNull();
   });
 });
+
+describe("bonus punches respect the master gate", () => {
+  it("rewards off -> +1 punch is refused (403) and writes nothing; on -> works", async () => {
+    await setRewards(false);
+    const before = await balance();
+    const refused = await request(app)
+      .post(`/api/dashboard/clients/${clientId}/bonus`)
+      .set("Cookie", cookie)
+      .send({ count: 1 });
+    expect(refused.status).toBe(403);
+    expect(refused.body.error).toBe("rewards_disabled");
+    expect(await balance()).toBe(before);
+
+    await setRewards(true);
+    const ok = await request(app)
+      .post(`/api/dashboard/clients/${clientId}/bonus`)
+      .set("Cookie", cookie)
+      .send({ count: 1 });
+    expect(ok.status).toBe(200);
+    expect(await balance()).toBe(before + 1);
+  });
+});

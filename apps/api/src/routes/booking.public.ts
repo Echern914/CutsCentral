@@ -759,13 +759,13 @@ bookingPublicRouter.post(
     });
 
     // Push the barber (the staff's linked user, else the owner) - push ONLY,
-    // no SMS leg by design. Fires on the first tap and again when the ETA
-    // chips add real information (eta first set / late first flagged); the
-    // shared collapse tag makes the update REPLACE the earlier notification
-    // instead of stacking a second buzz-per-chip.
+    // no SMS leg by design. Fires on the first tap and again whenever the ETA
+    // chips add or CHANGE real information (5 min -> 15 min must re-notify, or
+    // the barber keeps a stale ETA); the shared collapse tag makes each update
+    // REPLACE the earlier notification instead of stacking a buzz-per-chip.
     const meaningfulUpdate =
-      (appt.etaMinutes === null && eta !== null) ||
-      (!appt.runningLate && late);
+      (eta !== null && eta !== appt.etaMinutes) ||
+      (late && !appt.runningLate);
     if (firstTap || meaningfulUpdate) {
       const body = late
         ? "Running a little late"
@@ -1036,7 +1036,10 @@ bookingPublicRouter.post(
           excludeAppointmentId: appt.id,
         });
         // Move it, reprice for the new date, and reset send-state so a fresh
-        // confirmation/reminder go out.
+        // confirmation/reminder go out - the PUSH reminder stamps too, or the
+        // moved appointment would silently never get its 24h/2h push. Check-in
+        // state is likewise cleared: an "en route" tapped for the OLD time is
+        // meaningless for the new one (and would pin a stale pill days out).
         await tx.appointment.update({
           where: { id: appt.id },
           data: {
@@ -1045,6 +1048,12 @@ bookingPublicRouter.post(
             priceAtBooking: effectivePrice ?? null,
             confirmationSentAt: null,
             reminderSentAt: null,
+            reminder24hPushSentAt: null,
+            reminder2hPushSentAt: null,
+            checkInStatus: null,
+            checkedInAt: null,
+            etaMinutes: null,
+            runningLate: false,
           },
         });
       });

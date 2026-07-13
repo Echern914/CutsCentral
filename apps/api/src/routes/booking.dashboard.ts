@@ -684,7 +684,13 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
     const nudgeCounts = new Map<string, number>();
     if (apptIds.length > 0) {
       const nudgeRows = (await db.nudge.findMany({
-        where: { appointmentId: { in: apptIds }, kind: APPOINTMENT_NUDGE_KIND },
+        // Mirror the engine's cap predicate: FAILED (undelivered) attempts
+        // don't consume a nudge, so they mustn't show as used here either.
+        where: {
+          appointmentId: { in: apptIds },
+          kind: APPOINTMENT_NUDGE_KIND,
+          status: { in: ["PENDING", "SENT"] },
+        },
         select: { appointmentId: true },
       })) as unknown as { appointmentId: string | null }[];
       for (const n of nudgeRows) {
@@ -1529,6 +1535,16 @@ bookingDashboardRouter.post("/appointments/:id/decline", async (req, res) => {
     where: { id: req.params.id!, shopId, status: "PENDING" },
     data: { status: "CANCELED", canceledAt: new Date() },
   });
+  if (updated.count > 0) {
+    // A targeted-slot REQUEST claims its slot at create time (capacity 1 must
+    // hold while the request waits). Declining means the barber never accepted
+    // it, so the claim is RELEASED and the special slot goes back on sale -
+    // unlike a real (approved/booked) cancellation, which keeps it consumed.
+    await forShop(shopId).targetedSlot.updateMany({
+      where: { bookedAppointmentId: req.params.id! },
+      data: { bookedAppointmentId: null },
+    });
+  }
   res.status(updated.count > 0 ? 200 : 404).json({ ok: updated.count > 0 });
 });
 

@@ -291,3 +291,57 @@ describe("delete/deactivate", () => {
     expect(del2.status).toBe(409);
   });
 });
+
+describe("request-before-booking interplay", () => {
+  it("declining a PENDING targeted-slot request RELEASES the claim (booked cancel keeps it)", async () => {
+    await request(app)
+      .patch("/api/shops/me")
+      .set("Cookie", cookie)
+      .send({ requireBookingApproval: true });
+    const at = tomorrowAt(16); // in-hours
+    await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({ staffId, serviceId, startsAt: at.toISOString(), durationMin: 30, price: 40 });
+    const pub = await request(app).get(`/api/book/${slug}`);
+    const slot = (pub.body.targetedSlots as { id: string; startsAt: string }[]).find(
+      (s) => s.startsAt === at.toISOString(),
+    )!;
+
+    // Booking lands as a PENDING request but the capacity-1 claim holds.
+    const booked = await publicBooking(at, { targetedSlotId: slot.id });
+    expect(booked.status).toBe(201);
+    expect(booked.body.pending).toBe(true);
+    const appt = await prisma.appointment.findUnique({
+      where: { manageToken: booked.body.manageToken },
+      select: { id: true, status: true },
+    });
+    expect(appt!.status).toBe("PENDING");
+    const claimed = await prisma.targetedSlot.findUnique({
+      where: { id: slot.id },
+      select: { bookedAppointmentId: true },
+    });
+    expect(claimed!.bookedAppointmentId).toBe(appt!.id);
+
+    // Decline: the barber never accepted, so the special slot goes back on sale.
+    const decline = await request(app)
+      .post(`/api/booking/appointments/${appt!.id}/decline`)
+      .set("Cookie", cookie);
+    expect(decline.status).toBe(200);
+    const released = await prisma.targetedSlot.findUnique({
+      where: { id: slot.id },
+      select: { bookedAppointmentId: true },
+    });
+    expect(released!.bookedAppointmentId).toBeNull();
+    // ...and is publicly listed + bookable again.
+    const pub2 = await request(app).get(`/api/book/${slug}`);
+    expect(
+      (pub2.body.targetedSlots as { id: string }[]).some((s) => s.id === slot.id),
+    ).toBe(true);
+
+    await request(app)
+      .patch("/api/shops/me")
+      .set("Cookie", cookie)
+      .send({ requireBookingApproval: false });
+  });
+});

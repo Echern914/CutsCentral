@@ -191,6 +191,33 @@ describe("sendAppointmentNudge", () => {
     expect(pushes).toHaveLength(0);
   });
 
+  it("FAILED (undelivered) attempts do not consume the cap", async () => {
+    // Two nudges into the void (client has no device), then the client gets a
+    // device: the barber can still send both real nudges.
+    const apptId = await seedAppt({ clientId: quietClientId });
+    await sendAppointmentNudge({ shopId, appointmentId: apptId, body: "one" });
+    await sendAppointmentNudge({ shopId, appointmentId: apptId, body: "two" });
+
+    await prisma.pushSubscription.create({
+      data: {
+        shopId,
+        clientId: quietClientId,
+        kind: "web",
+        endpoint: `https://push.test/${randomToken(8)}`,
+        p256dh: "k",
+        auth: "a",
+      },
+    });
+    const r3 = await sendAppointmentNudge({ shopId, appointmentId: apptId, body: "three" });
+    expect(r3).toEqual({ ok: true, delivered: true });
+    const r4 = await sendAppointmentNudge({ shopId, appointmentId: apptId, body: "four" });
+    expect(r4.ok).toBe(true);
+    // Two DELIVERED nudges now cap it.
+    await expect(
+      sendAppointmentNudge({ shopId, appointmentId: apptId, body: "five" }),
+    ).rejects.toThrow(NudgeLimitError);
+  });
+
   it("refuses canceled, past, and clientless appointments", async () => {
     const canceled = await seedAppt({ status: "CANCELED" });
     const past = await seedAppt({ startsInMin: -30 });

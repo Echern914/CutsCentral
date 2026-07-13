@@ -404,7 +404,8 @@ export async function redeemReward(
 
 export type BonusResult =
   | { ok: true; newBalance: number; cardTypeId: string | null; cardName: string | null }
-  | { ok: false; reason: "card_not_found" };
+  | { ok: false; reason: "card_not_found" }
+  | { ok: false; reason: "rewards_disabled" };
 
 /**
  * Bonus punches (referrals etc). Same locked-transaction pattern as redeem.
@@ -418,6 +419,14 @@ export async function grantBonusPunches(
   count: number,
   cardTypeId: string | null = null,
 ): Promise<BonusResult> {
+  // Same master gate as earning/redeeming: a rewards-off shop's ledger is
+  // frozen - bonus grants must not mint balances either.
+  const gate = await prisma.shop.findUnique({
+    where: { id: shopId },
+    select: { rewardsEnabled: true },
+  });
+  if (!gate?.rewardsEnabled) return { ok: false, reason: "rewards_disabled" as const };
+
   return runWithShop(shopId, async (tx) => {
     await tx.$queryRaw`SELECT id FROM "Client" WHERE id = ${clientId} FOR UPDATE`;
     let cardName: string | null = null;
