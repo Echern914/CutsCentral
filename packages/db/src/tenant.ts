@@ -137,6 +137,10 @@ type AvailabilityExceptionCreateNoShop = Omit<
   Prisma.AvailabilityExceptionUncheckedCreateInput,
   "shopId"
 >;
+type TargetedSlotCreateNoShop = Omit<
+  Prisma.TargetedSlotUncheckedCreateInput,
+  "shopId"
+>;
 type RecurringSeriesCreateNoShop = Omit<
   Prisma.RecurringSeriesUncheckedCreateInput,
   "shopId"
@@ -818,6 +822,65 @@ export function forShop(shopId: string) {
       updateMany: (args: Prisma.AppointmentUpdateManyArgs) =>
         runWithShop(shopId, (tx) =>
           tx.appointment.updateMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+    },
+
+    // Barber-published targeted slots (one-off special-priced bookable slots).
+    // The barber CRUDs them here; the public booking claim runs on the
+    // UNauthenticated route via plain prisma inside the booking transaction
+    // (same trust model as the appointment insert above).
+    targetedSlot: {
+      findMany: (args: Prisma.TargetedSlotFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.targetedSlot.findMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      findFirst: (args: Prisma.TargetedSlotFindFirstArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.targetedSlot.findFirst({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      count: (args: Prisma.TargetedSlotCountArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.targetedSlot.count({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      create: (args: { data: TargetedSlotCreateNoShop }) =>
+        runWithShop(shopId, (tx) =>
+          tx.targetedSlot.create({
+            data: stamp(
+              args.data,
+              shopId,
+            ) as Prisma.TargetedSlotUncheckedCreateInput,
+          }),
+        ),
+      createMany: (args: { data: TargetedSlotCreateNoShop[] }) =>
+        runWithShop(shopId, (tx) =>
+          tx.targetedSlot.createMany({
+            data: args.data.map(
+              (d) => stamp(d, shopId) as Prisma.TargetedSlotUncheckedCreateInput,
+            ),
+          }),
+        ),
+      updateMany: (args: Prisma.TargetedSlotUpdateManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.targetedSlot.updateMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      deleteMany: (args: Prisma.TargetedSlotDeleteManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.targetedSlot.deleteMany({
             ...args,
             where: scopeWhere(args.where, shopId),
           }),

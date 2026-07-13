@@ -197,6 +197,25 @@ export async function computeOpenSlots(
       select: { startsAt: true, endsAt: true, isBlock: true },
     });
 
+    // Barber-published targeted slots: while ACTIVE and UNBOOKED they own
+    // their span, so the normal grid never offers a slot over them (they're
+    // sold separately, at their own price, via the targetedSlots payload).
+    // Booked ones are excluded - the claimed Appointment row below blocks
+    // instead. Skipped by the write-path check like booked rows (the tx guard
+    // in bookingWrite.ts is authoritative there).
+    const targeted = input.ignoreBooked
+      ? []
+      : await tx.targetedSlot.findMany({
+          where: {
+            staffId: input.staffId,
+            shopId: input.shopId,
+            active: true,
+            bookedAppointmentId: null,
+            startsAt: { lt: new Date(rangeEnd) },
+          },
+          select: { startsAt: true, durationMin: true },
+        });
+
     // Existing BOOKED appointments occupy their span + the turnover buffer.
     // (Skipped by the write-path check - see ignoreBooked.)
     const booked = input.ignoreBooked
@@ -223,10 +242,10 @@ export async function computeOpenSlots(
           select: { startsAt: true, endsAt: true },
         });
 
-    return { service, rules, exceptions, booked };
+    return { service, rules, exceptions, booked, targeted };
   });
   if (!data) return [];
-  const { service, rules, exceptions, booked } = data;
+  const { service, rules, exceptions, booked, targeted } = data;
 
   // The slot GRID steps by the service length (the start times the picker
   // offers); chosen add-ons extend how much room the appointment needs, NOT
@@ -295,6 +314,12 @@ export async function computeOpenSlots(
     blocks.push({
       start: b.startsAt.getTime(),
       end: b.endsAt.getTime() + buffer * MS_PER_MIN,
+    });
+  }
+  for (const t of targeted) {
+    blocks.push({
+      start: t.startsAt.getTime(),
+      end: t.startsAt.getTime() + (t.durationMin + buffer) * MS_PER_MIN,
     });
   }
 

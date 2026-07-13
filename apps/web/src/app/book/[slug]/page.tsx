@@ -45,6 +45,17 @@ export interface BookShopData {
     durationRange: { min: number; max: number };
   }[];
   offerings: { serviceId: string; staffId: string }[];
+  // Barber-published one-off special slots (future, active, unbooked), shown
+  // under their parent service with a badge + their own price.
+  targetedSlots: {
+    id: string;
+    staffId: string;
+    serviceId: string;
+    label: string | null;
+    startsAt: string;
+    durationMin: number;
+    price: number;
+  }[];
   // Optional extras. serviceId null = offered on every service; set = only with
   // that one. The client shows those valid for the chosen service.
   addOns: {

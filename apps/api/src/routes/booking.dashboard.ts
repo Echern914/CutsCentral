@@ -27,7 +27,7 @@ import {
   materializeSeries,
   type RecurrencePattern,
 } from "../engines/recurringSeries.js";
-import { zonedDateParts, localMinutesOfDay } from "@chairback/config";
+import { zonedDateParts, zonedWallTimeToUtc, localMinutesOfDay } from "@chairback/config";
 import { logger } from "../logger.js";
 
 /**
@@ -1217,6 +1217,133 @@ bookingDashboardRouter.post("/appointments/:id/no-show", async (req, res) => {
   }
   const ok = await cancelAppointment(shopId, req.params.id!, "NO_SHOW");
   res.status(ok ? 200 : 404).json({ ok });
+});
+
+//  Targeted slots (one-off special-priced bookable slots under a service)
+
+const targetedSlotSchema = z
+  .object({
+    staffId: z.string().min(1),
+    serviceId: z.string().min(1),
+    label: z.string().trim().max(60).optional().or(z.literal("")),
+    startsAt: z.coerce.date().refine((dt) => !Number.isNaN(dt.getTime())),
+    durationMin: z.number().int().min(5).max(600),
+    price: z.number().min(0).max(100000),
+    // Weekly recurrence, materialized at creation: 0 = just this one; N = this
+    // one + N more weeks at the same shop-local wall time (DST-stable).
+    repeatWeeks: z.number().int().min(0).max(26).optional(),
+  })
+  .strict();
+
+bookingDashboardRouter.get("/targeted-slots", async (req, res) => {
+  const db = forShop(req.shop!.id);
+  const slots = (await db.targetedSlot.findMany({
+    where: { startsAt: { gt: new Date() } },
+    orderBy: { startsAt: "asc" },
+    take: 200,
+    select: {
+      id: true,
+      staffId: true,
+      serviceId: true,
+      label: true,
+      startsAt: true,
+      durationMin: true,
+      price: true,
+      active: true,
+      bookedAppointmentId: true,
+    },
+  })) as unknown as {
+    id: string;
+    staffId: string;
+    serviceId: string;
+    label: string | null;
+    startsAt: Date;
+    durationMin: number;
+    price: Prisma.Decimal;
+    active: boolean;
+    bookedAppointmentId: string | null;
+  }[];
+  res.json({
+    targetedSlots: slots.map((t) => ({
+      ...t,
+      startsAt: t.startsAt.toISOString(),
+      price: Number(t.price),
+      booked: t.bookedAppointmentId !== null,
+    })),
+  });
+});
+
+bookingDashboardRouter.post("/targeted-slots", async (req, res) => {
+  const parsed = targetedSlotSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const d = parsed.data;
+  const shopId = req.shop!.id;
+  const shop = await prisma.shop.findUnique({
+    where: { id: shopId },
+    select: { timezone: true, bookingMode: true },
+  });
+  if (!shop || shop.bookingMode !== "native") {
+    res.status(400).json({ error: "not_native" });
+    return;
+  }
+  if (d.startsAt.getTime() <= Date.now()) {
+    res.status(400).json({ error: "in_the_past" });
+    return;
+  }
+  const db = forShop(shopId);
+  const [service, staff] = await Promise.all([
+    db.service.findFirst({ where: { id: d.serviceId, active: true }, select: { id: true } }),
+    db.staff.findFirst({ where: { id: d.staffId, active: true }, select: { id: true } }),
+  ]);
+  if (!service || !staff) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+
+  // Materialize the weekly repeats at the SAME shop-local wall time (a naive
+  // +7d of the UTC instant would drift an hour across a DST change).
+  const anchor = zonedDateParts(d.startsAt, shop.timezone);
+  const wallMin = localMinutesOfDay(d.startsAt, shop.timezone);
+  const rows = [];
+  for (let week = 0; week <= (d.repeatWeeks ?? 0); week++) {
+    const startsAt =
+      week === 0
+        ? d.startsAt
+        : zonedWallTimeToUtc(
+            anchor.year,
+            anchor.month0,
+            anchor.day + week * 7, // Date.UTC in the helper normalizes overflow
+            wallMin,
+            shop.timezone,
+          );
+    rows.push({
+      staffId: d.staffId,
+      serviceId: d.serviceId,
+      label: d.label?.trim() || null,
+      startsAt,
+      durationMin: d.durationMin,
+      price: d.price,
+    });
+  }
+  await db.targetedSlot.createMany({ data: rows });
+  res.status(201).json({ ok: true, created: rows.length });
+});
+
+// Delete an UNBOOKED targeted slot (a booked one is history - 409).
+bookingDashboardRouter.delete("/targeted-slots/:id", async (req, res) => {
+  const db = forShop(req.shop!.id);
+  const { count } = await db.targetedSlot.deleteMany({
+    where: { id: req.params.id, bookedAppointmentId: null },
+  });
+  if (count === 0) {
+    const exists = await db.targetedSlot.count({ where: { id: req.params.id } });
+    res.status(exists > 0 ? 409 : 404).json({ ok: false });
+    return;
+  }
+  res.json({ ok: true });
 });
 
 // Barber -> client "come early" push nudge on one appointment. Max 2 per

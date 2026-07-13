@@ -53,6 +53,13 @@ export async function lockStaffAndAssertSlotFree(
      * failed its own create guard.
      */
     statuses?: readonly ("BOOKED" | "PENDING")[];
+    /**
+     * Booking INTO a targeted slot: exclude that one slot's own block so the
+     * claim doesn't conflict with itself, while any OTHER overlapping targeted
+     * slot still blocks. Normal bookings omit this and are blocked by every
+     * active unbooked targeted slot.
+     */
+    targetedSlotIdToIgnore?: string;
     now?: Date;
   },
 ): Promise<void> {
@@ -83,4 +90,23 @@ export async function lockStaffAndAssertSlotFree(
                  AND "endsAt" > ${overlapStart.toISOString()}::timestamp`,
   );
   if (overlap.length > 0) throw new SlotTakenError();
+
+  // Targeted slots: an ACTIVE, UNBOOKED barber-published slot owns its span
+  // (buffer-padded like an appointment) so a normal booking can't be laid over
+  // it. Once booked it stops matching here - its Appointment row (checked
+  // above) is what blocks instead, so the time is never counted twice. Runs
+  // under the SAME advisory lock, same ISO-text timestamp discipline.
+  const slotIgnoreFragment = opts.targetedSlotIdToIgnore
+    ? Prisma.sql`AND "id" <> ${opts.targetedSlotIdToIgnore}`
+    : Prisma.empty;
+  const targetedOverlap = await tx.$queryRaw<{ id: string }[]>(
+    Prisma.sql`SELECT id FROM "TargetedSlot"
+               WHERE "staffId" = ${opts.staffId}
+                 AND "active" = true
+                 AND "bookedAppointmentId" IS NULL
+                 ${slotIgnoreFragment}
+                 AND "startsAt" < ${overlapEnd.toISOString()}::timestamp
+                 AND ("startsAt" + "durationMin" * interval '1 minute') > ${overlapStart.toISOString()}::timestamp`,
+  );
+  if (targetedOverlap.length > 0) throw new SlotTakenError();
 }

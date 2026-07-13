@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
@@ -19,12 +19,16 @@ import {
   createAddOnAction,
   createServiceAction,
   createStaffAction,
+  createTargetedSlotAction,
   deleteAddOnAction,
   deleteServiceAction,
   deleteStaffAction,
+  deleteTargetedSlotAction,
   getAvailabilityAction,
+  listTargetedSlotsAction,
   saveAvailabilityAction,
   saveBookingSettingsAction,
+  type TargetedSlotRow,
 } from "./actions";
 
 const field =
@@ -684,7 +688,222 @@ function ServicesTab({
       </Card>
 
       <AddOnsManager initial={initialAddOns} services={initial} toast={toast} />
+
+      <TargetedSlotsManager services={initial} staff={staff} toast={toast} />
     </div>
+  );
+}
+
+//  Targeted slots (one-off special-priced bookable slots under a service)
+
+function TargetedSlotsManager({
+  services,
+  staff,
+  toast,
+}: {
+  services: ServiceRow[];
+  staff: StaffRow[];
+  toast: Toast;
+}) {
+  const activeServices = services.filter((s) => s.active);
+  const activeStaff = staff.filter((s) => s.active);
+  const [slots, setSlots] = useState<TargetedSlotRow[] | null>(null);
+  const [serviceId, setServiceId] = useState("");
+  const [staffId, setStaffId] = useState("");
+  const [label, setLabel] = useState("");
+  const [when, setWhen] = useState(""); // datetime-local string
+  const [minutes, setMinutes] = useState(30);
+  const [price, setPrice] = useState("");
+  const [repeatWeeks, setRepeatWeeks] = useState(0);
+  const [pending, start] = useTransition();
+
+  function refresh() {
+    start(async () => {
+      const res = await listTargetedSlotsAction();
+      if (res.ok && res.slots) setSlots(res.slots);
+    });
+  }
+  // First load on mount (no server plumbing needed for a settings subsection).
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function add() {
+    if (!serviceId || !staffId || !when || !price.trim()) {
+      toast("Pick a service, barber, time, and price", "error");
+      return;
+    }
+    const startsAt = new Date(when);
+    if (Number.isNaN(startsAt.getTime()) || startsAt.getTime() <= Date.now()) {
+      toast("Pick a future time", "error");
+      return;
+    }
+    start(async () => {
+      const r = await createTargetedSlotAction({
+        staffId,
+        serviceId,
+        label: label.trim() || undefined,
+        startsAt: startsAt.toISOString(),
+        durationMin: minutes,
+        price: Number(price),
+        repeatWeeks: repeatWeeks > 0 ? repeatWeeks : undefined,
+      });
+      if (r.ok) {
+        toast("Slot published", "success");
+        setLabel("");
+        setWhen("");
+        setPrice("");
+        setRepeatWeeks(0);
+        refresh();
+      } else toast("Couldn't publish", "error");
+    });
+  }
+
+  function remove(id: string) {
+    start(async () => {
+      const r = await deleteTargetedSlotAction(id);
+      toast(r.ok ? "Slot removed" : "Couldn't remove (already booked?)", r.ok ? "success" : "error");
+      refresh();
+    });
+  }
+
+  const whenFmt = new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const nameOf = (list: { id: string; name: string }[], id: string) =>
+    list.find((x) => x.id === id)?.name ?? "?";
+
+  return (
+    <Card className="p-5">
+      <CardHeader
+        title="Targeted slots"
+        subtitle="Publish specific one-off times at their own price - a late-night special, a model rate. They show under the service with a badge, can be booked exactly once, and block that time from normal booking."
+      />
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <select
+          className={field}
+          value={serviceId}
+          onChange={(e) => setServiceId(e.target.value)}
+        >
+          <option value="">Service…</option>
+          {activeServices.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+        <select
+          className={field}
+          value={staffId}
+          onChange={(e) => setStaffId(e.target.value)}
+        >
+          <option value="">Barber…</option>
+          {activeStaff.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+        <input
+          className={field}
+          type="datetime-local"
+          value={when}
+          onChange={(e) => setWhen(e.target.value)}
+          aria-label="Date and time"
+        />
+        <input
+          className={field}
+          placeholder="Label (optional, e.g. Late night retwist)"
+          maxLength={60}
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+        />
+        <input
+          className={field}
+          type="number"
+          min={5}
+          inputMode="numeric"
+          placeholder="Minutes"
+          value={minutes}
+          onChange={(e) => setMinutes(Number(e.target.value))}
+          aria-label="Minutes"
+        />
+        <input
+          className={field}
+          type="number"
+          min={0}
+          inputMode="decimal"
+          placeholder="Price ($)"
+          value={price}
+          onChange={(e) => setPrice(e.target.value)}
+          aria-label="Price"
+        />
+        <label className="flex items-center gap-2 text-xs text-muted sm:col-span-2">
+          Repeat weekly for
+          <input
+            type="number"
+            min={0}
+            max={26}
+            className="w-16 rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
+            value={repeatWeeks}
+            onChange={(e) => setRepeatWeeks(Number(e.target.value))}
+            aria-label="Repeat weeks"
+          />
+          more week{repeatWeeks === 1 ? "" : "s"} (same day &amp; time)
+        </label>
+      </div>
+      <button
+        onClick={add}
+        disabled={pending}
+        className="mt-4 rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+      >
+        Publish slot
+      </button>
+
+      <ul className="mt-5 flex flex-col gap-2">
+        {(slots ?? []).map((t) => (
+          <li
+            key={t.id}
+            className="flex items-center justify-between rounded-xl border border-subtle px-4 py-2.5"
+          >
+            <span className="text-sm">
+              {whenFmt.format(new Date(t.startsAt))}{" "}
+              <span className="text-xs text-muted">
+                · {nameOf(activeServices, t.serviceId)} · {nameOf(activeStaff, t.staffId)} ·{" "}
+                {t.durationMin} min · ${t.price.toFixed(0)}
+                {t.label ? ` · ${t.label}` : ""}
+              </span>{" "}
+              <span
+                className={cn(
+                  "ml-1 rounded-full px-2 py-0.5 text-[10px] font-medium",
+                  t.booked
+                    ? "bg-emerald-soft/15 text-emerald-soft"
+                    : "bg-gold/15 text-gold",
+                )}
+              >
+                {t.booked ? "Booked" : "Open"}
+              </span>
+            </span>
+            {!t.booked && (
+              <button
+                onClick={() => remove(t.id)}
+                className="text-xs text-danger-soft hover:underline"
+              >
+                Remove
+              </button>
+            )}
+          </li>
+        ))}
+        {slots !== null && slots.length === 0 && (
+          <li className="text-sm text-muted">No targeted slots yet.</li>
+        )}
+      </ul>
+    </Card>
   );
 }
 

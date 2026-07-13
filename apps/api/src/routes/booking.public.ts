@@ -61,7 +61,7 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const [staff, services, links, addOns] = await Promise.all([
+  const [staff, services, links, addOns, targetedSlots] = await Promise.all([
     prisma.staff.findMany({
       where: { shopId: shop.id, active: true },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
@@ -88,6 +88,27 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
       where: { shopId: shop.id, active: true },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
       select: { id: true, name: true, durationMin: true, price: true, serviceId: true },
+    }),
+    // Barber-published targeted slots: future, active, still unbooked. Shown
+    // under their parent service with a badge + THEIR price.
+    prisma.targetedSlot.findMany({
+      where: {
+        shopId: shop.id,
+        active: true,
+        bookedAppointmentId: null,
+        startsAt: { gt: new Date() },
+      },
+      orderBy: { startsAt: "asc" },
+      take: 100,
+      select: {
+        id: true,
+        staffId: true,
+        serviceId: true,
+        label: true,
+        startsAt: true,
+        durationMin: true,
+        price: true,
+      },
     }),
   ]);
   res.json({
@@ -141,6 +162,16 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
     }),
     // The (service, staff) offering matrix so the UI can filter either way.
     offerings: links,
+    // One-off special slots, listed under their parent service in the picker.
+    targetedSlots: targetedSlots.map((t) => ({
+      id: t.id,
+      staffId: t.staffId,
+      serviceId: t.serviceId,
+      label: t.label,
+      startsAt: t.startsAt.toISOString(),
+      durationMin: t.durationMin,
+      price: Number(t.price),
+    })),
     // Optional add-ons. serviceId null = offered on every service; set = only
     // with that one. The client shows the ones valid for the chosen service.
     addOns: addOns.map((a) => ({
@@ -208,6 +239,9 @@ const createSchema = z
     smsConsent: z.boolean().optional(),
     // Chosen service add-ons (ids). Invalid/foreign ids are dropped server-side.
     addOnIds: z.array(z.string().min(1)).max(20).optional(),
+    // Booking a barber-published TARGETED slot: its id fixes the time, length,
+    // and price (validated server-side against the slot row; capacity 1).
+    targetedSlotId: z.string().min(1).optional(),
   })
   .strict()
   .refine((d) => Boolean(d.phone?.trim()) || Boolean(d.email?.trim()), {
@@ -266,59 +300,115 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
 
   const now = new Date();
   const startsAt = d.startsAt;
+
+  // Targeted slot: the barber-published row fixes time/length/price. Validated
+  // here; the capacity-1 CLAIM happens inside the booking transaction below.
+  let targeted: {
+    id: string;
+    startsAt: Date;
+    durationMin: number;
+    price: Prisma.Decimal;
+  } | null = null;
+  if (d.targetedSlotId) {
+    const slot = await prisma.targetedSlot.findFirst({
+      where: { id: d.targetedSlotId, shopId: shop.id },
+      select: {
+        id: true,
+        staffId: true,
+        serviceId: true,
+        startsAt: true,
+        durationMin: true,
+        price: true,
+        active: true,
+        bookedAppointmentId: true,
+      },
+    });
+    // Mismatched ids/time = a crafted POST -> 400. A real slot that's gone
+    // (booked or deactivated) -> the clean "no longer available" 409.
+    if (
+      !slot ||
+      slot.staffId !== d.staffId ||
+      slot.serviceId !== d.serviceId ||
+      slot.startsAt.getTime() !== startsAt.getTime()
+    ) {
+      res.status(400).json({ error: "invalid_slot" });
+      return;
+    }
+    if (!slot.active || slot.bookedAppointmentId !== null || startsAt <= now) {
+      res.status(409).json({ error: "slot_taken" });
+      return;
+    }
+    targeted = slot;
+  }
+
   // Chosen add-ons extend the appointment + total. Invalid/foreign ids drop.
-  const addOns = await resolveAddOns(shop.id, d.serviceId, d.addOnIds);
+  // A targeted slot has a fixed length/price, so add-ons don't apply (v1).
+  const addOns = targeted
+    ? { snapshot: [], extraDurationMin: 0, extraPrice: 0 }
+    : await resolveAddOns(shop.id, d.serviceId, d.addOnIds);
   // The duration for the DATE the customer picked (weekday override in the shop
   // tz, else base) - a Friday 20-min cut books a 20-min block. endsAt is the
-  // duration snapshot: editing the service later never rewrites this row.
-  const effectiveDuration = effectiveDurationForDate(
-    service.durationMin,
-    service.durationOverrides,
-    startsAt,
-    shop.timezone,
-  );
+  // duration snapshot: editing the service later never rewrites this row. A
+  // targeted slot carries its own explicit length instead.
+  const effectiveDuration = targeted
+    ? targeted.durationMin
+    : effectiveDurationForDate(
+        service.durationMin,
+        service.durationOverrides,
+        startsAt,
+        shop.timezone,
+      );
   const endsAt = new Date(
     startsAt.getTime() + (effectiveDuration + addOns.extraDurationMin) * 60_000,
   );
   // Snapshot the price for the DATE the customer picked (weekday override in the
   // shop tz, else base) - so a Sunday surcharge is locked in at exactly what the
-  // customer was shown, not the base price. Add-on prices are added on top.
-  const basePrice = effectivePriceForDate(
-    service.price === null ? null : Number(service.price),
-    service.priceOverrides,
-    startsAt,
-    shop.timezone,
-  );
+  // customer was shown, not the base price. Add-on prices are added on top. A
+  // targeted slot snapshots ITS price - that's the whole point of the feature.
+  const basePrice = targeted
+    ? Number(targeted.price)
+    : effectivePriceForDate(
+        service.price === null ? null : Number(service.price),
+        service.priceOverrides,
+        startsAt,
+        shop.timezone,
+      );
   const effectivePrice =
     basePrice === null && addOns.extraPrice === 0
       ? null
       : (basePrice ?? 0) + addOns.extraPrice;
-  const earliest = now.getTime() + shop.bookingLeadHours * 60 * 60_000;
-  const latest = now.getTime() + shop.bookingMaxDays * 24 * 60 * 60_000;
-  if (startsAt.getTime() < earliest) {
-    res.status(400).json({ error: "too_soon" });
-    return;
-  }
-  if (startsAt.getTime() > latest) {
-    res.status(400).json({ error: "too_far" });
-    return;
-  }
+  // Bounds + availability apply to GRID slots only: a targeted slot is explicit
+  // barber inventory - deliberately bookable outside the weekly hours and the
+  // lead/max window (already validated: future, active, unbooked, exact time).
+  if (!targeted) {
+    const earliest = now.getTime() + shop.bookingLeadHours * 60 * 60_000;
+    const latest = now.getTime() + shop.bookingMaxDays * 24 * 60 * 60_000;
+    if (startsAt.getTime() < earliest) {
+      res.status(400).json({ error: "too_soon" });
+      return;
+    }
+    if (startsAt.getTime() > latest) {
+      res.status(400).json({ error: "too_far" });
+      return;
+    }
 
-  // Authoritative availability check: the requested time must be a REAL open slot
-  // (inside the staff's hours, not on a blocked exception, honoring the buffer).
-  // The browser's slot list is advisory; a crafted POST must not bypass it. The
-  // extra add-on duration means the appointment needs a bigger free window.
-  if (
-    !(await isSlotBookable({
-      shopId: shop.id,
-      staffId: d.staffId,
-      serviceId: d.serviceId,
-      startsAt,
-      extraDurationMin: addOns.extraDurationMin,
-    }))
-  ) {
-    res.status(400).json({ error: "invalid_slot" });
-    return;
+    // Authoritative availability check: the requested time must be a REAL open
+    // slot (inside the staff's hours, not on a blocked exception, honoring the
+    // buffer). The browser's slot list is advisory; a crafted POST must not
+    // bypass it. The extra add-on duration means the appointment needs a
+    // bigger free window.
+    if (
+      !(await isSlotBookable({
+        shopId: shop.id,
+        staffId: d.staffId,
+        serviceId: d.serviceId,
+        startsAt,
+        extraDurationMin: addOns.extraDurationMin,
+      }))
+    ) {
+      res.status(400).json({ error: "invalid_slot" });
+      return;
+    }
   }
 
   const consented = d.smsConsent === true && Boolean(phone);
@@ -345,6 +435,9 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
         startsAt,
         endsAt,
         bufferMin: shop.bookingBufferMin,
+        // Booking INTO a targeted slot: its own block must not conflict with
+        // this claim (any OTHER overlapping targeted slot still does).
+        targetedSlotIdToIgnore: targeted?.id,
         now,
       });
 
@@ -400,9 +493,23 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
           priceAtBooking: effectivePrice ?? undefined,
           addOns: addOns.snapshot as unknown as Prisma.InputJsonValue,
           manageToken: token,
+          bookedVia: targeted ? "targeted_slot" : undefined,
         },
         select: { id: true, manageToken: true },
       });
+
+      // Capacity-1 claim: only the update that flips bookedAppointmentId from
+      // NULL wins. The advisory lock already serialized same-staff racers, so
+      // this is the correctness backstop (and covers a concurrent deactivate).
+      // count 0 -> the slot was grabbed/killed since validation - roll back and
+      // give the loser the same clean "no longer available" as slot_taken.
+      if (targeted) {
+        const claimed = await tx.targetedSlot.updateMany({
+          where: { id: targeted.id, bookedAppointmentId: null, active: true },
+          data: { bookedAppointmentId: appt.id },
+        });
+        if (claimed.count === 0) throw new SlotTakenError();
+      }
       return appt;
     });
     appointmentId = result.id;

@@ -27,7 +27,16 @@ export function BookingClient({ data }: { data: BookShopData }) {
   const [staffId, setStaffId] = useState<string | null>(null);
   const [day, setDay] = useState<string | null>(null); // YYYY-MM-DD (local)
   const [slot, setSlot] = useState<string | null>(null); // ISO startsAt
-  const [slotsByDay, setSlotsByDay] = useState<Map<string, { startsAt: string }[]>>(new Map());
+  // Set when the chosen slot is a barber-published TARGETED slot (fixed price,
+  // no add-ons); its id goes on the booking POST so the server claims it.
+  const [slotTargeted, setSlotTargeted] = useState<{
+    id: string;
+    price: number;
+    label: string | null;
+  } | null>(null);
+  const [slotsByDay, setSlotsByDay] = useState<
+    Map<string, { startsAt: string; targeted?: { id: string; price: number; label: string | null } }[]>
+  >(new Map());
   const [loadingSlots, setLoadingSlots] = useState(false);
 
   // Chosen add-ons (ids) for the picked service. Add-ons extend the appointment
@@ -97,6 +106,12 @@ export function BookingClient({ data }: { data: BookShopData }) {
     return parts; // en-CA yields YYYY-MM-DD
   }
 
+  /** Clear the chosen time (and any targeted-slot selection riding on it). */
+  function clearSlotPick() {
+    setSlot(null);
+    setSlotTargeted(null);
+  }
+
   function loadSlots(svc: string, stf: string) {
     setLoadingSlots(true);
     setError(null);
@@ -111,24 +126,42 @@ export function BookingClient({ data }: { data: BookShopData }) {
         setLoadingSlots(false);
         return;
       }
-      bucketSlots(res.data);
+      bucketSlots(res.data, svc, stf);
       setLoadingSlots(false);
     });
   }
 
-  function bucketSlots(result: SlotsResult) {
-    const map = new Map<string, { startsAt: string }[]>();
+  function bucketSlots(result: SlotsResult, svc: string, stf: string) {
+    const map = new Map<
+      string,
+      { startsAt: string; targeted?: { id: string; price: number; label: string | null } }[]
+    >();
     for (const s of result.slots) {
       const key = dayKey(s.startsAt);
       const list = map.get(key) ?? [];
       list.push({ startsAt: s.startsAt });
       map.set(key, list);
     }
+    // Merge the barber's targeted slots for this service+barber into the grid,
+    // badged with their own price (the normal engine never offers these times -
+    // it blocks around them - so there are no duplicates to reconcile).
+    for (const t of data.targetedSlots) {
+      if (t.serviceId !== svc || t.staffId !== stf) continue;
+      if (new Date(t.startsAt).getTime() <= Date.now()) continue;
+      const key = dayKey(t.startsAt);
+      const list = map.get(key) ?? [];
+      list.push({
+        startsAt: t.startsAt,
+        targeted: { id: t.id, price: t.price, label: t.label },
+      });
+      list.sort((a, b) => a.startsAt.localeCompare(b.startsAt));
+      map.set(key, list);
+    }
     setSlotsByDay(map);
     // Auto-select the first day with availability.
     const firstDay = [...map.keys()].sort()[0] ?? null;
     setDay(firstDay);
-    setSlot(null);
+    clearSlotPick();
   }
 
   function pickService(id: string) {
@@ -136,7 +169,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
     setStaffId(null);
     setSlotsByDay(new Map());
     setDay(null);
-    setSlot(null);
+    clearSlotPick();
     setAddOnIds([]); // add-ons are per-service; clear on change
   }
 
@@ -152,7 +185,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
 
   function pickStaff(id: string) {
     setStaffId(id);
-    setSlot(null);
+    clearSlotPick();
     if (serviceId) loadSlots(serviceId, id);
   }
 
@@ -163,14 +196,14 @@ export function BookingClient({ data }: { data: BookShopData }) {
     setStaffId(null);
     setSlotsByDay(new Map());
     setDay(null);
-    setSlot(null);
+    clearSlotPick();
   }
   function backToProvider() {
     setStaffId(null);
-    setSlot(null);
+    clearSlotPick();
   }
   function backToTime() {
-    setSlot(null);
+    clearSlotPick();
   }
 
   function submit() {
@@ -194,14 +227,17 @@ export function BookingClient({ data }: { data: BookShopData }) {
         phone: phone.trim() || undefined,
         email: email.trim() || undefined,
         smsConsent: consent && Boolean(phone.trim()),
-        addOnIds: addOnIds.length > 0 ? addOnIds : undefined,
+        // A targeted slot has a fixed length/price - no add-ons.
+        addOnIds:
+          !slotTargeted && addOnIds.length > 0 ? addOnIds : undefined,
+        targetedSlotId: slotTargeted?.id,
       });
       if (!res.ok) {
         if (res.error === "slot_taken") {
           setError("That time was just taken. Pick another slot.");
           // Refresh availability so the taken slot disappears.
           if (serviceId && staffId) loadSlots(serviceId, staffId);
-          setSlot(null);
+          clearSlotPick();
         } else if (res.error === "no_active_access") {
           setError(
             `Online booking is paused for ${data.shop.name} right now. Please contact the shop directly to book.`,
@@ -257,9 +293,13 @@ export function BookingClient({ data }: { data: BookShopData }) {
     return `$${min.toFixed(0)}-$${max.toFixed(0)}`;
   }
 
-  // The exact price for the slot the customer has chosen (so no surprise).
-  const selectedPrice =
-    selectedService && slot ? priceForDay(selectedService, slot) : null;
+  // The exact price for the slot the customer has chosen (so no surprise). A
+  // targeted slot carries its own price - that's its whole point.
+  const selectedPrice = slotTargeted
+    ? slotTargeted.price
+    : selectedService && slot
+      ? priceForDay(selectedService, slot)
+      : null;
   // Chosen add-ons' extra price + the combined total shown before booking.
   const addOnsTotal = addOnsForService
     .filter((a) => addOnIds.includes(a.id))
@@ -544,7 +584,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
                     type="button"
                     onClick={() => {
                       setDay(d);
-                      setSlot(null);
+                      clearSlotPick();
                     }}
                     className="shrink-0 rounded-lg border px-3 py-2 text-xs transition-colors"
                     style={{
@@ -560,21 +600,44 @@ export function BookingClient({ data }: { data: BookShopData }) {
                 ))}
               </div>
               <div className="grid grid-cols-3 gap-2">
-                {daySlots.map((s) => (
-                  <button
-                    key={s.startsAt}
-                    type="button"
-                    onClick={() => setSlot(s.startsAt)}
-                    className="rounded-lg border py-2 text-center text-sm transition-colors"
-                    style={{
-                      borderColor: slot === s.startsAt ? accent : "rgba(255,255,255,0.12)",
-                      backgroundColor: slot === s.startsAt ? accent : "transparent",
-                      color: slot === s.startsAt ? "#101012" : undefined,
-                    }}
-                  >
-                    {timeFmt.format(new Date(s.startsAt))}
-                  </button>
-                ))}
+                {daySlots.map((s) => {
+                  const picked =
+                    slot === s.startsAt &&
+                    (slotTargeted?.id ?? null) === (s.targeted?.id ?? null);
+                  return (
+                    <button
+                      key={s.targeted?.id ?? s.startsAt}
+                      type="button"
+                      onClick={() => {
+                        setSlot(s.startsAt);
+                        setSlotTargeted(s.targeted ?? null);
+                        if (s.targeted) setAddOnIds([]); // fixed length/price
+                      }}
+                      className="rounded-lg border py-2 text-center text-sm transition-colors"
+                      style={{
+                        borderColor: picked
+                          ? accent
+                          : s.targeted
+                            ? `${accent}99`
+                            : "rgba(255,255,255,0.12)",
+                        backgroundColor: picked
+                          ? accent
+                          : s.targeted
+                            ? `${accent}14`
+                            : "transparent",
+                        color: picked ? "#101012" : undefined,
+                      }}
+                    >
+                      {timeFmt.format(new Date(s.startsAt))}
+                      {s.targeted && (
+                        <span className="block text-[10px] font-semibold">
+                          {s.targeted.label || "Special"} · $
+                          {s.targeted.price.toFixed(0)}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             </>
           )}
@@ -587,8 +650,9 @@ export function BookingClient({ data }: { data: BookShopData }) {
           title="4 · Your details"
           back={<BackStep onClick={backToTime} />}
         >
-          {/* Optional add-ons for the chosen service. */}
-          {addOnsForService.length > 0 && (
+          {/* Optional add-ons for the chosen service (a targeted slot's
+              length/price are fixed, so add-ons don't apply there). */}
+          {!slotTargeted && addOnsForService.length > 0 && (
             <div className="mb-3 rounded-xl border border-white/10 p-3">
               <p className="mb-2 text-xs font-medium uppercase tracking-wide opacity-60">
                 Add-ons

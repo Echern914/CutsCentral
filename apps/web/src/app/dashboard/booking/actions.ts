@@ -322,6 +322,47 @@ export async function markArrivedAction(id: string): Promise<Result> {
   return done(await apiSend("POST", `/api/booking/appointments/${id}/arrived`));
 }
 
+//  Targeted slots (one-off special-priced bookable slots)
+
+export interface TargetedSlotRow {
+  id: string;
+  staffId: string;
+  serviceId: string;
+  label: string | null;
+  startsAt: string;
+  durationMin: number;
+  price: number;
+  active: boolean;
+  booked: boolean;
+}
+
+export async function listTargetedSlotsAction(): Promise<{
+  ok: boolean;
+  slots?: TargetedSlotRow[];
+}> {
+  const res = await apiGet<{ targetedSlots: TargetedSlotRow[] }>(
+    "/api/booking/targeted-slots",
+  );
+  if (!res.ok || !res.data) return { ok: false };
+  return { ok: true, slots: res.data.targetedSlots };
+}
+
+export async function createTargetedSlotAction(input: {
+  staffId: string;
+  serviceId: string;
+  label?: string;
+  startsAt: string;
+  durationMin: number;
+  price: number;
+  repeatWeeks?: number;
+}): Promise<Result> {
+  return done(await apiSend("POST", "/api/booking/targeted-slots", input));
+}
+
+export async function deleteTargetedSlotAction(id: string): Promise<Result> {
+  return done(await apiSend("DELETE", `/api/booking/targeted-slots/${id}`));
+}
+
 /**
  * Push a "come early" nudge to the appointment's client. Max 2 per appointment
  * (server-enforced; surfaces as error "nudge_limit"). delivered:false = the

@@ -335,6 +335,7 @@ model Shop {
   appointments           Appointment[]
   recurringSeries        RecurringSeries[]
   serviceAddOns          ServiceAddOn[]
+  targetedSlots          TargetedSlot[]
   payments               Payment[]
 
   @@index([ownerId])
@@ -918,6 +919,7 @@ model Staff {
   exceptions        AvailabilityException[]
   appointments      Appointment[]
   recurringSeries   RecurringSeries[]
+  targetedSlots     TargetedSlot[]
 
   @@index([shopId, active])
 }
@@ -955,6 +957,7 @@ model Service {
   appointments    Appointment[]
   recurringSeries RecurringSeries[]
   addOns          ServiceAddOn[]
+  targetedSlots   TargetedSlot[]
 
   @@index([shopId, active])
 }
@@ -1037,6 +1040,51 @@ model AvailabilityException {
   updatedAt DateTime @updatedAt
 
   @@index([shopId, staffId, startsAt])
+}
+
+// A barber-published ONE-OFF bookable slot with its own time/duration/price,
+// under a parent service ("two retwist slots this week at a special price").
+// Clients see it in the picker under that service, badged, at slot.price.
+//
+// Capacity is exactly ONE: booking claims bookedAppointmentId with a
+// conditional update inside the SAME transaction as the shared booking guard,
+// so two simultaneous bookings can't both win. While ACTIVE and UNBOOKED the
+// slot also BLOCKS normal bookings over its span - enforced inside
+// lockStaffAndAssertSlotFree (the one source of truth), so every write path
+// (public, dashboard, recurring, receptionist) respects it with no extra code.
+// Once booked, the created Appointment row does the blocking instead (the
+// claimed slot stops matching the guard's unbooked predicate - no double
+// count). A canceled targeted-slot appointment does NOT reopen the slot (the
+// barber recreates one deliberately; auto-relisting a promo price is wrong).
+//
+// Deliberately allowed OUTSIDE availability rules (only lead-time checked):
+// publishing a late-night special the normal grid would never offer is the
+// point. Recurrence is materialized at creation (one row per week, same
+// shop-local wall time via zonedWallTimeToUtc) - each row is independently
+// bookable/deletable; no open-ended recurrence in v1.
+model TargetedSlot {
+  id          String   @id @default(cuid())
+  shopId      String
+  shop        Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  staffId     String
+  staff       Staff    @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  // The parent category the slot is listed under.
+  serviceId   String
+  service     Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  label       String? // "Late night retwist", "Model rate"
+  startsAt    DateTime
+  durationMin Int
+  price       Decimal  @db.Decimal(10, 2)
+  active      Boolean  @default(true) // false = deactivated by the barber (unbooked only)
+  // The winning booking. Unique = the capacity-1 claim; SetNull keeps the slot
+  // row (as a consumed record) if the appointment is ever hard-deleted.
+  bookedAppointmentId String?      @unique
+  bookedAppointment   Appointment? @relation(fields: [bookedAppointmentId], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([shopId, staffId, startsAt]) // guard overlap + barber list
+  @@index([shopId, serviceId, startsAt]) // public picker per service
 }
 
 // A native booking. A future hold until its time passes (or the barber marks it
@@ -1124,6 +1172,8 @@ model Appointment {
 
   payment Payment? // the customer payment for this booking (if any)
   nudges  Nudge[] // appointment-scoped sends (checkin_nudge + replies)
+  // Set when this booking claimed a barber-published targeted slot.
+  targetedSlot TargetedSlot?
 
   // The double-booking guard (a partial unique on BOOKED rows) is added by hand
   // in the migration - Prisma can't express a WHERE-filtered unique index.
