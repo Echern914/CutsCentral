@@ -15,10 +15,13 @@ export function LegalShell({
   title,
   intro,
   children,
+  /** The legal pages show an effective date; a non-legal page (e.g. /support) can hide it. */
+  hideDate = false,
 }: {
   title: string;
   intro?: ReactNode;
   children: ReactNode;
+  hideDate?: boolean;
 }) {
   return (
     <main className="mx-auto w-full max-w-3xl px-6 py-14">
@@ -28,7 +31,9 @@ export function LegalShell({
         </Link>
       </p>
       <h1 className="font-display text-4xl tracking-tight text-offwhite">{title}</h1>
-      <p className="mt-2 text-sm text-muted">Effective date: {LEGAL_EFFECTIVE_DATE}</p>
+      {!hideDate && (
+        <p className="mt-2 text-sm text-muted">Effective date: {LEGAL_EFFECTIVE_DATE}</p>
+      )}
       {intro && <div className="mt-6">{intro}</div>}
       <div className="mt-8 flex flex-col gap-2">{children}</div>
       <footer className="mt-14 border-t border-subtle pt-6 text-xs text-muted">
