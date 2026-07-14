@@ -766,6 +766,7 @@ function serializeShop(shop: {
   receptionistTermsAcceptedAt: Date | null;
   receptionistSubscriptionStatus: string;
   receptionistCompAccess: boolean;
+  twilioNumber: string | null;
 }) {
   // Note: webhookSecret is intentionally NOT exposed to the client.
   return {
@@ -813,5 +814,7 @@ function serializeShop(shop: {
     receptionistTermsAcceptedAt: shop.receptionistTermsAcceptedAt?.toISOString() ?? null,
     // Entitlement summary for the settings UI (comp pilots or the $40/mo add-on).
     receptionistEntitled: hasReceptionistEntitlement(shop),
+    // The shop's own text line (null = shared platform number).
+    twilioNumber: shop.twilioNumber,
   };
 }

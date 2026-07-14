@@ -124,16 +124,34 @@ Deterministic tests (no API key, scripted model): `apps/api/src/receptionist/*.t
    (`PATCH /api/shops/me` with `receptionistEnabled: true, acceptReceptionistTerms: true`;
    optional `receptionistTone`)
 3. Entitlement: comp the pilot (`receptionistCompAccess`) or subscribe to the add-on
-4. Clients must exist with the phone numbers that will text in (v1 serves
-   KNOWN clients only; unknown numbers keep STOP/START-only behavior)
-5. **Give the shop its own number** (strongly recommended once >1 shop has the
-   receptionist - it makes wrong-shop routing structurally impossible):
+4. On the SHARED number, only KNOWN clients (existing phone match) get the AI.
+   On the shop's OWN number, a brand-new texter is onboarded automatically
+   (see "SMS walk-ins" below) - hand that number to clients on cards/signs.
+5. **Give the shop its own number** (auto-provisioned with Premium AI; also the
+   structural fix for wrong-shop routing once >1 shop has the receptionist):
    buy a local number (~$1.15/mo) → add it to the "ChairBack SMS" messaging
    service (attaches it to the VERIFIED campaign; up to 49 numbers ride the
    one campaign) → set its inbound webhook to
    `https://api.getchairback.com/webhooks/twilio/inbound` (POST) → set
    `Shop.twilioNumber` to the E.164. Inbound texts TO that number then pin
-   the shop, and its receptionist replies send FROM it.
+   the shop, and its receptionist replies send FROM it. Set
+   `TWILIO_MESSAGING_SERVICE_SID` (+ optional `TWILIO_NUMBER_AREA_CODE`) to
+   have this happen automatically on every Premium AI activation.
+
+## SMS walk-ins (unknown texters on a shop's own line)
+
+A brand-new number that texts a shop's OWN number is a walk-in: because they
+chose to text that specific shop, replying is consumer-initiated (no prior
+express written consent needed - the same TCPA basis as any inbound reply).
+`receptionist/inbound.ts:createSmsWalkinClient` makes a minimal `Client`
+(`source:"sms_walkin"`) so the booking tools have an identity, and the AI can
+book them immediately; if they give a name mid-booking it's saved to the row.
+
+Deliberately withheld: `smsConsentAt` stays null. That gate guards PROACTIVE
+marketing (nudges, gap-fill, win-back, promos) - texting to book is NOT consent
+to be blasted, so a walk-in is unreachable by those paths until they opt in
+elsewhere. A number that opted out ANYWHERE (global STOP) is never onboarded.
+Unknown numbers on the SHARED line are still not onboarded (no shop signal).
 
 ## Platform go-live checklist (Eric)
 
@@ -148,9 +166,8 @@ Deterministic tests (no API key, scripted model): `apps/api/src/receptionist/*.t
 
 ## Known v1 limits / deferred
 
-- Unknown texters get no AI even on a shop-owned line (booking tools need a
-  Client identity; creating clients from inbound texts is a consent-surface
-  decision deferred on purpose)
+- Unknown texters on the SHARED line get no AI (no shop signal to route them);
+  on a shop's OWN line they are onboarded as walk-ins (see above)
 - Shops still on the SHARED number fall back to known-client phone matching;
   a phone that's a client at 2+ enabled shops routes to the most-recently
   visited one. Giving each enabled shop its own number (checklist step 5)

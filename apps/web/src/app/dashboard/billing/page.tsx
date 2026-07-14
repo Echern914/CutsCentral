@@ -42,6 +42,7 @@ interface ShopSettings {
   receptionistEnabled: boolean;
   receptionistTermsAcceptedAt: string | null;
   bookingMode: string;
+  twilioNumber: string | null;
 }
 
 // Tier feature: a bold lead + an optional muted detail line, so every row
@@ -110,6 +111,10 @@ const PREMIUM_AI_FEATURES: TierFeature[] = [
   {
     lead: "Knows when to hand off",
     detail: "anything it can't handle comes to you with an alert",
+  },
+  {
+    lead: "Your own local number",
+    detail: "clients text YOUR shop's number, not a shared line — set up automatically",
   },
   {
     lead: `${PLANS.pro_ai.smsMonthlyQuota.toLocaleString()} texts a month — 4× Premium`,
@@ -319,6 +324,7 @@ export default async function BillingPage({
                 enabled={shop.receptionistEnabled}
                 termsAccepted={shop.receptionistTermsAcceptedAt !== null}
                 bookingMode={shop.bookingMode}
+                shopNumber={shop.twilioNumber ?? null}
               />
             )}
           </Card>

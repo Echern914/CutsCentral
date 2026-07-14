@@ -1,0 +1,136 @@
+import twilio from "twilio";
+import { apiEnv } from "@chairback/config";
+import { prisma } from "@chairback/db";
+import { logger } from "../logger.js";
+
+/**
+ * Per-shop number auto-provisioning: when a shop activates Premium AI, buy it
+ * a local number, point the number's inbound webhook at the API, attach it to
+ * the VERIFIED A2P campaign's messaging service (carriers treat unattached
+ * numbers as unregistered and filter them), and save it on the shop. From then
+ * on, inbound texts TO that number pin routing to the shop and its
+ * receptionist replies send FROM it (see receptionist/inbound.ts).
+ *
+ * Money: each number is a real ~$1.15/mo Twilio purchase, so the whole module
+ * is dark unless TWILIO_MESSAGING_SERVICE_SID is set - and it never throws
+ * into the Stripe webhook path (a failed purchase logs for manual follow-up;
+ * the shop just stays on the shared line, which keeps working).
+ *
+ * Scale note: one A2P campaign officially carries up to 49 numbers; past that
+ * Twilio requires a number-pooling justification (operator paperwork).
+ */
+
+export interface ProvisionedNumber {
+  phoneNumber: string; // E.164
+  sid: string; // PN... incoming phone number sid
+}
+
+export interface NumberProvisioner {
+  /** Buy + configure one local number, or null on failure (already logged). */
+  provision(opts: { friendlyName: string }): Promise<ProvisionedNumber | null>;
+}
+
+class TwilioNumberProvisioner implements NumberProvisioner {
+  async provision(opts: { friendlyName: string }): Promise<ProvisionedNumber | null> {
+    const env = apiEnv();
+    const serviceSid = env.TWILIO_MESSAGING_SERVICE_SID;
+    if (!serviceSid) return null;
+    const client = twilio(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
+    const webhookUrl = `${env.API_BASE_URL}/webhooks/twilio/inbound`;
+
+    // Preferred area code first; nationwide local inventory as the fallback.
+    const searches: { areaCode?: number }[] = env.TWILIO_NUMBER_AREA_CODE
+      ? [{ areaCode: Number(env.TWILIO_NUMBER_AREA_CODE) }, {}]
+      : [{}];
+    let candidate: string | null = null;
+    for (const search of searches) {
+      const available = await client
+        .availablePhoneNumbers("US")
+        .local.list({ ...search, smsEnabled: true, limit: 1 });
+      if (available[0]?.phoneNumber) {
+        candidate = available[0].phoneNumber;
+        break;
+      }
+    }
+    if (!candidate) {
+      logger.error("number provisioning: no local inventory available");
+      return null;
+    }
+
+    // THE PURCHASE (~$1.15/mo starts here). The webhook is set in the same
+    // call so there is no window where the number exists but inbound is lost.
+    const bought = await client.incomingPhoneNumbers.create({
+      phoneNumber: candidate,
+      friendlyName: opts.friendlyName,
+      smsUrl: webhookUrl,
+      smsMethod: "POST",
+    });
+
+    // Attach to the campaign's messaging service. If THIS step fails the
+    // number would send unregistered (carrier-filtered), so release it and
+    // report failure rather than half-provision.
+    try {
+      await client.messaging.v1.services(serviceSid).phoneNumbers.create({
+        phoneNumberSid: bought.sid,
+      });
+    } catch (err) {
+      logger.error(
+        { err, phoneNumber: bought.phoneNumber },
+        "number provisioning: campaign attach failed; releasing the number",
+      );
+      await client
+        .incomingPhoneNumbers(bought.sid)
+        .remove()
+        .catch(() => {});
+      return null;
+    }
+
+    return { phoneNumber: bought.phoneNumber, sid: bought.sid };
+  }
+}
+
+let testProvisioner: NumberProvisioner | undefined;
+
+/** Test seam: inject a fake provisioner (no Twilio, no purchases). */
+export function __setNumberProvisionerForTests(p: NumberProvisioner | undefined): void {
+  testProvisioner = p;
+}
+
+function getProvisioner(): NumberProvisioner {
+  return testProvisioner ?? new TwilioNumberProvisioner();
+}
+
+/**
+ * Idempotently give a Premium AI shop its own number. Safe to fire from every
+ * Stripe path that lands plan="pro_ai" (checkout, subscription webhook, the
+ * in-place upgrade): it no-ops when provisioning is unconfigured, the shop
+ * already has a number, or the plan isn't Premium AI. Never throws.
+ */
+export async function ensureShopNumber(shopId: string): Promise<void> {
+  try {
+    if (!apiEnv().TWILIO_MESSAGING_SERVICE_SID && !testProvisioner) return;
+    const shop = await prisma.shop.findUnique({
+      where: { id: shopId },
+      select: { id: true, name: true, plan: true, twilioNumber: true },
+    });
+    if (!shop || shop.twilioNumber || shop.plan !== "pro_ai") return;
+
+    const bought = await getProvisioner().provision({
+      friendlyName: `ChairBack - ${shop.name}`,
+    });
+    if (!bought) {
+      logger.error({ shopId }, "number provisioning failed; shop stays on the shared line");
+      return;
+    }
+    await prisma.shop.update({
+      where: { id: shopId },
+      data: { twilioNumber: bought.phoneNumber },
+    });
+    logger.info(
+      { shopId, phoneNumber: bought.phoneNumber },
+      "shop provisioned with its own number",
+    );
+  } catch (err) {
+    logger.error({ err, shopId }, "ensureShopNumber failed");
+  }
+}

@@ -88,6 +88,17 @@ const apiSchema = z.object({
   TWILIO_ACCOUNT_SID: z.string().min(1),
   TWILIO_AUTH_TOKEN: z.string().min(1),
   TWILIO_FROM_NUMBER: z.string().min(1),
+  // Per-shop number auto-provisioning (optional - while absent, no numbers are
+  // ever PURCHASED and shops stay on the shared line). Must be the messaging
+  // service attached to the VERIFIED A2P campaign: purchased numbers are added
+  // to it so carriers treat their traffic as registered.
+  TWILIO_MESSAGING_SERVICE_SID: z.string().min(1).optional(),
+  // Preferred area code for purchased numbers (falls back to any US local
+  // number when that area code has no inventory).
+  TWILIO_NUMBER_AREA_CODE: z
+    .string()
+    .regex(/^\d{3}$/)
+    .optional(),
 
   // Stripe billing (optional - while absent, billing is disabled and every
   // shop has full access; setting all three flips trial/subscription

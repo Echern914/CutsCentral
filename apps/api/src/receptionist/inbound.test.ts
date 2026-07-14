@@ -481,26 +481,172 @@ describe("processInboundText", () => {
     expect(sms[0]!.from).toBe(ownNumber);
   });
 
-  it("a stranger texting a shop-owned line stays silent - never rerouted to another shop", async () => {
-    // The phone is a client ONLY at shop A. Texting shop B's own number must
-    // not fall back to the phone-match (that would be the wrong-shop bug) -
-    // v1 answer for unknown texters is silence.
+  it("a phone that's a client only at shop A, texting shop B's line, is onboarded at B (never rerouted to A)", async () => {
+    // The wrong-shop invariant still holds: texting B's number means B, even
+    // though this phone is a known client at A. B doesn't know them, so B
+    // onboards them as an SMS walk-in - it must NEVER borrow A's identity.
     const shopA = await makeShop();
     const ownNumber = `+1555${Math.floor(1000000 + Math.random() * 8999999)}`;
     const shopB = await makeShop({ twilioNumber: ownNumber });
     await makeBookable(shopB.id);
     const phone = freshPhone();
-    await makeClient(shopA.id, phone);
+    const clientA = await makeClient(shopA.id, phone);
+
+    __setModelClientForTests(scriptedModel([textMsg("hey! what can I get you?")]));
+
+    await processInboundText({ phone, text: "you open?", to: ownNumber, now: NOW });
+
+    // Answered at B, from B's line.
+    expect(sms).toHaveLength(1);
+    expect(sms[0]!.from).toBe(ownNumber);
+    const convoB = await prisma.receptionistConversation.findFirst({
+      where: { shopId: shopB.id, phone },
+    });
+    expect(convoB).not.toBeNull();
+    expect(await prisma.receptionistConversation.count({ where: { shopId: shopA.id } })).toBe(0);
+
+    // A fresh walk-in Client exists at B - a DIFFERENT row from A's client.
+    const bClient = await prisma.client.findFirst({
+      where: { shopId: shopB.id, phone },
+      select: { id: true, source: true, smsConsentAt: true },
+    });
+    expect(bClient).not.toBeNull();
+    expect(bClient!.id).not.toBe(clientA.id);
+    expect(bClient!.source).toBe("sms_walkin");
+    expect(bClient!.smsConsentAt).toBeNull(); // conversational only, NOT marketing consent
+  });
+
+  it("a brand-new number texting a shop-owned line is onboarded and can book (SMS walk-in)", async () => {
+    const ownNumber = `+1555${Math.floor(1000000 + Math.random() * 8999999)}`;
+    const shop = await makeShop({ twilioNumber: ownNumber });
+    const { staffId, serviceId } = await makeBookable(shop.id);
+    const phone = freshPhone(); // no Client anywhere
+
+    const startsAt = new Date("2026-06-02T18:00:00Z");
+    const slotId = `${staffId}~${serviceId}~${startsAt.toISOString()}`;
+    __setModelClientForTests(
+      scriptedModel([
+        toolUseMsg([
+          {
+            id: "tu_1",
+            name: "book_appointment",
+            input: { slot_id: slotId, client_name: "Devon" },
+          },
+        ]),
+        textMsg("booked you Tue 2:00, Devon"),
+      ]),
+    );
+
+    await processInboundText({ phone, text: "can I get a cut tuesday at 2", to: ownNumber, now: NOW });
+
+    // The walk-in client was created, named from the booking, and booked.
+    const client = await prisma.client.findFirst({
+      where: { shopId: shop.id, phone },
+      select: { id: true, firstName: true, source: true, smsConsentAt: true, optedOut: true },
+    });
+    expect(client).not.toBeNull();
+    expect(client!.source).toBe("sms_walkin");
+    expect(client!.firstName).toBe("Devon"); // name persisted to the row
+    expect(client!.smsConsentAt).toBeNull();
+    expect(client!.optedOut).toBe(false);
+
+    const appt = await prisma.appointment.findFirst({
+      where: { shopId: shop.id, status: "BOOKED", clientId: client!.id },
+    });
+    expect(appt).not.toBeNull();
+    expect(sms).toHaveLength(1);
+  });
+
+  it("an opted-out number is NEVER onboarded, even on a shop-owned line", async () => {
+    // STOP is global and absolute - a number that opted out anywhere must not
+    // be recreated as a fresh client that the AI would then text.
+    const ownNumber = `+1555${Math.floor(1000000 + Math.random() * 8999999)}`;
+    const otherShop = await makeShop();
+    const shop = await makeShop({ twilioNumber: ownNumber });
+    await makeBookable(shop.id);
+    const phone = freshPhone();
+    // They opted out via a (different) shop's record.
+    await makeClient(otherShop.id, phone, { optedOut: true });
 
     __setModelClientForTests(scriptedModel([textMsg("should never be sent")]));
 
     await processInboundText({ phone, text: "you open?", to: ownNumber, now: NOW });
 
     expect(sms).toHaveLength(0);
-    const convos = await prisma.receptionistConversation.findMany({
-      where: { phone },
+    // No new walk-in row was created at the owned shop.
+    const created = await prisma.client.findFirst({ where: { shopId: shop.id, phone } });
+    expect(created).toBeNull();
+  });
+
+  it("an ARCHIVED prior walk-in re-texting is reactivated, not permanently silenced", async () => {
+    // Regression: bare create() collided with the archived row's
+    // (shopId, acuityClientKey=phone) key and the archivedAt:null re-read
+    // hid it -> the number was silently dropped forever. Now we un-archive.
+    const ownNumber = `+1555${Math.floor(1000000 + Math.random() * 8999999)}`;
+    const shop = await makeShop({ twilioNumber: ownNumber });
+    await makeBookable(shop.id);
+    const phone = freshPhone();
+    // A past walk-in the barber archived (source + key match a real walk-in).
+    const archived = await prisma.client.create({
+      data: {
+        shopId: shop.id,
+        acuityClientKey: phone,
+        phone,
+        source: "sms_walkin",
+        magicToken: randomToken(),
+        archivedAt: new Date("2026-05-01T00:00:00Z"),
+      },
+      select: { id: true },
     });
-    expect(convos).toHaveLength(0);
+
+    __setModelClientForTests(scriptedModel([textMsg("hey! what can I get you?")]));
+    await processInboundText({ phone, text: "you open?", to: ownNumber, now: NOW });
+
+    // The SAME row was reactivated (no duplicate, no silent drop) and answered.
+    expect(sms).toHaveLength(1);
+    const rows = await prisma.client.findMany({ where: { shopId: shop.id, phone } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.id).toBe(archived.id);
+    expect(rows[0]!.archivedAt).toBeNull();
+  });
+
+  it("a brand-new number on the SHARED line is still NOT onboarded (no shop signal)", async () => {
+    await makeShop({ twilioNumber: null });
+    const phone = freshPhone(); // client of nobody
+    __setModelClientForTests(scriptedModel([textMsg("should never be sent")]));
+
+    // to = shared platform number owned by no shop.
+    await processInboundText({ phone, text: "you open?", to: "+15550009999", now: NOW });
+
+    expect(sms).toHaveLength(0);
+    expect(await prisma.client.findFirst({ where: { phone } })).toBeNull();
+  });
+
+  it("stops minting walk-ins once the per-shop daily creation cap is hit", async () => {
+    const ownNumber = `+1555${Math.floor(1000000 + Math.random() * 8999999)}`;
+    const shop = await makeShop({ twilioNumber: ownNumber });
+    await makeBookable(shop.id);
+    // Pre-seed the cap's worth of walk-ins created "today" (NOW's UTC day).
+    for (let i = 0; i < 100; i++) {
+      await prisma.client.create({
+        data: {
+          shopId: shop.id,
+          acuityClientKey: `wk-${i}-${randomToken(5)}`,
+          phone: `+1555${2000000 + i}`,
+          source: "sms_walkin",
+          magicToken: randomToken(),
+          createdAt: NOW,
+        },
+      });
+    }
+
+    const phone = freshPhone();
+    __setModelClientForTests(scriptedModel([textMsg("should never be sent")]));
+    await processInboundText({ phone, text: "you open?", to: ownNumber, now: NOW });
+
+    // The 101st new number gets no AI and no row today.
+    expect(sms).toHaveLength(0);
+    expect(await prisma.client.findFirst({ where: { shopId: shop.id, phone } })).toBeNull();
   });
 
   it("shops without their own number keep shared-line phone-match routing and the shared sender", async () => {

@@ -10,14 +10,23 @@ import { enableReceptionistAction } from "./actions";
  * (400 receptionist_terms_required) - and the acceptance is one-time: once
  * stamped, the checkbox never shows again.
  */
+/** "+15512840878" -> "(551) 284-0878" for display; unknown shapes pass through. */
+function prettyNumber(e164: string): string {
+  const m = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(e164);
+  return m ? `(${m[1]}) ${m[2]}-${m[3]}` : e164;
+}
+
 export function ReceptionistControls({
   enabled,
   termsAccepted,
   bookingMode,
+  shopNumber,
 }: {
   enabled: boolean;
   termsAccepted: boolean;
   bookingMode: string;
+  /** The shop's OWN text line (null = shared platform number). */
+  shopNumber: string | null;
 }) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -58,6 +67,32 @@ export function ReceptionistControls({
           {pending ? "Saving…" : enabled ? "Turn off" : "Turn on"}
         </button>
       </div>
+
+      {/* The shop's own text line - the number the barber hands to clients.
+          Only shown once provisioned; shared-line shops see nothing here. */}
+      {shopNumber && (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-gold/30 bg-gold/10 px-4 py-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-gold-soft">
+              Your shop&apos;s text line
+            </p>
+            <p className="mt-1 text-lg font-semibold text-offwhite">
+              {prettyNumber(shopNumber)}
+            </p>
+            <p className="mt-0.5 text-xs text-muted">
+              Give this number to your clients - texts to it always reach YOUR
+              shop&apos;s AI, and its replies come from this number.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void navigator.clipboard.writeText(shopNumber)}
+            className="rounded-full border border-subtle px-4 py-1.5 text-xs text-offwhite transition-all duration-150 ease-out hover:bg-charcoal-700"
+          >
+            Copy
+          </button>
+        </div>
+      )}
 
       {/* How it works - so a barber knows exactly what turning this on does. */}
       <div className="mt-4 rounded-xl border border-subtle bg-charcoal-900/50 p-4">
