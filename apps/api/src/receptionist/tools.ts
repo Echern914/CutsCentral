@@ -769,6 +769,14 @@ async function bookAppointment(
   if (!identity) return fail("no client record for this number - escalate_to_human");
   // Identity comes from the DB; the model may only FILL a missing first name.
   const firstName = identity.firstName ?? parsed.data.client_name ?? "Client";
+  // An SMS walk-in gave their name for the first time: persist it to the
+  // Client row (not just the appointment) so get_client_history and the
+  // dashboard recognize them next time. Only when the row had no name AND the
+  // model supplied one - never overwrite an existing name from model text.
+  const nameToBackfill =
+    identity.firstName === null && parsed.data.client_name
+      ? parsed.data.client_name.slice(0, 80)
+      : null;
 
   try {
     const bookedId = await prisma.$transaction(async (tx) => {
@@ -865,6 +873,18 @@ async function bookAppointment(
       });
       return appt.id;
     });
+
+    // Backfill the walk-in's name onto the Client row (outside the booking tx;
+    // a failure here must not undo a successful booking). Guarded on still-null
+    // so two racing books don't clobber.
+    if (nameToBackfill) {
+      await prisma.client
+        .updateMany({
+          where: { id: identity.clientId, firstName: null },
+          data: { firstName: nameToBackfill },
+        })
+        .catch(() => {});
+    }
 
     return ok({
       booked: true,

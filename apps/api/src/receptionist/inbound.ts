@@ -1,4 +1,5 @@
 import { prisma } from "@chairback/db";
+import { randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
 import { receptionistEnabledForShop, receptionistConfigured } from "./config.js";
 import { renderPromptForShop } from "./prompt.js";
@@ -29,17 +30,24 @@ import { receptionistReplyCapReason } from "./replyCap.js";
  *   0. the number the client TEXTED is a shop-owned line (Shop.twilioNumber)
  *      -> that shop, full stop. The structural fix for wrong-shop routing:
  *      no guessing, and it outranks a live thread at another shop (texting a
- *      different shop's number IS choosing that shop).
+ *      different shop's number IS choosing that shop). An UNKNOWN number on a
+ *      shop-owned line is an SMS walk-in: a Client row is created on the spot
+ *      (createSmsWalkinClient) so the AI can book them - unless the number
+ *      opted out anywhere, which is always honored.
  *   1. else a live conversation for this phone wins - the thread pins the
  *      shop, so replies to a gap-fill offer route deterministically;
  *   2. else the phone must match a known Client at a receptionist-enabled
  *      native shop (multi-shop matches -> most recently visited; shops with
  *      their own number should make this guess practically unreachable);
  *   3. else NO AI - the webhook keeps today's STOP/START-only behavior.
+ *      (Unknown numbers on the SHARED line are NOT onboarded: with no shop
+ *      signal we can't know which shop they meant.)
  *
  * Consent semantics: replying to a consumer-initiated text needs no
  * smsConsentAt and ignores quiet hours/caps, but optedOut ALWAYS wins
- * (re-checked at send time in outbound.ts).
+ * (re-checked at send time in outbound.ts). An SMS walk-in gets NO
+ * smsConsentAt - texting to book is not consent to be marketed to, so the row
+ * is unreachable by nudges/gap-fill/promos until it opts in elsewhere.
  */
 
 const GATE_SELECT = {
@@ -80,6 +88,61 @@ interface ResolvedInbound {
   conversation: ConversationRow;
 }
 
+/**
+ * Ceiling on brand-new walk-in Clients minted per shop per UTC day. Bounds the
+ * (signature-gated, billable) case where an attacker sends texts from many
+ * rotating numbers to a shop's line and pollutes its client list. Generous
+ * enough that a real busy shop never trips it. Past the ceiling, a genuinely
+ * new number just gets today's shared-line behavior (no AI) until tomorrow.
+ */
+const WALKIN_CREATE_CAP_PER_SHOP_PER_DAY = 100;
+
+/**
+ * First text from an unknown number to a shop's OWN line = an SMS walk-in.
+ * The person deliberately texted THIS shop, so replying is consumer-initiated
+ * (the same TCPA basis as any inbound reply). We create a minimal Client so
+ * the booking tools have an identity - but withhold smsConsentAt: that gate
+ * guards PROACTIVE marketing (nudges, gap-fill, promos), and texting to book
+ * is NOT consent to be blasted. source="sms_walkin" makes the origin auditable
+ * and keeps them out of the "manual" dashboard badge. The AI can still learn
+ * and save their first name mid-booking (tools.ts book path). Returns null if
+ * the per-shop daily cap is hit, a race already created the row (caller
+ * re-reads), or on any failure.
+ */
+async function createSmsWalkinClient(
+  shopId: string,
+  phone: string,
+  now: Date,
+): Promise<{ id: string } | null> {
+  // Per-shop daily creation ceiling (anti-flood; see the constant).
+  const dayStart = new Date(now);
+  dayStart.setUTCHours(0, 0, 0, 0);
+  const todayCount = await prisma.client.count({
+    where: { shopId, source: "sms_walkin", createdAt: { gte: dayStart } },
+  });
+  if (todayCount >= WALKIN_CREATE_CAP_PER_SHOP_PER_DAY) {
+    logger.warn({ shopId }, "sms-walkin daily creation cap hit; no AI for new numbers today");
+    return null;
+  }
+  try {
+    return await prisma.client.create({
+      data: {
+        shopId,
+        acuityClientKey: phone, // normalized phone is the natural key
+        phone,
+        source: "sms_walkin",
+        // NO smsConsentAt: conversational replies are fine, marketing is not.
+        magicToken: randomToken(),
+      },
+      select: { id: true },
+    });
+  } catch (err) {
+    // Unique (shopId, acuityClientKey) race: another concurrent inbound won.
+    logger.info({ shopId, err: (err as Error).message }, "sms-walkin create raced/failed");
+    return null;
+  }
+}
+
 /** Which shop (if any) should answer this phone number right now. */
 async function resolveInbound(
   phone: string,
@@ -89,9 +152,10 @@ async function resolveInbound(
   // 0. A shop-owned line: the number the client TEXTED is the shop - the
   //    structural fix for wrong-shop routing. It outranks everything,
   //    including a live thread at another shop (texting a different shop's
-  //    number is choosing that shop). Unknown texters on a shop line stay
-  //    silent for now (booking tools need a Client identity), same as the
-  //    shared line.
+  //    number is choosing that shop). An UNKNOWN number that texts a shop's
+  //    own line is an SMS walk-in: we create a client on the spot so the AI
+  //    can book them (see createSmsWalkinClient). A number that opted out
+  //    ANYWHERE is never onboarded (STOP is global and absolute).
   if (to) {
     const owned = await prisma.shop.findUnique({
       where: { twilioNumber: to },
@@ -99,12 +163,49 @@ async function resolveInbound(
     });
     if (owned) {
       if (!receptionistEnabledForShop(owned, { now })) return null;
-      const client = await prisma.client.findFirst({
+      let client = await prisma.client.findFirst({
         where: { shopId: owned.id, phone, archivedAt: null },
         orderBy: { createdAt: "desc" },
         select: { id: true },
       });
-      if (!client) return null;
+      if (!client) {
+        // STOP is global: never onboard a number that opted out anywhere.
+        const optedOut = await prisma.client.findFirst({
+          where: { phone, optedOut: true },
+          select: { id: true },
+        });
+        if (optedOut) return null;
+
+        // An ARCHIVED walk-in at this shop (barber hid a past one-off) would
+        // (a) be invisible to the active-only lookup above and (b) collide on
+        // the (shopId, acuityClientKey=phone) unique key inside create -> the
+        // number would be permanently silenced. The person is re-engaging by
+        // texting the shop, so reactivate the row instead. Match on the
+        // walk-in's natural key (acuityClientKey=phone) so we never resurrect
+        // some unrelated archived record.
+        const archived = await prisma.client.findFirst({
+          where: { shopId: owned.id, acuityClientKey: phone, archivedAt: { not: null } },
+          select: { id: true },
+        });
+        if (archived) {
+          await prisma.client.update({
+            where: { id: archived.id },
+            data: { archivedAt: null },
+          });
+          client = archived;
+        } else {
+          client =
+            (await createSmsWalkinClient(owned.id, phone, now)) ??
+            // Lost the create race -> the winner's row now exists; re-read it.
+            // (Also the null-on-cap path: no row to find, so we stay silent.)
+            (await prisma.client.findFirst({
+              where: { shopId: owned.id, phone, archivedAt: null },
+              orderBy: { createdAt: "desc" },
+              select: { id: true },
+            }));
+        }
+        if (!client) return null;
+      }
       const conversation = await findOrCreateConversation({
         shopId: owned.id,
         phone,
