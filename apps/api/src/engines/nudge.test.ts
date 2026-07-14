@@ -12,7 +12,7 @@ import { sweepShop } from "./nudge.js";
 
 const NOW = new Date("2026-06-01T12:00:00Z");
 
-let sent: { to: string; body: string }[] = [];
+let sent: { to: string; body: string; from?: string }[] = [];
 const fakeProvider: MessageProvider = {
   channel: "SMS",
   async send(input) {
@@ -110,6 +110,28 @@ describe("sweepShop", () => {
     });
     expect(sentNudges.length).toBe(summary.sent);
     expect(sentNudges[0]?.messageSid).toMatch(/^SM/);
+    // No twilioNumber on this shop -> from is undefined (shared platform line).
+    expect(sent[0]!.from).toBeUndefined();
+  });
+
+  it("sends nudges FROM the shop's own number when it has one", async () => {
+    const own = "+15550101010";
+    const numShop = await prisma.shop.create({
+      data: {
+        ownerId: userId,
+        name: "Own Number Cuts",
+        bookingUrl: "https://ownnum.test",
+        webhookSecret: randomToken(),
+        dailySendCap: 5,
+        nudgeBufferDays: 7,
+        twilioNumber: own,
+      },
+    });
+    await makeOverdueClient(numShop.id, "tel:+13025552001", "+13025552001");
+    const summary = await sweepShop(numShop, { now: NOW, dryRun: false });
+    expect(summary.sent).toBe(1);
+    expect(sent[0]!.from).toBe(own);
+    await prisma.shop.delete({ where: { id: numShop.id } });
   });
 
   it("respects the per-shop daily cap", async () => {
