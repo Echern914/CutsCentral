@@ -2,6 +2,7 @@ import Stripe from "stripe";
 import { apiEnv } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
+import { ensureShopNumber } from "../messaging/numberProvision.js";
 
 /**
  * Stripe billing. Two base tiers ("pro" = Premium, "pro_ai" = Premium AI) on
@@ -214,6 +215,9 @@ export async function upgradeSubscriptionToPremiumAi(shop: {
       where: { id: shop.id },
       data: { plan: "pro_ai" },
     });
+    // Premium AI includes the shop's own number - provision it now
+    // (idempotent fire-and-forget; a failure only logs, never blocks billing).
+    void ensureShopNumber(shop.id);
     return true;
   } catch (err) {
     logger.error(
@@ -361,6 +365,9 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
           { shopId, type: event.type },
           "stripe checkout.completed matched no shop (or was a canceled-sub replay)",
         );
+      } else if (session.metadata?.tier === "pro_ai") {
+        // Premium AI includes the shop's own number (idempotent, non-blocking).
+        void ensureShopNumber(shopId);
       }
       return;
     }
@@ -392,6 +399,19 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
           plan: ACTIVE_STATUSES.has(status) ? tier : "free",
         },
       });
+      // An ACTIVE Premium AI subscription includes the shop's own number
+      // (idempotent - re-fires harmlessly on every subscription.updated).
+      if (count > 0 && tier === "pro_ai" && ACTIVE_STATUSES.has(status)) {
+        const target =
+          shopId ??
+          (
+            await prisma.shop.findFirst({
+              where: { stripeCustomerId: customerId },
+              select: { id: true },
+            })
+          )?.id;
+        if (target) void ensureShopNumber(target);
+      }
       if (count === 0) {
         logger.warn(
           { shopId, customerId, type: event.type },
