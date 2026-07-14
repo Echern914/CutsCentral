@@ -22,7 +22,7 @@ import { RECEPTIONIST_REPLY_LIMITS } from "./replyCap.js";
 
 const NOW = new Date("2026-06-01T16:00:00Z"); // Monday, 12:00 EDT
 
-let sms: { to: string; body: string }[] = [];
+let sms: { to: string; body: string; from?: string }[] = [];
 const fakeProvider: MessageProvider = {
   channel: "SMS",
   async send(input) {
@@ -112,6 +112,7 @@ async function makeShop(
     receptionistEnabled: boolean;
     receptionistTermsAcceptedAt: Date | null;
     notifyPhone: string | null;
+    twilioNumber: string | null;
   }> = {},
 ): Promise<{ id: string }> {
   return prisma.shop.create({
@@ -129,6 +130,7 @@ async function makeShop(
           ? NOW
           : overrides.receptionistTermsAcceptedAt,
       notifyPhone: overrides.notifyPhone === undefined ? "+13025550111" : overrides.notifyPhone,
+      twilioNumber: overrides.twilioNumber ?? null,
     },
     select: { id: true },
   });
@@ -444,6 +446,80 @@ describe("processInboundText", () => {
       where: { shopId: shop.id, status: "BOOKED" },
     });
     expect(bookedCount).toBe(1);
+  });
+
+  it("a shop-owned To number pins routing to that shop, beating the phone-match guess", async () => {
+    // The wrong-shop scenario: this phone is a client at BOTH shops, and shop A
+    // has the more recent visit - the phone-match heuristic would pick A. But
+    // the client texted SHOP B'S OWN NUMBER, so B must win, full stop.
+    const shopA = await makeShop();
+    const ownNumber = `+1555${Math.floor(1000000 + Math.random() * 8999999)}`;
+    const shopB = await makeShop({ twilioNumber: ownNumber });
+    await makeBookable(shopA.id);
+    await makeBookable(shopB.id);
+    const phone = freshPhone();
+    await makeClient(shopA.id, phone, { lastVisitAt: NOW }); // most recent -> the guess
+    await makeClient(shopB.id, phone, { lastVisitAt: new Date("2026-01-01T00:00:00Z") });
+
+    const model = scriptedModel([textMsg("hey! what can I get you?")]);
+    __setModelClientForTests(model);
+
+    await processInboundText({ phone, text: "you open?", to: ownNumber, now: NOW });
+
+    // The conversation landed at shop B (the owned line), not shop A.
+    const convoB = await prisma.receptionistConversation.findFirst({
+      where: { shopId: shopB.id, phone },
+    });
+    const convoA = await prisma.receptionistConversation.findFirst({
+      where: { shopId: shopA.id, phone },
+    });
+    expect(convoB).not.toBeNull();
+    expect(convoA).toBeNull();
+
+    // And the reply went out FROM the shop's own number.
+    expect(sms).toHaveLength(1);
+    expect(sms[0]!.from).toBe(ownNumber);
+  });
+
+  it("a stranger texting a shop-owned line stays silent - never rerouted to another shop", async () => {
+    // The phone is a client ONLY at shop A. Texting shop B's own number must
+    // not fall back to the phone-match (that would be the wrong-shop bug) -
+    // v1 answer for unknown texters is silence.
+    const shopA = await makeShop();
+    const ownNumber = `+1555${Math.floor(1000000 + Math.random() * 8999999)}`;
+    const shopB = await makeShop({ twilioNumber: ownNumber });
+    await makeBookable(shopB.id);
+    const phone = freshPhone();
+    await makeClient(shopA.id, phone);
+
+    __setModelClientForTests(scriptedModel([textMsg("should never be sent")]));
+
+    await processInboundText({ phone, text: "you open?", to: ownNumber, now: NOW });
+
+    expect(sms).toHaveLength(0);
+    const convos = await prisma.receptionistConversation.findMany({
+      where: { phone },
+    });
+    expect(convos).toHaveLength(0);
+  });
+
+  it("shops without their own number keep shared-line phone-match routing and the shared sender", async () => {
+    const shop = await makeShop(); // no twilioNumber
+    await makeBookable(shop.id);
+    const phone = freshPhone();
+    await makeClient(shop.id, phone);
+
+    __setModelClientForTests(scriptedModel([textMsg("hey Marcus")]));
+
+    // to = the shared platform number (owned by no shop) -> phone-match path.
+    await processInboundText({ phone, text: "hi", to: "+15550001111", now: NOW });
+
+    expect(sms).toHaveLength(1);
+    expect(sms[0]!.from).toBeUndefined(); // shared sender = provider default
+    const convo = await prisma.receptionistConversation.findFirst({
+      where: { shopId: shop.id, phone },
+    });
+    expect(convo).not.toBeNull();
   });
 
   it("omits the holds note when the client holds nothing", async () => {

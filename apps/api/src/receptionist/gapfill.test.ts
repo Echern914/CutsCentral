@@ -146,7 +146,13 @@ async function seedShop(dailySendCap = 50): Promise<Seeded> {
     staffId: staff.id,
     serviceId: service.id,
     input: {
-      shop: { id: shop.id, name: "Gap Cuts", timezone: "America/New_York", dailySendCap },
+      shop: {
+        id: shop.id,
+        name: "Gap Cuts",
+        timezone: "America/New_York",
+        dailySendCap,
+        twilioNumber: null,
+      },
       appt: {
         id: canceled.id,
         staffId: staff.id,

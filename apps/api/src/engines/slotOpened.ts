@@ -65,6 +65,7 @@ const SHOP_SELECT = {
   receptionistSubscriptionStatus: true,
   receptionistCompAccess: true,
   receptionistTermsAcceptedAt: true,
+  twilioNumber: true,
 } as const;
 
 export async function notifySlotOpened(params: {
@@ -170,6 +171,7 @@ export async function notifySlotOpened(params: {
           name: shop.name,
           timezone: shop.timezone,
           dailySendCap: shop.dailySendCap,
+          twilioNumber: shop.twilioNumber,
         },
         appt: {
           id: appt.id,

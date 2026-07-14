@@ -25,13 +25,17 @@ import { receptionistReplyCapReason } from "./replyCap.js";
  * Inbound orchestration: a non-keyword text arrives on the SHARED platform
  * number and (maybe) becomes an AI turn.
  *
- * Shop routing on a shared number (v1, per product decision):
- *   1. a live conversation for this phone wins - the thread pins the shop, so
- *      replies to a gap-fill offer route deterministically;
+ * Shop routing, in precedence order:
+ *   0. the number the client TEXTED is a shop-owned line (Shop.twilioNumber)
+ *      -> that shop, full stop. The structural fix for wrong-shop routing:
+ *      no guessing, and it outranks a live thread at another shop (texting a
+ *      different shop's number IS choosing that shop).
+ *   1. else a live conversation for this phone wins - the thread pins the
+ *      shop, so replies to a gap-fill offer route deterministically;
  *   2. else the phone must match a known Client at a receptionist-enabled
- *      native shop (multi-shop matches -> most recently visited);
+ *      native shop (multi-shop matches -> most recently visited; shops with
+ *      their own number should make this guess practically unreachable);
  *   3. else NO AI - the webhook keeps today's STOP/START-only behavior.
- *      Per-shop numbers (docs/per-shop-numbers-plan.md) later remove this limit.
  *
  * Consent semantics: replying to a consumer-initiated text needs no
  * smsConsentAt and ignores quiet hours/caps, but optedOut ALWAYS wins
@@ -51,6 +55,7 @@ const GATE_SELECT = {
   subscriptionStatus: true,
   trialEndsAt: true,
   compAccess: true,
+  twilioNumber: true,
 } as const;
 
 type GateShop = {
@@ -66,6 +71,7 @@ type GateShop = {
   subscriptionStatus: string;
   trialEndsAt: Date | null;
   compAccess: boolean;
+  twilioNumber: string | null;
 };
 
 interface ResolvedInbound {
@@ -75,7 +81,39 @@ interface ResolvedInbound {
 }
 
 /** Which shop (if any) should answer this phone number right now. */
-async function resolveInbound(phone: string, now: Date): Promise<ResolvedInbound | null> {
+async function resolveInbound(
+  phone: string,
+  now: Date,
+  to?: string | null,
+): Promise<ResolvedInbound | null> {
+  // 0. A shop-owned line: the number the client TEXTED is the shop - the
+  //    structural fix for wrong-shop routing. It outranks everything,
+  //    including a live thread at another shop (texting a different shop's
+  //    number is choosing that shop). Unknown texters on a shop line stay
+  //    silent for now (booking tools need a Client identity), same as the
+  //    shared line.
+  if (to) {
+    const owned = await prisma.shop.findUnique({
+      where: { twilioNumber: to },
+      select: GATE_SELECT,
+    });
+    if (owned) {
+      if (!receptionistEnabledForShop(owned, { now })) return null;
+      const client = await prisma.client.findFirst({
+        where: { shopId: owned.id, phone, archivedAt: null },
+        orderBy: { createdAt: "desc" },
+        select: { id: true },
+      });
+      if (!client) return null;
+      const conversation = await findOrCreateConversation({
+        shopId: owned.id,
+        phone,
+        clientId: client.id,
+      });
+      return { shop: owned, clientId: client.id, conversation };
+    }
+  }
+
   // 1. Live thread wins (routing must stay stable mid-conversation).
   const live = await prisma.receptionistConversation.findFirst({
     where: { phone, status: { in: ["active", "escalated"] } },
@@ -192,12 +230,14 @@ export async function hasLiveConversation(phone: string): Promise<boolean> {
 export async function processInboundText(params: {
   phone: string;
   text: string;
+  /** The number the client texted (E.164) - pins the shop when a shop owns it. */
+  to?: string | null;
   now?: Date;
 }): Promise<void> {
   const now = params.now ?? new Date();
   try {
     if (!receptionistConfigured()) return;
-    const resolved = await resolveInbound(params.phone, now);
+    const resolved = await resolveInbound(params.phone, now, params.to);
     if (!resolved) return; // unknown number / no enabled shop -> no AI (v1)
 
     const { shop, conversation } = resolved;
@@ -316,6 +356,7 @@ export async function processInboundText(params: {
           phone: params.phone,
           body: outcome.text,
           kind: "receptionist_reply",
+          from: shop.twilioNumber,
         });
       } else {
         // The loop died (API error, refusal, runaway) - hand off gracefully.
@@ -338,6 +379,7 @@ export async function processInboundText(params: {
           phone: params.phone,
           body: HANDOFF_LINE,
           kind: "receptionist_reply",
+          from: shop.twilioNumber,
         });
       }
     } finally {

@@ -6,9 +6,9 @@ import type { MessageProvider, SendMessageInput, SendMessageResult } from "./pro
 const env = apiEnv();
 
 /**
- * Twilio SMS provider using the single shared platform number. The shop name is
- * carried in the message body (set by the nudge template), not via a per-shop
- * number - that's a future seam.
+ * Twilio SMS provider. Sends from the shared platform number unless the caller
+ * passes a per-shop `from` (Shop.twilioNumber) - shops with their own line get
+ * deterministic inbound routing and a local sender their clients recognize.
  */
 export class TwilioMessageProvider implements MessageProvider {
   readonly channel = "SMS" as const;
@@ -17,7 +17,7 @@ export class TwilioMessageProvider implements MessageProvider {
   async send(input: SendMessageInput): Promise<SendMessageResult> {
     const msg = await this.client.messages.create({
       to: input.to,
-      from: env.TWILIO_FROM_NUMBER,
+      from: input.from ?? env.TWILIO_FROM_NUMBER,
       body: input.body,
     });
     return { sid: msg.sid, status: msg.status };

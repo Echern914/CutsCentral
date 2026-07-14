@@ -3,6 +3,10 @@ import type { MessageChannel } from "@chairback/db";
 export interface SendMessageInput {
   to: string; // E.164
   body: string;
+  // E.164 sender override - a shop's OWN number (Shop.twilioNumber). Omitted =
+  // the shared platform number. Any number used here must be attached to the
+  // verified A2P campaign's messaging service or carriers will filter it.
+  from?: string;
 }
 
 export interface SendMessageResult {
