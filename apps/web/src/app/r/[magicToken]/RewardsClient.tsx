@@ -14,6 +14,7 @@ import { CadenceCard } from "./CadenceCard";
 import { PushOptIn } from "./PushOptIn";
 import { GetTheApp } from "./GetTheApp";
 import { AddToWallet } from "./AddToWallet";
+import { DeleteMyData } from "./DeleteMyData";
 import { resolveRewardsTheme, rewardsFontVars, surfaceStyle } from "./theme";
 import type { RewardsData } from "./page";
 
@@ -476,6 +477,12 @@ export function RewardsClient({
               </a>
             </motion.footer>
           )}
+
+          {/* Self-serve data deletion (App Store 5.1.1(v)) - a quiet control,
+              always available, at the very bottom of the page. */}
+          <motion.div variants={fadeUp} className="pt-2">
+            <DeleteMyData magicToken={magicToken} shopName={shop.name} theme={t} />
+          </motion.div>
         </motion.div>
       </main>
     </div>
