@@ -45,6 +45,9 @@ twilioWebhookRouter.post(
     }
 
     const from = toE164((req.body as { From?: string }).From);
+    // The number the client texted. On a shop-owned line (Shop.twilioNumber)
+    // this pins receptionist routing to that shop - no phone-match guessing.
+    const to = toE164((req.body as { To?: string }).To);
     const text = ((req.body as { Body?: string }).Body ?? "").trim().toUpperCase();
 
     // Opt-in confirmation copy (matches the A2P campaign's registered opt-in
@@ -86,7 +89,7 @@ twilioWebhookRouter.post(
       // Not a compliance keyword: offer it to the AI receptionist. Fire and
       // forget AFTER we ACK - the reply (if any) goes out via REST, not TwiML.
       const rawBody = ((req.body as { Body?: string }).Body ?? "").trim();
-      if (rawBody) void processInboundText({ phone: from, text: rawBody });
+      if (rawBody) void processInboundText({ phone: from, text: rawBody, to });
     }
 
     // Escape the body for XML (the copy is static + safe, but keep it correct

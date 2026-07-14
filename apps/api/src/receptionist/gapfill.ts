@@ -49,6 +49,8 @@ export interface GapFillInput {
     name: string;
     timezone: string;
     dailySendCap: number;
+    /** The shop's own line (Shop.twilioNumber); null = shared platform number. */
+    twilioNumber: string | null;
   };
   appt: {
     id: string; // the just-canceled appointment (its slot is what we offer)
@@ -375,6 +377,7 @@ export async function runGapFill(input: GapFillInput): Promise<void> {
       phone: candidate.phone,
       body: outcome.text,
       kind: "receptionist",
+      from: shop.twilioNumber,
     });
     if (!sent) {
       await releaseHold(holdId);

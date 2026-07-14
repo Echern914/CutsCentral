@@ -12,8 +12,9 @@ client texts the shared Twilio number
   └─ POST /webhooks/twilio/inbound            (STOP/START handled first, unchanged)
        └─ ACK empty TwiML immediately, then async:
           receptionist/inbound.ts
-            ├─ route the phone -> shop (live thread wins, else known client
-            │  at a receptionist-enabled native shop, most-recent visit)
+            ├─ route: shop-owned To-number wins (Shop.twilioNumber - never
+            │  guesses), else live thread, else known-client phone match at a
+            │  receptionist-enabled native shop (most-recent visit)
             ├─ render ai/receptionist-prompt.md with the shop's config
             ├─ rebuild thread history from ReceptionistMessage rows
             ├─ inject the client's ACTIVE HOLDS (slot_ids) into the per-turn
@@ -123,8 +124,16 @@ Deterministic tests (no API key, scripted model): `apps/api/src/receptionist/*.t
    (`PATCH /api/shops/me` with `receptionistEnabled: true, acceptReceptionistTerms: true`;
    optional `receptionistTone`)
 3. Entitlement: comp the pilot (`receptionistCompAccess`) or subscribe to the add-on
-4. Clients must exist with the phone numbers that will text in (shared-number
-   v1 serves KNOWN clients only; unknown numbers keep STOP/START-only behavior)
+4. Clients must exist with the phone numbers that will text in (v1 serves
+   KNOWN clients only; unknown numbers keep STOP/START-only behavior)
+5. **Give the shop its own number** (strongly recommended once >1 shop has the
+   receptionist - it makes wrong-shop routing structurally impossible):
+   buy a local number (~$1.15/mo) → add it to the "ChairBack SMS" messaging
+   service (attaches it to the VERIFIED campaign; up to 49 numbers ride the
+   one campaign) → set its inbound webhook to
+   `https://api.getchairback.com/webhooks/twilio/inbound` (POST) → set
+   `Shop.twilioNumber` to the E.164. Inbound texts TO that number then pin
+   the shop, and its receptionist replies send FROM it.
 
 ## Platform go-live checklist (Eric)
 
@@ -139,8 +148,16 @@ Deterministic tests (no API key, scripted model): `apps/api/src/receptionist/*.t
 
 ## Known v1 limits / deferred
 
-- Shared platform number: unknown texters can't be routed to a shop (per-shop
-  numbers plan removes this later)
+- Unknown texters get no AI even on a shop-owned line (booking tools need a
+  Client identity; creating clients from inbound texts is a consent-surface
+  decision deferred on purpose)
+- Shops still on the SHARED number fall back to known-client phone matching;
+  a phone that's a client at 2+ enabled shops routes to the most-recently
+  visited one. Giving each enabled shop its own number (checklist step 5)
+  removes that guess entirely
+- Marketing sends (nudges/win-back/promos) still go from the shared number
+  even for shops with their own line - move them to the shop number when the
+  second shop onboards (the provider seam takes `from` already)
 - Gap-fill triggers on cancellations/no-shows only (natural-hole scanning is a
   fast-follow), one candidate per freed slot (no cascade on decline)
 - No dashboard transcript UI yet (data model + `forShop` delegates are ready)

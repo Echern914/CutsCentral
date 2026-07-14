@@ -22,6 +22,8 @@ export async function sendReceptionistSms(params: {
   phone: string;
   body: string;
   kind: "receptionist" | "receptionist_reply";
+  /** The shop's own number (Shop.twilioNumber); null/omitted = shared line. */
+  from?: string | null;
 }): Promise<boolean> {
   // Send-time STOP re-check (global by phone - STOP opts out every match).
   const optedOut = await prisma.client.findFirst({
@@ -52,6 +54,7 @@ export async function sendReceptionistSms(params: {
     const result = await getMessageProvider().send({
       to: params.phone,
       body: params.body,
+      from: params.from ?? undefined,
     });
     await db.nudge.update({
       where: { id: nudge.id },

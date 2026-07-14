@@ -272,6 +272,14 @@ model Shop {
   // the settings route when receptionistEnabled is first turned on; enabling is
   // REJECTED without it. null = never accepted.
   receptionistTermsAcceptedAt DateTime?
+  // The shop's OWN Twilio number (E.164), bought under the platform's verified
+  // A2P campaign. When set: inbound texts TO this number pin routing to this
+  // shop (no client-phone guessing - the structural fix for wrong-shop routing
+  // on the shared line) and the shop's receptionist replies send FROM it. Null
+  // = the shop uses the shared platform number (TWILIO_FROM_NUMBER) with
+  // known-client phone-match routing. Assigned by the operator (buy the number
+  // in Twilio, attach it to the campaign's messaging service, set it here).
+  twilioNumber String? @unique
 
   // per-shop webhook routing (the body has no account id, so the URL path routes)
   webhookSecret    String   @unique // 32-byte random, used in the webhook URL path
