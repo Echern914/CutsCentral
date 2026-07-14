@@ -172,11 +172,34 @@ Unknown numbers on the SHARED line are still not onboarded (no shop signal).
   a phone that's a client at 2+ enabled shops routes to the most-recently
   visited one. Giving each enabled shop its own number (checklist step 5)
   removes that guess entirely
-- Marketing sends (nudges/win-back/promos) still go from the shared number
-  even for shops with their own line - move them to the shop number when the
-  second shop onboards (the provider seam takes `from` already)
 - Gap-fill triggers on cancellations/no-shows only (natural-hole scanning is a
   fast-follow), one candidate per freed slot (no cascade on decline)
-- No dashboard transcript UI yet (data model + `forShop` delegates are ready)
 - Legal copy (terms §6, privacy subprocessor) is drafted language, not legal
   advice — worth a lawyer pass before charging for the tier
+
+## Everything a shop texts comes from its own number
+
+When a shop has its own number (`Shop.twilioNumber`), ALL of its client-facing
+SMS sends from it — not just the receptionist. The eight shop→client send
+sites (rebooking nudges, win-backs, promo blasts, loyalty/reward texts,
+appointment confirmations + reminders, the manual dashboard nudge, and the
+rewards-link resolver) each pass `from: shop.twilioNumber ?? undefined`, so a
+client only ever sees the one number for that barbershop. Barber-facing alerts
+(escalation pings, "a slot opened" to `notifyPhone`) stay on the shared line.
+
+## Barber inbox + manual takeover (`/dashboard/inbox`)
+
+Every AI conversation is readable and takeover-able by the barber:
+- `GET /api/dashboard/receptionist/conversations` — list (newest first,
+  `escalatedCount` badges threads the AI handed off).
+- `GET /api/dashboard/receptionist/conversations/:id` — full transcript.
+- `POST /api/dashboard/receptionist/conversations/:id/reply` — the barber
+  sends a manual reply FROM the shop's number. This re-checks opt-out at send
+  time (422 if opted out), needs a resolvable client (409 otherwise), records
+  a `system_note` + an `assistant` message, and flips the thread to
+  `escalated` so the AI goes silent — the human is now driving.
+
+All three read/scope through `forShop` (a cross-shop id 404s); the reply route
+is `smsLimiter`-throttled and demo-session-write-blocked. The web UI is at
+`apps/web/src/app/dashboard/inbox/` (list + `[id]` transcript + reply box),
+with an "Inbox" nav pill.

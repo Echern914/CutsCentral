@@ -51,6 +51,7 @@ const SHOP_SELECT = {
   subscriptionStatus: true,
   trialEndsAt: true,
   compAccess: true,
+  twilioNumber: true,
 } as const;
 
 /** The client fields every loyalty send needs (textability gate + copy). */
@@ -73,6 +74,7 @@ type LoyaltyShop = {
   subscriptionStatus: string;
   trialEndsAt: Date | null;
   compAccess: boolean;
+  twilioNumber: string | null;
 };
 
 type LoyaltyClient = {
@@ -170,6 +172,7 @@ async function sendLoyalty(
   clientId: string,
   to: string,
   body: string,
+  from: string | null,
 ): Promise<void> {
   const db = forShop(shopId);
   let nudgeId: string | undefined;
@@ -178,7 +181,11 @@ async function sendLoyalty(
       data: { clientId, channel: "SMS", status: "PENDING", kind: "loyalty", body },
     });
     nudgeId = nudge.id;
-    const result = await getMessageProvider().send({ to, body });
+    const result = await getMessageProvider().send({
+      to,
+      body,
+      from: from ?? undefined, // shop's own line when it has one
+    });
     await db.nudge.update({
       where: { id: nudge.id },
       data: { status: "SENT", sentAt: new Date(), messageSid: result.sid },
@@ -273,7 +280,7 @@ export async function notifyPunchEarned(params: {
       cardName: params.cardName,
       nextReward,
     });
-    await sendLoyalty(shop.id, client.id, client.phone!, body);
+    await sendLoyalty(shop.id, client.id, client.phone!, body, shop.twilioNumber);
   } catch (err) {
     // Defensive: the gate/copy path itself must never break the visit flow.
     logger.error(
@@ -348,7 +355,7 @@ export async function notifyRewardRedeemed(params: {
       balance: params.balance,
       cardName: params.cardName,
     });
-    await sendLoyalty(shop.id, client.id, client.phone!, body);
+    await sendLoyalty(shop.id, client.id, client.phone!, body, shop.twilioNumber);
   } catch (err) {
     logger.error(
       { err, shopId: params.shopId, clientId: params.clientId },

@@ -386,7 +386,11 @@ promotionsRouter.post("/:id/blast", smsLimiter, async (req, res) => {
     });
     try {
       // Non-null: dryRun===false here (the dry-run branch above `continue`d).
-      const result = await provider!.send({ to: client.phone!, body });
+      const result = await provider!.send({
+        to: client.phone!,
+        body,
+        from: shop.twilioNumber ?? undefined, // shop's own line when it has one
+      });
       await prisma.nudge.update({
         where: { id: nudge.id },
         data: { status: "SENT", sentAt: new Date(), messageSid: result.sid },

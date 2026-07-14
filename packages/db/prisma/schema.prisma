@@ -1356,6 +1356,7 @@ model ReceptionistConversation {
   @@index([shopId, phone, status])
   @@index([phone, status, lastMessageAt]) // inbound routing: active-conversation pin
   @@index([status, lastMessageAt]) // auto-close sweep
+  @@index([shopId, lastMessageAt]) // barber inbox list (newest first per shop)
 }
 
 // One turn in a receptionist conversation. The full audit trail: every inbound

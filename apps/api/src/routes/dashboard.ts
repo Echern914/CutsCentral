@@ -43,6 +43,9 @@ import { buildNudgeBody } from "../messaging/templates.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 import { pokeWalletPass } from "../wallet/pass.js";
 import { toE164 } from "../acuity/clientKey.js";
+import { sendReceptionistSms } from "../receptionist/outbound.js";
+import { appendMessage } from "../receptionist/conversation.js";
+import { logger } from "../logger.js";
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
@@ -402,7 +405,11 @@ dashboardRouter.post("/nudge/:clientId", smsLimiter, requireActiveAccess, async 
     data: { clientId: client.id, channel: "SMS", status: "PENDING", body },
   });
   try {
-    const result = await getMessageProvider().send({ to: client.phone, body });
+    const result = await getMessageProvider().send({
+      to: client.phone,
+      body,
+      from: shop.twilioNumber ?? undefined, // shop's own line when it has one
+    });
     await db.nudge.update({
       where: { id: nudge.id },
       data: { status: "SENT", sentAt: now, messageSid: result.sid },
@@ -1194,7 +1201,11 @@ dashboardRouter.post("/clients/bulk", smsLimiter, async (req, res) => {
       data: { clientId: client.id, channel: "SMS", status: "PENDING", body },
     });
     try {
-      const result = await provider.send({ to: client.phone!, body });
+      const result = await provider.send({
+        to: client.phone!,
+        body,
+        from: shop.twilioNumber ?? undefined, // shop's own line when it has one
+      });
       await db.nudge.update({
         where: { id: nudge.id },
         data: { status: "SENT", sentAt: now, messageSid: result.sid },
@@ -2005,5 +2016,187 @@ async function buildAtRiskRows(shopId: string, bufferDays: number, now: Date) {
 
   return rows.sort((a, b) => b.daysOverdue - a.daysOverdue);
 }
+
+// ---------------------------------------------------------------------------
+// AI receptionist inbox: the barber's view of every AI conversation, with the
+// ability to take over and reply manually. The escalation alert already exists
+// (the AI pages the barber when it hands off); this is where they read the
+// thread and step in. Reads go through forShop (RLS); a cross-shop id 404s.
+// ---------------------------------------------------------------------------
+
+// List conversations for this shop, newest activity first.
+dashboardRouter.get("/receptionist/conversations", async (req, res) => {
+  const db = forShop(req.shop!.id);
+  const convos = await db.receptionistConversation.findMany({
+    orderBy: { lastMessageAt: "desc" },
+    take: 200,
+  });
+  // forShop() doesn't type relation includes, so resolve client names in one
+  // scoped batch query keyed by the conversations' clientIds.
+  const clientIds = [...new Set(convos.map((c) => c.clientId).filter(Boolean))] as string[];
+  const clients = clientIds.length
+    ? await db.client.findMany({
+        where: { id: { in: clientIds } },
+        select: { id: true, firstName: true, lastName: true },
+      })
+    : [];
+  const nameById = new Map(
+    clients.map((c) => [c.id, [c.firstName, c.lastName].filter(Boolean).join(" ") || null]),
+  );
+  res.json({
+    conversations: convos.map((c) => ({
+      id: c.id,
+      phone: c.phone,
+      status: c.status,
+      clientName: c.clientId ? (nameById.get(c.clientId) ?? null) : null,
+      lastMessageAt: c.lastMessageAt.toISOString(),
+    })),
+    // Badge the nav: threads the AI handed off that still need a human.
+    escalatedCount: convos.filter((c) => c.status === "escalated").length,
+  });
+});
+
+// One conversation's full transcript, oldest first (the whole audit trail).
+dashboardRouter.get("/receptionist/conversations/:id", async (req, res) => {
+  const db = forShop(req.shop!.id);
+  const convo = await db.receptionistConversation.findFirst({
+    where: { id: req.params.id },
+  });
+  if (!convo) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const client = convo.clientId
+    ? await db.client.findFirst({
+        where: { id: convo.clientId },
+        select: { firstName: true, lastName: true },
+      })
+    : null;
+  const messages = await db.receptionistMessage.findMany({
+    where: { conversationId: convo.id },
+    orderBy: { createdAt: "asc" },
+  });
+  res.json({
+    conversation: {
+      id: convo.id,
+      phone: convo.phone,
+      status: convo.status,
+      clientName:
+        [client?.firstName, client?.lastName].filter(Boolean).join(" ") || null,
+      lastMessageAt: convo.lastMessageAt.toISOString(),
+    },
+    messages: messages.map((m) => ({
+      role: m.role, // "user" (client) | "assistant" (AI or barber) | "system_note"
+      content: m.content,
+      toolCalls: m.toolCalls,
+      createdAt: m.createdAt.toISOString(),
+    })),
+  });
+});
+
+// Barber takes over and sends a manual reply FROM the shop's own number. This
+// silences the AI on the thread (status -> escalated) so it won't also reply.
+// The send re-checks opt-out at send time (in sendReceptionistSms) and is
+// audited on the Nudge ledger like every other send. smsLimiter throttles it.
+const replySchema = z.object({ body: z.string().trim().min(1).max(1000) }).strict();
+dashboardRouter.post(
+  "/receptionist/conversations/:id/reply",
+  smsLimiter,
+  async (req, res) => {
+    const parsed = replySchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+      return;
+    }
+    const shop = req.shop!;
+    const db = forShop(shop.id);
+    const convo = await db.receptionistConversation.findFirst({
+      where: { id: req.params.id },
+    });
+    if (!convo) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+
+    // The Nudge ledger needs a clientId; a conversation's client can be null
+    // (merged/archived mid-thread). Re-resolve by phone, else refuse.
+    let clientId = convo.clientId;
+    if (!clientId) {
+      const client = await db.client.findFirst({
+        where: { phone: convo.phone, archivedAt: null },
+        select: { id: true },
+      });
+      clientId = client?.id ?? null;
+    }
+    if (!clientId) {
+      res.status(409).json({ error: "no_client" });
+      return;
+    }
+
+    const sent = await sendReceptionistSms({
+      shopId: shop.id,
+      clientId,
+      phone: convo.phone,
+      body: parsed.data.body,
+      kind: "receptionist_reply",
+      from: shop.twilioNumber, // the shop's own line
+    });
+    if (!sent) {
+      // Opted out at send time, or the send failed - don't record it as sent.
+      res.status(422).json({ error: "send_failed_or_opted_out" });
+      return;
+    }
+
+    // The SMS is already out. From here, a persistence failure must NOT surface
+    // as an error the barber retries on - a retry would re-send a duplicate
+    // text (the send has no idempotency key). So the post-send writes are
+    // best-effort: log and move on. The transcript self-heals on the next
+    // inbound turn's history rebuild; the status flip below is the only piece
+    // with a lasting consequence, so it's attempted last and independently.
+    try {
+      // Persist the barber's message on the thread (as an assistant-role turn,
+      // like the AI's own replies) with a system_note marking it manual.
+      await appendMessage({
+        shopId: shop.id,
+        conversationId: convo.id,
+        role: "system_note",
+        content: "manual reply sent by the shop",
+      });
+      await appendMessage({
+        shopId: shop.id,
+        conversationId: convo.id,
+        role: "assistant",
+        content: parsed.data.body,
+      });
+    } catch (err) {
+      logger.error(
+        { err, conversationId: convo.id },
+        "manual reply sent but transcript append failed",
+      );
+    }
+    // Take over: any non-escalated thread becomes escalated. For an ACTIVE
+    // thread this silences the AI. For a CLOSED thread this REOPENS it under
+    // the barber's control - critical, because the client's next text would
+    // otherwise skip the closed row (routing only matches active/escalated)
+    // and the AI would start a brand-new conversation, blind to the barber's
+    // manual reply and double-handling the client.
+    let status = convo.status;
+    if (convo.status !== "escalated") {
+      try {
+        await db.receptionistConversation.update({
+          where: { id: convo.id },
+          data: { status: "escalated" },
+        });
+        status = "escalated";
+      } catch (err) {
+        logger.error(
+          { err, conversationId: convo.id },
+          "manual reply sent but take-over status flip failed",
+        );
+      }
+    }
+    res.json({ ok: true, status });
+  },
+);
 
 export { NUDGE };

@@ -14,6 +14,7 @@ const LINKS = [
   { href: "/dashboard/booking", label: "Booking" },
   { href: "/dashboard/payments", label: "Payments" },
   { href: "/dashboard/site", label: "Page" },
+  { href: "/dashboard/inbox", label: "Inbox" },
   { href: "/dashboard/requests", label: "Requests" },
   { href: "/dashboard/reviews", label: "Reviews" },
   { href: "/dashboard/nudges", label: "Nudges" },

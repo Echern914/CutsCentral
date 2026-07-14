@@ -720,7 +720,7 @@ rewardsRouter.post("/resolve-by-phone", async (req, res) => {
       tx.client.findFirst({
         where: { phone, optedOut: false, smsConsentAt: { not: null }, archivedAt: null },
         orderBy: [{ lastVisitAt: { sort: "desc", nulls: "last" } }, { updatedAt: "desc" }],
-        include: { shop: { select: { id: true, name: true } } },
+        include: { shop: { select: { id: true, name: true, twilioNumber: true } } },
       }),
     );
     if (client) {
@@ -730,7 +730,11 @@ rewardsRouter.post("/resolve-by-phone", async (req, res) => {
         `Hi ${who}, here's your ${client.shop.name} rewards link: ${rewardsUrl} ` +
         `Reply STOP to opt out.`;
       try {
-        const result = await getMessageProvider().send({ to: phone, body });
+        const result = await getMessageProvider().send({
+          to: phone,
+          body,
+          from: client.shop.twilioNumber ?? undefined, // shop's own line when it has one
+        });
         // Audit as a loyalty-kind Nudge (transactional, not a marketing blast).
         await runAsOwner((tx) =>
           tx.nudge.create({

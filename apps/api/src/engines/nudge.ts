@@ -322,7 +322,11 @@ async function doSweepShop(
     try {
       // Non-null: dryRun===false here (the dry-run branch above `continue`d),
       // so provider was constructed.
-      const result = await provider!.send({ to: client.phone!, body });
+      const result = await provider!.send({
+        to: client.phone!,
+        body,
+        from: shop.twilioNumber ?? undefined, // the shop's own line when it has one
+      });
       await prisma.nudge.update({
         where: { id: nudge.id },
         data: { status: "SENT", sentAt: now, messageSid: result.sid },
