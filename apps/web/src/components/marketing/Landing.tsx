@@ -27,7 +27,10 @@ export function Landing() {
 
       {/* ====== Nav ====== */}
       <header className="sticky top-0 z-20">
-        <nav className="glass mx-auto mt-4 flex w-[min(72rem,calc(100%-2rem))] items-center justify-between rounded-full px-5 py-3">
+        <nav
+          aria-label="Primary"
+          className="glass mx-auto mt-4 flex w-[min(72rem,calc(100%-2rem))] items-center justify-between rounded-full px-5 py-3"
+        >
           <Link href="/" className="flex items-center gap-2">
             <ScissorsMark className="h-4 w-4 text-gold" />
             <span className="font-display text-base tracking-tight">{APP_NAME}</span>
@@ -498,6 +501,9 @@ export function Landing() {
             </Link>
             <Link href="/sms" className="transition-colors duration-150 ease-out hover:text-offwhite">
               SMS Policy
+            </Link>
+            <Link href="/accessibility" className="transition-colors duration-150 ease-out hover:text-offwhite">
+              Accessibility
             </Link>
             <a
               href="mailto:support@getchairback.com"

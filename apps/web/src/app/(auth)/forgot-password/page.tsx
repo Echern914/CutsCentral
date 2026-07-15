@@ -2,6 +2,9 @@ import Link from "next/link";
 import { apiPublicGet } from "@/lib/api";
 import { ForgotPasswordForm } from "./ForgotPasswordForm";
 
+// Distinct document title per route (WCAG 2.4.2) via the root %s template.
+export const metadata = { title: "Forgot password" };
+
 export default async function ForgotPasswordPage() {
   // Same capability discovery as the login page: while email isn't configured
   // the login form hides its link, but this URL is still typeable - so render

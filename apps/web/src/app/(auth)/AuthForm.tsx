@@ -6,6 +6,7 @@ import { APP_NAME } from "@chairback/config/constants";
 import { motion } from "framer-motion";
 import { fadeUp } from "@/components/motion/variants";
 import { Card } from "@/components/ui/Card";
+import { FormError } from "@/components/ui/FormError";
 
 function SubmitButton({ label }: { label: string }) {
   const { pending } = useFormStatus();
@@ -20,8 +21,10 @@ function SubmitButton({ label }: { label: string }) {
   );
 }
 
+// Keep the global :focus-visible ring visible (WCAG 2.4.7): we no longer strip
+// the outline with `outline-none`; the border tint is an extra, not the sole cue.
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-4 py-3 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "w-full rounded-xl border border-subtle bg-charcoal-700 px-4 py-3 text-sm text-offwhite placeholder:text-muted focus:border-gold/50";
 
 export function AuthForm({
   mode,
@@ -92,21 +95,38 @@ export function AuthForm({
           <form action={formAction} className="flex flex-col gap-3">
             {next && <input type="hidden" name="next" value={next} />}
             {isSignup && (
-              <input name="name" placeholder="Your name" required className={field} />
+              <input
+                name="name"
+                placeholder="Your name"
+                aria-label="Your name"
+                required
+                autoComplete="name"
+                aria-invalid={errorText ? true : undefined}
+                aria-describedby={errorText ? "auth-error" : undefined}
+                className={field}
+              />
             )}
             <input
               name="email"
               type="email"
               placeholder="Email"
+              aria-label="Email"
               required
+              autoComplete="email"
+              aria-invalid={errorText ? true : undefined}
+              aria-describedby={errorText ? "auth-error" : undefined}
               className={field}
             />
             <input
               name="password"
               type="password"
               placeholder="Password"
+              aria-label="Password"
               required
               minLength={8}
+              autoComplete={isSignup ? "new-password" : "current-password"}
+              aria-invalid={errorText ? true : undefined}
+              aria-describedby={errorText ? "auth-error" : undefined}
               className={field}
             />
             {!isSignup && forgotPasswordAvailable && (
@@ -134,9 +154,9 @@ export function AuthForm({
                 </span>
               </label>
             )}
-            {errorText && (
-              <p className="text-sm text-danger-soft">{errorText}</p>
-            )}
+            <FormError id="auth-error" className="text-sm">
+              {errorText}
+            </FormError>
             <div className="mt-1">
               <SubmitButton label={isSignup ? "Create account" : "Sign in"} />
             </div>

@@ -3,6 +3,9 @@ import { apiGet } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
 import { BackfillPoller } from "./BackfillPoller";
 
+// Distinct document title per route (WCAG 2.4.2) via the root %s template.
+export const metadata = { title: "You're all set" };
+
 interface ShopStatus {
   connected: boolean;
   visitCount: number;
@@ -26,6 +29,8 @@ export default async function OnboardingDonePage() {
         You&apos;re all set
       </h1>
       <Card className="mt-4 flex flex-col items-center gap-4 p-8 text-center">
+        {/* role=status: the poller swaps importing → imported without a page
+            navigation, so the result must be announced to screen readers. */}
         {!status?.connected ? (
           <p className="text-sm text-muted">
             No booking platform connected yet. You can connect Acuity or Square
@@ -33,8 +38,8 @@ export default async function OnboardingDonePage() {
             page instead.
           </p>
         ) : status.visitCount === 0 ? (
-          <>
-            <div className="h-2 w-full overflow-hidden rounded-full bg-charcoal-700">
+          <div role="status" className="flex w-full flex-col items-center gap-4">
+            <div aria-hidden="true" className="h-2 w-full overflow-hidden rounded-full bg-charcoal-700">
               <div className="skeleton h-full w-1/3 rounded-full bg-gold/40" />
             </div>
             <p className="text-sm text-muted">
@@ -42,9 +47,9 @@ export default async function OnboardingDonePage() {
               Acuity? There may be nothing to import yet. Your dashboard works
               either way.
             </p>
-          </>
+          </div>
         ) : (
-          <p className="text-sm text-emerald-soft">
+          <p role="status" className="text-sm text-emerald-soft">
             Imported {status.clientCount} clients and {status.visitCount} visits.
           </p>
         )}

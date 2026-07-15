@@ -22,6 +22,9 @@ export function FeatureSearch() {
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const wasOpen = useRef(false);
 
   // Global shortcut: Ctrl/Cmd-K toggles, Esc closes.
   useEffect(() => {
@@ -39,13 +42,41 @@ export function FeatureSearch() {
 
   useEffect(() => {
     if (open) {
+      wasOpen.current = true;
       setQuery("");
       setCursor(0);
       // Focus after the panel paints.
       const t = window.setTimeout(() => inputRef.current?.focus(), 10);
       return () => window.clearTimeout(t);
     }
+    // Restore focus to the trigger on close (WCAG 2.4.3) — but only after a
+    // real open/close cycle, not on mount.
+    if (wasOpen.current) {
+      wasOpen.current = false;
+      triggerRef.current?.focus();
+    }
   }, [open]);
+
+  // Modal focus trap: Tab cycles within the dialog instead of escaping into
+  // the page dimmed behind it (WCAG 2.4.3 / aria-modal contract).
+  function trapTab(e: React.KeyboardEvent) {
+    if (e.key !== "Tab") return;
+    const root = dialogRef.current;
+    if (!root) return;
+    const focusables = root.querySelectorAll<HTMLElement>(
+      'button, input, [tabindex]:not([tabindex="-1"])',
+    );
+    if (focusables.length === 0) return;
+    const first = focusables[0]!;
+    const last = focusables[focusables.length - 1]!;
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -98,6 +129,7 @@ export function FeatureSearch() {
   return (
     <>
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen(true)}
         aria-label="Search features (Ctrl+K)"
@@ -125,11 +157,13 @@ export function FeatureSearch() {
           onClick={() => setOpen(false)}
         >
           <div
+            ref={dialogRef}
             role="dialog"
             aria-modal="true"
             aria-label="Search features"
             className="glass mx-auto w-full max-w-lg overflow-hidden rounded-2xl shadow-2xl"
             onClick={(e) => e.stopPropagation()}
+            onKeyDown={trapTab}
           >
             <div className="flex items-center gap-3 border-b border-subtle px-4 py-3">
               <svg
@@ -156,12 +190,27 @@ export function FeatureSearch() {
                 placeholder="Search features — waitlist, punch cards, pay direct…"
                 className="w-full bg-transparent text-sm text-offwhite placeholder:text-muted focus:outline-none"
                 aria-label="Search features"
+                role="combobox"
+                aria-expanded={true}
+                aria-controls="feature-search-results"
+                aria-autocomplete="list"
+                aria-activedescendant={
+                  results.length > 0
+                    ? `feature-search-option-${Math.min(cursor, results.length - 1)}`
+                    : undefined
+                }
               />
               <kbd className="hidden shrink-0 rounded border border-subtle px-1.5 py-0.5 text-[10px] text-muted sm:block">
                 esc
               </kbd>
             </div>
-            <ul ref={listRef} className="max-h-80 overflow-y-auto py-1.5">
+            <ul
+              ref={listRef}
+              id="feature-search-results"
+              role="listbox"
+              aria-label="Matching features"
+              className="max-h-80 overflow-y-auto py-1.5"
+            >
               {results.length === 0 && (
                 <li className="px-4 py-6 text-center text-sm text-muted">
                   Nothing matches &ldquo;{query}&rdquo; — try another word.
@@ -203,7 +252,12 @@ function Row({
   onDemo?: () => void;
 }) {
   return (
-    <li data-index={index}>
+    <li
+      data-index={index}
+      id={`feature-search-option-${index}`}
+      role="option"
+      aria-selected={active}
+    >
       <div
         className={`flex items-center gap-2 px-2 py-1 ${active ? "bg-charcoal-700/70" : ""}`}
         onMouseEnter={onHover}

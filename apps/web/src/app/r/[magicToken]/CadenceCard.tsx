@@ -112,8 +112,14 @@ export function CadenceCard({
           ))}
         </div>
         {error && (
-          <p className="mt-2 text-xs" style={{ color: "#ef4444" }}>
-            {error}
+          <p
+            role="alert"
+            className="mt-2 flex items-start gap-1.5 text-xs"
+            style={{ color: "#ef4444" }}
+          >
+            {/* Non-color cue so the error reads without relying on red (WCAG 1.4.1). */}
+            <span aria-hidden="true">⚠</span>
+            <span>{error}</span>
           </p>
         )}
         <button

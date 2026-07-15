@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { ResetPasswordForm } from "./ResetPasswordForm";
 
+// Distinct document title per route (WCAG 2.4.2) via the root %s template.
+export const metadata = { title: "Set a new password" };
+
 export default function ResetPasswordPage({
   searchParams,
 }: {

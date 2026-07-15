@@ -42,6 +42,9 @@ export function LegalShell({
           <Link href="/sms" className="transition-colors duration-200 ease-out hover:text-offwhite">
             SMS Policy
           </Link>
+          <Link href="/accessibility" className="transition-colors duration-200 ease-out hover:text-offwhite">
+            Accessibility
+          </Link>
         </div>
       </footer>
     </main>

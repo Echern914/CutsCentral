@@ -135,14 +135,34 @@ export function DemoTour({
     );
   }, [prospect, router, spec, tour]);
 
-  if (!mounted || step === null || !active || active.route !== route) return null;
+  const running = mounted && step !== null && active !== null && active.route === route;
+
+  // Keyboard dismissal (WCAG 2.1.1): Escape ends the tour like "End tour".
+  useEffect(() => {
+    if (!running) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") end();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [running, end]);
+
+  // Move focus into the bubble on each step so keyboard/SR users land on the
+  // new step's content and controls (the bubble is portaled to <body>, far
+  // from the reading position otherwise).
+  const bubbleRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (running) bubbleRef.current?.focus();
+  }, [running, step]);
+
+  if (!running || step === null || !active) return null;
 
   const isFirst = step === 1;
   const isLast = step === spec.steps.length;
   const pad = 6;
 
   return createPortal(
-    <div className="pointer-events-none fixed inset-0 z-[120]" aria-live="polite">
+    <div className="pointer-events-none fixed inset-0 z-[120]">
       {/* Spotlight: a cutout box whose massive shadow dims everything else.
           Falls back to a plain dim when the anchor is missing — never a blank
           screen, the bubble still explains the step. */}
@@ -168,10 +188,17 @@ export function DemoTour({
           bottom sheet on small screens. key={step} re-runs the entrance. */}
       <motion.div
         key={step}
+        ref={bubbleRef}
+        // Non-modal dialog: the page behind stays interactive by design, so no
+        // aria-modal/focus trap — but the bubble needs dialog semantics, a
+        // name, and to receive focus per step (see the focus effect above).
+        role="dialog"
+        aria-label={`${spec.label} tour, step ${step} of ${spec.steps.length}: ${active.title}`}
+        tabIndex={-1}
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.2, ease: "easeOut" }}
-        className="pointer-events-auto fixed inset-x-3 bottom-3 mx-auto max-w-sm rounded-2xl border border-white/15 bg-[#101014]/95 p-4 text-offwhite shadow-2xl backdrop-blur sm:inset-x-auto"
+        className="pointer-events-auto fixed inset-x-3 bottom-3 mx-auto max-w-sm rounded-2xl border border-white/15 bg-[#101014]/95 p-4 text-offwhite shadow-2xl outline-none backdrop-blur sm:inset-x-auto"
         style={bubblePosition(rect, pad)}
       >
         <div className="flex items-center justify-between gap-3">

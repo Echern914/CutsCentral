@@ -9,6 +9,7 @@ import {
   type PageFontKey,
   type PageThemeKey,
 } from "@chairback/config/constants";
+import { readableOn } from "@/lib/contrast";
 import type { RewardsData } from "./page";
 
 /**
@@ -58,10 +59,10 @@ export function resolveRewardsTheme(shop: RewardsData["shop"]): RewardsTheme {
     text: theme.text,
     muted: theme.muted,
     accent,
-    // On a light theme accent text reads better against white; on dark themes a
-    // near-black foreground sits on the (typically bright) accent. Mirrors the
-    // shop page's `theme.scheme === "light" ? "#FFFFFF" : "#101012"` button rule.
-    onAccent: theme.scheme === "light" ? "#FFFFFF" : "#101012",
+    // Derived from the accent's own luminance, not the theme scheme: shops pick
+    // arbitrary accents, and a fixed foreground fails WCAG 1.4.3 on the wrong
+    // half of the color space (e.g. white text on a pale yellow accent).
+    onAccent: readableOn(accent),
     scheme: theme.scheme,
     radius: layout.radius,
     buttonRadius: layout.buttonRadius,

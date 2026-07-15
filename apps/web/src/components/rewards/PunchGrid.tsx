@@ -27,12 +27,17 @@ export function PunchGrid({
       variants={staggerContainer}
       initial="hidden"
       animate="show"
+      // Filled vs empty slots differ only by color — expose the progress as
+      // one readable summary and hide the decorative grid from AT (WCAG 1.4.1).
+      role="img"
+      aria-label={`${filled} of ${threshold} punches earned`}
       className="grid gap-3"
       style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
     >
       {slots.map((isFilled, i) => (
         <motion.div
           key={i}
+          aria-hidden="true"
           variants={punchFill}
           initial="empty"
           animate={isFilled ? "filled" : "empty"}

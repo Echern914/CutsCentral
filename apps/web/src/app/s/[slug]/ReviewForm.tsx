@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition, type CSSProperties } from "react";
+import { readableOn } from "@/lib/contrast";
 import { submitReviewAction } from "./actions";
 
 /**
@@ -69,7 +70,7 @@ export function ReviewForm({
 
   if (sent) {
     return (
-      <div className="p-5 text-center" style={fieldStyle}>
+      <div role="status" className="p-5 text-center" style={fieldStyle}>
         <p className="text-sm font-semibold">Thanks for the review ✓</p>
         <p className="mt-1 text-xs" style={{ color: theme.muted }}>
           {shopName} will review it shortly. Once approved it appears here.
@@ -88,7 +89,13 @@ export function ReviewForm({
         Been to {shopName}? Tell others how it went.
       </p>
 
-      <div className="mt-3 flex items-center gap-1" role="radiogroup" aria-label="Star rating">
+      <div
+        className="mt-3 flex items-center gap-1"
+        role="radiogroup"
+        aria-label="Star rating"
+        aria-invalid={error && rating < 1 ? true : undefined}
+        aria-describedby={error && rating < 1 ? "review-error" : undefined}
+      >
         {[1, 2, 3, 4, 5].map((n) => (
           <button
             key={n}
@@ -96,13 +103,35 @@ export function ReviewForm({
             aria-label={`${n} star${n === 1 ? "" : "s"}`}
             aria-checked={rating === n}
             role="radio"
+            // Roving tabindex: only the checked radio is tabbable (or the first
+            // when none is selected), so Tab enters/exits the group once and
+            // Arrow keys move within it — standard radiogroup keyboard behavior.
+            tabIndex={rating === n || (rating === 0 && n === 1) ? 0 : -1}
             onClick={() => setRating(n)}
+            onKeyDown={(e) => {
+              let next = 0;
+              if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+                next = Math.min(5, (rating || 0) + 1) || 1;
+              } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+                next = Math.max(1, (rating || 1) - 1);
+              }
+              if (next) {
+                e.preventDefault();
+                setRating(next);
+                // Move focus to follow selection (roving tabindex): grab the nth
+                // radio button among this group's siblings.
+                const group = e.currentTarget.parentElement;
+                const target = group?.children[next - 1] as HTMLElement | undefined;
+                target?.focus();
+              }
+            }}
             onMouseEnter={() => setHover(n)}
             onMouseLeave={() => setHover(0)}
-            className="text-2xl leading-none transition-transform duration-150 ease-out hover:scale-110 focus:outline-none"
+            className="text-2xl leading-none transition-transform duration-150 ease-out hover:scale-110"
             style={{ color: n <= shown ? accent : theme.border }}
           >
-            ★
+            {/* Filled vs outline glyph: rating readable without color (WCAG 1.4.1). */}
+            {n <= shown ? "★" : "☆"}
           </button>
         ))}
       </div>
@@ -115,7 +144,7 @@ export function ReviewForm({
           aria-label="Your review"
           rows={3}
           maxLength={1000}
-          className="w-full px-4 py-2.5 text-sm placeholder:opacity-60 focus:outline-none"
+          className="w-full px-4 py-2.5 text-sm placeholder:opacity-70"
           style={inputStyle}
         />
         <input
@@ -125,18 +154,25 @@ export function ReviewForm({
           placeholder="Your name (optional)"
           aria-label="Your name"
           maxLength={80}
-          className="w-full px-4 py-2.5 text-sm placeholder:opacity-60 focus:outline-none"
+          className="w-full px-4 py-2.5 text-sm placeholder:opacity-70"
           style={inputStyle}
         />
-        {error && <p className="text-xs text-red-500">{error}</p>}
+        {error && (
+          <p id="review-error" role="alert" className="flex items-start gap-1.5 text-xs text-red-500">
+            {/* Non-color cue so the error reads without relying on red (WCAG 1.4.1). */}
+            <span aria-hidden="true">⚠</span>
+            <span>{error}</span>
+          </p>
+        )}
         <button
           type="button"
           onClick={submit}
           disabled={pending}
+          aria-busy={pending}
           className="w-full py-3 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01] disabled:opacity-50"
           style={{
             backgroundColor: accent,
-            color: theme.scheme === "light" ? "#FFFFFF" : "#101012",
+            color: readableOn(accent),
             boxShadow: `0 8px 30px -10px ${accent}AA`,
             borderRadius: theme.buttonRadius,
           }}
