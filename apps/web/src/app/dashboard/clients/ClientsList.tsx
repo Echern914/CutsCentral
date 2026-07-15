@@ -11,6 +11,7 @@ import {
 import { Card } from "@/components/ui/Card";
 import { LocalDate } from "@/components/ui/LocalDate";
 import { useToast } from "@/components/ui/Toast";
+import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { bulkClientAction } from "../actions";
 
 export interface ClientRow {
@@ -37,6 +38,9 @@ export interface ClientRow {
  */
 export function ClientsList({ clients }: { clients: ClientRow[] }) {
   const { toast } = useToast();
+  // No "upgrade" steering inside the iOS app (Guideline 3.1.1) - the Billing
+  // page is hidden there, so the hint would point at nothing anyway.
+  const inApp = useIsNativeApp();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pending, startTransition] = useTransition();
 
@@ -78,7 +82,12 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
         }
         setSelected(new Set());
       } else if (r.error === "subscription_required") {
-        toast("Texting is a Premium feature - upgrade from the Billing page", "error");
+        toast(
+          inApp
+            ? "Texting is a Premium feature"
+            : "Texting is a Premium feature - upgrade from the Billing page",
+          "error",
+        );
       } else if (r.error === "quiet_hours") {
         toast("Texting is paused 9pm-8am (client local time)", "error");
       } else {

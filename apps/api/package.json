@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "admin:make": "tsx scripts/make-admin.ts",
+    "review:seed": "tsx scripts/seed-appreview.ts",
     "lint": "eslint src --max-warnings=0"
   },
   "dependencies": {

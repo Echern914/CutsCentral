@@ -417,10 +417,11 @@ authRouter.post("/google/exchange", authLimiter, async (req, res) => {
 
 // Native iOS sign-in (the mobile app). The app obtains an identity token from
 // Apple/Google's native SDK and POSTs it here; we verify it against the
-// provider's public keys, find-or-create the barber, and return a session token
-// the app stores as a bearer. Distinct from the web redirect flow above (which
-// needs the cross-origin handoff dance). The token is returned in JSON; the
-// cookie is also set, harmlessly, for parity with the other login routes.
+// provider's public keys, find the barber (LOGIN-ONLY - no account creation,
+// per App Store Guideline 3.1.1; sign-up is web-only), and return a session
+// token the app stores as a bearer. Distinct from the web redirect flow above
+// (which needs the cross-origin handoff dance). The token is returned in JSON;
+// the cookie is also set, harmlessly, for parity with the other login routes.
 authRouter.get("/native/available", (_req, res) => {
   res.json({ apple: appleNativeEnabled(), google: googleNativeEnabled() });
 });

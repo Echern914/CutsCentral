@@ -47,6 +47,7 @@ const KEEP_EMAILS = new Set([
   "drickcuttinup@gmail.com", // Drickcuttinup — real beta data (63 clients)
   "chernichaw1@gmail.com",   // chernCuts — early real account
   "demo@chairback.app",      // the seeded live-demo shop (see src/demo/seedDemoShop.ts)
+  "appreview@getchairback.com", // Apple App Review demo account (scripts/seed-appreview.ts)
 ]);
 
 // Explicit non-@test.local junk to delete (the dev seed account).
