@@ -69,6 +69,8 @@ export function TrendsChart({ series: initial }: { series: TrendPoint[] }) {
                   key={m}
                   onClick={() => pick(m)}
                   disabled={pending}
+                  aria-pressed={range === m}
+                  aria-label={`Last ${m} months`}
                   className={`rounded-full px-2.5 py-1 text-xs transition-colors duration-150 ease-out ${
                     range === m ? "bg-gold text-charcoal" : "text-muted hover:text-offwhite"
                   }`}
@@ -93,7 +95,15 @@ export function TrendsChart({ series: initial }: { series: TrendPoint[] }) {
             No activity yet. Charts fill in as visits and nudges accrue.
           </p>
         ) : (
-          <div className="flex h-40 items-end justify-between gap-2">
+          <div
+            // Text alternative for the bar chart: bars are hover-title-only,
+            // so summarize the series for screen readers (WCAG 1.1.1).
+            role="img"
+            aria-label={`Visits vs nudges by month: ${series
+              .map((p) => `${p.label}: ${p.visits} visits, ${p.nudges} nudges`)
+              .join("; ")}`}
+            className="flex h-40 items-end justify-between gap-2"
+          >
             {series.map((p) => (
               <div key={p.label} className="flex flex-1 flex-col items-center gap-2">
                 <div className="flex h-32 w-full items-end justify-center gap-1">

@@ -37,11 +37,18 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={{ toast }}>
       {children}
-      <div className="pointer-events-none fixed bottom-5 left-1/2 z-50 flex -translate-x-1/2 flex-col items-center gap-2">
+      {/* aria-live on the always-mounted container so screen readers announce
+          toasts as they arrive (WCAG 4.1.3) — errors assertively, the rest
+          politely. role is per-toast so each message gets the right urgency. */}
+      <div
+        aria-live="polite"
+        className="pointer-events-none fixed bottom-5 left-1/2 z-50 flex -translate-x-1/2 flex-col items-center gap-2"
+      >
         <AnimatePresence>
           {toasts.map((t) => (
             <motion.div
               key={t.id}
+              role={t.kind === "error" ? "alert" : "status"}
               initial={{ opacity: 0, y: 12, scale: 0.96 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 8, scale: 0.96 }}

@@ -132,7 +132,10 @@ export function ConsentCard({
           onChange={(e) => setPhone(e.target.value)}
           placeholder="Your mobile number"
           aria-label="Your mobile number"
-          className="mt-3 w-full px-4 py-2.5 text-sm focus:outline-none"
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? "consent-error" : undefined}
+          // No focus:outline-none — keep the global :focus-visible ring (WCAG 2.4.7).
+          className="mt-3 w-full px-4 py-2.5 text-sm"
           style={{
             backgroundColor: theme.bg,
             border: `1px solid ${theme.border}`,
@@ -143,8 +146,15 @@ export function ConsentCard({
         />
       )}
       {error && (
-        <p className="mt-2 text-xs" style={{ color: "#ef4444" }}>
-          {error}
+        <p
+          id="consent-error"
+          role="alert"
+          className="mt-2 flex items-start gap-1.5 text-xs"
+          style={{ color: "#ef4444" }}
+        >
+          {/* Non-color cue so the error reads without relying on red (WCAG 1.4.1). */}
+          <span aria-hidden="true">⚠</span>
+          <span>{error}</span>
         </p>
       )}
       <motion.button

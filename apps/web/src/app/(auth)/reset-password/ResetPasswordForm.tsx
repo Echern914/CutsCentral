@@ -6,6 +6,7 @@ import { APP_NAME } from "@chairback/config/constants";
 import { motion } from "framer-motion";
 import { fadeUp } from "@/components/motion/variants";
 import { Card } from "@/components/ui/Card";
+import { FormError } from "@/components/ui/FormError";
 import { resetPasswordAction } from "../passwordResetActions";
 
 function SubmitButton() {
@@ -22,7 +23,7 @@ function SubmitButton() {
 }
 
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-4 py-3 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "w-full rounded-xl border border-subtle bg-charcoal-700 px-4 py-3 text-sm text-offwhite placeholder:text-muted focus:border-gold/50";
 
 export function ResetPasswordForm({ token }: { token: string }) {
   const [state, formAction] = useFormState(resetPasswordAction, {});
@@ -47,7 +48,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
         </p>
         <Card className="p-6">
           {state.ok ? (
-            <div className="text-center">
+            <div role="status" className="text-center">
               <p className="mb-2 text-sm font-semibold text-offwhite">Password updated</p>
               <p className="mb-4 text-sm leading-relaxed text-muted">
                 You&apos;ve been signed out everywhere. Sign in with your new
@@ -69,12 +70,17 @@ export function ResetPasswordForm({ token }: { token: string }) {
                 name="newPassword"
                 type="password"
                 placeholder="New password (8+ characters)"
+                aria-label="New password"
                 required
                 minLength={8}
                 autoComplete="new-password"
+                aria-invalid={state.error ? true : undefined}
+                aria-describedby={state.error ? "reset-error" : undefined}
                 className={field}
               />
-              {state.error && <p className="text-sm text-danger-soft">{state.error}</p>}
+              <FormError id="reset-error" className="text-sm">
+                {state.error}
+              </FormError>
               <div className="mt-1">
                 <SubmitButton />
               </div>

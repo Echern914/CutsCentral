@@ -70,8 +70,24 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} ${display.variable}`}>
       <body className="font-sans antialiased bg-charcoal text-offwhite">
+        {/* Skip link: first focusable element, hidden until keyboard-focused, so
+            keyboard/SR users can jump past nav straight to page content (WCAG 2.4.1). */}
+        <a
+          href="#main"
+          className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-lg focus:bg-gold focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-charcoal"
+        >
+          Skip to content
+        </a>
         <MotionConfigProvider>
-          <ToastProvider>{children}</ToastProvider>
+          <ToastProvider>
+            {/* Skip-link target + focus anchor. NOT a <main> element: pages render
+                their own <main> landmark, and nesting <main> in <main> is invalid
+                HTML (two landmarks confuses SR nav). tabIndex=-1 lets the skip link
+                move focus here so the next Tab lands inside the page content. */}
+            <div id="main" tabIndex={-1} className="outline-none">
+              {children}
+            </div>
+          </ToastProvider>
         </MotionConfigProvider>
       </body>
     </html>

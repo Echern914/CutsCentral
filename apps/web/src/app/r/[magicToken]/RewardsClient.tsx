@@ -418,6 +418,7 @@ export function RewardsClient({
                           className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full"
                           style={{ backgroundColor: t.border }}
                           role="progressbar"
+                          aria-label={`Progress toward ${reward.name}`}
                           aria-valuenow={progress}
                           aria-valuemin={0}
                           aria-valuemax={100}
@@ -635,6 +636,7 @@ function PunchCardSurface({
                   className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full"
                   style={{ backgroundColor: t.border }}
                   role="progressbar"
+                  aria-label={`Progress toward ${reward.name}`}
                   aria-valuenow={progress}
                   aria-valuemin={0}
                   aria-valuemax={100}

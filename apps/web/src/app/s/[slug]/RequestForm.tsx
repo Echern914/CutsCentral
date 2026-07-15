@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition, type CSSProperties } from "react";
+import { readableOn } from "@/lib/contrast";
 import { submitRequestAction } from "./actions";
 
 /**
@@ -78,7 +79,7 @@ export function RequestForm({
 
   if (sent) {
     return (
-      <div className="p-5 text-center" style={fieldStyle}>
+      <div role="status" className="p-5 text-center" style={fieldStyle}>
         <p className="text-sm font-semibold">Request sent ✓</p>
         <p className="mt-1 text-xs" style={{ color: theme.muted }}>
           {shopName} will reach out to confirm your appointment.
@@ -100,7 +101,9 @@ export function RequestForm({
           onChange={(e) => setFirstName(e.target.value)}
           placeholder="Your name"
           aria-label="Your name"
-          className="w-full px-4 py-2.5 text-sm placeholder:opacity-60 focus:outline-none"
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? "request-error" : undefined}
+          className="w-full px-4 py-2.5 text-sm placeholder:opacity-70"
           style={inputStyle}
         />
         <input
@@ -111,7 +114,7 @@ export function RequestForm({
           onChange={(e) => setPhone(e.target.value)}
           placeholder="Mobile number"
           aria-label="Mobile number"
-          className="w-full px-4 py-2.5 text-sm placeholder:opacity-60 focus:outline-none"
+          className="w-full px-4 py-2.5 text-sm placeholder:opacity-70"
           style={inputStyle}
         />
         <input
@@ -121,7 +124,7 @@ export function RequestForm({
           onChange={(e) => setEmail(e.target.value)}
           placeholder="Email (optional)"
           aria-label="Email"
-          className="w-full px-4 py-2.5 text-sm placeholder:opacity-60 focus:outline-none"
+          className="w-full px-4 py-2.5 text-sm placeholder:opacity-70"
           style={inputStyle}
         />
         <input
@@ -130,7 +133,7 @@ export function RequestForm({
           onChange={(e) => setPreferredTime(e.target.value)}
           placeholder="Preferred time (e.g. Sat morning)"
           aria-label="Preferred time"
-          className="w-full px-4 py-2.5 text-sm placeholder:opacity-60 focus:outline-none"
+          className="w-full px-4 py-2.5 text-sm placeholder:opacity-70"
           style={inputStyle}
         />
         <textarea
@@ -139,18 +142,25 @@ export function RequestForm({
           placeholder="Anything else? (optional)"
           aria-label="Message"
           rows={2}
-          className="w-full px-4 py-2.5 text-sm placeholder:opacity-60 focus:outline-none"
+          className="w-full px-4 py-2.5 text-sm placeholder:opacity-70"
           style={inputStyle}
         />
-        {error && <p className="text-xs text-red-500">{error}</p>}
+        {error && (
+          <p id="request-error" role="alert" className="flex items-start gap-1.5 text-xs text-red-500">
+            {/* Non-color cue so the error reads without relying on red (WCAG 1.4.1). */}
+            <span aria-hidden="true">⚠</span>
+            <span>{error}</span>
+          </p>
+        )}
         <button
           type="button"
           onClick={submit}
           disabled={pending}
+          aria-busy={pending}
           className="w-full py-3 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01] disabled:opacity-50"
           style={{
             backgroundColor: accent,
-            color: theme.scheme === "light" ? "#FFFFFF" : "#101012",
+            color: readableOn(accent),
             boxShadow: `0 8px 30px -10px ${accent}AA`,
             borderRadius: theme.buttonRadius,
           }}

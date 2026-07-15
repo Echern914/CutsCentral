@@ -100,7 +100,11 @@ export function ManageClient({
           />
         </dl>
 
-        {error && <p className="mt-4 text-xs text-red-400">{error}</p>}
+        {error && (
+          <p role="alert" className="mt-4 text-xs text-red-400">
+            {error}
+          </p>
+        )}
 
         {isCanceled ? (
           <div className="mt-6 rounded-xl border border-white/10 bg-white/5 p-4 text-center text-sm text-muted">
@@ -240,11 +244,11 @@ function NudgeBanner({
       </p>
       <p className="mt-1 text-sm text-offwhite">{nudge.body ?? "Come early if you can"}</p>
       {answer === "on_my_way" ? (
-        <p className="mt-2 text-xs font-semibold text-emerald-300">
+        <p role="status" className="mt-2 text-xs font-semibold text-emerald-300">
           You&apos;re marked on the way ✓
         </p>
       ) : answer === "declined" ? (
-        <p className="mt-2 text-xs font-semibold text-muted">
+        <p role="status" className="mt-2 text-xs font-semibold text-muted">
           Got it - they&apos;ll expect you at the original time.
         </p>
       ) : (
@@ -268,7 +272,9 @@ function NudgeBanner({
         </div>
       )}
       {error && (
-        <p className="mt-2 text-xs text-red-400">Couldn&apos;t send that - try again.</p>
+        <p role="alert" className="mt-2 text-xs text-red-400">
+          Couldn&apos;t send that - try again.
+        </p>
       )}
     </div>
   );
@@ -304,7 +310,10 @@ function CheckInCard({
 
   if (status === "arrived") {
     return (
-      <div className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 py-3 text-center text-sm font-semibold text-emerald-300">
+      <div
+        role="status"
+        className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 py-3 text-center text-sm font-semibold text-emerald-300"
+      >
         You&apos;re checked in ✓
       </div>
     );
@@ -342,7 +351,7 @@ function CheckInCard({
           {pending ? "One sec…" : "On my way"}
         </button>
         {error && (
-          <p className="mt-2 text-center text-xs text-red-400">
+          <p role="alert" className="mt-2 text-center text-xs text-red-400">
             Couldn&apos;t send that - try again.
           </p>
         )}
@@ -359,7 +368,10 @@ function CheckInCard({
   ];
   return (
     <div>
-      <div className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 py-3 text-center text-sm font-semibold text-emerald-300">
+      <div
+        role="status"
+        className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 py-3 text-center text-sm font-semibold text-emerald-300"
+      >
         You&apos;re marked on the way ✓
       </div>
       <div className="mt-2 flex gap-1.5">
@@ -369,6 +381,7 @@ function CheckInCard({
             type="button"
             onClick={() => tap(c.opts)}
             disabled={pending}
+            aria-pressed={c.active}
             className={
               c.active
                 ? "flex-1 rounded-lg border border-emerald-400/60 bg-emerald-400/20 px-1 py-1.5 text-[11px] font-semibold text-emerald-200"
@@ -380,7 +393,7 @@ function CheckInCard({
         ))}
       </div>
       {error && (
-        <p className="mt-2 text-center text-xs text-red-400">
+        <p role="alert" className="mt-2 text-center text-xs text-red-400">
           Couldn&apos;t send that - try again.
         </p>
       )}

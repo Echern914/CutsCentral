@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { loadStripe, type Stripe } from "@stripe/stripe-js";
+import { readableOn } from "@/lib/contrast";
 import {
   Elements,
   PaymentElement,
@@ -94,13 +95,18 @@ function PaymentForm({
   return (
     <div className="flex flex-col gap-3">
       <PaymentElement options={{ layout: "tabs" }} />
-      {error && <p className="text-xs text-red-400">{error}</p>}
+      {error && (
+        <p role="alert" className="text-xs text-red-400">
+          {error}
+        </p>
+      )}
       <button
         type="button"
         onClick={pay}
         disabled={!stripe || paying}
+        aria-busy={paying}
         className="w-full rounded-xl py-3 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01] disabled:opacity-50"
-        style={{ backgroundColor: accent, color: "#101012" }}
+        style={{ backgroundColor: accent, color: readableOn(accent) }}
       >
         {paying ? "Processing…" : amountLabel ? `Pay ${amountLabel}` : "Pay & confirm"}
       </button>

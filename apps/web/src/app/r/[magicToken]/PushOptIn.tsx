@@ -236,7 +236,7 @@ export function PushOptIn({
         reward is ready, or it&apos;s time to rebook - free, no SMS required.
       </p>
       {error && (
-        <p className="mt-2 text-xs" style={{ color: "#ef4444" }}>
+        <p role="alert" className="mt-2 text-xs" style={{ color: "#ef4444" }}>
           {error}
         </p>
       )}

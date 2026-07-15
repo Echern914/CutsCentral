@@ -3,6 +3,9 @@ import { API_BASE, apiGet } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
 import { LinkButton } from "@/components/ui/Button";
 
+// Distinct document title per route (WCAG 2.4.2) via the root %s template.
+export const metadata = { title: "Connect your booking" };
+
 interface ShopStatus {
   connected: boolean;
 }

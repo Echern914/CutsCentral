@@ -2,16 +2,15 @@ import type { Viewport } from "next";
 import { pageFontVars } from "@/lib/pageFonts";
 
 /**
- * Lock zoom on the rewards page so it feels like an app, not a zoomable web page
- * - both inside the native WebView (which also injects this) and for customers
- * who open the SMS link in mobile Safari. Scoped to /r/* only (this layout), so
- * the marketing site + dashboard stay pinch-zoomable for accessibility.
+ * Rewards page viewport. We deliberately do NOT lock zoom: blocking pinch-zoom
+ * (maximumScale:1 / userScalable:false) fails WCAG 1.4.4 (Resize Text) for
+ * low-vision customers opening the SMS link in mobile Safari. The native WebView
+ * still handles its own "app-like" feel, so keeping the web path zoomable costs
+ * us nothing there. viewportFit:cover is retained for edge-to-edge notch layout.
  */
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
   viewportFit: "cover",
   themeColor: "#0A0A0B",
 };

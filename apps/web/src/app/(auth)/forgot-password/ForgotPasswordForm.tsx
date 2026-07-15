@@ -6,6 +6,7 @@ import { APP_NAME } from "@chairback/config/constants";
 import { motion } from "framer-motion";
 import { fadeUp } from "@/components/motion/variants";
 import { Card } from "@/components/ui/Card";
+import { FormError } from "@/components/ui/FormError";
 import { forgotPasswordAction } from "../passwordResetActions";
 
 function SubmitButton() {
@@ -22,7 +23,7 @@ function SubmitButton() {
 }
 
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-4 py-3 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "w-full rounded-xl border border-subtle bg-charcoal-700 px-4 py-3 text-sm text-offwhite placeholder:text-muted focus:border-gold/50";
 
 export function ForgotPasswordForm() {
   const [state, formAction] = useFormState(forgotPasswordAction, {});
@@ -49,7 +50,7 @@ export function ForgotPasswordForm() {
           {state.ok ? (
             // Generic on purpose (mirrors the API): the success card reads the
             // same whether or not an account exists for that email.
-            <div className="text-center">
+            <div role="status" className="text-center">
               <p className="mb-2 text-sm font-semibold text-offwhite">Check your inbox</p>
               <p className="text-sm leading-relaxed text-muted">
                 If an account exists for that email, a reset link is on its way.
@@ -62,10 +63,16 @@ export function ForgotPasswordForm() {
                 name="email"
                 type="email"
                 placeholder="Email"
+                aria-label="Email"
                 required
+                autoComplete="email"
+                aria-invalid={state.error ? true : undefined}
+                aria-describedby={state.error ? "forgot-error" : undefined}
                 className={field}
               />
-              {state.error && <p className="text-sm text-danger-soft">{state.error}</p>}
+              <FormError id="forgot-error" className="text-sm">
+                {state.error}
+              </FormError>
               <div className="mt-1">
                 <SubmitButton />
               </div>

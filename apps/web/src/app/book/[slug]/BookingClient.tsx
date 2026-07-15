@@ -8,6 +8,7 @@ import { useSignalNativeReady } from "@/lib/nativeReady";
 import { DemoTour } from "@/components/tour/DemoTour";
 import { useDemoTour } from "@/components/tour/state";
 import type { BookShopData } from "./page";
+import { readableOn } from "@/lib/contrast";
 import { bookAction, getSlotsAction, type SlotsResult } from "./actions";
 import { PaymentStep } from "./PaymentStep";
 import { WaitlistForm } from "./WaitlistForm";
@@ -24,6 +25,9 @@ export function BookingClient({ data }: { data: BookShopData }) {
   useSignalNativeReady();
 
   const accent = data.shop.accentColor || "#D4AF37";
+  // Text painted ON the accent must actually read against it — shops pick
+  // arbitrary accents, so a hardcoded near-black fails WCAG on dark ones.
+  const onAccent = readableOn(accent);
   const tz = data.shop.timezone;
 
   const [serviceId, setServiceId] = useState<string | null>(null);
@@ -68,6 +72,16 @@ export function BookingClient({ data }: { data: BookShopData }) {
   // Waitlist: null = hidden; "standing" = generic join; "slot" = join for the
   // currently-chosen service/provider (a fully-booked day).
   const [waitlistMode, setWaitlistMode] = useState<null | "standing" | "slot">(null);
+
+  // Move screen-reader/keyboard focus onto the heading when the wizard swaps to
+  // the payment or confirmation screen (a full-content replacement is otherwise
+  // silent to assistive tech).
+  const paymentHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  const confirmHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  useEffect(() => {
+    if (confirmedToken !== null) confirmHeadingRef.current?.focus();
+    else if (paymentSecret !== null) paymentHeadingRef.current?.focus();
+  }, [confirmedToken, paymentSecret]);
 
   // ---- Guided demo-tour mode (demo tenant only). While the tour runs, this
   // wizard never writes: submit() short-circuits to the seeded showcase
@@ -376,15 +390,19 @@ export function BookingClient({ data }: { data: BookShopData }) {
   const grandTotal = selectedPrice === null ? null : selectedPrice + addOnsTotal;
   const primaryBtn =
     "w-full rounded-xl py-3 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01] disabled:opacity-50";
+  // No focus:outline-none — the global :focus-visible ring must stay visible
+  // for keyboard users (WCAG 2.4.7); the border tint alone is too weak.
   const input =
-    "w-full rounded-lg border border-white/15 bg-white/5 px-4 py-2.5 text-sm text-offwhite placeholder:text-muted focus:border-white/40 focus:outline-none";
+    "w-full rounded-lg border border-white/15 bg-white/5 px-4 py-2.5 text-sm text-offwhite placeholder:text-muted focus:border-white/40";
 
   // ---- Payment screen (pay-ahead: booking created, collect card/Apple Pay) ----
   if (paymentSecret !== null && confirmedToken === null) {
     return (
       <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-5 py-10 text-offwhite">
         <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
-          <h1 className="font-display text-2xl">Pay to confirm</h1>
+          <h1 ref={paymentHeadingRef} tabIndex={-1} className="font-display text-2xl outline-none">
+            Pay to confirm
+          </h1>
           <p className="mt-1 mb-4 text-sm text-muted">
             Your time is held. Enter payment to lock in your appointment with{" "}
             {data.shop.name}.
@@ -414,12 +432,13 @@ export function BookingClient({ data }: { data: BookShopData }) {
           data-tour="confirmation"
         >
           <div
+            aria-hidden="true"
             className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full text-2xl"
             style={{ backgroundColor: `${accent}22`, color: accent }}
           >
             ✓
           </div>
-          <h1 className="font-display text-2xl">
+          <h1 ref={confirmHeadingRef} tabIndex={-1} className="font-display text-2xl outline-none">
             {wasRequest ? "Request sent" : "You're booked!"}
           </h1>
           <p className="mt-2 text-sm text-muted">
@@ -442,7 +461,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
           <Link
             href={`/book/manage/${confirmedToken}`}
             className="mt-5 inline-block rounded-xl px-5 py-2.5 text-sm font-semibold"
-            style={{ backgroundColor: accent, color: "#101012" }}
+            style={{ backgroundColor: accent, color: onAccent }}
           >
             View / change my appointment
           </Link>
@@ -557,6 +576,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
               key={s.id}
               type="button"
               onClick={() => pickService(s.id)}
+              aria-pressed={serviceId === s.id}
               className="flex items-center justify-between rounded-xl border px-4 py-3 text-left transition-colors"
               style={{
                 borderColor: serviceId === s.id ? accent : "rgba(255,255,255,0.12)",
@@ -587,6 +607,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
         <Section
           title="2 · Choose your provider"
           back={<BackStep onClick={backToService} />}
+          focusOnMount={!demoTour}
         >
           <div className="flex flex-col gap-2">
             {staffForService.map((s) => (
@@ -594,6 +615,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
                 key={s.id}
                 type="button"
                 onClick={() => pickStaff(s.id)}
+                aria-pressed={staffId === s.id}
                 className="flex items-center gap-3 rounded-xl border px-4 py-3 text-left transition-colors"
                 style={{
                   borderColor: staffId === s.id ? accent : "rgba(255,255,255,0.12)",
@@ -624,9 +646,12 @@ export function BookingClient({ data }: { data: BookShopData }) {
           title="3 · Pick a time"
           tour="slots"
           back={<BackStep onClick={backToProvider} />}
+          focusOnMount={!demoTour}
         >
           {loadingSlots ? (
-            <p className="text-sm text-muted">Loading available times…</p>
+            <p role="status" className="text-sm text-muted">
+              Loading available times…
+            </p>
           ) : days.length === 0 ? (
             <div className="flex flex-col gap-3">
               <p className="text-sm text-muted">
@@ -666,6 +691,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
                       setDay(d);
                       clearSlotPick();
                     }}
+                    aria-pressed={day === d}
                     className="shrink-0 rounded-lg border px-3 py-2 text-xs transition-colors"
                     style={{
                       borderColor: day === d ? accent : "rgba(255,255,255,0.12)",
@@ -693,6 +719,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
                         setSlotTargeted(s.targeted ?? null);
                         if (s.targeted) setAddOnIds([]); // fixed length/price
                       }}
+                      aria-pressed={picked}
                       className="rounded-lg border py-2 text-center text-sm transition-colors"
                       style={{
                         borderColor: picked
@@ -705,7 +732,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
                           : s.targeted
                             ? `${accent}14`
                             : "transparent",
-                        color: picked ? "#101012" : undefined,
+                        color: picked ? onAccent : undefined,
                       }}
                     >
                       {timeFmt.format(new Date(s.startsAt))}
@@ -729,6 +756,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
         <Section
           title="4 · Your details"
           back={<BackStep onClick={backToTime} />}
+          focusOnMount={!demoTour}
         >
           {/* Optional add-ons for the chosen service (a targeted slot's
               length/price are fixed, so add-ons don't apply there). */}
@@ -745,6 +773,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
                       key={a.id}
                       type="button"
                       onClick={() => toggleAddOn(a.id)}
+                      aria-pressed={on}
                       className="flex items-center justify-between rounded-lg border px-3 py-2 text-left text-sm transition-colors"
                       style={{
                         borderColor: on ? accent : "rgba(255,255,255,0.1)",
@@ -753,6 +782,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
                     >
                       <span className="flex items-center gap-2">
                         <span
+                          aria-hidden="true"
                           className="flex h-4 w-4 items-center justify-center rounded border text-[10px]"
                           style={{ borderColor: on ? accent : "rgba(255,255,255,0.3)", color: accent }}
                         >
@@ -861,13 +891,18 @@ export function BookingClient({ data }: { data: BookShopData }) {
                 .
               </span>
             </label>
-            {error && <p className="text-xs text-red-400">{error}</p>}
+            {error && (
+              <p role="alert" className="text-xs text-red-400">
+                {error}
+              </p>
+            )}
             <button
               type="button"
               onClick={submit}
               disabled={pending}
+              aria-busy={pending}
               className={primaryBtn}
-              style={{ backgroundColor: accent, color: "#101012" }}
+              style={{ backgroundColor: accent, color: onAccent }}
             >
               {pending ? "Booking…" : "Confirm booking"}
             </button>
@@ -875,7 +910,11 @@ export function BookingClient({ data }: { data: BookShopData }) {
         </Section>
       )}
 
-      {error && !slot && <p className="mt-3 text-center text-xs text-red-400">{error}</p>}
+      {error && !slot && (
+        <p role="alert" className="mt-3 text-center text-xs text-red-400">
+          {error}
+        </p>
+      )}
     </main>
   );
 }
@@ -885,6 +924,7 @@ function Section({
   children,
   back,
   tour,
+  focusOnMount,
 }: {
   title: string;
   children: React.ReactNode;
@@ -892,11 +932,28 @@ function Section({
   back?: React.ReactNode;
   /** Optional demo-tour anchor (a data-tour attribute on the section). */
   tour?: string;
+  /**
+   * Steps 2-4 mount mid-flow as the customer progresses; without a focus move
+   * the new step is invisible to keyboard/screen-reader users (WCAG 2.4.3).
+   */
+  focusOnMount?: boolean;
 }) {
+  const headingRef = useRef<HTMLHeadingElement | null>(null);
+  useEffect(() => {
+    if (focusOnMount) headingRef.current?.focus();
+    // Mount-only: refocusing on re-render would steal focus from the form.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   return (
     <section className="mb-5" data-tour={tour}>
       <div className="mb-2 flex items-center justify-between gap-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">{title}</h2>
+        <h2
+          ref={headingRef}
+          tabIndex={focusOnMount ? -1 : undefined}
+          className="text-xs font-semibold uppercase tracking-wide text-muted outline-none"
+        >
+          {title}
+        </h2>
         {back}
       </div>
       {children}
@@ -963,7 +1020,7 @@ function PayDirectInfo({
           <span className="text-muted">{r.label}</span>
           <span className="flex items-center gap-2 font-medium" style={{ color: accent }}>
             {r.value}
-            <span className="text-[11px] text-muted">
+            <span role="status" className="text-[11px] text-muted">
               {copied === r.value ? "copied!" : "tap to copy"}
             </span>
           </span>
