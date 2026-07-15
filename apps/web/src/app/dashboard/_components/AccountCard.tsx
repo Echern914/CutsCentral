@@ -116,13 +116,24 @@ export function AccountCard({
       </div>
 
       {/* Support */}
-      <p className="mb-4 text-xs text-muted">
-        Stuck or found a bug? Email{" "}
-        <a href="mailto:support@getchairback.com" className="text-gold hover:underline">
-          support@getchairback.com
-        </a>{" "}
-        - a human reads every message.
-      </p>
+      <div className="mb-6 flex items-center justify-between gap-3 border-t border-subtle pt-5">
+        <div>
+          <p className="text-sm font-medium text-offwhite">Help &amp; support</p>
+          <p className="mt-0.5 text-xs text-muted">
+            Stuck or found a bug? Email{" "}
+            <a href="mailto:support@getchairback.com" className="text-gold hover:underline">
+              support@getchairback.com
+            </a>{" "}
+            - a human reads every message.
+          </p>
+        </div>
+        <a
+          href="/support"
+          className="shrink-0 rounded-full border border-subtle px-4 py-2 text-xs font-medium text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
+        >
+          Support page
+        </a>
+      </div>
 
       {/* Danger zone */}
       <div className="rounded-xl border border-danger-soft/30 p-4">

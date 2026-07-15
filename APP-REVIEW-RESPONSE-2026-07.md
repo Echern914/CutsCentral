@@ -41,6 +41,7 @@ checklist.
 | 2.1(a) demo access | **Email + password sign‑in** added to the app's sign‑in screen (uses the existing `/api/auth/login`, which already returns a bearer token). This is how the reviewer's typed demo credentials work. Friendly "No ChairBack account found…" message for `account_not_found`. Keyboard‑avoiding + scrollable (the round‑2 iPad lesson). | `apps/mobile/app/login.tsx` |
 | 2.1(a) prepopulated demo | `review:seed` script creates the **App Review account**: email+password user + "Uptown Fades" shop, comped Premium, 8 clients with visits/punches/tiers/at‑risk rows, all SMS sending defused, prints credentials + two customer rewards links (browse + deletion‑test). Idempotent — rerun to mint fresh links. | `apps/api/scripts/seed-appreview.ts`, `apps/api/package.json`, keep‑listed in `apps/api/scripts/clean-fake-data.mjs` |
 | 3.1.1 leftover upgrade copy | The four "upgrade from the Billing page" strings (toasts + sweep error) now drop the upgrade steering when inside the app shell. | `ClientsList.tsx`, `RebookPanel.tsx`, `PromotionsManager.tsx`, `SweepControl.tsx` (all under `apps/web/src/app/dashboard/`) |
+| 1.5 support **inside the app** | Support is now one tap away everywhere in‑app: a **Help** pill in the dashboard nav → `/support`; a **Help & support** row on the Account card (email + Support page); a support email + Help line on the customer rewards page. The app shell now hands `mailto:`/`tel:` to iOS (previously dead inside the WebView) and enables edge‑swipe back; in‑app, LegalShell pages show an explicit "← Back" and the wordmark no longer links to the marketing homepage (which has sign‑up/pricing CTAs — 3.1.1). | `apps/mobile/src/AppWebView.tsx`, `DashboardNav.tsx`, `AccountCard.tsx`, `RewardsClient.tsx`, `apps/web/src/components/legal/Legal.tsx`, `BackLink.tsx` |
 
 Notes: the login‑only change is **server‑side** — it takes effect for build 30 the
 moment the API deploys. Build 31 is still required for the email sign‑in form (there is
@@ -56,7 +57,9 @@ owner has no password.
 > **Guideline 1.5 — Support URL.** This was a deployment fault on our side: the support
 > page existed in the app release but had not been published to our website when your
 > review ran. It is now live at https://getchairback.com/support (support email,
-> response time, account/data deletion steps, FAQ).
+> response time, account/data deletion steps, FAQ). Support is also accessible inside
+> the app: the dashboard has a "Help" tab and a "Help & support" section under Account,
+> and the customer rewards screen shows our support email and a Help link.
 >
 > **Guideline 2.1(a) — Demo account access.** We've added email + password sign‑in to
 > the app and created a dedicated, fully prepopulated review account — credentials are
@@ -126,7 +129,9 @@ owner has no password.
    `eas build -p ios --profile production --auto-submit` (buildNumber → 31, EAS‑managed).
    Sanity‑check on a real device: fresh Apple ID sign‑in shows the friendly
    "No ChairBack account found…" (not a raw error), email sign‑in works with the
-   review credentials, no Billing nav item, no trial banner.
+   review credentials, no Billing nav item, no trial banner. Also check support:
+   the **Help** pill opens the support page in‑app with a working "← Back", and
+   tapping the support email opens Mail.
 6. Reply to Apple with R3 + resubmit.
 
 ---

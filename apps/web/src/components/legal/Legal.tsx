@@ -1,6 +1,9 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { APP_NAME } from "@chairback/config/constants";
+import { HideInNativeApp } from "@/components/HideInNativeApp";
+import { ShowInNativeApp } from "@/components/ShowInNativeApp";
+import { BackLink } from "./BackLink";
 
 /**
  * Shared scaffolding for the public legal pages (/terms, /privacy, /sms).
@@ -25,10 +28,20 @@ export function LegalShell({
 }) {
   return (
     <main className="mx-auto w-full max-w-3xl px-6 py-14">
+      <ShowInNativeApp>
+        <BackLink />
+      </ShowInNativeApp>
       <p className="mb-6 text-xs uppercase tracking-[0.25em] text-gold">
-        <Link href="/" className="transition-opacity duration-200 ease-out hover:opacity-80">
-          {APP_NAME}
-        </Link>
+        {/* In the iOS app the wordmark must NOT link home: the marketing page
+            has sign-up/pricing CTAs, which are forbidden in-app (3.1.1). */}
+        <HideInNativeApp>
+          <Link href="/" className="transition-opacity duration-200 ease-out hover:opacity-80">
+            {APP_NAME}
+          </Link>
+        </HideInNativeApp>
+        <ShowInNativeApp>
+          <span>{APP_NAME}</span>
+        </ShowInNativeApp>
       </p>
       <h1 className="font-display text-4xl tracking-tight text-offwhite">{title}</h1>
       {!hideDate && (

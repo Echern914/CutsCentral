@@ -512,6 +512,26 @@ export function RewardsClient({
             </motion.footer>
           )}
 
+          {/* Support (App Store 1.5): the customer side must offer help too.
+              mailto opens the Mail app inside the iOS shell (AppWebView hands
+              external schemes to iOS); /support renders in place. */}
+          <motion.footer variants={fadeUp} className="pt-2 text-center">
+            <p className="text-xs" style={{ color: t.muted }}>
+              Questions or trouble with your rewards?{" "}
+              <a
+                href="mailto:support@getchairback.com"
+                className="hover:underline"
+                style={{ color: accent }}
+              >
+                support@getchairback.com
+              </a>{" "}
+              ·{" "}
+              <a href="/support" className="hover:underline" style={{ color: accent }}>
+                Help
+              </a>
+            </p>
+          </motion.footer>
+
           {/* Self-serve data deletion (App Store 5.1.1(v)) - a quiet control,
               always available, at the very bottom of the page. */}
           <motion.div variants={fadeUp} className="pt-2">
