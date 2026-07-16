@@ -6,6 +6,7 @@ import {
   CADENCE_KEYS,
   cadenceToDays,
   type CadenceKey,
+  DEMO,
   LOYALTY_TIERS,
   LOYALTY_TIER_KEYS,
   loyaltyTierForVisits,
@@ -602,6 +603,15 @@ rewardsRouter.post("/:magicToken/opt-out", async (req, res) => {
  * passes (which carry real device identifiers) are deleted outright.
  */
 rewardsRouter.post("/:magicToken/delete", async (req, res) => {
+  // The PUBLIC demo client must survive: its magicToken is fixed and published
+  // (the client tour and the iOS app's "Try the demo" both hard-code it), so
+  // anonymizing it would rotate the token and 404 the demo for EVERYONE until
+  // the next reseed. No real person's data lives behind it, so 5.1.1(v)
+  // deletion rights don't apply - refuse with a code the rewards page explains.
+  if (req.params.magicToken === DEMO.MAGIC_TOKEN) {
+    res.status(403).json({ error: "demo_client" });
+    return;
+  }
   const ok = await runAsOwner(async (tx) => {
     const client = await tx.client.findUnique({
       where: { magicToken: req.params.magicToken },

@@ -37,7 +37,11 @@ export function DeleteMyData({
     startTransition(async () => {
       const res = await deleteMyDataAction(magicToken);
       if (!res.ok) {
-        setError("Something went wrong. Please try again.");
+        setError(
+          res.error === "demo_client"
+            ? "This is the shared demo page — it holds no personal data, so there's nothing to delete."
+            : "Something went wrong. Please try again.",
+        );
         return;
       }
       const w = window as unknown as {

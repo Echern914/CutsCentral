@@ -6,6 +6,7 @@ import { APP_NAME } from "@chairback/config/constants";
 import { motion } from "framer-motion";
 import { fadeUp } from "@/components/motion/variants";
 import { Card } from "@/components/ui/Card";
+import { HideInNativeApp } from "@/components/HideInNativeApp";
 import { FormError } from "@/components/ui/FormError";
 
 function SubmitButton({ label }: { label: string }) {
@@ -76,8 +77,12 @@ export function AuthForm({
           {isSignup ? "Set up your shop in minutes." : "Sign in to your dashboard."}
         </p>
         <Card className="p-6">
+          {/* Hidden inside the native app: barbers sign in with Google NATIVELY
+              there (Google blocks OAuth in embedded WebViews), and a web page
+              offering ONLY Google + our own account fails App Store Guideline
+              4.8 — the native screen is where Sign in with Apple lives. */}
           {googleAvailable && (
-            <>
+            <HideInNativeApp>
               <a
                 href={googleStartUrl}
                 className="flex w-full items-center justify-center gap-2 rounded-xl border border-subtle bg-charcoal-700 px-4 py-3 text-sm font-medium text-offwhite transition-colors duration-200 ease-out hover:bg-charcoal-800"
@@ -90,7 +95,7 @@ export function AuthForm({
                 or
                 <span className="h-px flex-1 bg-subtle" />
               </div>
-            </>
+            </HideInNativeApp>
           )}
           <form action={formAction} className="flex flex-col gap-3">
             {next && <input type="hidden" name="next" value={next} />}

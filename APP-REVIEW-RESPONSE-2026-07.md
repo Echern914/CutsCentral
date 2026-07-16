@@ -1,4 +1,125 @@
-# App Store review responses — July 2026 (round 3 on top, round 2 kept below)
+# App Store review responses — July 2026 (round 4 on top, earlier rounds kept below)
+
+---
+
+# ROUND 4 — Submission 06faa402 (v1.0 build 31), rejected 2026‑07‑16
+
+Apple rejected build 31 on 2.1(a) ("we cannot access the customer accounts",
+prepopulated content), 3.1.1 + 3.1.3(c) (enterprise services sold to individuals
+without IAP), and — new this round — 4.8 (no equivalent login service). Sections
+mirror round 3: (R1) what actually went wrong, (R2) the code fixes on
+`feat/appstore-review-fixes` (PR #87), (R3) the reply to paste, (R4) ASC notes
+update, (R5) the build‑32 checklist.
+
+## R1. What actually went wrong
+
+- **2.1(a) customer accounts:** round 3 relied on the reviewer PASTING rewards links
+  from the App Review notes into customer mode. That either wasn't followed or the
+  links were dead (testing "Delete my data" rotates them by design, and a reseed
+  mints new ones the notes may not have carried). The app itself still had no way to
+  demonstrate the customer side without a link.
+- **3.1.1 / 3.1.3(c):** two real leaks survived every previous round.
+  (a) `HideInNativeApp` only removed prices AFTER React hydration — the
+  server‑rendered HTML (billing prices, trial banner) was **visible on first paint
+  on every in‑app page load**, a flash a reviewer can screenshot. (b) The WebView
+  had no navigation policy, so document navigations to the marketing landing (full
+  pricing section, $34.99/$74.99, "Start your free trial") rendered in‑app.
+- **4.8 (new):** build 31 DID offer Sign in with Apple first — but gated behind
+  `AppleAuthentication.isAvailableAsync()`. One false negative on the review device
+  and the button silently vanishes, leaving Google as the only service: exactly the
+  4.8 wording Apple sent. Separately, the WEB /login page (Continue with Google +
+  password, no Apple) was still reachable inside the WebView.
+
+## R2. Code fixes (PR #87, `feat/appstore-review-fixes`)
+
+| Issue | Fix | Files |
+|---|---|---|
+| 2.1(a) built‑in demos | "Just looking? **Explore the demo**" on the barber sign‑in → `/demo/dashboard` (anonymous read‑only demo tenant, guided tour); "Just looking? **Try the demo**" in customer mode → the seeded demo client's rewards page via its fixed public token. No link pasting required; neither persists nor registers push. | `apps/mobile/app/login.tsx`, `apps/mobile/app/customer.tsx`, `apps/mobile/app/barber.tsx`, `apps/mobile/src/config.ts` |
+| 3.1.1 first‑paint flash | The shell injects `[data-native-hide]{display:none}` **before any content loads**; `HideInNativeApp` now wraps children in a `display:contents` span carrying that attribute. Prices can no longer appear in‑app even for a frame. | `apps/mobile/src/AppWebView.tsx`, `apps/web/src/components/HideInNativeApp.tsx` |
+| 3.1.1 marketing pages in‑app | WebView navigation policy: document navigations to `/`, `/login`, `/signup`, `/forgot-password` open in **Safari** instead of the shell (SPA `<Link>` navs bypass native handlers, so those pages ALSO hide the forbidden UI in‑app — see next rows). | `apps/mobile/src/AppWebView.tsx` |
+| 3.1.1 landing pricing | Landing pricing nav link, the whole `#pricing` section, and the "How much does it cost?" FAQ answer are hidden in‑app. | `apps/web/src/components/marketing/Landing.tsx` |
+| 4.8 Apple button | Sign in with Apple renders **unconditionally on iOS** — the `isAvailableAsync()` gate is gone. | `apps/mobile/app/login.tsx` |
+| 4.8 web login in‑app | The web login/signup "Continue with Google" is hidden inside the shell (the in‑app web form is email/password only — own‑account login is exempt from 4.8). | `apps/web/src/app/(auth)/AuthForm.tsx` |
+| Demo durability | The PUBLIC demo client refuses self‑serve deletion (`demo_client` 403 + friendly copy) — its fixed token is baked into the app and the client tour, and an anonymous visitor could otherwise kill the demo for everyone until the next reseed. The REVIEW account's customer links still delete normally (that's Apple's deletion test). | `apps/api/src/routes/rewards.ts`, `apps/web/src/app/r/[magicToken]/DeleteMyData.tsx` |
+| Nice‑to‑have | "Forgot password?" on the native sign‑in opens Safari's reset flow. | `apps/mobile/app/login.tsx` |
+
+Web/API changes take effect for the FIELDED build 31 the moment they deploy
+(the flash fix's CSS injection, however, needs build 32 — the injection lives in
+the shell). Build 32 is required for: demo buttons, unconditional Apple, nav
+policy, forgot‑password.
+
+## R3. Reply to paste into App Store Connect (round 4)
+
+> Hello, and thank you for the continued review. A new build (32) accompanies this
+> reply; all three items are addressed.
+>
+> **Guideline 2.1(a) — Access to customer accounts.** The app now includes built‑in
+> demonstration modes for BOTH roles, so no credentials or links are needed to see
+> everything. Owner side: on the sign‑in screen, tap "Just looking? Explore the
+> demo" for a fully populated, read‑only dashboard with a guided tour. Customer
+> side: choose "I'm a customer", then tap "Just looking? Try the demo" to open a
+> fully populated customer rewards page (punch card, visit history, booking). A
+> full‑access demo account (email + password) also remains in App Review
+> Information. Note that real customers never have accounts or passwords — each
+> receives a private magic link by SMS from their barber, which is why customer
+> credentials as such do not exist.
+>
+> **Guidelines 3.1.1 / 3.1.3(c) — Enterprise services.** ChairBack's paid plans are
+> business services sold only to businesses (barbershops, salons, and similar
+> service businesses) to run their operations, billed to the business on our
+> website. They are not sold to single users, consumers, or for family use; the
+> only consumer‑facing surface (a shop's customers viewing their loyalty punch
+> card) is entirely free. The app contains no In‑App Purchases, no purchase or
+> payment functionality, no plan pricing, and no links or calls to action that
+> direct users to an external purchase mechanism — the app is used to access an
+> existing business account, as with other business SaaS apps.
+>
+> **Guideline 4.8 — Login services.** The app offers **Sign in with Apple** as the
+> first login option on the sign‑in screen, ahead of Google, alongside our own
+> email + password login. Sign in with Apple meets all of the guideline's
+> requirements: it limits data collection to name and email, lets users hide their
+> email address via Apple's private relay, and does not collect interactions with
+> the app for advertising. In the previous build the Apple button's visibility
+> depended on a runtime availability check that could suppress it on some devices;
+> in build 32 it is always shown on iOS. (If it was not visible during your review,
+> that is what you encountered — apologies for the confusion.)
+>
+> Thank you again for your patience.
+
+## R4. ASC notes update (App Review Information)
+
+Keep the round‑3 credentials block, and REPLACE the customer paragraph with:
+
+> CUSTOMER SIDE: customers never register — their barber texts them a private
+> rewards link (this is the whole auth model). Choose "I'm a customer", then either
+> tap "Just looking? Try the demo →" for a fully populated demo rewards page, or
+> paste one of these links:
+> • Browse all customer features: <link 1 from the seed script>
+> • For testing "Delete my data": <link 2> (deletion permanently kills this link;
+>   that is the expected behavior)
+>
+> OWNER SIDE, no sign‑in needed: tap "Just looking? Explore the demo →" on the
+> sign‑in screen for a read‑only guided tour of a fully populated dashboard. The
+> demo account above has full write access to everything.
+
+## R5. Build‑32 checklist
+
+**Deploy web + API to production BEFORE building/submitting** (demo endpoints,
+Google‑hidden login, landing pricing hides, demo‑client deletion guard).
+
+1. Merge PR #87 → `main`; verify Vercel + Railway deploys.
+2. Verify the public demo tenant is seeded & rich in prod (it powers BOTH new demo
+   buttons): `getchairback.com/demo/dashboard` shows a busy dashboard, and
+   `getchairback.com/r/demo-rewards-b91e57a3c40d268f7e13` shows a filled punch
+   card. If thin, rerun the demo seed (the pending `--allow-prod` rerun).
+3. Rerun `review:seed` on prod (round 3 R4 step 1) to mint FRESH customer links;
+   update the ASC notes with them + the new text above.
+4. On the Mac (`~/dev/CutsCentral`, never iCloud): fetch main, `pnpm install`,
+   typechecks, then `eas build -p ios --profile production --auto-submit`
+   (buildNumber → 32). Device sanity: Apple button visible on the sign‑in screen,
+   both demo buttons work, billing page shows no prices, tapping the ChairBack
+   wordmark on any in‑app page opens Safari (not in‑app pricing).
+5. Reply to Apple with R3 + resubmit.
 
 ---
 

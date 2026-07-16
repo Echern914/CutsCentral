@@ -10,11 +10,26 @@ import { useIsNativeApp } from "@/lib/useIsNativeApp";
  *
  * Wraps server-rendered subtrees (e.g. the TrialBanner, the billing CTAs)
  * without forcing them to become client components themselves.
+ *
+ * TWO hiding layers, because hydration isn't instant: until React hydrates,
+ * the server-rendered children are in the DOM — inside the WebView that was a
+ * visible FLASH of the forbidden prices on every page load. So the browser
+ * path renders through a `data-native-hide` wrapper that the native shell
+ * hides from the very first paint (AppWebView injects
+ * `[data-native-hide]{display:none}` before any content loads), and once
+ * hydration confirms we're in the app the subtree unmounts entirely. A `span`
+ * (valid inside <p>/headings for the inline "· $34.99/mo" usages) with
+ * `display: contents` (generates no box) keeps both inline and block layouts
+ * exactly as they were.
  */
 export function HideInNativeApp({ children }: { children: React.ReactNode }) {
   const inApp = useIsNativeApp();
   // `null` = not yet known (SSR/pre-hydration): default to showing, matching the
   // browser experience; hide only once we've confirmed we're in the app.
   if (inApp) return null;
-  return <>{children}</>;
+  return (
+    <span className="contents" data-native-hide>
+      {children}
+    </span>
+  );
 }

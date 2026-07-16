@@ -39,6 +39,24 @@ export function appAuthUrl(): string {
   return `${WEB_ORIGIN}/app-auth`;
 }
 
+/**
+ * The barber-side demo's front door: mints an anonymous READ-ONLY session for
+ * the seeded demo tenant and lands on the dashboard with the guided tour armed.
+ * This is the app's App Review demonstration mode (Guideline 2.1a) — reviewers
+ * (and curious prospects) explore the full dashboard without an account.
+ */
+export function demoDashboardUrl(): string {
+  return `${WEB_ORIGIN}/demo/dashboard`;
+}
+
+/**
+ * Fixed Client.magicToken of the seeded demo client — the customer-side
+ * demonstration mode. Deliberately public (the demo tenant holds no real data
+ * and resets nightly); MUST match DEMO.MAGIC_TOKEN in packages/config/src/demo.ts,
+ * the contract the demo seeder always restores.
+ */
+export const DEMO_REWARDS_TOKEN = "demo-rewards-b91e57a3c40d268f7e13";
+
 /** Persisted-choice keys. */
 export const STORAGE = {
   mode: "cb.mode", // "barber" | "manager" | "customer"

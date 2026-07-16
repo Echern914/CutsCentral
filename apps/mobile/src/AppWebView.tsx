@@ -8,6 +8,7 @@ import {
   StyleSheet,
 } from "react-native";
 import { WebView, type WebViewProps } from "react-native-webview";
+import { WEB_ORIGIN } from "@/src/config";
 
 // If the real page content hasn't signaled ready within this long, stop spinning
 // and offer a retry. The page posts "cb:ready" when its real UI mounts; we do NOT
@@ -50,6 +51,44 @@ const LOCK_VIEWPORT = `
 })();
 true;
 `;
+
+// Runs before page load: hide anything the web marked data-native-hide from the
+// FIRST paint. HideInNativeApp (apps/web) wraps App-Store-forbidden UI (prices,
+// upgrade buttons, the web Google sign-in) in that attribute and removes it
+// after hydration — but hydration takes a beat, and without this rule the
+// WebView briefly flashes the server-rendered prices (Guideline 3.1.1).
+const HIDE_FORBIDDEN_UI = `
+(function () {
+  var style = document.createElement('style');
+  style.textContent = '[data-native-hide]{display:none !important}';
+  function add() { (document.head || document.documentElement).appendChild(style); }
+  if (document.head || document.documentElement) add();
+  else document.addEventListener('DOMContentLoaded', add);
+})();
+true;
+`;
+
+/**
+ * Same-origin pages that must never render inside the app shell: the marketing
+ * landing carries plan pricing (App Store Guideline 3.1.1) and the web /login +
+ * /signup show the Google-only web sign-in (Guideline 4.8 — and Google blocks
+ * OAuth in embedded WebViews anyway). Full document navigations to these open
+ * in the system browser instead, where all of that is allowed.
+ *
+ * Next.js client-side (SPA) navigations never pass through the native handler,
+ * so those pages ALSO hide the forbidden UI themselves (HideInNativeApp); this
+ * is the backstop for cold loads, server redirects, and plain <a> links.
+ */
+const OPEN_EXTERNALLY_PATHS = new Set(["/", "/login", "/signup", "/forgot-password"]);
+
+function opensExternally(url: string): boolean {
+  if (!url.startsWith(WEB_ORIGIN)) return false;
+  const rest = url.slice(WEB_ORIGIN.length);
+  // Guard against lookalike hosts (getchairback.com.evil.tld).
+  if (rest !== "" && !/^[/?#]/.test(rest)) return false;
+  const path = rest.replace(/[?#].*$/, "").replace(/\/+$/, "");
+  return OPEN_EXTERNALLY_PATHS.has(path || "/");
+}
 
 /** Compare URLs ignoring query/hash/trailing-slash differences. */
 function normalizeUrl(u: string): string {
@@ -155,7 +194,7 @@ export function AppWebView({
         scalesPageToFit={false}
         setBuiltInZoomControls={false}
         setDisplayZoomControls={false}
-        injectedJavaScriptBeforeContentLoaded={LOCK_VIEWPORT}
+        injectedJavaScriptBeforeContentLoaded={LOCK_VIEWPORT + HIDE_FORBIDDEN_UI}
         bounces={false}
         overScrollMode="never"
         textInteractionEnabled
@@ -190,14 +229,23 @@ export function AppWebView({
         onHttpError={(e) => {
           if (e.nativeEvent.statusCode >= 400) setErrored(true);
         }}
-        // mailto:/tel:/etc go to iOS (Mail app), never into the WebView; any
-        // caller policy (e.g. barber.tsx's /login bounce) still runs for the rest.
+        // One navigation policy, three layers in order:
+        //  1. mailto:/tel:/etc go to iOS (Mail, Phone), never into the WebView;
+        //  2. the caller's policy (e.g. barber.tsx bounces web /login to the
+        //     native sign-in screen);
+        //  3. the marketing/auth backstop - forbidden pages open in Safari.
+        // isTopFrame is iOS-only; treat undefined (Android) as a main frame.
         onShouldStartLoadWithRequest={(req) => {
           if (EXTERNAL_SCHEME.test(req.url)) {
             Linking.openURL(req.url).catch(() => {});
             return false;
           }
-          return callerShouldStart ? callerShouldStart(req) : true;
+          if (callerShouldStart && !callerShouldStart(req)) return false;
+          if (req.isTopFrame !== false && opensExternally(req.url)) {
+            Linking.openURL(req.url).catch(() => {});
+            return false;
+          }
+          return true;
         }}
         {...props}
       />

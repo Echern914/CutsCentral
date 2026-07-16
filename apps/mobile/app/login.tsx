@@ -12,13 +12,14 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
+import * as Linking from "expo-linking";
 import * as AppleAuthentication from "expo-apple-authentication";
 import {
   GoogleSignin,
   statusCodes,
 } from "@react-native-google-signin/google-signin";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { API_ORIGIN, GOOGLE_IOS_CLIENT_ID, STORAGE } from "@/src/config";
+import { API_ORIGIN, GOOGLE_IOS_CLIENT_ID, STORAGE, WEB_ORIGIN } from "@/src/config";
 
 /**
  * Barber/manager native sign-in. Google blocks its OAuth inside an embedded
@@ -33,7 +34,15 @@ import { API_ORIGIN, GOOGLE_IOS_CLIENT_ID, STORAGE } from "@/src/config";
  * accounts created there without Apple/Google - including the App Review demo
  * account, which is the only way a reviewer can enter the barber side.
  *
- * Apple is rendered first per iOS HIG. This is an iOS-only screen.
+ * Apple is rendered first per iOS HIG, and UNCONDITIONALLY on iOS: build 31 was
+ * rejected under Guideline 4.8 ("no equivalent login service") and the prime
+ * suspect is the old isAvailableAsync() gate - a false negative silently left
+ * Google as the only provider. On iOS 13+ the API is always available, so the
+ * probe bought nothing and risked everything.
+ *
+ * "Explore the demo" opens the read-only demo dashboard (/demo/dashboard) with
+ * no account at all - the demonstration mode App Review asks for (2.1a), and a
+ * prospect's test drive. This is an iOS-only screen.
  */
 
 // Configure Google ONCE at module load. CRITICAL: iosClientId ONLY, no
@@ -58,7 +67,6 @@ async function errorCode(res: Response): Promise<string | null> {
 
 export default function LoginScreen() {
   const [busy, setBusy] = useState<Provider | null>(null);
-  const [appleAvailable, setAppleAvailable] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -79,14 +87,6 @@ export default function LoginScreen() {
       if (token) router.replace("/barber");
       else setChecking(false);
     })();
-  }, []);
-
-  useEffect(() => {
-    if (Platform.OS === "ios") {
-      AppleAuthentication.isAvailableAsync()
-        .then(setAppleAvailable)
-        .catch(() => setAppleAvailable(false));
-    }
   }, []);
 
   // Common tail: persist the session JWT, then route to /barber. The barber
@@ -252,8 +252,9 @@ export default function LoginScreen() {
             </Text>
 
             <View style={styles.buttons}>
-              {/* Apple first per iOS HIG; gated to iOS + availability. */}
-              {Platform.OS === "ios" && appleAvailable && (
+              {/* Apple first per iOS HIG. Rendered UNCONDITIONALLY on iOS (see
+                  the header comment - never let a capability probe hide it). */}
+              {Platform.OS === "ios" && (
                 <AppleAuthentication.AppleAuthenticationButton
                   buttonType={
                     AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN
@@ -322,9 +323,33 @@ export default function LoginScreen() {
                   {busy === "email" ? "Signing in…" : "Sign in"}
                 </Text>
               </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() =>
+                  // Reset happens over email - hand off to Safari rather than
+                  // rendering the web auth pages inside the shell.
+                  Linking.openURL(`${WEB_ORIGIN}/forgot-password`).catch(() => {})
+                }
+                style={styles.forgot}
+              >
+                <Text style={styles.forgotText}>Forgot password?</Text>
+              </Pressable>
             </View>
 
             {error && <Text style={styles.error}>{error}</Text>}
+
+            {/* Demonstration mode: the read-only demo dashboard, no account
+                needed (App Review Guideline 2.1a; also a prospect's test drive). */}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Explore the demo dashboard"
+              onPress={() =>
+                router.replace({ pathname: "/barber", params: { demo: "1" } })
+              }
+              style={styles.demo}
+            >
+              <Text style={styles.demoText}>Just looking? Explore the demo →</Text>
+            </Pressable>
 
             <Pressable
               onPress={async () => {
@@ -417,7 +442,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   emailText: { color: "#F5F5F4", fontSize: 16, fontWeight: "600" },
+  forgot: { alignSelf: "center", marginTop: 2 },
+  forgotText: { color: "#6b6b70", fontSize: 13 },
   error: { color: "#F87171", fontSize: 13, marginTop: 18, textAlign: "center" },
-  back: { marginTop: 28 },
+  demo: { marginTop: 26 },
+  demoText: { color: "#D4AF37", fontSize: 14, fontWeight: "600" },
+  back: { marginTop: 18 },
   backText: { color: "#6b6b70", fontSize: 13 },
 });

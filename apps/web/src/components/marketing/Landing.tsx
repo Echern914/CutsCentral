@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { APP_NAME, BILLING, PLANS } from "@chairback/config/constants";
+import { HideInNativeApp } from "@/components/HideInNativeApp";
 import { DashboardPreview } from "./DashboardPreview";
 import { Marquee } from "./Marquee";
 import { PhoneDemo } from "./PhoneDemo";
@@ -36,12 +37,15 @@ export function Landing() {
             <span className="font-display text-base tracking-tight">{APP_NAME}</span>
           </Link>
           <div className="flex items-center gap-2">
-            <a
-              href="#pricing"
-              className="hidden rounded-full px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite sm:inline"
-            >
-              Pricing
-            </a>
+            {/* Pricing is hidden inside the native app (App Store 3.1.1). */}
+            <HideInNativeApp>
+              <a
+                href="#pricing"
+                className="hidden rounded-full px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite sm:inline"
+              >
+                Pricing
+              </a>
+            </HideInNativeApp>
             <Link
               href="/login"
               className="rounded-full px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite"
@@ -272,6 +276,10 @@ export function Landing() {
         </section>
 
         {/* ====== Pricing ====== */}
+        {/* The entire section is hidden inside the native app shell: plan
+            prices and purchase CTAs may not render in-app (App Store 3.1.1).
+            Subscribing stays a browser-only flow. */}
+        <HideInNativeApp>
         <section id="pricing" className="border-t border-subtle bg-charcoal-900/40">
           <div className="mx-auto w-full max-w-6xl px-6 py-24">
             <SectionHeading
@@ -419,25 +427,34 @@ export function Landing() {
             </p>
           </div>
         </section>
+        </HideInNativeApp>
 
         {/* ====== FAQ ====== */}
         <section className="mx-auto w-full max-w-3xl px-6 pb-24 pt-24">
           <SectionHeading eyebrow="FAQ" title="Quick answers." />
           <Reveal className="mt-10 flex flex-col gap-3">
-            {FAQ.map((f) => (
-              <details
-                key={f.q}
-                className="group rounded-2xl border border-subtle bg-charcoal-800/60 px-6 py-4 transition-colors duration-200 ease-out open:border-gold/25"
-              >
-                <summary className="flex cursor-pointer list-none items-center justify-between gap-4 text-sm font-medium text-offwhite [&::-webkit-details-marker]:hidden">
-                  {f.q}
-                  <span className="text-gold transition-transform duration-200 ease-out group-open:rotate-45">
-                    <PlusIcon className="h-4 w-4" />
-                  </span>
-                </summary>
-                <p className="mt-3 text-sm leading-relaxed text-muted">{f.a}</p>
-              </details>
-            ))}
+            {FAQ.map((f) => {
+              const item = (
+                <details
+                  key={f.q}
+                  className="group rounded-2xl border border-subtle bg-charcoal-800/60 px-6 py-4 transition-colors duration-200 ease-out open:border-gold/25"
+                >
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-4 text-sm font-medium text-offwhite [&::-webkit-details-marker]:hidden">
+                    {f.q}
+                    <span className="text-gold transition-transform duration-200 ease-out group-open:rotate-45">
+                      <PlusIcon className="h-4 w-4" />
+                    </span>
+                  </summary>
+                  <p className="mt-3 text-sm leading-relaxed text-muted">{f.a}</p>
+                </details>
+              );
+              // The cost answer carries plan prices — forbidden in-app (3.1.1).
+              return f.hasPrices ? (
+                <HideInNativeApp key={f.q}>{item}</HideInNativeApp>
+              ) : (
+                item
+              );
+            })}
           </Reveal>
         </section>
 
@@ -604,7 +621,8 @@ const FEATURES = [
   },
 ] as const;
 
-const FAQ = [
+// `hasPrices` marks answers that carry plan pricing, hidden in-app (3.1.1).
+const FAQ: readonly { q: string; a: string; hasPrices?: boolean }[] = [
   {
     q: "Do my clients need to download an app?",
     a: "No. Each client gets a private magic link to their punch card. It opens in the browser from a text. No account, no password, no app store.",
@@ -628,12 +646,13 @@ const FAQ = [
   {
     q: "How much does it cost?",
     a: `The loyalty program (punch cards, rewards page, public mini-site, client book) is free forever, no card required. Premium ($${PLANS.pro.priceMonthlyUsd}/month, ${PLANS.pro.smsMonthlyQuota} texts included) adds the texting that brings clients back: rebooking nudges, promo blasts, and auto-sync with Acuity or Square. Premium AI ($${PLANS.pro_ai.priceMonthlyUsd}/month, ${PLANS.pro_ai.smsMonthlyQuota.toLocaleString()} texts included) adds an AI receptionist that answers client texts and books appointments 24/7. Every new shop gets a ${BILLING.trialDays}-day full Premium trial, and one rebooked regular typically covers the month.`,
+    hasPrices: true,
   },
   {
     q: "Is it only for barbershops?",
     a: "No. Salons, nail studios, lash artists, spas, and tattoo studios run the exact same playbook: visits earn punches, drifting clients get a perfectly-timed text. Pick your industry at signup and the defaults match your business.",
   },
-] as const;
+];
 
 /* ====== inline icons (no extra deps) ====== */
 
