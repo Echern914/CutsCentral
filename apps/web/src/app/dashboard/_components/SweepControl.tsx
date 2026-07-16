@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { motion } from "framer-motion";
 import { Card } from "@/components/ui/Card";
 import { fadeUp } from "@/components/motion/variants";
+import { isInNativeAppNow } from "@/lib/useIsNativeApp";
 import {
   runSweepAction,
   sweepPreviewAction,
@@ -40,7 +41,11 @@ export function SweepControl({ atRiskCount }: { atRiskCount: number }) {
         r.summary
           ? null
           : r.error === "subscription_required"
-            ? "Texting is a Premium feature - upgrade from the Billing page to send nudges."
+            ? // In-app copy stays neutral: no upgrade prompt, the Billing page
+              // is hidden there (App Store 3.1.1).
+              isInNativeAppNow()
+              ? "Texting isn't included in your shop's current plan."
+              : "Texting is a Premium feature - upgrade from the Billing page to send nudges."
             : "Couldn't send right now. Try again in a minute.",
       );
       setPreview(null);

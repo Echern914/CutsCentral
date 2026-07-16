@@ -11,6 +11,7 @@ import {
 import { Card } from "@/components/ui/Card";
 import { LocalDate } from "@/components/ui/LocalDate";
 import { useToast } from "@/components/ui/Toast";
+import { isInNativeAppNow } from "@/lib/useIsNativeApp";
 import { bulkClientAction } from "../actions";
 
 export interface ClientRow {
@@ -78,7 +79,13 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
         }
         setSelected(new Set());
       } else if (r.error === "subscription_required") {
-        toast("Texting is a Premium feature - upgrade from the Billing page", "error");
+        // In-app copy stays neutral: no upgrade prompt there (App Store 3.1.1).
+        toast(
+          isInNativeAppNow()
+            ? "Texting isn't included in your shop's current plan"
+            : "Texting is a Premium feature - upgrade from the Billing page",
+          "error",
+        );
       } else if (r.error === "quiet_hours") {
         toast("Texting is paused 9pm-8am (client local time)", "error");
       } else {

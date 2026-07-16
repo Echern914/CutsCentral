@@ -5,7 +5,7 @@ import { AppWebView } from "@/src/AppWebView";
 import { router, useLocalSearchParams } from "expo-router";
 import * as Linking from "expo-linking";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { rewardsUrl, API_ORIGIN, STORAGE } from "@/src/config";
+import { rewardsUrl, API_ORIGIN, DEMO_REWARDS_TOKEN, STORAGE } from "@/src/config";
 import { registerCustomerPush } from "@/src/push";
 
 /**
@@ -27,6 +27,11 @@ export default function CustomerScreen() {
   const [sentMsg, setSentMsg] = useState<string | null>(null);
   const [linkInput, setLinkInput] = useState("");
   const [linkErr, setLinkErr] = useState<string | null>(null);
+  // Demonstration mode (App Review Guideline 2.1a): browse the seeded demo
+  // client's rewards page. Deliberately NOT persisted (a relaunch returns to
+  // the real entry screen) and NEVER push-registered (the shared demo client
+  // must not accumulate reviewers' device tokens).
+  const [demoActive, setDemoActive] = useState(false);
   const registered = useRef(false);
 
   // Resolve a token from the deep link that launched/opened us, the route param,
@@ -126,19 +131,38 @@ export default function CustomerScreen() {
     );
   }
 
-  if (token) {
+  if (token || demoActive) {
     return (
       <SafeAreaView style={styles.flex} edges={["top"]}>
+        {/* A real token always wins over the demo (a customer with their own
+            link never sees demo chrome). */}
+        {!token && (
+          <View style={styles.demoBar}>
+            <Text style={styles.demoBarText}>Demo shop — nothing here is real</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Exit the demo"
+              onPress={() => setDemoActive(false)}
+            >
+              <Text style={styles.demoBarExit}>Done</Text>
+            </Pressable>
+          </View>
+        )}
         {/* awaitsReady: the rewards page posts "cb:ready" when its real UI mounts,
             so the spinner clears on that - not on the streamed loading shell. */}
-        <AppWebView source={{ uri: rewardsUrl(token) }} style={styles.flex} awaitsReady />
+        <AppWebView
+          source={{ uri: rewardsUrl(token ?? DEMO_REWARDS_TOKEN) }}
+          style={styles.flex}
+          awaitsReady
+        />
       </SafeAreaView>
     );
   }
 
-  // No token yet. Two ways in:
+  // No token yet. Three ways in:
   //  1. PASTE the rewards link the barber texted (primary - works with no SMS).
   //  2. "Text me my link" (fallback - needs texting to be live).
+  //  3. Browse the demo shop (no link needed - also App Review's way in).
   return (
     <SafeAreaView style={[styles.flex, styles.pad]}>
       <Text style={styles.title}>Your rewards</Text>
@@ -178,6 +202,15 @@ export default function CustomerScreen() {
       {sentMsg && <Text style={styles.note}>{sentMsg}</Text>}
       <Pressable style={[styles.button, styles.buttonSecondary]} onPress={textMeMyLink}>
         <Text style={styles.buttonSecondaryText}>Text me my link</Text>
+      </Pressable>
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Try the demo rewards page"
+        style={styles.demoLink}
+        onPress={() => setDemoActive(true)}
+      >
+        <Text style={styles.demoLinkText}>Just looking? Try the demo →</Text>
       </Pressable>
 
       <Pressable
@@ -222,6 +255,20 @@ const styles = StyleSheet.create({
   divider: { flexDirection: "row", alignItems: "center", marginVertical: 28 },
   line: { flex: 1, height: 1, backgroundColor: "#26262b" },
   dividerText: { color: "#6b6b70", fontSize: 13, marginHorizontal: 12 },
+  demoLink: { marginTop: 24, alignSelf: "center" },
+  demoLinkText: { color: "#D4AF37", fontSize: 14, fontWeight: "600" },
+  demoBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: "#151517",
+    borderBottomWidth: 1,
+    borderBottomColor: "#26262b",
+  },
+  demoBarText: { color: "#8a8a8f", fontSize: 12 },
+  demoBarExit: { color: "#D4AF37", fontSize: 13, fontWeight: "600" },
   back: { marginTop: 28, alignSelf: "center" },
   backText: { color: "#6b6b70", fontSize: 13 },
 });

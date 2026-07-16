@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { View, Text, Pressable, ActivityIndicator, StyleSheet } from "react-native";
 import { WebView, type WebViewProps } from "react-native-webview";
+import * as Linking from "expo-linking";
+import { WEB_ORIGIN } from "@/src/config";
 
 // If the real page content hasn't signaled ready within this long, stop spinning
 // and offer a retry. The page posts "cb:ready" when its real UI mounts; we do NOT
@@ -44,6 +46,44 @@ const LOCK_VIEWPORT = `
 true;
 `;
 
+// Runs before page load: hide anything the web marked data-native-hide from the
+// FIRST paint. HideInNativeApp (apps/web) wraps App-Store-forbidden UI (prices,
+// upgrade buttons, the web Google sign-in) in that attribute and removes it
+// after hydration — but hydration takes a beat, and without this rule the
+// WebView briefly flashes the server-rendered prices (Guideline 3.1.1).
+const HIDE_FORBIDDEN_UI = `
+(function () {
+  var style = document.createElement('style');
+  style.textContent = '[data-native-hide]{display:none !important}';
+  function add() { (document.head || document.documentElement).appendChild(style); }
+  if (document.head || document.documentElement) add();
+  else document.addEventListener('DOMContentLoaded', add);
+})();
+true;
+`;
+
+/**
+ * Same-origin pages that must never render inside the app shell: the marketing
+ * landing carries plan pricing (App Store Guideline 3.1.1) and the web /login +
+ * /signup show the Google-only web sign-in (Guideline 4.8 — and Google blocks
+ * OAuth in embedded WebViews anyway). Full document navigations to these open
+ * in the system browser instead, where all of that is allowed.
+ *
+ * Next.js client-side (SPA) navigations never pass through the native handler,
+ * so those pages ALSO hide the forbidden UI themselves (HideInNativeApp); this
+ * is the backstop for cold loads, server redirects, and plain <a> links.
+ */
+const OPEN_EXTERNALLY_PATHS = new Set(["/", "/login", "/signup", "/forgot-password"]);
+
+function opensExternally(url: string): boolean {
+  if (!url.startsWith(WEB_ORIGIN)) return false;
+  const rest = url.slice(WEB_ORIGIN.length);
+  // Guard against lookalike hosts (getchairback.com.evil.tld).
+  if (rest !== "" && !/^[/?#]/.test(rest)) return false;
+  const path = rest.replace(/[?#].*$/, "").replace(/\/+$/, "");
+  return OPEN_EXTERNALLY_PATHS.has(path || "/");
+}
+
 /** Compare URLs ignoring query/hash/trailing-slash differences. */
 function normalizeUrl(u: string): string {
   return u.replace(/[?#].*$/, "").replace(/\/+$/, "");
@@ -65,6 +105,7 @@ function normalizeUrl(u: string): string {
 export function AppWebView({
   awaitsReady = false,
   onMessage: callerOnMessage,
+  onShouldStartLoadWithRequest: callerNavPolicy,
   ...props
 }: WebViewProps & { awaitsReady?: boolean }) {
   const [errored, setErrored] = useState(false);
@@ -139,7 +180,7 @@ export function AppWebView({
         scalesPageToFit={false}
         setBuiltInZoomControls={false}
         setDisplayZoomControls={false}
-        injectedJavaScriptBeforeContentLoaded={LOCK_VIEWPORT}
+        injectedJavaScriptBeforeContentLoaded={LOCK_VIEWPORT + HIDE_FORBIDDEN_UI}
         bounces={false}
         overScrollMode="never"
         textInteractionEnabled
@@ -166,6 +207,17 @@ export function AppWebView({
         onMessage={(e) => {
           if (e.nativeEvent.data === READY_MESSAGE) clearLoading();
           callerOnMessage?.(e);
+        }}
+        // The caller's policy runs first (e.g. barber mode bounces web /login
+        // to the native sign-in); then the shared marketing/auth backstop.
+        // isTopFrame is iOS-only — treat undefined (Android) as a main frame.
+        onShouldStartLoadWithRequest={(req) => {
+          if (callerNavPolicy && !callerNavPolicy(req)) return false;
+          if (req.isTopFrame !== false && opensExternally(req.url)) {
+            Linking.openURL(req.url).catch(() => {});
+            return false;
+          }
+          return true;
         }}
         // Surface load failures instead of spinning forever. onError = native
         // load failure (DNS, offline, blocked). onHttpError >= 400 catches both

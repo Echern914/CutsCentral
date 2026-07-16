@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
+import { isInNativeAppNow } from "@/lib/useIsNativeApp";
 import { nudgeClientAction } from "../../actions";
 
 /**
@@ -59,7 +60,13 @@ export function RebookPanel({
               setNudged(true);
               toast("Nudge sent", "success");
             } else if (r.error === "subscription_required")
-              toast("Texting is a Premium feature - upgrade from the Billing page", "error");
+              // In-app copy stays neutral: no upgrade prompt there (3.1.1).
+              toast(
+                isInNativeAppNow()
+                  ? "Texting isn't included in your shop's current plan"
+                  : "Texting is a Premium feature - upgrade from the Billing page",
+                "error",
+              );
             else toast("Could not send nudge", "error");
           })
         }

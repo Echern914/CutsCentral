@@ -5,10 +5,16 @@ import {
   type WebViewMessageEvent,
   type WebViewNavigation,
 } from "react-native-webview";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { AppWebView } from "@/src/AppWebView";
-import { appAuthUrl, dashboardUrl, STORAGE, WEB_ORIGIN } from "@/src/config";
+import {
+  appAuthUrl,
+  dashboardUrl,
+  demoDashboardUrl,
+  STORAGE,
+  WEB_ORIGIN,
+} from "@/src/config";
 import { registerBarberPush } from "@/src/push";
 
 /**
@@ -20,10 +26,18 @@ import { registerBarberPush } from "@/src/push";
  * lands authenticated - no native cookie module required. The WebView's cookie
  * jar then persists it for later launches.
  *
+ * `?demo=1` (the sign-in screen's "Explore the demo") loads /demo/dashboard
+ * instead: an anonymous READ-ONLY session for the seeded demo tenant, no
+ * account needed - the demonstration mode App Review asks for (Guideline 2.1a).
+ * No push registration in demo: the shared demo owner must not accumulate
+ * reviewers' device tokens.
+ *
  * Native push: we also forward the stored JWT as the push bearer, or use a
  * postMessage "cb:auth" the dashboard emits - whichever arrives first.
  */
 export default function BarberScreen() {
+  const { demo } = useLocalSearchParams<{ demo?: string }>();
+  const isDemo = demo === "1";
   const registered = useRef(false);
   // Resolved after reading the stored session: the WebView entry point + (when
   // we have a token) the Bearer header that /app-auth consumes. Null until ready
@@ -34,6 +48,12 @@ export default function BarberScreen() {
 
   useEffect(() => {
     (async () => {
+      if (isDemo) {
+        // Suppress BOTH push paths (stored-token and the cb:auth message).
+        registered.current = true;
+        setSource({ uri: demoDashboardUrl() });
+        return;
+      }
       let token: string | null = null;
       try {
         token = await AsyncStorage.getItem(STORAGE.session);
@@ -55,7 +75,7 @@ export default function BarberScreen() {
         setSource({ uri: dashboardUrl() });
       }
     })();
-  }, []);
+  }, [isDemo]);
 
   function onMessage(e: WebViewMessageEvent) {
     try {

@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
+import { isInNativeAppNow } from "@/lib/useIsNativeApp";
 import type { Promo } from "./page";
 import {
   blastPromoAction,
@@ -253,7 +254,13 @@ function PromoRow({ promo }: { promo: Promo }) {
                     if (r.summary)
                       toast(`Sent ${r.summary.sent} text${r.summary.sent === 1 ? "" : "s"}`, "success");
                     else if (r.error === "subscription_required")
-                      toast("Promo blasts are a Premium feature - upgrade from the Billing page", "error");
+                      // In-app copy stays neutral: no upgrade prompt there (3.1.1).
+                      toast(
+                        isInNativeAppNow()
+                          ? "Promo blasts aren't included in your shop's current plan"
+                          : "Promo blasts are a Premium feature - upgrade from the Billing page",
+                        "error",
+                      );
                     else if (r.error === "quiet_hours")
                       toast("Texting is paused 9pm-8am (client local time). Try again in the morning.", "error");
                     else toast("Send failed", "error");
