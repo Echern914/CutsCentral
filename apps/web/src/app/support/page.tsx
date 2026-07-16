@@ -11,6 +11,7 @@ import {
   SUPPORT_EMAIL,
   UL,
 } from "@/components/legal/Legal";
+import { HideInNativeApp } from "@/components/HideInNativeApp";
 
 export const metadata: Metadata = {
   title: `Support — ${APP_NAME}`,
@@ -91,12 +92,16 @@ export default function SupportPage() {
         us and we&apos;ll help.
       </P>
 
-      <H3>How do I manage my subscription?</H3>
-      <P>
-        Subscriptions are managed on the web in your{" "}
-        <A href="/dashboard">dashboard</A> billing settings, where you can
-        upgrade, update your card, or cancel at any time.
-      </P>
+      {/* Upgrade/billing steering must not render inside the iOS app (3.1.1) -
+          the Help pill makes this page one tap from the in-app dashboard. */}
+      <HideInNativeApp>
+        <H3>How do I manage my subscription?</H3>
+        <P>
+          Subscriptions are managed on the web in your{" "}
+          <A href="/dashboard">dashboard</A> billing settings, where you can
+          upgrade, update your card, or cancel at any time.
+        </P>
+      </HideInNativeApp>
 
       <H3>How do I delete my account or data?</H3>
       <P>
