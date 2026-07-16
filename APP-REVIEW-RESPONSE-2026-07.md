@@ -74,16 +74,22 @@ owner has no password.
 > **Guideline 3.1.1 — Account registration.** We have removed account registration for
 > businesses and organizations from the app. Signing in with Apple, Google, or email
 > can only access an existing account; no account of any kind can be created inside
-> the app. The app also contains no pricing, subscription, upgrade, or payment UI.
+> the app. The app contains no In‑App Purchases and no purchase, pricing, or payment
+> functionality — nothing is sold inside the app.
 >
 > **Guidelines 3.1.1 / 3.1.3(c) — Enterprise services.** ChairBack's paid service is
 > sold only to businesses and organizations (barbershops, salons, and similar service
 > businesses), billed to the business on our website. It is not sold to single users,
 > consumers, or for family use — the only consumer‑facing part of the app (a shop's
 > customers viewing their loyalty punch card) is free for everyone and has nothing to
-> purchase. Per Guideline 3.1.3(c), and with registration and all purchase surfaces
-> removed from the app, we believe no In‑App Purchase is required. We're happy to
-> provide any further detail.
+> purchase. The app has never contained In‑App Purchases or any purchase mechanism,
+> and with account registration now removed, we believe no In‑App Purchase is required
+> under Guideline 3.1.3(c). We're happy to provide any further detail.
+>
+> <!-- Framing note (not for Apple): say "removed" ONLY about registration — Apple
+> demanded that removal and their reviewer saw it exist. Purchases are stated as a
+> standing fact (never had IAP, nothing sold in-app); the reviewer never saw purchase
+> UI (already hidden in build 30), so don't imply it existed. -->>
 >
 > Thank you again for your patience.
 
