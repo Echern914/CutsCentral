@@ -188,7 +188,7 @@ export function FeatureSearch() {
                 }}
                 onKeyDown={onInputKey}
                 placeholder="Search features — waitlist, punch cards, pay direct…"
-                className="w-full bg-transparent text-sm text-offwhite placeholder:text-muted focus:outline-none"
+                className="w-full bg-transparent text-sm text-offwhite placeholder:text-muted"
                 aria-label="Search features"
                 role="combobox"
                 aria-expanded={true}

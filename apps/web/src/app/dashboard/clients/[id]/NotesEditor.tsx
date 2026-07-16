@@ -42,7 +42,7 @@ export function NotesEditor({
         onChange={(e) => setNotes(e.target.value)}
         rows={4}
         placeholder="Private notes: preferences, history, anything useful."
-        className="w-full resize-none rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50"
+        className="w-full resize-none rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted focus:border-gold/50"
       />
     </Card>
   );

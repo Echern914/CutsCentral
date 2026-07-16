@@ -13,7 +13,7 @@ interface Hit {
 }
 
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted focus:border-gold/50";
 
 /**
  * Fold a duplicate client into THIS one (the winner). The barber searches for the

@@ -77,7 +77,7 @@ function MessageBubble({ message }: { message: Message }) {
   // system_note: a faint centered audit line (escalations, "manual reply", etc.)
   if (message.role === "system_note") {
     return (
-      <p className="self-center text-center text-[11px] italic text-muted/70">
+      <p className="self-center text-center text-[11px] italic text-muted">
         {message.content}
       </p>
     );
@@ -102,11 +102,11 @@ function MessageBubble({ message }: { message: Message }) {
         )}
       </div>
       {calls.length > 0 && (
-        <p className="mt-1 text-[10px] text-muted/70">
+        <p className="mt-1 text-[10px] text-muted">
           {calls.map((c) => `${c.name}${c.isError ? " ⚠" : ""}`).join(" · ")}
         </p>
       )}
-      <p className="mt-0.5 text-[10px] text-muted/60">
+      <p className="mt-0.5 text-[10px] text-muted">
         {new Date(message.createdAt).toLocaleString(undefined, {
           month: "short",
           day: "numeric",

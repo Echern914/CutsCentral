@@ -9,7 +9,7 @@ import {
 } from "../../actions";
 
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted focus:border-gold/50";
 
 /**
  * Barber edit controls for a client's own profile: edit name/phone/email inline,

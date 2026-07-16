@@ -514,7 +514,7 @@ export function Landing() {
           </div>
         </div>
         <div className="mx-auto mt-5 flex w-full max-w-6xl flex-wrap items-center justify-center gap-x-5 gap-y-2 border-t border-subtle px-6 pt-5 text-xs text-muted sm:justify-start">
-          <span className="text-muted/70">Also built for:</span>
+          <span className="text-muted">Also built for:</span>
           <Link href="/for/salons" className="transition-colors duration-150 ease-out hover:text-offwhite">
             Hair salons
           </Link>

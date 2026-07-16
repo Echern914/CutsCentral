@@ -126,7 +126,7 @@ export function ImageField({
             if (e.key === "Escape") setEditingUrl(false);
           }}
           placeholder="https://…/image.jpg"
-          className="rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted focus:border-gold/50 focus:outline-none"
+          className="rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted focus:border-gold/50"
         />
       ) : (
         <button

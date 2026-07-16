@@ -56,7 +56,7 @@ export default async function ReviewsPage() {
             </p>
             {/* Labeled example so you can see how a review will look. Not real, not public. */}
             <div className="mx-auto mt-5 max-w-md rounded-lg border border-dashed border-subtle p-4 text-left opacity-70">
-              <p className="mb-2 text-[10px] uppercase tracking-wide text-muted/70">
+              <p className="mb-2 text-[10px] uppercase tracking-wide text-muted">
                 Example — this is how a review will appear
               </p>
               <div className="flex items-center justify-between">
@@ -83,7 +83,7 @@ export default async function ReviewsPage() {
                     {r.body && (
                       <p className="mt-1.5 text-sm text-offwhite/90">{r.body}</p>
                     )}
-                    <p className="mt-1.5 text-[11px] text-muted/70">
+                    <p className="mt-1.5 text-[11px] text-muted">
                       {new Date(r.createdAt).toLocaleString(undefined, {
                         month: "short",
                         day: "numeric",

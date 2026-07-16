@@ -17,7 +17,7 @@ export interface ShopSettings {
 }
 
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite outline-none focus:border-gold/50";
+  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite focus:border-gold/50";
 const labelCls = "text-xs text-muted";
 
 function Save() {
@@ -142,7 +142,7 @@ export function SettingsCard({ settings }: { settings: ShopSettings }) {
         <div>
           <label className={labelCls}>
             Nudge message
-            <span className="ml-2 text-muted/60">
+            <span className="ml-2 text-muted">
               placeholders: {"{firstName} {shop} {bookingUrl} {rewardsUrl}"}
             </span>
             <textarea

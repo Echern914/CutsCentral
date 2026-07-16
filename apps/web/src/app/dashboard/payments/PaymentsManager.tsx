@@ -12,7 +12,7 @@ import {
 } from "./actions";
 
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted focus:border-gold/50";
 const labelCls = "text-xs text-muted";
 
 export function PaymentsManager({ initial }: { initial: PaymentStatus }) {

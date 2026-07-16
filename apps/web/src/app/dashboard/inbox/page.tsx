@@ -19,7 +19,7 @@ const STATUS_LABEL: Record<ConversationRow["status"], string> = {
 const STATUS_CLASS: Record<ConversationRow["status"], string> = {
   active: "text-muted",
   escalated: "text-gold",
-  closed: "text-muted/60",
+  closed: "text-muted",
 };
 
 export default async function InboxPage() {
@@ -71,7 +71,7 @@ export default async function InboxPage() {
                     <p className={`text-xs font-medium ${STATUS_CLASS[c.status]}`}>
                       {STATUS_LABEL[c.status]}
                     </p>
-                    <p className="mt-0.5 text-[11px] text-muted/70">
+                    <p className="mt-0.5 text-[11px] text-muted">
                       {new Date(c.lastMessageAt).toLocaleString(undefined, {
                         month: "short",
                         day: "numeric",

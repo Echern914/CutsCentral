@@ -33,7 +33,7 @@ import {
 } from "./actions";
 
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted focus:border-gold/50";
 const labelCls = "text-xs text-muted";
 const tabs = ["Settings", "Staff", "Services", "Hours", "Appointments"] as const;
 type Tab = (typeof tabs)[number];
@@ -636,7 +636,7 @@ function ServicesTab({
                   onChange={(e) =>
                     setDayPrices((cur) => ({ ...cur, [wd]: e.target.value }))
                   }
-                  className="w-full rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50"
+                  className="w-full rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite placeholder:text-muted focus:border-gold/50"
                   aria-label={`${label} price`}
                 />
                 <input
@@ -648,7 +648,7 @@ function ServicesTab({
                   onChange={(e) =>
                     setDayDurations((cur) => ({ ...cur, [wd]: e.target.value }))
                   }
-                  className="w-full rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50"
+                  className="w-full rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite placeholder:text-muted focus:border-gold/50"
                   aria-label={`${label} minutes`}
                 />
               </div>

@@ -40,7 +40,7 @@ export function ReviewModeration({ id, status }: { id: string; status: Status })
                   : opt.value === "HIDDEN"
                     ? "bg-charcoal-700 text-muted"
                     : "bg-gold/15 text-gold"
-                : "text-muted/60 hover:bg-charcoal-700 hover:text-offwhite",
+                : "text-muted hover:bg-charcoal-700 hover:text-offwhite",
             )}
           >
             {opt.label}

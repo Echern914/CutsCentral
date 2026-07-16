@@ -12,7 +12,7 @@ import {
 } from "../actions";
 
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted focus:border-gold/50";
 const labelCls = "text-xs text-muted";
 
 function Btn({ label }: { label: string }) {
@@ -73,7 +73,7 @@ export function AccountCard({
           Your name
           <input name="name" defaultValue={name} className={`mt-1 ${field}`} />
         </label>
-        <p className="text-xs text-muted/70">Signed in as {email}</p>
+        <p className="text-xs text-muted">Signed in as {email}</p>
         <div><Btn label="Save name" /></div>
         {nameState.ok ? null : null}
       </form>

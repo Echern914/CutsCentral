@@ -67,7 +67,7 @@ function NudgeRow({ row, appBaseUrl }: { row: AtRiskRow; appBaseUrl: string }) {
           {row.daysOverdue}d overdue · every ~{row.medianIntervalDays}d
           {row.lastService ? ` · last: ${row.lastService}` : ""}
         </p>
-        {row.phone && <p className="text-xs text-muted/70">{row.phone}</p>}
+        {row.phone && <p className="text-xs text-muted">{row.phone}</p>}
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <button

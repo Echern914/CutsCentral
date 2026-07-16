@@ -72,7 +72,7 @@ export default async function NudgesPage() {
                           ? "text-muted"
                           : n.status === "FAILED"
                             ? "text-danger-soft"
-                            : "text-muted/60"
+                            : "text-muted"
                       }`}
                     >
                       {n.status.toLowerCase()}

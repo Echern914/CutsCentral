@@ -67,7 +67,7 @@ export default async function RequestsPage() {
                     {r.message && (
                       <p className="mt-1 text-sm text-offwhite/90">{r.message}</p>
                     )}
-                    <p className="mt-1.5 text-[11px] text-muted/70">
+                    <p className="mt-1.5 text-[11px] text-muted">
                       {new Date(r.createdAt).toLocaleString(undefined, {
                         month: "short",
                         day: "numeric",

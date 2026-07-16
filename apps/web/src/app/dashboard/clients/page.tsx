@@ -73,7 +73,7 @@ export default async function ClientsPage({
               ← Prev
             </Link>
           ) : (
-            <span className="rounded-full border border-subtle px-4 py-2 text-xs text-muted/40">
+            <span className="rounded-full border border-subtle px-4 py-2 text-xs text-muted">
               ← Prev
             </span>
           )}
@@ -88,7 +88,7 @@ export default async function ClientsPage({
               Next →
             </Link>
           ) : (
-            <span className="rounded-full border border-subtle px-4 py-2 text-xs text-muted/40">
+            <span className="rounded-full border border-subtle px-4 py-2 text-xs text-muted">
               Next →
             </span>
           )}

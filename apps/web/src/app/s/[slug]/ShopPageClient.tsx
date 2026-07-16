@@ -177,6 +177,8 @@ export function ShopPageClient({
                 style={{ color: accent }}
               >
                 @{data.instagramHandle}
+                {/* Tell SR/keyboard users the link leaves the site (WCAG 3.2.5). */}
+                <span className="sr-only"> (opens Instagram in a new tab)</span>
               </a>
             )}
           </div>

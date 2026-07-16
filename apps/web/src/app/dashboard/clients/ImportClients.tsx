@@ -6,7 +6,7 @@ import { useToast } from "@/components/ui/Toast";
 import { importClientsAction, type ImportClientRow, type ImportResult } from "../actions";
 
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted focus:border-gold/50";
 
 /**
  * CSV client import — the "bring your book off Booksy/Fresha/Vagaro" flow. The

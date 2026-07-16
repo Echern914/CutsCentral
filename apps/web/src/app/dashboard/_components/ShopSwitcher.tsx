@@ -29,7 +29,7 @@ export function ShopSwitcher({
           const id = e.target.value;
           startTransition(() => switchShopAction(id));
         }}
-        className="max-w-[9.5rem] truncate rounded-full border border-subtle bg-charcoal-800 px-3 py-1.5 text-xs text-offwhite outline-none transition-colors duration-150 ease-out hover:bg-charcoal-700 focus:border-gold/50 disabled:opacity-50"
+        className="max-w-[9.5rem] truncate rounded-full border border-subtle bg-charcoal-800 px-3 py-1.5 text-xs text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700 focus:border-gold/50 disabled:opacity-50"
         title="Switch shop"
       >
         {shops.map((s) => (

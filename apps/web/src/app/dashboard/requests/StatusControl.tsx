@@ -40,7 +40,7 @@ export function StatusControl({
                   : opt === "CONTACTED"
                     ? "bg-emerald-soft/15 text-emerald-soft"
                     : "bg-charcoal-700 text-muted"
-                : "text-muted/60 hover:bg-charcoal-700 hover:text-offwhite",
+                : "text-muted hover:bg-charcoal-700 hover:text-offwhite",
             )}
           >
             {opt.toLowerCase()}

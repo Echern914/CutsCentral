@@ -134,7 +134,7 @@ export function GalleryEditor({
                 onChange={(e) => setCaption(i, e.target.value.slice(0, GALLERY_CAPTION_MAX))}
                 placeholder="Add a caption"
                 maxLength={GALLERY_CAPTION_MAX}
-                className="w-full bg-transparent px-2.5 py-2 text-xs text-offwhite placeholder:text-muted/70 focus:outline-none"
+                className="w-full bg-transparent px-2.5 py-2 text-xs text-offwhite placeholder:text-muted"
               />
             </figcaption>
           </figure>
@@ -187,7 +187,7 @@ export function GalleryEditor({
             }
           }}
           placeholder="…or paste an image URL and press Enter"
-          className="min-w-0 flex-1 rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted focus:border-gold/50 focus:outline-none"
+          className="min-w-0 flex-1 rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted focus:border-gold/50"
         />
         <button
           type="button"

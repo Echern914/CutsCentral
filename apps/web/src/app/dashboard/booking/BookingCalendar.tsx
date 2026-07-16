@@ -283,7 +283,7 @@ export function BookingCalendar({
               onClick={() => setSelectedDay(isSelected ? null : key)}
               className={cn(
                 "relative flex aspect-square flex-col items-center justify-center rounded-lg text-sm transition-colors",
-                inMonth ? "text-offwhite" : "text-muted/40",
+                inMonth ? "text-offwhite" : "text-muted",
                 isSelected
                   ? "bg-gold/20 ring-1 ring-gold/50"
                   : isToday
@@ -629,7 +629,7 @@ function DayPlanner({
                     <button
                       type="button"
                       onClick={() => onAddAt(h)}
-                      className="group flex w-full items-center gap-2 py-1 text-xs text-muted/40 transition-colors hover:text-gold"
+                      className="group flex w-full items-center gap-2 py-1 text-xs text-muted transition-colors hover:text-gold"
                     >
                       <span className="flex h-5 w-5 items-center justify-center rounded-full border border-subtle text-muted transition-colors group-hover:border-gold/50 group-hover:text-gold">
                         +
@@ -639,7 +639,7 @@ function DayPlanner({
                       </span>
                     </button>
                   ) : (
-                    <div className="py-1 text-xs text-muted/40">— open —</div>
+                    <div className="py-1 text-xs text-muted">— open —</div>
                   )
                 ) : (
                   <div className="flex flex-col gap-1.5">
@@ -882,7 +882,7 @@ function AppointmentBlock({
           {row.hasPush === false ? (
             <span
               title="This client hasn't allowed notifications, so a nudge won't reach them."
-              className="rounded-md border border-subtle px-2.5 py-1 text-[11px] text-muted/60"
+              className="rounded-md border border-subtle px-2.5 py-1 text-[11px] text-muted"
             >
               Notifications off
             </span>
@@ -912,7 +912,7 @@ function AppointmentBlock({
                       onChange={(e) => setCustomNudge(e.target.value.slice(0, NUDGE_MAX_LEN))}
                       placeholder="Custom message…"
                       maxLength={NUDGE_MAX_LEN}
-                      className="min-w-0 flex-1 rounded-md border border-subtle bg-charcoal-800 px-2 py-1 text-[11px] text-offwhite placeholder:text-muted/50"
+                      className="min-w-0 flex-1 rounded-md border border-subtle bg-charcoal-800 px-2 py-1 text-[11px] text-offwhite placeholder:text-muted"
                     />
                     <button
                       onClick={() => sendNudge(customNudge)}
@@ -926,7 +926,7 @@ function AppointmentBlock({
               )}
             </div>
           ) : (
-            <span className="rounded-md border border-subtle px-2.5 py-1 text-[11px] text-muted/60">
+            <span className="rounded-md border border-subtle px-2.5 py-1 text-[11px] text-muted">
               Nudged ×2
             </span>
           )}

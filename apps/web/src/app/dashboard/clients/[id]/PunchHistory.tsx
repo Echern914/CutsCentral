@@ -207,7 +207,7 @@ export function PunchHistory({
                       max={20}
                       value={editValue}
                       onChange={(ev) => setEditValue(ev.target.value)}
-                      className="w-16 rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-sm text-offwhite outline-none focus:border-gold/50"
+                      className="w-16 rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-sm text-offwhite focus:border-gold/50"
                     />
                     <button
                       onClick={() => saveEdit(e)}

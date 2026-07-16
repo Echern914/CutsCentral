@@ -49,10 +49,10 @@ export function ReplyBox({ conversationId }: { conversationId: string }) {
         rows={2}
         maxLength={1000}
         placeholder="Type a reply — sends from your shop's number and takes over from the AI"
-        className="w-full resize-none bg-transparent px-1 text-sm text-offwhite outline-none placeholder:text-muted/60"
+        className="w-full resize-none bg-transparent px-1 text-sm text-offwhite placeholder:text-muted"
       />
       <div className="mt-2 flex items-center justify-between gap-3">
-        <p className="text-[11px] text-muted/70">
+        <p className="text-[11px] text-muted">
           {error ? (
             <span className="text-danger-soft">{error}</span>
           ) : (
