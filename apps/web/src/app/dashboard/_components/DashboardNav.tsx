@@ -19,6 +19,9 @@ const LINKS = [
   { href: "/dashboard/reviews", label: "Reviews" },
   { href: "/dashboard/nudges", label: "Nudges" },
   { href: "/dashboard/billing", label: "Billing" },
+  // /support is a public page (no shop context) - listed here so help is one
+  // tap away everywhere, including inside the iOS app (Guideline 1.5).
+  { href: "/support", label: "Help" },
 ] as const;
 
 /** Pill nav links with active-route highlighting. Admins get an extra Admin pill. */

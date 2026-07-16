@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
+import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { nudgeClientAction } from "../../actions";
 
 /**
@@ -28,6 +29,8 @@ export function RebookPanel({
   canNudge: boolean;
 }) {
   const { toast } = useToast();
+  // No "upgrade" steering inside the iOS app (Guideline 3.1.1).
+  const inApp = useIsNativeApp();
   const [pending, startTransition] = useTransition();
   const [nudged, setNudged] = useState(false);
 
@@ -59,7 +62,12 @@ export function RebookPanel({
               setNudged(true);
               toast("Nudge sent", "success");
             } else if (r.error === "subscription_required")
-              toast("Texting is a Premium feature - upgrade from the Billing page", "error");
+              toast(
+                inApp
+                  ? "Texting is a Premium feature"
+                  : "Texting is a Premium feature - upgrade from the Billing page",
+                "error",
+              );
             else toast("Could not send nudge", "error");
           })
         }

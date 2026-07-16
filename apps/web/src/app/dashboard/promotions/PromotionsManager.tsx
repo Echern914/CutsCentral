@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
+import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import type { Promo } from "./page";
 import {
   blastPromoAction,
@@ -109,6 +110,8 @@ export function PromotionsManager({ promotions }: { promotions: Promo[] }) {
 
 function PromoRow({ promo }: { promo: Promo }) {
   const { toast } = useToast();
+  // No "upgrade" steering inside the iOS app (Guideline 3.1.1).
+  const inApp = useIsNativeApp();
   const [pending, startTransition] = useTransition();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [blastOpen, setBlastOpen] = useState(false);
@@ -253,7 +256,12 @@ function PromoRow({ promo }: { promo: Promo }) {
                     if (r.summary)
                       toast(`Sent ${r.summary.sent} text${r.summary.sent === 1 ? "" : "s"}`, "success");
                     else if (r.error === "subscription_required")
-                      toast("Promo blasts are a Premium feature - upgrade from the Billing page", "error");
+                      toast(
+                        inApp
+                          ? "Promo blasts are a Premium feature"
+                          : "Promo blasts are a Premium feature - upgrade from the Billing page",
+                        "error",
+                      );
                     else if (r.error === "quiet_hours")
                       toast("Texting is paused 9pm-8am (client local time). Try again in the morning.", "error");
                     else toast("Send failed", "error");

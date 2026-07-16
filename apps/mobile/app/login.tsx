@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -24,6 +27,12 @@ import { API_ORIGIN, GOOGLE_IOS_CLIENT_ID, STORAGE } from "@/src/config";
  * hand off to /barber (the dashboard WebView) already authenticated. The
  * customer path is unaffected (it never logs in - the magic link is the auth).
  *
+ * LOGIN-ONLY: the API refuses to create an account from this screen
+ * (account_not_found) - App Store Guideline 3.1.1 forbids in-app business
+ * registration, so sign-up lives on the web. The email+password form exists for
+ * accounts created there without Apple/Google - including the App Review demo
+ * account, which is the only way a reviewer can enter the barber side.
+ *
  * Apple is rendered first per iOS HIG. This is an iOS-only screen.
  */
 
@@ -35,12 +44,24 @@ GoogleSignin.configure({
   scopes: ["email", "profile"],
 });
 
-type Provider = "apple" | "google";
+type Provider = "apple" | "google" | "email";
+
+/** The API's structured auth error ({error: code}), or null if unparseable. */
+async function errorCode(res: Response): Promise<string | null> {
+  try {
+    const body = (await res.json()) as { error?: string };
+    return body.error ?? null;
+  } catch {
+    return null;
+  }
+}
 
 export default function LoginScreen() {
   const [busy, setBusy] = useState<Provider | null>(null);
   const [appleAvailable, setAppleAvailable] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const handing = useRef(false); // guard a double handoff
   // A returning barber already has a stored 30-day session: skip the buttons and
   // go straight to /barber, which re-asserts the dashboard cookie through
@@ -102,7 +123,18 @@ export default function LoginScreen() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ identityToken, name }),
       });
-      if (!res.ok) throw new Error(`Sign-in failed (${res.status})`);
+      if (!res.ok) {
+        // Login-only: no account is created in the app (Guideline 3.1.1), so an
+        // unknown Apple ID is a normal outcome, not a failure to retry.
+        if ((await errorCode(res)) === "account_not_found") {
+          setError(
+            "No ChairBack account found for that Apple ID. Sign in with the account your shop is set up with, or use your email below.",
+          );
+          setBusy(null);
+          return;
+        }
+        throw new Error(`Sign-in failed (${res.status})`);
+      }
       const { token } = (await res.json()) as { token: string };
       await completeSignIn(token);
     } catch (e) {
@@ -134,7 +166,16 @@ export default function LoginScreen() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ idToken }),
       });
-      if (!res.ok) throw new Error(`Sign-in failed (${res.status})`);
+      if (!res.ok) {
+        if ((await errorCode(res)) === "account_not_found") {
+          setError(
+            "No ChairBack account found for that Google account. Sign in with the account your shop is set up with, or use your email below.",
+          );
+          setBusy(null);
+          return;
+        }
+        throw new Error(`Sign-in failed (${res.status})`);
+      }
       const { token } = (await res.json()) as { token: string };
       await completeSignIn(token);
     } catch (e) {
@@ -147,6 +188,39 @@ export default function LoginScreen() {
     }
   }
 
+  // Email + password against the same /api/auth/login the web uses (it returns
+  // the session token in JSON for native callers). This is how accounts without
+  // Apple/Google - notably the App Review demo account - get in.
+  async function onEmail() {
+    const trimmed = email.trim().toLowerCase();
+    if (!trimmed || !password) {
+      setError("Enter your email and password.");
+      return;
+    }
+    setError(null);
+    setBusy("email");
+    try {
+      const res = await fetch(`${API_ORIGIN}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: trimmed, password }),
+      });
+      if (!res.ok) {
+        if ((await errorCode(res)) === "invalid_credentials") {
+          setError("Email or password is incorrect.");
+          setBusy(null);
+          return;
+        }
+        throw new Error(`Sign-in failed (${res.status})`);
+      }
+      const { token } = (await res.json()) as { token: string };
+      await completeSignIn(token);
+    } catch {
+      setError("Sign-in didn't work. Please try again.");
+      setBusy(null);
+    }
+  }
+
   if (checking) {
     return (
       <View style={[styles.root, styles.center]}>
@@ -155,65 +229,123 @@ export default function LoginScreen() {
     );
   }
 
+  // Same keyboard treatment as customer.tsx: without it the fields/buttons
+  // below the focused input are covered by the keyboard with no way to reach
+  // them (the iPad App Review 2.1(a) reject). keyboardShouldPersistTaps makes
+  // the FIRST tap on "Sign in" fire instead of only dismissing the keyboard.
   return (
     <View style={styles.root}>
       <SafeAreaView style={styles.safe}>
-        <View style={styles.content}>
-          <Text style={styles.title}>Sign in to your dashboard</Text>
-          <Text style={styles.sub}>
-            Use the account you manage your shop with.
-          </Text>
+        <KeyboardAvoidingView
+          style={styles.flex}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+        >
+          <ScrollView
+            contentContainerStyle={styles.scrollContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            bounces={false}
+          >
+            <Text style={styles.title}>Sign in to your dashboard</Text>
+            <Text style={styles.sub}>
+              Use the account you manage your shop with.
+            </Text>
 
-          <View style={styles.buttons}>
-            {/* Apple first per iOS HIG; gated to iOS + availability. */}
-            {Platform.OS === "ios" && appleAvailable && (
-              <AppleAuthentication.AppleAuthenticationButton
-                buttonType={
-                  AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN
-                }
-                buttonStyle={
-                  AppleAuthentication.AppleAuthenticationButtonStyle.WHITE
-                }
-                cornerRadius={12}
-                style={styles.appleButton}
-                onPress={onApple}
+            <View style={styles.buttons}>
+              {/* Apple first per iOS HIG; gated to iOS + availability. */}
+              {Platform.OS === "ios" && appleAvailable && (
+                <AppleAuthentication.AppleAuthenticationButton
+                  buttonType={
+                    AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN
+                  }
+                  buttonStyle={
+                    AppleAuthentication.AppleAuthenticationButtonStyle.WHITE
+                  }
+                  cornerRadius={12}
+                  style={styles.appleButton}
+                  onPress={onApple}
+                />
+              )}
+
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Sign in with Google"
+                disabled={busy !== null}
+                onPress={onGoogle}
+                style={[styles.googleButton, busy !== null && styles.disabled]}
+              >
+                <Text style={styles.googleText}>
+                  {busy === "google" ? "Signing in…" : "Sign in with Google"}
+                </Text>
+              </Pressable>
+
+              <View style={styles.divider}>
+                <View style={styles.line} />
+                <Text style={styles.dividerText}>or use your email</Text>
+                <View style={styles.line} />
+              </View>
+
+              <TextInput
+                value={email}
+                onChangeText={setEmail}
+                placeholder="Email"
+                placeholderTextColor="#6b6b70"
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoComplete="email"
+                keyboardType="email-address"
+                textContentType="username"
+                style={styles.input}
               />
-            )}
+              <TextInput
+                value={password}
+                onChangeText={setPassword}
+                placeholder="Password"
+                placeholderTextColor="#6b6b70"
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoComplete="current-password"
+                textContentType="password"
+                secureTextEntry
+                style={styles.input}
+                onSubmitEditing={onEmail}
+                returnKeyType="go"
+              />
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Sign in with email"
+                disabled={busy !== null}
+                onPress={onEmail}
+                style={[styles.emailButton, busy !== null && styles.disabled]}
+              >
+                <Text style={styles.emailText}>
+                  {busy === "email" ? "Signing in…" : "Sign in"}
+                </Text>
+              </Pressable>
+            </View>
+
+            {error && <Text style={styles.error}>{error}</Text>}
 
             <Pressable
+              onPress={async () => {
+                // Clear the saved "barber"/"manager" role first, otherwise the
+                // picker immediately redirects right back here (it auto-routes a
+                // returning user to their saved mode). Clearing it shows the
+                // 3-way picker so they can choose "customer".
+                try {
+                  await AsyncStorage.removeItem(STORAGE.mode);
+                } catch {
+                  // best-effort; still go back to the picker
+                }
+                router.replace("/");
+              }}
+              style={styles.back}
               accessibilityRole="button"
-              accessibilityLabel="Sign in with Google"
-              disabled={busy !== null}
-              onPress={onGoogle}
-              style={[styles.googleButton, busy !== null && styles.disabled]}
             >
-              <Text style={styles.googleText}>
-                {busy === "google" ? "Signing in…" : "Sign in with Google"}
-              </Text>
+              <Text style={styles.backText}>← Not a shop owner? Go back</Text>
             </Pressable>
-          </View>
-
-          {error && <Text style={styles.error}>{error}</Text>}
-
-          <Pressable
-            onPress={async () => {
-              // Clear the saved "barber"/"manager" role first, otherwise the
-              // picker immediately redirects right back here (it auto-routes a
-              // returning user to their saved mode). Clearing it shows the
-              // 3-way picker so they can choose "customer".
-              try {
-                await AsyncStorage.removeItem(STORAGE.mode);
-              } catch {
-                // best-effort; still go back to the picker
-              }
-              router.replace("/");
-            }}
-            style={styles.back}
-            accessibilityRole="button"
-          >
-            <Text style={styles.backText}>← Not a shop owner? Go back</Text>
-          </Pressable>
-        </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </SafeAreaView>
     </View>
   );
@@ -221,9 +353,16 @@ export default function LoginScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#0A0A0B" },
+  flex: { flex: 1 },
   center: { alignItems: "center", justifyContent: "center" },
-  safe: { flex: 1, justifyContent: "center" },
-  content: { paddingHorizontal: 28, alignItems: "center" },
+  safe: { flex: 1 },
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 28,
+    paddingVertical: 24,
+  },
   title: {
     color: "#F5F5F4",
     fontSize: 22,
@@ -249,6 +388,35 @@ const styles = StyleSheet.create({
   },
   disabled: { opacity: 0.6 },
   googleText: { color: "#1F1F1F", fontSize: 16, fontWeight: "600" },
+  divider: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginVertical: 2,
+  },
+  line: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: "#3f3f46" },
+  dividerText: { color: "#6b6b70", fontSize: 12 },
+  input: {
+    width: "100%",
+    height: 50,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#3f3f46",
+    backgroundColor: "#18181B",
+    color: "#F5F5F4",
+    paddingHorizontal: 14,
+    fontSize: 15,
+  },
+  emailButton: {
+    width: "100%",
+    height: 50,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#a1a1aa",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  emailText: { color: "#F5F5F4", fontSize: 16, fontWeight: "600" },
   error: { color: "#F87171", fontSize: 13, marginTop: 18, textAlign: "center" },
   back: { marginTop: 28 },
   backText: { color: "#6b6b70", fontSize: 13 },

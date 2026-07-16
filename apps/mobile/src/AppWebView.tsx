@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { View, Text, Pressable, ActivityIndicator, StyleSheet } from "react-native";
+import {
+  View,
+  Text,
+  Pressable,
+  ActivityIndicator,
+  Linking,
+  StyleSheet,
+} from "react-native";
 import { WebView, type WebViewProps } from "react-native-webview";
 
 // If the real page content hasn't signaled ready within this long, stop spinning
@@ -49,6 +56,11 @@ function normalizeUrl(u: string): string {
   return u.replace(/[?#].*$/, "").replace(/\/+$/, "");
 }
 
+// Non-web schemes a WKWebView can't render. Left to the WebView they dead-end
+// (or worse, fire onError and show the Retry screen) - e.g. the support email
+// link on the dashboard's Account card. Hand them to iOS instead (Mail, Phone).
+const EXTERNAL_SCHEME = /^(mailto:|tel:|sms:|facetime:)/i;
+
 /**
  * `awaitsReady`: when true (the rewards page), the spinner clears ONLY on the
  * page's "cb:ready" postMessage - not on onLoadEnd, which fires on the streamed
@@ -65,6 +77,7 @@ function normalizeUrl(u: string): string {
 export function AppWebView({
   awaitsReady = false,
   onMessage: callerOnMessage,
+  onShouldStartLoadWithRequest: callerShouldStart,
   ...props
 }: WebViewProps & { awaitsReady?: boolean }) {
   const [errored, setErrored] = useState(false);
@@ -136,6 +149,9 @@ export function AppWebView({
         // App-feel defaults; any caller prop still overrides via the spread below.
         contentInsetAdjustmentBehavior="never"
         automaticallyAdjustContentInsets={false}
+        // Edge-swipe goes back after an in-page navigation (e.g. dashboard ->
+        // Help) - without it those pages are a dead end (no browser chrome).
+        allowsBackForwardNavigationGestures
         scalesPageToFit={false}
         setBuiltInZoomControls={false}
         setDisplayZoomControls={false}
@@ -173,6 +189,15 @@ export function AppWebView({
         onError={() => setErrored(true)}
         onHttpError={(e) => {
           if (e.nativeEvent.statusCode >= 400) setErrored(true);
+        }}
+        // mailto:/tel:/etc go to iOS (Mail app), never into the WebView; any
+        // caller policy (e.g. barber.tsx's /login bounce) still runs for the rest.
+        onShouldStartLoadWithRequest={(req) => {
+          if (EXTERNAL_SCHEME.test(req.url)) {
+            Linking.openURL(req.url).catch(() => {});
+            return false;
+          }
+          return callerShouldStart ? callerShouldStart(req) : true;
         }}
         {...props}
       />

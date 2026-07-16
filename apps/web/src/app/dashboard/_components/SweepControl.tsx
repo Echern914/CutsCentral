@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { motion } from "framer-motion";
 import { Card } from "@/components/ui/Card";
 import { fadeUp } from "@/components/motion/variants";
+import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import {
   runSweepAction,
   sweepPreviewAction,
@@ -16,6 +17,8 @@ import {
  * barber never blasts SMS by accident.
  */
 export function SweepControl({ atRiskCount }: { atRiskCount: number }) {
+  // No "upgrade" steering inside the iOS app (Guideline 3.1.1).
+  const inApp = useIsNativeApp();
   const [pending, startTransition] = useTransition();
   const [preview, setPreview] = useState<SweepSummary | null>(null);
   const [result, setResult] = useState<SweepSummary | null>(null);
@@ -40,7 +43,9 @@ export function SweepControl({ atRiskCount }: { atRiskCount: number }) {
         r.summary
           ? null
           : r.error === "subscription_required"
-            ? "Texting is a Premium feature - upgrade from the Billing page to send nudges."
+            ? inApp
+              ? "Texting is a Premium feature."
+              : "Texting is a Premium feature - upgrade from the Billing page to send nudges."
             : "Couldn't send right now. Try again in a minute.",
       );
       setPreview(null);
