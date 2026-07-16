@@ -17,6 +17,7 @@ import { CadenceCard } from "./CadenceCard";
 import { PushOptIn } from "./PushOptIn";
 import { GetTheApp } from "./GetTheApp";
 import { AddToWallet } from "./AddToWallet";
+import { DeleteMyData } from "./DeleteMyData";
 import { resolveRewardsTheme, rewardsFontVars, surfaceStyle, type RewardsTheme } from "./theme";
 import type { RewardsData } from "./page";
 
@@ -418,6 +419,7 @@ export function RewardsClient({
                           className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full"
                           style={{ backgroundColor: t.border }}
                           role="progressbar"
+                          aria-label={`Progress toward ${reward.name}`}
                           aria-valuenow={progress}
                           aria-valuemin={0}
                           aria-valuemax={100}
@@ -510,6 +512,32 @@ export function RewardsClient({
               </a>
             </motion.footer>
           )}
+
+          {/* Support (App Store 1.5): the customer side must offer help too.
+              mailto opens the Mail app inside the iOS shell (AppWebView hands
+              external schemes to iOS); /support renders in place. */}
+          <motion.footer variants={fadeUp} className="pt-2 text-center">
+            <p className="text-xs" style={{ color: t.muted }}>
+              Questions or trouble with your rewards?{" "}
+              <a
+                href="mailto:support@getchairback.com"
+                className="hover:underline"
+                style={{ color: accent }}
+              >
+                support@getchairback.com
+              </a>{" "}
+              ·{" "}
+              <a href="/support" className="hover:underline" style={{ color: accent }}>
+                Help
+              </a>
+            </p>
+          </motion.footer>
+
+          {/* Self-serve data deletion (App Store 5.1.1(v)) - a quiet control,
+              always available, at the very bottom of the page. */}
+          <motion.div variants={fadeUp} className="pt-2">
+            <DeleteMyData magicToken={magicToken} shopName={shop.name} theme={t} />
+          </motion.div>
         </motion.div>
       </main>
     </div>
@@ -635,6 +663,7 @@ function PunchCardSurface({
                   className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full"
                   style={{ backgroundColor: t.border }}
                   role="progressbar"
+                  aria-label={`Progress toward ${reward.name}`}
                   aria-valuenow={progress}
                   aria-valuemin={0}
                   aria-valuemax={100}

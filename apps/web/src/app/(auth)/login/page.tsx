@@ -2,6 +2,9 @@ import { API_BASE, apiPublicGet } from "@/lib/api";
 import { loginAction } from "../actions";
 import { AuthForm } from "../AuthForm";
 
+// Distinct document title per route (WCAG 2.4.2) via the root %s template.
+export const metadata = { title: "Sign in" };
+
 const ERROR_COPY: Record<string, string> = {
   google_state: "Google sign-in expired. Please try again.",
   google_failed: "Google sign-in didn't go through. Please try again.",

@@ -6,9 +6,11 @@ import {
   CADENCE_KEYS,
   cadenceToDays,
   type CadenceKey,
+  DEMO,
   LOYALTY_TIERS,
   LOYALTY_TIER_KEYS,
   loyaltyTierForVisits,
+  randomToken,
 } from "@chairback/config";
 import { prisma, runAsOwner } from "@chairback/db";
 import { toE164 } from "../acuity/clientKey.js";
@@ -584,6 +586,94 @@ rewardsRouter.post("/:magicToken/opt-out", async (req, res) => {
     return;
   }
   res.json({ consent: { state: "opted_out", hasPhone: result.hasPhone } });
+});
+
+/**
+ * Client self-serve account/data deletion from their rewards page. App Store
+ * guideline 5.1.1(v): a person who can be identified in the app must be able to
+ * delete their data from the app. Keyed only by the magicToken, exactly like
+ * opt-out - the token IS the auth.
+ *
+ * We ANONYMIZE rather than hard-delete: every identifier the client gave us is
+ * erased and the magic link is voided (rotated to a fresh random token, so the
+ * old /r/<token> can never be reopened - it 404s like any bad token). The
+ * de-identified visit/punch history stays on the shop's books, and the row
+ * survives as an opted-out, archived stub so the shop can never text the person
+ * again and there is a TCPA record that they opted out. Push devices and wallet
+ * passes (which carry real device identifiers) are deleted outright.
+ */
+rewardsRouter.post("/:magicToken/delete", async (req, res) => {
+  // The PUBLIC demo client must survive: its magicToken is fixed and published
+  // (the client tour and the iOS app's "Try the demo" both hard-code it), so
+  // anonymizing it would rotate the token and 404 the demo for EVERYONE until
+  // the next reseed. No real person's data lives behind it, so 5.1.1(v)
+  // deletion rights don't apply - refuse with a code the rewards page explains.
+  if (req.params.magicToken === DEMO.MAGIC_TOKEN) {
+    res.status(403).json({ error: "demo_client" });
+    return;
+  }
+  const ok = await runAsOwner(async (tx) => {
+    const client = await tx.client.findUnique({
+      where: { magicToken: req.params.magicToken },
+      select: { id: true },
+    });
+    if (!client) return false;
+    // Revoke every push device + wallet pass tied to this client first (they
+    // hold device tokens/identifiers that must not survive deletion). These do
+    // NOT cascade because we keep the Client row (anonymized), so delete them
+    // explicitly.
+    await tx.pushSubscription.deleteMany({ where: { clientId: client.id } });
+    await tx.walletPassRegistration.deleteMany({ where: { clientId: client.id } });
+    // The AI-receptionist SMS threads for this client hold their phone number and
+    // the full text transcript; delete them (their messages cascade). clientId is
+    // SetNull, so they'd otherwise survive with PII intact.
+    await tx.receptionistConversation.deleteMany({ where: { clientId: client.id } });
+    // PII that lives OUTSIDE the Client row and does NOT cascade (we keep the row,
+    // only anonymize it, so the onDelete: Cascade never fires): the client's first
+    // name is baked into every sent-nudge body, and any native booking / recurring
+    // series keeps its own name/phone/email snapshot. Scrub them all so no
+    // identifier survives the deletion (guideline 5.1.1(v)).
+    await tx.nudge.updateMany({
+      where: { clientId: client.id },
+      data: { body: null },
+    });
+    await tx.appointment.updateMany({
+      where: { clientId: client.id },
+      data: { firstName: "Deleted", lastName: null, phone: null, email: null },
+    });
+    await tx.recurringSeries.updateMany({
+      where: { clientId: client.id },
+      data: { firstName: "Deleted", lastName: null, phone: null, email: null },
+    });
+    // Strip every identifier, kill the link, and mark the row opted-out +
+    // archived so it drops off the shop's active book. acuityClientKey is unique
+    // per (shop, key) and holds the normalized phone, so it must be replaced
+    // too - not just the phone column.
+    await tx.client.update({
+      where: { id: client.id },
+      data: {
+        firstName: null,
+        lastName: null,
+        phone: null,
+        email: null,
+        notes: null,
+        preferredCadence: null,
+        acuityClientKey: `deleted:${client.id}`,
+        magicToken: randomToken(), // old link is now dead (future loads 404)
+        optedOut: true,
+        optOutSource: "deleted",
+        smsConsentAt: null,
+        smsConsentSource: null,
+        archivedAt: new Date(),
+      },
+    });
+    return true;
+  });
+  if (!ok) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.json({ ok: true });
 });
 
 const pushSubscribeSchema = z

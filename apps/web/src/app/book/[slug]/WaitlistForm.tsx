@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { readableOn } from "@/lib/contrast";
 import { joinWaitlistAction } from "./actions";
 
 /**
@@ -35,8 +36,9 @@ export function WaitlistForm({
   const [sent, setSent] = useState(false);
   const [pending, startTransition] = useTransition();
 
+  // No focus:outline-none — keep the global :focus-visible ring (WCAG 2.4.7).
   const input =
-    "w-full rounded-lg border border-white/15 bg-white/5 px-4 py-2.5 text-sm text-offwhite placeholder:text-muted focus:border-white/40 focus:outline-none";
+    "w-full rounded-lg border border-white/15 bg-white/5 px-4 py-2.5 text-sm text-offwhite placeholder:text-muted focus:border-white/40";
 
   function submit() {
     setError(null);
@@ -67,7 +69,7 @@ export function WaitlistForm({
 
   if (sent) {
     return (
-      <div className="rounded-xl border border-white/10 bg-white/5 p-5 text-center">
+      <div role="status" className="rounded-xl border border-white/10 bg-white/5 p-5 text-center">
         <p className="text-sm font-semibold text-offwhite">You're on the waitlist ✓</p>
         <p className="mt-1 text-xs text-muted">
           {shopName} will reach out if a spot opens up.
@@ -121,7 +123,11 @@ export function WaitlistForm({
             onChange={(e) => setPreferredTime(e.target.value)}
           />
         )}
-        {error && <p className="text-xs text-red-400">{error}</p>}
+        {error && (
+          <p role="alert" className="text-xs text-red-400">
+            {error}
+          </p>
+        )}
         <div className="flex gap-2">
           {onDone && (
             <button
@@ -136,8 +142,9 @@ export function WaitlistForm({
             type="button"
             onClick={submit}
             disabled={pending}
+            aria-busy={pending}
             className="flex-1 rounded-xl py-3 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01] disabled:opacity-50"
-            style={{ backgroundColor: accent, color: "#101012" }}
+            style={{ backgroundColor: accent, color: readableOn(accent) }}
           >
             {pending ? "Joining…" : "Join the waitlist"}
           </button>

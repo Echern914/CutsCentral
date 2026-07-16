@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
-import { isInNativeAppNow } from "@/lib/useIsNativeApp";
+import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { nudgeClientAction } from "../../actions";
 
 /**
@@ -29,6 +29,8 @@ export function RebookPanel({
   canNudge: boolean;
 }) {
   const { toast } = useToast();
+  // No "upgrade" steering inside the iOS app (Guideline 3.1.1).
+  const inApp = useIsNativeApp();
   const [pending, startTransition] = useTransition();
   const [nudged, setNudged] = useState(false);
 
@@ -60,10 +62,9 @@ export function RebookPanel({
               setNudged(true);
               toast("Nudge sent", "success");
             } else if (r.error === "subscription_required")
-              // In-app copy stays neutral: no upgrade prompt there (3.1.1).
               toast(
-                isInNativeAppNow()
-                  ? "Texting isn't included in your shop's current plan"
+                inApp
+                  ? "Texting is a Premium feature"
                   : "Texting is a Premium feature - upgrade from the Billing page",
                 "error",
               );

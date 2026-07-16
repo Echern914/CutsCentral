@@ -11,7 +11,7 @@ import {
 import { Card } from "@/components/ui/Card";
 import { LocalDate } from "@/components/ui/LocalDate";
 import { useToast } from "@/components/ui/Toast";
-import { isInNativeAppNow } from "@/lib/useIsNativeApp";
+import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { bulkClientAction } from "../actions";
 
 export interface ClientRow {
@@ -38,6 +38,9 @@ export interface ClientRow {
  */
 export function ClientsList({ clients }: { clients: ClientRow[] }) {
   const { toast } = useToast();
+  // No "upgrade" steering inside the iOS app (Guideline 3.1.1) - the Billing
+  // page is hidden there, so the hint would point at nothing anyway.
+  const inApp = useIsNativeApp();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pending, startTransition] = useTransition();
 
@@ -79,10 +82,9 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
         }
         setSelected(new Set());
       } else if (r.error === "subscription_required") {
-        // In-app copy stays neutral: no upgrade prompt there (App Store 3.1.1).
         toast(
-          isInNativeAppNow()
-            ? "Texting isn't included in your shop's current plan"
+          inApp
+            ? "Texting is a Premium feature"
             : "Texting is a Premium feature - upgrade from the Billing page",
           "error",
         );

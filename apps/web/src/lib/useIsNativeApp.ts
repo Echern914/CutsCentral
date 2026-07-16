@@ -24,20 +24,10 @@ import { useEffect, useState } from "react";
 export function useIsNativeApp(): boolean | null {
   const [inApp, setInApp] = useState<boolean | null>(null);
   useEffect(() => {
-    setInApp(isInNativeAppNow());
+    setInApp(
+      typeof window !== "undefined" &&
+        Boolean((window as { ReactNativeWebView?: unknown }).ReactNativeWebView),
+    );
   }, []);
   return inApp;
-}
-
-/**
- * Non-hook variant for code that runs strictly AFTER hydration — event
- * handlers, action callbacks, toast copy. Never call it during render: the
- * server always answers false and hydration would mismatch; that's what the
- * hook's `null` phase is for.
- */
-export function isInNativeAppNow(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    Boolean((window as { ReactNativeWebView?: unknown }).ReactNativeWebView)
-  );
 }

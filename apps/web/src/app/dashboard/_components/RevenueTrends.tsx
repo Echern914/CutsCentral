@@ -90,6 +90,8 @@ export function RevenueTrends({ series: initial }: { series: TrendPoint[] }) {
                         key={m}
                         onClick={() => pick(m)}
                         disabled={pending}
+                        aria-pressed={range === m}
+                        aria-label={`Last ${m} months`}
                         className={`rounded-full px-2.5 py-1 text-xs transition-colors duration-150 ease-out ${
                           range === m
                             ? "bg-gold text-charcoal"

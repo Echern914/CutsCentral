@@ -198,7 +198,10 @@ export default function VerticalPage({
       />
 
       <header className="sticky top-0 z-20">
-        <nav className="glass mx-auto mt-4 flex w-[min(72rem,calc(100%-2rem))] items-center justify-between rounded-full px-5 py-3">
+        <nav
+          aria-label="Primary"
+          className="glass mx-auto mt-4 flex w-[min(72rem,calc(100%-2rem))] items-center justify-between rounded-full px-5 py-3"
+        >
           <Link href="/" className="font-display text-base tracking-tight">
             {APP_NAME}
           </Link>
@@ -294,6 +297,9 @@ export default function VerticalPage({
           </Link>
           <Link href="/sms" className="transition-colors duration-150 ease-out hover:text-offwhite">
             SMS Policy
+          </Link>
+          <Link href="/accessibility" className="transition-colors duration-150 ease-out hover:text-offwhite">
+            Accessibility
           </Link>
         </footer>
       </main>

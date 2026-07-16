@@ -11,9 +11,12 @@ import {
 import { createShopAction } from "./actions";
 import { fadeUp } from "@/components/motion/variants";
 import { Card } from "@/components/ui/Card";
+import { FormError } from "@/components/ui/FormError";
 
+// Keep the global :focus-visible ring (WCAG 2.4.7): no `outline-none`, and the
+// border tint is a supplement to that ring, not the sole focus indicator.
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-4 py-3 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "w-full rounded-xl border border-subtle bg-charcoal-700 px-4 py-3 text-sm text-offwhite placeholder:text-muted focus:border-gold/50";
 
 function Submit() {
   const { pending } = useFormStatus();
@@ -45,9 +48,16 @@ export default function OnboardingShopPage() {
         </h1>
         <Card className="p-6">
           <form action={action} className="flex flex-col gap-3">
-            <input name="name" placeholder="Shop or studio name" required className={field} />
+            <input
+              name="name"
+              placeholder="Shop or studio name"
+              aria-label="Shop or studio name"
+              required
+              className={field}
+            />
             <select
               name="industry"
+              aria-label="What kind of business?"
               value={industry}
               onChange={(e) => setIndustry(e.target.value as IndustryKey)}
               required
@@ -66,13 +76,19 @@ export default function OnboardingShopPage() {
               name="bookingUrl"
               type="url"
               placeholder="Booking link (optional — Acuity, Booksy, Square…)"
+              aria-label="Booking link (optional)"
               className={field}
             />
             <p className="-mt-1 text-xs text-muted">
               No booking link? Leave this blank — you can run booking right here
               on ChairBack (set it up in the Booking tab after signup).
             </p>
-            <select name="timezone" defaultValue="America/New_York" className={field}>
+            <select
+              name="timezone"
+              aria-label="Time zone"
+              defaultValue="America/New_York"
+              className={field}
+            >
               {/* Quiet-hours (TCPA) enforcement keys off this - cover every US
                   zone so no shop has to pick a wrong one. */}
               <option value="America/New_York">Eastern (New York)</option>
@@ -95,6 +111,7 @@ export default function OnboardingShopPage() {
                   min={1}
                   defaultValue={10}
                   placeholder="Punches needed"
+                  aria-label="Punches needed for the reward"
                   className={field}
                 />
                 <input
@@ -102,6 +119,7 @@ export default function OnboardingShopPage() {
                   key={industry}
                   defaultValue={industry ? INDUSTRIES[industry].defaultReward : ""}
                   placeholder="Reward name"
+                  aria-label="Reward name"
                   className={field}
                 />
               </div>
@@ -119,9 +137,7 @@ export default function OnboardingShopPage() {
                 behalf.
               </span>
             </label>
-            {state.error && (
-              <p className="text-sm text-danger-soft">{state.error}</p>
-            )}
+            <FormError className="text-sm">{state.error}</FormError>
             <div className="mt-1">
               <Submit />
             </div>

@@ -7,10 +7,11 @@ const env = apiEnv();
 
 /**
  * Native iOS sign-in: verify an identity token issued by Apple or Google to the
- * MOBILE app, then find-or-create the barber User and mint a session token the
- * app stores and sends as `Authorization: Bearer`. Mirrors the web Google
- * find-or-create (routes/auth.ts) - by provider id, else by email (link), else
- * create - so a barber has ONE account regardless of how they signed in.
+ * MOBILE app, then find the barber User and mint a session token the app stores
+ * and sends as `Authorization: Bearer`. Matches by provider id, else links by
+ * verified email - so a barber has ONE account regardless of how they signed
+ * in. Unlike the web Google flow this NEVER creates an account: App Store
+ * Guideline 3.1.1 (no in-app business registration) - sign-up is web-only.
  *
  * We verify the JWT ourselves against the provider's published public keys
  * (JWKS), checking issuer + audience, so a forged token can't mint a session.
@@ -110,10 +111,13 @@ export async function verifyGoogle(idToken: string): Promise<NativeProfile> {
 }
 
 /**
- * Find-or-create the barber User for a verified provider profile, then mint a
- * session token. `provider` selects which id column to match/stamp. Same
- * precedence as the web Google flow: by provider id, else link an existing email
- * account, else create. Returns the user + a fresh bearer token.
+ * Find (or link) the barber User for a verified provider profile, then mint a
+ * session token. `provider` selects which id column to match/stamp. Precedence:
+ * by provider id, else link an existing email account. LOGIN-ONLY - a profile
+ * that matches no existing account is refused, never created: App Store
+ * Guideline 3.1.1 forbids business-account registration inside the app, so
+ * accounts are only created on the web. Do not add a create step back here;
+ * the web OAuth flow (routes/auth.ts) is where sign-up lives.
  */
 export async function signInWithProfile(
   provider: "apple" | "google",
@@ -147,25 +151,12 @@ export async function signInWithProfile(
     }
   }
 
-  // 3) Else, create a new social-only account (no password).
+  // 3) No match -> refuse. One error for every miss (no email, unverified
+  // email, or simply no such account) so the response can't be used to probe
+  // which emails have ChairBack accounts. The app shows a friendly "no account
+  // found" message for this code.
   if (!user) {
-    if (!profile.email) {
-      // Apple can withhold the email on re-auth; without a prior link we can't
-      // safely create or match an account.
-      throw new NativeAuthError("no_email_to_create_account", 422);
-    }
-    if (!profile.emailVerified) {
-      // Unverified emails can't create accounts either: the address may belong
-      // to someone else who would then be locked out of signing up with it.
-      throw new NativeAuthError("email_unverified", 403);
-    }
-    user = await prisma.user.create({
-      data: {
-        email: profile.email,
-        name: profile.name?.trim() || profile.email.split("@")[0]!,
-        ...linkData,
-      },
-    });
+    throw new NativeAuthError("account_not_found", 403);
   }
 
   const token = mintSessionToken(user.id, user.tokenVersion);

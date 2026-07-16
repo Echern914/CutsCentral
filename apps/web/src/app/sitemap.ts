@@ -14,6 +14,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     "/terms",
     "/privacy",
     "/sms",
+    "/support",
     "/for/barbers",
     "/for/salons",
     "/for/nails",

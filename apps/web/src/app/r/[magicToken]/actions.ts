@@ -55,3 +55,20 @@ export async function setCadenceAction(
   if (!res.ok) return { ok: false, error: res.error ?? "failed" };
   return { ok: true };
 }
+
+/**
+ * Client self-serve data deletion (App Store 5.1.1(v)). Anonymizes the client's
+ * data server-side and voids this magic link; the page then shows a terminal
+ * "deleted" state (re-fetching would 404 - the link is gone).
+ */
+export async function deleteMyDataAction(
+  magicToken: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiPublicSend<{ ok: boolean }>(
+    "POST",
+    `/api/rewards/${magicToken}/delete`,
+    {},
+  );
+  if (!res.ok) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true };
+}

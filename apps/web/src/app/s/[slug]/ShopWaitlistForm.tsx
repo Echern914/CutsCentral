@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition, type CSSProperties } from "react";
+import { readableOn } from "@/lib/contrast";
 import { joinWaitlistAction } from "./actions";
 
 /**
@@ -74,7 +75,7 @@ export function ShopWaitlistForm({
 
   if (sent) {
     return (
-      <div className="p-4 text-center" style={fieldStyle}>
+      <div role="status" className="p-4 text-center" style={fieldStyle}>
         <p className="text-sm font-semibold">You&apos;re on the waitlist ✓</p>
         <p className="mt-1 text-xs" style={{ color: theme.muted }}>
           {shopName} will reach out if a spot opens.
@@ -88,6 +89,7 @@ export function ShopWaitlistForm({
       <button
         type="button"
         onClick={() => (preview ? undefined : setOpen(true))}
+        aria-expanded={false}
         className="block w-full py-3 text-center text-sm font-medium"
         style={{ border: `1px solid ${theme.border}`, color: theme.muted, borderRadius: theme.buttonRadius }}
       >
@@ -109,7 +111,12 @@ export function ShopWaitlistForm({
           onChange={(e) => setFirstName(e.target.value)}
           placeholder="Your name"
           aria-label="Your name"
-          className="w-full px-4 py-2.5 text-sm placeholder:opacity-60 focus:outline-none"
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? "waitlist-error" : undefined}
+          // The form only renders after the "Join the waitlist" tap — move
+          // focus into it so keyboard/SR users land on the revealed fields.
+          autoFocus
+          className="w-full px-4 py-2.5 text-sm placeholder:opacity-70"
           style={inputStyle}
         />
         <input
@@ -120,7 +127,7 @@ export function ShopWaitlistForm({
           onChange={(e) => setPhone(e.target.value)}
           placeholder="Mobile number"
           aria-label="Mobile number"
-          className="w-full px-4 py-2.5 text-sm placeholder:opacity-60 focus:outline-none"
+          className="w-full px-4 py-2.5 text-sm placeholder:opacity-70"
           style={inputStyle}
         />
         <input
@@ -130,7 +137,7 @@ export function ShopWaitlistForm({
           onChange={(e) => setEmail(e.target.value)}
           placeholder="Email (optional)"
           aria-label="Email"
-          className="w-full px-4 py-2.5 text-sm placeholder:opacity-60 focus:outline-none"
+          className="w-full px-4 py-2.5 text-sm placeholder:opacity-70"
           style={inputStyle}
         />
         <input
@@ -139,18 +146,25 @@ export function ShopWaitlistForm({
           onChange={(e) => setPreferredTime(e.target.value)}
           placeholder="Preferred time (e.g. Sat morning)"
           aria-label="Preferred time"
-          className="w-full px-4 py-2.5 text-sm placeholder:opacity-60 focus:outline-none"
+          className="w-full px-4 py-2.5 text-sm placeholder:opacity-70"
           style={inputStyle}
         />
-        {error && <p className="text-xs text-red-500">{error}</p>}
+        {error && (
+          <p id="waitlist-error" role="alert" className="flex items-start gap-1.5 text-xs text-red-500">
+            {/* Non-color cue so the error reads without relying on red (WCAG 1.4.1). */}
+            <span aria-hidden="true">⚠</span>
+            <span>{error}</span>
+          </p>
+        )}
         <button
           type="button"
           onClick={submit}
           disabled={pending}
+          aria-busy={pending}
           className="w-full py-3 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01] disabled:opacity-50"
           style={{
             backgroundColor: accent,
-            color: theme.scheme === "light" ? "#FFFFFF" : "#101012",
+            color: readableOn(accent),
             boxShadow: `0 8px 30px -10px ${accent}AA`,
             borderRadius: theme.buttonRadius,
           }}

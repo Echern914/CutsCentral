@@ -19,6 +19,9 @@ const LINKS = [
   { href: "/dashboard/reviews", label: "Reviews" },
   { href: "/dashboard/nudges", label: "Nudges" },
   { href: "/dashboard/billing", label: "Billing" },
+  // /support is a public page (no shop context) - listed here so help is one
+  // tap away everywhere, including inside the iOS app (Guideline 1.5).
+  { href: "/support", label: "Help" },
 ] as const;
 
 /** Pill nav links with active-route highlighting. Admins get an extra Admin pill. */
@@ -54,6 +57,7 @@ export function DashboardNavLinks({
           <Link
             key={l.href}
             href={l.href}
+            aria-current={active ? "page" : undefined}
             className={cn(
               "rounded-full px-3.5 py-1.5 text-xs font-medium transition-colors duration-150 ease-out sm:px-4 sm:text-sm",
               active

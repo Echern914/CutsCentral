@@ -1,5 +1,15 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator } from "react-native";
+import {
+  View,
+  Text,
+  TextInput,
+  Pressable,
+  StyleSheet,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  ScrollView,
+  Platform,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { AppWebView } from "@/src/AppWebView";
 import { router, useLocalSearchParams } from "expo-router";
@@ -154,6 +164,18 @@ export default function CustomerScreen() {
           source={{ uri: rewardsUrl(token ?? DEMO_REWARDS_TOKEN) }}
           style={styles.flex}
           awaitsReady
+          onMessage={(e) => {
+            // The rewards page posts "cb:deleted" after a self-serve data
+            // deletion: this magic link is now dead (it would 404 on reload), so
+            // forget it and drop back to the entry screen instead of reopening it.
+            // (The demo client refuses deletion server-side; clearing demoActive
+            // here is just belt-and-suspenders.)
+            if (e.nativeEvent.data === "cb:deleted") {
+              AsyncStorage.removeItem(STORAGE.lastToken).catch(() => {});
+              setToken(null);
+              setDemoActive(false);
+            }
+          }}
         />
       </SafeAreaView>
     );
@@ -163,73 +185,95 @@ export default function CustomerScreen() {
   //  1. PASTE the rewards link the barber texted (primary - works with no SMS).
   //  2. "Text me my link" (fallback - needs texting to be live).
   //  3. Browse the demo shop (no link needed - also App Review's way in).
+  //
+  // The form must stay reachable when the on-screen keyboard opens. A plain RN
+  // View does NOT avoid the keyboard, so without this the "Text me my link"
+  // button (below the focused field) is covered with no way to reach it - the
+  // App Review 2.1(a) reject ("no button to continue was visible" on iPad).
+  // KeyboardAvoidingView lifts the content; the ScrollView guarantees every
+  // control is scrollable into view on any screen size; flexGrow+center keeps
+  // today's centered look when it fits. keyboardShouldPersistTaps="handled" is
+  // required so the FIRST tap on a button fires onPress instead of only
+  // dismissing the keyboard.
   return (
-    <SafeAreaView style={[styles.flex, styles.pad]}>
-      <Text style={styles.title}>Your rewards</Text>
-      <Text style={styles.sub}>
-        Paste the rewards link your barber texted you:
-      </Text>
-      <TextInput
-        value={linkInput}
-        onChangeText={setLinkInput}
-        placeholder="getchairback.com/r/..."
-        placeholderTextColor="#6b6b70"
-        autoCapitalize="none"
-        autoCorrect={false}
-        keyboardType="url"
-        style={styles.input}
-      />
-      {linkErr && <Text style={styles.note}>{linkErr}</Text>}
-      <Pressable style={styles.button} onPress={openPastedLink}>
-        <Text style={styles.buttonText}>Open my rewards</Text>
-      </Pressable>
-
-      <View style={styles.divider}>
-        <View style={styles.line} />
-        <Text style={styles.dividerText}>or</Text>
-        <View style={styles.line} />
-      </View>
-
-      <Text style={styles.sub}>Don&apos;t have the link? Get it texted to you:</Text>
-      <TextInput
-        value={phone}
-        onChangeText={setPhone}
-        placeholder="Your mobile number"
-        placeholderTextColor="#6b6b70"
-        keyboardType="phone-pad"
-        style={styles.input}
-      />
-      {sentMsg && <Text style={styles.note}>{sentMsg}</Text>}
-      <Pressable style={[styles.button, styles.buttonSecondary]} onPress={textMeMyLink}>
-        <Text style={styles.buttonSecondaryText}>Text me my link</Text>
-      </Pressable>
-
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Try the demo rewards page"
-        style={styles.demoLink}
-        onPress={() => setDemoActive(true)}
+    <SafeAreaView style={styles.flex}>
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
       >
-        <Text style={styles.demoLinkText}>Just looking? Try the demo →</Text>
-      </Pressable>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          bounces={false}
+        >
+          <Text style={styles.title}>Your rewards</Text>
+          <Text style={styles.sub}>
+            Paste the rewards link your barber texted you:
+          </Text>
+          <TextInput
+            value={linkInput}
+            onChangeText={setLinkInput}
+            placeholder="getchairback.com/r/..."
+            placeholderTextColor="#6b6b70"
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            style={styles.input}
+          />
+          {linkErr && <Text style={styles.note}>{linkErr}</Text>}
+          <Pressable style={styles.button} onPress={openPastedLink}>
+            <Text style={styles.buttonText}>Open my rewards</Text>
+          </Pressable>
 
-      <Pressable
-        accessibilityRole="button"
-        style={styles.back}
-        onPress={async () => {
-          // Clear the saved "customer" role first, otherwise the picker
-          // immediately redirects right back here (it auto-routes a returning
-          // user to their saved mode) - the same loop login.tsx's back fixes.
-          try {
-            await AsyncStorage.removeItem(STORAGE.mode);
-          } catch {
-            // best-effort; still go back to the picker
-          }
-          router.replace("/");
-        }}
-      >
-        <Text style={styles.backText}>← Not a customer? Go back</Text>
-      </Pressable>
+          <View style={styles.divider}>
+            <View style={styles.line} />
+            <Text style={styles.dividerText}>or</Text>
+            <View style={styles.line} />
+          </View>
+
+          <Text style={styles.sub}>Don&apos;t have the link? Get it texted to you:</Text>
+          <TextInput
+            value={phone}
+            onChangeText={setPhone}
+            placeholder="Your mobile number"
+            placeholderTextColor="#6b6b70"
+            keyboardType="phone-pad"
+            style={styles.input}
+          />
+          {sentMsg && <Text style={styles.note}>{sentMsg}</Text>}
+          <Pressable style={[styles.button, styles.buttonSecondary]} onPress={textMeMyLink}>
+            <Text style={styles.buttonSecondaryText}>Text me my link</Text>
+          </Pressable>
+
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Try the demo rewards page"
+            style={styles.demoLink}
+            onPress={() => setDemoActive(true)}
+          >
+            <Text style={styles.demoLinkText}>Just looking? Try the demo →</Text>
+          </Pressable>
+
+          <Pressable
+            accessibilityRole="button"
+            style={styles.back}
+            onPress={async () => {
+              // Clear the saved "customer" role first, otherwise the picker
+              // immediately redirects right back here (it auto-routes a returning
+              // user to their saved mode) - the same loop login.tsx's back fixes.
+              try {
+                await AsyncStorage.removeItem(STORAGE.mode);
+              } catch {
+                // best-effort; still go back to the picker
+              }
+              router.replace("/");
+            }}
+          >
+            <Text style={styles.backText}>← Not a customer? Go back</Text>
+          </Pressable>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -243,7 +287,9 @@ function parseToken(url: string): string | null {
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: "#0A0A0B" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#0A0A0B" },
-  pad: { padding: 24, justifyContent: "center" },
+  // flexGrow lets the content center when it fits but grow/scroll when the
+  // keyboard shrinks the viewport, so no control is ever unreachable.
+  scrollContent: { padding: 24, flexGrow: 1, justifyContent: "center" },
   title: { color: "#fff", fontSize: 26, fontWeight: "700" },
   sub: { color: "#8a8a8f", fontSize: 14, marginTop: 8, marginBottom: 20 },
   input: { backgroundColor: "#151517", borderWidth: 1, borderColor: "#26262b", borderRadius: 12, color: "#fff", padding: 14, fontSize: 16 },

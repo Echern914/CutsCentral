@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { View, Text, Pressable, ActivityIndicator, StyleSheet } from "react-native";
+import {
+  View,
+  Text,
+  Pressable,
+  ActivityIndicator,
+  Linking,
+  StyleSheet,
+} from "react-native";
 import { WebView, type WebViewProps } from "react-native-webview";
-import * as Linking from "expo-linking";
 import { WEB_ORIGIN } from "@/src/config";
 
 // If the real page content hasn't signaled ready within this long, stop spinning
@@ -89,6 +95,11 @@ function normalizeUrl(u: string): string {
   return u.replace(/[?#].*$/, "").replace(/\/+$/, "");
 }
 
+// Non-web schemes a WKWebView can't render. Left to the WebView they dead-end
+// (or worse, fire onError and show the Retry screen) - e.g. the support email
+// link on the dashboard's Account card. Hand them to iOS instead (Mail, Phone).
+const EXTERNAL_SCHEME = /^(mailto:|tel:|sms:|facetime:)/i;
+
 /**
  * `awaitsReady`: when true (the rewards page), the spinner clears ONLY on the
  * page's "cb:ready" postMessage - not on onLoadEnd, which fires on the streamed
@@ -105,7 +116,7 @@ function normalizeUrl(u: string): string {
 export function AppWebView({
   awaitsReady = false,
   onMessage: callerOnMessage,
-  onShouldStartLoadWithRequest: callerNavPolicy,
+  onShouldStartLoadWithRequest: callerShouldStart,
   ...props
 }: WebViewProps & { awaitsReady?: boolean }) {
   const [errored, setErrored] = useState(false);
@@ -177,6 +188,9 @@ export function AppWebView({
         // App-feel defaults; any caller prop still overrides via the spread below.
         contentInsetAdjustmentBehavior="never"
         automaticallyAdjustContentInsets={false}
+        // Edge-swipe goes back after an in-page navigation (e.g. dashboard ->
+        // Help) - without it those pages are a dead end (no browser chrome).
+        allowsBackForwardNavigationGestures
         scalesPageToFit={false}
         setBuiltInZoomControls={false}
         setDisplayZoomControls={false}
@@ -208,23 +222,30 @@ export function AppWebView({
           if (e.nativeEvent.data === READY_MESSAGE) clearLoading();
           callerOnMessage?.(e);
         }}
-        // The caller's policy runs first (e.g. barber mode bounces web /login
-        // to the native sign-in); then the shared marketing/auth backstop.
-        // isTopFrame is iOS-only — treat undefined (Android) as a main frame.
-        onShouldStartLoadWithRequest={(req) => {
-          if (callerNavPolicy && !callerNavPolicy(req)) return false;
-          if (req.isTopFrame !== false && opensExternally(req.url)) {
-            Linking.openURL(req.url).catch(() => {});
-            return false;
-          }
-          return true;
-        }}
         // Surface load failures instead of spinning forever. onError = native
         // load failure (DNS, offline, blocked). onHttpError >= 400 catches both
         // 5xx (server) AND 404 (a stale/expired magic token -> Next notFound()).
         onError={() => setErrored(true)}
         onHttpError={(e) => {
           if (e.nativeEvent.statusCode >= 400) setErrored(true);
+        }}
+        // One navigation policy, three layers in order:
+        //  1. mailto:/tel:/etc go to iOS (Mail, Phone), never into the WebView;
+        //  2. the caller's policy (e.g. barber.tsx bounces web /login to the
+        //     native sign-in screen);
+        //  3. the marketing/auth backstop - forbidden pages open in Safari.
+        // isTopFrame is iOS-only; treat undefined (Android) as a main frame.
+        onShouldStartLoadWithRequest={(req) => {
+          if (EXTERNAL_SCHEME.test(req.url)) {
+            Linking.openURL(req.url).catch(() => {});
+            return false;
+          }
+          if (callerShouldStart && !callerShouldStart(req)) return false;
+          if (req.isTopFrame !== false && opensExternally(req.url)) {
+            Linking.openURL(req.url).catch(() => {});
+            return false;
+          }
+          return true;
         }}
         {...props}
       />
