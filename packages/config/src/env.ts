@@ -89,10 +89,15 @@ const apiSchema = z.object({
   TWILIO_AUTH_TOKEN: z.string().min(1),
   TWILIO_FROM_NUMBER: z.string().min(1),
   // Per-shop number auto-provisioning (optional - while absent, no numbers are
-  // ever PURCHASED and shops stay on the shared line). Must be the messaging
-  // service attached to the VERIFIED A2P campaign: purchased numbers are added
-  // to it so carriers treat their traffic as registered.
+  // ever PURCHASED and shops stay on the shared line). Comma-separated ordered
+  // list of messaging service SIDs, each attached to a VERIFIED A2P campaign:
+  // purchased numbers are added to the first service with a free slot (a
+  // campaign carries at most TWILIO_CAMPAIGN_NUMBER_CAP numbers), so scaling
+  // past one campaign = register another campaign and append its MG sid here.
   TWILIO_MESSAGING_SERVICE_SID: z.string().min(1).optional(),
+  // Numbers one A2P campaign may carry. 49 is the carrier standard; raise it
+  // only after Twilio approves number pooling for the campaign.
+  TWILIO_CAMPAIGN_NUMBER_CAP: z.coerce.number().int().positive().default(49),
   // Preferred area code for purchased numbers (falls back to any US local
   // number when that area code has no inventory).
   TWILIO_NUMBER_AREA_CODE: z

@@ -5,6 +5,7 @@ import { applyStripeEvent } from "../billing/stripe.js";
 import {
   __setNumberProvisionerForTests,
   ensureShopNumber,
+  planAttach,
   type NumberProvisioner,
 } from "./numberProvision.js";
 
@@ -16,15 +17,22 @@ import {
 
 let userId: string;
 
-function fakeProvisioner(): NumberProvisioner & { calls: number } {
+function fakeProvisioner(): NumberProvisioner & { calls: number; releases: string[] } {
   const p = {
     calls: 0,
+    releases: [] as string[],
     async provision() {
       p.calls += 1;
+      // Yield long enough for a concurrent caller to also pass the
+      // twilioNumber-null check - the window the claim guard exists for.
+      await new Promise((r) => setTimeout(r, 25));
       return {
         phoneNumber: `+1555${Math.floor(1000000 + Math.random() * 8999999)}`,
         sid: `PN${randomToken(8)}`,
       };
+    },
+    async release(sid: string) {
+      p.releases.push(sid);
     },
   };
   return p;
@@ -35,6 +43,7 @@ function failingProvisioner(): NumberProvisioner {
     async provision() {
       return null;
     },
+    async release() {},
   };
 }
 
@@ -86,6 +95,26 @@ beforeEach(() => {
   __setNumberProvisionerForTests(undefined);
 });
 
+describe("planAttach (campaign spill-over)", () => {
+  it("fills the first campaign while it has room", () => {
+    expect(planAttach([10, 0], 49)).toEqual({ index: 0, remainingAfter: 87 });
+  });
+
+  it("spills to the next campaign when the first is full", () => {
+    expect(planAttach([49, 3], 49)).toEqual({ index: 1, remainingAfter: 45 });
+  });
+
+  it("reports full when every campaign is at cap (even over-full)", () => {
+    expect(planAttach([49, 49], 49)).toEqual({ index: null, remainingAfter: 0 });
+    expect(planAttach([50], 49)).toEqual({ index: null, remainingAfter: 0 });
+  });
+
+  it("counts the runway down to zero on the last slot", () => {
+    expect(planAttach([48], 49)).toEqual({ index: 0, remainingAfter: 0 });
+    expect(planAttach([44], 49).remainingAfter).toBe(4);
+  });
+});
+
 describe("ensureShopNumber", () => {
   it("provisions a Premium AI shop exactly once (idempotent)", async () => {
     const p = fakeProvisioner();
@@ -112,6 +141,19 @@ describe("ensureShopNumber", () => {
       expect(await shopNumber(shopId)).toBeNull();
     }
     expect(p.calls).toBe(0);
+  });
+
+  it("concurrent provisions (checkout + subscription race) keep ONE number and release the duplicate", async () => {
+    const p = fakeProvisioner();
+    __setNumberProvisionerForTests(p);
+    const shopId = await makeShop("pro_ai");
+
+    await Promise.all([ensureShopNumber(shopId), ensureShopNumber(shopId)]);
+
+    const final = await shopNumber(shopId);
+    expect(final).not.toBeNull();
+    expect(p.calls).toBe(2); // both raced past the null check and bought
+    expect(p.releases).toHaveLength(1); // the loser released its purchase
   });
 
   it("a failed purchase leaves the shop on the shared line (no throw, no row change)", async () => {

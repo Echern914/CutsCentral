@@ -16,8 +16,14 @@ import { logger } from "../logger.js";
  * into the Stripe webhook path (a failed purchase logs for manual follow-up;
  * the shop just stays on the shared line, which keeps working).
  *
- * Scale note: one A2P campaign officially carries up to 49 numbers; past that
- * Twilio requires a number-pooling justification (operator paperwork).
+ * Scale: one A2P campaign carries at most TWILIO_CAMPAIGN_NUMBER_CAP numbers
+ * (49 without number-pooling approval). TWILIO_MESSAGING_SERVICE_SID is an
+ * ordered comma-separated list - one messaging service per registered
+ * campaign - and each purchase attaches to the first service with a free
+ * slot. Growing past capacity is therefore an env edit, not a code change:
+ * register the next campaign in Twilio, append its MG sid. A loud log fires
+ * while free slots remain (campaign vetting takes days, so the warning must
+ * lead the wall).
  */
 
 export interface ProvisionedNumber {
@@ -28,15 +34,77 @@ export interface ProvisionedNumber {
 export interface NumberProvisioner {
   /** Buy + configure one local number, or null on failure (already logged). */
   provision(opts: { friendlyName: string }): Promise<ProvisionedNumber | null>;
+  /** Release a purchased number (a concurrent provision won the claim). */
+  release(sid: string): Promise<void>;
+}
+
+/** Warn while this many free slots (or fewer) remain across ALL campaigns. */
+const LOW_CAPACITY_WARN = 5;
+
+/** TWILIO_MESSAGING_SERVICE_SID parsed as an ordered list of MG sids. */
+function serviceSids(): string[] {
+  return (apiEnv().TWILIO_MESSAGING_SERVICE_SID ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Pick which campaign the next number attaches to: the first with a free
+ * slot. Pure so the spill-over/full/runway arithmetic is unit-testable.
+ * `remainingAfter` = free slots across every campaign once this attach lands.
+ */
+export function planAttach(
+  counts: number[],
+  cap: number,
+): { index: number | null; remainingAfter: number } {
+  const index = counts.findIndex((c) => c < cap);
+  const free = counts.reduce((sum, c) => sum + Math.max(0, cap - c), 0);
+  return index === -1
+    ? { index: null, remainingAfter: 0 }
+    : { index, remainingAfter: free - 1 };
 }
 
 class TwilioNumberProvisioner implements NumberProvisioner {
+  async release(sid: string): Promise<void> {
+    const env = apiEnv();
+    const client = twilio(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
+    await client.incomingPhoneNumbers(sid).remove();
+  }
+
   async provision(opts: { friendlyName: string }): Promise<ProvisionedNumber | null> {
     const env = apiEnv();
-    const serviceSid = env.TWILIO_MESSAGING_SERVICE_SID;
-    if (!serviceSid) return null;
+    const sids = serviceSids();
+    if (sids.length === 0) return null;
+    const cap = env.TWILIO_CAMPAIGN_NUMBER_CAP;
     const client = twilio(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
     const webhookUrl = `${env.API_BASE_URL}/webhooks/twilio/inbound`;
+
+    // Count each campaign's numbers and pick the first with room - BEFORE
+    // buying, so a fully-saturated fleet costs nothing but this read.
+    const counts: number[] = [];
+    for (const sid of sids) {
+      counts.push(
+        (await client.messaging.v1.services(sid).phoneNumbers.list({ limit: cap })).length,
+      );
+    }
+    const { index, remainingAfter } = planAttach(counts, cap);
+    if (index === null) {
+      logger.error(
+        { counts, cap },
+        "number provisioning: EVERY campaign is full - register another A2P " +
+          "campaign and append its messaging service SID to TWILIO_MESSAGING_SERVICE_SID",
+      );
+      return null;
+    }
+    if (remainingAfter <= LOW_CAPACITY_WARN) {
+      logger.error(
+        { counts, cap, remainingAfter },
+        "number provisioning: capacity runway low - register the NEXT A2P " +
+          "campaign now (vetting takes days) and append its messaging service " +
+          "SID to TWILIO_MESSAGING_SERVICE_SID",
+      );
+    }
 
     // Preferred area code first; nationwide local inventory as the fallback.
     const searches: { areaCode?: number }[] = env.TWILIO_NUMBER_AREA_CODE
@@ -66,17 +134,30 @@ class TwilioNumberProvisioner implements NumberProvisioner {
       smsMethod: "POST",
     });
 
-    // Attach to the campaign's messaging service. If THIS step fails the
-    // number would send unregistered (carrier-filtered), so release it and
-    // report failure rather than half-provision.
-    try {
-      await client.messaging.v1.services(serviceSid).phoneNumbers.create({
-        phoneNumberSid: bought.sid,
-      });
-    } catch (err) {
+    // Attach to a campaign's messaging service. An unattached number sends
+    // unregistered (carrier-filtered), so on total failure release it rather
+    // than half-provision. The counts above can race a concurrent purchase,
+    // so if the chosen campaign rejects the attach, spill to the later ones
+    // before giving up.
+    let attached = false;
+    for (const sid of sids.slice(index)) {
+      try {
+        await client.messaging.v1.services(sid).phoneNumbers.create({
+          phoneNumberSid: bought.sid,
+        });
+        attached = true;
+        break;
+      } catch (err) {
+        logger.error(
+          { err, phoneNumber: bought.phoneNumber, serviceSid: sid },
+          "number provisioning: campaign attach failed; trying the next campaign",
+        );
+      }
+    }
+    if (!attached) {
       logger.error(
-        { err, phoneNumber: bought.phoneNumber },
-        "number provisioning: campaign attach failed; releasing the number",
+        { phoneNumber: bought.phoneNumber },
+        "number provisioning: no campaign accepted the number; releasing it",
       );
       await client
         .incomingPhoneNumbers(bought.sid)
@@ -122,10 +203,29 @@ export async function ensureShopNumber(shopId: string): Promise<void> {
       logger.error({ shopId }, "number provisioning failed; shop stays on the shared line");
       return;
     }
-    await prisma.shop.update({
-      where: { id: shopId },
+    // Claim the slot only if it is still empty: checkout and
+    // subscription.updated fire back-to-back for the same shop, and two
+    // in-flight provisions would otherwise both buy - the overwritten number
+    // would keep billing as an invisible orphan. The loser releases.
+    const claimed = await prisma.shop.updateMany({
+      where: { id: shopId, twilioNumber: null },
       data: { twilioNumber: bought.phoneNumber },
     });
+    if (claimed.count === 0) {
+      logger.warn(
+        { shopId, phoneNumber: bought.phoneNumber },
+        "concurrent provision already claimed this shop; releasing the duplicate number",
+      );
+      await getProvisioner()
+        .release(bought.sid)
+        .catch((err) =>
+          logger.error(
+            { err, phoneNumber: bought.phoneNumber, sid: bought.sid },
+            "duplicate number release FAILED - release it manually in the Twilio console",
+          ),
+        );
+      return;
+    }
     logger.info(
       { shopId, phoneNumber: bought.phoneNumber },
       "shop provisioned with its own number",
