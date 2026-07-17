@@ -5,6 +5,7 @@ import { applyStripeEvent } from "../billing/stripe.js";
 import {
   __setNumberProvisionerForTests,
   ensureShopNumber,
+  planAttach,
   type NumberProvisioner,
 } from "./numberProvision.js";
 
@@ -84,6 +85,26 @@ afterAll(() => {
 
 beforeEach(() => {
   __setNumberProvisionerForTests(undefined);
+});
+
+describe("planAttach (campaign spill-over)", () => {
+  it("fills the first campaign while it has room", () => {
+    expect(planAttach([10, 0], 49)).toEqual({ index: 0, remainingAfter: 87 });
+  });
+
+  it("spills to the next campaign when the first is full", () => {
+    expect(planAttach([49, 3], 49)).toEqual({ index: 1, remainingAfter: 45 });
+  });
+
+  it("reports full when every campaign is at cap (even over-full)", () => {
+    expect(planAttach([49, 49], 49)).toEqual({ index: null, remainingAfter: 0 });
+    expect(planAttach([50], 49)).toEqual({ index: null, remainingAfter: 0 });
+  });
+
+  it("counts the runway down to zero on the last slot", () => {
+    expect(planAttach([48], 49)).toEqual({ index: 0, remainingAfter: 0 });
+    expect(planAttach([44], 49).remainingAfter).toBe(4);
+  });
 });
 
 describe("ensureShopNumber", () => {
