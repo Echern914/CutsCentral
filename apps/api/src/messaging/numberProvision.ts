@@ -34,6 +34,8 @@ export interface ProvisionedNumber {
 export interface NumberProvisioner {
   /** Buy + configure one local number, or null on failure (already logged). */
   provision(opts: { friendlyName: string }): Promise<ProvisionedNumber | null>;
+  /** Release a purchased number (a concurrent provision won the claim). */
+  release(sid: string): Promise<void>;
 }
 
 /** Warn while this many free slots (or fewer) remain across ALL campaigns. */
@@ -64,6 +66,12 @@ export function planAttach(
 }
 
 class TwilioNumberProvisioner implements NumberProvisioner {
+  async release(sid: string): Promise<void> {
+    const env = apiEnv();
+    const client = twilio(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
+    await client.incomingPhoneNumbers(sid).remove();
+  }
+
   async provision(opts: { friendlyName: string }): Promise<ProvisionedNumber | null> {
     const env = apiEnv();
     const sids = serviceSids();
@@ -195,10 +203,29 @@ export async function ensureShopNumber(shopId: string): Promise<void> {
       logger.error({ shopId }, "number provisioning failed; shop stays on the shared line");
       return;
     }
-    await prisma.shop.update({
-      where: { id: shopId },
+    // Claim the slot only if it is still empty: checkout and
+    // subscription.updated fire back-to-back for the same shop, and two
+    // in-flight provisions would otherwise both buy - the overwritten number
+    // would keep billing as an invisible orphan. The loser releases.
+    const claimed = await prisma.shop.updateMany({
+      where: { id: shopId, twilioNumber: null },
       data: { twilioNumber: bought.phoneNumber },
     });
+    if (claimed.count === 0) {
+      logger.warn(
+        { shopId, phoneNumber: bought.phoneNumber },
+        "concurrent provision already claimed this shop; releasing the duplicate number",
+      );
+      await getProvisioner()
+        .release(bought.sid)
+        .catch((err) =>
+          logger.error(
+            { err, phoneNumber: bought.phoneNumber, sid: bought.sid },
+            "duplicate number release FAILED - release it manually in the Twilio console",
+          ),
+        );
+      return;
+    }
     logger.info(
       { shopId, phoneNumber: bought.phoneNumber },
       "shop provisioned with its own number",
