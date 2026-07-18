@@ -28,6 +28,9 @@ export const metadata: Metadata = {
     title: `${APP_NAME} Pricing`,
     description,
     type: "website",
+    // Page-level openGraph REPLACES the root's (Next 14 doesn't deep-merge),
+    // so restate the site name.
+    siteName: APP_NAME,
   },
 };
 
@@ -62,6 +65,10 @@ export default function PricingPage() {
       </header>
 
       <main>
+        {/* Visually-hidden h1: PricingSection's heading is an h2 (it renders as
+            a section on the homepage too), but a standalone page should start
+            its heading hierarchy - and rank - on an h1. */}
+        <h1 className="sr-only">{APP_NAME} pricing</h1>
         <PricingSection />
         <p className="mx-auto w-full max-w-6xl px-6 pb-16 text-center text-sm text-muted">
           Questions?{" "}
