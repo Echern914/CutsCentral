@@ -7,6 +7,7 @@ import { motion } from "framer-motion";
 import { fadeUp } from "@/components/motion/variants";
 import { Card } from "@/components/ui/Card";
 import { FormError } from "@/components/ui/FormError";
+import { useIsNativeApp } from "@/lib/useIsNativeApp";
 
 function SubmitButton({ label }: { label: string }) {
   const { pending } = useFormStatus();
@@ -56,6 +57,30 @@ export function AuthForm({
   const [state, formAction] = useFormState(action, {});
   const isSignup = mode === "signup";
   const errorText = state.error ?? initialError;
+  // App Store Guideline 3.1.1: business registration must not exist inside the
+  // iOS app shell. The signup FORM is the choke point - whatever path led here
+  // (marketing page, a shop page's powered-by link, the login cross-link), the
+  // in-app render is a neutral notice, never the form.
+  const inApp = useIsNativeApp();
+
+  if (isSignup && inApp) {
+    return (
+      <main className="relative mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center px-5">
+        <motion.div variants={fadeUp} initial="hidden" animate="show">
+          <p className="mb-4 text-center text-xs uppercase tracking-[0.25em] text-gold">
+            {APP_NAME}
+          </p>
+          <Card className="p-6 text-center">
+            <p className="text-sm text-muted">
+              Creating a {APP_NAME} account isn&apos;t available in the app. If
+              your shop already uses {APP_NAME}, go back and sign in with that
+              account.
+            </p>
+          </Card>
+        </motion.div>
+      </main>
+    );
+  }
 
   return (
     <main className="relative mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center px-5">
@@ -65,9 +90,14 @@ export function AuthForm({
       />
       <motion.div variants={fadeUp} initial="hidden" animate="show">
         <p className="mb-4 text-center text-xs uppercase tracking-[0.25em] text-gold">
-          <Link href="/" className="transition-opacity duration-200 ease-out hover:opacity-80">
-            {APP_NAME}
-          </Link>
+          {/* In-app the wordmark must not lead to the marketing site (3.1.1). */}
+          {inApp ? (
+            <span>{APP_NAME}</span>
+          ) : (
+            <Link href="/" className="transition-opacity duration-200 ease-out hover:opacity-80">
+              {APP_NAME}
+            </Link>
+          )}
         </p>
         <h1 className="mb-1 text-center font-display text-3xl tracking-tight">
           {isSignup ? "Create your account" : "Welcome back"}
@@ -187,7 +217,7 @@ export function AuthForm({
                 Sign in
               </Link>
             </>
-          ) : (
+          ) : inApp ? null : (
             <>
               New here?{" "}
               <Link href="/signup" className="text-gold hover:underline">
