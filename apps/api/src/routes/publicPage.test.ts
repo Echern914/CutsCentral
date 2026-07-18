@@ -181,6 +181,43 @@ describe("public shop page", () => {
     void slugB;
   });
 
+  it("square mode + booking link round-trip; blank clears the link", async () => {
+    const patch = await request(app)
+      .patch("/api/shops/me")
+      .set("Cookie", cookieA)
+      .send({
+        bookingMode: "square",
+        bookingUrl: "https://squareup.com/appointments/book/abc",
+      });
+    expect(patch.status).toBe(200);
+
+    const page = await request(app).get(`/api/page/${slugA}`);
+    expect(page.body.bookingMode).toBe("square");
+    expect(page.body.bookingUrl).toBe("https://squareup.com/appointments/book/abc");
+
+    // "" clears the link (the public page falls back to the request form) while
+    // the mode sticks — the Booking tab's "leave blank to remove" affordance.
+    const clear = await request(app)
+      .patch("/api/shops/me")
+      .set("Cookie", cookieA)
+      .send({ bookingUrl: "" });
+    expect(clear.status).toBe(200);
+    const cleared = await request(app).get(`/api/page/${slugA}`);
+    expect(cleared.body.bookingMode).toBe("square");
+    expect(cleared.body.bookingUrl).toBeNull();
+  });
+
+  it("validation failures name the offending field in issues (the editor's inline-error contract)", async () => {
+    const res = await request(app)
+      .patch("/api/shops/me")
+      .set("Cookie", cookieA)
+      .send({ accentColor: "#12" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_input");
+    const issues = res.body.issues as { path: (string | number)[]; message: string }[];
+    expect(issues.some((i) => i.path[0] === "accentColor")).toBe(true);
+  });
+
   it("disabling the page takes it offline (404), re-enabling restores it", async () => {
     await request(app)
       .patch("/api/shops/me")

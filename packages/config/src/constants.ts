@@ -304,6 +304,30 @@ export const SESSION_COOKIE_NAME = "cb_session";
 export const ACTIVE_SHOP_COOKIE_NAME = "cb_active_shop";
 
 /**
+ * How a shop's public page books appointments. "native" = the in-house engine;
+ * "acuity" / "square" = a synced platform whose booking site the Book button
+ * opens via Shop.bookingUrl (Square stores no booking-site URL of its own — the
+ * barber pastes theirs); "link" = a plain external URL. Shared by the API
+ * schema and both web surfaces so the union can never drift (a hand-copied
+ * union missing "square" once hid the Book button for every Square shop).
+ */
+export const BOOKING_MODES = ["link", "acuity", "native", "square"] as const;
+
+export type BookingModeKey = (typeof BOOKING_MODES)[number];
+
+/**
+ * Public page handle: 3-40 chars of lowercase letters/digits/dashes, starting
+ * and ending with a letter or digit. Shared by the API schema and the page
+ * editor's client-side validation so the two can never drift. (The previous
+ * regex made the tail group optional, silently admitting 1-char handles while
+ * every message claimed a 3-char minimum.)
+ */
+export const SLUG_REGEX = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/;
+
+/** Accent color override: a full 6-digit hex like #D4AF37. Shared like SLUG_REGEX. */
+export const ACCENT_HEX_REGEX = /^#[0-9a-fA-F]{6}$/;
+
+/**
  * Public shop page theme presets. The shop's accentColor (if set) overrides
  * the preset accent; everything else keys off these tokens so each barber's
  * page can look like THEIR shop, not like the product.

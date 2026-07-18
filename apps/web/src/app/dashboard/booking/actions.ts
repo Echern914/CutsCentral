@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import type { BookingModeKey } from "@chairback/config/constants";
 import { apiGet, apiSend } from "@/lib/api";
 import type { AgendaResponse } from "./page";
 
@@ -51,7 +52,8 @@ function done(res: { ok: boolean; error?: string }): Result {
 //  Booking mode + bounds (patches the shop)
 
 export async function saveBookingSettingsAction(input: {
-  bookingMode: "link" | "acuity" | "native" | "square";
+  bookingMode: BookingModeKey;
+  bookingUrl?: string;
   bookingLeadHours: number;
   bookingMaxDays: number;
   bookingBufferMin: number;

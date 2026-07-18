@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import type { BookingModeKey } from "@chairback/config/constants";
 import { apiGet } from "@/lib/api";
 import { DemoTour } from "@/components/tour/DemoTour";
 import { PageEditor } from "./PageEditor";
@@ -8,6 +9,9 @@ export const metadata: Metadata = { title: "Your page" };
 export interface ShopPageSettings {
   name: string;
   slug: string | null;
+  // Vertical key ("barber" | "salon" | ...) — the live preview needs it for
+  // noun-correct copy (ShopPageData.industry).
+  industry: string;
   publicPageEnabled: boolean;
   theme: string;
   bio: string | null;
@@ -27,7 +31,7 @@ export interface ShopPageSettings {
   waitlistEnabled: boolean;
   notifyPhone: string | null;
   bookingUrl: string | null;
-  bookingMode: "link" | "acuity" | "native";
+  bookingMode: BookingModeKey;
   punchesPerVisit: number;
 }
 

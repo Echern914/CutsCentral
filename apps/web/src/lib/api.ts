@@ -7,11 +7,23 @@ import { cookies } from "next/headers";
  */
 const API_BASE = process.env.API_BASE_URL ?? "http://localhost:4000";
 
+/** One zod validation failure forwarded by the API (400 invalid_input). */
+export interface ApiIssue {
+  path: (string | number)[];
+  message: string;
+}
+
 export interface ApiResult<T> {
   ok: boolean;
   status: number;
   data: T | null;
   error?: string;
+  /**
+   * Field-level validation failures, present only when the API rejected with
+   * `invalid_input` and included zod issues. Lets callers show the real
+   * offending field instead of one generic "could not save" line.
+   */
+  issues?: ApiIssue[];
 }
 
 function authHeader(): Record<string, string> {
@@ -96,14 +108,28 @@ export async function apiPublicSend<T>(
 async function toResult<T>(res: Response): Promise<ApiResult<T>> {
   let data: T | null = null;
   let error: string | undefined;
+  let issues: ApiIssue[] | undefined;
   try {
-    const json = (await res.json()) as T & { error?: string };
+    const json = (await res.json()) as T & { error?: string; issues?: unknown };
     if (res.ok) data = json;
-    else error = (json as { error?: string }).error ?? `http_${res.status}`;
+    else {
+      error = (json as { error?: string }).error ?? `http_${res.status}`;
+      const raw = (json as { issues?: unknown }).issues;
+      if (Array.isArray(raw)) {
+        const valid = raw.filter(
+          (i): i is ApiIssue =>
+            !!i &&
+            typeof i === "object" &&
+            Array.isArray((i as ApiIssue).path) &&
+            typeof (i as ApiIssue).message === "string",
+        );
+        if (valid.length > 0) issues = valid;
+      }
+    }
   } catch {
     error = `http_${res.status}`;
   }
-  return { ok: res.ok, status: res.status, data, error };
+  return { ok: res.ok, status: res.status, data, error, ...(issues ? { issues } : {}) };
 }
 
 export { API_BASE };
