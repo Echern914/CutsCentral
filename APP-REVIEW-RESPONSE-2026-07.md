@@ -1,4 +1,41 @@
-# App Store review responses — July 2026 (round 3 on top, round 2 kept below)
+# App Store review responses — July 2026 (round 4 on top; rounds 3 & 2 kept below)
+
+---
+
+# ROUND 4 — Submission 06faa402 (v1.0 build 32), rejected 2026‑07‑17
+
+Only ONE issue left: 3.1.1 "account registration feature for businesses" (same canned
+text as round 3 — 1.5, 2.1(a), and 3.1.3(c) all cleared). Root cause was the WEB, not
+the app or API (the deployed API is login‑only — verified by probing a round‑3 route):
+**rewards page → "More from {shop}" → shop mini‑site → "Powered by ChairBack" footer →
+marketing homepage → /signup — a working business registration form inside the WebView.**
+We handed the reviewer the rewards links, so this path was one obvious tap‑trail away.
+
+Fix (commit 8c41094 on `fix/support-faq-in-app`, all web‑side — **no new binary; Apple
+re‑reviews build 32 as submitted**):
+- **/signup is the choke point**: inside the app it renders a neutral "not available in
+  the app" card instead of the form, whatever path led there. The login page's "Create
+  an account" cross‑link and the auth wordmark home‑link are also inert in‑app.
+- Shop mini‑site "Powered by ChairBack" footer: plain text in‑app.
+- Marketing homepage: in‑app renders a neutral brand card instead of the Landing page.
+
+**Reply to paste (Resolution Center, round 4):**
+
+> Hello, and thank you for the continued review. We found and closed the path that made
+> business account registration reachable inside the app: a footer link on shops'
+> public loyalty pages led to our marketing website, from which our web signup page
+> could be opened. That link is now inert inside the app, and neither the marketing
+> site nor any account‑creation page can be displayed in the app — creating an account
+> is not possible anywhere in the app. Signing in (Apple, Google, or email) can only
+> access an existing account. No binary change was required — the fix is in the web
+> content the app displays — so build 32 can be re‑reviewed as submitted.
+>
+> Thank you again for your patience.
+
+**Checklist:** merge `fix/support-faq-in-app` → main (carries the round‑3 FAQ gate +
+these registration gates) → verify deploy → in the app: rewards link → More from shop →
+tap "Powered by ChairBack" does nothing (plain text) → reply in Resolution Center →
+resubmit build 32 (no new build).
 
 ---
 
