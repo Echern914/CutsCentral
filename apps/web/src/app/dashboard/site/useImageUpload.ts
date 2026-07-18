@@ -12,7 +12,7 @@ import { useCallback, useState } from "react";
  * surfaces "uploads_unavailable" so the caller can nudge the user to paste a URL.
  */
 
-export type UploadKind = "logo" | "hero" | "gallery";
+export type UploadKind = "logo" | "hero" | "gallery" | "avatar";
 
 const ACCEPT = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 // Longest edge after downscale. Generous (retina-sharp) but bounded.

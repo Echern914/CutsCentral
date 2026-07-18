@@ -10,7 +10,6 @@ import { AtRiskTable, type AtRiskRow } from "./_components/AtRiskTable";
 import { ActivityFeed, type ActivityItem } from "./_components/ActivityFeed";
 import { Leaderboard, type Leader } from "./_components/Leaderboard";
 import { SettingsCard, type ShopSettings } from "./_components/SettingsCard";
-import { AccountCard } from "./_components/AccountCard";
 import { ClientDemoCard } from "./_components/ClientDemoCard";
 import { TourReplayButton } from "./_components/TourReplayButton";
 import { SyncHealthBanner } from "./_components/SyncHealthBanner";
@@ -168,20 +167,6 @@ export default async function DashboardPage({
       <div className="mt-6">
         <ClientDemoCard />
       </div>
-
-      {/* A public read-only demo session gets no account surface: the shared
-          demo owner's email/password/delete forms would only confuse (every
-          mutation is refused server-side anyway). */}
-      {!me.data?.demo && (
-        <div className="mt-6">
-          <AccountCard
-            name={me.data?.name ?? ""}
-            email={me.data?.email ?? ""}
-            shopName={shop.name}
-            hasPassword={me.data?.hasPassword ?? true}
-          />
-        </div>
-      )}
     </main>
   );
 }

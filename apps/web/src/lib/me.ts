@@ -5,10 +5,15 @@ export interface Me {
   id: string;
   email: string;
   name: string;
+  /** Optional profile photo; null when unset. */
+  avatarUrl: string | null;
   isAdmin: boolean;
   welcomeSeen: boolean;
   /** False for social-only (Apple/Google) accounts - they SET a password rather than change one. */
   hasPassword: boolean;
+  /** Which sign-in methods are linked (the account page's connected chips). */
+  hasGoogle: boolean;
+  hasApple: boolean;
   /** Shops this user owns (oldest first). 1 for a normal barber; >1 = manager. */
   shops: { id: string; name: string }[];
   /** The shop the dashboard is currently acting on (the switcher's selection). */

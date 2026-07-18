@@ -3,11 +3,15 @@
 import { useState } from "react";
 import { useFormState, useFormStatus } from "react-dom";
 import { Card } from "@/components/ui/Card";
+import { FormError } from "@/components/ui/FormError";
 import { useToast } from "@/components/ui/Toast";
+import { ImageField } from "../site/ImageField";
 import {
   changePasswordAction,
   deleteAccountAction,
   deleteShopAction,
+  requestEmailChangeAction,
+  updateAvatarAction,
   updateNameAction,
 } from "../actions";
 
@@ -31,17 +35,28 @@ function Btn({ label }: { label: string }) {
 export function AccountCard({
   name,
   email,
+  avatarUrl,
   shopName,
   hasPassword,
+  hasGoogle,
+  hasApple,
+  emailChangeAvailable,
 }: {
   name: string;
   email: string;
+  /** "" when no profile photo is set. */
+  avatarUrl: string;
+  /** "" when the user owns no shop (deleted it) - hides the delete-shop form. */
   shopName: string;
   /** False for social-only (Apple/Google) accounts: no current password to ask for. */
   hasPassword: boolean;
+  hasGoogle: boolean;
+  hasApple: boolean;
+  /** False until transactional email is configured - hides the email-change form. */
+  emailChangeAvailable: boolean;
 }) {
   const { toast } = useToast();
-  const [nameState, nameAction] = useFormState(
+  const [, nameAction] = useFormState(
     async (p: { ok?: boolean; error?: string }, fd: FormData) => {
       const r = await updateNameAction(p, fd);
       toast(r.ok ? "Name updated" : r.error ?? "Error", r.ok ? "success" : "error");
@@ -57,26 +72,75 @@ export function AccountCard({
     },
     {},
   );
+  const [emailState, emailAction] = useFormState(requestEmailChangeAction, {});
   // Which danger-zone confirmation is open: the shop delete (type the shop
   // name) or the account delete (type the account email). Never both.
   const [confirming, setConfirming] = useState<"shop" | "account" | null>(null);
   const [delState, delAction] = useFormState(deleteShopAction, {});
   const [delAcctState, delAcctAction] = useFormState(deleteAccountAction, {});
 
+  // Avatar saves on change (no separate Save button - matches how the picker
+  // behaves in the page editor, where changes feel immediate).
+  const [avatar, setAvatar] = useState(avatarUrl);
+  function onAvatarChange(url: string) {
+    setAvatar(url);
+    void updateAvatarAction(url).then((r) =>
+      toast(
+        r.ok ? (url ? "Photo saved" : "Photo removed") : r.error ?? "Error",
+        r.ok ? "success" : "error",
+      ),
+    );
+  }
+
+  // Which sign-in methods are connected (shown as chips) + provider-accurate
+  // copy for the "Set a password" state.
+  const methods = [
+    hasPassword && "Email & password",
+    hasGoogle && "Google",
+    hasApple && "Apple",
+  ].filter((m): m is string => Boolean(m));
+  const providerNames =
+    [hasGoogle && "Google", hasApple && "Apple"].filter(Boolean).join(" and ") ||
+    "Apple or Google";
+
   return (
     <Card className="p-5">
       <h2 className="mb-4 font-display text-lg">Account</h2>
 
-      {/* Name */}
-      <form action={nameAction} className="mb-5 flex flex-col gap-2">
-        <label className={labelCls}>
-          Your name
-          <input name="name" defaultValue={name} className={`mt-1 ${field}`} />
-        </label>
-        <p className="text-xs text-muted/70">Signed in as {email}</p>
-        <div><Btn label="Save name" /></div>
-        {nameState.ok ? null : null}
-      </form>
+      {/* Profile: photo + name */}
+      <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start">
+        <ImageField
+          label="Profile photo"
+          kind="avatar"
+          aspect="square"
+          value={avatar}
+          onChange={onAvatarChange}
+          hint="Optional. Shows next to the Account link up top."
+        />
+        <form action={nameAction} className="flex min-w-0 flex-1 flex-col gap-2">
+          <label className={labelCls}>
+            Your name
+            <input name="name" defaultValue={name} className={`mt-1 ${field}`} />
+          </label>
+          <p className="text-xs text-muted/70">Signed in as {email}</p>
+          <div><Btn label="Save name" /></div>
+        </form>
+      </div>
+
+      {/* Sign-in methods */}
+      <div className="mb-5 border-t border-subtle pt-5">
+        <p className="text-sm font-medium text-offwhite">Sign-in methods</p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {methods.map((m) => (
+            <span
+              key={m}
+              className="rounded-full border border-subtle px-3 py-1 text-xs text-muted"
+            >
+              {m} ✓
+            </span>
+          ))}
+        </div>
+      </div>
 
       {/* Password. A social-only (Apple/Google) account has no password yet, so
           asking for a "current password" would be a dead end - offer to SET one
@@ -86,17 +150,76 @@ export function AccountCard({
           {hasPassword ? "Change password" : "Set a password"}
         </p>
         {hasPassword ? (
-          <input name="currentPassword" type="password" placeholder="Current password" className={field} />
+          <input
+            name="currentPassword"
+            type="password"
+            placeholder="Current password"
+            autoComplete="current-password"
+            aria-invalid={pwState.error ? true : undefined}
+            aria-describedby={pwState.error ? "err-password" : undefined}
+            className={field}
+          />
         ) : (
           <p className="text-xs text-muted">
-            You signed in with Apple or Google. Add a password to also sign in with
-            your email.
+            You signed in with {providerNames}. Add a password to also sign in
+            with your email.
           </p>
         )}
-        <input name="newPassword" type="password" placeholder="New password (min 8 chars)" className={field} />
+        <input
+          name="newPassword"
+          type="password"
+          placeholder="New password (min 8 chars)"
+          autoComplete="new-password"
+          className={field}
+        />
         <div><Btn label={hasPassword ? "Update password" : "Set password"} /></div>
-        {pwState.error && <span className="text-xs text-danger-soft">{pwState.error}</span>}
+        <FormError id="err-password">{pwState.error}</FormError>
       </form>
+
+      {/* Login email. Dark until transactional email is configured: the change
+          only applies after a confirmation link sent to the NEW address. */}
+      {emailChangeAvailable && (
+        <form action={emailAction} className="mb-6 flex flex-col gap-2 border-t border-subtle pt-5">
+          <p className="text-sm font-medium text-offwhite">Change login email</p>
+          {emailState.ok ? (
+            <p role="status" className="text-sm text-muted">
+              Check <span className="text-offwhite">{emailState.sentTo}</span> and
+              click the confirmation link within 30 minutes. Once confirmed,
+              you&apos;ll be signed out everywhere and sign back in with the new
+              address.
+            </p>
+          ) : (
+            <>
+              <p className="text-xs text-muted">
+                Currently <span className="text-offwhite">{email}</span>. We&apos;ll
+                email the new address a confirmation link — nothing changes until
+                it&apos;s clicked.
+              </p>
+              <input
+                name="newEmail"
+                type="email"
+                required
+                placeholder="new@email.com"
+                autoComplete="email"
+                aria-invalid={emailState.error ? true : undefined}
+                aria-describedby={emailState.error ? "err-email-change" : undefined}
+                className={field}
+              />
+              {hasPassword && (
+                <input
+                  name="currentPassword"
+                  type="password"
+                  placeholder="Current password"
+                  autoComplete="current-password"
+                  className={field}
+                />
+              )}
+              <div><Btn label="Send confirmation" /></div>
+              <FormError id="err-email-change">{emailState.error}</FormError>
+            </>
+          )}
+        </form>
+      )}
 
       {/* Replay the interactive dashboard tour (plain <a>: the full navigation
           remounts the DemoTour overlay, whose ?tour=1 bootstrap starts it). */}
@@ -145,12 +268,14 @@ export function AccountCard({
         </p>
         {confirming === null && (
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => setConfirming("shop")}
-              className="rounded-full border border-danger-soft/50 px-4 py-2 text-xs font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10"
-            >
-              Delete shop
-            </button>
+            {shopName && (
+              <button
+                onClick={() => setConfirming("shop")}
+                className="rounded-full border border-danger-soft/50 px-4 py-2 text-xs font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10"
+              >
+                Delete shop
+              </button>
+            )}
             <button
               onClick={() => setConfirming("account")}
               className="rounded-full border border-danger-soft/50 px-4 py-2 text-xs font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10"
@@ -163,7 +288,13 @@ export function AccountCard({
           <form action={delAction} className="mt-3 flex flex-col gap-2">
             <label className={labelCls}>
               Type <span className="text-offwhite">{shopName}</span> to confirm
-              <input name="confirm" className={`mt-1 ${field}`} autoComplete="off" />
+              <input
+                name="confirm"
+                className={`mt-1 ${field}`}
+                autoComplete="off"
+                aria-invalid={delState.error ? true : undefined}
+                aria-describedby={delState.error ? "err-del-shop" : undefined}
+              />
             </label>
             <div className="flex items-center gap-2">
               <button
@@ -180,14 +311,20 @@ export function AccountCard({
                 Cancel
               </button>
             </div>
-            {delState.error && <span className="text-xs text-danger-soft">{delState.error}</span>}
+            <FormError id="err-del-shop">{delState.error}</FormError>
           </form>
         )}
         {confirming === "account" && (
           <form action={delAcctAction} className="mt-3 flex flex-col gap-2">
             <label className={labelCls}>
               Type <span className="text-offwhite">{email}</span> to confirm
-              <input name="confirm" className={`mt-1 ${field}`} autoComplete="off" />
+              <input
+                name="confirm"
+                className={`mt-1 ${field}`}
+                autoComplete="off"
+                aria-invalid={delAcctState.error ? true : undefined}
+                aria-describedby={delAcctState.error ? "err-del-account" : undefined}
+              />
             </label>
             <div className="flex items-center gap-2">
               <button
@@ -204,9 +341,7 @@ export function AccountCard({
                 Cancel
               </button>
             </div>
-            {delAcctState.error && (
-              <span className="text-xs text-danger-soft">{delAcctState.error}</span>
-            )}
+            <FormError id="err-del-account">{delAcctState.error}</FormError>
           </form>
         )}
       </div>

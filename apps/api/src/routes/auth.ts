@@ -28,7 +28,7 @@ import {
   verifyGoogle,
 } from "../auth/native.js";
 import { requireUser, resolveOwnedShop } from "../middleware/auth.js";
-import { authLimiter } from "../middleware/rateLimit.js";
+import { accountLimiter, authLimiter } from "../middleware/rateLimit.js";
 import { billingEnabled, stripeClient } from "../billing/stripe.js";
 import { logger } from "../logger.js";
 
@@ -148,12 +148,17 @@ authRouter.get("/me", requireUser, async (req, res) => {
       id: true,
       email: true,
       name: true,
+      avatarUrl: true,
       isAdmin: true,
       welcomeSeenAt: true,
       // Exposed only as the hasPassword boolean below - lets the account card
       // say "Set a password" instead of asking a social-only (Apple/Google)
       // account for a current password it doesn't have.
       passwordHash: true,
+      // Exposed only as hasGoogle/hasApple booleans - the account page shows
+      // which sign-in methods are connected, never the provider subs.
+      googleId: true,
+      appleId: true,
     },
   });
   if (!user) {
@@ -173,7 +178,7 @@ authRouter.get("/me", requireUser, async (req, res) => {
     req.userId!,
     req.cookies?.[ACTIVE_SHOP_COOKIE_NAME] as string | undefined,
   );
-  const { welcomeSeenAt, passwordHash, ...rest } = user;
+  const { welcomeSeenAt, passwordHash, googleId, appleId, ...rest } = user;
   // Whether the ACTIVE shop has rewards on - the dashboard chrome hides every
   // rewards surface (nav tab etc.) for a rewards-off shop.
   const activeShopRewards = activeShop
@@ -186,6 +191,8 @@ authRouter.get("/me", requireUser, async (req, res) => {
     ...rest,
     welcomeSeen: welcomeSeenAt !== null,
     hasPassword: passwordHash !== null,
+    hasGoogle: googleId !== null,
+    hasApple: appleId !== null,
     shops,
     activeShopId: activeShop?.id ?? null,
     rewardsEnabled: activeShopRewards?.rewardsEnabled ?? false,
@@ -206,23 +213,46 @@ authRouter.post("/welcome-seen", requireUser, async (req, res) => {
   res.json({ ok: true });
 });
 
-// Update display name.
-authRouter.patch("/me", requireUser, async (req, res) => {
-  const parsed = z.object({ name: z.string().min(1).max(120) }).strict().safeParse(req.body);
+// Update profile: display name and/or avatar. Both optional so the name form
+// and the avatar picker can each PATCH just their own field; an empty body is
+// rejected. avatarUrl is http(s)-only (it renders as an <img src> in the
+// dashboard chrome) and "" / null clears it.
+const patchMeSchema = z
+  .object({
+    name: z.string().min(1).max(120).optional(),
+    avatarUrl: z
+      .string()
+      .max(500)
+      .url()
+      .refine((u) => /^https?:\/\//i.test(u), "Must be an http(s) URL")
+      .nullish()
+      .or(z.literal("")),
+  })
+  .strict();
+
+authRouter.patch("/me", accountLimiter, requireUser, async (req, res) => {
+  const parsed = patchMeSchema.safeParse(req.body);
   if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const data: { name?: string; avatarUrl?: string | null } = {};
+  if (parsed.data.name !== undefined) data.name = parsed.data.name.trim();
+  if (parsed.data.avatarUrl !== undefined) data.avatarUrl = parsed.data.avatarUrl || null;
+  if (Object.keys(data).length === 0) {
     res.status(400).json({ error: "invalid_input" });
     return;
   }
   const user = await prisma.user.update({
     where: { id: req.userId },
-    data: { name: parsed.data.name.trim() },
-    select: { id: true, email: true, name: true },
+    data,
+    select: { id: true, email: true, name: true, avatarUrl: true },
   });
   res.json(user);
 });
 
 // Change password (requires the current password unless the account is Google-only).
-authRouter.post("/change-password", requireUser, async (req, res) => {
+authRouter.post("/change-password", accountLimiter, requireUser, async (req, res) => {
   const parsed = z
     .object({
       currentPassword: z.string().optional(),
@@ -267,7 +297,7 @@ authRouter.post("/change-password", requireUser, async (req, res) => {
 // be created in the app must be deletable in the app - deleting only the shop
 // would leave the login identity (email + Apple/Google ids) behind. Requires
 // the account email as a typed confirmation, mirroring delete-shop's typed name.
-authRouter.delete("/me", requireUser, async (req, res) => {
+authRouter.delete("/me", accountLimiter, requireUser, async (req, res) => {
   const user = await prisma.user.findUnique({
     where: { id: req.userId },
     select: { id: true, email: true },
