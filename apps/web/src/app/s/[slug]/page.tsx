@@ -1,6 +1,10 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { APP_NAME, serviceNounFor } from "@chairback/config/constants";
+import {
+  APP_NAME,
+  serviceNounFor,
+  type BookingModeKey,
+} from "@chairback/config/constants";
 import { apiPublicGet } from "@/lib/api";
 import { ShopPageClient } from "./ShopPageClient";
 
@@ -21,7 +25,7 @@ export interface ShopPageData {
   layoutStyle: string | null;
   sectionOrder: string[];
   bookingUrl: string | null;
-  bookingMode: "link" | "acuity" | "native";
+  bookingMode: BookingModeKey;
   takesRequests: boolean;
   waitlistEnabled: boolean;
   punchesPerVisit: number;

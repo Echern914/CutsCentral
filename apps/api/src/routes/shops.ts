@@ -1,7 +1,9 @@
 import { Router } from "express";
 import { z } from "zod";
 import {
+  ACCENT_HEX_REGEX,
   BILLING,
+  BOOKING_MODES,
   DEFAULTS,
   DEFAULT_SECTION_ORDER,
   GALLERY_CAPTION_MAX,
@@ -15,6 +17,7 @@ import {
   REWARDS_SECTION_DEFAULT,
   REWARDS_SECTION_KEYS,
   REWARDS_WELCOME_MAX,
+  SLUG_REGEX,
   apiEnv,
   randomToken,
   type GalleryItem,
@@ -98,7 +101,7 @@ const createShopSchema = z
     logoUrl: httpUrl(500).nullish().or(z.literal("")),
     accentColor: z
       .string()
-      .regex(/^#[0-9a-fA-F]{6}$/, "Use a hex color like #D4AF37")
+      .regex(ACCENT_HEX_REGEX, "Use a hex color like #D4AF37")
       .nullish()
       .or(z.literal("")),
     // SMS attestation captured here too: the Google sign-in path skips the
@@ -119,8 +122,8 @@ const updateShopSchema = createShopSchema
       .trim()
       .toLowerCase()
       .regex(
-        /^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])?$/,
-        "3-40 chars: letters, numbers, dashes",
+        SLUG_REGEX,
+        "3-40 chars: letters, numbers, dashes (start and end with a letter or number)",
       ),
     publicPageEnabled: z.boolean(),
     theme: z.enum(PAGE_THEME_KEYS as [string, ...string[]]),
@@ -169,7 +172,7 @@ const updateShopSchema = createShopSchema
     loyaltyTextsEnabled: z.boolean(),
     // Native booking engine. bookingMode picks the ONE active source; the bounds
     // shape the public slot picker (all interpreted in the shop's timezone).
-    bookingMode: z.enum(["link", "acuity", "native", "square"]),
+    bookingMode: z.enum(BOOKING_MODES),
     bookingLeadHours: z.number().int().min(0).max(720),
     bookingMaxDays: z.number().int().min(1).max(365),
     bookingBufferMin: z.number().int().min(0).max(240),

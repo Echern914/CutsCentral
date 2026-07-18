@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
+import { FormError } from "@/components/ui/FormError";
 import { useToast } from "@/components/ui/Toast";
 import { useDemoTour } from "@/components/tour/state";
 import { cn } from "@/lib/cn";
@@ -85,15 +86,36 @@ export function BookingManager({
         </Card>
       )}
 
-      {/* Link mode with no link = a public page with no way to book. Nudge the
-          barber to add a link OR switch to ChairBack's own booking. */}
-      {shop.bookingMode === "link" && !shop.bookingUrl && (
+      {/* Any external mode with no link = a public page with no way to book
+          (Acuity/Square sync appointments but store no booking-site URL — the
+          Book button opens Shop.bookingUrl). Nudge the barber to paste their
+          link OR switch to ChairBack's own booking. */}
+      {shop.bookingMode !== "native" && !shop.bookingUrl && (
         <Card className="border-gold/30 bg-gold/5 px-5 py-4">
           <p className="text-sm text-gold">
-            You haven&apos;t added a booking link yet. Paste your Acuity/Booksy/Square
-            link below, or switch to <strong>Run booking on ChairBack</strong> to
-            take appointments right here — otherwise customers can only request a
-            time.
+            {shop.bookingMode === "square" ? (
+              <>
+                Square is syncing your appointments, but your public page has no
+                Book button yet. Paste your Square booking-site link in{" "}
+                <strong>Your booking link</strong> below so clients can book
+                straight from your page.
+              </>
+            ) : shop.bookingMode === "acuity" ? (
+              <>
+                Acuity is syncing your appointments, but your public page has no
+                Book button yet. Paste your Acuity scheduling link in{" "}
+                <strong>Your booking link</strong> below so clients can book
+                straight from your page.
+              </>
+            ) : (
+              <>
+                You haven&apos;t added a booking link yet. Paste your
+                Acuity/Booksy/Square link in <strong>Your booking link</strong>{" "}
+                below, or switch to <strong>Run booking on ChairBack</strong> to
+                take appointments right here — otherwise customers can only
+                request a time.
+              </>
+            )}
           </p>
         </Card>
       )}
@@ -171,6 +193,7 @@ function SettingsTab({
   toast: Toast;
 }) {
   const [mode, setMode] = useState(shop.bookingMode);
+  const [bookingUrl, setBookingUrl] = useState(shop.bookingUrl ?? "");
   const [lead, setLead] = useState(shop.bookingLeadHours);
   const [maxDays, setMaxDays] = useState(shop.bookingMaxDays);
   const [buffer, setBuffer] = useState(shop.bookingBufferMin);
@@ -183,6 +206,7 @@ function SettingsTab({
   function persist(
     next: Partial<{
       mode: typeof mode;
+      bookingUrl: string;
       slotOpened: boolean;
       requireApproval: boolean;
       remind24h: boolean;
@@ -192,6 +216,9 @@ function SettingsTab({
     start(async () => {
       const r = await saveBookingSettingsAction({
         bookingMode: next.mode ?? mode,
+        // Only the "Your booking link" card sends the URL; toggles omit it so a
+        // half-typed link can never fail an unrelated save (schema is partial).
+        ...(next.bookingUrl !== undefined ? { bookingUrl: next.bookingUrl } : {}),
         bookingLeadHours: lead,
         bookingMaxDays: maxDays,
         bookingBufferMin: buffer,
@@ -202,6 +229,15 @@ function SettingsTab({
       });
       toast(r.ok ? "Booking settings saved" : "Couldn't save", r.ok ? "success" : "error");
     });
+  }
+
+  // "" clears the link (the API stores null); anything else must be http(s).
+  const bookingUrlTrimmed = bookingUrl.trim();
+  const bookingUrlValid =
+    bookingUrlTrimmed === "" || /^https?:\/\/\S+$/i.test(bookingUrlTrimmed);
+
+  function saveBookingUrl() {
+    persist({ bookingUrl: bookingUrlTrimmed });
   }
 
   // Flip the "notify waitlist when a slot opens" toggle and save immediately.
@@ -244,6 +280,51 @@ function SettingsTab({
   return (
     <div className="flex flex-col gap-5">
       <ConnectPlatforms mode={mode} onPick={pickMode} connect={connect} apiBase={apiBase} />
+
+      {mode !== "native" && (
+        <Card className="p-5">
+          <CardHeader
+            title="Your booking link"
+            subtitle={
+              mode === "square"
+                ? "The Book button on your public page opens this link. Find yours in Square Dashboard → Online Booking → Booking site."
+                : mode === "acuity"
+                  ? "The Book button on your public page opens this link — your Acuity client scheduling page."
+                  : "The Book button on your public page opens this link (Acuity, Booksy, Square, or any booking site)."
+            }
+          />
+          <div className="mt-4 flex flex-col gap-2">
+            <input
+              value={bookingUrl}
+              onChange={(e) => setBookingUrl(e.target.value)}
+              placeholder="https://squareup.com/appointments/book/…"
+              maxLength={500}
+              aria-label="Booking link"
+              aria-invalid={!bookingUrlValid || undefined}
+              aria-describedby={bookingUrlValid ? undefined : "err-booking-url"}
+              className={field}
+            />
+            {!bookingUrlValid && (
+              <FormError id="err-booking-url">
+                Must be a full link starting with https://
+              </FormError>
+            )}
+            <div className="flex items-center gap-3">
+              <button
+                onClick={saveBookingUrl}
+                disabled={pending || !bookingUrlValid}
+                className="rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+              >
+                {pending ? "Saving…" : "Save link"}
+              </button>
+              <p className="text-xs text-muted">
+                Leave blank to remove the Book button
+                {mode === "link" ? "" : " (appointments keep syncing either way)"}.
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {mode === "native" && (
         <Card className="p-5">

@@ -138,8 +138,8 @@ export function ShopPageClient({
         className="mx-auto w-full max-w-lg px-5 pb-16"
         style={{ fontFamily: "var(--page-body)" }}
       >
-        {/* Hero: a full-bleed banner that fades into the page, then the shop name.
-            No logo coin - the banner + name carry the identity. */}
+        {/* Hero: a full-bleed banner that fades into the page, then the shop's
+            logo coin (when uploaded) overlapping the fade, then the name. */}
         <motion.header variants={fadeUp} className="relative" data-tour="hero">
           {data.heroImageUrl ? (
             <div className="relative -mx-5 h-48 overflow-hidden sm:h-56">
@@ -161,7 +161,23 @@ export function ShopPageClient({
             />
           )}
 
-          <div className="mt-4 text-center">
+          {/* Logo coin — same treatment as the rewards page header. alt="" is
+              deliberate: the shop name renders immediately below. */}
+          {data.logoUrl && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={data.logoUrl}
+              alt=""
+              className="relative z-10 mx-auto -mt-10 h-16 w-16 object-cover"
+              style={{
+                backgroundColor: theme.surface,
+                border: `1px solid ${theme.border}`,
+                borderRadius: layout.radius,
+              }}
+            />
+          )}
+
+          <div className={`${data.logoUrl ? "mt-3" : "mt-4"} text-center`}>
             <h1 className="text-3xl tracking-tight" style={{ fontFamily: "var(--page-display)" }}>
               {data.name}
             </h1>

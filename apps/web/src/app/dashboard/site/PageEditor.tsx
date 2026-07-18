@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useTransition } from "react";
 import {
+  ACCENT_HEX_REGEX,
   DEFAULT_LAYOUT_STYLE,
   DEFAULT_PAGE_FONT,
   DEFAULT_SECTION_ORDER,
@@ -13,6 +14,7 @@ import {
   REWARDS_SECTION_DEFAULT,
   REWARDS_SECTION_KEYS,
   REWARDS_WELCOME_MAX,
+  SLUG_REGEX,
   type LayoutStyleKey,
   type PageFontKey,
   type PageSectionKey,
@@ -20,6 +22,7 @@ import {
   type RewardsSectionKey,
 } from "@chairback/config/constants";
 import { Card, CardHeader } from "@/components/ui/Card";
+import { FormError } from "@/components/ui/FormError";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
 import type { ShopPageSettings } from "./page";
@@ -34,6 +37,32 @@ import { LivePreview } from "./LivePreview";
 const field =
   "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 const labelCls = "text-xs text-muted";
+
+// Fields with an inline error slot right under their input. A server rejection
+// on any other field surfaces in the save bar, prefixed with a friendly label.
+const INLINE_ERROR_FIELDS = new Set([
+  "slug",
+  "accentColor",
+  "instagramHandle",
+  "bio",
+  "hoursText",
+  "notifyPhone",
+  "rewardsWelcome",
+]);
+
+const FIELD_LABELS: Record<string, string> = {
+  logoUrl: "Logo",
+  heroImageUrl: "Hero banner",
+  gallery: "Gallery",
+  theme: "Theme",
+  fontKey: "Typography",
+  layoutStyle: "Shape",
+  sectionOrder: "Sections",
+  rewardsSections: "Rewards sections",
+  publicPageEnabled: "Live toggle",
+  takesRequests: "Requests toggle",
+  waitlistEnabled: "Waitlist toggle",
+};
 
 export function PageEditor({
   settings,
@@ -77,13 +106,28 @@ export function PageEditor({
   const [waitlistEnabled, setWaitlistEnabled] = useState(settings.waitlistEnabled);
   const [notifyPhone, setNotifyPhone] = useState(settings.notifyPhone ?? "");
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [savedOnce, setSavedOnce] = useState(false);
   const [showPreviewMobile, setShowPreviewMobile] = useState(false);
 
   const pageUrl = `${appBase}/s/${slug || "your-shop"}`;
   const activeTheme = PAGE_THEMES[(theme as PageThemeKey) in PAGE_THEMES ? (theme as PageThemeKey) : "classic"];
-  const validHex = /^#[0-9a-fA-F]{6}$/.test(accentColor);
+  // Client-side mirrors of the API's validation (same shared regexes), so a bad
+  // value blocks Save with a specific message instead of a mystery rejection.
+  const validHex = ACCENT_HEX_REGEX.test(accentColor);
   const previewAccent = validHex ? accentColor : activeTheme.accent;
+  const slugValid = SLUG_REGEX.test(slug.trim().toLowerCase());
+  const slugError =
+    slug.trim() && !slugValid
+      ? "Letters, numbers, and dashes — start and end with a letter or number (3–40 characters)."
+      : fieldErrors.slug;
+  const accentError =
+    accentColor && !validHex
+      ? "Finish the hex — 6 digits, like #D4AF37."
+      : fieldErrors.accentColor;
+  const leftoverErrors = Object.entries(fieldErrors).filter(
+    ([key]) => !INLINE_ERROR_FIELDS.has(key),
+  );
 
   // Map the in-progress editor state onto the public ShopPageData shape so the
   // live preview renders EXACTLY what clients will see (same component).
@@ -92,6 +136,7 @@ export function PageEditor({
       name: settings.name,
       slug: slug || "your-shop",
       bio: bio.trim() || null,
+      industry: settings.industry,
       theme,
       logoUrl: logoUrl.trim() || null,
       heroImageUrl: heroImageUrl.trim() || null,
@@ -119,6 +164,7 @@ export function PageEditor({
     }),
     [
       settings.name,
+      settings.industry,
       settings.bookingUrl,
       settings.punchesPerVisit,
       slug,
@@ -141,6 +187,7 @@ export function PageEditor({
 
   function save() {
     setError(null);
+    setFieldErrors({});
     startTransition(async () => {
       const r = await savePageAction({
         slug: slug.trim().toLowerCase(),
@@ -166,7 +213,14 @@ export function PageEditor({
         toast("Your page is saved", "success");
         setSavedOnce(true);
       } else {
-        setError(r.error ?? "Could not save");
+        const fe = r.fieldErrors ?? {};
+        setFieldErrors(fe);
+        setError(
+          r.error ??
+            (Object.keys(fe).length > 0
+              ? "Fix the highlighted fields and save again."
+              : "Could not save"),
+        );
       }
     });
   }
@@ -323,6 +377,8 @@ export function PageEditor({
                     value={accentColor}
                     onChange={(e) => setAccentColor(e.target.value)}
                     placeholder={activeTheme.accent}
+                    aria-invalid={accentError ? true : undefined}
+                    aria-describedby={accentError ? "err-accent" : undefined}
                     className={`${field} font-mono`}
                   />
                   {accentColor && (
@@ -335,6 +391,9 @@ export function PageEditor({
                     </button>
                   )}
                 </span>
+                <FormError id="err-accent" className="mt-1">
+                  {accentError}
+                </FormError>
                 <span className="mt-1 block text-[11px] text-muted/80">Overrides the theme&apos;s accent.</span>
               </label>
             </div>
@@ -347,7 +406,7 @@ export function PageEditor({
                 aspect="square"
                 value={logoUrl}
                 onChange={setLogoUrl}
-                hint="Square works best."
+                hint="Square works best. Shows on your page and the rewards page."
               />
               <ImageField
                 label="Hero banner"
@@ -366,8 +425,13 @@ export function PageEditor({
                 onChange={(e) => setSlug(e.target.value)}
                 placeholder="dricks-barbershop"
                 maxLength={40}
+                aria-invalid={slugError ? true : undefined}
+                aria-describedby={slugError ? "err-slug" : undefined}
                 className={`mt-1 ${field} font-mono`}
               />
+              <FormError id="err-slug" className="mt-1">
+                {slugError}
+              </FormError>
             </label>
           </div>
         </Card>
@@ -384,8 +448,13 @@ export function PageEditor({
                 rows={2}
                 maxLength={500}
                 placeholder="Precision fades and beard work in downtown Wilmington. By appointment."
+                aria-invalid={fieldErrors.bio ? true : undefined}
+                aria-describedby={fieldErrors.bio ? "err-bio" : undefined}
                 className={`mt-1 ${field} resize-none`}
               />
+              <FormError id="err-bio" className="mt-1">
+                {fieldErrors.bio}
+              </FormError>
             </label>
             <div className="grid gap-4 sm:grid-cols-2">
               <label className={labelCls}>
@@ -395,8 +464,13 @@ export function PageEditor({
                   onChange={(e) => setInstagramHandle(e.target.value)}
                   placeholder="@drickscuts"
                   maxLength={31}
+                  aria-invalid={fieldErrors.instagramHandle ? true : undefined}
+                  aria-describedby={fieldErrors.instagramHandle ? "err-instagram" : undefined}
                   className={`mt-1 ${field}`}
                 />
+                <FormError id="err-instagram" className="mt-1">
+                  {fieldErrors.instagramHandle}
+                </FormError>
               </label>
               <label className={labelCls}>
                 Hours (free text, line breaks kept)
@@ -406,8 +480,13 @@ export function PageEditor({
                   rows={3}
                   maxLength={400}
                   placeholder={"Tue-Fri 9-6\nSat 8-3\nClosed Sun-Mon"}
+                  aria-invalid={fieldErrors.hoursText ? true : undefined}
+                  aria-describedby={fieldErrors.hoursText ? "err-hours" : undefined}
                   className={`mt-1 ${field} resize-none`}
                 />
+                <FormError id="err-hours" className="mt-1">
+                  {fieldErrors.hoursText}
+                </FormError>
               </label>
             </div>
           </div>
@@ -446,8 +525,13 @@ export function PageEditor({
                 rows={2}
                 maxLength={REWARDS_WELCOME_MAX}
                 placeholder="Thanks for being a regular — see you in the chair soon!"
+                aria-invalid={fieldErrors.rewardsWelcome ? true : undefined}
+                aria-describedby={fieldErrors.rewardsWelcome ? "err-rewards-welcome" : undefined}
                 className={`mt-1 ${field} resize-none`}
               />
+              <FormError id="err-rewards-welcome" className="mt-1">
+                {fieldErrors.rewardsWelcome}
+              </FormError>
               <span className="mt-1 block text-[11px] text-muted/80">
                 Shown at the top of the page, under their name. {rewardsWelcome.length}/
                 {REWARDS_WELCOME_MAX}
@@ -495,8 +579,13 @@ export function PageEditor({
                 onChange={(e) => setNotifyPhone(e.target.value)}
                 placeholder="(302) 555-0142"
                 maxLength={40}
+                aria-invalid={fieldErrors.notifyPhone ? true : undefined}
+                aria-describedby={fieldErrors.notifyPhone ? "err-notify-phone" : undefined}
                 className={`mt-1 ${field}`}
               />
+              <FormError id="err-notify-phone" className="mt-1">
+                {fieldErrors.notifyPhone}
+              </FormError>
               <span className="mt-1 block text-[11px] text-muted/80">
                 We&apos;ll text this number when a request or waitlist join comes in. Leave blank to just check the dashboard.
               </span>
@@ -527,7 +616,7 @@ export function PageEditor({
         {/* Save bar */}
         <div className="flex flex-wrap items-center gap-3">
           <button
-            disabled={pending || slug.trim().length < 3}
+            disabled={pending || !slugValid || Boolean(accentColor && !validHex)}
             onClick={save}
             className="rounded-full bg-gold px-6 py-2.5 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50"
           >
@@ -549,7 +638,16 @@ export function PageEditor({
               Saved ✓ View your live page →
             </a>
           )}
-          {error && <span className="text-sm text-danger-soft">{error}</span>}
+          {(error || leftoverErrors.length > 0) && (
+            <div className="flex w-full flex-col gap-1">
+              <FormError className="text-sm">{error}</FormError>
+              {leftoverErrors.map(([key, msg]) => (
+                <FormError key={key} className="text-sm">
+                  {`${FIELD_LABELS[key] ?? key}: ${msg}`}
+                </FormError>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Mobile preview (inline, toggled) */}

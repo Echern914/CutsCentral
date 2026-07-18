@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import type { BookingModeKey } from "@chairback/config/constants";
 import { API_BASE, apiGet } from "@/lib/api";
 import { DemoTour } from "@/components/tour/DemoTour";
 import { BookingManager } from "./BookingManager";
@@ -7,7 +8,7 @@ export const metadata: Metadata = { title: "Booking" };
 
 export interface BookingShop {
   slug: string | null;
-  bookingMode: "link" | "acuity" | "native" | "square";
+  bookingMode: BookingModeKey;
   bookingUrl: string | null;
   bookingLeadHours: number;
   bookingMaxDays: number;
