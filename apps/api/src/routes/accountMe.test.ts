@@ -204,4 +204,44 @@ describe("change login email", () => {
     expect(res.body.ok).toBe(true);
     expect(sent).toHaveLength(0);
   });
+
+  it("changing the password voids a pending email-change token (recovery revokes the session-independent way in)", async () => {
+    const sent: SendEmailInput[] = [];
+    __setSendEmailForTests(async (input) => {
+      sent.push(input);
+      return { id: "test", status: "sent" };
+    });
+
+    const cookie = (await request(app)
+      .post("/api/auth/login")
+      .send({ email: emailNew, password })
+      .then((r) => (r.headers["set-cookie"] as unknown as string[])[0]))!;
+
+    const pendingEmail = `acct-me-pending-${suffix}@test.local`;
+    const req1 = await request(app)
+      .post("/api/auth/change-email")
+      .set("Cookie", cookie)
+      .send({ newEmail: pendingEmail, currentPassword: password });
+    expect(req1.status).toBe(200);
+    expect(sent).toHaveLength(1);
+    const token = decodeURIComponent(
+      sent[0]!.text.match(/confirm-email\?token=([^\s]+)/)![1]!,
+    );
+
+    // The documented intruder-recovery step: change the password. The pending
+    // token is not a session, so the tokenVersion bump alone wouldn't kill it.
+    const cp = await request(app)
+      .post("/api/auth/change-password")
+      .set("Cookie", cookie)
+      .send({ currentPassword: password, newPassword: `${password}-rotated` });
+    expect(cp.status).toBe(200);
+
+    const confirm = await request(app)
+      .post("/api/auth/confirm-email-change")
+      .send({ token });
+    expect(confirm.status).toBe(400);
+    expect(confirm.body.error).toBe("invalid_or_expired");
+    // The login identity never moved.
+    expect(await prisma.user.findUnique({ where: { email: pendingEmail } })).toBeNull();
+  });
 });

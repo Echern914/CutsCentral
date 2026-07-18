@@ -142,14 +142,19 @@ passwordResetRouter.post("/reset-password", authLimiter, async (req, res) => {
   // tokenVersion bump revokes every previously issued session (any device, any
   // leaked cookie) - same rationale as change-password in routes/auth.ts. We do
   // NOT auto-login here: the page sends the user to /login to sign in fresh,
-  // keeping this endpoint a pure credential write.
-  await prisma.user.update({
-    where: { id: row.userId },
-    data: {
-      passwordHash: await hashPassword(parsed.data.newPassword),
-      tokenVersion: { increment: 1 },
-    },
-  });
+  // keeping this endpoint a pure credential write. Pending email-change tokens
+  // die too: a reset is the lockout-recovery path, and a live emailed token is
+  // a session-independent way back in for whoever requested it.
+  await prisma.$transaction([
+    prisma.user.update({
+      where: { id: row.userId },
+      data: {
+        passwordHash: await hashPassword(parsed.data.newPassword),
+        tokenVersion: { increment: 1 },
+      },
+    }),
+    prisma.emailChangeToken.deleteMany({ where: { userId: row.userId, usedAt: null } }),
+  ]);
 
   res.json({ ok: true });
 });

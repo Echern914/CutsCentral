@@ -7,6 +7,7 @@ import { verifyPassword } from "../auth/password.js";
 import { requireUser } from "../middleware/auth.js";
 import { accountLimiter, authLimiter } from "../middleware/rateLimit.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
+import { billingEnabled, stripeClient } from "../billing/stripe.js";
 import { logger } from "../logger.js";
 
 /**
@@ -85,17 +86,19 @@ emailChangeRouter.post("/change-email", accountLimiter, requireUser, async (req,
 
   // From here the response is a constant { ok: true } — whether the address is
   // free or already someone's login, the caller only learns "check that inbox".
+  // Supersede any prior pending request FIRST and unconditionally: the "one
+  // live request per user" invariant must hold even when the new address turns
+  // out to be taken, and doing it on both paths narrows the free-vs-taken
+  // timing skew (the residual skew is the same accepted stance as
+  // forgot-password — see passwordReset.ts).
+  await prisma.emailChangeToken.deleteMany({ where: { userId: user.id, usedAt: null } });
   const taken = await prisma.user.findUnique({ where: { email: newEmail } });
   if (!taken) {
     const token = randomToken(); // 32 random bytes, base64url — unguessable
     const expiresAt = new Date(Date.now() + CHANGE_TOKEN_TTL_MS);
-    // One live request per user: a re-request supersedes unused predecessors.
-    await prisma.$transaction([
-      prisma.emailChangeToken.deleteMany({ where: { userId: user.id, usedAt: null } }),
-      prisma.emailChangeToken.create({
-        data: { userId: user.id, newEmail, tokenHash: sha256Hex(token), expiresAt },
-      }),
-    ]);
+    await prisma.emailChangeToken.create({
+      data: { userId: user.id, newEmail, tokenHash: sha256Hex(token), expiresAt },
+    });
 
     const confirmUrl = `${env.APP_BASE_URL}/confirm-email?token=${encodeURIComponent(token)}`;
     try {
@@ -172,6 +175,29 @@ emailChangeRouter.post("/confirm-email-change", authLimiter, async (req, res) =>
     where: { id: row.userId },
     data: { email: row.newEmail, tokenVersion: { increment: 1 } },
   });
+
+  // Keep Stripe in sync: the customer email was snapshotted at customer
+  // creation, and receipts/dunning would otherwise keep going to the old
+  // (possibly lost) address forever. Best-effort - a Stripe hiccup must not
+  // fail a change that has already applied.
+  if (billingEnabled()) {
+    const billedShops = await prisma.shop.findMany({
+      where: { ownerId: row.userId, stripeCustomerId: { not: null } },
+      select: { id: true, stripeCustomerId: true },
+    });
+    for (const shop of billedShops) {
+      try {
+        await stripeClient().customers.update(shop.stripeCustomerId!, {
+          email: row.newEmail,
+        });
+      } catch (err) {
+        logger.error(
+          { err, shopId: shop.id },
+          "email change: stripe customer email update failed",
+        );
+      }
+    }
+  }
 
   res.json({ ok: true });
 });

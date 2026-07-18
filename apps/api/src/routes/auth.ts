@@ -279,14 +279,20 @@ authRouter.post("/change-password", accountLimiter, requireUser, async (req, res
   }
   // Bump tokenVersion: every session issued before this moment (any device,
   // any leaked token) is revoked. Then mint a fresh cookie for THIS browser
-  // so the user changing their password stays signed in.
-  const updated = await prisma.user.update({
-    where: { id: user.id },
-    data: {
-      passwordHash: await hashPassword(parsed.data.newPassword),
-      tokenVersion: { increment: 1 },
-    },
-  });
+  // so the user changing their password stays signed in. Pending email-change
+  // tokens die in the same transaction: "change your password" is the
+  // documented intruder-recovery step, and a live emailed token is a
+  // session-INDEPENDENT way back in that a version bump alone can't revoke.
+  const [updated] = await prisma.$transaction([
+    prisma.user.update({
+      where: { id: user.id },
+      data: {
+        passwordHash: await hashPassword(parsed.data.newPassword),
+        tokenVersion: { increment: 1 },
+      },
+    }),
+    prisma.emailChangeToken.deleteMany({ where: { userId: user.id, usedAt: null } }),
+  ]);
   const token = setSessionCookie(res, updated.id, updated.tokenVersion);
   res.json({ ok: true, token });
 });
