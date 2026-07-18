@@ -271,8 +271,11 @@ export function ShopPageClient({
           )}
           {/* Growth loop: every shop page quietly markets the platform. Inside
               the iOS app it must be INERT text - the marketing site it links to
-              leads to business signup, which is forbidden in-app (3.1.1). */}
-          {inApp ? (
+              leads to business signup, which is forbidden in-app (3.1.1). The
+              site-editor preview keeps the full (already inert) link so the
+              barber sees exactly what browser visitors see, even when editing
+              from inside the app. */}
+          {inApp && !preview ? (
             <span
               className="mt-6 inline-block text-[11px]"
               style={{ color: theme.muted }}

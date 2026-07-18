@@ -8,6 +8,7 @@ import {
   StyleSheet,
 } from "react-native";
 import { WebView, type WebViewProps } from "react-native-webview";
+import { WEB_ORIGIN } from "./config";
 
 // If the real page content hasn't signaled ready within this long, stop spinning
 // and offer a retry. The page posts "cb:ready" when its real UI mounts; we do NOT
@@ -60,6 +61,33 @@ function normalizeUrl(u: string): string {
 // (or worse, fire onError and show the Retry screen) - e.g. the support email
 // link on the dashboard's Account card. Hand them to iOS instead (Mail, Phone).
 const EXTERNAL_SCHEME = /^(mailto:|tel:|sms:|facetime:)/i;
+
+// Marketing/auth routes that must NEVER load inside the app shell: they lead
+// to business signup and pricing, which App Store Guideline 3.1.1 forbids
+// in-app (the round-4 rejection came from exactly one such link). The web
+// pages gate themselves too, but this native denylist is the boundary that
+// also catches links added later by someone who forgets the per-page gate.
+// Exact paths only: "/onboarding" is the shop-creation page, while deeper
+// /onboarding/connect is a legitimate in-app flow (calendar connect).
+const BLOCKED_WEB_PATHS = new Set([
+  "/", // the marketing homepage (nav/hero/pricing all funnel to signup)
+  "/signup",
+  "/pricing",
+  "/demo",
+  "/welcome",
+  "/onboarding",
+]);
+
+/** True when `url` is one of OUR marketing/auth pages that may not load in-app. */
+function isBlockedInAppUrl(url: string): boolean {
+  if (!url.startsWith(WEB_ORIGIN)) return false;
+  try {
+    const path = new URL(url).pathname.replace(/\/+$/, "") || "/";
+    return BLOCKED_WEB_PATHS.has(path);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * `awaitsReady`: when true (the rewards page), the spinner clears ONLY on the
@@ -191,13 +219,16 @@ export function AppWebView({
           if (e.nativeEvent.statusCode >= 400) setErrored(true);
         }}
         // mailto:/tel:/etc go to iOS (Mail app), never into the WebView; any
-        // caller policy (e.g. barber.tsx's /login bounce) still runs for the rest.
+        // caller policy (e.g. barber.tsx's /login bounce) still runs for the
+        // rest; finally, our own marketing/auth routes are refused outright.
         onShouldStartLoadWithRequest={(req) => {
           if (EXTERNAL_SCHEME.test(req.url)) {
             Linking.openURL(req.url).catch(() => {});
             return false;
           }
-          return callerShouldStart ? callerShouldStart(req) : true;
+          if (callerShouldStart && !callerShouldStart(req)) return false;
+          if (isBlockedInAppUrl(req.url)) return false;
+          return true;
         }}
         {...props}
       />

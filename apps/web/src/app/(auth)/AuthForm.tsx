@@ -9,12 +9,12 @@ import { Card } from "@/components/ui/Card";
 import { FormError } from "@/components/ui/FormError";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
 
-function SubmitButton({ label }: { label: string }) {
+function SubmitButton({ label, disabled = false }: { label: string; disabled?: boolean }) {
   const { pending } = useFormStatus();
   return (
     <button
       type="submit"
-      disabled={pending}
+      disabled={pending || disabled}
       className="w-full rounded-full bg-gold-gradient px-5 py-3 text-sm font-semibold text-charcoal shadow-glow transition-all duration-200 ease-out hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
     >
       {pending ? "Please wait…" : label}
@@ -62,6 +62,11 @@ export function AuthForm({
   // (marketing page, a shop page's powered-by link, the login cross-link), the
   // in-app render is a neutral notice, never the form.
   const inApp = useIsNativeApp();
+  // Pre-hydration, inApp is null and the SSR'd signup form is briefly on
+  // screen even in the app shell. Keep its actions dead until we KNOW we're in
+  // a browser: submit disabled + Google href withheld while null. On the web
+  // this resolves within a frame of hydration - imperceptible.
+  const signupGateUnknown = isSignup && inApp === null;
 
   if (isSignup && inApp) {
     return (
@@ -109,7 +114,8 @@ export function AuthForm({
           {googleAvailable && (
             <>
               <a
-                href={googleStartUrl}
+                href={signupGateUnknown ? undefined : googleStartUrl}
+                onClick={signupGateUnknown ? (e) => e.preventDefault() : undefined}
                 className="flex w-full items-center justify-center gap-2 rounded-xl border border-subtle bg-charcoal-700 px-4 py-3 text-sm font-medium text-offwhite transition-colors duration-200 ease-out hover:bg-charcoal-800"
               >
                 <GoogleGlyph />
@@ -188,7 +194,10 @@ export function AuthForm({
               {errorText}
             </FormError>
             <div className="mt-1">
-              <SubmitButton label={isSignup ? "Create account" : "Sign in"} />
+              <SubmitButton
+                label={isSignup ? "Create account" : "Sign in"}
+                disabled={signupGateUnknown}
+              />
             </div>
             {isSignup && (
               <p className="mt-1 text-center text-xs leading-relaxed text-muted">
