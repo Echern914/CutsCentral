@@ -9,6 +9,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
   const base = "https://getchairback.com";
   const pages = [
     "",
+    "/pricing",
     "/signup",
     "/login",
     "/terms",

@@ -42,14 +42,6 @@ const nextConfig = {
   reactStrictMode: true,
   // Compile the shared workspace package from source.
   transpilePackages: ["@chairback/config"],
-  // /pricing is what people type and what ads link to, but pricing lives as a
-  // homepage section. A config redirect (edge-level, proper Location header)
-  // replaces the old static page calling redirect() - Vercel served that
-  // prerendered 307 WITHOUT a Location header, which only script-running
-  // browsers could recover from (crawlers and curl saw a broken redirect).
-  async redirects() {
-    return [{ source: "/pricing", destination: "/#pricing", permanent: false }];
-  },
   async headers() {
     return [
       { source: "/(.*)", headers: securityHeaders },

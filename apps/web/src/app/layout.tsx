@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, Bricolage_Grotesque } from "next/font/google";
+import { Analytics } from "@vercel/analytics/react";
 import { APP_NAME } from "@chairback/config/constants";
 import { MotionConfigProvider } from "@/components/motion/MotionConfigProvider";
 import { ToastProvider } from "@/components/ui/Toast";
@@ -89,6 +90,13 @@ export default function RootLayout({
             </div>
           </ToastProvider>
         </MotionConfigProvider>
+        {/* Vercel Web Analytics: cookieless page-view + funnel counts (no
+            consent banner needed). In production the script and beacon are
+            same-origin (/_vercel/insights/*), so the CSP's script-src/
+            connect-src 'self' already allow it. In local dev it points at
+            va.vercel-scripts.com, which the CSP blocks - analytics simply
+            doesn't run locally, which is the behavior we want anyway. */}
+        <Analytics />
       </body>
     </html>
   );
