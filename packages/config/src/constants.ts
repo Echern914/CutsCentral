@@ -318,9 +318,11 @@ export type BookingModeKey = (typeof BOOKING_MODES)[number];
 /**
  * Public page handle: 3-40 chars of lowercase letters/digits/dashes, starting
  * and ending with a letter or digit. Shared by the API schema and the page
- * editor's client-side validation so the two can never drift.
+ * editor's client-side validation so the two can never drift. (The previous
+ * regex made the tail group optional, silently admitting 1-char handles while
+ * every message claimed a 3-char minimum.)
  */
-export const SLUG_REGEX = /^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])?$/;
+export const SLUG_REGEX = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/;
 
 /** Accent color override: a full 6-digit hex like #D4AF37. Shared like SLUG_REGEX. */
 export const ACCENT_HEX_REGEX = /^#[0-9a-fA-F]{6}$/;

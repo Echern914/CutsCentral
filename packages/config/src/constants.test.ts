@@ -9,7 +9,7 @@ describe("SLUG_REGEX", () => {
   });
 
   it("rejects leading/trailing dashes, invalid chars, and short/long handles", () => {
-    for (const slug of ["-ab", "ab-", "my_shop", "My-Shop", "ab", "", "a".repeat(41)]) {
+    for (const slug of ["-ab", "ab-", "my_shop", "My-Shop", "a", "ab", "", "a".repeat(41)]) {
       expect(SLUG_REGEX.test(slug), slug).toBe(false);
     }
   });

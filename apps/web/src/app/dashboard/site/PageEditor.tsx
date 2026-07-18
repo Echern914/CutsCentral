@@ -114,15 +114,18 @@ export function PageEditor({
   const activeTheme = PAGE_THEMES[(theme as PageThemeKey) in PAGE_THEMES ? (theme as PageThemeKey) : "classic"];
   // Client-side mirrors of the API's validation (same shared regexes), so a bad
   // value blocks Save with a specific message instead of a mystery rejection.
-  const validHex = ACCENT_HEX_REGEX.test(accentColor);
-  const previewAccent = validHex ? accentColor : activeTheme.accent;
+  // Validate the TRIMMED accent: save() sends the trimmed value, so a pasted
+  // trailing space must never gate Save on a hex the API would accept.
+  const accentTrimmed = accentColor.trim();
+  const validHex = ACCENT_HEX_REGEX.test(accentTrimmed);
+  const previewAccent = validHex ? accentTrimmed : activeTheme.accent;
   const slugValid = SLUG_REGEX.test(slug.trim().toLowerCase());
   const slugError =
     slug.trim() && !slugValid
       ? "Letters, numbers, and dashes — start and end with a letter or number (3–40 characters)."
       : fieldErrors.slug;
   const accentError =
-    accentColor && !validHex
+    accentTrimmed && !validHex
       ? "Finish the hex — 6 digits, like #D4AF37."
       : fieldErrors.accentColor;
   const leftoverErrors = Object.entries(fieldErrors).filter(
@@ -140,7 +143,7 @@ export function PageEditor({
       theme,
       logoUrl: logoUrl.trim() || null,
       heroImageUrl: heroImageUrl.trim() || null,
-      accentColor: validHex ? accentColor : null,
+      accentColor: validHex ? accentTrimmed : null,
       instagramHandle: instagramHandle.trim().replace(/^@/, "") || null,
       hoursText: hoursText.trim() || null,
       gallery,
@@ -616,7 +619,7 @@ export function PageEditor({
         {/* Save bar */}
         <div className="flex flex-wrap items-center gap-3">
           <button
-            disabled={pending || !slugValid || Boolean(accentColor && !validHex)}
+            disabled={pending || !slugValid || Boolean(accentTrimmed && !validHex)}
             onClick={save}
             className="rounded-full bg-gold px-6 py-2.5 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50"
           >
