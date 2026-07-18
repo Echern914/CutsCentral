@@ -77,6 +77,7 @@ model User {
   googleId      String?   @unique // Google "sub"; set for Google sign-in
   appleId       String?   @unique // Apple "sub"; set for Sign in with Apple (native iOS)
   name          String
+  avatarUrl     String? // optional profile photo (https URL in the public storage bucket)
   // Session revocation: bumped on password change, which invalidates every
   // previously issued session token (tokens embed the version they were minted with).
   tokenVersion  Int       @default(0)
@@ -98,6 +99,7 @@ model User {
   shops Shop[] @relation("ShopOwner") // one today; FK clean for N later
 
   passwordResetTokens PasswordResetToken[]
+  emailChangeTokens   EmailChangeToken[]
   // Barber/manager devices registered for native push (dashboard app).
   pushSubscriptions   PushSubscription[]
 }
@@ -115,6 +117,25 @@ model PasswordResetToken {
   id        String    @id @default(cuid())
   userId    String
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique // sha256 hex of the emailed token; never the raw value
+  expiresAt DateTime
+  usedAt    DateTime? // stamped on redeem; non-null = spent, can never be replayed
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// One-shot change-login-email tokens, emailed to the NEW address to prove the
+// owner controls it before it becomes the login identity. Same threat model
+// and lifecycle as PasswordResetToken (sha256-only at rest, 30 min TTL,
+// single-use, superseded on re-request); the pending newEmail lives HERE, not
+// on User, so an unconfirmed request never affects login. Same non-tenant RLS
+// lockdown (enabled, no policy, not forced).
+model EmailChangeToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  newEmail  String // the address that becomes User.email on redeem
   tokenHash String    @unique // sha256 hex of the emailed token; never the raw value
   expiresAt DateTime
   usedAt    DateTime? // stamped on redeem; non-null = spent, can never be replayed

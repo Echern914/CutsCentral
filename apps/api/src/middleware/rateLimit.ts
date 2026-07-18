@@ -63,6 +63,19 @@ export const uploadLimiter = make({
   keyGenerator: sessionKey,
 });
 
+/**
+ * Authenticated account mutations (name/avatar, change password/email, delete).
+ * Per-SESSION, not per-IP: sharing authLimiter's per-IP bucket would couple a
+ * shop's shared Wi-Fi to the login brute-force budget, and the brute-force
+ * surface here (a stolen session guessing the current password) is keyed by
+ * the session anyway.
+ */
+export const accountLimiter = make({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  keyGenerator: sessionKey,
+});
+
 /** General authenticated dashboard reads: per-user, loose. */
 export const dashboardLimiter = make({
   windowMs: 60 * 1000,

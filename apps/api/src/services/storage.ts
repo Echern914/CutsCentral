@@ -22,9 +22,11 @@ const ALLOWED: Record<string, string> = {
 /** Hard ceiling per upload. The editor downscales before sending, so this is a backstop. */
 export const MAX_UPLOAD_BYTES = 8 * 1024 * 1024; // 8 MB
 
-/** Photo "slot" on the page - only used to organize the storage path. */
-export type UploadKind = "logo" | "hero" | "gallery";
-const KINDS: readonly UploadKind[] = ["logo", "hero", "gallery"];
+/** Photo "slot" - only used to organize the storage path. "avatar" is the
+ *  owner's profile photo (account page); stored under the shop path like the
+ *  rest since every uploader is a shop owner. */
+export type UploadKind = "logo" | "hero" | "gallery" | "avatar";
+const KINDS: readonly UploadKind[] = ["logo", "hero", "gallery", "avatar"];
 
 export function isUploadKind(v: unknown): v is UploadKind {
   return typeof v === "string" && (KINDS as readonly string[]).includes(v);

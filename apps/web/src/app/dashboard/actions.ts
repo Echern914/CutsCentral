@@ -381,6 +381,56 @@ export async function updateNameAction(
   return res.ok ? { ok: true } : { error: "Could not update name." };
 }
 
+/**
+ * Save (or clear, with "") the profile photo. Called straight from the avatar
+ * picker on change - no form. Revalidates the account page + the dashboard
+ * layout (the top-bar Account link shows the thumbnail).
+ */
+export async function updateAvatarAction(
+  url: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiSend("PATCH", "/api/auth/me", { avatarUrl: url });
+  revalidatePath("/dashboard/account");
+  revalidatePath("/dashboard");
+  return res.ok ? { ok: true } : { ok: false, error: "Could not save your photo." };
+}
+
+export interface EmailChangeState {
+  ok?: boolean;
+  /** Echoed so the success copy can say which inbox to check. */
+  sentTo?: string;
+  error?: string;
+}
+
+/**
+ * Start a login-email change: the API emails the NEW address a confirmation
+ * link; nothing changes until it's clicked (see /confirm-email).
+ */
+export async function requestEmailChangeAction(
+  _prev: EmailChangeState,
+  formData: FormData,
+): Promise<EmailChangeState> {
+  const newEmail = String(formData.get("newEmail") ?? "").trim();
+  const currentPassword = String(formData.get("currentPassword") ?? "");
+  const res = await apiSend("POST", "/api/auth/change-email", {
+    newEmail,
+    ...(currentPassword ? { currentPassword } : {}),
+  });
+  if (res.ok) return { ok: true, sentTo: newEmail };
+  return {
+    error:
+      res.error === "wrong_password"
+        ? "Current password is incorrect."
+        : res.error === "same_email"
+          ? "That's already your login email."
+          : res.error === "email_unavailable"
+            ? "Email changes aren't available right now."
+            : res.status === 400
+              ? "Enter a valid email address."
+              : "Could not start the email change. Try again.",
+  };
+}
+
 export async function changePasswordAction(
   _prev: { ok?: boolean; error?: string },
   formData: FormData,

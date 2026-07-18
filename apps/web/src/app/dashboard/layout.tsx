@@ -46,6 +46,26 @@ export default async function DashboardLayout({
           {shops.length > 1 && (
             <ShopSwitcher shops={shops} activeShopId={activeShopId} />
           )}
+          {/* Personal account page. Hidden for read-only demo sessions (shared
+              account). Deliberately NOT hidden in the native app: App Store
+              5.1.1(v) requires in-app account deletion to stay reachable, and
+              it lives on this page. */}
+          {!me.data?.demo && (
+            <Link
+              href="/dashboard/account"
+              className="flex shrink-0 items-center gap-1.5 rounded-full border border-subtle px-3.5 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
+            >
+              {me.data?.avatarUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={me.data.avatarUrl}
+                  alt=""
+                  className="h-4 w-4 rounded-full object-cover"
+                />
+              )}
+              Account
+            </Link>
+          )}
           <form action={logoutAction} className="shrink-0">
             <button className="rounded-full border border-subtle px-3.5 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite">
               Sign out
