@@ -1,4 +1,55 @@
-# App Store review responses — July 2026 (round 4 on top, earlier rounds kept below)
+# App Store review responses — July 2026 (round 5 on top, earlier rounds kept below)
+
+---
+
+# ROUND 5 — Submission 06faa402 (v1.0 build 32), rejected 2026‑07‑17
+
+ONE issue: 3.1.1 "account registration feature for businesses" (same canned text;
+everything else from round 4 cleared). Branch: **`fix/appstore-round5`** (off main,
+includes everything below). Root cause: build 32's own **demo modes still advertised
+registration in‑app** — the sign‑in screen's "Explore the demo" lands on the demo
+dashboard whose ribbon showed **"Create your shop →" (/signup)**, and the guided
+tour's LAST step turns the finish button into the same **"Create your shop →"** CTA.
+An in‑app registration button that links out is exactly "access to external
+mechanisms". Two smaller leftovers: SPA navigations to /signup still rendered the
+full email signup form (the shell only Safari‑opens full document navigations), and
+the shop mini‑site's "Powered by ChairBack" footer was a live link to the marketing
+site for older shells.
+
+**Fixes (all web‑side — build 32 re‑reviews as submitted):**
+- DemoBanner "Create your shop →" hidden in‑app (flash‑proof `HideInNativeApp`).
+- DemoTour: in‑app the finish button is the neutral finish, never the signup sell.
+- /signup choke point: in‑app the form is replaced by a neutral "not available in
+  the app" card (flash‑proof); submit + Google stay disabled until the in‑app check
+  resolves (covers old shells' pre‑hydration window); login's "Create an account"
+  cross‑link and all auth wordmark home‑links (login/signup/forgot/reset) inert
+  in‑app.
+- Marketing homepage renders a neutral brand card in‑app (SPA‑nav backstop; cold
+  loads already Safari‑open). Mini‑site "Powered by ChairBack" is plain text
+  in‑app; the site‑editor preview keeps the full inert link (fidelity). Support
+  page's subscription FAQ hidden in‑app.
+- Shell (rides with the NEXT build, not required for this resubmission): /pricing
+  added to the Safari‑open set.
+
+**Reply to paste (Resolution Center, round 5):**
+
+> Hello, and thank you for the continued review. We found the remaining entry
+> points and removed them: the read‑only demo mode reachable from the app's
+> sign‑in screen displayed "Create your shop" prompts (in its banner and at the
+> end of the guided tour) that led toward our web signup. Those prompts no longer
+> exist inside the app, and our web signup page now shows a neutral notice instead
+> of a registration form whenever it is displayed inside the app. Creating an
+> account — business or otherwise — is not possible anywhere in the app, and the
+> app contains no In‑App Purchases and sells nothing. Signing in (Apple, Google,
+> or email) can only access an existing account. No binary change was required —
+> the fixes are in the web content the app displays — so build 32 can be
+> re‑reviewed as submitted.
+>
+> Thank you again for your patience.
+
+**Checklist:** merge `fix/appstore-round5` → main → verify deploy → in the app:
+"Explore the demo" shows NO "Create your shop" anywhere (banner or tour finish) →
+reply + resubmit build 32. The demo credentials/notes in ASC stay unchanged.
 
 ---
 

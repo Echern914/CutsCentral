@@ -18,6 +18,7 @@ import {
 import { DEMO } from "@chairback/config/demo";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { useSignalNativeReady } from "@/lib/nativeReady";
+import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { BackToDashboard } from "@/components/BackToDashboard";
 import { DemoTour } from "@/components/tour/DemoTour";
 import { RequestForm } from "./RequestForm";
@@ -46,6 +47,8 @@ export function ShopPageClient({
   // Clear the native app's WebView spinner (reachable from the rewards page via
   // "More from {shop}"; without this the shell waits for a ready signal forever).
   useSignalNativeReady();
+  // In-app, the powered-by footer must not link out to the marketing site (3.1.1).
+  const inApp = useIsNativeApp();
 
   const theme =
     PAGE_THEMES[(data.theme as PageThemeKey) in PAGE_THEMES ? (data.theme as PageThemeKey) : "classic"];
@@ -266,15 +269,29 @@ export function ShopPageClient({
               Book with {data.name}
             </a>
           )}
-          {/* Growth loop: every shop page quietly markets the platform. */}
-          <a
-            href={preview ? undefined : `/?ref=${encodeURIComponent(data.slug)}`}
-            onClick={preview ? (e) => e.preventDefault() : undefined}
-            className="mt-6 inline-block text-[11px] underline-offset-2 hover:underline"
-            style={{ color: theme.muted }}
-          >
-            Powered by {APP_NAME}, loyalty for your shop
-          </a>
+          {/* Growth loop: every shop page quietly markets the platform. Inside
+              the iOS app it must be INERT text - the marketing site it links to
+              leads to business signup, which is forbidden in-app (3.1.1). The
+              site-editor preview keeps the full (already inert) link so the
+              barber sees exactly what browser visitors see, even when editing
+              from inside the app. */}
+          {inApp && !preview ? (
+            <span
+              className="mt-6 inline-block text-[11px]"
+              style={{ color: theme.muted }}
+            >
+              Powered by {APP_NAME}
+            </span>
+          ) : (
+            <a
+              href={preview ? undefined : `/?ref=${encodeURIComponent(data.slug)}`}
+              onClick={preview ? (e) => e.preventDefault() : undefined}
+              className="mt-6 inline-block text-[11px] underline-offset-2 hover:underline"
+              style={{ color: theme.muted }}
+            >
+              Powered by {APP_NAME}, loyalty for your shop
+            </a>
+          )}
         </motion.footer>
       </motion.main>
     </div>

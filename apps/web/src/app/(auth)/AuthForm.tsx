@@ -7,19 +7,27 @@ import { motion } from "framer-motion";
 import { fadeUp } from "@/components/motion/variants";
 import { Card } from "@/components/ui/Card";
 import { HideInNativeApp } from "@/components/HideInNativeApp";
+import { ShowInNativeApp } from "@/components/ShowInNativeApp";
 import { FormError } from "@/components/ui/FormError";
+import { useIsNativeApp } from "@/lib/useIsNativeApp";
 
-function SubmitButton({ label }: { label: string }) {
+function SubmitButton({ label, disabled = false }: { label: string; disabled?: boolean }) {
   const { pending } = useFormStatus();
   return (
     <button
       type="submit"
-      disabled={pending}
+      disabled={pending || disabled}
       className="w-full rounded-full bg-gold-gradient px-5 py-3 text-sm font-semibold text-charcoal shadow-glow transition-all duration-200 ease-out hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
     >
       {pending ? "Please wait…" : label}
     </button>
   );
+}
+
+/** HideInNativeApp, but only when `hide` - the login card must stay in-app. */
+function HideInAppWhen({ hide, children }: { hide: boolean; children: React.ReactNode }) {
+  if (!hide) return <>{children}</>;
+  return <HideInNativeApp>{children}</HideInNativeApp>;
 }
 
 // Keep the global :focus-visible ring visible (WCAG 2.4.7): we no longer strip
@@ -57,6 +65,16 @@ export function AuthForm({
   const [state, formAction] = useFormState(action, {});
   const isSignup = mode === "signup";
   const errorText = state.error ?? initialError;
+  // App Store Guideline 3.1.1: business registration must not exist inside the
+  // iOS app shell. The shell Safari-opens document navigations to /signup, but
+  // SPA navigations and older shells still render this page - so in-app the
+  // signup CARD is replaced by a neutral notice (flash-proof via
+  // HideInNativeApp's data-native-hide on current shells), and as a belt for
+  // old shells' pre-hydration window the form's actions stay dead until we
+  // KNOW we're in a browser (submit disabled + Google href withheld while the
+  // in-app check is unresolved; on the web that's one frame - imperceptible).
+  const inApp = useIsNativeApp();
+  const signupGateUnknown = isSignup && inApp === null;
 
   return (
     <main className="relative mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center px-5">
@@ -66,9 +84,15 @@ export function AuthForm({
       />
       <motion.div variants={fadeUp} initial="hidden" animate="show">
         <p className="mb-4 text-center text-xs uppercase tracking-[0.25em] text-gold">
-          <Link href="/" className="transition-opacity duration-200 ease-out hover:opacity-80">
-            {APP_NAME}
-          </Link>
+          {/* In-app the wordmark must not lead to the marketing site (3.1.1). */}
+          <HideInNativeApp>
+            <Link href="/" className="transition-opacity duration-200 ease-out hover:opacity-80">
+              {APP_NAME}
+            </Link>
+          </HideInNativeApp>
+          <ShowInNativeApp>
+            <span>{APP_NAME}</span>
+          </ShowInNativeApp>
         </p>
         <h1 className="mb-1 text-center font-display text-3xl tracking-tight">
           {isSignup ? "Create your account" : "Welcome back"}
@@ -76,6 +100,20 @@ export function AuthForm({
         <p className="mb-6 text-center text-sm text-muted">
           {isSignup ? "Set up your shop in minutes." : "Sign in to your dashboard."}
         </p>
+        {/* In-app, /signup renders a neutral notice instead of the form: no
+            account of any kind can be created inside the app (3.1.1). */}
+        {isSignup && (
+          <ShowInNativeApp>
+            <Card className="p-6 text-center">
+              <p className="text-sm text-muted">
+                Creating a {APP_NAME} account isn&apos;t available in the app.
+                If your shop already uses {APP_NAME}, go back and sign in with
+                that account.
+              </p>
+            </Card>
+          </ShowInNativeApp>
+        )}
+        <HideInAppWhen hide={isSignup}>
         <Card className="p-6">
           {/* Hidden inside the native app: barbers sign in with Google NATIVELY
               there (Google blocks OAuth in embedded WebViews), and a web page
@@ -84,7 +122,8 @@ export function AuthForm({
           {googleAvailable && (
             <HideInNativeApp>
               <a
-                href={googleStartUrl}
+                href={signupGateUnknown ? undefined : googleStartUrl}
+                onClick={signupGateUnknown ? (e) => e.preventDefault() : undefined}
                 className="flex w-full items-center justify-center gap-2 rounded-xl border border-subtle bg-charcoal-700 px-4 py-3 text-sm font-medium text-offwhite transition-colors duration-200 ease-out hover:bg-charcoal-800"
               >
                 <GoogleGlyph />
@@ -163,7 +202,10 @@ export function AuthForm({
               {errorText}
             </FormError>
             <div className="mt-1">
-              <SubmitButton label={isSignup ? "Create account" : "Sign in"} />
+              <SubmitButton
+                label={isSignup ? "Create account" : "Sign in"}
+                disabled={signupGateUnknown}
+              />
             </div>
             {isSignup && (
               <p className="mt-1 text-center text-xs leading-relaxed text-muted">
@@ -184,6 +226,7 @@ export function AuthForm({
             )}
           </form>
         </Card>
+        </HideInAppWhen>
         <p className="mt-5 text-center text-sm text-muted">
           {isSignup ? (
             <>
@@ -193,12 +236,14 @@ export function AuthForm({
               </Link>
             </>
           ) : (
-            <>
+            // No signup steering inside the app (3.1.1) - accounts can't be
+            // created there, so the invitation would only dead-end.
+            <HideInNativeApp>
               New here?{" "}
               <Link href="/signup" className="text-gold hover:underline">
                 Create an account
               </Link>
-            </>
+            </HideInNativeApp>
           )}
         </p>
       </motion.div>
