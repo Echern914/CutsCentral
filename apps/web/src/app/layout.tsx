@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, Bricolage_Grotesque } from "next/font/google";
-import { Analytics } from "@vercel/analytics/react";
+import { Analytics } from "@vercel/analytics/next";
 import { APP_NAME } from "@chairback/config/constants";
 import { MotionConfigProvider } from "@/components/motion/MotionConfigProvider";
 import { ToastProvider } from "@/components/ui/Toast";

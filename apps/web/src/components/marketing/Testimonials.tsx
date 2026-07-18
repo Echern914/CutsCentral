@@ -50,7 +50,7 @@ export function Testimonials() {
           {TESTIMONIALS.map((t) => (
             <StaggerItem key={t.name}>
               <figure className="glass flex h-full flex-col rounded-3xl p-7">
-                <div className="flex gap-1 text-gold" aria-label="5 out of 5 stars">
+                <div className="flex gap-1 text-gold" role="img" aria-label="5 out of 5 stars">
                   {Array.from({ length: 5 }, (_, i) => (
                     <StarIcon key={i} className="h-4 w-4" />
                   ))}
