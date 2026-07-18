@@ -7,6 +7,7 @@ import { motion } from "framer-motion";
 import { fadeUp } from "@/components/motion/variants";
 import { Card } from "@/components/ui/Card";
 import { FormError } from "@/components/ui/FormError";
+import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { forgotPasswordAction } from "../passwordResetActions";
 
 function SubmitButton() {
@@ -27,6 +28,8 @@ const field =
 
 export function ForgotPasswordForm() {
   const [state, formAction] = useFormState(forgotPasswordAction, {});
+  // In-app the wordmark must not lead to the marketing site (3.1.1).
+  const inApp = useIsNativeApp();
 
   return (
     <main className="relative mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center px-5">
@@ -36,9 +39,13 @@ export function ForgotPasswordForm() {
       />
       <motion.div variants={fadeUp} initial="hidden" animate="show">
         <p className="mb-4 text-center text-xs uppercase tracking-[0.25em] text-gold">
-          <Link href="/" className="transition-opacity duration-200 ease-out hover:opacity-80">
-            {APP_NAME}
-          </Link>
+          {inApp ? (
+            <span>{APP_NAME}</span>
+          ) : (
+            <Link href="/" className="transition-opacity duration-200 ease-out hover:opacity-80">
+              {APP_NAME}
+            </Link>
+          )}
         </p>
         <h1 className="mb-1 text-center font-display text-3xl tracking-tight">
           Forgot your password?

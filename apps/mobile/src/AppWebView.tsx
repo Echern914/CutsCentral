@@ -79,7 +79,14 @@ true;
  * so those pages ALSO hide the forbidden UI themselves (HideInNativeApp); this
  * is the backstop for cold loads, server redirects, and plain <a> links.
  */
-const OPEN_EXTERNALLY_PATHS = new Set(["/", "/login", "/signup", "/forgot-password"]);
+const OPEN_EXTERNALLY_PATHS = new Set([
+  "/",
+  "/login",
+  "/signup",
+  "/forgot-password",
+  // Plan pricing page - same 3.1.1 exposure as the landing's pricing section.
+  "/pricing",
+]);
 
 function opensExternally(url: string): boolean {
   if (!url.startsWith(WEB_ORIGIN)) return false;

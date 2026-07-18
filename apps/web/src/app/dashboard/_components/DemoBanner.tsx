@@ -2,6 +2,7 @@ import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@chairback/config/constants";
 import { sessionCookieDomain } from "@/lib/sessionCookieDomain";
+import { HideInNativeApp } from "@/components/HideInNativeApp";
 
 /**
  * The read-only ribbon shown while a prospect explores the dashboard through a
@@ -34,9 +35,15 @@ export function DemoBanner() {
         You&apos;re exploring the demo shop — look anywhere, nothing saves.
       </p>
       <span className="flex items-center gap-3">
-        <a href="/signup" className="font-semibold text-gold hover:underline">
-          Create your shop →
-        </a>
+        {/* NO registration CTA inside the iOS app (Guideline 3.1.1): the app's
+            sign-in screen offers "Explore the demo", so this banner is one tap
+            from the reviewer - an in-app "create your shop" button is exactly
+            the "account registration feature" Apple rejects. Web keeps it. */}
+        <HideInNativeApp>
+          <a href="/signup" className="font-semibold text-gold hover:underline">
+            Create your shop →
+          </a>
+        </HideInNativeApp>
         <form action={exitDemo}>
           <button className="text-muted transition-colors duration-150 ease-out hover:text-offwhite">
             Exit demo

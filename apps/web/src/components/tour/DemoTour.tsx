@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { TOURS, type TourId } from "./tourPaths";
 import { readTourStep, useDemoTour, writeTourStep } from "./state";
+import { useIsNativeApp } from "@/lib/useIsNativeApp";
 
 /**
  * The guided client-experience tour: a spotlight + callout bubble walked across
@@ -40,6 +41,11 @@ export function DemoTour({
 }) {
   const router = useRouter();
   const spec = TOURS[tour];
+  // Inside the iOS app the finish button must never become a signup CTA -
+  // in-app registration steering is an App Store 3.1.1 rejection (the shell's
+  // "Explore the demo" entry lands reviewers right here). Web keeps the sell.
+  const inApp = useIsNativeApp();
+  const sellFinish = prospect && !inApp;
   const { step } = useDemoTour(tour);
   const [mounted, setMounted] = useState(false);
   const [rect, setRect] = useState<{ top: number; left: number; width: number; height: number } | null>(null);
@@ -131,9 +137,9 @@ export function DemoTour({
   const finish = useCallback(() => {
     writeTourStep(tour, null);
     router.push(
-      prospect ? (spec.prospectFinishHref ?? spec.finishHref) : spec.finishHref,
+      sellFinish ? (spec.prospectFinishHref ?? spec.finishHref) : spec.finishHref,
     );
-  }, [prospect, router, spec, tour]);
+  }, [sellFinish, router, spec, tour]);
 
   const running = mounted && step !== null && active !== null && active.route === route;
 
@@ -237,7 +243,7 @@ export function DemoTour({
             className="flex-1 rounded-xl bg-offwhite py-2 text-center text-sm font-semibold text-black transition-transform duration-200 ease-out hover:scale-[1.01]"
           >
             {isLast
-              ? prospect
+              ? sellFinish
                 ? (spec.prospectFinishLabel ?? spec.finishLabel)
                 : spec.finishLabel
               : "Next"}
