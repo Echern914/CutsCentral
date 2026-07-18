@@ -26,7 +26,24 @@ export async function GET(request: Request): Promise<Response> {
   }
   const landing = `${pathForDashboardTourRoute(DASHBOARD_TOUR_STEPS[step - 1]!.route)}?tour=${step}`;
 
-  const hasSession = Boolean(cookies().get(SESSION_COOKIE_NAME)?.value);
+  // A session only counts if the API still accepts it. Presence alone is NOT
+  // enough: the iOS app's WebView keeps this cookie for 30 days, so a stale or
+  // revoked session (logout elsewhere, account deleted, token version bumped)
+  // used to short-circuit the demo mint here - then /dashboard rejected the
+  // dead cookie and bounced to /login, which the app shell turns straight back
+  // into its native sign-in screen. Net effect: "Explore the demo" appeared to
+  // do nothing. A VALID session still keeps precedence (a signed-in barber is
+  // never silently logged out into the demo account - they get the tour on
+  // their own dashboard).
+  const existing = cookies().get(SESSION_COOKIE_NAME)?.value;
+  let hasSession = false;
+  if (existing) {
+    const me = await fetch(`${API_BASE}/api/auth/me`, {
+      headers: { Cookie: `${SESSION_COOKIE_NAME}=${existing}` },
+      cache: "no-store",
+    }).catch(() => null);
+    hasSession = Boolean(me?.ok);
+  }
   if (!hasSession) {
     const res = await fetch(`${API_BASE}/api/demo/session`, {
       method: "POST",
