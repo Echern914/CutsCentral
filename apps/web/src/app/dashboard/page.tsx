@@ -152,20 +152,24 @@ export default async function DashboardPage({
         </div>
       </div>
 
-      {/* The punch leaderboard is a rewards surface - a rewards-off shop gets
-          the settings card at full width instead of an empty column. */}
-      <div className="mt-6 grid gap-6 lg:grid-cols-2">
-        {shop.rewardsEnabled && (
-          <Leaderboard
-            leaders={leaderboard.data?.leaders ?? []}
-            seeAllHref="/dashboard/leaderboard"
-          />
-        )}
+      {/* Bottom row: Settings is a tall card, so pairing it with the short
+          Leaderboard in a rigid grid stranded a big empty column beneath the
+          leaderboard. Instead the LEFT column stacks the leaderboard (when
+          rewards are on) above the demo banner, which fills the height next to
+          Settings — no void. `items-start` keeps each card its natural height.
+          A rewards-off shop has no leaderboard, so the left column is just the
+          demo banner and Settings sits beside it. */}
+      <div className="mt-6 grid items-start gap-6 lg:grid-cols-2">
+        <div className="flex flex-col gap-6">
+          {shop.rewardsEnabled && (
+            <Leaderboard
+              leaders={leaderboard.data?.leaders ?? []}
+              seeAllHref="/dashboard/leaderboard"
+            />
+          )}
+          <ClientDemoCard />
+        </div>
         <SettingsCard settings={shop} />
-      </div>
-
-      <div className="mt-6">
-        <ClientDemoCard />
       </div>
     </main>
   );
