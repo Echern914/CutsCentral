@@ -166,8 +166,12 @@ export default async function BillingPage({
           data-tour: keep in sync with packages/config/src/demoTour.ts. */}
       <DemoTour tour="dashboard" route="billing" prospect={Boolean(me.data?.demo)} />
       <h1 className="font-display text-2xl tracking-tight">Billing</h1>
+      {/* The plan-comparison subtitle is a subscription pitch — hidden in-app
+          (App Store 3.1.1). In-app this page shows only price-free account
+          status (current plan + text usage), never the paid tiers. */}
       <p className="mb-6 mt-1 text-sm text-muted">
-        Simple tiers, no per-text surprises. Cancel anytime.
+        <HideInNativeApp>Simple tiers, no per-text surprises. Cancel anytime.</HideInNativeApp>
+        <ShowInNativeApp>Your plan and text usage.</ShowInNativeApp>
       </p>
 
       {searchParams?.checkout === "success" && (
@@ -275,11 +279,15 @@ export default async function BillingPage({
             )}
 
             {!b.compAccess && !b.hasAccess && b.billingEnabled && (
-              <div className="mt-4 rounded-2xl border border-gold/30 bg-gold/10 px-4 py-3 text-sm text-gold">
-                You&apos;re on the Free plan. Punches, your rewards page, and your
-                client book keep working. Premium adds the part that brings clients
-                back: rebooking texts and promo blasts.
-              </div>
+              // Premium-upsell copy is hidden in-app (3.1.1) — barbers see plans
+              // and upgrade on the web.
+              <HideInNativeApp>
+                <div className="mt-4 rounded-2xl border border-gold/30 bg-gold/10 px-4 py-3 text-sm text-gold">
+                  You&apos;re on the Free plan. Punches, your rewards page, and your
+                  client book keep working. Premium adds the part that brings clients
+                  back: rebooking texts and promo blasts.
+                </div>
+              </HideInNativeApp>
             )}
 
             {/* Comped shops have everything already; no billing surface. */}
@@ -332,7 +340,11 @@ export default async function BillingPage({
           {/* The plan switcher: every card carries its own state-aware action
               (current-plan chip / upgrade / checkout), so switching tiers or
               comparing them never requires hunting elsewhere on the page.
-              Prices + purchase buttons stay inside HideInNativeApp (3.1.1). */}
+              The ENTIRE tier comparison is hidden in-app, not just the prices
+              and buttons: a three-plan subscription grid — even price-free — is
+              exactly the "access to subscription mechanisms" App Store 3.1.1
+              forbids in-app. Barbers compare and pick plans on the web. */}
+          <HideInNativeApp>
           <div className="grid items-stretch gap-5 sm:grid-cols-3">
             <Card className="flex flex-col p-6">
               <div className="flex items-center justify-between gap-2">
@@ -511,6 +523,7 @@ export default async function BillingPage({
               </div>
             </Card>
           </div>
+          </HideInNativeApp>
         </div>
       )}
     </main>

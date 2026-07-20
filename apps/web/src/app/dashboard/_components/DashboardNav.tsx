@@ -33,9 +33,14 @@ export function DashboardNavLinks({
   rewardsEnabled?: boolean;
 }) {
   const pathname = usePathname();
-  // Inside the native app, hide the Billing pill: it leads to prices and the
-  // Stripe Checkout flow, which the App Store forbids in-app (Guideline 3.1.1).
-  // Barbers still manage billing in a browser. `null` (pre-hydration) = show.
+  // Inside the native app, hide the Billing pill: it leads to the plan
+  // comparison and Stripe Checkout, which the App Store forbids in-app
+  // (Guideline 3.1.1). Two layers, like HideInNativeApp: the JS filter unmounts
+  // it once hydration confirms we're in the app, AND the pill carries
+  // `data-native-hide` so the shell's first-paint CSS hides it before hydration
+  // — without that backstop the server-rendered pill FLASHED in-app on every
+  // cold WebView load (and could be caught in a screenshot). `null`
+  // (pre-hydration) keeps it in the list, hidden by that CSS in-app, shown on web.
   const inApp = useIsNativeApp();
   const baseLinks = LINKS.filter(
     (l) =>
@@ -58,6 +63,9 @@ export function DashboardNavLinks({
             key={l.href}
             href={l.href}
             aria-current={active ? "page" : undefined}
+            // First-paint backstop: the shell hides `[data-native-hide]` before
+            // hydration, so the Billing pill never flashes in-app (3.1.1).
+            data-native-hide={l.href === "/dashboard/billing" ? "" : undefined}
             className={cn(
               "rounded-full px-3.5 py-1.5 text-xs font-medium transition-colors duration-150 ease-out sm:px-4 sm:text-sm",
               active

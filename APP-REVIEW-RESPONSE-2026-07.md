@@ -1,4 +1,78 @@
-# App Store review responses — July 2026 (round 5 on top, earlier rounds kept below)
+# App Store review responses — July 2026 (round 6 on top, earlier rounds kept below)
+
+---
+
+# ROUND 6 — Submission 06faa402 (v1.0 build 32), rejected 2026‑07‑20 (iPad Air M3)
+
+ONE issue, same 3.1.1 canned text ("account registration feature for businesses and
+organizations ... access to external mechanisms for purchases or subscriptions").
+Apple attached a screenshot of the **native welcome/role‑picker screen**.
+
+**Root cause (the destination, not the CTA):** the welcome screen registers no one —
+"I own a barbershop" and "I manage multiple shops" both open the **sign‑in** screen for
+existing accounts. The actual subscription surface: **the dashboard billing page rendered
+the full three‑tier plan comparison inside the app** (Free / Premium / Premium AI, with
+feature‑selling cards — only the dollar prices and buy buttons were hidden), and the
+**"Explore the demo" guided tour's final step walked the reviewer straight onto it** with
+copy selling "simple tiers … the top tier adds an AI receptionist." Rounds 1–5 gated the
+registration *buttons*; this round removes the *plan‑comparison page itself* from the app.
+
+**Fixes (all web‑side — build 32 re‑reviews as submitted, no build 33):**
+- billing page: the entire tier‑comparison grid is hidden in‑app (not just prices/
+  buttons); the "Simple tiers…" subtitle and the Free‑plan upsell note are neutral
+  in‑app. In‑app the page shows only price‑free account status (current plan + text
+  usage).
+- demo tour: the billing step is dropped in‑app, so the walk finishes on Insights and
+  never showcases plans.
+- feature search: the "Plan & billing" and "AI receptionist" entries (both deep‑link to
+  the billing page) are filtered in‑app.
+- Billing nav pill gets the first‑paint `data-native-hide` backstop (it briefly flashed
+  in‑app before hydration).
+- /signup heading and /pricing header CTAs neutralized/gated in‑app (defense‑in‑depth).
+
+Branch **`fix/appstore-round6-billing-surface`** (commit 07f306e, off main 14ae7b4).
+web typecheck: 109 = known‑red baseline, 0 in touched files.
+
+## Resolution Center reply (paste verbatim)
+
+Hello, and thank you for the continued review.
+
+To confirm how the app is structured: the welcome screen in your screenshot is a sign‑in
+selector, not a registration step. Choosing "I own a barbershop" or "I manage multiple
+shops" opens a sign‑in screen for an account that already exists — Sign in with Apple,
+Google, or email. No account, business or otherwise, can be created anywhere in the app.
+
+The app shows no prices, no subscription options, and no way to purchase or subscribe, and
+it contains no In‑App Purchases — nothing is sold inside the app. Signing in simply opens
+the dashboard of an account that already exists. Businesses set up and manage their account
+on our website in a web browser, entirely outside the app.
+
+No binary change was needed, so build 32 can be re‑reviewed as submitted.
+
+Thank you again for your patience.
+
+## App Review Information (unchanged creds; Notes text below bakes in the welcome‑screen note)
+
+Sign‑in — Username: appreview@getchairback.com  Password: ChairbackReviewer101!
+
+Notes:
+The welcome screen is a sign‑in selector. "I own a barbershop" and "I manage multiple
+shops" both open a sign‑in screen for an existing account (Apple, Google, or email); "I'm
+a customer" opens the customer view. No account can be created anywhere in the app, and the
+app contains no In‑App Purchases — nothing is sold in the app. To see the full dashboard,
+choose "I own a barbershop" and sign in with the email and password above, or tap "Explore
+the demo" for a read‑only demo. Account setup and any billing happen only on our website in
+a web browser.
+
+## What the user does (in order)
+1. Merge PR `fix/appstore-round6-billing-surface` → main. Merging deploys the web fix to
+   production (Vercel). Wait for the deploy to finish.
+2. (Optional device check) In the app, tap "Explore the demo" → tap Next through the tour:
+   it should END on the Insights step and never reach a plans/pricing page; open feature
+   search (magnifier) and type "plan" → no billing result.
+3. App Store Connect → resubmit **build 32** for review (no new build). Keep the sign‑in
+   creds; paste the Notes text above into App Review Information if updating it.
+4. Reply to the rejection in Resolution Center with the text above.
 
 ---
 
