@@ -46,6 +46,14 @@ export function DemoTour({
   // "Explore the demo" entry lands reviewers right here). Web keeps the sell.
   const inApp = useIsNativeApp();
   const sellFinish = prospect && !inApp;
+  // Inside the iOS app the dashboard tour must never walk onto the billing/plan
+  // page: a subscription-tier surface reached via the tour is exactly what App
+  // Store 3.1.1 rejects (this is the "Explore the demo" reviewer path). Drop the
+  // billing step so the in-app walk finishes on Insights instead. `null`
+  // (pre-hydration) keeps the full list; the billing page hides its own tiers
+  // in-app regardless, so a pre-hydration landing there shows nothing to sell.
+  const steps =
+    inApp === true ? spec.steps.filter((s) => s.route !== "billing") : spec.steps;
   const { step } = useDemoTour(tour);
   const [mounted, setMounted] = useState(false);
   const [rect, setRect] = useState<{ top: number; left: number; width: number; height: number } | null>(null);
@@ -62,21 +70,21 @@ export function DemoTour({
     const raw = new URLSearchParams(window.location.search).get("tour");
     if (raw === null) return;
     const n = Number(raw);
-    if (Number.isInteger(n) && n >= 1 && n <= spec.steps.length && n !== readTourStep(tour)) {
+    if (Number.isInteger(n) && n >= 1 && n <= steps.length && n !== readTourStep(tour)) {
       writeTourStep(tour, n);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const active = step === null ? null : spec.steps[step - 1] ?? null;
+  const active = step === null ? null : steps[step - 1] ?? null;
 
   // If the running step belongs to another page (viewer clicked a real link
   // mid-tour), follow them: jump to this page's first step.
   useEffect(() => {
     if (!active || active.route === route) return;
-    const first = spec.steps.findIndex((s) => s.route === route);
+    const first = steps.findIndex((s) => s.route === route);
     if (first !== -1) writeTourStep(tour, first + 1);
-  }, [active, route, spec, tour]);
+  }, [active, route, steps, tour]);
 
   // Track the anchor's rect every frame while the tour runs. The client pages
   // stagger-animate sections into place (springs, not fixed durations), so a
@@ -116,14 +124,14 @@ export function DemoTour({
 
   const go = useCallback(
     (n: number) => {
-      const target = spec.steps[n - 1];
+      const target = steps[n - 1];
       if (!target) return;
       writeTourStep(tour, n);
       if (target.route !== route) {
         router.push(`${spec.pathFor(target.route)}?tour=${n}`);
       }
     },
-    [route, router, spec, tour],
+    [route, router, spec, steps, tour],
   );
 
   const end = useCallback(() => {
@@ -164,7 +172,7 @@ export function DemoTour({
   if (!running || step === null || !active) return null;
 
   const isFirst = step === 1;
-  const isLast = step === spec.steps.length;
+  const isLast = step === steps.length;
   const pad = 6;
 
   return createPortal(
@@ -199,7 +207,7 @@ export function DemoTour({
         // aria-modal/focus trap — but the bubble needs dialog semantics, a
         // name, and to receive focus per step (see the focus effect above).
         role="dialog"
-        aria-label={`${spec.label} tour, step ${step} of ${spec.steps.length}: ${active.title}`}
+        aria-label={`${spec.label} tour, step ${step} of ${steps.length}: ${active.title}`}
         tabIndex={-1}
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
@@ -209,7 +217,7 @@ export function DemoTour({
       >
         <div className="flex items-center justify-between gap-3">
           <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-gold">
-            {spec.label} · {step} of {spec.steps.length}
+            {spec.label} · {step} of {steps.length}
           </p>
           <button
             type="button"
@@ -224,7 +232,7 @@ export function DemoTour({
         <div className="mt-2 h-0.5 w-full overflow-hidden rounded-full bg-white/10" aria-hidden>
           <div
             className="h-full rounded-full bg-gold transition-all duration-200 ease-out"
-            style={{ width: `${(step / spec.steps.length) * 100}%` }}
+            style={{ width: `${(step / steps.length) * 100}%` }}
           />
         </div>
         <div className="mt-3 flex items-center gap-2">

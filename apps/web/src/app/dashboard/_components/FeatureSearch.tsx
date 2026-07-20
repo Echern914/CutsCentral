@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { FEATURE_INDEX, type FeatureIndexEntry } from "@chairback/config/features";
+import { useIsNativeApp } from "@/lib/useIsNativeApp";
 
 /**
  * The dashboard's feature finder: a magnifier in the nav (or Ctrl/Cmd-K) opens
@@ -17,6 +18,17 @@ import { FEATURE_INDEX, type FeatureIndexEntry } from "@chairback/config/feature
  */
 export function FeatureSearch() {
   const router = useRouter();
+  // Inside the iOS app, drop the plan/billing entries ("Plan & billing", "AI
+  // receptionist") — both deep-link to /dashboard/billing, and this palette
+  // navigates with router.push (an SPA nav the native shell can't intercept),
+  // so an unfiltered entry is a back-door onto the subscription page the App
+  // Store forbids in-app (Guideline 3.1.1). `null` (pre-hydration) shows all,
+  // but the palette only opens on a tap, by which point the check has resolved.
+  const inApp = useIsNativeApp();
+  const index = useMemo(
+    () => (inApp ? FEATURE_INDEX.filter((f) => f.href !== "/dashboard/billing") : FEATURE_INDEX),
+    [inApp],
+  );
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
@@ -80,8 +92,8 @@ export function FeatureSearch() {
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return FEATURE_INDEX;
-    const scored = FEATURE_INDEX.map((f) => {
+    if (!q) return index;
+    const scored = index.map((f) => {
       const name = f.name.toLowerCase();
       let score = 0;
       if (name.startsWith(q)) score = 4;
@@ -95,7 +107,7 @@ export function FeatureSearch() {
       .filter((r) => r.score > 0)
       .sort((a, b) => b.score - a.score)
       .map((r) => r.f);
-  }, [query]);
+  }, [query, index]);
 
   const go = useCallback(
     (href: string) => {

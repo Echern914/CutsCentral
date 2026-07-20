@@ -3,6 +3,7 @@ import Link from "next/link";
 import { APP_NAME, BILLING, PLANS } from "@chairback/config/constants";
 import { PricingSection } from "@/components/marketing/PricingSection";
 import { ScissorsMark } from "@/components/marketing/PunchCardDemo";
+import { HideInNativeApp } from "@/components/HideInNativeApp";
 
 /**
  * Standalone pricing page - what people type and what ads deep-link to.
@@ -47,20 +48,26 @@ export default function PricingPage() {
             <ScissorsMark className="h-4 w-4 text-gold" />
             <span className="font-display text-base tracking-tight">{APP_NAME}</span>
           </Link>
-          <div className="flex items-center gap-2">
-            <Link
-              href="/login"
-              className="rounded-full px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite"
-            >
-              Sign in
-            </Link>
-            <Link
-              href="/signup"
-              className="rounded-full bg-gold-gradient px-4 py-2 text-sm font-semibold text-charcoal shadow-glow-sm transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow hover:brightness-105"
-            >
-              Get started
-            </Link>
-          </div>
+          {/* Sign-in / Get-started are hidden in-app (3.1.1): build 32's shell
+              renders /pricing inside the WebView, and "Get started" → /signup is
+              a business-registration entry. No in-app surface links here, but
+              gating keeps the page safe-by-construction if one ever does. */}
+          <HideInNativeApp>
+            <div className="flex items-center gap-2">
+              <Link
+                href="/login"
+                className="rounded-full px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite"
+              >
+                Sign in
+              </Link>
+              <Link
+                href="/signup"
+                className="rounded-full bg-gold-gradient px-4 py-2 text-sm font-semibold text-charcoal shadow-glow-sm transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow hover:brightness-105"
+              >
+                Get started
+              </Link>
+            </div>
+          </HideInNativeApp>
         </nav>
       </header>
 

@@ -95,10 +95,26 @@ export function AuthForm({
           </ShowInNativeApp>
         </p>
         <h1 className="mb-1 text-center font-display text-3xl tracking-tight">
-          {isSignup ? "Create your account" : "Welcome back"}
+          {isSignup ? (
+            // In-app the heading must not read as business registration (3.1.1)
+            // — the neutral notice below explains sign-up lives on the web.
+            <>
+              <HideInNativeApp>Create your account</HideInNativeApp>
+              <ShowInNativeApp>Welcome to {APP_NAME}</ShowInNativeApp>
+            </>
+          ) : (
+            "Welcome back"
+          )}
         </h1>
         <p className="mb-6 text-center text-sm text-muted">
-          {isSignup ? "Set up your shop in minutes." : "Sign in to your dashboard."}
+          {isSignup ? (
+            <>
+              <HideInNativeApp>Set up your shop in minutes.</HideInNativeApp>
+              <ShowInNativeApp>Sign in from the app with an account you already have.</ShowInNativeApp>
+            </>
+          ) : (
+            "Sign in to your dashboard."
+          )}
         </p>
         {/* In-app, /signup renders a neutral notice instead of the form: no
             account of any kind can be created inside the app (3.1.1). */}
