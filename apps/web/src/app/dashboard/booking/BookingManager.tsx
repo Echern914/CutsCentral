@@ -627,22 +627,37 @@ function ServicesTab({
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
-        <NumberField
-          className={field}
-          min={5}
-          integer
-          placeholder="Minutes"
-          value={duration}
-          onChange={setDuration}
-        />
-        <input
-          className={field}
-          type="number"
-          min={0}
-          placeholder="Price ($)"
-          value={price}
-          onChange={(e) => setPrice(e.target.value)}
-        />
+        {/* Minutes — persistent "min" suffix so the unit shows even after a
+            value is typed (the placeholder alone vanished on input). */}
+        <div className="relative">
+          <NumberField
+            className={`${field} pr-11`}
+            min={5}
+            integer
+            placeholder="Length"
+            value={duration}
+            onChange={setDuration}
+            aria-label="Service length in minutes"
+          />
+          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted">
+            min
+          </span>
+        </div>
+        {/* Price — persistent "$" prefix, same reasoning. */}
+        <div className="relative">
+          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted">
+            $
+          </span>
+          <input
+            className={`${field} pl-7`}
+            type="number"
+            min={0}
+            placeholder="Price"
+            value={price}
+            onChange={(e) => setPrice(e.target.value)}
+            aria-label="Price in dollars"
+          />
+        </div>
       </div>
       {activeStaff.length > 0 && (
         <div className="mt-3">
