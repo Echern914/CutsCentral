@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Card } from "@/components/ui/Card";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { cn } from "@/lib/cn";
+import { serviceColorHex } from "@chairback/config/constants";
 import type { AgendaResponse, AgendaRow, ServiceRow, StaffRow, WaitlistRow } from "./page";
 import {
   applyRewardAction,
@@ -783,12 +784,17 @@ function AppointmentBlock({
     });
   }
 
+  // Service color-coding: a left accent stripe (and a dot by the service name).
+  // Falls back to the default subtle border when the service has no color.
+  const colorHex = serviceColorHex(row.serviceColor);
   return (
     <div
       className={cn(
         "rounded-lg border border-subtle bg-charcoal-800/40 px-3 py-2",
+        colorHex && "border-l-4",
         row.status === "canceled" && "opacity-60",
       )}
+      style={colorHex ? { borderLeftColor: colorHex } : undefined}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
@@ -804,10 +810,19 @@ function AppointmentBlock({
               </span>
             )}
           </p>
-          {/* The haircut / service type + price. */}
-          <p className="mt-0.5 truncate text-xs text-muted">
-            {row.serviceName ?? "Appointment"}
-            {row.price != null && ` · $${row.price.toFixed(0)}`}
+          {/* The haircut / service type + price, with a color dot when set. */}
+          <p className="mt-0.5 flex items-center gap-1.5 truncate text-xs text-muted">
+            {colorHex && (
+              <span
+                aria-hidden
+                className="inline-block h-2 w-2 shrink-0 rounded-full"
+                style={{ backgroundColor: colorHex }}
+              />
+            )}
+            <span className="truncate">
+              {row.serviceName ?? "Appointment"}
+              {row.price != null && ` · $${row.price.toFixed(0)}`}
+            </span>
           </p>
         </div>
         <span

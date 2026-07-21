@@ -49,6 +49,8 @@ export interface ServiceRow {
   // "Mondays only 10:00-14:00"). Weekday absent = unrestricted; [] = closed that
   // day. {} = no restriction on any day (the default).
   hoursWindows: Record<string, { s: number; e: number }[]>;
+  // Calendar color-coding: a SERVICE_COLORS key, or null for no color.
+  color: string | null;
   // True = offered by every active barber, kept in sync as staff change (staffIds
   // still lists the current concrete set). False = the hand-picked staffIds.
   offeredByAll: boolean;
@@ -80,6 +82,7 @@ export interface AgendaRow {
   end: string | null; // ISO
   clientName: string; // for a block: the reason (or "Blocked")
   serviceName: string | null;
+  serviceColor: string | null; // SERVICE_COLORS key for the calendar accent
   price: number | null;
   status: "pending" | "upcoming" | "completed" | "canceled" | "no_show" | "blocked";
   // Non-null = part of a recurring series (drives the ↻ badge + cancel-scope menu).

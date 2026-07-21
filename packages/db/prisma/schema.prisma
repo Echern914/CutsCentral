@@ -998,6 +998,11 @@ model Service {
   // deliberate overrides and are NOT restricted. See engines/slots.ts
   // (computeOpenSlots) and engines/pricing.ts (parseServiceHours).
   hoursWindows   Json     @default("{}")
+  // Calendar color-coding: one of the SERVICE_COLORS keys (packages/config), or
+  // null for no color. Stored as the KEY (not hex) so the palette can be
+  // re-tuned without a migration. Purely cosmetic - drives the accent stripe on
+  // the barber's appointment blocks.
+  color          String?
   // "Offered by every barber" as a LIVE intent, not a snapshot. When true, the
   // ServiceStaff join is kept materialized to all currently-active staff: creating
   // or reactivating a barber auto-links them to this service, so "all" genuinely

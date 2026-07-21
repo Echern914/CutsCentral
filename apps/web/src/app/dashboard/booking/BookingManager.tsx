@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
+import { SERVICE_COLORS, SERVICE_COLOR_KEYS } from "@chairback/config/constants";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { FormError } from "@/components/ui/FormError";
 import { NumberField } from "@/components/ui/NumberField";
@@ -43,6 +44,56 @@ const tabs = ["Settings", "Staff", "Services", "Hours", "Appointments"] as const
 type Tab = (typeof tabs)[number];
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/**
+ * Curated color picker for a service's calendar color. A row of swatches from
+ * SERVICE_COLORS + a "None" option; the selected one gets a ring. Stores the
+ * palette KEY (or null). Used in the service editor.
+ */
+function ColorSwatchPicker({
+  value,
+  onChange,
+}: {
+  value: string | null;
+  onChange: (next: string | null) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        onClick={() => onChange(null)}
+        title="No color"
+        aria-label="No color"
+        aria-pressed={value === null}
+        className={cn(
+          "grid h-7 w-7 place-items-center rounded-full border border-subtle text-[10px] text-muted transition-transform",
+          value === null ? "ring-2 ring-gold ring-offset-2 ring-offset-charcoal-800" : "hover:scale-110",
+        )}
+      >
+        ✕
+      </button>
+      {SERVICE_COLOR_KEYS.map((key) => {
+        const c = SERVICE_COLORS[key];
+        const selected = value === key;
+        return (
+          <button
+            key={key}
+            type="button"
+            onClick={() => onChange(key)}
+            title={c.label}
+            aria-label={c.label}
+            aria-pressed={selected}
+            style={{ backgroundColor: c.hex }}
+            className={cn(
+              "h-7 w-7 rounded-full transition-transform",
+              selected ? "ring-2 ring-gold ring-offset-2 ring-offset-charcoal-800" : "hover:scale-110",
+            )}
+          />
+        );
+      })}
+    </div>
+  );
+}
 
 export function BookingManager({
   shop,
@@ -792,6 +843,8 @@ function ServiceEditForm({
   const [staffIds, setStaffIds] = useState<string[]>(
     service.offeredByAll ? activeStaff.map((s) => s.id) : (service.staffIds ?? []),
   );
+  // Calendar color (a SERVICE_COLORS key, or null = no color).
+  const [color, setColor] = useState<string | null>(service.color ?? null);
   // Per-service available-hours rows (one window/day in v1), seeded from storage.
   const [hoursRows, setHoursRows] = useState<ServiceHoursRow[]>(() =>
     hoursRowsFromWindows(service.hoursWindows),
@@ -864,6 +917,7 @@ function ServiceEditForm({
         priceOverrides: buildPriceOverrides(dayPrices),
         durationOverrides: buildDurationOverrides(dayDurations),
         hoursWindows: buildHoursWindows(hoursRows),
+        color,
         // offeredByAll wins server-side; send staffIds only for the hand-picked
         // case so a later-added barber is auto-included when "all" is chosen.
         offeredByAll,
@@ -940,6 +994,15 @@ function ServiceEditForm({
             </div>
           </div>
         )}
+
+        {/* Calendar color: tints this service's appointment blocks so the day
+            view is scannable by cut type. */}
+        <div>
+          <span className={labelCls}>Calendar color</span>
+          <div className="mt-1.5">
+            <ColorSwatchPicker value={color} onChange={setColor} />
+          </div>
+        </div>
 
         {/* Per-day price/duration overrides (same idiom as the add form). */}
         <VaryByDayEditor
