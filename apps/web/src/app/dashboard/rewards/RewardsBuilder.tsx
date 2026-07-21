@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
+import { NumberField } from "@/components/ui/NumberField";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
 import type { LoyaltyConfig } from "./page";
@@ -278,12 +279,12 @@ function RewardForm({
         </label>
         <label className="text-xs text-muted">
           Punch cost
-          <input
-            type="number"
+          <NumberField
             min={1}
             max={100}
+            integer
             value={punchCost}
-            onChange={(e) => setPunchCost(Number(e.target.value))}
+            onChange={setPunchCost}
             className={`mt-1 ${field}`}
           />
         </label>
@@ -449,12 +450,12 @@ function Earning({
             </label>
             <label className="w-28 text-xs text-muted">
               Earns
-              <input
-                type="number"
+              <NumberField
                 min={1}
                 max={20}
+                integer
                 value={punches}
-                onChange={(e) => setPunches(Number(e.target.value))}
+                onChange={setPunches}
                 className={`mt-1 ${field}`}
               />
             </label>
