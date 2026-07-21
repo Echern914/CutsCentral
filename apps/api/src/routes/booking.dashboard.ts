@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { randomToken } from "@chairback/config";
+import { randomToken, SERVICE_COLOR_KEYS } from "@chairback/config";
 import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import {
@@ -84,6 +84,12 @@ const serviceSchema = z
     hoursWindows: hoursWindowsSchema,
     price: z.number().min(0).max(100000).nullable().optional(),
     priceOverrides: priceOverridesSchema,
+    // Calendar color: one of the palette keys, or null to clear. Validated
+    // against the known keys so a bad value can't land in the column.
+    color: z
+      .enum(SERVICE_COLOR_KEYS as [string, ...string[]])
+      .nullable()
+      .optional(),
     active: z.boolean().optional(),
     sortOrder: z.number().int().min(0).max(1000).optional(),
     // "Offered by every barber" as a live intent. When true, staffIds is ignored
@@ -132,6 +138,7 @@ bookingDashboardRouter.post("/services", async (req, res) => {
       // schemas already constrained them to known weekday keys + valid values.
       durationOverrides: d.durationOverrides ?? {},
       hoursWindows: d.hoursWindows ?? {},
+      color: d.color ?? null,
       price: d.price ?? null,
       priceOverrides: d.priceOverrides ?? {},
       active: d.active ?? true,
@@ -167,6 +174,7 @@ bookingDashboardRouter.patch("/services/:id", async (req, res) => {
         ? { durationOverrides: d.durationOverrides }
         : {}),
       ...(d.hoursWindows !== undefined ? { hoursWindows: d.hoursWindows } : {}),
+      ...(d.color !== undefined ? { color: d.color } : {}),
       ...(d.price !== undefined ? { price: d.price } : {}),
       ...(d.priceOverrides !== undefined ? { priceOverrides: d.priceOverrides } : {}),
       ...(d.active !== undefined ? { active: d.active } : {}),
@@ -672,6 +680,9 @@ interface AgendaRow {
   end: string | null; // ISO
   clientName: string; // for a block: the reason (or "Blocked")
   serviceName: string | null;
+  // Palette key for calendar color-coding; null when the service has no color
+  // (or the row is a synced visit / block). See SERVICE_COLORS.
+  serviceColor: string | null;
   price: number | null;
   status: AgendaStatus;
   // Non-null when this occurrence is part of a recurring series (native only).
@@ -740,7 +751,7 @@ type ApptAgendaRow = {
   checkInStatus: string | null;
   etaMinutes: number | null;
   runningLate: boolean;
-  service: { name: string } | null;
+  service: { name: string; color: string | null } | null;
 };
 type VisitAgendaRow = {
   id: string;
@@ -797,7 +808,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         checkInStatus: true,
         etaMinutes: true,
         runningLate: true,
-        service: { select: { name: true } },
+        service: { select: { name: true, color: true } },
       },
     })) as unknown as ApptAgendaRow[];
 
@@ -890,6 +901,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       end: a.endsAt.toISOString(),
       clientName: fullName(a.firstName, a.lastName),
       serviceName: a.service?.name ?? null,
+      serviceColor: a.service?.color ?? null,
       price: a.priceAtBooking == null ? null : Number(a.priceAtBooking),
       status: APPT_STATUS[a.status] ?? "upcoming",
       seriesId: a.seriesId,
@@ -931,6 +943,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         end: b.endsAt.toISOString(),
         clientName: b.reason || "Blocked",
         serviceName: null,
+        serviceColor: null,
         price: null,
         status: "blocked",
         seriesId: null,
@@ -969,6 +982,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       end: v.endAt ? v.endAt.toISOString() : null,
       clientName: fullName(v.client?.firstName ?? null, v.client?.lastName ?? null),
       serviceName: v.serviceName ?? null,
+      serviceColor: null, // Visits have no linked Service row (synced shops).
       price: v.price == null ? null : Number(v.price),
       status: VISIT_STATUS[v.status] ?? "upcoming",
       seriesId: null,

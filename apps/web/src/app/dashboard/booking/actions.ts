@@ -108,6 +108,7 @@ export async function createServiceAction(input: {
   hoursWindows?: ServiceHoursWindows;
   price?: number | null;
   priceOverrides?: Record<string, number>;
+  color?: string | null;
   offeredByAll?: boolean;
   staffIds?: string[];
 }): Promise<Result> {
@@ -125,7 +126,8 @@ export async function updateServiceAction(
     price?: number | null;
     priceOverrides?: Record<string, number>;
     active?: boolean;
-    offeredByAll?: boolean;
+    color?: string | null;
+  offeredByAll?: boolean;
     staffIds?: string[];
   },
 ): Promise<Result> {

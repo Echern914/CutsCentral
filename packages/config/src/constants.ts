@@ -125,6 +125,37 @@ export type LoyaltyTierKey = keyof typeof LOYALTY_TIERS;
 
 export const LOYALTY_TIER_KEYS = Object.keys(LOYALTY_TIERS) as LoyaltyTierKey[];
 
+/**
+ * Curated palette for color-coding services on the barber's calendar. The
+ * barber picks one per service (Service.color stores the KEY, not the hex, so
+ * the palette can be re-tuned without a data migration). Each `hex` is chosen to
+ * read clearly as a solid accent (a left stripe + dot on the appointment block)
+ * against the dark charcoal calendar - saturated enough to tell apart at a
+ * glance, not so bright it fights the text. `label` is the picker tooltip. null
+ * on a service = no color (the block renders with the default subtle border).
+ */
+export const SERVICE_COLORS = {
+  slate: { label: "Slate", hex: "#64748B" },
+  red: { label: "Red", hex: "#EF4444" },
+  orange: { label: "Orange", hex: "#F97316" },
+  amber: { label: "Amber", hex: "#F59E0B" },
+  green: { label: "Green", hex: "#22C55E" },
+  teal: { label: "Teal", hex: "#14B8A6" },
+  blue: { label: "Blue", hex: "#3B82F6" },
+  violet: { label: "Violet", hex: "#8B5CF6" },
+  pink: { label: "Pink", hex: "#EC4899" },
+} as const;
+
+export type ServiceColorKey = keyof typeof SERVICE_COLORS;
+
+export const SERVICE_COLOR_KEYS = Object.keys(SERVICE_COLORS) as ServiceColorKey[];
+
+/** The hex for a stored service-color key, or null for an unknown/absent key. */
+export function serviceColorHex(key: string | null | undefined): string | null {
+  if (!key) return null;
+  return (SERVICE_COLORS as Record<string, { hex: string }>)[key]?.hex ?? null;
+}
+
 /** The loyalty tier a client earns at a given lifetime completed-visit count (or null). */
 export function loyaltyTierForVisits(completedVisits: number): LoyaltyTierKey | null {
   let earned: LoyaltyTierKey | null = null;
