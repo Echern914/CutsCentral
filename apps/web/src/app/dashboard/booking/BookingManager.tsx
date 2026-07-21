@@ -19,6 +19,7 @@ import type {
 import { BookingCalendar } from "./BookingCalendar";
 import { ConnectPlatforms } from "./ConnectPlatforms";
 import { Sheet } from "./AppointmentForm";
+import { TimeSelect } from "@/components/ui/TimeSelect";
 import {
   createAddOnAction,
   createServiceAction,
@@ -997,21 +998,19 @@ function ServiceEditForm({
                   />
                   {WEEKDAYS[i]}
                 </label>
-                <input
-                  type="time"
+                <TimeSelect
                   disabled={!r.restricted}
                   value={r.start}
-                  onChange={(e) => setHoursRow(i, { start: e.target.value })}
-                  className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-sm disabled:opacity-40"
+                  onChange={(v) => setHoursRow(i, { start: v })}
+                  className={timeSelectCls}
                   aria-label={`${WEEKDAYS[i]} available from`}
                 />
                 <span className="text-muted">–</span>
-                <input
-                  type="time"
+                <TimeSelect
                   disabled={!r.restricted}
                   value={r.end}
-                  onChange={(e) => setHoursRow(i, { end: e.target.value })}
-                  className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-sm disabled:opacity-40"
+                  onChange={(v) => setHoursRow(i, { end: v })}
+                  className={timeSelectCls}
                   aria-label={`${WEEKDAYS[i]} available until`}
                 />
               </div>
@@ -1377,29 +1376,81 @@ function AddOnsManager({
 
 //  Hours (weekly availability per staff)
 
+// A recurring weekly break within a weekday (HH:MM strings for the pickers).
+type HourBreak = { start: string; end: string; reason: string };
+type HourRow = { on: boolean; start: string; end: string; breaks: HourBreak[] };
+
+const timeSelectCls =
+  "rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-sm text-offwhite disabled:opacity-40";
+
 function HoursTab({ staff, toast }: { staff: StaffRow[]; toast: Toast }) {
   const activeStaff = staff.filter((s) => s.active);
   const [selected, setSelected] = useState<string>(activeStaff[0]?.id ?? "");
-  // Per-weekday on/off + start/end (HH:MM strings). Loaded when a staff is picked.
-  const [rows, setRows] = useState<
-    { on: boolean; start: string; end: string }[]
-  >(() => WEEKDAYS.map(() => ({ on: false, start: "09:00", end: "17:00" })));
+  // Per-weekday on/off + start/end + recurring breaks. Loaded when a staff is picked.
+  const [rows, setRows] = useState<HourRow[]>(() =>
+    WEEKDAYS.map(() => ({ on: false, start: "09:00", end: "17:00", breaks: [] })),
+  );
   const [loaded, setLoaded] = useState(false);
   const [pending, start] = useTransition();
+
+  function patchRow(i: number, patch: Partial<HourRow>) {
+    setRows((cur) => cur.map((c, j) => (j === i ? { ...c, ...patch } : c)));
+  }
+  function addBreak(i: number) {
+    setRows((cur) =>
+      cur.map((c, j) =>
+        j === i
+          ? { ...c, breaks: [...c.breaks, { start: "12:00", end: "13:00", reason: "" }] }
+          : c,
+      ),
+    );
+  }
+  function patchBreak(i: number, bi: number, patch: Partial<HourBreak>) {
+    setRows((cur) =>
+      cur.map((c, j) =>
+        j === i
+          ? { ...c, breaks: c.breaks.map((b, k) => (k === bi ? { ...b, ...patch } : b)) }
+          : c,
+      ),
+    );
+  }
+  function removeBreak(i: number, bi: number) {
+    setRows((cur) =>
+      cur.map((c, j) => (j === i ? { ...c, breaks: c.breaks.filter((_, k) => k !== bi) } : c)),
+    );
+  }
 
   function load(id: string) {
     setSelected(id);
     setLoaded(false);
     start(async () => {
       const r = await getAvailabilityAction(id);
-      const next = WEEKDAYS.map(() => ({ on: false, start: "09:00", end: "17:00" }));
+      const next: HourRow[] = WEEKDAYS.map(() => ({
+        on: false,
+        start: "09:00",
+        end: "17:00",
+        breaks: [],
+      }));
       if (r.ok && r.data) {
         for (const rule of r.data.rules) {
           next[rule.weekday] = {
+            ...next[rule.weekday]!,
             on: true,
             start: minToHHMM(rule.startMin),
             end: minToHHMM(rule.endMin),
           };
+        }
+        // Recurring breaks bucket onto their weekday (turn the day on too, so a
+        // break isn't stranded on an unchecked - and therefore closed - day).
+        for (const b of r.data.recurringBlocks) {
+          const row = next[b.weekday];
+          if (!row) continue;
+          row.on = true;
+          row.breaks.push({
+            start: minToHHMM(b.startMin),
+            end: minToHHMM(b.endMin),
+            reason: b.reason ?? "",
+          });
         }
       }
       setRows(next);
@@ -1414,11 +1465,34 @@ function HoursTab({ staff, toast }: { staff: StaffRow[]; toast: Toast }) {
       )
       .filter((x): x is { weekday: number; startMin: number; endMin: number } => x !== null);
     if (rules.some((r) => r.endMin <= r.startMin)) {
-      toast("End time must be after start time", "error");
+      toast("Each day's end time must be after its start time", "error");
+      return;
+    }
+    // Only breaks on ENABLED days are meaningful (a break on a closed day
+    // subtracts from nothing).
+    const recurringBlocks: {
+      weekday: number;
+      startMin: number;
+      endMin: number;
+      reason?: string;
+    }[] = [];
+    for (const [weekday, r] of rows.entries()) {
+      if (!r.on) continue;
+      for (const b of r.breaks) {
+        recurringBlocks.push({
+          weekday,
+          startMin: hhmmToMin(b.start),
+          endMin: hhmmToMin(b.end),
+          reason: b.reason.trim() || undefined,
+        });
+      }
+    }
+    if (recurringBlocks.some((b) => b.endMin <= b.startMin)) {
+      toast("Each break's end time must be after its start time", "error");
       return;
     }
     start(async () => {
-      const r = await saveAvailabilityAction(selected, rules);
+      const r = await saveAvailabilityAction(selected, rules, recurringBlocks);
       toast(r.ok ? "Hours saved" : "Couldn't save", r.ok ? "success" : "error");
     });
   }
@@ -1431,7 +1505,10 @@ function HoursTab({ staff, toast }: { staff: StaffRow[]; toast: Toast }) {
 
   return (
     <Card className="p-5">
-      <CardHeader title="Weekly hours" subtitle="When each staff member is available to book." />
+      <CardHeader
+        title="Weekly hours"
+        subtitle="When each staff member is available to book — and any recurring breaks."
+      />
       <div className="mt-3 flex flex-wrap gap-2">
         {activeStaff.map((s) => (
           <button
@@ -1453,44 +1530,85 @@ function HoursTab({ staff, toast }: { staff: StaffRow[]; toast: Toast }) {
         <p className="mt-4 text-sm text-muted">Pick a staff member to edit their hours.</p>
       ) : (
         <>
-          <div className="mt-4 flex flex-col gap-2">
+          <div className="mt-4 flex flex-col gap-3">
             {rows.map((r, i) => (
-              <div key={i} className="flex items-center gap-3">
-                <label className="flex w-20 items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={r.on}
-                    onChange={(e) =>
-                      setRows((cur) =>
-                        cur.map((c, j) => (j === i ? { ...c, on: e.target.checked } : c)),
-                      )
-                    }
+              <div key={i} className="rounded-lg border border-subtle/60 p-2.5">
+                <div className="flex items-center gap-3">
+                  <label className="flex w-20 items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={r.on}
+                      onChange={(e) => patchRow(i, { on: e.target.checked })}
+                    />
+                    {WEEKDAYS[i]}
+                  </label>
+                  <TimeSelect
+                    disabled={!r.on}
+                    value={r.start}
+                    onChange={(v) => patchRow(i, { start: v })}
+                    className={timeSelectCls}
+                    aria-label={`${WEEKDAYS[i]} start`}
                   />
-                  {WEEKDAYS[i]}
-                </label>
-                <input
-                  type="time"
-                  disabled={!r.on}
-                  value={r.start}
-                  onChange={(e) =>
-                    setRows((cur) =>
-                      cur.map((c, j) => (j === i ? { ...c, start: e.target.value } : c)),
-                    )
-                  }
-                  className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-sm disabled:opacity-40"
-                />
-                <span className="text-muted">–</span>
-                <input
-                  type="time"
-                  disabled={!r.on}
-                  value={r.end}
-                  onChange={(e) =>
-                    setRows((cur) =>
-                      cur.map((c, j) => (j === i ? { ...c, end: e.target.value } : c)),
-                    )
-                  }
-                  className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-sm disabled:opacity-40"
-                />
+                  <span className="text-muted">–</span>
+                  <TimeSelect
+                    disabled={!r.on}
+                    value={r.end}
+                    onChange={(v) => patchRow(i, { end: v })}
+                    className={timeSelectCls}
+                    aria-label={`${WEEKDAYS[i]} end`}
+                  />
+                </div>
+
+                {/* Recurring breaks for this weekday (a standing lunch etc.) -
+                    subtracted from the shift automatically every week. */}
+                {r.on && (
+                  <div className="mt-2 flex flex-col gap-2 pl-[5.75rem]">
+                    {r.breaks.map((b, bi) => (
+                      <div key={bi} className="flex flex-wrap items-center gap-2">
+                        <span className="text-[11px] uppercase tracking-wide text-muted">
+                          Break
+                        </span>
+                        <TimeSelect
+                          value={b.start}
+                          onChange={(v) => patchBreak(i, bi, { start: v })}
+                          className={timeSelectCls}
+                          aria-label={`${WEEKDAYS[i]} break start`}
+                        />
+                        <span className="text-muted">–</span>
+                        <TimeSelect
+                          value={b.end}
+                          onChange={(v) => patchBreak(i, bi, { end: v })}
+                          className={timeSelectCls}
+                          aria-label={`${WEEKDAYS[i]} break end`}
+                        />
+                        <input
+                          type="text"
+                          placeholder="Label (e.g. Lunch)"
+                          maxLength={200}
+                          value={b.reason}
+                          onChange={(e) => patchBreak(i, bi, { reason: e.target.value })}
+                          className="w-32 rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-sm text-offwhite placeholder:text-muted"
+                          aria-label={`${WEEKDAYS[i]} break label`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeBreak(i, bi)}
+                          className="text-xs text-danger-soft hover:underline"
+                          aria-label="Remove break"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => addBreak(i)}
+                      className="self-start text-xs text-gold hover:underline"
+                    >
+                      + Add a recurring break
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
           </div>

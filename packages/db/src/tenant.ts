@@ -760,6 +760,19 @@ export function forShop(shopId: string) {
         ),
     },
 
+    // Recurring weekly block-offs. The dashboard availability GET reads these
+    // through forShop; the PUT writes them via a direct runWithShop tx (so no
+    // create/deleteMany accessor is needed here).
+    recurringBlock: {
+      findMany: (args: Prisma.RecurringBlockFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.recurringBlock.findMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+    },
+
     availabilityException: {
       findMany: (args: Prisma.AvailabilityExceptionFindManyArgs = {}) =>
         runWithShop(shopId, (tx) =>
