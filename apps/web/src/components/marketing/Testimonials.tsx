@@ -4,41 +4,28 @@ import { Stagger, StaggerItem } from "./Reveal";
 /**
  * Social proof on the landing page.
  *
- * SWAP: every quote below is a PLACEHOLDER written to show the layout — swap
- * each one for a real quote from a live shop (with their permission) before
- * pointing ads at the site. Keep them short (one to three sentences), keep the
- * attribution first-name + role, and delete any card you can't back with a
- * real person.
+ * REAL QUOTES ONLY. This section renders NOTHING until there's at least one
+ * genuine testimonial below — we don't ship fabricated reviews onto paid
+ * traffic (conversion-integrity + FTC endorsement rules). To turn it back on,
+ * add a real quote (with the person's permission): keep it short (one to three
+ * sentences), attribute it first-name + role, and only add a card you can back
+ * with a real person.
+ *
+ * Example shape (do NOT ship until it's a real person's words):
+ *   { quote: "…", name: "Drick", role: "Barbershop owner" }
  */
 const TESTIMONIALS: {
   quote: string;
   name: string;
   role: string;
 }[] = [
-  {
-    // SWAP: placeholder
-    quote:
-      "The rebooking texts do the chasing for me. Regulars that used to drift six, seven weeks are back on a three-week rhythm.",
-    name: "Marcus",
-    role: "Barbershop owner",
-  },
-  {
-    // SWAP: placeholder
-    quote:
-      "My clients actually use the punch cards because there's nothing to install — they tap the text, see their punches, book again.",
-    name: "Dana",
-    role: "Salon owner",
-  },
-  {
-    // SWAP: placeholder
-    quote:
-      "Set up on a Tuesday night between clients. The page looks like MY shop, not like software.",
-    name: "Alex",
-    role: "Studio owner",
-  },
+  // Add real quotes here. Empty = the whole section is hidden.
 ];
 
 export function Testimonials() {
+  // No real testimonials yet → render nothing rather than fabricated proof.
+  if (TESTIMONIALS.length === 0) return null;
+
   return (
     <section className="border-t border-subtle">
       <div className="mx-auto w-full max-w-6xl px-6 py-24">
