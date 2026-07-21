@@ -1,17 +1,26 @@
 import rateLimit, { type RateLimitRequestHandler } from "express-rate-limit";
 import type { Request } from "express";
 import { SESSION_COOKIE_NAME } from "@chairback/config";
+import { PgRateStore } from "./pgRateStore.js";
 
 /**
  * Reusable rate limiters. Default key is the client IP; some limiters key on the
  * session cookie or admin token so the limit is per-account, not per-IP (a shared
  * NAT shouldn't punish everyone, and a per-user SMS cap should follow the user).
  *
- * In tests (VITEST) limits are effectively disabled so suites aren't throttled.
+ * STORE: a shared Postgres store (pgRateStore.ts) so limits hold ACROSS API
+ * replicas - the default in-memory MemoryStore fragments every limit once we run
+ * more than one replica, and resets on each deploy. Each limiter gets its own
+ * `name` prefix so their key spaces don't collide in the shared table.
+ *
+ * In tests (VITEST) we skip the DB entirely - the in-memory store is used and
+ * the limit is bumped so suites aren't throttled and don't touch the test DB on
+ * every request.
  */
 const TEST = process.env.VITEST === "true";
 
 function make(opts: {
+  name: string;
   windowMs: number;
   limit: number;
   keyGenerator?: (req: Request) => string;
@@ -22,6 +31,8 @@ function make(opts: {
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: opts.keyGenerator,
+    // Postgres store in real envs; MemoryStore (default) in tests.
+    ...(TEST ? {} : { store: new PgRateStore(`${opts.name}:`) }),
   });
 }
 
@@ -35,22 +46,23 @@ function bearerKey(req: Request): string {
 }
 
 /** Auth (signup/login): blunt credential stuffing. Per IP. */
-export const authLimiter = make({ windowMs: 15 * 60 * 1000, limit: 20 });
+export const authLimiter = make({ name: "auth", windowMs: 15 * 60 * 1000, limit: 20 });
 
 /** Public rewards lookup: blunt magic-token enumeration. Per IP. */
-export const rewardsLimiter = make({ windowMs: 60 * 1000, limit: 30 });
+export const rewardsLimiter = make({ name: "rewards", windowMs: 60 * 1000, limit: 30 });
 
 /** Public lead-form submissions: spam-bounded. Per IP, tight. */
-export const leadLimiter = make({ windowMs: 60 * 1000, limit: 5 });
+export const leadLimiter = make({ name: "lead", windowMs: 60 * 1000, limit: 5 });
 
 /** Acuity OAuth callback: blunt code-exchange replay. Per IP. */
-export const oauthLimiter = make({ windowMs: 60 * 1000, limit: 15 });
+export const oauthLimiter = make({ name: "oauth", windowMs: 60 * 1000, limit: 15 });
 
 /** Webhook receivers: generous (legit bursts happen) but bounded. Per IP. */
-export const webhookLimiter = make({ windowMs: 60 * 1000, limit: 120 });
+export const webhookLimiter = make({ name: "webhook", windowMs: 60 * 1000, limit: 120 });
 
 /** SMS-sending dashboard actions: per-user, tight (real money). */
 export const smsLimiter = make({
+  name: "sms",
   windowMs: 60 * 1000,
   limit: 10,
   keyGenerator: sessionKey,
@@ -58,6 +70,7 @@ export const smsLimiter = make({
 
 /** Photo uploads: per-user, moderate (each call hits external storage). */
 export const uploadLimiter = make({
+  name: "upload",
   windowMs: 60 * 1000,
   limit: 30,
   keyGenerator: sessionKey,
@@ -71,6 +84,7 @@ export const uploadLimiter = make({
  * the session anyway.
  */
 export const accountLimiter = make({
+  name: "account",
   windowMs: 15 * 60 * 1000,
   limit: 20,
   keyGenerator: sessionKey,
@@ -78,6 +92,7 @@ export const accountLimiter = make({
 
 /** General authenticated dashboard reads: per-user, loose. */
 export const dashboardLimiter = make({
+  name: "dashboard",
   windowMs: 60 * 1000,
   limit: 120,
   keyGenerator: sessionKey,
@@ -85,6 +100,7 @@ export const dashboardLimiter = make({
 
 /** Admin endpoints: per-token, tight (expensive ops; contain a leaked token). */
 export const adminLimiter = make({
+  name: "admin",
   windowMs: 60 * 1000,
   limit: 10,
   keyGenerator: bearerKey,

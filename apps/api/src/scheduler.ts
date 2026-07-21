@@ -14,6 +14,7 @@ import { runAcuityResync } from "./engines/acuityResync.js";
 import { runTrialReminders } from "./engines/trialReminder.js";
 import { autoCloseIdleConversations } from "./receptionist/conversation.js";
 import { sweepExpiredHolds } from "./engines/holdSweep.js";
+import { sweepExpiredRateCounters } from "./middleware/pgRateStore.js";
 import { runDemoReset } from "./engines/demoReset.js";
 
 const env = apiEnv();
@@ -153,6 +154,17 @@ export function startScheduler(): void {
     void withLease("receptionist-hold-sweep", 2 * MINUTE, () => sweepExpiredHolds()).catch(
       (err) => logger.error({ err }, "receptionist hold sweep failed"),
     );
+  });
+
+  // Rate-limit store hygiene: delete counter rows whose window expired >1h ago
+  // every 30 min. The store is correct without this (an expired row resets on
+  // the next hit), but a public launch churns many one-off IP keys that would
+  // otherwise accumulate. Lease-guarded so only one replica sweeps.
+  cron.schedule("*/30 * * * *", () => {
+    void withLease("rate-limit-sweep", 5 * MINUTE, async () => {
+      const deleted = await sweepExpiredRateCounters();
+      if (deleted > 0) logger.debug({ deleted }, "rate-limit counters swept");
+    }).catch((err) => logger.error({ err }, "rate-limit sweep failed"));
   });
 
   // Live-demo shop: nightly restore to canonical state at 04:00 (quietest
