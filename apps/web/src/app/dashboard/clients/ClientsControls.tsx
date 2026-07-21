@@ -1,12 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useFormState, useFormStatus } from "react-dom";
 import { LOYALTY_TIERS, LOYALTY_TIER_KEYS } from "@chairback/config/constants";
 import { Card } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
-import { addClientAction } from "../actions";
+import { addClientAction, searchClientsByNameAction, type ClientSearchResult } from "../actions";
 import { ImportClients } from "./ImportClients";
 
 const field =
@@ -19,6 +20,41 @@ export function ClientsControls() {
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
 
+  // Live typeahead: as you type (>=2 chars), show a dropdown of the first few
+  // matches so you don't have to type the whole name / number and hit Enter.
+  const [query, setQuery] = useState(params.get("q") ?? "");
+  const [results, setResults] = useState<ClientSearchResult[]>([]);
+  const [open, setOpen] = useState(false);
+  const searchBox = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setResults([]);
+      return;
+    }
+    const t = setTimeout(() => {
+      searchClientsByNameAction(q).then((res) => {
+        if (res.ok && res.clients) {
+          setResults(res.clients);
+          setOpen(true);
+        }
+      });
+    }, 250);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  // Close the dropdown on an outside click.
+  useEffect(() => {
+    function onDown(e: MouseEvent) {
+      if (searchBox.current && !searchBox.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, []);
+
   function setParam(key: string, value: string) {
     const next = new URLSearchParams(params.toString());
     if (value) next.set(key, value);
@@ -30,14 +66,45 @@ export function ClientsControls() {
   return (
     <div className="mb-5 flex flex-col gap-3">
       <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-        <input
-          defaultValue={params.get("q") ?? ""}
-          placeholder="Search name, phone, or email…"
-          onKeyDown={(e) => {
-            if (e.key === "Enter") setParam("q", (e.target as HTMLInputElement).value);
-          }}
-          className={`${field} w-full sm:flex-1 sm:min-w-[180px]`}
-        />
+        <div ref={searchBox} className="relative w-full sm:flex-1 sm:min-w-[180px]">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onFocus={() => results.length > 0 && setOpen(true)}
+            placeholder="Search name, phone, or email…"
+            autoComplete="off"
+            aria-label="Search clients"
+            onKeyDown={(e) => {
+              // Enter still runs the full filtered list (the fallback).
+              if (e.key === "Enter") {
+                setOpen(false);
+                setParam("q", query);
+              } else if (e.key === "Escape") {
+                setOpen(false);
+              }
+            }}
+            className={`${field}`}
+          />
+          {/* Live matches: click one to jump straight to that client. */}
+          {open && results.length > 0 && (
+            <ul className="absolute left-0 right-0 top-full z-20 mt-1 max-h-72 overflow-y-auto rounded-xl border border-subtle bg-charcoal-800 py-1 shadow-lg">
+              {results.map((c) => (
+                <li key={c.id}>
+                  <Link
+                    href={`/dashboard/clients/${c.id}`}
+                    onClick={() => setOpen(false)}
+                    className="flex items-center justify-between gap-3 px-3 py-2 text-sm hover:bg-charcoal-700"
+                  >
+                    <span className="truncate text-offwhite">{c.name || "Client"}</span>
+                    {c.phone && (
+                      <span className="shrink-0 text-xs text-muted tabular-nums">{c.phone}</span>
+                    )}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
         <select
           value={params.get("sort") ?? "recent"}
           onChange={(e) => setParam("sort", e.target.value)}

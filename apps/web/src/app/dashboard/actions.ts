@@ -128,6 +128,31 @@ export async function saveSettingsAction(
   return res.ok ? { saved: true } : { error: "Could not save settings." };
 }
 
+/** One typeahead match: the client-list search returns a combined `name`. */
+export interface ClientSearchResult {
+  id: string;
+  name: string;
+  phone: string | null;
+}
+
+/**
+ * Live client search for the Clients-page typeahead. Hits the same
+ * GET /api/dashboard/clients?q= endpoint (partial name OR phone, case-
+ * insensitive), and returns the first few matches. NOTE: that endpoint returns
+ * a combined `name` string (not firstName/lastName), so we read `name` here.
+ */
+export async function searchClientsByNameAction(
+  q: string,
+): Promise<{ ok: boolean; clients?: ClientSearchResult[]; error?: string }> {
+  const trimmed = q.trim();
+  if (trimmed.length < 2) return { ok: true, clients: [] };
+  const res = await apiGet<{ clients: ClientSearchResult[] }>(
+    `/api/dashboard/clients?q=${encodeURIComponent(trimmed)}`,
+  );
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, clients: res.data.clients.slice(0, 8) };
+}
+
 export async function addClientAction(
   _prev: { error?: string; ok?: boolean },
   formData: FormData,
