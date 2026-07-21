@@ -1,0 +1,59 @@
+name: Backup to Cloudflare R2
+
+# Off-site backup of the prod Postgres DB + Supabase Storage photos → Cloudflare R2.
+# Runs nightly, and can be triggered by hand from the Actions tab.
+#
+# All credentials come from GitHub repo Secrets (Settings → Secrets and variables →
+# Actions). See docs/BACKUP.md for exactly which secrets to create and where each
+# value comes from. Nothing here is sensitive on its own.
+
+on:
+  schedule:
+    # 07:15 UTC daily ≈ 03:15 ET — a quiet hour for a US barbershop app.
+    - cron: "15 7 * * *"
+  workflow_dispatch: {} # manual "Run workflow" button
+
+# Never let two backups overlap (a long dump + a manual run).
+concurrency:
+  group: r2-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (for the backup script)
+        uses: actions/checkout@v4
+
+      - name: Install pg_dump v15 client + rclone
+        run: |
+          set -euo pipefail
+          # Ubuntu's default postgresql-client can lag Supabase's server version,
+          # and pg_dump refuses to dump a newer server. Pin the PGDG v15 client.
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-15 rclone
+          pg_dump --version
+          rclone version | head -1
+
+      - name: Compute UTC stamp
+        id: stamp
+        run: echo "value=$(date -u +%Y/%m/%d/%H%M%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Run backup
+        env:
+          BACKUP_STAMP: ${{ steps.stamp.outputs.value }}
+          PROD_DIRECT_URL: ${{ secrets.PROD_DIRECT_URL }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          SUPABASE_S3_ENDPOINT: ${{ secrets.SUPABASE_S3_ENDPOINT }}
+          SUPABASE_S3_REGION: ${{ secrets.SUPABASE_S3_REGION }}
+          SUPABASE_S3_ACCESS_KEY_ID: ${{ secrets.SUPABASE_S3_ACCESS_KEY_ID }}
+          SUPABASE_S3_SECRET_ACCESS_KEY: ${{ secrets.SUPABASE_S3_SECRET_ACCESS_KEY }}
+          SUPABASE_STORAGE_BUCKET: ${{ secrets.SUPABASE_STORAGE_BUCKET }}
+          RETENTION_DAYS: ${{ vars.BACKUP_RETENTION_DAYS || '30' }}
+        run: bash scripts/backup/run-backup.sh

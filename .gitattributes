@@ -1,0 +1,5 @@
+# Files consumed by the Linux CI runner must keep LF endings regardless of the
+# committer's OS — a shell script stored with CRLF fails with "bad interpreter".
+# Scoped narrowly on purpose (no repo-wide normalization).
+*.sh text eol=lf
+.github/workflows/*.yml text eol=lf
