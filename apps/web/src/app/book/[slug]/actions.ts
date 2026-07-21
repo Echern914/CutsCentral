@@ -7,24 +7,65 @@ export interface SlotsResult {
   slots: { startsAt: string; endsAt: string }[];
 }
 
+/** A single open instant, tagged with every staffId who can serve it. */
+export interface MergedSlot {
+  startsAt: string;
+  // Staff free at this instant (>1 when several barbers offer the same time).
+  staffIds: string[];
+}
+
+export interface MergedSlotsResult {
+  timezone: string;
+  slots: MergedSlot[];
+}
+
 /**
- * Fetch open slots for a (staff, service) over a date range. Goes through the
- * server (CSP blocks a direct browser fetch to the API origin), same as the
- * booking submit below.
+ * Fetch open slots across MANY staff for one service and merge them into a
+ * single availability list keyed by instant, so the calendar can show "any
+ * barber" availability without making the customer pick a provider first. The
+ * slots API is strictly per-staff, so we fan out one request per staff (in
+ * parallel) and union the results. `startsAt` carries the list of staff free at
+ * that time; the booking submit picks one concrete staffId to write.
+ *
+ * Single-barber shops pass one id and this collapses to the plain per-staff
+ * fetch — same data, one round-trip.
  */
-export async function getSlotsAction(
+export async function getMergedSlotsAction(
   slug: string,
-  staffId: string,
+  staffIds: string[],
   serviceId: string,
   from: string,
   to: string,
-): Promise<{ ok: boolean; data?: SlotsResult; error?: string }> {
-  const qs = new URLSearchParams({ staffId, serviceId, from, to }).toString();
-  const res = await apiPublicGet<SlotsResult>(
-    `/api/book/${encodeURIComponent(slug)}/slots?${qs}`,
+): Promise<{ ok: boolean; data?: MergedSlotsResult; error?: string }> {
+  if (staffIds.length === 0) return { ok: false, error: "no_staff" };
+  const results = await Promise.all(
+    staffIds.map(async (staffId) => {
+      const qs = new URLSearchParams({ staffId, serviceId, from, to }).toString();
+      const res = await apiPublicGet<SlotsResult>(
+        `/api/book/${encodeURIComponent(slug)}/slots?${qs}`,
+      );
+      return { staffId, res };
+    }),
   );
-  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
-  return { ok: true, data: res.data };
+  // Every fan-out request must succeed; a partial merge would hide real times.
+  if (results.some((r) => !r.res.ok || !r.res.data)) {
+    const failed = results.find((r) => !r.res.ok);
+    return { ok: false, error: failed?.res.error ?? "failed" };
+  }
+  const timezone = results[0]!.res.data!.timezone;
+  // Union by instant; accumulate which staff are free at each.
+  const byInstant = new Map<string, Set<string>>();
+  for (const { staffId, res } of results) {
+    for (const s of res.data!.slots) {
+      const set = byInstant.get(s.startsAt) ?? new Set<string>();
+      set.add(staffId);
+      byInstant.set(s.startsAt, set);
+    }
+  }
+  const slots: MergedSlot[] = [...byInstant.entries()]
+    .map(([startsAt, set]) => ({ startsAt, staffIds: [...set] }))
+    .sort((a, b) => a.startsAt.localeCompare(b.startsAt));
+  return { ok: true, data: { timezone, slots } };
 }
 
 export interface BookInput {

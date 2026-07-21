@@ -9,7 +9,11 @@ import { DemoTour } from "@/components/tour/DemoTour";
 import { useDemoTour } from "@/components/tour/state";
 import type { BookShopData } from "./page";
 import { readableOn } from "@/lib/contrast";
-import { bookAction, getSlotsAction, type SlotsResult } from "./actions";
+import {
+  bookAction,
+  getMergedSlotsAction,
+  type MergedSlotsResult,
+} from "./actions";
 import { PaymentStep } from "./PaymentStep";
 import { WaitlistForm } from "./WaitlistForm";
 
@@ -19,6 +23,75 @@ import { WaitlistForm } from "./WaitlistForm";
  * (CSP blocks a direct browser fetch); the create action returns a manage token
  * so we can link the customer to cancel/reschedule. Accent-themed to the shop.
  */
+/** One selectable time in the calendar grid, with who can serve it. */
+interface DaySlot {
+  startsAt: string;
+  // Staff free at this instant (from the merged fetch); one for single-barber.
+  staffIds: string[];
+  // Present when this is a barber-published targeted "special" slot.
+  targeted?: { id: string; price: number; label: string | null };
+}
+
+// ---- Calendar date math. All operate on shop-local "YYYY-MM-DD" / "YYYY-MM"
+// strings so there is NO Date parsing in the viewer's zone (which would drift a
+// day near midnight). We only construct a UTC Date to walk the grid, then read
+// it back with getUTCFullYear/Month/Date — never a local getter.
+
+/** "YYYY-MM" month key for a "YYYY-MM-DD" day (or ISO — first 7 chars). */
+function monthKey(dayOrIso: string): string {
+  return dayOrIso.slice(0, 7);
+}
+
+/** First day ("YYYY-MM-01") of a "YYYY-MM" month. */
+function monthFirstDay(month: string): string {
+  return `${month}-01`;
+}
+
+/** Shift a "YYYY-MM" month by ±n months, returning a new "YYYY-MM". */
+function addMonths(month: string, n: number): string {
+  const [y, m] = month.split("-").map(Number) as [number, number];
+  const total = y * 12 + (m - 1) + n;
+  const ny = Math.floor(total / 12);
+  const nm = total % 12;
+  return `${ny}-${String(nm + 1).padStart(2, "0")}`;
+}
+
+/** Human month label, e.g. "July 2026", from a "YYYY-MM". */
+function monthLabel(month: string): string {
+  const [y, m] = month.split("-").map(Number) as [number, number];
+  return new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(y, m - 1, 1)));
+}
+
+/**
+ * The 6-week grid (42 cells, Sun-first) covering a "YYYY-MM" month. Each cell is
+ * a "YYYY-MM-DD" day; leading/trailing cells spill into the adjacent months so
+ * the weekday columns line up. Built with UTC so it never depends on the
+ * viewer's timezone.
+ */
+function monthGrid(month: string): { day: string; inMonth: boolean }[] {
+  const [y, m] = month.split("-").map(Number) as [number, number];
+  const first = new Date(Date.UTC(y, m - 1, 1));
+  const startWeekday = first.getUTCDay(); // 0=Sun
+  const cells: { day: string; inMonth: boolean }[] = [];
+  const gridStart = new Date(first);
+  gridStart.setUTCDate(1 - startWeekday); // back up to the Sunday of week 1
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(gridStart);
+    d.setUTCDate(gridStart.getUTCDate() + i);
+    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(
+      d.getUTCDate(),
+    ).padStart(2, "0")}`;
+    cells.push({ day: key, inMonth: d.getUTCMonth() === m - 1 });
+  }
+  return cells;
+}
+
+const WEEKDAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
+
 export function BookingClient({ data }: { data: BookShopData }) {
   // Clear the native app's WebView spinner (reachable from the shop page's Book
   // CTA inside the app; the shell may be waiting on this ready signal).
@@ -31,9 +104,16 @@ export function BookingClient({ data }: { data: BookShopData }) {
   const tz = data.shop.timezone;
 
   const [serviceId, setServiceId] = useState<string | null>(null);
+  // The provider the slots were loaded for. For a MULTI-barber shop this is the
+  // barber the customer explicitly chose. For a SINGLE-barber shop the provider
+  // step is skipped and this is set implicitly to that lone barber.
   const [staffId, setStaffId] = useState<string | null>(null);
   const [day, setDay] = useState<string | null>(null); // YYYY-MM-DD (local)
   const [slot, setSlot] = useState<string | null>(null); // ISO startsAt
+  // The concrete barber to WRITE the booking against. When the provider step is
+  // skipped, several barbers may be free at the chosen instant; this is the one
+  // we picked for the create POST (chosen when the slot is selected).
+  const [pickedStaffId, setPickedStaffId] = useState<string | null>(null);
   // Set when the chosen slot is a barber-published TARGETED slot (fixed price,
   // no add-ons); its id goes on the booking POST so the server claims it.
   const [slotTargeted, setSlotTargeted] = useState<{
@@ -41,10 +121,10 @@ export function BookingClient({ data }: { data: BookShopData }) {
     price: number;
     label: string | null;
   } | null>(null);
-  const [slotsByDay, setSlotsByDay] = useState<
-    Map<string, { startsAt: string; targeted?: { id: string; price: number; label: string | null } }[]>
-  >(new Map());
+  const [slotsByDay, setSlotsByDay] = useState<Map<string, DaySlot[]>>(new Map());
   const [loadingSlots, setLoadingSlots] = useState(false);
+  // Which calendar month is on screen (first-of-month YYYY-MM-DD, shop tz).
+  const [viewMonth, setViewMonth] = useState<string | null>(null);
 
   // Chosen add-ons (ids) for the picked service. Add-ons extend the appointment
   // and the total; validated at create (if they overflow the slot, the create
@@ -100,14 +180,17 @@ export function BookingClient({ data }: { data: BookShopData }) {
     setEmail((cur) => cur || "jordan@example.com");
     if (!serviceId && data.services.length > 0) {
       const svc = data.services[0]!;
-      const staffIds = new Set(
-        data.offerings.filter((o) => o.serviceId === svc.id).map((o) => o.staffId),
-      );
-      const stf = data.staff.find((s) => staffIds.has(s.id));
+      const svcStaff = data.offerings
+        .filter((o) => o.serviceId === svc.id)
+        .map((o) => o.staffId);
+      const stf = data.staff.find((s) => svcStaff.includes(s.id));
       pickService(svc.id);
-      if (stf) {
+      // pickService already auto-loads a single-barber service's calendar; only
+      // force the staff + fetch when it did NOT (a multi-barber demo service),
+      // so the tour still lands on a loaded calendar without a double fetch.
+      if (stf && svcStaff.length > 1) {
         setStaffId(stf.id);
-        loadSlots(svc.id, stf.id);
+        loadSlots(svc.id, [stf.id]);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -127,6 +210,8 @@ export function BookingClient({ data }: { data: BookShopData }) {
     if (first) {
       setSlot(first.startsAt);
       setSlotTargeted(first.targeted ?? null);
+      setPickedStaffId(first.staffIds[0] ?? null);
+      setViewMonth(monthKey(d));
     }
   }, [demoTour, slot, slotsByDay]);
   // The tour's confirmation step forces the confirmation screen (and stepping
@@ -150,6 +235,14 @@ export function BookingClient({ data }: { data: BookShopData }) {
     );
     return data.staff.filter((s) => ids.has(s.id));
   }, [serviceId, data]);
+
+  // Does the CHOSEN service have more than one barber? If so we keep the
+  // "Choose your provider" step; a single-barber service skips it and jumps
+  // straight to the calendar (loaded for that lone barber in pickService).
+  const isMultiBarber = serviceId !== null && staffForService.length > 1;
+  // The time step is step 2 when provider is skipped, step 3 otherwise.
+  const timeStepNo = isMultiBarber ? 3 : 2;
+  const detailsStepNo = isMultiBarber ? 4 : 3;
 
   const dateFmt = useMemo(
     () =>
@@ -182,13 +275,19 @@ export function BookingClient({ data }: { data: BookShopData }) {
     return parts; // en-CA yields YYYY-MM-DD
   }
 
-  /** Clear the chosen time (and any targeted-slot selection riding on it). */
+  /** Clear the chosen time (and any targeted-slot / picked-barber riding on it). */
   function clearSlotPick() {
     setSlot(null);
     setSlotTargeted(null);
+    setPickedStaffId(null);
   }
 
-  function loadSlots(svc: string, stf: string) {
+  /**
+   * Load availability for a service across the given barbers, merged into one
+   * calendar. `staffPool` is the lone barber for a single-barber shop, or the
+   * one the customer chose for a multi-barber shop.
+   */
+  function loadSlots(svc: string, staffPool: string[]) {
     setLoadingSlots(true);
     setError(null);
     const from = new Date().toISOString();
@@ -196,48 +295,56 @@ export function BookingClient({ data }: { data: BookShopData }) {
       Date.now() + data.shop.bookingMaxDays * 24 * 60 * 60 * 1000,
     ).toISOString();
     startTransition(async () => {
-      const res = await getSlotsAction(data.shop.slug, stf, svc, from, to);
+      const res = await getMergedSlotsAction(data.shop.slug, staffPool, svc, from, to);
       if (!res.ok || !res.data) {
         setError("Couldn't load times. Please try again.");
         setLoadingSlots(false);
         return;
       }
-      bucketSlots(res.data, svc, stf);
+      bucketSlots(res.data, svc, staffPool);
       setLoadingSlots(false);
     });
   }
 
-  function bucketSlots(result: SlotsResult, svc: string, stf: string) {
-    const map = new Map<
-      string,
-      { startsAt: string; targeted?: { id: string; price: number; label: string | null } }[]
-    >();
+  function bucketSlots(result: MergedSlotsResult, svc: string, staffPool: string[]) {
+    const map = new Map<string, DaySlot[]>();
     for (const s of result.slots) {
       const key = dayKey(s.startsAt);
       const list = map.get(key) ?? [];
-      list.push({ startsAt: s.startsAt });
+      list.push({ startsAt: s.startsAt, staffIds: s.staffIds });
       map.set(key, list);
     }
-    // Merge the barber's targeted slots for this service+barber into the grid,
-    // badged with their own price (the normal engine never offers these times -
-    // it blocks around them - so there are no duplicates to reconcile).
+    // Merge in the barbers' targeted slots for this service (only those from a
+    // barber in the loaded pool), badged with their own price. The normal engine
+    // never offers these times - it blocks around them - so no duplicates.
+    const pool = new Set(staffPool);
     for (const t of data.targetedSlots) {
-      if (t.serviceId !== svc || t.staffId !== stf) continue;
+      if (t.serviceId !== svc || !pool.has(t.staffId)) continue;
       if (new Date(t.startsAt).getTime() <= Date.now()) continue;
       const key = dayKey(t.startsAt);
       const list = map.get(key) ?? [];
       list.push({
         startsAt: t.startsAt,
+        staffIds: [t.staffId],
         targeted: { id: t.id, price: t.price, label: t.label },
       });
       list.sort((a, b) => a.startsAt.localeCompare(b.startsAt));
       map.set(key, list);
     }
     setSlotsByDay(map);
-    // Auto-select the first day with availability.
+    // Land on the first day with availability, and open its month in the calendar.
     const firstDay = [...map.keys()].sort()[0] ?? null;
     setDay(firstDay);
+    setViewMonth(firstDay ? monthKey(firstDay) : monthKey(dayKey(new Date().toISOString())));
     clearSlotPick();
+  }
+
+  /** Barbers who offer a given service (used to decide skip-provider + pool). */
+  function staffPoolFor(svc: string): string[] {
+    const ids = new Set(
+      data.offerings.filter((o) => o.serviceId === svc).map((o) => o.staffId),
+    );
+    return data.staff.filter((s) => ids.has(s.id)).map((s) => s.id);
   }
 
   function pickService(id: string) {
@@ -245,8 +352,16 @@ export function BookingClient({ data }: { data: BookShopData }) {
     setStaffId(null);
     setSlotsByDay(new Map());
     setDay(null);
+    setViewMonth(null);
     clearSlotPick();
     setAddOnIds([]); // add-ons are per-service; clear on change
+    // Single-barber shop: skip the provider step and go straight to the
+    // calendar (loaded for that lone barber). Multi-barber shops still choose.
+    const pool = staffPoolFor(id);
+    if (pool.length === 1) {
+      setStaffId(pool[0]!);
+      loadSlots(id, pool);
+    }
   }
 
   // Add-ons valid for the chosen service (shop-wide null, or scoped to it).
@@ -262,7 +377,8 @@ export function BookingClient({ data }: { data: BookShopData }) {
   function pickStaff(id: string) {
     setStaffId(id);
     clearSlotPick();
-    if (serviceId) loadSlots(serviceId, id);
+    // Multi-barber shop: load just the chosen barber's calendar.
+    if (serviceId) loadSlots(serviceId, [id]);
   }
 
   // ---- Step-back navigation (customer stepping back a stage). Each clears the
@@ -272,6 +388,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
     setStaffId(null);
     setSlotsByDay(new Map());
     setDay(null);
+    setViewMonth(null);
     clearSlotPick();
   }
   function backToProvider() {
@@ -292,7 +409,10 @@ export function BookingClient({ data }: { data: BookShopData }) {
       setError("Add a phone or email so we can confirm.");
       return;
     }
-    if (!serviceId || !staffId || !slot) return;
+    // The barber to write against: the one bound to the chosen slot (may differ
+    // from `staffId` when the provider step was skipped and several were free).
+    const writeStaffId = pickedStaffId ?? staffId;
+    if (!serviceId || !writeStaffId || !slot) return;
     // Demo tour: show the REAL confirmation screen with zero writes — the
     // manage link points at the seeded showcase appointment.
     if (demoTour) {
@@ -302,7 +422,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
     }
     startTransition(async () => {
       const res = await bookAction(data.shop.slug, {
-        staffId,
+        staffId: writeStaffId,
         serviceId,
         startsAt: slot,
         firstName: firstName.trim(),
@@ -318,8 +438,9 @@ export function BookingClient({ data }: { data: BookShopData }) {
       if (!res.ok) {
         if (res.error === "slot_taken") {
           setError("That time was just taken. Pick another slot.");
-          // Refresh availability so the taken slot disappears.
-          if (serviceId && staffId) loadSlots(serviceId, staffId);
+          // Refresh availability so the taken slot disappears (reload the same
+          // pool the calendar was loaded with — the lone barber, or the chosen).
+          if (serviceId && staffId) loadSlots(serviceId, [staffId]);
           clearSlotPick();
         } else if (res.error === "no_active_access") {
           setError(
@@ -347,6 +468,30 @@ export function BookingClient({ data }: { data: BookShopData }) {
 
   const days = [...slotsByDay.keys()].sort();
   const daySlots = day ? (slotsByDay.get(day) ?? []) : [];
+
+  // Set of days (YYYY-MM-DD) that actually have open times — the calendar makes
+  // exactly these tappable and dims the rest.
+  const availableDays = useMemo(() => new Set(slotsByDay.keys()), [slotsByDay]);
+
+  // The earliest open time across all loaded days (for the "soonest" button).
+  // Slots within a day are already time-sorted; the first day is the earliest.
+  const soonest = useMemo(() => {
+    const firstDay = [...slotsByDay.keys()].sort()[0];
+    if (!firstDay) return null;
+    const first = (slotsByDay.get(firstDay) ?? [])[0];
+    return first ? { day: firstDay, slot: first } : null;
+  }, [slotsByDay]);
+
+  /** Jump straight to the earliest open time (day + slot in one tap). */
+  function pickSoonest() {
+    if (!soonest) return;
+    setDay(soonest.day);
+    setViewMonth(monthKey(soonest.day));
+    setSlot(soonest.slot.startsAt);
+    setSlotTargeted(soonest.slot.targeted ?? null);
+    setPickedStaffId(soonest.slot.staffIds[0] ?? null);
+    if (soonest.slot.targeted) setAddOnIds([]);
+  }
 
   const selectedService = data.services.find((s) => s.id === serviceId) ?? null;
 
@@ -602,8 +747,9 @@ export function BookingClient({ data }: { data: BookShopData }) {
         </div>
       </Section>
 
-      {/* Step 2: provider */}
-      {serviceId && (
+      {/* Step 2: provider — only for services offered by more than one barber.
+          A single-barber service skips this and lands on the calendar. */}
+      {serviceId && isMultiBarber && (
         <Section
           title="2 · Choose your provider"
           back={<BackStep onClick={backToService} />}
@@ -640,12 +786,16 @@ export function BookingClient({ data }: { data: BookShopData }) {
         </Section>
       )}
 
-      {/* Step 3: day + slot */}
+      {/* Time step: calendar + slot. Numbered 3 for multi-barber shops (after
+          provider) or 2 when the provider step was skipped. Back goes to the
+          provider step if there was one, else back to the service list. */}
       {serviceId && staffId && (
         <Section
-          title="3 · Pick a time"
+          title={`${timeStepNo} · Pick a time`}
           tour="slots"
-          back={<BackStep onClick={backToProvider} />}
+          back={
+            <BackStep onClick={isMultiBarber ? backToProvider : backToService} />
+          }
           focusOnMount={!demoTour}
         >
           {loadingSlots ? (
@@ -682,30 +832,63 @@ export function BookingClient({ data }: { data: BookShopData }) {
             </div>
           ) : (
             <>
-              <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
-                {days.map((d) => (
-                  <button
-                    key={d}
-                    type="button"
-                    onClick={() => {
-                      setDay(d);
-                      clearSlotPick();
-                    }}
-                    aria-pressed={day === d}
-                    className="shrink-0 rounded-lg border px-3 py-2 text-xs transition-colors"
-                    style={{
-                      borderColor: day === d ? accent : "rgba(255,255,255,0.12)",
-                      backgroundColor: day === d ? `${accent}14` : "transparent",
-                    }}
+              {/* Soonest-available shortcut: one tap to the earliest open time. */}
+              {soonest && (
+                <button
+                  type="button"
+                  onClick={pickSoonest}
+                  className="mb-3 flex w-full items-center justify-between rounded-xl border px-4 py-3 text-left transition-colors"
+                  style={{
+                    borderColor:
+                      slot === soonest.slot.startsAt ? accent : `${accent}66`,
+                    backgroundColor: `${accent}14`,
+                  }}
+                >
+                  <span className="flex items-center gap-2">
+                    <span aria-hidden="true" style={{ color: accent }}>
+                      ⚡
+                    </span>
+                    <span>
+                      <span className="block text-xs uppercase tracking-wide text-muted">
+                        Soonest available
+                      </span>
+                      <span className="block text-sm font-semibold">
+                        {dateFmt.format(new Date(soonest.slot.startsAt))} ·{" "}
+                        {timeFmt.format(new Date(soonest.slot.startsAt))}
+                      </span>
+                    </span>
+                  </span>
+                  <span
+                    className="text-xs font-semibold"
+                    style={{ color: accent }}
                   >
-                    {/* Label from the first slot's real instant (correct in the
-                        shop tz) - never synthesize a date from the key string,
-                        which would be parsed in the viewer's local zone. */}
-                    {dateFmt.format(new Date((slotsByDay.get(d) ?? [])[0]?.startsAt ?? d))}
-                  </button>
-                ))}
-              </div>
-              <div className="grid grid-cols-3 gap-2">
+                    Book it →
+                  </span>
+                </button>
+              )}
+
+              {/* Monthly calendar: only days with open times are tappable. */}
+              <MonthCalendar
+                viewMonth={viewMonth ?? monthKey(days[0]!)}
+                availableDays={availableDays}
+                selectedDay={day}
+                accent={accent}
+                onAccent={onAccent}
+                onPrevMonth={() => setViewMonth((m) => addMonths(m ?? monthKey(days[0]!), -1))}
+                onNextMonth={() => setViewMonth((m) => addMonths(m ?? monthKey(days[0]!), 1))}
+                onPickDay={(d) => {
+                  setDay(d);
+                  clearSlotPick();
+                }}
+              />
+
+              {/* Times for the selected day. */}
+              <div className="mt-4 grid grid-cols-3 gap-2">
+                {daySlots.length === 0 && (
+                  <p className="col-span-3 text-sm text-muted">
+                    Pick a highlighted day to see open times.
+                  </p>
+                )}
                 {daySlots.map((s) => {
                   const picked =
                     slot === s.startsAt &&
@@ -717,6 +900,9 @@ export function BookingClient({ data }: { data: BookShopData }) {
                       onClick={() => {
                         setSlot(s.startsAt);
                         setSlotTargeted(s.targeted ?? null);
+                        // Bind the barber who will actually take this booking
+                        // (several may be free at this instant on a merged fetch).
+                        setPickedStaffId(s.staffIds[0] ?? null);
                         if (s.targeted) setAddOnIds([]); // fixed length/price
                       }}
                       aria-pressed={picked}
@@ -751,10 +937,10 @@ export function BookingClient({ data }: { data: BookShopData }) {
         </Section>
       )}
 
-      {/* Step 4: contact + consent */}
+      {/* Details step: contact + consent. Numbered after the time step. */}
       {slot && (
         <Section
-          title="4 · Your details"
+          title={`${detailsStepNo} · Your details`}
           back={<BackStep onClick={backToTime} />}
           focusOnMount={!demoTour}
         >
@@ -971,6 +1157,121 @@ function BackStep({ onClick }: { onClick: () => void }) {
     >
       ← Back
     </button>
+  );
+}
+
+/**
+ * Monthly availability calendar. Renders a Sun-first month grid; only days in
+ * `availableDays` are tappable (they have open times), every other cell is
+ * dimmed and inert. The customer pages between months with the arrows. Prev is
+ * disabled once we reach the current month (nothing bookable in the past).
+ *
+ * All dates are shop-local "YYYY-MM-DD" strings and the grid is built in UTC
+ * (see monthGrid) so the highlighted day never drifts by the viewer's timezone.
+ * "Today" is computed from the shop-tz day key the parent passes via
+ * availableDays' domain; here we only need month-vs-month comparison, done on
+ * the "YYYY-MM" strings.
+ */
+function MonthCalendar({
+  viewMonth,
+  availableDays,
+  selectedDay,
+  accent,
+  onAccent,
+  onPrevMonth,
+  onNextMonth,
+  onPickDay,
+}: {
+  viewMonth: string; // "YYYY-MM"
+  availableDays: Set<string>; // "YYYY-MM-DD" keys with open times
+  selectedDay: string | null;
+  accent: string;
+  onAccent: string;
+  onPrevMonth: () => void;
+  onNextMonth: () => void;
+  onPickDay: (day: string) => void;
+}) {
+  const cells = monthGrid(viewMonth);
+  // The earliest available day fixes the floor: never let the customer page to
+  // a month before the first month that has any availability.
+  const firstAvailableMonth =
+    [...availableDays].sort()[0]?.slice(0, 7) ?? viewMonth;
+  const atFloor = viewMonth <= firstAvailableMonth;
+
+  return (
+    <div className="rounded-xl border border-white/10 p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <button
+          type="button"
+          onClick={onPrevMonth}
+          disabled={atFloor}
+          aria-label="Previous month"
+          className="rounded-lg px-2 py-1 text-sm text-muted transition-colors hover:text-offwhite disabled:opacity-30"
+        >
+          ←
+        </button>
+        <span className="text-sm font-semibold">{monthLabel(viewMonth)}</span>
+        <button
+          type="button"
+          onClick={onNextMonth}
+          aria-label="Next month"
+          className="rounded-lg px-2 py-1 text-sm text-muted transition-colors hover:text-offwhite"
+        >
+          →
+        </button>
+      </div>
+      <div className="grid grid-cols-7 gap-1 text-center">
+        {WEEKDAY_LABELS.map((w, i) => (
+          <span
+            key={i}
+            aria-hidden="true"
+            className="py-1 text-[10px] font-semibold uppercase text-muted"
+          >
+            {w}
+          </span>
+        ))}
+        {cells.map(({ day, inMonth }) => {
+          const dayNum = Number(day.slice(8, 10));
+          const open = availableDays.has(day);
+          const selected = selectedDay === day;
+          if (!inMonth) {
+            // Spill-over cell from an adjacent month: keep the grid aligned but
+            // render nothing tappable.
+            return <span key={day} aria-hidden="true" />;
+          }
+          return (
+            <button
+              key={day}
+              type="button"
+              disabled={!open}
+              onClick={() => onPickDay(day)}
+              aria-pressed={selected}
+              aria-label={`${day}${open ? "" : " (no openings)"}`}
+              className="flex aspect-square items-center justify-center rounded-lg border text-sm transition-colors disabled:cursor-default"
+              style={{
+                borderColor: selected
+                  ? accent
+                  : open
+                    ? `${accent}55`
+                    : "transparent",
+                backgroundColor: selected
+                  ? accent
+                  : open
+                    ? `${accent}14`
+                    : "transparent",
+                color: selected
+                  ? onAccent
+                  : open
+                    ? undefined
+                    : "rgba(255,255,255,0.25)",
+              }}
+            >
+              {dayNum}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
