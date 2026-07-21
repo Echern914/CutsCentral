@@ -10,6 +10,7 @@ import { promoteFulfilledAppointments } from "./engines/appointmentPromotion.js"
 import { runAppointmentReminders } from "./engines/appointmentReminders.js";
 import { runPushReminders } from "./engines/pushReminders.js";
 import { refreshExpiringSquareTokens } from "./engines/squareTokenRefresh.js";
+import { runAcuityResync } from "./engines/acuityResync.js";
 import { runTrialReminders } from "./engines/trialReminder.js";
 import { autoCloseIdleConversations } from "./receptionist/conversation.js";
 import { sweepExpiredHolds } from "./engines/holdSweep.js";
@@ -110,6 +111,19 @@ export function startScheduler(): void {
     void withLease("square-token-refresh", 10 * MINUTE, () =>
       refreshExpiringSquareTokens(),
     ).catch((err) => logger.error({ err }, "square token refresh sweep failed"));
+  });
+
+  // Acuity: re-sync a recent window of appointments for every connected shop
+  // every 30 minutes, so client names/numbers added or edited directly in Acuity
+  // (or missed by a dropped webhook) self-heal into the searchable client book
+  // without a manual Repair. Idempotent (Visit unique key), bounded recent
+  // window, no-op when no Acuity shops are connected. Generous TTL - a
+  // multi-shop account ingests sequentially. See engines/acuityResync.ts.
+  cron.schedule("*/30 * * * *", () => {
+    void withLease("acuity-resync", 15 * MINUTE, async () => {
+      const ingested = await runAcuityResync();
+      if (ingested > 0) logger.info({ ingested }, "acuity resync ingested appointments");
+    }).catch((err) => logger.error({ err }, "acuity resync sweep failed"));
   });
 
   // Trial-expiry reminder EMAILS to shop owners, daily at 14:00 (mid-morning
