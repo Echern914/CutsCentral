@@ -985,6 +985,27 @@ model Service {
   // is the duration snapshot - editing this later never rewrites a booked row.
   // See engines/pricing.ts (effectiveDurationForDate).
   durationOverrides Json  @default("{}")
+  // Per-weekday available-hours restriction. A JSON map of shop-local weekday
+  // ("0"=Sun.."6"=Sat) to an array of {s,e} windows in minutes-from-midnight
+  // (e exclusive), e.g. {"1": [{"s":600,"e":840}]} = "Mondays this service is
+  // only bookable 10:00-14:00". Tri-state by KEY PRESENCE:
+  //   - weekday absent  => UNRESTRICTED (use the staff's full availability). This
+  //     is the default; every existing service is {} so nothing changes for them.
+  //   - present, non-empty => allowed ONLY within those windows that weekday
+  //     (INTERSECTED with the staff's availability - never widens it).
+  //   - present, empty []  => service not offered that weekday at all.
+  // Only shapes the slot GRID; targeted slots and one-off open exceptions are
+  // deliberate overrides and are NOT restricted. See engines/slots.ts
+  // (computeOpenSlots) and engines/pricing.ts (parseServiceHours).
+  hoursWindows   Json     @default("{}")
+  // "Offered by every barber" as a LIVE intent, not a snapshot. When true, the
+  // ServiceStaff join is kept materialized to all currently-active staff: creating
+  // or reactivating a barber auto-links them to this service, so "all" genuinely
+  // means all - including barbers added after the service was created. When false,
+  // the ServiceStaff rows are the hand-picked set. Every read path still consults
+  // the join (unchanged); only the write paths maintain it. Default false so
+  // existing services keep their exact current (snapshotted) offering set.
+  offeredByAll   Boolean  @default(false)
   active         Boolean  @default(true)
   sortOrder      Int      @default(0)
   createdAt      DateTime @default(now())

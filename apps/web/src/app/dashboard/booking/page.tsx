@@ -45,6 +45,13 @@ export interface ServiceRow {
   priceOverrides: Record<string, number>;
   // Per-weekday duration overrides ({ "5": 20 } = Friday 20 min). {} = base.
   durationOverrides: Record<string, number>;
+  // Per-weekday available-hours restriction ({ "1": [{ s: 600, e: 840 }] } =
+  // "Mondays only 10:00-14:00"). Weekday absent = unrestricted; [] = closed that
+  // day. {} = no restriction on any day (the default).
+  hoursWindows: Record<string, { s: number; e: number }[]>;
+  // True = offered by every active barber, kept in sync as staff change (staffIds
+  // still lists the current concrete set). False = the hand-picked staffIds.
+  offeredByAll: boolean;
   active: boolean;
   sortOrder: number;
   staffIds: string[];

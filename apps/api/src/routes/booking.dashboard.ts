@@ -56,17 +56,41 @@ const durationOverridesSchema = z
   .record(z.enum(["0", "1", "2", "3", "4", "5", "6"]), z.number().int().min(5).max(600))
   .optional();
 
+// Per-weekday AVAILABLE-HOURS restriction: {weekday: [{s,e}]} where s/e are
+// minutes from shop-local midnight (e exclusive), e.g. {"1":[{"s":600,"e":840}]}
+// = "Mondays only 10:00-14:00". A weekday absent from the map is unrestricted; a
+// present weekday with [] means the service isn't offered that day. Capped at a
+// handful of windows/day. The engine intersects these with staff availability.
+const serviceWindowSchema = z
+  .object({
+    // s is a START minute so it can never be 1440 (end-of-day midnight); e is
+    // exclusive so it can be 1440. These bounds must stay in lockstep with the
+    // engine parser (parseServiceHours) so the write-time check and the read-time
+    // defense never diverge on what a valid window is.
+    s: z.number().int().min(0).max(1439),
+    e: z.number().int().min(1).max(1440),
+  })
+  .refine((w) => w.e > w.s, { message: "window end must be after start" });
+const hoursWindowsSchema = z
+  .record(z.enum(["0", "1", "2", "3", "4", "5", "6"]), z.array(serviceWindowSchema).max(6))
+  .optional();
+
 const serviceSchema = z
   .object({
     name: z.string().trim().min(1).max(120),
     description: z.string().trim().max(500).optional().or(z.literal("")),
     durationMin: z.number().int().min(5).max(600),
     durationOverrides: durationOverridesSchema,
+    hoursWindows: hoursWindowsSchema,
     price: z.number().min(0).max(100000).nullable().optional(),
     priceOverrides: priceOverridesSchema,
     active: z.boolean().optional(),
     sortOrder: z.number().int().min(0).max(1000).optional(),
+    // "Offered by every barber" as a live intent. When true, staffIds is ignored
+    // and the offering is kept in sync with all active staff (now and future).
+    offeredByAll: z.boolean().optional(),
     // Which staff offer this service (ids). Replaces the offering set on write.
+    // Ignored when offeredByAll is true.
     staffIds: z.array(z.string().min(1)).max(100).optional(),
   })
   .strict();
@@ -85,6 +109,7 @@ bookingDashboardRouter.get("/services", async (req, res) => {
       price: s.price === null ? null : Number(s.price),
       priceOverrides: s.priceOverrides ?? {},
       durationOverrides: s.durationOverrides ?? {},
+      hoursWindows: s.hoursWindows ?? {},
       staffIds: links.filter((l) => l.serviceId === s.id).map((l) => l.staffId),
     })),
   });
@@ -106,13 +131,21 @@ bookingDashboardRouter.post("/services", async (req, res) => {
       // Per-weekday overrides ({} = base every day). Stored verbatim; the zod
       // schemas already constrained them to known weekday keys + valid values.
       durationOverrides: d.durationOverrides ?? {},
+      hoursWindows: d.hoursWindows ?? {},
       price: d.price ?? null,
       priceOverrides: d.priceOverrides ?? {},
       active: d.active ?? true,
       sortOrder: d.sortOrder ?? 0,
+      offeredByAll: d.offeredByAll ?? false,
     },
   });
-  if (d.staffIds) await setServiceStaff(req.shop!.id, service.id, d.staffIds);
+  // offeredByAll wins: materialize the offering to all active staff and ignore
+  // any staffIds. Otherwise honor the hand-picked set.
+  if (d.offeredByAll) {
+    await linkServiceToAllActiveStaff(req.shop!.id, service.id);
+  } else if (d.staffIds) {
+    await setServiceStaff(req.shop!.id, service.id, d.staffIds);
+  }
   res.status(201).json({ id: service.id });
 });
 
@@ -133,17 +166,24 @@ bookingDashboardRouter.patch("/services/:id", async (req, res) => {
       ...(d.durationOverrides !== undefined
         ? { durationOverrides: d.durationOverrides }
         : {}),
+      ...(d.hoursWindows !== undefined ? { hoursWindows: d.hoursWindows } : {}),
       ...(d.price !== undefined ? { price: d.price } : {}),
       ...(d.priceOverrides !== undefined ? { priceOverrides: d.priceOverrides } : {}),
       ...(d.active !== undefined ? { active: d.active } : {}),
       ...(d.sortOrder !== undefined ? { sortOrder: d.sortOrder } : {}),
+      ...(d.offeredByAll !== undefined ? { offeredByAll: d.offeredByAll } : {}),
     },
   });
   if (count === 0) {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  if (d.staffIds !== undefined) {
+  // Re-materialize the offering to match the (possibly new) mode. If the payload
+  // sets offeredByAll true, sync to all active staff and ignore staffIds. If it
+  // sets offeredByAll false OR just sends staffIds, use the hand-picked set.
+  if (d.offeredByAll === true) {
+    await linkServiceToAllActiveStaff(req.shop!.id, req.params.id!);
+  } else if (d.staffIds !== undefined) {
     await setServiceStaff(req.shop!.id, req.params.id!, d.staffIds);
   }
   res.json({ ok: true });
@@ -178,6 +218,53 @@ async function setServiceStaff(
         data: valid.map((s) => ({ shopId, serviceId, staffId: s.id })),
       });
     }
+  });
+}
+
+/**
+ * Materialize an "offered by all" service's staff links to EVERY currently-active
+ * staff member (deleteMany + recreate, one tx). Called when a service is saved as
+ * offeredByAll. Keeping the join in sync (rather than teaching every read path a
+ * special case) means the slot engine / public page / receptionist are untouched.
+ */
+async function linkServiceToAllActiveStaff(
+  shopId: string,
+  serviceId: string,
+): Promise<void> {
+  await runWithShop(shopId, async (tx) => {
+    const active = await tx.staff.findMany({
+      where: { shopId, active: true },
+      select: { id: true },
+    });
+    await tx.serviceStaff.deleteMany({ where: { shopId, serviceId } });
+    if (active.length > 0) {
+      await tx.serviceStaff.createMany({
+        data: active.map((s) => ({ shopId, serviceId, staffId: s.id })),
+      });
+    }
+  });
+}
+
+/**
+ * The other half of "offered by all": when a staff member becomes active (created,
+ * or reactivated), link them to every offeredByAll service so "all" stays live.
+ * Idempotent - skipDuplicates guards the (serviceId, staffId) unique. This is what
+ * makes offeredByAll dynamic for barbers added AFTER a service was created.
+ */
+async function linkStaffToOfferedByAllServices(
+  shopId: string,
+  staffId: string,
+): Promise<void> {
+  await runWithShop(shopId, async (tx) => {
+    const services = await tx.service.findMany({
+      where: { shopId, offeredByAll: true },
+      select: { id: true },
+    });
+    if (services.length === 0) return;
+    await tx.serviceStaff.createMany({
+      data: services.map((s) => ({ shopId, serviceId: s.id, staffId })),
+      skipDuplicates: true,
+    });
   });
 }
 
@@ -298,6 +385,11 @@ bookingDashboardRouter.post("/staff", async (req, res) => {
       sortOrder: d.sortOrder ?? 0,
     },
   });
+  // A new ACTIVE barber joins every "offered by all" service automatically -
+  // this is what makes offeredByAll a live intent instead of a creation snapshot.
+  if (staff.active) {
+    await linkStaffToOfferedByAllServices(req.shop!.id, staff.id);
+  }
   res.status(201).json({ id: staff.id });
 });
 
@@ -319,6 +411,12 @@ bookingDashboardRouter.patch("/staff/:id", async (req, res) => {
       ...(d.sortOrder !== undefined ? { sortOrder: d.sortOrder } : {}),
     },
   });
+  // Reactivating a barber re-joins them to every "offered by all" service (the
+  // slot engine ignores inactive staff, so no pruning is needed on deactivation;
+  // skipDuplicates makes re-linking an already-linked staff a no-op).
+  if (count > 0 && d.active === true) {
+    await linkStaffToOfferedByAllServices(req.shop!.id, req.params.id!);
+  }
   res.json({ ok: count > 0 });
 });
 

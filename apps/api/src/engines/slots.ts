@@ -4,7 +4,7 @@ import {
   zonedDateParts,
   zonedWallTimeToUtc,
 } from "@chairback/config";
-import { effectiveDurationForDate } from "./pricing.js";
+import { effectiveDurationForDate, parseServiceHours } from "./pricing.js";
 
 /**
  * Open-slot computation for the native booking engine.
@@ -77,6 +77,30 @@ export function subtractRanges(
     work = next;
   }
   return work;
+}
+
+/**
+ * Intersection of two range sets: every sub-span covered by BOTH a and b. Used
+ * to constrain staff availability windows to a service's allowed hours (a slot
+ * is open only where the staff works AND the service is offered). A two-pointer
+ * sweep over the merged, sorted sets. Exported for unit tests; the hot path in
+ * computeOpenSlots does the equivalent clamp inline in shop-local minute space.
+ */
+export function intersectRanges(a: TimeRange[], b: TimeRange[]): TimeRange[] {
+  const A = mergeRanges(a);
+  const B = mergeRanges(b);
+  const out: TimeRange[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < A.length && j < B.length) {
+    const start = Math.max(A[i]!.start, B[j]!.start);
+    const end = Math.min(A[i]!.end, B[j]!.end);
+    if (end > start) out.push({ start, end });
+    // Advance whichever range ends first - the other may still overlap the next.
+    if (A[i]!.end < B[j]!.end) i++;
+    else j++;
+  }
+  return out;
 }
 
 /** Clip ranges to [min, max], dropping anything that falls entirely outside. */
@@ -161,7 +185,12 @@ export async function computeOpenSlots(
   const data = await runWithShop(input.shopId, async (tx) => {
     const service = await tx.service.findFirst({
       where: { id: input.serviceId, shopId: input.shopId, active: true },
-      select: { id: true, durationMin: true, durationOverrides: true },
+      select: {
+        id: true,
+        durationMin: true,
+        durationOverrides: true,
+        hoursWindows: true,
+      },
     });
     if (!service || service.durationMin <= 0) return null;
 
@@ -263,6 +292,13 @@ export async function computeOpenSlots(
   const extraMin = Math.max(0, input.extraDurationMin ?? 0);
   const buffer = Math.max(0, shop.bookingBufferMin);
 
+  // Optional per-service available-hours restriction (weekday -> allowed local
+  // windows). A weekday ABSENT from the map is unrestricted (staff hours as-is);
+  // PRESENT restricts the service to those windows that day (an intersection
+  // with staff hours); present + empty means the service isn't offered that day.
+  // Empty map (every existing service) => nothing is ever restricted.
+  const serviceByWeekday = parseServiceHours(service.hoursWindows);
+
   // Build the recurring windows by walking each shop-local calendar date across
   // the range (plus a day of slack on each side so a window that straddles
   // midnight in UTC is still captured).
@@ -280,23 +316,48 @@ export async function computeOpenSlots(
       const parts = zonedDateParts(cursor, shop.timezone);
       const dayRules = byWeekday.get(parts.weekday);
       if (dayRules) {
+        // Service-hours restriction for THIS weekday. `restricted` is true iff
+        // the barber set any windows for this weekday; when true, `allowed` is
+        // the (possibly empty) list of allowed local windows.
+        const restricted = serviceByWeekday.has(parts.weekday);
+        const allowed = restricted ? serviceByWeekday.get(parts.weekday)! : null;
+
         for (const dr of dayRules) {
           if (dr.endMin <= dr.startMin) continue;
-          const start = zonedWallTimeToUtc(
-            parts.year,
-            parts.month0,
-            parts.day,
-            dr.startMin,
-            shop.timezone,
-          );
-          const end = zonedWallTimeToUtc(
-            parts.year,
-            parts.month0,
-            parts.day,
-            dr.endMin,
-            shop.timezone,
-          );
-          windows.push({ start: start.getTime(), end: end.getTime() });
+
+          // Intersect the staff rule with the service's allowed windows in
+          // shop-local minute space, BEFORE converting to UTC (so DST is still
+          // handled per edge by zonedWallTimeToUtc). Unrestricted => the staff
+          // rule passes through unchanged (identical to the original behavior);
+          // an empty `allowed` yields no spans, so the day is closed.
+          const localSpans: { startMin: number; endMin: number }[] = [];
+          if (!restricted) {
+            localSpans.push({ startMin: dr.startMin, endMin: dr.endMin });
+          } else {
+            for (const a of allowed!) {
+              const s = Math.max(dr.startMin, a.startMin);
+              const e = Math.min(dr.endMin, a.endMin);
+              if (e > s) localSpans.push({ startMin: s, endMin: e });
+            }
+          }
+
+          for (const span of localSpans) {
+            const start = zonedWallTimeToUtc(
+              parts.year,
+              parts.month0,
+              parts.day,
+              span.startMin,
+              shop.timezone,
+            );
+            const end = zonedWallTimeToUtc(
+              parts.year,
+              parts.month0,
+              parts.day,
+              span.endMin,
+              shop.timezone,
+            );
+            windows.push({ start: start.getTime(), end: end.getTime() });
+          }
         }
       }
       cursor = addDays(cursor, 1);
