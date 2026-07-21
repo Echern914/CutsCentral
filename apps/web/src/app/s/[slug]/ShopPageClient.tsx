@@ -273,13 +273,15 @@ export function ShopPageClient({
         {/* Movable sections, in the shop's chosen order */}
         {order.map((key) => sections[key])}
 
-        {/* Bottom CTA + footer */}
-        <motion.footer variants={fadeUp} className="mt-10 text-center">
+        {/* Bottom CTA + footer. Flex column so the pill and the powered-by line
+            stack + center reliably — as inline-block siblings they crowded onto
+            one line when both fit. */}
+        <motion.footer variants={fadeUp} className="mt-10 flex flex-col items-center gap-6 text-center">
           {hasBooking && (
             <a
               href={preview ? undefined : bookHref ?? undefined}
               onClick={preview ? (e) => e.preventDefault() : undefined}
-              className="inline-block px-8 py-3 text-sm font-semibold"
+              className="px-8 py-3 text-sm font-semibold"
               style={{ border: `1px solid ${accent}`, color: accent, borderRadius: layout.buttonRadius }}
             >
               Book with {data.name}
@@ -292,17 +294,14 @@ export function ShopPageClient({
               barber sees exactly what browser visitors see, even when editing
               from inside the app. */}
           {inApp && !preview ? (
-            <span
-              className="mt-6 inline-block text-[11px]"
-              style={{ color: theme.muted }}
-            >
+            <span className="text-[11px]" style={{ color: theme.muted }}>
               Powered by {APP_NAME}
             </span>
           ) : (
             <a
               href={preview ? undefined : `/?ref=${encodeURIComponent(data.slug)}`}
               onClick={preview ? (e) => e.preventDefault() : undefined}
-              className="mt-6 inline-block text-[11px] underline-offset-2 hover:underline"
+              className="text-[11px] underline-offset-2 hover:underline"
               style={{ color: theme.muted }}
             >
               Powered by {APP_NAME}, loyalty for your shop
