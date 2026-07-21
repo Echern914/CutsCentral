@@ -19,9 +19,15 @@ export function PaymentsManager({ initial }: { initial: PaymentStatus }) {
   const { toast } = useToast();
   const [pending, start] = useTransition();
   const [mode, setMode] = useState(initial.paymentsMode);
-  const [cancelHours, setCancelHours] = useState(initial.cancelWindowHours);
+  // Held as raw strings so the field can be empty while typing. A numeric state
+  // defaulting to 0 rendered a literal "0" the barber couldn't delete (typing
+  // "40" showed "040"); the string lets the input clear, and we coerce on save.
+  const [cancelHours, setCancelHours] = useState(String(initial.cancelWindowHours));
+  // bps -> percent WITHOUT rounding, so a stored 4050 bps reloads as "40.5", not
+  // "41" (a rounded initializer made the displayed value drift from what was
+  // saved on every reload). Save re-multiplies by 100 and rounds to whole bps.
   const [cancelFeePct, setCancelFeePct] = useState(
-    Math.round(initial.cancelFeeBps / 100),
+    String(initial.cancelFeeBps / 100),
   );
 
   // Fee-free pay-direct (Zelle/Venmo/Cash App) — independent of Stripe Connect.
@@ -59,10 +65,14 @@ export function PaymentsManager({ initial }: { initial: PaymentStatus }) {
 
   function save() {
     start(async () => {
+      // Coerce the raw string inputs and clamp to the API's bounds (fee 0-100%
+      // -> 0-10000 bps, hours 0-720). An empty/garbage field saves as 0.
+      const feePct = Math.min(100, Math.max(0, Number(cancelFeePct) || 0));
+      const hours = Math.min(720, Math.max(0, Math.round(Number(cancelHours) || 0)));
       const r = await savePaymentSettingsAction({
         paymentsMode: mode,
-        cancelWindowHours: cancelHours,
-        cancelFeeBps: Math.round(cancelFeePct * 100),
+        cancelWindowHours: hours,
+        cancelFeeBps: Math.round(feePct * 100),
       });
       if (r.ok) toast("Payment settings saved", "success");
       else if (r.error === "connect_not_ready")
@@ -233,7 +243,7 @@ export function PaymentsManager({ initial }: { initial: PaymentStatus }) {
               min={0}
               className={field}
               value={cancelHours}
-              onChange={(e) => setCancelHours(Number(e.target.value))}
+              onChange={(e) => setCancelHours(e.target.value)}
             />
             <span className="mt-1 block text-[11px] text-muted">
               0 = always full refund.
@@ -247,7 +257,7 @@ export function PaymentsManager({ initial }: { initial: PaymentStatus }) {
               max={100}
               className={field}
               value={cancelFeePct}
-              onChange={(e) => setCancelFeePct(Number(e.target.value))}
+              onChange={(e) => setCancelFeePct(e.target.value)}
             />
             <span className="mt-1 block text-[11px] text-muted">
               100 = no refund inside the cutoff.
