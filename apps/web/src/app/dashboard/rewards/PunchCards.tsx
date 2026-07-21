@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
+import { NumberField } from "@/components/ui/NumberField";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
 import type { LoyaltyConfig } from "./page";
@@ -299,12 +300,12 @@ function CardForm({
         </label>
         <label className="text-xs text-muted">
           Punches/visit
-          <input
-            type="number"
+          <NumberField
             min={1}
             max={10}
+            integer
             value={punchesPerVisit}
-            onChange={(e) => setPunchesPerVisit(Number(e.target.value))}
+            onChange={setPunchesPerVisit}
             className={`mt-1 ${field}`}
           />
         </label>

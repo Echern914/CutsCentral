@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
+import { NumberField } from "@/components/ui/NumberField";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
@@ -363,13 +364,13 @@ function PromoForm({
         {kind !== "FREE_ADDON" ? (
           <label className="text-xs text-muted">
             {valueLabelFor[kind]}
-            <input
-              type="number"
-              min={kind === "AMOUNT_OFF" ? 1 : 1}
+            <NumberField
+              min={1}
               max={kind === "PERCENT_OFF" ? 100 : kind === "EXTRA_PUNCHES" ? 10 : 500}
               step={kind === "AMOUNT_OFF" ? 0.5 : 1}
+              integer={kind !== "AMOUNT_OFF"}
               value={value}
-              onChange={(e) => setValue(Number(e.target.value))}
+              onChange={setValue}
               className={`mt-1 ${field}`}
             />
           </label>

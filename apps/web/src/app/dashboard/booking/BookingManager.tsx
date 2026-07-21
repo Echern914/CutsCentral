@@ -3,6 +3,7 @@
 import { useEffect, useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { FormError } from "@/components/ui/FormError";
+import { NumberField } from "@/components/ui/NumberField";
 import { useToast } from "@/components/ui/Toast";
 import { useDemoTour } from "@/components/tour/state";
 import { cn } from "@/lib/cn";
@@ -334,32 +335,32 @@ function SettingsTab({
           <div className="mt-4 grid gap-4 sm:grid-cols-3">
             <label className="block">
               <span className={labelCls}>Min notice (hours)</span>
-              <input
-                type="number"
+              <NumberField
                 min={0}
+                integer
                 className={field}
                 value={lead}
-                onChange={(e) => setLead(Number(e.target.value))}
+                onChange={setLead}
               />
             </label>
             <label className="block">
               <span className={labelCls}>Book up to (days ahead)</span>
-              <input
-                type="number"
+              <NumberField
                 min={1}
+                integer
                 className={field}
                 value={maxDays}
-                onChange={(e) => setMaxDays(Number(e.target.value))}
+                onChange={setMaxDays}
               />
             </label>
             <label className="block">
               <span className={labelCls}>Buffer between (min)</span>
-              <input
-                type="number"
+              <NumberField
                 min={0}
+                integer
                 className={field}
                 value={buffer}
-                onChange={(e) => setBuffer(Number(e.target.value))}
+                onChange={setBuffer}
               />
             </label>
           </div>
@@ -626,13 +627,13 @@ function ServicesTab({
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
-        <input
+        <NumberField
           className={field}
-          type="number"
           min={5}
+          integer
           placeholder="Minutes"
           value={duration}
-          onChange={(e) => setDuration(Number(e.target.value))}
+          onChange={setDuration}
         />
         <input
           className={field}
@@ -922,13 +923,13 @@ function ServiceEditForm({
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
-          <input
+          <NumberField
             className={field}
-            type="number"
             min={5}
+            integer
             placeholder="Minutes"
             value={duration}
-            onChange={(e) => setDuration(Number(e.target.value))}
+            onChange={setDuration}
           />
           <input
             className={field}
@@ -1215,14 +1216,14 @@ function TargetedSlotsManager({
           value={label}
           onChange={(e) => setLabel(e.target.value)}
         />
-        <input
+        <NumberField
           className={field}
-          type="number"
           min={5}
+          integer
           inputMode="numeric"
           placeholder="Minutes"
           value={minutes}
-          onChange={(e) => setMinutes(Number(e.target.value))}
+          onChange={setMinutes}
           aria-label="Minutes"
         />
         <input
@@ -1237,13 +1238,13 @@ function TargetedSlotsManager({
         />
         <label className="flex items-center gap-2 text-xs text-muted sm:col-span-2">
           Repeat weekly for
-          <input
-            type="number"
+          <NumberField
             min={0}
             max={26}
+            integer
             className="w-16 rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
             value={repeatWeeks}
-            onChange={(e) => setRepeatWeeks(Number(e.target.value))}
+            onChange={setRepeatWeeks}
             aria-label="Repeat weeks"
           />
           more week{repeatWeeks === 1 ? "" : "s"} (same day &amp; time)
@@ -1357,13 +1358,13 @@ function AddOnsManager({
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
-        <input
+        <NumberField
           className={field}
-          type="number"
           min={0}
+          integer
           placeholder="+ min"
           value={duration}
-          onChange={(e) => setDuration(Number(e.target.value))}
+          onChange={setDuration}
           aria-label="Extra minutes"
         />
         <input
