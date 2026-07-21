@@ -47,15 +47,19 @@ export async function getMergedSlotsAction(
       return { staffId, res };
     }),
   );
-  // Every fan-out request must succeed; a partial merge would hide real times.
-  if (results.some((r) => !r.res.ok || !r.res.data)) {
+  // Tolerate partial failures: keep the barbers whose fetch succeeded and union
+  // their availability. Dropping a flaky barber's slots preserves everyone
+  // else's real openings; only a TOTAL failure (no barber returned) is fatal —
+  // returning an error on any single hiccup would blank the whole calendar.
+  const ok = results.filter((r) => r.res.ok && r.res.data);
+  if (ok.length === 0) {
     const failed = results.find((r) => !r.res.ok);
     return { ok: false, error: failed?.res.error ?? "failed" };
   }
-  const timezone = results[0]!.res.data!.timezone;
+  const timezone = ok[0]!.res.data!.timezone;
   // Union by instant; accumulate which staff are free at each.
   const byInstant = new Map<string, Set<string>>();
-  for (const { staffId, res } of results) {
+  for (const { staffId, res } of ok) {
     for (const s of res.data!.slots) {
       const set = byInstant.get(s.startsAt) ?? new Set<string>();
       set.add(staffId);
