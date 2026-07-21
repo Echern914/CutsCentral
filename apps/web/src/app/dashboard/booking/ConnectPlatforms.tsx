@@ -2,6 +2,7 @@
 
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { DEMO } from "@chairback/config/demo";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
@@ -59,7 +60,7 @@ export function ConnectPlatforms({
     {
       key: "native",
       name: "ChairBack Booking",
-      desc: "Take real bookings right here. No third party, no fees.",
+      desc: "Take real bookings right here. No third party, no fees. Switching here keeps any other platform connected — appointments keep syncing.",
       Logo: ChairBackMark,
     },
     {
@@ -112,12 +113,50 @@ export function ConnectPlatforms({
     });
   }
 
+  // A barber already synced to Acuity/Square is the one who hesitates to try
+  // ChairBack booking — they assume "switch" means "disconnect". It doesn't:
+  // picking a mode only sets bookingMode; the provider stays connected until
+  // they explicitly hit Disconnect. Say so, and give them a no-risk way to feel
+  // the flow (the seeded demo shop) without changing their own settings.
+  const onConnectedProvider =
+    (mode === "acuity" && connect.acuityConnected) ||
+    (mode === "square" && connect.squareConnected);
+
   return (
     <Card className="p-5">
       <CardHeader
         title="How customers book"
         subtitle="Pick where your bookings come from. You can switch anytime."
       />
+
+      {/* No-risk "try it" path: opens the seeded demo shop's real booking flow
+          in a new tab. Nothing about the barber's own shop changes. */}
+      <a
+        href={`/book/${DEMO.SHOP_SLUG}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="mt-3 inline-flex items-center gap-1.5 text-sm font-medium text-gold transition-colors duration-150 ease-out hover:text-gold-muted"
+      >
+        See ChairBack booking in action
+        <span aria-hidden>↗</span>
+      </a>
+      <p className="mt-1 text-xs text-muted">
+        Opens a sample shop&apos;s booking page in a new tab — try booking an
+        appointment yourself. Your shop and settings aren&apos;t touched.
+      </p>
+
+      {onConnectedProvider && (
+        <p className="mt-3 rounded-xl border border-subtle bg-charcoal-700/50 px-3.5 py-2.5 text-xs leading-relaxed text-muted">
+          <span className="font-medium text-offwhite">
+            Switching to ChairBack Booking won&apos;t disconnect{" "}
+            {mode === "acuity" ? "Acuity" : "Square"}.
+          </span>{" "}
+          Your account stays connected and your appointments keep syncing — only
+          where <em>new</em> online bookings are taken changes. You can switch
+          back anytime, and nothing is disconnected until you press Disconnect.
+        </p>
+      )}
+
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         {cards.map((c) => {
           const selected = mode === c.key;
