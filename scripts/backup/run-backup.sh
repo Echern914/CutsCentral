@@ -42,6 +42,18 @@ require PROD_DIRECT_URL \
         SUPABASE_S3_ENDPOINT SUPABASE_S3_REGION \
         SUPABASE_S3_ACCESS_KEY_ID SUPABASE_S3_SECRET_ACCESS_KEY
 
+# Pasting a secret into the GitHub UI easily appends a trailing newline (and
+# sometimes CRs). A stray \n on the connection URL makes pg_dump read the db name
+# as "postgres\n" and fail with `database "postgres" does not exist`. Strip all
+# surrounding whitespace/CR from the values we interpolate so paste hygiene can't
+# break the run. (trim leading+trailing ASCII whitespace incl. \r \n \t)
+trim_ws() { local v="$1"; v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]]}"}"; printf '%s' "$v"; }
+PROD_DIRECT_URL="$(trim_ws "$PROD_DIRECT_URL")"
+SUPABASE_S3_ENDPOINT="$(trim_ws "$SUPABASE_S3_ENDPOINT")"
+SUPABASE_S3_REGION="$(trim_ws "$SUPABASE_S3_REGION")"
+R2_ACCOUNT_ID="$(trim_ws "$R2_ACCOUNT_ID")"
+R2_BUCKET="$(trim_ws "$R2_BUCKET")"
+
 SRC_BUCKET="${SUPABASE_STORAGE_BUCKET:-shop-media}"
 RETENTION_DAYS="${RETENTION_DAYS:-30}"
 
