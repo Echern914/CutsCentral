@@ -4,6 +4,14 @@
 // Everything else is locked down; img allows https (shop logos are
 // barber-provided URLs).
 const isDev = process.env.NODE_ENV === "development";
+// Marketing/analytics pixels (Meta Pixel + PostHog). Their loader scripts and
+// beacon endpoints are cross-origin, so they must be allowlisted here even
+// though the pixels only load when their NEXT_PUBLIC_* env is set (so on an
+// env without keys these hosts are simply never contacted). img-src already
+// allows https: so image-beacon fallbacks work without extra entries.
+const analyticsScriptSrc = "https://connect.facebook.net https://us-assets.i.posthog.com";
+const analyticsConnectSrc =
+  "https://www.facebook.com https://us.i.posthog.com https://us-assets.i.posthog.com";
 // Stripe.js (the pay-ahead Payment Element on /book/[slug]) needs three
 // allowances per Stripe's own CSP guidance: its script from js.stripe.com,
 // its iframes (js.stripe.com + hooks.stripe.com), and API calls to
@@ -11,13 +19,13 @@ const isDev = process.env.NODE_ENV === "development";
 // tag loadStripe injects is cross-origin and script-src 'self' blocks it.
 const csp = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline' https://js.stripe.com${isDev ? " 'unsafe-eval'" : ""}`,
+  `script-src 'self' 'unsafe-inline' https://js.stripe.com ${analyticsScriptSrc}${isDev ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' https: data:",
   "font-src 'self' data:",
   // connect-src: same-origin for the app itself (push subscribe etc. go through
-  // same-origin Next route handlers) + Stripe's API for the Payment Element.
-  "connect-src 'self' https://api.stripe.com",
+  // same-origin Next route handlers) + Stripe's API + the analytics beacons.
+  `connect-src 'self' https://api.stripe.com ${analyticsConnectSrc}`,
   "frame-src https://js.stripe.com https://hooks.stripe.com",
   // The rewards PWA service worker (public/sw.js, same origin).
   "worker-src 'self'",

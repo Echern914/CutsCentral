@@ -18,7 +18,7 @@ interface ActionState {
 
 async function proxyAuth(
   path: string,
-  payload: Record<string, string | boolean>,
+  payload: Record<string, unknown>,
 ): Promise<{ ok: boolean; error?: string; setCookie?: string }> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
@@ -60,6 +60,30 @@ function applySessionCookie(setCookie: string | undefined): void {
   }
 }
 
+/**
+ * Read the first-touch attribution cookie the middleware set on landing (see
+ * apps/web/src/middleware.ts) and split it into the API's shape: the whole blob
+ * as `acquisition`, plus the `ref` code pulled out as `referralCode` (its own
+ * indexed column for affiliate reporting). Returns {} when no cookie / bad JSON,
+ * so a signup with no attribution just omits the fields.
+ */
+function readAttribution(): {
+  acquisition?: Record<string, string>;
+  referralCode?: string;
+} {
+  const raw = cookies().get("cb_attn")?.value;
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as Record<string, string>;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const referralCode =
+      typeof parsed.ref === "string" ? parsed.ref.slice(0, 200) : undefined;
+    return { acquisition: parsed, referralCode };
+  } catch {
+    return {};
+  }
+}
+
 export async function signupAction(
   _prev: ActionState,
   formData: FormData,
@@ -75,6 +99,8 @@ export async function signupAction(
     email: String(formData.get("email") ?? ""),
     password: String(formData.get("password") ?? ""),
     smsAttested: true,
+    // Acquisition source captured on landing; optional (API tolerates absence).
+    ...readAttribution(),
   });
   if (!result.ok) {
     // Actionable messages for the two fixable inputs; generic for the rest.

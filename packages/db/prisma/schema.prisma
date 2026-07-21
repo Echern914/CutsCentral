@@ -93,6 +93,19 @@ model User {
   // skips) the dashboard welcome carousel. null = never seen, so the tour
   // auto-opens once. Replaying it from the account card does NOT clear this.
   welcomeSeenAt DateTime?
+  // Acquisition attribution, captured at signup from a first-party cookie the
+  // middleware sets when a visitor lands with utm_*/gclid/fbclid params (see
+  // apps/web/src/middleware.ts). `acquisition` is the raw first-touch blob
+  // ({utmSource, utmMedium, utmCampaign, utmTerm, utmContent, gclid, fbclid,
+  // landingPath, ...}); null = organic/direct or pre-tracking signup. Used to
+  // grade marketing channels in your own data (alongside PostHog) and to
+  // attribute a paid conversion back to its source at Stripe-webhook time.
+  acquisition   Json?
+  // Referral code pulled out of the acquisition blob into its own indexed column
+  // because affiliate payouts query "signups where referralCode = X". null =
+  // not referred. The code is opaque here; the affiliate/payout system (future)
+  // owns what a code maps to.
+  referralCode  String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -102,6 +115,9 @@ model User {
   emailChangeTokens   EmailChangeToken[]
   // Barber/manager devices registered for native push (dashboard app).
   pushSubscriptions   PushSubscription[]
+
+  // Affiliate/referral reporting: "how many signups did code X drive?"
+  @@index([referralCode])
 }
 
 // One-shot forgot-password tokens. Only the sha256 of the token is stored - the
