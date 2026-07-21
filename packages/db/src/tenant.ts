@@ -149,6 +149,10 @@ type ServiceAddOnCreateNoShop = Omit<
   Prisma.ServiceAddOnUncheckedCreateInput,
   "shopId"
 >;
+type ServiceGroupCreateNoShop = Omit<
+  Prisma.ServiceGroupUncheckedCreateInput,
+  "shopId"
+>;
 
 export function forShop(shopId: string) {
   return {
@@ -705,6 +709,35 @@ export function forShop(shopId: string) {
       deleteMany: (args: Prisma.ServiceAddOnDeleteManyArgs) =>
         runWithShop(shopId, (tx) =>
           tx.serviceAddOn.deleteMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+    },
+
+    serviceGroup: {
+      findMany: (args: Prisma.ServiceGroupFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.serviceGroup.findMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      findFirst: (args: Prisma.ServiceGroupFindFirstArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.serviceGroup.findFirst({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      create: (args: { data: ServiceGroupCreateNoShop }) =>
+        runWithShop(shopId, (tx) =>
+          tx.serviceGroup.create({
+            data: stamp(args.data, shopId) as Prisma.ServiceGroupUncheckedCreateInput,
+          }),
+        ),
+      update: (args: Prisma.ServiceGroupUpdateArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.serviceGroup.update({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      updateMany: (args: Prisma.ServiceGroupUpdateManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.serviceGroup.updateMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      deleteMany: (args: Prisma.ServiceGroupDeleteManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.serviceGroup.deleteMany({ ...args, where: scopeWhere(args.where, shopId) }),
         ),
     },
 

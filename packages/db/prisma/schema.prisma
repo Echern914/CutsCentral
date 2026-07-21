@@ -373,6 +373,7 @@ model Shop {
   appointments           Appointment[]
   recurringSeries        RecurringSeries[]
   serviceAddOns          ServiceAddOn[]
+  serviceGroups          ServiceGroup[]
   targetedSlots          TargetedSlot[]
   payments               Payment[]
 
@@ -1020,6 +1021,13 @@ model Service {
   offeredByAll   Boolean  @default(false)
   active         Boolean  @default(true)
   sortOrder      Int      @default(0)
+  // Optional membership in a ServiceGroup. null = the service is standalone and
+  // uses its OWN hoursWindows/limits (the default; every existing service is null
+  // so nothing changes). When set, the group's hoursWindows OVERRIDE this
+  // service's hoursWindows, and the group's maxPerDay/maxConcurrent caps apply
+  // across all sibling members. Deleting the group SETs this back to null (the
+  // services survive). See model ServiceGroup and engines/slots.ts.
+  serviceGroupId String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -1028,6 +1036,38 @@ model Service {
   recurringSeries RecurringSeries[]
   addOns          ServiceAddOn[]
   targetedSlots   TargetedSlot[]
+  serviceGroup    ServiceGroup? @relation(fields: [serviceGroupId], references: [id], onDelete: SetNull)
+
+  @@index([shopId, active])
+  @@index([shopId, serviceGroupId])
+}
+
+// A ServiceGroup bundles several services under ONE shared config (Acuity-style
+// "Group N appointment types"). A member service inherits the group's shared
+// availability and booking caps:
+//   - hoursWindows  same shape/semantics as Service.hoursWindows, but when a
+//     service is in a group THIS map OVERRIDES the service's own windows.
+//   - maxPerDay     null => no daily cap; N => at most N bookings per shop-local
+//     day counted ACROSS all member services.
+//   - maxConcurrent null => no per-slot cap; N => at most N overlapping bookings
+//     at once across the group (a shared-resource cap).
+// A service belongs to at most one group (Service.serviceGroupId). Deleting a
+// group SetNull's its members (services survive). Enforced in engines/slots.ts
+// (computeOpenSlots), which also gates every write path via isSlotBookable.
+model ServiceGroup {
+  id            String   @id @default(cuid())
+  shopId        String
+  shop          Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  name          String
+  hoursWindows  Json     @default("{}")
+  maxPerDay     Int? // null = no daily cap across the group
+  maxConcurrent Int? // null = no per-slot (overlapping) cap across the group
+  active        Boolean  @default(true)
+  sortOrder     Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  services Service[]
 
   @@index([shopId, active])
 }
