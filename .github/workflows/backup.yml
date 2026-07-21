@@ -26,16 +26,27 @@ jobs:
       - name: Checkout (for the backup script)
         uses: actions/checkout@v4
 
-      - name: Install pg_dump v15 client + rclone
+      - name: Install pg_dump v17 client + rclone
         run: |
           set -euo pipefail
-          # Ubuntu's default postgresql-client can lag Supabase's server version,
-          # and pg_dump refuses to dump a newer server. Pin the PGDG v15 client.
+          # Supabase prod runs Postgres 17, and pg_dump refuses to dump a server
+          # NEWER than itself. Ubuntu's default client lags (v16), so pin the PGDG
+          # v17 client explicitly. Keep this >= the Supabase server major version.
           sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
           curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
           sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-client-15 rclone
-          pg_dump --version
+          sudo apt-get install -y -qq postgresql-client-17 rclone
+          # The PGDG package installs pg_dump 17 under /usr/lib/postgresql/17/bin;
+          # make sure THAT one is first on PATH (not Ubuntu's older /usr/bin one).
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+          export PATH="/usr/lib/postgresql/17/bin:$PATH"
+          # Fail loudly if we didn't actually get v17 (silent fallback was the bug).
+          ver="$(pg_dump --version | grep -oE '[0-9]+' | head -1)"
+          echo "pg_dump major version: ${ver}"
+          if [ "${ver}" -lt 17 ]; then
+            echo "::error::expected pg_dump >= 17 but got ${ver}" >&2
+            exit 1
+          fi
           rclone version | head -1
 
       - name: Compute UTC stamp
