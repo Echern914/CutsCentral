@@ -464,6 +464,46 @@ export const DEFAULT_SECTION_ORDER: PageSectionKey[] = [
 ];
 
 /**
+ * One-click LAYOUT TEMPLATES for the public page: named starting points that set
+ * the section order (which sections show, and in what order) in a single tap.
+ * They're apply-and-forget - clicking one seeds `sectionOrder`, which the barber
+ * then fine-tunes with the drag editor and saves normally; we deliberately do
+ * NOT store which template was chosen, since it goes stale the moment a section
+ * is dragged. Order-only so a template composes with whatever theme/font/shape
+ * the barber already picked. `sectionOrder` here also doubles as show/hide: a
+ * key omitted from the list is hidden (e.g. "Minimal" drops gallery/promotions).
+ */
+export const PAGE_TEMPLATES = {
+  classic: {
+    label: "Classic",
+    hint: "Deals, rewards, reviews, work, hours",
+    sectionOrder: ["promotions", "rewards", "reviews", "gallery", "hours"],
+  },
+  galleryFirst: {
+    label: "Gallery-first",
+    hint: "Lead with your work",
+    sectionOrder: ["gallery", "reviews", "promotions", "rewards", "hours"],
+  },
+  bookingFocused: {
+    label: "Booking-focused",
+    hint: "Deals and hours up top",
+    sectionOrder: ["promotions", "hours", "rewards", "reviews", "gallery"],
+  },
+  minimal: {
+    label: "Minimal",
+    hint: "Just hours and reviews",
+    sectionOrder: ["hours", "reviews"],
+  },
+} as const satisfies Record<
+  string,
+  { label: string; hint: string; sectionOrder: PageSectionKey[] }
+>;
+
+export type PageTemplateKey = keyof typeof PAGE_TEMPLATES;
+
+export const PAGE_TEMPLATE_KEYS = Object.keys(PAGE_TEMPLATES) as PageTemplateKey[];
+
+/**
  * Optional blocks on the CLIENT rewards page (/r/[magicToken]) the barber can
  * show or hide. Unlike the public page's PAGE_SECTIONS these are NOT reorderable
  * - the rewards page has a deliberate emotional order (balance -> consent ->
