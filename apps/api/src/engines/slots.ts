@@ -190,9 +190,66 @@ export async function computeOpenSlots(
         durationMin: true,
         durationOverrides: true,
         hoursWindows: true,
+        serviceGroupId: true,
       },
     });
     if (!service || service.durationMin <= 0) return null;
+
+    // SERVICE GROUP (Acuity-style bundle). When the service belongs to an active
+    // group, the group carries: shared available-hours (OVERRIDE this service's
+    // own hoursWindows below) and two shop-wide caps - maxPerDay (bookings per
+    // shop-local day across all member services) and maxConcurrent (overlapping
+    // bookings at once across the group). Ungrouped services (serviceGroupId
+    // null - every existing service, every new shop) skip this entirely and the
+    // rest of the engine is byte-for-byte the pre-group behavior.
+    const group = service.serviceGroupId
+      ? await tx.serviceGroup.findFirst({
+          where: { id: service.serviceGroupId, shopId: input.shopId, active: true },
+          select: { id: true, hoursWindows: true, maxPerDay: true, maxConcurrent: true },
+        })
+      : null;
+
+    // Member service ids of the group - the caps count bookings across ALL of
+    // them (a group cap is a shared resource cap, not a per-service one). Only
+    // needed when a cap is actually set; skip the query otherwise. NOTE: this is
+    // deliberately NOT filtered by active - a member service that was later
+    // deactivated can still have live future BOOKED/PENDING appointments, and
+    // those must keep counting against the shared cap (a deactivated service is
+    // no longer bookable, but its existing bookings still consume the resource).
+    const groupMemberIds =
+      group && (group.maxPerDay !== null || group.maxConcurrent !== null)
+        ? (
+            await tx.service.findMany({
+              where: { serviceGroupId: group.id, shopId: input.shopId },
+              select: { id: true },
+            })
+          ).map((s) => s.id)
+        : [];
+
+    // Group-cap appointment set: BOOKED+PENDING (active-hold-aware, SAME
+    // predicate as `booked` above) member-service rows across the WHOLE shop
+    // (all staff), over a padded window. This is a SEPARATE query from `booked`
+    // and is NOT gated by ignoreBooked: the caps are an availability rule (like
+    // service-hours), so the write-path check (isSlotBookable, ignoreBooked=true)
+    // must still honor them even though it skips the per-staff `booked`
+    // subtraction. Excludes the caller's own row on reschedule, mirroring booked.
+    const groupCapAppts =
+      groupMemberIds.length > 0
+        ? await tx.appointment.findMany({
+            where: {
+              serviceId: { in: groupMemberIds },
+              shopId: input.shopId,
+              status: { in: ["BOOKED", "PENDING"] },
+              AND: [{ OR: [{ holdExpiresAt: null }, { holdExpiresAt: { gt: now } }] }],
+              startsAt: { lt: new Date(rangeEnd) },
+              endsAt: { gt: new Date(rangeStart) },
+              ...(input.excludeAppointmentId
+                ? { id: { not: input.excludeAppointmentId } }
+                : {}),
+            },
+            select: { startsAt: true, endsAt: true },
+          })
+        : [];
 
     // The staff must exist, be active, and actually offer this service.
     const offers = await tx.serviceStaff.findMany({
@@ -279,10 +336,28 @@ export async function computeOpenSlots(
           select: { startsAt: true, endsAt: true },
         });
 
-    return { service, rules, recurringBlocks, exceptions, booked, targeted };
+    return {
+      service,
+      rules,
+      recurringBlocks,
+      exceptions,
+      booked,
+      targeted,
+      group,
+      groupCapAppts,
+    };
   });
   if (!data) return [];
-  const { service, rules, recurringBlocks, exceptions, booked, targeted } = data;
+  const {
+    service,
+    rules,
+    recurringBlocks,
+    exceptions,
+    booked,
+    targeted,
+    group,
+    groupCapAppts,
+  } = data;
 
   // The slot GRID steps by the service length (the start times the picker
   // offers); chosen add-ons extend how much room the appointment needs, NOT
@@ -305,7 +380,16 @@ export async function computeOpenSlots(
   // PRESENT restricts the service to those windows that day (an intersection
   // with staff hours); present + empty means the service isn't offered that day.
   // Empty map (every existing service) => nothing is ever restricted.
-  const serviceByWeekday = parseServiceHours(service.hoursWindows);
+  //
+  // GROUP OVERRIDES SERVICE: when the service is in an active group, the GROUP's
+  // hoursWindows feed the restriction instead of the service's own - the shared
+  // group hours win. Ungrouped (group === null) is the fast path: identical to
+  // parsing the service's own hoursWindows, byte-for-byte unchanged. The
+  // intersection-with-staff-rules walk below is untouched either way; only which
+  // map it reads changes.
+  const serviceByWeekday = parseServiceHours(
+    group ? group.hoursWindows : service.hoursWindows,
+  );
 
   // Build the recurring windows by walking each shop-local calendar date across
   // the range (plus a day of slack on each side so a window that straddles
@@ -475,6 +559,70 @@ export async function computeOpenSlots(
     }
   }
   slots.sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime());
+
+  // GROUP CAPS. Only when the service is in an active group AND a cap is set.
+  // The counts are computed from groupCapAppts (BOOKED+PENDING member-service
+  // rows shop-wide, hold-aware, excluding the reschedule's own row) - a SEPARATE
+  // set from the per-staff `booked` subtraction above, which is left untouched
+  // (a group cap is a shared-resource limit, not the per-barber overlap guard).
+  // Applied even under ignoreBooked (the write-path check): caps are an
+  // availability rule like service-hours, so groupCapAppts is fetched
+  // unconditionally when a cap exists, not gated by ignoreBooked.
+  //
+  //   maxConcurrent: drop a candidate if >= maxConcurrent group appointments
+  //     already OVERLAP its [startsAt, endsAt) span (half-open, buffer-free -
+  //     this is a resource-contention cap, not a turnover constraint).
+  //   maxPerDay: bucket existing group appointments by SHOP-LOCAL calendar day
+  //     (zonedDateParts, so DST-correct and matching the customer's day), then
+  //     drop every remaining candidate whose own shop-local day is already at
+  //     or over the cap.
+  //
+  // RESIDUAL RACE (documented, accepted): these counts are read outside the
+  // booking write tx's advisory lock, so a true concurrent burst can let a cap
+  // overshoot by 1 (two writers each see count == cap-1 and both commit). That
+  // matches how typical booking tools behave for a barber-facing seasonal cap;
+  // the per-(staff,startsAt) unique + tx overlap guard still prevent genuine
+  // double-books, only the soft group cap can slip by one under contention.
+  if (group && (group.maxPerDay !== null || group.maxConcurrent !== null)) {
+    // Shop-local day key (YYYY-MM-DD in shop tz) for a given instant.
+    const dayKey = (at: Date): string => {
+      const p = zonedDateParts(at, shop.timezone);
+      return `${p.year}-${p.month0}-${p.day}`;
+    };
+
+    // Pre-bucket existing group appointments by shop-local day for maxPerDay.
+    const perDayCount = new Map<string, number>();
+    if (group.maxPerDay !== null) {
+      for (const a of groupCapAppts) {
+        const k = dayKey(a.startsAt);
+        perDayCount.set(k, (perDayCount.get(k) ?? 0) + 1);
+      }
+    }
+
+    const kept: Slot[] = [];
+    for (const s of slots) {
+      // maxPerDay: this candidate's shop-local day already at/over the cap.
+      if (group.maxPerDay !== null) {
+        const k = dayKey(s.startsAt);
+        if ((perDayCount.get(k) ?? 0) >= group.maxPerDay) continue;
+      }
+      // maxConcurrent: overlapping group appointments at this candidate's span.
+      if (group.maxConcurrent !== null) {
+        const sStart = s.startsAt.getTime();
+        const sEnd = s.endsAt.getTime();
+        let overlap = 0;
+        for (const a of groupCapAppts) {
+          if (a.startsAt.getTime() < sEnd && a.endsAt.getTime() > sStart) {
+            overlap++;
+          }
+        }
+        if (overlap >= group.maxConcurrent) continue;
+      }
+      kept.push(s);
+    }
+    return kept;
+  }
+
   return slots;
 }
 

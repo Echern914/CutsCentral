@@ -138,6 +138,40 @@ export async function deleteServiceAction(id: string): Promise<Result> {
   return done(await apiSend("DELETE", `/api/booking/services/${id}`));
 }
 
+//  Service groups
+
+// A group bundles several services under ONE shared config. hoursWindows uses the
+// same shape as a service's own windows but OVERRIDES each member's windows while
+// the service is in the group. maxPerDay = total bookings/shop-local-day across all
+// members; maxConcurrent = overlapping bookings at once across the group. Either
+// cap null = no limit. serviceIds = the group's current membership.
+export interface ServiceGroupInput {
+  name: string;
+  hoursWindows?: ServiceHoursWindows;
+  maxPerDay?: number | null;
+  maxConcurrent?: number | null;
+  serviceIds?: string[];
+  active?: boolean;
+  sortOrder?: number;
+}
+
+export async function createServiceGroupAction(
+  input: ServiceGroupInput,
+): Promise<Result> {
+  return done(await apiSend("POST", "/api/booking/groups", input));
+}
+
+export async function updateServiceGroupAction(
+  id: string,
+  input: Partial<ServiceGroupInput>,
+): Promise<Result> {
+  return done(await apiSend("PATCH", `/api/booking/groups/${id}`, input));
+}
+
+export async function deleteServiceGroupAction(id: string): Promise<Result> {
+  return done(await apiSend("DELETE", `/api/booking/groups/${id}`));
+}
+
 //  Availability
 
 export async function saveAvailabilityAction(

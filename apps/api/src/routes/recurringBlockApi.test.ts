@@ -41,7 +41,7 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-const put = (body: unknown) =>
+const put = (body: object) =>
   request(app).put(`/api/booking/staff/${staffId}/availability`).set("Cookie", cookie).send(body);
 const get = () =>
   request(app).get(`/api/booking/staff/${staffId}/availability`).set("Cookie", cookie);

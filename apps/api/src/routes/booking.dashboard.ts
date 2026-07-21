@@ -116,6 +116,11 @@ bookingDashboardRouter.get("/services", async (req, res) => {
       priceOverrides: s.priceOverrides ?? {},
       durationOverrides: s.durationOverrides ?? {},
       hoursWindows: s.hoursWindows ?? {},
+      // Which group (if any) this service belongs to. null for every service on
+      // a shop not using groups - the web UI keys the "in group X" badge off it.
+      // The bare findMany above returns serviceGroupId by default; ...s carries
+      // it, this line just makes the contract explicit.
+      serviceGroupId: s.serviceGroupId ?? null,
       staffIds: links.filter((l) => l.serviceId === s.id).map((l) => l.staffId),
     })),
   });
@@ -204,6 +209,177 @@ bookingDashboardRouter.delete("/services/:id", async (req, res) => {
   const { count } = await db.service.updateMany({
     where: { id: req.params.id },
     data: { active: false },
+  });
+  res.json({ ok: count > 0 });
+});
+
+//  Service groups (Acuity-style: several services share ONE hours + limits config)
+
+// A group bundles several services under one shared config. hoursWindows reuses
+// the SAME validator as a service's own windows (identical {weekday:[{s,e}]}
+// shape) - a grouped service's own windows are overridden by the group's. The
+// two caps are shop-local-day (maxPerDay) and overlapping (maxConcurrent) totals
+// across all member services; either null = uncapped. serviceIds is the member
+// set to (re)assign on write. .strict() rejects stray keys like the other schemas.
+const groupSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+    hoursWindows: hoursWindowsSchema,
+    maxPerDay: z.number().int().min(1).max(1000).nullable().optional(),
+    maxConcurrent: z.number().int().min(1).max(100).nullable().optional(),
+    active: z.boolean().optional(),
+    sortOrder: z.number().int().min(0).max(1000).optional(),
+    serviceIds: z.array(z.string().min(1)).max(200).optional(),
+  })
+  .strict();
+
+bookingDashboardRouter.get("/groups", async (req, res) => {
+  const db = forShop(req.shop!.id);
+  const [groups, services] = await Promise.all([
+    db.serviceGroup.findMany({
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    }),
+    // One pass over active services, grouped in JS below - avoids N queries.
+    db.service.findMany({
+      where: { active: true },
+      select: { id: true, serviceGroupId: true },
+    }),
+  ]);
+  res.json({
+    groups: groups.map((g) => ({
+      ...g,
+      hoursWindows: g.hoursWindows ?? {},
+      serviceIds: services
+        .filter((s) => s.serviceGroupId === g.id)
+        .map((s) => s.id),
+    })),
+  });
+});
+
+bookingDashboardRouter.post("/groups", async (req, res) => {
+  const parsed = groupSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const d = parsed.data;
+  const shopId = req.shop!.id;
+  // Create the group AND claim its initial members in ONE tx (matching the PATCH
+  // reassignment), so a create can never leave a group with zero members because
+  // the follow-up assignment failed. Member ids are intersected with this shop's
+  // real services (like setServiceStaff's defensive filter) so a foreign/bogus id
+  // is silently dropped rather than crossing tenants.
+  const groupId = await runWithShop(shopId, async (tx) => {
+    const group = await tx.serviceGroup.create({
+      data: {
+        shopId,
+        name: d.name,
+        hoursWindows: d.hoursWindows ?? {},
+        maxPerDay: d.maxPerDay ?? null,
+        maxConcurrent: d.maxConcurrent ?? null,
+        active: d.active ?? true,
+        sortOrder: d.sortOrder ?? 0,
+      },
+    });
+    if (d.serviceIds && d.serviceIds.length > 0) {
+      const valid = await tx.service.findMany({
+        where: { shopId, id: { in: d.serviceIds } },
+        select: { id: true },
+      });
+      if (valid.length > 0) {
+        await tx.service.updateMany({
+          where: { shopId, id: { in: valid.map((s) => s.id) } },
+          data: { serviceGroupId: group.id },
+        });
+      }
+    }
+    return group.id;
+  });
+  res.status(201).json({ id: groupId });
+});
+
+bookingDashboardRouter.patch("/groups/:id", async (req, res) => {
+  const parsed = groupSchema.partial().safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const d = parsed.data;
+  const shopId = req.shop!.id;
+  const groupId = req.params.id!;
+  const db = forShop(shopId);
+  const { count } = await db.serviceGroup.updateMany({
+    where: { id: groupId },
+    data: {
+      ...(d.name !== undefined ? { name: d.name } : {}),
+      ...(d.hoursWindows !== undefined ? { hoursWindows: d.hoursWindows } : {}),
+      ...(d.maxPerDay !== undefined ? { maxPerDay: d.maxPerDay ?? null } : {}),
+      ...(d.maxConcurrent !== undefined
+        ? { maxConcurrent: d.maxConcurrent ?? null }
+        : {}),
+      ...(d.active !== undefined ? { active: d.active } : {}),
+      ...(d.sortOrder !== undefined ? { sortOrder: d.sortOrder } : {}),
+    },
+  });
+  if (count === 0) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  // Reassign membership atomically when serviceIds is present: first release any
+  // current member no longer listed (-> serviceGroupId null), then claim the
+  // listed ones (this shop only). One tx so the group never briefly loses/keeps
+  // the wrong members. An empty array clears the group's membership entirely.
+  if (d.serviceIds !== undefined) {
+    await runWithShop(shopId, async (tx) => {
+      const ids = d.serviceIds ?? [];
+      // Only ids that are real services in this shop can be claimed.
+      const valid =
+        ids.length > 0
+          ? await tx.service.findMany({
+              where: { shopId, id: { in: ids } },
+              select: { id: true },
+            })
+          : [];
+      const validIds = valid.map((s) => s.id);
+      // Release members that were in this group but aren't in the new set.
+      await tx.service.updateMany({
+        where: {
+          shopId,
+          serviceGroupId: groupId,
+          ...(validIds.length > 0 ? { id: { notIn: validIds } } : {}),
+        },
+        data: { serviceGroupId: null },
+      });
+      // Claim the listed (valid) services into this group.
+      if (validIds.length > 0) {
+        await tx.service.updateMany({
+          where: { shopId, id: { in: validIds } },
+          data: { serviceGroupId: groupId },
+        });
+      }
+    });
+  }
+  res.json({ ok: true });
+});
+
+// Soft-delete (active=false) AND detach members in one tx, so a "deleted" group
+// can never keep overriding its ex-members' hours/limits. The services survive
+// (their serviceGroupId is nulled - onDelete:SetNull semantics, applied here).
+bookingDashboardRouter.delete("/groups/:id", async (req, res) => {
+  const shopId = req.shop!.id;
+  const groupId = req.params.id!;
+  const count = await runWithShop(shopId, async (tx) => {
+    const updated = await tx.serviceGroup.updateMany({
+      where: { shopId, id: groupId },
+      data: { active: false },
+    });
+    if (updated.count > 0) {
+      await tx.service.updateMany({
+        where: { shopId, serviceGroupId: groupId },
+        data: { serviceGroupId: null },
+      });
+    }
+    return updated.count;
   });
   res.json({ ok: count > 0 });
 });

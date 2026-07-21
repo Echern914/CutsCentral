@@ -57,6 +57,26 @@ export interface ServiceRow {
   active: boolean;
   sortOrder: number;
   staffIds: string[];
+  // Non-null = this service belongs to a group; the group's hoursWindows + booking
+  // limits override this service's own. null = ungrouped (the default for every
+  // existing service, so zero behavior change).
+  serviceGroupId: string | null;
+}
+/**
+ * A group bundles several services under ONE shared config: shared hoursWindows
+ * that OVERRIDE each member's own windows, plus booking limits (maxPerDay = total
+ * bookings/shop-local-day across all members; maxConcurrent = overlapping bookings
+ * at once across the group; either null = no cap). serviceIds = current membership.
+ */
+export interface ServiceGroupRow {
+  id: string;
+  name: string;
+  hoursWindows: Record<string, { s: number; e: number }[]>;
+  maxPerDay: number | null;
+  maxConcurrent: number | null;
+  active: boolean;
+  sortOrder: number;
+  serviceIds: string[];
 }
 export interface AddOnRow {
   id: string;
@@ -135,11 +155,12 @@ export default async function BookingPage() {
   const agendaFrom = new Date(monthStart.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const agendaTo = new Date(monthEnd.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
-  const [shopRes, staffRes, servicesRes, addOnsRes, agendaRes, waitlistRes, acuityRes, squareRes] =
+  const [shopRes, staffRes, servicesRes, groupsRes, addOnsRes, agendaRes, waitlistRes, acuityRes, squareRes] =
     await Promise.all([
       apiGet<BookingShop>("/api/shops/me"),
       apiGet<{ staff: StaffRow[] }>("/api/booking/staff"),
       apiGet<{ services: ServiceRow[] }>("/api/booking/services"),
+      apiGet<{ groups: ServiceGroupRow[] }>("/api/booking/groups"),
       apiGet<{ addOns: AddOnRow[] }>("/api/booking/addons"),
       apiGet<AgendaResponse>(
         `/api/booking/agenda?from=${encodeURIComponent(agendaFrom)}&to=${encodeURIComponent(agendaTo)}`,
@@ -182,6 +203,7 @@ export default async function BookingPage() {
         connect={connect}
         initialStaff={staffRes.data?.staff ?? []}
         initialServices={servicesRes.data?.services ?? []}
+        initialServiceGroups={groupsRes.data?.groups ?? []}
         initialAddOns={addOnsRes.data?.addOns ?? []}
         initialAgenda={
           agendaRes.data ?? {

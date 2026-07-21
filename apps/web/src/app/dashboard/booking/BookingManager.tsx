@@ -13,6 +13,7 @@ import type {
   AgendaResponse,
   BookingShop,
   ConnectStatus,
+  ServiceGroupRow,
   ServiceRow,
   StaffRow,
   WaitlistRow,
@@ -24,10 +25,12 @@ import { TimeSelect } from "@/components/ui/TimeSelect";
 import {
   createAddOnAction,
   createServiceAction,
+  createServiceGroupAction,
   createStaffAction,
   createTargetedSlotAction,
   deleteAddOnAction,
   deleteServiceAction,
+  deleteServiceGroupAction,
   deleteStaffAction,
   deleteTargetedSlotAction,
   getAvailabilityAction,
@@ -35,6 +38,7 @@ import {
   saveAvailabilityAction,
   saveBookingSettingsAction,
   updateServiceAction,
+  updateServiceGroupAction,
   type TargetedSlotRow,
 } from "./actions";
 
@@ -103,6 +107,7 @@ export function BookingManager({
   connect,
   initialStaff,
   initialServices,
+  initialServiceGroups,
   initialAddOns,
   initialAgenda,
   initialWaitlist,
@@ -113,6 +118,7 @@ export function BookingManager({
   connect: ConnectStatus;
   initialStaff: StaffRow[];
   initialServices: ServiceRow[];
+  initialServiceGroups: ServiceGroupRow[];
   initialAddOns: AddOnRow[];
   initialAgenda: AgendaResponse;
   initialWaitlist: WaitlistRow[];
@@ -208,6 +214,7 @@ export function BookingManager({
           <ServicesTab
             initial={initialServices}
             staff={initialStaff}
+            initialServiceGroups={initialServiceGroups}
             initialAddOns={initialAddOns}
             toast={toast}
           />
@@ -606,11 +613,13 @@ function StaffTab({ initial, toast }: { initial: StaffRow[]; toast: Toast }) {
 function ServicesTab({
   initial,
   staff,
+  initialServiceGroups,
   initialAddOns,
   toast,
 }: {
   initial: ServiceRow[];
   staff: StaffRow[];
+  initialServiceGroups: ServiceGroupRow[];
   initialAddOns: AddOnRow[];
   toast: Toast;
 }) {
@@ -808,10 +817,22 @@ function ServicesTab({
           key={editing.id}
           service={editing}
           staff={staff}
+          groupName={
+            editing.serviceGroupId
+              ? (initialServiceGroups.find((g) => g.id === editing.serviceGroupId)
+                  ?.name ?? null)
+              : null
+          }
           toast={toast}
           onClose={() => setEditing(null)}
         />
       )}
+
+      <ServiceGroupsManager
+        initial={initialServiceGroups}
+        services={initial}
+        toast={toast}
+      />
 
       <AddOnsManager initial={initialAddOns} services={initial} toast={toast} />
 
@@ -828,11 +849,15 @@ function ServicesTab({
 function ServiceEditForm({
   service,
   staff,
+  groupName,
   toast,
   onClose,
 }: {
   service: ServiceRow;
   staff: StaffRow[];
+  // Non-null = this service is in a group; the group owns hours + limits, so the
+  // per-service hours editor is replaced with a note (the group overrides it).
+  groupName: string | null;
   toast: Toast;
   onClose: () => void;
 }) {
@@ -910,12 +935,16 @@ function ServiceEditForm({
     }
     // A restricted day whose end is not after its start is a user error, not a
     // "closed" instruction - block save so they don't silently lose the day.
-    const badRow = hoursRows.some(
-      (r) => r.restricted && hhmmToMin(r.end) <= hhmmToMin(r.start),
-    );
-    if (badRow) {
-      toast("Service hours: end must be after start", "error");
-      return;
+    // Skipped when grouped: the group owns hours, so the editor is hidden and we
+    // must not send its (now irrelevant) windows.
+    if (!groupName) {
+      const badRow = hoursRows.some(
+        (r) => r.restricted && hhmmToMin(r.end) <= hhmmToMin(r.start),
+      );
+      if (badRow) {
+        toast("Service hours: end must be after start", "error");
+        return;
+      }
     }
     // If hand-picking, at least one barber must be selected (an empty pick that
     // isn't "all" would offer the service to nobody).
@@ -932,7 +961,9 @@ function ServiceEditForm({
         // restriction actually persists - PATCH is partial, absent = unchanged.
         priceOverrides: buildPriceOverrides(dayPrices),
         durationOverrides: buildDurationOverrides(dayDurations),
-        hoursWindows: buildHoursWindows(hoursRows),
+        // Grouped services get their hours from the group (which overrides these),
+        // so omit the field entirely - PATCH is partial, absent = leave unchanged.
+        ...(groupName ? {} : { hoursWindows: buildHoursWindows(hoursRows) }),
         color,
         // offeredByAll wins server-side; send staffIds only for the hand-picked
         // case so a later-added barber is auto-included when "all" is chosen.
@@ -1033,53 +1064,65 @@ function ServiceEditForm({
         {/* Per-service available hours. Unchecked day = available whenever the
             barber works; check a day + set a window to limit this service (e.g.
             "Mens Haircut only 10:00-14:00"). It intersects with the barber's
-            weekly hours - it never widens them. */}
-        <div>
-          <div className="flex items-center justify-between gap-3">
-            <span className={labelCls}>Available hours for this service (optional)</span>
-            {/* Check/uncheck every day in one tap instead of one by one. */}
-            <button
-              type="button"
-              onClick={() => setAllHours(!allHoursChecked)}
-              className="shrink-0 rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:border-gold/50 hover:text-gold"
-            >
-              {allHoursChecked ? "Uncheck all days" : "Check all days"}
-            </button>
+            weekly hours - it never widens them. When the service is in a group,
+            the group owns hours + limits, so the editor is hidden. */}
+        {groupName ? (
+          <div>
+            <span className={labelCls}>Available hours for this service</span>
+            <p className="mt-1 rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-xs text-muted">
+              Hours &amp; limits are managed by the group{" "}
+              <span className="text-offwhite">“{groupName}”</span>. Edit them in{" "}
+              <span className="text-offwhite">Service groups</span> below.
+            </p>
           </div>
-          <p className="mt-0.5 text-[11px] text-muted">
-            Leave a day unchecked to offer it whenever the barber works. Check a
-            day and set a window to limit it.
-          </p>
-          <div className="mt-2 flex flex-col gap-2">
-            {hoursRows.map((r, i) => (
-              <div key={i} className="flex items-center gap-3">
-                <label className="flex w-20 items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={r.restricted}
-                    onChange={(e) => setHoursRow(i, { restricted: e.target.checked })}
+        ) : (
+          <div>
+            <div className="flex items-center justify-between gap-3">
+              <span className={labelCls}>Available hours for this service (optional)</span>
+              {/* Check/uncheck every day in one tap instead of one by one. */}
+              <button
+                type="button"
+                onClick={() => setAllHours(!allHoursChecked)}
+                className="shrink-0 rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:border-gold/50 hover:text-gold"
+              >
+                {allHoursChecked ? "Uncheck all days" : "Check all days"}
+              </button>
+            </div>
+            <p className="mt-0.5 text-[11px] text-muted">
+              Leave a day unchecked to offer it whenever the barber works. Check a
+              day and set a window to limit it.
+            </p>
+            <div className="mt-2 flex flex-col gap-2">
+              {hoursRows.map((r, i) => (
+                <div key={i} className="flex items-center gap-3">
+                  <label className="flex w-20 items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={r.restricted}
+                      onChange={(e) => setHoursRow(i, { restricted: e.target.checked })}
+                    />
+                    {WEEKDAYS[i]}
+                  </label>
+                  <TimeSelect
+                    disabled={!r.restricted}
+                    value={r.start}
+                    onChange={(v) => setHoursRow(i, { start: v })}
+                    className={timeSelectCls}
+                    aria-label={`${WEEKDAYS[i]} available from`}
                   />
-                  {WEEKDAYS[i]}
-                </label>
-                <TimeSelect
-                  disabled={!r.restricted}
-                  value={r.start}
-                  onChange={(v) => setHoursRow(i, { start: v })}
-                  className={timeSelectCls}
-                  aria-label={`${WEEKDAYS[i]} available from`}
-                />
-                <span className="text-muted">–</span>
-                <TimeSelect
-                  disabled={!r.restricted}
-                  value={r.end}
-                  onChange={(v) => setHoursRow(i, { end: v })}
-                  className={timeSelectCls}
-                  aria-label={`${WEEKDAYS[i]} available until`}
-                />
-              </div>
-            ))}
+                  <span className="text-muted">–</span>
+                  <TimeSelect
+                    disabled={!r.restricted}
+                    value={r.end}
+                    onChange={(v) => setHoursRow(i, { end: v })}
+                    className={timeSelectCls}
+                    aria-label={`${WEEKDAYS[i]} available until`}
+                  />
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         <button
           onClick={save}
@@ -1434,6 +1477,346 @@ function AddOnsManager({
         )}
       </ul>
     </Card>
+  );
+}
+
+//  Service groups (Acuity-style) - bundle services under ONE shared config:
+//  shared available-hours that OVERRIDE each member's own windows, plus booking
+//  limits (maxPerDay = total bookings/shop-local-day across all members;
+//  maxConcurrent = overlapping bookings at once across the group). Each group
+//  renders COMPACT (collapsed header) by default and EXPANDED on toggle. The list
+//  refreshes via revalidatePath on every action, so there's no local list sync.
+
+function ServiceGroupsManager({
+  initial,
+  services,
+  toast,
+}: {
+  initial: ServiceGroupRow[];
+  services: ServiceRow[];
+  toast: Toast;
+}) {
+  const [name, setName] = useState("");
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [pending, start] = useTransition();
+  const activeGroups = initial.filter((g) => g.active);
+
+  function add() {
+    if (!name.trim()) return;
+    start(async () => {
+      const r = await createServiceGroupAction({ name: name.trim() });
+      if (r.ok) {
+        toast("Group added", "success");
+        setName("");
+      } else toast("Couldn't add", "error");
+    });
+  }
+
+  return (
+    <Card className="p-5">
+      <CardHeader
+        title="Service groups"
+        subtitle="Bundle services under one shared set of available hours and booking limits (Acuity-style). A grouped service uses the group's hours instead of its own."
+      />
+      <div className="mt-3 flex gap-2">
+        <input
+          className={field}
+          placeholder="Group name (e.g. Color services)"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && add()}
+        />
+        <button
+          onClick={add}
+          disabled={pending}
+          className="shrink-0 rounded-xl bg-gold px-4 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+        >
+          Add group
+        </button>
+      </div>
+
+      <ul className="mt-5 flex flex-col gap-2">
+        {activeGroups.map((g) => (
+          <ServiceGroupItem
+            key={g.id}
+            group={g}
+            services={services}
+            expanded={expandedId === g.id}
+            onToggle={() =>
+              setExpandedId((cur) => (cur === g.id ? null : g.id))
+            }
+            toast={toast}
+          />
+        ))}
+        {activeGroups.length === 0 && (
+          <li className="text-sm text-muted">No service groups yet.</li>
+        )}
+      </ul>
+    </Card>
+  );
+}
+
+/** A limits summary for the collapsed header ("Using global limits" / "5/day ·
+ *  2 at once" / "5/day" / "2 at once"). Both null = no caps set on the group. */
+function limitsSummary(maxPerDay: number | null, maxConcurrent: number | null): string {
+  const parts: string[] = [];
+  if (maxPerDay != null) parts.push(`${maxPerDay}/day`);
+  if (maxConcurrent != null) parts.push(`${maxConcurrent} at once`);
+  return parts.length ? parts.join(" · ") : "Using global limits";
+}
+
+// One group row: COMPACT header (name · N services · limits · chevron) that
+// expands into the members-chips + name-edit + availability/limits editor.
+function ServiceGroupItem({
+  group,
+  services,
+  expanded,
+  onToggle,
+  toast,
+}: {
+  group: ServiceGroupRow;
+  services: ServiceRow[];
+  expanded: boolean;
+  onToggle: () => void;
+  toast: Toast;
+}) {
+  const activeServices = services.filter((s) => s.active);
+  const [name, setName] = useState(group.name);
+  const [serviceIds, setServiceIds] = useState<string[]>(group.serviceIds);
+  const [hoursRows, setHoursRows] = useState<ServiceHoursRow[]>(() =>
+    hoursRowsFromWindows(group.hoursWindows),
+  );
+  // 0 = no cap (sent to the API as null). NumberField holds a number and settles
+  // an emptied field back to 0, so 0 is the natural "no cap" sentinel here.
+  const [maxPerDay, setMaxPerDay] = useState<number>(group.maxPerDay ?? 0);
+  const [maxConcurrent, setMaxConcurrent] = useState<number>(
+    group.maxConcurrent ?? 0,
+  );
+  const [pending, start] = useTransition();
+
+  function toggleService(id: string) {
+    setServiceIds((cur) =>
+      cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id],
+    );
+  }
+  function setHoursRow(i: number, patch: Partial<ServiceHoursRow>) {
+    setHoursRows((cur) => cur.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  }
+  const allHoursChecked = hoursRows.every((r) => r.restricted);
+
+  // 0 (or blank, which NumberField settles to 0) = no cap → null. Otherwise the
+  // cap must be a positive integer.
+  function parseCap(n: number): { ok: boolean; value: number | null } {
+    if (n <= 0) return { ok: true, value: null };
+    if (!Number.isInteger(n)) return { ok: false, value: null };
+    return { ok: true, value: n };
+  }
+
+  function save() {
+    if (!name.trim()) {
+      toast("Group name is required", "error");
+      return;
+    }
+    const badRow = hoursRows.some(
+      (r) => r.restricted && hhmmToMin(r.end) <= hhmmToMin(r.start),
+    );
+    if (badRow) {
+      toast("Group hours: end must be after start", "error");
+      return;
+    }
+    const perDay = parseCap(maxPerDay);
+    const concurrent = parseCap(maxConcurrent);
+    if (!perDay.ok || !concurrent.ok) {
+      toast("Limits must be a whole number (or blank for no cap)", "error");
+      return;
+    }
+    start(async () => {
+      const r = await updateServiceGroupAction(group.id, {
+        name: name.trim(),
+        hoursWindows: buildHoursWindows(hoursRows),
+        maxPerDay: perDay.value,
+        maxConcurrent: concurrent.value,
+        serviceIds,
+      });
+      toast(r.ok ? "Group saved" : "Couldn't save", r.ok ? "success" : "error");
+    });
+  }
+
+  function remove() {
+    start(async () => {
+      const r = await deleteServiceGroupAction(group.id);
+      toast(r.ok ? "Group removed" : "Couldn't remove", r.ok ? "success" : "error");
+    });
+  }
+
+  return (
+    <li className="rounded-xl border border-subtle">
+      {/* COMPACT header - always visible; the chevron toggles the editor. */}
+      <button
+        onClick={onToggle}
+        aria-expanded={expanded}
+        className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left"
+      >
+        <span className="text-sm">
+          {group.name}{" "}
+          <span className="text-xs text-muted">
+            · {group.serviceIds.length} service
+            {group.serviceIds.length === 1 ? "" : "s"} ·{" "}
+            {limitsSummary(group.maxPerDay, group.maxConcurrent)}
+          </span>
+        </span>
+        <span
+          className={cn(
+            "shrink-0 text-muted transition-transform duration-150 ease-out",
+            expanded && "rotate-180",
+          )}
+          aria-hidden
+        >
+          ▾
+        </span>
+      </button>
+
+      {/* EXPANDED - members chips + name edit + availability/limits editor. */}
+      {expanded && (
+        <div className="flex flex-col gap-4 border-t border-subtle px-4 py-4">
+          <div>
+            <span className={labelCls}>Group name</span>
+            <input
+              className={cn(field, "mt-1")}
+              placeholder="Group name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <span className={labelCls}>Services in this group</span>
+            <p className="mt-0.5 text-[11px] text-muted">
+              A service can be in one group at a time — adding it here moves it
+              out of any other group.
+            </p>
+            <div className="mt-1 flex flex-wrap gap-2">
+              {activeServices.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => toggleService(s.id)}
+                  className={cn(
+                    "rounded-full border px-3 py-1 text-xs transition-colors",
+                    serviceIds.includes(s.id)
+                      ? "border-gold/60 bg-gold/10 text-gold"
+                      : "border-subtle text-muted",
+                  )}
+                >
+                  {s.name}
+                </button>
+              ))}
+              {activeServices.length === 0 && (
+                <span className="text-xs text-muted">Add a service first.</span>
+              )}
+            </div>
+          </div>
+
+          {/* Shared available-hours grid - same idiom as ServiceEditForm; these
+              hours OVERRIDE each member service's own windows. */}
+          <div>
+            <div className="flex items-center justify-between gap-3">
+              <span className={labelCls}>Available hours for this group (optional)</span>
+              <button
+                type="button"
+                onClick={() =>
+                  setHoursRows((cur) =>
+                    cur.map((r) => ({ ...r, restricted: !allHoursChecked })),
+                  )
+                }
+                className="shrink-0 rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:border-gold/50 hover:text-gold"
+              >
+                {allHoursChecked ? "Uncheck all days" : "Check all days"}
+              </button>
+            </div>
+            <p className="mt-0.5 text-[11px] text-muted">
+              Leave a day unchecked to offer it whenever the barber works. Check a
+              day and set a window to limit every service in this group.
+            </p>
+            <div className="mt-2 flex flex-col gap-2">
+              {hoursRows.map((r, i) => (
+                <div key={i} className="flex items-center gap-3">
+                  <label className="flex w-20 items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={r.restricted}
+                      onChange={(e) => setHoursRow(i, { restricted: e.target.checked })}
+                    />
+                    {WEEKDAYS[i]}
+                  </label>
+                  <TimeSelect
+                    disabled={!r.restricted}
+                    value={r.start}
+                    onChange={(v) => setHoursRow(i, { start: v })}
+                    className={timeSelectCls}
+                    aria-label={`${WEEKDAYS[i]} available from`}
+                  />
+                  <span className="text-muted">–</span>
+                  <TimeSelect
+                    disabled={!r.restricted}
+                    value={r.end}
+                    onChange={(v) => setHoursRow(i, { end: v })}
+                    className={timeSelectCls}
+                    aria-label={`${WEEKDAYS[i]} available until`}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Booking limits across the whole group. Blank/0 = no cap. */}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block">
+              <span className={labelCls}>Max per day (blank = no cap)</span>
+              <NumberField
+                min={0}
+                max={1000}
+                integer
+                className={cn(field, "mt-1")}
+                placeholder="No cap"
+                value={maxPerDay}
+                onChange={setMaxPerDay}
+                aria-label="Max bookings per day for this group"
+              />
+            </label>
+            <label className="block">
+              <span className={labelCls}>Max at once (blank = no cap)</span>
+              <NumberField
+                min={0}
+                max={100}
+                integer
+                className={cn(field, "mt-1")}
+                placeholder="No cap"
+                value={maxConcurrent}
+                onChange={setMaxConcurrent}
+                aria-label="Max concurrent bookings for this group"
+              />
+            </label>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <button
+              onClick={save}
+              disabled={pending}
+              className="rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+            >
+              {pending ? "Saving…" : "Save"}
+            </button>
+            <button
+              onClick={remove}
+              disabled={pending}
+              className="text-xs text-danger-soft hover:underline disabled:opacity-50"
+            >
+              Remove
+            </button>
+          </div>
+        </div>
+      )}
+    </li>
   );
 }
 
