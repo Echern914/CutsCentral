@@ -21,6 +21,7 @@ import { BookingCalendar } from "./BookingCalendar";
 import { ConnectPlatforms } from "./ConnectPlatforms";
 import { Sheet } from "./AppointmentForm";
 import { TimeSelect } from "@/components/ui/TimeSelect";
+import { ImageField } from "../site/ImageField";
 import {
   createAddOnAction,
   createServiceAction,
@@ -838,6 +839,10 @@ function ServiceEditForm({
 }) {
   const activeStaff = staff.filter((s) => s.active);
   const [name, setName] = useState(service.name);
+  // Public-card content: a multi-line description (supports an "INCLUDES:" list)
+  // and a menu photo. Both optional; empty = the card renders without them.
+  const [description, setDescription] = useState(service.description ?? "");
+  const [imageUrl, setImageUrl] = useState(service.imageUrl ?? "");
   const [duration, setDuration] = useState(service.durationMin);
   const [price, setPrice] = useState(service.price !== null ? String(service.price) : "");
   // Seed the per-day override inputs from the stored maps (weekday -> string).
@@ -926,6 +931,9 @@ function ServiceEditForm({
     start(async () => {
       const r = await updateServiceAction(service.id, {
         name: name.trim(),
+        // Send trimmed values (empty string clears the column server-side).
+        description: description.trim(),
+        imageUrl: imageUrl.trim(),
         durationMin: duration,
         price: priceNum,
         // Always send the FULL maps (including {}) so clearing an override or a
@@ -971,6 +979,34 @@ function ServiceEditForm({
             placeholder="Price ($)"
             value={price}
             onChange={(e) => setPrice(e.target.value)}
+          />
+        </div>
+
+        {/* Public booking-card content: what the customer sees when they pick
+            this service. A description (one line per bullet works — e.g. an
+            "INCLUDES:" list) and a menu photo. Both optional. */}
+        <div>
+          <span className={labelCls}>Description (shown on the booking page)</span>
+          <textarea
+            className={cn(field, "mt-1 min-h-[96px] resize-y leading-relaxed")}
+            placeholder={"What's included, e.g.\nThe VIP Package — most requested\nINCLUDES:\n• Haircut of choice\n• Hot towel + facial"}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            maxLength={800}
+          />
+          <span className="mt-0.5 block text-[11px] text-muted/80">
+            Line breaks are kept — put each “includes” item on its own line.
+          </span>
+        </div>
+
+        <div className="max-w-[220px]">
+          <ImageField
+            label="Photo (shown on the booking card)"
+            hint="A square photo of the cut/result. Optional."
+            value={imageUrl}
+            onChange={setImageUrl}
+            kind="service"
+            aspect="square"
           />
         </div>
 

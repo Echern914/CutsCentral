@@ -14,7 +14,7 @@ const API_BASE = process.env.API_BASE_URL ?? "http://localhost:4000";
 const MAX_BYTES = 8 * 1024 * 1024; // mirror the API cap for a clean early reject
 const ALLOWED = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 // Mirror UploadKind in apps/api/src/services/storage.ts (and useImageUpload.ts).
-const KINDS = new Set(["logo", "hero", "gallery", "avatar"]);
+const KINDS = new Set(["logo", "hero", "gallery", "avatar", "service"]);
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const kind = req.nextUrl.searchParams.get("kind") ?? "gallery";

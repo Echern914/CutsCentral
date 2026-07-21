@@ -23,10 +23,10 @@ const ALLOWED: Record<string, string> = {
 export const MAX_UPLOAD_BYTES = 8 * 1024 * 1024; // 8 MB
 
 /** Photo "slot" - only used to organize the storage path. "avatar" is the
- *  owner's profile photo (account page); stored under the shop path like the
- *  rest since every uploader is a shop owner. */
-export type UploadKind = "logo" | "hero" | "gallery" | "avatar";
-const KINDS: readonly UploadKind[] = ["logo", "hero", "gallery", "avatar"];
+ *  owner's profile photo (account page); "service" is a per-service booking-card
+ *  photo. All stored under the shop path since every uploader is a shop owner. */
+export type UploadKind = "logo" | "hero" | "gallery" | "avatar" | "service";
+const KINDS: readonly UploadKind[] = ["logo", "hero", "gallery", "avatar", "service"];
 
 export function isUploadKind(v: unknown): v is UploadKind {
   return typeof v === "string" && (KINDS as readonly string[]).includes(v);

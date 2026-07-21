@@ -33,6 +33,10 @@ export interface BookShopData {
     id: string;
     name: string;
     description: string | null;
+    // Per-service menu photo (https URL) + calendar-color KEY (SERVICE_COLORS).
+    // Both cosmetic on the card: photo = thumbnail, color = left-edge accent.
+    imageUrl: string | null;
+    color: string | null;
     durationMin: number;
     price: number | null;
     // Per-weekday price overrides ({ "0": 55 } = Sunday $55); the client picks the

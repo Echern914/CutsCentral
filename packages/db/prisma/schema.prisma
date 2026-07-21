@@ -1005,6 +1005,11 @@ model Service {
   // re-tuned without a migration. Purely cosmetic - drives the accent stripe on
   // the barber's appointment blocks.
   color          String?
+  // Per-service photo shown on the PUBLIC booking card (a menu-style thumbnail,
+  // like a "VIP Package" shot). https(s) URL in the public storage bucket; same
+  // boundary guard as the shop/staff branding images. null = no photo (the card
+  // renders text-only, unchanged). Uploaded via the "service" upload kind.
+  imageUrl       String?
   // "Offered by every barber" as a LIVE intent, not a snapshot. When true, the
   // ServiceStaff join is kept materialized to all currently-active staff: creating
   // or reactivating a barber auto-links them to this service, so "all" genuinely

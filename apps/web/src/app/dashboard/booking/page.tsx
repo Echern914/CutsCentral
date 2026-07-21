@@ -39,6 +39,8 @@ export interface ServiceRow {
   id: string;
   name: string;
   description: string | null;
+  // Per-service booking-card photo (https URL in the public bucket), or null.
+  imageUrl: string | null;
   durationMin: number;
   price: number | null;
   // Per-weekday price overrides ({ "0": 55 } = Sunday $55). {} = base every day.

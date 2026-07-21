@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { DEMO } from "@chairback/config/demo";
+import { serviceColorHex } from "@chairback/config/constants";
 import { BackToDashboard } from "@/components/BackToDashboard";
 import { useSignalNativeReady } from "@/lib/nativeReady";
 import { DemoTour } from "@/components/tour/DemoTour";
@@ -571,31 +572,58 @@ export function BookingClient({ data }: { data: BookShopData }) {
         }
       >
         <div className="flex flex-col gap-2">
-          {data.services.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              onClick={() => pickService(s.id)}
-              aria-pressed={serviceId === s.id}
-              className="flex items-center justify-between rounded-xl border px-4 py-3 text-left transition-colors"
-              style={{
-                borderColor: serviceId === s.id ? accent : "rgba(255,255,255,0.12)",
-                backgroundColor: serviceId === s.id ? `${accent}14` : "transparent",
-              }}
-            >
-              <span>
-                <span className="block text-sm font-medium">{s.name}</span>
-                <span className="block text-xs text-muted">
-                  {s.durationRange.min === s.durationRange.max
-                    ? `${s.durationMin} min`
-                    : `${s.durationRange.min}-${s.durationRange.max} min`}
-                </span>
-              </span>
-              {priceLabel(s) && (
-                <span className="text-sm text-muted">{priceLabel(s)}</span>
-              )}
-            </button>
-          ))}
+          {data.services.map((s) => {
+            const selected = serviceId === s.id;
+            // The barber's calendar color, echoed as a left-edge accent stripe so
+            // the customer sees the same coding. null = no stripe (plain border).
+            const stripe = serviceColorHex(s.color);
+            const durationLabel =
+              s.durationRange.min === s.durationRange.max
+                ? `${s.durationMin} min`
+                : `${s.durationRange.min}-${s.durationRange.max} min`;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => pickService(s.id)}
+                aria-pressed={selected}
+                className="overflow-hidden rounded-xl border text-left transition-colors"
+                style={{
+                  borderColor: selected ? accent : "rgba(255,255,255,0.12)",
+                  backgroundColor: selected ? `${accent}14` : "transparent",
+                  // A 3px color rail on the leading edge when the service has one.
+                  borderLeft: stripe ? `3px solid ${stripe}` : undefined,
+                }}
+              >
+                <div className="flex items-start gap-3 px-4 py-3">
+                  {s.imageUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={s.imageUrl}
+                      alt=""
+                      className="h-14 w-14 shrink-0 rounded-lg border border-white/10 object-cover"
+                    />
+                  ) : null}
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-baseline justify-between gap-3">
+                      <span className="block text-sm font-medium">{s.name}</span>
+                      {priceLabel(s) && (
+                        <span className="shrink-0 text-sm text-muted">{priceLabel(s)}</span>
+                      )}
+                    </span>
+                    <span className="mt-0.5 block text-xs text-muted">{durationLabel}</span>
+                    {/* Barber's description. whitespace-pre-line keeps the line
+                        breaks so an "INCLUDES:" list renders as a list. */}
+                    {s.description && (
+                      <span className="mt-1.5 block whitespace-pre-line text-xs leading-relaxed text-muted/90">
+                        {s.description}
+                      </span>
+                    )}
+                  </span>
+                </div>
+              </button>
+            );
+          })}
           {data.services.length === 0 && (
             <p className="text-sm text-muted">No services available yet.</p>
           )}

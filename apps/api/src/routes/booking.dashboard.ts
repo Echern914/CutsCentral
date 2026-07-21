@@ -78,7 +78,19 @@ const hoursWindowsSchema = z
 const serviceSchema = z
   .object({
     name: z.string().trim().min(1).max(120),
-    description: z.string().trim().max(500).optional().or(z.literal("")),
+    // Roomy enough for a multi-line "INCLUDES:" bullet list on the public
+    // booking card (the whole point of the richer menu). Newlines are preserved
+    // in the column; the card renders them with whitespace-pre-line.
+    description: z.string().trim().max(800).optional().or(z.literal("")),
+    // Per-service booking-card photo. Same http(s) boundary as staff.imageUrl.
+    imageUrl: z
+      .string()
+      .trim()
+      .url()
+      .max(500)
+      .refine((u) => /^https?:\/\//i.test(u), "Must be an http(s) URL")
+      .optional()
+      .or(z.literal("")),
     durationMin: z.number().int().min(5).max(600),
     durationOverrides: durationOverridesSchema,
     hoursWindows: hoursWindowsSchema,
@@ -133,6 +145,7 @@ bookingDashboardRouter.post("/services", async (req, res) => {
     data: {
       name: d.name,
       description: d.description || null,
+      imageUrl: d.imageUrl || null,
       durationMin: d.durationMin,
       // Per-weekday overrides ({} = base every day). Stored verbatim; the zod
       // schemas already constrained them to known weekday keys + valid values.
@@ -169,6 +182,7 @@ bookingDashboardRouter.patch("/services/:id", async (req, res) => {
     data: {
       ...(d.name !== undefined ? { name: d.name } : {}),
       ...(d.description !== undefined ? { description: d.description || null } : {}),
+      ...(d.imageUrl !== undefined ? { imageUrl: d.imageUrl || null } : {}),
       ...(d.durationMin !== undefined ? { durationMin: d.durationMin } : {}),
       ...(d.durationOverrides !== undefined
         ? { durationOverrides: d.durationOverrides }
