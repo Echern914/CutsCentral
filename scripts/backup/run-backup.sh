@@ -42,17 +42,29 @@ require PROD_DIRECT_URL \
         SUPABASE_S3_ENDPOINT SUPABASE_S3_REGION \
         SUPABASE_S3_ACCESS_KEY_ID SUPABASE_S3_SECRET_ACCESS_KEY
 
-# Pasting a secret into the GitHub UI easily appends a trailing newline (and
-# sometimes CRs). A stray \n on the connection URL makes pg_dump read the db name
-# as "postgres\n" and fail with `database "postgres" does not exist`. Strip all
-# surrounding whitespace/CR from the values we interpolate so paste hygiene can't
-# break the run. (trim leading+trailing ASCII whitespace incl. \r \n \t)
-trim_ws() { local v="$1"; v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]]}"}"; printf '%s' "$v"; }
-PROD_DIRECT_URL="$(trim_ws "$PROD_DIRECT_URL")"
-SUPABASE_S3_ENDPOINT="$(trim_ws "$SUPABASE_S3_ENDPOINT")"
-SUPABASE_S3_REGION="$(trim_ws "$SUPABASE_S3_REGION")"
-R2_ACCOUNT_ID="$(trim_ws "$R2_ACCOUNT_ID")"
-R2_BUCKET="$(trim_ws "$R2_BUCKET")"
+# Pasting a secret into the GitHub UI easily appends stray characters — a trailing
+# newline, CR, non-breaking space (U+00A0), or a zero-width/BOM char — none of which
+# `[[:space:]]` reliably matches. A stray char on the connection URL makes pg_dump
+# read the db name as "postgres\n" and fail with `database "postgres" does not exist`.
+# Nuke every ASCII control char (0x00-0x1F, 0x7F) and surrounding whitespace from the
+# values we interpolate, using `tr` (handles \r \n \t) then a whitespace trim.
+sanitize() {
+  local v
+  v="$(printf '%s' "$1" | tr -d '\000-\037\177')"        # strip all C0 controls + DEL
+  v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]]}"}"  # trim edge whitespace
+  printf '%s' "$v"
+}
+PROD_DIRECT_URL="$(sanitize "$PROD_DIRECT_URL")"
+SUPABASE_S3_ENDPOINT="$(sanitize "$SUPABASE_S3_ENDPOINT")"
+SUPABASE_S3_REGION="$(sanitize "$SUPABASE_S3_REGION")"
+R2_ACCOUNT_ID="$(sanitize "$R2_ACCOUNT_ID")"
+R2_BUCKET="$(sanitize "$R2_BUCKET")"
+
+# One-line diagnostic (NO secrets): confirm the URL parses to the expected db name.
+# If this ever prints a db other than "postgres", the value has hidden chars we
+# didn't strip — surfaces the problem instead of a cryptic pg_dump failure.
+_db="${PROD_DIRECT_URL##*/}"
+echo "==> parsed target database: [${_db}] (expect: [postgres]), url length: ${#PROD_DIRECT_URL}"
 
 SRC_BUCKET="${SUPABASE_STORAGE_BUCKET:-shop-media}"
 RETENTION_DAYS="${RETENTION_DAYS:-30}"
