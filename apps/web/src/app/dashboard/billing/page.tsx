@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/Card";
 import { DemoTour } from "@/components/tour/DemoTour";
 import { HideInNativeApp } from "@/components/HideInNativeApp";
 import { ShowInNativeApp } from "@/components/ShowInNativeApp";
+import { TrackConversion } from "@/components/TrackConversion";
 import {
   CancelMembershipButton,
   ManageBillingButton,
@@ -165,6 +166,19 @@ export default async function BillingPage({
           `prospect` — read-only demo sessions finish on the signup CTA).
           data-tour: keep in sync with packages/config/src/demoTour.ts. */}
       <DemoTour tour="dashboard" route="billing" prospect={Boolean(me.data?.demo)} />
+      {/* Purchase conversion. Stripe redirects here with ?checkout/upgrade/
+          receptionist=success after a paid action; fire once per session per
+          type. The searchParam is the browser-side signal - the authoritative
+          record is the Stripe webhook (server-side CAPI is a P2 follow-up). */}
+      {searchParams?.checkout === "success" && (
+        <TrackConversion event="purchase" dedupeKey="checkout" value={currentPrice} />
+      )}
+      {searchParams?.upgrade === "success" && (
+        <TrackConversion event="purchase" dedupeKey="upgrade" value={currentPrice} />
+      )}
+      {searchParams?.receptionist === "success" && (
+        <TrackConversion event="purchase" dedupeKey="receptionist" value={40} />
+      )}
       <h1 className="font-display text-2xl tracking-tight">Billing</h1>
       {/* The plan-comparison subtitle is a subscription pitch — hidden in-app
           (App Store 3.1.1). In-app this page shows only price-free account

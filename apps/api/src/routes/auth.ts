@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { apiEnv, ACTIVE_SHOP_COOKIE_NAME } from "@chairback/config";
-import { prisma } from "@chairback/db";
+import { prisma, Prisma } from "@chairback/db";
 import { hashPassword, verifyPassword } from "../auth/password.js";
 import {
   SESSION_COOKIE_NAME,
@@ -35,6 +35,25 @@ import { logger } from "../logger.js";
 const env = apiEnv();
 export const authRouter: Router = Router();
 
+// Acquisition attribution captured on landing (see apps/web/src/middleware.ts),
+// forwarded from the signup action. A bounded, string-only map of known
+// marketing params + landingPath; unknown keys are dropped and values capped so
+// a crafted cookie can't bloat the row. All optional - a signup with no
+// attribution simply omits it.
+const attributionSchema = z
+  .object({
+    utm_source: z.string().max(200).optional(),
+    utm_medium: z.string().max(200).optional(),
+    utm_campaign: z.string().max(200).optional(),
+    utm_term: z.string().max(200).optional(),
+    utm_content: z.string().max(200).optional(),
+    gclid: z.string().max(200).optional(),
+    fbclid: z.string().max(200).optional(),
+    ref: z.string().max(200).optional(),
+    landingPath: z.string().max(200).optional(),
+  })
+  .strip(); // drop any unknown keys rather than reject the whole signup
+
 const signupSchema = z
   .object({
     email: z.string().email(),
@@ -43,8 +62,29 @@ const signupSchema = z
     // SMS attestation: must be literally true. The barber affirms they'll only
     // add/text consented clients and are authorized to send on their behalf.
     smsAttested: z.literal(true),
+    // Optional marketing attribution + the referral code (persisted separately).
+    acquisition: attributionSchema.optional(),
+    referralCode: z.string().max(200).optional(),
   })
   .strict();
+
+/**
+ * Normalize attribution into the User create fields. An empty acquisition blob
+ * becomes null (nothing to store); the referral code is stored on its own
+ * indexed column. Shared by the password + Google signup paths.
+ */
+function attributionData(input: {
+  acquisition?: Record<string, string | undefined>;
+  referralCode?: string;
+}): { acquisition?: Prisma.InputJsonValue; referralCode?: string } {
+  const clean = Object.fromEntries(
+    Object.entries(input.acquisition ?? {}).filter(([, v]) => v != null && v !== ""),
+  );
+  return {
+    ...(Object.keys(clean).length > 0 ? { acquisition: clean } : {}),
+    ...(input.referralCode ? { referralCode: input.referralCode } : {}),
+  };
+}
 
 const loginSchema = z
   .object({
@@ -59,7 +99,7 @@ authRouter.post("/signup", authLimiter, async (req, res) => {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
     return;
   }
-  const { email, password, name } = parsed.data;
+  const { email, password, name, acquisition, referralCode } = parsed.data;
   const normalizedEmail = email.trim().toLowerCase();
 
   const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
@@ -76,6 +116,7 @@ authRouter.post("/signup", authLimiter, async (req, res) => {
       passwordHash,
       name: name.trim(),
       smsAttestedAt: new Date(), // schema requires smsAttested === true to reach here
+      ...attributionData({ acquisition, referralCode }),
     },
   });
 
@@ -410,6 +451,12 @@ authRouter.get("/google/callback", authLimiter, async (req, res) => {
           data: { googleId: profile.sub },
         });
       } else {
+        // NOTE: no acquisition attribution on the Google path yet. The cb_attn
+        // cookie lives on the WEB origin (Vercel); this callback runs on the API
+        // origin (Railway), so the cookie isn't readable here. Capturing it would
+        // mean threading attribution through the OAuth `state` round-trip - a
+        // follow-up. Password signup (the majority) is attributed via the web
+        // action. See apps/web/src/app/(auth)/actions.ts.
         user = await prisma.user.create({
           data: { email: profile.email, name: profile.name, googleId: profile.sub },
         });

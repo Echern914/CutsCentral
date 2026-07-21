@@ -12,6 +12,7 @@ import { createShopAction } from "./actions";
 import { fadeUp } from "@/components/motion/variants";
 import { Card } from "@/components/ui/Card";
 import { FormError } from "@/components/ui/FormError";
+import { TrackConversion } from "@/components/TrackConversion";
 
 // Keep the global :focus-visible ring (WCAG 2.4.7): no `outline-none`, and the
 // border tint is a supplement to that ring, not the sole focus indicator.
@@ -39,6 +40,9 @@ export default function OnboardingShopPage() {
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center px-5">
+      {/* Signup conversion. /onboarding is the first page after a successful
+          signup redirect; fires once per session so a refresh doesn't re-count. */}
+      <TrackConversion event="signup" dedupeKey="signup" />
       <motion.div variants={fadeUp} initial="hidden" animate="show">
         <p className="text-center text-xs uppercase tracking-[0.2em] text-muted">
           Step 1 of 3

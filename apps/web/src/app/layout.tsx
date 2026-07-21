@@ -4,6 +4,7 @@ import { Analytics } from "@vercel/analytics/next";
 import { APP_NAME } from "@chairback/config/constants";
 import { MotionConfigProvider } from "@/components/motion/MotionConfigProvider";
 import { ToastProvider } from "@/components/ui/Toast";
+import { AnalyticsScripts } from "@/components/AnalyticsScripts";
 import "./globals.css";
 
 const inter = Inter({
@@ -97,6 +98,10 @@ export default function RootLayout({
             va.vercel-scripts.com, which the CSP blocks - analytics simply
             doesn't run locally, which is the behavior we want anyway. */}
         <Analytics />
+        {/* Meta Pixel + PostHog — each loads only when its NEXT_PUBLIC_* env is
+            set, so this is inert until you configure a pixel/key. See
+            components/AnalyticsScripts.tsx and lib/analytics.ts. */}
+        <AnalyticsScripts />
       </body>
     </html>
   );
