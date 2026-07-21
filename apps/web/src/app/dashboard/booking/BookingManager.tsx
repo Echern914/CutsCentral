@@ -670,60 +670,17 @@ function ServicesTab({
 
       {/* Optional per-day overrides ("Vary by day"). Leave a day blank to use
           the base price/length; fill one in to differ (e.g. Sunday premium, or
-          "Friday cuts are 20 min"). A filled day lights up so it's obvious at a
-          glance which days are customized. Duration drives the slot grid: a
-          20-min Friday makes Friday book in 20-min blocks. */}
+          "Friday cuts are 20 min"). Duration drives the slot grid: a 20-min
+          Friday makes Friday book in 20-min blocks. */}
       <div className="mt-3">
-        <span className={labelCls}>Vary by day? (optional — price and/or minutes)</span>
-        <div className="mt-1 grid grid-cols-4 gap-2 sm:grid-cols-7">
-          {WEEKDAYS.map((label, wd) => {
-            const customized =
-              (dayPrices[wd] ?? "").trim() !== "" ||
-              (dayDurations[wd] ?? "").trim() !== "";
-            return (
-              <div
-                key={wd}
-                className={cn(
-                  "flex flex-col gap-1 rounded-lg p-1",
-                  customized && "bg-gold/10 ring-1 ring-gold/40",
-                )}
-              >
-                <span
-                  className={cn(
-                    "text-[10px]",
-                    customized ? "font-semibold text-gold" : "text-muted",
-                  )}
-                >
-                  {label}
-                </span>
-                <input
-                  type="number"
-                  min={0}
-                  inputMode="decimal"
-                  placeholder={price.trim() ? `$${price}` : "$ base"}
-                  value={dayPrices[wd] ?? ""}
-                  onChange={(e) =>
-                    setDayPrices((cur) => ({ ...cur, [wd]: e.target.value }))
-                  }
-                  className="w-full rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50"
-                  aria-label={`${label} price`}
-                />
-                <input
-                  type="number"
-                  min={5}
-                  inputMode="numeric"
-                  placeholder={`${duration || "?"} min`}
-                  value={dayDurations[wd] ?? ""}
-                  onChange={(e) =>
-                    setDayDurations((cur) => ({ ...cur, [wd]: e.target.value }))
-                  }
-                  className="w-full rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50"
-                  aria-label={`${label} minutes`}
-                />
-              </div>
-            );
-          })}
-        </div>
+        <VaryByDayEditor
+          dayPrices={dayPrices}
+          dayDurations={dayDurations}
+          basePrice={price}
+          baseDuration={duration}
+          onPrice={(wd, v) => setDayPrices((cur) => ({ ...cur, [wd]: v }))}
+          onDuration={(wd, v) => setDayDurations((cur) => ({ ...cur, [wd]: v }))}
+        />
       </div>
 
       <button
@@ -853,6 +810,12 @@ function ServiceEditForm({
   function setHoursRow(i: number, patch: Partial<ServiceHoursRow>) {
     setHoursRows((cur) => cur.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   }
+  // Check / uncheck every weekday at once (Drick: "an option to open all days
+  // instead of checking one by one"). Preserves each row's start/end times.
+  const allHoursChecked = hoursRows.every((r) => r.restricted);
+  function setAllHours(restricted: boolean) {
+    setHoursRows((cur) => cur.map((r) => ({ ...r, restricted })));
+  }
 
   function save() {
     if (!name.trim()) {
@@ -979,65 +942,31 @@ function ServiceEditForm({
         )}
 
         {/* Per-day price/duration overrides (same idiom as the add form). */}
-        <div>
-          <span className={labelCls}>Vary by day? (optional — price and/or minutes)</span>
-          <div className="mt-1 grid grid-cols-4 gap-2 sm:grid-cols-7">
-            {WEEKDAYS.map((label, wd) => {
-              const customized =
-                (dayPrices[wd] ?? "").trim() !== "" ||
-                (dayDurations[wd] ?? "").trim() !== "";
-              return (
-                <div
-                  key={wd}
-                  className={cn(
-                    "flex flex-col gap-1 rounded-lg p-1",
-                    customized && "bg-gold/10 ring-1 ring-gold/40",
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "text-[10px]",
-                      customized ? "font-semibold text-gold" : "text-muted",
-                    )}
-                  >
-                    {label}
-                  </span>
-                  <input
-                    type="number"
-                    min={0}
-                    inputMode="decimal"
-                    placeholder={price.trim() ? `$${price}` : "$ base"}
-                    value={dayPrices[wd] ?? ""}
-                    onChange={(e) =>
-                      setDayPrices((cur) => ({ ...cur, [wd]: e.target.value }))
-                    }
-                    className="w-full rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50"
-                    aria-label={`${label} price`}
-                  />
-                  <input
-                    type="number"
-                    min={5}
-                    inputMode="numeric"
-                    placeholder={`${duration || "?"} min`}
-                    value={dayDurations[wd] ?? ""}
-                    onChange={(e) =>
-                      setDayDurations((cur) => ({ ...cur, [wd]: e.target.value }))
-                    }
-                    className="w-full rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50"
-                    aria-label={`${label} minutes`}
-                  />
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        <VaryByDayEditor
+          dayPrices={dayPrices}
+          dayDurations={dayDurations}
+          basePrice={price}
+          baseDuration={duration}
+          onPrice={(wd, v) => setDayPrices((cur) => ({ ...cur, [wd]: v }))}
+          onDuration={(wd, v) => setDayDurations((cur) => ({ ...cur, [wd]: v }))}
+        />
 
         {/* Per-service available hours. Unchecked day = available whenever the
             barber works; check a day + set a window to limit this service (e.g.
             "Mens Haircut only 10:00-14:00"). It intersects with the barber's
             weekly hours - it never widens them. */}
         <div>
-          <span className={labelCls}>Available hours for this service (optional)</span>
+          <div className="flex items-center justify-between gap-3">
+            <span className={labelCls}>Available hours for this service (optional)</span>
+            {/* Check/uncheck every day in one tap instead of one by one. */}
+            <button
+              type="button"
+              onClick={() => setAllHours(!allHoursChecked)}
+              className="shrink-0 rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:border-gold/50 hover:text-gold"
+            >
+              {allHoursChecked ? "Uncheck all days" : "Check all days"}
+            </button>
+          </div>
           <p className="mt-0.5 text-[11px] text-muted">
             Leave a day unchecked to offer it whenever the barber works. Check a
             day and set a window to limit it.
@@ -1637,4 +1566,97 @@ function hoursRowsFromWindows(
       end: first ? minToHHMM(first.e) : "14:00",
     };
   });
+}
+
+/**
+ * Per-weekday price/duration overrides ("vary by day"). Laid out as one ROW per
+ * day rather than a cramped 7-column grid, with an explicit "$" on the price and
+ * "min" on the duration, and inputs wide enough to actually show the number -
+ * the old grid squeezed both into ~1/7 of the sheet, so values rendered as
+ * unreadable stubs ("$6", "3C"). Blank = that day uses the base price/length; a
+ * filled day highlights so it's obvious which days differ. Shared by the add and
+ * edit forms so the two stay identical.
+ */
+function VaryByDayEditor({
+  dayPrices,
+  dayDurations,
+  basePrice,
+  baseDuration,
+  onPrice,
+  onDuration,
+}: {
+  dayPrices: Record<number, string>;
+  dayDurations: Record<number, string>;
+  basePrice: string;
+  baseDuration: number;
+  onPrice: (wd: number, value: string) => void;
+  onDuration: (wd: number, value: string) => void;
+}) {
+  const cell =
+    "w-full rounded-lg border border-subtle bg-charcoal-700 py-1.5 pl-6 pr-2 text-sm text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50";
+  return (
+    <div>
+      <span className={labelCls}>Vary by day? (optional — price and/or minutes)</span>
+      <p className="mt-0.5 text-[11px] text-muted">
+        Leave a day blank to use the base {basePrice.trim() ? `$${basePrice}` : "price"} /{" "}
+        {baseDuration || "?"} min. Fill one in to charge or run that day differently.
+      </p>
+      {/* Column headers so it's obvious which field is dollars vs. minutes. */}
+      <div className="mt-2 grid grid-cols-[3rem_1fr_1fr] gap-2 px-0.5 text-[10px] uppercase tracking-wide text-muted">
+        <span />
+        <span>Price</span>
+        <span>Minutes</span>
+      </div>
+      <div className="mt-1 flex flex-col gap-1.5">
+        {WEEKDAYS.map((label, wd) => {
+          const customized =
+            (dayPrices[wd] ?? "").trim() !== "" || (dayDurations[wd] ?? "").trim() !== "";
+          return (
+            <div key={wd} className="grid grid-cols-[3rem_1fr_1fr] items-center gap-2">
+              <span
+                className={cn(
+                  "text-xs",
+                  customized ? "font-semibold text-gold" : "text-muted",
+                )}
+              >
+                {label}
+              </span>
+              {/* Price — a persistent "$" prefix so the unit is never in doubt. */}
+              <div className="relative">
+                <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-sm text-muted">
+                  $
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  inputMode="decimal"
+                  placeholder={basePrice.trim() ? basePrice : "base"}
+                  value={dayPrices[wd] ?? ""}
+                  onChange={(e) => onPrice(wd, e.target.value)}
+                  className={cell}
+                  aria-label={`${label} price in dollars`}
+                />
+              </div>
+              {/* Minutes — a persistent "min" suffix. */}
+              <div className="relative">
+                <input
+                  type="number"
+                  min={5}
+                  inputMode="numeric"
+                  placeholder={`${baseDuration || "?"}`}
+                  value={dayDurations[wd] ?? ""}
+                  onChange={(e) => onDuration(wd, e.target.value)}
+                  className="w-full rounded-lg border border-subtle bg-charcoal-700 py-1.5 pl-2 pr-10 text-sm text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50"
+                  aria-label={`${label} minutes`}
+                />
+                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted">
+                  min
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
