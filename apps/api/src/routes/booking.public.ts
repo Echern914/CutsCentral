@@ -74,6 +74,8 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
         id: true,
         name: true,
         description: true,
+        imageUrl: true,
+        color: true,
         durationMin: true,
         durationOverrides: true,
         price: true,
@@ -147,6 +149,11 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
         id: s.id,
         name: s.name,
         description: s.description,
+        // Per-service booking-card photo (https URL) + calendar color KEY. Both
+        // purely cosmetic on the public card: the photo is a menu thumbnail, the
+        // color a subtle left-edge accent matching the barber's calendar coding.
+        imageUrl: s.imageUrl,
+        color: s.color,
         durationMin: s.durationMin,
         price: base,
         // Per-weekday overrides ({weekday: price}); the client computes the exact

@@ -103,6 +103,7 @@ type ServiceHoursWindows = Record<string, { s: number; e: number }[]>;
 export async function createServiceAction(input: {
   name: string;
   description?: string;
+  imageUrl?: string;
   durationMin: number;
   durationOverrides?: Record<string, number>;
   hoursWindows?: ServiceHoursWindows;
@@ -120,6 +121,7 @@ export async function updateServiceAction(
   input: {
     name?: string;
     description?: string;
+    imageUrl?: string;
     durationMin?: number;
     durationOverrides?: Record<string, number>;
     hoursWindows?: ServiceHoursWindows;
@@ -127,7 +129,7 @@ export async function updateServiceAction(
     priceOverrides?: Record<string, number>;
     active?: boolean;
     color?: string | null;
-  offeredByAll?: boolean;
+    offeredByAll?: boolean;
     staffIds?: string[];
   },
 ): Promise<Result> {
