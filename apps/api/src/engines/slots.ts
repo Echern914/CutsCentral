@@ -215,6 +215,14 @@ export async function computeOpenSlots(
       select: { weekday: true, startMin: true, endMin: true },
     });
 
+    // Recurring weekly block-offs (a standing lunch break etc.). Same per-staff,
+    // weekday-keyed shape as `rules`, but SUBTRACTED - built into `blocks` below
+    // via the same per-date UTC walk so DST lands identically to the windows.
+    const recurringBlocks = await tx.recurringBlock.findMany({
+      where: { staffId: input.staffId, shopId: input.shopId },
+      select: { weekday: true, startMin: true, endMin: true },
+    });
+
     // Exceptions over the (slightly padded) window range.
     const exceptions = await tx.availabilityException.findMany({
       where: {
@@ -271,10 +279,10 @@ export async function computeOpenSlots(
           select: { startsAt: true, endsAt: true },
         });
 
-    return { service, rules, exceptions, booked, targeted };
+    return { service, rules, recurringBlocks, exceptions, booked, targeted };
   });
   if (!data) return [];
-  const { service, rules, exceptions, booked, targeted } = data;
+  const { service, rules, recurringBlocks, exceptions, booked, targeted } = data;
 
   // The slot GRID steps by the service length (the start times the picker
   // offers); chosen add-ons extend how much room the appointment needs, NOT
@@ -365,6 +373,50 @@ export async function computeOpenSlots(
   }
 
   const blocks: TimeRange[] = [];
+
+  // Recurring weekly block-offs: same per-date walk as the windows above, so the
+  // block for a given shop-local date is converted with the SAME DST offset as
+  // the availability window it carves. A Mon 12:00-13:30 block lands at the right
+  // wall-clock hour year-round (and on the DST-transition day itself, since
+  // zonedWallTimeToUtc resolves the offset at the target instant). Subtracted
+  // unconditionally - a break blocks every service, so it is NOT intersected with
+  // the per-service hours restriction.
+  const blocksByWeekday = new Map<number, { startMin: number; endMin: number }[]>();
+  for (const rb of recurringBlocks) {
+    if (rb.endMin <= rb.startMin) continue; // defensive
+    const list = blocksByWeekday.get(rb.weekday) ?? [];
+    list.push({ startMin: rb.startMin, endMin: rb.endMin });
+    blocksByWeekday.set(rb.weekday, list);
+  }
+  if (blocksByWeekday.size > 0) {
+    let cursor = addDays(new Date(rangeStart), -1);
+    const walkEnd = addDays(new Date(rangeEnd), 1);
+    while (cursor.getTime() <= walkEnd.getTime()) {
+      const parts = zonedDateParts(cursor, shop.timezone);
+      const dayBlocks = blocksByWeekday.get(parts.weekday);
+      if (dayBlocks) {
+        for (const b of dayBlocks) {
+          const start = zonedWallTimeToUtc(
+            parts.year,
+            parts.month0,
+            parts.day,
+            b.startMin,
+            shop.timezone,
+          );
+          const end = zonedWallTimeToUtc(
+            parts.year,
+            parts.month0,
+            parts.day,
+            b.endMin,
+            shop.timezone,
+          );
+          blocks.push({ start: start.getTime(), end: end.getTime() });
+        }
+      }
+      cursor = addDays(cursor, 1);
+    }
+  }
+
   for (const ex of exceptions) {
     const r = { start: ex.startsAt.getTime(), end: ex.endsAt.getTime() };
     if (ex.isBlock) blocks.push(r);

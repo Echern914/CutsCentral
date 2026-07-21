@@ -368,6 +368,7 @@ model Shop {
   services               Service[]
   serviceStaff           ServiceStaff[]
   availabilityRules      AvailabilityRule[]
+  recurringBlocks        RecurringBlock[]
   availabilityExceptions AvailabilityException[]
   appointments           Appointment[]
   recurringSeries        RecurringSeries[]
@@ -953,6 +954,7 @@ model Staff {
 
   services          ServiceStaff[]
   availabilityRules AvailabilityRule[]
+  recurringBlocks   RecurringBlock[]
   exceptions        AvailabilityException[]
   appointments      Appointment[]
   recurringSeries   RecurringSeries[]
@@ -1075,6 +1077,29 @@ model AvailabilityRule {
   weekday   Int // 0-6 (Sun-Sat), in shop-local time
   startMin  Int // minutes from local midnight, inclusive (e.g. 540 = 09:00)
   endMin    Int // minutes from local midnight, exclusive (e.g. 1020 = 17:00)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([shopId, staffId, weekday])
+}
+
+// A RECURRING weekly block-off (the mirror of AvailabilityRule: same shape, but
+// SUBTRACTED from availability instead of added). "Every Monday 12:00-13:30 is
+// blocked" - a standing lunch break / recurring commitment set once. Stored as
+// shop-local minutes from midnight (like AvailabilityRule) so the concrete UTC
+// instant is computed per date and stays DST-correct. Distinct from
+// AvailabilityException, which is a ONE-OFF dated block. The slot engine
+// subtracts these in computeOpenSlots; see engines/slots.ts.
+model RecurringBlock {
+  id        String   @id @default(cuid())
+  shopId    String
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  staffId   String
+  staff     Staff    @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  weekday   Int // 0-6 (Sun-Sat), shop-local
+  startMin  Int // minutes from local midnight, inclusive
+  endMin    Int // minutes from local midnight, exclusive (endMin > startMin)
+  reason    String? // optional label ("Lunch", "Standing appt")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

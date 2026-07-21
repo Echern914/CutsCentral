@@ -22,8 +22,16 @@ export async function getAgendaAction(
   return { ok: true, data: res.data };
 }
 
+export interface RecurringBlockRow {
+  id: string;
+  weekday: number;
+  startMin: number;
+  endMin: number;
+  reason: string | null;
+}
 export interface AvailabilityData {
   rules: { id: string; weekday: number; startMin: number; endMin: number }[];
+  recurringBlocks: RecurringBlockRow[];
   exceptions: {
     id: string;
     startsAt: string;
@@ -133,9 +141,18 @@ export async function deleteServiceAction(id: string): Promise<Result> {
 export async function saveAvailabilityAction(
   staffId: string,
   rules: { weekday: number; startMin: number; endMin: number }[],
+  recurringBlocks: {
+    weekday: number;
+    startMin: number;
+    endMin: number;
+    reason?: string;
+  }[] = [],
 ): Promise<Result> {
   return done(
-    await apiSend("PUT", `/api/booking/staff/${staffId}/availability`, { rules }),
+    await apiSend("PUT", `/api/booking/staff/${staffId}/availability`, {
+      rules,
+      recurringBlocks,
+    }),
   );
 }
 

@@ -436,12 +436,23 @@ const ruleSchema = z.object({
   startMin: z.number().int().min(0).max(1440),
   endMin: z.number().int().min(0).max(1440),
 });
+// A recurring weekly block-off: same shape as a rule + an optional label.
+const blockSchema = ruleSchema.extend({
+  reason: z.string().trim().max(200).optional(),
+});
 const availabilitySchema = z
-  .object({ rules: z.array(ruleSchema).max(100) })
+  .object({
+    rules: z.array(ruleSchema).max(100),
+    // Recurring weekly block-offs (standing breaks). Replace-all like rules.
+    recurringBlocks: z.array(blockSchema).max(100).optional().default([]),
+  })
   .strict()
-  .refine((d) => d.rules.every((r) => r.endMin > r.startMin), {
-    message: "Each rule's end must be after its start.",
-  });
+  .refine(
+    (d) =>
+      d.rules.every((r) => r.endMin > r.startMin) &&
+      d.recurringBlocks.every((b) => b.endMin > b.startMin),
+    { message: "Each rule/block's end must be after its start." },
+  );
 
 bookingDashboardRouter.get("/staff/:id/availability", async (req, res) => {
   const db = forShop(req.shop!.id);
@@ -453,8 +464,12 @@ bookingDashboardRouter.get("/staff/:id/availability", async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const [rules, exceptions] = await Promise.all([
+  const [rules, recurringBlocks, exceptions] = await Promise.all([
     db.availabilityRule.findMany({
+      where: { staffId: req.params.id },
+      orderBy: [{ weekday: "asc" }, { startMin: "asc" }],
+    }),
+    db.recurringBlock.findMany({
       where: { staffId: req.params.id },
       orderBy: [{ weekday: "asc" }, { startMin: "asc" }],
     }),
@@ -469,6 +484,13 @@ bookingDashboardRouter.get("/staff/:id/availability", async (req, res) => {
       weekday: r.weekday,
       startMin: r.startMin,
       endMin: r.endMin,
+    })),
+    recurringBlocks: recurringBlocks.map((b) => ({
+      id: b.id,
+      weekday: b.weekday,
+      startMin: b.startMin,
+      endMin: b.endMin,
+      reason: b.reason,
     })),
     exceptions: exceptions.map((e) => ({
       id: e.id,
@@ -495,10 +517,24 @@ bookingDashboardRouter.put("/staff/:id/availability", async (req, res) => {
       select: { id: true },
     });
     if (!staff) return false;
+    // Replace-all for BOTH rules and recurring blocks, atomically.
     await tx.availabilityRule.deleteMany({ where: { shopId, staffId } });
     if (parsed.data.rules.length > 0) {
       await tx.availabilityRule.createMany({
         data: parsed.data.rules.map((r) => ({ ...r, shopId, staffId })),
+      });
+    }
+    await tx.recurringBlock.deleteMany({ where: { shopId, staffId } });
+    if (parsed.data.recurringBlocks.length > 0) {
+      await tx.recurringBlock.createMany({
+        data: parsed.data.recurringBlocks.map((b) => ({
+          weekday: b.weekday,
+          startMin: b.startMin,
+          endMin: b.endMin,
+          reason: b.reason ?? null,
+          shopId,
+          staffId,
+        })),
       });
     }
     return true;
