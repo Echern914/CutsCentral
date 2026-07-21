@@ -72,6 +72,55 @@ export function parseDurationOverrides(raw: unknown): Record<number, number> {
 }
 
 /**
+ * Per-service AVAILABLE-HOURS restriction - the third "vary by day" knob, but a
+ * map of shop-local weekday to an ARRAY of {startMin,endMin} windows (minutes
+ * from midnight, endMin exclusive) rather than a single number. It shapes the
+ * slot grid: a slot is open only where the staff is available AND the service is
+ * allowed (an INTERSECTION - it never widens staff hours). See slots.ts.
+ *
+ * The return is a Map, not a plain object, so callers can distinguish a weekday
+ * that is ABSENT (unrestricted - use staff hours as-is) from one PRESENT with an
+ * empty array (closed that weekday) via `.has(weekday)`. A plain-object record
+ * would collapse those two very different cases.
+ */
+export function parseServiceHours(
+  raw: unknown,
+): Map<number, { startMin: number; endMin: number }[]> {
+  const out = new Map<number, { startMin: number; endMin: number }[]>();
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      const day = Number(k);
+      if (!Number.isInteger(day) || day < 0 || day > 6) continue;
+      if (!Array.isArray(v)) continue; // malformed weekday -> treat as absent
+      const windows: { startMin: number; endMin: number }[] = [];
+      for (const w of v) {
+        if (!w || typeof w !== "object") continue;
+        const s = Number((w as { s?: unknown }).s);
+        const e = Number((w as { e?: unknown }).e);
+        // Bounds mirror serviceWindowSchema (booking.dashboard.ts) exactly so the
+        // write-time validator and this read-time defense accept the same set: s
+        // is a start minute [0,1439], e is exclusive [1,1440], end after start.
+        if (
+          Number.isInteger(s) &&
+          Number.isInteger(e) &&
+          s >= 0 &&
+          s <= 1439 &&
+          e >= 1 &&
+          e <= 1440 &&
+          e > s
+        ) {
+          windows.push({ startMin: s, endMin: e });
+        }
+      }
+      // Present key is preserved even when it parses to zero windows: an
+      // explicit empty [] means "closed that weekday", distinct from absent.
+      out.set(day, windows);
+    }
+  }
+  return out;
+}
+
+/**
  * The duration (minutes) for a service on the calendar date of `at`, resolved
  * by the SHOP-timezone weekday - a 9pm Thursday booking in the shop's timezone
  * uses Thursday's duration even when that instant is already Friday in UTC.

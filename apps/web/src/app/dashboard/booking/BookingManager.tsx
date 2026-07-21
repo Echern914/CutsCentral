@@ -17,6 +17,7 @@ import type {
 } from "./page";
 import { BookingCalendar } from "./BookingCalendar";
 import { ConnectPlatforms } from "./ConnectPlatforms";
+import { Sheet } from "./AppointmentForm";
 import {
   createAddOnAction,
   createServiceAction,
@@ -30,6 +31,7 @@ import {
   listTargetedSlotsAction,
   saveAvailabilityAction,
   saveBookingSettingsAction,
+  updateServiceAction,
   type TargetedSlotRow,
 } from "./actions";
 
@@ -569,35 +571,19 @@ function ServicesTab({
   // Empty = "offered by everyone" (resolved at submit). Starting empty avoids a
   // stale snapshot of the staff list - a barber added later is included by default.
   const [staffIds, setStaffIds] = useState<string[]>([]);
+  // Which service the pencil opened for editing (null = the edit Sheet is closed).
+  const [editing, setEditing] = useState<ServiceRow | null>(null);
   const [pending, start] = useTransition();
   const activeStaff = staff.filter((s) => s.active);
 
-  /** Build the {weekday: price} override map from the day inputs (valid only). */
-  function buildOverrides(): Record<string, number> {
-    const out: Record<string, number> = {};
-    for (const [wd, val] of Object.entries(dayPrices)) {
-      const n = Number(val);
-      if (val.trim() !== "" && Number.isFinite(n) && n >= 0) out[wd] = n;
-    }
-    return out;
-  }
-
-  /** Same for {weekday: minutes} - whole minutes, 5 min floor (API bound). */
-  function buildDurationOverrides(): Record<string, number> {
-    const out: Record<string, number> = {};
-    for (const [wd, val] of Object.entries(dayDurations)) {
-      const n = Number(val);
-      if (val.trim() !== "" && Number.isInteger(n) && n >= 5) out[wd] = n;
-    }
-    return out;
-  }
-
   function add() {
     if (!name.trim()) return;
-    // No explicit selection -> offer it via every active barber.
-    const offeredBy = staffIds.length > 0 ? staffIds : activeStaff.map((s) => s.id);
-    const overrides = buildOverrides();
-    const durOverrides = buildDurationOverrides();
+    // No explicit selection -> offer via every barber as a LIVE intent
+    // (offeredByAll), so a barber added later is auto-included. An explicit
+    // selection pins the hand-picked set.
+    const all = staffIds.length === 0;
+    const overrides = buildPriceOverrides(dayPrices);
+    const durOverrides = buildDurationOverrides(dayDurations);
     start(async () => {
       const r = await createServiceAction({
         name: name.trim(),
@@ -606,7 +592,8 @@ function ServicesTab({
         priceOverrides: Object.keys(overrides).length > 0 ? overrides : undefined,
         durationOverrides:
           Object.keys(durOverrides).length > 0 ? durOverrides : undefined,
-        staffIds: offeredBy,
+        offeredByAll: all,
+        staffIds: all ? undefined : staffIds,
       });
       if (r.ok) {
         toast("Service added", "success");
@@ -768,12 +755,21 @@ function ServicesTab({
                       .join(", ")}
               </span>
             </span>
-            <button
-              onClick={() => remove(s.id)}
-              className="text-xs text-danger-soft hover:underline"
-            >
-              Remove
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setEditing(s)}
+                className="text-xs text-gold hover:underline"
+                aria-label={`Edit ${s.name}`}
+              >
+                Edit
+              </button>
+              <button
+                onClick={() => remove(s.id)}
+                className="text-xs text-danger-soft hover:underline"
+              >
+                Remove
+              </button>
+            </div>
           </li>
         ))}
         {initial.filter((s) => s.active).length === 0 && (
@@ -782,10 +778,311 @@ function ServicesTab({
       </ul>
       </Card>
 
+      {editing && (
+        <ServiceEditForm
+          key={editing.id}
+          service={editing}
+          staff={staff}
+          toast={toast}
+          onClose={() => setEditing(null)}
+        />
+      )}
+
       <AddOnsManager initial={initialAddOns} services={initial} toast={toast} />
 
       <TargetedSlotsManager services={initial} staff={staff} toast={toast} />
     </div>
+  );
+}
+
+//  Edit an existing service (pencil) - name, price, per-day price/duration,
+//  offered-by staff, AND the per-service available-hours restriction. Wires to
+//  the existing updateServiceAction (PATCH /services/:id). The list refreshes
+//  via revalidatePath on save, so no local list sync is needed.
+
+function ServiceEditForm({
+  service,
+  staff,
+  toast,
+  onClose,
+}: {
+  service: ServiceRow;
+  staff: StaffRow[];
+  toast: Toast;
+  onClose: () => void;
+}) {
+  const activeStaff = staff.filter((s) => s.active);
+  const [name, setName] = useState(service.name);
+  const [duration, setDuration] = useState(service.durationMin);
+  const [price, setPrice] = useState(service.price !== null ? String(service.price) : "");
+  // Seed the per-day override inputs from the stored maps (weekday -> string).
+  const [dayPrices, setDayPrices] = useState<Record<number, string>>(() => {
+    const out: Record<number, string> = {};
+    for (const [wd, p] of Object.entries(service.priceOverrides ?? {})) out[Number(wd)] = String(p);
+    return out;
+  });
+  const [dayDurations, setDayDurations] = useState<Record<number, string>>(() => {
+    const out: Record<number, string> = {};
+    for (const [wd, m] of Object.entries(service.durationOverrides ?? {})) out[Number(wd)] = String(m);
+    return out;
+  });
+  // "Offered by all" is a live intent (see the API): when on, the chips show all
+  // active barbers lit and a barber added later is auto-included. Toggling any
+  // single chip switches to a hand-picked set. Seed from the stored flag; the
+  // chip selection is seeded from the resolved staffIds so the UI matches state.
+  const [offeredByAll, setOfferedByAll] = useState<boolean>(service.offeredByAll ?? false);
+  const [staffIds, setStaffIds] = useState<string[]>(
+    service.offeredByAll ? activeStaff.map((s) => s.id) : (service.staffIds ?? []),
+  );
+  // Per-service available-hours rows (one window/day in v1), seeded from storage.
+  const [hoursRows, setHoursRows] = useState<ServiceHoursRow[]>(() =>
+    hoursRowsFromWindows(service.hoursWindows),
+  );
+  const [pending, start] = useTransition();
+
+  function toggleStaff(id: string) {
+    // Picking specific barbers means it's no longer "all".
+    setOfferedByAll(false);
+    setStaffIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
+  }
+  function chooseAll() {
+    setOfferedByAll(true);
+    setStaffIds(activeStaff.map((s) => s.id));
+  }
+  function setHoursRow(i: number, patch: Partial<ServiceHoursRow>) {
+    setHoursRows((cur) => cur.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  }
+
+  function save() {
+    if (!name.trim()) {
+      toast("Name is required", "error");
+      return;
+    }
+    // Duration must be a whole number >= 5 (mirrors the API bound). Clearing the
+    // field yields Number("")=0 and letters yield NaN - both are user errors, not
+    // "0 minutes", so catch them here with a clear message instead of a generic
+    // 400 "Couldn't save" (or, for price, a silent NaN->null "free" service).
+    if (!Number.isInteger(duration) || duration < 5) {
+      toast("Minutes must be a whole number of 5 or more", "error");
+      return;
+    }
+    // Price is optional (blank = no set price). But a non-empty, non-numeric
+    // price (e.g. pasted "abc") must NOT silently serialize to null and save the
+    // service as FREE - reject it so the barber sees the problem.
+    const trimmedPrice = price.trim();
+    const priceNum = trimmedPrice ? Number(trimmedPrice) : null;
+    if (priceNum !== null && (!Number.isFinite(priceNum) || priceNum < 0)) {
+      toast("Price must be a number (or blank)", "error");
+      return;
+    }
+    // A restricted day whose end is not after its start is a user error, not a
+    // "closed" instruction - block save so they don't silently lose the day.
+    const badRow = hoursRows.some(
+      (r) => r.restricted && hhmmToMin(r.end) <= hhmmToMin(r.start),
+    );
+    if (badRow) {
+      toast("Service hours: end must be after start", "error");
+      return;
+    }
+    // If hand-picking, at least one barber must be selected (an empty pick that
+    // isn't "all" would offer the service to nobody).
+    if (!offeredByAll && staffIds.length === 0) {
+      toast("Pick at least one barber, or choose All", "error");
+      return;
+    }
+    start(async () => {
+      const r = await updateServiceAction(service.id, {
+        name: name.trim(),
+        durationMin: duration,
+        price: priceNum,
+        // Always send the FULL maps (including {}) so clearing an override or a
+        // restriction actually persists - PATCH is partial, absent = unchanged.
+        priceOverrides: buildPriceOverrides(dayPrices),
+        durationOverrides: buildDurationOverrides(dayDurations),
+        hoursWindows: buildHoursWindows(hoursRows),
+        // offeredByAll wins server-side; send staffIds only for the hand-picked
+        // case so a later-added barber is auto-included when "all" is chosen.
+        offeredByAll,
+        staffIds: offeredByAll ? undefined : staffIds,
+      });
+      if (r.ok) {
+        toast("Service updated", "success");
+        onClose();
+      } else toast("Couldn't save", "error");
+    });
+  }
+
+  return (
+    <Sheet title="Edit service" onClose={onClose}>
+      <div className="flex flex-col gap-4">
+        <div className="grid gap-2 sm:grid-cols-[1fr_110px_110px]">
+          <input
+            className={field}
+            placeholder="Service name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+          <input
+            className={field}
+            type="number"
+            min={5}
+            placeholder="Minutes"
+            value={duration}
+            onChange={(e) => setDuration(Number(e.target.value))}
+          />
+          <input
+            className={field}
+            type="number"
+            min={0}
+            placeholder="Price ($)"
+            value={price}
+            onChange={(e) => setPrice(e.target.value)}
+          />
+        </div>
+
+        {activeStaff.length > 0 && (
+          <div>
+            <span className={labelCls}>
+              Offered by {offeredByAll ? "(all barbers, including any added later)" : ""}
+            </span>
+            <div className="mt-1 flex flex-wrap gap-2">
+              {/* "All" is a live intent: pick it and every barber - now or added
+                  later - offers this service. Picking individuals switches off it. */}
+              <button
+                onClick={chooseAll}
+                className={cn(
+                  "rounded-full border px-3 py-1 text-xs transition-colors",
+                  offeredByAll
+                    ? "border-gold/60 bg-gold/10 text-gold"
+                    : "border-subtle text-muted",
+                )}
+              >
+                All barbers
+              </button>
+              {activeStaff.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => toggleStaff(s.id)}
+                  className={cn(
+                    "rounded-full border px-3 py-1 text-xs transition-colors",
+                    !offeredByAll && staffIds.includes(s.id)
+                      ? "border-gold/60 bg-gold/10 text-gold"
+                      : "border-subtle text-muted",
+                  )}
+                >
+                  {s.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Per-day price/duration overrides (same idiom as the add form). */}
+        <div>
+          <span className={labelCls}>Vary by day? (optional — price and/or minutes)</span>
+          <div className="mt-1 grid grid-cols-4 gap-2 sm:grid-cols-7">
+            {WEEKDAYS.map((label, wd) => {
+              const customized =
+                (dayPrices[wd] ?? "").trim() !== "" ||
+                (dayDurations[wd] ?? "").trim() !== "";
+              return (
+                <div
+                  key={wd}
+                  className={cn(
+                    "flex flex-col gap-1 rounded-lg p-1",
+                    customized && "bg-gold/10 ring-1 ring-gold/40",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "text-[10px]",
+                      customized ? "font-semibold text-gold" : "text-muted",
+                    )}
+                  >
+                    {label}
+                  </span>
+                  <input
+                    type="number"
+                    min={0}
+                    inputMode="decimal"
+                    placeholder={price.trim() ? `$${price}` : "$ base"}
+                    value={dayPrices[wd] ?? ""}
+                    onChange={(e) =>
+                      setDayPrices((cur) => ({ ...cur, [wd]: e.target.value }))
+                    }
+                    className="w-full rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50"
+                    aria-label={`${label} price`}
+                  />
+                  <input
+                    type="number"
+                    min={5}
+                    inputMode="numeric"
+                    placeholder={`${duration || "?"} min`}
+                    value={dayDurations[wd] ?? ""}
+                    onChange={(e) =>
+                      setDayDurations((cur) => ({ ...cur, [wd]: e.target.value }))
+                    }
+                    className="w-full rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50"
+                    aria-label={`${label} minutes`}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Per-service available hours. Unchecked day = available whenever the
+            barber works; check a day + set a window to limit this service (e.g.
+            "Mens Haircut only 10:00-14:00"). It intersects with the barber's
+            weekly hours - it never widens them. */}
+        <div>
+          <span className={labelCls}>Available hours for this service (optional)</span>
+          <p className="mt-0.5 text-[11px] text-muted">
+            Leave a day unchecked to offer it whenever the barber works. Check a
+            day and set a window to limit it.
+          </p>
+          <div className="mt-2 flex flex-col gap-2">
+            {hoursRows.map((r, i) => (
+              <div key={i} className="flex items-center gap-3">
+                <label className="flex w-20 items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={r.restricted}
+                    onChange={(e) => setHoursRow(i, { restricted: e.target.checked })}
+                  />
+                  {WEEKDAYS[i]}
+                </label>
+                <input
+                  type="time"
+                  disabled={!r.restricted}
+                  value={r.start}
+                  onChange={(e) => setHoursRow(i, { start: e.target.value })}
+                  className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-sm disabled:opacity-40"
+                  aria-label={`${WEEKDAYS[i]} available from`}
+                />
+                <span className="text-muted">–</span>
+                <input
+                  type="time"
+                  disabled={!r.restricted}
+                  value={r.end}
+                  onChange={(e) => setHoursRow(i, { end: e.target.value })}
+                  className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-sm disabled:opacity-40"
+                  aria-label={`${WEEKDAYS[i]} available until`}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <button
+          onClick={save}
+          disabled={pending}
+          className="mt-1 self-start rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+        >
+          {pending ? "Saving…" : "Save changes"}
+        </button>
+      </div>
+    </Sheet>
   );
 }
 
@@ -1275,4 +1572,68 @@ function minToHHMM(min: number): string {
 function hhmmToMin(hhmm: string): number {
   const [h, m] = hhmm.split(":").map(Number);
   return (h ?? 0) * 60 + (m ?? 0);
+}
+
+// Shared by the add form (ServicesTab) and the edit Sheet (ServiceEditForm) so
+// the "vary by day" and per-service-hours payloads are built identically.
+
+/** {weekday: price} from the day inputs, keeping only valid non-negative entries. */
+function buildPriceOverrides(dayPrices: Record<number, string>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [wd, val] of Object.entries(dayPrices)) {
+    const n = Number(val);
+    if (val.trim() !== "" && Number.isFinite(n) && n >= 0) out[wd] = n;
+  }
+  return out;
+}
+
+/** {weekday: minutes} - whole minutes, 5 min floor (mirrors the API bound). */
+function buildDurationOverrides(
+  dayDurations: Record<number, string>,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [wd, val] of Object.entries(dayDurations)) {
+    const n = Number(val);
+    if (val.trim() !== "" && Number.isInteger(n) && n >= 5) out[wd] = n;
+  }
+  return out;
+}
+
+// Per-service available-hours rows: one optional window per weekday. `restricted`
+// off = the weekday is left out of the payload entirely (unrestricted).
+type ServiceHoursRow = { restricted: boolean; start: string; end: string };
+
+/**
+ * {weekday: [{s,e}]} from the hours rows. A restricted weekday with a valid
+ * window emits it; a restricted weekday with an invalid/empty window emits []
+ * (closed that day). Unrestricted weekdays are omitted so they stay "available
+ * whenever the barber works". The full map is sent (including {} to clear).
+ */
+function buildHoursWindows(
+  rows: ServiceHoursRow[],
+): Record<string, { s: number; e: number }[]> {
+  const out: Record<string, { s: number; e: number }[]> = {};
+  rows.forEach((r, wd) => {
+    if (!r.restricted) return; // absent = unrestricted
+    const s = hhmmToMin(r.start);
+    const e = hhmmToMin(r.end);
+    out[String(wd)] = e > s ? [{ s, e }] : []; // empty = closed that weekday
+  });
+  return out;
+}
+
+/** Seed the edit form's hours rows from a service's stored hoursWindows map. */
+function hoursRowsFromWindows(
+  windows: Record<string, { s: number; e: number }[]> | undefined,
+): ServiceHoursRow[] {
+  return WEEKDAYS.map((_, wd) => {
+    const w = windows?.[String(wd)];
+    if (!w) return { restricted: false, start: "10:00", end: "14:00" };
+    const first = w[0];
+    return {
+      restricted: true,
+      start: first ? minToHHMM(first.s) : "10:00",
+      end: first ? minToHHMM(first.e) : "14:00",
+    };
+  });
 }

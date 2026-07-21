@@ -88,13 +88,19 @@ export async function deleteStaffAction(id: string): Promise<Result> {
 
 //  Services
 
+// Per-weekday available-hours restriction ({ "1": [{ s, e }] } minutes from
+// shop-local midnight). Weekday absent = unrestricted; [] = closed that day.
+type ServiceHoursWindows = Record<string, { s: number; e: number }[]>;
+
 export async function createServiceAction(input: {
   name: string;
   description?: string;
   durationMin: number;
   durationOverrides?: Record<string, number>;
+  hoursWindows?: ServiceHoursWindows;
   price?: number | null;
   priceOverrides?: Record<string, number>;
+  offeredByAll?: boolean;
   staffIds?: string[];
 }): Promise<Result> {
   return done(await apiSend("POST", "/api/booking/services", input));
@@ -107,9 +113,11 @@ export async function updateServiceAction(
     description?: string;
     durationMin?: number;
     durationOverrides?: Record<string, number>;
+    hoursWindows?: ServiceHoursWindows;
     price?: number | null;
     priceOverrides?: Record<string, number>;
     active?: boolean;
+    offeredByAll?: boolean;
     staffIds?: string[];
   },
 ): Promise<Result> {
