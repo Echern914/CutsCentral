@@ -10,6 +10,8 @@ import {
   LAYOUT_STYLE_KEYS,
   PAGE_FONTS,
   PAGE_FONT_KEYS,
+  PAGE_TEMPLATES,
+  PAGE_TEMPLATE_KEYS,
   PAGE_THEMES,
   REWARDS_SECTION_DEFAULT,
   REWARDS_SECTION_KEYS,
@@ -506,7 +508,41 @@ export function PageEditor({
         {/* Sections */}
         <Card className="overflow-hidden">
           <CardHeader title="Sections" subtitle="Show, hide, and reorder what's on your page." />
-          <div className="px-5 py-5">
+          <div className="flex flex-col gap-5 px-5 py-5">
+            {/* Layout templates: a one-tap starting point. Applying one just
+                seeds the order below - the barber can still drag/toggle after,
+                and nothing saves until they hit Save. */}
+            <div>
+              <span className={labelCls}>Start from a template</span>
+              <div className="mt-1.5 flex flex-wrap gap-2">
+                {PAGE_TEMPLATE_KEYS.map((key) => {
+                  const tpl = PAGE_TEMPLATES[key];
+                  // Highlight the template whose order currently matches exactly.
+                  const active =
+                    sectionOrder.length === tpl.sectionOrder.length &&
+                    sectionOrder.every((k, i) => k === tpl.sectionOrder[i]);
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setSectionOrder([...tpl.sectionOrder])}
+                      title={tpl.hint}
+                      className={cn(
+                        "rounded-full border px-3 py-1.5 text-xs transition-colors",
+                        active
+                          ? "border-gold/60 bg-gold/10 text-gold"
+                          : "border-subtle text-muted hover:text-offwhite",
+                      )}
+                    >
+                      {tpl.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-1.5 text-[11px] text-muted">
+                Applies instantly to the order below — drag to fine-tune, then Save.
+              </p>
+            </div>
             <SectionOrderEditor value={sectionOrder} onChange={setSectionOrder} />
           </div>
         </Card>
