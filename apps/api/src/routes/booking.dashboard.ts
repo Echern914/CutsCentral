@@ -250,7 +250,11 @@ const groupSchema = z
 bookingDashboardRouter.get("/groups", async (req, res) => {
   const db = forShop(req.shop!.id);
   const [groups, services] = await Promise.all([
+    // Soft-deleted groups are excluded outright: DELETE detaches every member,
+    // so unlike inactive services (kept for appointment history) a dead group
+    // has nothing left to render anywhere.
     db.serviceGroup.findMany({
+      where: { active: true },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
     }),
     // One pass over active services, grouped in JS below - avoids N queries.
@@ -322,22 +326,30 @@ bookingDashboardRouter.patch("/groups/:id", async (req, res) => {
   const shopId = req.shop!.id;
   const groupId = req.params.id!;
   const db = forShop(shopId);
-  const { count } = await db.serviceGroup.updateMany({
+  // Existence is checked explicitly rather than via updateMany's count: a
+  // serviceIds-ONLY patch (a bare membership reassignment) has no scalar
+  // columns to set, and Prisma's updateMany with an empty data object updates
+  // nothing (count 0) - which read as "not found" and 404'd the reassignment.
+  const exists = await db.serviceGroup.findFirst({
     where: { id: groupId },
-    data: {
-      ...(d.name !== undefined ? { name: d.name } : {}),
-      ...(d.hoursWindows !== undefined ? { hoursWindows: d.hoursWindows } : {}),
-      ...(d.maxPerDay !== undefined ? { maxPerDay: d.maxPerDay ?? null } : {}),
-      ...(d.maxConcurrent !== undefined
-        ? { maxConcurrent: d.maxConcurrent ?? null }
-        : {}),
-      ...(d.active !== undefined ? { active: d.active } : {}),
-      ...(d.sortOrder !== undefined ? { sortOrder: d.sortOrder } : {}),
-    },
+    select: { id: true },
   });
-  if (count === 0) {
+  if (!exists) {
     res.status(404).json({ error: "not_found" });
     return;
+  }
+  const data = {
+    ...(d.name !== undefined ? { name: d.name } : {}),
+    ...(d.hoursWindows !== undefined ? { hoursWindows: d.hoursWindows } : {}),
+    ...(d.maxPerDay !== undefined ? { maxPerDay: d.maxPerDay ?? null } : {}),
+    ...(d.maxConcurrent !== undefined
+      ? { maxConcurrent: d.maxConcurrent ?? null }
+      : {}),
+    ...(d.active !== undefined ? { active: d.active } : {}),
+    ...(d.sortOrder !== undefined ? { sortOrder: d.sortOrder } : {}),
+  };
+  if (Object.keys(data).length > 0) {
+    await db.serviceGroup.updateMany({ where: { id: groupId }, data });
   }
   // Reassign membership atomically when serviceIds is present: first release any
   // current member no longer listed (-> serviceGroupId null), then claim the
