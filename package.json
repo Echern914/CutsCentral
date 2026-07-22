@@ -7,6 +7,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "status": "node scripts/status.mjs",
     "build": "turbo run build",
     "predev": "node scripts/guard-dev-db.mjs",
     "dev": "turbo run dev",
