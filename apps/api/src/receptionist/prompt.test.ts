@@ -118,10 +118,10 @@ describe("renderPromptForShop", () => {
       data: { shopId: shop.id, name: "Skin Fade", durationMin: 40, price: 40 },
     });
     await prisma.serviceAddOn.create({
-      data: { shopId: shop.id, serviceId: service.id, name: "Hot Towel", durationMin: 10, price: 8 },
+      data: { shopId: shop.id, serviceIds: [service.id], name: "Hot Towel", durationMin: 10, price: 8 },
     });
     await prisma.serviceAddOn.create({
-      data: { shopId: shop.id, serviceId: null, name: "Beard Lineup", durationMin: 15, price: 12 },
+      data: { shopId: shop.id, serviceIds: [], name: "Beard Lineup", durationMin: 15, price: 12 },
     });
     // Tue + Sat hours.
     await prisma.availabilityRule.create({

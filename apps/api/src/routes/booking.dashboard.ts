@@ -22,6 +22,10 @@ import {
   sendAppointmentNudge,
 } from "../engines/appointmentNudge.js";
 import { resolveAddOns } from "../engines/addOns.js";
+import {
+  materializeTargetedRule,
+  TARGETED_RULE_HORIZON_DAYS,
+} from "../engines/targetedSlotRules.js";
 import { effectiveDurationForDate, effectivePriceForDate } from "../engines/pricing.js";
 import {
   materializeSeries,
@@ -257,9 +261,12 @@ bookingDashboardRouter.get("/groups", async (req, res) => {
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
     }),
     // One pass over active services, grouped in JS below - avoids N queries.
+    // groupSortOrder first: serviceIds must come back in the group's saved
+    // order (it drives the editor's order list AND the public page).
     db.service.findMany({
       where: { active: true },
       select: { id: true, serviceGroupId: true },
+      orderBy: [{ groupSortOrder: "asc" }, { sortOrder: "asc" }, { createdAt: "asc" }],
     }),
   ]);
   res.json({
@@ -303,10 +310,14 @@ bookingDashboardRouter.post("/groups", async (req, res) => {
         where: { shopId, id: { in: d.serviceIds } },
         select: { id: true },
       });
-      if (valid.length > 0) {
-        await tx.service.updateMany({
-          where: { shopId, id: { in: valid.map((s) => s.id) } },
-          data: { serviceGroupId: group.id },
+      const validSet = new Set(valid.map((s) => s.id));
+      // Claim in the SUBMITTED order — the array's order is the group's
+      // display order, stamped onto each member as groupSortOrder.
+      const ordered = d.serviceIds.filter((id) => validSet.has(id));
+      for (let i = 0; i < ordered.length; i++) {
+        await tx.service.update({
+          where: { id: ordered[i]! },
+          data: { serviceGroupId: group.id, groupSortOrder: i },
         });
       }
     }
@@ -375,11 +386,15 @@ bookingDashboardRouter.patch("/groups/:id", async (req, res) => {
         },
         data: { serviceGroupId: null },
       });
-      // Claim the listed (valid) services into this group.
-      if (validIds.length > 0) {
-        await tx.service.updateMany({
-          where: { shopId, id: { in: validIds } },
-          data: { serviceGroupId: groupId },
+      // Claim the listed (valid) services into this group, in the SUBMITTED
+      // order — the array's order is the group's display order, stamped onto
+      // each member as groupSortOrder.
+      const validSet = new Set(validIds);
+      const ordered = ids.filter((id) => validSet.has(id));
+      for (let i = 0; i < ordered.length; i++) {
+        await tx.service.update({
+          where: { id: ordered[i]! },
+          data: { serviceGroupId: groupId, groupSortOrder: i },
         });
       }
     });
@@ -484,12 +499,25 @@ const addOnSchema = z
     name: z.string().trim().min(1).max(120),
     durationMin: z.number().int().min(0).max(480),
     price: z.number().min(0).max(100000).nullish(),
-    // null/omitted = offered on every service; set = only with that service.
-    serviceId: z.string().min(1).nullish(),
+    // []/omitted = offered on every service; non-empty = only with those
+    // services. Ids are intersected with the shop's real services on write
+    // (same silent-drop stance as group membership).
+    serviceIds: z.array(z.string().min(1)).max(200).optional(),
     active: z.boolean().optional(),
     sortOrder: z.number().int().min(0).max(1000).optional(),
   })
   .strict();
+
+/** Keep only ids that are really this shop's services (foreign ids dropped). */
+async function validServiceIds(shopId: string, ids: string[]): Promise<string[]> {
+  if (ids.length === 0) return [];
+  const real = await forShop(shopId).service.findMany({
+    where: { id: { in: ids } },
+    select: { id: true },
+  });
+  const keep = new Set(real.map((s) => s.id));
+  return ids.filter((id) => keep.has(id));
+}
 
 bookingDashboardRouter.get("/addons", async (req, res) => {
   const addOns = await forShop(req.shop!.id).serviceAddOn.findMany({
@@ -512,7 +540,7 @@ bookingDashboardRouter.post("/addons", async (req, res) => {
       name: d.name,
       durationMin: d.durationMin,
       price: d.price ?? null,
-      serviceId: d.serviceId ?? null,
+      serviceIds: await validServiceIds(req.shop!.id, d.serviceIds ?? []),
       active: d.active ?? true,
       sortOrder: d.sortOrder ?? 0,
     },
@@ -533,7 +561,9 @@ bookingDashboardRouter.patch("/addons/:id", async (req, res) => {
       ...(d.name !== undefined ? { name: d.name } : {}),
       ...(d.durationMin !== undefined ? { durationMin: d.durationMin } : {}),
       ...(d.price !== undefined ? { price: d.price ?? null } : {}),
-      ...(d.serviceId !== undefined ? { serviceId: d.serviceId ?? null } : {}),
+      ...(d.serviceIds !== undefined
+        ? { serviceIds: await validServiceIds(req.shop!.id, d.serviceIds) }
+        : {}),
       ...(d.active !== undefined ? { active: d.active } : {}),
       ...(d.sortOrder !== undefined ? { sortOrder: d.sortOrder } : {}),
     },
@@ -1652,37 +1682,72 @@ const targetedSlotSchema = z
     // Weekly recurrence, materialized at creation: 0 = just this one; N = this
     // one + N more weeks at the same shop-local wall time (DST-stable).
     repeatWeeks: z.number().int().min(0).max(26).optional(),
+    // "Until I turn it off": an INDEFINITE weekly series. Creates a
+    // TargetedSlotRule; the roll-forward job keeps materializing rows to the
+    // horizon until the rule is turned off. Mutually exclusive with repeatWeeks.
+    repeatForever: z.boolean().optional(),
   })
-  .strict();
+  .strict()
+  .refine((d) => !(d.repeatForever && (d.repeatWeeks ?? 0) > 0), {
+    message: "repeatWeeks and repeatForever are mutually exclusive",
+    path: ["repeatWeeks"],
+  });
 
 bookingDashboardRouter.get("/targeted-slots", async (req, res) => {
   const db = forShop(req.shop!.id);
-  const slots = (await db.targetedSlot.findMany({
-    where: { startsAt: { gt: new Date() } },
-    orderBy: { startsAt: "asc" },
-    take: 200,
-    select: {
-      id: true,
-      staffId: true,
-      serviceId: true,
-      label: true,
-      startsAt: true,
-      durationMin: true,
-      price: true,
-      active: true,
-      bookedAppointmentId: true,
-    },
-  })) as unknown as {
-    id: string;
-    staffId: string;
-    serviceId: string;
-    label: string | null;
-    startsAt: Date;
-    durationMin: number;
-    price: Prisma.Decimal;
-    active: boolean;
-    bookedAppointmentId: string | null;
-  }[];
+  const shop = await prisma.shop.findUnique({
+    where: { id: req.shop!.id },
+    select: { timezone: true },
+  });
+  const [slots, rules] = await Promise.all([
+    db.targetedSlot.findMany({
+      where: { startsAt: { gt: new Date() } },
+      orderBy: { startsAt: "asc" },
+      take: 200,
+      select: {
+        id: true,
+        staffId: true,
+        serviceId: true,
+        label: true,
+        startsAt: true,
+        durationMin: true,
+        price: true,
+        active: true,
+        ruleId: true,
+        bookedAppointmentId: true,
+      },
+    }) as unknown as Promise<
+      {
+        id: string;
+        staffId: string;
+        serviceId: string;
+        label: string | null;
+        startsAt: Date;
+        durationMin: number;
+        price: Prisma.Decimal;
+        active: boolean;
+        ruleId: string | null;
+        bookedAppointmentId: string | null;
+      }[]
+    >,
+    // Active rules drive the condensed series cards (and the finite ones give
+    // a batch its group header + "Remove series").
+    db.targetedSlotRule.findMany({
+      where: { active: true },
+      orderBy: { createdAt: "asc" },
+      select: {
+        id: true,
+        staffId: true,
+        serviceId: true,
+        label: true,
+        anchor: true,
+        durationMin: true,
+        price: true,
+        indefinite: true,
+      },
+    }),
+  ]);
+  const tz = shop?.timezone ?? "America/New_York";
   res.json({
     targetedSlots: slots.map((t) => ({
       ...t,
@@ -1690,6 +1755,23 @@ bookingDashboardRouter.get("/targeted-slots", async (req, res) => {
       price: Number(t.price),
       booked: t.bookedAppointmentId !== null,
     })),
+    rules: rules.map((r) => {
+      // Display-ready cadence, computed server-side (the server knows the shop
+      // timezone; the dashboard shouldn't re-derive weekday math).
+      const weekday = zonedDateParts(r.anchor, tz).weekday;
+      const wallMin = localMinutesOfDay(r.anchor, tz);
+      return {
+        id: r.id,
+        staffId: r.staffId,
+        serviceId: r.serviceId,
+        label: r.label,
+        weekday,
+        startMin: wallMin,
+        durationMin: r.durationMin,
+        price: Number(r.price),
+        indefinite: r.indefinite,
+      };
+    }),
   });
 });
 
@@ -1723,12 +1805,56 @@ bookingDashboardRouter.post("/targeted-slots", async (req, res) => {
     return;
   }
 
+  const label = d.label?.trim() || null;
+
+  // "Until I turn it off": store a rule and let the shared materializer create
+  // the first horizon of rows; the roll-forward job keeps extending it.
+  if (d.repeatForever) {
+    const rule = await db.targetedSlotRule.create({
+      data: {
+        staffId: d.staffId,
+        serviceId: d.serviceId,
+        label,
+        anchor: d.startsAt,
+        durationMin: d.durationMin,
+        price: d.price,
+        indefinite: true,
+      },
+    });
+    const created = await materializeTargetedRule(
+      { ...rule, shopId: req.shop!.id },
+      shop.timezone,
+      new Date(Date.now() + TARGETED_RULE_HORIZON_DAYS * 24 * 60 * 60 * 1000),
+    );
+    res.status(201).json({ ok: true, created, ruleId: rule.id });
+    return;
+  }
+
   // Materialize the weekly repeats at the SAME shop-local wall time (a naive
-  // +7d of the UTC instant would drift an hour across a DST change).
+  // +7d of the UTC instant would drift an hour across a DST change). A finite
+  // batch (repeatWeeks > 0) also gets a rule row — not for roll-forward
+  // (indefinite=false), but so the dashboard can render the batch as ONE
+  // condensed series and delete it in one tap.
+  const repeat = d.repeatWeeks ?? 0;
+  const rule =
+    repeat > 0
+      ? await db.targetedSlotRule.create({
+          data: {
+            staffId: d.staffId,
+            serviceId: d.serviceId,
+            label,
+            anchor: d.startsAt,
+            durationMin: d.durationMin,
+            price: d.price,
+            indefinite: false,
+            weeksMaterialized: repeat + 1,
+          },
+        })
+      : null;
   const anchor = zonedDateParts(d.startsAt, shop.timezone);
   const wallMin = localMinutesOfDay(d.startsAt, shop.timezone);
   const rows = [];
-  for (let week = 0; week <= (d.repeatWeeks ?? 0); week++) {
+  for (let week = 0; week <= repeat; week++) {
     const startsAt =
       week === 0
         ? d.startsAt
@@ -1742,14 +1868,61 @@ bookingDashboardRouter.post("/targeted-slots", async (req, res) => {
     rows.push({
       staffId: d.staffId,
       serviceId: d.serviceId,
-      label: d.label?.trim() || null,
+      label,
       startsAt,
       durationMin: d.durationMin,
       price: d.price,
+      ruleId: rule?.id ?? null,
     });
   }
   await db.targetedSlot.createMany({ data: rows });
-  res.status(201).json({ ok: true, created: rows.length });
+  res.status(201).json({ ok: true, created: rows.length, ruleId: rule?.id ?? null });
+});
+
+// Turn a series off (indefinite) / remove a finite batch: deactivate the rule
+// and delete its FUTURE UNBOOKED rows in one tx. Booked and past rows survive
+// as history — same stance as the single-row delete's 409.
+bookingDashboardRouter.delete("/targeted-slots/rules/:id", async (req, res) => {
+  const shopId = req.shop!.id;
+  const ruleId = req.params.id!;
+  const result = await runWithShop(shopId, async (tx) => {
+    const off = await tx.targetedSlotRule.updateMany({
+      where: { shopId, id: ruleId },
+      data: { active: false },
+    });
+    if (off.count === 0) return null;
+    const removed = await tx.targetedSlot.deleteMany({
+      where: {
+        shopId,
+        ruleId,
+        bookedAppointmentId: null,
+        startsAt: { gt: new Date() },
+      },
+    });
+    return removed.count;
+  });
+  if (result === null) {
+    res.status(404).json({ ok: false });
+    return;
+  }
+  res.json({ ok: true, removed: result });
+});
+
+// Bulk remove hand-picked UNBOOKED slots ("select to delete"). Booked ids in
+// the list are simply not removed (the response count says how many were).
+const bulkDeleteSchema = z
+  .object({ ids: z.array(z.string().min(1)).min(1).max(200) })
+  .strict();
+bookingDashboardRouter.post("/targeted-slots/bulk-delete", async (req, res) => {
+  const parsed = bulkDeleteSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const { count } = await forShop(req.shop!.id).targetedSlot.deleteMany({
+    where: { id: { in: parsed.data.ids }, bookedAppointmentId: null },
+  });
+  res.json({ ok: true, removed: count });
 });
 
 // Delete an UNBOOKED targeted slot (a booked one is history - 409).

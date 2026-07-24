@@ -38,8 +38,8 @@ export async function resolveAddOns(
     where: {
       id: { in: ids },
       active: true,
-      // valid for this service: shop-wide (null) or scoped to it.
-      OR: [{ serviceId: null }, { serviceId }],
+      // valid for this service: shop-wide ([]) or scoped to a set holding it.
+      OR: [{ serviceIds: { isEmpty: true } }, { serviceIds: { has: serviceId } }],
     },
     select: { id: true, name: true, durationMin: true, price: true },
   });

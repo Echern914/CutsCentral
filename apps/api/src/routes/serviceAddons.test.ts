@@ -144,7 +144,12 @@ describe("booking with add-ons", () => {
 
   it("honors a shop-wide add-on on any service but a scoped one only on its service", async () => {
     // Scoped to `serviceId` (Haircut) only.
-    const scoped = await createAddOn({ name: "Line-up", durationMin: 10, price: 5, serviceId });
+    const scoped = await createAddOn({
+      name: "Line-up",
+      durationMin: 10,
+      price: 5,
+      serviceIds: [serviceId],
+    });
     // Booking the OTHER service with the scoped add-on → it's dropped.
     const res = await request(app)
       .post("/api/booking/appointments")
@@ -162,6 +167,41 @@ describe("booking with add-ons", () => {
     // Color is 60 min; the Haircut-scoped add-on must NOT apply.
     expect(appt!.endsAt.getTime() - appt!.startsAt.getTime()).toBe(60 * 60 * 1000);
     expect((appt!.addOns as unknown as unknown[]).length).toBe(0);
+  });
+
+  it("honors an add-on scoped to SEVERAL services on each of them", async () => {
+    const multi = await createAddOn({
+      name: "Scissor trim",
+      durationMin: 10,
+      price: 5,
+      serviceIds: [serviceId, otherServiceId],
+    });
+    // Applies on the second listed service too (60 min Color + 10).
+    const res = await request(app)
+      .post("/api/booking/appointments")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId: otherServiceId,
+        startsAt: tomorrowAt(12),
+        firstName: "Multi",
+        customTime: true,
+        addOnIds: [multi.body.id],
+      });
+    expect(res.status).toBe(201);
+    const appt = await prisma.appointment.findUnique({ where: { id: res.body.id } });
+    expect(appt!.endsAt.getTime() - appt!.startsAt.getTime()).toBe(70 * 60 * 1000);
+    expect((appt!.addOns as unknown as { name: string }[])[0]!.name).toBe("Scissor trim");
+    // Foreign ids passed on write are silently dropped, not stored.
+    const crafted = await createAddOn({
+      name: "Crafted",
+      durationMin: 5,
+      price: 1,
+      serviceIds: ["not-a-real-service", serviceId],
+    });
+    expect(crafted.status).toBe(201);
+    const stored = await prisma.serviceAddOn.findUnique({ where: { id: crafted.body.id } });
+    expect(stored!.serviceIds).toEqual([serviceId]);
   });
 });
 

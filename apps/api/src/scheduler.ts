@@ -10,6 +10,7 @@ import { promoteFulfilledAppointments } from "./engines/appointmentPromotion.js"
 import { runAppointmentReminders } from "./engines/appointmentReminders.js";
 import { runPushReminders } from "./engines/pushReminders.js";
 import { refreshExpiringSquareTokens } from "./engines/squareTokenRefresh.js";
+import { rollForwardTargetedRules } from "./engines/targetedSlotRules.js";
 import { runAcuityResync } from "./engines/acuityResync.js";
 import { runTrialReminders } from "./engines/trialReminder.js";
 import { autoCloseIdleConversations } from "./receptionist/conversation.js";
@@ -104,6 +105,15 @@ export function startScheduler(): void {
     void withLease("push-reminders", 5 * MINUTE, () => runPushReminders()).catch(
       (err) => logger.error({ err }, "push reminder job failed"),
     );
+  });
+
+  // Targeted slots: roll every ACTIVE indefinite series ("repeat until I turn
+  // it off") forward to the horizon, daily at 04:10. Idempotent via the rule's
+  // weeksMaterialized cursor; no-op when no indefinite rules exist.
+  cron.schedule("10 4 * * *", () => {
+    void withLease("targeted-slot-roll-forward", 10 * MINUTE, () =>
+      rollForwardTargetedRules(),
+    ).catch((err) => logger.error({ err }, "targeted slot roll-forward job failed"));
   });
 
   // Square: proactively refresh OAuth access tokens nearing their ~30-day expiry

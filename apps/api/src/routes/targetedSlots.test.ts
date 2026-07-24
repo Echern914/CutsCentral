@@ -345,3 +345,177 @@ describe("request-before-booking interplay", () => {
       .send({ requireBookingApproval: false });
   });
 });
+
+describe("weekly series: until-turned-off + condensed grouping + bulk delete", () => {
+  it("repeatForever creates a rule and materializes rows to the horizon", async () => {
+    const first = tomorrowAt(21);
+    const created = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        startsAt: first.toISOString(),
+        durationMin: 45,
+        price: 90,
+        label: "Standing special",
+        repeatForever: true,
+      });
+    expect(created.status).toBe(201);
+    expect(created.body.ruleId).toBeTruthy();
+    // 91-day horizon, anchor ~1 day out, weekly cadence -> weeks 0..12 = 13 rows.
+    expect(created.body.created).toBe(13);
+
+    const rule = await prisma.targetedSlotRule.findUnique({
+      where: { id: created.body.ruleId },
+    });
+    expect(rule!.indefinite).toBe(true);
+    expect(rule!.weeksMaterialized).toBe(13);
+
+    // Rows carry the ruleId and the list endpoint returns the rule for the
+    // condensed series card.
+    const list = await request(app)
+      .get("/api/booking/targeted-slots")
+      .set("Cookie", cookie);
+    const mine = (list.body.targetedSlots as { ruleId: string | null }[]).filter(
+      (t) => t.ruleId === created.body.ruleId,
+    );
+    expect(mine.length).toBe(13);
+    const ruleRow = (list.body.rules as { id: string; indefinite: boolean }[]).find(
+      (r) => r.id === created.body.ruleId,
+    );
+    expect(ruleRow?.indefinite).toBe(true);
+  });
+
+  it("roll-forward is idempotent and extend-only", async () => {
+    const { materializeTargetedRule } = await import(
+      "../engines/targetedSlotRules.js"
+    );
+    const rule = await prisma.targetedSlotRule.findFirst({
+      where: { shopId, indefinite: true, active: true },
+    });
+    // Same horizon again: nothing new.
+    const again = await materializeTargetedRule(
+      rule!,
+      "UTC",
+      new Date(Date.now() + 91 * 24 * 60 * 60 * 1000),
+    );
+    expect(again).toBe(0);
+    // A wider horizon extends by exactly the extra weeks.
+    const wider = await materializeTargetedRule(
+      { ...rule!, weeksMaterialized: rule!.weeksMaterialized },
+      "UTC",
+      new Date(Date.now() + (91 + 14) * 24 * 60 * 60 * 1000),
+    );
+    expect(wider).toBe(2);
+  });
+
+  it("finite repeats get a grouping rule; turning a series off deletes future unbooked rows only", async () => {
+    const first = tomorrowAt(22);
+    const created = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        startsAt: first.toISOString(),
+        durationMin: 30,
+        price: 40,
+        repeatWeeks: 3,
+      });
+    expect(created.status).toBe(201);
+    expect(created.body.created).toBe(4);
+    const ruleId = created.body.ruleId as string;
+    expect(ruleId).toBeTruthy();
+
+    // Book the first occurrence so it must SURVIVE the series delete.
+    const slot = await prisma.targetedSlot.findFirst({
+      where: { ruleId, startsAt: first },
+    });
+    const bookRes = await request(app)
+      .post(`/api/book/${slug}`)
+      .send({
+        staffId,
+        serviceId,
+        startsAt: first.toISOString(),
+        firstName: "SeriesKeeper",
+        email: `sk-${randomToken(6)}@test.local`,
+        targetedSlotId: slot!.id,
+      });
+    expect(bookRes.status).toBe(201);
+
+    const off = await request(app)
+      .delete(`/api/booking/targeted-slots/rules/${ruleId}`)
+      .set("Cookie", cookie);
+    expect(off.status).toBe(200);
+    expect(off.body.removed).toBe(3); // the 3 unbooked future rows
+
+    const remaining = await prisma.targetedSlot.findMany({ where: { ruleId } });
+    expect(remaining.length).toBe(1); // the booked one survives
+    expect(remaining[0]!.bookedAppointmentId).not.toBeNull();
+    const rule = await prisma.targetedSlotRule.findUnique({ where: { id: ruleId } });
+    expect(rule!.active).toBe(false);
+  });
+
+  it("bulk delete removes only the unbooked selected ids", async () => {
+    const a = tomorrowAt(23);
+    const created = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        startsAt: a.toISOString(),
+        durationMin: 20,
+        price: 25,
+        repeatWeeks: 2,
+      });
+    expect(created.status).toBe(201);
+    const rows = await prisma.targetedSlot.findMany({
+      where: { ruleId: created.body.ruleId },
+      orderBy: { startsAt: "asc" },
+    });
+    expect(rows.length).toBe(3);
+    // Book the middle one; try to bulk-delete all three.
+    const mid = rows[1]!;
+    const bookRes = await request(app)
+      .post(`/api/book/${slug}`)
+      .send({
+        staffId,
+        serviceId,
+        startsAt: mid.startsAt.toISOString(),
+        firstName: "BulkKeeper",
+        email: `bk-${randomToken(6)}@test.local`,
+        targetedSlotId: mid.id,
+      });
+    expect(bookRes.status).toBe(201);
+
+    const bulk = await request(app)
+      .post("/api/booking/targeted-slots/bulk-delete")
+      .set("Cookie", cookie)
+      .send({ ids: rows.map((r) => r.id) });
+    expect(bulk.status).toBe(200);
+    expect(bulk.body.removed).toBe(2);
+    const left = await prisma.targetedSlot.findMany({
+      where: { id: { in: rows.map((r) => r.id) } },
+    });
+    expect(left.length).toBe(1);
+    expect(left[0]!.id).toBe(mid.id);
+  });
+
+  it("rejects repeatWeeks together with repeatForever", async () => {
+    const res = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        startsAt: tomorrowAt(12).toISOString(),
+        durationMin: 30,
+        price: 50,
+        repeatWeeks: 4,
+        repeatForever: true,
+      });
+    expect(res.status).toBe(400);
+  });
+});
