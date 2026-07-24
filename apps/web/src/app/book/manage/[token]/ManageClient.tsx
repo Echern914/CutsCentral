@@ -4,6 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { DEMO } from "@chairback/config/demo";
 import { useSignalNativeReady } from "@/lib/nativeReady";
+import { CustomerBack } from "@/components/CustomerBack";
 import { DemoTour } from "@/components/tour/DemoTour";
 import { useDemoTour } from "@/components/tour/state";
 import type { ManageData } from "./page";
@@ -80,6 +81,14 @@ export function ManageClient({
       {/* Guided client-experience tour — the seeded demo appointment only.
           data-tour anchors: keep in sync with packages/config/src/demoTour.ts */}
       {token === DEMO.MANAGE_TOKEN && <DemoTour route="manage" />}
+      {/* "← {shop}" — in the app WebView this page has no browser chrome, so
+          it was a dead end. Pops history when there is any; a direct visit
+          (texted confirmation link) falls back to the shop's public page. */}
+      <CustomerBack
+        label={`← ${data.shop.name}`}
+        fallbackHref={data.shop.slug ? `/s/${data.shop.slug}` : undefined}
+        className="mb-4 self-start rounded-full border border-white/15 bg-white/5 px-3.5 py-2 text-xs font-medium text-muted transition-colors hover:text-offwhite"
+      />
       <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
         <p className="text-xs uppercase tracking-wide text-muted">Your appointment</p>
         <h1 className="mt-1 font-display text-2xl">{data.shop.name}</h1>

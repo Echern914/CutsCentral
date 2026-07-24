@@ -20,6 +20,7 @@ import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { useSignalNativeReady } from "@/lib/nativeReady";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { BackToDashboard } from "@/components/BackToDashboard";
+import { CustomerBack } from "@/components/CustomerBack";
 import { DemoTour } from "@/components/tour/DemoTour";
 import { RequestForm } from "./RequestForm";
 import { ShopWaitlistForm } from "./ShopWaitlistForm";
@@ -122,6 +123,21 @@ export function ShopPageClient({
       {!preview && (
         <BackToDashboard
           fallbackHref="/dashboard/site"
+          className="fixed left-4 top-4 z-20 px-3.5 py-2 text-xs font-medium shadow-lg backdrop-blur transition-transform duration-200 ease-out hover:scale-[1.03]"
+          style={{
+            backgroundColor: theme.surface,
+            border: `1px solid ${theme.border}`,
+            color: theme.text,
+            borderRadius: layout.buttonRadius,
+          }}
+        />
+      )}
+      {/* Customer "← Back" — in the app WebView this page has no browser
+          chrome, so arriving from the rewards page ("More from {shop}") was a
+          dead end. Same spot as BackToDashboard; the two never both render
+          (CustomerBack hides itself under ?from=dashboard). */}
+      {!preview && (
+        <CustomerBack
           className="fixed left-4 top-4 z-20 px-3.5 py-2 text-xs font-medium shadow-lg backdrop-blur transition-transform duration-200 ease-out hover:scale-[1.03]"
           style={{
             backgroundColor: theme.surface,

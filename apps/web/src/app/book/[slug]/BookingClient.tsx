@@ -5,6 +5,7 @@ import Link from "next/link";
 import { DEMO } from "@chairback/config/demo";
 import { serviceColorHex } from "@chairback/config/constants";
 import { BackToDashboard } from "@/components/BackToDashboard";
+import { CustomerBack } from "@/components/CustomerBack";
 import { useSignalNativeReady } from "@/lib/nativeReady";
 import { DemoTour } from "@/components/tour/DemoTour";
 import { useDemoTour } from "@/components/tour/state";
@@ -637,6 +638,13 @@ export function BookingClient({ data }: { data: BookShopData }) {
           >
             View / change my appointment
           </Link>
+          {/* Escape hatch: in the app WebView the confirmation was a dead end
+              (no browser chrome) — pop back to wherever the customer started
+              (rewards home or shop page). */}
+          <CustomerBack
+            label={`← Back to ${data.shop.name}`}
+            className="mt-4 block w-full text-center text-xs text-muted transition-colors hover:text-offwhite"
+          />
 
           {data.shop.payDirect && (
             <PayDirectInfo
@@ -734,12 +742,14 @@ export function BookingClient({ data }: { data: BookShopData }) {
         title="1 · Choose a service"
         tour="services"
         back={
-          <Link
-            href={`/s/${data.shop.slug}`}
+          // Pops real history when there is any (in the app: back to the
+          // rewards home or shop page the customer came from), else falls
+          // back to the shop page — never a dead end.
+          <CustomerBack
+            label={`← Back to ${data.shop.name}`}
+            fallbackHref={`/s/${data.shop.slug}`}
             className="text-xs text-muted transition-colors hover:text-offwhite"
-          >
-            ← Back to {data.shop.name}
-          </Link>
+          />
         }
       >
         <div className="flex flex-col gap-2">
