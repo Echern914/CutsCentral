@@ -83,6 +83,25 @@ function monthGrid(month: string): { day: string; inMonth: boolean }[] {
 
 const WEEKDAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
 
+/** "$45-$160" across a group's member services (null = no priced member). */
+function groupPriceLabel(services: BookShopData["services"]): string | null {
+  const mins: number[] = [];
+  const maxs: number[] = [];
+  for (const s of services) {
+    if (s.priceRange) {
+      mins.push(s.priceRange.min);
+      maxs.push(s.priceRange.max);
+    } else if (s.price !== null) {
+      mins.push(s.price);
+      maxs.push(s.price);
+    }
+  }
+  if (mins.length === 0) return null;
+  const lo = Math.min(...mins);
+  const hi = Math.max(...maxs);
+  return lo === hi ? `$${lo}` : `$${lo}-$${hi}`;
+}
+
 /**
  * Public native booking picker: pick service -> (provider, only when the service
  * has more than one barber) -> a day on the monthly calendar -> open slot ->
@@ -247,6 +266,34 @@ export function BookingClient({ data }: { data: BookShopData }) {
     return data.services.filter((s) => offered.has(s.id));
   }, [data.services, data.offerings]);
 
+  // Groups-first menu (shop setting): open with GROUP cards, tap one to see its
+  // services. Groups with no bookable member are hidden; ungrouped services
+  // collect under "Everything else" (or show directly when no group has any).
+  const [groupId, setGroupId] = useState<string | null>(null);
+  const groupedMenu = useMemo(() => {
+    if (!data.shop.groupsFirst) return null;
+    const groups = (data.groups ?? [])
+      .map((g) => ({
+        ...g,
+        services: bookableServices
+          .filter((s) => s.serviceGroupId === g.id)
+          .sort((a, b) => a.groupSortOrder - b.groupSortOrder),
+      }))
+      .filter((g) => g.services.length > 0);
+    if (groups.length === 0) return null;
+    const grouped = new Set(groups.flatMap((g) => g.services.map((s) => s.id)));
+    const other = bookableServices.filter((s) => !grouped.has(s.id));
+    return { groups, other };
+  }, [data.shop.groupsFirst, data.groups, bookableServices]);
+  // The services the step-1 list actually shows: the chosen group's members
+  // (groups-first) or the whole flat menu.
+  const menuServices =
+    groupedMenu === null
+      ? bookableServices
+      : groupId === "other"
+        ? groupedMenu.other
+        : (groupedMenu.groups.find((g) => g.id === groupId)?.services ?? []);
+
   // Does the CHOSEN service have more than one barber? If so we keep the
   // "Choose your provider" step; a single-barber service skips it and jumps
   // straight to the calendar (loaded for that lone barber in pickService).
@@ -391,7 +438,9 @@ export function BookingClient({ data }: { data: BookShopData }) {
   // Add-ons valid for the chosen service (shop-wide null, or scoped to it).
   const addOnsForService = useMemo(() => {
     if (!serviceId) return [];
-    return data.addOns.filter((a) => a.serviceId === null || a.serviceId === serviceId);
+    return data.addOns.filter(
+      (a) => a.serviceIds.length === 0 || a.serviceIds.includes(serviceId),
+    );
   }, [serviceId, data.addOns]);
 
   function toggleAddOn(id: string) {
@@ -752,11 +801,68 @@ export function BookingClient({ data }: { data: BookShopData }) {
           />
         }
       >
+        {/* Groups-first: the menu opens as GROUP cards; tapping one shows its
+            services (with a way back up). Flat menu when the setting is off. */}
+        {groupedMenu !== null && groupId === null ? (
+          <div className="flex flex-col gap-2">
+            {groupedMenu.groups.map((g) => (
+              <button
+                key={g.id}
+                type="button"
+                onClick={() => setGroupId(g.id)}
+                className="flex items-center justify-between rounded-xl border px-4 py-3.5 text-left transition-colors"
+                style={{ borderColor: "rgba(255,255,255,0.12)" }}
+              >
+                <span>
+                  <span className="block text-sm font-medium">{g.name}</span>
+                  <span className="mt-0.5 block text-xs text-muted">
+                    {g.services.length} service{g.services.length === 1 ? "" : "s"}
+                    {groupPriceLabel(g.services) ? ` · ${groupPriceLabel(g.services)}` : ""}
+                  </span>
+                </span>
+                <span aria-hidden className="text-muted">
+                  →
+                </span>
+              </button>
+            ))}
+            {groupedMenu.other.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setGroupId("other")}
+                className="flex items-center justify-between rounded-xl border px-4 py-3.5 text-left transition-colors"
+                style={{ borderColor: "rgba(255,255,255,0.12)" }}
+              >
+                <span>
+                  <span className="block text-sm font-medium">Everything else</span>
+                  <span className="mt-0.5 block text-xs text-muted">
+                    {groupedMenu.other.length} service
+                    {groupedMenu.other.length === 1 ? "" : "s"}
+                  </span>
+                </span>
+                <span aria-hidden className="text-muted">
+                  →
+                </span>
+              </button>
+            )}
+          </div>
+        ) : (
         <div className="flex flex-col gap-2">
+          {groupedMenu !== null && (
+            <button
+              type="button"
+              onClick={() => {
+                setGroupId(null);
+                backToService();
+              }}
+              className="self-start text-xs text-muted transition-colors hover:text-offwhite"
+            >
+              ← All categories
+            </button>
+          )}
           {/* Only services a barber actually offers (bookableServices) — an
               unbookable service would dead-end the wizard. Rich card layout
               (photo + description + calendar-color rail) is from #114. */}
-          {bookableServices.map((s) => {
+          {menuServices.map((s) => {
             const selected = serviceId === s.id;
             // The barber's calendar color, echoed as a left-edge accent stripe so
             // the customer sees the same coding. null = no stripe (plain border).
@@ -812,6 +918,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
             <p className="text-sm text-muted">No services available yet.</p>
           )}
         </div>
+        )}
       </Section>
 
       {/* Step 2: provider — only for services offered by more than one barber.

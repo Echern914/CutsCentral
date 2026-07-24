@@ -330,6 +330,10 @@ model Shop {
   bookingLeadHours Int         @default(2) // earliest bookable slot = now + this many hours
   bookingMaxDays   Int         @default(60) // how far ahead a customer may book
   bookingBufferMin Int         @default(0) // turnover gap added after each appointment
+  // Public booking menu: show service-GROUP cards first (tap a group to see its
+  // services) instead of the full flat service list. Only takes effect when the
+  // shop has active groups; ships default-off so no existing page changes.
+  bookingGroupsFirst Boolean   @default(false)
 
   // Customer payments (Stripe Connect Express). All default to "off"/absent so
   // existing shops are unchanged until the barber connects + turns payments on.
@@ -391,6 +395,7 @@ model Shop {
   serviceAddOns          ServiceAddOn[]
   serviceGroups          ServiceGroup[]
   targetedSlots          TargetedSlot[]
+  targetedSlotRules      TargetedSlotRule[]
   payments               Payment[]
 
   @@index([ownerId])
@@ -976,6 +981,7 @@ model Staff {
   appointments      Appointment[]
   recurringSeries   RecurringSeries[]
   targetedSlots     TargetedSlot[]
+  targetedSlotRules TargetedSlotRule[]
 
   @@index([shopId, active])
 }
@@ -1047,11 +1053,14 @@ model Service {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
+  // Position within its group (assigned from the order the group's serviceIds
+  // were saved in). Meaningless while ungrouped; reassigned on every claim.
+  groupSortOrder  Int               @default(0)
   staff           ServiceStaff[]
   appointments    Appointment[]
   recurringSeries RecurringSeries[]
-  addOns          ServiceAddOn[]
   targetedSlots   TargetedSlot[]
+  targetedSlotRules TargetedSlotRule[]
   serviceGroup    ServiceGroup? @relation(fields: [serviceGroupId], references: [id], onDelete: SetNull)
 
   @@index([shopId, active])
@@ -1090,17 +1099,19 @@ model ServiceGroup {
 
 // An optional extra a customer can tack onto a service at booking (e.g. "+ beard
 // trim", "+ hot towel"). Adds its durationMin to the appointment length and its
-// price to the total. Shop-wide by default (serviceId null = offered on every
-// service); scope to one service by setting serviceId. The CHOSEN add-ons are
-// snapshotted onto Appointment.addOns at booking time (name/duration/price), so
-// editing or deleting an add-on later never rewrites a past appointment.
+// price to the total. Shop-wide by default (serviceIds [] = offered on every
+// service); scope it by listing the service ids it's offered with. A scalar
+// list rather than a join: the resolver already silently drops ids that don't
+// match the booked service, so a stale id (deleted service) is inert, and the
+// CHOSEN add-ons are snapshotted onto Appointment.addOns at booking time
+// (name/duration/price), so editing or deleting an add-on later never rewrites
+// a past appointment.
 model ServiceAddOn {
   id          String   @id @default(cuid())
   shopId      String
   shop        Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  // null = available on ALL services; set = only offered with that one service.
-  serviceId   String?
-  service     Service? @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  // [] = available on ALL services; non-empty = only with the listed services.
+  serviceIds  String[] @default([])
   name        String
   durationMin Int      @default(0) // extra minutes added to the appointment
   price       Decimal? @db.Decimal(10, 2) // extra charge added to the total
@@ -1110,7 +1121,6 @@ model ServiceAddOn {
   updatedAt   DateTime @updatedAt
 
   @@index([shopId, active])
-  @@index([shopId, serviceId])
 }
 
 // Which staff offer which service (explicit join, multi-staff). shopId is
@@ -1225,6 +1235,11 @@ model TargetedSlot {
   durationMin Int
   price       Decimal  @db.Decimal(10, 2)
   active      Boolean  @default(true) // false = deactivated by the barber (unbooked only)
+  // The recurrence rule this row was materialized from (null = a standalone
+  // one-off). Groups the dashboard's condensed series list and series delete;
+  // SetNull keeps booked/past rows as history if the rule is ever hard-deleted.
+  ruleId      String?
+  rule        TargetedSlotRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
   // The winning booking. Unique = the capacity-1 claim; SetNull keeps the slot
   // row (as a consumed record) if the appointment is ever hard-deleted.
   bookedAppointmentId String?      @unique
@@ -1234,6 +1249,43 @@ model TargetedSlot {
 
   @@index([shopId, staffId, startsAt]) // guard overlap + barber list
   @@index([shopId, serviceId, startsAt]) // public picker per service
+  @@index([ruleId]) // series grouping + series-wide delete
+}
+
+// A weekly targeted-slot series ("every Sunday 3pm"). Rows are ALWAYS concrete
+// TargetedSlot records (the capacity-1 claim and grid-blocking need real rows):
+// a finite series ("repeat N more weeks") is fully materialized at creation and
+// its rule exists only to group/delete the batch; an INDEFINITE series
+// ("until I turn it off", indefinite=true) is materialized to a rolling horizon
+// by the targeted-slot-roll-forward scheduler job. Occurrence k is derived from
+// `anchor` at the same shop-local wall time (DST-stable via zonedWallTimeToUtc);
+// weeksMaterialized marks how many occurrences exist, so the roll-forward is
+// idempotent (extend-only, never re-create). Turning a series off deactivates
+// the rule and deletes its future UNBOOKED rows; booked ones are history.
+model TargetedSlotRule {
+  id          String   @id @default(cuid())
+  shopId      String
+  shop        Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  staffId     String
+  staff       Staff    @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  serviceId   String
+  service     Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  label       String?
+  // First occurrence (UTC instant). Weekday + wall time derive from this in the
+  // shop's timezone; storing the instant (not weekday/minutes) keeps one source
+  // of truth with the POST that created it.
+  anchor      DateTime
+  durationMin Int
+  price       Decimal  @db.Decimal(10, 2)
+  // true = repeats until turned off; false = a finite batch (grouping only).
+  indefinite  Boolean  @default(false)
+  active      Boolean  @default(true) // false = turned off; no further roll-forward
+  weeksMaterialized Int @default(0) // occurrences created so far (k = 0..n-1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  slots       TargetedSlot[]
+
+  @@index([shopId, active])
 }
 
 // A native booking. A future hold until its time passes (or the barber marks it

@@ -220,3 +220,28 @@ describe("service groups tenant safety", () => {
     await request(app).delete(`/api/booking/groups/${groupId}`).set("Cookie", cookie);
   });
 });
+
+describe("service order within a group", () => {
+  it("GET returns serviceIds in the saved order; re-saving reversed flips it", async () => {
+    const create = await createGroup({
+      name: "Ordered set",
+      serviceIds: [serviceBId, serviceAId], // B first, deliberately
+    });
+    expect(create.status).toBe(201);
+    const groupId = create.body.id as string;
+
+    let found = (await listGroups()).find((g) => g.id === groupId)!;
+    expect(found.serviceIds).toEqual([serviceBId, serviceAId]);
+
+    // Reorder: A first now.
+    const patch = await request(app)
+      .patch(`/api/booking/groups/${groupId}`)
+      .set("Cookie", cookie)
+      .send({ serviceIds: [serviceAId, serviceBId] });
+    expect(patch.status).toBe(200);
+    found = (await listGroups()).find((g) => g.id === groupId)!;
+    expect(found.serviceIds).toEqual([serviceAId, serviceBId]);
+
+    await request(app).delete(`/api/booking/groups/${groupId}`).set("Cookie", cookie);
+  });
+});

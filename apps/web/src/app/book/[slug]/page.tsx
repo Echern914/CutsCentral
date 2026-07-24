@@ -19,6 +19,9 @@ export interface BookShopData {
     // When on, the booking page offers "Join the waitlist" (a standing button
     // and when a chosen day is fully booked).
     waitlistEnabled?: boolean;
+    // When on (and the shop has groups), the menu opens with group cards
+    // instead of the full flat service list.
+    groupsFirst?: boolean;
     // Fee-free direct-payment handles (display-only); null when the barber hasn't
     // turned it on. Shown on the confirmation so the customer can pay directly.
     payDirect: {
@@ -47,7 +50,13 @@ export interface BookShopData {
     // range, the picker the exact length for the chosen day.
     durationOverrides: Record<string, number>;
     durationRange: { min: number; max: number };
+    // Groups-first: which group card this files under (null = ungrouped) and
+    // its saved position within that group.
+    serviceGroupId: string | null;
+    groupSortOrder: number;
   }[];
+  // Group cards for the groups-first menu, in display order.
+  groups: { id: string; name: string }[];
   offerings: { serviceId: string; staffId: string }[];
   // Barber-published one-off special slots (future, active, unbooked), shown
   // under their parent service with a badge + their own price.
@@ -60,14 +69,14 @@ export interface BookShopData {
     durationMin: number;
     price: number;
   }[];
-  // Optional extras. serviceId null = offered on every service; set = only with
-  // that one. The client shows those valid for the chosen service.
+  // Optional extras. serviceIds [] = offered on every service; non-empty = only
+  // with those. The client shows those valid for the chosen service.
   addOns: {
     id: string;
     name: string;
     durationMin: number;
     price: number | null;
-    serviceId: string | null;
+    serviceIds: string[];
   }[];
 }
 

@@ -166,11 +166,11 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
       orderBy: { sortOrder: "asc" },
       select: { id: true, name: true, durationMin: true, price: true },
     }),
-    // serviceId null = offered on EVERY service; set = scoped to that one.
+    // serviceIds [] = offered on EVERY service; non-empty = scoped to those.
     db.serviceAddOn.findMany({
       where: { active: true },
       orderBy: { sortOrder: "asc" },
-      select: { serviceId: true, name: true, durationMin: true, price: true },
+      select: { serviceIds: true, name: true, durationMin: true, price: true },
     }),
     db.availabilityRule.findMany({
       select: { weekday: true, startMin: true, endMin: true },
@@ -180,13 +180,13 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
   const menuLines: string[] = [];
   for (const s of services) {
     menuLines.push(`${s.name} - ${fmtPrice(s.price)} (${s.durationMin} min)`);
-    for (const a of addOns.filter((x) => x.serviceId === s.id)) {
+    for (const a of addOns.filter((x) => x.serviceIds.includes(s.id))) {
       menuLines.push(
         `  + add-on: ${a.name} - ${fmtPrice(a.price)} (+${a.durationMin} min)`,
       );
     }
   }
-  const shopWide = addOns.filter((x) => x.serviceId === null);
+  const shopWide = addOns.filter((x) => x.serviceIds.length === 0);
   if (shopWide.length > 0) {
     menuLines.push("Add-ons (any service):");
     for (const a of shopWide) {

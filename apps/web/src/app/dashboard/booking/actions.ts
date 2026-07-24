@@ -67,6 +67,7 @@ export async function saveBookingSettingsAction(input: {
   bookingBufferMin: number;
   slotOpenedTextsEnabled?: boolean;
   requireBookingApproval?: boolean;
+  bookingGroupsFirst?: boolean;
   pushReminder24hEnabled?: boolean;
   pushReminder2hEnabled?: boolean;
 }): Promise<Result> {
@@ -320,7 +321,8 @@ export interface AddOnInput {
   name: string;
   durationMin: number;
   price?: number | null;
-  serviceId?: string | null;
+  // [] = offered on every service; non-empty = only with those services.
+  serviceIds?: string[];
   active?: boolean;
   sortOrder?: number;
 }
@@ -412,18 +414,36 @@ export interface TargetedSlotRow {
   durationMin: number;
   price: number;
   active: boolean;
+  // The weekly series this row was materialized from (null = one-off).
+  ruleId: string | null;
   booked: boolean;
+}
+
+/** A weekly series ("every Sunday 3pm"), condensed to one dashboard card. */
+export interface TargetedSlotRuleRow {
+  id: string;
+  staffId: string;
+  serviceId: string;
+  label: string | null;
+  weekday: number; // 0=Sun, shop-local
+  startMin: number; // shop-local minutes of day
+  durationMin: number;
+  price: number;
+  // true = repeats until turned off; false = a finite "N more weeks" batch.
+  indefinite: boolean;
 }
 
 export async function listTargetedSlotsAction(): Promise<{
   ok: boolean;
   slots?: TargetedSlotRow[];
+  rules?: TargetedSlotRuleRow[];
 }> {
-  const res = await apiGet<{ targetedSlots: TargetedSlotRow[] }>(
-    "/api/booking/targeted-slots",
-  );
+  const res = await apiGet<{
+    targetedSlots: TargetedSlotRow[];
+    rules: TargetedSlotRuleRow[];
+  }>("/api/booking/targeted-slots");
   if (!res.ok || !res.data) return { ok: false };
-  return { ok: true, slots: res.data.targetedSlots };
+  return { ok: true, slots: res.data.targetedSlots, rules: res.data.rules };
 }
 
 export async function createTargetedSlotAction(input: {
@@ -434,12 +454,23 @@ export async function createTargetedSlotAction(input: {
   durationMin: number;
   price: number;
   repeatWeeks?: number;
+  repeatForever?: boolean;
 }): Promise<Result> {
   return done(await apiSend("POST", "/api/booking/targeted-slots", input));
 }
 
 export async function deleteTargetedSlotAction(id: string): Promise<Result> {
   return done(await apiSend("DELETE", `/api/booking/targeted-slots/${id}`));
+}
+
+/** Turn a series off / remove a finite batch (future unbooked rows deleted). */
+export async function deleteTargetedSlotRuleAction(id: string): Promise<Result> {
+  return done(await apiSend("DELETE", `/api/booking/targeted-slots/rules/${id}`));
+}
+
+/** Remove several hand-picked unbooked slots at once. */
+export async function bulkDeleteTargetedSlotsAction(ids: string[]): Promise<Result> {
+  return done(await apiSend("POST", "/api/booking/targeted-slots/bulk-delete", { ids }));
 }
 
 /**

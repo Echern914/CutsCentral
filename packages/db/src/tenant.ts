@@ -141,6 +141,10 @@ type TargetedSlotCreateNoShop = Omit<
   Prisma.TargetedSlotUncheckedCreateInput,
   "shopId"
 >;
+type TargetedSlotRuleCreateNoShop = Omit<
+  Prisma.TargetedSlotRuleUncheckedCreateInput,
+  "shopId"
+>;
 type RecurringSeriesCreateNoShop = Omit<
   Prisma.RecurringSeriesUncheckedCreateInput,
   "shopId"
@@ -933,6 +937,31 @@ export function forShop(shopId: string) {
         ),
     },
 
+    targetedSlotRule: {
+      findMany: (args: Prisma.TargetedSlotRuleFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.targetedSlotRule.findMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      create: (args: { data: TargetedSlotRuleCreateNoShop }) =>
+        runWithShop(shopId, (tx) =>
+          tx.targetedSlotRule.create({
+            data: stamp(
+              args.data,
+              shopId,
+            ) as Prisma.TargetedSlotRuleUncheckedCreateInput,
+          }),
+        ),
+      updateMany: (args: Prisma.TargetedSlotRuleUpdateManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.targetedSlotRule.updateMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+    },
     recurringSeries: {
       findMany: (args: Prisma.RecurringSeriesFindManyArgs = {}) =>
         runWithShop(shopId, (tx) =>

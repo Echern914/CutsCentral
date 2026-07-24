@@ -61,7 +61,7 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const [staff, services, links, addOns, targetedSlots] = await Promise.all([
+  const [staff, services, links, addOns, targetedSlots, groups] = await Promise.all([
     prisma.staff.findMany({
       where: { shopId: shop.id, active: true },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
@@ -80,6 +80,10 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
         durationOverrides: true,
         price: true,
         priceOverrides: true,
+        // Groups-first layout: which group card the service files under and
+        // its saved position within that group.
+        serviceGroupId: true,
+        groupSortOrder: true,
       },
     }),
     prisma.serviceStaff.findMany({
@@ -89,7 +93,7 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
     prisma.serviceAddOn.findMany({
       where: { shopId: shop.id, active: true },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-      select: { id: true, name: true, durationMin: true, price: true, serviceId: true },
+      select: { id: true, name: true, durationMin: true, price: true, serviceIds: true },
     }),
     // Barber-published targeted slots: future, active, still unbooked. Shown
     // under their parent service with a badge + THEIR price.
@@ -112,6 +116,12 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
         price: true,
       },
     }),
+    // Service groups for the optional groups-first menu layout.
+    prisma.serviceGroup.findMany({
+      where: { shopId: shop.id, active: true },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      select: { id: true, name: true },
+    }),
   ]);
   res.json({
     shop: {
@@ -129,6 +139,9 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
       // When on, the booking page offers "Join the waitlist" (a standing button
       // and when a day is fully booked).
       waitlistEnabled: shop.waitlistEnabled,
+      // When on (and groups exist), the menu shows group cards first instead
+      // of every service "off rip".
+      groupsFirst: shop.bookingGroupsFirst,
       // Fee-free pay-direct handles (display-only) so the confirmation screen can
       // show "pay the barber directly". Only surfaced when the barber enabled it.
       payDirect: shop.payDirectEnabled
@@ -165,8 +178,14 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
         // "20-30 min" and the picker the exact length for the chosen day.
         durationOverrides: durOverrides,
         durationRange: durationRangeForService(s.durationMin, durOverrides),
+        // Groups-first layout: which group card this files under + its saved
+        // position inside that group.
+        serviceGroupId: s.serviceGroupId,
+        groupSortOrder: s.groupSortOrder,
       };
     }),
+    // Group cards for the optional groups-first menu (shop.groupsFirst).
+    groups,
     // The (service, staff) offering matrix so the UI can filter either way.
     offerings: links,
     // One-off special slots, listed under their parent service in the picker.
@@ -179,14 +198,14 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
       durationMin: t.durationMin,
       price: Number(t.price),
     })),
-    // Optional add-ons. serviceId null = offered on every service; set = only
-    // with that one. The client shows the ones valid for the chosen service.
+    // Optional add-ons. serviceIds [] = offered on every service; non-empty =
+    // only with those. The client shows the ones valid for the chosen service.
     addOns: addOns.map((a) => ({
       id: a.id,
       name: a.name,
       durationMin: a.durationMin,
       price: a.price === null ? null : Number(a.price),
-      serviceId: a.serviceId,
+      serviceIds: a.serviceIds,
     })),
   });
 });

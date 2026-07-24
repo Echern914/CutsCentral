@@ -16,6 +16,7 @@ export interface BookingShop {
   waitlistEnabled: boolean;
   slotOpenedTextsEnabled: boolean;
   requireBookingApproval: boolean;
+  bookingGroupsFirst: boolean;
   pushReminder24hEnabled: boolean;
   pushReminder2hEnabled: boolean;
 }
@@ -85,8 +86,8 @@ export interface AddOnRow {
   name: string;
   durationMin: number;
   price: number | null;
-  // null = offered on every service; set = only with that service.
-  serviceId: string | null;
+  // [] = offered on every service; non-empty = only with those services.
+  serviceIds: string[];
   active: boolean;
   sortOrder: number;
 }

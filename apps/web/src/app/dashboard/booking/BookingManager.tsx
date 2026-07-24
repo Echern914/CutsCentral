@@ -24,6 +24,7 @@ import { Sheet } from "./AppointmentForm";
 import { TimeSelect } from "@/components/ui/TimeSelect";
 import { ImageField } from "../site/ImageField";
 import {
+  bulkDeleteTargetedSlotsAction,
   createAddOnAction,
   createServiceAction,
   createServiceGroupAction,
@@ -34,6 +35,7 @@ import {
   deleteServiceGroupAction,
   deleteStaffAction,
   deleteTargetedSlotAction,
+  deleteTargetedSlotRuleAction,
   getAvailabilityAction,
   listTargetedSlotsAction,
   saveAvailabilityAction,
@@ -41,6 +43,7 @@ import {
   updateServiceAction,
   updateServiceGroupAction,
   type TargetedSlotRow,
+  type TargetedSlotRuleRow,
 } from "./actions";
 
 const field =
@@ -262,6 +265,7 @@ function SettingsTab({
   const [buffer, setBuffer] = useState(shop.bookingBufferMin);
   const [slotOpened, setSlotOpened] = useState(shop.slotOpenedTextsEnabled);
   const [requireApproval, setRequireApproval] = useState(shop.requireBookingApproval);
+  const [groupsFirst, setGroupsFirst] = useState(shop.bookingGroupsFirst);
   const [remind24h, setRemind24h] = useState(shop.pushReminder24hEnabled);
   const [remind2h, setRemind2h] = useState(shop.pushReminder2hEnabled);
   const [pending, start] = useTransition();
@@ -272,6 +276,7 @@ function SettingsTab({
       bookingUrl: string;
       slotOpened: boolean;
       requireApproval: boolean;
+      groupsFirst: boolean;
       remind24h: boolean;
       remind2h: boolean;
     }> = {},
@@ -287,6 +292,7 @@ function SettingsTab({
         bookingBufferMin: buffer,
         slotOpenedTextsEnabled: next.slotOpened ?? slotOpened,
         requireBookingApproval: next.requireApproval ?? requireApproval,
+        bookingGroupsFirst: next.groupsFirst ?? groupsFirst,
         pushReminder24hEnabled: next.remind24h ?? remind24h,
         pushReminder2hEnabled: next.remind2h ?? remind2h,
       });
@@ -315,6 +321,13 @@ function SettingsTab({
     const next = !requireApproval;
     setRequireApproval(next);
     persist({ requireApproval: next });
+  }
+
+  // Flip "open the public menu with group cards" and save.
+  function toggleGroupsFirst() {
+    const next = !groupsFirst;
+    setGroupsFirst(next);
+    persist({ groupsFirst: next });
   }
 
   // Flip one of the automatic push-reminder tiers (24h / 2h) and save.
@@ -536,6 +549,34 @@ function SettingsTab({
               )}
             >
               {requireApproval ? "On" : "Off"}
+            </button>
+          </div>
+        </Card>
+      )}
+
+      {mode === "native" && (
+        <Card className="p-5">
+          <CardHeader
+            title="Show service groups first on your booking page"
+            subtitle="When on, customers see your group cards (e.g. AFTER HOURS, HAIRCUT) and tap one to open its services — instead of every service at once. Needs at least one service group below."
+          />
+          <div className="mt-4 flex items-center justify-between gap-4">
+            <p className="text-sm text-muted">
+              {groupsFirst
+                ? "On — the menu opens with your groups."
+                : "Off — the menu lists every service."}
+            </p>
+            <button
+              onClick={toggleGroupsFirst}
+              disabled={pending}
+              className={cn(
+                "shrink-0 rounded-full px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-50",
+                groupsFirst
+                  ? "bg-emerald-soft/15 text-emerald-soft"
+                  : "border border-subtle text-muted hover:bg-charcoal-700",
+              )}
+            >
+              {groupsFirst ? "On" : "Off"}
             </button>
           </div>
         </Card>
@@ -906,14 +947,11 @@ function ServiceEditForm({
     setOfferedByAll(true);
     setStaffIds(activeStaff.map((s) => s.id));
   }
-  function setHoursRow(i: number, patch: Partial<ServiceHoursRow>) {
-    setHoursRows((cur) => cur.map((r, j) => (j === i ? { ...r, ...patch } : r)));
-  }
-  // Check / uncheck every weekday at once (Drick: "an option to open all days
-  // instead of checking one by one"). Preserves each row's start/end times.
-  const allHoursChecked = hoursRows.every((r) => r.restricted);
-  function setAllHours(restricted: boolean) {
-    setHoursRows((cur) => cur.map((r) => ({ ...r, restricted })));
+  // Flip every weekday at once (Drick: "an option to open all days instead of
+  // checking one by one"). Preserves each row's windows.
+  const allHoursCustom = hoursRows.every((r) => r.mode === "custom");
+  function setAllHours(mode: ServiceHoursRow["mode"]) {
+    setHoursRows((cur) => cur.map((r) => ({ ...r, mode })));
   }
 
   function save() {
@@ -938,18 +976,13 @@ function ServiceEditForm({
       toast("Price must be a number (or blank)", "error");
       return;
     }
-    // A restricted day whose end is not after its start is a user error, not a
+    // A custom window whose end is not after its start is a user error, not a
     // "closed" instruction - block save so they don't silently lose the day.
     // Skipped when grouped: the group owns hours, so the editor is hidden and we
     // must not send its (now irrelevant) windows.
-    if (!groupName) {
-      const badRow = hoursRows.some(
-        (r) => r.restricted && hhmmToMin(r.end) <= hhmmToMin(r.start),
-      );
-      if (badRow) {
-        toast("Service hours: end must be after start", "error");
-        return;
-      }
+    if (!groupName && hasInvalidHoursRow(hoursRows)) {
+      toast("Service hours: each window's end must be after its start", "error");
+      return;
     }
     // If hand-picking, at least one barber must be selected (an empty pick that
     // isn't "all" would offer the service to nobody).
@@ -1115,48 +1148,25 @@ function ServiceEditForm({
           <div>
             <div className="flex items-center justify-between gap-3">
               <span className={labelCls}>Available hours for this service (optional)</span>
-              {/* Check/uncheck every day in one tap instead of one by one. */}
+              {/* Flip every day in one tap instead of one by one. */}
               <button
                 type="button"
-                onClick={() => setAllHours(!allHoursChecked)}
+                onClick={() => setAllHours(allHoursCustom ? "any" : "custom")}
                 className="shrink-0 rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:border-gold/50 hover:text-gold"
               >
-                {allHoursChecked ? "Uncheck all days" : "Check all days"}
+                {allHoursCustom ? "All days: open" : "All days: custom"}
               </button>
             </div>
             <p className="mt-0.5 text-[11px] text-muted">
-              Leave a day unchecked to offer it whenever the barber works. Check a
-              day and set a window to limit it.
+              Open = whenever the barber works that day. Custom = only the windows
+              you set (add a second window for a split day). Not open = no
+              bookings that day.
             </p>
-            <div className="mt-2 flex flex-col gap-2">
-              {hoursRows.map((r, i) => (
-                <div key={i} className="flex items-center gap-3">
-                  <label className="flex w-20 items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={r.restricted}
-                      onChange={(e) => setHoursRow(i, { restricted: e.target.checked })}
-                    />
-                    {WEEKDAYS[i]}
-                  </label>
-                  <TimeSelect
-                    disabled={!r.restricted}
-                    value={r.start}
-                    onChange={(v) => setHoursRow(i, { start: v })}
-                    className={timeSelectCls}
-                    aria-label={`${WEEKDAYS[i]} available from`}
-                  />
-                  <span className="text-muted">–</span>
-                  <TimeSelect
-                    disabled={!r.restricted}
-                    value={r.end}
-                    onChange={(v) => setHoursRow(i, { end: v })}
-                    className={timeSelectCls}
-                    aria-label={`${WEEKDAYS[i]} available until`}
-                  />
-                </div>
-              ))}
-            </div>
+            <AvailableHoursRows
+              rows={hoursRows}
+              onChange={setHoursRows}
+              ariaScope="this service"
+            />
           </div>
         )}
 
@@ -1186,6 +1196,7 @@ function TargetedSlotsManager({
   const activeServices = services.filter((s) => s.active);
   const activeStaff = staff.filter((s) => s.active);
   const [slots, setSlots] = useState<TargetedSlotRow[] | null>(null);
+  const [rules, setRules] = useState<TargetedSlotRuleRow[]>([]);
   const [serviceId, setServiceId] = useState("");
   const [staffId, setStaffId] = useState("");
   const [label, setLabel] = useState("");
@@ -1193,12 +1204,23 @@ function TargetedSlotsManager({
   const [minutes, setMinutes] = useState(30);
   const [price, setPrice] = useState("");
   const [repeatWeeks, setRepeatWeeks] = useState(0);
+  // "Until I turn it off" — an indefinite weekly series (Drick: capping at N
+  // weeks means re-publishing forever). Mutually exclusive with the spinner.
+  const [repeatForever, setRepeatForever] = useState(false);
+  // Hand-picked slot ids for bulk remove ("select to delete").
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Which series cards are expanded to their individual dates.
+  const [openRules, setOpenRules] = useState<Set<string>>(new Set());
   const [pending, start] = useTransition();
 
   function refresh() {
     start(async () => {
       const res = await listTargetedSlotsAction();
-      if (res.ok && res.slots) setSlots(res.slots);
+      if (res.ok && res.slots) {
+        setSlots(res.slots);
+        setRules(res.rules ?? []);
+        setSelected(new Set());
+      }
     });
   }
   // First load on mount (no server plumbing needed for a settings subsection).
@@ -1225,14 +1247,16 @@ function TargetedSlotsManager({
         startsAt: startsAt.toISOString(),
         durationMin: minutes,
         price: Number(price),
-        repeatWeeks: repeatWeeks > 0 ? repeatWeeks : undefined,
+        repeatWeeks: !repeatForever && repeatWeeks > 0 ? repeatWeeks : undefined,
+        repeatForever: repeatForever || undefined,
       });
       if (r.ok) {
-        toast("Slot published", "success");
+        toast(repeatForever ? "Series published" : "Slot published", "success");
         setLabel("");
         setWhen("");
         setPrice("");
         setRepeatWeeks(0);
+        setRepeatForever(false);
         refresh();
       } else toast("Couldn't publish", "error");
     });
@@ -1243,6 +1267,40 @@ function TargetedSlotsManager({
       const r = await deleteTargetedSlotAction(id);
       toast(r.ok ? "Slot removed" : "Couldn't remove (already booked?)", r.ok ? "success" : "error");
       refresh();
+    });
+  }
+
+  function removeRule(rule: TargetedSlotRuleRow) {
+    start(async () => {
+      const r = await deleteTargetedSlotRuleAction(rule.id);
+      toast(
+        r.ok
+          ? rule.indefinite
+            ? "Series turned off"
+            : "Series removed"
+          : "Couldn't remove",
+        r.ok ? "success" : "error",
+      );
+      refresh();
+    });
+  }
+
+  function removeSelected() {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    start(async () => {
+      const r = await bulkDeleteTargetedSlotsAction(ids);
+      toast(r.ok ? "Selected slots removed" : "Couldn't remove", r.ok ? "success" : "error");
+      refresh();
+    });
+  }
+
+  function toggleSelected(id: string) {
+    setSelected((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
     });
   }
 
@@ -1321,19 +1379,37 @@ function TargetedSlotsManager({
           onChange={(e) => setPrice(e.target.value)}
           aria-label="Price"
         />
-        <label className="flex items-center gap-2 text-xs text-muted sm:col-span-2">
-          Repeat weekly for
-          <NumberField
-            min={0}
-            max={26}
-            integer
-            className="w-16 rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
-            value={repeatWeeks}
-            onChange={setRepeatWeeks}
-            aria-label="Repeat weeks"
-          />
-          more week{repeatWeeks === 1 ? "" : "s"} (same day &amp; time)
-        </label>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 sm:col-span-2">
+          <label
+            className={cn(
+              "flex items-center gap-2 text-xs text-muted",
+              repeatForever && "opacity-40",
+            )}
+          >
+            Repeat weekly for
+            <NumberField
+              min={0}
+              max={26}
+              integer
+              disabled={repeatForever}
+              className="w-16 rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite disabled:opacity-50"
+              value={repeatWeeks}
+              onChange={setRepeatWeeks}
+              aria-label="Repeat weeks"
+            />
+            more week{repeatWeeks === 1 ? "" : "s"} (same day &amp; time)
+          </label>
+          <label className="flex items-center gap-2 text-xs text-muted">
+            <input
+              type="checkbox"
+              checked={repeatForever}
+              onChange={(e) => setRepeatForever(e.target.checked)}
+            />
+            <span className={cn(repeatForever && "text-gold")}>
+              Repeat until I turn it off
+            </span>
+          </label>
+        </div>
       </div>
       <button
         onClick={add}
@@ -1343,46 +1419,154 @@ function TargetedSlotsManager({
         Publish slot
       </button>
 
-      <ul className="mt-5 flex flex-col gap-2">
-        {(slots ?? []).map((t) => (
-          <li
-            key={t.id}
-            className="flex items-center justify-between rounded-xl border border-subtle px-4 py-2.5"
+      {/* Bulk remove bar — appears once anything is checked. */}
+      {selected.size > 0 && (
+        <div className="mt-5 flex items-center gap-4 rounded-xl border border-gold/40 bg-gold/5 px-4 py-2">
+          <span className="text-xs text-gold">{selected.size} selected</span>
+          <button
+            onClick={removeSelected}
+            disabled={pending}
+            className="text-xs font-semibold text-danger-soft hover:underline disabled:opacity-50"
           >
-            <span className="text-sm">
-              {whenFmt.format(new Date(t.startsAt))}{" "}
-              <span className="text-xs text-muted">
-                · {nameOf(activeServices, t.serviceId)} · {nameOf(activeStaff, t.staffId)} ·{" "}
-                {t.durationMin} min · ${t.price.toFixed(0)}
-                {t.label ? ` · ${t.label}` : ""}
-              </span>{" "}
-              <span
-                className={cn(
-                  "ml-1 rounded-full px-2 py-0.5 text-[10px] font-medium",
-                  t.booked
-                    ? "bg-emerald-soft/15 text-emerald-soft"
-                    : "bg-gold/15 text-gold",
-                )}
-              >
-                {t.booked ? "Booked" : "Open"}
-              </span>
-            </span>
-            {!t.booked && (
-              <button
-                onClick={() => remove(t.id)}
-                className="text-xs text-danger-soft hover:underline"
-              >
-                Remove
-              </button>
-            )}
-          </li>
-        ))}
-        {slots !== null && slots.length === 0 && (
+            Remove selected
+          </button>
+          <button
+            onClick={() => setSelected(new Set())}
+            className="text-xs text-muted hover:underline"
+          >
+            Clear
+          </button>
+        </div>
+      )}
+
+      <ul className="mt-5 flex flex-col gap-2">
+        {/* One condensed card per weekly series (Drick: dozens of identical
+            rows buried the list). Expand for the individual dates. */}
+        {rules.map((rule) => {
+          const ruleSlots = (slots ?? []).filter((t) => t.ruleId === rule.id);
+          const openCount = ruleSlots.filter((t) => !t.booked).length;
+          const bookedCount = ruleSlots.length - openCount;
+          const next = ruleSlots[0];
+          const isOpen = openRules.has(rule.id);
+          return (
+            <li key={`rule-${rule.id}`} className="rounded-xl border border-subtle">
+              <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+                <button
+                  onClick={() =>
+                    setOpenRules((cur) => {
+                      const nextSet = new Set(cur);
+                      if (nextSet.has(rule.id)) nextSet.delete(rule.id);
+                      else nextSet.add(rule.id);
+                      return nextSet;
+                    })
+                  }
+                  aria-expanded={isOpen}
+                  className="flex-1 text-left"
+                >
+                  <span className="text-sm">
+                    {WEEKDAYS[rule.weekday]}s · {fmtWallTime(rule.startMin)}{" "}
+                    <span className="text-xs text-muted">
+                      · {nameOf(activeServices, rule.serviceId)} ·{" "}
+                      {nameOf(activeStaff, rule.staffId)} · {rule.durationMin} min · $
+                      {rule.price.toFixed(0)}
+                      {rule.label ? ` · ${rule.label}` : ""}
+                    </span>
+                  </span>
+                  <span className="mt-0.5 block text-[11px] text-muted">
+                    {rule.indefinite
+                      ? "Repeats weekly until turned off"
+                      : `${ruleSlots.length} upcoming date${ruleSlots.length === 1 ? "" : "s"}`}
+                    {" · "}
+                    {openCount} open
+                    {bookedCount > 0 ? ` · ${bookedCount} booked` : ""}
+                    {next ? ` · next ${whenFmt.format(new Date(next.startsAt))}` : ""}{" "}
+                    {isOpen ? "▴" : "▾"}
+                  </span>
+                </button>
+                <button
+                  onClick={() => removeRule(rule)}
+                  disabled={pending}
+                  className="shrink-0 text-xs text-danger-soft hover:underline disabled:opacity-50"
+                >
+                  {rule.indefinite ? "Turn off" : "Remove series"}
+                </button>
+              </div>
+              {isOpen && (
+                <ul className="flex flex-col gap-1 border-t border-subtle px-4 py-2">
+                  {ruleSlots.map((t) => slotRow(t))}
+                  {ruleSlots.length === 0 && (
+                    <li className="text-xs text-muted">No upcoming dates.</li>
+                  )}
+                </ul>
+              )}
+            </li>
+          );
+        })}
+        {/* One-off slots (and booked leftovers of turned-off series). */}
+        {(slots ?? [])
+          .filter((t) => !t.ruleId || !rules.some((r) => r.id === t.ruleId))
+          .map((t) => slotRow(t))}
+        {slots !== null && slots.length === 0 && rules.length === 0 && (
           <li className="text-sm text-muted">No targeted slots yet.</li>
         )}
       </ul>
     </Card>
   );
+
+  /** One slot row: checkbox (unbooked) + when + meta + badge + Remove. */
+  function slotRow(t: TargetedSlotRow) {
+    return (
+      <li
+        key={t.id}
+        className="flex items-center justify-between gap-3 rounded-xl border border-subtle px-4 py-2.5"
+      >
+        <span className="flex items-center gap-3 text-sm">
+          {!t.booked && (
+            <input
+              type="checkbox"
+              checked={selected.has(t.id)}
+              onChange={() => toggleSelected(t.id)}
+              aria-label={`Select ${whenFmt.format(new Date(t.startsAt))}`}
+            />
+          )}
+          <span>
+            {whenFmt.format(new Date(t.startsAt))}{" "}
+            <span className="text-xs text-muted">
+              · {nameOf(activeServices, t.serviceId)} · {nameOf(activeStaff, t.staffId)} ·{" "}
+              {t.durationMin} min · ${t.price.toFixed(0)}
+              {t.label ? ` · ${t.label}` : ""}
+            </span>{" "}
+            <span
+              className={cn(
+                "ml-1 rounded-full px-2 py-0.5 text-[10px] font-medium",
+                t.booked
+                  ? "bg-emerald-soft/15 text-emerald-soft"
+                  : "bg-gold/15 text-gold",
+              )}
+            >
+              {t.booked ? "Booked" : "Open"}
+            </span>
+          </span>
+        </span>
+        {!t.booked && (
+          <button
+            onClick={() => remove(t.id)}
+            className="text-xs text-danger-soft hover:underline"
+          >
+            Remove
+          </button>
+        )}
+      </li>
+    );
+  }
+}
+
+/** Shop-local wall minutes → "3:00 PM". */
+function fmtWallTime(min: number): string {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${String(m).padStart(2, "0")} ${h >= 12 ? "PM" : "AM"}`;
 }
 
 //  Add-ons (optional extras that add time + price to a service)
@@ -1399,12 +1583,24 @@ function AddOnsManager({
   const [name, setName] = useState("");
   const [duration, setDuration] = useState(15);
   const [price, setPrice] = useState("");
-  // "" = offered on every service; a service id scopes it to that one.
-  const [serviceId, setServiceId] = useState<string>("");
+  // [] = offered on every service; ids scope it to just those (Drick: an add-on
+  // often applies to several services, not all-or-one).
+  const [serviceIds, setServiceIds] = useState<string[]>([]);
   const [pending, start] = useTransition();
   const activeServices = services.filter((s) => s.active);
-  const serviceName = (id: string | null) =>
-    id === null ? "All services" : (services.find((s) => s.id === id)?.name ?? "A service");
+  const scopeLabel = (ids: string[]) => {
+    if (ids.length === 0) return "All services";
+    const names = ids.map((id) => services.find((s) => s.id === id)?.name ?? "a service");
+    return names.length <= 2
+      ? names.join(", ")
+      : `${names.slice(0, 2).join(", ")} + ${names.length - 2} more`;
+  };
+
+  function toggleService(id: string) {
+    setServiceIds((cur) =>
+      cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id],
+    );
+  }
 
   function add() {
     if (!name.trim()) return;
@@ -1413,13 +1609,13 @@ function AddOnsManager({
         name: name.trim(),
         durationMin: duration,
         price: price.trim() ? Number(price) : null,
-        serviceId: serviceId || null,
+        serviceIds,
       });
       if (r.ok) {
         toast("Add-on added", "success");
         setName("");
         setPrice("");
-        setServiceId("");
+        setServiceIds([]);
       } else toast("Couldn't add", "error");
     });
   }
@@ -1436,48 +1632,83 @@ function AddOnsManager({
         title="Add-ons"
         subtitle="Optional extras a customer can add to a service (e.g. beard trim). Adds time and price."
       />
+      {/* Labeled columns (Drick: two bare spinners read as mystery numbers —
+          say which is minutes and which is dollars). */}
       <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_110px_110px]">
-        <input
-          className={field}
-          placeholder="Add-on name (e.g. Beard trim)"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
-        <NumberField
-          className={field}
-          min={0}
-          integer
-          placeholder="+ min"
-          value={duration}
-          onChange={setDuration}
-          aria-label="Extra minutes"
-        />
-        <input
-          className={field}
-          type="number"
-          min={0}
-          inputMode="decimal"
-          placeholder="+ price"
-          value={price}
-          onChange={(e) => setPrice(e.target.value)}
-          aria-label="Extra price"
-        />
+        <label className="block">
+          <span className={labelCls}>Add-on name</span>
+          <input
+            className={cn(field, "mt-1")}
+            placeholder="e.g. Beard trim"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </label>
+        <label className="block">
+          <span className={labelCls}>Extra minutes</span>
+          <NumberField
+            className={cn(field, "mt-1")}
+            min={0}
+            integer
+            placeholder="+ min"
+            value={duration}
+            onChange={setDuration}
+            aria-label="Extra minutes"
+          />
+        </label>
+        <label className="block">
+          <span className={labelCls}>Extra price ($)</span>
+          <input
+            className={cn(field, "mt-1")}
+            type="number"
+            min={0}
+            inputMode="decimal"
+            placeholder="+ $"
+            value={price}
+            onChange={(e) => setPrice(e.target.value)}
+            aria-label="Extra price in dollars"
+          />
+        </label>
       </div>
-      <div className="mt-2">
+      <div className="mt-3">
         <span className={labelCls}>Offer on</span>
-        <select
-          className={cn(field, "mt-1")}
-          value={serviceId}
-          onChange={(e) => setServiceId(e.target.value)}
-          aria-label="Offer add-on on"
-        >
-          <option value="">All services</option>
+        {/* Multi-select chips; each shows the service's own minutes + price so
+            it's clear what the add-on extends. Nothing selected = every service. */}
+        <div className="mt-1.5 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setServiceIds([])}
+            aria-pressed={serviceIds.length === 0}
+            className={cn(
+              "rounded-full border px-3 py-1 text-xs transition-colors",
+              serviceIds.length === 0
+                ? "border-gold/60 bg-gold/10 text-gold"
+                : "border-subtle text-muted hover:text-offwhite",
+            )}
+          >
+            All services
+          </button>
           {activeServices.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name} only
-            </option>
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => toggleService(s.id)}
+              aria-pressed={serviceIds.includes(s.id)}
+              className={cn(
+                "rounded-full border px-3 py-1 text-xs transition-colors",
+                serviceIds.includes(s.id)
+                  ? "border-gold/60 bg-gold/10 text-gold"
+                  : "border-subtle text-muted hover:text-offwhite",
+              )}
+            >
+              {s.name}
+              <span className="opacity-70">
+                {" "}
+                · {s.durationMin} min{s.price !== null ? ` · $${s.price}` : ""}
+              </span>
+            </button>
           ))}
-        </select>
+        </div>
       </div>
       <button
         onClick={add}
@@ -1497,7 +1728,7 @@ function AddOnsManager({
               {a.name}{" "}
               <span className="text-xs text-muted">
                 · +{a.durationMin} min{a.price !== null ? ` · +$${a.price}` : ""} ·{" "}
-                {serviceName(a.serviceId)}
+                {scopeLabel(a.serviceIds)}
               </span>
             </span>
             <button
@@ -1635,10 +1866,7 @@ function ServiceGroupItem({
       cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id],
     );
   }
-  function setHoursRow(i: number, patch: Partial<ServiceHoursRow>) {
-    setHoursRows((cur) => cur.map((r, j) => (j === i ? { ...r, ...patch } : r)));
-  }
-  const allHoursChecked = hoursRows.every((r) => r.restricted);
+  const allHoursCustom = hoursRows.every((r) => r.mode === "custom");
 
   // 0 (or blank, which NumberField settles to 0) = no cap → null. Otherwise the
   // cap must be a positive integer.
@@ -1653,11 +1881,8 @@ function ServiceGroupItem({
       toast("Group name is required", "error");
       return;
     }
-    const badRow = hoursRows.some(
-      (r) => r.restricted && hhmmToMin(r.end) <= hhmmToMin(r.start),
-    );
-    if (badRow) {
-      toast("Group hours: end must be after start", "error");
+    if (hasInvalidHoursRow(hoursRows)) {
+      toast("Group hours: each window's end must be after its start", "error");
       return;
     }
     const perDay = parseCap(maxPerDay);
@@ -1752,6 +1977,60 @@ function ServiceGroupItem({
             </div>
           </div>
 
+          {/* Order within the group (Drick): the saved order is what customers
+              see on the booking page. Save persists the array order. */}
+          {serviceIds.length > 1 && (
+            <div>
+              <span className={labelCls}>Order in this group</span>
+              <ul className="mt-1 flex flex-col gap-1">
+                {serviceIds.map((id, i) => (
+                  <li
+                    key={id}
+                    className="flex items-center gap-2 rounded-lg border border-subtle px-3 py-1.5"
+                  >
+                    <span className="w-4 text-xs text-muted">{i + 1}.</span>
+                    <span className="flex-1 text-sm">
+                      {services.find((s) => s.id === id)?.name ?? "…"}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={i === 0}
+                      onClick={() =>
+                        setServiceIds((cur) => {
+                          const next = [...cur];
+                          [next[i - 1], next[i]] = [next[i]!, next[i - 1]!];
+                          return next;
+                        })
+                      }
+                      className="px-1 text-sm text-muted transition-colors hover:text-gold disabled:opacity-30"
+                      aria-label={`Move ${services.find((s) => s.id === id)?.name ?? "service"} up`}
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      disabled={i === serviceIds.length - 1}
+                      onClick={() =>
+                        setServiceIds((cur) => {
+                          const next = [...cur];
+                          [next[i], next[i + 1]] = [next[i + 1]!, next[i]!];
+                          return next;
+                        })
+                      }
+                      className="px-1 text-sm text-muted transition-colors hover:text-gold disabled:opacity-30"
+                      aria-label={`Move ${services.find((s) => s.id === id)?.name ?? "service"} down`}
+                    >
+                      ↓
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-0.5 text-[11px] text-muted">
+                This is the order customers see. Hit Save to keep it.
+              </p>
+            </div>
+          )}
+
           {/* Shared available-hours grid - same idiom as ServiceEditForm; these
               hours OVERRIDE each member service's own windows. */}
           <div>
@@ -1761,47 +2040,24 @@ function ServiceGroupItem({
                 type="button"
                 onClick={() =>
                   setHoursRows((cur) =>
-                    cur.map((r) => ({ ...r, restricted: !allHoursChecked })),
+                    cur.map((r) => ({ ...r, mode: allHoursCustom ? "any" : "custom" })),
                   )
                 }
                 className="shrink-0 rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:border-gold/50 hover:text-gold"
               >
-                {allHoursChecked ? "Uncheck all days" : "Check all days"}
+                {allHoursCustom ? "All days: open" : "All days: custom"}
               </button>
             </div>
             <p className="mt-0.5 text-[11px] text-muted">
-              Leave a day unchecked to offer it whenever the barber works. Check a
-              day and set a window to limit every service in this group.
+              Open = whenever the barber works that day. Custom = only the windows
+              you set (add a second window for a split day). Not open = no
+              bookings that day, for every service in this group.
             </p>
-            <div className="mt-2 flex flex-col gap-2">
-              {hoursRows.map((r, i) => (
-                <div key={i} className="flex items-center gap-3">
-                  <label className="flex w-20 items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={r.restricted}
-                      onChange={(e) => setHoursRow(i, { restricted: e.target.checked })}
-                    />
-                    {WEEKDAYS[i]}
-                  </label>
-                  <TimeSelect
-                    disabled={!r.restricted}
-                    value={r.start}
-                    onChange={(v) => setHoursRow(i, { start: v })}
-                    className={timeSelectCls}
-                    aria-label={`${WEEKDAYS[i]} available from`}
-                  />
-                  <span className="text-muted">–</span>
-                  <TimeSelect
-                    disabled={!r.restricted}
-                    value={r.end}
-                    onChange={(v) => setHoursRow(i, { end: v })}
-                    className={timeSelectCls}
-                    aria-label={`${WEEKDAYS[i]} available until`}
-                  />
-                </div>
-              ))}
-            </div>
+            <AvailableHoursRows
+              rows={hoursRows}
+              onChange={setHoursRows}
+              ariaScope="this group"
+            />
           </div>
 
           {/* Booking limits across the whole group. Blank/0 = no cap. */}
@@ -2144,43 +2400,159 @@ function buildDurationOverrides(
   return out;
 }
 
-// Per-service available-hours rows: one optional window per weekday. `restricted`
-// off = the weekday is left out of the payload entirely (unrestricted).
-type ServiceHoursRow = { restricted: boolean; start: string; end: string };
+// Per-weekday availability rows. Three modes (Drick: unchecking a day looked
+// like "closed" but actually meant "whenever the barber works" — so the day
+// still showed bookable; and one window/day couldn't express 9-10am + 8-11pm):
+//  "any"    — key omitted from the payload: open whenever the barber works
+//  "custom" — one or more windows limit the day (stored as [{s,e},...])
+//  "closed" — [] stored: no bookings that day at all
+type HoursWindow = { start: string; end: string };
+type ServiceHoursRow = { mode: "any" | "custom" | "closed"; windows: HoursWindow[] };
+
+/** Most windows one day can hold in the UI (the API accepts up to 6). */
+const MAX_DAY_WINDOWS = 4;
 
 /**
- * {weekday: [{s,e}]} from the hours rows. A restricted weekday with a valid
- * window emits it; a restricted weekday with an invalid/empty window emits []
- * (closed that day). Unrestricted weekdays are omitted so they stay "available
- * whenever the barber works". The full map is sent (including {} to clear).
+ * {weekday: [{s,e},...]} from the hours rows. "any" days are omitted (open
+ * whenever the barber works), "closed" days emit [] (no bookings), "custom"
+ * days emit every window. The full map is sent (including {} to clear).
+ * Windows are assumed valid — save() rejects end<=start before calling this.
  */
 function buildHoursWindows(
   rows: ServiceHoursRow[],
 ): Record<string, { s: number; e: number }[]> {
   const out: Record<string, { s: number; e: number }[]> = {};
   rows.forEach((r, wd) => {
-    if (!r.restricted) return; // absent = unrestricted
-    const s = hhmmToMin(r.start);
-    const e = hhmmToMin(r.end);
-    out[String(wd)] = e > s ? [{ s, e }] : []; // empty = closed that weekday
+    if (r.mode === "any") return; // absent = open per barber's hours
+    out[String(wd)] =
+      r.mode === "closed"
+        ? []
+        : r.windows.map((w) => ({ s: hhmmToMin(w.start), e: hhmmToMin(w.end) }));
   });
   return out;
 }
 
-/** Seed the edit form's hours rows from a service's stored hoursWindows map. */
+/** True when any custom day holds a window whose end isn't after its start. */
+function hasInvalidHoursRow(rows: ServiceHoursRow[]): boolean {
+  return rows.some(
+    (r) =>
+      r.mode === "custom" &&
+      r.windows.some((w) => hhmmToMin(w.end) <= hhmmToMin(w.start)),
+  );
+}
+
+const DEFAULT_WINDOW: HoursWindow = { start: "10:00", end: "14:00" };
+
+/** Seed the edit form's hours rows from a stored hoursWindows map. */
 function hoursRowsFromWindows(
   windows: Record<string, { s: number; e: number }[]> | undefined,
 ): ServiceHoursRow[] {
   return WEEKDAYS.map((_, wd) => {
     const w = windows?.[String(wd)];
-    if (!w) return { restricted: false, start: "10:00", end: "14:00" };
-    const first = w[0];
+    // Keep a default window in state even for any/closed so switching the mode
+    // to "custom" starts from something sensible instead of an empty list.
+    if (!w) return { mode: "any", windows: [{ ...DEFAULT_WINDOW }] };
+    if (w.length === 0) return { mode: "closed", windows: [{ ...DEFAULT_WINDOW }] };
     return {
-      restricted: true,
-      start: first ? minToHHMM(first.s) : "10:00",
-      end: first ? minToHHMM(first.e) : "14:00",
+      mode: "custom",
+      windows: w.map((x) => ({ start: minToHHMM(x.s), end: minToHHMM(x.e) })),
     };
   });
+}
+
+/**
+ * The shared per-weekday availability editor (service editor + group editor).
+ * Each day picks a mode — Open (barber's hours) / Custom hours / Not open —
+ * and a custom day can hold several windows ("+ hours": 9-10am AND 8-11pm).
+ */
+function AvailableHoursRows({
+  rows,
+  onChange,
+  ariaScope,
+}: {
+  rows: ServiceHoursRow[];
+  onChange: (rows: ServiceHoursRow[]) => void;
+  /** e.g. "this service" / "this group" — used in aria labels. */
+  ariaScope: string;
+}) {
+  function patchRow(i: number, patch: Partial<ServiceHoursRow>) {
+    onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  }
+  function patchWindow(i: number, k: number, patch: Partial<HoursWindow>) {
+    patchRow(i, {
+      windows: rows[i]!.windows.map((w, j) => (j === k ? { ...w, ...patch } : w)),
+    });
+  }
+  return (
+    <div className="mt-2 flex flex-col gap-2">
+      {rows.map((r, i) => (
+        <div key={i} className="flex items-start gap-3">
+          <span className="w-9 pt-1.5 text-sm">{WEEKDAYS[i]}</span>
+          <select
+            className={cn(field, "mt-0 w-auto shrink-0 py-1.5 text-xs")}
+            value={r.mode}
+            onChange={(e) =>
+              patchRow(i, { mode: e.target.value as ServiceHoursRow["mode"] })
+            }
+            aria-label={`${WEEKDAYS[i]} availability for ${ariaScope}`}
+          >
+            <option value="any">Open (barber&apos;s hours)</option>
+            <option value="custom">Custom hours</option>
+            <option value="closed">Not open</option>
+          </select>
+          {r.mode === "custom" && (
+            <div className="flex flex-col gap-1.5">
+              {r.windows.map((w, k) => (
+                <div key={k} className="flex items-center gap-2">
+                  <TimeSelect
+                    value={w.start}
+                    onChange={(v) => patchWindow(i, k, { start: v })}
+                    className={timeSelectCls}
+                    aria-label={`${WEEKDAYS[i]} window ${k + 1} from`}
+                  />
+                  <span className="text-muted">–</span>
+                  <TimeSelect
+                    value={w.end}
+                    onChange={(v) => patchWindow(i, k, { end: v })}
+                    className={timeSelectCls}
+                    aria-label={`${WEEKDAYS[i]} window ${k + 1} until`}
+                  />
+                  {r.windows.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        patchRow(i, { windows: r.windows.filter((_, j) => j !== k) })
+                      }
+                      className="text-xs text-muted transition-colors hover:text-danger-soft"
+                      aria-label={`Remove ${WEEKDAYS[i]} window ${k + 1}`}
+                    >
+                      ✕
+                    </button>
+                  )}
+                  {k === r.windows.length - 1 && r.windows.length < MAX_DAY_WINDOWS && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        // Seed the new window after the last one (a second
+                        // evening window is the common case, e.g. 8-11pm).
+                        patchRow(i, {
+                          windows: [...r.windows, { start: w.end, end: "23:00" }],
+                        })
+                      }
+                      className="whitespace-nowrap text-xs text-muted transition-colors hover:text-gold"
+                      aria-label={`Add another ${WEEKDAYS[i]} window`}
+                    >
+                      + hours
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 /**

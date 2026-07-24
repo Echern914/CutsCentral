@@ -176,6 +176,8 @@ const updateShopSchema = createShopSchema
     bookingLeadHours: z.number().int().min(0).max(720),
     bookingMaxDays: z.number().int().min(1).max(365),
     bookingBufferMin: z.number().int().min(0).max(240),
+    // Public booking menu: group cards first (only meaningful with groups).
+    bookingGroupsFirst: z.boolean(),
     // Client rewards page content. rewardsWelcome: optional short greeting
     // ("" clears it). rewardsSections: visible REWARDS_SECTIONS keys (de-duped,
     // known keys only); [] = show all.
@@ -764,6 +766,7 @@ function serializeShop(shop: {
   bookingLeadHours: number;
   bookingMaxDays: number;
   bookingBufferMin: number;
+  bookingGroupsFirst: boolean;
   receptionistEnabled: boolean;
   receptionistTone: string | null;
   receptionistTermsAcceptedAt: Date | null;
@@ -812,6 +815,7 @@ function serializeShop(shop: {
     bookingLeadHours: shop.bookingLeadHours,
     bookingMaxDays: shop.bookingMaxDays,
     bookingBufferMin: shop.bookingBufferMin,
+    bookingGroupsFirst: shop.bookingGroupsFirst,
     receptionistEnabled: shop.receptionistEnabled,
     receptionistTone: shop.receptionistTone,
     receptionistTermsAcceptedAt: shop.receptionistTermsAcceptedAt?.toISOString() ?? null,
