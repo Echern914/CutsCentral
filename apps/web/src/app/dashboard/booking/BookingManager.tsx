@@ -2486,22 +2486,30 @@ function AvailableHoursRows({
   return (
     <div className="mt-2 flex flex-col gap-2">
       {rows.map((r, i) => (
-        <div key={i} className="flex items-start gap-3">
-          <span className="w-9 pt-1.5 text-sm">{WEEKDAYS[i]}</span>
-          <select
-            className={cn(field, "mt-0 w-auto shrink-0 py-1.5 text-xs")}
-            value={r.mode}
-            onChange={(e) =>
-              patchRow(i, { mode: e.target.value as ServiceHoursRow["mode"] })
-            }
-            aria-label={`${WEEKDAYS[i]} availability for ${ariaScope}`}
-          >
-            <option value="any">Open (barber&apos;s hours)</option>
-            <option value="custom">Custom hours</option>
-            <option value="closed">Not open</option>
-          </select>
+        // Two stacked lines per day: [day + mode select], then (custom only)
+        // the windows indented UNDER the select — everything stays inside the
+        // card; nothing ever renders off to the side.
+        <div key={i} className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-3">
+            <span className="w-9 shrink-0 text-sm">{WEEKDAYS[i]}</span>
+            {/* Deliberately NOT the shared `field` class (w-full): a compact
+                fixed-width select keeps all 7 rows aligned. Short labels — the
+                helper text above the grid explains each mode. */}
+            <select
+              className="w-36 shrink-0 rounded-lg border border-subtle bg-charcoal-700 px-2.5 py-1.5 text-xs text-offwhite outline-none focus:border-gold/50"
+              value={r.mode}
+              onChange={(e) =>
+                patchRow(i, { mode: e.target.value as ServiceHoursRow["mode"] })
+              }
+              aria-label={`${WEEKDAYS[i]} availability for ${ariaScope}`}
+            >
+              <option value="any">Open</option>
+              <option value="custom">Custom hours</option>
+              <option value="closed">Not open</option>
+            </select>
+          </div>
           {r.mode === "custom" && (
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-1.5 pl-12">
               {r.windows.map((w, k) => (
                 <div key={k} className="flex items-center gap-2">
                   <TimeSelect
