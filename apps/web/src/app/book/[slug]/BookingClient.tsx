@@ -13,7 +13,10 @@ import type { BookShopData } from "./page";
 import { readableOn } from "@/lib/contrast";
 import {
   bookAction,
+  getDayBundlesAction,
   getMergedSlotsAction,
+  type DayBundlesResult,
+  type DayService,
   type MergedSlotsResult,
 } from "./actions";
 import { PaymentStep } from "./PaymentStep";
@@ -82,25 +85,6 @@ function monthGrid(month: string): { day: string; inMonth: boolean }[] {
 }
 
 const WEEKDAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
-
-/** "$45-$160" across a group's member services (null = no priced member). */
-function groupPriceLabel(services: BookShopData["services"]): string | null {
-  const mins: number[] = [];
-  const maxs: number[] = [];
-  for (const s of services) {
-    if (s.priceRange) {
-      mins.push(s.priceRange.min);
-      maxs.push(s.priceRange.max);
-    } else if (s.price !== null) {
-      mins.push(s.price);
-      maxs.push(s.price);
-    }
-  }
-  if (mins.length === 0) return null;
-  const lo = Math.min(...mins);
-  const hi = Math.max(...maxs);
-  return lo === hi ? `$${lo}` : `$${lo}-$${hi}`;
-}
 
 /**
  * Public native booking picker: pick service -> (provider, only when the service
@@ -266,33 +250,113 @@ export function BookingClient({ data }: { data: BookShopData }) {
     return data.services.filter((s) => offered.has(s.id));
   }, [data.services, data.offerings]);
 
-  // Groups-first menu (shop setting): open with GROUP cards, tap one to see its
-  // services. Groups with no bookable member are hidden; ungrouped services
-  // collect under "Everything else" (or show directly when no group has any).
-  const [groupId, setGroupId] = useState<string | null>(null);
-  const groupedMenu = useMemo(() => {
-    if (!data.shop.groupsFirst) return null;
-    const groups = (data.groups ?? [])
-      .map((g) => ({
-        ...g,
-        services: bookableServices
-          .filter((s) => s.serviceGroupId === g.id)
-          .sort((a, b) => a.groupSortOrder - b.groupSortOrder),
-      }))
-      .filter((g) => g.services.length > 0);
-    if (groups.length === 0) return null;
-    const grouped = new Set(groups.flatMap((g) => g.services.map((s) => s.id)));
-    const other = bookableServices.filter((s) => !grouped.has(s.id));
-    return { groups, other };
-  }, [data.shop.groupsFirst, data.groups, bookableServices]);
-  // The services the step-1 list actually shows: the chosen group's members
-  // (groups-first) or the whole flat menu.
-  const menuServices =
-    groupedMenu === null
-      ? bookableServices
-      : groupId === "other"
-        ? groupedMenu.other
-        : (groupedMenu.groups.find((g) => g.id === groupId)?.services ?? []);
+  // Day-first "bundles" menu (the groups-first shop setting): the customer
+  // picks a DATE first, then sees only the bundles (service groups) with real
+  // openings that day and the concrete times inside each — bundles with
+  // nothing open that day never appear. Replaces the service-first steps.
+  const dayFirst = Boolean(data.shop.groupsFirst);
+  const [dayDate, setDayDate] = useState<string | null>(null); // YYYY-MM-DD (shop tz)
+  const [dayData, setDayData] = useState<DayBundlesResult | null>(null);
+  const [dayLoading, setDayLoading] = useState(false);
+  const [dayMonth, setDayMonth] = useState<string | null>(null); // "YYYY-MM"
+
+  // Days the calendar offers: within the booking window, on a weekday anyone
+  // works at all (cheap heuristic — the REAL openings are fetched on tap, and
+  // an empty day says so instead of lying).
+  const dayFirstDays = useMemo(() => {
+    if (!dayFirst) return new Set<string>();
+    const out = new Set<string>();
+    const today = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+    const start = new Date(`${today}T12:00:00Z`);
+    for (let i = 0; i <= data.shop.bookingMaxDays; i++) {
+      const d = new Date(start);
+      d.setUTCDate(start.getUTCDate() + i);
+      if (!data.openWeekdays?.includes(d.getUTCDay())) continue;
+      out.add(d.toISOString().slice(0, 10));
+    }
+    return out;
+  }, [dayFirst, tz, data.shop.bookingMaxDays, data.openWeekdays]);
+
+  function pickDay(day: string) {
+    setDayDate(day);
+    setDayMonth(monthKey(day));
+    setServiceId(null);
+    setAddOnIds([]);
+    clearSlotPick();
+    setDayLoading(true);
+    setDayData(null);
+    startTransition(async () => {
+      const res = await getDayBundlesAction(data.shop.slug, day);
+      if (res.ok && res.data) setDayData(res.data);
+      setDayLoading(false);
+    });
+  }
+
+  /** Tap a time in the day view: bind service + slot (+ barber) and go to details. */
+  function pickDaySlot(svc: DayService, s: DayService["slots"][number]) {
+    setServiceId(svc.id);
+    setAddOnIds([]);
+    setSlot(s.startsAt);
+    setSlotTargeted(s.targeted ?? null);
+    setPickedStaffId(s.staffIds[0] ?? null);
+  }
+
+  /** One service's row in the day view: name + that-day price + time chips. */
+  function dayServiceRow(svc: DayService) {
+    const stripe = serviceColorHex(svc.color);
+    return (
+      <div
+        key={svc.id}
+        className="overflow-hidden rounded-xl border"
+        style={{
+          borderColor: "rgba(255,255,255,0.12)",
+          borderLeft: stripe ? `3px solid ${stripe}` : undefined,
+        }}
+      >
+        <div className="px-4 py-3">
+          <span className="flex items-baseline justify-between gap-3">
+            <span className="text-sm font-medium">{svc.name}</span>
+            {svc.price !== null && (
+              <span className="shrink-0 text-sm text-muted">${svc.price}</span>
+            )}
+          </span>
+          <span className="mt-0.5 block text-xs text-muted">{svc.durationMin} min</span>
+          <div className="mt-2.5 flex flex-wrap gap-2">
+            {svc.slots.map((s) => {
+              const chosen = slot === s.startsAt && serviceId === svc.id;
+              return (
+                <button
+                  key={`${s.startsAt}-${s.targeted?.id ?? "grid"}`}
+                  type="button"
+                  onClick={() => pickDaySlot(svc, s)}
+                  aria-pressed={chosen}
+                  className="rounded-lg border px-3 py-1.5 text-xs transition-colors"
+                  style={{
+                    borderColor: chosen ? accent : "rgba(255,255,255,0.15)",
+                    backgroundColor: chosen ? `${accent}14` : "transparent",
+                    color: chosen ? accent : undefined,
+                  }}
+                >
+                  {timeFmt.format(new Date(s.startsAt))}
+                  {s.targeted && (
+                    <span className="ml-1 opacity-80">
+                      · ${s.targeted.price}
+                      {s.targeted.label ? ` · ${s.targeted.label}` : ""}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Does the CHOSEN service have more than one barber? If so we keep the
   // "Choose your provider" step; a single-barber service skips it and jumps
@@ -300,7 +364,8 @@ export function BookingClient({ data }: { data: BookShopData }) {
   const isMultiBarber = serviceId !== null && staffForService.length > 1;
   // The time step is step 2 when provider is skipped, step 3 otherwise.
   const timeStepNo = isMultiBarber ? 3 : 2;
-  const detailsStepNo = isMultiBarber ? 4 : 3;
+  // Day-first flow is always day -> time -> details, so details is step 3.
+  const detailsStepNo = dayFirst ? 3 : isMultiBarber ? 4 : 3;
 
   const dateFmt = useMemo(
     () =>
@@ -511,10 +576,12 @@ export function BookingClient({ data }: { data: BookShopData }) {
       if (!res.ok) {
         if (res.error === "slot_taken") {
           setError("That time was just taken. Pick another slot.");
-          // Refresh availability so the taken slot disappears — reload the SAME
-          // pool the calendar was built from (not just one barber), so a merged
+          // Refresh availability so the taken slot disappears — day-first
+          // refetches the whole day; service-first reloads the SAME pool the
+          // calendar was built from (not just one barber), so a merged
           // multi-barber calendar doesn't collapse to a single provider.
-          if (serviceId && loadedPool.length) loadSlots(serviceId, loadedPool);
+          if (dayFirst && dayDate) pickDay(dayDate);
+          else if (serviceId && loadedPool.length) loadSlots(serviceId, loadedPool);
           clearSlotPick();
         } else if (res.error === "no_active_access") {
           setError(
@@ -786,7 +853,79 @@ export function BookingClient({ data }: { data: BookShopData }) {
         </div>
       )}
 
-      {/* Step 1: service */}
+      {/* DAY-FIRST (groups-first shops): 1 pick a day -> 2 the day's bundles
+          with their open times. Bundles/services with nothing open that day
+          are omitted server-side. */}
+      {dayFirst && (
+        <Section
+          title="1 · Pick a day"
+          tour="services"
+          back={
+            <CustomerBack
+              label={`← Back to ${data.shop.name}`}
+              fallbackHref={`/s/${data.shop.slug}`}
+              className="text-xs text-muted transition-colors hover:text-offwhite"
+            />
+          }
+        >
+          <MonthCalendar
+            viewMonth={dayMonth ?? monthKey([...dayFirstDays].sort()[0] ?? "2026-01-01")}
+            availableDays={dayFirstDays}
+            selectedDay={dayDate}
+            accent={accent}
+            onAccent={onAccent}
+            labelForDay={(d) => dateFmt.format(new Date(`${d}T12:00:00Z`))}
+            onPrevMonth={() =>
+              setDayMonth((m) => addMonths(m ?? monthKey([...dayFirstDays].sort()[0] ?? ""), -1))
+            }
+            onNextMonth={() =>
+              setDayMonth((m) => addMonths(m ?? monthKey([...dayFirstDays].sort()[0] ?? ""), 1))
+            }
+            onPickDay={pickDay}
+          />
+        </Section>
+      )}
+      {dayFirst && dayDate && (
+        <Section title="2 · Pick a time" focusOnMount={!demoTour}>
+          {dayLoading && (
+            <p className="text-sm text-muted">Checking the day&apos;s openings…</p>
+          )}
+          {!dayLoading && dayData && (
+            <div className="flex flex-col gap-5">
+              {dayData.bundles.map((b) => (
+                <div key={b.id}>
+                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+                    {b.name}
+                  </h3>
+                  <div className="flex flex-col gap-3">
+                    {b.services.map((svc) => dayServiceRow(svc))}
+                  </div>
+                </div>
+              ))}
+              {dayData.ungrouped.length > 0 && (
+                <div>
+                  {dayData.bundles.length > 0 && (
+                    <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+                      More services
+                    </h3>
+                  )}
+                  <div className="flex flex-col gap-3">
+                    {dayData.ungrouped.map((svc) => dayServiceRow(svc))}
+                  </div>
+                </div>
+              )}
+              {dayData.bundles.length === 0 && dayData.ungrouped.length === 0 && (
+                <p className="text-sm text-muted">
+                  Nothing open this day — try another date.
+                </p>
+              )}
+            </div>
+          )}
+        </Section>
+      )}
+
+      {/* Step 1: service (service-first shops; day-first starts at the calendar). */}
+      {!dayFirst && (
       <Section
         title="1 · Choose a service"
         tour="services"
@@ -801,68 +940,11 @@ export function BookingClient({ data }: { data: BookShopData }) {
           />
         }
       >
-        {/* Groups-first: the menu opens as GROUP cards; tapping one shows its
-            services (with a way back up). Flat menu when the setting is off. */}
-        {groupedMenu !== null && groupId === null ? (
-          <div className="flex flex-col gap-2">
-            {groupedMenu.groups.map((g) => (
-              <button
-                key={g.id}
-                type="button"
-                onClick={() => setGroupId(g.id)}
-                className="flex items-center justify-between rounded-xl border px-4 py-3.5 text-left transition-colors"
-                style={{ borderColor: "rgba(255,255,255,0.12)" }}
-              >
-                <span>
-                  <span className="block text-sm font-medium">{g.name}</span>
-                  <span className="mt-0.5 block text-xs text-muted">
-                    {g.services.length} service{g.services.length === 1 ? "" : "s"}
-                    {groupPriceLabel(g.services) ? ` · ${groupPriceLabel(g.services)}` : ""}
-                  </span>
-                </span>
-                <span aria-hidden className="text-muted">
-                  →
-                </span>
-              </button>
-            ))}
-            {groupedMenu.other.length > 0 && (
-              <button
-                type="button"
-                onClick={() => setGroupId("other")}
-                className="flex items-center justify-between rounded-xl border px-4 py-3.5 text-left transition-colors"
-                style={{ borderColor: "rgba(255,255,255,0.12)" }}
-              >
-                <span>
-                  <span className="block text-sm font-medium">Everything else</span>
-                  <span className="mt-0.5 block text-xs text-muted">
-                    {groupedMenu.other.length} service
-                    {groupedMenu.other.length === 1 ? "" : "s"}
-                  </span>
-                </span>
-                <span aria-hidden className="text-muted">
-                  →
-                </span>
-              </button>
-            )}
-          </div>
-        ) : (
         <div className="flex flex-col gap-2">
-          {groupedMenu !== null && (
-            <button
-              type="button"
-              onClick={() => {
-                setGroupId(null);
-                backToService();
-              }}
-              className="self-start text-xs text-muted transition-colors hover:text-offwhite"
-            >
-              ← All categories
-            </button>
-          )}
           {/* Only services a barber actually offers (bookableServices) — an
               unbookable service would dead-end the wizard. Rich card layout
               (photo + description + calendar-color rail) is from #114. */}
-          {menuServices.map((s) => {
+          {bookableServices.map((s) => {
             const selected = serviceId === s.id;
             // The barber's calendar color, echoed as a left-edge accent stripe so
             // the customer sees the same coding. null = no stripe (plain border).
@@ -918,12 +1000,12 @@ export function BookingClient({ data }: { data: BookShopData }) {
             <p className="text-sm text-muted">No services available yet.</p>
           )}
         </div>
-        )}
       </Section>
+      )}
 
       {/* Step 2: provider — only for services offered by more than one barber.
           A single-barber service skips this and lands on the calendar. */}
-      {serviceId && isMultiBarber && (
+      {!dayFirst && serviceId && isMultiBarber && (
         <Section
           title="2 · Choose your provider"
           back={<BackStep onClick={backToService} />}

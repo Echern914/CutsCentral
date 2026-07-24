@@ -557,14 +557,14 @@ function SettingsTab({
       {mode === "native" && (
         <Card className="p-5">
           <CardHeader
-            title="Show service groups first on your booking page"
-            subtitle="When on, customers see your group cards (e.g. AFTER HOURS, HAIRCUT) and tap one to open its services — instead of every service at once. Needs at least one service group below."
+            title="Day-first booking page (bundles by date)"
+            subtitle="When on, customers pick a DATE first, then see only the bundles (your service groups) with openings that day and the exact times inside each — instead of every service at once. Bundles with nothing open that day don't appear."
           />
           <div className="mt-4 flex items-center justify-between gap-4">
             <p className="text-sm text-muted">
               {groupsFirst
-                ? "On — the menu opens with your groups."
-                : "Off — the menu lists every service."}
+                ? "On — customers pick a day, then a time from that day's bundles."
+                : "Off — the menu lists every service (service first)."}
             </p>
             <button
               onClick={toggleGroupsFirst}
@@ -2486,17 +2486,23 @@ function AvailableHoursRows({
   return (
     <div className="mt-2 flex flex-col gap-2">
       {rows.map((r, i) => (
-        <div key={i} className="flex items-start gap-3">
-          <span className="w-9 pt-1.5 text-sm">{WEEKDAYS[i]}</span>
+        // flex-wrap: the windows sit beside the select where they fit and wrap
+        // under it on narrow screens — never overflowing the card (the full-
+        // width `field` select pushed the times out of the card entirely).
+        <div key={i} className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <span className="w-9 shrink-0 text-sm">{WEEKDAYS[i]}</span>
+          {/* Deliberately NOT the shared `field` class (w-full): a compact
+              fixed-width select keeps all 7 rows aligned. Short labels — the
+              helper text above the grid explains each mode. */}
           <select
-            className={cn(field, "mt-0 w-auto shrink-0 py-1.5 text-xs")}
+            className="w-32 shrink-0 rounded-lg border border-subtle bg-charcoal-700 px-2.5 py-1.5 text-xs text-offwhite outline-none focus:border-gold/50"
             value={r.mode}
             onChange={(e) =>
               patchRow(i, { mode: e.target.value as ServiceHoursRow["mode"] })
             }
             aria-label={`${WEEKDAYS[i]} availability for ${ariaScope}`}
           >
-            <option value="any">Open (barber&apos;s hours)</option>
+            <option value="any">Open</option>
             <option value="custom">Custom hours</option>
             <option value="closed">Not open</option>
           </select>

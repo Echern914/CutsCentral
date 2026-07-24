@@ -57,6 +57,9 @@ export interface BookShopData {
   }[];
   // Group cards for the groups-first menu, in display order.
   groups: { id: string; name: string }[];
+  // Weekdays (0-6, shop-local) with any staff availability — the day-first
+  // calendar's pickable-day heuristic (real slots fetched per day on tap).
+  openWeekdays: number[];
   offerings: { serviceId: string; staffId: string }[];
   // Barber-published one-off special slots (future, active, unbooked), shown
   // under their parent service with a badge + their own price.
