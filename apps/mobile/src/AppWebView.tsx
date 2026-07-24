@@ -4,7 +4,9 @@ import {
   Text,
   Pressable,
   ActivityIndicator,
+  BackHandler,
   Linking,
+  Platform,
   StyleSheet,
 } from "react-native";
 import { WebView, type WebViewProps } from "react-native-webview";
@@ -124,12 +126,19 @@ export function AppWebView({
   awaitsReady = false,
   onMessage: callerOnMessage,
   onShouldStartLoadWithRequest: callerShouldStart,
+  onNavigationStateChange: callerNavStateChange,
   ...props
 }: WebViewProps & { awaitsReady?: boolean }) {
   const [errored, setErrored] = useState(false);
   const [loading, setLoading] = useState(true);
   const [key, setKey] = useState(0); // bump to force a fresh WebView on retry
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const webref = useRef<WebView>(null);
+  // Android system back should step the WebView's history back (like Chrome)
+  // instead of leaving the screen — otherwise every in-page navigation is a
+  // one-way door and "back" closes customer/barber mode entirely. Tracked in a
+  // ref (not state): the handler needs the latest value without re-rendering.
+  const canGoBack = useRef(false);
   // The URL the pending watchdog is guarding (null = none pending). A genuine
   // navigation (different URL) re-arms; repeated onLoadStarts from one streamed
   // page match this and do NOT keep pushing the deadline out.
@@ -176,6 +185,22 @@ export function AppWebView({
     setKey((k) => k + 1);
   }
 
+  // Android hardware/gesture back: consume it while the WebView has history to
+  // pop; otherwise let the system handle it (screen back / app exit). iOS has
+  // no system back — it gets allowsBackForwardNavigationGestures below plus
+  // the pages' own "← Back" controls.
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (canGoBack.current) {
+        webref.current?.goBack();
+        return true;
+      }
+      return false;
+    });
+    return () => sub.remove();
+  }, []);
+
   if (errored) {
     return (
       <View style={styles.center}>
@@ -192,6 +217,11 @@ export function AppWebView({
     <View style={styles.flex}>
       <WebView
         key={key}
+        ref={webref}
+        onNavigationStateChange={(navState) => {
+          canGoBack.current = navState.canGoBack;
+          callerNavStateChange?.(navState);
+        }}
         // App-feel defaults; any caller prop still overrides via the spread below.
         contentInsetAdjustmentBehavior="never"
         automaticallyAdjustContentInsets={false}
