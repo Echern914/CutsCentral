@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { apiEnv, randomToken } from "@chairback/config";
+import { apiEnv, randomToken, zonedWallTimeToUtc } from "@chairback/config";
 import { prisma, Prisma } from "@chairback/db";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
@@ -61,7 +61,7 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const [staff, services, links, addOns, targetedSlots, groups] = await Promise.all([
+  const [staff, services, links, addOns, targetedSlots, groups, availRules] = await Promise.all([
     prisma.staff.findMany({
       where: { shopId: shop.id, active: true },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
@@ -122,7 +122,19 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
       select: { id: true, name: true },
     }),
+    // Weekly availability rules — the day-first calendar marks weekdays anyone
+    // works as pickable (real slots are fetched per day on tap).
+    prisma.availabilityRule.findMany({
+      where: { shopId: shop.id },
+      select: { weekday: true, staffId: true },
+    }),
   ]);
+  const activeStaffIds = new Set(staff.map((s) => s.id));
+  const openWeekdays = [
+    ...new Set(
+      availRules.filter((r) => activeStaffIds.has(r.staffId)).map((r) => r.weekday),
+    ),
+  ];
   res.json({
     shop: {
       name: shop.name,
@@ -186,6 +198,9 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
     }),
     // Group cards for the optional groups-first menu (shop.groupsFirst).
     groups,
+    // Weekdays (0-6, shop-local) with any staff availability at all — the
+    // day-first calendar's "pickable day" heuristic.
+    openWeekdays,
     // The (service, staff) offering matrix so the UI can filter either way.
     offerings: links,
     // One-off special slots, listed under their parent service in the picker.
@@ -250,6 +265,172 @@ bookingPublicRouter.get("/:slug/slots", rewardsLimiter, async (req, res) => {
       endsAt: s.endsAt.toISOString(),
     })),
   });
+});
+
+// GET /api/book/:slug/day?date=YYYY-MM-DD — everything bookable on ONE
+// shop-local day, grouped by bundle (service group), for the day-first menu:
+// the customer picks a DATE, then sees only the bundles with availability that
+// day and the concrete open times inside each. Services/bundles with nothing
+// open that day are omitted entirely. Price + duration are resolved for THAT
+// day (weekday overrides), and the day's unbooked targeted slots ride along
+// under their parent service with their own price.
+const dayQuerySchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+});
+bookingPublicRouter.get("/:slug/day", rewardsLimiter, async (req, res) => {
+  const shop = await resolveNativeShop(req.params.slug);
+  if (!shop) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const parsed = dayQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const [y, m, d] = parsed.data.date.split("-").map(Number) as [number, number, number];
+  const dayStart = zonedWallTimeToUtc(y, m - 1, d, 0, shop.timezone);
+  const dayEnd = zonedWallTimeToUtc(y, m - 1, d + 1, 0, shop.timezone);
+  const now = new Date();
+  const horizon = new Date(now.getTime() + shop.bookingMaxDays * 24 * 60 * 60 * 1000);
+  // Outside the bookable window: an empty (not error) day, so the calendar can
+  // page freely without special-casing.
+  if (dayEnd.getTime() <= now.getTime() || dayStart.getTime() > horizon.getTime()) {
+    res.json({ timezone: shop.timezone, date: parsed.data.date, bundles: [], ungrouped: [] });
+    return;
+  }
+
+  const [services, links, groups, targeted] = await Promise.all([
+    prisma.service.findMany({
+      where: { shopId: shop.id, active: true },
+      // groupSortOrder first so each bundle's members come out in saved order.
+      orderBy: [{ groupSortOrder: "asc" }, { sortOrder: "asc" }, { createdAt: "asc" }],
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        imageUrl: true,
+        color: true,
+        durationMin: true,
+        durationOverrides: true,
+        price: true,
+        priceOverrides: true,
+        serviceGroupId: true,
+      },
+    }),
+    prisma.serviceStaff.findMany({
+      where: { shopId: shop.id },
+      select: { serviceId: true, staffId: true },
+    }),
+    prisma.serviceGroup.findMany({
+      where: { shopId: shop.id, active: true },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      select: { id: true, name: true },
+    }),
+    prisma.targetedSlot.findMany({
+      where: {
+        shopId: shop.id,
+        active: true,
+        bookedAppointmentId: null,
+        startsAt: { gte: dayStart, lt: dayEnd },
+      },
+      orderBy: { startsAt: "asc" },
+      select: {
+        id: true,
+        staffId: true,
+        serviceId: true,
+        label: true,
+        startsAt: true,
+        durationMin: true,
+        price: true,
+      },
+    }),
+  ]);
+
+  // Per service: union the open slots across every staff who offers it (same
+  // merge the client does for the per-service calendar, done server-side here
+  // because the day view spans EVERY service at once).
+  interface DaySlotOut {
+    startsAt: string;
+    staffIds: string[];
+    targeted?: { id: string; price: number; label: string | null };
+  }
+  const staffByService = new Map<string, string[]>();
+  for (const l of links) {
+    staffByService.set(l.serviceId, [...(staffByService.get(l.serviceId) ?? []), l.staffId]);
+  }
+  const midDay = new Date((dayStart.getTime() + dayEnd.getTime()) / 2);
+
+  async function dayFor(service: (typeof services)[number]) {
+    const staffIds = staffByService.get(service.id) ?? [];
+    const merged = new Map<string, string[]>();
+    for (const staffId of staffIds) {
+      const slots = await computeOpenSlots({
+        shopId: shop!.id,
+        staffId,
+        serviceId: service.id,
+        fromDate: dayStart.getTime() > now.getTime() ? dayStart : now,
+        toDate: dayEnd,
+        now,
+      });
+      for (const s of slots) {
+        const key = s.startsAt.toISOString();
+        merged.set(key, [...(merged.get(key) ?? []), staffId]);
+      }
+    }
+    const out: DaySlotOut[] = [...merged.entries()]
+      .map(([startsAt, ids]) => ({ startsAt, staffIds: ids }))
+      .sort((a, b) => a.startsAt.localeCompare(b.startsAt));
+    // The day's targeted specials for this service, at THEIR price.
+    for (const t of targeted.filter((t) => t.serviceId === service.id)) {
+      out.push({
+        startsAt: t.startsAt.toISOString(),
+        staffIds: [t.staffId],
+        targeted: { id: t.id, price: Number(t.price), label: t.label },
+      });
+    }
+    out.sort((a, b) => a.startsAt.localeCompare(b.startsAt));
+    if (out.length === 0) return null;
+    return {
+      id: service.id,
+      name: service.name,
+      description: service.description,
+      imageUrl: service.imageUrl,
+      color: service.color,
+      durationMin: effectiveDurationForDate(
+        service.durationMin,
+        service.durationOverrides,
+        midDay,
+        shop!.timezone,
+      ),
+      price: effectivePriceForDate(
+        service.price === null ? null : Number(service.price),
+        service.priceOverrides,
+        midDay,
+        shop!.timezone,
+      ),
+      slots: out,
+    };
+  }
+
+  const dayServices = (await Promise.all(services.map((s) => dayFor(s)))).filter(
+    (s): s is NonNullable<typeof s> => s !== null,
+  );
+  const byId = new Map(dayServices.map((s) => [s.id, s]));
+  const bundles = groups
+    .map((g) => ({
+      id: g.id,
+      name: g.name,
+      services: services
+        .filter((s) => s.serviceGroupId === g.id)
+        .map((s) => byId.get(s.id))
+        .filter((s): s is NonNullable<typeof s> => Boolean(s)),
+    }))
+    .filter((g) => g.services.length > 0);
+  const groupedIds = new Set(bundles.flatMap((b) => b.services.map((s) => s.id)));
+  const ungrouped = dayServices.filter((s) => !groupedIds.has(s.id));
+
+  res.json({ timezone: shop.timezone, date: parsed.data.date, bundles, ungrouped });
 });
 
 // POST /api/book/:slug - create a booking. Tighter (lead) limiter: anti-spam.

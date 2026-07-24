@@ -72,6 +72,42 @@ export async function getMergedSlotsAction(
   return { ok: true, data: { timezone, slots } };
 }
 
+/** One service's openings on a single day (day-first bundles view). */
+export interface DayService {
+  id: string;
+  name: string;
+  description: string | null;
+  imageUrl: string | null;
+  color: string | null;
+  durationMin: number; // resolved for THAT day (weekday overrides)
+  price: number | null; // resolved for THAT day
+  slots: {
+    startsAt: string;
+    staffIds: string[];
+    targeted?: { id: string; price: number; label: string | null };
+  }[];
+}
+
+export interface DayBundlesResult {
+  timezone: string;
+  date: string;
+  // Only bundles/services with at least one opening that day.
+  bundles: { id: string; name: string; services: DayService[] }[];
+  ungrouped: DayService[];
+}
+
+/** Everything bookable on one shop-local day, grouped by bundle. */
+export async function getDayBundlesAction(
+  slug: string,
+  date: string,
+): Promise<{ ok: boolean; data?: DayBundlesResult; error?: string }> {
+  const res = await apiPublicGet<DayBundlesResult>(
+    `/api/book/${encodeURIComponent(slug)}/day?date=${encodeURIComponent(date)}`,
+  );
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, data: res.data };
+}
+
 export interface BookInput {
   staffId: string;
   serviceId: string;

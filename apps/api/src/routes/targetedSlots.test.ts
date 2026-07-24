@@ -519,3 +519,90 @@ describe("weekly series: until-turned-off + condensed grouping + bulk delete", (
     expect(res.status).toBe(400);
   });
 });
+
+describe("day-first bundles endpoint (/api/book/:slug/day)", () => {
+  it("returns only bundles/services with openings that day, with day prices and targeted specials", async () => {
+    // Group the service under a bundle restricted to a window that EXISTS on
+    // the queried day, and publish a same-day targeted special.
+    const group = await request(app)
+      .post("/api/booking/groups")
+      .set("Cookie", cookie)
+      .send({ name: "DAY BUNDLE", serviceIds: [serviceId] });
+    expect(group.status).toBe(201);
+
+    const day = tomorrowAt(0);
+    const key = day.toISOString().slice(0, 10);
+    const special = tomorrowAt(19); // 7pm — outside 9-17, targeted only
+    await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        startsAt: special.toISOString(),
+        durationMin: 30,
+        price: 55,
+        label: "Evening special",
+      });
+
+    const res = await request(app).get(`/api/book/${slug}/day?date=${key}`);
+    expect(res.status).toBe(200);
+    const bundle = (res.body.bundles as {
+      name: string;
+      services: { id: string; slots: { startsAt: string; targeted?: { price: number } }[] }[];
+    }[]).find((b) => b.name === "DAY BUNDLE");
+    expect(bundle).toBeTruthy();
+    const svc = bundle!.services.find((s) => s.id === serviceId)!;
+    expect(svc.slots.length).toBeGreaterThan(0);
+    // The 7pm special rides along with its own price. Match by label — other
+    // tests in this file leave their own targeted slots on the same day.
+    const withSpecial = svc.slots.find(
+      (s) => s.targeted?.label === "Evening special",
+    );
+    expect(withSpecial?.targeted?.price).toBe(55);
+    // Every grid slot is on the queried day.
+    for (const s of svc.slots) {
+      expect(s.startsAt.slice(0, 10)).toBe(key);
+    }
+
+    // A day outside the window returns an empty (not error) shape.
+    const far = await request(app).get(`/api/book/${slug}/day?date=2030-01-01`);
+    expect(far.status).toBe(200);
+    expect(far.body.bundles).toEqual([]);
+
+    // Group hours: close the bundle on the queried weekday -> it vanishes.
+    const wd = new Date(`${key}T12:00:00Z`).getUTCDay();
+    const close = await request(app)
+      .patch(`/api/booking/groups/${group.body.id}`)
+      .set("Cookie", cookie)
+      .send({ hoursWindows: { [String(wd)]: [] } });
+    expect(close.status).toBe(200);
+    const closed = await request(app).get(`/api/book/${slug}/day?date=${key}`);
+    const gone = (closed.body.bundles as { name: string }[]).find(
+      (b) => b.name === "DAY BUNDLE",
+    );
+    // The grid closes for the day... but the targeted special deliberately
+    // ignores availability rules, so the bundle may survive with ONLY the
+    // special. Assert the grid slots are gone.
+    if (gone) {
+      const svcClosed = (closed.body.bundles as {
+        name: string;
+        services: { id: string; slots: { targeted?: unknown }[] }[];
+      }[])
+        .find((b) => b.name === "DAY BUNDLE")!
+        .services.find((s) => s.id === serviceId)!;
+      expect(svcClosed.slots.every((s) => Boolean(s.targeted))).toBe(true);
+    }
+    // Cleanup: ungroup + drop the group so other tests see the old shape.
+    await request(app)
+      .delete(`/api/booking/groups/${group.body.id}`)
+      .set("Cookie", cookie);
+  });
+
+  it("exposes openWeekdays on the main public payload", async () => {
+    const pub = await request(app).get(`/api/book/${slug}`);
+    expect(pub.status).toBe(200);
+    // The suite's barber works every day (0-6 seeded in beforeAll).
+    expect([...(pub.body.openWeekdays as number[])].sort()).toEqual([0, 1, 2, 3, 4, 5, 6]);
+  });
+});

@@ -557,14 +557,14 @@ function SettingsTab({
       {mode === "native" && (
         <Card className="p-5">
           <CardHeader
-            title="Show service groups first on your booking page"
-            subtitle="When on, customers see your group cards (e.g. AFTER HOURS, HAIRCUT) and tap one to open its services — instead of every service at once. Needs at least one service group below."
+            title="Day-first booking page (bundles by date)"
+            subtitle="When on, customers pick a DATE first, then see only the bundles (your service groups) with openings that day and the exact times inside each — instead of every service at once. Bundles with nothing open that day don't appear."
           />
           <div className="mt-4 flex items-center justify-between gap-4">
             <p className="text-sm text-muted">
               {groupsFirst
-                ? "On — the menu opens with your groups."
-                : "Off — the menu lists every service."}
+                ? "On — customers pick a day, then a time from that day's bundles."
+                : "Off — the menu lists every service (service first)."}
             </p>
             <button
               onClick={toggleGroupsFirst}
