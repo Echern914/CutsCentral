@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { cn } from "@/lib/cn";
+import { zonedWallTimeToUtc } from "@chairback/config/time";
 import type { ServiceRow, StaffRow } from "./page";
 import {
   createAppointmentAction,
@@ -146,12 +147,18 @@ export function AppointmentForm({
     if (!clientId && !newName.trim()) return setError("Pick a client or enter a name.");
     if (repeat && endMode === "until" && !until) return setError("Pick an end date.");
 
+    // `until` is inclusive of the chosen day (the server stops once an
+    // occurrence starts AFTER untilDate), so send END of that day in the
+    // SHOP's tz. The old browser-local-noon anchor cut afternoon occurrences
+    // on the until-day even with everyone in the same zone.
+    const untilISO = () => {
+      const [y, m, d] = until.split("-").map(Number);
+      return zonedWallTimeToUtc(y!, m! - 1, d!, 23 * 60 + 59, timezone).toISOString();
+    };
     const recurrence = repeat
       ? {
           interval: everyWeeks,
-          ...(endMode === "count"
-            ? { count }
-            : { until: new Date(`${until}T12:00:00`).toISOString() }),
+          ...(endMode === "count" ? { count } : { until: untilISO() }),
         }
       : undefined;
 
@@ -274,9 +281,17 @@ export function AppointmentForm({
               type="datetime-local"
               className="mt-1.5 w-full rounded-lg border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite"
               onChange={(e) => {
-                // datetime-local is naive local; interpret in the viewer's zone.
+                // datetime-local is naive wall clock; interpret in the SHOP's
+                // zone (the schedule shown) - new Date(v) would use the device's
+                // zone and shift the instant when the barber isn't in the shop tz.
                 const v = e.target.value;
-                if (v) setStartsAt(new Date(v).toISOString());
+                if (!v) return;
+                const [day, time] = v.split("T");
+                const [y, m, d] = day!.split("-").map(Number);
+                const [hh, mm] = time!.split(":").map(Number);
+                setStartsAt(
+                  zonedWallTimeToUtc(y!, m! - 1, d!, hh! * 60 + mm!, timezone).toISOString(),
+                );
               }}
             />
           ) : loadingSlots ? (

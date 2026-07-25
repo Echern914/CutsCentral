@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { cn } from "@/lib/cn";
+import { zonedWallTimeToUtc } from "@chairback/config/time";
 import { Sheet } from "./AppointmentForm";
 import type { StaffRow } from "./page";
 import { addBlockAction } from "./actions";
@@ -16,6 +17,7 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
 export function BlockOffForm({
   staff,
   dayKey,
+  timezone,
   defaultFromHour,
   onClose,
   onCreated,
@@ -23,6 +25,7 @@ export function BlockOffForm({
 }: {
   staff: StaffRow[];
   dayKey: string; // YYYY-MM-DD
+  timezone: string; // IANA shop tz - the time inputs are shop wall clock
   defaultFromHour: number; // 0-23, the tapped hour
   onClose: () => void;
   onCreated: () => void;
@@ -41,10 +44,13 @@ export function BlockOffForm({
   function submit() {
     setError(null);
     if (!staffId) return setError("Pick a provider to block.");
-    // Build ISO instants from the day + local time inputs. datetime is naive;
-    // interpret in the viewer's zone (barber is typically in the shop's zone).
-    const startsAt = new Date(`${dayKey}T${fromTime}`);
-    const endsAt = new Date(`${dayKey}T${toTime}`);
+    // Build ISO instants from the day + time inputs. Both are naive wall clock
+    // in the SHOP's tz (the schedule the barber sees), so convert via the shop
+    // tz - a device-local `new Date(...)` would block the wrong hours whenever
+    // the barber's device is in a different timezone than the shop.
+    const [y, m, d] = dayKey.split("-").map(Number);
+    const startsAt = zonedWallTimeToUtc(y!, m! - 1, d!, minutesOf(fromTime), timezone);
+    const endsAt = zonedWallTimeToUtc(y!, m! - 1, d!, minutesOf(toTime), timezone);
     if (!(endsAt.getTime() > startsAt.getTime())) {
       return setError("End time must be after the start time.");
     }
@@ -142,4 +148,11 @@ export function BlockOffForm({
 
 function pad(n: number): string {
   return String(n).padStart(2, "0");
+}
+
+/** "HH:mm" -> minutes from midnight. NaN for a cleared input, which the
+ *  end-after-start guard in submit() rejects (Invalid Date compares false). */
+function minutesOf(hhmm: string): number {
+  const [h, m] = hhmm.split(":").map(Number);
+  return h! * 60 + m!;
 }

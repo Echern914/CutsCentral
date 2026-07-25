@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { SERVICE_COLORS, SERVICE_COLOR_KEYS } from "@chairback/config/constants";
+import { zonedWallTimeToUtc } from "@chairback/config/time";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { FormError } from "@/components/ui/FormError";
 import { NumberField } from "@/components/ui/NumberField";
@@ -220,6 +221,7 @@ export function BookingManager({
             staff={initialStaff}
             initialServiceGroups={initialServiceGroups}
             initialAddOns={initialAddOns}
+            timezone={initialAgenda.timezone}
             toast={toast}
           />
         </div>
@@ -657,12 +659,14 @@ function ServicesTab({
   staff,
   initialServiceGroups,
   initialAddOns,
+  timezone,
   toast,
 }: {
   initial: ServiceRow[];
   staff: StaffRow[];
   initialServiceGroups: ServiceGroupRow[];
   initialAddOns: AddOnRow[];
+  timezone: string; // IANA shop tz (targeted-slot times are shop wall clock)
   toast: Toast;
 }) {
   const [name, setName] = useState("");
@@ -878,7 +882,7 @@ function ServicesTab({
 
       <AddOnsManager initial={initialAddOns} services={initial} toast={toast} />
 
-      <TargetedSlotsManager services={initial} staff={staff} toast={toast} />
+      <TargetedSlotsManager services={initial} staff={staff} timezone={timezone} toast={toast} />
     </div>
   );
 }
@@ -1187,10 +1191,12 @@ function ServiceEditForm({
 function TargetedSlotsManager({
   services,
   staff,
+  timezone,
   toast,
 }: {
   services: ServiceRow[];
   staff: StaffRow[];
+  timezone: string; // IANA shop tz - the datetime input is shop wall clock
   toast: Toast;
 }) {
   const activeServices = services.filter((s) => s.active);
@@ -1234,7 +1240,14 @@ function TargetedSlotsManager({
       toast("Pick a service, barber, time, and price", "error");
       return;
     }
-    const startsAt = new Date(when);
+    // datetime-local is naive wall clock; interpret in the SHOP's tz (the zone
+    // the public page + calendar render in) - new Date(when) would use the
+    // device's zone and publish the slot (or anchor a weekly series) at the
+    // wrong shop-local time whenever the barber's device isn't in the shop tz.
+    const [day, time] = when.split("T");
+    const [y, m, d] = (day ?? "").split("-").map(Number);
+    const [hh, mm] = (time ?? "").split(":").map(Number);
+    const startsAt = zonedWallTimeToUtc(y!, m! - 1, d!, hh! * 60 + mm!, timezone);
     if (Number.isNaN(startsAt.getTime()) || startsAt.getTime() <= Date.now()) {
       toast("Pick a future time", "error");
       return;
@@ -1304,7 +1317,10 @@ function TargetedSlotsManager({
     });
   }
 
+  // Shop tz, matching the input interpretation above and the calendar/public
+  // page - device-local rendering would show a different hour than was set.
   const whenFmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
     weekday: "short",
     month: "short",
     day: "numeric",

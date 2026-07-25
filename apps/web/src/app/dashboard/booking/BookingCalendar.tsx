@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/Card";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { cn } from "@/lib/cn";
 import { serviceColorHex } from "@chairback/config/constants";
+import { zonedWallTimeToUtc } from "@chairback/config/time";
 import type { AgendaResponse, AgendaRow, ServiceRow, StaffRow, WaitlistRow } from "./page";
 import {
   applyRewardAction,
@@ -334,7 +335,7 @@ export function BookingCalendar({
               timeFmt={timeFmt}
               toast={toast}
               isNative={isNative}
-              onAddAt={(hour) => setAddAt(isoForDayHour(selectedDay, hour))}
+              onAddAt={(hour) => setAddAt(isoForDayHour(selectedDay, hour, tz))}
               onBlock={() => setBlockDay({ dayKey: selectedDay, hour: 12 })}
               onChanged={refreshAgenda}
             />
@@ -362,6 +363,7 @@ export function BookingCalendar({
         <BlockOffForm
           staff={staff}
           dayKey={blockDay.dayKey}
+          timezone={tz}
           defaultFromHour={blockDay.hour}
           onClose={() => setBlockDay(null)}
           onCreated={() => {
@@ -376,13 +378,14 @@ export function BookingCalendar({
 }
 
 /**
- * Build an ISO instant for a (YYYY-MM-DD day, hour) as a prefill. Uses the local
- * zone (the barber is typically in the shop's zone); the appointment form then
- * fetches the REAL open slots for that day, so this is only an initial anchor.
+ * Build an ISO instant for a (YYYY-MM-DD day, hour) as a prefill. Converts in
+ * the SHOP's tz (the zone the day grid is rendered in), so the anchor stays on
+ * the tapped day/hour even when the device is in another zone. The appointment
+ * form then fetches the REAL open slots for that day - this is only an anchor.
  */
-function isoForDayHour(dayKey: string, hour: number): string {
+function isoForDayHour(dayKey: string, hour: number, tz: string): string {
   const [y, m, d] = dayKey.split("-").map(Number);
-  return new Date(y!, m! - 1, d!, hour, 0, 0).toISOString();
+  return zonedWallTimeToUtc(y!, m! - 1, d!, hour * 60, tz).toISOString();
 }
 
 /**
