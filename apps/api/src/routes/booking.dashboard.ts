@@ -186,28 +186,36 @@ bookingDashboardRouter.patch("/services/:id", async (req, res) => {
   }
   const d = parsed.data;
   const db = forShop(req.shop!.id);
-  const { count } = await db.service.updateMany({
+  // Existence check DECOUPLED from the update (same fix as /groups/:id below):
+  // a staffIds-only PATCH makes the updateMany data empty, and Prisma reports
+  // count 0 for an empty update - which the old code misread as "not found",
+  // 404ing a legitimate barber reassignment AND skipping the staff re-link.
+  const exists = await db.service.findMany({
     where: { id: req.params.id },
-    data: {
-      ...(d.name !== undefined ? { name: d.name } : {}),
-      ...(d.description !== undefined ? { description: d.description || null } : {}),
-      ...(d.imageUrl !== undefined ? { imageUrl: d.imageUrl || null } : {}),
-      ...(d.durationMin !== undefined ? { durationMin: d.durationMin } : {}),
-      ...(d.durationOverrides !== undefined
-        ? { durationOverrides: d.durationOverrides }
-        : {}),
-      ...(d.hoursWindows !== undefined ? { hoursWindows: d.hoursWindows } : {}),
-      ...(d.color !== undefined ? { color: d.color } : {}),
-      ...(d.price !== undefined ? { price: d.price } : {}),
-      ...(d.priceOverrides !== undefined ? { priceOverrides: d.priceOverrides } : {}),
-      ...(d.active !== undefined ? { active: d.active } : {}),
-      ...(d.sortOrder !== undefined ? { sortOrder: d.sortOrder } : {}),
-      ...(d.offeredByAll !== undefined ? { offeredByAll: d.offeredByAll } : {}),
-    },
+    select: { id: true },
   });
-  if (count === 0) {
+  if (exists.length === 0) {
     res.status(404).json({ error: "not_found" });
     return;
+  }
+  const data = {
+    ...(d.name !== undefined ? { name: d.name } : {}),
+    ...(d.description !== undefined ? { description: d.description || null } : {}),
+    ...(d.imageUrl !== undefined ? { imageUrl: d.imageUrl || null } : {}),
+    ...(d.durationMin !== undefined ? { durationMin: d.durationMin } : {}),
+    ...(d.durationOverrides !== undefined
+      ? { durationOverrides: d.durationOverrides }
+      : {}),
+    ...(d.hoursWindows !== undefined ? { hoursWindows: d.hoursWindows } : {}),
+    ...(d.color !== undefined ? { color: d.color } : {}),
+    ...(d.price !== undefined ? { price: d.price } : {}),
+    ...(d.priceOverrides !== undefined ? { priceOverrides: d.priceOverrides } : {}),
+    ...(d.active !== undefined ? { active: d.active } : {}),
+    ...(d.sortOrder !== undefined ? { sortOrder: d.sortOrder } : {}),
+    ...(d.offeredByAll !== undefined ? { offeredByAll: d.offeredByAll } : {}),
+  };
+  if (Object.keys(data).length > 0) {
+    await db.service.updateMany({ where: { id: req.params.id }, data });
   }
   // Re-materialize the offering to match the (possibly new) mode. If the payload
   // sets offeredByAll true, sync to all active staff and ignore staffIds. If it
@@ -555,20 +563,32 @@ bookingDashboardRouter.patch("/addons/:id", async (req, res) => {
     return;
   }
   const d = parsed.data;
-  const { count } = await forShop(req.shop!.id).serviceAddOn.updateMany({
+  const db = forShop(req.shop!.id);
+  // Existence check DECOUPLED from the update (the /groups/:id empty-data
+  // gotcha): an empty PATCH body yields empty data, and Prisma's updateMany
+  // reports count 0 without touching the DB - not a "not found".
+  const exists = await db.serviceAddOn.findMany({
     where: { id: req.params.id },
-    data: {
-      ...(d.name !== undefined ? { name: d.name } : {}),
-      ...(d.durationMin !== undefined ? { durationMin: d.durationMin } : {}),
-      ...(d.price !== undefined ? { price: d.price ?? null } : {}),
-      ...(d.serviceIds !== undefined
-        ? { serviceIds: await validServiceIds(req.shop!.id, d.serviceIds) }
-        : {}),
-      ...(d.active !== undefined ? { active: d.active } : {}),
-      ...(d.sortOrder !== undefined ? { sortOrder: d.sortOrder } : {}),
-    },
+    select: { id: true },
   });
-  res.status(count > 0 ? 200 : 404).json({ ok: count > 0 });
+  if (exists.length === 0) {
+    res.status(404).json({ ok: false });
+    return;
+  }
+  const data = {
+    ...(d.name !== undefined ? { name: d.name } : {}),
+    ...(d.durationMin !== undefined ? { durationMin: d.durationMin } : {}),
+    ...(d.price !== undefined ? { price: d.price ?? null } : {}),
+    ...(d.serviceIds !== undefined
+      ? { serviceIds: await validServiceIds(req.shop!.id, d.serviceIds) }
+      : {}),
+    ...(d.active !== undefined ? { active: d.active } : {}),
+    ...(d.sortOrder !== undefined ? { sortOrder: d.sortOrder } : {}),
+  };
+  if (Object.keys(data).length > 0) {
+    await db.serviceAddOn.updateMany({ where: { id: req.params.id }, data });
+  }
+  res.json({ ok: true });
 });
 
 // Hard delete: add-ons aren't FK'd from Appointment (the choice is snapshotted
@@ -640,23 +660,34 @@ bookingDashboardRouter.patch("/staff/:id", async (req, res) => {
   }
   const d = parsed.data;
   const db = forShop(req.shop!.id);
-  const { count } = await db.staff.updateMany({
+  // Existence check DECOUPLED from the update (the /groups/:id empty-data
+  // gotcha): an empty PATCH body yields empty data, and Prisma's updateMany
+  // reports count 0 without touching the DB - not a "not found".
+  const exists = await db.staff.findMany({
     where: { id: req.params.id },
-    data: {
-      ...(d.name !== undefined ? { name: d.name } : {}),
-      ...(d.bio !== undefined ? { bio: d.bio || null } : {}),
-      ...(d.imageUrl !== undefined ? { imageUrl: d.imageUrl || null } : {}),
-      ...(d.active !== undefined ? { active: d.active } : {}),
-      ...(d.sortOrder !== undefined ? { sortOrder: d.sortOrder } : {}),
-    },
+    select: { id: true },
   });
+  if (exists.length === 0) {
+    res.json({ ok: false });
+    return;
+  }
+  const data = {
+    ...(d.name !== undefined ? { name: d.name } : {}),
+    ...(d.bio !== undefined ? { bio: d.bio || null } : {}),
+    ...(d.imageUrl !== undefined ? { imageUrl: d.imageUrl || null } : {}),
+    ...(d.active !== undefined ? { active: d.active } : {}),
+    ...(d.sortOrder !== undefined ? { sortOrder: d.sortOrder } : {}),
+  };
+  if (Object.keys(data).length > 0) {
+    await db.staff.updateMany({ where: { id: req.params.id }, data });
+  }
   // Reactivating a barber re-joins them to every "offered by all" service (the
   // slot engine ignores inactive staff, so no pruning is needed on deactivation;
   // skipDuplicates makes re-linking an already-linked staff a no-op).
-  if (count > 0 && d.active === true) {
+  if (d.active === true) {
     await linkStaffToOfferedByAllServices(req.shop!.id, req.params.id!);
   }
-  res.json({ ok: count > 0 });
+  res.json({ ok: true });
 });
 
 bookingDashboardRouter.delete("/staff/:id", async (req, res) => {

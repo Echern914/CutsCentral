@@ -178,23 +178,31 @@ promotionsRouter.patch("/:id", async (req, res) => {
     return;
   }
   const d = parsed.data;
-  const { count } = await forShop(shop.id).promotion.updateMany({
+  // Existence check DECOUPLED from the update (the booking /groups/:id
+  // empty-data gotcha): an empty PATCH body yields empty data, and Prisma's
+  // updateMany reports count 0 without touching the DB - not a "not found".
+  const db = forShop(shop.id);
+  const exists = await db.promotion.findMany({
     where: { id: req.params.id },
-    data: {
-      ...(d.title !== undefined && { title: d.title }),
-      ...(d.description !== undefined && { description: d.description || null }),
-      ...(d.code !== undefined && { code: d.code || null }),
-      ...(d.percentOff !== undefined && { percentOff: d.percentOff }),
-      ...(d.amountOff !== undefined && { amountOff: d.amountOff }),
-      ...(d.extraPunches !== undefined && { extraPunches: d.extraPunches }),
-      ...(d.startsAt !== undefined && { startsAt: d.startsAt }),
-      ...(d.endsAt !== undefined && { endsAt: d.endsAt }),
-      ...(d.active !== undefined && { active: d.active }),
-    },
+    select: { id: true },
   });
-  if (count === 0) {
+  if (exists.length === 0) {
     res.status(404).json({ error: "not_found" });
     return;
+  }
+  const data = {
+    ...(d.title !== undefined && { title: d.title }),
+    ...(d.description !== undefined && { description: d.description || null }),
+    ...(d.code !== undefined && { code: d.code || null }),
+    ...(d.percentOff !== undefined && { percentOff: d.percentOff }),
+    ...(d.amountOff !== undefined && { amountOff: d.amountOff }),
+    ...(d.extraPunches !== undefined && { extraPunches: d.extraPunches }),
+    ...(d.startsAt !== undefined && { startsAt: d.startsAt }),
+    ...(d.endsAt !== undefined && { endsAt: d.endsAt }),
+    ...(d.active !== undefined && { active: d.active }),
+  };
+  if (Object.keys(data).length > 0) {
+    await db.promotion.updateMany({ where: { id: req.params.id }, data });
   }
   res.json({ ok: true });
 });

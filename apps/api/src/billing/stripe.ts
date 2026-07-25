@@ -343,6 +343,18 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
       // to "active" - free access for a canceled sub. So we only activate when
       // this same subscription isn't already recorded as canceled; the
       // customer.subscription.* events remain the source of truth for status.
+      //
+      // CANCELED SHOPS NEVER ACTIVATE HERE - by design, not accident.
+      // Cancellation NULLs stripeSubscriptionId, and the compound NOT below is
+      // SQL NULL (not TRUE) for a NULL column, so EVERY checkout.completed on a
+      // canceled shop matches 0 rows - including a legitimate re-subscribe.
+      // That asymmetry is load-bearing: after cancellation, a fresh checkout
+      // and a 3-day-old replayed one are indistinguishable by row state (both
+      // NULL + canceled), so widening this to allow "NULL = fresh" would hand
+      // a canceled shop free access on any stale replay. A real re-subscribe
+      // activates seconds later via customer.subscription.created/updated,
+      // which also re-fires the pro_ai ensureShopNumber kick - nothing is lost.
+      // (Asserted by billing.test.ts "re-subscribe after cancellation".)
       const { count } = await prisma.shop.updateMany({
         where: {
           id: shopId,
@@ -363,7 +375,9 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
       if (count === 0) {
         logger.warn(
           { shopId, type: event.type },
-          "stripe checkout.completed matched no shop (or was a canceled-sub replay)",
+          "stripe checkout.completed did not activate: unknown shop, a stale " +
+            "replay, or a canceled shop re-subscribing (the subscription.created " +
+            "event performs that activation - see the replay-guard comment)",
         );
       } else if (session.metadata?.tier === "pro_ai") {
         // Premium AI includes the shop's own number (idempotent, non-blocking).

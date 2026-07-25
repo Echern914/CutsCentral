@@ -222,6 +222,61 @@ describe("stripe webhook + event folding", () => {
     expect(shop!.subscriptionStatus).toBe("past_due");
     expect(shop!.plan).toBe("pro"); // past_due keeps access through dunning
   });
+
+  it("re-subscribe after cancellation: checkout.completed stays blocked (replay-safe), subscription.created activates", async () => {
+    // Reach the canceled state (stripeSubscriptionId is NULLed on cancel).
+    await applyStripeEvent({
+      type: "customer.subscription.deleted",
+      data: {
+        object: {
+          id: `${SUB_ID}_2`,
+          status: "canceled",
+          customer: CUSTOMER_ID,
+          metadata: { shopId },
+        },
+      },
+    } as never);
+    let shop = await prisma.shop.findUnique({ where: { id: shopId } });
+    expect(shop!.subscriptionStatus).toBe("canceled");
+    expect(shop!.stripeSubscriptionId).toBeNull();
+
+    // checkout.session.completed NEVER activates a canceled shop - a fresh
+    // checkout and a 3-day-old replayed one are indistinguishable by row state
+    // (both NULL + canceled), so this staying a no-op is what keeps a stale
+    // replay from handing out free access. See the guard comment in stripe.ts.
+    await applyStripeEvent({
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          object: "checkout.session",
+          mode: "subscription",
+          client_reference_id: shopId,
+          customer: CUSTOMER_ID,
+          subscription: `${SUB_ID}_resub`,
+        },
+      },
+    } as never);
+    shop = await prisma.shop.findUnique({ where: { id: shopId } });
+    expect(shop!.subscriptionStatus).toBe("canceled");
+
+    // The real re-subscribe activation arrives via subscription.created -
+    // Stripe always emits it for the new subscription, seconds later.
+    await applyStripeEvent({
+      type: "customer.subscription.created",
+      data: {
+        object: {
+          id: `${SUB_ID}_resub`,
+          status: "active",
+          customer: CUSTOMER_ID,
+          metadata: { shopId },
+        },
+      },
+    } as never);
+    shop = await prisma.shop.findUnique({ where: { id: shopId } });
+    expect(shop!.subscriptionStatus).toBe("active");
+    expect(shop!.stripeSubscriptionId).toBe(`${SUB_ID}_resub`);
+    expect(shop!.plan).toBe("pro");
+  });
 });
 
 describe("402 gate once the trial lapses", () => {

@@ -83,10 +83,13 @@ export async function materializeTargetedRule(
   if (rows.length === 0) return 0;
   // createMany + cursor advance in ONE tx (shop-scoped for RLS), guarded on the
   // cursor still being where we read it — if a concurrent run already extended,
-  // the guard matches 0 rows and we skip instead of duplicating.
+  // the guard matches 0 rows and we skip instead of duplicating. `active: true`
+  // is part of the guard: the roll-forward reads its rule list up front, so a
+  // series the barber turns OFF mid-job (delete sets active:false and removes
+  // future rows) must not have a fresh batch resurrected under it.
   return runWithShop(rule.shopId, async (tx) => {
     const advanced = await tx.targetedSlotRule.updateMany({
-      where: { id: rule.id, weeksMaterialized: rule.weeksMaterialized },
+      where: { id: rule.id, active: true, weeksMaterialized: rule.weeksMaterialized },
       data: { weeksMaterialized: k },
     });
     if (advanced.count === 0) return 0;
