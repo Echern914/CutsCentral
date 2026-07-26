@@ -126,6 +126,44 @@ describe("service offeredByAll (live 'all barbers' intent)", () => {
     expect(allActive.length).toBeGreaterThan(1); // proves it grabbed more than Sam
   });
 
+  it("a staffIds-ONLY patch re-links barbers instead of 404ing (empty-data updateMany gotcha)", async () => {
+    const created = await request(app)
+      .post("/api/booking/services")
+      .set("Cookie", cookie)
+      .send({ name: "Beard trim", durationMin: 15, price: 18, offeredByAll: false, staffIds: [firstStaffId] });
+    expect(created.status).toBe(201);
+    const serviceId = created.body.id;
+
+    // Reassign barbers with NO scalar fields: the update data is empty, which
+    // Prisma's updateMany reports as count 0 without touching the DB - the old
+    // code misread that as "not found", 404ed, and never ran the staff re-link.
+    const staffRes = await request(app).get("/api/booking/staff").set("Cookie", cookie);
+    const target = (staffRes.body.staff as { id: string; active: boolean }[])
+      .filter((s) => s.active && s.id !== firstStaffId)
+      .map((s) => s.id)
+      .slice(0, 2);
+    expect(target.length).toBeGreaterThan(0);
+    const patch = await request(app)
+      .patch(`/api/booking/services/${serviceId}`)
+      .set("Cookie", cookie)
+      .send({ staffIds: target });
+    expect(patch.status).toBe(200);
+    expect(await staffIdsFor(serviceId)).toEqual(sortedIds(...target));
+
+    // An empty PATCH body is a no-op 200, not a 404...
+    const empty = await request(app)
+      .patch(`/api/booking/services/${serviceId}`)
+      .set("Cookie", cookie)
+      .send({});
+    expect(empty.status).toBe(200);
+    // ...while a genuinely unknown id still 404s.
+    const missing = await request(app)
+      .patch(`/api/booking/services/nope-${randomToken(6)}`)
+      .set("Cookie", cookie)
+      .send({});
+    expect(missing.status).toBe(404);
+  });
+
   it("reactivating a barber re-joins them to offeredByAll services", async () => {
     const svc = await request(app)
       .post("/api/booking/services")

@@ -410,6 +410,42 @@ describe("weekly series: until-turned-off + condensed grouping + bulk delete", (
     expect(wider).toBe(2);
   });
 
+  it("does not resurrect a series turned off mid-roll-forward (stale rule row)", async () => {
+    const { materializeTargetedRule } = await import(
+      "../engines/targetedSlotRules.js"
+    );
+    const first = tomorrowAt(6, 30);
+    const created = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        startsAt: first.toISOString(),
+        durationMin: 25,
+        price: 70,
+        repeatForever: true,
+      });
+    expect(created.status).toBe(201);
+    const ruleId = created.body.ruleId as string;
+    // The roll-forward job reads its rule list up front; simulate that stale
+    // read by grabbing the row BEFORE the barber turns the series off.
+    const stale = await prisma.targetedSlotRule.findUnique({ where: { id: ruleId } });
+    const off = await request(app)
+      .delete(`/api/booking/targeted-slots/rules/${ruleId}`)
+      .set("Cookie", cookie);
+    expect(off.status).toBe(200);
+    // Materializing from the stale row must be a no-op (the cursor guard also
+    // requires active:true), not a fresh batch under a turned-off series.
+    const resurrected = await materializeTargetedRule(
+      stale!,
+      "UTC",
+      new Date(Date.now() + (91 + 30) * 24 * 60 * 60 * 1000),
+    );
+    expect(resurrected).toBe(0);
+    expect(await prisma.targetedSlot.count({ where: { ruleId } })).toBe(0);
+  });
+
   it("finite repeats get a grouping rule; turning a series off deletes future unbooked rows only", async () => {
     const first = tomorrowAt(22);
     const created = await request(app)
@@ -549,7 +585,7 @@ describe("day-first bundles endpoint (/api/book/:slug/day)", () => {
     expect(res.status).toBe(200);
     const bundle = (res.body.bundles as {
       name: string;
-      services: { id: string; slots: { startsAt: string; targeted?: { price: number } }[] }[];
+      services: { id: string; slots: { startsAt: string; targeted?: { price: number; label: string | null } }[] }[];
     }[]).find((b) => b.name === "DAY BUNDLE");
     expect(bundle).toBeTruthy();
     const svc = bundle!.services.find((s) => s.id === serviceId)!;
@@ -597,6 +633,40 @@ describe("day-first bundles endpoint (/api/book/:slug/day)", () => {
     await request(app)
       .delete(`/api/booking/groups/${group.body.id}`)
       .set("Cookie", cookie);
+  });
+
+  it("omits a same-day special whose time has already passed", async () => {
+    // A special earlier TODAY (shop tz = UTC): the flat payload filters
+    // startsAt > now, and the booking POST rejects startsAt <= now, so /day
+    // must not offer it either - it could only ever 409.
+    const dayStart = new Date();
+    dayStart.setUTCHours(0, 0, 0, 0);
+    const past = new Date(
+      Math.max(dayStart.getTime() + 1, Date.now() - 2 * 60 * 60 * 1000),
+    );
+    const dead = await prisma.targetedSlot.create({
+      data: {
+        shopId,
+        staffId,
+        serviceId,
+        label: "Dead special",
+        startsAt: past,
+        durationMin: 30,
+        price: 25,
+        active: true,
+      },
+    });
+    const key = past.toISOString().slice(0, 10);
+    const res = await request(app).get(`/api/book/${slug}/day?date=${key}`);
+    expect(res.status).toBe(200);
+    const all = [
+      ...(res.body.bundles as { services: { slots: { targeted?: { label: string | null } }[] }[] }[]).flatMap(
+        (b) => b.services,
+      ),
+      ...(res.body.ungrouped as { slots: { targeted?: { label: string | null } }[] }[]),
+    ].flatMap((s) => s.slots);
+    expect(all.some((s) => s.targeted?.label === "Dead special")).toBe(false);
+    await prisma.targetedSlot.delete({ where: { id: dead.id } });
   });
 
   it("exposes openWeekdays on the main public payload", async () => {

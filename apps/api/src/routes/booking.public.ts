@@ -332,7 +332,14 @@ bookingPublicRouter.get("/:slug/day", rewardsLimiter, async (req, res) => {
         shopId: shop.id,
         active: true,
         bookedAppointmentId: null,
-        startsAt: { gte: dayStart, lt: dayEnd },
+        // Floor at NOW when the requested day is today - the flat payload
+        // (GET /:slug) filters gt: now, and the booking POST rejects
+        // startsAt <= now, so a passed same-day special must not render as
+        // a tappable chip that can only ever 409.
+        startsAt: {
+          ...(dayStart.getTime() > now.getTime() ? { gte: dayStart } : { gt: now }),
+          lt: dayEnd,
+        },
       },
       orderBy: { startsAt: "asc" },
       select: {

@@ -282,6 +282,23 @@ export function BookingClient({ data }: { data: BookShopData }) {
     return out;
   }, [dayFirst, tz, data.shop.bookingMaxDays, data.openWeekdays]);
 
+  // Calendar month shown before the customer picks one: the first offered day,
+  // else the CURRENT shop-tz month. Never a hardcoded past month - a shop with
+  // no availability yet must still show today's calendar (with the empty-state
+  // note below it), not a dead page.
+  const dayFirstFallbackMonth = useMemo(() => {
+    const first = [...dayFirstDays].sort()[0];
+    if (first) return monthKey(first);
+    return monthKey(
+      new Intl.DateTimeFormat("en-CA", {
+        timeZone: tz,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date()),
+    );
+  }, [dayFirstDays, tz]);
+
   function pickDay(day: string) {
     setDayDate(day);
     setDayMonth(monthKey(day));
@@ -328,7 +345,14 @@ export function BookingClient({ data }: { data: BookShopData }) {
           <span className="mt-0.5 block text-xs text-muted">{svc.durationMin} min</span>
           <div className="mt-2.5 flex flex-wrap gap-2">
             {svc.slots.map((s) => {
-              const chosen = slot === s.startsAt && serviceId === svc.id;
+              // Compound key incl. the targeted id (same as the service-first
+              // grid): a special and a normal slot can share the same instant
+              // on different barbers, and only ONE of them may light up - they
+              // carry different prices.
+              const chosen =
+                slot === s.startsAt &&
+                serviceId === svc.id &&
+                (slotTargeted?.id ?? null) === (s.targeted?.id ?? null);
               return (
                 <button
                   key={`${s.startsAt}-${s.targeted?.id ?? "grid"}`}
@@ -869,20 +893,21 @@ export function BookingClient({ data }: { data: BookShopData }) {
           }
         >
           <MonthCalendar
-            viewMonth={dayMonth ?? monthKey([...dayFirstDays].sort()[0] ?? "2026-01-01")}
+            viewMonth={dayMonth ?? dayFirstFallbackMonth}
             availableDays={dayFirstDays}
             selectedDay={dayDate}
             accent={accent}
             onAccent={onAccent}
             labelForDay={(d) => dateFmt.format(new Date(`${d}T12:00:00Z`))}
-            onPrevMonth={() =>
-              setDayMonth((m) => addMonths(m ?? monthKey([...dayFirstDays].sort()[0] ?? ""), -1))
-            }
-            onNextMonth={() =>
-              setDayMonth((m) => addMonths(m ?? monthKey([...dayFirstDays].sort()[0] ?? ""), 1))
-            }
+            onPrevMonth={() => setDayMonth((m) => addMonths(m ?? dayFirstFallbackMonth, -1))}
+            onNextMonth={() => setDayMonth((m) => addMonths(m ?? dayFirstFallbackMonth, 1))}
             onPickDay={pickDay}
           />
+          {dayFirstDays.size === 0 && (
+            <p className="mt-3 text-sm text-muted">
+              No open days right now — check back soon.
+            </p>
+          )}
         </Section>
       )}
       {dayFirst && dayDate && (

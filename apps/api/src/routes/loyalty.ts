@@ -220,21 +220,29 @@ loyaltyRouter.patch("/rewards/:id", async (req, res) => {
     res.status(400).json({ error: "invalid_card" });
     return;
   }
-  const { count } = await forShop(shop.id).reward.updateMany({
+  // Existence check DECOUPLED from the update (the booking /groups/:id
+  // empty-data gotcha): an empty PATCH body yields empty data, and Prisma's
+  // updateMany reports count 0 without touching the DB - not a "not found".
+  const db = forShop(shop.id);
+  const exists = await db.reward.findMany({
     where: { id: req.params.id },
-    data: {
-      ...(d.name !== undefined && { name: d.name }),
-      ...(d.description !== undefined && { description: emptyToNull(d.description) }),
-      ...(d.emoji !== undefined && { emoji: emptyToNull(d.emoji) }),
-      ...(d.punchCost !== undefined && { punchCost: d.punchCost }),
-      ...(d.cardTypeId !== undefined && { cardTypeId: d.cardTypeId }),
-      ...(d.active !== undefined && { active: d.active }),
-      ...(d.sortOrder !== undefined && { sortOrder: d.sortOrder }),
-    },
+    select: { id: true },
   });
-  if (count === 0) {
+  if (exists.length === 0) {
     res.status(404).json({ error: "not_found" });
     return;
+  }
+  const data = {
+    ...(d.name !== undefined && { name: d.name }),
+    ...(d.description !== undefined && { description: emptyToNull(d.description) }),
+    ...(d.emoji !== undefined && { emoji: emptyToNull(d.emoji) }),
+    ...(d.punchCost !== undefined && { punchCost: d.punchCost }),
+    ...(d.cardTypeId !== undefined && { cardTypeId: d.cardTypeId }),
+    ...(d.active !== undefined && { active: d.active }),
+    ...(d.sortOrder !== undefined && { sortOrder: d.sortOrder }),
+  };
+  if (Object.keys(data).length > 0) {
+    await db.reward.updateMany({ where: { id: req.params.id }, data });
   }
   res.json({ ok: true });
 });
@@ -336,13 +344,23 @@ loyaltyRouter.patch("/rules/:id", async (req, res) => {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
     return;
   }
-  const { count } = await forShop(req.shop!.id).earnRule.updateMany({
+  // Existence check DECOUPLED from the update (the booking /groups/:id
+  // empty-data gotcha): an empty PATCH body yields empty data, and Prisma's
+  // updateMany reports count 0 without touching the DB - not a "not found".
+  const db = forShop(req.shop!.id);
+  const exists = await db.earnRule.findMany({
     where: { id: req.params.id },
-    data: parsed.data,
+    select: { id: true },
   });
-  if (count === 0) {
+  if (exists.length === 0) {
     res.status(404).json({ error: "not_found" });
     return;
+  }
+  if (Object.keys(parsed.data).length > 0) {
+    await db.earnRule.updateMany({
+      where: { id: req.params.id },
+      data: parsed.data,
+    });
   }
   res.json({ ok: true });
 });
@@ -397,23 +415,31 @@ loyaltyRouter.patch("/cards/:id", async (req, res) => {
     return;
   }
   const d = parsed.data;
-  const { count } = await forShop(req.shop!.id).cardType.updateMany({
+  // Existence check DECOUPLED from the update (the booking /groups/:id
+  // empty-data gotcha): an empty PATCH body yields empty data, and Prisma's
+  // updateMany reports count 0 without touching the DB - not a "not found".
+  const db = forShop(req.shop!.id);
+  const exists = await db.cardType.findMany({
     where: { id: req.params.id },
-    data: {
-      ...(d.name !== undefined && { name: d.name }),
-      ...(d.description !== undefined && { description: emptyToNull(d.description) }),
-      ...(d.emoji !== undefined && { emoji: emptyToNull(d.emoji) }),
-      ...(d.accentColor !== undefined && { accentColor: emptyToNull(d.accentColor) }),
-      ...(d.serviceMatch !== undefined && { serviceMatch: d.serviceMatch }),
-      ...(d.punchesPerVisit !== undefined && { punchesPerVisit: d.punchesPerVisit }),
-      ...(d.exclusive !== undefined && { exclusive: d.exclusive }),
-      ...(d.active !== undefined && { active: d.active }),
-      ...(d.sortOrder !== undefined && { sortOrder: d.sortOrder }),
-    },
+    select: { id: true },
   });
-  if (count === 0) {
+  if (exists.length === 0) {
     res.status(404).json({ error: "not_found" });
     return;
+  }
+  const data = {
+    ...(d.name !== undefined && { name: d.name }),
+    ...(d.description !== undefined && { description: emptyToNull(d.description) }),
+    ...(d.emoji !== undefined && { emoji: emptyToNull(d.emoji) }),
+    ...(d.accentColor !== undefined && { accentColor: emptyToNull(d.accentColor) }),
+    ...(d.serviceMatch !== undefined && { serviceMatch: d.serviceMatch }),
+    ...(d.punchesPerVisit !== undefined && { punchesPerVisit: d.punchesPerVisit }),
+    ...(d.exclusive !== undefined && { exclusive: d.exclusive }),
+    ...(d.active !== undefined && { active: d.active }),
+    ...(d.sortOrder !== undefined && { sortOrder: d.sortOrder }),
+  };
+  if (Object.keys(data).length > 0) {
+    await db.cardType.updateMany({ where: { id: req.params.id }, data });
   }
   res.json({ ok: true });
 });
