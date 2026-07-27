@@ -8,6 +8,7 @@ import { SweepControl } from "./_components/SweepControl";
 import { WinbackPreview } from "./_components/WinbackPreview";
 import { AtRiskTable, type AtRiskRow } from "./_components/AtRiskTable";
 import { ActivityFeed, type ActivityItem } from "./_components/ActivityFeed";
+import { TodayAgenda, type TodayRow } from "./_components/TodayAgenda";
 import { Leaderboard, type Leader } from "./_components/Leaderboard";
 import { SettingsCard, type ShopSettings } from "./_components/SettingsCard";
 import { ClientDemoCard } from "./_components/ClientDemoCard";
@@ -40,7 +41,14 @@ export default async function DashboardPage({
   // serial hop just added ~1 API round trip to every dashboard open. The
   // redirect/error checks below still run on shopRes before anything renders;
   // on the rare 401/404 the extra widget calls simply also 401 and are dropped.
-  const [shopRes, stats, atRisk, activity, leaderboard, trends, me, sync] =
+  // "Today" has to be the SHOP's day, but its timezone only arrives with the
+  // agenda response — so ask for a generous UTC window around now (any shop tz
+  // is within ±14h of UTC) and narrow to the shop-local day below. One request,
+  // no serial hop just to learn the zone.
+  const agendaFrom = new Date(Date.now() - 36 * 60 * 60 * 1000).toISOString();
+  const agendaTo = new Date(Date.now() + 36 * 60 * 60 * 1000).toISOString();
+
+  const [shopRes, stats, atRisk, activity, leaderboard, trends, me, sync, agenda] =
     await Promise.all([
       apiGet<ShopMe>("/api/shops/me"),
       apiGet<Stats>("/api/dashboard/stats"),
@@ -51,6 +59,9 @@ export default async function DashboardPage({
       // Memoized: shares the layout's /api/auth/me round-trip for this render.
       getMe(),
       apiGet<SyncStatus>("/api/acuity/oauth/status"),
+      apiGet<{ agenda: TodayRow[]; timezone: string }>(
+        `/api/booking/agenda?from=${encodeURIComponent(agendaFrom)}&to=${encodeURIComponent(agendaTo)}`,
+      ),
     ]);
 
   if (shopRes.status === 401) redirect("/login");
@@ -59,6 +70,22 @@ export default async function DashboardPage({
   // the login page - let error.tsx render its "Try again" instead.
   if (!shopRes.ok || !shopRes.data) throw new Error("Failed to load your shop");
   const shop = shopRes.data;
+
+  // Narrow the ±36h agenda window to the shop's OWN calendar day. Comparing
+  // en-CA ("YYYY-MM-DD") renderings in the shop tz keeps this off the server's
+  // local zone, which would otherwise roll the day over at the wrong midnight.
+  const agendaTz = agenda.data?.timezone ?? "UTC";
+  const shopDayKey = (iso: string) =>
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: agendaTz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date(iso));
+  const todayKey = shopDayKey(new Date().toISOString());
+  const todayRows = ((agenda.data?.agenda ?? []) as TodayRow[])
+    .filter((r: TodayRow) => shopDayKey(r.start) === todayKey)
+    .sort((a: TodayRow, b: TodayRow) => a.start.localeCompare(b.start));
 
   // Brand-new barber? Arm the interactive dashboard tour right here on their
   // real pages (?tour=1 bootstraps the DemoTour overlay below). Stamp seen
@@ -117,6 +144,11 @@ export default async function DashboardPage({
       />
 
       <ConsentSetup needConsentCount={sync.data?.clientsNeedingConsent ?? 0} />
+
+      {/* Today's book, first thing on the page: opening the app should answer
+          "who's coming in today?" before any of the analytics below. Rendered
+          whenever the agenda call succeeded (an empty day says so itself). */}
+      {agenda.ok && <TodayAgenda rows={todayRows} timezone={agendaTz} />}
 
       {stats.data && (
         <div data-tour="stats">

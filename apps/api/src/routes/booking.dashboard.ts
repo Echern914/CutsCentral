@@ -996,6 +996,9 @@ interface AgendaRow {
   checkInStatus: string | null;
   etaMinutes: number | null;
   runningLate: boolean;
+  // Add-ons frozen onto the booking (native only; [] on visit/block rows).
+  // Name-matched to an icon on the dashboard's Today card.
+  addOns: { id: string; name: string }[];
   // Nudge affordance (native upcoming rows): whether the client has ANY
   // registered push device ("Notifications off" when false - a nudge won't
   // land), and how many of the max-2 nudges this appointment already used.
@@ -1040,6 +1043,22 @@ function fullName(first: string | null, last: string | null): string {
 // forShop() is a hand-curated tenant wrapper that erases nested-relation types
 // from a `select`, so we spell out the exact selected shapes and cast to them.
 // The cast is safe: it names precisely the fields each `select` below requests.
+/**
+ * The frozen add-on snapshot on an Appointment is untyped JSON (it may predate
+ * the current shape, or be null on older rows), so read it defensively: keep
+ * only entries that actually carry an id + name and drop anything else.
+ */
+function agendaAddOns(raw: Prisma.JsonValue | null): { id: string; name: string }[] {
+  if (!Array.isArray(raw)) return [];
+  const out: { id: string; name: string }[] = [];
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) continue;
+    const { id, name } = item as { id?: unknown; name?: unknown };
+    if (typeof id === "string" && typeof name === "string") out.push({ id, name });
+  }
+  return out;
+}
+
 type ApptAgendaRow = {
   id: string;
   status: string;
@@ -1054,6 +1073,8 @@ type ApptAgendaRow = {
   etaMinutes: number | null;
   runningLate: boolean;
   service: { name: string; color: string | null } | null;
+  // Frozen AddOnSnapshotItem[] (see engines/addOns.ts) - JSON on the row.
+  addOns: Prisma.JsonValue | null;
 };
 type VisitAgendaRow = {
   id: string;
@@ -1111,6 +1132,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         etaMinutes: true,
         runningLate: true,
         service: { select: { name: true, color: true } },
+        addOns: true,
       },
     })) as unknown as ApptAgendaRow[];
 
@@ -1210,6 +1232,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       checkInStatus: a.checkInStatus,
       etaMinutes: a.etaMinutes,
       runningLate: a.runningLate,
+      addOns: agendaAddOns(a.addOns),
       hasPush: a.clientId !== null && pushClients.has(a.clientId),
       nudgesSent: nudgeCounts.get(a.id) ?? 0,
       nudgeLimit: APPOINTMENT_NUDGE_LIMIT,
@@ -1252,6 +1275,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         checkInStatus: null,
         etaMinutes: null,
         runningLate: false,
+        addOns: [],
         hasPush: false,
         nudgesSent: 0,
         nudgeLimit: APPOINTMENT_NUDGE_LIMIT,
@@ -1291,6 +1315,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       checkInStatus: null,
       etaMinutes: null,
       runningLate: false,
+      addOns: [], // synced Visits carry no ChairBack add-on snapshot
       hasPush: false,
       nudgesSent: 0,
       nudgeLimit: APPOINTMENT_NUDGE_LIMIT,
