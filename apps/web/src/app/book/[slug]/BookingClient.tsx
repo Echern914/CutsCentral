@@ -279,12 +279,14 @@ export function BookingClient({ data }: { data: BookShopData }) {
   // openings that day and the concrete times inside each — bundles with
   // nothing open that day never appear.
   //
-  // Layout choice: SERVICE-FIRST is the default — the service menu (photo,
-  // price, description) shows immediately on open, so nothing is hidden behind
-  // a date tap. The date-first "pick a day, then cross-filter that day's
-  // openings by time and/or service" variant (see timeFilter below) is opt-in
-  // per shop via groupsFirst, for shops that prefer a calendar-led funnel.
-  const dayFirst = Boolean(data.shop.groupsFirst);
+  // Layout (every shop): EVERYTHING is on screen from the moment the page
+  // opens — the grouped service menu at the top (each group a dropdown card
+  // with its services and their times inside), and the month calendar with the
+  // day's time rail right below it. The soonest open day is auto-selected on
+  // load, so dates AND times are already showing without a single tap; picking
+  // another date just swaps the times. The time rail and the service cards
+  // cross-filter each other (see timeFilter below).
+  const dayFirst = true;
   const [dayDate, setDayDate] = useState<string | null>(null); // YYYY-MM-DD (shop tz)
   const [dayData, setDayData] = useState<DayBundlesResult | null>(null);
   const [dayLoading, setDayLoading] = useState(false);
@@ -344,6 +346,17 @@ export function BookingClient({ data }: { data: BookShopData }) {
       }).format(new Date()),
     );
   }, [dayFirstDays, tz]);
+
+  // Auto-select the soonest bookable day on open, so the page arrives with a
+  // date already highlighted and every service showing that day's times — the
+  // customer sees real availability without tapping anything. Runs once
+  // (dayDate is only null before the first pick).
+  useEffect(() => {
+    if (dayDate !== null) return;
+    const first = [...dayFirstDays].sort()[0];
+    if (first) pickDay(first);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dayFirstDays]);
 
   function pickDay(day: string) {
     setDayDate(day);
@@ -985,12 +998,14 @@ export function BookingClient({ data }: { data: BookShopData }) {
         </div>
       )}
 
-      {/* DAY-FIRST (groups-first shops): 1 pick a day -> 2 the day's bundles
-          with their open times. Bundles/services with nothing open that day
-          are omitted server-side. */}
+      {/* THE MENU — always on screen from the first paint: each group is a
+          dropdown card with its services (and the selected day's open times)
+          inside; ungrouped services follow. Fed by the selected day's bundle
+          fetch — the soonest open day is auto-selected on load, so times show
+          with zero taps. */}
       {dayFirst && (
         <Section
-          title="1 · Pick a day"
+          title="1 · Choose a service"
           tour="services"
           back={
             <CustomerBack
@@ -1000,78 +1015,16 @@ export function BookingClient({ data }: { data: BookShopData }) {
             />
           }
         >
-          <MonthCalendar
-            viewMonth={dayMonth ?? dayFirstFallbackMonth}
-            availableDays={dayFirstDays}
-            selectedDay={dayDate}
-            accent={accent}
-            onAccent={onAccent}
-            labelForDay={(d) => dateFmt.format(new Date(`${d}T12:00:00Z`))}
-            onPrevMonth={() => setDayMonth((m) => addMonths(m ?? dayFirstFallbackMonth, -1))}
-            onNextMonth={() => setDayMonth((m) => addMonths(m ?? dayFirstFallbackMonth, 1))}
-            onPickDay={pickDay}
-          />
-          {dayFirstDays.size === 0 && (
-            <p className="mt-3 text-sm text-muted">
+          {(dayLoading || (!dayData && dayFirstDays.size > 0)) && (
+            <p className="text-sm text-muted">Checking the day&apos;s openings…</p>
+          )}
+          {!dayLoading && dayFirstDays.size === 0 && (
+            <p className="text-sm text-muted">
               No open days right now — check back soon.
             </p>
           )}
-        </Section>
-      )}
-      {dayFirst && dayDate && (
-        <Section title="2 · Pick a time & service" focusOnMount={!demoTour}>
-          {dayLoading && (
-            <p className="text-sm text-muted">Checking the day&apos;s openings…</p>
-          )}
           {!dayLoading && dayData && visibleDay && (
             <div className="flex flex-col gap-5">
-              {/* Time rail: every open instant that day (or just the chosen
-                  service's times when one is picked). Tapping a time filters
-                  the services below to those bookable at it; "Any time" clears
-                  it. Cross-filters with the service cards — either narrows the
-                  other. */}
-              {dayTimes.length > 0 && (
-                <div>
-                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-                    Time
-                  </h3>
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setTimeFilter(null)}
-                      aria-pressed={timeFilter === null}
-                      className="rounded-lg border px-3 py-1.5 text-xs transition-colors"
-                      style={{
-                        borderColor: timeFilter === null ? accent : "rgba(255,255,255,0.15)",
-                        backgroundColor: timeFilter === null ? `${accent}14` : "transparent",
-                        color: timeFilter === null ? accent : undefined,
-                      }}
-                    >
-                      Any time
-                    </button>
-                    {dayTimes.map((t) => {
-                      const on = timeFilter === t;
-                      return (
-                        <button
-                          key={t}
-                          type="button"
-                          onClick={() => setTimeFilter(on ? null : t)}
-                          aria-pressed={on}
-                          className="rounded-lg border px-3 py-1.5 text-xs transition-colors"
-                          style={{
-                            borderColor: on ? accent : "rgba(255,255,255,0.15)",
-                            backgroundColor: on ? `${accent}14` : "transparent",
-                            color: on ? accent : undefined,
-                          }}
-                        >
-                          {timeFmt.format(new Date(t))}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
               {/* Services, grouped into the barber's collapsible group cards.
                   Filtered to those bookable at the chosen time (when set). */}
               {visibleDay.bundles.map((b) => {
@@ -1151,7 +1104,70 @@ export function BookingClient({ data }: { data: BookShopData }) {
         </Section>
       )}
 
-      {/* Step 1: service (service-first shops; day-first starts at the calendar). */}
+      {/* The calendar, right below the menu — dates always visible with the
+          selected day highlighted, and that day's open times as a rail under
+          it. Tapping a time filters the menu above to the services bookable at
+          that instant ("Any time" clears it); tapping a service narrows the
+          rail to its times (the cross-filter from the day view). */}
+      {dayFirst && (
+        <Section title="2 · Pick a day & time">
+          <MonthCalendar
+            viewMonth={dayMonth ?? dayFirstFallbackMonth}
+            availableDays={dayFirstDays}
+            selectedDay={dayDate}
+            accent={accent}
+            onAccent={onAccent}
+            labelForDay={(d) => dateFmt.format(new Date(`${d}T12:00:00Z`))}
+            onPrevMonth={() => setDayMonth((m) => addMonths(m ?? dayFirstFallbackMonth, -1))}
+            onNextMonth={() => setDayMonth((m) => addMonths(m ?? dayFirstFallbackMonth, 1))}
+            onPickDay={pickDay}
+          />
+          {!dayLoading && dayData && dayTimes.length > 0 && (
+            <div className="mt-4">
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+                Time
+              </h3>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTimeFilter(null)}
+                  aria-pressed={timeFilter === null}
+                  className="rounded-lg border px-3 py-1.5 text-xs transition-colors"
+                  style={{
+                    borderColor: timeFilter === null ? accent : "rgba(255,255,255,0.15)",
+                    backgroundColor: timeFilter === null ? `${accent}14` : "transparent",
+                    color: timeFilter === null ? accent : undefined,
+                  }}
+                >
+                  Any time
+                </button>
+                {dayTimes.map((t) => {
+                  const on = timeFilter === t;
+                  return (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setTimeFilter(on ? null : t)}
+                      aria-pressed={on}
+                      className="rounded-lg border px-3 py-1.5 text-xs transition-colors"
+                      style={{
+                        borderColor: on ? accent : "rgba(255,255,255,0.15)",
+                        backgroundColor: on ? `${accent}14` : "transparent",
+                        color: on ? accent : undefined,
+                      }}
+                    >
+                      {timeFmt.format(new Date(t))}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </Section>
+      )}
+
+      {/* Step 1: service (service-first shops; retained but unreachable while
+          the combined groups+calendar layout is forced for every shop). */}
       {!dayFirst && (
       <Section
         title="1 · Choose a service"
