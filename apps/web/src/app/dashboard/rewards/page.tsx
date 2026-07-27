@@ -44,9 +44,13 @@ export interface LoyaltyConfig {
 }
 
 export default async function RewardsPage() {
+  // Fetch identity + loyalty config in parallel (they don't depend on each
+  // other) instead of waiting for /me before even starting /api/loyalty. getMe
+  // is memoized so it's ~free; this removes a serial API hop from the load.
+  const [me, res] = await Promise.all([getMe(), apiGet<LoyaltyConfig>("/api/loyalty")]);
+
   // Rewards off (deep link / stale tab - the nav pill is already hidden): a
   // clear "flip it on in Settings" note instead of a dead builder.
-  const me = await getMe();
   if (me.ok && me.data && !me.data.rewardsEnabled) {
     return (
       <main className="mx-auto w-full max-w-xl px-5 py-16 text-center">
@@ -66,7 +70,6 @@ export default async function RewardsPage() {
     );
   }
 
-  const res = await apiGet<LoyaltyConfig>("/api/loyalty");
   if (!res.ok || !res.data) {
     return <main className="p-8 text-muted">Could not load your rewards setup.</main>;
   }

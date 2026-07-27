@@ -34,24 +34,31 @@ export default async function DashboardPage({
 }: {
   searchParams?: { tour?: string };
 }) {
-  const shopRes = await apiGet<ShopMe>("/api/shops/me");
+  // Fetch the shop AND the dashboard widgets in one parallel batch instead of
+  // gating the whole page on a serial /api/shops/me round-trip first. shops/me
+  // doesn't feed the other calls, so there's no dependency to wait on — the old
+  // serial hop just added ~1 API round trip to every dashboard open. The
+  // redirect/error checks below still run on shopRes before anything renders;
+  // on the rare 401/404 the extra widget calls simply also 401 and are dropped.
+  const [shopRes, stats, atRisk, activity, leaderboard, trends, me, sync] =
+    await Promise.all([
+      apiGet<ShopMe>("/api/shops/me"),
+      apiGet<Stats>("/api/dashboard/stats"),
+      apiGet<{ clients: AtRiskRow[] }>("/api/dashboard/at-risk"),
+      apiGet<{ items: ActivityItem[] }>("/api/dashboard/activity"),
+      apiGet<{ leaders: Leader[] }>("/api/dashboard/leaderboard"),
+      apiGet<{ series: TrendPoint[] }>("/api/dashboard/trends"),
+      // Memoized: shares the layout's /api/auth/me round-trip for this render.
+      getMe(),
+      apiGet<SyncStatus>("/api/acuity/oauth/status"),
+    ]);
+
   if (shopRes.status === 401) redirect("/login");
   if (shopRes.status === 404) redirect("/onboarding");
   // A transient API failure (5xx) must NOT bounce an authenticated barber to
   // the login page - let error.tsx render its "Try again" instead.
   if (!shopRes.ok || !shopRes.data) throw new Error("Failed to load your shop");
   const shop = shopRes.data;
-
-  const [stats, atRisk, activity, leaderboard, trends, me, sync] = await Promise.all([
-    apiGet<Stats>("/api/dashboard/stats"),
-    apiGet<{ clients: AtRiskRow[] }>("/api/dashboard/at-risk"),
-    apiGet<{ items: ActivityItem[] }>("/api/dashboard/activity"),
-    apiGet<{ leaders: Leader[] }>("/api/dashboard/leaderboard"),
-    apiGet<{ series: TrendPoint[] }>("/api/dashboard/trends"),
-    // Memoized: shares the layout's /api/auth/me round-trip for this render.
-    getMe(),
-    apiGet<SyncStatus>("/api/acuity/oauth/status"),
-  ]);
 
   // Brand-new barber? Arm the interactive dashboard tour right here on their
   // real pages (?tour=1 bootstraps the DemoTour overlay below). Stamp seen
