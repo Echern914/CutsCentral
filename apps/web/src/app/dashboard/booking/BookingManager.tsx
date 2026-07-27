@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import { SERVICE_COLORS, SERVICE_COLOR_KEYS } from "@chairback/config/constants";
 import { zonedWallTimeToUtc } from "@chairback/config/time";
 import { Card, CardHeader } from "@/components/ui/Card";
@@ -134,6 +134,22 @@ export function BookingManager({
   const bookUrl = `${appBase}/book/${shop.slug ?? "your-shop"}`;
   const needsSetup = initialStaff.length === 0 || initialServices.length === 0;
 
+  // The Hours tab saves via its own "Save hours" button, so leaving that tab
+  // with unsaved edits would silently lose them. HoursTab keeps this ref in sync
+  // with its dirty state; the tab switcher below confirms before abandoning it.
+  const hoursDirtyRef = useRef(false);
+  function switchTab(next: Tab) {
+    if (next === tab) return;
+    if (
+      tab === "Hours" &&
+      hoursDirtyRef.current &&
+      !window.confirm("You have unsaved hours. Leave this tab and lose them?")
+    ) {
+      return;
+    }
+    setTab(next);
+  }
+
   // Dashboard demo tour: its steps on this page live behind tabs, so follow
   // the tour by switching to the tab that hosts the active step's anchor.
   const { stepId: dashTourStepId } = useDemoTour("dashboard");
@@ -191,7 +207,7 @@ export function BookingManager({
         {tabs.map((t) => (
           <button
             key={t}
-            onClick={() => setTab(t)}
+            onClick={() => switchTab(t)}
             className={cn(
               "rounded-full px-4 py-1.5 text-sm font-medium transition-colors duration-150 ease-out",
               tab === t
@@ -227,7 +243,9 @@ export function BookingManager({
           />
         </div>
       )}
-      {tab === "Hours" && <HoursTab staff={initialStaff} toast={toast} />}
+      {tab === "Hours" && (
+        <HoursTab staff={initialStaff} toast={toast} dirtyRef={hoursDirtyRef} />
+      )}
       {tab === "Appointments" && (
         <div data-tour="agenda">
           <BookingCalendar
@@ -1196,9 +1214,11 @@ function ServiceEditForm({
             </p>
           </div>
         ) : (
-          <div>
-            <div className="flex items-center justify-between gap-3">
-              <span className={labelCls}>Available hours for this service (optional)</span>
+          <CollapsibleHours
+            title="Available hours for this service (optional)"
+            summary={hoursSummary(hoursRows)}
+          >
+            <div className="flex items-center justify-end">
               {/* Flip every day in one tap instead of one by one. */}
               <button
                 type="button"
@@ -1218,7 +1238,7 @@ function ServiceEditForm({
               onChange={setHoursRows}
               ariaScope="this service"
             />
-          </div>
+          </CollapsibleHours>
         )}
 
         <button
@@ -2247,9 +2267,11 @@ function ServiceGroupItem({
 
           {/* Shared available-hours grid - same idiom as ServiceEditForm; these
               hours OVERRIDE each member service's own windows. */}
-          <div>
-            <div className="flex items-center justify-between gap-3">
-              <span className={labelCls}>Available hours for this group (optional)</span>
+          <CollapsibleHours
+            title="Available hours for this group (optional)"
+            summary={hoursSummary(hoursRows)}
+          >
+            <div className="flex items-center justify-end">
               <button
                 type="button"
                 onClick={() =>
@@ -2272,7 +2294,7 @@ function ServiceGroupItem({
               onChange={setHoursRows}
               ariaScope="this group"
             />
-          </div>
+          </CollapsibleHours>
 
           {/* Booking limits across the whole group. Blank/0 = no cap. */}
           <div className="grid gap-3 sm:grid-cols-2">
@@ -2335,7 +2357,17 @@ type HourRow = { on: boolean; start: string; end: string; breaks: HourBreak[] };
 const timeSelectCls =
   "rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-sm text-offwhite disabled:opacity-40";
 
-function HoursTab({ staff, toast }: { staff: StaffRow[]; toast: Toast }) {
+function HoursTab({
+  staff,
+  toast,
+  dirtyRef,
+}: {
+  staff: StaffRow[];
+  toast: Toast;
+  // Mirrors this tab's unsaved state up to the parent so the dashboard-tab
+  // switcher can warn before unmounting the editor.
+  dirtyRef: React.MutableRefObject<boolean>;
+}) {
   const activeStaff = staff.filter((s) => s.active);
   const [selected, setSelected] = useState<string>(activeStaff[0]?.id ?? "");
   // Per-weekday on/off + start/end + recurring breaks. Loaded when a staff is picked.
@@ -2344,6 +2376,42 @@ function HoursTab({ staff, toast }: { staff: StaffRow[]; toast: Toast }) {
   );
   const [loaded, setLoaded] = useState(false);
   const [pending, start] = useTransition();
+  // The last SAVED/LOADED snapshot of `rows`, JSON-encoded. `dirty` = the barber
+  // has edits that aren't in the DB yet. This is the whole point of the guard:
+  // hours only persist on "Save hours", so switching staff (which reloads) or
+  // leaving the page would otherwise silently discard unsaved edits - the exact
+  // "I filled it in, left, and it was gone" report.
+  const [savedSnapshot, setSavedSnapshot] = useState<string>("");
+  const dirty = loaded && JSON.stringify(rows) !== savedSnapshot;
+
+  // Keep the parent's dirty mirror current, and clear it when this tab unmounts
+  // (so a confirmed "leave and lose them" doesn't leave a stale true behind).
+  useEffect(() => {
+    dirtyRef.current = dirty;
+    return () => {
+      dirtyRef.current = false;
+    };
+  }, [dirty, dirtyRef]);
+
+  // Warn the browser before an actual page unload/close/refresh while dirty
+  // (the native "Leave site?" prompt). In-app tab switches are guarded
+  // separately in load()/the parent - this catches hard navigations.
+  useEffect(() => {
+    if (!dirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = ""; // required for the prompt to show in Chrome
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [dirty]);
+
+  // Auto-load the first staff member on mount so the editor is never stranded on
+  // "Pick a staff member" (and so we always have a saved baseline to diff).
+  useEffect(() => {
+    if (selected && !loaded) load(selected);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function patchRow(i: number, patch: Partial<HourRow>) {
     setRows((cur) => cur.map((c, j) => (j === i ? { ...c, ...patch } : c)));
@@ -2370,6 +2438,16 @@ function HoursTab({ staff, toast }: { staff: StaffRow[]; toast: Toast }) {
     setRows((cur) =>
       cur.map((c, j) => (j === i ? { ...c, breaks: c.breaks.filter((_, k) => k !== bi) } : c)),
     );
+  }
+
+  // Switch which staff member is being edited. Guard against silently throwing
+  // away unsaved edits to the CURRENT staff: if dirty, make the barber confirm.
+  function selectStaff(id: string) {
+    if (id === selected) return;
+    if (dirty && !window.confirm("You have unsaved hours. Switch staff and lose them?")) {
+      return;
+    }
+    load(id);
   }
 
   function load(id: string) {
@@ -2406,6 +2484,7 @@ function HoursTab({ staff, toast }: { staff: StaffRow[]; toast: Toast }) {
         }
       }
       setRows(next);
+      setSavedSnapshot(JSON.stringify(next)); // this loaded state IS the baseline
       setLoaded(true);
     });
   }
@@ -2443,9 +2522,19 @@ function HoursTab({ staff, toast }: { staff: StaffRow[]; toast: Toast }) {
       toast("Each break's end time must be after its start time", "error");
       return;
     }
+    // Snapshot exactly what's being persisted so a successful save clears the
+    // dirty flag (and the unload guard) for this state.
+    const snapshotAtSave = JSON.stringify(rows);
     start(async () => {
       const r = await saveAvailabilityAction(selected, rules, recurringBlocks);
-      toast(r.ok ? "Hours saved" : "Couldn't save", r.ok ? "success" : "error");
+      if (r.ok) {
+        setSavedSnapshot(snapshotAtSave);
+        toast("Hours saved", "success");
+      } else {
+        // Do NOT clear dirty on failure - the edits are still unsaved, and the
+        // guard must keep protecting them.
+        toast("Couldn't save — your changes are still here. Try again.", "error");
+      }
     });
   }
 
@@ -2465,7 +2554,7 @@ function HoursTab({ staff, toast }: { staff: StaffRow[]; toast: Toast }) {
         {activeStaff.map((s) => (
           <button
             key={s.id}
-            onClick={() => load(s.id)}
+            onClick={() => selectStaff(s.id)}
             className={cn(
               "rounded-full border px-3 py-1 text-xs transition-colors",
               selected === s.id
@@ -2474,12 +2563,15 @@ function HoursTab({ staff, toast }: { staff: StaffRow[]; toast: Toast }) {
             )}
           >
             {s.name}
+            {/* An unsaved marker on the current staff makes it obvious that
+                switching away needs a Save first. */}
+            {selected === s.id && dirty && <span className="ml-1 text-gold">•</span>}
           </button>
         ))}
       </div>
 
       {!loaded ? (
-        <p className="mt-4 text-sm text-muted">Pick a staff member to edit their hours.</p>
+        <p className="mt-4 text-sm text-muted">Loading hours…</p>
       ) : (
         <>
           <div className="mt-4 flex flex-col gap-3">
@@ -2564,13 +2656,18 @@ function HoursTab({ staff, toast }: { staff: StaffRow[]; toast: Toast }) {
               </div>
             ))}
           </div>
-          <button
-            onClick={save}
-            disabled={pending}
-            className="mt-5 rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
-          >
-            {pending ? "Saving…" : "Save hours"}
-          </button>
+          <div className="mt-5 flex items-center gap-3">
+            <button
+              onClick={save}
+              disabled={pending}
+              className="rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+            >
+              {pending ? "Saving…" : dirty ? "Save hours" : "Saved ✓"}
+            </button>
+            {dirty && !pending && (
+              <span className="text-xs text-gold">Unsaved changes</span>
+            )}
+          </div>
         </>
       )}
     </Card>
@@ -2672,6 +2769,64 @@ function hoursRowsFromWindows(
       windows: w.map((x) => ({ start: minToHHMM(x.s), end: minToHHMM(x.e) })),
     };
   });
+}
+
+/**
+ * One-line summary of the per-day hours state, shown on the collapsed button so
+ * a barber sees the setting without expanding. "Open every day" is the untouched
+ * default (all days = the barber's own hours); otherwise it names how many days
+ * are custom and/or closed.
+ */
+function hoursSummary(rows: ServiceHoursRow[]): string {
+  const custom = rows.filter((r) => r.mode === "custom").length;
+  const closed = rows.filter((r) => r.mode === "closed").length;
+  if (custom === 0 && closed === 0) return "Open every day";
+  const parts: string[] = [];
+  if (custom > 0) parts.push(`custom on ${custom} day${custom > 1 ? "s" : ""}`);
+  if (closed > 0) parts.push(`closed ${closed} day${closed > 1 ? "s" : ""}`);
+  const s = parts.join(" · ");
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * Collapsible "Available hours" wrapper: a summary button that expands the given
+ * editor in place when tapped (and collapses again). Keeps the tall 7-day grid
+ * out of the way until the barber wants it — the Edit-service / group modals were
+ * dominated by it. `summary` reflects the current state so it's readable closed.
+ */
+function CollapsibleHours({
+  title,
+  summary,
+  children,
+}: {
+  title: string;
+  summary: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-3 rounded-xl border border-subtle bg-charcoal-700 px-3 py-2.5 text-left transition-colors hover:border-gold/50"
+      >
+        <span className="flex flex-col">
+          <span className="text-sm text-offwhite">{title}</span>
+          <span className="text-[11px] text-muted">{summary}</span>
+        </span>
+        <span
+          aria-hidden="true"
+          className="shrink-0 text-xs text-muted transition-transform duration-200"
+          style={{ transform: open ? "rotate(90deg)" : "none" }}
+        >
+          ▸
+        </span>
+      </button>
+      {open && <div className="mt-2">{children}</div>}
+    </div>
+  );
 }
 
 /**
