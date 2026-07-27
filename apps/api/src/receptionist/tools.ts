@@ -6,7 +6,7 @@ import { logger } from "../logger.js";
 import { computeOpenSlots, isSlotBookable, type Slot } from "../engines/slots.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import { cancelAppointment } from "../engines/appointmentPromotion.js";
-import { effectiveDurationForDate, effectivePriceForDate } from "../engines/pricing.js";
+import { effectiveDurationAt, effectivePriceAt } from "../engines/pricing.js";
 import { formatApptTime } from "../messaging/templates.js";
 import { sendPushToUser } from "../messaging/push.js";
 import { getMessageProvider } from "../messaging/twilio.js";
@@ -596,6 +596,7 @@ async function loadSlotContext(
         name: true,
         durationMin: true,
         durationOverrides: true,
+        timeOverrides: true,
         price: true,
         priceOverrides: true,
       },
@@ -606,25 +607,28 @@ async function loadSlotContext(
     }),
   ]);
   if (!service || !staff) return "that slot's barber or service is no longer offered";
-  const price = effectivePriceForDate(
+  const price = effectivePriceAt(
     service.price === null ? null : Number(service.price),
-    service.priceOverrides,
-    decoded.startsAt,
-    shop.timezone,
+    {
+      at: decoded.startsAt,
+      timezone: shop.timezone,
+      weekdayOverrides: service.priceOverrides,
+      timeWindows: service.timeOverrides,
+    },
   );
   return {
     staffId: decoded.staffId,
     serviceId: decoded.serviceId,
     startsAt: decoded.startsAt,
-    // Effective duration for the slot's shop-local weekday (mirrors the price).
+    // Effective duration for the slot's own start instant (mirrors the price).
     endsAt: new Date(
       decoded.startsAt.getTime() +
-        effectiveDurationForDate(
-          service.durationMin,
-          service.durationOverrides,
-          decoded.startsAt,
-          shop.timezone,
-        ) *
+        effectiveDurationAt(service.durationMin, {
+          at: decoded.startsAt,
+          timezone: shop.timezone,
+          weekdayOverrides: service.durationOverrides,
+          timeWindows: service.timeOverrides,
+        }) *
           60_000,
     ),
     price,

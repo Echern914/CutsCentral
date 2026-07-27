@@ -85,6 +85,10 @@ export interface DayService {
     startsAt: string;
     staffIds: string[];
     targeted?: { id: string; price: number; label: string | null };
+    // Present ONLY when a time-of-day window makes this slot differ from the
+    // day-level price/durationMin above (e.g. the 9 PM chip is $65 / 20 min).
+    price?: number | null;
+    durationMin?: number;
   }[];
 }
 

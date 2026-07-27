@@ -50,6 +50,10 @@ export interface BookShopData {
     // range, the picker the exact length for the chosen day.
     durationOverrides: Record<string, number>;
     durationRange: { min: number; max: number };
+    // Time-of-day windows ([{s,e,price,durationMin}] in SHOP-local minutes, e
+    // exclusive, every day) layered over the weekday overrides - the client
+    // resolves each slot's exact price/length from the slot's own start time.
+    timeOverrides: { s: number; e: number; price: number | null; durationMin: number | null }[];
     // Groups-first: which group card this files under (null = ungrouped) and
     // its saved position within that group.
     serviceGroupId: string | null;

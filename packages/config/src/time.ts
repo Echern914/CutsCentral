@@ -172,6 +172,37 @@ export function zonedWallTimeToUtc(
 }
 
 /** The shop-local calendar parts (year, month0 0-11, day, weekday 0-6) at `at`. */
+/**
+ * Minutes since midnight (0..1439) for an instant, in the given timezone's
+ * wall clock - "what time of day is it there". DST-correct by construction
+ * (Intl resolves the offset at the instant itself). Falls back to UTC parts on
+ * a bad zone, mirroring zonedDateParts below. Browser-safe (Intl only) - the
+ * public booking page uses it to resolve per-slot time-window pricing in the
+ * SHOP's timezone, never the device's.
+ */
+export function zonedMinutesOfDay(at: Date, timeZone: string): number {
+  try {
+    const dtf = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    });
+    const parts = dtf.formatToParts(at);
+    const get = (type: string) =>
+      Number(parts.find((p) => p.type === type)?.value ?? NaN);
+    const hour = get("hour");
+    const minute = get("minute");
+    if (Number.isFinite(hour) && Number.isFinite(minute)) {
+      // "24:xx" never appears under h23, but clamp defensively anyway.
+      return ((hour % 24) * 60 + minute) % 1440;
+    }
+  } catch {
+    // fall through to the UTC fallback
+  }
+  return at.getUTCHours() * 60 + at.getUTCMinutes();
+}
+
 export function zonedDateParts(
   at: Date,
   timeZone: string,

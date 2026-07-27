@@ -1,3 +1,4 @@
+import { apiEnv } from "@chairback/config";
 import { forShop, prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import {
@@ -5,9 +6,11 @@ import {
   buildAppointmentConfirmationEmail,
   buildAppointmentReminderBody,
   buildAppointmentReminderEmail,
+  formatApptTime,
 } from "../messaging/templates.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
+import { sendPushToUser } from "../messaging/push.js";
 import { inQuietHours } from "../engines/quietHours.js";
 import { hasActiveAccess } from "../billing/stripe.js";
 
@@ -416,5 +419,121 @@ export async function notifyAppointmentReminder(params: {
       "notifyAppointmentReminder failed",
     );
     return false;
+  }
+}
+
+/** Customer-initiated booking events the barber gets alerted about. */
+export type BarberBookingEventKind =
+  | "booked" // instant booking landed on the calendar
+  | "requested" // approval-mode request holding a slot (barber must act)
+  | "rescheduled" // customer moved an existing booking via the manage page
+  | "canceled"; // customer canceled via the manage page
+
+const BARBER_EVENT_TITLE: Record<BarberBookingEventKind, string> = {
+  booked: "New booking",
+  requested: "New booking request",
+  rescheduled: "Booking moved",
+  canceled: "Booking canceled",
+};
+
+/**
+ * Alert the BARBER that a customer just booked / requested / moved / canceled
+ * an appointment - the business-side mirror of the customer confirmation
+ * above. Two legs, the same transports as the lead-form alert in
+ * routes/shops.ts:
+ *
+ *  - Native push to every device of the appointment's staff-linked user (in a
+ *    multi-barber shop, the barber the appointment is actually FOR), falling
+ *    back to the shop owner. sendPushToUser honors DRY_RUN internally.
+ *  - SMS to shop.notifyPhone when the barber set one (the same alert number
+ *    the lead and waitlist forms text; null = push/inbox only). The provider
+ *    factory returns the noop sender under DRY_RUN.
+ *
+ * No consent/quiet-hours gate: this is an operational alert to the business
+ * itself, not a client message (same stance as the lead-form alert, and why
+ * there is no Nudge ledger row - that ledger is client-keyed). Fires AFTER the
+ * booking transaction committed; fire-and-forget; never throws.
+ */
+export async function notifyBarberBookingEvent(params: {
+  shopId: string;
+  appointmentId: string;
+  kind: BarberBookingEventKind;
+}): Promise<void> {
+  try {
+    const shop = await prisma.shop.findUnique({
+      where: { id: params.shopId },
+      select: {
+        id: true,
+        name: true,
+        timezone: true,
+        ownerId: true,
+        notifyPhone: true,
+      },
+    });
+    if (!shop) return;
+    const appt = await runWithShop(params.shopId, (tx) =>
+      tx.appointment.findFirst({
+        // No status filter: a "canceled" event reads the row it just canceled.
+        where: { id: params.appointmentId, shopId: params.shopId },
+        select: {
+          id: true,
+          startsAt: true,
+          firstName: true,
+          lastName: true,
+          service: { select: { name: true } },
+          staff: { select: { name: true, userId: true } },
+        },
+      }),
+    );
+    if (!appt) return;
+
+    const who =
+      [appt.firstName, appt.lastName].filter(Boolean).join(" ") || "A customer";
+    const when = formatApptTime(appt.startsAt, shop.timezone);
+    const what = `${appt.service.name} with ${appt.staff.name}`;
+    const body =
+      params.kind === "booked"
+        ? `${who} just booked ${what} - ${when}`
+        : params.kind === "requested"
+          ? `${who} requested ${what} - ${when}`
+          : params.kind === "rescheduled"
+            ? `${who} moved their ${what} to ${when}`
+            : `${who} canceled their ${what} - ${when}`;
+
+    await sendPushToUser({
+      userId: appt.staff.userId ?? shop.ownerId,
+      shopId: shop.id,
+      payload: {
+        title: BARBER_EVENT_TITLE[params.kind],
+        body,
+        url: `${apiEnv().APP_BASE_URL}/dashboard/booking`,
+        // Per-appointment tag: successive events on the SAME booking replace
+        // each other (booked -> moved -> canceled), different bookings stack.
+        tag: `booking-event-${appt.id}`,
+      },
+    });
+
+    if (shop.notifyPhone) {
+      if (apiEnv().DRY_RUN) {
+        logger.info(
+          { shopId: shop.id, to: shop.notifyPhone, kind: params.kind },
+          "barber booking-event SMS (dry-run, not sent)",
+        );
+      } else {
+        await getMessageProvider()
+          .send({ to: shop.notifyPhone, body: `${shop.name}: ${body}` })
+          .catch((err) =>
+            logger.error(
+              { err, shopId: shop.id, appointmentId: params.appointmentId },
+              "barber booking-event SMS failed",
+            ),
+          );
+      }
+    }
+  } catch (err) {
+    logger.error(
+      { err, shopId: params.shopId, appointmentId: params.appointmentId },
+      "notifyBarberBookingEvent failed",
+    );
   }
 }

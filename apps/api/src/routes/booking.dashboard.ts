@@ -26,7 +26,7 @@ import {
   materializeTargetedRule,
   TARGETED_RULE_HORIZON_DAYS,
 } from "../engines/targetedSlotRules.js";
-import { effectiveDurationForDate, effectivePriceForDate } from "../engines/pricing.js";
+import { effectiveDurationAt, effectivePriceAt } from "../engines/pricing.js";
 import {
   materializeSeries,
   type RecurrencePattern,
@@ -79,6 +79,42 @@ const hoursWindowsSchema = z
   .record(z.enum(["0", "1", "2", "3", "4", "5", "6"]), z.array(serviceWindowSchema).max(6))
   .optional();
 
+// Time-of-day price/duration windows: an ARRAY of {s,e,price?,durationMin?}
+// (same s/e minute bounds as serviceWindowSchema; price/durationMin bounds
+// mirror the base fields). Every-day windows layered over the weekday maps -
+// "after 9pm this runs $65 and takes 20 min". A window must set at least one
+// of price/durationMin (else it does nothing), and windows must not overlap
+// (kept in lockstep with the read-side defense in parseTimeWindows).
+const timeOverridesSchema = z
+  .array(
+    z
+      .object({
+        s: z.number().int().min(0).max(1439),
+        e: z.number().int().min(1).max(1440),
+        price: z.number().min(0).max(100000).nullable().optional(),
+        durationMin: z.number().int().min(5).max(600).nullable().optional(),
+      })
+      .refine((w) => w.e > w.s, { message: "window end must be after start" })
+      .refine(
+        (w) =>
+          (w.price !== null && w.price !== undefined) ||
+          (w.durationMin !== null && w.durationMin !== undefined),
+        { message: "window must set a price and/or minutes" },
+      ),
+  )
+  .max(8)
+  .refine(
+    (windows) => {
+      const sorted = [...windows].sort((a, b) => a.s - b.s);
+      for (let i = 1; i < sorted.length; i++) {
+        if (sorted[i]!.s < sorted[i - 1]!.e) return false;
+      }
+      return true;
+    },
+    { message: "time windows must not overlap" },
+  )
+  .optional();
+
 const serviceSchema = z
   .object({
     name: z.string().trim().min(1).max(120),
@@ -98,6 +134,7 @@ const serviceSchema = z
     durationMin: z.number().int().min(5).max(600),
     durationOverrides: durationOverridesSchema,
     hoursWindows: hoursWindowsSchema,
+    timeOverrides: timeOverridesSchema,
     price: z.number().min(0).max(100000).nullable().optional(),
     priceOverrides: priceOverridesSchema,
     // Calendar color: one of the palette keys, or null to clear. Validated
@@ -132,6 +169,7 @@ bookingDashboardRouter.get("/services", async (req, res) => {
       priceOverrides: s.priceOverrides ?? {},
       durationOverrides: s.durationOverrides ?? {},
       hoursWindows: s.hoursWindows ?? {},
+      timeOverrides: s.timeOverrides ?? [],
       // Which group (if any) this service belongs to. null for every service on
       // a shop not using groups - the web UI keys the "in group X" badge off it.
       // The bare findMany above returns serviceGroupId by default; ...s carries
@@ -160,6 +198,7 @@ bookingDashboardRouter.post("/services", async (req, res) => {
       // schemas already constrained them to known weekday keys + valid values.
       durationOverrides: d.durationOverrides ?? {},
       hoursWindows: d.hoursWindows ?? {},
+      timeOverrides: d.timeOverrides ?? [],
       color: d.color ?? null,
       price: d.price ?? null,
       priceOverrides: d.priceOverrides ?? {},
@@ -207,6 +246,7 @@ bookingDashboardRouter.patch("/services/:id", async (req, res) => {
       ? { durationOverrides: d.durationOverrides }
       : {}),
     ...(d.hoursWindows !== undefined ? { hoursWindows: d.hoursWindows } : {}),
+    ...(d.timeOverrides !== undefined ? { timeOverrides: d.timeOverrides } : {}),
     ...(d.color !== undefined ? { color: d.color } : {}),
     ...(d.price !== undefined ? { price: d.price } : {}),
     ...(d.priceOverrides !== undefined ? { priceOverrides: d.priceOverrides } : {}),
@@ -1408,6 +1448,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
       id: true,
       durationMin: true,
       durationOverrides: true,
+      timeOverrides: true,
       price: true,
       priceOverrides: true,
       name: true,
@@ -1432,22 +1473,25 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
   const addOns = d.recurrence
     ? { snapshot: [], extraDurationMin: 0, extraPrice: 0 }
     : await resolveAddOns(shopId, d.serviceId, d.addOnIds);
-  // Effective duration for the picked date's shop-local weekday (mirrors the
-  // effectivePriceForDate snapshot just below).
-  const effectiveDuration = effectiveDurationForDate(
-    service.durationMin,
-    service.durationOverrides,
-    startsAt,
-    shop.timezone,
-  );
+  // Effective duration for the picked slot - weekday layer plus time-of-day
+  // windows (mirrors the effectivePriceAt snapshot just below).
+  const effectiveDuration = effectiveDurationAt(service.durationMin, {
+    at: startsAt,
+    timezone: shop.timezone,
+    weekdayOverrides: service.durationOverrides,
+    timeWindows: service.timeOverrides,
+  });
   const endsAt = new Date(
     startsAt.getTime() + (effectiveDuration + addOns.extraDurationMin) * 60_000,
   );
-  const basePrice = effectivePriceForDate(
+  const basePrice = effectivePriceAt(
     service.price === null ? null : Number(service.price),
-    service.priceOverrides,
-    startsAt,
-    shop.timezone,
+    {
+      at: startsAt,
+      timezone: shop.timezone,
+      weekdayOverrides: service.priceOverrides,
+      timeWindows: service.timeOverrides,
+    },
   );
   const effectivePrice =
     basePrice === null && addOns.extraPrice === 0
@@ -1514,6 +1558,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         email: d.email || null,
         durationMin: service.durationMin,
         durationOverrides: service.durationOverrides,
+        timeOverrides: service.timeOverrides,
         basePrice: service.price === null ? null : Number(service.price),
         priceOverrides: service.priceOverrides,
         timezone: shop.timezone,

@@ -8,15 +8,19 @@ import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWr
 import { resolveAddOns } from "../engines/addOns.js";
 import {
   durationRangeForService,
-  effectiveDurationForDate,
-  effectivePriceForDate,
+  effectiveDurationAt,
+  effectivePriceAt,
   parseDurationOverrides,
   parsePriceOverrides,
+  parseTimeWindows,
   priceRangeForService,
 } from "../engines/pricing.js";
 import { connectEnabled, hasActiveAccess } from "../billing/stripe.js";
 import { createAheadPaymentIntent, toCents } from "../billing/payments.js";
-import { notifyAppointmentConfirmation } from "../services/appointmentNotify.js";
+import {
+  notifyAppointmentConfirmation,
+  notifyBarberBookingEvent,
+} from "../services/appointmentNotify.js";
 import { sendPushToUser } from "../messaging/push.js";
 import { cancelAppointment } from "../engines/appointmentPromotion.js";
 import { rewardsLimiter, leadLimiter } from "../middleware/rateLimit.js";
@@ -78,6 +82,7 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
         color: true,
         durationMin: true,
         durationOverrides: true,
+        timeOverrides: true,
         price: true,
         priceOverrides: true,
         // Groups-first layout: which group card the service files under and
@@ -170,6 +175,7 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
       const base = s.price === null ? null : Number(s.price);
       const overrides = parsePriceOverrides(s.priceOverrides);
       const durOverrides = parseDurationOverrides(s.durationOverrides);
+      const timeWindows = parseTimeWindows(s.timeOverrides);
       return {
         id: s.id,
         name: s.name,
@@ -185,11 +191,21 @@ bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
         // price for the day the customer picks (in the shop tz). priceRange lets
         // the menu show "from $X" / "$45-$55" before a day is chosen.
         priceOverrides: overrides,
-        priceRange: priceRangeForService(base, overrides),
+        priceRange: priceRangeForService(base, {
+          weekdayOverrides: overrides,
+          timeWindows,
+        }),
         // Same idea for duration ({weekday: minutes}) - the menu can show
         // "20-30 min" and the picker the exact length for the chosen day.
         durationOverrides: durOverrides,
-        durationRange: durationRangeForService(s.durationMin, durOverrides),
+        durationRange: durationRangeForService(s.durationMin, {
+          weekdayOverrides: durOverrides,
+          timeWindows,
+        }),
+        // Time-of-day windows ([{s,e,price?,durationMin?}], shop-local minutes,
+        // every day) - the client resolves each slot's exact price/length from
+        // the SLOT time so an evening special is shown before it's tapped.
+        timeOverrides: timeWindows,
         // Groups-first layout: which group card this files under + its saved
         // position inside that group.
         serviceGroupId: s.serviceGroupId,
@@ -313,6 +329,7 @@ bookingPublicRouter.get("/:slug/day", rewardsLimiter, async (req, res) => {
         color: true,
         durationMin: true,
         durationOverrides: true,
+        timeOverrides: true,
         price: true,
         priceOverrides: true,
         serviceGroupId: true,
@@ -361,6 +378,11 @@ bookingPublicRouter.get("/:slug/day", rewardsLimiter, async (req, res) => {
     startsAt: string;
     staffIds: string[];
     targeted?: { id: string; price: number; label: string | null };
+    // Present ONLY when a time-of-day window makes this slot differ from the
+    // service's day-level price/durationMin (e.g. the 9pm chip is $65/20 min
+    // while the day runs $45/30 min) - the UI badges just those chips.
+    price?: number | null;
+    durationMin?: number;
   }
   const staffByService = new Map<string, string[]>();
   for (const l of links) {
@@ -385,8 +407,50 @@ bookingPublicRouter.get("/:slug/day", rewardsLimiter, async (req, res) => {
         merged.set(key, [...(merged.get(key) ?? []), staffId]);
       }
     }
+    // Day-level price/duration resolve the WEEKDAY layer only (timeWindows:
+    // null): time-of-day windows are slot-scoped, and midday falling inside a
+    // window (a lunch special) must not relabel the whole day's card.
+    const dayDuration = effectiveDurationAt(service.durationMin, {
+      at: midDay,
+      timezone: shop!.timezone,
+      weekdayOverrides: service.durationOverrides,
+      timeWindows: null,
+    });
+    const dayPrice = effectivePriceAt(
+      service.price === null ? null : Number(service.price),
+      {
+        at: midDay,
+        timezone: shop!.timezone,
+        weekdayOverrides: service.priceOverrides,
+        timeWindows: null,
+      },
+    );
     const out: DaySlotOut[] = [...merged.entries()]
-      .map(([startsAt, ids]) => ({ startsAt, staffIds: ids }))
+      .map(([startsAt, ids]): DaySlotOut => {
+        const slot: DaySlotOut = { startsAt, staffIds: ids };
+        // Full-layer resolve for THIS slot's start instant; attach only when a
+        // window makes it differ from the day-level values, so the payload (and
+        // the UI's badging rule) stay exactly as before for window-less shops.
+        const at = new Date(startsAt);
+        const slotPrice = effectivePriceAt(
+          service.price === null ? null : Number(service.price),
+          {
+            at,
+            timezone: shop!.timezone,
+            weekdayOverrides: service.priceOverrides,
+            timeWindows: service.timeOverrides,
+          },
+        );
+        const slotDuration = effectiveDurationAt(service.durationMin, {
+          at,
+          timezone: shop!.timezone,
+          weekdayOverrides: service.durationOverrides,
+          timeWindows: service.timeOverrides,
+        });
+        if (slotPrice !== dayPrice) slot.price = slotPrice;
+        if (slotDuration !== dayDuration) slot.durationMin = slotDuration;
+        return slot;
+      })
       .sort((a, b) => a.startsAt.localeCompare(b.startsAt));
     // The day's targeted specials for this service, at THEIR price.
     for (const t of targeted.filter((t) => t.serviceId === service.id)) {
@@ -404,18 +468,8 @@ bookingPublicRouter.get("/:slug/day", rewardsLimiter, async (req, res) => {
       description: service.description,
       imageUrl: service.imageUrl,
       color: service.color,
-      durationMin: effectiveDurationForDate(
-        service.durationMin,
-        service.durationOverrides,
-        midDay,
-        shop!.timezone,
-      ),
-      price: effectivePriceForDate(
-        service.price === null ? null : Number(service.price),
-        service.priceOverrides,
-        midDay,
-        shop!.timezone,
-      ),
+      durationMin: dayDuration,
+      price: dayPrice,
       slots: out,
     };
   }
@@ -494,6 +548,7 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
       id: true,
       durationMin: true,
       durationOverrides: true,
+      timeOverrides: true,
       price: true,
       priceOverrides: true,
       name: true,
@@ -560,33 +615,35 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
   const addOns = targeted
     ? { snapshot: [], extraDurationMin: 0, extraPrice: 0 }
     : await resolveAddOns(shop.id, d.serviceId, d.addOnIds);
-  // The duration for the DATE the customer picked (weekday override in the shop
-  // tz, else base) - a Friday 20-min cut books a 20-min block. endsAt is the
+  // The duration for the SLOT the customer picked (time-of-day window, else
+  // weekday override in the shop tz, else base) - a Friday 20-min cut books a
+  // 20-min block, a 9pm in-window cut books the window's length. endsAt is the
   // duration snapshot: editing the service later never rewrites this row. A
   // targeted slot carries its own explicit length instead.
   const effectiveDuration = targeted
     ? targeted.durationMin
-    : effectiveDurationForDate(
-        service.durationMin,
-        service.durationOverrides,
-        startsAt,
-        shop.timezone,
-      );
+    : effectiveDurationAt(service.durationMin, {
+        at: startsAt,
+        timezone: shop.timezone,
+        weekdayOverrides: service.durationOverrides,
+        timeWindows: service.timeOverrides,
+      });
   const endsAt = new Date(
     startsAt.getTime() + (effectiveDuration + addOns.extraDurationMin) * 60_000,
   );
-  // Snapshot the price for the DATE the customer picked (weekday override in the
-  // shop tz, else base) - so a Sunday surcharge is locked in at exactly what the
-  // customer was shown, not the base price. Add-on prices are added on top. A
-  // targeted slot snapshots ITS price - that's the whole point of the feature.
+  // Snapshot the price for the SLOT the customer picked (same layer order as
+  // the duration above) - so a Sunday surcharge or a 9pm-window premium is
+  // locked in at exactly what the customer was shown, not the base price.
+  // Add-on prices are added on top. A targeted slot snapshots ITS price -
+  // that's the whole point of the feature.
   const basePrice = targeted
     ? Number(targeted.price)
-    : effectivePriceForDate(
-        service.price === null ? null : Number(service.price),
-        service.priceOverrides,
-        startsAt,
-        shop.timezone,
-      );
+    : effectivePriceAt(service.price === null ? null : Number(service.price), {
+        at: startsAt,
+        timezone: shop.timezone,
+        weekdayOverrides: service.priceOverrides,
+        timeWindows: service.timeOverrides,
+      });
   const effectivePrice =
     basePrice === null && addOns.extraPrice === 0
       ? null
@@ -753,6 +810,14 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
   if (!shop.requireBookingApproval) {
     void notifyAppointmentConfirmation({ shopId: shop.id, appointmentId });
   }
+  // Barber-side alert (push to the booked staffer's devices + notifyPhone SMS).
+  // Fires for BOTH an instant booking and an approval request - the wording
+  // adapts. Fire-and-forget after commit, like the confirmation above.
+  void notifyBarberBookingEvent({
+    shopId: shop.id,
+    appointmentId,
+    kind: shop.requireBookingApproval ? "requested" : "booked",
+  });
 
   // Pay-ahead: create a PaymentIntent for the customer to confirm (card/Apple
   // Pay) and return its client secret. Gated on the shop being in `ahead` mode
@@ -1114,6 +1179,12 @@ bookingPublicRouter.post(
     await cancelAppointment(appt.shopId, appt.id, "CANCELED", new Date(), {
       applyPolicyFee: true,
     });
+    // Freed-up time is actionable (rebook it) - alert the barber (push + SMS).
+    void notifyBarberBookingEvent({
+      shopId: appt.shopId,
+      appointmentId: appt.id,
+      kind: "canceled",
+    });
     res.json({ ok: true });
   },
 );
@@ -1144,6 +1215,7 @@ bookingPublicRouter.post(
           select: {
             durationMin: true,
             durationOverrides: true,
+            timeOverrides: true,
             price: true,
             priceOverrides: true,
           },
@@ -1179,25 +1251,29 @@ bookingPublicRouter.post(
 
     const now = new Date();
     const startsAt = parsed.data.startsAt;
-    // The new date may fall on a different-duration weekday - re-measure, like
-    // the reprice below. (Add-on minutes aren't carried through a reschedule
-    // today - endsAt was already service-only on this path.)
+    // The new slot may fall on a different-duration weekday OR inside a
+    // time-of-day window - re-measure, like the reprice below. (Add-on minutes
+    // aren't carried through a reschedule today - endsAt was already
+    // service-only on this path.)
     const endsAt = new Date(
       startsAt.getTime() +
-        effectiveDurationForDate(
-          appt.service.durationMin,
-          appt.service.durationOverrides,
-          startsAt,
-          appt.shop.timezone,
-        ) *
+        effectiveDurationAt(appt.service.durationMin, {
+          at: startsAt,
+          timezone: appt.shop.timezone,
+          weekdayOverrides: appt.service.durationOverrides,
+          timeWindows: appt.service.timeOverrides,
+        }) *
           60_000,
     );
-    // The new date may fall on a different-priced weekday - reprice to match.
-    const effectivePrice = effectivePriceForDate(
+    // The new slot may carry a different weekday/window price - reprice to match.
+    const effectivePrice = effectivePriceAt(
       appt.service.price === null ? null : Number(appt.service.price),
-      appt.service.priceOverrides,
-      startsAt,
-      appt.shop.timezone,
+      {
+        at: startsAt,
+        timezone: appt.shop.timezone,
+        weekdayOverrides: appt.service.priceOverrides,
+        timeWindows: appt.service.timeOverrides,
+      },
     );
     const earliest = now.getTime() + appt.shop.bookingLeadHours * 60 * 60_000;
     const latest = now.getTime() + appt.shop.bookingMaxDays * 24 * 60 * 60_000;
@@ -1288,6 +1364,12 @@ bookingPublicRouter.post(
     void notifyAppointmentConfirmation({
       shopId: appt.shopId,
       appointmentId: appt.id,
+    });
+    // The barber's day just changed under them - mirror alert (push + SMS).
+    void notifyBarberBookingEvent({
+      shopId: appt.shopId,
+      appointmentId: appt.id,
+      kind: "rescheduled",
     });
     res.json({ ok: true, startsAt: startsAt.toISOString() });
   },

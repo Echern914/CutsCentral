@@ -41,6 +41,7 @@ import {
   listTargetedSlotsAction,
   saveAvailabilityAction,
   saveBookingSettingsAction,
+  updateAddOnAction,
   updateServiceAction,
   updateServiceGroupAction,
   type TargetedSlotRow,
@@ -694,6 +695,8 @@ function ServicesTab({
   // Empty = that day uses the base price/length. Built into the API payload.
   const [dayPrices, setDayPrices] = useState<Record<number, string>>({});
   const [dayDurations, setDayDurations] = useState<Record<number, string>>({});
+  // Time-of-day windows ("after 9 PM: $60 / 20 min"); none by default.
+  const [timeRows, setTimeRows] = useState<TimeWindowRow[]>([]);
   // Empty = "offered by everyone" (resolved at submit). Starting empty avoids a
   // stale snapshot of the staff list - a barber added later is included by default.
   const [staffIds, setStaffIds] = useState<string[]>([]);
@@ -704,6 +707,12 @@ function ServicesTab({
 
   function add() {
     if (!name.trim()) return;
+    // Time windows get the same specific validation as the edit Sheet.
+    const timeErr = timeRowsError(timeRows);
+    if (timeErr) {
+      toast(timeErr, "error");
+      return;
+    }
     // No explicit selection -> offer via every barber as a LIVE intent
     // (offeredByAll), so a barber added later is auto-included. An explicit
     // selection pins the hand-picked set.
@@ -718,6 +727,7 @@ function ServicesTab({
         priceOverrides: Object.keys(overrides).length > 0 ? overrides : undefined,
         durationOverrides:
           Object.keys(durOverrides).length > 0 ? durOverrides : undefined,
+        timeOverrides: timeRows.length > 0 ? buildTimeOverrides(timeRows) : undefined,
         offeredByAll: all,
         staffIds: all ? undefined : staffIds,
       });
@@ -727,6 +737,7 @@ function ServicesTab({
         setPrice("");
         setDayPrices({});
         setDayDurations({});
+        setTimeRows([]);
         setStaffIds([]);
       } else toast("Couldn't add", "error");
     });
@@ -823,6 +834,17 @@ function ServicesTab({
         />
       </div>
 
+      {/* Time-of-day windows ("after 9 PM: $60 / 20 min") — same editor as the
+          edit Sheet so a special evening rate can be set at create time. */}
+      <div className="mt-3">
+        <VaryByTimeEditor
+          rows={timeRows}
+          onChange={setTimeRows}
+          basePrice={price}
+          baseDuration={duration}
+        />
+      </div>
+
       <button
         onClick={add}
         disabled={pending}
@@ -851,6 +873,8 @@ function ServicesTab({
                     Object.entries(s.durationOverrides ?? {})
                       .map(([wd, m]) => `${WEEKDAYS[Number(wd)]} ${m}min`)
                       .join(", ")}
+                {(s.timeOverrides ?? []).length > 0 &&
+                  " · " + (s.timeOverrides ?? []).map(timeWindowSummary).join(", ")}
               </span>
             </span>
             <div className="flex items-center gap-3">
@@ -958,6 +982,10 @@ function ServiceEditForm({
   const [hoursRows, setHoursRows] = useState<ServiceHoursRow[]>(() =>
     hoursRowsFromWindows(service.hoursWindows),
   );
+  // Time-of-day price/duration windows ("after 9 PM: $60 / 20 min").
+  const [timeRows, setTimeRows] = useState<TimeWindowRow[]>(() =>
+    timeRowsFromOverrides(service.timeOverrides),
+  );
   const [pending, start] = useTransition();
 
   function toggleStaff(id: string) {
@@ -1006,6 +1034,13 @@ function ServiceEditForm({
       toast("Service hours: each window's end must be after its start", "error");
       return;
     }
+    // Time windows validated with a SPECIFIC message (end>start, price/minutes
+    // present + valid, no overlaps) so a mistake doesn't surface as a bare 400.
+    const timeErr = timeRowsError(timeRows);
+    if (timeErr) {
+      toast(timeErr, "error");
+      return;
+    }
     // If hand-picking, at least one barber must be selected (an empty pick that
     // isn't "all" would offer the service to nobody).
     if (!offeredByAll && staffIds.length === 0) {
@@ -1024,6 +1059,8 @@ function ServiceEditForm({
         // restriction actually persists - PATCH is partial, absent = unchanged.
         priceOverrides: buildPriceOverrides(dayPrices),
         durationOverrides: buildDurationOverrides(dayDurations),
+        // Same rule for the time windows ([] clears them all).
+        timeOverrides: buildTimeOverrides(timeRows),
         // Grouped services get their hours from the group (which overrides these),
         // so omit the field entirely - PATCH is partial, absent = leave unchanged.
         ...(groupName ? {} : { hoursWindows: buildHoursWindows(hoursRows) }),
@@ -1150,6 +1187,16 @@ function ServiceEditForm({
           baseDuration={duration}
           onPrice={(wd, v) => setDayPrices((cur) => ({ ...cur, [wd]: v }))}
           onDuration={(wd, v) => setDayDurations((cur) => ({ ...cur, [wd]: v }))}
+        />
+
+        {/* Time-of-day windows: "after 9 PM this runs $60 and takes 20 min".
+            Inside a window the slot grid steps by the window's length and the
+            customer sees (and is charged) the window's price. */}
+        <VaryByTimeEditor
+          rows={timeRows}
+          onChange={setTimeRows}
+          basePrice={price}
+          baseDuration={duration}
         />
 
         {/* Per-service available hours. Unchecked day = available whenever the
@@ -1662,6 +1709,50 @@ function AddOnsManager({
     });
   }
 
+  // Inline edit (Drick: "edits for add ons" - Remove-and-retype loses the
+  // scope selection and feels destructive). One row edits at a time; the draft
+  // mirrors the add form's fields and saves via the (previously unused) PATCH.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draftName, setDraftName] = useState("");
+  const [draftDuration, setDraftDuration] = useState(15);
+  const [draftPrice, setDraftPrice] = useState("");
+  const [draftServiceIds, setDraftServiceIds] = useState<string[]>([]);
+
+  function beginEdit(a: AddOnRow) {
+    setEditingId(a.id);
+    setDraftName(a.name);
+    setDraftDuration(a.durationMin);
+    setDraftPrice(a.price !== null ? String(a.price) : "");
+    setDraftServiceIds(a.serviceIds);
+  }
+  function saveEdit() {
+    if (!editingId || !draftName.trim()) return;
+    const trimmed = draftPrice.trim();
+    const priceNum = trimmed ? Number(trimmed) : null;
+    // A non-numeric price must not silently save the add-on as free.
+    if (priceNum !== null && (!Number.isFinite(priceNum) || priceNum < 0)) {
+      toast("Extra price must be a number (or blank)", "error");
+      return;
+    }
+    if (!Number.isInteger(draftDuration) || draftDuration < 0) {
+      toast("Extra minutes must be a whole number", "error");
+      return;
+    }
+    const id = editingId;
+    start(async () => {
+      const r = await updateAddOnAction(id, {
+        name: draftName.trim(),
+        durationMin: draftDuration,
+        price: priceNum,
+        serviceIds: draftServiceIds,
+      });
+      if (r.ok) {
+        toast("Add-on updated", "success");
+        setEditingId(null);
+      } else toast("Couldn't save", "error");
+    });
+  }
+
   return (
     <Card className="p-5">
       <CardHeader
@@ -1755,26 +1846,133 @@ function AddOnsManager({
       </button>
 
       <ul className="mt-5 flex flex-col gap-2">
-        {initial.filter((a) => a.active).map((a) => (
-          <li
-            key={a.id}
-            className="flex items-center justify-between rounded-xl border border-subtle px-4 py-2.5"
-          >
-            <span className="text-sm">
-              {a.name}{" "}
-              <span className="text-xs text-muted">
-                · +{a.durationMin} min{a.price !== null ? ` · +$${a.price}` : ""} ·{" "}
-                {scopeLabel(a.serviceIds)}
-              </span>
-            </span>
-            <button
-              onClick={() => remove(a.id)}
-              className="text-xs text-danger-soft hover:underline"
+        {initial.filter((a) => a.active).map((a) =>
+          editingId === a.id ? (
+            // Inline editor: the same labeled fields as the add form, prefilled.
+            <li
+              key={a.id}
+              className="rounded-xl border border-gold/40 bg-charcoal-700/40 px-4 py-3"
             >
-              Remove
-            </button>
-          </li>
-        ))}
+              <div className="grid gap-2 sm:grid-cols-[1fr_110px_110px]">
+                <label className="block">
+                  <span className={labelCls}>Add-on name</span>
+                  <input
+                    className={cn(field, "mt-1")}
+                    value={draftName}
+                    onChange={(e) => setDraftName(e.target.value)}
+                    aria-label="Add-on name"
+                  />
+                </label>
+                <label className="block">
+                  <span className={labelCls}>Extra minutes</span>
+                  <NumberField
+                    className={cn(field, "mt-1")}
+                    min={0}
+                    integer
+                    value={draftDuration}
+                    onChange={setDraftDuration}
+                    aria-label="Extra minutes"
+                  />
+                </label>
+                <label className="block">
+                  <span className={labelCls}>Extra price ($)</span>
+                  <input
+                    className={cn(field, "mt-1")}
+                    type="number"
+                    min={0}
+                    inputMode="decimal"
+                    value={draftPrice}
+                    onChange={(e) => setDraftPrice(e.target.value)}
+                    aria-label="Extra price in dollars"
+                  />
+                </label>
+              </div>
+              <div className="mt-2">
+                <span className={labelCls}>Offer on</span>
+                <div className="mt-1.5 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setDraftServiceIds([])}
+                    aria-pressed={draftServiceIds.length === 0}
+                    className={cn(
+                      "rounded-full border px-3 py-1 text-xs transition-colors",
+                      draftServiceIds.length === 0
+                        ? "border-gold/60 bg-gold/10 text-gold"
+                        : "border-subtle text-muted hover:text-offwhite",
+                    )}
+                  >
+                    All services
+                  </button>
+                  {activeServices.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() =>
+                        setDraftServiceIds((cur) =>
+                          cur.includes(s.id)
+                            ? cur.filter((x) => x !== s.id)
+                            : [...cur, s.id],
+                        )
+                      }
+                      aria-pressed={draftServiceIds.includes(s.id)}
+                      className={cn(
+                        "rounded-full border px-3 py-1 text-xs transition-colors",
+                        draftServiceIds.includes(s.id)
+                          ? "border-gold/60 bg-gold/10 text-gold"
+                          : "border-subtle text-muted hover:text-offwhite",
+                      )}
+                    >
+                      {s.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="mt-3 flex items-center gap-3">
+                <button
+                  onClick={saveEdit}
+                  disabled={pending}
+                  className="rounded-xl bg-gold px-4 py-2 text-xs font-semibold text-charcoal-900 disabled:opacity-50"
+                >
+                  {pending ? "Saving…" : "Save changes"}
+                </button>
+                <button
+                  onClick={() => setEditingId(null)}
+                  className="text-xs text-muted hover:underline"
+                >
+                  Cancel
+                </button>
+              </div>
+            </li>
+          ) : (
+            <li
+              key={a.id}
+              className="flex items-center justify-between rounded-xl border border-subtle px-4 py-2.5"
+            >
+              <span className="text-sm">
+                {a.name}{" "}
+                <span className="text-xs text-muted">
+                  · +{a.durationMin} min{a.price !== null ? ` · +$${a.price}` : ""} ·{" "}
+                  {scopeLabel(a.serviceIds)}
+                </span>
+              </span>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => beginEdit(a)}
+                  className="text-xs text-gold hover:underline"
+                  aria-label={`Edit ${a.name}`}
+                >
+                  Edit
+                </button>
+                <button
+                  onClick={() => remove(a.id)}
+                  className="text-xs text-danger-soft hover:underline"
+                >
+                  Remove
+                </button>
+              </div>
+            </li>
+          ),
+        )}
         {initial.filter((a) => a.active).length === 0 && (
           <li className="text-sm text-muted">No add-ons yet.</li>
         )}
@@ -2821,6 +3019,196 @@ function VaryByDayEditor({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+//  "Vary by time of day" — per-service TIME windows where the price and/or the
+//  length differ (Drick: "select hours in which appointment duration varies …
+//  slots would be shorter within a specific service"). Each row is a window
+//  [from, to) in shop-local time that applies EVERY day, on top of any per-day
+//  settings above. Inside a window the slot grid steps by the window's length
+//  and the customer is shown (and charged) the window's price.
+
+/** One draft row: HH:MM bounds + string drafts for the two optional fields. */
+type TimeWindowRow = { start: string; end: string; price: string; durationMin: string };
+
+const DEFAULT_TIME_WINDOW: TimeWindowRow = {
+  start: "21:00",
+  end: "23:00",
+  price: "",
+  durationMin: "",
+};
+
+/** Seed rows from the stored windows ([] -> no rows). */
+function timeRowsFromOverrides(
+  overrides:
+    | { s: number; e: number; price: number | null; durationMin: number | null }[]
+    | undefined,
+): TimeWindowRow[] {
+  return (overrides ?? []).map((w) => ({
+    start: minToHHMM(w.s),
+    end: minToHHMM(w.e),
+    price: w.price !== null ? String(w.price) : "",
+    durationMin: w.durationMin !== null ? String(w.durationMin) : "",
+  }));
+}
+
+/**
+ * Validate the draft rows; returns an error message or null. Mirrors the API
+ * rules (end after start, price and/or minutes required per window, valid
+ * values, no overlaps) so the barber gets a specific message instead of a
+ * generic 400 "Couldn't save".
+ */
+function timeRowsError(rows: TimeWindowRow[]): string | null {
+  const spans: { s: number; e: number }[] = [];
+  for (const r of rows) {
+    const s = hhmmToMin(r.start);
+    const e = hhmmToMin(r.end);
+    if (e <= s) return "Time windows: each window's end must be after its start";
+    const price = r.price.trim();
+    const mins = r.durationMin.trim();
+    if (!price && !mins) {
+      return "Time windows: set a price and/or minutes for each window (or remove it)";
+    }
+    if (price && (!Number.isFinite(Number(price)) || Number(price) < 0)) {
+      return "Time windows: price must be a number";
+    }
+    if (mins && (!Number.isInteger(Number(mins)) || Number(mins) < 5)) {
+      return "Time windows: minutes must be a whole number of 5 or more";
+    }
+    spans.push({ s, e });
+  }
+  const sorted = [...spans].sort((a, b) => a.s - b.s);
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i]!.s < sorted[i - 1]!.e) return "Time windows can't overlap";
+  }
+  return null;
+}
+
+/** API payload from validated rows (the FULL array; [] clears every window). */
+function buildTimeOverrides(
+  rows: TimeWindowRow[],
+): { s: number; e: number; price?: number | null; durationMin?: number | null }[] {
+  return rows.map((r) => ({
+    s: hhmmToMin(r.start),
+    e: hhmmToMin(r.end),
+    price: r.price.trim() ? Number(r.price) : null,
+    durationMin: r.durationMin.trim() ? Number(r.durationMin) : null,
+  }));
+}
+
+/** Compact "9:00 PM–11:00 PM $65 / 20 min" label for the services list. */
+function timeWindowSummary(w: {
+  s: number;
+  e: number;
+  price: number | null;
+  durationMin: number | null;
+}): string {
+  const fmt = (min: number) => {
+    const h = Math.floor(min / 60) % 24;
+    const m = min % 60;
+    const ampm = h < 12 ? "AM" : "PM";
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+  };
+  const bits = [
+    w.price !== null ? `$${w.price}` : null,
+    w.durationMin !== null ? `${w.durationMin}min` : null,
+  ].filter(Boolean);
+  return `${fmt(w.s)}–${fmt(w.e)} ${bits.join(" / ")}`;
+}
+
+function VaryByTimeEditor({
+  rows,
+  onChange,
+  basePrice,
+  baseDuration,
+}: {
+  rows: TimeWindowRow[];
+  onChange: (rows: TimeWindowRow[]) => void;
+  basePrice: string;
+  baseDuration: number;
+}) {
+  const select =
+    "rounded-lg border border-subtle bg-charcoal-700 py-1.5 px-2 text-sm text-offwhite outline-none focus:border-gold/50";
+  function patch(i: number, part: Partial<TimeWindowRow>) {
+    onChange(rows.map((r, idx) => (idx === i ? { ...r, ...part } : r)));
+  }
+  return (
+    <div>
+      <span className={labelCls}>Vary by time of day? (optional — price and/or minutes)</span>
+      <p className="mt-0.5 text-[11px] text-muted">
+        e.g. after 9 PM cuts run $60 and take 20 min. Applies every day, on top
+        of any per-day settings. Leave a field blank to keep the usual{" "}
+        {basePrice.trim() ? `$${basePrice}` : "price"} / {baseDuration || "?"} min.
+      </p>
+      <div className="mt-2 flex flex-col gap-2">
+        {rows.map((r, i) => (
+          <div
+            key={i}
+            className="grid grid-cols-2 items-center gap-2 sm:grid-cols-[1fr_1fr_96px_96px_auto]"
+          >
+            <TimeSelect
+              value={r.start}
+              onChange={(v) => patch(i, { start: v })}
+              className={select}
+              aria-label={`Window ${i + 1} start time`}
+            />
+            <TimeSelect
+              value={r.end}
+              onChange={(v) => patch(i, { end: v })}
+              className={select}
+              aria-label={`Window ${i + 1} end time`}
+            />
+            <div className="relative">
+              <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-sm text-muted">
+                $
+              </span>
+              <input
+                type="number"
+                min={0}
+                inputMode="decimal"
+                placeholder={basePrice.trim() ? basePrice : "base"}
+                value={r.price}
+                onChange={(e) => patch(i, { price: e.target.value })}
+                className="w-full rounded-lg border border-subtle bg-charcoal-700 py-1.5 pl-6 pr-2 text-sm text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50"
+                aria-label={`Window ${i + 1} price in dollars`}
+              />
+            </div>
+            <div className="relative">
+              <input
+                type="number"
+                min={5}
+                inputMode="numeric"
+                placeholder={`${baseDuration || "?"}`}
+                value={r.durationMin}
+                onChange={(e) => patch(i, { durationMin: e.target.value })}
+                className="w-full rounded-lg border border-subtle bg-charcoal-700 py-1.5 pl-2 pr-10 text-sm text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50"
+                aria-label={`Window ${i + 1} minutes`}
+              />
+              <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted">
+                min
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => onChange(rows.filter((_, idx) => idx !== i))}
+              className="justify-self-start text-xs text-danger-soft hover:underline"
+              aria-label={`Remove time window ${i + 1}`}
+            >
+              Remove
+            </button>
+          </div>
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={() => onChange([...rows, { ...DEFAULT_TIME_WINDOW }])}
+        className="mt-2 rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:border-gold/50 hover:text-gold"
+      >
+        + Add time window
+      </button>
     </div>
   );
 }
