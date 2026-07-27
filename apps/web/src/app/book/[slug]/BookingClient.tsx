@@ -278,11 +278,31 @@ export function BookingClient({ data }: { data: BookShopData }) {
   // picks a DATE first, then sees only the bundles (service groups) with real
   // openings that day and the concrete times inside each — bundles with
   // nothing open that day never appear. Replaces the service-first steps.
-  const dayFirst = Boolean(data.shop.groupsFirst);
+  // Calendar-first is now the layout for EVERY shop: the customer sees the
+  // calendar up front, picks a day, then cross-filters the day's openings by
+  // time and/or service (see timeFilter below). The old service-first wizard
+  // (guarded by !dayFirst) is retained but unreachable.
+  const dayFirst = true;
   const [dayDate, setDayDate] = useState<string | null>(null); // YYYY-MM-DD (shop tz)
   const [dayData, setDayData] = useState<DayBundlesResult | null>(null);
   const [dayLoading, setDayLoading] = useState(false);
   const [dayMonth, setDayMonth] = useState<string | null>(null); // "YYYY-MM"
+  // Cross-filter within a chosen day. `timeFilter` is a slot instant (ISO
+  // startsAt) the customer tapped in the time rail: when set, only services
+  // with an opening at exactly that instant show, and each service's chips
+  // narrow to that time. null = every open time. Cleared whenever the day
+  // changes (a time on Monday means nothing on Tuesday).
+  const [timeFilter, setTimeFilter] = useState<string | null>(null);
+  // Which group cards are expanded in the day view. Groups start open so the
+  // customer sees services without a tap; tapping a header collapses one.
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const toggleDayGroup = (id: string) =>
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   // Days the calendar offers: within the booking window, on a weekday anyone
   // works at all (cheap heuristic — the REAL openings are fetched on tap, and
@@ -327,6 +347,8 @@ export function BookingClient({ data }: { data: BookShopData }) {
     setDayDate(day);
     setDayMonth(monthKey(day));
     setServiceId(null);
+    setTimeFilter(null); // a time on the old day is meaningless on the new one
+    setCollapsedGroups(new Set()); // reopen all groups for the new day
     setAddOnIds([]);
     clearSlotPick();
     setDayLoading(true);
@@ -347,9 +369,50 @@ export function BookingClient({ data }: { data: BookShopData }) {
     setPickedStaffId(s.staffIds[0] ?? null);
   }
 
-  /** One service's row in the day view: name + that-day price + time chips. */
+  // Cross-filter for the day view: the customer can narrow by TIME (the time
+  // rail) and/or by SERVICE (tapping a service card), and each narrows the
+  // other. `dayTimes` is the rail: every distinct open instant that day, or
+  // just the picked service's instants when one is chosen. A service "fits" a
+  // chosen time iff its own per-service slot list contains that instant — the
+  // slot engine already sized each opening to that service's duration, so a
+  // service only appears at 3:00 when 3:00 is genuinely bookable for it.
+  const dayAllServices = useMemo<DayService[]>(() => {
+    if (!dayData) return [];
+    return [...dayData.bundles.flatMap((b) => b.services), ...dayData.ungrouped];
+  }, [dayData]);
+
+  const dayTimes = useMemo(() => {
+    const pool = serviceId
+      ? dayAllServices.filter((s) => s.id === serviceId)
+      : dayAllServices;
+    const set = new Set<string>();
+    for (const svc of pool) for (const s of svc.slots) set.add(s.startsAt);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [dayAllServices, serviceId]);
+
+  // The day's bundles/ungrouped, restricted to services that have an opening at
+  // the chosen time (when a time is picked). Services with nothing at that time
+  // drop out; the rest keep their card. null time = unfiltered.
+  const visibleDay = useMemo(() => {
+    if (!dayData) return null;
+    const fits = (svc: DayService) =>
+      timeFilter === null || svc.slots.some((s) => s.startsAt === timeFilter);
+    const bundles = dayData.bundles
+      .map((b) => ({ ...b, services: b.services.filter(fits) }))
+      .filter((b) => b.services.length > 0);
+    const ungrouped = dayData.ungrouped.filter(fits);
+    return { bundles, ungrouped };
+  }, [dayData, timeFilter]);
+
+  /** One service's row in the day view: name + that-day price + time chips.
+      When a time is active in the rail, only that time's chip(s) show, so the
+      card reads as "this service, at your chosen time". */
   function dayServiceRow(svc: DayService) {
     const stripe = serviceColorHex(svc.color);
+    const chips =
+      timeFilter === null
+        ? svc.slots
+        : svc.slots.filter((s) => s.startsAt === timeFilter);
     return (
       <div
         key={svc.id}
@@ -368,7 +431,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
           </span>
           <span className="mt-0.5 block text-xs text-muted">{svc.durationMin} min</span>
           <div className="mt-2.5 flex flex-wrap gap-2">
-            {svc.slots.map((s) => {
+            {chips.map((s) => {
               // Compound key incl. the targeted id (same as the service-first
               // grid): a special and a normal slot can share the same instant
               // on different barbers, and only ONE of them may light up - they
@@ -954,38 +1017,132 @@ export function BookingClient({ data }: { data: BookShopData }) {
         </Section>
       )}
       {dayFirst && dayDate && (
-        <Section title="2 · Pick a time" focusOnMount={!demoTour}>
+        <Section title="2 · Pick a time & service" focusOnMount={!demoTour}>
           {dayLoading && (
             <p className="text-sm text-muted">Checking the day&apos;s openings…</p>
           )}
-          {!dayLoading && dayData && (
+          {!dayLoading && dayData && visibleDay && (
             <div className="flex flex-col gap-5">
-              {dayData.bundles.map((b) => (
-                <div key={b.id}>
+              {/* Time rail: every open instant that day (or just the chosen
+                  service's times when one is picked). Tapping a time filters
+                  the services below to those bookable at it; "Any time" clears
+                  it. Cross-filters with the service cards — either narrows the
+                  other. */}
+              {dayTimes.length > 0 && (
+                <div>
                   <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-                    {b.name}
+                    Time
                   </h3>
-                  <div className="flex flex-col gap-3">
-                    {b.services.map((svc) => dayServiceRow(svc))}
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setTimeFilter(null)}
+                      aria-pressed={timeFilter === null}
+                      className="rounded-lg border px-3 py-1.5 text-xs transition-colors"
+                      style={{
+                        borderColor: timeFilter === null ? accent : "rgba(255,255,255,0.15)",
+                        backgroundColor: timeFilter === null ? `${accent}14` : "transparent",
+                        color: timeFilter === null ? accent : undefined,
+                      }}
+                    >
+                      Any time
+                    </button>
+                    {dayTimes.map((t) => {
+                      const on = timeFilter === t;
+                      return (
+                        <button
+                          key={t}
+                          type="button"
+                          onClick={() => setTimeFilter(on ? null : t)}
+                          aria-pressed={on}
+                          className="rounded-lg border px-3 py-1.5 text-xs transition-colors"
+                          style={{
+                            borderColor: on ? accent : "rgba(255,255,255,0.15)",
+                            backgroundColor: on ? `${accent}14` : "transparent",
+                            color: on ? accent : undefined,
+                          }}
+                        >
+                          {timeFmt.format(new Date(t))}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
-              ))}
-              {dayData.ungrouped.length > 0 && (
+              )}
+
+              {/* Services, grouped into the barber's collapsible group cards.
+                  Filtered to those bookable at the chosen time (when set). */}
+              {visibleDay.bundles.map((b) => {
+                const open = !collapsedGroups.has(b.id);
+                return (
+                  <div
+                    key={b.id}
+                    className="overflow-hidden rounded-xl border border-white/12"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => toggleDayGroup(b.id)}
+                      aria-expanded={open}
+                      className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-white/[0.03]"
+                    >
+                      <span className="flex items-baseline gap-2">
+                        <span className="text-sm font-semibold">{b.name}</span>
+                        <span className="text-xs text-muted">
+                          {b.services.length}{" "}
+                          {b.services.length === 1 ? "service" : "services"}
+                        </span>
+                      </span>
+                      <span
+                        aria-hidden
+                        className="shrink-0 text-muted transition-transform"
+                        style={{ transform: open ? "rotate(180deg)" : "none" }}
+                      >
+                        ▾
+                      </span>
+                    </button>
+                    {open && (
+                      <div className="flex flex-col gap-3 border-t border-white/8 p-3">
+                        {b.services.map((svc) => dayServiceRow(svc))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {visibleDay.ungrouped.length > 0 && (
                 <div>
-                  {dayData.bundles.length > 0 && (
+                  {visibleDay.bundles.length > 0 && (
                     <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
                       More services
                     </h3>
                   )}
                   <div className="flex flex-col gap-3">
-                    {dayData.ungrouped.map((svc) => dayServiceRow(svc))}
+                    {visibleDay.ungrouped.map((svc) => dayServiceRow(svc))}
                   </div>
                 </div>
               )}
-              {dayData.bundles.length === 0 && dayData.ungrouped.length === 0 && (
-                <p className="text-sm text-muted">
-                  Nothing open this day — try another date.
-                </p>
+
+              {/* Empty states: nothing open all day vs. nothing at the chosen
+                  time (which the customer can clear). */}
+              {visibleDay.bundles.length === 0 && visibleDay.ungrouped.length === 0 && (
+                timeFilter !== null ? (
+                  <div className="flex flex-col gap-2">
+                    <p className="text-sm text-muted">
+                      Nothing open at {timeFmt.format(new Date(timeFilter))}.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setTimeFilter(null)}
+                      className="self-start text-xs font-medium transition-colors"
+                      style={{ color: accent }}
+                    >
+                      ← See all times
+                    </button>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted">
+                    Nothing open this day — try another date.
+                  </p>
+                )
               )}
             </div>
           )}
