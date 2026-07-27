@@ -8,7 +8,7 @@ import { randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
 import { isSlotBookable } from "./slots.js";
 import { lockStaffAndAssertSlotFree } from "./bookingWrite.js";
-import { effectiveDurationForDate, effectivePriceForDate } from "./pricing.js";
+import { effectiveDurationAt, effectivePriceAt } from "./pricing.js";
 
 /**
  * Recurring-appointment series generation.
@@ -113,9 +113,11 @@ export interface MaterializeInput {
   phone: string | null;
   email: string | null;
   // Service facts for end/price computation. Duration + price both resolve
-  // per-occurrence by the occurrence's own shop-local weekday.
+  // per-occurrence by the occurrence's own shop-local weekday and any
+  // time-of-day window its start minute falls in.
   durationMin: number;
   durationOverrides: unknown;
+  timeOverrides: unknown;
   basePrice: number | null;
   priceOverrides: unknown;
   // Shop facts.
@@ -172,16 +174,17 @@ export async function materializeSeries(
 
   for (const occ of occurrences) {
     const startsAt = occ.startsAt;
-    // Each occurrence measures by ITS OWN weekday's duration (a weekly-on-
-    // Friday series with a Friday override books 20-min blocks throughout).
+    // Each occurrence measures by ITS OWN slot's duration (a weekly-on-Friday
+    // series with a Friday override books 20-min blocks throughout; a 9pm
+    // series inside an evening window books the window's length).
     const endsAt = new Date(
       startsAt.getTime() +
-        effectiveDurationForDate(
-          input.durationMin,
-          input.durationOverrides,
-          startsAt,
-          input.timezone,
-        ) *
+        effectiveDurationAt(input.durationMin, {
+          at: startsAt,
+          timezone: input.timezone,
+          weekdayOverrides: input.durationOverrides,
+          timeWindows: input.timeOverrides,
+        }) *
           MS_PER_MIN,
     );
 
@@ -207,12 +210,12 @@ export async function materializeSeries(
       }
     }
 
-    const price = effectivePriceForDate(
-      input.basePrice,
-      input.priceOverrides,
-      startsAt,
-      input.timezone,
-    );
+    const price = effectivePriceAt(input.basePrice, {
+      at: startsAt,
+      timezone: input.timezone,
+      weekdayOverrides: input.priceOverrides,
+      timeWindows: input.timeOverrides,
+    });
 
     try {
       const appt = await prisma.$transaction(async (tx) => {

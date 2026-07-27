@@ -1023,6 +1023,17 @@ model Service {
   // deliberate overrides and are NOT restricted. See engines/slots.ts
   // (computeOpenSlots) and engines/pricing.ts (parseServiceHours).
   hoursWindows   Json     @default("{}")
+  // Time-of-day price/duration windows: a JSON ARRAY of {s,e,price?,durationMin?}
+  // where s/e are minutes from shop-local midnight (e exclusive), applied EVERY
+  // day on top of the weekday overrides above. A slot whose START minute falls
+  // inside a window uses that window's price and/or durationMin; a null/absent
+  // field inherits the weekday-or-base value. Non-overlapping (validated at
+  // write). e.g. [{"s":1260,"e":1440,"price":65,"durationMin":20}] = "after 9pm
+  // this runs $65 and takes 20 min". Drives the slot grid step inside the
+  // window, the per-slot price the customer is shown, and the booking snapshot.
+  // [] (every existing service) = no windows, byte-for-byte prior behavior.
+  // See engines/pricing.ts (parseTimeWindows / effective*At).
+  timeOverrides  Json     @default("[]")
   // Calendar color-coding: one of the SERVICE_COLORS keys (packages/config), or
   // null for no color. Stored as the KEY (not hex) so the palette can be
   // re-tuned without a migration. Purely cosmetic - drives the accent stripe on

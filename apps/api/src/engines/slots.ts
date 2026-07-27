@@ -4,7 +4,7 @@ import {
   zonedDateParts,
   zonedWallTimeToUtc,
 } from "@chairback/config";
-import { effectiveDurationForDate, parseServiceHours } from "./pricing.js";
+import { effectiveDurationAt, parseServiceHours } from "./pricing.js";
 
 /**
  * Open-slot computation for the native booking engine.
@@ -189,6 +189,7 @@ export async function computeOpenSlots(
         id: true,
         durationMin: true,
         durationOverrides: true,
+        timeOverrides: true,
         hoursWindows: true,
         serviceGroupId: true,
       },
@@ -536,20 +537,22 @@ export async function computeOpenSlots(
   // Slice each free window into SERVICE-duration steps (the grid the picker
   // shows); require the full extended span + buffer to also fit after the slot
   // so add-ons and turnover are honored. The step/span come from the EFFECTIVE
-  // duration for each candidate slot's own start instant (shop-local weekday) -
-  // Friday's 20-min override makes Friday windows step and span by 20 while
-  // Thursday still steps by 30. With no overrides and no add-ons this is
-  // identical to the original constant step/tail math.
+  // duration for each candidate slot's own start instant - the shop-local
+  // weekday layer ("Friday cuts are 20 min") AND the time-of-day windows
+  // ("after 9pm cuts are 20 min"), so the grid steps by 30 through the evening
+  // then by 20 inside the window, resolved per candidate. With no overrides,
+  // no windows, and no add-ons this is identical to the original constant
+  // step/tail math.
   const slots: Slot[] = [];
   for (const w of free) {
     let t = w.start;
     for (;;) {
-      const effDur = effectiveDurationForDate(
-        baseDuration,
-        service.durationOverrides,
-        new Date(t),
-        shop.timezone,
-      );
+      const effDur = effectiveDurationAt(baseDuration, {
+        at: new Date(t),
+        timezone: shop.timezone,
+        weekdayOverrides: service.durationOverrides,
+        timeWindows: service.timeOverrides,
+      });
       if (effDur <= 0) break; // defensive: a bad override must not spin forever
       const spanMs = (effDur + extraMin) * MS_PER_MIN;
       const tailMs = spanMs + buffer * MS_PER_MIN;
