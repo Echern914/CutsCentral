@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition, type ReactNode } from "react";
+import { useEffect, useState, useTransition, type ReactNode } from "react";
 import { SERVICE_COLORS, SERVICE_COLOR_KEYS } from "@chairback/config/constants";
 import { zonedWallTimeToUtc } from "@chairback/config/time";
 import { Card, CardHeader } from "@/components/ui/Card";
@@ -50,7 +50,7 @@ import {
 const field =
   "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 const labelCls = "text-xs text-muted";
-const tabs = ["Settings", "Staff", "Services", "Hours", "Appointments"] as const;
+const tabs = ["Settings", "Staff", "Services", "Appointments"] as const;
 type Tab = (typeof tabs)[number];
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -133,19 +133,8 @@ export function BookingManager({
   const bookUrl = `${appBase}/book/${shop.slug ?? "your-shop"}`;
   const needsSetup = initialStaff.length === 0 || initialServices.length === 0;
 
-  // The Hours tab saves via its own "Save hours" button, so leaving that tab
-  // with unsaved edits would silently lose them. HoursTab keeps this ref in sync
-  // with its dirty state; the tab switcher below confirms before abandoning it.
-  const hoursDirtyRef = useRef(false);
   function switchTab(next: Tab) {
     if (next === tab) return;
-    if (
-      tab === "Hours" &&
-      hoursDirtyRef.current &&
-      !window.confirm("You have unsaved hours. Leave this tab and lose them?")
-    ) {
-      return;
-    }
     setTab(next);
   }
 
@@ -241,9 +230,6 @@ export function BookingManager({
             toast={toast}
           />
         </div>
-      )}
-      {tab === "Hours" && (
-        <HoursTab staff={initialStaff} toast={toast} dirtyRef={hoursDirtyRef} />
       )}
       {tab === "Appointments" && (
         <div data-tour="agenda">
@@ -610,6 +596,8 @@ function SettingsTab({
 function StaffTab({ initial, toast }: { initial: StaffRow[]; toast: Toast }) {
   const [name, setName] = useState("");
   const [pending, start] = useTransition();
+  // The staff member whose weekly-hours Sheet is open (null = closed).
+  const [hoursFor, setHoursFor] = useState<StaffRow | null>(null);
 
   function add() {
     if (!name.trim()) return;
@@ -654,18 +642,35 @@ function StaffTab({ initial, toast }: { initial: StaffRow[]; toast: Toast }) {
             className="flex items-center justify-between rounded-xl border border-subtle px-4 py-2.5"
           >
             <span className="text-sm">{s.name}</span>
-            <button
-              onClick={() => remove(s.id)}
-              className="text-xs text-danger-soft hover:underline"
-            >
-              Remove
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setHoursFor(s)}
+                className="rounded-full border border-subtle px-3 py-1 text-xs text-muted hover:text-offwhite"
+              >
+                Hours
+              </button>
+              <button
+                onClick={() => remove(s.id)}
+                className="text-xs text-danger-soft hover:underline"
+              >
+                Remove
+              </button>
+            </div>
           </li>
         ))}
         {initial.filter((s) => s.active).length === 0 && (
           <li className="text-sm text-muted">No staff yet.</li>
         )}
       </ul>
+      {hoursFor && (
+        <StaffHoursSheet
+          key={hoursFor.id}
+          staffId={hoursFor.id}
+          staffName={hoursFor.name}
+          toast={toast}
+          onClose={() => setHoursFor(null)}
+        />
+      )}
     </Card>
   );
 }
@@ -2150,8 +2155,6 @@ function ServiceGroupItem({
   );
 }
 
-//  Hours (weekly availability per staff)
-
 // A recurring weekly break within a weekday (HH:MM strings for the pickers).
 type HourBreak = { start: string; end: string; reason: string };
 type HourRow = { on: boolean; start: string; end: string; breaks: HourBreak[] };
@@ -2159,104 +2162,34 @@ type HourRow = { on: boolean; start: string; end: string; breaks: HourBreak[] };
 const timeSelectCls =
   "rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-sm text-offwhite disabled:opacity-40";
 
-function HoursTab({
-  staff,
+// Weekly-hours editor for ONE staff member, shown in a Sheet from the Staff tab.
+// Hours persist only on "Save hours", so an unsaved close would silently lose
+// edits — the same "I filled it in, left, and it was gone" trap the old Hours
+// tab guarded. We diff against the loaded/saved snapshot and confirm on close.
+function StaffHoursSheet({
+  staffId,
+  staffName,
   toast,
-  dirtyRef,
+  onClose,
 }: {
-  staff: StaffRow[];
+  staffId: string;
+  staffName: string;
   toast: Toast;
-  // Mirrors this tab's unsaved state up to the parent so the dashboard-tab
-  // switcher can warn before unmounting the editor.
-  dirtyRef: React.MutableRefObject<boolean>;
+  onClose: () => void;
 }) {
-  const activeStaff = staff.filter((s) => s.active);
-  const [selected, setSelected] = useState<string>(activeStaff[0]?.id ?? "");
-  // Per-weekday on/off + start/end + recurring breaks. Loaded when a staff is picked.
   const [rows, setRows] = useState<HourRow[]>(() =>
     WEEKDAYS.map(() => ({ on: false, start: "09:00", end: "17:00", breaks: [] })),
   );
   const [loaded, setLoaded] = useState(false);
   const [pending, start] = useTransition();
-  // The last SAVED/LOADED snapshot of `rows`, JSON-encoded. `dirty` = the barber
-  // has edits that aren't in the DB yet. This is the whole point of the guard:
-  // hours only persist on "Save hours", so switching staff (which reloads) or
-  // leaving the page would otherwise silently discard unsaved edits - the exact
-  // "I filled it in, left, and it was gone" report.
+  // JSON snapshot of the last loaded/saved state; `dirty` = unsaved edits exist.
   const [savedSnapshot, setSavedSnapshot] = useState<string>("");
   const dirty = loaded && JSON.stringify(rows) !== savedSnapshot;
 
-  // Keep the parent's dirty mirror current, and clear it when this tab unmounts
-  // (so a confirmed "leave and lose them" doesn't leave a stale true behind).
+  // Load this staff member's hours on mount (the Sheet only opens for one).
   useEffect(() => {
-    dirtyRef.current = dirty;
-    return () => {
-      dirtyRef.current = false;
-    };
-  }, [dirty, dirtyRef]);
-
-  // Warn the browser before an actual page unload/close/refresh while dirty
-  // (the native "Leave site?" prompt). In-app tab switches are guarded
-  // separately in load()/the parent - this catches hard navigations.
-  useEffect(() => {
-    if (!dirty) return;
-    const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-      e.returnValue = ""; // required for the prompt to show in Chrome
-    };
-    window.addEventListener("beforeunload", onBeforeUnload);
-    return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [dirty]);
-
-  // Auto-load the first staff member on mount so the editor is never stranded on
-  // "Pick a staff member" (and so we always have a saved baseline to diff).
-  useEffect(() => {
-    if (selected && !loaded) load(selected);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  function patchRow(i: number, patch: Partial<HourRow>) {
-    setRows((cur) => cur.map((c, j) => (j === i ? { ...c, ...patch } : c)));
-  }
-  function addBreak(i: number) {
-    setRows((cur) =>
-      cur.map((c, j) =>
-        j === i
-          ? { ...c, breaks: [...c.breaks, { start: "12:00", end: "13:00", reason: "" }] }
-          : c,
-      ),
-    );
-  }
-  function patchBreak(i: number, bi: number, patch: Partial<HourBreak>) {
-    setRows((cur) =>
-      cur.map((c, j) =>
-        j === i
-          ? { ...c, breaks: c.breaks.map((b, k) => (k === bi ? { ...b, ...patch } : b)) }
-          : c,
-      ),
-    );
-  }
-  function removeBreak(i: number, bi: number) {
-    setRows((cur) =>
-      cur.map((c, j) => (j === i ? { ...c, breaks: c.breaks.filter((_, k) => k !== bi) } : c)),
-    );
-  }
-
-  // Switch which staff member is being edited. Guard against silently throwing
-  // away unsaved edits to the CURRENT staff: if dirty, make the barber confirm.
-  function selectStaff(id: string) {
-    if (id === selected) return;
-    if (dirty && !window.confirm("You have unsaved hours. Switch staff and lose them?")) {
-      return;
-    }
-    load(id);
-  }
-
-  function load(id: string) {
-    setSelected(id);
-    setLoaded(false);
     start(async () => {
-      const r = await getAvailabilityAction(id);
+      const r = await getAvailabilityAction(staffId);
       const next: HourRow[] = WEEKDAYS.map(() => ({
         on: false,
         start: "09:00",
@@ -2289,6 +2222,53 @@ function HoursTab({
       setSavedSnapshot(JSON.stringify(next)); // this loaded state IS the baseline
       setLoaded(true);
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [staffId]);
+
+  // Warn on a hard page unload/close/refresh while dirty (the in-app close is
+  // guarded by attemptClose below).
+  useEffect(() => {
+    if (!dirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = ""; // required for the prompt to show in Chrome
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [dirty]);
+
+  function attemptClose() {
+    if (dirty && !window.confirm("You have unsaved hours. Close and lose them?")) {
+      return;
+    }
+    onClose();
+  }
+
+  function patchRow(i: number, patch: Partial<HourRow>) {
+    setRows((cur) => cur.map((c, j) => (j === i ? { ...c, ...patch } : c)));
+  }
+  function addBreak(i: number) {
+    setRows((cur) =>
+      cur.map((c, j) =>
+        j === i
+          ? { ...c, breaks: [...c.breaks, { start: "12:00", end: "13:00", reason: "" }] }
+          : c,
+      ),
+    );
+  }
+  function patchBreak(i: number, bi: number, patch: Partial<HourBreak>) {
+    setRows((cur) =>
+      cur.map((c, j) =>
+        j === i
+          ? { ...c, breaks: c.breaks.map((b, k) => (k === bi ? { ...b, ...patch } : b)) }
+          : c,
+      ),
+    );
+  }
+  function removeBreak(i: number, bi: number) {
+    setRows((cur) =>
+      cur.map((c, j) => (j === i ? { ...c, breaks: c.breaks.filter((_, k) => k !== bi) } : c)),
+    );
   }
 
   function save() {
@@ -2324,59 +2304,30 @@ function HoursTab({
       toast("Each break's end time must be after its start time", "error");
       return;
     }
-    // Snapshot exactly what's being persisted so a successful save clears the
-    // dirty flag (and the unload guard) for this state.
+    // Snapshot exactly what's being persisted so a successful save clears dirty.
     const snapshotAtSave = JSON.stringify(rows);
     start(async () => {
-      const r = await saveAvailabilityAction(selected, rules, recurringBlocks);
+      const r = await saveAvailabilityAction(staffId, rules, recurringBlocks);
       if (r.ok) {
         setSavedSnapshot(snapshotAtSave);
         toast("Hours saved", "success");
       } else {
-        // Do NOT clear dirty on failure - the edits are still unsaved, and the
-        // guard must keep protecting them.
+        // Do NOT clear dirty on failure - the edits are still unsaved.
         toast("Couldn't save — your changes are still here. Try again.", "error");
       }
     });
   }
 
-  if (activeStaff.length === 0) {
-    return (
-      <Card className="p-5 text-sm text-muted">Add a staff member first to set hours.</Card>
-    );
-  }
-
   return (
-    <Card className="p-5">
-      <CardHeader
-        title="Weekly hours"
-        subtitle="When each staff member is available to book — and any recurring breaks."
-      />
-      <div className="mt-3 flex flex-wrap gap-2">
-        {activeStaff.map((s) => (
-          <button
-            key={s.id}
-            onClick={() => selectStaff(s.id)}
-            className={cn(
-              "rounded-full border px-3 py-1 text-xs transition-colors",
-              selected === s.id
-                ? "border-gold/60 bg-gold/10 text-gold"
-                : "border-subtle text-muted",
-            )}
-          >
-            {s.name}
-            {/* An unsaved marker on the current staff makes it obvious that
-                switching away needs a Save first. */}
-            {selected === s.id && dirty && <span className="ml-1 text-gold">•</span>}
-          </button>
-        ))}
-      </div>
-
+    <Sheet title={`${staffName} — weekly hours`} onClose={attemptClose}>
+      <p className="mb-3 text-xs text-muted">
+        When this staff member is available to book — and any recurring breaks.
+      </p>
       {!loaded ? (
-        <p className="mt-4 text-sm text-muted">Loading hours…</p>
+        <p className="text-sm text-muted">Loading hours…</p>
       ) : (
         <>
-          <div className="mt-4 flex flex-col gap-3">
+          <div className="flex flex-col gap-3">
             {rows.map((r, i) => (
               <div key={i} className="rounded-lg border border-subtle/60 p-2.5">
                 <div className="flex items-center gap-3">
@@ -2466,13 +2417,11 @@ function HoursTab({
             >
               {pending ? "Saving…" : dirty ? "Save hours" : "Saved ✓"}
             </button>
-            {dirty && !pending && (
-              <span className="text-xs text-gold">Unsaved changes</span>
-            )}
+            {dirty && !pending && <span className="text-xs text-gold">Unsaved changes</span>}
           </div>
         </>
       )}
-    </Card>
+    </Sheet>
   );
 }
 
