@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { forShop, prisma, runAsOwner, runWithShop } from "@chairback/db"; // runWithShop: batch a page's tenant reads into one connection
+import { forShop, prisma, runAsOwner, runWithShop, Prisma } from "@chairback/db"; // runWithShop: batch a page's tenant reads into one connection
 import {
   NUDGE,
   apiEnv,
@@ -480,6 +480,31 @@ const SORTS = {
   name: { firstName: "asc" },
 } as const;
 
+/**
+ * The filter/tier predicates as a raw-SQL fragment, so the trigram search query
+ * applies EXACTLY the same filters as the Prisma `where` on the non-search path.
+ * Every branch mirrors a `where.*` assignment in GET /clients below - if one
+ * changes, change both. Values are parameterized (Prisma.sql ${}) so there's no
+ * injection surface; `filter`/`tier` are also validated by the caller. Returns
+ * Prisma.empty for the "all" default so it composes cleanly into the WHERE.
+ */
+function buildClientFilterSql(filter: string, tier: string): Prisma.Sql {
+  const parts: Prisma.Sql[] = [];
+  // archived: only the explicit "archived" filter surfaces archived rows.
+  parts.push(
+    filter === "archived"
+      ? Prisma.sql`AND "archivedAt" IS NOT NULL`
+      : Prisma.sql`AND "archivedAt" IS NULL`,
+  );
+  if (filter === "optedOut") parts.push(Prisma.sql`AND "optedOut" = true`);
+  if (filter === "active") parts.push(Prisma.sql`AND "optedOut" = false`);
+  if (filter === "needsConsent") parts.push(Prisma.sql`AND "smsConsentAt" IS NULL`);
+  if ((LOYALTY_TIER_KEYS as readonly string[]).includes(tier)) {
+    parts.push(Prisma.sql`AND "loyaltyTier" = ${tier}`);
+  }
+  return parts.length ? Prisma.join(parts, " ") : Prisma.empty;
+}
+
 dashboardRouter.get("/clients", async (req, res) => {
   const shop = req.shop!;
   const q = String(req.query.q ?? "").trim();
@@ -489,14 +514,6 @@ dashboardRouter.get("/clients", async (req, res) => {
   const pageSize = 50;
 
   const where: Record<string, unknown> = {};
-  if (q) {
-    where.OR = [
-      { firstName: { contains: q, mode: "insensitive" } },
-      { lastName: { contains: q, mode: "insensitive" } },
-      { phone: { contains: q } },
-      { email: { contains: q, mode: "insensitive" } },
-    ];
-  }
   if (filter === "optedOut") where.optedOut = true;
   if (filter === "active") where.optedOut = false;
   // Clients ChairBack can't text yet because no consent is on file - the set a
@@ -514,15 +531,74 @@ dashboardRouter.get("/clients", async (req, res) => {
   }
 
   const db = forShop(shop.id);
-  const [total, clients] = await Promise.all([
-    db.client.count({ where }),
-    db.client.findMany({
-      where,
-      orderBy: SORTS[sortKey] ?? SORTS.recent,
-      skip: (page - 1) * pageSize,
-      take: pageSize,
-    }),
-  ]);
+
+  // SEARCH (q present): rank by TRIGRAM relevance, not just substring. The old
+  // path was `firstName ILIKE %q% OR lastName ILIKE %q% OR ...` per column, so
+  // "Marcus Thompson" (first + last together) matched nothing, "Jon" never found
+  // "John", and hits came back in list-sort order. Now one raw query scores each
+  // client against a CONCATENATED full name (+ phone/email) with pg_trgm
+  // similarity, keeps any exact substring match as a floor (so 2-char and
+  // numeric queries still behave), and returns IDs newest-relevance-first. The
+  // rest of the handler (page fetch, balances, shaping) is unchanged - it just
+  // fetches THESE ids in THIS order instead of a Prisma orderBy.
+  //
+  // Runs inside runWithShop so RLS applies, and still carries shopId in the WHERE
+  // explicitly (defense in depth, same as the rest of the app). unaccent() folds
+  // accents ("Jose" ~ "José"); the % operator + similarity() and the %-wrapped
+  // ILIKE are all backed by the GIN trigram indexes from the migration.
+  let searchIds: string[] | null = null;
+  if (q) {
+    const like = `%${q}%`;
+    const filterSql = buildClientFilterSql(filter, tier);
+    const ranked = await runWithShop(shop.id, (tx) =>
+      tx.$queryRaw<{ id: string }[]>`
+        SELECT id FROM "Client"
+        WHERE "shopId" = ${shop.id}
+          ${filterSql}
+          AND (
+            unaccent(lower(coalesce("firstName", '') || ' ' || coalesce("lastName", '')))
+              % unaccent(lower(${q}))
+            OR unaccent(lower(coalesce("firstName", '') || ' ' || coalesce("lastName", '')))
+              ILIKE unaccent(lower(${like}))
+            OR coalesce("phone", '') ILIKE ${like}
+            OR lower(coalesce("email", '')) ILIKE lower(${like})
+          )
+        ORDER BY
+          -- exact substring first, then trigram similarity, then most-recent.
+          (unaccent(lower(coalesce("firstName", '') || ' ' || coalesce("lastName", '')))
+             ILIKE unaccent(lower(${like}))) DESC,
+          similarity(
+            unaccent(lower(coalesce("firstName", '') || ' ' || coalesce("lastName", ''))),
+            unaccent(lower(${q}))
+          ) DESC,
+          "lastVisitAt" DESC NULLS LAST
+        LIMIT 500`,
+    );
+    searchIds = ranked.map((r) => r.id);
+  }
+
+  // When searching, page over the ranked id list in-memory (already capped at
+  // 500) and preserve its order; otherwise use the normal WHERE + sort.
+  let total: number;
+  let clients: Awaited<ReturnType<typeof db.client.findMany>>;
+  if (searchIds !== null) {
+    total = searchIds.length;
+    const pageIdsInOrder = searchIds.slice((page - 1) * pageSize, page * pageSize);
+    const rows = await db.client.findMany({ where: { id: { in: pageIdsInOrder } } });
+    // findMany doesn't honor the `in` order, so re-sort to the ranked order.
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    clients = pageIdsInOrder.map((id) => byId.get(id)).filter(Boolean) as typeof rows;
+  } else {
+    [total, clients] = await Promise.all([
+      db.client.count({ where }),
+      db.client.findMany({
+        where,
+        orderBy: SORTS[sortKey] ?? SORTS.recent,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+    ]);
+  }
 
   // Balances for THIS PAGE's clients only. Aggregating the whole shop ledger for
   // a 50-row page scanned tens of thousands of rows on a long-lived shop.

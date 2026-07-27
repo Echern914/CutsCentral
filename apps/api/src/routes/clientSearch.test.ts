@@ -36,6 +36,10 @@ beforeAll(async () => {
       { shopId: s!.id, firstName: "Marcus", lastName: "Thompson", phone: "+15551234567", acuityClientKey: "tel:+15551234567", magicToken: randomToken() },
       { shopId: s!.id, firstName: "Marcy", lastName: "Diaz", phone: "+15559998888", acuityClientKey: "tel:+15559998888", magicToken: randomToken() },
       { shopId: s!.id, firstName: "Dre", lastName: "Wilson", phone: "+15552223333", acuityClientKey: "tel:+15552223333", magicToken: randomToken() },
+      // For fuzzy/full-name coverage: a "John" (vs a "Jon" typo query) and a
+      // José (accent folding).
+      { shopId: s!.id, firstName: "John", lastName: "Carter", phone: "+15557770000", acuityClientKey: "tel:+15557770000", magicToken: randomToken() },
+      { shopId: s!.id, firstName: "José", lastName: "Ramírez", phone: "+15556660000", acuityClientKey: "tel:+15556660000", magicToken: randomToken() },
     ],
   });
 });
@@ -74,5 +78,37 @@ describe("client search typeahead endpoint", () => {
     const res = await search("zzznope");
     expect(res.status).toBe(200);
     expect(res.body.clients).toEqual([]);
+  });
+
+  it("matches a FULL name (first + last together) - the old per-column search couldn't", async () => {
+    const res = await search("marcus thompson");
+    expect(res.status).toBe(200);
+    const names = res.body.clients.map((c: { name: string }) => c.name);
+    // The exact full-name hit must be present AND first (best relevance).
+    expect(names[0]).toBe("Marcus Thompson");
+  });
+
+  it("tolerates a typo / close spelling (trigram fuzzy match)", async () => {
+    // "Jon" is NOT a substring of "John", so the old ILIKE %q% found nothing.
+    const res = await search("jon carter");
+    expect(res.status).toBe(200);
+    const names = res.body.clients.map((c: { name: string }) => c.name);
+    expect(names).toContain("John Carter");
+  });
+
+  it("folds accents (jose matches José)", async () => {
+    const res = await search("jose ramirez");
+    expect(res.status).toBe(200);
+    const names = res.body.clients.map((c: { name: string }) => c.name);
+    expect(names).toContain("José Ramírez");
+  });
+
+  it("ranks the closer match first", async () => {
+    // Both Marcus and Marcy start with "marc"; the query "marcy" must put
+    // Marcy Diaz ahead of Marcus Thompson by similarity.
+    const res = await search("marcy");
+    expect(res.status).toBe(200);
+    const names = res.body.clients.map((c: { name: string }) => c.name);
+    expect(names[0]).toBe("Marcy Diaz");
   });
 });
