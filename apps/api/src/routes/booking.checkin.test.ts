@@ -300,6 +300,19 @@ describe("reschedule resets check-in + push-reminder state", () => {
       .send({ startsAt: newStart.toISOString() });
     expect(res.status).toBe(200);
 
+    // The reschedule also fires the barber-side "Booking moved" alert
+    // (fire-and-forget, post-response). Await it HERE so the async push can't
+    // straggle across the test boundary into the next test's exact
+    // push-count assertions - and pin the alert itself while we're at it.
+    for (
+      let i = 0;
+      i < 80 && !pushes.some((p) => p.title === "Booking moved");
+      i++
+    ) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(pushes.some((p) => p.title === "Booking moved")).toBe(true);
+
     const row = await prisma.appointment.findUnique({
       where: { id: appt.id },
       select: {
