@@ -998,15 +998,14 @@ export function BookingClient({ data }: { data: BookShopData }) {
         </div>
       )}
 
-      {/* THE MENU — always on screen from the first paint: each group is a
-          dropdown card with its services (and the selected day's open times)
-          inside; ungrouped services follow. Fed by the selected day's bundle
-          fetch — the soonest open day is auto-selected on load, so times show
-          with zero taps. */}
+      {/* The calendar, on top — dates always visible with the selected day
+          highlighted, and that day's open times as a rail under it. Tapping a
+          time filters the service menu below to those bookable at that instant
+          ("Any time" clears it); tapping a service narrows the rail to its
+          times (the cross-filter from the day view). */}
       {dayFirst && (
         <Section
-          title="1 · Choose a service"
-          tour="services"
+          title="1 · Pick a day & time"
           back={
             <CustomerBack
               label={`← Back to ${data.shop.name}`}
@@ -1015,6 +1014,69 @@ export function BookingClient({ data }: { data: BookShopData }) {
             />
           }
         >
+          <MonthCalendar
+            viewMonth={dayMonth ?? dayFirstFallbackMonth}
+            availableDays={dayFirstDays}
+            selectedDay={dayDate}
+            accent={accent}
+            onAccent={onAccent}
+            labelForDay={(d) => dateFmt.format(new Date(`${d}T12:00:00Z`))}
+            onPrevMonth={() => setDayMonth((m) => addMonths(m ?? dayFirstFallbackMonth, -1))}
+            onNextMonth={() => setDayMonth((m) => addMonths(m ?? dayFirstFallbackMonth, 1))}
+            onPickDay={pickDay}
+          />
+          {!dayLoading && dayData && dayTimes.length > 0 && (
+            <div className="mt-4">
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+                Time
+              </h3>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTimeFilter(null)}
+                  aria-pressed={timeFilter === null}
+                  className="rounded-lg border px-3 py-1.5 text-xs transition-colors"
+                  style={{
+                    borderColor: timeFilter === null ? accent : "rgba(255,255,255,0.15)",
+                    backgroundColor: timeFilter === null ? `${accent}14` : "transparent",
+                    color: timeFilter === null ? accent : undefined,
+                  }}
+                >
+                  Any time
+                </button>
+                {dayTimes.map((t) => {
+                  const on = timeFilter === t;
+                  return (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setTimeFilter(on ? null : t)}
+                      aria-pressed={on}
+                      className="rounded-lg border px-3 py-1.5 text-xs transition-colors"
+                      style={{
+                        borderColor: on ? accent : "rgba(255,255,255,0.15)",
+                        backgroundColor: on ? `${accent}14` : "transparent",
+                        color: on ? accent : undefined,
+                      }}
+                    >
+                      {timeFmt.format(new Date(t))}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </Section>
+      )}
+
+      {/* THE MENU — the grouped service cards, right below the calendar. Each
+          group is a dropdown card with its services (and the selected day's
+          open times) inside; ungrouped services follow. Fed by the selected
+          day's bundle fetch — the soonest open day is auto-selected on load, so
+          times show with zero taps. Tapping a time in the rail above filters
+          these to the services bookable at that instant. */}
+      {dayFirst && (
+        <Section title="2 · Choose a service" tour="services">
           {(dayLoading || (!dayData && dayFirstDays.size > 0)) && (
             <p className="text-sm text-muted">Checking the day&apos;s openings…</p>
           )}
@@ -1099,68 +1161,6 @@ export function BookingClient({ data }: { data: BookShopData }) {
                   </p>
                 )
               )}
-            </div>
-          )}
-        </Section>
-      )}
-
-      {/* The calendar, right below the menu — dates always visible with the
-          selected day highlighted, and that day's open times as a rail under
-          it. Tapping a time filters the menu above to the services bookable at
-          that instant ("Any time" clears it); tapping a service narrows the
-          rail to its times (the cross-filter from the day view). */}
-      {dayFirst && (
-        <Section title="2 · Pick a day & time">
-          <MonthCalendar
-            viewMonth={dayMonth ?? dayFirstFallbackMonth}
-            availableDays={dayFirstDays}
-            selectedDay={dayDate}
-            accent={accent}
-            onAccent={onAccent}
-            labelForDay={(d) => dateFmt.format(new Date(`${d}T12:00:00Z`))}
-            onPrevMonth={() => setDayMonth((m) => addMonths(m ?? dayFirstFallbackMonth, -1))}
-            onNextMonth={() => setDayMonth((m) => addMonths(m ?? dayFirstFallbackMonth, 1))}
-            onPickDay={pickDay}
-          />
-          {!dayLoading && dayData && dayTimes.length > 0 && (
-            <div className="mt-4">
-              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-                Time
-              </h3>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => setTimeFilter(null)}
-                  aria-pressed={timeFilter === null}
-                  className="rounded-lg border px-3 py-1.5 text-xs transition-colors"
-                  style={{
-                    borderColor: timeFilter === null ? accent : "rgba(255,255,255,0.15)",
-                    backgroundColor: timeFilter === null ? `${accent}14` : "transparent",
-                    color: timeFilter === null ? accent : undefined,
-                  }}
-                >
-                  Any time
-                </button>
-                {dayTimes.map((t) => {
-                  const on = timeFilter === t;
-                  return (
-                    <button
-                      key={t}
-                      type="button"
-                      onClick={() => setTimeFilter(on ? null : t)}
-                      aria-pressed={on}
-                      className="rounded-lg border px-3 py-1.5 text-xs transition-colors"
-                      style={{
-                        borderColor: on ? accent : "rgba(255,255,255,0.15)",
-                        backgroundColor: on ? `${accent}14` : "transparent",
-                        color: on ? accent : undefined,
-                      }}
-                    >
-                      {timeFmt.format(new Date(t))}
-                    </button>
-                  );
-                })}
-              </div>
             </div>
           )}
         </Section>
