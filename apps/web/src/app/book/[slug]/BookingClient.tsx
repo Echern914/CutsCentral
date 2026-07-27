@@ -284,19 +284,12 @@ export function BookingClient({ data }: { data: BookShopData }) {
   // with its services and their times inside), and the month calendar with the
   // day's time rail right below it. The soonest open day is auto-selected on
   // load, so dates AND times are already showing without a single tap; picking
-  // another date just swaps the times. The time rail and the service cards
-  // cross-filter each other (see timeFilter below).
+  // another date just swaps the times.
   const dayFirst = true;
   const [dayDate, setDayDate] = useState<string | null>(null); // YYYY-MM-DD (shop tz)
   const [dayData, setDayData] = useState<DayBundlesResult | null>(null);
   const [dayLoading, setDayLoading] = useState(false);
   const [dayMonth, setDayMonth] = useState<string | null>(null); // "YYYY-MM"
-  // Cross-filter within a chosen day. `timeFilter` is a slot instant (ISO
-  // startsAt) the customer tapped in the time rail: when set, only services
-  // with an opening at exactly that instant show, and each service's chips
-  // narrow to that time. null = every open time. Cleared whenever the day
-  // changes (a time on Monday means nothing on Tuesday).
-  const [timeFilter, setTimeFilter] = useState<string | null>(null);
   // Which group cards are expanded in the day view. Groups start open so the
   // customer sees services without a tap; tapping a header collapses one.
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
@@ -362,7 +355,6 @@ export function BookingClient({ data }: { data: BookShopData }) {
     setDayDate(day);
     setDayMonth(monthKey(day));
     setServiceId(null);
-    setTimeFilter(null); // a time on the old day is meaningless on the new one
     setCollapsedGroups(new Set()); // reopen all groups for the new day
     setAddOnIds([]);
     clearSlotPick();
@@ -384,50 +376,19 @@ export function BookingClient({ data }: { data: BookShopData }) {
     setPickedStaffId(s.staffIds[0] ?? null);
   }
 
-  // Cross-filter for the day view: the customer can narrow by TIME (the time
-  // rail) and/or by SERVICE (tapping a service card), and each narrows the
-  // other. `dayTimes` is the rail: every distinct open instant that day, or
-  // just the picked service's instants when one is chosen. A service "fits" a
-  // chosen time iff its own per-service slot list contains that instant — the
-  // slot engine already sized each opening to that service's duration, so a
-  // service only appears at 3:00 when 3:00 is genuinely bookable for it.
-  const dayAllServices = useMemo<DayService[]>(() => {
-    if (!dayData) return [];
-    return [...dayData.bundles.flatMap((b) => b.services), ...dayData.ungrouped];
-  }, [dayData]);
-
-  const dayTimes = useMemo(() => {
-    const pool = serviceId
-      ? dayAllServices.filter((s) => s.id === serviceId)
-      : dayAllServices;
-    const set = new Set<string>();
-    for (const svc of pool) for (const s of svc.slots) set.add(s.startsAt);
-    return [...set].sort((a, b) => a.localeCompare(b));
-  }, [dayAllServices, serviceId]);
-
-  // The day's bundles/ungrouped, restricted to services that have an opening at
-  // the chosen time (when a time is picked). Services with nothing at that time
-  // drop out; the rest keep their card. null time = unfiltered.
+  // The selected day's menu: every bundle/service the API returned as having an
+  // opening that day (it already omits the rest). Each service carries its own
+  // bookable time chips, which is where the customer picks a time — there is no
+  // separate time rail to reconcile with.
   const visibleDay = useMemo(() => {
     if (!dayData) return null;
-    const fits = (svc: DayService) =>
-      timeFilter === null || svc.slots.some((s) => s.startsAt === timeFilter);
-    const bundles = dayData.bundles
-      .map((b) => ({ ...b, services: b.services.filter(fits) }))
-      .filter((b) => b.services.length > 0);
-    const ungrouped = dayData.ungrouped.filter(fits);
-    return { bundles, ungrouped };
-  }, [dayData, timeFilter]);
+    return { bundles: dayData.bundles, ungrouped: dayData.ungrouped };
+  }, [dayData]);
 
-  /** One service's row in the day view: name + that-day price + time chips.
-      When a time is active in the rail, only that time's chip(s) show, so the
-      card reads as "this service, at your chosen time". */
+  /** One service's row in the day view: name + that-day price + time chips. */
   function dayServiceRow(svc: DayService) {
     const stripe = serviceColorHex(svc.color);
-    const chips =
-      timeFilter === null
-        ? svc.slots
-        : svc.slots.filter((s) => s.startsAt === timeFilter);
+    const chips = svc.slots;
     return (
       <div
         key={svc.id}
@@ -998,14 +959,12 @@ export function BookingClient({ data }: { data: BookShopData }) {
         </div>
       )}
 
-      {/* The calendar, on top — dates always visible with the selected day
-          highlighted, and that day's open times as a rail under it. Tapping a
-          time filters the service menu below to those bookable at that instant
-          ("Any time" clears it); tapping a service narrows the rail to its
-          times (the cross-filter from the day view). */}
+      {/* The calendar, on top — dates only. The day's actual times live on the
+          service cards below (each service shows its own bookable chips), so a
+          separate time rail here would just duplicate them. */}
       {dayFirst && (
         <Section
-          title="1 · Pick a day & time"
+          title="1 · Pick a day"
           back={
             <CustomerBack
               label={`← Back to ${data.shop.name}`}
@@ -1025,47 +984,6 @@ export function BookingClient({ data }: { data: BookShopData }) {
             onNextMonth={() => setDayMonth((m) => addMonths(m ?? dayFirstFallbackMonth, 1))}
             onPickDay={pickDay}
           />
-          {!dayLoading && dayData && dayTimes.length > 0 && (
-            <div className="mt-4">
-              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-                Time
-              </h3>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => setTimeFilter(null)}
-                  aria-pressed={timeFilter === null}
-                  className="rounded-lg border px-3 py-1.5 text-xs transition-colors"
-                  style={{
-                    borderColor: timeFilter === null ? accent : "rgba(255,255,255,0.15)",
-                    backgroundColor: timeFilter === null ? `${accent}14` : "transparent",
-                    color: timeFilter === null ? accent : undefined,
-                  }}
-                >
-                  Any time
-                </button>
-                {dayTimes.map((t) => {
-                  const on = timeFilter === t;
-                  return (
-                    <button
-                      key={t}
-                      type="button"
-                      onClick={() => setTimeFilter(on ? null : t)}
-                      aria-pressed={on}
-                      className="rounded-lg border px-3 py-1.5 text-xs transition-colors"
-                      style={{
-                        borderColor: on ? accent : "rgba(255,255,255,0.15)",
-                        backgroundColor: on ? `${accent}14` : "transparent",
-                        color: on ? accent : undefined,
-                      }}
-                    >
-                      {timeFmt.format(new Date(t))}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
         </Section>
       )}
 
@@ -1073,8 +991,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
           group is a dropdown card with its services (and the selected day's
           open times) inside; ungrouped services follow. Fed by the selected
           day's bundle fetch — the soonest open day is auto-selected on load, so
-          times show with zero taps. Tapping a time in the rail above filters
-          these to the services bookable at that instant. */}
+          times show with zero taps. Tapping a service's time chip books it. */}
       {dayFirst && (
         <Section title="2 · Choose a service" tour="services">
           {(dayLoading || (!dayData && dayFirstDays.size > 0)) && (
@@ -1138,28 +1055,10 @@ export function BookingClient({ data }: { data: BookShopData }) {
                 </div>
               )}
 
-              {/* Empty states: nothing open all day vs. nothing at the chosen
-                  time (which the customer can clear). */}
               {visibleDay.bundles.length === 0 && visibleDay.ungrouped.length === 0 && (
-                timeFilter !== null ? (
-                  <div className="flex flex-col gap-2">
-                    <p className="text-sm text-muted">
-                      Nothing open at {timeFmt.format(new Date(timeFilter))}.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => setTimeFilter(null)}
-                      className="self-start text-xs font-medium transition-colors"
-                      style={{ color: accent }}
-                    >
-                      ← See all times
-                    </button>
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted">
-                    Nothing open this day — try another date.
-                  </p>
-                )
+                <p className="text-sm text-muted">
+                  Nothing open this day — try another date.
+                </p>
               )}
             </div>
           )}
