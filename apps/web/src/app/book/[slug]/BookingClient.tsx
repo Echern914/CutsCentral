@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { DEMO } from "@chairback/config/demo";
 import { serviceColorHex } from "@chairback/config/constants";
+import { zonedMinutesOfDay } from "@chairback/config/time";
 import { BackToDashboard } from "@/components/BackToDashboard";
 import { CustomerBack } from "@/components/CustomerBack";
 import { useSignalNativeReady } from "@/lib/nativeReady";
@@ -250,6 +251,29 @@ export function BookingClient({ data }: { data: BookShopData }) {
     return data.services.filter((s) => offered.has(s.id));
   }, [data.services, data.offerings]);
 
+  // Grouped sections for the service-first menu (Drick: the list should mirror
+  // his group taxonomy instead of interleaving everything). Groups in display
+  // order with members in their saved in-group order; services without a live
+  // group trail under "More services". A shop with no groups renders the same
+  // flat list as before (one headerless section).
+  const menuSections = useMemo(() => {
+    const sections = (data.groups ?? [])
+      .map((g) => ({
+        id: g.id,
+        name: g.name,
+        services: bookableServices
+          .filter((s) => s.serviceGroupId === g.id)
+          .slice()
+          .sort((a, b) => a.groupSortOrder - b.groupSortOrder),
+      }))
+      .filter((g) => g.services.length > 0);
+    const grouped = new Set(sections.flatMap((g) => g.services.map((s) => s.id)));
+    return {
+      sections,
+      ungrouped: bookableServices.filter((s) => !grouped.has(s.id)),
+    };
+  }, [data.groups, bookableServices]);
+
   // Day-first "bundles" menu (the groups-first shop setting): the customer
   // picks a DATE first, then sees only the bundles (service groups) with real
   // openings that day and the concrete times inside each — bundles with
@@ -371,6 +395,14 @@ export function BookingClient({ data }: { data: BookShopData }) {
                     <span className="ml-1 opacity-80">
                       · ${s.targeted.price}
                       {s.targeted.label ? ` · ${s.targeted.label}` : ""}
+                    </span>
+                  )}
+                  {/* A time-of-day window's own price/length (the API attaches
+                      these only when they differ from the day-level card). */}
+                  {!s.targeted && (s.price !== undefined || s.durationMin !== undefined) && (
+                    <span className="ml-1 opacity-80">
+                      {s.price !== undefined && s.price !== null ? ` · $${s.price}` : ""}
+                      {s.durationMin !== undefined ? ` · ${s.durationMin} min` : ""}
                     </span>
                   )}
                 </button>
@@ -671,11 +703,22 @@ export function BookingClient({ data }: { data: BookShopData }) {
     return { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[wd] ?? 0;
   }
 
-  /** The effective price for a service on a given ISO date (override else base). */
-  function priceForDay(
-    svc: { price: number | null; priceOverrides: Record<string, number> },
+  /**
+   * The effective price for a service at a chosen SLOT instant, matching the
+   * API's layer order: the time-of-day window covering the slot's shop-local
+   * start minute, else that date's weekday override, else the base price.
+   */
+  function priceForSlot(
+    svc: {
+      price: number | null;
+      priceOverrides: Record<string, number>;
+      timeOverrides: { s: number; e: number; price: number | null }[];
+    },
     iso: string,
   ): number | null {
+    const minute = zonedMinutesOfDay(new Date(iso), tz);
+    const win = svc.timeOverrides.find((w) => minute >= w.s && minute < w.e);
+    if (win && win.price !== null) return win.price;
     const wd = String(weekdayInTz(iso));
     if (Object.prototype.hasOwnProperty.call(svc.priceOverrides, wd)) return svc.priceOverrides[wd]!;
     return svc.price;
@@ -694,7 +737,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
   const selectedPrice = slotTargeted
     ? slotTargeted.price
     : selectedService && slot
-      ? priceForDay(selectedService, slot)
+      ? priceForSlot(selectedService, slot)
       : null;
   // Chosen add-ons' extra price + the combined total shown before booking.
   const addOnsTotal = addOnsForService
@@ -965,62 +1008,93 @@ export function BookingClient({ data }: { data: BookShopData }) {
           />
         }
       >
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-5">
           {/* Only services a barber actually offers (bookableServices) — an
               unbookable service would dead-end the wizard. Rich card layout
-              (photo + description + calendar-color rail) is from #114. */}
-          {bookableServices.map((s) => {
-            const selected = serviceId === s.id;
-            // The barber's calendar color, echoed as a left-edge accent stripe so
-            // the customer sees the same coding. null = no stripe (plain border).
-            const stripe = serviceColorHex(s.color);
-            const durationLabel =
-              s.durationRange.min === s.durationRange.max
-                ? `${s.durationMin} min`
-                : `${s.durationRange.min}-${s.durationRange.max} min`;
-            return (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() => pickService(s.id)}
-                aria-pressed={selected}
-                className="overflow-hidden rounded-xl border text-left transition-colors"
-                style={{
-                  borderColor: selected ? accent : "rgba(255,255,255,0.12)",
-                  backgroundColor: selected ? `${accent}14` : "transparent",
-                  // A 3px color rail on the leading edge when the service has one.
-                  borderLeft: stripe ? `3px solid ${stripe}` : undefined,
-                }}
-              >
-                <div className="flex items-start gap-3 px-4 py-3">
-                  {s.imageUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={s.imageUrl}
-                      alt=""
-                      className="h-14 w-14 shrink-0 rounded-lg border border-white/10 object-cover"
-                    />
-                  ) : null}
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-baseline justify-between gap-3">
-                      <span className="block text-sm font-medium">{s.name}</span>
-                      {priceLabel(s) && (
-                        <span className="shrink-0 text-sm text-muted">{priceLabel(s)}</span>
-                      )}
-                    </span>
-                    <span className="mt-0.5 block text-xs text-muted">{durationLabel}</span>
-                    {/* Barber's description. whitespace-pre-line keeps the line
-                        breaks so an "INCLUDES:" list renders as a list. */}
-                    {s.description && (
-                      <span className="mt-1.5 block whitespace-pre-line text-xs leading-relaxed text-muted/90">
-                        {s.description}
-                      </span>
-                    )}
-                  </span>
-                </div>
-              </button>
-            );
-          })}
+              (photo + description + calendar-color rail) is from #114. When the
+              shop has service groups, the menu mirrors that taxonomy: one
+              uppercase header per group (members in their saved order), then
+              everything ungrouped under "More services" — the same presentation
+              as the day view's bundles. No groups = the untouched flat list. */}
+          {[
+            ...menuSections.sections.map((sec) => ({
+              key: sec.id,
+              name: sec.name,
+              services: sec.services,
+            })),
+            ...(menuSections.ungrouped.length > 0
+              ? [
+                  {
+                    key: "__ungrouped__",
+                    // Headerless when there are no group sections at all.
+                    name: menuSections.sections.length > 0 ? "More services" : null,
+                    services: menuSections.ungrouped,
+                  },
+                ]
+              : []),
+          ].map((sec) => (
+            <div key={sec.key}>
+              {sec.name && (
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+                  {sec.name}
+                </h3>
+              )}
+              <div className="flex flex-col gap-2">
+                {sec.services.map((s) => {
+                  const selected = serviceId === s.id;
+                  // The barber's calendar color, echoed as a left-edge accent stripe
+                  // so the customer sees the same coding. null = no stripe.
+                  const stripe = serviceColorHex(s.color);
+                  const durationLabel =
+                    s.durationRange.min === s.durationRange.max
+                      ? `${s.durationMin} min`
+                      : `${s.durationRange.min}-${s.durationRange.max} min`;
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => pickService(s.id)}
+                      aria-pressed={selected}
+                      className="overflow-hidden rounded-xl border text-left transition-colors"
+                      style={{
+                        borderColor: selected ? accent : "rgba(255,255,255,0.12)",
+                        backgroundColor: selected ? `${accent}14` : "transparent",
+                        // A 3px color rail on the leading edge when the service has one.
+                        borderLeft: stripe ? `3px solid ${stripe}` : undefined,
+                      }}
+                    >
+                      <div className="flex items-start gap-3 px-4 py-3">
+                        {s.imageUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={s.imageUrl}
+                            alt=""
+                            className="h-14 w-14 shrink-0 rounded-lg border border-white/10 object-cover"
+                          />
+                        ) : null}
+                        <span className="min-w-0 flex-1">
+                          <span className="flex items-baseline justify-between gap-3">
+                            <span className="block text-sm font-medium">{s.name}</span>
+                            {priceLabel(s) && (
+                              <span className="shrink-0 text-sm text-muted">{priceLabel(s)}</span>
+                            )}
+                          </span>
+                          <span className="mt-0.5 block text-xs text-muted">{durationLabel}</span>
+                          {/* Barber's description. whitespace-pre-line keeps the line
+                              breaks so an "INCLUDES:" list renders as a list. */}
+                          {s.description && (
+                            <span className="mt-1.5 block whitespace-pre-line text-xs leading-relaxed text-muted/90">
+                              {s.description}
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
           {bookableServices.length === 0 && (
             <p className="text-sm text-muted">No services available yet.</p>
           )}
