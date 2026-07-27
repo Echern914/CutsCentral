@@ -277,12 +277,14 @@ export function BookingClient({ data }: { data: BookShopData }) {
   // Day-first "bundles" menu (the groups-first shop setting): the customer
   // picks a DATE first, then sees only the bundles (service groups) with real
   // openings that day and the concrete times inside each — bundles with
-  // nothing open that day never appear. Replaces the service-first steps.
-  // Calendar-first is now the layout for EVERY shop: the customer sees the
-  // calendar up front, picks a day, then cross-filters the day's openings by
-  // time and/or service (see timeFilter below). The old service-first wizard
-  // (guarded by !dayFirst) is retained but unreachable.
-  const dayFirst = true;
+  // nothing open that day never appear.
+  //
+  // Layout choice: SERVICE-FIRST is the default — the service menu (photo,
+  // price, description) shows immediately on open, so nothing is hidden behind
+  // a date tap. The date-first "pick a day, then cross-filter that day's
+  // openings by time and/or service" variant (see timeFilter below) is opt-in
+  // per shop via groupsFirst, for shops that prefer a calendar-led funnel.
+  const dayFirst = Boolean(data.shop.groupsFirst);
   const [dayDate, setDayDate] = useState<string | null>(null); // YYYY-MM-DD (shop tz)
   const [dayData, setDayData] = useState<DayBundlesResult | null>(null);
   const [dayLoading, setDayLoading] = useState(false);
