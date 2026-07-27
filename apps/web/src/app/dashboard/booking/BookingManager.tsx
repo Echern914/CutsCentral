@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import { SERVICE_COLORS, SERVICE_COLOR_KEYS } from "@chairback/config/constants";
 import { zonedWallTimeToUtc } from "@chairback/config/time";
 import { Card, CardHeader } from "@/components/ui/Card";
@@ -1167,9 +1167,11 @@ function ServiceEditForm({
             </p>
           </div>
         ) : (
-          <div>
-            <div className="flex items-center justify-between gap-3">
-              <span className={labelCls}>Available hours for this service (optional)</span>
+          <CollapsibleHours
+            title="Available hours for this service (optional)"
+            summary={hoursSummary(hoursRows)}
+          >
+            <div className="flex items-center justify-end">
               {/* Flip every day in one tap instead of one by one. */}
               <button
                 type="button"
@@ -1189,7 +1191,7 @@ function ServiceEditForm({
               onChange={setHoursRows}
               ariaScope="this service"
             />
-          </div>
+          </CollapsibleHours>
         )}
 
         <button
@@ -2067,9 +2069,11 @@ function ServiceGroupItem({
 
           {/* Shared available-hours grid - same idiom as ServiceEditForm; these
               hours OVERRIDE each member service's own windows. */}
-          <div>
-            <div className="flex items-center justify-between gap-3">
-              <span className={labelCls}>Available hours for this group (optional)</span>
+          <CollapsibleHours
+            title="Available hours for this group (optional)"
+            summary={hoursSummary(hoursRows)}
+          >
+            <div className="flex items-center justify-end">
               <button
                 type="button"
                 onClick={() =>
@@ -2092,7 +2096,7 @@ function ServiceGroupItem({
               onChange={setHoursRows}
               ariaScope="this group"
             />
-          </div>
+          </CollapsibleHours>
 
           {/* Booking limits across the whole group. Blank/0 = no cap. */}
           <div className="grid gap-3 sm:grid-cols-2">
@@ -2567,6 +2571,64 @@ function hoursRowsFromWindows(
       windows: w.map((x) => ({ start: minToHHMM(x.s), end: minToHHMM(x.e) })),
     };
   });
+}
+
+/**
+ * One-line summary of the per-day hours state, shown on the collapsed button so
+ * a barber sees the setting without expanding. "Open every day" is the untouched
+ * default (all days = the barber's own hours); otherwise it names how many days
+ * are custom and/or closed.
+ */
+function hoursSummary(rows: ServiceHoursRow[]): string {
+  const custom = rows.filter((r) => r.mode === "custom").length;
+  const closed = rows.filter((r) => r.mode === "closed").length;
+  if (custom === 0 && closed === 0) return "Open every day";
+  const parts: string[] = [];
+  if (custom > 0) parts.push(`custom on ${custom} day${custom > 1 ? "s" : ""}`);
+  if (closed > 0) parts.push(`closed ${closed} day${closed > 1 ? "s" : ""}`);
+  const s = parts.join(" · ");
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * Collapsible "Available hours" wrapper: a summary button that expands the given
+ * editor in place when tapped (and collapses again). Keeps the tall 7-day grid
+ * out of the way until the barber wants it — the Edit-service / group modals were
+ * dominated by it. `summary` reflects the current state so it's readable closed.
+ */
+function CollapsibleHours({
+  title,
+  summary,
+  children,
+}: {
+  title: string;
+  summary: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-3 rounded-xl border border-subtle bg-charcoal-700 px-3 py-2.5 text-left transition-colors hover:border-gold/50"
+      >
+        <span className="flex flex-col">
+          <span className="text-sm text-offwhite">{title}</span>
+          <span className="text-[11px] text-muted">{summary}</span>
+        </span>
+        <span
+          aria-hidden="true"
+          className="shrink-0 text-xs text-muted transition-transform duration-200"
+          style={{ transform: open ? "rotate(90deg)" : "none" }}
+        >
+          ▸
+        </span>
+      </button>
+      {open && <div className="mt-2">{children}</div>}
+    </div>
+  );
 }
 
 /**
