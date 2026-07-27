@@ -58,8 +58,18 @@ export interface ShopPageData {
   reviewSummary: { count: number; avgRating: number | null };
 }
 
+// Cache the public shop-page data (theme, bio, reviews, promotions) for 60s.
+// This does two things: the metadata + render calls to the SAME endpoint dedupe
+// into one upstream request, and repeat visitors within the window get a cached
+// response instead of a ~1s API+DB round trip. A barber's edit appears within
+// 60s. (The live booking-slots feed on /book is deliberately NOT cached.)
+const SHOP_PAGE_REVALIDATE_S = 60;
+
 async function getData(slug: string): Promise<ShopPageData | null> {
-  const res = await apiPublicGet<ShopPageData>(`/api/page/${encodeURIComponent(slug)}`);
+  const res = await apiPublicGet<ShopPageData>(
+    `/api/page/${encodeURIComponent(slug)}`,
+    SHOP_PAGE_REVALIDATE_S,
+  );
   return res.ok ? res.data : null;
 }
 

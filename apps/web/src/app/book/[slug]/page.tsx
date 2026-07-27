@@ -87,8 +87,19 @@ export interface BookShopData {
   }[];
 }
 
+// Cache the booking SHELL (shop meta, staff, services, add-ons) for 30s: dedupes
+// the metadata + render calls and spares repeat visitors the ~1s API round trip.
+// This is only the static menu — the live per-day availability is a SEPARATE,
+// uncached client call (/api/book/:slug/day), so open times are never stale.
+// 30s (shorter than the shop page) because it also lists targeted slots, which
+// the booking-write overlap guard backstops anyway.
+const BOOK_SHELL_REVALIDATE_S = 30;
+
 async function getData(slug: string): Promise<BookShopData | null> {
-  const res = await apiPublicGet<BookShopData>(`/api/book/${encodeURIComponent(slug)}`);
+  const res = await apiPublicGet<BookShopData>(
+    `/api/book/${encodeURIComponent(slug)}`,
+    BOOK_SHELL_REVALIDATE_S,
+  );
   return res.ok ? res.data : null;
 }
 

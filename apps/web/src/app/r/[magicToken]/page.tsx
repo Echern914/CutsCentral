@@ -107,8 +107,18 @@ export interface RewardsData {
   redemptions: { date: string; reward: string | null; punches: number; card?: string | null }[];
 }
 
+// Short 10s cache: the token IS the identity (no cookie), so it's a valid cache
+// key. The main win is deduping the metadata + render calls to this endpoint
+// into one; the tiny window also speeds rapid re-opens. Kept short because the
+// punch balance changes when the client earns/redeems — 10s stale at most, and
+// they'd reload after a counter visit anyway.
+const REWARDS_REVALIDATE_S = 10;
+
 async function getData(magicToken: string): Promise<RewardsData | null> {
-  const res = await apiPublicGet<RewardsData>(`/api/rewards/${magicToken}`);
+  const res = await apiPublicGet<RewardsData>(
+    `/api/rewards/${magicToken}`,
+    REWARDS_REVALIDATE_S,
+  );
   return res.ok ? res.data : null;
 }
 

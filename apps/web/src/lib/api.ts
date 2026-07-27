@@ -47,13 +47,28 @@ function authHeader(): Record<string, string> {
  */
 const REQUEST_TIMEOUT_MS = 12_000;
 
-async function doFetch<T>(path: string, init: RequestInit): Promise<ApiResult<T>> {
+/**
+ * `revalidate`: when set (seconds), the response goes through Next's Data Cache
+ * for that window AND is deduped within a single render — so a public page that
+ * reads the same endpoint in generateMetadata and in its render tree makes ONE
+ * upstream call, not two, and repeat visitors don't re-hit the API on every
+ * load. ONLY safe for UNauthenticated calls (a shared cache key must not carry
+ * per-user data) — authenticated apiGet/apiSend always stay no-store.
+ */
+async function doFetch<T>(
+  path: string,
+  init: RequestInit,
+  revalidate?: number,
+): Promise<ApiResult<T>> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
     const res = await fetch(`${API_BASE}${path}`, {
       ...init,
-      cache: "no-store",
+      // no-store and next.revalidate are mutually exclusive: pick one.
+      ...(revalidate === undefined
+        ? { cache: "no-store" as const }
+        : { next: { revalidate } }),
       signal: controller.signal,
     });
     return await toResult<T>(res);
@@ -82,9 +97,24 @@ export async function apiSend<T>(
   });
 }
 
-/** Public (no-cookie) GET - used by the rewards page. */
-export async function apiPublicGet<T>(path: string): Promise<ApiResult<T>> {
-  return doFetch<T>(path, {});
+/**
+ * Public (no-cookie) GET — rewards page, public shop/booking pages.
+ *
+ * `revalidateSeconds` opts this call into Next's Data Cache + per-render dedup
+ * (see doFetch). Safe here because there's no cookie: the response is identical
+ * for every visitor of a given URL. Omit it (or pass 0) to stay uncached — e.g.
+ * the live booking-slots feed, which must always be fresh. A barber's edit
+ * shows within the window; keep it short (30–60s) so pages feel live.
+ */
+export async function apiPublicGet<T>(
+  path: string,
+  revalidateSeconds?: number,
+): Promise<ApiResult<T>> {
+  return doFetch<T>(
+    path,
+    {},
+    revalidateSeconds && revalidateSeconds > 0 ? revalidateSeconds : undefined,
+  );
 }
 
 /**
