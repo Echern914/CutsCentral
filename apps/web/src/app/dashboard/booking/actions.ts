@@ -101,6 +101,16 @@ export async function deleteStaffAction(id: string): Promise<Result> {
 // shop-local midnight). Weekday absent = unrestricted; [] = closed that day.
 type ServiceHoursWindows = Record<string, { s: number; e: number }[]>;
 
+// Time-of-day price/duration window ([{s,e,price?,durationMin?}] in shop-local
+// minutes, e exclusive, every day) - "after 9 PM this runs $65 and takes 20
+// min". Layered over the per-weekday overrides; must not overlap (API 400s).
+export type ServiceTimeWindow = {
+  s: number;
+  e: number;
+  price?: number | null;
+  durationMin?: number | null;
+};
+
 export async function createServiceAction(input: {
   name: string;
   description?: string;
@@ -108,6 +118,7 @@ export async function createServiceAction(input: {
   durationMin: number;
   durationOverrides?: Record<string, number>;
   hoursWindows?: ServiceHoursWindows;
+  timeOverrides?: ServiceTimeWindow[];
   price?: number | null;
   priceOverrides?: Record<string, number>;
   color?: string | null;
@@ -126,6 +137,7 @@ export async function updateServiceAction(
     durationMin?: number;
     durationOverrides?: Record<string, number>;
     hoursWindows?: ServiceHoursWindows;
+    timeOverrides?: ServiceTimeWindow[];
     price?: number | null;
     priceOverrides?: Record<string, number>;
     active?: boolean;

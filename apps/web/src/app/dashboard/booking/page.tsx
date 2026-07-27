@@ -52,6 +52,10 @@ export interface ServiceRow {
   // "Mondays only 10:00-14:00"). Weekday absent = unrestricted; [] = closed that
   // day. {} = no restriction on any day (the default).
   hoursWindows: Record<string, { s: number; e: number }[]>;
+  // Time-of-day price/duration windows ([{s,e,price,durationMin}] in shop-local
+  // minutes, e exclusive, every day) layered over the weekday overrides. [] =
+  // none (the default for every existing service).
+  timeOverrides: { s: number; e: number; price: number | null; durationMin: number | null }[];
   // Calendar color-coding: a SERVICE_COLORS key, or null for no color.
   color: string | null;
   // True = offered by every active barber, kept in sync as staff change (staffIds
