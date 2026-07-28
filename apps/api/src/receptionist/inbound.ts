@@ -20,6 +20,7 @@ import {
   type ConversationRow,
 } from "./conversation.js";
 import { sendReceptionistSms } from "./outbound.js";
+import { alertShopCapTripped } from "./capAlert.js";
 import { receptionistReplyCapReason } from "./replyCap.js";
 
 /**
@@ -376,13 +377,19 @@ export async function processInboundText(params: {
     // Abuse guard BEFORE claiming the turn: a capped inbound skips the
     // Anthropic call entirely, not just the SMS. See replyCap.ts.
     const capReason = await receptionistReplyCapReason(shop.id, clientId, now);
-    if (capReason === "shop_daily_cap") {
-      // Distributed flood: AI goes quiet shop-wide until tomorrow. No
-      // escalation (that would page the barber once per thread) and no SMS.
+    if (capReason === "shop_daily_cap" || capReason === "shop_monthly_cap") {
+      // Distributed flood: AI goes quiet shop-wide (until tomorrow, or until
+      // the 1st for the monthly ceiling). No escalation (that would page the
+      // barber once per thread) and no SMS to the sender.
+      //
+      // But DO tell the owner once per day: a shop-wide cap otherwise fails
+      // completely silently, which is indistinguishable from the AI being
+      // broken - and is exactly what a sustained spend attack looks like.
       logger.warn(
-        { shopId: shop.id, conversationId: conversation.id },
-        "receptionist: shop daily reply cap hit; staying silent",
+        { shopId: shop.id, conversationId: conversation.id, capReason },
+        "receptionist: shop reply cap hit; staying silent",
       );
+      await alertShopCapTripped({ shopId: shop.id, reason: capReason });
       return;
     }
     if (capReason === "client_daily_cap") {
