@@ -133,3 +133,115 @@ describe("receptionistReplyCapReason", () => {
     );
   });
 });
+
+/**
+ * The monthly ceiling. The daily caps reset at every UTC midnight, so without
+ * this a patient attacker could park at the daily limit indefinitely. These
+ * tests use their OWN shop so the daily-cap suite above can't interfere.
+ */
+describe("receptionistReplyCapReason - monthly ceiling", () => {
+  let monthShopId: string;
+  let monthClientId: string;
+
+  beforeAll(async () => {
+    const shop = await prisma.shop.create({
+      data: {
+        ownerId: userId,
+        name: "Monthly Cap Shop",
+        bookingUrl: "https://mcap.test",
+        webhookSecret: randomToken(),
+      },
+    });
+    monthShopId = shop.id;
+    const c = await prisma.client.create({
+      data: {
+        shopId: monthShopId,
+        acuityClientKey: `mcap-${randomToken(6)}`,
+        magicToken: randomToken(),
+        firstName: "M",
+      },
+    });
+    monthClientId = c.id;
+  });
+
+  it("trips at the monthly limit from EARLIER days that are under today's daily cap", async () => {
+    const monthly = RECEPTIONIST_REPLY_LIMITS.perShopPerMonth;
+    // Spread the whole month's volume across earlier days of the SAME UTC
+    // month, so neither daily cap is in play today - only the monthly one.
+    // Each earlier day gets its own throwaway client too, so the per-client
+    // day cap is never the reason.
+    // Seed ONLY days 1-14, i.e. strictly BEFORE NOW (the 15th). Two reasons:
+    // the daily windows are `createdAt >= dayStart` with no upper bound, so
+    // future-dated rows would count toward "today" and trip the daily cap
+    // first; and past-dated volume is what the monthly ceiling is actually
+    // about. 14 days x 150 = 2100 >= the 2000 monthly limit.
+    const perDay = Math.ceil(monthly / 14);
+    let remaining = monthly;
+    let day = 1;
+    while (remaining > 0 && day <= 14) {
+      const c = await prisma.client.create({
+        data: {
+          shopId: monthShopId,
+          acuityClientKey: `mcap-d-${randomToken(8)}`,
+          magicToken: randomToken(),
+          firstName: "D",
+        },
+      });
+      const n = Math.min(perDay, remaining);
+      const stamp = new Date(
+        `2026-06-${String(day).padStart(2, "0")}T10:00:00Z`,
+      );
+      await prisma.nudge.createMany({
+        data: Array.from({ length: n }, () => ({
+          shopId: monthShopId,
+          clientId: c.id,
+          channel: "SMS" as const,
+          status: "SENT" as const,
+          kind: "receptionist_reply",
+          createdAt: stamp,
+        })),
+      });
+      remaining -= n;
+      day += 1;
+    }
+
+    // Today is clean (0 replies today), so only the monthly ceiling can fire.
+    expect(await receptionistReplyCapReason(monthShopId, monthClientId, NOW)).toBe(
+      "shop_monthly_cap",
+    );
+  });
+
+  it("does not count LAST month's replies", async () => {
+    const freshShop = await prisma.shop.create({
+      data: {
+        ownerId: userId,
+        name: "Last Month Shop",
+        bookingUrl: "https://lmcap.test",
+        webhookSecret: randomToken(),
+      },
+    });
+    const c = await prisma.client.create({
+      data: {
+        shopId: freshShop.id,
+        acuityClientKey: `lmcap-${randomToken(6)}`,
+        magicToken: randomToken(),
+        firstName: "L",
+      },
+    });
+    // A full month's worth, but in MAY - June's window must ignore it.
+    await prisma.nudge.createMany({
+      data: Array.from(
+        { length: RECEPTIONIST_REPLY_LIMITS.perShopPerMonth },
+        () => ({
+          shopId: freshShop.id,
+          clientId: c.id,
+          channel: "SMS" as const,
+          status: "SENT" as const,
+          kind: "receptionist_reply",
+          createdAt: new Date("2026-05-20T10:00:00Z"),
+        }),
+      ),
+    });
+    expect(await receptionistReplyCapReason(freshShop.id, c.id, NOW)).toBeNull();
+  });
+});
