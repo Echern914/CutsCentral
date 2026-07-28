@@ -481,6 +481,33 @@ const SORTS = {
 } as const;
 
 /**
+ * pg_trgm and unaccent live in the `extensions` schema, not `public` - migration
+ * 20260728120000_extensions_out_of_public moved them there to clear Supabase's
+ * "Extension in Public" security lint. So every reference in the search query
+ * below has to be schema-qualified: functions as `extensions.fn(...)`, and the
+ * trigram similarity operator as `OPERATOR(extensions.%)`. A bare `%` no longer
+ * resolves to it and the query would fail outright.
+ *
+ * unaccent() is used in its TWO-argument form with an explicitly qualified
+ * dictionary. The one-argument form looks its dictionary up by bare name, which
+ * only resolves when `extensions` is on the connection's search_path - true for
+ * us today via the database-level default that migration sets, but not something
+ * a query running behind a transaction pooler should depend on.
+ *
+ * The full name is spelled out once here because the WHERE clause and both
+ * ORDER BY terms have to use the identical expression.
+ */
+const FULL_NAME_FOLDED = Prisma.raw(
+  `extensions.unaccent('extensions.unaccent'::regdictionary, ` +
+    `lower(coalesce("firstName", '') || ' ' || coalesce("lastName", '')))`,
+);
+
+/** The same accent folding applied to a user value, kept parameterized. */
+function foldedValue(value: string): Prisma.Sql {
+  return Prisma.sql`extensions.unaccent('extensions.unaccent'::regdictionary, lower(${value}))`;
+}
+
+/**
  * The filter/tier predicates as a raw-SQL fragment, so the trigram search query
  * applies EXACTLY the same filters as the Prisma `where` on the non-search path.
  * Every branch mirrors a `where.*` assignment in GET /clients below - if one
@@ -544,8 +571,8 @@ dashboardRouter.get("/clients", async (req, res) => {
   //
   // Runs inside runWithShop so RLS applies, and still carries shopId in the WHERE
   // explicitly (defense in depth, same as the rest of the app). unaccent() folds
-  // accents ("Jose" ~ "José"); the % operator + similarity() and the %-wrapped
-  // ILIKE are all backed by the GIN trigram indexes from the migration.
+  // accents ("Jose" ~ "José"). Everything from pg_trgm/unaccent is qualified to
+  // the `extensions` schema - see the note on FULL_NAME_FOLDED above.
   let searchIds: string[] | null = null;
   if (q) {
     const like = `%${q}%`;
@@ -556,21 +583,15 @@ dashboardRouter.get("/clients", async (req, res) => {
         WHERE "shopId" = ${shop.id}
           ${filterSql}
           AND (
-            unaccent(lower(coalesce("firstName", '') || ' ' || coalesce("lastName", '')))
-              % unaccent(lower(${q}))
-            OR unaccent(lower(coalesce("firstName", '') || ' ' || coalesce("lastName", '')))
-              ILIKE unaccent(lower(${like}))
+            ${FULL_NAME_FOLDED} OPERATOR(extensions.%) ${foldedValue(q)}
+            OR ${FULL_NAME_FOLDED} ILIKE ${foldedValue(like)}
             OR coalesce("phone", '') ILIKE ${like}
             OR lower(coalesce("email", '')) ILIKE lower(${like})
           )
         ORDER BY
           -- exact substring first, then trigram similarity, then most-recent.
-          (unaccent(lower(coalesce("firstName", '') || ' ' || coalesce("lastName", '')))
-             ILIKE unaccent(lower(${like}))) DESC,
-          similarity(
-            unaccent(lower(coalesce("firstName", '') || ' ' || coalesce("lastName", ''))),
-            unaccent(lower(${q}))
-          ) DESC,
+          (${FULL_NAME_FOLDED} ILIKE ${foldedValue(like)}) DESC,
+          extensions.similarity(${FULL_NAME_FOLDED}, ${foldedValue(q)}) DESC,
           "lastVisitAt" DESC NULLS LAST
         LIMIT 500`,
     );
