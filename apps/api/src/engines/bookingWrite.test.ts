@@ -52,6 +52,7 @@ function assertFree(opts: {
   return prisma.$transaction((tx) =>
     lockStaffAndAssertSlotFree(tx, {
       staffId,
+      shopId,
       startsAt: opts.startsAt,
       endsAt: opts.endsAt,
       bufferMin: opts.bufferMin ?? 0,
@@ -172,6 +173,7 @@ describe("lockStaffAndAssertSlotFree", () => {
     const created = await prisma.$transaction(async (tx) => {
       await lockStaffAndAssertSlotFree(tx, {
         staffId,
+        shopId,
         startsAt: T(17, 0),
         endsAt: T(17, 30),
         bufferMin: 0,

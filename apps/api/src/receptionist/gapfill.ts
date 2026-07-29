@@ -280,6 +280,7 @@ export async function runGapFill(input: GapFillInput): Promise<void> {
       const held = await prisma.$transaction(async (tx) => {
         await lockStaffAndAssertSlotFree(tx, {
           staffId: appt.staffId,
+          shopId: shop.id,
           startsAt: appt.startsAt,
           endsAt,
           bufferMin: 0,

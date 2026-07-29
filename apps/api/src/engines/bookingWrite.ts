@@ -42,6 +42,11 @@ export async function lockStaffAndAssertSlotFree(
   tx: Prisma.TransactionClient,
   opts: {
     staffId: string;
+    /**
+     * Needed for the synced-Visit overlap check: external (Acuity/Square)
+     * appointments carry no staffId, so they block shop-wide.
+     */
+    shopId: string;
     startsAt: Date;
     endsAt: Date;
     /** Shop.bookingBufferMin - turnover gap enforced on both sides. */
@@ -111,6 +116,23 @@ export async function lockStaffAndAssertSlotFree(
                  AND ("startsAt" + "durationMin" * interval '1 minute') > ${overlapStart.toISOString()}::timestamp`,
   );
   if (targetedOverlap.length > 0) throw new SlotTakenError();
+
+  // Synced EXTERNAL appointments (Acuity/Square Visits): a live future visit
+  // owns its span shop-wide — Visits carry no staffId, so this is deliberately
+  // conservative (exact for single-barber shops, safe for multi-chair). Visits
+  // promoted from a NATIVE appointment are excluded: their Appointment row
+  // (checked above) is authoritative, so the time is never counted twice.
+  // Mirrors the read-side subtraction in slots.ts.
+  const visitOverlap = await tx.$queryRaw<{ id: string }[]>(
+    Prisma.sql`SELECT v.id FROM "Visit" v
+               WHERE v."shopId" = ${opts.shopId}
+                 AND v."status" IN ('SCHEDULED', 'RESCHEDULED')
+                 AND v."endAt" IS NOT NULL
+                 AND NOT EXISTS (SELECT 1 FROM "Appointment" a WHERE a."visitId" = v.id)
+                 AND v."scheduledAt" < ${overlapEnd.toISOString()}::timestamp
+                 AND v."endAt" > ${overlapStart.toISOString()}::timestamp`,
+  );
+  if (visitOverlap.length > 0) throw new SlotTakenError();
 
   // The overlap predicate above correctly ignores EXPIRED holds (the slot
   // freed the moment the hold lapsed) - but until the 5-min sweep flips them

@@ -337,12 +337,34 @@ export async function computeOpenSlots(
           select: { startsAt: true, endsAt: true },
         });
 
+    // Synced EXTERNAL appointments (Acuity/Square Visits) occupy their span
+    // too. A shop that switches to native booking often still has FUTURE
+    // synced appointments on the books — without this the picker offers those
+    // times and double-books the chair. Visits carry no staffId, so an
+    // external visit conservatively blocks EVERY barber's slots for its
+    // window (exact for single-barber shops; safe for multi-chair). Visits
+    // promoted from a NATIVE appointment are excluded — their Appointment row
+    // (above) already blocks, and it is the authoritative time on reschedule.
+    const externalVisits = input.ignoreBooked
+      ? []
+      : await tx.visit.findMany({
+          where: {
+            shopId: input.shopId,
+            status: { in: ["SCHEDULED", "RESCHEDULED"] },
+            appointment: null,
+            scheduledAt: { lt: new Date(rangeEnd) },
+            endAt: { gt: new Date(rangeStart) },
+          },
+          select: { scheduledAt: true, endAt: true },
+        });
+
     return {
       service,
       rules,
       recurringBlocks,
       exceptions,
       booked,
+      externalVisits,
       targeted,
       group,
       groupCapAppts,
@@ -355,6 +377,7 @@ export async function computeOpenSlots(
     recurringBlocks,
     exceptions,
     booked,
+    externalVisits,
     targeted,
     group,
     groupCapAppts,
@@ -512,6 +535,15 @@ export async function computeOpenSlots(
     blocks.push({
       start: b.startsAt.getTime(),
       end: b.endsAt.getTime() + buffer * MS_PER_MIN,
+    });
+  }
+  // External synced appointments: same buffer treatment as native rows. The
+  // query guarantees endAt is set; the fallback keeps a hypothetical bad row
+  // from producing a negative-length block.
+  for (const v of externalVisits) {
+    blocks.push({
+      start: v.scheduledAt.getTime(),
+      end: (v.endAt ?? v.scheduledAt).getTime() + buffer * MS_PER_MIN,
     });
   }
   for (const t of targeted) {

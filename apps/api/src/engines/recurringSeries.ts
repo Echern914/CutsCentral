@@ -223,6 +223,7 @@ export async function materializeSeries(
         // message is "slot_taken" - the catch below matches unchanged).
         await lockStaffAndAssertSlotFree(tx, {
           staffId: input.staffId,
+          shopId: input.shopId,
           startsAt,
           endsAt,
           bufferMin: input.bookingBufferMin,
