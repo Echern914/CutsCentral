@@ -821,6 +821,7 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
       // for the full protocol (and the PR #70 timestamp rule it encapsulates).
       await lockStaffAndAssertSlotFree(tx, {
         staffId: d.staffId,
+        shopId: shop.id,
         startsAt,
         endsAt,
         bufferMin: shop.bookingBufferMin,
@@ -1438,6 +1439,7 @@ bookingPublicRouter.post(
         // Same shared guard as create, EXCLUDING this appt's own row.
         await lockStaffAndAssertSlotFree(tx, {
           staffId: appt.staffId,
+          shopId: appt.shopId,
           startsAt,
           endsAt,
           bufferMin: appt.shop.bookingBufferMin,

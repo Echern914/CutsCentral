@@ -1624,6 +1624,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
       // SlotTakenError's message is "slot_taken", so the catch below matches.
       await lockStaffAndAssertSlotFree(tx, {
         staffId: d.staffId,
+        shopId: shop.id,
         startsAt,
         endsAt,
         bufferMin: shop.bookingBufferMin,
@@ -2129,6 +2130,7 @@ bookingDashboardRouter.post("/appointments/:id/approve", async (req, res) => {
       // have failed its own create guard (see engines/bookingWrite.ts).
       await lockStaffAndAssertSlotFree(tx, {
         staffId: appt.staffId,
+        shopId,
         startsAt: appt.startsAt,
         endsAt: appt.endsAt,
         bufferMin: shop.bookingBufferMin,
