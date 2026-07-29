@@ -429,10 +429,17 @@ bookingDashboardRouter.patch("/groups/:id", async (req, res) => {
             })
           : [];
       const validIds = valid.map((s) => s.id);
-      // Release members that were in this group but aren't in the new set.
+      // Release ACTIVE members that were in this group but aren't in the new
+      // set. A soft-deleted member is deliberately NOT released: it can no
+      // longer be claimed (filter above), so without active:true here every
+      // membership PATCH would evict it — and slots.ts:215-228 relies on it
+      // KEEPING serviceGroupId so its live appointments still consume the
+      // group's maxPerDay/maxConcurrent caps. (DELETE /groups below detaches
+      // everyone regardless: a deleted group applies no caps at all.)
       await tx.service.updateMany({
         where: {
           shopId,
+          active: true,
           serviceGroupId: groupId,
           ...(validIds.length > 0 ? { id: { notIn: validIds } } : {}),
         },
