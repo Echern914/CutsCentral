@@ -374,4 +374,56 @@ describe("group membership claims skip soft-deleted services", () => {
 
     await request(app).delete(`/api/booking/groups/${groupId}`).set("Cookie", cookie);
   });
+
+  it("a member deactivated AFTER joining keeps its membership through a serviceIds PATCH", async () => {
+    // slots.ts (group-cap accounting) deliberately does NOT filter members by
+    // active: a deactivated member's live BOOKED/PENDING appointments must
+    // still consume the group's maxPerDay/maxConcurrent. The claim filter
+    // skips inactive ids, so if the RELEASE step didn't skip them too, every
+    // membership PATCH would silently evict the member and void those caps.
+    const retiredId = await createService("Retired perm", 45, 60);
+    const create = await createGroup({
+      name: "Cap keepers",
+      maxConcurrent: 1,
+      serviceIds: [serviceAId, retiredId],
+    });
+    expect(create.status).toBe(201);
+    const groupId = create.body.id as string;
+    expect(await serviceGroupIdOf(retiredId)).toBe(groupId);
+
+    // The barber retires the service while it's a member...
+    const del = await request(app)
+      .delete(`/api/booking/services/${retiredId}`)
+      .set("Cookie", cookie);
+    expect(del.status).toBe(200);
+    // (GET /groups hides inactive members, but the DB row keeps the link.)
+    expect(await serviceGroupIdOf(retiredId)).toBe(groupId);
+
+    // ...then reorders/edits membership from the dashboard. The inactive
+    // member must survive: not claimable, but not evicted either.
+    const patch = await request(app)
+      .patch(`/api/booking/groups/${groupId}`)
+      .set("Cookie", cookie)
+      .send({ serviceIds: [serviceBId, serviceAId] });
+    expect(patch.status).toBe(200);
+    const found = (await listGroups()).find((g) => g.id === groupId)!;
+    expect(found.serviceIds).toEqual([serviceBId, serviceAId]);
+    expect(await serviceGroupIdOf(retiredId)).toBe(groupId);
+
+    // An explicit clear keeps it too — [] means "no ACTIVE members".
+    const clear = await request(app)
+      .patch(`/api/booking/groups/${groupId}`)
+      .set("Cookie", cookie)
+      .send({ serviceIds: [] });
+    expect(clear.status).toBe(200);
+    expect(await serviceGroupIdOf(serviceAId)).toBeNull();
+    expect(await serviceGroupIdOf(serviceBId)).toBeNull();
+    expect(await serviceGroupIdOf(retiredId)).toBe(groupId);
+
+    // DELETING the group is the one detach-all: a dead group applies no caps,
+    // so keeping the link would be pointless (slots.ts requires active:true
+    // on the group itself).
+    await request(app).delete(`/api/booking/groups/${groupId}`).set("Cookie", cookie);
+    expect(await serviceGroupIdOf(retiredId)).toBeNull();
+  });
 });

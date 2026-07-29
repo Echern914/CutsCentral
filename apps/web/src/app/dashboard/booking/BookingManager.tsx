@@ -114,6 +114,65 @@ function ColorSwatchPicker({
   );
 }
 
+// State the open deferred-save editor reports to the collapse / switch-group /
+// tab-switch guards: prompt on dirty, and IGNORE the tap while a save is in
+// flight (unmounting mid-flight would both cry wolf — dirty stays true until
+// the action resolves — and, on a failed save, discard the draft the failure
+// toast promises is still there).
+type EditorGuardState = { dirty: boolean; saving: boolean };
+
+// Guard EVERY way off the page while a deferred-save editor holds unsaved
+// edits. `beforeunload` only covers hard exits (close/refresh/external link) —
+// Next's <Link> navigations are soft and never fire it, and the dashboard's
+// sticky top nav is exactly such links, so without the click interceptor one
+// tap on "Clients" silently discarded a half-configured hours grid. The
+// capture-phase listeners run before Link's own handler, so cancelling the
+// event genuinely stops the navigation.
+function useLeaveGuard(active: boolean, message: string) {
+  useEffect(() => {
+    if (!active) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = ""; // required for the prompt to show in Chrome
+    };
+    const onClick = (e: MouseEvent) => {
+      // Only plain left-clicks navigate in-tab; modified clicks open new tabs
+      // and leave the draft alone.
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)
+        return;
+      const a = (e.target as HTMLElement | null)?.closest?.(
+        "a[href]",
+      ) as HTMLAnchorElement | null;
+      if (!a || a.target === "_blank" || a.hasAttribute("download")) return;
+      const url = new URL(a.href, window.location.href);
+      if (url.origin !== window.location.origin) return; // external: beforeunload covers it
+      if (url.pathname === window.location.pathname) return; // same page (hash/query)
+      if (!window.confirm(message)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    const onSubmit = (e: Event) => {
+      // Server-action forms (the layout's Sign out) navigate too. Plain
+      // onSubmit-handled forms have no action attribute — leave those alone.
+      const form = e.target as HTMLFormElement | null;
+      if (!form || !form.getAttribute("action")) return;
+      if (!window.confirm(message)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    document.addEventListener("click", onClick, true);
+    document.addEventListener("submit", onSubmit, true);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      document.removeEventListener("click", onClick, true);
+      document.removeEventListener("submit", onSubmit, true);
+    };
+  }, [active, message]);
+}
+
 export function BookingManager({
   shop,
   appBase,
@@ -147,12 +206,18 @@ export function BookingManager({
   // tab — without this guard a mid-configuration tab tap silently discarded
   // every unsaved hours window (the "I spent so much time doing it all over"
   // trap, same class #128 fixed for the old Hours tab).
-  const groupUnsavedRef = useRef<(() => boolean) | null>(null);
+  const groupUnsavedRef = useRef<(() => EditorGuardState) | null>(null);
 
   function switchTab(next: Tab) {
     if (next === tab) return;
+    const st = groupUnsavedRef.current?.();
+    // Mid-save: ignore the tap. Unmounting now would prompt about edits that
+    // are already on the wire (dirty clears only when the action resolves) —
+    // and if that save then failed, the draft the toast promises is kept
+    // would already be gone. The save settles within a beat; tap again.
+    if (st?.saving) return;
     if (
-      groupUnsavedRef.current?.() &&
+      st?.dirty &&
       !window.confirm("You have unsaved group edits. Leave and lose them?")
     ) {
       return;
@@ -161,11 +226,16 @@ export function BookingManager({
   }
 
   // Dashboard demo tour: its steps on this page live behind tabs, so follow
-  // the tour by switching to the tab that hosts the active step's anchor.
+  // the tour by switching to the tab that hosts the active step's anchor —
+  // through switchTab, so an active tour can't silently discard a dirty
+  // editor's draft (the one caller that used to bypass the guard).
   const { stepId: dashTourStepId } = useDemoTour("dashboard");
   useEffect(() => {
-    if (dashTourStepId === "dash-agenda") setTab("Appointments");
-    else if (dashTourStepId === "dash-services") setTab("Services");
+    if (dashTourStepId === "dash-agenda") switchTab("Appointments");
+    else if (dashTourStepId === "dash-services") switchTab("Services");
+    // switchTab is redefined per render but reads current state; the effect
+    // only needs to run when the tour step changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dashTourStepId]);
 
   return (
@@ -716,7 +786,7 @@ function ServicesTab({
   timezone: string; // IANA shop tz (targeted-slot times are shop wall clock)
   toast: Toast;
   // Registered by the open group editor; BookingManager's tab guard reads it.
-  groupUnsavedRef: MutableRefObject<(() => boolean) | null>;
+  groupUnsavedRef: MutableRefObject<(() => EditorGuardState) | null>;
 }) {
   const [name, setName] = useState("");
   const [duration, setDuration] = useState(30);
@@ -773,6 +843,24 @@ function ServicesTab({
     });
   }
   function remove(id: string) {
+    // One tap here used to destroy a fully-configured service — per-day prices
+    // and durations, hours, time-of-day windows, staff assignments — with no
+    // confirm and no undo, sitting right next to "Edit" on every row. Name
+    // exactly what's being lost (group deletion already confirms; a service
+    // carries far more setup).
+    const svc = initial.find((s) => s.id === id);
+    const grp = initialServiceGroups.find(
+      (g) => g.active && g.serviceIds.includes(id),
+    );
+    if (
+      !window.confirm(
+        `Remove "${svc?.name ?? "this service"}"? Its prices, hours and staff setup are deleted` +
+          (grp ? ` and it leaves the "${grp.name}" group` : "") +
+          ". This can't be undone.",
+      )
+    ) {
+      return;
+    }
     start(async () => {
       const r = await deleteServiceAction(id);
       toast(r.ok ? "Service removed" : "Couldn't remove", r.ok ? "success" : "error");
@@ -2028,8 +2116,8 @@ function ServiceGroupsManager({
   initial: ServiceGroupRow[];
   services: ServiceRow[];
   toast: Toast;
-  // Dirty-check registered by the open editor (see ServiceGroupEditor).
-  unsavedRef: MutableRefObject<(() => boolean) | null>;
+  // Dirty/saving check registered by the open editor (see ServiceGroupEditor).
+  unsavedRef: MutableRefObject<(() => EditorGuardState) | null>;
 }) {
   const [name, setName] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -2038,10 +2126,13 @@ function ServiceGroupsManager({
 
   // Collapsing this group — or expanding another — unmounts the open editor
   // and its draft. Confirm first when it holds unsaved edits, so a stray tap
-  // can't silently discard a half-configured hours grid.
+  // can't silently discard a half-configured hours grid. Mid-save the tap is
+  // ignored outright (see switchTab for why).
   function toggle(id: string) {
+    const st = unsavedRef.current?.();
+    if (st?.saving) return;
     if (
-      unsavedRef.current?.() &&
+      st?.dirty &&
       !window.confirm("You have unsaved group edits. Leave and lose them?")
     ) {
       return;
@@ -2129,8 +2220,30 @@ function ServiceGroupItem({
   expanded: boolean;
   onToggle: () => void;
   toast: Toast;
-  unsavedRef: MutableRefObject<(() => boolean) | null>;
+  unsavedRef: MutableRefObject<(() => EditorGuardState) | null>;
 }) {
+  // The row a save JUST persisted, until the server props catch up. After Save,
+  // revalidatePath refetches this page's eight API calls — seconds on prod —
+  // and a collapse + re-expand inside that window used to re-seed the editor
+  // from PRE-save props: the barber watched his just-saved hours "revert" and
+  // typed them all in again ("it still isn't saving"). Seeding from the
+  // last-saved row instead makes a reopened editor always show what was
+  // actually written. Cleared once props deep-equal it (the refresh landed),
+  // so later genuine server changes are never masked.
+  const [lastSaved, setLastSaved] = useState<ServiceGroupRow | null>(null);
+  useEffect(() => {
+    if (!lastSaved) return;
+    if (
+      group.name === lastSaved.name &&
+      group.maxPerDay === lastSaved.maxPerDay &&
+      group.maxConcurrent === lastSaved.maxConcurrent &&
+      JSON.stringify(group.serviceIds) === JSON.stringify(lastSaved.serviceIds) &&
+      JSON.stringify(group.hoursWindows) === JSON.stringify(lastSaved.hoursWindows)
+    ) {
+      setLastSaved(null);
+    }
+  }, [group, lastSaved]);
+  const current = lastSaved ?? group;
   return (
     <li className="rounded-xl border border-subtle">
       {/* COMPACT header - always visible; the chevron toggles the editor. */}
@@ -2140,11 +2253,11 @@ function ServiceGroupItem({
         className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left"
       >
         <span className="text-sm">
-          {group.name}{" "}
+          {current.name}{" "}
           <span className="text-xs text-muted">
-            · {group.serviceIds.length} service
-            {group.serviceIds.length === 1 ? "" : "s"} ·{" "}
-            {limitsSummary(group.maxPerDay, group.maxConcurrent)}
+            · {current.serviceIds.length} service
+            {current.serviceIds.length === 1 ? "" : "s"} ·{" "}
+            {limitsSummary(current.maxPerDay, current.maxConcurrent)}
           </span>
         </span>
         <span
@@ -2158,13 +2271,16 @@ function ServiceGroupItem({
         </span>
       </button>
 
-      {/* EXPANDED - the editor. Mounted per open so drafts can't go stale. */}
+      {/* EXPANDED - the editor. Mounted per open so drafts can't go stale:
+          it seeds from the freshest row we know — the just-saved values while
+          the post-save refetch is still in flight, server props otherwise. */}
       {expanded && (
         <ServiceGroupEditor
-          group={group}
+          group={current}
           services={services}
           toast={toast}
           unsavedRef={unsavedRef}
+          onSaved={setLastSaved}
         />
       )}
     </li>
@@ -2187,11 +2303,15 @@ function ServiceGroupEditor({
   services,
   toast,
   unsavedRef,
+  onSaved,
 }: {
   group: ServiceGroupRow;
   services: ServiceRow[];
   toast: Toast;
-  unsavedRef: MutableRefObject<(() => boolean) | null>;
+  unsavedRef: MutableRefObject<(() => EditorGuardState) | null>;
+  // Reports the row a successful save persisted, so the parent item can seed
+  // a re-opened editor from it while the post-save refetch is in flight.
+  onSaved: (row: ServiceGroupRow) => void;
 }) {
   const activeServices = services.filter((s) => s.active);
   const [name, setName] = useState(group.name);
@@ -2240,28 +2360,35 @@ function ServiceGroupEditor({
     (maxConcurrent <= 0 ? null : maxConcurrent) !== saved.maxConcurrent ||
     JSON.stringify(serviceIds) !== saved.serviceIds;
 
-  // While this editor is the open one, its dirty check is what the collapse /
-  // switch-group / tab-switch guards consult. Cleared on unmount.
+  // While this editor is the open one, its dirty/saving state is what the
+  // collapse / switch-group / tab-switch guards consult. Cleared on unmount.
+  // The refs are written from effects, not during render — save() runs inside
+  // useTransition, whose interruptible renders can be discarded before commit,
+  // and a render-time write from a discarded render would leave the guards
+  // reading state the UI never showed.
   const dirtyLive = useRef(dirty);
-  dirtyLive.current = dirty;
+  const savingLive = useRef(pending);
   useEffect(() => {
-    unsavedRef.current = () => dirtyLive.current;
+    dirtyLive.current = dirty;
+  }, [dirty]);
+  useEffect(() => {
+    savingLive.current = pending;
+  }, [pending]);
+  useEffect(() => {
+    unsavedRef.current = () => ({
+      dirty: dirtyLive.current,
+      saving: savingLive.current,
+    });
     return () => {
       unsavedRef.current = null;
     };
   }, [unsavedRef]);
 
-  // Warn on a hard page unload/close/refresh while dirty (in-app navigation is
-  // guarded by the confirms in ServiceGroupsManager / switchTab).
-  useEffect(() => {
-    if (!dirty) return;
-    const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-      e.returnValue = ""; // required for the prompt to show in Chrome
-    };
-    window.addEventListener("beforeunload", onBeforeUnload);
-    return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [dirty]);
+  // Guard every exit while dirty: hard unloads via beforeunload, and the
+  // dashboard's sticky-nav <Link>s / Sign-out form via the capture-phase
+  // interceptors (soft navigation never fires beforeunload — one tap on
+  // "Clients" used to silently discard the whole draft).
+  useLeaveGuard(dirty, "You have unsaved group edits. Leave and lose them?");
 
   function save() {
     if (!name.trim()) {
@@ -2310,6 +2437,17 @@ function ServiceGroupEditor({
       const r = await updateServiceGroupAction(group.id, payload);
       if (r.ok) {
         setSaved(next);
+        // Hand the persisted row up so a collapse + re-open seeds from it
+        // while revalidatePath's refetch is still in flight (seconds on prod)
+        // — re-seeding from pre-save props made saved hours LOOK reverted.
+        onSaved({
+          ...group,
+          name: trimmed,
+          hoursWindows: hours,
+          maxPerDay: perDay.value,
+          maxConcurrent: concurrent.value,
+          serviceIds: [...serviceIds],
+        });
         toast("Group saved", "success");
       } else {
         toast("Couldn't save — your changes are still here. Try again.", "error");
@@ -2601,17 +2739,12 @@ function StaffHoursSheet({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [staffId]);
 
-  // Warn on a hard page unload/close/refresh while dirty (the in-app close is
-  // guarded by attemptClose below).
-  useEffect(() => {
-    if (!dirty) return;
-    const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-      e.returnValue = ""; // required for the prompt to show in Chrome
-    };
-    window.addEventListener("beforeunload", onBeforeUnload);
-    return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [dirty]);
+  // Guard every exit while dirty: hard unloads, and the dashboard's sticky-nav
+  // <Link>s / Sign-out form (soft navigation never fires beforeunload — the
+  // Sheet's backdrop doesn't cover the top nav, so a stray tap there used to
+  // discard the whole week silently). The in-app close is guarded by
+  // attemptClose below.
+  useLeaveGuard(dirty, "You have unsaved hours. Leave and lose them?");
 
   function attemptClose() {
     if (dirty && !window.confirm("You have unsaved hours. Close and lose them?")) {
