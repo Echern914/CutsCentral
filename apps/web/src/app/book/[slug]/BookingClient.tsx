@@ -378,6 +378,31 @@ export function BookingClient({ data }: { data: BookShopData }) {
     return out;
   }, [dayFirstDays, openDaySet, openInfo, tz]);
 
+  // Working days the engine found NOTHING on (fully booked, or today with all
+  // times passed): the weekday heuristic offers them, real availability says
+  // no. These stay tappable-but-dimmed so tapping one shows an honest "no
+  // available times this day" + the waitlist, instead of a dead cell — the
+  // only things that can open them back up are a cancellation or a published
+  // squeeze-in (which flips the day into openDays automatically).
+  const bookedOutDays = useMemo(() => {
+    if (!openDaySet || !openInfo || openInfo === "unavailable")
+      return new Set<string>();
+    const today = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+    const edge = new Date(`${today}T12:00:00Z`);
+    edge.setUTCDate(edge.getUTCDate() + openInfo.scanDays);
+    const lastScanned = edge.toISOString().slice(0, 10);
+    const out = new Set<string>();
+    for (const d of dayFirstDays) {
+      if (d < lastScanned && !openDaySet.has(d)) out.add(d);
+    }
+    return out;
+  }, [dayFirstDays, openDaySet, openInfo, tz]);
+
   // Which day the AUTO-select landed on (null after any manual pick) — only an
   // auto-picked day may be silently re-aimed when real availability arrives.
   const autoPickedDay = useRef<string | null>(null);
@@ -1108,6 +1133,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
           <MonthCalendar
             viewMonth={dayMonth ?? dayFirstFallbackMonth}
             availableDays={calendarDays}
+            bookedOutDays={bookedOutDays}
             selectedDay={dayDate}
             accent={accent}
             onAccent={onAccent}
@@ -1194,9 +1220,68 @@ export function BookingClient({ data }: { data: BookShopData }) {
               )}
 
               {visibleDay.bundles.length === 0 && visibleDay.ungrouped.length === 0 && (
-                <p className="text-sm text-muted">
-                  Nothing open this day — try another date.
-                </p>
+                <div className="flex flex-col gap-3">
+                  {/* Honest booked-out state (Drick: "it should show on a day
+                      that is booked out completely that there is no available
+                      times"). Today reads differently from a future date, and
+                      the two ways forward are right here: the next day with a
+                      real opening, and the waitlist (a cancellation or a
+                      squeeze-in the barber publishes reopens the day on its
+                      own — squeeze-ins count as openings upstream). */}
+                  <p className="text-sm text-muted" role="status">
+                    {(() => {
+                      const shopToday = new Intl.DateTimeFormat("en-CA", {
+                        timeZone: tz,
+                        year: "numeric",
+                        month: "2-digit",
+                        day: "2-digit",
+                      }).format(new Date());
+                      if (dayDate === shopToday)
+                        return "No available times left today.";
+                      return bookedOutDays.has(dayDate ?? "")
+                        ? "This day is fully booked."
+                        : "Nothing open this day — try another date.";
+                    })()}
+                  </p>
+                  {(() => {
+                    const nextOpen = openDaySet
+                      ? [...openDaySet].sort().find((d) => d > (dayDate ?? ""))
+                      : null;
+                    if (!nextOpen) return null;
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          autoPickedDay.current = null;
+                          pendingSoonest.current = null;
+                          pickDay(nextOpen);
+                        }}
+                        className="w-full rounded-xl border px-4 py-3 text-left text-sm font-semibold transition-colors"
+                        style={{ borderColor: accent, color: accent }}
+                      >
+                        Next available: {dateFmt.format(new Date(`${nextOpen}T12:00:00Z`))} →
+                      </button>
+                    );
+                  })()}
+                  {data.shop.waitlistEnabled &&
+                    (waitlistMode === "slot" ? (
+                      <WaitlistForm
+                        slug={data.shop.slug}
+                        shopName={data.shop.name}
+                        accent={accent}
+                        onDone={() => setWaitlistMode(null)}
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setWaitlistMode("slot")}
+                        className="w-full rounded-xl border py-3 text-center text-sm font-semibold transition-colors"
+                        style={{ borderColor: accent, color: accent }}
+                      >
+                        Join the waitlist — get texted if a time opens up
+                      </button>
+                    ))}
+                </div>
               )}
             </div>
           )}
@@ -1757,6 +1842,7 @@ function BackStep({ onClick }: { onClick: () => void }) {
 function MonthCalendar({
   viewMonth,
   availableDays,
+  bookedOutDays,
   selectedDay,
   accent,
   onAccent,
@@ -1767,6 +1853,11 @@ function MonthCalendar({
 }: {
   viewMonth: string; // "YYYY-MM"
   availableDays: Set<string>; // "YYYY-MM-DD" keys with open times
+  // Working days the engine found NO openings on (fully booked / times passed).
+  // Rendered dimmed but still TAPPABLE, so the customer lands on an honest
+  // "no available times this day" state (with the waitlist) instead of a dead
+  // cell that looks like the shop is closed. Days in neither set stay inert.
+  bookedOutDays?: Set<string>;
   selectedDay: string | null;
   accent: string;
   onAccent: string;
@@ -1820,6 +1911,8 @@ function MonthCalendar({
         {cells.map(({ day, inMonth }) => {
           const dayNum = Number(day.slice(8, 10));
           const open = availableDays.has(day);
+          const bookedOut = !open && (bookedOutDays?.has(day) ?? false);
+          const tappable = open || bookedOut;
           const selected = selectedDay === day;
           if (!inMonth) {
             // Spill-over cell from an adjacent month: keep the grid aligned but
@@ -1830,12 +1923,14 @@ function MonthCalendar({
             <button
               key={day}
               type="button"
-              disabled={!open}
+              disabled={!tappable}
               onClick={() => onPickDay(day)}
-              // aria-pressed only on selectable (open) days; a disabled cell
+              // aria-pressed only on selectable days; a disabled cell
               // announcing a toggle state is meaningless noise to assistive tech.
-              aria-pressed={open ? selected : undefined}
-              aria-label={`${labelForDay(day)}${open ? "" : " (no openings)"}`}
+              aria-pressed={tappable ? selected : undefined}
+              aria-label={`${labelForDay(day)}${
+                open ? "" : bookedOut ? " (fully booked)" : " (no openings)"
+              }`}
               className="flex aspect-square items-center justify-center rounded-lg border text-sm transition-colors disabled:cursor-default"
               style={{
                 borderColor: selected
@@ -1847,12 +1942,19 @@ function MonthCalendar({
                   ? accent
                   : open
                     ? `${accent}14`
-                    : "transparent",
+                    : bookedOut
+                      ? "rgba(255,255,255,0.04)"
+                      : "transparent",
                 color: selected
                   ? onAccent
                   : open
                     ? undefined
-                    : "rgba(255,255,255,0.25)",
+                    : bookedOut
+                      ? "rgba(255,255,255,0.45)"
+                      : "rgba(255,255,255,0.25)",
+                // A booked-out day reads as "was offerable, none left" — the
+                // strike distinguishes it from a closed day at a glance.
+                textDecoration: bookedOut && !selected ? "line-through" : undefined,
               }}
             >
               {dayNum}
