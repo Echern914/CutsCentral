@@ -354,8 +354,11 @@ bookingDashboardRouter.post("/groups", async (req, res) => {
       },
     });
     if (d.serviceIds && d.serviceIds.length > 0) {
+      // active: true — a soft-deleted service must not be claimable (a stale
+      // client save could otherwise resurrect it into the group invisibly;
+      // GET /groups only lists active members).
       const valid = await tx.service.findMany({
-        where: { shopId, id: { in: d.serviceIds } },
+        where: { shopId, active: true, id: { in: d.serviceIds } },
         select: { id: true },
       });
       const validSet = new Set(valid.map((s) => s.id));
@@ -416,11 +419,12 @@ bookingDashboardRouter.patch("/groups/:id", async (req, res) => {
   if (d.serviceIds !== undefined) {
     await runWithShop(shopId, async (tx) => {
       const ids = d.serviceIds ?? [];
-      // Only ids that are real services in this shop can be claimed.
+      // Only ids that are real, ACTIVE services in this shop can be claimed —
+      // a soft-deleted id in a stale payload must not rejoin the group.
       const valid =
         ids.length > 0
           ? await tx.service.findMany({
-              where: { shopId, id: { in: ids } },
+              where: { shopId, active: true, id: { in: ids } },
               select: { id: true },
             })
           : [];

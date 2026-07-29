@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useState, useTransition, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useTransition,
+  type MutableRefObject,
+  type ReactNode,
+} from "react";
 import { SERVICE_COLORS, SERVICE_COLOR_KEYS } from "@chairback/config/constants";
 import { zonedWallTimeToUtc } from "@chairback/config/time";
 import { Card, CardHeader } from "@/components/ui/Card";
@@ -44,6 +51,7 @@ import {
   updateAddOnAction,
   updateServiceAction,
   updateServiceGroupAction,
+  type ServiceGroupInput,
   type TargetedSlotRow,
   type TargetedSlotRuleRow,
 } from "./actions";
@@ -134,8 +142,21 @@ export function BookingManager({
   const bookUrl = `${appBase}/book/${shop.slug ?? "your-shop"}`;
   const needsSetup = initialStaff.length === 0 || initialServices.length === 0;
 
+  // Dirty-check registered by the OPEN service-group editor (null = none open).
+  // Group edits persist only on Save, and switching tabs unmounts the Services
+  // tab — without this guard a mid-configuration tab tap silently discarded
+  // every unsaved hours window (the "I spent so much time doing it all over"
+  // trap, same class #128 fixed for the old Hours tab).
+  const groupUnsavedRef = useRef<(() => boolean) | null>(null);
+
   function switchTab(next: Tab) {
     if (next === tab) return;
+    if (
+      groupUnsavedRef.current?.() &&
+      !window.confirm("You have unsaved group edits. Leave and lose them?")
+    ) {
+      return;
+    }
     setTab(next);
   }
 
@@ -229,6 +250,7 @@ export function BookingManager({
             initialAddOns={initialAddOns}
             timezone={initialAgenda.timezone}
             toast={toast}
+            groupUnsavedRef={groupUnsavedRef}
           />
         </div>
       )}
@@ -685,6 +707,7 @@ function ServicesTab({
   initialAddOns,
   timezone,
   toast,
+  groupUnsavedRef,
 }: {
   initial: ServiceRow[];
   staff: StaffRow[];
@@ -692,6 +715,8 @@ function ServicesTab({
   initialAddOns: AddOnRow[];
   timezone: string; // IANA shop tz (targeted-slot times are shop wall clock)
   toast: Toast;
+  // Registered by the open group editor; BookingManager's tab guard reads it.
+  groupUnsavedRef: MutableRefObject<(() => boolean) | null>;
 }) {
   const [name, setName] = useState("");
   const [duration, setDuration] = useState(30);
@@ -925,6 +950,7 @@ function ServicesTab({
         initial={initialServiceGroups}
         services={initial}
         toast={toast}
+        unsavedRef={groupUnsavedRef}
       />
 
       <AddOnsManager initial={initialAddOns} services={initial} toast={toast} />
@@ -1997,15 +2023,31 @@ function ServiceGroupsManager({
   initial,
   services,
   toast,
+  unsavedRef,
 }: {
   initial: ServiceGroupRow[];
   services: ServiceRow[];
   toast: Toast;
+  // Dirty-check registered by the open editor (see ServiceGroupEditor).
+  unsavedRef: MutableRefObject<(() => boolean) | null>;
 }) {
   const [name, setName] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const activeGroups = initial.filter((g) => g.active);
+
+  // Collapsing this group — or expanding another — unmounts the open editor
+  // and its draft. Confirm first when it holds unsaved edits, so a stray tap
+  // can't silently discard a half-configured hours grid.
+  function toggle(id: string) {
+    if (
+      unsavedRef.current?.() &&
+      !window.confirm("You have unsaved group edits. Leave and lose them?")
+    ) {
+      return;
+    }
+    setExpandedId((cur) => (cur === id ? null : id));
+  }
 
   function add() {
     if (!name.trim()) return;
@@ -2048,10 +2090,9 @@ function ServiceGroupsManager({
             group={g}
             services={services}
             expanded={expandedId === g.id}
-            onToggle={() =>
-              setExpandedId((cur) => (cur === g.id ? null : g.id))
-            }
+            onToggle={() => toggle(g.id)}
             toast={toast}
+            unsavedRef={unsavedRef}
           />
         ))}
         {activeGroups.length === 0 && (
@@ -2071,84 +2112,25 @@ function limitsSummary(maxPerDay: number | null, maxConcurrent: number | null): 
   return parts.length ? parts.join(" · ") : "Using global limits";
 }
 
-// One group row: COMPACT header (name · N services · limits · chevron) that
-// expands into the members-chips + name-edit + availability/limits editor.
+// One group row: COMPACT header (name · N services · limits · chevron). The
+// editor mounts ONLY while expanded (ServiceGroupEditor below), so its draft
+// always seeds from the CURRENT server row at open — the same open-time-seed
+// idiom as the add-on inline edit and the staff hours Sheet.
 function ServiceGroupItem({
   group,
   services,
   expanded,
   onToggle,
   toast,
+  unsavedRef,
 }: {
   group: ServiceGroupRow;
   services: ServiceRow[];
   expanded: boolean;
   onToggle: () => void;
   toast: Toast;
+  unsavedRef: MutableRefObject<(() => boolean) | null>;
 }) {
-  const activeServices = services.filter((s) => s.active);
-  const [name, setName] = useState(group.name);
-  const [serviceIds, setServiceIds] = useState<string[]>(group.serviceIds);
-  const [hoursRows, setHoursRows] = useState<ServiceHoursRow[]>(() =>
-    hoursRowsFromWindows(group.hoursWindows),
-  );
-  // 0 = no cap (sent to the API as null). NumberField holds a number and settles
-  // an emptied field back to 0, so 0 is the natural "no cap" sentinel here.
-  const [maxPerDay, setMaxPerDay] = useState<number>(group.maxPerDay ?? 0);
-  const [maxConcurrent, setMaxConcurrent] = useState<number>(
-    group.maxConcurrent ?? 0,
-  );
-  const [pending, start] = useTransition();
-
-  function toggleService(id: string) {
-    setServiceIds((cur) =>
-      cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id],
-    );
-  }
-  const allHoursCustom = hoursRows.every((r) => r.mode === "custom");
-
-  // 0 (or blank, which NumberField settles to 0) = no cap → null. Otherwise the
-  // cap must be a positive integer.
-  function parseCap(n: number): { ok: boolean; value: number | null } {
-    if (n <= 0) return { ok: true, value: null };
-    if (!Number.isInteger(n)) return { ok: false, value: null };
-    return { ok: true, value: n };
-  }
-
-  function save() {
-    if (!name.trim()) {
-      toast("Group name is required", "error");
-      return;
-    }
-    if (hasInvalidHoursRow(hoursRows)) {
-      toast("Group hours: each window's end must be after its start", "error");
-      return;
-    }
-    const perDay = parseCap(maxPerDay);
-    const concurrent = parseCap(maxConcurrent);
-    if (!perDay.ok || !concurrent.ok) {
-      toast("Limits must be a whole number (or blank for no cap)", "error");
-      return;
-    }
-    start(async () => {
-      const r = await updateServiceGroupAction(group.id, {
-        name: name.trim(),
-        hoursWindows: buildHoursWindows(hoursRows),
-        maxPerDay: perDay.value,
-        maxConcurrent: concurrent.value,
-        serviceIds,
-      });
-      toast(r.ok ? "Group saved" : "Couldn't save", r.ok ? "success" : "error");
-    });
-  }
-
-  function remove() {
-    start(async () => {
-      const r = await deleteServiceGroupAction(group.id);
-      toast(r.ok ? "Group removed" : "Couldn't remove", r.ok ? "success" : "error");
-    });
-  }
-
   return (
     <li className="rounded-xl border border-subtle">
       {/* COMPACT header - always visible; the chevron toggles the editor. */}
@@ -2176,180 +2158,376 @@ function ServiceGroupItem({
         </span>
       </button>
 
-      {/* EXPANDED - members chips + name edit + availability/limits editor. */}
+      {/* EXPANDED - the editor. Mounted per open so drafts can't go stale. */}
       {expanded && (
-        <div className="flex flex-col gap-4 border-t border-subtle px-4 py-4">
-          <div>
-            <span className={labelCls}>Group name</span>
-            <input
-              className={cn(field, "mt-1")}
-              placeholder="Group name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-          </div>
-
-          <div>
-            <span className={labelCls}>Services in this group</span>
-            <p className="mt-0.5 text-[11px] text-muted">
-              A service can be in one group at a time — adding it here moves it
-              out of any other group.
-            </p>
-            <div className="mt-1 flex flex-wrap gap-2">
-              {activeServices.map((s) => (
-                <button
-                  key={s.id}
-                  onClick={() => toggleService(s.id)}
-                  className={cn(
-                    "rounded-full border px-3 py-1 text-xs transition-colors",
-                    serviceIds.includes(s.id)
-                      ? "border-gold/60 bg-gold/10 text-gold"
-                      : "border-subtle text-muted",
-                  )}
-                >
-                  {s.name}
-                </button>
-              ))}
-              {activeServices.length === 0 && (
-                <span className="text-xs text-muted">Add a service first.</span>
-              )}
-            </div>
-          </div>
-
-          {/* Order within the group (Drick): the saved order is what customers
-              see on the booking page. Save persists the array order. */}
-          {serviceIds.length > 1 && (
-            <div>
-              <span className={labelCls}>Order in this group</span>
-              <ul className="mt-1 flex flex-col gap-1">
-                {serviceIds.map((id, i) => (
-                  <li
-                    key={id}
-                    className="flex items-center gap-2 rounded-lg border border-subtle px-3 py-1.5"
-                  >
-                    <span className="w-4 text-xs text-muted">{i + 1}.</span>
-                    <span className="flex-1 text-sm">
-                      {services.find((s) => s.id === id)?.name ?? "…"}
-                    </span>
-                    <button
-                      type="button"
-                      disabled={i === 0}
-                      onClick={() =>
-                        setServiceIds((cur) => {
-                          const next = [...cur];
-                          [next[i - 1], next[i]] = [next[i]!, next[i - 1]!];
-                          return next;
-                        })
-                      }
-                      className="px-1 text-sm text-muted transition-colors hover:text-gold disabled:opacity-30"
-                      aria-label={`Move ${services.find((s) => s.id === id)?.name ?? "service"} up`}
-                    >
-                      ↑
-                    </button>
-                    <button
-                      type="button"
-                      disabled={i === serviceIds.length - 1}
-                      onClick={() =>
-                        setServiceIds((cur) => {
-                          const next = [...cur];
-                          [next[i], next[i + 1]] = [next[i + 1]!, next[i]!];
-                          return next;
-                        })
-                      }
-                      className="px-1 text-sm text-muted transition-colors hover:text-gold disabled:opacity-30"
-                      aria-label={`Move ${services.find((s) => s.id === id)?.name ?? "service"} down`}
-                    >
-                      ↓
-                    </button>
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-0.5 text-[11px] text-muted">
-                This is the order customers see. Hit Save to keep it.
-              </p>
-            </div>
-          )}
-
-          {/* Shared available-hours grid - same idiom as ServiceEditForm; these
-              hours OVERRIDE each member service's own windows. */}
-          <CollapsibleHours
-            title="Available hours for this group (optional)"
-            summary={hoursSummary(hoursRows)}
-          >
-            <div className="flex items-center justify-end">
-              <button
-                type="button"
-                onClick={() =>
-                  setHoursRows((cur) =>
-                    cur.map((r) => ({ ...r, mode: allHoursCustom ? "any" : "custom" })),
-                  )
-                }
-                className="shrink-0 rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:border-gold/50 hover:text-gold"
-              >
-                {allHoursCustom ? "All days: open" : "All days: custom"}
-              </button>
-            </div>
-            <p className="mt-0.5 text-[11px] text-muted">
-              Open = whenever the barber works that day. Custom = only the windows
-              you set (add a second window for a split day). Not open = no
-              bookings that day, for every service in this group.
-            </p>
-            <AvailableHoursRows
-              rows={hoursRows}
-              onChange={setHoursRows}
-              ariaScope="this group"
-            />
-          </CollapsibleHours>
-
-          {/* Booking limits across the whole group. Blank/0 = no cap. */}
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block">
-              <span className={labelCls}>Max per day (blank = no cap)</span>
-              <NumberField
-                min={0}
-                max={1000}
-                integer
-                className={cn(field, "mt-1")}
-                placeholder="No cap"
-                value={maxPerDay}
-                onChange={setMaxPerDay}
-                aria-label="Max bookings per day for this group"
-              />
-            </label>
-            <label className="block">
-              <span className={labelCls}>Max at once (blank = no cap)</span>
-              <NumberField
-                min={0}
-                max={100}
-                integer
-                className={cn(field, "mt-1")}
-                placeholder="No cap"
-                value={maxConcurrent}
-                onChange={setMaxConcurrent}
-                aria-label="Max concurrent bookings for this group"
-              />
-            </label>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <button
-              onClick={save}
-              disabled={pending}
-              className="rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
-            >
-              {pending ? "Saving…" : "Save"}
-            </button>
-            <button
-              onClick={remove}
-              disabled={pending}
-              className="text-xs text-danger-soft hover:underline disabled:opacity-50"
-            >
-              Remove
-            </button>
-          </div>
-        </div>
+        <ServiceGroupEditor
+          group={group}
+          services={services}
+          toast={toast}
+          unsavedRef={unsavedRef}
+        />
       )}
     </li>
+  );
+}
+
+// The expanded editor for ONE group. Three deliberate behaviors, all fixes for
+// real data loss ("every time you save or modify, hours reset" — Drick):
+//  1. Drafts seed when the barber OPENS the group, never at tab render. The old
+//     form mounted (collapsed) with the tab and never resynced with refreshed
+//     props, so a Save from a stale row wrote its mount-time snapshot back.
+//  2. Save PATCHes ONLY the fields changed in THIS editor. The old full-form
+//     payload turned any staleness into silent overwrites — an untouched
+//     all-Open hours grid re-serialized to {} and CLEARED the saved windows on
+//     every unrelated save (rename, reorder, membership, caps).
+//  3. Unsaved edits are guarded: collapse / switch-group / tab-switch confirm
+//     first, and a hard unload gets the browser prompt (StaffHoursSheet idiom).
+function ServiceGroupEditor({
+  group,
+  services,
+  toast,
+  unsavedRef,
+}: {
+  group: ServiceGroupRow;
+  services: ServiceRow[];
+  toast: Toast;
+  unsavedRef: MutableRefObject<(() => boolean) | null>;
+}) {
+  const activeServices = services.filter((s) => s.active);
+  const [name, setName] = useState(group.name);
+  const [serviceIds, setServiceIds] = useState<string[]>(group.serviceIds);
+  const [hoursRows, setHoursRows] = useState<ServiceHoursRow[]>(() =>
+    hoursRowsFromWindows(group.hoursWindows),
+  );
+  // 0 = no cap (sent to the API as null). NumberField holds a number and settles
+  // an emptied field back to 0, so 0 is the natural "no cap" sentinel here.
+  const [maxPerDay, setMaxPerDay] = useState<number>(group.maxPerDay ?? 0);
+  const [maxConcurrent, setMaxConcurrent] = useState<number>(
+    group.maxConcurrent ?? 0,
+  );
+  const [pending, start] = useTransition();
+  // The last-persisted values in PAYLOAD form — the baseline the Save diff and
+  // the dirty flag compare against. Hours round-trip rows -> windows so both
+  // sides compare canonically ("any" days absent, closed days as []).
+  const [saved, setSaved] = useState(() => ({
+    name: group.name,
+    hours: JSON.stringify(buildHoursWindows(hoursRowsFromWindows(group.hoursWindows))),
+    maxPerDay: group.maxPerDay ?? null,
+    maxConcurrent: group.maxConcurrent ?? null,
+    serviceIds: JSON.stringify(group.serviceIds),
+  }));
+
+  function toggleService(id: string) {
+    setServiceIds((cur) =>
+      cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id],
+    );
+  }
+  const allHoursCustom = hoursRows.every((r) => r.mode === "custom");
+
+  // 0 (or blank, which NumberField settles to 0) = no cap → null. Otherwise the
+  // cap must be a positive integer.
+  function parseCap(n: number): { ok: boolean; value: number | null } {
+    if (n <= 0) return { ok: true, value: null };
+    if (!Number.isInteger(n)) return { ok: false, value: null };
+    return { ok: true, value: n };
+  }
+
+  // Unsaved edits? Caps compare through the same 0/blank -> null they save as.
+  const dirty =
+    name.trim() !== saved.name ||
+    JSON.stringify(buildHoursWindows(hoursRows)) !== saved.hours ||
+    (maxPerDay <= 0 ? null : maxPerDay) !== saved.maxPerDay ||
+    (maxConcurrent <= 0 ? null : maxConcurrent) !== saved.maxConcurrent ||
+    JSON.stringify(serviceIds) !== saved.serviceIds;
+
+  // While this editor is the open one, its dirty check is what the collapse /
+  // switch-group / tab-switch guards consult. Cleared on unmount.
+  const dirtyLive = useRef(dirty);
+  dirtyLive.current = dirty;
+  useEffect(() => {
+    unsavedRef.current = () => dirtyLive.current;
+    return () => {
+      unsavedRef.current = null;
+    };
+  }, [unsavedRef]);
+
+  // Warn on a hard page unload/close/refresh while dirty (in-app navigation is
+  // guarded by the confirms in ServiceGroupsManager / switchTab).
+  useEffect(() => {
+    if (!dirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = ""; // required for the prompt to show in Chrome
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [dirty]);
+
+  function save() {
+    if (!name.trim()) {
+      toast("Group name is required", "error");
+      return;
+    }
+    if (hasInvalidHoursRow(hoursRows)) {
+      toast("Group hours: each window's end must be after its start", "error");
+      return;
+    }
+    const perDay = parseCap(maxPerDay);
+    const concurrent = parseCap(maxConcurrent);
+    if (!perDay.ok || !concurrent.ok) {
+      toast("Limits must be a whole number (or blank for no cap)", "error");
+      return;
+    }
+    const trimmed = name.trim();
+    const hours = buildHoursWindows(hoursRows);
+    const hoursJson = JSON.stringify(hours);
+    const idsJson = JSON.stringify(serviceIds);
+    // Only what changed in THIS editor goes in the PATCH (the API keeps absent
+    // fields as-is) — an untouched field can never overwrite anything.
+    const payload: Partial<ServiceGroupInput> = {
+      ...(trimmed !== saved.name ? { name: trimmed } : {}),
+      ...(hoursJson !== saved.hours ? { hoursWindows: hours } : {}),
+      ...(perDay.value !== saved.maxPerDay ? { maxPerDay: perDay.value } : {}),
+      ...(concurrent.value !== saved.maxConcurrent
+        ? { maxConcurrent: concurrent.value }
+        : {}),
+      ...(idsJson !== saved.serviceIds ? { serviceIds } : {}),
+    };
+    if (Object.keys(payload).length === 0) {
+      toast("Group saved", "success"); // nothing changed - already saved
+      return;
+    }
+    // Snapshot exactly what's being persisted so a successful save clears
+    // dirty; a failure keeps the draft AND the flag (nothing silently lost).
+    const next = {
+      name: trimmed,
+      hours: hoursJson,
+      maxPerDay: perDay.value,
+      maxConcurrent: concurrent.value,
+      serviceIds: idsJson,
+    };
+    start(async () => {
+      const r = await updateServiceGroupAction(group.id, payload);
+      if (r.ok) {
+        setSaved(next);
+        toast("Group saved", "success");
+      } else {
+        toast("Couldn't save — your changes are still here. Try again.", "error");
+      }
+    });
+  }
+
+  function remove() {
+    if (
+      !window.confirm(
+        `Remove the group "${group.name}"? Its services stay, but the shared hours and limits are gone.`,
+      )
+    ) {
+      return;
+    }
+    start(async () => {
+      const r = await deleteServiceGroupAction(group.id);
+      toast(r.ok ? "Group removed" : "Couldn't remove", r.ok ? "success" : "error");
+    });
+  }
+
+  return (
+    <div className="flex flex-col gap-4 border-t border-subtle px-4 py-4">
+      <div>
+        <span className={labelCls}>Group name</span>
+        <input
+          className={cn(field, "mt-1")}
+          placeholder="Group name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+      </div>
+
+      <div>
+        <span className={labelCls}>Services in this group</span>
+        <p className="mt-0.5 text-[11px] text-muted">
+          Tap a service to add it to — or remove it from — this group. A
+          service can be in one group at a time, so adding it here moves it out
+          of any other group. Hit Save to keep the change.
+        </p>
+        <div className="mt-1 flex flex-wrap gap-2">
+          {activeServices.map((s) => {
+            const inGroup = serviceIds.includes(s.id);
+            return (
+              <button
+                key={s.id}
+                onClick={() => toggleService(s.id)}
+                aria-pressed={inGroup}
+                title={
+                  inGroup
+                    ? `Remove ${s.name} from this group`
+                    : `Add ${s.name} to this group`
+                }
+                className={cn(
+                  "rounded-full border px-3 py-1 text-xs transition-colors",
+                  inGroup
+                    ? "border-gold/60 bg-gold/10 text-gold"
+                    : "border-subtle text-muted hover:text-offwhite",
+                )}
+              >
+                <span aria-hidden>{inGroup ? "✓ " : "+ "}</span>
+                {s.name}
+              </button>
+            );
+          })}
+          {activeServices.length === 0 && (
+            <span className="text-xs text-muted">Add a service first.</span>
+          )}
+        </div>
+      </div>
+
+      {/* Order within the group (Drick): the saved order is what customers
+          see on the booking page. Save persists the array order. */}
+      {serviceIds.length > 1 && (
+        <div>
+          <span className={labelCls}>Order in this group</span>
+          <ul className="mt-1 flex flex-col gap-1">
+            {serviceIds.map((id, i) => (
+              <li
+                key={id}
+                className="flex items-center gap-2 rounded-lg border border-subtle px-3 py-1.5"
+              >
+                <span className="w-4 text-xs text-muted">{i + 1}.</span>
+                <span className="flex-1 text-sm">
+                  {services.find((s) => s.id === id)?.name ?? "…"}
+                </span>
+                <button
+                  type="button"
+                  disabled={i === 0}
+                  onClick={() =>
+                    setServiceIds((cur) => {
+                      const next = [...cur];
+                      [next[i - 1], next[i]] = [next[i]!, next[i - 1]!];
+                      return next;
+                    })
+                  }
+                  className="px-1 text-sm text-muted transition-colors hover:text-gold disabled:opacity-30"
+                  aria-label={`Move ${services.find((s) => s.id === id)?.name ?? "service"} up`}
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  disabled={i === serviceIds.length - 1}
+                  onClick={() =>
+                    setServiceIds((cur) => {
+                      const next = [...cur];
+                      [next[i], next[i + 1]] = [next[i + 1]!, next[i]!];
+                      return next;
+                    })
+                  }
+                  className="px-1 text-sm text-muted transition-colors hover:text-gold disabled:opacity-30"
+                  aria-label={`Move ${services.find((s) => s.id === id)?.name ?? "service"} down`}
+                >
+                  ↓
+                </button>
+                {/* Explicit remove — the chip above toggles membership too,
+                    but an ✕ on the row is the affordance barbers look for. */}
+                <button
+                  type="button"
+                  onClick={() => toggleService(id)}
+                  className="px-1 text-xs text-muted transition-colors hover:text-danger-soft"
+                  aria-label={`Remove ${services.find((s) => s.id === id)?.name ?? "service"} from this group`}
+                >
+                  ✕
+                </button>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-0.5 text-[11px] text-muted">
+            This is the order customers see. Hit Save to keep it.
+          </p>
+        </div>
+      )}
+
+      {/* Shared available-hours grid - same idiom as ServiceEditForm; these
+          hours OVERRIDE each member service's own windows. */}
+      <CollapsibleHours
+        title="Available hours for this group (optional)"
+        summary={hoursSummary(hoursRows)}
+      >
+        <div className="flex items-center justify-end">
+          <button
+            type="button"
+            onClick={() =>
+              setHoursRows((cur) =>
+                cur.map((r) => ({ ...r, mode: allHoursCustom ? "any" : "custom" })),
+              )
+            }
+            className="shrink-0 rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:border-gold/50 hover:text-gold"
+          >
+            {allHoursCustom ? "All days: open" : "All days: custom"}
+          </button>
+        </div>
+        <p className="mt-0.5 text-[11px] text-muted">
+          Open = whenever the barber works that day. Custom = only the windows
+          you set (add a second window for a split day). Not open = no
+          bookings that day, for every service in this group.
+        </p>
+        <AvailableHoursRows
+          rows={hoursRows}
+          onChange={setHoursRows}
+          ariaScope="this group"
+        />
+      </CollapsibleHours>
+
+      {/* Booking limits across the whole group. Blank/0 = no cap. */}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="block">
+          <span className={labelCls}>Max per day (blank = no cap)</span>
+          <NumberField
+            min={0}
+            max={1000}
+            integer
+            className={cn(field, "mt-1")}
+            placeholder="No cap"
+            value={maxPerDay}
+            onChange={setMaxPerDay}
+            aria-label="Max bookings per day for this group"
+          />
+        </label>
+        <label className="block">
+          <span className={labelCls}>Max at once (blank = no cap)</span>
+          <NumberField
+            min={0}
+            max={100}
+            integer
+            className={cn(field, "mt-1")}
+            placeholder="No cap"
+            value={maxConcurrent}
+            onChange={setMaxConcurrent}
+            aria-label="Max concurrent bookings for this group"
+          />
+        </label>
+      </div>
+
+      <div className="flex items-center gap-3">
+        <button
+          onClick={save}
+          disabled={pending}
+          className="rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+        >
+          {pending ? "Saving…" : "Save"}
+        </button>
+        <button
+          onClick={remove}
+          disabled={pending}
+          className="text-xs text-danger-soft hover:underline disabled:opacity-50"
+        >
+          Remove
+        </button>
+        {dirty && (
+          <span className="text-[11px] text-gold" role="status">
+            Unsaved changes — hit Save to keep them.
+          </span>
+        )}
+      </div>
+    </div>
   );
 }
 
