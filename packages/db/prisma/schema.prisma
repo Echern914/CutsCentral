@@ -394,6 +394,7 @@ model Shop {
   recurringSeries        RecurringSeries[]
   serviceAddOns          ServiceAddOn[]
   serviceGroups          ServiceGroup[]
+  goal                   ShopGoal?
   targetedSlots          TargetedSlot[]
   targetedSlotRules      TargetedSlotRule[]
   payments               Payment[]
@@ -1106,6 +1107,33 @@ model ServiceGroup {
   services Service[]
 
   @@index([shopId, active])
+}
+
+// The barber's Insights quota: ONE active goal per shop ("$4,000 this month" /
+// "60 cuts this week"). Progress is computed from COMPLETED Visits (the same
+// source Insights totals use, so it works identically for native and synced
+// shops); the goal row itself is just the target. Period windows are derived
+// in the SHOP's timezone at read time - nothing here stores dates.
+model ShopGoal {
+  id     String     @id @default(cuid())
+  shopId String     @unique // one active goal per shop (edit in place)
+  shop   Shop       @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  metric GoalMetric
+  period GoalPeriod
+  // Revenue goals: whole dollars. Visit-count goals: number of visits.
+  target    Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum GoalMetric {
+  revenue
+  visits
+}
+
+enum GoalPeriod {
+  week // Mon-start, shop tz (matches the Insights weekly series)
+  month // calendar month, shop tz
 }
 
 // An optional extra a customer can tack onto a service at booking (e.g. "+ beard
