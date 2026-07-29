@@ -21,8 +21,35 @@ export interface InsightsData {
   loyalty: { punchesEarned: number; punchesRedeemed: number; redemptions: number };
 }
 
+// Quota goal ("$4,000 this month" / "60 cuts this week") + live progress.
+export interface GoalData {
+  metric: "revenue" | "visits";
+  period: "week" | "month";
+  target: number;
+}
+export interface GoalProgress {
+  periodStart: string; // YYYY-MM-DD (shop-local)
+  periodEnd: string;
+  totalDays: number;
+  elapsedDays: number;
+  daysLeft: number;
+  actual: number;
+  paceTarget: number; // straight-line target for the elapsed fraction
+  delta: number; // actual - paceTarget (negative = behind pace)
+  pct: number; // actual / target, capped at 1
+  series: { day: number; cumulative: number | null }[]; // null = future day
+}
+export interface GoalResponse {
+  goal: GoalData | null;
+  progress: GoalProgress | null;
+}
+
 export default async function InsightsPage() {
-  const [res, me] = await Promise.all([apiGet<InsightsData>("/api/insights"), getMe()]);
+  const [res, goalRes, me] = await Promise.all([
+    apiGet<InsightsData>("/api/insights"),
+    apiGet<GoalResponse>("/api/insights/goal"),
+    getMe(),
+  ]);
   if (!res.ok || !res.data) {
     return <main className="p-8 text-muted">Could not load your insights.</main>;
   }
@@ -42,6 +69,7 @@ export default async function InsightsPage() {
       <div data-tour="charts">
         <InsightsClient
           initial={res.data}
+          initialGoal={goalRes.ok ? (goalRes.data ?? null) : null}
           rewardsEnabled={me.data?.rewardsEnabled ?? true}
         />
       </div>

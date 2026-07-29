@@ -1,5 +1,6 @@
 import { Router } from "express";
-import { prisma } from "@chairback/db";
+import { z } from "zod";
+import { prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 
 /**
@@ -213,4 +214,146 @@ insightsRouter.get("/", async (req, res) => {
       redemptions,
     },
   });
+});
+
+//  Quota goal ("$4,000 this month" / "60 cuts this week")
+
+// Progress is derived from COMPLETED Visits — the SAME source as the totals
+// above, so it reads identically for native and Acuity/Square-synced shops,
+// and an unpriced walk-in counts as a visit but contributes $0 revenue.
+
+/** Shop-local period window as UTC-midnight dates: [start, end). */
+function periodWindow(
+  now: Date,
+  timezone: string,
+  period: "week" | "month",
+): { start: Date; end: Date } {
+  const today = shopLocalDay(now, timezone);
+  if (period === "week") {
+    const start = weekStart(today);
+    return { start, end: new Date(start.getTime() + 7 * DAY_MS) };
+  }
+  const start = new Date(
+    Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1),
+  );
+  const end = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 1));
+  return { start, end };
+}
+
+// GET /api/insights/goal — the goal (or null) + live progress for the current
+// period: actual, where the target's straight-line pace says they should be,
+// and a per-day cumulative series for the chart.
+insightsRouter.get("/goal", async (req, res) => {
+  const shop = req.shop!;
+  const goal = await runWithShop(shop.id, (tx) =>
+    tx.shopGoal.findUnique({
+      where: { shopId: shop.id },
+      select: { metric: true, period: true, target: true },
+    }),
+  );
+  if (!goal) {
+    res.json({ goal: null, progress: null });
+    return;
+  }
+
+  const now = new Date();
+  const { start, end } = periodWindow(now, shop.timezone, goal.period);
+  // Pad the DB filter a day each side so timezone offsets can't clip a visit
+  // that's inside the window shop-locally (same trick as the weekly series).
+  const visits = await prisma.visit.findMany({
+    where: {
+      shopId: shop.id,
+      status: "COMPLETED",
+      scheduledAt: {
+        gte: new Date(start.getTime() - DAY_MS),
+        lt: new Date(end.getTime() + DAY_MS),
+      },
+    },
+    select: { scheduledAt: true, price: true },
+  });
+
+  const totalDays = Math.round((end.getTime() - start.getTime()) / DAY_MS);
+  const today = shopLocalDay(now, shop.timezone);
+  // Day 1 = the period's first day. Clamp: a goal viewed outside its own
+  // period (should not happen) still yields sane math.
+  const elapsedDays = Math.min(
+    totalDays,
+    Math.max(1, Math.round((today.getTime() - start.getTime()) / DAY_MS) + 1),
+  );
+
+  // Per-day buckets across the whole period (future days stay 0 for the chart).
+  const perDay = new Array<number>(totalDays).fill(0);
+  let actual = 0;
+  for (const v of visits) {
+    const day = shopLocalDay(v.scheduledAt, shop.timezone);
+    const idx = Math.round((day.getTime() - start.getTime()) / DAY_MS);
+    if (idx < 0 || idx >= totalDays) continue; // padding stragglers
+    const amount = goal.metric === "revenue" ? Number(v.price ?? 0) : 1;
+    perDay[idx]! += amount;
+    actual += amount;
+  }
+  let running = 0;
+  const series = perDay.map((amount, i) => {
+    // Cumulative up to today; future days carry null so the chart's actual
+    // line stops at "now" instead of flatlining to the period's end.
+    if (i >= elapsedDays) return { day: i + 1, cumulative: null };
+    running += amount;
+    return { day: i + 1, cumulative: Math.round(running) };
+  });
+
+  const paceTarget = (goal.target * elapsedDays) / totalDays;
+  res.json({
+    goal,
+    progress: {
+      periodStart: start.toISOString().slice(0, 10),
+      periodEnd: new Date(end.getTime() - DAY_MS).toISOString().slice(0, 10),
+      totalDays,
+      elapsedDays,
+      daysLeft: totalDays - elapsedDays,
+      actual: Math.round(actual),
+      paceTarget: Math.round(paceTarget),
+      // ahead / behind by how much, vs the straight-line pace.
+      delta: Math.round(actual - paceTarget),
+      pct: goal.target > 0 ? Math.min(1, actual / goal.target) : 0,
+      series,
+    },
+  });
+});
+
+const goalSchema = z
+  .object({
+    metric: z.enum(["revenue", "visits"]),
+    period: z.enum(["week", "month"]),
+    // Whole dollars or visit count. Upper bound is a sanity rail, not a limit
+    // anyone real will hit.
+    target: z.number().int().min(1).max(1_000_000),
+  })
+  .strict();
+
+// PUT /api/insights/goal — set or replace the shop's one goal in place.
+insightsRouter.put("/goal", async (req, res) => {
+  const shop = req.shop!;
+  const parsed = goalSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const d = parsed.data;
+  await runWithShop(shop.id, (tx) =>
+    tx.shopGoal.upsert({
+      where: { shopId: shop.id },
+      create: { shopId: shop.id, ...d },
+      update: d,
+    }),
+  );
+  res.json({ ok: true });
+});
+
+// DELETE /api/insights/goal — clear it (deleteMany: idempotent, no 404 dance).
+insightsRouter.delete("/goal", async (req, res) => {
+  const shop = req.shop!;
+  await runWithShop(shop.id, (tx) =>
+    tx.shopGoal.deleteMany({ where: { shopId: shop.id } }),
+  );
+  res.json({ ok: true });
 });
