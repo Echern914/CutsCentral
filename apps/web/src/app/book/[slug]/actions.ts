@@ -112,6 +112,37 @@ export async function getDayBundlesAction(
   return { ok: true, data: res.data };
 }
 
+export interface OpenDaysResult {
+  timezone: string;
+  // How many days ahead the API scanned (its cap or bookingMaxDays, whichever
+  // is smaller). Days beyond this weren't checked — don't grey them.
+  scanDays: number;
+  // Shop-local YYYY-MM-DD days with at least one real opening, sorted.
+  openDays: string[];
+  // The single earliest bookable slot across every service, if any.
+  soonest: {
+    date: string; // shop-local YYYY-MM-DD
+    startsAt: string; // ISO instant
+    serviceId: string;
+    staffIds: string[];
+  } | null;
+}
+
+/**
+ * Which days actually have an opening (real engine, not the weekday
+ * heuristic) + the soonest bookable slot. Drives the day-first calendar's
+ * greying, its auto-selected landing day, and the "Soonest available" chip.
+ */
+export async function getOpenDaysAction(
+  slug: string,
+): Promise<{ ok: boolean; data?: OpenDaysResult; error?: string }> {
+  const res = await apiPublicGet<OpenDaysResult>(
+    `/api/book/${encodeURIComponent(slug)}/open-days`,
+  );
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, data: res.data };
+}
+
 export interface BookInput {
   staffId: string;
   serviceId: string;

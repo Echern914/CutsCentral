@@ -16,9 +16,11 @@ import {
   bookAction,
   getDayBundlesAction,
   getMergedSlotsAction,
+  getOpenDaysAction,
   type DayBundlesResult,
   type DayService,
   type MergedSlotsResult,
+  type OpenDaysResult,
 } from "./actions";
 import { PaymentStep } from "./PaymentStep";
 import { WaitlistForm } from "./WaitlistForm";
@@ -301,9 +303,9 @@ export function BookingClient({ data }: { data: BookShopData }) {
       return next;
     });
 
-  // Days the calendar offers: within the booking window, on a weekday anyone
-  // works at all (cheap heuristic — the REAL openings are fetched on tap, and
-  // an empty day says so instead of lying).
+  // Days the calendar offers, first pass: within the booking window, on a
+  // weekday anyone works at all (cheap heuristic, available instantly from the
+  // shell payload — the REAL availability arrives just behind it, below).
   const dayFirstDays = useMemo(() => {
     if (!dayFirst) return new Set<string>();
     const out = new Set<string>();
@@ -323,12 +325,74 @@ export function BookingClient({ data }: { data: BookShopData }) {
     return out;
   }, [dayFirst, tz, data.shop.bookingMaxDays, data.openWeekdays]);
 
+  // REAL availability (engine-computed, 60s-cached server side): which days
+  // actually have an opening, and the single soonest bookable slot. The
+  // weekday heuristic alone auto-selected TODAY even when today's slots were
+  // gone (every evening visitor landed on an empty day) and never greyed a
+  // fully-booked date — "grey out days not open" / "doesn't open in the next
+  // day available" (Drick).
+  const [openInfo, setOpenInfo] = useState<OpenDaysResult | "unavailable" | null>(null);
+  useEffect(() => {
+    if (!dayFirst) return;
+    let alive = true;
+    (async () => {
+      const res = await getOpenDaysAction(data.shop.slug);
+      if (!alive) return;
+      // On failure the calendar simply keeps the heuristic — never a dead page.
+      setOpenInfo(res.ok && res.data ? res.data : "unavailable");
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [dayFirst, data.shop.slug]);
+  const openDaySet = useMemo(
+    () =>
+      openInfo && openInfo !== "unavailable" ? new Set(openInfo.openDays) : null,
+    [openInfo],
+  );
+
+  // What the calendar actually offers: inside the scanned range the engine's
+  // answer replaces the heuristic (fully-booked and closed days grey out);
+  // beyond it the heuristic stands (the API didn't look that far). Open days
+  // the heuristic missed — a targeted special on an off weekday — are added.
+  const calendarDays = useMemo(() => {
+    if (!openDaySet || !openInfo || openInfo === "unavailable") return dayFirstDays;
+    const today = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+    const edge = new Date(`${today}T12:00:00Z`);
+    edge.setUTCDate(edge.getUTCDate() + openInfo.scanDays);
+    const lastScanned = edge.toISOString().slice(0, 10);
+    const out = new Set<string>();
+    for (const d of dayFirstDays) {
+      if (d < lastScanned) {
+        if (openDaySet.has(d)) out.add(d);
+      } else {
+        out.add(d);
+      }
+    }
+    for (const d of openDaySet) out.add(d);
+    return out;
+  }, [dayFirstDays, openDaySet, openInfo, tz]);
+
+  // Which day the AUTO-select landed on (null after any manual pick) — only an
+  // auto-picked day may be silently re-aimed when real availability arrives.
+  const autoPickedDay = useRef<string | null>(null);
+  // Set when the "Soonest available" chip is tapped: once that day's bundles
+  // load, bind this exact service + slot so one tap really books the soonest.
+  const pendingSoonest = useRef<{ serviceId: string; startsAt: string } | null>(
+    null,
+  );
+
   // Calendar month shown before the customer picks one: the first offered day,
   // else the CURRENT shop-tz month. Never a hardcoded past month - a shop with
   // no availability yet must still show today's calendar (with the empty-state
   // note below it), not a dead page.
   const dayFirstFallbackMonth = useMemo(() => {
-    const first = [...dayFirstDays].sort()[0];
+    const first = [...calendarDays].sort()[0];
     if (first) return monthKey(first);
     return monthKey(
       new Intl.DateTimeFormat("en-CA", {
@@ -338,18 +402,39 @@ export function BookingClient({ data }: { data: BookShopData }) {
         day: "2-digit",
       }).format(new Date()),
     );
-  }, [dayFirstDays, tz]);
+  }, [calendarDays, tz]);
 
   // Auto-select the soonest bookable day on open, so the page arrives with a
   // date already highlighted and every service showing that day's times — the
   // customer sees real availability without tapping anything. Runs once
-  // (dayDate is only null before the first pick).
+  // (dayDate is only null before the first pick). Uses whatever the calendar
+  // currently offers — the heuristic at first paint, so the page is instant.
   useEffect(() => {
     if (dayDate !== null) return;
-    const first = [...dayFirstDays].sort()[0];
-    if (first) pickDay(first);
+    const first = [...calendarDays].sort()[0];
+    if (first) {
+      autoPickedDay.current = first;
+      pickDay(first);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dayFirstDays]);
+  }, [calendarDays]);
+
+  // When the engine's answer lands: if the auto-pick landed on a day with
+  // nothing actually open (the classic: it's 9 PM, today's weekday qualifies
+  // but today's slots are gone), quietly re-aim at the first truly open day —
+  // "it should open on the next day available". Never touches a manual pick
+  // or a chosen time.
+  useEffect(() => {
+    if (!openDaySet) return;
+    if (dayDate === null || autoPickedDay.current !== dayDate) return;
+    if (openDaySet.has(dayDate) || slot !== null) return;
+    const first = [...openDaySet].sort()[0];
+    if (first && first !== dayDate) {
+      autoPickedDay.current = first;
+      pickDay(first);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openDaySet, dayDate]);
 
   function pickDay(day: string) {
     setDayDate(day);
@@ -364,7 +449,31 @@ export function BookingClient({ data }: { data: BookShopData }) {
       const res = await getDayBundlesAction(data.shop.slug, day);
       if (res.ok && res.data) setDayData(res.data);
       setDayLoading(false);
+      // Soonest-chip tap: the day is loaded — now bind the exact service+slot
+      // it promised, so the tap goes straight to the details step.
+      const target = pendingSoonest.current;
+      if (target && res.ok && res.data) {
+        pendingSoonest.current = null;
+        const all = [
+          ...res.data.bundles.flatMap((b) => b.services),
+          ...res.data.ungrouped,
+        ];
+        const svc = all.find((s) => s.id === target.serviceId);
+        const hit = svc?.slots.find((x) => x.startsAt === target.startsAt);
+        if (svc && hit) pickDaySlot(svc, hit);
+        // Sold out in the seconds since? The day's real times are showing —
+        // honest fallback, nothing to fake.
+      }
     });
+  }
+
+  /** "Soonest available" chip: jump to the earliest bookable slot anywhere. */
+  function pickSoonestOpen() {
+    const s = openInfo && openInfo !== "unavailable" ? openInfo.soonest : null;
+    if (!s) return;
+    pendingSoonest.current = { serviceId: s.serviceId, startsAt: s.startsAt };
+    autoPickedDay.current = null; // deliberate pick — never re-aimed
+    pickDay(s.date);
   }
 
   /** Tap a time in the day view: bind service + slot (+ barber) and go to details. */
@@ -973,16 +1082,45 @@ export function BookingClient({ data }: { data: BookShopData }) {
             />
           }
         >
+          {/* Soonest-available shortcut: one tap to the earliest open time
+              across every service (the day loads and the exact slot binds). */}
+          {openInfo && openInfo !== "unavailable" && openInfo.soonest && (
+            <button
+              type="button"
+              onClick={pickSoonestOpen}
+              className="mb-3 flex w-full items-center justify-between rounded-xl border px-4 py-3 text-left transition-colors"
+              style={{
+                borderColor:
+                  slot === openInfo.soonest.startsAt
+                    ? accent
+                    : "rgba(255,255,255,0.15)",
+              }}
+            >
+              <span className="text-sm font-semibold" style={{ color: accent }}>
+                Soonest available
+              </span>
+              <span className="text-sm text-muted">
+                {dateFmt.format(new Date(openInfo.soonest.startsAt))} ·{" "}
+                {timeFmt.format(new Date(openInfo.soonest.startsAt))}
+              </span>
+            </button>
+          )}
           <MonthCalendar
             viewMonth={dayMonth ?? dayFirstFallbackMonth}
-            availableDays={dayFirstDays}
+            availableDays={calendarDays}
             selectedDay={dayDate}
             accent={accent}
             onAccent={onAccent}
             labelForDay={(d) => dateFmt.format(new Date(`${d}T12:00:00Z`))}
             onPrevMonth={() => setDayMonth((m) => addMonths(m ?? dayFirstFallbackMonth, -1))}
             onNextMonth={() => setDayMonth((m) => addMonths(m ?? dayFirstFallbackMonth, 1))}
-            onPickDay={pickDay}
+            onPickDay={(d) => {
+              // A real tap: clear the auto-pick marker (this day is the
+              // customer's choice now) and any pending soonest-chip binding.
+              autoPickedDay.current = null;
+              pendingSoonest.current = null;
+              pickDay(d);
+            }}
           />
         </Section>
       )}
@@ -994,10 +1132,10 @@ export function BookingClient({ data }: { data: BookShopData }) {
           times show with zero taps. Tapping a service's time chip books it. */}
       {dayFirst && (
         <Section title="2 · Choose a service" tour="services">
-          {(dayLoading || (!dayData && dayFirstDays.size > 0)) && (
+          {(dayLoading || (!dayData && calendarDays.size > 0)) && (
             <p className="text-sm text-muted">Checking the day&apos;s openings…</p>
           )}
-          {!dayLoading && dayFirstDays.size === 0 && (
+          {!dayLoading && calendarDays.size === 0 && (
             <p className="text-sm text-muted">
               No open days right now — check back soon.
             </p>

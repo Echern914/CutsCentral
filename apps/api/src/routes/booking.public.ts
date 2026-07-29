@@ -494,6 +494,124 @@ bookingPublicRouter.get("/:slug/day", rewardsLimiter, async (req, res) => {
   res.json({ timezone: shop.timezone, date: parsed.data.date, bundles, ungrouped });
 });
 
+// GET /api/book/:slug/open-days — which shop-local days in the booking window
+// have at least ONE bookable opening across any service, plus the single
+// soonest slot overall. The day-first calendar used to offer days on a weekday
+// heuristic ("anyone works Tuesdays"), which (a) auto-selected TODAY even when
+// today's slots were all gone — every evening visitor landed on an empty day —
+// and (b) never greyed a fully-booked or closed date ("grey out days not
+// open" — Drick). Real availability, same engine as /day and the booking POST.
+//
+// Cost: one computeOpenSlots sweep per staff×service pair spanning the window
+// (what the legacy per-service calendar paid per pick, summed) — so results
+// are cached in-process for 60s per shop, same freshness tradeoff as the
+// public shell's 30s cache. The scan is capped at 45 days: calendars beyond
+// that fall back to the client's weekday heuristic, and the horizon check in
+// the booking POST still rejects anything truly out of range.
+const OPEN_DAYS_TTL_MS = 60_000;
+const OPEN_DAYS_SCAN_CAP = 45;
+const openDaysCache = new Map<string, { at: number; body: unknown }>();
+bookingPublicRouter.get("/:slug/open-days", rewardsLimiter, async (req, res) => {
+  const slug = req.params.slug!;
+  const shop = await resolveNativeShop(slug);
+  if (!shop) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const cached = openDaysCache.get(slug);
+  if (cached && Date.now() - cached.at < OPEN_DAYS_TTL_MS) {
+    res.json(cached.body);
+    return;
+  }
+  const now = new Date();
+  const scanDays = Math.min(shop.bookingMaxDays, OPEN_DAYS_SCAN_CAP);
+  const toDate = new Date(now.getTime() + scanDays * 24 * 60 * 60 * 1000);
+  const [services, links, targeted] = await Promise.all([
+    prisma.service.findMany({
+      where: { shopId: shop.id, active: true },
+      select: { id: true },
+    }),
+    prisma.serviceStaff.findMany({
+      where: { shopId: shop.id },
+      select: { serviceId: true, staffId: true },
+    }),
+    // Unbooked targeted specials count as openings too — a day whose only
+    // availability is a published special must not render greyed.
+    prisma.targetedSlot.findMany({
+      where: {
+        shopId: shop.id,
+        active: true,
+        bookedAppointmentId: null,
+        startsAt: { gt: now, lt: toDate },
+      },
+      select: { startsAt: true, serviceId: true, staffId: true },
+    }),
+  ]);
+  const staffByService = new Map<string, string[]>();
+  for (const l of links) {
+    staffByService.set(l.serviceId, [
+      ...(staffByService.get(l.serviceId) ?? []),
+      l.staffId,
+    ]);
+  }
+  // Shop-tz day keys, matching the client's YYYY-MM-DD calendar keys.
+  const dayFmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: shop.timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const openDays = new Set<string>();
+  let soonest: { startsAt: Date; serviceId: string; staffIds: string[] } | null =
+    null;
+  const consider = (startsAt: Date, serviceId: string, staffId: string) => {
+    openDays.add(dayFmt.format(startsAt));
+    if (!soonest || startsAt.getTime() < soonest.startsAt.getTime()) {
+      soonest = { startsAt, serviceId, staffIds: [staffId] };
+    } else if (
+      startsAt.getTime() === soonest.startsAt.getTime() &&
+      soonest.serviceId === serviceId &&
+      !soonest.staffIds.includes(staffId)
+    ) {
+      soonest.staffIds.push(staffId); // same instant, same service: merged chip
+    }
+  };
+  for (const svc of services) {
+    for (const staffId of staffByService.get(svc.id) ?? []) {
+      const slots = await computeOpenSlots({
+        shopId: shop.id,
+        staffId,
+        serviceId: svc.id,
+        fromDate: now,
+        toDate,
+        now,
+      });
+      for (const s of slots) consider(s.startsAt, svc.id, staffId);
+    }
+  }
+  for (const t of targeted) consider(t.startsAt, t.serviceId, t.staffId);
+  const soonestOut = soonest as {
+    startsAt: Date;
+    serviceId: string;
+    staffIds: string[];
+  } | null;
+  const body = {
+    timezone: shop.timezone,
+    scanDays,
+    openDays: [...openDays].sort(),
+    soonest: soonestOut
+      ? {
+          date: dayFmt.format(soonestOut.startsAt),
+          startsAt: soonestOut.startsAt.toISOString(),
+          serviceId: soonestOut.serviceId,
+          staffIds: soonestOut.staffIds,
+        }
+      : null,
+  };
+  openDaysCache.set(slug, { at: Date.now(), body });
+  res.json(body);
+});
+
 // POST /api/book/:slug - create a booking. Tighter (lead) limiter: anti-spam.
 const createSchema = z
   .object({
