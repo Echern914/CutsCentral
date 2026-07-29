@@ -245,3 +245,133 @@ describe("service order within a group", () => {
     await request(app).delete(`/api/booking/groups/${groupId}`).set("Cookie", cookie);
   });
 });
+
+// REGRESSION - Drick's "hours keep resetting": the dashboard used to send the
+// FULL group form on every save, so a Save from a stale editor overwrote
+// hoursWindows (an untouched all-Open grid serialized to {} and CLEARED the
+// configured windows). The web client now PATCHes only the fields the barber
+// changed; these lock the API contract that makes that safe: a field ABSENT
+// from the PATCH body is never touched.
+describe("group hours survive unrelated PATCHes", () => {
+  const hoursWindows = { "1": [{ s: 600, e: 840 }], "2": [{ s: 600, e: 840 }] }; // Mon+Tue 10:00-14:00
+
+  it("membership-only, name-only, caps-only, and hours-only PATCHes each touch only their field", async () => {
+    const create = await createGroup({
+      name: "After hours",
+      hoursWindows,
+      serviceIds: [serviceAId],
+    });
+    expect(create.status).toBe(201);
+    const groupId = create.body.id as string;
+
+    // Membership-only PATCH (add B) - the exact save the barber makes when
+    // editing which services are in the group.
+    let patch = await request(app)
+      .patch(`/api/booking/groups/${groupId}`)
+      .set("Cookie", cookie)
+      .send({ serviceIds: [serviceAId, serviceBId] });
+    expect(patch.status).toBe(200);
+    let found = (await listGroups()).find((g) => g.id === groupId)!;
+    expect(found.hoursWindows).toEqual(hoursWindows);
+    expect(found.serviceIds).toEqual([serviceAId, serviceBId]);
+
+    // Name-only PATCH.
+    patch = await request(app)
+      .patch(`/api/booking/groups/${groupId}`)
+      .set("Cookie", cookie)
+      .send({ name: "After hours (renamed)" });
+    expect(patch.status).toBe(200);
+    found = (await listGroups()).find((g) => g.id === groupId)!;
+    expect(found.name).toBe("After hours (renamed)");
+    expect(found.hoursWindows).toEqual(hoursWindows);
+    expect(found.serviceIds).toEqual([serviceAId, serviceBId]); // members untouched too
+
+    // Caps-only PATCH.
+    patch = await request(app)
+      .patch(`/api/booking/groups/${groupId}`)
+      .set("Cookie", cookie)
+      .send({ maxPerDay: 4 });
+    expect(patch.status).toBe(200);
+    found = (await listGroups()).find((g) => g.id === groupId)!;
+    expect(found.maxPerDay).toBe(4);
+    expect(found.hoursWindows).toEqual(hoursWindows);
+
+    // Hours-only PATCH updates hours and leaves membership alone.
+    const newWindows = { "5": [{ s: 540, e: 720 }] }; // Fri 9:00-12:00
+    patch = await request(app)
+      .patch(`/api/booking/groups/${groupId}`)
+      .set("Cookie", cookie)
+      .send({ hoursWindows: newWindows });
+    expect(patch.status).toBe(200);
+    found = (await listGroups()).find((g) => g.id === groupId)!;
+    expect(found.hoursWindows).toEqual(newWindows);
+    expect(found.serviceIds).toEqual([serviceAId, serviceBId]);
+
+    // Explicit {} clears - the documented "every day back to Open" intent.
+    patch = await request(app)
+      .patch(`/api/booking/groups/${groupId}`)
+      .set("Cookie", cookie)
+      .send({ hoursWindows: {} });
+    expect(patch.status).toBe(200);
+    found = (await listGroups()).find((g) => g.id === groupId)!;
+    expect(found.hoursWindows).toEqual({});
+
+    await request(app).delete(`/api/booking/groups/${groupId}`).set("Cookie", cookie);
+  });
+
+  it("an empty PATCH body changes nothing (and 200s)", async () => {
+    const create = await createGroup({
+      name: "No-op",
+      hoursWindows,
+      serviceIds: [serviceAId],
+    });
+    expect(create.status).toBe(201);
+    const groupId = create.body.id as string;
+
+    const patch = await request(app)
+      .patch(`/api/booking/groups/${groupId}`)
+      .set("Cookie", cookie)
+      .send({});
+    expect(patch.status).toBe(200);
+    const found = (await listGroups()).find((g) => g.id === groupId)!;
+    expect(found.name).toBe("No-op");
+    expect(found.hoursWindows).toEqual(hoursWindows);
+    expect(found.serviceIds).toEqual([serviceAId]);
+
+    await request(app).delete(`/api/booking/groups/${groupId}`).set("Cookie", cookie);
+  });
+});
+
+describe("group membership claims skip soft-deleted services", () => {
+  it("a deleted service id in serviceIds is dropped on create AND on PATCH", async () => {
+    // A service that's been removed from the shop (soft delete: active=false).
+    const deletedId = await createService("Old fade", 30, 25);
+    const del = await request(app)
+      .delete(`/api/booking/services/${deletedId}`)
+      .set("Cookie", cookie);
+    expect(del.status).toBe(200);
+
+    // Create: the deleted id is silently dropped, like a foreign id.
+    const create = await createGroup({
+      name: "Live members only",
+      serviceIds: [serviceAId, deletedId],
+    });
+    expect(create.status).toBe(201);
+    const groupId = create.body.id as string;
+    let found = (await listGroups()).find((g) => g.id === groupId)!;
+    expect(found.serviceIds).toEqual([serviceAId]);
+    expect(await serviceGroupIdOf(deletedId)).toBeNull();
+
+    // PATCH (the stale-client shape): still dropped, live ids still claimed.
+    const patch = await request(app)
+      .patch(`/api/booking/groups/${groupId}`)
+      .set("Cookie", cookie)
+      .send({ serviceIds: [serviceAId, serviceBId, deletedId] });
+    expect(patch.status).toBe(200);
+    found = (await listGroups()).find((g) => g.id === groupId)!;
+    expect(found.serviceIds).toEqual([serviceAId, serviceBId]);
+    expect(await serviceGroupIdOf(deletedId)).toBeNull();
+
+    await request(app).delete(`/api/booking/groups/${groupId}`).set("Cookie", cookie);
+  });
+});
