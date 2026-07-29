@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   useTransition,
@@ -1470,6 +1471,19 @@ function TargetedSlotsManager({
   }
 
   function removeRule(rule: TargetedSlotRuleRow) {
+    // A series is configuration (service, weekly time, price) — one tap used
+    // to wipe every future date of it with no confirm.
+    const svcName =
+      services.find((s) => s.id === rule.serviceId)?.name ?? "this service";
+    if (
+      !window.confirm(
+        rule.indefinite
+          ? `Turn off the weekly ${svcName} series? All of its future special slots are removed.`
+          : `Remove the ${svcName} series and its remaining dates?`,
+      )
+    ) {
+      return;
+    }
     start(async () => {
       const r = await deleteTargetedSlotRuleAction(rule.id);
       toast(
@@ -1487,6 +1501,13 @@ function TargetedSlotsManager({
   function removeSelected() {
     const ids = [...selected];
     if (ids.length === 0) return;
+    if (
+      !window.confirm(
+        `Remove ${ids.length} selected special slot${ids.length === 1 ? "" : "s"}?`,
+      )
+    ) {
+      return;
+    }
     start(async () => {
       const r = await bulkDeleteTargetedSlotsAction(ids);
       toast(r.ok ? "Selected slots removed" : "Couldn't remove", r.ok ? "success" : "error");
@@ -1821,13 +1842,6 @@ function AddOnsManager({
       } else toast("Couldn't add", "error");
     });
   }
-  function remove(id: string) {
-    start(async () => {
-      const r = await deleteAddOnAction(id);
-      toast(r.ok ? "Add-on removed" : "Couldn't remove", r.ok ? "success" : "error");
-    });
-  }
-
   // Inline edit (Drick: "edits for add ons" - Remove-and-retype loses the
   // scope selection and feels destructive). One row edits at a time; the draft
   // mirrors the add form's fields and saves via the (previously unused) PATCH.
@@ -1837,7 +1851,81 @@ function AddOnsManager({
   const [draftPrice, setDraftPrice] = useState("");
   const [draftServiceIds, setDraftServiceIds] = useState<string[]>([]);
 
+  // Rows a save JUST persisted, keyed by id, until server props catch up.
+  // saveEdit PATCHes the FULL add-on from a draft seeded at edit-open — and
+  // the post-save revalidatePath refetch takes seconds on prod. Re-opening an
+  // edit inside that window used to seed STALE props, so the next save quietly
+  // reverted the change that was just made (the group editor's clobber in
+  // miniature). Rows and re-edits read the just-saved value instead; each
+  // override drops as soon as the refreshed props deep-equal it.
+  const [savedOverrides, setSavedOverrides] = useState<Map<string, AddOnRow>>(
+    () => new Map(),
+  );
+  const rows = useMemo(
+    () => initial.map((a) => savedOverrides.get(a.id) ?? a),
+    [initial, savedOverrides],
+  );
+  useEffect(() => {
+    if (savedOverrides.size === 0) return;
+    const caughtUp = [...savedOverrides.entries()]
+      .filter(([id, o]) => {
+        const p = initial.find((a) => a.id === id);
+        return (
+          p &&
+          p.name === o.name &&
+          p.durationMin === o.durationMin &&
+          p.price === o.price &&
+          JSON.stringify(p.serviceIds) === JSON.stringify(o.serviceIds)
+        );
+      })
+      .map(([id]) => id);
+    if (caughtUp.length > 0) {
+      setSavedOverrides((cur) => {
+        const next = new Map(cur);
+        for (const id of caughtUp) next.delete(id);
+        return next;
+      });
+    }
+  }, [initial, savedOverrides]);
+
+  // Unsaved changes in the open inline edit? Same exits guarded as the group
+  // editor: nav-away (links + Sign out + hard unload) via useLeaveGuard, and
+  // switching to a different row confirms in beginEdit.
+  const editingRow = editingId ? rows.find((a) => a.id === editingId) : null;
+  const editDirty =
+    !!editingRow &&
+    (draftName.trim() !== editingRow.name ||
+      draftDuration !== editingRow.durationMin ||
+      (draftPrice.trim() ? Number(draftPrice) : null) !== editingRow.price ||
+      JSON.stringify(draftServiceIds) !== JSON.stringify(editingRow.serviceIds));
+  useLeaveGuard(editDirty, "You have unsaved add-on edits. Leave and lose them?");
+
+  function remove(id: string) {
+    // One tap used to delete the add-on with no confirm — same trap the
+    // service list had.
+    const a = rows.find((x) => x.id === id);
+    if (
+      !window.confirm(
+        `Remove the add-on "${a?.name ?? "this add-on"}"? This can't be undone.`,
+      )
+    ) {
+      return;
+    }
+    start(async () => {
+      const r = await deleteAddOnAction(id);
+      toast(r.ok ? "Add-on removed" : "Couldn't remove", r.ok ? "success" : "error");
+    });
+  }
+
   function beginEdit(a: AddOnRow) {
+    if (
+      editingId &&
+      editingId !== a.id &&
+      editDirty &&
+      !window.confirm("You have unsaved add-on edits. Switch rows and lose them?")
+    ) {
+      return;
+    }
     setEditingId(a.id);
     setDraftName(a.name);
     setDraftDuration(a.durationMin);
@@ -1866,6 +1954,20 @@ function AddOnsManager({
         serviceIds: draftServiceIds,
       });
       if (r.ok) {
+        // Remember what was persisted so the row (and a re-opened edit) shows
+        // the saved values while the props refetch is still in flight.
+        const base = rows.find((a) => a.id === id);
+        if (base) {
+          setSavedOverrides((cur) =>
+            new Map(cur).set(id, {
+              ...base,
+              name: draftName.trim(),
+              durationMin: draftDuration,
+              price: priceNum,
+              serviceIds: [...draftServiceIds],
+            }),
+          );
+        }
         toast("Add-on updated", "success");
         setEditingId(null);
       } else toast("Couldn't save", "error");
@@ -1965,7 +2067,7 @@ function AddOnsManager({
       </button>
 
       <ul className="mt-5 flex flex-col gap-2">
-        {initial.filter((a) => a.active).map((a) =>
+        {rows.filter((a) => a.active).map((a) =>
           editingId === a.id ? (
             // Inline editor: the same labeled fields as the add form, prefilled.
             <li
