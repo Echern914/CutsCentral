@@ -53,6 +53,16 @@ const ALERT_COPY: Record<
  * FAIL-CLOSED (returns false on DB error), the opposite of pgRateStore's
  * fail-open: a limiter must never take the API down, but a failed dedupe claim
  * here would send duplicate paid SMS. Missing an alert is the safer failure.
+ *
+ * BOTH CASE arms are load-bearing - do not "simplify" the "hits" one away.
+ * `RETURNING (hits = 1)` reads the POST-update row, so if "hits" only ever
+ * incremented, the claim would succeed on the initial INSERT and NEVER again:
+ * the owner would be told once that the AI went dark and never on any later
+ * day, silently reinstating the failure mode this module exists to report.
+ * Resetting "hits" alongside "expiresAt" makes the row recycle itself, so
+ * correctness does not depend on the (explicitly optional) expired-counter
+ * sweep in pgRateStore either. Covered by the "re-arms after the window
+ * lapses" regression test.
  */
 async function claimAlertSlot(shopId: string, reason: string): Promise<boolean> {
   const key = `receptionist_cap_alert:${shopId}:${reason}`;
@@ -66,7 +76,11 @@ async function claimAlertSlot(shopId: string, reason: string): Promise<boolean> 
         now() AT TIME ZONE 'UTC'
       )
       ON CONFLICT ("key") DO UPDATE
-        SET "hits" = "rate_limit_counter"."hits" + 1,
+        SET "hits" = CASE
+              WHEN "rate_limit_counter"."expiresAt" <= (now() AT TIME ZONE 'UTC')
+                THEN 1
+              ELSE "rate_limit_counter"."hits" + 1
+            END,
             "expiresAt" = CASE
               WHEN "rate_limit_counter"."expiresAt" <= (now() AT TIME ZONE 'UTC')
                 THEN (now() AT TIME ZONE 'UTC') + (${ALERT_WINDOW_HOURS}::int * interval '1 hour')

@@ -20,6 +20,9 @@ vi.mock("../messaging/push.js", () => ({
 
 const { alertShopCapTripped } = await import("./capAlert.js");
 
+/** Shop id used by the "shop is gone" case; needs explicit counter cleanup. */
+const MISSING_SHOP_ID = "missing-shop-id";
+
 let userId: string;
 let shopId: string;
 
@@ -41,8 +44,24 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // rate_limit_counter has no shopId FK, so nothing cascades - the dedupe rows
+  // must be deleted for EVERY shop these tests created (several cases spin up
+  // their own), not just the shared one. Otherwise they accumulate in the
+  // shared test DB and a stale row can pre-claim a later run's alert slot.
+  const shops = await prisma.shop.findMany({
+    where: { ownerId: userId },
+    select: { id: true },
+  });
   await prisma.rateLimitCounter.deleteMany({
-    where: { key: { contains: shopId } },
+    where: {
+      OR: [
+        ...shops.map((s) => ({ key: { contains: s.id } })),
+        // The "shop is gone" case claims a slot for an id that never existed
+        // (the claim deliberately precedes the shop lookup), so it has no Shop
+        // row to find it by.
+        { key: { contains: MISSING_SHOP_ID } },
+      ],
+    },
   });
   await prisma.shop.deleteMany({ where: { ownerId: userId } });
   await prisma.user.delete({ where: { id: userId } });
@@ -80,6 +99,50 @@ describe("alertShopCapTripped", () => {
     expect(pushMock).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * REGRESSION (the bug the original tests missed): the dedupe must RE-ARM once
+   * the window lapses. The first version of the claim SQL bumped "hits"
+   * unconditionally while only resetting "expiresAt", so RETURNING (hits = 1)
+   * could only ever be true on the very first INSERT - the owner was alerted
+   * once EVER per shop+reason instead of once per window, which silently
+   * reinstated the "shop-wide caps fail silently" defect this feature exists to
+   * close. Nothing here advances real time; we backdate the counter row, which
+   * is exactly what a lapsed window looks like to the SQL.
+   */
+  it("re-arms after the window lapses, so a later trip alerts again", async () => {
+    const shop = await prisma.shop.create({
+      data: {
+        ownerId: userId,
+        name: "Re-arm Shop",
+        bookingUrl: "https://rearm.test",
+        webhookSecret: randomToken(),
+        notifyPhone: "+13025550177",
+      },
+    });
+
+    await alertShopCapTripped({ shopId: shop.id, reason: "shop_daily_cap" });
+    expect(pushMock).toHaveBeenCalledTimes(1);
+
+    // Same window: still deduped.
+    await alertShopCapTripped({ shopId: shop.id, reason: "shop_daily_cap" });
+    expect(pushMock).toHaveBeenCalledTimes(1);
+
+    // Window lapses (the shop is still being hammered the next day).
+    const key = `receptionist_cap_alert:${shop.id}:shop_daily_cap`;
+    await prisma.$executeRaw`
+      UPDATE "rate_limit_counter"
+         SET "expiresAt" = (now() AT TIME ZONE 'UTC') - interval '1 hour'
+       WHERE "key" = ${key}
+    `;
+
+    await alertShopCapTripped({ shopId: shop.id, reason: "shop_daily_cap" });
+    expect(pushMock).toHaveBeenCalledTimes(2); // alerted again - not silent
+
+    // ...and the fresh window dedupes again.
+    await alertShopCapTripped({ shopId: shop.id, reason: "shop_daily_cap" });
+    expect(pushMock).toHaveBeenCalledTimes(2);
+  });
+
   it("suppresses the SMS leg under DRY_RUN (push still fires)", async () => {
     // Fresh shop so the dedupe key is unclaimed.
     const shop = await prisma.shop.create({
@@ -99,7 +162,7 @@ describe("alertShopCapTripped", () => {
 
   it("does not throw when the shop is gone (alerting must never break the webhook)", async () => {
     await expect(
-      alertShopCapTripped({ shopId: "missing-shop-id", reason: "shop_daily_cap" }),
+      alertShopCapTripped({ shopId: MISSING_SHOP_ID, reason: "shop_daily_cap" }),
     ).resolves.toBeUndefined();
     expect(sendMock).not.toHaveBeenCalled();
   });
