@@ -2585,6 +2585,19 @@ function ServiceGroupEditor({
 
       {/* Shared available-hours grid - same idiom as ServiceEditForm; these
           hours OVERRIDE each member service's own windows. */}
+      {/* All-Open = NO restriction: the group's services are bookable any
+          time the barber works, and each member's OWN windows are ignored
+          (the group override masks them). Said out loud because a wiped or
+          never-set grid otherwise just looks like "Open everywhere" — and a
+          barber who set per-service windows sees those times "reset" the
+          moment a service joins the group, with no clue why. */}
+      {hoursRows.every((r) => r.mode === "any") && (
+        <p className="mb-1 rounded-lg border border-gold/25 bg-gold/5 px-3 py-2 text-[11px] text-gold/90">
+          No group hours set — these services can be booked whenever the barber
+          works, even if a service has its own hours. Set windows below to
+          restrict them.
+        </p>
+      )}
       <CollapsibleHours
         title="Available hours for this group (optional)"
         summary={hoursSummary(hoursRows)}
