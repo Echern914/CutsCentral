@@ -28,7 +28,11 @@ export function ActivityFeed({
       {items.length === 0 ? (
         <p className="px-5 py-6 text-sm text-muted">No activity yet.</p>
       ) : (
-        <ul className="divide-y divide-subtle">
+        // Cap the preview height and scroll internally: the feed returns up to
+        // 20 items, which otherwise towers over the short cards beside it and
+        // strands a tall void in the grid column. "See all" leads to the full,
+        // uncapped list. ~5 rows visible (each row is py-3.5 + text ≈ 3.25rem).
+        <ul className="max-h-80 divide-y divide-subtle overflow-y-auto">
           {items.map((item, i) => (
             <li key={i} className="flex items-center gap-3 px-5 py-3.5">
               <span
