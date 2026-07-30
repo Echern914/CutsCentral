@@ -32,29 +32,42 @@ export interface SavePageResult {
   fieldErrors?: Record<string, string>;
 }
 
+/**
+ * Whitelist of PATCHable page fields. Server actions are network-callable, so
+ * the body is rebuilt from this list — extra keys in `input` never reach the
+ * API — and only the keys the caller PROVIDED are forwarded: the editor
+ * diff-saves (changed fields only), so a form seeded from stale props can no
+ * longer clobber fields the barber never touched (the #142 bug class).
+ */
+const PAGE_FIELDS = [
+  "slug",
+  "publicPageEnabled",
+  "theme",
+  "bio",
+  "logoUrl",
+  "accentColor",
+  "heroImageUrl",
+  "instagramHandle",
+  "hoursText",
+  "gallery",
+  "fontKey",
+  "layoutStyle",
+  "sectionOrder",
+  "rewardsWelcome",
+  "rewardsSections",
+  "takesRequests",
+  "waitlistEnabled",
+  "notifyPhone",
+] as const satisfies readonly (keyof PageSettingsInput)[];
+
 export async function savePageAction(
-  input: PageSettingsInput,
+  input: Partial<PageSettingsInput>,
 ): Promise<SavePageResult> {
-  const res = await apiSend("PATCH", "/api/shops/me", {
-    slug: input.slug,
-    publicPageEnabled: input.publicPageEnabled,
-    theme: input.theme,
-    bio: input.bio,
-    logoUrl: input.logoUrl,
-    accentColor: input.accentColor,
-    heroImageUrl: input.heroImageUrl,
-    instagramHandle: input.instagramHandle,
-    hoursText: input.hoursText,
-    gallery: input.gallery,
-    fontKey: input.fontKey,
-    layoutStyle: input.layoutStyle,
-    sectionOrder: input.sectionOrder,
-    rewardsWelcome: input.rewardsWelcome,
-    rewardsSections: input.rewardsSections,
-    takesRequests: input.takesRequests,
-    waitlistEnabled: input.waitlistEnabled,
-    notifyPhone: input.notifyPhone,
-  });
+  const body: Record<string, unknown> = {};
+  for (const key of PAGE_FIELDS) {
+    if (key in input && input[key] !== undefined) body[key] = input[key];
+  }
+  const res = await apiSend("PATCH", "/api/shops/me", body);
   revalidatePath("/dashboard/site");
   if (res.ok) return { ok: true };
   if (res.error === "slug_taken") {
