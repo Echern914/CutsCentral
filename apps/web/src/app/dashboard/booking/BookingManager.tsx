@@ -16,6 +16,7 @@ import { NumberField } from "@/components/ui/NumberField";
 import { useToast } from "@/components/ui/Toast";
 import { useDemoTour } from "@/components/tour/state";
 import { cn } from "@/lib/cn";
+import { useLeaveGuard } from "@/lib/useLeaveGuard";
 import type {
   AddOnRow,
   AgendaResponse,
@@ -121,57 +122,9 @@ function ColorSwatchPicker({
 // toast promises is still there).
 type EditorGuardState = { dirty: boolean; saving: boolean };
 
-// Guard EVERY way off the page while a deferred-save editor holds unsaved
-// edits. `beforeunload` only covers hard exits (close/refresh/external link) —
-// Next's <Link> navigations are soft and never fire it, and the dashboard's
-// sticky top nav is exactly such links, so without the click interceptor one
-// tap on "Clients" silently discarded a half-configured hours grid. The
-// capture-phase listeners run before Link's own handler, so cancelling the
-// event genuinely stops the navigation.
-function useLeaveGuard(active: boolean, message: string) {
-  useEffect(() => {
-    if (!active) return;
-    const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-      e.returnValue = ""; // required for the prompt to show in Chrome
-    };
-    const onClick = (e: MouseEvent) => {
-      // Only plain left-clicks navigate in-tab; modified clicks open new tabs
-      // and leave the draft alone.
-      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)
-        return;
-      const a = (e.target as HTMLElement | null)?.closest?.(
-        "a[href]",
-      ) as HTMLAnchorElement | null;
-      if (!a || a.target === "_blank" || a.hasAttribute("download")) return;
-      const url = new URL(a.href, window.location.href);
-      if (url.origin !== window.location.origin) return; // external: beforeunload covers it
-      if (url.pathname === window.location.pathname) return; // same page (hash/query)
-      if (!window.confirm(message)) {
-        e.preventDefault();
-        e.stopPropagation();
-      }
-    };
-    const onSubmit = (e: Event) => {
-      // Server-action forms (the layout's Sign out) navigate too. Plain
-      // onSubmit-handled forms have no action attribute — leave those alone.
-      const form = e.target as HTMLFormElement | null;
-      if (!form || !form.getAttribute("action")) return;
-      if (!window.confirm(message)) {
-        e.preventDefault();
-        e.stopPropagation();
-      }
-    };
-    window.addEventListener("beforeunload", onBeforeUnload);
-    document.addEventListener("click", onClick, true);
-    document.addEventListener("submit", onSubmit, true);
-    return () => {
-      window.removeEventListener("beforeunload", onBeforeUnload);
-      document.removeEventListener("click", onClick, true);
-      document.removeEventListener("submit", onSubmit, true);
-    };
-  }, [active, message]);
-}
+// The leave guard (beforeunload + Link-click + server-action-submit
+// interception) lives in @/lib/useLeaveGuard now, shared with PageEditor and
+// any other deferred-save editor.
 
 export function BookingManager({
   shop,

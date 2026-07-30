@@ -291,6 +291,10 @@ export function BookingClient({ data }: { data: BookShopData }) {
   const [dayDate, setDayDate] = useState<string | null>(null); // YYYY-MM-DD (shop tz)
   const [dayData, setDayData] = useState<DayBundlesResult | null>(null);
   const [dayLoading, setDayLoading] = useState(false);
+  // A failed /day fetch used to leave "Checking the day's openings…" up
+  // FOREVER (the transition silently dropped the failure) — one network blip
+  // on landing and the whole page looked dead. Real state + a retry button.
+  const [dayError, setDayError] = useState(false);
   const [dayMonth, setDayMonth] = useState<string | null>(null); // "YYYY-MM"
   // Which group cards are expanded in the day view. Groups start open so the
   // customer sees services without a tap; tapping a header collapses one.
@@ -461,6 +465,13 @@ export function BookingClient({ data }: { data: BookShopData }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openDaySet, dayDate]);
 
+  // Monotonic fetch id: taps can outrun responses, and a SLOW response landing
+  // after a newer pick used to overwrite the newer day's times while the
+  // calendar highlight stayed put — chips show time-of-day only, so the
+  // customer would book day A believing it was day B, and the server would
+  // happily accept the (genuinely valid) day-A slot.
+  const daySeq = useRef(0);
+
   function pickDay(day: string) {
     setDayDate(day);
     setDayMonth(monthKey(day));
@@ -470,9 +481,13 @@ export function BookingClient({ data }: { data: BookShopData }) {
     clearSlotPick();
     setDayLoading(true);
     setDayData(null);
+    setDayError(false);
+    const seq = ++daySeq.current;
     startTransition(async () => {
       const res = await getDayBundlesAction(data.shop.slug, day);
+      if (seq !== daySeq.current) return; // superseded by a newer pick — drop it
       if (res.ok && res.data) setDayData(res.data);
+      else setDayError(true);
       setDayLoading(false);
       // Soonest-chip tap: the day is loaded — now bind the exact service+slot
       // it promised, so the tap goes straight to the details step.
@@ -970,6 +985,16 @@ export function BookingClient({ data }: { data: BookShopData }) {
           <h1 ref={confirmHeadingRef} tabIndex={-1} className="font-display text-2xl outline-none">
             {wasRequest ? "Request sent" : "You're booked!"}
           </h1>
+          {/* Spell out WHEN — "You're booked!" with no date/time forced the
+              customer into the manage page just to see what they booked. */}
+          {slot !== null && (
+            <p className="mt-2 text-base font-semibold">
+              {dateFmt.format(new Date(slot))} · {timeFmt.format(new Date(slot))}
+              {selectedService ? (
+                <span className="font-normal text-muted"> · {selectedService.name}</span>
+              ) : null}
+            </p>
+          )}
           <p className="mt-2 text-sm text-muted">
             {wasRequest ? (
               <>
@@ -1158,10 +1183,24 @@ export function BookingClient({ data }: { data: BookShopData }) {
           times show with zero taps. Tapping a service's time chip books it. */}
       {dayFirst && (
         <Section title="2 · Choose a service" tour="services">
-          {(dayLoading || (!dayData && calendarDays.size > 0)) && (
+          {(dayLoading || (!dayData && !dayError && calendarDays.size > 0)) && (
             <p className="text-sm text-muted">Checking the day&apos;s openings…</p>
           )}
-          {!dayLoading && calendarDays.size === 0 && (
+          {!dayLoading && dayError && (
+            <div className="flex flex-wrap items-center gap-3" role="alert">
+              <p className="text-sm text-muted">
+                Couldn&apos;t load this day&apos;s times.
+              </p>
+              <button
+                type="button"
+                onClick={() => dayDate && pickDay(dayDate)}
+                className="rounded-full border border-white/15 px-4 py-1.5 text-xs font-medium transition-colors hover:bg-white/[0.06]"
+              >
+                Try again
+              </button>
+            </div>
+          )}
+          {!dayLoading && !dayError && calendarDays.size === 0 && (
             <p className="text-sm text-muted">
               No open days right now — check back soon.
             </p>
@@ -1658,16 +1697,31 @@ export function BookingClient({ data }: { data: BookShopData }) {
             </div>
           )}
 
-          {grandTotal !== null && (
+          {(slot !== null || grandTotal !== null) && (
             <div
-              className="mb-3 flex items-center justify-between rounded-xl px-4 py-3 text-sm"
+              className="mb-3 flex flex-col gap-1 rounded-xl px-4 py-3 text-sm"
               style={{ backgroundColor: `${accent}14`, color: accent }}
             >
-              <span>
-                {selectedService?.name}
-                {addOnIds.length > 0 && ` + ${addOnIds.length} add-on${addOnIds.length > 1 ? "s" : ""}`}
-              </span>
-              <span className="font-semibold">${grandTotal.toFixed(0)}</span>
+              {/* The one recap of WHEN before committing — time chips show
+                  time-of-day only and the highlighted calendar cell is
+                  scrolled far above on a phone, so without this line the
+                  customer confirms a booking whose date they never see
+                  spelled out. */}
+              {slot !== null && (
+                <div className="flex items-center justify-between font-semibold">
+                  <span>{dateFmt.format(new Date(slot))}</span>
+                  <span>{timeFmt.format(new Date(slot))}</span>
+                </div>
+              )}
+              {grandTotal !== null && (
+                <div className="flex items-center justify-between">
+                  <span>
+                    {selectedService?.name}
+                    {addOnIds.length > 0 && ` + ${addOnIds.length} add-on${addOnIds.length > 1 ? "s" : ""}`}
+                  </span>
+                  <span className="font-semibold">${grandTotal.toFixed(0)}</span>
+                </div>
+              )}
             </div>
           )}
           <div className="flex flex-col gap-3" data-tour="checkout">

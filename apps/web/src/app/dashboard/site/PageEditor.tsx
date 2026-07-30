@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import {
   ACCENT_HEX_REGEX,
   DEFAULT_LAYOUT_STYLE,
@@ -27,9 +27,10 @@ import { Card, CardHeader } from "@/components/ui/Card";
 import { FormError } from "@/components/ui/FormError";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
+import { useLeaveGuard } from "@/lib/useLeaveGuard";
 import type { ShopPageSettings } from "./page";
 import type { ShopPageData } from "@/app/s/[slug]/page";
-import { savePageAction } from "./actions";
+import { savePageAction, type PageSettingsInput } from "./actions";
 import { GalleryEditor } from "./GalleryEditor";
 import { ImageField } from "./ImageField";
 import { SectionOrderEditor } from "./SectionOrderEditor";
@@ -134,6 +135,48 @@ export function PageEditor({
     ([key]) => !INLINE_ERROR_FIELDS.has(key),
   );
 
+  // ----- Dirty tracking + diff-save (the #142/#143 editor pattern) -----
+  // This was the app's biggest silent data-loss surface: no dirty guard of any
+  // kind (a sticky-nav tap threw away a whole page's worth of edits with no
+  // prompt) AND every save PATCHed all 18 fields from state seeded at page
+  // load (a stale tab reverted edits made anywhere else - hero, gallery,
+  // toggles - the #142 clobber class).
+  //
+  // The full payload, exactly as a save would send it.
+  const payload: PageSettingsInput = {
+    slug: slug.trim().toLowerCase(),
+    publicPageEnabled: enabled,
+    theme,
+    bio: bio.trim(),
+    logoUrl: logoUrl.trim(),
+    accentColor: accentTrimmed,
+    heroImageUrl: heroImageUrl.trim(),
+    instagramHandle: instagramHandle.trim(),
+    hoursText: hoursText.trim(),
+    gallery: gallery.map((g) => ({
+      url: g.url,
+      ...(g.caption?.trim() ? { caption: g.caption.trim() } : {}),
+    })),
+    fontKey,
+    layoutStyle,
+    sectionOrder,
+    rewardsWelcome: rewardsWelcome.trim(),
+    rewardsSections,
+    takesRequests,
+    waitlistEnabled,
+    notifyPhone: notifyPhone.trim(),
+  };
+  // Saved baseline: the form's mount state, replaced ONLY on a confirmed save.
+  // Dirty + diff compare against this - never against props, which lag the
+  // server for seconds after a save.
+  const baselineRef = useRef<PageSettingsInput | null>(null);
+  if (baselineRef.current === null) baselineRef.current = payload;
+  const changedKeys = (Object.keys(payload) as (keyof PageSettingsInput)[]).filter(
+    (k) => JSON.stringify(payload[k]) !== JSON.stringify(baselineRef.current?.[k]),
+  );
+  const dirty = changedKeys.length > 0;
+  useLeaveGuard(dirty && !pending, "You have unsaved page edits. Leave and lose them?");
+
   // Map the in-progress editor state onto the public ShopPageData shape so the
   // live preview renders EXACTLY what clients will see (same component).
   const previewData: ShopPageData = useMemo(
@@ -193,28 +236,18 @@ export function PageEditor({
   function save() {
     setError(null);
     setFieldErrors({});
+    // Diff-save: PATCH only the fields that changed since the last confirmed
+    // save. An untouched field can never clobber an edit made from another
+    // tab/device between this page's load and now.
+    const diff: Partial<PageSettingsInput> = {};
+    for (const k of changedKeys) (diff as Record<string, unknown>)[k] = payload[k];
+    const snapshot = payload;
     startTransition(async () => {
-      const r = await savePageAction({
-        slug: slug.trim().toLowerCase(),
-        publicPageEnabled: enabled,
-        theme,
-        bio: bio.trim(),
-        logoUrl: logoUrl.trim(),
-        accentColor: accentColor.trim(),
-        heroImageUrl: heroImageUrl.trim(),
-        instagramHandle: instagramHandle.trim(),
-        hoursText: hoursText.trim(),
-        gallery: gallery.map((g) => ({ url: g.url, ...(g.caption?.trim() ? { caption: g.caption.trim() } : {}) })),
-        fontKey,
-        layoutStyle,
-        sectionOrder,
-        rewardsWelcome: rewardsWelcome.trim(),
-        rewardsSections,
-        takesRequests,
-        waitlistEnabled,
-        notifyPhone: notifyPhone.trim(),
-      });
+      const r = await savePageAction(diff);
       if (r.ok) {
+        // The baseline advances ONLY on confirmed success - a failed save
+        // keeps the form dirty so the draft stays guarded.
+        baselineRef.current = snapshot;
         toast("Your page is saved", "success");
         setSavedOnce(true);
       } else {
@@ -655,12 +688,17 @@ export function PageEditor({
         {/* Save bar */}
         <div className="flex flex-wrap items-center gap-3">
           <button
-            disabled={pending || !slugValid || Boolean(accentTrimmed && !validHex)}
+            disabled={pending || !dirty || !slugValid || Boolean(accentTrimmed && !validHex)}
             onClick={save}
             className="rounded-full bg-gold px-6 py-2.5 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50"
           >
             {pending ? "Saving…" : "Save page"}
           </button>
+          {dirty && !pending && (
+            <span className="text-xs text-muted" role="status">
+              Unsaved changes
+            </span>
+          )}
           <button
             onClick={() => setShowPreviewMobile((v) => !v)}
             className="rounded-full border border-subtle px-5 py-2.5 text-sm text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 lg:hidden"
