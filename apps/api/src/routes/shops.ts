@@ -29,7 +29,7 @@ import { previewNudgeBody } from "../messaging/templates.js";
 import { toE164 } from "../acuity/clientKey.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 import { sendPushToUser } from "../messaging/push.js";
-import { leadLimiter } from "../middleware/rateLimit.js";
+import { leadLimiter, waitlistLimiter } from "../middleware/rateLimit.js";
 import { hasReceptionistEntitlement } from "../receptionist/config.js";
 import { logger } from "../logger.js";
 
@@ -594,7 +594,7 @@ const waitlistSchema = z
     path: ["phone"],
   });
 
-publicPageRouter.post("/:slug/waitlist", leadLimiter, async (req, res) => {
+publicPageRouter.post("/:slug/waitlist", waitlistLimiter, async (req, res) => {
   const parsed = waitlistSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });

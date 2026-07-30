@@ -229,6 +229,62 @@ describe("book_appointment", () => {
   });
 });
 
+describe("book_appointment availability gate (no live hold)", () => {
+  // Slot ids are a transparent staffId~serviceId~ISO codec, and the tool
+  // description invites a direct book — so a mangled/hallucinated timestamp
+  // used to land a REAL BOOKED row (with a confirmation text) at any
+  // conflict-free instant: 3am, a day off, or months out. The gate re-runs
+  // isSlotBookable for any path without a LIVE hold.
+  it("refuses a direct book outside the barber's working hours", async () => {
+    // A second barber with real hours (9:00-17:00 local) — the shared fixture
+    // barber works 24/7, which can't distinguish an hours violation.
+    const narrow = await prisma.staff.create({ data: { shopId, name: "Nine2Five" } });
+    for (let weekday = 0; weekday < 7; weekday++) {
+      await prisma.availabilityRule.create({
+        data: { shopId, staffId: narrow.id, weekday, startMin: 540, endMin: 1020 },
+      });
+    }
+    await prisma.serviceStaff.create({
+      data: { shopId, serviceId, staffId: narrow.id },
+    });
+
+    // 07:00 UTC = 03:00 in the shop's tz — the literal 3am booking.
+    const exec = makeToolExecutor(ctxFor(clientId, "+15551230001"));
+    const res = await exec("book_appointment", {
+      slot_id: encodeSlotId(narrow.id, serviceId, T(7, 0)),
+    });
+    expect(res.isError).toBe(true);
+    expect(res.result).toContain("outside the shop's bookable hours");
+    const row = await prisma.appointment.findFirst({
+      where: { shopId, staffId: narrow.id, startsAt: T(7, 0) },
+    });
+    expect(row).toBeNull(); // nothing written, nothing confirmed
+  });
+
+  it("refuses a direct book past the shop's booking horizon", async () => {
+    const exec = makeToolExecutor(ctxFor(clientId, "+15551230001"));
+    const far = new Date(NOW.getTime() + 200 * 24 * 60 * 60 * 1000);
+    const res = await exec("book_appointment", {
+      slot_id: encodeSlotId(staffId, serviceId, far),
+    });
+    expect(res.isError).toBe(true);
+    expect(res.result).toContain("outside the shop's bookable hours");
+    const row = await prisma.appointment.findFirst({
+      where: { shopId, staffId, startsAt: far },
+    });
+    expect(row).toBeNull();
+  });
+
+  it("still books normally when a LIVE hold exists (hours were validated at hold time)", async () => {
+    const exec = makeToolExecutor(ctxFor(clientId, "+15551230001"));
+    const held = await exec("hold_slot", { slot_id: slotIdAt(16, 0) });
+    expect(held.isError).toBe(false);
+    const booked = await exec("book_appointment", { slot_id: slotIdAt(16, 0) });
+    expect(booked.isError).toBe(false);
+    expect(JSON.parse(booked.result).booked).toBe(true);
+  });
+});
+
 describe("reschedule", () => {
   it("moves the client's own appointment: new time, fresh reminder state, slot freed", async () => {
     const exec = makeToolExecutor(ctxFor(clientId, "+15551230001"));

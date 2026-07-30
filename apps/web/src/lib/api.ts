@@ -1,4 +1,4 @@
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 
 /**
  * Server-side API client. Calls the Express API at API_BASE_URL and forwards the
@@ -32,6 +32,33 @@ function authHeader(): Record<string, string> {
     .map((c) => `${c.name}=${c.value}`)
     .join("; ");
   return cookieHeader ? { Cookie: cookieHeader } : {};
+}
+
+/**
+ * Forward the real visitor's IP on public calls, authenticated by the shared
+ * WEB_PROXY_SECRET. Every public request reaches the API from THIS server, so
+ * without it the API rate-limits all visitors as one IP (Vercel's egress) and
+ * a busy evening 429s everyone at once. The API ignores the header unless the
+ * secret matches (middleware/rateLimit.ts publicIpKey), and we send nothing
+ * when the env isn't set — so this is inert until both sides are configured.
+ *
+ * NEVER attach to a cached public GET: Next's Data Cache keys on headers, so a
+ * per-visitor header would fragment the shared cache into per-visitor entries.
+ */
+function clientIpHeaders(): Record<string, string> {
+  const secret = process.env.WEB_PROXY_SECRET;
+  if (!secret) return {};
+  try {
+    const h = headers();
+    const ip =
+      h.get("x-real-ip") ?? h.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "";
+    if (!ip) return {};
+    return { "x-cb-client-ip": ip, "x-cb-proxy-secret": secret };
+  } catch {
+    // headers() throws outside a request scope (build-time render) - no
+    // visitor there to identify anyway.
+    return {};
+  }
 }
 
 /**
@@ -110,10 +137,12 @@ export async function apiPublicGet<T>(
   path: string,
   revalidateSeconds?: number,
 ): Promise<ApiResult<T>> {
+  const cached = Boolean(revalidateSeconds && revalidateSeconds > 0);
   return doFetch<T>(
     path,
-    {},
-    revalidateSeconds && revalidateSeconds > 0 ? revalidateSeconds : undefined,
+    // Visitor-IP forwarding only on UNcached calls (see clientIpHeaders).
+    cached ? {} : { headers: clientIpHeaders() },
+    cached ? revalidateSeconds : undefined,
   );
 }
 
@@ -130,7 +159,7 @@ export async function apiPublicSend<T>(
 ): Promise<ApiResult<T>> {
   return doFetch<T>(path, {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...clientIpHeaders() },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 }
