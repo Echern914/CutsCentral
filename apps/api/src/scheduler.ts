@@ -1,5 +1,6 @@
 import cron from "node-cron";
 import { apiEnv } from "@chairback/config";
+import { prisma } from "@chairback/db";
 import { logger } from "./logger.js";
 import { withLease } from "./scheduler/lease.js";
 import { promoteCompletedVisits } from "./engines/statusPromotion.js";
@@ -38,7 +39,210 @@ const MINUTE = 60_000;
  * lease ever expires mid-run a second replica could double-execute, so keep them
  * generous. Row-level idempotency (reminderSentAt, the booking:{id} visit key)
  * remains as a second line of defense, but correctness no longer depends on it.
+ *
+ * EVERY name here MUST have a `job_lease` row seeded by a migration (the
+ * *_lease_seed pattern): withLease acquires by UPDATE-only, so an unseeded name
+ * matches 0 rows and the job silently never runs in ANY real environment —
+ * exactly how acuity-resync shipped dead for a week (its own test inserted the
+ * row manually, so the suite stayed green). Two guards now enforce it:
+ * verifyLeaseRows() logs an ERROR at startup for missing rows, and
+ * scheduler.leaseSeed.test.ts fails when a name below has no seed migration.
  */
+interface ScheduledJob {
+  cronExpr: string;
+  name: string;
+  ttlMs: number;
+  run: () => Promise<unknown>;
+  failMsg: string;
+}
+
+export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
+  // Promote past-end visits to COMPLETED every 15 minutes.
+  {
+    cronExpr: "*/15 * * * *",
+    name: "promote-visits",
+    ttlMs: 5 * MINUTE,
+    run: () => promoteCompletedVisits(),
+    failMsg: "promotion job failed",
+  },
+  // Daily nudge sweep at 10:00 (server time). Respects per-shop caps + DRY_RUN.
+  // Highest-stakes job (mass SMS) — the lease is what makes it safe on N
+  // replicas. TTL is generous (30min): the sweep sends SMS sequentially across
+  // all shops, so a large multi-shop account's worst-case runtime stays
+  // comfortably under TTL, keeping the at-most-one-winner invariant.
+  {
+    cronExpr: "0 10 * * *",
+    name: "nudge-sweep",
+    ttlMs: 30 * MINUTE,
+    run: () => runNudgeSweep(),
+    failMsg: "nudge sweep failed",
+  },
+  // Daily win-back ("Growth Agent") sweep at 11:00 — one hour AFTER the nudge
+  // sweep so the two SMS blasts don't overlap (they share the per-shop daily
+  // cap; running nudge first lets win-back see the remaining budget). Opt-in
+  // per shop (winbackTextsEnabled), respects DRY_RUN + caps + quiet hours.
+  // Same generous TTL as the nudge sweep — it's the other mass-SMS job.
+  {
+    cronExpr: "0 11 * * *",
+    name: "winback-sweep",
+    ttlMs: 30 * MINUTE,
+    run: () => runWinbackSweep(),
+    failMsg: "winback sweep failed",
+  },
+  // Attribution hourly.
+  {
+    cronExpr: "0 * * * *",
+    name: "attribution",
+    ttlMs: 5 * MINUTE,
+    run: () => linkBookingsToNudges(),
+    failMsg: "attribution job failed",
+  },
+  // Native booking: promote past-end appointments to COMPLETED Visits + punches
+  // every 15 minutes (same idempotent pattern as the visit promotion job).
+  {
+    cronExpr: "*/15 * * * *",
+    name: "promote-appointments",
+    ttlMs: 5 * MINUTE,
+    run: () => promoteFulfilledAppointments(),
+    failMsg: "appointment promotion job failed",
+  },
+  // Native booking: send ~24h reminders every 20 minutes. Idempotent
+  // (reminderSentAt) and quiet-hours-deferring; respects DRY_RUN.
+  {
+    cronExpr: "*/20 * * * *",
+    name: "appointment-reminders",
+    ttlMs: 5 * MINUTE,
+    run: () => runAppointmentReminders(),
+    failMsg: "appointment reminder job failed",
+  },
+  // Native booking: PUSH reminders (24h + 2h tiers, per-shop toggles) every 10
+  // minutes - the 2h tier needs a tighter cadence than the SMS/email job.
+  // Idempotent via the per-tier stamps; push-only, respects DRY_RUN.
+  {
+    cronExpr: "*/10 * * * *",
+    name: "push-reminders",
+    ttlMs: 5 * MINUTE,
+    run: () => runPushReminders(),
+    failMsg: "push reminder job failed",
+  },
+  // Targeted slots: roll every ACTIVE indefinite series ("repeat until I turn
+  // it off") forward to the horizon, daily at 04:10. Idempotent via the rule's
+  // weeksMaterialized cursor; no-op when no indefinite rules exist.
+  {
+    cronExpr: "10 4 * * *",
+    name: "targeted-slot-roll-forward",
+    ttlMs: 10 * MINUTE,
+    run: () => rollForwardTargetedRules(),
+    failMsg: "targeted slot roll-forward job failed",
+  },
+  // Square: proactively refresh OAuth access tokens nearing their ~30-day
+  // expiry (daily at 03:00). No-op when no Square shops are connected.
+  {
+    cronExpr: "0 3 * * *",
+    name: "square-token-refresh",
+    ttlMs: 10 * MINUTE,
+    run: () => refreshExpiringSquareTokens(),
+    failMsg: "square token refresh sweep failed",
+  },
+  // Acuity: re-sync a recent window of appointments for every connected shop
+  // every 30 minutes, so client names/numbers added or edited directly in
+  // Acuity (or missed by a dropped webhook) self-heal into the searchable
+  // client book without a manual Repair. Since #147, synced Visits also BLOCK
+  // native slots — this resync is what keeps that mirror honest. Idempotent
+  // (Visit unique key), bounded recent window, no-op when no Acuity shops are
+  // connected. Generous TTL - a multi-shop account ingests sequentially.
+  {
+    cronExpr: "*/30 * * * *",
+    name: "acuity-resync",
+    ttlMs: 15 * MINUTE,
+    run: async () => {
+      const ingested = await runAcuityResync();
+      if (ingested > 0) logger.info({ ingested }, "acuity resync ingested appointments");
+    },
+    failMsg: "acuity resync sweep failed",
+  },
+  // Trial-expiry reminder EMAILS to shop owners, daily at 14:00 (mid-morning
+  // across US timezones - a business email, not a customer text, so quiet
+  // hours don't apply). Hard no-op until BOTH billing (STRIPE_*) and email
+  // (RESEND_API_KEY/EMAIL_FROM) are configured; idempotent per stage via the
+  // monotonic Shop.trialReminderStage compare-and-set.
+  {
+    cronExpr: "0 14 * * *",
+    name: "trial-reminders",
+    ttlMs: 10 * MINUTE,
+    run: () => runTrialReminders(),
+    failMsg: "trial reminder sweep failed",
+  },
+  // AI receptionist: close conversation threads idle >24h (hourly) so a
+  // months-later text starts fresh instead of resuming a stale thread.
+  {
+    cronExpr: "30 * * * *",
+    name: "receptionist-conversation-close",
+    ttlMs: 5 * MINUTE,
+    run: async () => {
+      const closed = await autoCloseIdleConversations();
+      if (closed > 0) logger.info({ closed }, "receptionist conversations auto-closed");
+    },
+    failMsg: "receptionist conversation close failed",
+  },
+  // AI receptionist: sweep expired slot holds every 5 minutes. Hygiene only -
+  // the slot engine + overlap guards already ignore expired holds, so the slot
+  // is free the moment a hold lapses regardless of this job's cadence.
+  {
+    cronExpr: "*/5 * * * *",
+    name: "receptionist-hold-sweep",
+    ttlMs: 2 * MINUTE,
+    run: () => sweepExpiredHolds(),
+    failMsg: "receptionist hold sweep failed",
+  },
+  // Rate-limit store hygiene: delete counter rows whose window expired >1h ago
+  // every 30 min. The store is correct without this (an expired row resets on
+  // the next hit), but a public launch churns many one-off IP keys that would
+  // otherwise accumulate. Lease-guarded so only one replica sweeps.
+  {
+    cronExpr: "*/30 * * * *",
+    name: "rate-limit-sweep",
+    ttlMs: 5 * MINUTE,
+    run: async () => {
+      const deleted = await sweepExpiredRateCounters();
+      if (deleted > 0) logger.debug({ deleted }, "rate-limit counters swept");
+    },
+    failMsg: "rate-limit sweep failed",
+  },
+  // Live-demo shop: nightly restore to canonical state at 04:00 (quietest
+  // hour). Clears viewer-submitted junk and re-rolls the seeded dates so the
+  // demo never goes stale. No-op on envs without a seeded demo tenant.
+  {
+    cronExpr: "0 4 * * *",
+    name: "demo-reset",
+    ttlMs: 10 * MINUTE,
+    run: () => runDemoReset(),
+    failMsg: "demo reset failed",
+  },
+];
+
+/**
+ * Startup guard for the UPDATE-only lease acquire: any scheduled name with no
+ * seeded job_lease row can never win a lease, so its job never runs — and the
+ * per-tick miss logs at debug, below prod LOG_LEVEL. Surface that loudly, once,
+ * at boot. Best-effort: a transient DB error here must not crash startup.
+ */
+async function verifyLeaseRows(): Promise<void> {
+  try {
+    const rows = await prisma.$queryRaw<{ name: string }[]>`SELECT "name" FROM "job_lease"`;
+    const seeded = new Set(rows.map((r) => r.name));
+    const missing = SCHEDULED_JOBS.map((j) => j.name).filter((n) => !seeded.has(n));
+    if (missing.length > 0) {
+      logger.error(
+        { missing },
+        "job_lease rows MISSING - these cron jobs will NEVER run; add a *_lease_seed migration",
+      );
+    }
+  } catch (err) {
+    logger.error({ err }, "job_lease startup verification failed");
+  }
+}
+
 export function startScheduler(): void {
   if (!env.ENABLE_SCHEDULER) {
     logger.info("scheduler disabled (ENABLE_SCHEDULER=false)");
@@ -46,145 +250,14 @@ export function startScheduler(): void {
   }
   logger.info("scheduler running IN-PROCESS — multi-replica safe via job_lease");
 
-  // Promote past-end visits to COMPLETED every 15 minutes.
-  cron.schedule("*/15 * * * *", () => {
-    void withLease("promote-visits", 5 * MINUTE, () => promoteCompletedVisits()).catch((err) =>
-      logger.error({ err }, "promotion job failed"),
-    );
-  });
+  for (const job of SCHEDULED_JOBS) {
+    cron.schedule(job.cronExpr, () => {
+      void withLease(job.name, job.ttlMs, job.run).catch((err) =>
+        logger.error({ err }, job.failMsg),
+      );
+    });
+  }
 
-  // Daily nudge sweep at 10:00 (server time). Respects per-shop caps + DRY_RUN.
-  // Highest-stakes job (mass SMS) — the lease is what makes it safe on N replicas.
-  // TTL is generous (30min): the sweep sends SMS sequentially across all shops, so
-  // a large multi-shop account's worst-case runtime stays comfortably under TTL,
-  // keeping the at-most-one-winner invariant even on big days.
-  cron.schedule("0 10 * * *", () => {
-    void withLease("nudge-sweep", 30 * MINUTE, () => runNudgeSweep()).catch((err) =>
-      logger.error({ err }, "nudge sweep failed"),
-    );
-  });
-
-  // Daily win-back ("Growth Agent") sweep at 11:00 — one hour AFTER the nudge
-  // sweep so the two SMS blasts don't overlap (they share the per-shop daily
-  // cap; running nudge first lets win-back see the remaining budget). Opt-in per
-  // shop (winbackTextsEnabled), respects DRY_RUN + caps + quiet hours. Same
-  // generous TTL as the nudge sweep — it's the other mass-SMS job.
-  cron.schedule("0 11 * * *", () => {
-    void withLease("winback-sweep", 30 * MINUTE, () => runWinbackSweep()).catch((err) =>
-      logger.error({ err }, "winback sweep failed"),
-    );
-  });
-
-  // Attribution hourly.
-  cron.schedule("0 * * * *", () => {
-    void withLease("attribution", 5 * MINUTE, () => linkBookingsToNudges()).catch((err) =>
-      logger.error({ err }, "attribution job failed"),
-    );
-  });
-
-  // Native booking: promote past-end appointments to COMPLETED Visits + punches
-  // every 15 minutes (same idempotent pattern as the visit promotion job).
-  cron.schedule("*/15 * * * *", () => {
-    void withLease("promote-appointments", 5 * MINUTE, () =>
-      promoteFulfilledAppointments(),
-    ).catch((err) => logger.error({ err }, "appointment promotion job failed"));
-  });
-
-  // Native booking: send ~24h reminders every 20 minutes. Idempotent
-  // (reminderSentAt) and quiet-hours-deferring; respects DRY_RUN.
-  cron.schedule("*/20 * * * *", () => {
-    void withLease("appointment-reminders", 5 * MINUTE, () =>
-      runAppointmentReminders(),
-    ).catch((err) => logger.error({ err }, "appointment reminder job failed"));
-  });
-
-  // Native booking: PUSH reminders (24h + 2h tiers, per-shop toggles) every 10
-  // minutes - the 2h tier needs a tighter cadence than the SMS/email job.
-  // Idempotent via the per-tier stamps; push-only, respects DRY_RUN.
-  cron.schedule("*/10 * * * *", () => {
-    void withLease("push-reminders", 5 * MINUTE, () => runPushReminders()).catch(
-      (err) => logger.error({ err }, "push reminder job failed"),
-    );
-  });
-
-  // Targeted slots: roll every ACTIVE indefinite series ("repeat until I turn
-  // it off") forward to the horizon, daily at 04:10. Idempotent via the rule's
-  // weeksMaterialized cursor; no-op when no indefinite rules exist.
-  cron.schedule("10 4 * * *", () => {
-    void withLease("targeted-slot-roll-forward", 10 * MINUTE, () =>
-      rollForwardTargetedRules(),
-    ).catch((err) => logger.error({ err }, "targeted slot roll-forward job failed"));
-  });
-
-  // Square: proactively refresh OAuth access tokens nearing their ~30-day expiry
-  // (daily at 03:00). No-op when no Square shops are connected.
-  cron.schedule("0 3 * * *", () => {
-    void withLease("square-token-refresh", 10 * MINUTE, () =>
-      refreshExpiringSquareTokens(),
-    ).catch((err) => logger.error({ err }, "square token refresh sweep failed"));
-  });
-
-  // Acuity: re-sync a recent window of appointments for every connected shop
-  // every 30 minutes, so client names/numbers added or edited directly in Acuity
-  // (or missed by a dropped webhook) self-heal into the searchable client book
-  // without a manual Repair. Idempotent (Visit unique key), bounded recent
-  // window, no-op when no Acuity shops are connected. Generous TTL - a
-  // multi-shop account ingests sequentially. See engines/acuityResync.ts.
-  cron.schedule("*/30 * * * *", () => {
-    void withLease("acuity-resync", 15 * MINUTE, async () => {
-      const ingested = await runAcuityResync();
-      if (ingested > 0) logger.info({ ingested }, "acuity resync ingested appointments");
-    }).catch((err) => logger.error({ err }, "acuity resync sweep failed"));
-  });
-
-  // Trial-expiry reminder EMAILS to shop owners, daily at 14:00 (mid-morning
-  // across US timezones - a business email, not a customer text, so quiet hours
-  // don't apply). Hard no-op until BOTH billing (STRIPE_*) and email
-  // (RESEND_API_KEY/EMAIL_FROM) are configured; idempotent per stage via the
-  // monotonic Shop.trialReminderStage compare-and-set.
-  cron.schedule("0 14 * * *", () => {
-    void withLease("trial-reminders", 10 * MINUTE, () => runTrialReminders()).catch(
-      (err) => logger.error({ err }, "trial reminder sweep failed"),
-    );
-  });
-
-  // AI receptionist: close conversation threads idle >24h (hourly) so a
-  // months-later text starts fresh instead of resuming a stale thread.
-  cron.schedule("30 * * * *", () => {
-    void withLease("receptionist-conversation-close", 5 * MINUTE, async () => {
-      const closed = await autoCloseIdleConversations();
-      if (closed > 0) logger.info({ closed }, "receptionist conversations auto-closed");
-    }).catch((err) => logger.error({ err }, "receptionist conversation close failed"));
-  });
-
-  // AI receptionist: sweep expired slot holds every 5 minutes. Hygiene only -
-  // the slot engine + overlap guards already ignore expired holds, so the slot
-  // is free the moment a hold lapses regardless of this job's cadence.
-  cron.schedule("*/5 * * * *", () => {
-    void withLease("receptionist-hold-sweep", 2 * MINUTE, () => sweepExpiredHolds()).catch(
-      (err) => logger.error({ err }, "receptionist hold sweep failed"),
-    );
-  });
-
-  // Rate-limit store hygiene: delete counter rows whose window expired >1h ago
-  // every 30 min. The store is correct without this (an expired row resets on
-  // the next hit), but a public launch churns many one-off IP keys that would
-  // otherwise accumulate. Lease-guarded so only one replica sweeps.
-  cron.schedule("*/30 * * * *", () => {
-    void withLease("rate-limit-sweep", 5 * MINUTE, async () => {
-      const deleted = await sweepExpiredRateCounters();
-      if (deleted > 0) logger.debug({ deleted }, "rate-limit counters swept");
-    }).catch((err) => logger.error({ err }, "rate-limit sweep failed"));
-  });
-
-  // Live-demo shop: nightly restore to canonical state at 04:00 (quietest
-  // hour). Clears viewer-submitted junk and re-rolls the seeded dates so the
-  // demo never goes stale. No-op on envs without a seeded demo tenant.
-  cron.schedule("0 4 * * *", () => {
-    void withLease("demo-reset", 10 * MINUTE, () => runDemoReset()).catch((err) =>
-      logger.error({ err }, "demo reset failed"),
-    );
-  });
-
+  void verifyLeaseRows();
   logger.info("scheduler started");
 }

@@ -783,6 +783,42 @@ async function bookAppointment(
       ? parsed.data.client_name.slice(0, 80)
       : null;
 
+  // Availability re-check for any path WITHOUT a live hold. holdSlot validated
+  // hours/exceptions/bounds when the hold was placed; a direct book (the model
+  // skipped hold_slot, or the hold expired) has had NO such check — the tx
+  // guard below catches CONFLICTS only, so a mangled or hallucinated slot_id
+  // (slot ids are a transparent staffId~serviceId~ISO codec) at 3am, on a day
+  // off, or past the horizon would otherwise land as a real BOOKED row with a
+  // confirmation text. This makes the tool description's "availability is
+  // re-verified at write time" actually true. Group caps ride along: they're
+  // enforced inside computeOpenSlots, which isSlotBookable re-runs.
+  const liveHold = await forShop(ctx.shopId).appointment.findFirst({
+    where: {
+      staffId: slot.staffId,
+      startsAt: slot.startsAt,
+      clientId: identity.clientId,
+      status: "PENDING",
+      bookedVia: "receptionist",
+      holdExpiresAt: { gt: ctx.now },
+    },
+    select: { id: true },
+  });
+  if (!liveHold) {
+    const bookable = await isSlotBookable({
+      shopId: ctx.shopId,
+      staffId: slot.staffId,
+      serviceId: slot.serviceId,
+      startsAt: slot.startsAt,
+      now: ctx.now,
+    });
+    if (!bookable) {
+      return fail(
+        "that time is outside the shop's bookable hours - run check_availability " +
+          "again and only offer slot_ids it returns",
+      );
+    }
+  }
+
   try {
     const bookedId = await prisma.$transaction(async (tx) => {
       // Our own live-or-expired hold on this exact slot, if any.

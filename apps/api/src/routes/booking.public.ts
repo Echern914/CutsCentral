@@ -23,7 +23,11 @@ import {
 } from "../services/appointmentNotify.js";
 import { sendPushToUser } from "../messaging/push.js";
 import { cancelAppointment } from "../engines/appointmentPromotion.js";
-import { rewardsLimiter, leadLimiter } from "../middleware/rateLimit.js";
+import {
+  rewardsLimiter,
+  bookingReadLimiter,
+  bookingWriteLimiter,
+} from "../middleware/rateLimit.js";
 import { logger } from "../logger.js";
 
 /**
@@ -59,7 +63,7 @@ async function resolveNativeShop(slugRaw: string | undefined) {
 }
 
 // GET /api/book/:slug - shop meta + active staff + active services.
-bookingPublicRouter.get("/:slug", rewardsLimiter, async (req, res) => {
+bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
   const shop = await resolveNativeShop(req.params.slug);
   if (!shop) {
     res.status(404).json({ error: "not_found" });
@@ -249,7 +253,7 @@ const slotsQuerySchema = z.object({
   to: z.coerce.date().optional(),
 });
 
-bookingPublicRouter.get("/:slug/slots", rewardsLimiter, async (req, res) => {
+bookingPublicRouter.get("/:slug/slots", bookingReadLimiter, async (req, res) => {
   const shop = await resolveNativeShop(req.params.slug);
   if (!shop) {
     res.status(404).json({ error: "not_found" });
@@ -293,7 +297,54 @@ bookingPublicRouter.get("/:slug/slots", rewardsLimiter, async (req, res) => {
 const dayQuerySchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 });
-bookingPublicRouter.get("/:slug/day", rewardsLimiter, async (req, res) => {
+
+// Same cost story as /open-days below: one computeOpenSlots per staff×service
+// pair, so an uncached /day is the most expensive read on the API. Cached
+// in-process for 60s per shop+date (same freshness tradeoff as /open-days),
+// and the per-service fan-out is capped — each computeOpenSlots holds a pooled
+// connection for its whole interactive transaction, so an UNbounded
+// Promise.all over a big menu could grab ~services-count connections from the
+// shared pool (connection_limit=10) in one request and starve every tenant.
+// TTL 0 under vitest (same pattern as middleware/rateLimit.ts): suites edit
+// hours/services and immediately re-read the day, and serving the pre-edit
+// body would fail them for a staleness prod explicitly accepts.
+const DAY_TTL_MS = process.env.VITEST === "true" ? 0 : 60_000;
+const dayCache = new Map<string, { at: number; body: unknown }>();
+const DAY_FANOUT_LIMIT = 4;
+
+/**
+ * Drop every cached day for a shop after a PUBLIC booking write. Without this,
+ * the customer who loses a slot race refreshes the day, gets the same cached
+ * list with the dead chip, and loops on slot_taken until the TTL lapses.
+ * Receptionist/dashboard writes don't reach in here — their ≤60s staleness in
+ * the public view is the same accepted tradeoff as /open-days.
+ */
+function invalidateShopDayCache(shopId: string): void {
+  for (const key of dayCache.keys()) {
+    if (key.startsWith(`${shopId}|`)) dayCache.delete(key);
+  }
+}
+
+/** Map with at most `limit` calls of `fn` in flight at once (order preserved). */
+async function mapWithLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const i = next++;
+        results[i] = await fn(items[i]!);
+      }
+    }),
+  );
+  return results;
+}
+
+bookingPublicRouter.get("/:slug/day", bookingReadLimiter, async (req, res) => {
   const shop = await resolveNativeShop(req.params.slug);
   if (!shop) {
     res.status(404).json({ error: "not_found" });
@@ -313,6 +364,14 @@ bookingPublicRouter.get("/:slug/day", rewardsLimiter, async (req, res) => {
   // page freely without special-casing.
   if (dayEnd.getTime() <= now.getTime() || dayStart.getTime() > horizon.getTime()) {
     res.json({ timezone: shop.timezone, date: parsed.data.date, bundles: [], ungrouped: [] });
+    return;
+  }
+  // Cache AFTER the horizon check: out-of-window days are cheap empties, and
+  // keying by shop.id (not the raw slug) avoids case-variant duplicate entries.
+  const dayCacheKey = `${shop.id}|${parsed.data.date}`;
+  const dayCached = dayCache.get(dayCacheKey);
+  if (dayCached && Date.now() - dayCached.at < DAY_TTL_MS) {
+    res.json(dayCached.body);
     return;
   }
 
@@ -474,9 +533,9 @@ bookingPublicRouter.get("/:slug/day", rewardsLimiter, async (req, res) => {
     };
   }
 
-  const dayServices = (await Promise.all(services.map((s) => dayFor(s)))).filter(
-    (s): s is NonNullable<typeof s> => s !== null,
-  );
+  const dayServices = (
+    await mapWithLimit(services, DAY_FANOUT_LIMIT, (s) => dayFor(s))
+  ).filter((s): s is NonNullable<typeof s> => s !== null);
   const byId = new Map(dayServices.map((s) => [s.id, s]));
   const bundles = groups
     .map((g) => ({
@@ -491,7 +550,9 @@ bookingPublicRouter.get("/:slug/day", rewardsLimiter, async (req, res) => {
   const groupedIds = new Set(bundles.flatMap((b) => b.services.map((s) => s.id)));
   const ungrouped = dayServices.filter((s) => !groupedIds.has(s.id));
 
-  res.json({ timezone: shop.timezone, date: parsed.data.date, bundles, ungrouped });
+  const dayBody = { timezone: shop.timezone, date: parsed.data.date, bundles, ungrouped };
+  dayCache.set(dayCacheKey, { at: Date.now(), body: dayBody });
+  res.json(dayBody);
 });
 
 // GET /api/book/:slug/open-days — which shop-local days in the booking window
@@ -511,7 +572,7 @@ bookingPublicRouter.get("/:slug/day", rewardsLimiter, async (req, res) => {
 const OPEN_DAYS_TTL_MS = 60_000;
 const OPEN_DAYS_SCAN_CAP = 45;
 const openDaysCache = new Map<string, { at: number; body: unknown }>();
-bookingPublicRouter.get("/:slug/open-days", rewardsLimiter, async (req, res) => {
+bookingPublicRouter.get("/:slug/open-days", bookingReadLimiter, async (req, res) => {
   const slug = req.params.slug!;
   const shop = await resolveNativeShop(slug);
   if (!shop) {
@@ -635,7 +696,7 @@ const createSchema = z
     path: ["phone"],
   });
 
-bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
+bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {
   const parsed = createSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
@@ -937,6 +998,7 @@ bookingPublicRouter.post("/:slug", leadLimiter, async (req, res) => {
     appointmentId,
     kind: shop.requireBookingApproval ? "requested" : "booked",
   });
+  invalidateShopDayCache(shop.id);
 
   // Pay-ahead: create a PaymentIntent for the customer to confirm (card/Apple
   // Pay) and return its client secret. Gated on the shop being in `ahead` mode
@@ -1097,7 +1159,7 @@ const checkinSchema = z
 
 bookingPublicRouter.post(
   "/manage/:token/checkin",
-  leadLimiter,
+  bookingWriteLimiter,
   async (req, res) => {
     const parsed = checkinSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -1203,7 +1265,7 @@ const nudgeReplySchema = z
 
 bookingPublicRouter.post(
   "/manage/:token/nudge-reply",
-  leadLimiter,
+  bookingWriteLimiter,
   async (req, res) => {
     const parsed = nudgeReplySchema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -1279,7 +1341,7 @@ bookingPublicRouter.post(
 // POST /api/book/manage/:token/cancel - the customer cancels their own booking.
 bookingPublicRouter.post(
   "/manage/:token/cancel",
-  leadLimiter,
+  bookingWriteLimiter,
   async (req, res) => {
     const appt = await prisma.appointment.findUnique({
       where: { manageToken: String(req.params.token) },
@@ -1304,6 +1366,7 @@ bookingPublicRouter.post(
       appointmentId: appt.id,
       kind: "canceled",
     });
+    invalidateShopDayCache(appt.shopId);
     res.json({ ok: true });
   },
 );
@@ -1313,7 +1376,7 @@ const rescheduleSchema = z.object({ startsAt: validDate }).strict();
 
 bookingPublicRouter.post(
   "/manage/:token/reschedule",
-  leadLimiter,
+  bookingWriteLimiter,
   async (req, res) => {
     const parsed = rescheduleSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -1491,6 +1554,7 @@ bookingPublicRouter.post(
       appointmentId: appt.id,
       kind: "rescheduled",
     });
+    invalidateShopDayCache(appt.shopId);
     res.json({ ok: true, startsAt: startsAt.toISOString() });
   },
 );

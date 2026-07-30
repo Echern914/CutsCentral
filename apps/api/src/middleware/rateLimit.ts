@@ -1,5 +1,6 @@
 import rateLimit, { type RateLimitRequestHandler } from "express-rate-limit";
 import type { Request } from "express";
+import { timingSafeEqual } from "node:crypto";
 import { SESSION_COOKIE_NAME } from "@chairback/config";
 import { PgRateStore } from "./pgRateStore.js";
 
@@ -41,6 +42,35 @@ function sessionKey(req: Request): string {
   return cookie ?? req.ip ?? "anon";
 }
 
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ab.length === bb.length && timingSafeEqual(ab, bb);
+}
+
+/**
+ * Key for PUBLIC endpoints. All public booking traffic reaches us server-side
+ * from the Vercel web app, so `req.ip` is Vercel's egress IP — every visitor
+ * lands in ONE shared bucket and a handful of simultaneous customers can 429
+ * the whole platform. The web server forwards the real visitor IP in
+ * `x-cb-client-ip`, authenticated by `x-cb-proxy-secret` (WEB_PROXY_SECRET on
+ * both sides), and we key on that instead. The secret matters: without it,
+ * anyone hitting the API directly could rotate the header to mint fresh
+ * buckets and bypass per-IP limits entirely. Unset (or mismatched) secret
+ * falls back to `req.ip`, i.e. exactly the old behavior.
+ */
+export function publicIpKey(req: Request): string {
+  const secret = process.env.WEB_PROXY_SECRET;
+  if (secret) {
+    const supplied = req.header("x-cb-proxy-secret");
+    const forwarded = req.header("x-cb-client-ip");
+    if (supplied && forwarded && safeEqual(supplied, secret)) {
+      return `fwd:${forwarded.slice(0, 64)}`;
+    }
+  }
+  return req.ip ?? "anon";
+}
+
 function bearerKey(req: Request): string {
   return (req.header("Authorization") ?? req.ip ?? "anon").slice(0, 64);
 }
@@ -48,11 +78,57 @@ function bearerKey(req: Request): string {
 /** Auth (signup/login): blunt credential stuffing. Per IP. */
 export const authLimiter = make({ name: "auth", windowMs: 15 * 60 * 1000, limit: 20 });
 
-/** Public rewards lookup: blunt magic-token enumeration. Per IP. */
-export const rewardsLimiter = make({ name: "rewards", windowMs: 60 * 1000, limit: 30 });
+/** Public rewards lookup: blunt magic-token enumeration. Per visitor. */
+export const rewardsLimiter = make({
+  name: "rewards",
+  windowMs: 60 * 1000,
+  limit: 30,
+  keyGenerator: publicIpKey,
+});
 
-/** Public lead-form submissions: spam-bounded. Per IP, tight. */
-export const leadLimiter = make({ name: "lead", windowMs: 60 * 1000, limit: 5 });
+/** Public lead-form submissions: spam-bounded. Per visitor, tight. */
+export const leadLimiter = make({
+  name: "lead",
+  windowMs: 60 * 1000,
+  limit: 5,
+  keyGenerator: publicIpKey,
+});
+
+/**
+ * Public booking READS (shell, slots, day, open-days). Split from the rewards
+ * bucket: a booking page load fires several of these and must never compete
+ * with magic-token lookups. Generous — every real visitor behind one un-keyed
+ * proxy IP shares this until WEB_PROXY_SECRET is live, and /day is cached +
+ * fan-out-bounded so the ceiling is a cost bound, not a UX bound.
+ */
+export const bookingReadLimiter = make({
+  name: "bookread",
+  windowMs: 60 * 1000,
+  limit: 120,
+  keyGenerator: publicIpKey,
+});
+
+/**
+ * Public booking WRITES (create, cancel, reschedule, check-in). Split from the
+ * lead form's 5/min: bookings are the product, the lead form is the spam
+ * magnet — sharing a bucket meant ~6 bookings/minute platform-wide 429'd
+ * every customer. Junk-write spam stays bounded: creates burn real open slots
+ * (409 past the first) and manage/* routes need an unguessable 256-bit token.
+ */
+export const bookingWriteLimiter = make({
+  name: "bookwrite",
+  windowMs: 60 * 1000,
+  limit: 20,
+  keyGenerator: publicIpKey,
+});
+
+/** Public waitlist joins: one-tap CTA, own bucket so it can't eat lead-form budget (or vice versa). */
+export const waitlistLimiter = make({
+  name: "waitlist",
+  windowMs: 60 * 1000,
+  limit: 10,
+  keyGenerator: publicIpKey,
+});
 
 /** Acuity OAuth callback: blunt code-exchange replay. Per IP. */
 export const oauthLimiter = make({ name: "oauth", windowMs: 60 * 1000, limit: 15 });
