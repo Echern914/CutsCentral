@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { forShop, prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
+import { requireManager } from "../auth/roles.js";
 
 /**
  * Loyalty program designer: each shop curates its own reward MENU and decides
@@ -10,7 +11,7 @@ import { requireShop, requireUser } from "../middleware/auth.js";
  * the session's shop (updateMany/deleteMany return count 0 otherwise -> 404).
  */
 export const loyaltyRouter: Router = Router();
-loyaltyRouter.use(requireUser, requireShop);
+loyaltyRouter.use(requireUser, requireShop, requireManager);
 
 // Caps keep the client-facing menu scannable and the queries bounded.
 const MAX_REWARDS = 12;

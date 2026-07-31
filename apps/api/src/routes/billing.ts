@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { BILLING, PLANS } from "@chairback/config";
 import { requireShop, requireUser } from "../middleware/auth.js";
+import { requireManager } from "../auth/roles.js";
 import {
   ACTIVE_STATUSES,
   billingEnabled,
@@ -22,7 +23,7 @@ import {
 import { hasReceptionistEntitlement } from "../receptionist/config.js";
 
 export const billingRouter: Router = Router();
-billingRouter.use(requireUser, requireShop);
+billingRouter.use(requireUser, requireShop, requireManager);
 
 // Billing status for the dashboard (trial banner + billing page).
 billingRouter.get("/", async (req, res) => {

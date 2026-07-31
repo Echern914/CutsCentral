@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
+import { requireManager } from "../auth/roles.js";
 import {
   connectEnabled,
   createOnboardingLink,
@@ -15,7 +16,7 @@ import { logger } from "../logger.js";
  * auth + shop-scoped. Dark (503) unless connectEnabled().
  */
 export const paymentsDashboardRouter: Router = Router();
-paymentsDashboardRouter.use(requireUser, requireShop);
+paymentsDashboardRouter.use(requireUser, requireShop, requireManager);
 
 // GET /api/payments/status - live Connect status + current settings.
 paymentsDashboardRouter.get("/status", async (req, res) => {

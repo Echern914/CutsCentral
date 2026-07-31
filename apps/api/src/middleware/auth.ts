@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import { ACTIVE_SHOP_COOKIE_NAME } from "@chairback/config";
 import { prisma, type Shop } from "@chairback/db";
 import { SESSION_COOKIE_NAME, sessionFromToken } from "../auth/session.js";
+import type { ShopRole } from "../auth/roles.js";
 
 /**
  * Resolve which of an owner's shops is "active". A manager who owns several
@@ -26,6 +27,52 @@ export async function resolveOwnedShop(
     where: { ownerId: userId },
     orderBy: { createdAt: "asc" },
   });
+}
+
+/**
+ * Resolve which shop this session acts in, and with what role.
+ *
+ * OWNERSHIP IS CHECKED FIRST AND IS UNCHANGED - `Shop.ownerId` remains the
+ * source of truth, so an owner's access can never depend on a ShopMember row
+ * existing or being correct. Employee seats are a pure FALLBACK: only when the
+ * user owns no matching shop do we look for a membership. That ordering is what
+ * makes adding team seats safe for every shop that already exists.
+ *
+ * The requested-shop id is still only ever a HINT, re-verified here against
+ * ownership or membership, so a forged cookie naming someone else's shop
+ * resolves to null and falls back to this user's own.
+ */
+export async function resolveShopAccess(
+  userId: string,
+  requestedShopId?: string,
+): Promise<{ shop: Shop; role: ShopRole; staffId: string | null } | null> {
+  const owned = await resolveOwnedShop(userId, requestedShopId);
+  if (owned) return { shop: owned, role: "OWNER", staffId: null };
+
+  // Not an owner: is there a seat? Honor the active-shop hint, else the oldest
+  // membership - mirroring the deterministic owner fallback above.
+  const hinted = requestedShopId
+    ? await prisma.shopMember.findFirst({
+        where: { userId, shopId: requestedShopId },
+        include: { shop: true },
+      })
+    : null;
+  const seat =
+    hinted ??
+    (await prisma.shopMember.findFirst({
+      where: { userId },
+      orderBy: { createdAt: "asc" },
+      include: { shop: true },
+    }));
+  if (!seat) return null;
+  return {
+    shop: seat.shop,
+    // A stored OWNER seat on a shop this user does NOT own (possible only if
+    // ownership were transferred without fixing seats) must not grant owner
+    // powers: ownership comes from Shop.ownerId above and nowhere else.
+    role: seat.shop.ownerId === userId ? "OWNER" : (seat.role as ShopRole),
+    staffId: seat.staffId,
+  };
 }
 
 /**
@@ -125,11 +172,13 @@ export async function requireShop(
   const requestedShopId = req.cookies?.[ACTIVE_SHOP_COOKIE_NAME] as
     | string
     | undefined;
-  const shop = await resolveOwnedShop(req.userId, requestedShopId);
-  if (!shop) {
+  const access = await resolveShopAccess(req.userId, requestedShopId);
+  if (!access) {
     res.status(404).json({ error: "no_shop", message: "Create a shop first." });
     return;
   }
-  req.shop = shop;
+  req.shop = access.shop;
+  req.shopRole = access.role;
+  req.shopStaffId = access.staffId;
   next();
 }

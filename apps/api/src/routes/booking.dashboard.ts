@@ -3,6 +3,7 @@ import { z } from "zod";
 import { randomToken, SERVICE_COLOR_KEYS } from "@chairback/config";
 import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
+import { requireManager } from "../auth/roles.js";
 import {
   cancelAppointment,
   cancelSeries,
@@ -43,7 +44,7 @@ import { logger } from "../logger.js";
  * The public customer-facing booking lives in booking.public.ts.
  */
 export const bookingDashboardRouter: Router = Router();
-bookingDashboardRouter.use(requireUser, requireShop);
+bookingDashboardRouter.use(requireUser, requireShop, requireManager);
 
 //  Services
 

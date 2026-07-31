@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
+import { requireManager } from "../auth/roles.js";
 
 /**
  * Shop insights: the barber's own analytics page. Everything is derived from
@@ -20,7 +21,7 @@ import { requireShop, requireUser } from "../middleware/auth.js";
  * simply contributes 0 revenue but still counts as a visit.
  */
 export const insightsRouter: Router = Router();
-insightsRouter.use(requireUser, requireShop);
+insightsRouter.use(requireUser, requireShop, requireManager);
 
 const WEEK_CHOICES = [8, 12, 26] as const;
 const DAY_MS = 86_400_000;

@@ -277,6 +277,13 @@ shopsRouter.post("/", requireUser, async (req, res) => {
         sortOrder: 0,
       },
     });
+    // The owner's team seat. Ownership itself still comes from Shop.ownerId —
+    // this row is what makes the owner appear on the Team roster alongside the
+    // people they invite. Created here so a NEW shop matches what the
+    // team-members migration backfilled for existing ones.
+    await tx.shopMember.create({
+      data: { shopId: created.id, userId: req.userId!, role: "OWNER" },
+    });
     // Record the attestation on the owner if not already set (Google-path users
     // attest here; form-signup users were stamped at signup - don't overwrite).
     await tx.user.updateMany({
