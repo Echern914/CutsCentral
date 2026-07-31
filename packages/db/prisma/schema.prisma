@@ -113,6 +113,9 @@ model User {
 
   passwordResetTokens PasswordResetToken[]
   emailChangeTokens   EmailChangeToken[]
+  // Shops this user can sign in to as staff (separate from `shops` above,
+  // which is shops they OWN).
+  shopMemberships     ShopMember[]
   // Barber/manager devices registered for native push (dashboard app).
   pushSubscriptions   PushSubscription[]
 
@@ -399,7 +402,80 @@ model Shop {
   targetedSlotRules      TargetedSlotRule[]
   payments               Payment[]
 
+  // Team: who else can sign in to this shop, and outstanding invites.
+  members     ShopMember[]
+  teamInvites TeamInvite[]
+
   @@index([ownerId])
+}
+
+// What a signed-in member may do in a shop.
+//
+// OWNER   - the shop's creator. Billing, integrations, deletion. Exactly one,
+//           mirroring Shop.ownerId (which stays the source of truth for
+//           ownership; a member row is added alongside it for uniformity).
+// MANAGER - runs the shop day to day: full dashboard, no billing/ownership.
+// BARBER  - an employee: their own chair. See auth/roles.ts for the gate.
+enum ShopRole {
+  OWNER
+  MANAGER
+  BARBER
+}
+
+// A user's seat in a shop. This is what makes an employee login possible: until
+// now every authenticated principal WAS the shop owner (Shop.ownerId), and
+// `Staff` was only a calendar entity with a name and hours.
+//
+// `staffId` links a member to the chair they work, so "my calendar" resolves to
+// their own appointments. Unique, so two people can't claim the same chair.
+//
+// A row is NOT created for a pending invite - only when the invite is
+// accepted - so "members" always means people who can actually sign in.
+model ShopMember {
+  id        String   @id @default(cuid())
+  shopId    String
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      ShopRole
+  // The chair this member works (barbers). Null for office-only managers.
+  staffId   String?  @unique
+  staff     Staff?   @relation(fields: [staffId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // One seat per person per shop.
+  @@unique([shopId, userId])
+  @@index([userId])
+}
+
+// A pending invitation to join a shop's team. Same threat model and lifecycle
+// as PasswordResetToken: only the sha256 of the emailed token is stored, so a
+// DB leak can't let anyone join a shop; single-use (acceptedAt stamped
+// atomically on redeem); expires; revocable.
+//
+// `email` is what the invite was sent to, and acceptance requires the signed-in
+// user's email to MATCH - otherwise a forwarded link would hand a stranger a
+// seat in someone's shop.
+model TeamInvite {
+  id          String    @id @default(cuid())
+  shopId      String
+  shop        Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  email       String // lowercased at write time
+  role        ShopRole
+  // Optionally pre-link the invitee to an existing chair, so an owner can
+  // invite "the person who works this chair" and the link survives acceptance.
+  staffId     String?
+  staff       Staff?    @relation(fields: [staffId], references: [id], onDelete: SetNull)
+  tokenHash   String    @unique // sha256 hex of the emailed token; never the raw value
+  invitedById String
+  expiresAt   DateTime
+  acceptedAt  DateTime? // non-null = spent, can never be replayed
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([shopId, email])
 }
 
 // A shop-designed promotion ("Spring special: 20% off weekday cuts"). Live =
@@ -983,6 +1059,9 @@ model Staff {
   recurringSeries   RecurringSeries[]
   targetedSlots     TargetedSlot[]
   targetedSlotRules TargetedSlotRule[]
+  // The team seat that works this chair, if any (see ShopMember.staffId).
+  member            ShopMember?
+  teamInvites       TeamInvite[]
 
   @@index([shopId, active])
 }

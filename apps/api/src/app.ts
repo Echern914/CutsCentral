@@ -25,6 +25,8 @@ import { rewardsRouter } from "./routes/rewards.js";
 import { walletRouter } from "./routes/wallet.js";
 import { dashboardRouter } from "./routes/dashboard.js";
 import { insightsRouter } from "./routes/insights.js";
+import { teamRouter } from "./routes/team.js";
+import { teamJoinRouter } from "./routes/teamJoin.js";
 import { bookingPublicRouter } from "./routes/booking.public.js";
 import { bookingDashboardRouter } from "./routes/booking.dashboard.js";
 import { loyaltyRouter } from "./routes/loyalty.js";
@@ -105,6 +107,17 @@ export function createApp(): Express {
   app.use("/api/wallet", rewardsLimiter, walletRouter); // Apple Wallet pass web service (public, ApplePass-token auth)
   app.use("/api/page", rewardsLimiter, publicPageRouter); // public shop pages
   app.use("/api/book", bookingPublicRouter); // public native booking (per-route limits inside)
+  // Team seats + the join flow. teamJoinRouter is mounted FIRST and requires
+  // only a session: accepting an invite happens before the user belongs to any
+  // shop, so it must not sit behind requireShop.
+  app.use("/api/team/join", dashboardLimiter, teamJoinRouter);
+  app.use("/api/team", dashboardLimiter, teamRouter);
+
+  // Existing dashboard surface. The employee (BARBER) role is refused inside
+  // each of these routers, right after their own requireShop — see
+  // `requireManager` in auth/roles.ts. It can't be gated here at the mount:
+  // these routers resolve the session themselves, so req.shopRole isn't set
+  // until their own middleware has run.
   app.use("/api/dashboard", dashboardLimiter, dashboardRouter);
   app.use("/api/insights", dashboardLimiter, insightsRouter); // barber analytics page
   app.use("/api/booking", dashboardLimiter, bookingDashboardRouter); // barber booking config

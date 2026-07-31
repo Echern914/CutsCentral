@@ -11,6 +11,7 @@ import {
   type LoyaltyTierKey,
 } from "@chairback/config";
 import { requireShop, requireUser } from "../middleware/auth.js";
+import { requireManager } from "../auth/roles.js";
 import { requireActiveAccess } from "../middleware/billing.js";
 import { hasActiveAccess } from "../billing/stripe.js";
 import { remainingMonthlySms } from "../billing/quota.js";
@@ -50,7 +51,7 @@ import { logger } from "../logger.js";
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
 export const dashboardRouter: Router = Router();
-dashboardRouter.use(requireUser, requireShop);
+dashboardRouter.use(requireUser, requireShop, requireManager);
 
 const pushNativeSchema = z
   .object({

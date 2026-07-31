@@ -3,6 +3,7 @@ import { z } from "zod";
 import { apiEnv } from "@chairback/config";
 import { forShop, prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
+import { requireManager } from "../auth/roles.js";
 import { smsLimiter } from "../middleware/rateLimit.js";
 import { loadEligibilityData } from "../engines/nudge.js";
 import { isNudgeEligible } from "../engines/eligibility.js";
@@ -20,7 +21,7 @@ import { remainingMonthlySms } from "../billing/quota.js";
  * so each promo's results are attributable.
  */
 export const promotionsRouter: Router = Router();
-promotionsRouter.use(requireUser, requireShop);
+promotionsRouter.use(requireUser, requireShop, requireManager);
 
 const MAX_PROMOS = 20;
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
