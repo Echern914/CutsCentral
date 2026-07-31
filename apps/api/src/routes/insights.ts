@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
+import { openMinutesForDay, shopLocalDays } from "../engines/utilization.js";
 
 /**
  * Shop insights: the barber's own analytics page. Everything is derived from
@@ -213,6 +214,237 @@ insightsRouter.get("/", async (req, res) => {
       punchesRedeemed: ledgerAgg._sum.punchesRedeemed ?? 0,
       redemptions,
     },
+  });
+});
+
+//  Chair utilization: open time vs sold time
+
+/**
+ * GET /api/insights/utilization?weeks=8|12|26&by=weekday|service&staffId=…
+ *
+ * "Busiest day" counts bookings; this measures how much of the time the shop
+ * was OPEN actually got sold. Four bookings on a full Saturday and four on a
+ * barely-worked Wednesday look identical in a count and completely different
+ * here — which is the number that tells a barber where the empty hours are.
+ *
+ * `by=weekday` gives capacity vs booked per weekday (the utilization view).
+ * `by=service` splits the SAME booked time by what filled it — capacity is not
+ * per-service (services share one chair), so a service row reports its share
+ * of booked time and of total open time rather than its own utilization.
+ *
+ * Booked time counts native appointments AND external synced (Acuity/Square)
+ * visits: both really occupied the chair. Canceled time is excluded (it was
+ * given back); a no-show is included (nobody else could book that hour).
+ *
+ * Only days up to TODAY are measured — future days have capacity but no
+ * settled outcome, and averaging them in would drag every number toward zero.
+ */
+const utilizationQuerySchema = z.object({
+  weeks: z.coerce.number().int().optional(),
+  by: z.enum(["weekday", "service"]).optional(),
+  staffId: z.string().min(1).optional(),
+});
+
+insightsRouter.get("/utilization", async (req, res) => {
+  const shop = req.shop!;
+  const parsed = utilizationQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const weekCount = (WEEK_CHOICES as readonly number[]).includes(parsed.data.weeks ?? 12)
+    ? (parsed.data.weeks ?? 12)
+    : 12;
+  const by = parsed.data.by ?? "weekday";
+
+  const now = new Date();
+  const thisWeek = weekStart(shopLocalDay(now, shop.timezone));
+  const windowStart = new Date(thisWeek.getTime() - (weekCount - 1) * 7 * DAY_MS);
+  // Measure through the END of yesterday: today is still in progress, and a
+  // half-finished day would read as a slump every time the barber checks
+  // before lunch.
+  const today = shopLocalDay(now, shop.timezone);
+  const lastMeasuredDay = new Date(today.getTime() - DAY_MS);
+  if (lastMeasuredDay < windowStart) {
+    res.json({
+      by,
+      weeks: weekCount,
+      timezone: shop.timezone,
+      staff: [],
+      rows: [],
+      totals: { openMin: 0, bookedMin: 0, bookings: 0, utilizationPct: null },
+      scheduleCaveat: false,
+    });
+    return;
+  }
+
+  // Concrete UTC bounds for the DB reads (pad a day so a shop-local day whose
+  // instants straddle UTC midnight can't be clipped).
+  const fetchFrom = new Date(windowStart.getTime() - DAY_MS);
+  const fetchTo = new Date(lastMeasuredDay.getTime() + 2 * DAY_MS);
+
+  const staffFilter = parsed.data.staffId;
+  const [staffRows, rules, recurringBlocks, exceptions, appts, visits] = await Promise.all([
+    prisma.staff.findMany({
+      where: { shopId: shop.id, active: true },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      select: { id: true, name: true },
+    }),
+    prisma.availabilityRule.findMany({
+      where: { shopId: shop.id, ...(staffFilter ? { staffId: staffFilter } : {}) },
+      select: { staffId: true, weekday: true, startMin: true, endMin: true },
+    }),
+    prisma.recurringBlock.findMany({
+      where: { shopId: shop.id, ...(staffFilter ? { staffId: staffFilter } : {}) },
+      select: { staffId: true, weekday: true, startMin: true, endMin: true },
+    }),
+    prisma.availabilityException.findMany({
+      where: {
+        shopId: shop.id,
+        ...(staffFilter ? { staffId: staffFilter } : {}),
+        startsAt: { lt: fetchTo },
+        endsAt: { gt: fetchFrom },
+      },
+      select: { staffId: true, startsAt: true, endsAt: true, isBlock: true },
+    }),
+    // Native bookings that occupied the chair. Holds (PENDING with an expiry)
+    // are provisional, never sold time.
+    prisma.appointment.findMany({
+      where: {
+        shopId: shop.id,
+        ...(staffFilter ? { staffId: staffFilter } : {}),
+        holdExpiresAt: null,
+        status: { in: ["BOOKED", "COMPLETED", "NO_SHOW"] },
+        startsAt: { gte: fetchFrom, lt: fetchTo },
+      },
+      select: {
+        startsAt: true,
+        endsAt: true,
+        service: { select: { name: true } },
+      },
+    }),
+    // External synced bookings (Acuity/Square). `appointment: null` keeps a
+    // visit promoted from a native appointment from double-counting its time.
+    // Not staff-filterable: a Visit carries no staffId.
+    prisma.visit.findMany({
+      where: {
+        shopId: shop.id,
+        appointment: null,
+        status: { in: ["SCHEDULED", "RESCHEDULED", "COMPLETED", "NO_SHOW"] },
+        scheduledAt: { gte: fetchFrom, lt: fetchTo },
+      },
+      select: { scheduledAt: true, endAt: true, serviceName: true },
+    }),
+  ]);
+
+  const staffIds = staffFilter
+    ? staffRows.filter((s) => s.id === staffFilter).map((s) => s.id)
+    : staffRows.map((s) => s.id);
+
+  // --- Capacity per weekday, from the schedule ---
+  const days = shopLocalDays(windowStart, lastMeasuredDay, shop.timezone);
+  const openByWeekday = new Array(7).fill(0) as number[];
+  const daysByWeekday = new Array(7).fill(0) as number[];
+  for (const d of days) {
+    openByWeekday[d.weekday] =
+      (openByWeekday[d.weekday] ?? 0) +
+      openMinutesForDay({
+        dayStartUtc: d.dayStartUtc,
+        weekday: d.weekday,
+        staffIds,
+        rules,
+        recurringBlocks,
+        exceptions,
+      });
+    daysByWeekday[d.weekday] = (daysByWeekday[d.weekday] ?? 0) + 1;
+  }
+
+  // --- Booked time, bucketed the same way ---
+  const bookedByWeekday = new Array(7).fill(0) as number[];
+  const countByWeekday = new Array(7).fill(0) as number[];
+  const byService = new Map<string, { min: number; count: number }>();
+  const DEFAULT_MIN = 30; // a visit with no recorded end still held the chair
+
+  const addBooking = (start: Date, end: Date | null, serviceName: string | null) => {
+    const local = shopLocalDay(start, shop.timezone);
+    if (local < windowStart || local > lastMeasuredDay) return;
+    const minutes =
+      end && end > start
+        ? Math.round((end.getTime() - start.getTime()) / 60_000)
+        : DEFAULT_MIN;
+    // JS getUTCDay on a UTC-midnight shop-local day == the shop-local weekday.
+    const weekday = local.getUTCDay();
+    bookedByWeekday[weekday] = (bookedByWeekday[weekday] ?? 0) + minutes;
+    countByWeekday[weekday] = (countByWeekday[weekday] ?? 0) + 1;
+    const key = serviceName?.trim() || "(no service)";
+    const s = byService.get(key) ?? { min: 0, count: 0 };
+    s.min += minutes;
+    s.count += 1;
+    byService.set(key, s);
+  };
+
+  for (const a of appts) addBooking(a.startsAt, a.endsAt, a.service?.name ?? null);
+  // Staff-filtered views drop external visits: a Visit has no staff, so
+  // attributing its time to the selected barber would invent capacity usage.
+  if (!staffFilter) {
+    for (const v of visits) addBooking(v.scheduledAt, v.endAt, v.serviceName);
+  }
+
+  const totalOpen = openByWeekday.reduce((a, b) => a + b, 0);
+  const totalBooked = bookedByWeekday.reduce((a, b) => a + b, 0);
+  const totalCount = countByWeekday.reduce((a, b) => a + b, 0);
+  const pct = (booked: number, open: number): number | null =>
+    open > 0 ? Math.round((booked / open) * 100) : null;
+
+  // WEEKDAYS is Mon-first (matches the existing chart); JS weekday is Sun=0.
+  const MON_FIRST = [1, 2, 3, 4, 5, 6, 0];
+
+  const rows =
+    by === "weekday"
+      ? MON_FIRST.map((jsDay, i) => ({
+          key: WEEKDAYS[i]!,
+          label: WEEKDAYS[i]!,
+          openMin: openByWeekday[jsDay]!,
+          bookedMin: bookedByWeekday[jsDay]!,
+          bookings: countByWeekday[jsDay]!,
+          days: daysByWeekday[jsDay]!,
+          utilizationPct: pct(bookedByWeekday[jsDay]!, openByWeekday[jsDay]!),
+        }))
+      : [...byService.entries()]
+          .sort((a, b) => b[1].min - a[1].min)
+          .slice(0, 10)
+          .map(([name, s]) => ({
+            key: name,
+            label: name,
+            // Capacity is shared across services, so a service row reports the
+            // slice of open time it filled — not a utilization of its own.
+            openMin: 0,
+            bookedMin: s.min,
+            bookings: s.count,
+            days: 0,
+            utilizationPct: pct(s.min, totalOpen),
+          }));
+
+  res.json({
+    by,
+    weeks: weekCount,
+    timezone: shop.timezone,
+    staff: staffRows,
+    staffId: staffFilter ?? null,
+    rows,
+    totals: {
+      openMin: totalOpen,
+      bookedMin: totalBooked,
+      bookings: totalCount,
+      utilizationPct: pct(totalBooked, totalOpen),
+    },
+    // True when the shop has no weekly hours at all: capacity is unknowable, so
+    // the UI shows booked time only instead of a meaningless 0% / ∞.
+    noSchedule: totalOpen === 0,
+    // Capacity comes from the CURRENT weekly schedule; older days in the window
+    // are measured against it. The UI says so rather than implying we kept
+    // historical hours.
+    scheduleCaveat: true,
   });
 });
 
