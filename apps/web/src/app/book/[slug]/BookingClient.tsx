@@ -282,11 +282,11 @@ export function BookingClient({ data }: { data: BookShopData }) {
   // nothing open that day never appear.
   //
   // Layout (every shop): EVERYTHING is on screen from the moment the page
-  // opens — the grouped service menu at the top (each group a dropdown card
-  // with its services and their times inside), and the month calendar with the
-  // day's time rail right below it. The soonest open day is auto-selected on
-  // load, so dates AND times are already showing without a single tap; picking
-  // another date just swaps the times.
+  // opens — the grouped service menu at the top (each group a COLLAPSED
+  // dropdown card; one tap opens its services and their times), and the month
+  // calendar with the day's time rail right below it. The soonest open day is
+  // auto-selected on load, so the menu is ready the moment a card is opened;
+  // picking another date just swaps the times inside whatever's open.
   const dayFirst = true;
   const [dayDate, setDayDate] = useState<string | null>(null); // YYYY-MM-DD (shop tz)
   const [dayData, setDayData] = useState<DayBundlesResult | null>(null);
@@ -296,11 +296,13 @@ export function BookingClient({ data }: { data: BookShopData }) {
   // on landing and the whole page looked dead. Real state + a retry button.
   const [dayError, setDayError] = useState(false);
   const [dayMonth, setDayMonth] = useState<string | null>(null); // "YYYY-MM"
-  // Which group cards are expanded in the day view. Groups start open so the
-  // customer sees services without a tap; tapping a header collapses one.
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  // Which group cards are expanded in the day view. Groups start COLLAPSED
+  // (Drick: a wall of every service at once overwhelms — headers first, tap to
+  // open) and a customer's opened cards STAY open across day switches so they
+  // can compare a service's times between days without re-opening it.
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const toggleDayGroup = (id: string) =>
-    setCollapsedGroups((prev) => {
+    setExpandedGroups((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -476,7 +478,8 @@ export function BookingClient({ data }: { data: BookShopData }) {
     setDayDate(day);
     setDayMonth(monthKey(day));
     setServiceId(null);
-    setCollapsedGroups(new Set()); // reopen all groups for the new day
+    // Deliberately NOT resetting expandedGroups: switching days keeps the
+    // customer's opened cards open (compare times across days in place).
     setAddOnIds([]);
     clearSlotPick();
     setDayLoading(true);
@@ -500,7 +503,17 @@ export function BookingClient({ data }: { data: BookShopData }) {
         ];
         const svc = all.find((s) => s.id === target.serviceId);
         const hit = svc?.slots.find((x) => x.startsAt === target.startsAt);
-        if (svc && hit) pickDaySlot(svc, hit);
+        if (svc && hit) {
+          // Open the service's group card too (groups start collapsed), so
+          // backing out of the details step lands on the relevant card open.
+          const bundle = res.data.bundles.find((b) =>
+            b.services.some((s) => s.id === svc.id),
+          );
+          if (bundle) {
+            setExpandedGroups((prev) => new Set(prev).add(bundle.id));
+          }
+          pickDaySlot(svc, hit);
+        }
         // Sold out in the seconds since? The day's real times are showing —
         // honest fallback, nothing to fake.
       }
@@ -1177,10 +1190,11 @@ export function BookingClient({ data }: { data: BookShopData }) {
       )}
 
       {/* THE MENU — the grouped service cards, right below the calendar. Each
-          group is a dropdown card with its services (and the selected day's
-          open times) inside; ungrouped services follow. Fed by the selected
-          day's bundle fetch — the soonest open day is auto-selected on load, so
-          times show with zero taps. Tapping a service's time chip books it. */}
+          group is a COLLAPSED dropdown card — one tap opens its services with
+          the selected day's open times inside; ungrouped services follow. Fed
+          by the selected day's bundle fetch — the soonest open day is
+          auto-selected on load, so an opened card shows real times instantly.
+          Tapping a service's time chip books it. */}
       {dayFirst && (
         <Section title="2 · Choose a service" tour="services">
           {(dayLoading || (!dayData && !dayError && calendarDays.size > 0)) && (
@@ -1210,7 +1224,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
               {/* Services, grouped into the barber's collapsible group cards.
                   Filtered to those bookable at the chosen time (when set). */}
               {visibleDay.bundles.map((b) => {
-                const open = !collapsedGroups.has(b.id);
+                const open = expandedGroups.has(b.id);
                 return (
                   <div
                     key={b.id}
