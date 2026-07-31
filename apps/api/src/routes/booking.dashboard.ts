@@ -32,6 +32,7 @@ import {
   type RecurrencePattern,
 } from "../engines/recurringSeries.js";
 import { zonedDateParts, zonedWallTimeToUtc, localMinutesOfDay } from "@chairback/config";
+import { invalidateShopAvailabilityCaches } from "./booking.public.js";
 import { logger } from "../logger.js";
 
 /**
@@ -44,6 +45,34 @@ import { logger } from "../logger.js";
  */
 export const bookingDashboardRouter: Router = Router();
 bookingDashboardRouter.use(requireUser, requireShop);
+
+/**
+ * Any successful mutation here can change what the public booking page offers
+ * (hours, services, groups, staff, block-offs, targeted slots, booking rules,
+ * a manually-booked appointment). The public /day + /open-days responses are
+ * cached in-process for 60s, so without this the barber's own verify loop —
+ * save, then immediately open the booking page — shows him PRE-SAVE times and
+ * reads as "it didn't save".
+ *
+ * One router-level hook instead of ~15 per-route calls: a new mutating route
+ * can't forget to invalidate. Fires after the response is sent (never delays
+ * the barber's save) and only on a 2xx/3xx, so a rejected write doesn't dump a
+ * warm cache. Deliberately broad — invalidation is one Map delete, while a
+ * missed one costs a support text.
+ */
+bookingDashboardRouter.use((req, res, next) => {
+  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") {
+    next();
+    return;
+  }
+  const shopId = req.shop?.id;
+  if (shopId) {
+    res.on("finish", () => {
+      if (res.statusCode < 400) invalidateShopAvailabilityCaches(shopId);
+    });
+  }
+  next();
+});
 
 //  Services
 
@@ -989,6 +1018,12 @@ type AgendaStatus =
 interface AgendaRow {
   id: string;
   source: "appointment" | "visit" | "block";
+  // True only for a synced Acuity/Square booking shown on a NATIVE shop's
+  // calendar (a shop mid-transition). Drives the "Acuity/Square" badge that
+  // explains why the row can't be acted on — and why its time is blocked.
+  // Absent on synced-mode shops, where every row is a visit and a badge on all
+  // of them would be noise.
+  syncedExternal?: boolean;
   start: string; // ISO
   end: string | null; // ISO
   clientName: string; // for a block: the reason (or "Blocked")
@@ -1294,6 +1329,68 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         rewardReady: null,
       });
     }
+
+    // EXTERNAL synced appointments (Acuity / Square) on a NATIVE shop's
+    // calendar. A shop mid-transition still takes bookings in Acuity, and
+    // since the visit-busy fix those Visits BLOCK native slots shop-wide — but
+    // they were never rendered here, so the barber saw a half-empty ChairBack
+    // calendar and unexplained dead slots ("it's not syncing my Acuity").
+    // Showing them makes the calendar the whole truth about the chair and
+    // explains every blocked slot.
+    //
+    // `appointment: null` = purely external: a Visit promoted FROM a native
+    // appointment is already on this calendar as its Appointment row, and
+    // would otherwise render twice. Same predicate the busy-set uses, so what
+    // blocks a slot and what shows here can't drift apart.
+    //
+    // NOT filtered by staffId even when the barber filters the calendar: a
+    // Visit carries no staff, and the engine blocks EVERY staffer's slots for
+    // its window — hiding it under a filter would recreate the same mystery
+    // one level down.
+    const externalVisits = (await db.visit.findMany({
+      where: { scheduledAt: { gte: from, lte: to }, appointment: null },
+      orderBy: { scheduledAt: "asc" },
+      take: 500,
+      select: {
+        id: true,
+        status: true,
+        scheduledAt: true,
+        endAt: true,
+        price: true,
+        serviceName: true,
+        client: { select: { firstName: true, lastName: true } },
+      },
+    })) as unknown as VisitAgendaRow[];
+    for (const v of externalVisits) {
+      agenda.push({
+        id: v.id,
+        source: "visit",
+        // Read-only in the UI (row actions are gated on source==="appointment"):
+        // the booking platform owns these, so ChairBack must never pretend to
+        // cancel or complete one.
+        syncedExternal: true,
+        start: v.scheduledAt.toISOString(),
+        end: v.endAt ? v.endAt.toISOString() : null,
+        clientName:
+          fullName(v.client?.firstName ?? null, v.client?.lastName ?? null) ||
+          "Booked elsewhere",
+        serviceName: v.serviceName ?? null,
+        serviceColor: null,
+        price: v.price == null ? null : Number(v.price),
+        status: VISIT_STATUS[v.status] ?? "upcoming",
+        seriesId: null,
+        checkInStatus: null,
+        etaMinutes: null,
+        runningLate: false,
+        addOns: [],
+        hasPush: false,
+        nudgesSent: 0,
+        nudgeLimit: APPOINTMENT_NUDGE_LIMIT,
+        clientId: null,
+        rewardReady: null,
+      });
+    }
+
     agenda.sort((a, b) => a.start.localeCompare(b.start));
   } else {
     // Synced shops (Acuity / Square / link): appointments are Visit rows. There's
