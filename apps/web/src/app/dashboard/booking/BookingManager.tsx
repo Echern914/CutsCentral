@@ -925,46 +925,63 @@ function ServicesTab({
       </button>
 
       <ul className="mt-5 flex flex-col gap-2">
-        {initial.filter((s) => s.active).map((s) => (
-          <li
-            key={s.id}
-            className="flex items-center justify-between rounded-xl border border-subtle px-4 py-2.5"
-          >
-            <span className="text-sm">
-              {s.name}{" "}
-              <span className="text-xs text-muted">
-                · {s.durationMin} min{s.price !== null ? ` · $${s.price}` : ""}
-                {Object.keys(s.priceOverrides ?? {}).length > 0 &&
-                  " · " +
-                    Object.entries(s.priceOverrides)
-                      .map(([wd, p]) => `${WEEKDAYS[Number(wd)]} $${p}`)
-                      .join(", ")}
-                {Object.keys(s.durationOverrides ?? {}).length > 0 &&
-                  " · " +
-                    Object.entries(s.durationOverrides ?? {})
-                      .map(([wd, m]) => `${WEEKDAYS[Number(wd)]} ${m}min`)
-                      .join(", ")}
-                {(s.timeOverrides ?? []).length > 0 &&
-                  " · " + (s.timeOverrides ?? []).map(timeWindowSummary).join(", ")}
+        {initial.filter((s) => s.active).map((s) => {
+          // Hours the ENGINE will use for this service (a group overrides it).
+          // Restricted => ★ + the windows spelled out, so the barber can spot
+          // his evening/weekend-only services without opening a single editor.
+          const { windows, groupName } = effectiveServiceHours(s, initialServiceGroups);
+          const offHours = hasCustomHours(windows);
+          return (
+            <li
+              key={s.id}
+              className={cn(
+                "flex items-start justify-between gap-3 rounded-xl border px-4 py-2.5",
+                offHours ? "border-gold/40 bg-gold/[0.04]" : "border-subtle",
+              )}
+            >
+              <span className="min-w-0 text-sm">
+                {offHours && <OffHoursStar />}
+                {s.name}{" "}
+                <span className="text-xs text-muted">
+                  · {s.durationMin} min{s.price !== null ? ` · $${s.price}` : ""}
+                  {Object.keys(s.priceOverrides ?? {}).length > 0 &&
+                    " · " +
+                      Object.entries(s.priceOverrides)
+                        .map(([wd, p]) => `${WEEKDAYS[Number(wd)]} $${p}`)
+                        .join(", ")}
+                  {Object.keys(s.durationOverrides ?? {}).length > 0 &&
+                    " · " +
+                      Object.entries(s.durationOverrides ?? {})
+                        .map(([wd, m]) => `${WEEKDAYS[Number(wd)]} ${m}min`)
+                        .join(", ")}
+                  {(s.timeOverrides ?? []).length > 0 &&
+                    " · " + (s.timeOverrides ?? []).map(timeWindowSummary).join(", ")}
+                </span>
+                {offHours && (
+                  <span className="mt-0.5 block text-xs text-gold/90">
+                    {groupName ? `${groupName} hours · ` : ""}
+                    {hoursWindowsSummary(windows)}
+                  </span>
+                )}
               </span>
-            </span>
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => setEditing(s)}
-                className="text-xs text-gold hover:underline"
-                aria-label={`Edit ${s.name}`}
-              >
-                Edit
-              </button>
-              <button
-                onClick={() => remove(s.id)}
-                className="text-xs text-danger-soft hover:underline"
-              >
-                Remove
-              </button>
-            </div>
-          </li>
-        ))}
+              <div className="flex shrink-0 items-center gap-3">
+                <button
+                  onClick={() => setEditing(s)}
+                  className="text-xs text-gold hover:underline"
+                  aria-label={`Edit ${s.name}`}
+                >
+                  Edit
+                </button>
+                <button
+                  onClick={() => remove(s.id)}
+                  className="text-xs text-danger-soft hover:underline"
+                >
+                  Remove
+                </button>
+              </div>
+            </li>
+          );
+        })}
         {initial.filter((s) => s.active).length === 0 && (
           <li className="text-sm text-muted">No services yet.</li>
         )}
@@ -2197,21 +2214,31 @@ function ServiceGroupItem({
     }
   }, [group, lastSaved]);
   const current = lastSaved ?? group;
+  // Group hours govern every member service, so a restricted group is the one
+  // place a whole bundle silently leaves the regular schedule — star it here
+  // too, reading from `current` so a just-saved change stars immediately.
+  const offHours = hasCustomHours(current.hoursWindows);
   return (
-    <li className="rounded-xl border border-subtle">
+    <li className={cn("rounded-xl border", offHours ? "border-gold/40" : "border-subtle")}>
       {/* COMPACT header - always visible; the chevron toggles the editor. */}
       <button
         onClick={onToggle}
         aria-expanded={expanded}
-        className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left"
+        className="flex w-full items-start justify-between gap-3 px-4 py-2.5 text-left"
       >
-        <span className="text-sm">
+        <span className="min-w-0 text-sm">
+          {offHours && <OffHoursStar />}
           {current.name}{" "}
           <span className="text-xs text-muted">
             · {current.serviceIds.length} service
             {current.serviceIds.length === 1 ? "" : "s"} ·{" "}
             {limitsSummary(current.maxPerDay, current.maxConcurrent)}
           </span>
+          {offHours && (
+            <span className="mt-0.5 block text-xs text-gold/90">
+              {hoursWindowsSummary(current.hoursWindows)}
+            </span>
+          )}
         </span>
         <span
           className={cn(
@@ -3000,6 +3027,96 @@ function hoursRowsFromWindows(
   });
 }
 
+/** "6:00 PM" from shop-local minutes-past-midnight. */
+function fmtClock(min: number): string {
+  const h = Math.floor(min / 60) % 24;
+  const m = min % 60;
+  const ampm = h < 12 ? "AM" : "PM";
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
+//  OFF-REGULAR-HOURS BADGE. A service/group left entirely on "Open (barber's
+//  hours)" stores {} — it runs whenever the chair does. The moment ANY weekday
+//  is set to custom windows or to closed, that item no longer follows the
+//  regular schedule, and until now the only way to discover that was to open
+//  the editor and expand "Available hours". These two helpers drive the ★ and
+//  the plain-language hours line on the list rows.
+
+/** True when any weekday is restricted — a custom window OR a closed day. */
+function hasCustomHours(
+  windows: Record<string, { s: number; e: number }[]> | undefined,
+): boolean {
+  return Object.keys(windows ?? {}).length > 0;
+}
+
+/**
+ * The stored hours map in plain language: "Tue, Thu 6:00 PM–9:00 PM · closed
+ * Sun". Weekdays sharing identical windows collapse onto one clause, and days
+ * ABSENT from the map are never mentioned — those are the regular hours, which
+ * is the whole point of the badge. Returns "" for an unrestricted map.
+ */
+function hoursWindowsSummary(
+  windows: Record<string, { s: number; e: number }[]> | undefined,
+): string {
+  const closed: string[] = [];
+  // Window-text -> the weekdays that share it, so "Tue 6-9, Thu 6-9" reads as
+  // "Tue, Thu 6:00 PM-9:00 PM". Insertion order is Sun..Sat (the loop below).
+  const byWindows = new Map<string, string[]>();
+  for (let wd = 0; wd < 7; wd++) {
+    const w = windows?.[String(wd)];
+    if (!w) continue; // absent = the barber's regular hours
+    const day = WEEKDAYS[wd]!;
+    if (w.length === 0) {
+      closed.push(day);
+      continue;
+    }
+    const text = w.map((x) => `${fmtClock(x.s)}–${fmtClock(x.e)}`).join(", ");
+    const days = byWindows.get(text);
+    if (days) days.push(day);
+    else byWindows.set(text, [day]);
+  }
+  const parts = [...byWindows.entries()].map(([text, days]) => `${days.join(", ")} ${text}`);
+  if (closed.length > 0) parts.push(`closed ${closed.join(", ")}`);
+  return parts.join(" · ");
+}
+
+/**
+ * Which hours actually govern a service — mirroring engines/slots.ts exactly:
+ * membership in an ACTIVE group makes the GROUP's windows override the
+ * service's own (an inactive group is ignored, so the service's own windows
+ * apply again). Getting this wrong would star the wrong rows: a grouped service
+ * with {} of its own still runs on restricted hours, and its own leftover
+ * windows are dead config the engine never reads.
+ */
+function effectiveServiceHours(
+  service: ServiceRow,
+  groups: ServiceGroupRow[],
+): { windows: Record<string, { s: number; e: number }[]>; groupName: string | null } {
+  const group = service.serviceGroupId
+    ? groups.find((g) => g.id === service.serviceGroupId && g.active)
+    : undefined;
+  return group
+    ? { windows: group.hoursWindows, groupName: group.name }
+    : { windows: service.hoursWindows, groupName: null };
+}
+
+/**
+ * The ★ that marks a row as not-on-regular-hours. Decorative on its own (the
+ * hours line beside it carries the meaning in text, so this is never
+ * symbol-or-color-only), with an sr-only lead-in for screen readers.
+ */
+function OffHoursStar() {
+  return (
+    <>
+      <span aria-hidden="true" className="mr-1 text-gold" title="Not on regular hours">
+        ★
+      </span>
+      <span className="sr-only">Custom hours. </span>
+    </>
+  );
+}
+
 /**
  * One-line summary of the per-day hours state, shown on the collapsed button so
  * a barber sees the setting without expanding. "Open every day" is the untouched
@@ -3353,18 +3470,11 @@ function timeWindowSummary(w: {
   price: number | null;
   durationMin: number | null;
 }): string {
-  const fmt = (min: number) => {
-    const h = Math.floor(min / 60) % 24;
-    const m = min % 60;
-    const ampm = h < 12 ? "AM" : "PM";
-    const h12 = h % 12 === 0 ? 12 : h % 12;
-    return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
-  };
   const bits = [
     w.price !== null ? `$${w.price}` : null,
     w.durationMin !== null ? `${w.durationMin}min` : null,
   ].filter(Boolean);
-  return `${fmt(w.s)}–${fmt(w.e)} ${bits.join(" / ")}`;
+  return `${fmtClock(w.s)}–${fmtClock(w.e)} ${bits.join(" / ")}`;
 }
 
 function VaryByTimeEditor({
