@@ -1300,7 +1300,7 @@ function ServiceEditForm({
                 {allHoursCustom ? "All days: open" : "All days: custom"}
               </button>
             </div>
-            <p className="mt-0.5 text-[11px] text-muted">
+            <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
               Open = whenever the barber works that day. Custom = only the windows
               you set (add a second window for a split day). Not open = no
               bookings that day.
@@ -2568,7 +2568,7 @@ function ServiceGroupEditor({
             {allHoursCustom ? "All days: open" : "All days: custom"}
           </button>
         </div>
-        <p className="mt-0.5 text-[11px] text-muted">
+        <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
           Open = whenever the barber works that day. Custom = only the windows
           you set (add a second window for a split day). Not open = no
           bookings that day, for every service in this group.
@@ -2639,8 +2639,11 @@ function ServiceGroupEditor({
 type HourBreak = { start: string; end: string; reason: string };
 type HourRow = { on: boolean; start: string; end: string; breaks: HourBreak[] };
 
+// Time pickers sit shoulder-to-shoulder in every hours editor, so they carry
+// their own padding (px-2.5 py-1.5) rather than relying on the gap alone — two
+// adjacent selects with tight padding read as one wide control.
 const timeSelectCls =
-  "rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-sm text-offwhite disabled:opacity-40";
+  "rounded-lg border border-subtle bg-charcoal-700 px-2.5 py-1.5 text-sm text-offwhite disabled:opacity-40";
 
 // Weekly-hours editor for ONE staff member, shown in a Sheet from the Staff tab.
 // Hours persist only on "Save hours", so an unsaved close would silently lose
@@ -3079,13 +3082,26 @@ function AvailableHoursRows({
     });
   }
   return (
-    <div className="mt-2 flex flex-col gap-2">
+    // One bordered list with a rule between days. Seven bare rows 8px apart
+    // read as a single dense block of dropdowns — you can't tell at a glance
+    // where Monday ends and Tuesday begins, which is exactly the row you're
+    // trying to edit. The divider does that work; the row padding gives each
+    // day room to breathe.
+    <div className="mt-2 divide-y divide-subtle overflow-hidden rounded-xl border border-subtle">
       {rows.map((r, i) => (
         // flex-wrap: the windows sit beside the select where they fit and wrap
         // under it on narrow screens — never overflowing the card (the full-
         // width `field` select pushed the times out of the card entirely).
-        <div key={i} className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-          <span className="w-9 shrink-0 text-sm">{WEEKDAYS[i]}</span>
+        <div
+          key={i}
+          className={cn(
+            "flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5",
+            // A closed day has nothing to configure — dim it so the days that
+            // DO carry settings are what the eye lands on.
+            r.mode === "closed" && "opacity-60",
+          )}
+        >
+          <span className="w-10 shrink-0 text-sm font-medium">{WEEKDAYS[i]}</span>
           {/* Deliberately NOT the shared `field` class (w-full): a compact
               fixed-width select keeps all 7 rows aligned. Short labels — the
               helper text above the grid explains each mode. */}
@@ -3102,29 +3118,35 @@ function AvailableHoursRows({
             <option value="closed">Not open</option>
           </select>
           {r.mode === "custom" && (
-            <div className="flex flex-col gap-1.5">
+            // Stacked windows on one day need to read as a set that belongs to
+            // THIS day, not as more loose rows: a left rule ties them together
+            // and to the weekday beside them.
+            <div className="flex flex-col gap-2 border-l border-subtle pl-3">
               {r.windows.map((w, k) => (
-                <div key={k} className="flex items-center gap-2">
+                <div key={k} className="flex items-center gap-2.5">
                   <TimeSelect
                     value={w.start}
                     onChange={(v) => patchWindow(i, k, { start: v })}
                     className={timeSelectCls}
                     aria-label={`${WEEKDAYS[i]} window ${k + 1} from`}
                   />
-                  <span className="text-muted">–</span>
+                  <span className="px-0.5 text-muted">–</span>
                   <TimeSelect
                     value={w.end}
                     onChange={(v) => patchWindow(i, k, { end: v })}
                     className={timeSelectCls}
                     aria-label={`${WEEKDAYS[i]} window ${k + 1} until`}
                   />
+                  {/* The row actions get their own margin + hit area: butted
+                      straight against the "until" select they read as part of
+                      the control, and were a hard tap target on a phone. */}
                   {r.windows.length > 1 && (
                     <button
                       type="button"
                       onClick={() =>
                         patchRow(i, { windows: r.windows.filter((_, j) => j !== k) })
                       }
-                      className="text-xs text-muted transition-colors hover:text-danger-soft"
+                      className="ml-1 rounded px-1.5 py-1 text-xs text-muted transition-colors hover:text-danger-soft"
                       aria-label={`Remove ${WEEKDAYS[i]} window ${k + 1}`}
                     >
                       ✕
@@ -3140,7 +3162,7 @@ function AvailableHoursRows({
                           windows: [...r.windows, { start: w.end, end: "23:00" }],
                         })
                       }
-                      className="whitespace-nowrap text-xs text-muted transition-colors hover:text-gold"
+                      className="ml-1 whitespace-nowrap rounded px-1.5 py-1 text-xs text-muted transition-colors hover:text-gold"
                       aria-label={`Add another ${WEEKDAYS[i]} window`}
                     >
                       + hours
