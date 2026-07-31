@@ -21,6 +21,38 @@ export interface InsightsData {
   loyalty: { punchesEarned: number; punchesRedeemed: number; redemptions: number };
 }
 
+/**
+ * Chair utilization: how much of the time the shop was OPEN actually sold.
+ * `by=weekday` rows carry real capacity; `by=service` rows share one chair, so
+ * their openMin is 0 and utilizationPct means "share of total open time".
+ */
+export interface UtilizationRow {
+  key: string;
+  label: string;
+  openMin: number;
+  bookedMin: number;
+  bookings: number;
+  days: number;
+  utilizationPct: number | null;
+}
+export interface UtilizationData {
+  by: "weekday" | "service";
+  weeks: number;
+  timezone: string;
+  staff: { id: string; name: string }[];
+  staffId: string | null;
+  rows: UtilizationRow[];
+  totals: {
+    openMin: number;
+    bookedMin: number;
+    bookings: number;
+    utilizationPct: number | null;
+  };
+  /** No weekly hours set at all — capacity is unknowable, show sold time only. */
+  noSchedule: boolean;
+  scheduleCaveat: boolean;
+}
+
 // Quota goal ("$4,000 this month" / "60 cuts this week") + live progress.
 export interface GoalData {
   metric: "revenue" | "visits";
