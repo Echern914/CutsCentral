@@ -812,6 +812,16 @@ function AppointmentBlock({
                 ↻ Weekly
               </span>
             )}
+            {/* Booked in Acuity/Square, mirrored here. Says both "this time is
+                taken for online booking" and "manage it where it was made". */}
+            {row.syncedExternal && (
+              <span
+                title="Booked on your other platform (Acuity/Square). It blocks this time for online booking — change or cancel it there."
+                className="shrink-0 rounded-full bg-sky-400/15 px-1.5 py-0.5 text-[10px] font-medium text-sky-300"
+              >
+                Synced
+              </span>
+            )}
           </p>
           {/* The haircut / service type + price, with a color dot when set. */}
           <p className="mt-0.5 flex items-center gap-1.5 truncate text-xs text-muted">

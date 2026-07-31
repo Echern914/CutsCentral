@@ -105,6 +105,12 @@ export interface AddOnRow {
 export interface AgendaRow {
   id: string;
   source: "appointment" | "visit" | "block";
+  /**
+   * A synced Acuity/Square booking shown on a NATIVE shop's calendar (a shop
+   * mid-transition). Read-only like any visit row, but badged so the barber
+   * knows where it came from — and why that time is blocked for native booking.
+   */
+  syncedExternal?: boolean;
   start: string; // ISO
   end: string | null; // ISO
   clientName: string; // for a block: the reason (or "Blocked")

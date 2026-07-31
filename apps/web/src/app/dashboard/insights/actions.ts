@@ -1,11 +1,30 @@
 "use server";
 
 import { apiGet, apiSend } from "@/lib/api";
-import type { GoalResponse, InsightsData } from "./page";
+import type { GoalResponse, InsightsData, UtilizationData } from "./page";
 
 /** Re-fetch insights for a non-default week range (mirrors trendsAction). */
 export async function insightsAction(weeks: number): Promise<InsightsData | null> {
   const res = await apiGet<InsightsData>(`/api/insights?weeks=${weeks}`);
+  return res.ok ? (res.data ?? null) : null;
+}
+
+/**
+ * Chair utilization: open time vs sold time, grouped by weekday or service and
+ * optionally narrowed to one barber. Fetched on demand as the barber changes
+ * the card's controls, rather than widening the page's server payload.
+ */
+export async function utilizationAction(input: {
+  weeks: number;
+  by: "weekday" | "service";
+  staffId?: string;
+}): Promise<UtilizationData | null> {
+  const params = new URLSearchParams({
+    weeks: String(input.weeks),
+    by: input.by,
+    ...(input.staffId ? { staffId: input.staffId } : {}),
+  });
+  const res = await apiGet<UtilizationData>(`/api/insights/utilization?${params}`);
   return res.ok ? (res.data ?? null) : null;
 }
 

@@ -313,16 +313,25 @@ const dayCache = new Map<string, { at: number; body: unknown }>();
 const DAY_FANOUT_LIMIT = 4;
 
 /**
- * Drop every cached day for a shop after a PUBLIC booking write. Without this,
- * the customer who loses a slot race refreshes the day, gets the same cached
- * list with the dead chip, and loops on slot_taken until the TTL lapses.
- * Receptionist/dashboard writes don't reach in here — their ≤60s staleness in
- * the public view is the same accepted tradeoff as /open-days.
+ * Drop a shop's cached availability (every /day date + /open-days) after any
+ * write that can change what's bookable.
+ *
+ * Public booking writes call it so the customer who loses a slot race sees the
+ * dead chip disappear instead of looping on slot_taken until the TTL lapses.
+ *
+ * DASHBOARD writes call it too (via the invalidation hook on the booking
+ * dashboard router): a barber's verify loop is "save hours -> open my booking
+ * page -> check" and that happens in SECONDS. Serving him the pre-save times
+ * for up to a minute reads as "it didn't save" — the single most damaging
+ * thing a save can look like, and precisely the complaint that surfaced on
+ * launch day. Availability edits are rare and this is one Map delete, so
+ * there's no reason to make the barber wait out a TTL to see his own change.
  */
-function invalidateShopDayCache(shopId: string): void {
+export function invalidateShopAvailabilityCaches(shopId: string): void {
   for (const key of dayCache.keys()) {
     if (key.startsWith(`${shopId}|`)) dayCache.delete(key);
   }
+  openDaysCache.delete(shopId);
 }
 
 /** Map with at most `limit` calls of `fn` in flight at once (order preserved). */
@@ -569,8 +578,12 @@ bookingPublicRouter.get("/:slug/day", bookingReadLimiter, async (req, res) => {
 // public shell's 30s cache. The scan is capped at 45 days: calendars beyond
 // that fall back to the client's weekday heuristic, and the horizon check in
 // the booking POST still rejects anything truly out of range.
-const OPEN_DAYS_TTL_MS = 60_000;
+// TTL 0 under vitest, same reason as the /day cache above.
+const OPEN_DAYS_TTL_MS = process.env.VITEST === "true" ? 0 : 60_000;
 const OPEN_DAYS_SCAN_CAP = 45;
+// Keyed by shop.id (NOT the raw slug): the dashboard invalidator only knows the
+// shop id, and a slug key also let case variants of the same slug each hold
+// their own entry.
 const openDaysCache = new Map<string, { at: number; body: unknown }>();
 bookingPublicRouter.get("/:slug/open-days", bookingReadLimiter, async (req, res) => {
   const slug = req.params.slug!;
@@ -579,7 +592,7 @@ bookingPublicRouter.get("/:slug/open-days", bookingReadLimiter, async (req, res)
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const cached = openDaysCache.get(slug);
+  const cached = openDaysCache.get(shop.id);
   if (cached && Date.now() - cached.at < OPEN_DAYS_TTL_MS) {
     res.json(cached.body);
     return;
@@ -669,7 +682,7 @@ bookingPublicRouter.get("/:slug/open-days", bookingReadLimiter, async (req, res)
         }
       : null,
   };
-  openDaysCache.set(slug, { at: Date.now(), body });
+  openDaysCache.set(shop.id, { at: Date.now(), body });
   res.json(body);
 });
 
@@ -998,7 +1011,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {
     appointmentId,
     kind: shop.requireBookingApproval ? "requested" : "booked",
   });
-  invalidateShopDayCache(shop.id);
+  invalidateShopAvailabilityCaches(shop.id);
 
   // Pay-ahead: create a PaymentIntent for the customer to confirm (card/Apple
   // Pay) and return its client secret. Gated on the shop being in `ahead` mode
@@ -1366,7 +1379,7 @@ bookingPublicRouter.post(
       appointmentId: appt.id,
       kind: "canceled",
     });
-    invalidateShopDayCache(appt.shopId);
+    invalidateShopAvailabilityCaches(appt.shopId);
     res.json({ ok: true });
   },
 );
@@ -1554,7 +1567,7 @@ bookingPublicRouter.post(
       appointmentId: appt.id,
       kind: "rescheduled",
     });
-    invalidateShopDayCache(appt.shopId);
+    invalidateShopAvailabilityCaches(appt.shopId);
     res.json({ ok: true, startsAt: startsAt.toISOString() });
   },
 );

@@ -5,12 +5,13 @@ import { motion } from "framer-motion";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { cn } from "@/lib/cn";
-import type { GoalData, GoalResponse, InsightsData } from "./page";
+import type { GoalData, GoalResponse, InsightsData, UtilizationData } from "./page";
 import {
   clearGoalAction,
   goalAction,
   insightsAction,
   saveGoalAction,
+  utilizationAction,
 } from "./actions";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
@@ -115,6 +116,11 @@ export function InsightsClient({
             <ServiceBars services={services} />
           )}
         </Card>
+      </motion.div>
+
+      {/* Open chair time vs sold chair time */}
+      <motion.div variants={fadeUp}>
+        <UtilizationCard weeks={range} />
       </motion.div>
 
       <motion.div variants={fadeUp} className="grid gap-6 md:grid-cols-2">
@@ -255,6 +261,188 @@ function ServiceBars({ services }: { services: InsightsData["services"] }) {
 }
 
 /** Mon..Sun mini bars. */
+//  Chair utilization
+
+/** "6h 30m" / "45m" — hours read better than 390 minutes to a barber. */
+function fmtDuration(min: number): string {
+  const h = Math.floor(min / 60);
+  const m = Math.round(min % 60);
+  if (h === 0) return `${m}m`;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}
+
+/** Color the bar by how full it is — red/amber/green reads at a glance. */
+function utilTone(pct: number | null): string {
+  if (pct === null) return "bg-charcoal-600";
+  if (pct >= 75) return "bg-emerald-soft";
+  if (pct >= 40) return "bg-gold";
+  return "bg-rose-400/80";
+}
+
+/**
+ * How much of the time the barber was OPEN actually got sold.
+ *
+ * "Busiest day" counts bookings, which can't tell a full Saturday from a
+ * barely-worked Wednesday — this can. Customizable along the axes a barber
+ * actually thinks in: group by weekday (where are my empty hours?) or by
+ * service (what fills the chair?), and narrow to one barber in a multi-chair
+ * shop. Range follows the page's week selector.
+ */
+function UtilizationCard({ weeks }: { weeks: number }) {
+  const [by, setBy] = useState<"weekday" | "service">("weekday");
+  const [staffId, setStaffId] = useState<string>("");
+  const [data, setData] = useState<UtilizationData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setFailed(false);
+    void utilizationAction({ weeks, by, ...(staffId ? { staffId } : {}) }).then((d) => {
+      if (cancelled) return;
+      if (d) setData(d);
+      else setFailed(true);
+      setLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [weeks, by, staffId]);
+
+  const rows = data?.rows ?? [];
+  // Scale bars to the busiest row, not to 100%: a shop that never exceeds 40%
+  // would otherwise render seven near-invisible slivers.
+  const maxBooked = Math.max(1, ...rows.map((r) => r.bookedMin));
+  const maxOpen = Math.max(1, ...rows.map((r) => r.openMin));
+  const scale = Math.max(maxBooked, maxOpen);
+
+  const chip = (active: boolean) =>
+    cn(
+      "rounded-full px-3 py-1 text-xs transition-colors",
+      active
+        ? "bg-gold/15 text-gold"
+        : "border border-subtle text-muted hover:text-offwhite",
+    );
+
+  return (
+    <Card className="overflow-hidden">
+      <CardHeader
+        title="Chair time"
+        subtitle="How much of the time you were open actually got booked."
+      />
+      <div className="flex flex-col gap-4 px-5 py-5">
+        {/* Controls: what to group by, and (multi-chair shops) whose chair. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex gap-1.5" role="group" aria-label="Group by">
+            <button type="button" onClick={() => setBy("weekday")} className={chip(by === "weekday")}>
+              By day
+            </button>
+            <button type="button" onClick={() => setBy("service")} className={chip(by === "service")}>
+              By service
+            </button>
+          </div>
+          {(data?.staff.length ?? 0) > 1 && (
+            <select
+              value={staffId}
+              onChange={(e) => setStaffId(e.target.value)}
+              aria-label="Barber"
+              className="ml-auto rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
+            >
+              <option value="">All barbers</option>
+              {data!.staff.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        {loading && !data ? (
+          <p className="py-4 text-sm text-muted">Working out your chair time…</p>
+        ) : failed && !data ? (
+          <p className="py-4 text-sm text-muted" role="alert">
+            Couldn&apos;t load chair time right now.
+          </p>
+        ) : data && data.noSchedule ? (
+          <p className="py-4 text-sm text-muted">
+            Set your weekly hours under Booking → Staff and this fills in — we
+            need to know when you&apos;re open before we can say how full you are.
+          </p>
+        ) : (
+          <>
+            {/* The headline number. */}
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <span className="font-display text-3xl text-offwhite">
+                {data?.totals.utilizationPct ?? 0}%
+              </span>
+              <span className="text-sm text-muted">
+                of your open time booked ·{" "}
+                {fmtDuration(data?.totals.bookedMin ?? 0)} sold of{" "}
+                {fmtDuration(data?.totals.openMin ?? 0)} open
+              </span>
+            </div>
+
+            <div className={cn("flex flex-col gap-2.5", loading && "opacity-50")}>
+              {rows.length === 0 && (
+                <p className="text-sm text-muted">Nothing booked in this window yet.</p>
+              )}
+              {rows.map((r) => {
+                // Weekday rows show sold-vs-open (a filled track inside the
+                // day's capacity). Service rows share one chair, so they show
+                // sold time only, scaled against the biggest service.
+                const openW = Math.round((r.openMin / scale) * 100);
+                const bookedW = Math.round((r.bookedMin / scale) * 100);
+                const closed = by === "weekday" && r.openMin === 0;
+                return (
+                  <div key={r.key} className="flex items-center gap-3">
+                    <span className="w-24 shrink-0 truncate text-xs text-muted" title={r.label}>
+                      {r.label}
+                    </span>
+                    <div className="relative h-5 flex-1 overflow-hidden rounded bg-charcoal-700/60">
+                      {by === "weekday" && (
+                        <div
+                          className="absolute inset-y-0 left-0 rounded bg-charcoal-600/70"
+                          style={{ width: `${openW}%` }}
+                          aria-hidden
+                        />
+                      )}
+                      <div
+                        className={cn("absolute inset-y-0 left-0 rounded", utilTone(r.utilizationPct))}
+                        style={{ width: `${bookedW}%` }}
+                        aria-hidden
+                      />
+                    </div>
+                    <span className="w-32 shrink-0 text-right text-xs tabular-nums text-muted">
+                      {closed ? (
+                        "closed"
+                      ) : (
+                        <>
+                          <span className="text-offwhite">{r.utilizationPct ?? 0}%</span>
+                          {" · "}
+                          {fmtDuration(r.bookedMin)}
+                          {by === "weekday" && ` / ${fmtDuration(r.openMin)}`}
+                        </>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            <p className="text-[11px] text-muted/80">
+              {by === "weekday"
+                ? "Open time comes from your current weekly hours, minus block-offs. Bookings made on Acuity or Square count too — they take up the chair."
+                : "Share of your open time each service filled. Services share one chair, so these add up to your total booked time."}
+            </p>
+          </>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 function DayBars({ counts }: { counts: number[] }) {
   const max = Math.max(1, ...counts);
   return (
