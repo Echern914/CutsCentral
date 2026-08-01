@@ -122,6 +122,9 @@ export async function createServiceAction(input: {
   price?: number | null;
   priceOverrides?: Record<string, number>;
   color?: string | null;
+  // Display-only daily slot target for the calendar day gauge. NOT a cap, and
+  // only used while the service is ungrouped (a grouped one uses its group's).
+  dailyTarget?: number | null;
   offeredByAll?: boolean;
   staffIds?: string[];
 }): Promise<Result> {
@@ -142,6 +145,7 @@ export async function updateServiceAction(
     priceOverrides?: Record<string, number>;
     active?: boolean;
     color?: string | null;
+    dailyTarget?: number | null;
     offeredByAll?: boolean;
     staffIds?: string[];
   },
@@ -165,6 +169,9 @@ export interface ServiceGroupInput {
   hoursWindows?: ServiceHoursWindows;
   maxPerDay?: number | null;
   maxConcurrent?: number | null;
+  // Display-only daily slot target for the calendar day gauge ("Haircuts 10/12").
+  // NOT a cap - booking past it is allowed and just reads 13/12.
+  dailyTarget?: number | null;
   serviceIds?: string[];
   active?: boolean;
   sortOrder?: number;

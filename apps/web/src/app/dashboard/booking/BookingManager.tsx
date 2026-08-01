@@ -60,6 +60,17 @@ import {
 const field =
   "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 const labelCls = "text-xs text-muted";
+
+/**
+ * A part-way-through numerator for the "shows on your calendar as X 3/12" hint.
+ * Stays BELOW the target so the example never reads as an already-full day - a
+ * target of 3 rendering "3/3" made the field look like a cap, which is the exact
+ * confusion the helper text exists to prevent.
+ */
+function exampleBooked(target: number): number {
+  return Math.max(1, Math.min(3, target - 1));
+}
+
 const tabs = ["Settings", "Staff", "Services", "Appointments"] as const;
 type Tab = (typeof tabs)[number];
 
@@ -1067,6 +1078,10 @@ function ServiceEditForm({
   );
   // Calendar color (a SERVICE_COLORS key, or null = no color).
   const [color, setColor] = useState<string | null>(service.color ?? null);
+  // Display-only daily slot target (0 = none). Only meaningful while UNGROUPED —
+  // a grouped service is gauged by its group's target, so the field is hidden
+  // and the value left untouched, exactly like the hours editor above.
+  const [dailyTarget, setDailyTarget] = useState<number>(service.dailyTarget ?? 0);
   // Per-service available-hours rows (one window/day in v1), seeded from storage.
   const [hoursRows, setHoursRows] = useState<ServiceHoursRow[]>(() =>
     hoursRowsFromWindows(service.hoursWindows),
@@ -1153,6 +1168,8 @@ function ServiceEditForm({
         // Grouped services get their hours from the group (which overrides these),
         // so omit the field entirely - PATCH is partial, absent = leave unchanged.
         ...(groupName ? {} : { hoursWindows: buildHoursWindows(hoursRows) }),
+        // Ditto the day-gauge target: the group owns it while grouped.
+        ...(groupName ? {} : { dailyTarget: dailyTarget > 0 ? dailyTarget : null }),
         color,
         // offeredByAll wins server-side; send staffIds only for the hand-picked
         // case so a later-added barber is auto-included when "all" is chosen.
@@ -1328,6 +1345,33 @@ function ServiceEditForm({
               ariaScope="this service"
             />
           </CollapsibleHours>
+        )}
+
+        {/* Day-gauge target. Hidden while grouped for the same reason as the
+            hours editor: the group owns it across all its members. */}
+        {!groupName && (
+          <label className="block">
+            {/* See the group editor's twin: labelCls is inline, and this input
+                is narrow, so the label needs `block` to sit above it. */}
+            <span className={cn(labelCls, "block")}>Daily target (blank = none)</span>
+            <NumberField
+              min={0}
+              max={1000}
+              integer
+              className={cn(field, "mt-1 sm:max-w-[12rem]")}
+              placeholder="No target"
+              value={dailyTarget}
+              onChange={setDailyTarget}
+              aria-label="Daily slot target for this service"
+              aria-describedby="service-target-help"
+            />
+            <p id="service-target-help" className="mt-1 text-[11px] text-muted">
+              How many of these you aim to do in a day. Shows on your calendar
+              as &ldquo;{name.trim() || "Service"} {exampleBooked(dailyTarget || 8)}/
+              {dailyTarget || 8}&rdquo; so you can see how full the day is.{" "}
+              <span className="text-offwhite">It never stops bookings.</span>
+            </p>
+          </label>
         )}
 
         <button
@@ -2305,6 +2349,9 @@ function ServiceGroupEditor({
   const [maxConcurrent, setMaxConcurrent] = useState<number>(
     group.maxConcurrent ?? 0,
   );
+  // Same 0 = "unset" sentinel as the caps, but this one is DISPLAY ONLY: it's
+  // the denominator of the calendar day gauge and never blocks a booking.
+  const [dailyTarget, setDailyTarget] = useState<number>(group.dailyTarget ?? 0);
   const [pending, start] = useTransition();
   // The last-persisted values in PAYLOAD form — the baseline the Save diff and
   // the dirty flag compare against. Hours round-trip rows -> windows so both
@@ -2314,6 +2361,7 @@ function ServiceGroupEditor({
     hours: JSON.stringify(buildHoursWindows(hoursRowsFromWindows(group.hoursWindows))),
     maxPerDay: group.maxPerDay ?? null,
     maxConcurrent: group.maxConcurrent ?? null,
+    dailyTarget: group.dailyTarget ?? null,
     serviceIds: JSON.stringify(group.serviceIds),
   }));
 
@@ -2338,6 +2386,7 @@ function ServiceGroupEditor({
     JSON.stringify(buildHoursWindows(hoursRows)) !== saved.hours ||
     (maxPerDay <= 0 ? null : maxPerDay) !== saved.maxPerDay ||
     (maxConcurrent <= 0 ? null : maxConcurrent) !== saved.maxConcurrent ||
+    (dailyTarget <= 0 ? null : dailyTarget) !== saved.dailyTarget ||
     JSON.stringify(serviceIds) !== saved.serviceIds;
 
   // While this editor is the open one, its dirty/saving state is what the
@@ -2385,6 +2434,13 @@ function ServiceGroupEditor({
       toast("Limits must be a whole number (or blank for no cap)", "error");
       return;
     }
+    // Same 0/blank -> null shape as the caps, so the diff below compares like
+    // for like even though this one is only ever displayed.
+    const target = parseCap(dailyTarget);
+    if (!target.ok) {
+      toast("Daily target must be a whole number (or blank)", "error");
+      return;
+    }
     const trimmed = name.trim();
     const hours = buildHoursWindows(hoursRows);
     const hoursJson = JSON.stringify(hours);
@@ -2397,6 +2453,9 @@ function ServiceGroupEditor({
       ...(perDay.value !== saved.maxPerDay ? { maxPerDay: perDay.value } : {}),
       ...(concurrent.value !== saved.maxConcurrent
         ? { maxConcurrent: concurrent.value }
+        : {}),
+      ...(target.value !== saved.dailyTarget
+        ? { dailyTarget: target.value }
         : {}),
       ...(idsJson !== saved.serviceIds ? { serviceIds } : {}),
     };
@@ -2411,6 +2470,7 @@ function ServiceGroupEditor({
       hours: hoursJson,
       maxPerDay: perDay.value,
       maxConcurrent: concurrent.value,
+      dailyTarget: target.value,
       serviceIds: idsJson,
     };
     start(async () => {
@@ -2426,6 +2486,7 @@ function ServiceGroupEditor({
           hoursWindows: hours,
           maxPerDay: perDay.value,
           maxConcurrent: concurrent.value,
+          dailyTarget: target.value,
           serviceIds: [...serviceIds],
         });
         toast("Group saved", "success");
@@ -2636,6 +2697,36 @@ function ServiceGroupEditor({
           />
         </label>
       </div>
+
+      {/* Display-only target, kept OUT of the limits grid above on purpose: the
+          two look alike but only the caps stop a booking, and a barber who
+          confuses them turns away work to make a number look right. */}
+      <label className="block">
+        {/* `block` because labelCls alone is inline: the fields above only wrap
+            because their input is w-full, and this one is deliberately narrow. */}
+        <span className={cn(labelCls, "block")}>Daily target (blank = none)</span>
+        <NumberField
+          min={0}
+          max={1000}
+          integer
+          className={cn(field, "mt-1 sm:max-w-[12rem]")}
+          placeholder="No target"
+          value={dailyTarget}
+          onChange={setDailyTarget}
+          aria-label="Daily slot target for this group"
+          aria-describedby={`group-target-help-${group.id}`}
+        />
+        <p id={`group-target-help-${group.id}`} className="mt-1 text-[11px] text-muted">
+          How many of these you aim to do in a day. Shows on your calendar as
+          &ldquo;{group.name || "Group"} {exampleBooked(dailyTarget || 8)}/
+          {dailyTarget || 8}&rdquo; so you can see how full the day is.{" "}
+          <span className="text-offwhite">
+            This never stops bookings — go past it and it just reads{" "}
+            {(dailyTarget || 8) + 1}/{dailyTarget || 8}.
+          </span>{" "}
+          Use &ldquo;Max per day&rdquo; above if you actually want a hard cap.
+        </p>
+      </label>
 
       <div className="flex items-center gap-3">
         <button
