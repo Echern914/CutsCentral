@@ -25,6 +25,7 @@ import {
 } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
+import { linkReferralOnShopCreate } from "../services/referral.js";
 import { previewNudgeBody } from "../messaging/templates.js";
 import { toE164 } from "../acuity/clientKey.js";
 import { getMessageProvider } from "../messaging/twilio.js";
@@ -292,7 +293,27 @@ shopsRouter.post("/", requireUser, async (req, res) => {
     });
     return created;
   });
-  res.status(201).json(serializeShop(shop));
+  // Referral attribution, AFTER the shop transaction commits. Deliberately not
+  // inside it: a referral is a growth nicety and must never be able to fail
+  // shop creation. It reads User.referralCode (the code this owner arrived
+  // with, captured at signup) and, when that resolves to a real referrer,
+  // records the referral and extends THIS shop's trial by a month. The referrer
+  // is not paid until this shop's first invoice actually clears.
+  const owner = await prisma.user.findUnique({
+    where: { id: req.userId! },
+    select: { referralCode: true },
+  });
+  const referred = await linkReferralOnShopCreate({
+    shopId: shop.id,
+    ownerId: req.userId!,
+    code: owner?.referralCode,
+  });
+  // Re-read only when a referral actually landed, so the response carries the
+  // extended trialEndsAt instead of the pre-referral value.
+  const fresh = referred
+    ? await prisma.shop.findUnique({ where: { id: shop.id } })
+    : null;
+  res.status(201).json(serializeShop(fresh ?? shop));
 });
 
 // Current shop + connection / progress status for the onboarding wizard.

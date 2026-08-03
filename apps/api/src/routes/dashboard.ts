@@ -8,10 +8,12 @@ import {
   frequencySegment,
   cadenceToDays,
   LOYALTY_TIER_KEYS,
+  REFERRAL,
   type LoyaltyTierKey,
 } from "@chairback/config";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
+import { ensureReferralCode } from "../services/referral.js";
 import { requireActiveAccess } from "../middleware/billing.js";
 import { hasActiveAccess } from "../billing/stripe.js";
 import { remainingMonthlySms } from "../billing/quota.js";
@@ -2296,5 +2298,46 @@ dashboardRouter.post(
     res.json({ ok: true, status });
   },
 );
+
+/**
+ * The referrals page: this shop's share code plus who they've brought in.
+ *
+ * GET mints the code on first view (lazily, so no backfill was needed), which
+ * is why a read endpoint writes. Referral rows are read with plain prisma
+ * rather than forShop: a row spans two shops, and the referrer needs the
+ * REFERRED shop's name, which a shop-scoped read can't reach.
+ */
+dashboardRouter.get("/referrals", async (req, res) => {
+  const shop = req.shop!;
+  const code = await ensureReferralCode(shop.id);
+  const rows = await prisma.referral.findMany({
+    // VOID rows are self-referrals; showing them would just look like a bug.
+    where: { referrerShopId: shop.id, status: { not: "VOID" } },
+    orderBy: { createdAt: "desc" },
+    take: 100,
+    select: {
+      id: true,
+      status: true,
+      createdAt: true,
+      rewardedAt: true,
+      referredShop: { select: { name: true } },
+    },
+  });
+  res.json({
+    code,
+    referrals: rows.map((r) => ({
+      id: r.id,
+      shopName: r.referredShop.name,
+      status: r.status,
+      joinedAt: r.createdAt.toISOString(),
+      rewardedAt: r.rewardedAt?.toISOString() ?? null,
+    })),
+    // Counters the page leads with, computed here so the client never has to
+    // re-derive them from a truncated list.
+    earnedMonths: rows.filter((r) => r.status === "REWARDED").length,
+    pendingCount: rows.filter((r) => r.status === "PENDING").length,
+    rewardDays: REFERRAL.rewardDays,
+  });
+});
 
 export { NUDGE };

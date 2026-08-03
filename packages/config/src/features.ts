@@ -243,6 +243,21 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     href: "/dashboard/billing",
   },
   {
+    id: "referrals",
+    name: "Refer a barber",
+    synonyms: [
+      "referral",
+      "refer a friend",
+      "invite",
+      "share",
+      "free month",
+      "affiliate",
+      "referral link",
+    ],
+    description: "Send your link — they get an extra month, you get one free",
+    href: "/dashboard/referrals",
+  },
+  {
     id: "live-demo",
     name: "Live client demo",
     synonyms: ["demo", "tour", "what clients see", "walkthrough", "preview"],
