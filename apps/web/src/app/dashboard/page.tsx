@@ -18,12 +18,20 @@ import { GettingStarted } from "./_components/GettingStarted";
 import { ConsentSetup } from "./_components/ConsentSetup";
 import { ShopIdentity } from "./_components/ShopIdentity";
 import { QuickActions } from "./_components/QuickActions";
+import { ReferralCard } from "./_components/ReferralCard";
 import { DemoTour } from "@/components/tour/DemoTour";
 
 interface ShopMe extends ShopSettings {
   connected: boolean;
   /** URL handle for the public booking page; null until one is picked. */
   slug: string | null;
+}
+
+/** Counters behind the home-screen referral row (full list lives on its page). */
+interface ReferralSummary {
+  earnedMonths: number;
+  pendingCount: number;
+  rewardDays: number;
 }
 
 interface SyncStatus {
@@ -55,21 +63,35 @@ export default async function DashboardPage({
   // texted to clients — those can't be relative.
   const appBase = process.env.APP_BASE_URL ?? "";
 
-  const [shopRes, stats, atRisk, activity, leaderboard, trends, me, sync, agenda] =
-    await Promise.all([
-      apiGet<ShopMe>("/api/shops/me"),
-      apiGet<Stats>("/api/dashboard/stats"),
-      apiGet<{ clients: AtRiskRow[] }>("/api/dashboard/at-risk"),
-      apiGet<{ items: ActivityItem[] }>("/api/dashboard/activity"),
-      apiGet<{ leaders: Leader[] }>("/api/dashboard/leaderboard"),
-      apiGet<{ series: TrendPoint[] }>("/api/dashboard/trends"),
-      // Memoized: shares the layout's /api/auth/me round-trip for this render.
-      getMe(),
-      apiGet<SyncStatus>("/api/acuity/oauth/status"),
-      apiGet<{ agenda: TodayRow[]; timezone: string }>(
-        `/api/booking/agenda?from=${encodeURIComponent(agendaFrom)}&to=${encodeURIComponent(agendaTo)}`,
-      ),
-    ]);
+  const [
+    shopRes,
+    stats,
+    atRisk,
+    activity,
+    leaderboard,
+    trends,
+    me,
+    sync,
+    agenda,
+    referrals,
+  ] = await Promise.all([
+    apiGet<ShopMe>("/api/shops/me"),
+    apiGet<Stats>("/api/dashboard/stats"),
+    apiGet<{ clients: AtRiskRow[] }>("/api/dashboard/at-risk"),
+    apiGet<{ items: ActivityItem[] }>("/api/dashboard/activity"),
+    apiGet<{ leaders: Leader[] }>("/api/dashboard/leaderboard"),
+    apiGet<{ series: TrendPoint[] }>("/api/dashboard/trends"),
+    // Memoized: shares the layout's /api/auth/me round-trip for this render.
+    getMe(),
+    apiGet<SyncStatus>("/api/acuity/oauth/status"),
+    apiGet<{ agenda: TodayRow[]; timezone: string }>(
+      `/api/booking/agenda?from=${encodeURIComponent(agendaFrom)}&to=${encodeURIComponent(agendaTo)}`,
+    ),
+    // Joins the existing parallel batch, so it costs no extra round trip in
+    // wall-clock terms. This endpoint also MINTS the shop's referral code on
+    // first read - idempotent, and a code every shop can share is the point.
+    apiGet<ReferralSummary>("/api/dashboard/referrals"),
+  ]);
 
   if (shopRes.status === 401) redirect("/login");
   if (shopRes.status === 404) redirect("/onboarding");
@@ -150,6 +172,18 @@ export default async function DashboardPage({
         <div data-tour="stats">
           <StatCards stats={stats.data} />
         </div>
+      )}
+
+      {/* Sits after today's numbers and before the reference sections: a growth
+          nudge belongs after the work, not competing with the primary CTA.
+          Dropped entirely if the call failed - a missing referral row is
+          invisible, while a broken one on the home screen is not. */}
+      {referrals.data && (
+        <ReferralCard
+          earnedMonths={referrals.data.earnedMonths}
+          pendingCount={referrals.data.pendingCount}
+          rewardDays={referrals.data.rewardDays}
+        />
       )}
 
       {/* These two carry demo-tour anchors ("at-risk", "activity"), so they stay
