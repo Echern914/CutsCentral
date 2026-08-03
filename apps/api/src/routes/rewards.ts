@@ -814,7 +814,9 @@ rewardsRouter.post("/resolve-by-phone", async (req, res) => {
       }),
     );
     if (client) {
-      const rewardsUrl = `${env.APP_BASE_URL}/r/${client.magicToken}`;
+      // The text promises "your rewards link", so it opens the punch card
+      // (/rewards) - not the shop-page landing the bare /r/ now renders.
+      const rewardsUrl = `${env.APP_BASE_URL}/r/${client.magicToken}/rewards`;
       const who = client.firstName ?? "there";
       const body =
         `Hi ${who}, here's your ${client.shop.name} rewards link: ${rewardsUrl} ` +
