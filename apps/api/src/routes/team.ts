@@ -4,7 +4,7 @@ import { z } from "zod";
 import { APP_NAME, apiEnv, randomToken } from "@chairback/config";
 import { forShop, prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
-import { requireOwner } from "../auth/roles.js";
+import { requireManager, requireOwner } from "../auth/roles.js";
 import { accountLimiter, dashboardLimiter } from "../middleware/rateLimit.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
 import { logger } from "../logger.js";
@@ -34,7 +34,15 @@ import { logger } from "../logger.js";
 
 const env = apiEnv();
 export const teamRouter: Router = Router();
-teamRouter.use(requireUser, requireShop);
+// Manager-gated at the ROUTER, so a route added later inherits the restriction.
+// The roster read below was previously reachable by ANY member: writes were
+// requireOwner, but nothing gated the GET, so an invited BARBER could list every
+// colleague's name, email and avatar plus every pending invite's email address.
+// Nothing surfaced it because barbers 403'd on every other dashboard route, so
+// nobody had a session that could reach this one. A barber has no business
+// reading the roster; accepting an invite is a different router (teamJoin.ts)
+// and is unaffected.
+teamRouter.use(requireUser, requireShop, requireManager);
 
 /** A week: long enough for a barber to get to it, short enough to bound a stale mailbox. */
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;

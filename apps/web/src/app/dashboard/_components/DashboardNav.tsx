@@ -51,16 +51,37 @@ function isActive(pathname: string, href: string): boolean {
 interface NavProps {
   isAdmin?: boolean;
   rewardsEnabled?: boolean;
+  /**
+   * True for an employee seat. Their whole surface is Home (their own chair):
+   * every other tab is manager-gated and would 403, and a nav full of doors
+   * that refuse to open reads as a broken app rather than a limited one.
+   */
+  barberOnly?: boolean;
+}
+
+/** The tabs a given role can actually reach. */
+function tabsFor(barberOnly: boolean): Tab[] {
+  return barberOnly ? TABS.filter((t) => t.href === "/dashboard") : TABS;
 }
 
 /**
  * Phones only. MUST be mounted outside the blurred top bar — see the note above
  * about `backdrop-filter` and fixed positioning.
  */
-export function DashboardTabBar({ isAdmin = false, rewardsEnabled = true }: NavProps) {
+export function DashboardTabBar({
+  isAdmin = false,
+  rewardsEnabled = true,
+  barberOnly = false,
+}: NavProps) {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
-  const moreActive = !TABS.some((t) => isActive(pathname, t.href));
+  const tabs = tabsFor(barberOnly);
+  const moreActive = !tabs.some((t) => isActive(pathname, t.href));
+
+  // An employee's entire app is one screen. A tab bar with a single tab is
+  // noise, and a More sheet listing pages that all 403 is worse than no sheet.
+  // Account, sign-out and Help stay reachable from the top bar and the page.
+  if (barberOnly) return null;
 
   return (
     <>
@@ -74,7 +95,7 @@ export function DashboardTabBar({ isAdmin = false, rewardsEnabled = true }: NavP
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
         <ul className="flex items-stretch">
-          {TABS.map((t) => (
+          {tabs.map((t) => (
             <li key={t.href} className="flex-1">
               <TabLink tab={t} active={isActive(pathname, t.href)} />
             </li>
@@ -96,17 +117,25 @@ export function DashboardTabBar({ isAdmin = false, rewardsEnabled = true }: NavP
 }
 
 /** Tablet and up: the same five destinations, inline in the top bar. */
-export function DashboardNavInline({ isAdmin = false, rewardsEnabled = true }: NavProps) {
+export function DashboardNavInline({
+  isAdmin = false,
+  rewardsEnabled = true,
+  barberOnly = false,
+}: NavProps) {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
+  const tabs = tabsFor(barberOnly);
   // Any page that isn't one of the four tabs was reached THROUGH More, so
   // More carries the active state — the nav never looks like nothing is on.
-  const moreActive = !TABS.some((t) => isActive(pathname, t.href));
+  const moreActive = !tabs.some((t) => isActive(pathname, t.href));
+
+  // See DashboardTabBar: an employee has one destination, so no nav at all.
+  if (barberOnly) return null;
 
   return (
     <>
       <div className="hidden items-center gap-1 sm:flex">
-        {TABS.map((t) => {
+        {tabs.map((t) => {
           const active = isActive(pathname, t.href);
           return (
             <Link
