@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { apiPublicGet } from "@/lib/api";
 import { resolveRewardsTheme } from "../theme";
-import type { RewardsData } from "../page";
+import type { RewardsData } from "../rewards/page";
 
 /**
  * Per-shop Web App Manifest for the rewards PWA. A single static manifest can't

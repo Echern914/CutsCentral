@@ -15,9 +15,13 @@ import { hasActiveAccess } from "../billing/stripe.js";
 
 const env = apiEnv();
 
-/** The client's live rewards page - the click target for a loyalty push. */
+/**
+ * The client's punch card - the click target for a loyalty push. /rewards, not
+ * the bare /r/ landing (now the shop's page): a push about punches must open
+ * punches.
+ */
 function rewardsUrl(magicToken: string): string {
-  return `${env.APP_BASE_URL}/r/${magicToken}`;
+  return `${env.APP_BASE_URL}/r/${magicToken}/rewards`;
 }
 
 /**
