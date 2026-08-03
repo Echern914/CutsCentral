@@ -3,6 +3,10 @@ import { apiEnv } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import { ensureShopNumber } from "../messaging/numberProvision.js";
+// Static here, but referral.ts imports THIS module dynamically (inside the
+// functions that need a Stripe client) so the cycle never exists at module
+// evaluation time.
+import { grantReferralReward } from "../services/referral.js";
 
 /**
  * Stripe billing. Two base tiers ("pro" = Premium, "pro_ai" = Premium AI) on
@@ -432,6 +436,35 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
           "stripe event matched no shop",
         );
       }
+      return;
+    }
+    case "invoice.paid": {
+      // The ONLY event that proves money actually moved, which is what the
+      // referral reward waits for. checkout.session.completed fires while a
+      // trial is still running (nothing charged yet), and a trialing -> active
+      // subscription update doesn't prove a charge cleared either; rewarding on
+      // those would pay out for signups that never become revenue.
+      const invoice = event.data.object as Stripe.Invoice;
+      // $0 invoices are issued for trial periods and fully-discounted cycles.
+      // Those are not payments and must not qualify a referral.
+      if ((invoice.amount_paid ?? 0) <= 0) return;
+
+      const customerId =
+        typeof invoice.customer === "string"
+          ? invoice.customer
+          : invoice.customer?.id ?? null;
+      if (!customerId) return;
+      const paidShop = await prisma.shop.findFirst({
+        where: { stripeCustomerId: customerId },
+        select: { id: true },
+      });
+      if (!paidShop) return;
+
+      // Safe to call on EVERY paid invoice, not just the first: it no-ops
+      // unless this shop has a PENDING referral, and granting flips that row to
+      // REWARDED under a compare-and-set. So renewals and Stripe's multi-day
+      // replays cannot pay a second time.
+      await grantReferralReward(paidShop.id);
       return;
     }
     default:
