@@ -4,13 +4,21 @@ import { APP_NAME } from "@chairback/config/constants";
 import { getMe } from "@/lib/me";
 import { HideInNativeApp } from "@/components/HideInNativeApp";
 import { logoutAction } from "../(auth)/actions";
-import { DashboardNavLinks } from "./_components/DashboardNav";
+import { DashboardNavInline, DashboardTabBar } from "./_components/DashboardNav";
 import { DemoBanner } from "./_components/DemoBanner";
 import { FeatureSearch } from "./_components/FeatureSearch";
 import { ShopSwitcher } from "./_components/ShopSwitcher";
 import { TrialBanner } from "./_components/TrialBanner";
 
-/** Shared dashboard chrome: sticky glass top nav with brand, links, sign out. */
+/**
+ * Shared dashboard chrome: a slim sticky top bar (brand, search, account, sign
+ * out) plus the primary nav, which renders as a bottom tab bar on phones and an
+ * inline row in the top bar on wider screens.
+ *
+ * The tab bar is mounted at the root of this tree, NOT inside <header>: the
+ * header's `.glass` sets `backdrop-filter`, which would make the fixed bar
+ * position against the nav pill instead of the viewport.
+ */
 export default async function DashboardLayout({
   children,
 }: {
@@ -41,36 +49,42 @@ export default async function DashboardLayout({
               {APP_NAME}
             </span>
           </Link>
-          <DashboardNavLinks isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} />
-          <FeatureSearch />
-          {shops.length > 1 && (
-            <ShopSwitcher shops={shops} activeShopId={activeShopId} />
-          )}
-          {/* Personal account page. Hidden for read-only demo sessions (shared
-              account). Deliberately NOT hidden in the native app: App Store
-              5.1.1(v) requires in-app account deletion to stay reachable, and
-              it lives on this page. */}
-          {!me.data?.demo && (
-            <Link
-              href="/dashboard/account"
-              className="flex shrink-0 items-center gap-1.5 rounded-full border border-subtle px-3.5 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
-            >
-              {me.data?.avatarUrl && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={me.data.avatarUrl}
-                  alt=""
-                  className="h-4 w-4 rounded-full object-cover"
-                />
-              )}
-              Account
-            </Link>
-          )}
-          <form action={logoutAction} className="shrink-0">
-            <button className="rounded-full border border-subtle px-3.5 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite">
-              Sign out
-            </button>
-          </form>
+          <DashboardNavInline isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} />
+          <div className="flex shrink-0 items-center gap-2">
+            <FeatureSearch />
+            {shops.length > 1 && (
+              <ShopSwitcher shops={shops} activeShopId={activeShopId} />
+            )}
+            {/* Personal account page. Hidden for read-only demo sessions (shared
+                account). Deliberately NOT hidden in the native app: App Store
+                5.1.1(v) requires in-app account deletion to stay reachable, and
+                it lives on this page. The label collapses on phones so the top
+                bar stays a single uncrowded row. */}
+            {!me.data?.demo && (
+              <Link
+                href="/dashboard/account"
+                aria-label="Account"
+                className="flex shrink-0 items-center gap-1.5 rounded-full border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite sm:px-3.5"
+              >
+                {me.data?.avatarUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={me.data.avatarUrl}
+                    alt=""
+                    className="h-4 w-4 rounded-full object-cover"
+                  />
+                ) : (
+                  <PersonMark />
+                )}
+                <span className="hidden sm:inline">Account</span>
+              </Link>
+            )}
+            <form action={logoutAction} className="shrink-0">
+              <button className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite sm:px-3.5">
+                Sign out
+              </button>
+            </form>
+          </div>
         </nav>
       </header>
       {/* Read-only demo session: the ribbon replaces the trial banner (a demo
@@ -85,8 +99,36 @@ export default async function DashboardLayout({
           <TrialBanner />
         </HideInNativeApp>
       )}
-      {children}
+      {/* Phones scroll under a fixed tab bar, so the last card needs clearance
+          or it sits permanently behind it. ~4.5rem of bar plus the home-indicator
+          inset; from `sm` up the bar is hidden and no padding is needed. */}
+      <div
+        className="sm:!pb-0"
+        style={{ paddingBottom: "calc(4.5rem + env(safe-area-inset-bottom))" }}
+      >
+        {children}
+      </div>
+      <DashboardTabBar isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} />
     </div>
+  );
+}
+
+/** Fallback avatar for the account chip when the barber has no photo set. */
+function PersonMark() {
+  return (
+    <svg
+      className="h-4 w-4"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <circle cx="12" cy="8.5" r="3.5" />
+      <path d="M5 20c0-3.6 3.1-6.2 7-6.2s7 2.6 7 6.2" />
+    </svg>
   );
 }
 

@@ -139,6 +139,7 @@ type EditorGuardState = { dirty: boolean; saving: boolean };
 
 export function BookingManager({
   shop,
+  initialTab,
   appBase,
   apiBase,
   connect,
@@ -150,6 +151,8 @@ export function BookingManager({
   initialWaitlist,
 }: {
   shop: BookingShop;
+  /** Raw `?tab=` value; validated against `tabs` before it's trusted. */
+  initialTab?: string;
   appBase: string;
   apiBase: string;
   connect: ConnectStatus;
@@ -161,7 +164,11 @@ export function BookingManager({
   initialWaitlist: WaitlistRow[];
 }) {
   const { toast } = useToast();
-  const [tab, setTab] = useState<Tab>("Settings");
+  // Narrow the untrusted query value to a real tab; anything else (typo, stale
+  // link) falls back to the default rather than rendering nothing.
+  const [tab, setTab] = useState<Tab>(() =>
+    tabs.includes(initialTab as Tab) ? (initialTab as Tab) : "Settings",
+  );
   const bookUrl = `${appBase}/book/${shop.slug ?? "your-shop"}`;
   const needsSetup = initialStaff.length === 0 || initialServices.length === 0;
 
