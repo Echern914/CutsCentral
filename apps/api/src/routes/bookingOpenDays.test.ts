@@ -161,4 +161,77 @@ describe("GET /api/book/:slug/open-days", () => {
     expect(soonest).toBeTruthy();
     expect(soonest!.date).toBe(dayKey(nextWeek));
   });
+
+  // The sweep is bounded-parallel across service x staff pairs and shared
+  // between concurrent callers. Both were introduced to stop a cold sweep
+  // blowing past the web layer's 12s fetch abort (which is what made the
+  // calendar fall back to a weekday heuristic and land on a dead day). The
+  // parallel fold must stay order-stable and the in-flight entry must be
+  // cleaned up, or the SECOND visitor gets a stale promise forever.
+  it("serves concurrent cold callers one identical sweep, and recovers after", async () => {
+    const slug = `open-c-${randomToken(5)}`.toLowerCase();
+    await makeShop({
+      slug,
+      weekdays: [0, 1, 2, 3, 4, 5, 6],
+      bookingMaxDays: 30,
+    });
+    // TTL is 0 under vitest, so these genuinely race the cold path rather than
+    // all reading one cached body.
+    const [a, b, c] = await Promise.all([
+      request(app).get(`/api/book/${slug}/open-days`),
+      request(app).get(`/api/book/${slug}/open-days`),
+      request(app).get(`/api/book/${slug}/open-days`),
+    ]);
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    expect(c.status).toBe(200);
+    expect(b.body).toEqual(a.body);
+    expect(c.body).toEqual(a.body);
+    expect((a.body.openDays as string[]).length).toBeGreaterThan(0);
+
+    // In-flight entry released: a later request still computes a real answer.
+    const after = await request(app).get(`/api/book/${slug}/open-days`);
+    expect(after.status).toBe(200);
+    expect(after.body.openDays).toEqual(a.body.openDays);
+    expect(after.body.soonest?.serviceId).toBe(a.body.soonest?.serviceId);
+  });
+
+  // Multiple services AND multiple barbers: the pair sweep must produce the
+  // same merged answer the old sequential nested loop did - in particular the
+  // soonest chip merges equal-instant hits across barbers, which is order
+  // dependent, so a parallel fold that consumed out of order would reorder
+  // staffIds here.
+  it("merges barbers on the soonest slot deterministically", async () => {
+    const slug = `open-d-${randomToken(5)}`.toLowerCase();
+    const { shopId, serviceId } = await makeShop({
+      slug,
+      weekdays: [0, 1, 2, 3, 4, 5, 6],
+      bookingMaxDays: 30,
+    });
+    // A second barber offering the SAME service, identical hours → both are
+    // free at the same first instant.
+    const second = await prisma.staff.create({
+      data: { shopId, name: "Sam Two" },
+      select: { id: true },
+    });
+    await prisma.serviceStaff.create({
+      data: { shopId, serviceId, staffId: second.id },
+    });
+    await prisma.availabilityRule.createMany({
+      data: [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({
+        shopId,
+        staffId: second.id,
+        weekday,
+        startMin: 9 * 60,
+        endMin: 17 * 60,
+      })),
+    });
+    const res = await request(app).get(`/api/book/${slug}/open-days`);
+    expect(res.status).toBe(200);
+    const soonest = res.body.soonest as { staffIds: string[] } | null;
+    expect(soonest).toBeTruthy();
+    // Both barbers are free at that instant, so both ride the one chip.
+    expect(soonest!.staffIds.length).toBe(2);
+    expect(new Set(soonest!.staffIds).size).toBe(2); // no duplicates
+  });
 });
