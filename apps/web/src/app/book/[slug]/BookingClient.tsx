@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { DEMO } from "@chairback/config/demo";
 import { serviceColorHex } from "@chairback/config/constants";
@@ -475,11 +475,83 @@ export function BookingClient({ data }: { data: BookShopData }) {
   // never turn this into a walk through all 45 scanned days.
   const MAX_AUTO_HOPS = 10;
   const autoHops = useRef(0);
+
+  //  DAY CACHE + PREFETCH. Tapping a date used to mean a full round trip
+  //  before a single time appeared — measured ~6s cold and ~0.8s warm against
+  //  prod, which reads as a broken page ("they need to be instant"). The
+  //  payload for a given day is immutable enough to reuse: the API caches the
+  //  same body per shop+date for 60s, so a client hit inside that window would
+  //  have received a byte-identical response anyway. Nothing here changes what
+  //  gets booked — the booking POST re-checks availability server-side.
+  const DAY_CACHE_TTL_MS = 60_000;
+  const dayCache = useRef<Map<string, { at: number; body: DayBundlesResult }>>(
+    new Map(),
+  );
+  /** Cached payload for `day`, or null when absent or past its TTL. */
+  function cachedDay(day: string): DayBundlesResult | null {
+    const hit = dayCache.current.get(day);
+    if (!hit) return null;
+    if (Date.now() - hit.at >= DAY_CACHE_TTL_MS) {
+      dayCache.current.delete(day);
+      return null;
+    }
+    return hit.body;
+  }
+  // Days with a prefetch in flight, so a hover storm (or a hover then a tap)
+  // can't stack duplicate requests against the public read limiter.
+  const prefetching = useRef<Set<string>>(new Set());
+  /**
+   * Warm a day in the background. Never touches render state — a prefetch that
+   * loses a race with a real pick must not be able to paint the wrong day's
+   * times, so it only ever fills the cache.
+   */
+  const prefetchDay = useCallback(
+    async (day: string) => {
+      if (!day || cachedDay(day) || prefetching.current.has(day)) return;
+      prefetching.current.add(day);
+      try {
+        const res = await getDayBundlesAction(data.shop.slug, day);
+        if (res.ok && res.data) {
+          dayCache.current.set(day, { at: Date.now(), body: res.data });
+        }
+      } catch {
+        // A failed warm-up is a non-event: the real pick will fetch again.
+      } finally {
+        prefetching.current.delete(day);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [data.shop.slug],
+  );
   useEffect(() => {
     candidateDaysRef.current = openDaySet
       ? [...openDaySet].sort()
       : [...calendarDays].sort();
   }, [openDaySet, calendarDays]);
+
+  // Warm the few days most likely to be tapped next: the open days right after
+  // the one being shown. Deliberately small and sequential — the point is a
+  // responsive tap, not mirroring the whole calendar, and the public read
+  // limiter is per-minute. Runs only once the selected day has painted, so a
+  // prefetch can never compete with the fetch the customer is waiting on.
+  const PREFETCH_AHEAD = 3;
+  useEffect(() => {
+    if (!dayDate || dayLoading) return;
+    const upcoming = candidateDaysRef.current
+      .filter((d) => d > dayDate && !emptyDaysRef.current.has(d))
+      .slice(0, PREFETCH_AHEAD);
+    if (upcoming.length === 0) return;
+    let alive = true;
+    (async () => {
+      for (const d of upcoming) {
+        if (!alive) return;
+        await prefetchDay(d);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [dayDate, dayLoading, openDaySet, prefetchDay]);
   // Set when the "Soonest available" chip is tapped: once that day's bundles
   // load, bind this exact service + slot so one tap really books the soonest.
   const pendingSoonest = useRef<{ serviceId: string; startsAt: string } | null>(
@@ -550,12 +622,43 @@ export function BookingClient({ data }: { data: BookShopData }) {
     // customer's opened cards open (compare times across days in place).
     setAddOnIds([]);
     clearSlotPick();
+
+    // Already warm? Paint it synchronously — no spinner, no round trip. This is
+    // what makes a tap feel instant; everything below is the cold path.
+    const warm = cachedDay(day);
+    if (warm) {
+      setDayData(warm);
+      setDayLoading(false);
+      setDayError(false);
+      daySeq.current++; // invalidate any in-flight older fetch
+      // An auto-picked day that is warm-but-empty still has to hop, exactly as
+      // the cold path does — otherwise the cache would reintroduce the dead end.
+      if (
+        warm.bundles.length === 0 &&
+        warm.ungrouped.length === 0 &&
+        autoPickedDay.current === day
+      ) {
+        markDayEmpty(day);
+        const next =
+          autoHops.current < MAX_AUTO_HOPS ? nextCandidateDay(day) : null;
+        if (next) {
+          autoHops.current += 1;
+          autoPickedDay.current = next;
+          pickDay(next);
+        }
+      }
+      return;
+    }
+
     setDayLoading(true);
     setDayData(null);
     setDayError(false);
     const seq = ++daySeq.current;
     startTransition(async () => {
       const res = await getDayBundlesAction(data.shop.slug, day);
+      if (res.ok && res.data) {
+        dayCache.current.set(day, { at: Date.now(), body: res.data });
+      }
       if (seq !== daySeq.current) return; // superseded by a newer pick — drop it
 
       // AUTO-HOP. The day's own bundles are the authoritative answer, and this
@@ -1275,6 +1378,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
             selectedDay={dayDate}
             accent={accent}
             onAccent={onAccent}
+            onPrefetchDay={prefetchDay}
             labelForDay={(d) => dateFmt.format(new Date(`${d}T12:00:00Z`))}
             onPrevMonth={() => setDayMonth((m) => addMonths(m ?? dayFirstFallbackMonth, -1))}
             onNextMonth={() => setDayMonth((m) => addMonths(m ?? dayFirstFallbackMonth, 1))}
@@ -2043,6 +2147,7 @@ function MonthCalendar({
   onPrevMonth,
   onNextMonth,
   onPickDay,
+  onPrefetchDay,
 }: {
   viewMonth: string; // "YYYY-MM"
   availableDays: Set<string>; // "YYYY-MM-DD" keys with open times
@@ -2058,6 +2163,8 @@ function MonthCalendar({
   onPrevMonth: () => void;
   onNextMonth: () => void;
   onPickDay: (day: string) => void;
+  /** Warm a day the customer looks like they're about to tap. Optional. */
+  onPrefetchDay?: (day: string) => void;
 }) {
   const cells = monthGrid(viewMonth);
   // Bound paging to the span of months that actually hold availability: never
@@ -2118,6 +2225,13 @@ function MonthCalendar({
               type="button"
               disabled={!tappable}
               onClick={() => onPickDay(day)}
+              // Warm on intent, not on click. Pointer-enter buys the whole
+              // hover-to-click gap on desktop; pointer-down buys the press
+              // duration on touch, where there is no hover. Focus covers
+              // keyboard arrowing. All three are idempotent and deduped.
+              onPointerEnter={tappable ? () => onPrefetchDay?.(day) : undefined}
+              onPointerDown={tappable ? () => onPrefetchDay?.(day) : undefined}
+              onFocus={tappable ? () => onPrefetchDay?.(day) : undefined}
               // aria-pressed only on selectable days; a disabled cell
               // announcing a toggle state is meaningless noise to assistive tech.
               aria-pressed={tappable ? selected : undefined}
