@@ -317,6 +317,28 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     category: "data",
   },
   {
+    // The old nav strip had an Inbox pill; when the 5-tab nav replaced it, this
+    // index became the ONLY route to every non-tab page — and Inbox had no
+    // entry, orphaning the receptionist's SMS threads entirely.
+    id: "inbox",
+    name: "Inbox",
+    synonyms: ["messages", "texts", "conversations", "sms", "replies", "chat"],
+    description: "Text conversations with your clients, including AI receptionist chats",
+    href: "/dashboard/inbox",
+    category: "data",
+  },
+  {
+    // Same orphaning as inbox: the Team pill died with the old nav strip.
+    // Distinct from "staff" (providers with services and hours, under Booking) —
+    // this is who can SIGN IN to the dashboard.
+    id: "team",
+    name: "Team logins",
+    synonyms: ["team", "employees", "invite", "seats", "staff logins", "roles"],
+    description: "Invite the people in your shop and manage who can sign in",
+    href: "/dashboard/team",
+    category: "account",
+  },
+  {
     id: "receptionist",
     name: "AI receptionist",
     synonyms: ["ai", "text booking", "sms assistant", "answering", "missed calls"],

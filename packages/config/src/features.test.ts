@@ -43,6 +43,35 @@ describe("FEATURE_INDEX", () => {
       expect(catIds.has(f.category), `${f.id} -> ${f.category}`).toBe(true);
     }
   });
+
+  // Since the 5-tab nav landed, this index (via the More sheet) is the ONLY way
+  // to reach any dashboard page that isn't a tab. Losing an entry orphans the
+  // page - it happened to Inbox and Team when the old pill strip was removed,
+  // and nothing failed. This manifest is every non-tab dashboard page a barber
+  // must be able to reach; ADD to it when adding a page, never remove without
+  // also removing the page itself.
+  it("covers every non-tab dashboard page (the More sheet is their only nav)", () => {
+    const REQUIRED_HREFS = [
+      "/dashboard/account",
+      "/dashboard/activity",
+      "/dashboard/billing",
+      "/dashboard/inbox",
+      "/dashboard/leaderboard",
+      "/dashboard/nudges",
+      "/dashboard/payments",
+      "/dashboard/promotions",
+      "/dashboard/referrals",
+      "/dashboard/requests",
+      "/dashboard/reviews",
+      "/dashboard/rewards",
+      "/dashboard/site",
+      "/dashboard/team",
+    ];
+    const indexed = new Set(FEATURE_INDEX.map((f) => f.href));
+    for (const href of REQUIRED_HREFS) {
+      expect(indexed.has(href), `${href} has no FEATURE_INDEX entry - orphaned page`).toBe(true);
+    }
+  });
 });
 
 describe("FEATURE_CATEGORIES", () => {
