@@ -553,16 +553,24 @@ export async function computeOpenSlots(
     });
   }
 
-  // free = windows - blocks, clipped to [max(earliest, rangeStart), rangeEnd].
-  // The window walk starts a day BEFORE rangeStart (tz-straddle slack), so the
-  // lower clip must honor the caller's fromDate too - clipping only to
-  // `earliest` (now + lead) leaked the day-before's windows into a FUTURE-dated
-  // query (e.g. asking for tomorrow returned today's remaining slots, anchored
-  // at odd now-based minutes). The public page queries from=now (unaffected);
-  // the barber's Time picker for a future day was the visible victim.
+  // The lower bound every candidate slot must clear: now + lead, and never
+  // before the caller's fromDate. The window walk starts a day BEFORE
+  // rangeStart (tz-straddle slack), so honoring fromDate here is what keeps a
+  // FUTURE-dated query from returning today's leftovers (asking for tomorrow
+  // used to return today's remaining slots).
+  const lowerBound = Math.max(earliest, rangeStart);
+
+  // free = windows - blocks, clipped only at the TOP. The lower bound is
+  // deliberately NOT clipped in: clipping it re-anchored the slot grid to the
+  // bound itself, which is an arbitrary instant (now + lead, to the
+  // millisecond). A customer loading the page at 10:23:07.123 with the default
+  // 2h lead was offered "12:23 PM, 1:23 PM, 2:23 PM" while every FUTURE day
+  // showed a clean 9:00 / 10:00 / 11:00 grid off the window start. Keeping the
+  // window's own start as the grid origin and filtering candidates below makes
+  // today read exactly like every other day.
   const free = clipRanges(
     subtractRanges(windows, blocks),
-    Math.max(earliest, rangeStart),
+    Number.NEGATIVE_INFINITY,
     rangeEnd,
   );
 
@@ -589,7 +597,13 @@ export async function computeOpenSlots(
       const spanMs = (effDur + extraMin) * MS_PER_MIN;
       const tailMs = spanMs + buffer * MS_PER_MIN;
       if (t + tailMs > w.end) break;
-      slots.push({ startsAt: new Date(t), endsAt: new Date(t + spanMs) });
+      // Below the bound (already past, inside the lead, or before the caller's
+      // fromDate) - step over it WITHOUT moving the grid. `>=` matches the
+      // write path's own too_soon test (startsAt < earliest), so the engine can
+      // never offer a time the booking POST would turn around and reject.
+      if (t >= lowerBound) {
+        slots.push({ startsAt: new Date(t), endsAt: new Date(t + spanMs) });
+      }
       t += effDur * MS_PER_MIN;
     }
   }
