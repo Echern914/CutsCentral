@@ -310,6 +310,10 @@ const dayQuerySchema = z.object({
 // body would fail them for a staleness prod explicitly accepts.
 const DAY_TTL_MS = process.env.VITEST === "true" ? 0 : 60_000;
 const dayCache = new Map<string, { at: number; body: unknown }>();
+// Day sweeps CURRENTLY RUNNING, keyed by shop|date. Same reasoning as the
+// open-days in-flight map below: the cache holds only finished bodies, so
+// without this a burst of visitors on one date each runs the whole sweep.
+const dayInFlight = new Map<string, Promise<unknown>>();
 const DAY_FANOUT_LIMIT = 4;
 
 /**
@@ -384,6 +388,36 @@ bookingPublicRouter.get("/:slug/day", bookingReadLimiter, async (req, res) => {
     return;
   }
 
+  const inFlightDay = dayInFlight.get(dayCacheKey);
+  if (inFlightDay) {
+    res.json(await inFlightDay);
+    return;
+  }
+  const dayWork = computeDayBody(shop, parsed.data.date, dayStart, dayEnd, now);
+  dayInFlight.set(dayCacheKey, dayWork);
+  try {
+    res.json(await dayWork);
+  } finally {
+    dayInFlight.delete(dayCacheKey);
+  }
+});
+
+/**
+ * One day's bundles. Factored out of the route so concurrent callers can share
+ * ONE run: the cache above only holds FINISHED bodies, so a burst of visitors
+ * landing on the same date each used to start their own full service x staff
+ * sweep - the shape that starves a fixed connection pool. Measured on prod:
+ * three simultaneous requests for one uncached day took 5.7s / 6.2s / 7.4s,
+ * each doing the whole job.
+ */
+async function computeDayBody(
+  shop: NonNullable<Awaited<ReturnType<typeof resolveNativeShop>>>,
+  date: string,
+  dayStart: Date,
+  dayEnd: Date,
+  now: Date,
+): Promise<unknown> {
+  const dayCacheKey = `${shop.id}|${date}`;
   const [services, links, groups, targeted] = await Promise.all([
     prisma.service.findMany({
       where: { shopId: shop.id, active: true },
@@ -559,10 +593,10 @@ bookingPublicRouter.get("/:slug/day", bookingReadLimiter, async (req, res) => {
   const groupedIds = new Set(bundles.flatMap((b) => b.services.map((s) => s.id)));
   const ungrouped = dayServices.filter((s) => !groupedIds.has(s.id));
 
-  const dayBody = { timezone: shop.timezone, date: parsed.data.date, bundles, ungrouped };
+  const dayBody = { timezone: shop.timezone, date, bundles, ungrouped };
   dayCache.set(dayCacheKey, { at: Date.now(), body: dayBody });
-  res.json(dayBody);
-});
+  return dayBody;
+}
 
 // GET /api/book/:slug/open-days — which shop-local days in the booking window
 // have at least ONE bookable opening across any service, plus the single
