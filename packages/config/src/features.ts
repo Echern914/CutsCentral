@@ -346,6 +346,9 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     ],
     description: "Send your link — they get an extra month, you get one free",
     href: "/dashboard/referrals",
+    // Grouped with the other "your account" surfaces in the More tab: this is
+    // about the barber's own plan, not something their clients ever see.
+    category: "account",
   },
   {
     id: "live-demo",
