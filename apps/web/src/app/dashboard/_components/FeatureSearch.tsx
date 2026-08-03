@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { FEATURE_INDEX, type FeatureIndexEntry } from "@chairback/config/features";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
@@ -30,6 +31,10 @@ export function FeatureSearch() {
     [inApp],
   );
   const [open, setOpen] = useState(false);
+  // Portals need a DOM to target, which SSR has none of — same mounted gate the
+  // demo tour uses. The palette only opens on a tap/Ctrl-K, long after mount.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -163,7 +168,19 @@ export function FeatureSearch() {
         </svg>
       </button>
 
-      {open && (
+      {/* PORTALED TO <body> — not merely tidy, it's the whole reason the palette
+          works. This component renders inside the dashboard's `nav.glass`, and
+          that pill carries `backdrop-filter: blur(14px)`. A filter/backdrop-filter
+          makes an element the CONTAINING BLOCK for its position:fixed descendants
+          (same rule as `transform`), so `fixed inset-0` resolved against the
+          54px-tall nav instead of the viewport: the overlay came out ~1150x120,
+          the input sat jammed in the header, and the results list — all 33 rows,
+          correctly matched and present in the DOM — was clipped away by this
+          div's own overflow-y-auto. Typing did nothing visible, so the search
+          read as completely broken. The demo tour hit this first and portals for
+          the same reason. */}
+      {open && mounted &&
+        createPortal(
         <div
           className="fixed inset-0 z-50 overflow-y-auto bg-black/60 px-4 pb-10 pt-20 backdrop-blur-sm"
           onClick={() => setOpen(false)}
@@ -241,7 +258,8 @@ export function FeatureSearch() {
               ))}
             </ul>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );
