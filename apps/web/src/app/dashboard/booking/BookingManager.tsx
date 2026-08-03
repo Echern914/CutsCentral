@@ -3036,6 +3036,26 @@ function fmtClock(min: number): string {
   return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
 }
 
+/** Same clock, minus the noise: "6 PM" on the hour, "6:30 PM" otherwise. */
+function fmtClockShort(min: number): string {
+  const h = Math.floor(min / 60) % 24;
+  const m = min % 60;
+  const ampm = h < 12 ? "AM" : "PM";
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return m === 0 ? `${h12} ${ampm}` : `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
+/**
+ * A window as a compact range. Both ends in the same half of the day share one
+ * meridiem ("1–3 PM", not "1:00 PM–3:00 PM") — over a seven-day schedule that
+ * repetition is most of the line.
+ */
+function fmtRangeShort(s: number, e: number): string {
+  const sameHalf = Math.floor(s / 60) % 24 < 12 === (Math.floor(e / 60) % 24 < 12);
+  const start = sameHalf ? fmtClockShort(s).replace(/ [AP]M$/, "") : fmtClockShort(s);
+  return `${start}–${fmtClockShort(e)}`;
+}
+
 //  OFF-REGULAR-HOURS BADGE. A service/group left entirely on "Open (barber's
 //  hours)" stores {} — it runs whenever the chair does. The moment ANY weekday
 //  is set to custom windows or to closed, that item no longer follows the
@@ -3051,17 +3071,26 @@ function hasCustomHours(
 }
 
 /**
- * The stored hours map in plain language: "Tue, Thu 6:00 PM–9:00 PM · closed
- * Sun". Weekdays sharing identical windows collapse onto one clause, and days
- * ABSENT from the map are never mentioned — those are the regular hours, which
- * is the whole point of the badge. Returns "" for an unrestricted map.
+ * The stored hours map in plain language: "Tue, Thu 6–9 PM · closed Sun".
+ * Weekdays sharing identical windows collapse onto one clause, and days ABSENT
+ * from the map are never mentioned — those are the regular hours, which is the
+ * whole point of the badge. Returns "" for an unrestricted map.
+ *
+ * TRUNCATED ON PURPOSE. The first version spelled out every distinct day, which
+ * on a real seven-day schedule with split shifts ran to 278 characters PER ROW
+ * and buried the page — "it got overloaded looks like too much is going on"
+ * (Drick). The row only has to answer "is this one on regular hours, and
+ * roughly when?"; the editor is where the full grid belongs. So: at most
+ * MAX_CLAUSES day-clauses, then a count of the rest, and the closed-days clause
+ * kept last because "closed Sun" is the part a barber scans for.
  */
+const MAX_CLAUSES = 2;
 function hoursWindowsSummary(
   windows: Record<string, { s: number; e: number }[]> | undefined,
 ): string {
   const closed: string[] = [];
   // Window-text -> the weekdays that share it, so "Tue 6-9, Thu 6-9" reads as
-  // "Tue, Thu 6:00 PM-9:00 PM". Insertion order is Sun..Sat (the loop below).
+  // "Tue, Thu 6-9 PM". Insertion order is Sun..Sat (the loop below).
   const byWindows = new Map<string, string[]>();
   for (let wd = 0; wd < 7; wd++) {
     const w = windows?.[String(wd)];
@@ -3071,12 +3100,19 @@ function hoursWindowsSummary(
       closed.push(day);
       continue;
     }
-    const text = w.map((x) => `${fmtClock(x.s)}–${fmtClock(x.e)}`).join(", ");
+    const text = w.map((x) => fmtRangeShort(x.s, x.e)).join(", ");
     const days = byWindows.get(text);
     if (days) days.push(day);
     else byWindows.set(text, [day]);
   }
-  const parts = [...byWindows.entries()].map(([text, days]) => `${days.join(", ")} ${text}`);
+  const all = [...byWindows.entries()].map(
+    ([text, days]) => `${days.join(", ")} ${text}`,
+  );
+  const parts = all.slice(0, MAX_CLAUSES);
+  const hiddenDays = [...byWindows.values()]
+    .slice(MAX_CLAUSES)
+    .reduce((n, days) => n + days.length, 0);
+  if (hiddenDays > 0) parts.push(`+${hiddenDays} more day${hiddenDays > 1 ? "s" : ""}`);
   if (closed.length > 0) parts.push(`closed ${closed.join(", ")}`);
   return parts.join(" · ");
 }
