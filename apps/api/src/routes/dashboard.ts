@@ -1612,6 +1612,34 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
       orderBy: { createdAt: "desc" },
       take: 50,
     });
+    // What this client has COMING UP. `visits` above is a past-only ledger
+    // (VisitHistory rejects future dates outright), so before this the detail
+    // page could show everything a client had ever done and still not tell you
+    // they were booked in tomorrow.
+    //
+    // PENDING sits alongside BOOKED because it holds the slot the same way -
+    // it's a request awaiting approval, and whoever is reading this page needs
+    // to know it's there. CANCELED/COMPLETED/NO_SHOW are terminal and belong to
+    // history, not to "upcoming".
+    const upcoming = await tx.appointment.findMany({
+      where: {
+        shopId: shop.id,
+        clientId: client.id,
+        startsAt: { gte: now },
+        status: { in: ["BOOKED", "PENDING"] },
+      },
+      orderBy: { startsAt: "asc" },
+      take: 10,
+      select: {
+        id: true,
+        startsAt: true,
+        endsAt: true,
+        status: true,
+        priceAtBooking: true,
+        service: { select: { name: true } },
+        staff: { select: { name: true } },
+      },
+    });
     // Per-card balances (cardTypeId null = the default card). Rewards redeem
     // from their OWN card, so "affordable" must compare against that balance.
     const groups = await tx.punchLedger.groupBy({
@@ -1637,14 +1665,15 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
       },
       orderBy: { createdAt: "desc" },
     });
-    return { client, visits, nudges, groups, shopCards, rewards, livePromos };
+    return { client, visits, nudges, upcoming, groups, shopCards, rewards, livePromos };
   });
 
   if (!data) {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const { client, visits, nudges, groups, shopCards, rewards, livePromos } = data;
+  const { client, visits, nudges, upcoming, groups, shopCards, rewards, livePromos } =
+    data;
   const balanceByCard = new Map(
     groups.map((g) => [
       g.cardTypeId,
@@ -1710,6 +1739,21 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
       status: v.status,
       service: v.serviceName,
     })),
+    upcoming: upcoming.map((a) => ({
+      id: a.id,
+      startsAt: a.startsAt.toISOString(),
+      endsAt: a.endsAt.toISOString(),
+      status: a.status,
+      service: a.service.name,
+      staff: a.staff.name,
+      // Decimal doesn't survive JSON as a number; send a plain string (or null)
+      // and let the client format it.
+      price: a.priceAtBooking?.toString() ?? null,
+    })),
+    // Appointment times render in the SHOP's zone, not the reader's. A barber
+    // checking the book from another timezone must see the time the client is
+    // actually walking in at. Same rule the agenda follows.
+    timezone: shop.timezone,
     nudges: nudges.map((n) => ({
       sentAt: (n.sentAt ?? n.createdAt).toISOString(),
       status: n.status,

@@ -38,7 +38,7 @@ export function ConsentSetup({ needConsentCount }: { needConsentCount: number })
         <h2 className="font-display text-lg tracking-tight text-offwhite">
           Before you can text:{" "}
           <span className="text-gold">
-            {needConsentCount} client{needConsentCount === 1 ? "" : "s"} need
+            {needConsentCount} client{needConsentCount === 1 ? " needs" : "s need"}{" "}
             consent
           </span>
         </h2>

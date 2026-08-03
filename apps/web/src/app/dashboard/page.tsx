@@ -119,13 +119,17 @@ export default async function DashboardPage({
 
       {/* Identity first, then the one action that matters. Everything below is
           reference material — see the layout note at the bottom of this file. */}
-      <ShopIdentity
-        shopName={shop.name}
-        avatarUrl={me.data?.avatarUrl}
-        publicUrl={shop.slug ? `${appBase}/book/${shop.slug}` : null}
-        connected={shop.connected}
-      />
-      <QuickActions rewardsEnabled={shop.rewardsEnabled} />
+      {/* Capped on wide screens: a full-width primary button across 1280px reads
+          as a banner, not a button. The identity block centers with it. */}
+      <div className="mx-auto w-full max-w-xl">
+        <ShopIdentity
+          shopName={shop.name}
+          avatarUrl={me.data?.avatarUrl}
+          publicUrl={shop.slug ? `${appBase}/book/${shop.slug}` : null}
+          connected={shop.connected}
+        />
+        <QuickActions rewardsEnabled={shop.rewardsEnabled} />
+      </div>
 
       <SyncHealthBanner needsRepair={Boolean(sync.data?.needsRepair)} />
 
