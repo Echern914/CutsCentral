@@ -19,6 +19,7 @@ import { ConsentSetup } from "./_components/ConsentSetup";
 import { ShopIdentity } from "./_components/ShopIdentity";
 import { QuickActions } from "./_components/QuickActions";
 import { ReferralCard } from "./_components/ReferralCard";
+import { BarberHome, type BarberHomeData } from "./_components/BarberHome";
 import { DemoTour } from "@/components/tour/DemoTour";
 
 interface ShopMe extends ShopSettings {
@@ -47,6 +48,31 @@ export default async function DashboardPage({
 }: {
   searchParams?: { tour?: string };
 }) {
+  // An employee gets a different page entirely, resolved BEFORE the manager
+  // batch below so their session never even REQUESTS shop-wide stats, revenue
+  // or the client book. Those calls would 403 anyway; not firing them is the
+  // honest version - the barber dashboard is its own surface, not the owner's
+  // with pieces missing. getMe() is memoized, so this costs no extra round trip
+  // for owners.
+  const who = await getMe();
+  if (who.status === 401) redirect("/login");
+  if (who.data?.shopRole === "BARBER") {
+    // Generous UTC window; the API narrows to the shop's own calendar day.
+    const from = new Date(Date.now() - 36 * 60 * 60 * 1000).toISOString();
+    const to = new Date(Date.now() + 36 * 60 * 60 * 1000).toISOString();
+    const home = await apiGet<BarberHomeData>(
+      `/api/barber/home?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+    );
+    if (!home.ok || !home.data) throw new Error("Failed to load your day");
+    return (
+      <BarberHome
+        data={home.data}
+        barberName={who.data.name}
+        avatarUrl={who.data.avatarUrl}
+      />
+    );
+  }
+
   // Fetch the shop AND the dashboard widgets in one parallel batch instead of
   // gating the whole page on a serial /api/shops/me round-trip first. shops/me
   // doesn't feed the other calls, so there's no dependency to wait on — the old

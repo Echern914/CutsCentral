@@ -279,9 +279,26 @@ describe("what an employee may do", () => {
   });
 
   it("resolves the shop it was invited to (owning none of its own)", async () => {
-    const res = await request(app).get("/api/team").set("Cookie", barberCookie);
+    // Probes /api/auth/me rather than /api/team. This test's point is that a
+    // member's session resolves to the shop they were INVITED to despite owning
+    // none; /api/team was only ever a convenient endpoint a barber could reach,
+    // and it no longer is (see the roster test below). /api/auth/me answers the
+    // actual question directly, and is what the web chrome reads.
+    const res = await request(app).get("/api/auth/me").set("Cookie", barberCookie);
     expect(res.status).toBe(200);
-    expect(res.body.role).toBe("BARBER");
+    expect(res.body.shopRole).toBe("BARBER");
+    expect(res.body.activeShopId).toBeTruthy();
+  });
+
+  it("cannot read the roster (colleagues' emails are not a barber's business)", async () => {
+    // Writes here were owner-gated from the start, but the GET wasn't gated at
+    // all, so any member could list every colleague's name, email and avatar
+    // plus every pending invite's email address. It went unnoticed because a
+    // barber 403'd on every other dashboard route, so no session ever reached
+    // this one until the barber dashboard existed.
+    const res = await request(app).get("/api/team").set("Cookie", barberCookie);
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("forbidden_role");
   });
 
   it("cannot invite, change a role, or remove anyone", async () => {

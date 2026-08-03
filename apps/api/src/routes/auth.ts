@@ -27,7 +27,7 @@ import {
   verifyApple,
   verifyGoogle,
 } from "../auth/native.js";
-import { requireUser, resolveOwnedShop } from "../middleware/auth.js";
+import { requireUser, resolveOwnedShop, resolveShopAccess } from "../middleware/auth.js";
 import { accountLimiter, authLimiter } from "../middleware/rateLimit.js";
 import { billingEnabled, stripeClient } from "../billing/stripe.js";
 import { logger } from "../logger.js";
@@ -215,10 +215,16 @@ authRouter.get("/me", requireUser, async (req, res) => {
     orderBy: { createdAt: "asc" },
     select: { id: true, name: true },
   });
-  const activeShop = await resolveOwnedShop(
+  // Resolve the ACTIVE shop the same way every API route does - ownership
+  // first, team seat as the fallback. It used to be resolveOwnedShop, which
+  // meant an invited barber (who owns nothing) had activeShopId null and no
+  // role: the web chrome had no way to know it was rendering for an employee,
+  // let alone which chair they work.
+  const access = await resolveShopAccess(
     req.userId!,
     req.cookies?.[ACTIVE_SHOP_COOKIE_NAME] as string | undefined,
   );
+  const activeShop = access?.shop ?? null;
   const { welcomeSeenAt, passwordHash, googleId, appleId, ...rest } = user;
   // Whether the ACTIVE shop has rewards on - the dashboard chrome hides every
   // rewards surface (nav tab etc.) for a rewards-off shop.
@@ -236,6 +242,15 @@ authRouter.get("/me", requireUser, async (req, res) => {
     hasApple: appleId !== null,
     shops,
     activeShopId: activeShop?.id ?? null,
+    // The signed-in user's role in the ACTIVE shop, and the chair their seat
+    // works. The web chrome branches on these: a BARBER gets the own-chair
+    // dashboard and a reduced nav, never the manager surfaces. Null role = no
+    // shop at all (pre-onboarding), which the dashboard already redirects on.
+    shopRole: access?.role ?? null,
+    staffId: access?.staffId ?? null,
+    // Members see the shop they work in; owners see the ones they own. Without
+    // this a barber's chrome had no shop name to render at all.
+    activeShopName: activeShop?.name ?? null,
     rewardsEnabled: activeShopRewards?.rewardsEnabled ?? false,
     // Read-only demo session (the public dashboard tour) — the web chrome
     // shows the demo banner + signup CTA and hides account-level actions.

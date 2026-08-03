@@ -18,6 +18,16 @@ export interface Me {
   shops: { id: string; name: string }[];
   /** The shop the dashboard is currently acting on (the switcher's selection). */
   activeShopId: string | null;
+  /** Name of the active shop. Set for MEMBERS too, who own no shop of their own. */
+  activeShopName?: string | null;
+  /**
+   * Role in the active shop. A BARBER gets the own-chair dashboard and a
+   * reduced nav - no shop-wide numbers, money, or team. Optional so a web
+   * deploy ahead of the API keeps the previous owner-only behavior.
+   */
+  shopRole?: "OWNER" | "MANAGER" | "BARBER" | null;
+  /** The chair this member works, when their seat is linked to one. */
+  staffId?: string | null;
   /** Whether the ACTIVE shop has rewards on - gates every rewards surface. */
   rewardsEnabled: boolean;
   /** Read-only public demo session (/demo/dashboard) — banner + hidden account UI. */

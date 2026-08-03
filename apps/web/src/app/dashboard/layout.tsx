@@ -35,6 +35,10 @@ export default async function DashboardLayout({
   // Rewards-off shops get no Rewards nav pill (default true so a transient /me
   // failure never hides a paying shop's tab).
   const rewardsEnabled = me.data?.rewardsEnabled ?? true;
+  // An employee seat: no nav (their app is one screen), and no feature search
+  // (every result is a manager page that would 403). Defaults to false so a
+  // transient /me failure never strips an owner's chrome.
+  const barberOnly = me.data?.shopRole === "BARBER";
   // Multi-shop managers get a shop switcher; a normal single-shop barber never
   // sees it (list has one entry).
   const shops = me.data?.shops ?? [];
@@ -49,9 +53,9 @@ export default async function DashboardLayout({
               {APP_NAME}
             </span>
           </Link>
-          <DashboardNavInline isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} />
+          <DashboardNavInline isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} barberOnly={barberOnly} />
           <div className="flex shrink-0 items-center gap-2">
-            <FeatureSearch />
+            {!barberOnly && <FeatureSearch />}
             {shops.length > 1 && (
               <ShopSwitcher shops={shops} activeShopId={activeShopId} />
             )}
@@ -104,11 +108,11 @@ export default async function DashboardLayout({
           inset; from `sm` up the bar is hidden and no padding is needed. */}
       <div
         className="sm:!pb-0"
-        style={{ paddingBottom: "calc(4.5rem + env(safe-area-inset-bottom))" }}
+        style={{ paddingBottom: barberOnly ? undefined : "calc(4.5rem + env(safe-area-inset-bottom))" }}
       >
         {children}
       </div>
-      <DashboardTabBar isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} />
+      <DashboardTabBar isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} barberOnly={barberOnly} />
     </div>
   );
 }
