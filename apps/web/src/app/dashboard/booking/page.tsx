@@ -183,7 +183,14 @@ export interface WaitlistRow {
   createdAt: string;
 }
 
-export default async function BookingPage() {
+export default async function BookingPage({
+  searchParams,
+}: {
+  // `?tab=Appointments` lets the dashboard's "Book appointment" CTA land on the
+  // calendar instead of the default Settings tab. An unknown or absent value
+  // falls back to the default, so a stale or hand-typed link can't render blank.
+  searchParams?: { tab?: string };
+}) {
   // The month calendar loads the current month on first paint (with a week of
   // padding on each side so the visible grid's leading/trailing days are filled),
   // then fetches other months on demand via getAgendaAction as the barber pages.
@@ -236,6 +243,7 @@ export default async function BookingPage() {
       </header>
       <BookingManager
         shop={shopRes.data}
+        initialTab={searchParams?.tab}
         appBase={process.env.APP_BASE_URL ?? ""}
         apiBase={API_BASE}
         connect={connect}

@@ -16,10 +16,14 @@ import { TourReplayButton } from "./_components/TourReplayButton";
 import { SyncHealthBanner } from "./_components/SyncHealthBanner";
 import { GettingStarted } from "./_components/GettingStarted";
 import { ConsentSetup } from "./_components/ConsentSetup";
+import { ShopIdentity } from "./_components/ShopIdentity";
+import { QuickActions } from "./_components/QuickActions";
 import { DemoTour } from "@/components/tour/DemoTour";
 
 interface ShopMe extends ShopSettings {
   connected: boolean;
+  /** URL handle for the public booking page; null until one is picked. */
+  slug: string | null;
 }
 
 interface SyncStatus {
@@ -47,6 +51,9 @@ export default async function DashboardPage({
   // no serial hop just to learn the zone.
   const agendaFrom = new Date(Date.now() - 36 * 60 * 60 * 1000).toISOString();
   const agendaTo = new Date(Date.now() + 36 * 60 * 60 * 1000).toISOString();
+  // Absolute origin for links a barber SHARES (their booking page) or that get
+  // texted to clients — those can't be relative.
+  const appBase = process.env.APP_BASE_URL ?? "";
 
   const [shopRes, stats, atRisk, activity, leaderboard, trends, me, sync, agenda] =
     await Promise.all([
@@ -109,31 +116,16 @@ export default async function DashboardPage({
           replay it). data-tour anchors: keep in sync with
           packages/config/src/demoTour.ts (DASHBOARD_TOUR_STEPS). */}
       <DemoTour tour="dashboard" route="overview" />
-      <header className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div className="flex flex-col">
-          <p className="text-xs uppercase tracking-[0.2em] text-muted">
-            Your shop
-          </p>
-          <h1 className="font-display text-4xl tracking-tight">{shop.name}</h1>
-          <div className="mt-2">
-            <TourReplayButton />
-          </div>
-        </div>
-        {shop.connected ? (
-          <span className="inline-flex w-fit items-center gap-2 rounded-full border border-emerald-soft/40 bg-emerald-soft/10 px-4 py-2 text-xs font-medium text-emerald-soft">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-soft" />
-            Booking connected
-          </span>
-        ) : (
-          <a
-            href="/onboarding/connect"
-            className="animate-pulse-glow inline-flex w-fit items-center gap-2 rounded-full border border-gold/50 bg-gold/10 px-4 py-2 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/20"
-          >
-            <span className="h-1.5 w-1.5 rounded-full bg-gold" />
-            Connect your booking to go live
-          </a>
-        )}
-      </header>
+
+      {/* Identity first, then the one action that matters. Everything below is
+          reference material — see the layout note at the bottom of this file. */}
+      <ShopIdentity
+        shopName={shop.name}
+        avatarUrl={me.data?.avatarUrl}
+        publicUrl={shop.slug ? `${appBase}/book/${shop.slug}` : null}
+        connected={shop.connected}
+      />
+      <QuickActions rewardsEnabled={shop.rewardsEnabled} />
 
       <SyncHealthBanner needsRepair={Boolean(sync.data?.needsRepair)} />
 
@@ -156,31 +148,14 @@ export default async function DashboardPage({
         </div>
       )}
 
-      {trends.data && (
-        <div className="mt-6">
-          <RevenueTrends series={trends.data.series} />
-        </div>
-      )}
-
-      <div className="mt-6">
-        <SweepControl atRiskCount={atRisk.data?.clients?.length ?? 0} />
-      </div>
-
-      <div className="mt-6">
-        <WinbackPreview />
-      </div>
-
-      {trends.data && (
-        <div className="mt-6">
-          <TrendsChart series={trends.data.series} />
-        </div>
-      )}
-
+      {/* These two carry demo-tour anchors ("at-risk", "activity"), so they stay
+          expanded — the spotlight can't anchor to an element inside a closed
+          <details>. They're also the two a barber actually reads daily. */}
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <div data-tour="at-risk">
           <AtRiskTable
             rows={atRisk.data?.clients ?? []}
-            appBaseUrl={process.env.APP_BASE_URL ?? ""}
+            appBaseUrl={appBase}
           />
         </div>
         <div data-tour="activity">
@@ -191,25 +166,80 @@ export default async function DashboardPage({
         </div>
       </div>
 
-      {/* Bottom row: Settings is a tall card, so pairing it with the short
-          Leaderboard in a rigid grid stranded a big empty column beneath the
-          leaderboard. Instead the LEFT column stacks the leaderboard (when
-          rewards are on) above the demo banner, which fills the height next to
-          Settings — no void. `items-start` keeps each card its natural height.
-          A rewards-off shop has no leaderboard, so the left column is just the
-          demo banner and Settings sits beside it. */}
-      <div className="mt-6 grid items-start gap-6 lg:grid-cols-2">
-        <div className="flex flex-col gap-6">
-          {shop.rewardsEnabled && (
-            <Leaderboard
-              leaders={leaderboard.data?.leaders ?? []}
-              seeAllHref="/dashboard/leaderboard"
-            />
-          )}
-          <ClientDemoCard />
-        </div>
+      {/* Everything past here is reference, not daily use. It used to sit open
+          in one long stack — thirteen cards deep, with no hierarchy telling a
+          barber which mattered. Collapsed by default it's all still one tap
+          away, and the top of the page can be about today. */}
+      <Section title="Revenue & trends" hint="How the money is moving">
+        {trends.data && <RevenueTrends series={trends.data.series} />}
+        {trends.data && <TrendsChart series={trends.data.series} />}
+      </Section>
+
+      <Section title="Win back clients" hint="Reach the people who've gone quiet">
+        <SweepControl atRiskCount={atRisk.data?.clients?.length ?? 0} />
+        <WinbackPreview />
+      </Section>
+
+      <Section title="Shop settings" hint="Texting, rewards, and the client demo">
+        {shop.rewardsEnabled && (
+          <Leaderboard
+            leaders={leaderboard.data?.leaders ?? []}
+            seeAllHref="/dashboard/leaderboard"
+          />
+        )}
+        <ClientDemoCard />
         <SettingsCard settings={shop} />
-      </div>
+        <div>
+          <TourReplayButton />
+        </div>
+      </Section>
     </main>
+  );
+}
+
+/**
+ * A collapsed group of cards. Native <details> on purpose: it works without
+ * JavaScript, ships no client bundle from a server component, and gets
+ * keyboard and screen-reader behavior from the platform rather than from ARIA
+ * we'd have to maintain.
+ *
+ * Never wrap a `data-tour` anchor in one — a closed <details> hides its
+ * content, and the tour spotlight has nothing to measure.
+ */
+function Section({
+  title,
+  hint,
+  children,
+}: {
+  title: string;
+  hint: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <details className="glass group mt-4 rounded-3xl px-4 py-3 sm:px-5">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 py-1">
+        <span>
+          <span className="font-display text-base tracking-tight">{title}</span>
+          <span className="mt-0.5 block text-xs text-muted">{hint}</span>
+        </span>
+        <span
+          aria-hidden
+          className="shrink-0 text-muted transition-transform duration-150 ease-out group-open:rotate-180"
+        >
+          <svg
+            className="h-4 w-4"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </span>
+      </summary>
+      <div className="mt-4 flex flex-col gap-6 pb-2">{children}</div>
+    </details>
   );
 }
