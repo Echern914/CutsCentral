@@ -1134,6 +1134,15 @@ model Service {
   offeredByAll   Boolean  @default(false)
   active         Boolean  @default(true)
   sortOrder      Int      @default(0)
+  // DISPLAY-ONLY daily slot target ("I aim for 12 haircuts a day"), used as the
+  // denominator of the calendar day gauge (12/16). Deliberately NOT a cap: no
+  // read or write path consults this, so booking past it is allowed and simply
+  // reads 13/12. The enforced ceiling is ServiceGroup.maxPerDay - keeping the
+  // two apart means a barber can track fullness without accidentally turning
+  // away work. Ignored while the service is in a group (the GROUP's target
+  // covers all its members, mirroring how group hours override service hours).
+  // null = no target; the gauge falls back to a plain count.
+  dailyTarget    Int?
   // Optional membership in a ServiceGroup. null = the service is standalone and
   // uses its OWN hoursWindows/limits (the default; every existing service is null
   // so nothing changes). When set, the group's hoursWindows OVERRIDE this
@@ -1178,6 +1187,10 @@ model ServiceGroup {
   hoursWindows  Json     @default("{}")
   maxPerDay     Int? // null = no daily cap across the group
   maxConcurrent Int? // null = no per-slot (overlapping) cap across the group
+  // DISPLAY-ONLY daily slot target for the calendar day gauge ("Haircuts 10/12"),
+  // counted across all member services. NOT enforced anywhere - see the twin
+  // field on Service for why this is deliberately separate from maxPerDay.
+  dailyTarget   Int?
   active        Boolean  @default(true)
   sortOrder     Int      @default(0)
   createdAt     DateTime @default(now())

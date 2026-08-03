@@ -63,6 +63,10 @@ export interface ServiceRow {
   offeredByAll: boolean;
   active: boolean;
   sortOrder: number;
+  // Display-only daily slot target driving the calendar day gauge ("Fades 6/8").
+  // NOT a cap - the slot engine never reads it, so a 7th booking just reads 7/6.
+  // Only consulted while ungrouped; a grouped service uses its group's target.
+  dailyTarget: number | null;
   staffIds: string[];
   // Non-null = this service belongs to a group; the group's hoursWindows + booking
   // limits override this service's own. null = ungrouped (the default for every
@@ -81,6 +85,9 @@ export interface ServiceGroupRow {
   hoursWindows: Record<string, { s: number; e: number }[]>;
   maxPerDay: number | null;
   maxConcurrent: number | null;
+  // Display-only daily slot target for the calendar day gauge, counted across
+  // all member services. NOT a cap - see maxPerDay for the enforced ceiling.
+  dailyTarget: number | null;
   active: boolean;
   sortOrder: number;
   serviceIds: string[];
@@ -135,12 +142,30 @@ export interface AgendaRow {
   // Cheapest reward the row's client can afford right now (rewards shops only).
   // Drives "Reward ready - apply to this visit?" Apply/Skip on the row.
   rewardReady?: { rewardId: string; rewardName: string; punchCost: number } | null;
+  // Which AgendaCategory this row counts toward on the day gauge. null =
+  // uncategorized (a block, or a synced visit whose service name matched
+  // nothing); those still count in the "All" total.
+  categoryId?: string | null;
+}
+
+/**
+ * One bucket of the calendar day gauge: an active service group, or an active
+ * UNGROUPED service. `target` is the barber's display-only daily slot target -
+ * null means this bucket shows a plain count instead of a fraction.
+ */
+export interface AgendaCategory {
+  id: string;
+  name: string;
+  target: number | null;
 }
 
 export interface AgendaResponse {
   agenda: AgendaRow[];
   source: "appointment" | "visit";
   timezone: string;
+  // Absent on a cached/older payload - the calendar treats that as "no
+  // categories", falling back to the plain appointment count.
+  categories?: AgendaCategory[];
 }
 
 /** One person waiting for a spot (barber-facing). */
