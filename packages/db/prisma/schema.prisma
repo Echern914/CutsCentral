@@ -1234,8 +1234,10 @@ model Service {
 // A ServiceGroup bundles several services under ONE shared config (Acuity-style
 // "Group N appointment types"). A member service inherits the group's shared
 // availability and booking caps:
-//   - hoursWindows  same shape/semantics as Service.hoursWindows, but when a
-//     service is in a group THIS map OVERRIDES the service's own windows.
+//   - hoursWindows  LEGACY, no longer read by anything. It used to override the
+//     member service's own windows; hours now live on the Service (migration
+//     20260804120000 copied each active group's map down onto its members). Kept
+//     populated so the change stays revertible.
 //   - maxPerDay     null => no daily cap; N => at most N bookings per shop-local
 //     day counted ACROSS all member services.
 //   - maxConcurrent null => no per-slot cap; N => at most N overlapping bookings

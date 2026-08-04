@@ -319,16 +319,29 @@ bookingDashboardRouter.delete("/services/:id", async (req, res) => {
 
 //  Service groups (Acuity-style: several services share ONE hours + limits config)
 
-// A group bundles several services under one shared config. hoursWindows reuses
-// the SAME validator as a service's own windows (identical {weekday:[{s,e}]}
-// shape) - a grouped service's own windows are overridden by the group's. The
-// two caps are shop-local-day (maxPerDay) and overlapping (maxConcurrent) totals
-// across all member services; either null = uncapped. serviceIds is the member
-// set to (re)assign on write. .strict() rejects stray keys like the other schemas.
+// A group bundles several services under one shared config. It NO LONGER carries
+// hours: a group's windows used to override each member service's own, so hours
+// were set in one place and shown in another and a grouped service's own windows
+// were dead config. Hours live on the Service now (see the 20260804120000
+// migration, which copied each active group's windows down onto its members).
+// ServiceGroup.hoursWindows remains in the schema, unread, so the change stays
+// revertible.
+// The two caps are shop-local-day (maxPerDay) and overlapping (maxConcurrent)
+// totals across all member services; either null = uncapped. serviceIds is the
+// member set to (re)assign on write.
+//
+// hoursWindows is still ACCEPTED and then IGNORED, deliberately. The schema is
+// .strict() like its siblings, so simply deleting the key would 400 any client
+// still sending it - and the group editor batches its whole diff into ONE
+// payload, so a rename, a cap change and a membership change made in the same
+// save would die with it. web and api are separate deploy targets fired by one
+// merge with no ordering guarantee, so that skew window is real. Accepting the
+// key keeps those saves working; nothing writes it, and the field disappears
+// from the UI in the same release.
 const groupSchema = z
   .object({
     name: z.string().trim().min(1).max(120),
-    hoursWindows: hoursWindowsSchema,
+    hoursWindows: hoursWindowsSchema, // accepted for deploy-skew, never written
     maxPerDay: z.number().int().min(1).max(1000).nullable().optional(),
     maxConcurrent: z.number().int().min(1).max(100).nullable().optional(),
     // Display-only day-gauge denominator - NOT a cap (see ServiceGroup.dailyTarget).
@@ -358,9 +371,12 @@ bookingDashboardRouter.get("/groups", async (req, res) => {
     }),
   ]);
   res.json({
-    groups: groups.map((g) => ({
+    // hoursWindows is destructured OUT, not just left unused: the row spread
+    // would otherwise keep shipping a field nothing reads, which is how the
+    // dashboard ends up rendering hours that no longer govern anything. The
+    // column itself stays populated for revertibility.
+    groups: groups.map(({ hoursWindows: _legacyHours, ...g }) => ({
       ...g,
-      hoursWindows: g.hoursWindows ?? {},
       serviceIds: services
         .filter((s) => s.serviceGroupId === g.id)
         .map((s) => s.id),
@@ -386,7 +402,6 @@ bookingDashboardRouter.post("/groups", async (req, res) => {
       data: {
         shopId,
         name: d.name,
-        hoursWindows: d.hoursWindows ?? {},
         maxPerDay: d.maxPerDay ?? null,
         maxConcurrent: d.maxConcurrent ?? null,
         dailyTarget: d.dailyTarget ?? null,
@@ -442,7 +457,6 @@ bookingDashboardRouter.patch("/groups/:id", async (req, res) => {
   }
   const data = {
     ...(d.name !== undefined ? { name: d.name } : {}),
-    ...(d.hoursWindows !== undefined ? { hoursWindows: d.hoursWindows } : {}),
     ...(d.maxPerDay !== undefined ? { maxPerDay: d.maxPerDay ?? null } : {}),
     ...(d.maxConcurrent !== undefined
       ? { maxConcurrent: d.maxConcurrent ?? null }

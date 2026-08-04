@@ -947,7 +947,7 @@ function ServicesTab({
           // Hours the ENGINE will use for this service (a group overrides it).
           // Restricted => ★ + the windows spelled out, so the barber can spot
           // his evening/weekend-only services without opening a single editor.
-          const { windows, groupName } = effectiveServiceHours(s, initialServiceGroups);
+          const { windows } = effectiveServiceHours(s, initialServiceGroups);
           const offHours = hasCustomHours(windows);
           return (
             <li
@@ -977,7 +977,6 @@ function ServicesTab({
                 </span>
                 {offHours && (
                   <span className="mt-0.5 block text-xs text-gold/90">
-                    {groupName ? `${groupName} hours · ` : ""}
                     {hoursWindowsSummary(windows)}
                   </span>
                 )}
@@ -1141,7 +1140,7 @@ function ServiceEditForm({
     // "closed" instruction - block save so they don't silently lose the day.
     // Skipped when grouped: the group owns hours, so the editor is hidden and we
     // must not send its (now irrelevant) windows.
-    if (!groupName && hasInvalidHoursRow(hoursRows)) {
+    if (hasInvalidHoursRow(hoursRows)) {
       toast("Service hours: each window's end must be after its start", "error");
       return;
     }
@@ -1172,9 +1171,11 @@ function ServiceEditForm({
         durationOverrides: buildDurationOverrides(dayDurations),
         // Same rule for the time windows ([] clears them all).
         timeOverrides: buildTimeOverrides(timeRows),
-        // Grouped services get their hours from the group (which overrides these),
-        // so omit the field entirely - PATCH is partial, absent = leave unchanged.
-        ...(groupName ? {} : { hoursWindows: buildHoursWindows(hoursRows) }),
+        // Always sent now, grouped or not: the service owns its hours. This was
+        // omitted for a grouped service back when the group's windows overrode
+        // them - which meant the editor could show a grid that was impossible to
+        // save.
+        hoursWindows: buildHoursWindows(hoursRows),
         // Ditto the day-gauge target: the group owns it while grouped.
         ...(groupName ? {} : { dailyTarget: dailyTarget > 0 ? dailyTarget : null }),
         color,
@@ -1312,47 +1313,50 @@ function ServiceEditForm({
           baseDuration={duration}
         />
 
-        {/* Per-service available hours. Unchecked day = available whenever the
-            barber works; check a day + set a window to limit this service (e.g.
-            "Mens Haircut only 10:00-14:00"). It intersects with the barber's
-            weekly hours - it never widens them. When the service is in a group,
-            the group owns hours + limits, so the editor is hidden. */}
-        {groupName ? (
-          <div>
-            <span className={labelCls}>Available hours for this service</span>
-            <p className="mt-1 rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-xs text-muted">
-              Hours &amp; limits are managed by the group{" "}
-              <span className="text-offwhite">“{groupName}”</span>. Edit them in{" "}
-              <span className="text-offwhite">Service groups</span> below.
-            </p>
+        {/* Per-service available hours — THE one place these are edited, whether
+            or not the service is in a group. Unchecked day = available whenever
+            the barber works; check a day + set a window to limit this service
+            (e.g. "Mens Haircut only 10:00-14:00"). It intersects with the
+            barber's weekly hours - it never widens them.
+
+            This used to be hidden for a grouped service, pointing the barber at
+            the group editor instead: hours were set in one place and shown in
+            another, and a grouped service's own windows were config the engine
+            silently ignored. A group is a bundle with shared booking limits now;
+            hours belong to the service. */}
+        <CollapsibleHours
+          title="Available hours for this service (optional)"
+          summary={hoursSummary(hoursRows)}
+        >
+          <div className="flex items-center justify-end">
+            {/* Flip every day in one tap instead of one by one. */}
+            <button
+              type="button"
+              onClick={() => setAllHours(allHoursCustom ? "any" : "custom")}
+              className="shrink-0 rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:border-gold/50 hover:text-gold"
+            >
+              {allHoursCustom ? "All days: open" : "All days: custom"}
+            </button>
           </div>
-        ) : (
-          <CollapsibleHours
-            title="Available hours for this service (optional)"
-            summary={hoursSummary(hoursRows)}
-          >
-            <div className="flex items-center justify-end">
-              {/* Flip every day in one tap instead of one by one. */}
-              <button
-                type="button"
-                onClick={() => setAllHours(allHoursCustom ? "any" : "custom")}
-                className="shrink-0 rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:border-gold/50 hover:text-gold"
-              >
-                {allHoursCustom ? "All days: open" : "All days: custom"}
-              </button>
-            </div>
-            <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
-              Open = whenever the barber works that day. Custom = only the windows
-              you set (add a second window for a split day). Not open = no
-              bookings that day.
-            </p>
-            <AvailableHoursRows
-              rows={hoursRows}
-              onChange={setHoursRows}
-              ariaScope="this service"
-            />
-          </CollapsibleHours>
-        )}
+          <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
+            Open = whenever the barber works that day. Custom = only the windows
+            you set (add a second window for a split day). Not open = no
+            bookings that day.
+            {groupName ? (
+              <>
+                {" "}
+                These are this service&apos;s own hours —{" "}
+                <span className="text-offwhite">“{groupName}”</span> only shares
+                booking limits with it, not hours.
+              </>
+            ) : null}
+          </p>
+          <AvailableHoursRows
+            rows={hoursRows}
+            onChange={setHoursRows}
+            ariaScope="this service"
+          />
+        </CollapsibleHours>
 
         {/* Day-gauge target. Hidden while grouped for the same reason as the
             hours editor: the group owns it across all its members. */}
@@ -2258,19 +2262,17 @@ function ServiceGroupItem({
       group.name === lastSaved.name &&
       group.maxPerDay === lastSaved.maxPerDay &&
       group.maxConcurrent === lastSaved.maxConcurrent &&
-      JSON.stringify(group.serviceIds) === JSON.stringify(lastSaved.serviceIds) &&
-      JSON.stringify(group.hoursWindows) === JSON.stringify(lastSaved.hoursWindows)
+      JSON.stringify(group.serviceIds) === JSON.stringify(lastSaved.serviceIds)
     ) {
       setLastSaved(null);
     }
   }, [group, lastSaved]);
   const current = lastSaved ?? group;
-  // Group hours govern every member service, so a restricted group is the one
-  // place a whole bundle silently leaves the regular schedule — star it here
-  // too, reading from `current` so a just-saved change stars immediately.
-  const offHours = hasCustomHours(current.hoursWindows);
+  // No ★ here any more: a group no longer carries hours, so there is nothing
+  // about a group that can be "off regular hours". The star lives on the
+  // SERVICE rows, which is where the windows are now set.
   return (
-    <li className={cn("rounded-xl border", offHours ? "border-gold/40" : "border-subtle")}>
+    <li className="rounded-xl border border-subtle">
       {/* COMPACT header - always visible; the chevron toggles the editor. */}
       <button
         onClick={onToggle}
@@ -2278,18 +2280,12 @@ function ServiceGroupItem({
         className="flex w-full items-start justify-between gap-3 px-4 py-2.5 text-left"
       >
         <span className="min-w-0 text-sm">
-          {offHours && <OffHoursStar />}
           {current.name}{" "}
           <span className="text-xs text-muted">
             · {current.serviceIds.length} service
             {current.serviceIds.length === 1 ? "" : "s"} ·{" "}
             {limitsSummary(current.maxPerDay, current.maxConcurrent)}
           </span>
-          {offHours && (
-            <span className="mt-0.5 block text-xs text-gold/90">
-              {hoursWindowsSummary(current.hoursWindows)}
-            </span>
-          )}
         </span>
         <span
           className={cn(
@@ -2347,9 +2343,6 @@ function ServiceGroupEditor({
   const activeServices = services.filter((s) => s.active);
   const [name, setName] = useState(group.name);
   const [serviceIds, setServiceIds] = useState<string[]>(group.serviceIds);
-  const [hoursRows, setHoursRows] = useState<ServiceHoursRow[]>(() =>
-    hoursRowsFromWindows(group.hoursWindows),
-  );
   // 0 = no cap (sent to the API as null). NumberField holds a number and settles
   // an emptied field back to 0, so 0 is the natural "no cap" sentinel here.
   const [maxPerDay, setMaxPerDay] = useState<number>(group.maxPerDay ?? 0);
@@ -2361,11 +2354,9 @@ function ServiceGroupEditor({
   const [dailyTarget, setDailyTarget] = useState<number>(group.dailyTarget ?? 0);
   const [pending, start] = useTransition();
   // The last-persisted values in PAYLOAD form — the baseline the Save diff and
-  // the dirty flag compare against. Hours round-trip rows -> windows so both
-  // sides compare canonically ("any" days absent, closed days as []).
+  // the dirty flag compare against.
   const [saved, setSaved] = useState(() => ({
     name: group.name,
-    hours: JSON.stringify(buildHoursWindows(hoursRowsFromWindows(group.hoursWindows))),
     maxPerDay: group.maxPerDay ?? null,
     maxConcurrent: group.maxConcurrent ?? null,
     dailyTarget: group.dailyTarget ?? null,
@@ -2377,8 +2368,6 @@ function ServiceGroupEditor({
       cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id],
     );
   }
-  const allHoursCustom = hoursRows.every((r) => r.mode === "custom");
-
   // 0 (or blank, which NumberField settles to 0) = no cap → null. Otherwise the
   // cap must be a positive integer.
   function parseCap(n: number): { ok: boolean; value: number | null } {
@@ -2390,7 +2379,6 @@ function ServiceGroupEditor({
   // Unsaved edits? Caps compare through the same 0/blank -> null they save as.
   const dirty =
     name.trim() !== saved.name ||
-    JSON.stringify(buildHoursWindows(hoursRows)) !== saved.hours ||
     (maxPerDay <= 0 ? null : maxPerDay) !== saved.maxPerDay ||
     (maxConcurrent <= 0 ? null : maxConcurrent) !== saved.maxConcurrent ||
     (dailyTarget <= 0 ? null : dailyTarget) !== saved.dailyTarget ||
@@ -2431,10 +2419,6 @@ function ServiceGroupEditor({
       toast("Group name is required", "error");
       return;
     }
-    if (hasInvalidHoursRow(hoursRows)) {
-      toast("Group hours: each window's end must be after its start", "error");
-      return;
-    }
     const perDay = parseCap(maxPerDay);
     const concurrent = parseCap(maxConcurrent);
     if (!perDay.ok || !concurrent.ok) {
@@ -2449,14 +2433,11 @@ function ServiceGroupEditor({
       return;
     }
     const trimmed = name.trim();
-    const hours = buildHoursWindows(hoursRows);
-    const hoursJson = JSON.stringify(hours);
     const idsJson = JSON.stringify(serviceIds);
     // Only what changed in THIS editor goes in the PATCH (the API keeps absent
     // fields as-is) — an untouched field can never overwrite anything.
     const payload: Partial<ServiceGroupInput> = {
       ...(trimmed !== saved.name ? { name: trimmed } : {}),
-      ...(hoursJson !== saved.hours ? { hoursWindows: hours } : {}),
       ...(perDay.value !== saved.maxPerDay ? { maxPerDay: perDay.value } : {}),
       ...(concurrent.value !== saved.maxConcurrent
         ? { maxConcurrent: concurrent.value }
@@ -2474,7 +2455,6 @@ function ServiceGroupEditor({
     // dirty; a failure keeps the draft AND the flag (nothing silently lost).
     const next = {
       name: trimmed,
-      hours: hoursJson,
       maxPerDay: perDay.value,
       maxConcurrent: concurrent.value,
       dailyTarget: target.value,
@@ -2490,7 +2470,6 @@ function ServiceGroupEditor({
         onSaved({
           ...group,
           name: trimmed,
-          hoursWindows: hours,
           maxPerDay: perDay.value,
           maxConcurrent: concurrent.value,
           dailyTarget: target.value,
@@ -2633,47 +2612,17 @@ function ServiceGroupEditor({
 
       {/* Shared available-hours grid - same idiom as ServiceEditForm; these
           hours OVERRIDE each member service's own windows. */}
-      {/* All-Open = NO restriction: the group's services are bookable any
-          time the barber works, and each member's OWN windows are ignored
-          (the group override masks them). Said out loud because a wiped or
-          never-set grid otherwise just looks like "Open everywhere" — and a
-          barber who set per-service windows sees those times "reset" the
-          moment a service joins the group, with no clue why. */}
-      {hoursRows.every((r) => r.mode === "any") && (
-        <p className="mb-1 rounded-lg border border-gold/25 bg-gold/5 px-3 py-2 text-[11px] text-gold/90">
-          No group hours set — these services can be booked whenever the barber
-          works, even if a service has its own hours. Set windows below to
-          restrict them.
-        </p>
-      )}
-      <CollapsibleHours
-        title="Available hours for this group (optional)"
-        summary={hoursSummary(hoursRows)}
-      >
-        <div className="flex items-center justify-end">
-          <button
-            type="button"
-            onClick={() =>
-              setHoursRows((cur) =>
-                cur.map((r) => ({ ...r, mode: allHoursCustom ? "any" : "custom" })),
-              )
-            }
-            className="shrink-0 rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:border-gold/50 hover:text-gold"
-          >
-            {allHoursCustom ? "All days: open" : "All days: custom"}
-          </button>
-        </div>
-        <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
-          Open = whenever the barber works that day. Custom = only the windows
-          you set (add a second window for a split day). Not open = no
-          bookings that day, for every service in this group.
-        </p>
-        <AvailableHoursRows
-          rows={hoursRows}
-          onChange={setHoursRows}
-          ariaScope="this group"
-        />
-      </CollapsibleHours>
+      {/* Hours are NOT edited here. They used to be: a group's windows
+          overrode every member service's own, so the barber set a service's
+          hours in one place and read them in another, and a grouped service's
+          own windows were config the engine silently ignored. Hours now live
+          on the service (Services -> Edit). A group is a bundle with shared
+          booking limits. */}
+      <p className="mb-1 rounded-lg border border-subtle px-3 py-2 text-[11px] leading-relaxed text-muted">
+        Hours are set per service now — open a service and use{" "}
+        <span className="text-offwhite">Available hours</span>. This group shares
+        the booking limits below with its services.
+      </p>
 
       {/* Booking limits across the whole group. Blank/0 = no cap. */}
       <div className="grid gap-3 sm:grid-cols-2">
@@ -3231,8 +3180,11 @@ function effectiveServiceHours(
     ? groups.find((g) => g.id === service.serviceGroupId && g.active)
     : undefined;
   return group
-    ? { windows: group.hoursWindows, groupName: group.name }
+    ? { windows: service.hoursWindows, groupName: group.name }
     : { windows: service.hoursWindows, groupName: null };
+  // NOTE: windows is the SERVICE's either way now. groupName is returned only so
+  // a row can name the bundle it belongs to - it must never be read as "these
+  // are the group's hours", which is exactly what it used to mean.
 }
 
 /**
