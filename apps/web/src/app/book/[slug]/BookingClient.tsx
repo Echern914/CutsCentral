@@ -97,6 +97,9 @@ const WEEKDAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
  * action (CSP blocks a direct browser fetch); the create action returns a manage
  * token so we can link the customer to cancel/reschedule. Accent-themed to the shop.
  */
+/** Fixed gold for special slots — see the note in BookingClient. */
+const SPECIAL_GOLD = "#D4AF37";
+
 export function BookingClient({ data }: { data: BookShopData }) {
   // Clear the native app's WebView spinner (reachable from the shop page's Book
   // CTA inside the app; the shell may be waiting on this ready signal).
@@ -107,6 +110,17 @@ export function BookingClient({ data }: { data: BookShopData }) {
   // arbitrary accents, so a hardcoded near-black fails WCAG on dark ones.
   const onAccent = readableOn(accent);
   const tz = data.shop.timezone;
+
+  /**
+   * Specials (barber-published targeted slots — the late-night cut, the model
+   * rate) are painted GOLD and starred, deliberately NOT in the shop's accent.
+   *
+   * They used to render in the accent at low opacity, which meant that for any
+   * shop whose accent IS gold-ish the "extra" slot looked exactly like every
+   * ordinary time. A special is a different KIND of thing — its own price, its
+   * own hours — so it gets its own fixed colour and a ★ that survives whatever
+   * accent the shop picks.
+   */
 
   const [serviceId, setServiceId] = useState<string | null>(null);
   // The provider the slots were loaded for. For a MULTI-barber shop this is the
@@ -686,11 +700,26 @@ export function BookingClient({ data }: { data: BookShopData }) {
                   aria-pressed={chosen}
                   className="rounded-lg border px-3 py-1.5 text-xs transition-colors"
                   style={{
-                    borderColor: chosen ? accent : "rgba(255,255,255,0.15)",
-                    backgroundColor: chosen ? `${accent}14` : "transparent",
-                    color: chosen ? accent : undefined,
+                    // A special keeps its gold even when it isn't the chosen
+                    // chip, so it reads as "extra" while scanning the grid.
+                    borderColor: s.targeted
+                      ? SPECIAL_GOLD
+                      : chosen
+                        ? accent
+                        : "rgba(255,255,255,0.15)",
+                    backgroundColor: s.targeted
+                      ? `${SPECIAL_GOLD}${chosen ? "2E" : "14"}`
+                      : chosen
+                        ? `${accent}14`
+                        : "transparent",
+                    color: s.targeted ? SPECIAL_GOLD : chosen ? accent : undefined,
                   }}
                 >
+                  {s.targeted && (
+                    <span aria-hidden className="mr-1">
+                      ★
+                    </span>
+                  )}
                   {timeFmt.format(new Date(s.startsAt))}
                   {s.targeted && (
                     <span className="ml-1 opacity-80">
@@ -1753,19 +1782,34 @@ export function BookingClient({ data }: { data: BookShopData }) {
                       aria-pressed={picked}
                       className="rounded-lg border py-2 text-center text-sm transition-colors"
                       style={{
-                        borderColor: picked
-                          ? accent
-                          : s.targeted
-                            ? `${accent}99`
+                        // Gold marks a special whether or not it's picked; when
+                        // picked it fills, so it still reads as the selection.
+                        borderColor: s.targeted
+                          ? SPECIAL_GOLD
+                          : picked
+                            ? accent
                             : "rgba(255,255,255,0.12)",
-                        backgroundColor: picked
-                          ? accent
-                          : s.targeted
-                            ? `${accent}14`
+                        backgroundColor: s.targeted
+                          ? picked
+                            ? SPECIAL_GOLD
+                            : `${SPECIAL_GOLD}14`
+                          : picked
+                            ? accent
                             : "transparent",
-                        color: picked ? onAccent : undefined,
+                        color: s.targeted
+                          ? picked
+                            ? readableOn(SPECIAL_GOLD)
+                            : SPECIAL_GOLD
+                          : picked
+                            ? onAccent
+                            : undefined,
                       }}
                     >
+                      {s.targeted && (
+                        <span aria-hidden className="mr-1">
+                          ★
+                        </span>
+                      )}
                       {timeFmt.format(new Date(s.startsAt))}
                       {s.targeted && (
                         <span className="block text-[10px] font-semibold">
