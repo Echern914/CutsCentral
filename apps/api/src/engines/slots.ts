@@ -196,17 +196,25 @@ export async function computeOpenSlots(
     });
     if (!service || service.durationMin <= 0) return null;
 
-    // SERVICE GROUP (Acuity-style bundle). When the service belongs to an active
-    // group, the group carries: shared available-hours (OVERRIDE this service's
-    // own hoursWindows below) and two shop-wide caps - maxPerDay (bookings per
-    // shop-local day across all member services) and maxConcurrent (overlapping
-    // bookings at once across the group). Ungrouped services (serviceGroupId
-    // null - every existing service, every new shop) skip this entirely and the
-    // rest of the engine is byte-for-byte the pre-group behavior.
+    // SERVICE GROUP (Acuity-style bundle). A group carries the two shop-wide
+    // caps - maxPerDay (bookings per shop-local day across all member services)
+    // and maxConcurrent (overlapping bookings at once across the group).
+    //
+    // It no longer carries HOURS. A group's hoursWindows used to override the
+    // member service's own, which meant a service's hours were edited in one
+    // place and displayed in another, and a grouped service's own windows were
+    // dead config the engine silently ignored. Hours now live on the service,
+    // always - one owner, one place to edit (see the migration that copied each
+    // active group's windows down onto its members). ServiceGroup.hoursWindows
+    // is deliberately still in the schema but no longer read.
+    //
+    // Ungrouped services (serviceGroupId null - every existing service, every
+    // new shop) skip this entirely and the rest of the engine is byte-for-byte
+    // the pre-group behavior.
     const group = service.serviceGroupId
       ? await tx.serviceGroup.findFirst({
           where: { id: service.serviceGroupId, shopId: input.shopId, active: true },
-          select: { id: true, hoursWindows: true, maxPerDay: true, maxConcurrent: true },
+          select: { id: true, maxPerDay: true, maxConcurrent: true },
         })
       : null;
 
@@ -405,15 +413,11 @@ export async function computeOpenSlots(
   // with staff hours); present + empty means the service isn't offered that day.
   // Empty map (every existing service) => nothing is ever restricted.
   //
-  // GROUP OVERRIDES SERVICE: when the service is in an active group, the GROUP's
-  // hoursWindows feed the restriction instead of the service's own - the shared
-  // group hours win. Ungrouped (group === null) is the fast path: identical to
-  // parsing the service's own hoursWindows, byte-for-byte unchanged. The
-  // intersection-with-staff-rules walk below is untouched either way; only which
-  // map it reads changes.
-  const serviceByWeekday = parseServiceHours(
-    group ? group.hoursWindows : service.hoursWindows,
-  );
+  // THE SERVICE OWNS ITS HOURS, grouped or not. This used to consult the
+  // service's active group first, so a grouped service's own windows were dead
+  // config; the group's map is no longer read at all here (see the group query
+  // above). Group membership now affects only the shared CAPS below.
+  const serviceByWeekday = parseServiceHours(service.hoursWindows);
 
   // Build the recurring windows by walking each shop-local calendar date across
   // the range (plus a day of slack on each side so a window that straddles

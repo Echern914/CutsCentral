@@ -74,15 +74,15 @@ export interface ServiceRow {
   serviceGroupId: string | null;
 }
 /**
- * A group bundles several services under ONE shared config: shared hoursWindows
- * that OVERRIDE each member's own windows, plus booking limits (maxPerDay = total
- * bookings/shop-local-day across all members; maxConcurrent = overlapping bookings
- * at once across the group; either null = no cap). serviceIds = current membership.
+ * A group bundles several services under ONE shared set of BOOKING LIMITS
+ * (maxPerDay = total bookings/shop-local-day across all members; maxConcurrent =
+ * overlapping bookings at once across the group; either null = no cap).
+ * serviceIds = current membership. A group does NOT carry hours - those belong to
+ * the service and are edited in Services -> Edit.
  */
 export interface ServiceGroupRow {
   id: string;
   name: string;
-  hoursWindows: Record<string, { s: number; e: number }[]>;
   maxPerDay: number | null;
   maxConcurrent: number | null;
   // Display-only daily slot target for the calendar day gauge, counted across
