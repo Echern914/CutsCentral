@@ -1464,7 +1464,17 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
     // its window — hiding it under a filter would recreate the same mystery
     // one level down.
     const externalVisits = (await db.visit.findMany({
-      where: { scheduledAt: { gte: from, lte: to }, appointment: null },
+      where: {
+        scheduledAt: { gte: from, lte: to },
+        appointment: null,
+        // A cancelled booking is not on the schedule. Acuity tells us via the
+        // appointment.canceled webhook (or the 90-day resync sweep) and the row
+        // flips to CANCELED; it used to keep rendering, just dimmed, so a client
+        // who cancelled still looked like they were coming in. RESCHEDULED is
+        // the same story - the moved appointment arrives as its own row, so
+        // keeping the old one would show the client twice.
+        status: { notIn: ["CANCELED", "RESCHEDULED"] },
+      },
       orderBy: { scheduledAt: "asc" },
       take: 500,
       select: {
@@ -1519,7 +1529,12 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
     // Synced shops (Acuity / Square / link): appointments are Visit rows. There's
     // no staff relation on Visit, so a staffId filter simply doesn't apply.
     const rows = (await db.visit.findMany({
-      where: { scheduledAt: { gte: from, lte: to } },
+      where: {
+        scheduledAt: { gte: from, lte: to },
+        // Same rule as the native branch above: cancelled and rescheduled
+        // bookings are off the schedule, not dimmed on it.
+        status: { notIn: ["CANCELED", "RESCHEDULED"] },
+      },
       orderBy: { scheduledAt: "asc" },
       take: 500,
       select: {

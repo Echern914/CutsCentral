@@ -182,4 +182,45 @@ describe("native shop agenda: synced Acuity/Square appointments", () => {
     const rows = await agenda(staffId);
     expect(rows.some((r) => r.serviceName === "Acuity Fade")).toBe(true);
   });
+
+  // A client who cancels in Acuity must come OFF the schedule. The webhook
+  // (appointment.canceled) flips the Visit to CANCELED and the slot-busy guard
+  // already ignored it — but the agenda had NO status filter, so the row kept
+  // rendering (dimmed) and the barber still saw someone who wasn't coming.
+  it("drops a CANCELED synced visit from the calendar", async () => {
+    const canceled = await prisma.visit.create({
+      data: {
+        shopId,
+        clientId,
+        acuityAppointmentId: `acu-${randomToken(6)}`,
+        status: "CANCELED",
+        scheduledAt: at(tomorrow, 15),
+        endAt: at(tomorrow, 16),
+        serviceName: "Cancelled Fade",
+      },
+    });
+    const rows = await agenda();
+    expect(rows.some((r) => r.serviceName === "Cancelled Fade")).toBe(false);
+    await prisma.visit.delete({ where: { id: canceled.id } });
+  });
+
+  // RESCHEDULED is the same problem wearing a different hat: Acuity sends the
+  // moved appointment as its OWN row, so keeping the old one shows the client
+  // twice — once at a time they are not coming.
+  it("drops a RESCHEDULED synced visit (the new time arrives as its own row)", async () => {
+    const moved = await prisma.visit.create({
+      data: {
+        shopId,
+        clientId,
+        acuityAppointmentId: `acu-${randomToken(6)}`,
+        status: "RESCHEDULED",
+        scheduledAt: at(tomorrow, 17),
+        endAt: at(tomorrow, 18),
+        serviceName: "Moved Fade",
+      },
+    });
+    const rows = await agenda();
+    expect(rows.some((r) => r.serviceName === "Moved Fade")).toBe(false);
+    await prisma.visit.delete({ where: { id: moved.id } });
+  });
 });
