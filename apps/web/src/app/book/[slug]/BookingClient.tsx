@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { DEMO } from "@chairback/config/demo";
 import { serviceColorHex } from "@chairback/config/constants";
@@ -664,7 +664,14 @@ export function BookingClient({ data }: { data: BookShopData }) {
   /** One service's row in the day view: name + that-day price + time chips. */
   function dayServiceRow(svc: DayService) {
     const stripe = serviceColorHex(svc.color);
-    const chips = svc.slots;
+    // Specials are split OUT of the normal run rather than sorted in among it.
+    // Colour alone wasn't enough: an 8 PM late-night slot landed immediately
+    // after the 5:15 PM regular one, reading as "just the next time" instead of
+    // a different offer at a different price. Splitting gives them a heading of
+    // their own, so the shape of the day is obvious before you read any chip.
+    // Order within each block is preserved (the API already sorts by time).
+    const chips = svc.slots.filter((s) => !s.targeted);
+    const specials = svc.slots.filter((s) => s.targeted);
     return (
       <div
         key={svc.id}
@@ -682,65 +689,147 @@ export function BookingClient({ data }: { data: BookShopData }) {
             )}
           </span>
           <span className="mt-0.5 block text-xs text-muted">{svc.durationMin} min</span>
-          <div className="mt-2.5 flex flex-wrap gap-2">
-            {chips.map((s) => {
-              // Compound key incl. the targeted id (same as the service-first
-              // grid): a special and a normal slot can share the same instant
-              // on different barbers, and only ONE of them may light up - they
-              // carry different prices.
-              const chosen =
-                slot === s.startsAt &&
-                serviceId === svc.id &&
-                (slotTargeted?.id ?? null) === (s.targeted?.id ?? null);
-              return (
-                <button
-                  key={`${s.startsAt}-${s.targeted?.id ?? "grid"}`}
-                  type="button"
-                  onClick={() => pickDaySlot(svc, s)}
-                  aria-pressed={chosen}
-                  className="rounded-lg border px-3 py-1.5 text-xs transition-colors"
-                  style={{
-                    // A special keeps its gold even when it isn't the chosen
-                    // chip, so it reads as "extra" while scanning the grid.
-                    borderColor: s.targeted
-                      ? SPECIAL_GOLD
-                      : chosen
-                        ? accent
-                        : "rgba(255,255,255,0.15)",
-                    backgroundColor: s.targeted
-                      ? `${SPECIAL_GOLD}${chosen ? "2E" : "14"}`
-                      : chosen
-                        ? `${accent}14`
-                        : "transparent",
-                    color: s.targeted ? SPECIAL_GOLD : chosen ? accent : undefined,
-                  }}
-                >
-                  {s.targeted && (
-                    <span aria-hidden className="mr-1">
-                      ★
-                    </span>
-                  )}
-                  {timeFmt.format(new Date(s.startsAt))}
-                  {s.targeted && (
-                    <span className="ml-1 opacity-80">
-                      · ${s.targeted.price}
-                      {s.targeted.label ? ` · ${s.targeted.label}` : ""}
-                    </span>
-                  )}
-                  {/* A time-of-day window's own price/length (the API attaches
-                      these only when they differ from the day-level card). */}
-                  {!s.targeted && (s.price !== undefined || s.durationMin !== undefined) && (
-                    <span className="ml-1 opacity-80">
-                      {s.price !== undefined && s.price !== null ? ` · $${s.price}` : ""}
-                      {s.durationMin !== undefined ? ` · ${s.durationMin} min` : ""}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
+          {chips.length > 0 && (
+            <div className="mt-2.5 flex flex-wrap gap-2">{chips.map(chipButton)}</div>
+          )}
+
+          {/* Specials get their own labelled block under the regular run. */}
+          {specials.length > 0 && (
+            <div className="mt-3">
+              <span
+                className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.14em]"
+                style={{ color: SPECIAL_GOLD }}
+              >
+                <span aria-hidden>★</span>
+                {/* Every special on a service shares one heading; the chips
+                    still carry their own label and price. */}
+                {specials.length === 1 && specials[0]!.targeted?.label
+                  ? specials[0]!.targeted!.label
+                  : "Special times"}
+                <span
+                  aria-hidden
+                  className="h-px flex-1"
+                  style={{ backgroundColor: `${SPECIAL_GOLD}40` }}
+                />
+              </span>
+              <div className="mt-2 flex flex-wrap gap-2">{specials.map(chipButton)}</div>
+            </div>
+          )}
         </div>
       </div>
+    );
+
+    /** One time chip. Shared by the regular run and the specials block. */
+    function chipButton(s: DayService["slots"][number]) {
+      // Compound key incl. the targeted id: a special and a normal slot can
+      // share the same instant on different barbers, and only ONE of them may
+      // light up - they carry different prices.
+      const chosen =
+        slot === s.startsAt &&
+        serviceId === svc.id &&
+        (slotTargeted?.id ?? null) === (s.targeted?.id ?? null);
+      return (
+        <button
+          key={`${s.startsAt}-${s.targeted?.id ?? "grid"}`}
+          type="button"
+          onClick={() => pickDaySlot(svc, s)}
+          aria-pressed={chosen}
+          className="rounded-lg border px-3 py-1.5 text-xs transition-colors"
+          style={{
+            // A special keeps its gold even when it isn't the chosen chip, so
+            // it reads as "extra" while scanning the grid.
+            borderColor: s.targeted
+              ? SPECIAL_GOLD
+              : chosen
+                ? accent
+                : "rgba(255,255,255,0.15)",
+            backgroundColor: s.targeted
+              ? `${SPECIAL_GOLD}${chosen ? "2E" : "14"}`
+              : chosen
+                ? `${accent}14`
+                : "transparent",
+            color: s.targeted ? SPECIAL_GOLD : chosen ? accent : undefined,
+          }}
+        >
+          {s.targeted && (
+            <span aria-hidden className="mr-1">
+              ★
+            </span>
+          )}
+          {timeFmt.format(new Date(s.startsAt))}
+          {s.targeted && (
+            <span className="ml-1 opacity-80">
+              · ${s.targeted.price}
+              {s.targeted.label ? ` · ${s.targeted.label}` : ""}
+            </span>
+          )}
+          {/* A time-of-day window's own price/length (the API attaches these
+              only when they differ from the day-level card). */}
+          {!s.targeted && (s.price !== undefined || s.durationMin !== undefined) && (
+            <span className="ml-1 opacity-80">
+              {s.price !== undefined && s.price !== null ? ` · $${s.price}` : ""}
+              {s.durationMin !== undefined ? ` · ${s.durationMin} min` : ""}
+            </span>
+          )}
+        </button>
+      );
+    }
+  }
+
+  /** One time chip in the service-first flow's time step. */
+  function renderTimeChip(s: DaySlot) {
+    const picked =
+      slot === s.startsAt && (slotTargeted?.id ?? null) === (s.targeted?.id ?? null);
+    return (
+      <button
+        key={s.targeted?.id ?? s.startsAt}
+        type="button"
+        onClick={() => {
+          setSlot(s.startsAt);
+          setSlotTargeted(s.targeted ?? null);
+          // Bind the barber who will actually take this booking (several may be
+          // free at this instant on a merged fetch).
+          setPickedStaffId(s.staffIds[0] ?? null);
+          if (s.targeted) setAddOnIds([]); // fixed length/price
+        }}
+        aria-pressed={picked}
+        className="rounded-lg border py-2 text-center text-sm transition-colors"
+        style={{
+          // Gold marks a special whether or not it's picked; when picked it
+          // fills, so it still reads as the selection.
+          borderColor: s.targeted
+            ? SPECIAL_GOLD
+            : picked
+              ? accent
+              : "rgba(255,255,255,0.12)",
+          backgroundColor: s.targeted
+            ? picked
+              ? SPECIAL_GOLD
+              : `${SPECIAL_GOLD}14`
+            : picked
+              ? accent
+              : "transparent",
+          color: s.targeted
+            ? picked
+              ? readableOn(SPECIAL_GOLD)
+              : SPECIAL_GOLD
+            : picked
+              ? onAccent
+              : undefined,
+        }}
+      >
+        {s.targeted && (
+          <span aria-hidden className="mr-1">
+            ★
+          </span>
+        )}
+        {timeFmt.format(new Date(s.startsAt))}
+        {s.targeted && (
+          <span className="block text-[10px] font-semibold">
+            {s.targeted.label || "Special"} · ${s.targeted.price.toFixed(0)}
+          </span>
+        )}
+      </button>
     );
   }
 
@@ -1756,70 +1845,42 @@ export function BookingClient({ data }: { data: BookShopData }) {
                 }}
               />
 
-              {/* Times for the selected day. */}
+              {/* Times for the selected day. Specials are pushed to the end and
+                  introduced by their own gold heading (see dayServiceRow) —
+                  inline, an 8 PM late-night slot just looked like the next
+                  time after 5:15 PM rather than a different offer. */}
               <div className="mt-4 grid grid-cols-3 gap-2">
                 {daySlots.length === 0 && (
                   <p className="col-span-3 text-sm text-muted">
                     Pick a highlighted day to see open times.
                   </p>
                 )}
-                {daySlots.map((s) => {
-                  const picked =
-                    slot === s.startsAt &&
-                    (slotTargeted?.id ?? null) === (s.targeted?.id ?? null);
-                  return (
-                    <button
-                      key={s.targeted?.id ?? s.startsAt}
-                      type="button"
-                      onClick={() => {
-                        setSlot(s.startsAt);
-                        setSlotTargeted(s.targeted ?? null);
-                        // Bind the barber who will actually take this booking
-                        // (several may be free at this instant on a merged fetch).
-                        setPickedStaffId(s.staffIds[0] ?? null);
-                        if (s.targeted) setAddOnIds([]); // fixed length/price
-                      }}
-                      aria-pressed={picked}
-                      className="rounded-lg border py-2 text-center text-sm transition-colors"
-                      style={{
-                        // Gold marks a special whether or not it's picked; when
-                        // picked it fills, so it still reads as the selection.
-                        borderColor: s.targeted
-                          ? SPECIAL_GOLD
-                          : picked
-                            ? accent
-                            : "rgba(255,255,255,0.12)",
-                        backgroundColor: s.targeted
-                          ? picked
-                            ? SPECIAL_GOLD
-                            : `${SPECIAL_GOLD}14`
-                          : picked
-                            ? accent
-                            : "transparent",
-                        color: s.targeted
-                          ? picked
-                            ? readableOn(SPECIAL_GOLD)
-                            : SPECIAL_GOLD
-                          : picked
-                            ? onAccent
-                            : undefined,
-                      }}
-                    >
-                      {s.targeted && (
-                        <span aria-hidden className="mr-1">
-                          ★
-                        </span>
-                      )}
-                      {timeFmt.format(new Date(s.startsAt))}
-                      {s.targeted && (
-                        <span className="block text-[10px] font-semibold">
-                          {s.targeted.label || "Special"} · $
-                          {s.targeted.price.toFixed(0)}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
+                {[...daySlots]
+                  .sort((a, b) => Number(Boolean(a.targeted)) - Number(Boolean(b.targeted)))
+                  .map((s, i, arr) => {
+                    // Heading goes immediately before the first special.
+                    const startsSpecials =
+                      Boolean(s.targeted) && (i === 0 || !arr[i - 1]!.targeted);
+                    return (
+                      <Fragment key={`wrap-${s.targeted?.id ?? s.startsAt}`}>
+                        {startsSpecials && (
+                          <span
+                            className="col-span-3 mt-1 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.14em]"
+                            style={{ color: SPECIAL_GOLD }}
+                          >
+                            <span aria-hidden>★</span>
+                            Special times
+                            <span
+                              aria-hidden
+                              className="h-px flex-1"
+                              style={{ backgroundColor: `${SPECIAL_GOLD}40` }}
+                            />
+                          </span>
+                        )}
+                        {renderTimeChip(s)}
+                      </Fragment>
+                    );
+                  })}
               </div>
             </>
           )}
