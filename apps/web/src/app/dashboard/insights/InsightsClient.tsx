@@ -3,20 +3,29 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Card, CardHeader } from "@/components/ui/Card";
+import { Segmented } from "@/components/ui/Segmented";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { cn } from "@/lib/cn";
+import { NumberField } from "@/components/ui/NumberField";
+import { GoalPlanner } from "./GoalPlanner";
 import type {
+  Bucket,
   Goal,
   GoalMetric,
   GoalPeriod,
+  GoalResponse,
   InsightsData,
   PeriodKey,
+  PlannerData,
+  ServiceGoalRow,
   UtilizationData,
 } from "./page";
 import {
+  clearChairTimeGoalAction,
   clearGoalAction,
   goalAction,
   insightsAction,
+  saveChairTimeGoalAction,
   saveGoalAction,
   utilizationAction,
 } from "./actions";
@@ -42,14 +51,27 @@ function fmtDay(ymd: string): string {
  */
 export function InsightsClient({
   initial,
-  initialGoals = null,
+  initialGoalData = null,
   rewardsEnabled = true,
 }: {
   initial: InsightsData;
-  initialGoals?: Goal[] | null;
+  initialGoalData?: GoalResponse | null;
   rewardsEnabled?: boolean;
 }) {
   const [period, setPeriod] = useState<PeriodKey>(initial.period);
+  // Goals + planner data live here because three cards read them: GoalsCard
+  // (the four quota slots + planner sheet), Chair time (the % target) and
+  // Services (per-service quotas). One fetch, one refresh, no drift.
+  const [goalData, setGoalData] = useState<GoalResponse | null>(initialGoalData);
+  async function refreshGoals() {
+    const r = await goalAction();
+    if (r) setGoalData(r);
+  }
+  // null = the period's default bar size; a click on the Day/Week/Month pills
+  // overrides it. Reset on period change - a bucket that suits 30 days may not
+  // exist for a year (the API would quietly fall back, but the pills should
+  // never show a choice the response didn't honor).
+  const [bucket, setBucket] = useState<Bucket | null>(null);
   // Keep showing the last good payload while the next one loads, so the page
   // dims rather than collapsing to empty every time the range changes.
   const [data, setData] = useState<InsightsData>(initial);
@@ -57,11 +79,12 @@ export function InsightsClient({
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    if (period === data.period) return; // already showing this window
+    // Already showing this window at this bar size.
+    if (period === data.period && (bucket === null || bucket === data.bucket)) return;
     let cancelled = false;
     setPending(true);
     setFailed(false);
-    void insightsAction(period).then((d) => {
+    void insightsAction(period, bucket ?? undefined).then((d) => {
       if (cancelled) return;
       if (d) setData(d);
       else setFailed(true);
@@ -70,7 +93,7 @@ export function InsightsClient({
     return () => {
       cancelled = true;
     };
-  }, [period, data.period]);
+  }, [period, bucket, data.period, data.bucket]);
 
   const { buckets, services, totals, busiest, loyalty } = data;
 
@@ -92,7 +115,10 @@ export function InsightsClient({
             <button
               key={p.key}
               type="button"
-              onClick={() => setPeriod(p.key)}
+              onClick={() => {
+                setPeriod(p.key);
+                setBucket(null); // each range starts at its natural bar size
+              }}
               aria-pressed={period === p.key}
               className={cn(
                 "shrink-0 rounded-full border px-3.5 py-1.5 text-xs transition-colors duration-150 ease-out",
@@ -119,7 +145,11 @@ export function InsightsClient({
 
       {/* Goals — one target per metric AND period, each kept separately. */}
       <motion.div variants={fadeUp}>
-        <GoalsCard initial={initialGoals} />
+        <GoalsCard
+          goals={goalData?.goals ?? null}
+          planner={goalData?.planner ?? null}
+          onRefresh={refreshGoals}
+        />
       </motion.div>
 
       {/* Headline numbers for the window */}
@@ -144,12 +174,26 @@ export function InsightsClient({
         <Tile label="Busiest day" value={busiest.weekday ?? "n/a"} />
       </motion.div>
 
-      {/* Cuts over time — the bar is whatever the range makes it. */}
+      {/* Cuts over time — the bar is whatever the range makes it, and the
+          Day/Week/Month pills re-slice the same range on demand. */}
       <motion.div variants={fadeUp}>
         <Card className="p-5">
-          <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-            <h2 className="font-display text-lg">Cuts per {data.bucketNoun}</h2>
-            <span className="text-xs text-muted">{data.periodLabel}</span>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+            <div className="flex items-baseline gap-3">
+              <h2 className="font-display text-lg">Cuts per {data.bucketNoun}</h2>
+              <span className="text-xs text-muted">{data.periodLabel}</span>
+            </div>
+            {data.bucketOptions.length > 1 && (
+              <Segmented
+                options={data.bucketOptions.map((b) => ({
+                  key: b,
+                  label: b === "day" ? "Day" : b === "week" ? "Week" : "Month",
+                }))}
+                value={bucket ?? data.bucket}
+                onChange={setBucket}
+                ariaLabel="Bar size"
+              />
+            )}
           </div>
           <BucketBars buckets={buckets} pending={pending} noun={data.bucketNoun} />
         </Card>
@@ -167,14 +211,24 @@ export function InsightsClient({
               No services on the menu yet — add them under Booking → Services.
             </p>
           ) : (
-            <ServiceBars services={services} pending={pending} />
+            <ServiceBars
+              services={services}
+              pending={pending}
+              serviceGoals={goalData?.serviceGoals ?? []}
+              onRefreshGoals={refreshGoals}
+            />
           )}
         </Card>
       </motion.div>
 
       {/* Open chair time vs sold chair time */}
       <motion.div variants={fadeUp}>
-        <UtilizationCard period={period} />
+        <UtilizationCard
+          period={period}
+          bucket={bucket}
+          chairTimeTarget={goalData?.chairTime.target ?? null}
+          onRefreshGoals={refreshGoals}
+        />
       </motion.div>
 
       <motion.div
@@ -184,9 +238,12 @@ export function InsightsClient({
           pending && "opacity-60",
         )}
       >
-        {/* Day-of-week shape */}
+        {/* Day-of-week shape. Titled "Cuts by day" - Chair time's weekday view
+            is ALSO called "By day of week", and two cards with one name and two
+            different measures (booking counts here, minutes there) read as the
+            page contradicting itself. */}
         <Card className="p-5">
-          <h2 className="mb-1 font-display text-lg">By day of week</h2>
+          <h2 className="mb-1 font-display text-lg">Cuts by day</h2>
           <p className="mb-4 text-xs text-muted">
             Every cut in this range, stacked onto the day it fell on.
           </p>
@@ -321,12 +378,65 @@ function BucketBars({
 function ServiceBars({
   services,
   pending,
+  serviceGoals,
+  onRefreshGoals,
 }: {
   services: InsightsData["services"];
   pending: boolean;
+  serviceGoals: ServiceGoalRow[];
+  onRefreshGoals: () => Promise<void>;
 }) {
   const [mode, setMode] = useState<"count" | "revenue">("count");
   const [showAll, setShowAll] = useState(false);
+  // Per-service quota editor: which row is open, and its draft.
+  const [goalEditor, setGoalEditor] = useState<string | null>(null); // serviceId
+  const [goalTarget, setGoalTarget] = useState<number>(10);
+  const [goalPeriod, setGoalPeriod] = useState<GoalPeriod>("week");
+  const [goalSaving, setGoalSaving] = useState(false);
+
+  // The metric a row's quota uses follows the card's toggle: ranking by
+  // bookings sets cut quotas, ranking by revenue sets dollar quotas.
+  const goalMetric: GoalMetric = mode === "count" ? "visits" : "revenue";
+  const goalFor = (serviceId: string | null): ServiceGoalRow | undefined =>
+    serviceId
+      ? serviceGoals.find((g) => g.serviceId === serviceId && g.metric === goalMetric)
+      : undefined;
+
+  function openGoalEditor(serviceId: string) {
+    const existing = goalFor(serviceId);
+    setGoalTarget(existing?.target ?? (goalMetric === "visits" ? 10 : 500));
+    setGoalPeriod(existing?.period ?? "week");
+    setGoalEditor(serviceId);
+  }
+
+  async function saveServiceGoal(serviceId: string) {
+    setGoalSaving(true);
+    const r = await saveGoalAction({
+      metric: goalMetric,
+      period: goalPeriod,
+      target: goalTarget,
+      serviceId,
+    });
+    if (r.ok) {
+      await onRefreshGoals();
+      setGoalEditor(null);
+    }
+    setGoalSaving(false);
+  }
+
+  async function removeServiceGoal(g: ServiceGoalRow) {
+    setGoalSaving(true);
+    const r = await clearGoalAction({
+      metric: g.metric,
+      period: g.period,
+      serviceId: g.serviceId,
+    });
+    if (r.ok) {
+      await onRefreshGoals();
+      setGoalEditor(null);
+    }
+    setGoalSaving(false);
+  }
 
   const booked = services.filter((s) => s.count > 0);
   const unbooked = services.filter((s) => s.count === 0);
@@ -338,55 +448,124 @@ function ServiceBars({
 
   return (
     <div className={cn("px-5 py-4", pending && "opacity-50")}>
-      <div className="mb-3 flex w-fit items-center gap-1 self-start rounded-full border border-subtle p-0.5">
-        {(["count", "revenue"] as const).map((m) => (
-          <button
-            key={m}
-            onClick={() => setMode(m)}
-            aria-pressed={mode === m}
-            className={cn(
-              "rounded-full px-3 py-1 text-xs transition-colors duration-150 ease-out",
-              mode === m ? "bg-gold/15 text-gold" : "text-muted hover:text-offwhite",
-            )}
-          >
-            {m === "count" ? "By bookings" : "By revenue"}
-          </button>
-        ))}
-      </div>
+      <Segmented
+        className="mb-3"
+        options={[
+          { key: "count", label: "By bookings" },
+          { key: "revenue", label: "By revenue" },
+        ]}
+        value={mode}
+        onChange={setMode}
+        ariaLabel="Rank services by"
+      />
       {booked.length === 0 && (
         <p className="mb-3 text-sm text-muted">
           Nothing booked in this range — your menu is listed below at zero.
         </p>
       )}
       <ul className="flex flex-col gap-2.5">
-        {visible.map((s) => (
-          <li key={s.serviceId ?? `name:${s.name}`}>
-            <div className="mb-1 flex items-center justify-between gap-3 text-xs">
-              <span
-                className={cn(
-                  "truncate",
-                  s.count === 0 || s.name === "(no service name)"
-                    ? "text-muted"
-                    : "text-offwhite",
-                )}
-                title={s.name}
-              >
-                {s.name}
-              </span>
-              <span className="shrink-0 tabular-nums text-muted">
-                {mode === "count"
-                  ? `${s.count} ${s.count === 1 ? "booking" : "bookings"}`
-                  : `$${s.revenue.toLocaleString()}`}
-              </span>
-            </div>
-            <div className="h-2 w-full overflow-hidden rounded-full bg-charcoal-700">
-              <div
-                className="h-full rounded-full bg-gold/70 transition-all duration-200 ease-out"
-                style={{ width: `${Math.max(s[mode] > 0 ? 2 : 0, Math.round((s[mode] / max) * 100))}%` }}
-              />
-            </div>
-          </li>
-        ))}
+        {visible.map((s) => {
+          const g = goalFor(s.serviceId);
+          const editingThis = goalEditor !== null && goalEditor === s.serviceId;
+          return (
+            <li key={s.serviceId ?? `name:${s.name}`}>
+              <div className="mb-1 flex items-center justify-between gap-3 text-xs">
+                <span className="flex min-w-0 items-center gap-2">
+                  <span
+                    className={cn(
+                      "truncate",
+                      s.count === 0 || s.name === "(no service name)"
+                        ? "text-muted"
+                        : "text-offwhite",
+                    )}
+                    title={s.name}
+                  >
+                    {s.name}
+                  </span>
+                  {s.serviceId && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        editingThis ? setGoalEditor(null) : openGoalEditor(s.serviceId!)
+                      }
+                      className={cn(
+                        "shrink-0 rounded-full border px-2 py-0.5 text-[10px] tabular-nums transition-colors",
+                        g
+                          ? g.pct >= 1
+                            ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
+                            : "border-gold/40 bg-gold/10 text-gold"
+                          : "border-subtle text-muted hover:border-gold/50 hover:text-gold",
+                      )}
+                      title={
+                        g
+                          ? `${g.actual} of ${g.target} ${g.metric === "visits" ? "cuts" : "$"} ${PERIOD_LABEL[g.period]}`
+                          : "Set a target for this service"
+                      }
+                    >
+                      {g
+                        ? `${g.actual}/${g.target}${g.period === "week" ? " wk" : " mo"}`
+                        : "+ target"}
+                    </button>
+                  )}
+                </span>
+                <span className="shrink-0 tabular-nums text-muted">
+                  {mode === "count"
+                    ? `${s.count} ${s.count === 1 ? "booking" : "bookings"}`
+                    : `$${s.revenue.toLocaleString()}`}
+                </span>
+              </div>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-charcoal-700">
+                <div
+                  className="h-full rounded-full bg-gold/70 transition-all duration-200 ease-out"
+                  style={{ width: `${Math.max(s[mode] > 0 ? 2 : 0, Math.round((s[mode] / max) * 100))}%` }}
+                />
+              </div>
+              {editingThis && (
+                <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl border border-gold/40 bg-charcoal-800/50 px-3 py-2">
+                  <NumberField
+                    value={goalTarget}
+                    onChange={setGoalTarget}
+                    min={1}
+                    max={1_000_000}
+                    integer
+                    className="w-20 rounded-lg border border-subtle bg-charcoal-800 px-2 py-1 text-right text-xs tabular-nums"
+                    aria-label={`${goalMetric === "visits" ? "Cuts" : "Revenue"} target for ${s.name}`}
+                  />
+                  <span className="text-[11px] text-muted">
+                    {goalMetric === "visits" ? "cuts" : "$"} per
+                  </span>
+                  <Segmented
+                    options={[
+                      { key: "week", label: "week" },
+                      { key: "month", label: "month" },
+                    ]}
+                    value={goalPeriod}
+                    onChange={setGoalPeriod}
+                    ariaLabel="Quota period"
+                  />
+                  <div className="ml-auto flex gap-1.5">
+                    {g && (
+                      <button
+                        onClick={() => void removeServiceGoal(g)}
+                        disabled={goalSaving}
+                        className="rounded-full border border-subtle px-2.5 py-1 text-[11px] text-muted transition-colors hover:text-red-400"
+                      >
+                        Remove
+                      </button>
+                    )}
+                    <button
+                      onClick={() => void saveServiceGoal(s.serviceId!)}
+                      disabled={goalSaving}
+                      className="rounded-full bg-gold px-3 py-1 text-[11px] font-semibold text-charcoal-900 disabled:opacity-50"
+                    >
+                      {goalSaving ? "Saving…" : "Save"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </li>
+          );
+        })}
       </ul>
       {hidden > 0 && (
         <button
@@ -415,9 +594,14 @@ function fmtDuration(min: number): string {
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 
-/** Color the bar by how full it is — red/amber/green reads at a glance. */
+/**
+ * Color the bar by how full it is — red/amber/green reads at a glance. A null
+ * percentage (work booked outside any scheduled hours) must still be VISIBLE:
+ * the old charcoal-600 painted on the charcoal-700 track was a bar you could
+ * not see, so every off-hours weekday looked like an empty row.
+ */
 function utilTone(pct: number | null): string {
-  if (pct === null) return "bg-charcoal-600";
+  if (pct === null) return "bg-amber-400/60";
   if (pct >= 75) return "bg-emerald-soft";
   if (pct >= 40) return "bg-gold";
   return "bg-rose-400/80";
@@ -437,18 +621,59 @@ const UTIL_VIEWS = [
  * thinks in: which weekday runs empty, whether it's trending up or down over the
  * selected range, or what fills the chair. Range follows the page's one control.
  */
-function UtilizationCard({ period }: { period: PeriodKey }) {
+function UtilizationCard({
+  period,
+  bucket,
+  chairTimeTarget,
+  onRefreshGoals,
+}: {
+  period: PeriodKey;
+  bucket: Bucket | null;
+  chairTimeTarget: number | null;
+  onRefreshGoals: () => Promise<void>;
+}) {
   const [by, setBy] = useState<"weekday" | "period" | "service">("weekday");
   const [staffId, setStaffId] = useState<string>("");
   const [data, setData] = useState<UtilizationData | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
+  // The standing "run at N% booked" target editor.
+  const [editingTarget, setEditingTarget] = useState(false);
+  const [targetDraft, setTargetDraft] = useState<number>(chairTimeTarget ?? 75);
+  const [savingTarget, setSavingTarget] = useState(false);
+
+  async function saveTarget() {
+    setSavingTarget(true);
+    const r = await saveChairTimeGoalAction(targetDraft);
+    if (r.ok) {
+      await onRefreshGoals();
+      setEditingTarget(false);
+    }
+    setSavingTarget(false);
+  }
+
+  async function clearTarget() {
+    setSavingTarget(true);
+    const r = await clearChairTimeGoalAction();
+    if (r.ok) {
+      await onRefreshGoals();
+      setEditingTarget(false);
+    }
+    setSavingTarget(false);
+  }
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setFailed(false);
-    void utilizationAction({ period, by, ...(staffId ? { staffId } : {}) }).then((d) => {
+    void utilizationAction({
+      period,
+      by,
+      // Follow the page's bar-size override so "Over time" re-buckets in step
+      // with the cuts chart instead of contradicting it.
+      ...(bucket ? { bucket } : {}),
+      ...(staffId ? { staffId } : {}),
+    }).then((d) => {
       if (cancelled) return;
       if (d) setData(d);
       else setFailed(true);
@@ -457,9 +682,19 @@ function UtilizationCard({ period }: { period: PeriodKey }) {
     return () => {
       cancelled = true;
     };
-  }, [period, by, staffId]);
+  }, [period, bucket, by, staffId]);
 
-  const rows = data?.rows ?? [];
+  const rawRows = data?.rows ?? [];
+  // Weekday rows accumulate the WHOLE window - at a year that's "210h / 470h",
+  // 52 Mondays summed, which answers nothing. The API sends how many of each
+  // weekday the window held (r.days); showing the per-weekday AVERAGE is what
+  // makes "which day runs empty?" readable. The percentage is a ratio, so it
+  // survives the division untouched.
+  const rows = rawRows.map((r) =>
+    by === "weekday" && r.days > 0
+      ? { ...r, openMin: Math.round(r.openMin / r.days), bookedMin: Math.round(r.bookedMin / r.days) }
+      : r,
+  );
   // Scale bars to the busiest row, not to 100%: a shop that never exceeds 40%
   // would otherwise render seven near-invisible slivers.
   const maxBooked = Math.max(1, ...rows.map((r) => r.bookedMin));
@@ -467,12 +702,8 @@ function UtilizationCard({ period }: { period: PeriodKey }) {
   const scale = Math.max(maxBooked, maxOpen);
   // Weekday and over-time rows carry real capacity; service rows share one chair.
   const hasCapacity = by !== "service";
-
-  const chip = (active: boolean) =>
-    cn(
-      "rounded-full px-3 py-1 text-xs transition-colors",
-      active ? "bg-gold/15 text-gold" : "border border-subtle text-muted hover:text-offwhite",
-    );
+  // "over 4 Mondays" context for the weekday view's caption.
+  const weekdaySpan = by === "weekday" ? Math.max(...rawRows.map((r) => r.days), 0) : 0;
 
   return (
     <Card className="overflow-hidden">
@@ -481,23 +712,69 @@ function UtilizationCard({ period }: { period: PeriodKey }) {
         subtitle={`How much of the time you were open actually got booked${
           data ? ` — ${data.periodLabel.toLowerCase()}` : ""
         }.`}
+        action={
+          <button
+            type="button"
+            onClick={() => {
+              setTargetDraft(chairTimeTarget ?? 75);
+              setEditingTarget((v) => !v);
+            }}
+            className="rounded-full border border-gold/50 px-3 py-1 text-xs text-gold transition-colors hover:bg-gold/10"
+          >
+            {chairTimeTarget === null ? "Set a target" : "Edit target"}
+          </button>
+        }
       />
       <div className="flex flex-col gap-4 px-5 py-5">
+        {editingTarget && (
+          <div className="flex flex-wrap items-center gap-3 rounded-xl border border-gold/40 bg-charcoal-800/50 px-4 py-3">
+            <label className="flex items-center gap-2 text-xs text-muted">
+              I want to run at
+              <NumberField
+                value={targetDraft}
+                onChange={setTargetDraft}
+                min={1}
+                max={100}
+                integer
+                className="w-16 rounded-lg border border-subtle bg-charcoal-800 px-2 py-1.5 text-right text-sm tabular-nums"
+                aria-label="Chair time target percent"
+              />
+              % booked
+            </label>
+            <div className="ml-auto flex gap-2">
+              {chairTimeTarget !== null && (
+                <button
+                  onClick={() => void clearTarget()}
+                  disabled={savingTarget}
+                  className="rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:text-red-400"
+                >
+                  Remove
+                </button>
+              )}
+              <button
+                onClick={() => setEditingTarget(false)}
+                className="rounded-full border border-subtle px-3 py-1 text-xs text-muted hover:text-offwhite"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void saveTarget()}
+                disabled={savingTarget}
+                className="rounded-full bg-gold px-3 py-1 text-xs font-semibold text-charcoal-900 disabled:opacity-50"
+              >
+                {savingTarget ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        )}
         {/* Controls: how to slice it, and (multi-chair shops) whose chair. */}
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Group by">
-            {UTIL_VIEWS.map((v) => (
-              <button
-                key={v.key}
-                type="button"
-                onClick={() => setBy(v.key)}
-                aria-pressed={by === v.key}
-                className={chip(by === v.key)}
-              >
-                {v.label}
-              </button>
-            ))}
-          </div>
+          <Segmented
+            options={UTIL_VIEWS.map((v) => ({ key: v.key, label: v.label }))}
+            value={by}
+            onChange={setBy}
+            ariaLabel="Group by"
+          />
           {(data?.staff.length ?? 0) > 1 && (
             <select
               value={staffId}
@@ -528,7 +805,7 @@ function UtilizationCard({ period }: { period: PeriodKey }) {
           </p>
         ) : (
           <>
-            {/* The headline number. */}
+            {/* The headline number, measured against the standing target. */}
             <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
               <span className="font-display text-3xl tabular-nums text-offwhite">
                 {data?.totals.utilizationPct ?? 0}%
@@ -544,6 +821,19 @@ function UtilizationCard({ period }: { period: PeriodKey }) {
                 </span>{" "}
                 open
               </span>
+              {chairTimeTarget !== null && (
+                <span
+                  className={cn(
+                    "rounded-full border px-2 py-0.5 text-[10px] font-semibold tabular-nums",
+                    (data?.totals.utilizationPct ?? 0) >= chairTimeTarget
+                      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
+                      : "border-amber-500/40 bg-amber-500/10 text-amber-400",
+                  )}
+                  title={`Your standing target: run at ${chairTimeTarget}% booked.`}
+                >
+                  target {chairTimeTarget}%
+                </span>
+              )}
             </div>
 
             <div className={cn("flex flex-col gap-2.5", loading && "opacity-50")}>
@@ -589,9 +879,9 @@ function UtilizationCard({ period }: { period: PeriodKey }) {
                       {closed ? (
                         "closed"
                       ) : offSchedule ? (
-                        <span title="Booked outside your weekly hours — there's no scheduled capacity to measure it against.">
-                          <span className="text-offwhite">{fmtDuration(r.bookedMin)}</span>
-                          {" off-hours"}
+                        <span title="Booked outside your weekly hours — there's no scheduled capacity to measure it against. Add this day to your hours and it gets a real percentage.">
+                          <span className="text-offwhite">{fmtDuration(r.bookedMin)}</span>{" "}
+                          <span className="text-amber-400/90">off-hours</span>
                         </span>
                       ) : (
                         <>
@@ -608,6 +898,13 @@ function UtilizationCard({ period }: { period: PeriodKey }) {
             </div>
 
             <div className="flex flex-col gap-1 text-[11px] text-muted/80">
+              {by === "weekday" && weekdaySpan > 1 && (
+                <p>
+                  Each row is the average for that weekday across the range
+                  (about {weekdaySpan} of each) — not the total, so a year and a
+                  week read on the same scale.
+                </p>
+              )}
               <p>
                 {by === "service"
                   ? "Share of your open time each service filled. Services share one chair, so these add up to your total booked time."
@@ -686,41 +983,17 @@ function goalKey(g: { metric: GoalMetric; period: GoalPeriod }): string {
  * layout so the numbers line up down the column instead of wandering with the
  * length of each label.
  */
-function GoalsCard({ initial }: { initial: Goal[] | null }) {
-  const [goals, setGoals] = useState<Goal[] | null>(initial);
-  const [editing, setEditing] = useState<string | null>(null); // goalKey
-  const [target, setTarget] = useState("");
+function GoalsCard({
+  goals,
+  planner,
+  onRefresh,
+}: {
+  goals: Goal[] | null;
+  planner: PlannerData | null;
+  onRefresh: () => Promise<void>;
+}) {
+  const [planning, setPlanning] = useState<string | null>(null); // goalKey
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function refresh() {
-    const r = await goalAction();
-    if (r) setGoals(r.goals);
-  }
-
-  function beginEdit(g: Goal) {
-    setTarget(g.target === null ? "" : String(g.target));
-    setError(null);
-    setEditing(goalKey(g));
-  }
-
-  async function save(g: Goal) {
-    const n = Number(target.trim());
-    if (!Number.isInteger(n) || n < 1) {
-      setError("Target must be a whole number of at least 1.");
-      return;
-    }
-    setSaving(true);
-    setError(null);
-    const r = await saveGoalAction({ metric: g.metric, period: g.period, target: n });
-    if (r.ok) {
-      await refresh();
-      setEditing(null);
-    } else {
-      setError("Couldn't save that goal. Try again.");
-    }
-    setSaving(false);
-  }
 
   async function clear(g: Goal) {
     if (
@@ -732,7 +1005,7 @@ function GoalsCard({ initial }: { initial: Goal[] | null }) {
     }
     setSaving(true);
     const r = await clearGoalAction({ metric: g.metric, period: g.period });
-    if (r.ok) await refresh();
+    if (r.ok) await onRefresh();
     setSaving(false);
   }
 
@@ -745,40 +1018,40 @@ function GoalsCard({ initial }: { initial: Goal[] | null }) {
   }
 
   const anySet = goals.some((g) => g.target !== null);
+  const planningGoal = goals.find((g) => goalKey(g) === planning) ?? null;
 
   return (
     <Card className="p-5">
       <CardHeader
         title="Goals"
-        subtitle="Set a quota for the week and the month — revenue and cuts are tracked separately, so each keeps its own number."
+        subtitle="Set a quota for the week and the month — then plan how to hit it: raise a price, add cuts, pick how booked you want to run."
       />
       {!anySet && (
         <p className="mt-3 text-sm text-muted">
           Nothing set yet. Pick any of the four below and Insights tracks whether
-          you&apos;re on pace.
+          you&apos;re on pace — and helps you plan the prices and volume to get
+          there.
         </p>
       )}
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        {goals.map((g) => {
-          const key = goalKey(g);
-          const isEditing = editing === key;
-          return (
-            <GoalCell
-              key={key}
-              goal={g}
-              editing={isEditing}
-              saving={saving}
-              error={isEditing ? error : null}
-              target={target}
-              onTargetChange={setTarget}
-              onBeginEdit={() => beginEdit(g)}
-              onCancel={() => setEditing(null)}
-              onSave={() => void save(g)}
-              onClear={() => void clear(g)}
-            />
-          );
-        })}
+        {goals.map((g) => (
+          <GoalCell
+            key={goalKey(g)}
+            goal={g}
+            saving={saving}
+            onBeginEdit={() => setPlanning(goalKey(g))}
+            onClear={() => void clear(g)}
+          />
+        ))}
       </div>
+      {planningGoal && planner && (
+        <GoalPlanner
+          goal={planningGoal}
+          planner={planner}
+          onSaved={onRefresh}
+          onClose={() => setPlanning(null)}
+        />
+      )}
     </Card>
   );
 }
@@ -790,81 +1063,17 @@ function GoalsCard({ initial }: { initial: Goal[] | null }) {
  */
 function GoalCell({
   goal,
-  editing,
   saving,
-  error,
-  target,
-  onTargetChange,
   onBeginEdit,
-  onCancel,
-  onSave,
   onClear,
 }: {
   goal: Goal;
-  editing: boolean;
   saving: boolean;
-  error: string | null;
-  target: string;
-  onTargetChange: (v: string) => void;
   onBeginEdit: () => void;
-  onCancel: () => void;
-  onSave: () => void;
   onClear: () => void;
 }) {
   const title = `${METRIC_LABEL[goal.metric]} · ${PERIOD_LABEL[goal.period]}`;
   const p = goal.progress;
-
-  if (editing) {
-    return (
-      <div className="rounded-xl border border-gold/40 bg-charcoal-800/50 p-4">
-        <p className="text-[11px] uppercase tracking-wide text-muted">{title}</p>
-        <label className="mt-2 block">
-          <span className="text-xs text-muted">
-            Target {goal.metric === "revenue" ? "($)" : "(cuts)"}
-          </span>
-          <input
-            className="mt-1 w-full rounded-xl border border-subtle bg-charcoal-800 px-3 py-2 text-sm tabular-nums"
-            type="number"
-            min={1}
-            inputMode="numeric"
-            autoFocus
-            placeholder={
-              goal.metric === "revenue"
-                ? goal.period === "week"
-                  ? "1000"
-                  : "4000"
-                : goal.period === "week"
-                  ? "15"
-                  : "60"
-            }
-            value={target}
-            onChange={(e) => onTargetChange(e.target.value)}
-            aria-label={`${title} target`}
-          />
-        </label>
-        {error && (
-          <p role="alert" className="mt-2 text-xs text-red-400">
-            {error}
-          </p>
-        )}
-        <div className="mt-3 flex gap-2">
-          <button
-            onClick={onSave}
-            disabled={saving}
-            className="rounded-xl bg-gold px-4 py-1.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
-          >
-            {saving ? "Saving…" : "Save"}
-          </button>
-          <button
-            onClick={onCancel}
-            className="rounded-xl border border-subtle px-3 py-1.5 text-sm text-muted hover:text-offwhite"
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   if (goal.target === null || !p) {
     return (
@@ -933,12 +1142,23 @@ function GoalCell({
         </span>
       </div>
 
+      {goal.plan && (
+        <p className="mt-2 text-[11px] text-muted">
+          <span className="text-gold/90">Plan:</span> run at {goal.plan.bookedPct}%
+          booked
+          {goal.plan.services.length > 0 &&
+            ` · ${goal.plan.services.length} service ${
+              goal.plan.services.length === 1 ? "lever" : "levers"
+            }`}
+        </p>
+      )}
+
       <div className="mt-auto flex gap-2 pt-3">
         <button
           onClick={onBeginEdit}
-          className="rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:text-offwhite"
+          className="rounded-full border border-gold/50 px-3 py-1 text-xs text-gold transition-colors hover:bg-gold/10"
         >
-          Edit
+          Edit &amp; plan
         </button>
         <button
           onClick={onClear}

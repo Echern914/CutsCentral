@@ -398,6 +398,7 @@ model Shop {
   serviceAddOns          ServiceAddOn[]
   serviceGroups          ServiceGroup[]
   goals                  ShopGoal[]
+  serviceGoals           ServiceGoal[]
   targetedSlots          TargetedSlot[]
   targetedSlotRules      TargetedSlotRule[]
   payments               Payment[]
@@ -1225,6 +1226,7 @@ model Service {
   recurringSeries RecurringSeries[]
   targetedSlots   TargetedSlot[]
   targetedSlotRules TargetedSlotRule[]
+  serviceGoals    ServiceGoal[]
   serviceGroup    ServiceGroup? @relation(fields: [serviceGroupId], references: [id], onDelete: SetNull)
 
   @@index([shopId, active])
@@ -1281,7 +1283,14 @@ model ShopGoal {
   metric GoalMetric
   period GoalPeriod
   // Revenue goals: whole dollars. Visit-count goals: number of visits.
+  // chairTime goals: a target utilization percent (1-100).
   target    Int
+  // The planner's saved levers for THIS goal - how the barber intends to hit
+  // the target: { bookedPct, services: [{ serviceId, priceDelta, extraCuts }] }.
+  // Written by the goal planner sheet and read back so the plan survives
+  // reload; purely presentational inputs to a client-side projection, never
+  // queried server-side.
+  plan      Json?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1292,14 +1301,39 @@ model ShopGoal {
   @@index([shopId])
 }
 
+// A per-service quota ("12 fades a week", "$800 of color a month"), shown as
+// progress on the Insights By-service view. A separate table rather than a
+// nullable serviceId on ShopGoal: Postgres unique indexes treat NULLs as
+// distinct, so a nullable column inside the compound unique would admit
+// duplicate shop-wide rows and Prisma couldn't upsert on the key at all.
+model ServiceGoal {
+  id        String     @id @default(cuid())
+  shopId    String
+  shop      Shop       @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  serviceId String
+  service   Service    @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  // chairTime makes no sense per service (services share one chair) - the API
+  // rejects it; the enum is shared for its labels, not its full range.
+  metric    GoalMetric
+  period    GoalPeriod
+  target    Int
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@unique([shopId, serviceId, metric, period])
+  @@index([shopId])
+}
+
 enum GoalMetric {
   revenue
   visits
+  chairTime // % of open time booked (ShopGoal only; target = 1-100)
 }
 
 enum GoalPeriod {
   week // Mon-start, shop tz (matches the Insights weekly series)
   month // calendar month, shop tz
+  overall // no calendar window: a standing level target (used by chairTime %)
 }
 
 // An optional extra a customer can tack onto a service at booking (e.g. "+ beard
@@ -1457,16 +1491,18 @@ model TargetedSlot {
   @@index([ruleId]) // series grouping + series-wide delete
 }
 
-// A weekly targeted-slot series ("every Sunday 3pm"). Rows are ALWAYS concrete
-// TargetedSlot records (the capacity-1 claim and grid-blocking need real rows):
-// a finite series ("repeat N more weeks") is fully materialized at creation and
-// its rule exists only to group/delete the batch; an INDEFINITE series
-// ("until I turn it off", indefinite=true) is materialized to a rolling horizon
-// by the targeted-slot-roll-forward scheduler job. Occurrence k is derived from
-// `anchor` at the same shop-local wall time (DST-stable via zonedWallTimeToUtc);
-// weeksMaterialized marks how many occurrences exist, so the roll-forward is
-// idempotent (extend-only, never re-create). Turning a series off deactivates
-// the rule and deletes its future UNBOOKED rows; booked ones are history.
+// A weekly targeted-slot series ("every Sunday 3pm"; since the schedule
+// column: "every night at 9pm", "mornings AND afternoons daily"). Rows are
+// ALWAYS concrete TargetedSlot records (the capacity-1 claim and grid-blocking
+// need real rows): a finite series ("repeat N more weeks") is fully
+// materialized at creation and its rule exists only to group/delete the batch;
+// an INDEFINITE series ("until I turn it off", indefinite=true) is
+// materialized to a rolling horizon by the targeted-slot-roll-forward
+// scheduler job. Week k spans the 7 days starting at anchor's shop-local date
+// (DST-stable via zonedWallTimeToUtc); weeksMaterialized marks how many WEEKS
+// exist, so the roll-forward is idempotent (extend-only, never re-create).
+// Turning a series off deactivates the rule and deletes its future UNBOOKED
+// rows; booked ones are history.
 model TargetedSlotRule {
   id          String   @id @default(cuid())
   shopId      String
@@ -1476,16 +1512,23 @@ model TargetedSlotRule {
   serviceId   String
   service     Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
   label       String?
-  // First occurrence (UTC instant). Weekday + wall time derive from this in the
-  // shop's timezone; storing the instant (not weekday/minutes) keeps one source
-  // of truth with the POST that created it.
+  // First occurrence (UTC instant). Also the start of "week 0" - the series
+  // never materializes anything before it.
   anchor      DateTime
   durationMin Int
   price       Decimal  @db.Decimal(10, 2)
+  // WHICH weekday/times each week holds: {"0".."6": [{startMin, durationMin?,
+  // price?}]} - the same key-presence convention as Service.hoursWindows
+  // (0=Sun..6=Sat, shop-local minutes from midnight). Per-time durationMin and
+  // price fall back to the rule's base columns. Every rule created since this
+  // column stores its schedule here; {} = a legacy single-occurrence rule
+  // whose weekday/time derive from `anchor` (migration backfills these, but an
+  // empty map must still behave - see effectiveSchedule in the engine).
+  schedule    Json     @default("{}")
   // true = repeats until turned off; false = a finite batch (grouping only).
   indefinite  Boolean  @default(false)
   active      Boolean  @default(true) // false = turned off; no further roll-forward
-  weeksMaterialized Int @default(0) // occurrences created so far (k = 0..n-1)
+  weeksMaterialized Int @default(0) // weeks created so far (k = 0..n-1)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   slots       TargetedSlot[]

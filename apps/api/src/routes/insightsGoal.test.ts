@@ -237,3 +237,139 @@ describe("insights quota goals", () => {
     }
   });
 });
+
+describe("goal planner: plans, chair-time target, per-service quotas", () => {
+  it("round-trips a saved plan on a quota goal; null clears it", async () => {
+    const svc = await prisma.service.create({
+      data: { shopId, name: "Plan Fade", durationMin: 45, price: 50 },
+      select: { id: true },
+    });
+    const plan = {
+      bookedPct: 80,
+      services: [{ serviceId: svc.id, priceDelta: 5, extraCuts: 3 }],
+    };
+    expect(
+      (await putGoal({ metric: "revenue", period: "week", target: 1200, plan })).status,
+    ).toBe(200);
+    let g = (await slot("revenue", "week")) as Goal & { plan?: unknown };
+    expect(g.target).toBe(1200);
+    expect(g.plan).toEqual(plan);
+
+    // Re-saving the target WITHOUT the plan leaves the plan alone.
+    expect((await putGoal({ metric: "revenue", period: "week", target: 1300 })).status).toBe(200);
+    g = (await slot("revenue", "week")) as Goal & { plan?: unknown };
+    expect(g.target).toBe(1300);
+    expect(g.plan).toEqual(plan);
+
+    // Explicit null clears it.
+    expect(
+      (await putGoal({ metric: "revenue", period: "week", target: 1300, plan: null })).status,
+    ).toBe(200);
+    g = (await slot("revenue", "week")) as Goal & { plan?: unknown };
+    expect(g.plan).toBeNull();
+  });
+
+  it("stores the standing chair-time % target and bounds it to 1-100", async () => {
+    expect((await putGoal({ metric: "chairTime", period: "overall", target: 75 })).status).toBe(200);
+    let res = await request(app).get("/api/insights/goal").set("Cookie", cookie);
+    expect(res.body.chairTime.target).toBe(75);
+
+    expect((await putGoal({ metric: "chairTime", period: "overall", target: 130 })).status).toBe(400);
+    // A chair-time goal is a level, not a weekly quota.
+    expect((await putGoal({ metric: "chairTime", period: "week", target: 75 })).status).toBe(400);
+
+    expect((await deleteGoal({ metric: "chairTime" })).status).toBe(200);
+    res = await request(app).get("/api/insights/goal").set("Cookie", cookie);
+    expect(res.body.chairTime.target).toBeNull();
+  });
+
+  it("per-service quota: saved, measured against that service's bookings, cleared", async () => {
+    const svc = await prisma.service.create({
+      data: { shopId, name: "Quota Retwist", durationMin: 60, price: 90 },
+      select: { id: true },
+    });
+    // Two bookings of THIS service this week (native carries the serviceId)...
+    const staff = await prisma.staff.create({ data: { shopId, name: "Q" }, select: { id: true } });
+    for (let i = 0; i < 2; i++) {
+      await prisma.appointment.create({
+        data: {
+          shopId,
+          staffId: staff.id,
+          serviceId: svc.id,
+          clientId,
+          firstName: "Q",
+          status: "COMPLETED",
+          startsAt: new Date(Date.now() - (i + 1) * 60 * 60 * 1000),
+          endsAt: new Date(Date.now() - (i + 1) * 60 * 60 * 1000 + 60 * 60 * 1000),
+          priceAtBooking: 90,
+          manageToken: randomToken(),
+        },
+      });
+    }
+    // ...and one SYNCED visit that only carries the service's NAME.
+    await prisma.visit.create({
+      data: {
+        shopId,
+        clientId,
+        acuityAppointmentId: `goal-${randomToken(6)}`,
+        status: "COMPLETED",
+        scheduledAt: new Date(Date.now() - 3 * 60 * 60 * 1000),
+        endAt: new Date(Date.now() - 3 * 60 * 60 * 1000 + 60 * 60 * 1000),
+        completedAt: new Date(),
+        serviceName: "Quota Retwist",
+        price: 90,
+      },
+    });
+
+    expect(
+      (await putGoal({ metric: "visits", period: "week", target: 12, serviceId: svc.id })).status,
+    ).toBe(200);
+    const res = await request(app).get("/api/insights/goal").set("Cookie", cookie);
+    const sg = (res.body.serviceGoals as {
+      serviceId: string;
+      name: string;
+      target: number;
+      actual: number;
+      pct: number;
+    }[]).find((x) => x.serviceId === svc.id);
+    expect(sg).toBeDefined();
+    expect(sg!.name).toBe("Quota Retwist");
+    expect(sg!.target).toBe(12);
+    expect(sg!.actual).toBe(3); // 2 native + 1 name-matched synced
+    expect(sg!.pct).toBeCloseTo(3 / 12, 5);
+
+    // A serviceId from another shop's menu (or nowhere) 404s cleanly.
+    expect(
+      (await putGoal({ metric: "visits", period: "week", target: 5, serviceId: "nope" })).status,
+    ).toBe(404);
+
+    expect((await deleteGoal({ serviceId: svc.id })).status).toBe(200);
+    const after = await request(app).get("/api/insights/goal").set("Cookie", cookie);
+    expect(
+      (after.body.serviceGoals as { serviceId: string }[]).some((x) => x.serviceId === svc.id),
+    ).toBe(false);
+  });
+
+  it("ships the planner payload: per-service run-rates + full-window capacity", async () => {
+    // Give the shop a schedule so capacity is non-zero: Mon-Sun 9-5.
+    const staff = await prisma.staff.create({ data: { shopId, name: "Cap" }, select: { id: true } });
+    for (let wd = 0; wd < 7; wd++) {
+      await prisma.availabilityRule.create({
+        data: { shopId, staffId: staff.id, weekday: wd, startMin: 9 * 60, endMin: 17 * 60 },
+      });
+    }
+    const res = await request(app).get("/api/insights/goal").set("Cookie", cookie);
+    expect(res.status).toBe(200);
+    const planner = res.body.planner as {
+      services: { serviceId: string; name: string; price: number | null; durationMin: number; week: { cuts: number }; month: { cuts: number } }[];
+      capacity: { week: { openMin: number }; month: { openMin: number } };
+    };
+    const quota = planner.services.find((s) => s.name === "Quota Retwist");
+    expect(quota).toMatchObject({ price: 90, durationMin: 60 });
+    expect(quota!.week.cuts).toBe(3);
+    // A full week at 8h/day for (at least) one chair. Other staff rows created
+    // by earlier tests may add capacity - assert the floor, not the exact sum.
+    expect(planner.capacity.week.openMin).toBeGreaterThanOrEqual(7 * 8 * 60);
+    expect(planner.capacity.month.openMin).toBeGreaterThan(planner.capacity.week.openMin);
+  });
+});
