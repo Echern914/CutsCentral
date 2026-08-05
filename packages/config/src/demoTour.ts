@@ -237,7 +237,7 @@ export const DASHBOARD_TOUR_STEPS: DemoTourStep<DashboardTourRoute>[] = [
     route: "insights",
     anchor: "charts",
     title: "Know your numbers",
-    body: "Cuts per week, revenue trends, top services, busiest days — the numbers that tell you what's working.",
+    body: "Pick a range and everything follows it: cuts over time, revenue, your whole service menu, busiest days, and how full your chair ran.",
   },
   {
     id: "dash-billing",

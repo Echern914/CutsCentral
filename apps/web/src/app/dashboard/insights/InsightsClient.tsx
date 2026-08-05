@@ -5,7 +5,14 @@ import { motion } from "framer-motion";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { cn } from "@/lib/cn";
-import type { GoalData, GoalResponse, InsightsData, UtilizationData } from "./page";
+import type {
+  Goal,
+  GoalMetric,
+  GoalPeriod,
+  InsightsData,
+  PeriodKey,
+  UtilizationData,
+} from "./page";
 import {
   clearGoalAction,
   goalAction,
@@ -16,44 +23,56 @@ import {
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 
+/** "Aug 4" from a shop-local YYYY-MM-DD, without dragging it through local tz. */
+function fmtDay(ymd: string): string {
+  return new Date(`${ymd}T00:00:00Z`).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+}
+
 /**
  * The barber's analytics page. Same dependency-free chart approach as
- * TrendsChart: scaled divs, no chart library. The default (12w) range renders
- * the server prop; other ranges re-fetch and never go stale.
+ * TrendsChart: scaled divs, no chart library.
+ *
+ * ONE period control at the top drives every card, and the API echoes the window
+ * it measured with each response — so the titles, the axis and the numbers can
+ * never describe different spans of time.
  */
 export function InsightsClient({
   initial,
-  initialGoal = null,
+  initialGoals = null,
   rewardsEnabled = true,
 }: {
   initial: InsightsData;
-  initialGoal?: GoalResponse | null;
+  initialGoals?: Goal[] | null;
   rewardsEnabled?: boolean;
 }) {
-  const [range, setRange] = useState(12);
-  const [override, setOverride] = useState<InsightsData | null>(null);
+  const [period, setPeriod] = useState<PeriodKey>(initial.period);
+  // Keep showing the last good payload while the next one loads, so the page
+  // dims rather than collapsing to empty every time the range changes.
+  const [data, setData] = useState<InsightsData>(initial);
   const [pending, setPending] = useState(false);
-  const data = range === 12 ? initial : (override ?? initial);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    if (range === 12) {
-      setOverride(null);
-      setPending(false);
-      return;
-    }
+    if (period === data.period) return; // already showing this window
     let cancelled = false;
     setPending(true);
-    void insightsAction(range).then((d) => {
+    setFailed(false);
+    void insightsAction(period).then((d) => {
       if (cancelled) return;
-      if (d) setOverride(d);
+      if (d) setData(d);
+      else setFailed(true);
       setPending(false);
     });
     return () => {
       cancelled = true;
     };
-  }, [range]);
+  }, [period, data.period]);
 
-  const { weeks, services, totals, busiest, loyalty } = data;
+  const { buckets, services, totals, busiest, loyalty } = data;
 
   return (
     <motion.div
@@ -62,42 +81,77 @@ export function InsightsClient({
       animate="show"
       className="flex flex-col gap-6"
     >
-      {/* The quota goal — the motivational headline, above everything. */}
+      {/* The one range control for the whole tab. */}
       <motion.div variants={fadeUp}>
-        <GoalCard initial={initialGoal} />
+        <div
+          className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1"
+          role="group"
+          aria-label="Time range"
+        >
+          {data.periods.map((p) => (
+            <button
+              key={p.key}
+              type="button"
+              onClick={() => setPeriod(p.key)}
+              aria-pressed={period === p.key}
+              className={cn(
+                "shrink-0 rounded-full border px-3.5 py-1.5 text-xs transition-colors duration-150 ease-out",
+                period === p.key
+                  ? "border-gold/60 bg-gold/15 text-gold"
+                  : "border-subtle text-muted hover:text-offwhite",
+              )}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 text-[11px] text-muted">
+          {fmtDay(data.windowStart)} – {fmtDay(data.windowEnd)} · every card below
+          covers this range, in your shop&apos;s time.
+          {pending && " Updating…"}
+        </p>
+        {failed && (
+          <p role="alert" className="mt-1 text-[11px] text-amber-400">
+            Couldn&apos;t load that range — still showing {data.periodLabel.toLowerCase()}.
+          </p>
+        )}
+      </motion.div>
+
+      {/* Goals — one target per metric AND period, each kept separately. */}
+      <motion.div variants={fadeUp}>
+        <GoalsCard initial={initialGoals} />
       </motion.div>
 
       {/* Headline numbers for the window */}
-      <motion.div variants={fadeUp} className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <Tile label={`Cuts (${range}w)`} value={String(totals.visits)} accent />
+      <motion.div
+        variants={fadeUp}
+        className={cn(
+          "grid grid-cols-2 gap-4 transition-opacity duration-150 ease-out sm:grid-cols-4",
+          pending && "opacity-60",
+        )}
+      >
+        <Tile label="Cuts" value={String(totals.visits)} accent />
         <Tile label="Revenue" value={`$${totals.revenue.toLocaleString()}`} />
-        <Tile label="Avg ticket" value={totals.avgTicket > 0 ? `$${totals.avgTicket}` : "n/a"} />
+        <Tile
+          label="Avg ticket"
+          value={totals.avgTicket > 0 ? `$${totals.avgTicket}` : "n/a"}
+          note={
+            totals.unpricedCount > 0
+              ? `${totals.pricedCount} priced of ${totals.visits}`
+              : undefined
+          }
+        />
         <Tile label="Busiest day" value={busiest.weekday ?? "n/a"} />
       </motion.div>
 
-      {/* Cuts per week */}
+      {/* Cuts over time — the bar is whatever the range makes it. */}
       <motion.div variants={fadeUp}>
         <Card className="p-5">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <h2 className="font-display text-lg">Cuts per week</h2>
-            <div className="flex items-center gap-1 rounded-full border border-subtle p-0.5">
-              {[8, 12, 26].map((w) => (
-                <button
-                  key={w}
-                  onClick={() => setRange(w)}
-                  className={cn(
-                    "rounded-full px-3 py-1 text-xs transition-colors duration-150 ease-out",
-                    range === w
-                      ? "bg-gold/15 text-gold"
-                      : "text-muted hover:text-offwhite",
-                  )}
-                >
-                  {w}w
-                </button>
-              ))}
-            </div>
+          <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+            <h2 className="font-display text-lg">Cuts per {data.bucketNoun}</h2>
+            <span className="text-xs text-muted">{data.periodLabel}</span>
           </div>
-          <WeekBars weeks={weeks} pending={pending} />
+          <BucketBars buckets={buckets} pending={pending} noun={data.bucketNoun} />
         </Card>
       </motion.div>
 
@@ -105,28 +159,37 @@ export function InsightsClient({
       <motion.div variants={fadeUp}>
         <Card className="overflow-hidden">
           <CardHeader
-            title="Top services"
-            subtitle="What clients book most - and what it brings in."
+            title="Services"
+            subtitle="What clients booked — and what it brought in. Your whole menu is here; anything at zero went unbooked this range."
           />
           {services.length === 0 ? (
             <p className="px-5 py-6 text-sm text-muted">
-              No completed visits in this window yet.
+              No services on the menu yet — add them under Booking → Services.
             </p>
           ) : (
-            <ServiceBars services={services} />
+            <ServiceBars services={services} pending={pending} />
           )}
         </Card>
       </motion.div>
 
       {/* Open chair time vs sold chair time */}
       <motion.div variants={fadeUp}>
-        <UtilizationCard weeks={range} />
+        <UtilizationCard period={period} />
       </motion.div>
 
-      <motion.div variants={fadeUp} className="grid gap-6 md:grid-cols-2">
+      <motion.div
+        variants={fadeUp}
+        className={cn(
+          "grid gap-6 transition-opacity duration-150 ease-out md:grid-cols-2",
+          pending && "opacity-60",
+        )}
+      >
         {/* Day-of-week shape */}
         <Card className="p-5">
-          <h2 className="mb-4 font-display text-lg">By day of week</h2>
+          <h2 className="mb-1 font-display text-lg">By day of week</h2>
+          <p className="mb-4 text-xs text-muted">
+            Every cut in this range, stacked onto the day it fell on.
+          </p>
           <DayBars counts={busiest.counts} />
         </Card>
 
@@ -137,6 +200,9 @@ export function InsightsClient({
             <Row label="Clients seen" value={String(totals.uniqueClients)} />
             <Row label="New clients" value={String(totals.newClients)} emphasize />
             <Row label="Returning" value={String(totals.returningClients)} />
+            {totals.walkIns > 0 && (
+              <Row label="Walk-ins (no client)" value={String(totals.walkIns)} />
+            )}
             {rewardsEnabled && (
               <Row label="Punches earned" value={String(loyalty.punchesEarned)} />
             )}
@@ -144,19 +210,42 @@ export function InsightsClient({
               <Row label="Rewards redeemed" value={String(loyalty.redemptions)} />
             )}
           </dl>
+          {totals.walkIns > 0 && (
+            <p className="mt-3 text-[11px] text-muted/80">
+              Walk-ins booked without a client record count as cuts and revenue,
+              but there&apos;s no person to count them against — which is why
+              cuts can run ahead of clients seen.
+            </p>
+          )}
         </Card>
       </motion.div>
     </motion.div>
   );
 }
 
-function Tile({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function Tile({
+  label,
+  value,
+  accent,
+  note,
+}: {
+  label: string;
+  value: string;
+  accent?: boolean;
+  note?: string;
+}) {
   return (
     <Card className="p-4">
       <p className="text-[10px] uppercase tracking-wide text-muted">{label}</p>
-      <p className={cn("mt-1 font-display text-xl", accent ? "text-gold" : "text-offwhite")}>
+      <p
+        className={cn(
+          "mt-1 font-display text-xl tabular-nums",
+          accent ? "text-gold" : "text-offwhite",
+        )}
+      >
         {value}
       </p>
+      {note && <p className="mt-0.5 text-[10px] text-muted">{note}</p>}
     </Card>
   );
 }
@@ -165,68 +254,98 @@ function Row({ label, value, emphasize }: { label: string; value: string; emphas
   return (
     <div className="flex items-center justify-between gap-3">
       <dt className="text-muted">{label}</dt>
-      <dd className={cn("font-medium", emphasize ? "text-gold" : "text-offwhite")}>{value}</dd>
+      <dd className={cn("font-medium tabular-nums", emphasize ? "text-gold" : "text-offwhite")}>
+        {value}
+      </dd>
     </div>
   );
 }
 
-/** Weekly grouped bars: visits (gold) with the revenue printed under the peak weeks. */
-function WeekBars({
-  weeks,
+/** Bars per bucket — a day, a week or a month, whichever the range selected. */
+function BucketBars({
+  buckets,
   pending,
+  noun,
 }: {
-  weeks: InsightsData["weeks"];
+  buckets: InsightsData["buckets"];
   pending: boolean;
+  noun: string;
 }) {
-  const max = Math.max(1, ...weeks.map((w) => w.visits));
-  const hasData = weeks.some((w) => w.visits > 0);
+  const max = Math.max(1, ...buckets.map((b) => b.cuts));
+  const hasData = buckets.some((b) => b.cuts > 0);
   if (!hasData) {
     return (
       <p className="py-6 text-sm text-muted">
-        No completed visits in this window yet - they&apos;ll chart here as they come in.
+        No bookings in this range yet — they&apos;ll chart here as they come in.
+        Try a longer range if you&apos;re just getting started.
       </p>
     );
   }
   return (
     <div className={cn("transition-opacity duration-150 ease-out", pending && "opacity-50")}>
-      <div className="flex h-36 items-end gap-1.5">
-        {weeks.map((w, i) => (
+      {/* Each column must STRETCH to the track's height: a percentage height
+          resolves against a definite parent only, so `items-end` here would
+          collapse every column to auto and render an empty chart. The columns
+          stretch; the bar inside each one is what sits at the bottom. */}
+      <div className="flex h-36 gap-1" role="img" aria-label={`Cuts per ${noun}`}>
+        {buckets.map((b) => (
           <div
-            key={i}
-            className="group relative flex-1"
-            title={`${w.label}: ${w.visits} ${w.visits === 1 ? "visit" : "visits"}${
-              w.revenue > 0 ? ` · $${w.revenue.toLocaleString()}` : ""
+            key={b.key}
+            className="group relative flex flex-1 items-end"
+            title={`${b.fullLabel}: ${b.cuts} ${b.cuts === 1 ? "cut" : "cuts"}${
+              b.revenue > 0 ? ` · $${b.revenue.toLocaleString()}` : ""
             }`}
           >
             <div
               className="w-full rounded-t bg-gold/70 transition-all duration-200 ease-out group-hover:bg-gold"
-              style={{ height: `${Math.max(2, Math.round((w.visits / max) * 100))}%` }}
+              style={{ height: `${Math.max(2, Math.round((b.cuts / max) * 100))}%` }}
             />
           </div>
         ))}
       </div>
       <div className="mt-2 flex justify-between text-[10px] text-muted">
-        <span>{weeks[0]?.label}</span>
-        <span>{weeks[weeks.length - 1]?.label}</span>
+        <span>{buckets[0]?.label}</span>
+        <span>{buckets[buckets.length - 1]?.label}</span>
       </div>
     </div>
   );
 }
 
-/** Horizontal bars per service with a count/revenue toggle. */
-function ServiceBars({ services }: { services: InsightsData["services"] }) {
+/**
+ * Horizontal bars per service with a count/revenue toggle.
+ *
+ * The list is the WHOLE menu, booked first. Unbooked services are folded behind
+ * a toggle so a long menu doesn't bury the ranking — but they are reachable,
+ * because "my service isn't in here" is indistinguishable from "it's broken".
+ */
+function ServiceBars({
+  services,
+  pending,
+}: {
+  services: InsightsData["services"];
+  pending: boolean;
+}) {
   const [mode, setMode] = useState<"count" | "revenue">("count");
-  const sorted = [...services].sort((a, b) => b[mode] - a[mode]);
-  const max = Math.max(1, ...sorted.map((s) => s[mode]));
+  const [showAll, setShowAll] = useState(false);
+
+  const booked = services.filter((s) => s.count > 0);
+  const unbooked = services.filter((s) => s.count === 0);
+  const ranked = [...booked].sort((a, b) => b[mode] - a[mode] || b.count - a.count);
+  const TOP = 10;
+  const visible = showAll ? [...ranked, ...unbooked] : ranked.slice(0, TOP);
+  const hidden = booked.length - Math.min(TOP, booked.length) + unbooked.length;
+  const max = Math.max(1, ...ranked.map((s) => s[mode]));
+
   return (
-    <div className="px-5 py-4">
-      <div className="mb-3 flex items-center gap-1 rounded-full border border-subtle p-0.5 self-start w-fit">
+    <div className={cn("px-5 py-4", pending && "opacity-50")}>
+      <div className="mb-3 flex w-fit items-center gap-1 self-start rounded-full border border-subtle p-0.5">
         {(["count", "revenue"] as const).map((m) => (
           <button
             key={m}
             onClick={() => setMode(m)}
+            aria-pressed={mode === m}
             className={cn(
-              "rounded-full px-3 py-1 text-xs capitalize transition-colors duration-150 ease-out",
+              "rounded-full px-3 py-1 text-xs transition-colors duration-150 ease-out",
               mode === m ? "bg-gold/15 text-gold" : "text-muted hover:text-offwhite",
             )}
           >
@@ -234,14 +353,27 @@ function ServiceBars({ services }: { services: InsightsData["services"] }) {
           </button>
         ))}
       </div>
+      {booked.length === 0 && (
+        <p className="mb-3 text-sm text-muted">
+          Nothing booked in this range — your menu is listed below at zero.
+        </p>
+      )}
       <ul className="flex flex-col gap-2.5">
-        {sorted.map((s) => (
-          <li key={s.name}>
+        {visible.map((s) => (
+          <li key={s.serviceId ?? `name:${s.name}`}>
             <div className="mb-1 flex items-center justify-between gap-3 text-xs">
-              <span className={cn("truncate", s.name === "(no service)" ? "text-muted" : "text-offwhite")}>
+              <span
+                className={cn(
+                  "truncate",
+                  s.count === 0 || s.name === "(no service name)"
+                    ? "text-muted"
+                    : "text-offwhite",
+                )}
+                title={s.name}
+              >
                 {s.name}
               </span>
-              <span className="shrink-0 text-muted">
+              <span className="shrink-0 tabular-nums text-muted">
                 {mode === "count"
                   ? `${s.count} ${s.count === 1 ? "booking" : "bookings"}`
                   : `$${s.revenue.toLocaleString()}`}
@@ -250,17 +382,29 @@ function ServiceBars({ services }: { services: InsightsData["services"] }) {
             <div className="h-2 w-full overflow-hidden rounded-full bg-charcoal-700">
               <div
                 className="h-full rounded-full bg-gold/70 transition-all duration-200 ease-out"
-                style={{ width: `${Math.max(2, Math.round((s[mode] / max) * 100))}%` }}
+                style={{ width: `${Math.max(s[mode] > 0 ? 2 : 0, Math.round((s[mode] / max) * 100))}%` }}
               />
             </div>
           </li>
         ))}
       </ul>
+      {hidden > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowAll((v) => !v)}
+          className="mt-3 text-xs text-muted underline-offset-2 transition-colors hover:text-offwhite hover:underline"
+        >
+          {showAll
+            ? "Show top 10 only"
+            : `Show all ${booked.length + unbooked.length} services${
+                unbooked.length > 0 ? ` (${unbooked.length} unbooked)` : ""
+              }`}
+        </button>
+      )}
     </div>
   );
 }
 
-/** Mon..Sun mini bars. */
 //  Chair utilization
 
 /** "6h 30m" / "45m" — hours read better than 390 minutes to a barber. */
@@ -279,17 +423,22 @@ function utilTone(pct: number | null): string {
   return "bg-rose-400/80";
 }
 
+const UTIL_VIEWS = [
+  { key: "weekday", label: "By day of week" },
+  { key: "period", label: "Over time" },
+  { key: "service", label: "By service" },
+] as const;
+
 /**
  * How much of the time the barber was OPEN actually got sold.
  *
- * "Busiest day" counts bookings, which can't tell a full Saturday from a
- * barely-worked Wednesday — this can. Customizable along the axes a barber
- * actually thinks in: group by weekday (where are my empty hours?) or by
- * service (what fills the chair?), and narrow to one barber in a multi-chair
- * shop. Range follows the page's week selector.
+ * "Busiest day" counts bookings, which can't tell a full Saturday from a barely
+ * worked Wednesday — this can. Customizable along the axes a barber actually
+ * thinks in: which weekday runs empty, whether it's trending up or down over the
+ * selected range, or what fills the chair. Range follows the page's one control.
  */
-function UtilizationCard({ weeks }: { weeks: number }) {
-  const [by, setBy] = useState<"weekday" | "service">("weekday");
+function UtilizationCard({ period }: { period: PeriodKey }) {
+  const [by, setBy] = useState<"weekday" | "period" | "service">("weekday");
   const [staffId, setStaffId] = useState<string>("");
   const [data, setData] = useState<UtilizationData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -299,7 +448,7 @@ function UtilizationCard({ weeks }: { weeks: number }) {
     let cancelled = false;
     setLoading(true);
     setFailed(false);
-    void utilizationAction({ weeks, by, ...(staffId ? { staffId } : {}) }).then((d) => {
+    void utilizationAction({ period, by, ...(staffId ? { staffId } : {}) }).then((d) => {
       if (cancelled) return;
       if (d) setData(d);
       else setFailed(true);
@@ -308,7 +457,7 @@ function UtilizationCard({ weeks }: { weeks: number }) {
     return () => {
       cancelled = true;
     };
-  }, [weeks, by, staffId]);
+  }, [period, by, staffId]);
 
   const rows = data?.rows ?? [];
   // Scale bars to the busiest row, not to 100%: a shop that never exceeds 40%
@@ -316,31 +465,38 @@ function UtilizationCard({ weeks }: { weeks: number }) {
   const maxBooked = Math.max(1, ...rows.map((r) => r.bookedMin));
   const maxOpen = Math.max(1, ...rows.map((r) => r.openMin));
   const scale = Math.max(maxBooked, maxOpen);
+  // Weekday and over-time rows carry real capacity; service rows share one chair.
+  const hasCapacity = by !== "service";
 
   const chip = (active: boolean) =>
     cn(
       "rounded-full px-3 py-1 text-xs transition-colors",
-      active
-        ? "bg-gold/15 text-gold"
-        : "border border-subtle text-muted hover:text-offwhite",
+      active ? "bg-gold/15 text-gold" : "border border-subtle text-muted hover:text-offwhite",
     );
 
   return (
     <Card className="overflow-hidden">
       <CardHeader
         title="Chair time"
-        subtitle="How much of the time you were open actually got booked."
+        subtitle={`How much of the time you were open actually got booked${
+          data ? ` — ${data.periodLabel.toLowerCase()}` : ""
+        }.`}
       />
       <div className="flex flex-col gap-4 px-5 py-5">
-        {/* Controls: what to group by, and (multi-chair shops) whose chair. */}
+        {/* Controls: how to slice it, and (multi-chair shops) whose chair. */}
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex gap-1.5" role="group" aria-label="Group by">
-            <button type="button" onClick={() => setBy("weekday")} className={chip(by === "weekday")}>
-              By day
-            </button>
-            <button type="button" onClick={() => setBy("service")} className={chip(by === "service")}>
-              By service
-            </button>
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Group by">
+            {UTIL_VIEWS.map((v) => (
+              <button
+                key={v.key}
+                type="button"
+                onClick={() => setBy(v.key)}
+                aria-pressed={by === v.key}
+                className={chip(by === v.key)}
+              >
+                {v.label}
+              </button>
+            ))}
           </div>
           {(data?.staff.length ?? 0) > 1 && (
             <select
@@ -374,34 +530,49 @@ function UtilizationCard({ weeks }: { weeks: number }) {
           <>
             {/* The headline number. */}
             <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <span className="font-display text-3xl text-offwhite">
+              <span className="font-display text-3xl tabular-nums text-offwhite">
                 {data?.totals.utilizationPct ?? 0}%
               </span>
               <span className="text-sm text-muted">
                 of your open time booked ·{" "}
-                {fmtDuration(data?.totals.bookedMin ?? 0)} sold of{" "}
-                {fmtDuration(data?.totals.openMin ?? 0)} open
+                <span className="tabular-nums">
+                  {fmtDuration(data?.totals.bookedMin ?? 0)}
+                </span>{" "}
+                sold of{" "}
+                <span className="tabular-nums">
+                  {fmtDuration(data?.totals.openMin ?? 0)}
+                </span>{" "}
+                open
               </span>
             </div>
 
             <div className={cn("flex flex-col gap-2.5", loading && "opacity-50")}>
               {rows.length === 0 && (
-                <p className="text-sm text-muted">Nothing booked in this window yet.</p>
+                <p className="text-sm text-muted">Nothing booked in this range yet.</p>
               )}
               {rows.map((r) => {
-                // Weekday rows show sold-vs-open (a filled track inside the
-                // day's capacity). Service rows share one chair, so they show
+                // Capacity views show sold-vs-open (a filled track inside the
+                // period's capacity). Service rows share one chair, so they show
                 // sold time only, scaled against the biggest service.
                 const openW = Math.round((r.openMin / scale) * 100);
                 const bookedW = Math.round((r.bookedMin / scale) * 100);
-                const closed = by === "weekday" && r.openMin === 0;
+                // No hours scheduled AND nothing booked = a closed day.
+                const closed = hasCapacity && r.openMin === 0 && r.bookedMin === 0;
+                // No hours scheduled but work happened anyway: a cut squeezed in
+                // outside the weekly schedule. There's no capacity to divide by,
+                // so show the time sold rather than a "0%" that reads as a bad
+                // day — or a "closed" that hides the work entirely.
+                const offSchedule = hasCapacity && r.openMin === 0 && r.bookedMin > 0;
                 return (
                   <div key={r.key} className="flex items-center gap-3">
-                    <span className="w-24 shrink-0 truncate text-xs text-muted" title={r.label}>
+                    <span
+                      className="w-24 shrink-0 truncate text-xs text-muted sm:w-32"
+                      title={r.label}
+                    >
                       {r.label}
                     </span>
                     <div className="relative h-5 flex-1 overflow-hidden rounded bg-charcoal-700/60">
-                      {by === "weekday" && (
+                      {hasCapacity && (
                         <div
                           className="absolute inset-y-0 left-0 rounded bg-charcoal-600/70"
                           style={{ width: `${openW}%` }}
@@ -417,12 +588,17 @@ function UtilizationCard({ weeks }: { weeks: number }) {
                     <span className="w-32 shrink-0 text-right text-xs tabular-nums text-muted">
                       {closed ? (
                         "closed"
+                      ) : offSchedule ? (
+                        <span title="Booked outside your weekly hours — there's no scheduled capacity to measure it against.">
+                          <span className="text-offwhite">{fmtDuration(r.bookedMin)}</span>
+                          {" off-hours"}
+                        </span>
                       ) : (
                         <>
                           <span className="text-offwhite">{r.utilizationPct ?? 0}%</span>
                           {" · "}
                           {fmtDuration(r.bookedMin)}
-                          {by === "weekday" && ` / ${fmtDuration(r.openMin)}`}
+                          {hasCapacity && ` / ${fmtDuration(r.openMin)}`}
                         </>
                       )}
                     </span>
@@ -431,11 +607,24 @@ function UtilizationCard({ weeks }: { weeks: number }) {
               })}
             </div>
 
-            <p className="text-[11px] text-muted/80">
-              {by === "weekday"
-                ? "Open time comes from your current weekly hours, minus block-offs. Bookings made on Acuity or Square count too — they take up the chair."
-                : "Share of your open time each service filled. Services share one chair, so these add up to your total booked time."}
-            </p>
+            <div className="flex flex-col gap-1 text-[11px] text-muted/80">
+              <p>
+                {by === "service"
+                  ? "Share of your open time each service filled. Services share one chair, so these add up to your total booked time."
+                  : "Open time comes from your current weekly hours, minus block-offs. Today counts only the hours already past, so checking before lunch doesn't read as a slump."}
+              </p>
+              {data?.syncedExcluded ? (
+                <p>
+                  One barber selected — Acuity and Square bookings aren&apos;t
+                  tied to a barber, so this view shows their native bookings only.
+                </p>
+              ) : (
+                <p>
+                  Bookings made on Acuity or Square count too — they take up the
+                  chair.
+                </p>
+              )}
+            </div>
           </>
         )}
       </div>
@@ -446,7 +635,9 @@ function UtilizationCard({ weeks }: { weeks: number }) {
 function DayBars({ counts }: { counts: number[] }) {
   const max = Math.max(1, ...counts);
   return (
-    <div className="flex h-28 items-end gap-2">
+    // Columns stretch to the full track height (see BucketBars) so the bars'
+    // percentage heights have a definite parent to resolve against.
+    <div className="flex h-28 gap-2">
       {counts.map((c, i) => (
         <div key={i} className="flex flex-1 flex-col items-center gap-1.5">
           <div className="flex w-full flex-1 items-end">
@@ -463,42 +654,57 @@ function DayBars({ counts }: { counts: number[] }) {
   );
 }
 
-//  Quota goal card
+//  Quota goals
 
-/** "$1,234" for revenue goals, "17 cuts" for visit goals. */
-function fmtAmount(metric: GoalData["metric"], n: number): string {
+/** "$1,234" for revenue goals, "17 cuts" for cut-count goals. */
+function fmtAmount(metric: GoalMetric, n: number): string {
   return metric === "revenue"
     ? `$${n.toLocaleString()}`
     : `${n.toLocaleString()} cut${n === 1 ? "" : "s"}`;
 }
 
+const METRIC_LABEL: Record<GoalMetric, string> = {
+  revenue: "Revenue",
+  visits: "Completed cuts",
+};
+const PERIOD_LABEL: Record<GoalPeriod, string> = {
+  week: "this week",
+  month: "this month",
+};
+
+function goalKey(g: { metric: GoalMetric; period: GoalPeriod }): string {
+  return `${g.metric}:${g.period}`;
+}
+
 /**
- * The barber's quota: set a revenue or cut-count target for the week/month and
- * watch actual vs. straight-line PACE — the pace verdict is the point (a bare
- * progress bar always looks fine until the 28th). Progress derives from
- * COMPLETED visits server-side, so native and Acuity-synced shops read alike.
+ * The barber's quotas. Four independent targets — revenue or cuts, per week or
+ * per month — each SAVED SEPARATELY, because they are different goals: setting a
+ * monthly revenue number must not wipe the weekly cut count he set yesterday.
+ *
+ * Every set goal shows actual vs straight-line PACE, which is the point (a bare
+ * progress bar always looks fine until the 28th). All four cells share one
+ * layout so the numbers line up down the column instead of wandering with the
+ * length of each label.
  */
-function GoalCard({ initial }: { initial: GoalResponse | null }) {
-  const [data, setData] = useState<GoalResponse | null>(initial);
-  const [editing, setEditing] = useState(false);
-  const [metric, setMetric] = useState<GoalData["metric"]>("revenue");
-  const [period, setPeriod] = useState<GoalData["period"]>("month");
+function GoalsCard({ initial }: { initial: Goal[] | null }) {
+  const [goals, setGoals] = useState<Goal[] | null>(initial);
+  const [editing, setEditing] = useState<string | null>(null); // goalKey
   const [target, setTarget] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const goal = data?.goal ?? null;
-  const progress = data?.progress ?? null;
-
-  function beginEdit() {
-    setMetric(goal?.metric ?? "revenue");
-    setPeriod(goal?.period ?? "month");
-    setTarget(goal ? String(goal.target) : "");
-    setError(null);
-    setEditing(true);
+  async function refresh() {
+    const r = await goalAction();
+    if (r) setGoals(r.goals);
   }
 
-  async function save() {
+  function beginEdit(g: Goal) {
+    setTarget(g.target === null ? "" : String(g.target));
+    setError(null);
+    setEditing(goalKey(g));
+  }
+
+  async function save(g: Goal) {
     const n = Number(target.trim());
     if (!Number.isInteger(n) || n < 1) {
       setError("Target must be a whole number of at least 1.");
@@ -506,204 +712,210 @@ function GoalCard({ initial }: { initial: GoalResponse | null }) {
     }
     setSaving(true);
     setError(null);
-    const r = await saveGoalAction({ metric, period, target: n });
+    const r = await saveGoalAction({ metric: g.metric, period: g.period, target: n });
     if (r.ok) {
-      setData(await goalAction());
-      setEditing(false);
+      await refresh();
+      setEditing(null);
     } else {
-      setError("Couldn't save the goal. Try again.");
+      setError("Couldn't save that goal. Try again.");
     }
     setSaving(false);
   }
 
-  async function clear() {
-    if (!window.confirm("Remove your goal? Progress tracking stops (history is unaffected).")) {
+  async function clear(g: Goal) {
+    if (
+      !window.confirm(
+        `Remove your ${METRIC_LABEL[g.metric].toLowerCase()} ${g.period} goal? Your other goals are unaffected.`,
+      )
+    ) {
       return;
     }
     setSaving(true);
-    const r = await clearGoalAction();
-    if (r.ok) setData(await goalAction());
+    const r = await clearGoalAction({ metric: g.metric, period: g.period });
+    if (r.ok) await refresh();
     setSaving(false);
   }
 
-  // ---- Setup / edit form ----
-  // (progress rides along whenever a goal exists; the null-check keeps a
-  // hypothetical partial response on the safe branch instead of crashing.)
-  if (editing || !goal || !progress) {
+  if (!goals) {
     return (
       <Card className="p-5">
-        <CardHeader
-          title="Goal"
-          subtitle="Set a quota for the week or month — revenue or completed cuts — and Insights tracks whether you're on pace."
-        />
-        {!editing ? (
-          <button
-            onClick={beginEdit}
-            className="mt-3 rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900"
-          >
-            Set a goal
-          </button>
-        ) : (
-          <div className="mt-3 flex flex-col gap-3">
-            <div className="flex flex-wrap gap-2">
-              {(
-                [
-                  ["revenue", "Revenue ($)"],
-                  ["visits", "Completed cuts"],
-                ] as const
-              ).map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setMetric(key)}
-                  aria-pressed={metric === key}
-                  className={cn(
-                    "rounded-full border px-3 py-1 text-xs transition-colors",
-                    metric === key
-                      ? "border-gold/60 bg-gold/10 text-gold"
-                      : "border-subtle text-muted hover:text-offwhite",
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
-              <span className="mx-1 self-center text-xs text-muted">per</span>
-              {(
-                [
-                  ["week", "Week"],
-                  ["month", "Month"],
-                ] as const
-              ).map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setPeriod(key)}
-                  aria-pressed={period === key}
-                  className={cn(
-                    "rounded-full border px-3 py-1 text-xs transition-colors",
-                    period === key
-                      ? "border-gold/60 bg-gold/10 text-gold"
-                      : "border-subtle text-muted hover:text-offwhite",
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <label className="block max-w-[220px]">
-              <span className="text-xs uppercase tracking-wide text-muted">
-                Target {metric === "revenue" ? "($)" : "(cuts)"}
-              </span>
-              <input
-                className="mt-1 w-full rounded-xl border border-subtle bg-charcoal-800 px-3 py-2 text-sm"
-                type="number"
-                min={1}
-                inputMode="numeric"
-                placeholder={metric === "revenue" ? "4000" : "60"}
-                value={target}
-                onChange={(e) => setTarget(e.target.value)}
-                aria-label="Goal target"
-              />
-            </label>
-            {error && (
-              <p role="alert" className="text-xs text-red-400">
-                {error}
-              </p>
-            )}
-            <div className="flex gap-2">
-              <button
-                onClick={save}
-                disabled={saving}
-                className="rounded-xl bg-gold px-5 py-2 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
-              >
-                {saving ? "Saving…" : "Save goal"}
-              </button>
-              {goal && (
-                <button
-                  onClick={() => setEditing(false)}
-                  className="rounded-xl border border-subtle px-4 py-2 text-sm text-muted hover:text-offwhite"
-                >
-                  Cancel
-                </button>
-              )}
-            </div>
-          </div>
-        )}
+        <CardHeader title="Goals" subtitle="Couldn't load your goals right now." />
       </Card>
     );
   }
 
-  // ---- Progress display ----
-  const p = progress;
+  const anySet = goals.some((g) => g.target !== null);
+
+  return (
+    <Card className="p-5">
+      <CardHeader
+        title="Goals"
+        subtitle="Set a quota for the week and the month — revenue and cuts are tracked separately, so each keeps its own number."
+      />
+      {!anySet && (
+        <p className="mt-3 text-sm text-muted">
+          Nothing set yet. Pick any of the four below and Insights tracks whether
+          you&apos;re on pace.
+        </p>
+      )}
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        {goals.map((g) => {
+          const key = goalKey(g);
+          const isEditing = editing === key;
+          return (
+            <GoalCell
+              key={key}
+              goal={g}
+              editing={isEditing}
+              saving={saving}
+              error={isEditing ? error : null}
+              target={target}
+              onTargetChange={setTarget}
+              onBeginEdit={() => beginEdit(g)}
+              onCancel={() => setEditing(null)}
+              onSave={() => void save(g)}
+              onClear={() => void clear(g)}
+            />
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+/**
+ * One goal slot. Set or unset, every cell keeps the SAME internal rows in the
+ * same order and at the same widths, so the four line up as a grid rather than
+ * as four differently-shaped cards.
+ */
+function GoalCell({
+  goal,
+  editing,
+  saving,
+  error,
+  target,
+  onTargetChange,
+  onBeginEdit,
+  onCancel,
+  onSave,
+  onClear,
+}: {
+  goal: Goal;
+  editing: boolean;
+  saving: boolean;
+  error: string | null;
+  target: string;
+  onTargetChange: (v: string) => void;
+  onBeginEdit: () => void;
+  onCancel: () => void;
+  onSave: () => void;
+  onClear: () => void;
+}) {
+  const title = `${METRIC_LABEL[goal.metric]} · ${PERIOD_LABEL[goal.period]}`;
+  const p = goal.progress;
+
+  if (editing) {
+    return (
+      <div className="rounded-xl border border-gold/40 bg-charcoal-800/50 p-4">
+        <p className="text-[11px] uppercase tracking-wide text-muted">{title}</p>
+        <label className="mt-2 block">
+          <span className="text-xs text-muted">
+            Target {goal.metric === "revenue" ? "($)" : "(cuts)"}
+          </span>
+          <input
+            className="mt-1 w-full rounded-xl border border-subtle bg-charcoal-800 px-3 py-2 text-sm tabular-nums"
+            type="number"
+            min={1}
+            inputMode="numeric"
+            autoFocus
+            placeholder={
+              goal.metric === "revenue"
+                ? goal.period === "week"
+                  ? "1000"
+                  : "4000"
+                : goal.period === "week"
+                  ? "15"
+                  : "60"
+            }
+            value={target}
+            onChange={(e) => onTargetChange(e.target.value)}
+            aria-label={`${title} target`}
+          />
+        </label>
+        {error && (
+          <p role="alert" className="mt-2 text-xs text-red-400">
+            {error}
+          </p>
+        )}
+        <div className="mt-3 flex gap-2">
+          <button
+            onClick={onSave}
+            disabled={saving}
+            className="rounded-xl bg-gold px-4 py-1.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+          <button
+            onClick={onCancel}
+            className="rounded-xl border border-subtle px-3 py-1.5 text-sm text-muted hover:text-offwhite"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (goal.target === null || !p) {
+    return (
+      <div className="flex flex-col rounded-xl border border-subtle p-4">
+        <p className="text-[11px] uppercase tracking-wide text-muted">{title}</p>
+        <p className="mt-1 font-display text-xl text-muted/60">Not set</p>
+        <div className="mt-auto pt-3">
+          <button
+            onClick={onBeginEdit}
+            className="rounded-full border border-gold/50 px-3 py-1 text-xs text-gold transition-colors hover:bg-gold/10"
+          >
+            Set a target
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const pctFill = Math.round(p.pct * 100);
   const onPace = p.delta >= 0;
   // Where the pace line sits along the bar (as % of TARGET, capped).
   const paceMark = Math.min(100, Math.round((p.paceTarget / goal.target) * 100));
-  const periodLabel = goal.period === "week" ? "this week" : "this month";
-
-  // Mini chart: cumulative actual vs the straight target line, in a 300x80 box.
-  const W = 300;
-  const H = 80;
-  const padY = 6;
-  const maxY = Math.max(goal.target, p.actual, 1);
-  const px = (i: number) =>
-    p.totalDays <= 1 ? W / 2 : (i / (p.totalDays - 1)) * W;
-  const py = (v: number) => padY + (1 - v / maxY) * (H - padY * 2);
-  const actualPath = p.series
-    .filter((s): s is { day: number; cumulative: number } => s.cumulative !== null)
-    .map((s) => `${px(s.day - 1)},${py(s.cumulative)}`)
-    .join(" ");
 
   return (
-    <Card className="p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="text-xs uppercase tracking-wide text-muted">
-            Goal · {periodLabel}
-          </p>
-          <p className="mt-1 font-display text-2xl text-offwhite">
-            {fmtAmount(goal.metric, p.actual)}
-            <span className="text-base text-muted">
-              {" "}
-              of {fmtAmount(goal.metric, goal.target)}
-            </span>
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {/* The pace verdict — the whole point of the card. */}
-          <span
-            className={cn(
-              "rounded-full border px-3 py-1 text-xs font-semibold",
-              onPace
-                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
-                : "border-amber-500/40 bg-amber-500/10 text-amber-400",
-            )}
-          >
-            {p.delta === 0
-              ? "On pace"
-              : onPace
-                ? `Ahead by ${fmtAmount(goal.metric, p.delta)}`
-                : `${fmtAmount(goal.metric, -p.delta)} behind pace`}
-          </span>
-          <button
-            onClick={beginEdit}
-            className="rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:text-offwhite"
-          >
-            Edit
-          </button>
-          <button
-            onClick={clear}
-            disabled={saving}
-            className="rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:text-red-400"
-          >
-            Remove
-          </button>
-        </div>
+    <div className="flex flex-col rounded-xl border border-subtle p-4">
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-[11px] uppercase tracking-wide text-muted">{title}</p>
+        <span
+          className={cn(
+            "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold",
+            onPace
+              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
+              : "border-amber-500/40 bg-amber-500/10 text-amber-400",
+          )}
+        >
+          {p.delta === 0
+            ? "On pace"
+            : onPace
+              ? `+${fmtAmount(goal.metric, p.delta)}`
+              : `-${fmtAmount(goal.metric, -p.delta)}`}
+        </span>
       </div>
 
-      {/* Progress bar with the pace tick: fill = actual/target, tick = where
-          the straight-line pace says you should be today. */}
-      <div className="relative mt-4 h-3 overflow-hidden rounded-full bg-charcoal-700">
+      <p className="mt-1 font-display text-2xl tabular-nums text-offwhite">
+        {fmtAmount(goal.metric, p.actual)}
+        <span className="text-sm text-muted"> of {fmtAmount(goal.metric, goal.target)}</span>
+      </p>
+
+      {/* Progress bar with the pace tick: fill = actual/target, tick = where the
+          straight-line pace says you should be today. */}
+      <div className="relative mt-3 h-2.5 overflow-hidden rounded-full bg-charcoal-700">
         <div
           className={cn("h-full rounded-full", onPace ? "bg-emerald-500/80" : "bg-gold/80")}
           style={{ width: `${pctFill}%` }}
@@ -714,53 +926,28 @@ function GoalCard({ initial }: { initial: GoalResponse | null }) {
           title={`Pace: ${fmtAmount(goal.metric, p.paceTarget)} by today`}
         />
       </div>
-      <div className="mt-1 flex justify-between text-[11px] text-muted">
+      <div className="mt-1 flex justify-between text-[10px] tabular-nums text-muted">
         <span>{pctFill}% of goal</span>
         <span>
-          {p.daysLeft === 0
-            ? "Last day"
-            : `${p.daysLeft} day${p.daysLeft === 1 ? "" : "s"} left`}
+          {p.daysLeft === 0 ? "Last day" : `${p.daysLeft} day${p.daysLeft === 1 ? "" : "s"} left`}
         </span>
       </div>
 
-      {/* Cumulative actual (solid) vs straight-line target (dashed). */}
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        className="mt-3 h-[64px] w-full"
-        preserveAspectRatio="none"
-        role="img"
-        aria-label={`Goal progress: ${fmtAmount(goal.metric, p.actual)} of ${fmtAmount(
-          goal.metric,
-          goal.target,
-        )} ${periodLabel}, ${onPace ? "on or ahead of" : "behind"} pace`}
-      >
-        <line
-          x1={px(0)}
-          y1={py(0)}
-          x2={px(p.totalDays - 1)}
-          y2={py(goal.target)}
-          stroke="rgba(255,255,255,0.35)"
-          strokeWidth={1}
-          strokeDasharray="4 4"
-          vectorEffect="non-scaling-stroke"
-        />
-        {actualPath && (
-          <polyline
-            points={actualPath}
-            fill="none"
-            stroke="#D4AF37"
-            strokeWidth={2}
-            strokeLinejoin="round"
-            strokeLinecap="round"
-            vectorEffect="non-scaling-stroke"
-          />
-        )}
-      </svg>
-      <div className="flex justify-between text-[10px] uppercase tracking-wide text-muted">
-        <span>{p.periodStart.slice(5)}</span>
-        <span>target: {fmtAmount(goal.metric, goal.target)}</span>
-        <span>{p.periodEnd.slice(5)}</span>
+      <div className="mt-auto flex gap-2 pt-3">
+        <button
+          onClick={onBeginEdit}
+          className="rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:text-offwhite"
+        >
+          Edit
+        </button>
+        <button
+          onClick={onClear}
+          disabled={saving}
+          className="rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:text-red-400"
+        >
+          Remove
+        </button>
       </div>
-    </Card>
+    </div>
   );
 }
