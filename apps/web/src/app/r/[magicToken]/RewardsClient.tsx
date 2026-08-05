@@ -19,7 +19,9 @@ import { GetTheApp } from "./GetTheApp";
 import { AddToWallet } from "./AddToWallet";
 import { DeleteMyData } from "./DeleteMyData";
 import { resolveRewardsTheme, rewardsFontVars, surfaceStyle, type RewardsTheme } from "./theme";
-import type { RewardsData } from "./page";
+// The interface lives with the rewards sub-route (its page owns the API call);
+// this component just renders whichever page mounts it.
+import type { RewardsData } from "./rewards/page";
 
 function promoValue(p: RewardsData["promotions"][number]): string | null {
   switch (p.kind) {
@@ -51,6 +53,7 @@ export function RewardsClient({
   vapidPublicKey,
   appStoreUrl,
   playStoreUrl,
+  shopHref = null,
 }: {
   data: RewardsData;
   magicToken: string;
@@ -60,6 +63,14 @@ export function RewardsClient({
   appStoreUrl: string | null;
   /** Android Play Store link (optional). */
   playStoreUrl: string | null;
+  /**
+   * The client's landing page (/r/<token>), set when the shop HAS a public
+   * page and this renders as its rewards sub-view: shows a back link and hides
+   * the booking CTA (the shop page owns Book). Null = STANDALONE - the shop has
+   * no public page, this IS the landing, and it keeps its own booking CTA so a
+   * bookingUrl-only shop's clients don't lose their only way to book.
+   */
+  shopHref?: string | null;
 }) {
   const {
     shop,
@@ -146,6 +157,18 @@ export function RewardsClient({
         >
           {/* Header */}
           <motion.header variants={fadeUp} className="text-center">
+            {/* Back to the shop's page - the client's way out of this sub-view.
+                The ONLY navigation on this page by design: everything else
+                (booking included) lives on the shop page it returns to. */}
+            {shopHref && (
+              <a
+                href={shopHref}
+                className="mb-4 inline-flex items-center gap-1.5 text-sm hover:underline"
+                style={{ color: t.muted }}
+              >
+                ← {shop.name}
+              </a>
+            )}
             {shop.logoUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
@@ -459,10 +482,12 @@ export function RewardsClient({
             </motion.div>
           )}
 
-          {/* CTA - only when the shop has an external booking link. Without one
-              there's nowhere to send them, so we hide the button rather than
-              render a dead link (they're already on their rewards page). */}
-          {shop.bookingUrl && (
+          {/* Booking CTA only in STANDALONE mode (shop has no public page, so
+              this page is the landing and their only way to book). When this is
+              the shop page's rewards sub-view, the shop page owns Book - two
+              competing "book" entry points made the card feel like an ad rather
+              than the client's own record; back-to-shop lives in the header. */}
+          {!shopHref && shop.bookingUrl && (
             <motion.div variants={fadeUp} className="text-center">
               <a
                 href={shop.bookingUrl}
@@ -500,18 +525,6 @@ export function RewardsClient({
             </motion.section>
           )}
 
-          {/* The shop's own mini-site */}
-          {shop.pageSlug && (
-            <motion.footer variants={fadeUp} className="pt-2 text-center">
-              <a
-                href={`/s/${shop.pageSlug}`}
-                className="text-xs hover:underline"
-                style={{ color: accent }}
-              >
-                More from {shop.name} →
-              </a>
-            </motion.footer>
-          )}
 
           {/* Support (App Store 1.5): the customer side must offer help too.
               mailto opens the Mail app inside the iOS shell (AppWebView hands

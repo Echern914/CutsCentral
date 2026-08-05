@@ -10,7 +10,7 @@ import {
   type PageThemeKey,
 } from "@chairback/config/constants";
 import { readableOn } from "@/lib/contrast";
-import type { RewardsData } from "./page";
+import type { RewardsData } from "./rewards/page";
 
 /**
  * Resolved visual identity for the client rewards page, derived from the shop's

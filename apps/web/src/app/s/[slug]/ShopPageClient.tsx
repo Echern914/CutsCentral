@@ -41,9 +41,19 @@ import type { ShopPageData } from "./page";
 export function ShopPageClient({
   data,
   preview = false,
+  rewardsHref,
+  rewardsLabel = "Your rewards",
 }: {
   data: ShopPageData;
   preview?: boolean;
+  /**
+   * Set only when a KNOWN client is viewing (i.e. rendered from
+   * /r/<magicToken>, where the token identifies them). Adds an entry back into
+   * their punch card. Anonymous visitors on /s/<slug> pass nothing and see no
+   * such link — there'd be no card to show them.
+   */
+  rewardsHref?: string;
+  rewardsLabel?: string;
 }) {
   // Clear the native app's WebView spinner (reachable from the rewards page via
   // "More from {shop}"; without this the shell waits for a ready signal forever).
@@ -264,6 +274,28 @@ export function ShopPageClient({
             </a>
           ) : null}
         </motion.div>
+
+        {/* A known client's way to their punch card. Its own block, OUTSIDE the
+            data-tour="book-cta" div above - the demo tour spotlights that
+            anchor, and this link only exists for real token-holding clients,
+            never in the demo. Deliberately secondary to Book: this page exists
+            to get them booked; the card is what they check on the way. */}
+        {rewardsHref && (
+          <motion.div variants={fadeUp} className="mt-3">
+            <a
+              href={rewardsHref}
+              className="flex w-full items-center justify-center gap-2 py-3 text-center text-sm font-medium transition-transform duration-200 ease-out hover:scale-[1.01]"
+              style={{
+                border: `1px solid ${theme.border}`,
+                color: theme.text,
+                borderRadius: layout.buttonRadius,
+              }}
+            >
+              <StampMark />
+              {rewardsLabel}
+            </a>
+          </motion.div>
+        )}
 
         {/* Standing waitlist entry: for when they're fully booked. Not shown with
             the request form (that's already a "reach out" path). */}
@@ -624,6 +656,27 @@ function promoValue(p: ShopPageData["promotions"][number]): string | null {
     case "EXTRA_PUNCHES":
       return p.extraPunches ? `+${p.extraPunches} ${p.extraPunches === 1 ? "punch" : "punches"} per visit` : null;
   }
+}
+
+/** Punch-card mark for the client's rewards entry. */
+function StampMark() {
+  return (
+    <svg
+      className="h-4 w-4"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <rect x="3" y="6" width="18" height="12" rx="2.5" />
+      <circle cx="8" cy="12" r="1.4" />
+      <circle cx="12" cy="12" r="1.4" />
+      <circle cx="16" cy="12" r="1.4" />
+    </svg>
+  );
 }
 
 function endsLabel(endsAt: string | null): string | null {

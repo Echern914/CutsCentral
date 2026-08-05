@@ -63,6 +63,10 @@ export interface ServiceRow {
   offeredByAll: boolean;
   active: boolean;
   sortOrder: number;
+  // Display-only daily slot target driving the calendar day gauge ("Fades 6/8").
+  // NOT a cap - the slot engine never reads it, so a 7th booking just reads 7/6.
+  // Only consulted while ungrouped; a grouped service uses its group's target.
+  dailyTarget: number | null;
   staffIds: string[];
   // Non-null = this service belongs to a group; the group's hoursWindows + booking
   // limits override this service's own. null = ungrouped (the default for every
@@ -70,17 +74,20 @@ export interface ServiceRow {
   serviceGroupId: string | null;
 }
 /**
- * A group bundles several services under ONE shared config: shared hoursWindows
- * that OVERRIDE each member's own windows, plus booking limits (maxPerDay = total
- * bookings/shop-local-day across all members; maxConcurrent = overlapping bookings
- * at once across the group; either null = no cap). serviceIds = current membership.
+ * A group bundles several services under ONE shared set of BOOKING LIMITS
+ * (maxPerDay = total bookings/shop-local-day across all members; maxConcurrent =
+ * overlapping bookings at once across the group; either null = no cap).
+ * serviceIds = current membership. A group does NOT carry hours - those belong to
+ * the service and are edited in Services -> Edit.
  */
 export interface ServiceGroupRow {
   id: string;
   name: string;
-  hoursWindows: Record<string, { s: number; e: number }[]>;
   maxPerDay: number | null;
   maxConcurrent: number | null;
+  // Display-only daily slot target for the calendar day gauge, counted across
+  // all member services. NOT a cap - see maxPerDay for the enforced ceiling.
+  dailyTarget: number | null;
   active: boolean;
   sortOrder: number;
   serviceIds: string[];
@@ -135,12 +142,30 @@ export interface AgendaRow {
   // Cheapest reward the row's client can afford right now (rewards shops only).
   // Drives "Reward ready - apply to this visit?" Apply/Skip on the row.
   rewardReady?: { rewardId: string; rewardName: string; punchCost: number } | null;
+  // Which AgendaCategory this row counts toward on the day gauge. null =
+  // uncategorized (a block, or a synced visit whose service name matched
+  // nothing); those still count in the "All" total.
+  categoryId?: string | null;
+}
+
+/**
+ * One bucket of the calendar day gauge: an active service group, or an active
+ * UNGROUPED service. `target` is the barber's display-only daily slot target -
+ * null means this bucket shows a plain count instead of a fraction.
+ */
+export interface AgendaCategory {
+  id: string;
+  name: string;
+  target: number | null;
 }
 
 export interface AgendaResponse {
   agenda: AgendaRow[];
   source: "appointment" | "visit";
   timezone: string;
+  // Absent on a cached/older payload - the calendar treats that as "no
+  // categories", falling back to the plain appointment count.
+  categories?: AgendaCategory[];
 }
 
 /** One person waiting for a spot (barber-facing). */
@@ -158,7 +183,14 @@ export interface WaitlistRow {
   createdAt: string;
 }
 
-export default async function BookingPage() {
+export default async function BookingPage({
+  searchParams,
+}: {
+  // `?tab=Appointments` lets the dashboard's "Book appointment" CTA land on the
+  // calendar instead of the default Settings tab. An unknown or absent value
+  // falls back to the default, so a stale or hand-typed link can't render blank.
+  searchParams?: { tab?: string };
+}) {
   // The month calendar loads the current month on first paint (with a week of
   // padding on each side so the visible grid's leading/trailing days are filled),
   // then fetches other months on demand via getAgendaAction as the barber pages.
@@ -211,6 +243,7 @@ export default async function BookingPage() {
       </header>
       <BookingManager
         shop={shopRes.data}
+        initialTab={searchParams?.tab}
         appBase={process.env.APP_BASE_URL ?? ""}
         apiBase={API_BASE}
         connect={connect}

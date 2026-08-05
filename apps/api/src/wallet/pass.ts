@@ -130,7 +130,9 @@ export async function buildPassForClient(clientId: string): Promise<Buffer | nul
 
   const { client, balance, rewards } = data;
   const nextTarget = rewards.find((r) => r.punchCost > balance) ?? null;
-  const rewardsUrl = `${env.APP_BASE_URL}/r/${client.magicToken}`;
+  // The pass IS the punch card, so its tap-through opens the punch card
+  // (/rewards) rather than the shop-page landing.
+  const rewardsUrl = `${env.APP_BASE_URL}/r/${client.magicToken}/rewards`;
 
   const passJson = {
     formatVersion: 1,

@@ -7,7 +7,14 @@ import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { cn } from "@/lib/cn";
 import { serviceColorHex } from "@chairback/config/constants";
 import { zonedWallTimeToUtc } from "@chairback/config/time";
-import type { AgendaResponse, AgendaRow, ServiceRow, StaffRow, WaitlistRow } from "./page";
+import type {
+  AgendaCategory,
+  AgendaResponse,
+  AgendaRow,
+  ServiceRow,
+  StaffRow,
+  WaitlistRow,
+} from "./page";
 import {
   applyRewardAction,
   approveAppointmentAction,
@@ -119,6 +126,12 @@ export function BookingCalendar({
 
   // ---- Loaded agenda (starts server-provided, replaced when paging months) ----
   const [agenda, setAgenda] = useState<AgendaRow[]>(initial.agenda);
+  // Day-gauge buckets (service groups + ungrouped services, with their targets).
+  // Refreshed alongside the agenda so editing a target in another tab shows up
+  // on the next poll rather than needing a reload.
+  const [categories, setCategories] = useState<AgendaCategory[]>(
+    initial.categories ?? [],
+  );
   const [pendingMonth, startMonthLoad] = useTransition();
   // Which months we've already fetched, so re-visiting one doesn't refetch.
   const [loadedMonths, setLoadedMonths] = useState<Set<string>>(
@@ -165,6 +178,7 @@ export function BookingCalendar({
         for (const r of res.data!.agenda) if (!seen.has(r.id)) merged.push(r);
         return merged;
       });
+      if (res.data.categories) setCategories(res.data.categories);
       setLoadedMonths((prev) => new Set(prev).add(tag));
     });
   }
@@ -180,6 +194,7 @@ export function BookingCalendar({
     void getAgendaAction(from, to).then((res) => {
       if (!res.ok || !res.data) return;
       const rows = res.data.agenda;
+      if (res.data.categories) setCategories(res.data.categories);
       setAgenda((prev) => {
         const fresh = new Map(rows.map((r) => [r.id, r]));
         const merged = prev.map((r) => fresh.get(r.id) ?? r);
@@ -324,6 +339,7 @@ export function BookingCalendar({
           >
             <DayPlanner
               rows={selectedRows}
+              categories={categories}
               title={
                 selectedRows[0]
                   ? dayTitleFmt.format(new Date(selectedRows[0].start))
@@ -537,9 +553,115 @@ function WaitlistItem({ entry, toast }: { entry: WaitlistRow; toast: Toast }) {
   );
 }
 
+/**
+ * Counts the day's bookings per gauge bucket. Mirrors `activeCount`'s rule -
+ * blocked time isn't a booking and a canceled row freed its slot, so neither
+ * counts. A row whose categoryId matches no LISTED category (a retired service,
+ * or a synced visit whose name matched nothing) still lands in the All total,
+ * which is why that total is counted directly rather than summed from buckets.
+ */
+function countByCategory(rows: AgendaRow[]): { all: number; byId: Map<string, number> } {
+  const byId = new Map<string, number>();
+  let all = 0;
+  for (const r of rows) {
+    if (r.source === "block" || r.status === "canceled") continue;
+    all++;
+    if (r.categoryId) byId.set(r.categoryId, (byId.get(r.categoryId) ?? 0) + 1);
+  }
+  return { all, byId };
+}
+
+/**
+ * The "All" denominator: the sum of every bucket's target - but ONLY when that
+ * sum actually describes the whole day. It's withheld when any bucket has no
+ * target, or when some booking sits outside every bucket, because in either
+ * case the numerator counts things the denominator doesn't cover and "14/16"
+ * would be a quietly wrong number. Returning null just falls back to a plain
+ * count, which is honest.
+ */
+function sumTargets(
+  categories: AgendaCategory[],
+  counts: { all: number; byId: Map<string, number> },
+): number | null {
+  if (categories.length === 0) return null;
+  let total = 0;
+  let bucketed = 0;
+  for (const c of categories) {
+    if (c.target === null) return null;
+    total += c.target;
+    bucketed += counts.byId.get(c.id) ?? 0;
+  }
+  return bucketed === counts.all ? total : null;
+}
+
+/**
+ * The headline "12 / 16" (or a plain count when the bucket has no target).
+ * Hitting the target is the good outcome, so full reads GOLD, not red - and
+ * going past it is allowed by design (nothing enforces a target), so an
+ * over-target day reads 17/16 rather than clamping or alarming.
+ */
+function DayGauge({ count, target }: { count: number; target: number | null }) {
+  if (target === null) {
+    return (
+      <span className="shrink-0 text-xs text-muted">
+        {count} {count === 1 ? "appointment" : "appointments"}
+      </span>
+    );
+  }
+  const full = count >= target;
+  return (
+    <span
+      className="shrink-0 text-xs text-muted"
+      // One label for the pair - a screen reader hearing "12 16" learns nothing.
+      aria-label={`${count} of ${target} slots booked`}
+    >
+      <span className={cn("text-sm font-semibold", full ? "text-gold" : "text-offwhite")}>
+        {count}
+      </span>
+      <span aria-hidden="true"> / {target} slots</span>
+    </span>
+  );
+}
+
+/** One filter chip, carrying its own bucket's count so the row reads at a glance. */
+function CategoryChip({
+  label,
+  count,
+  target,
+  active,
+  onClick,
+}: {
+  label: string;
+  count: number;
+  target: number | null;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        "shrink-0 whitespace-nowrap rounded-full border px-3 py-1 text-xs transition-colors",
+        active
+          ? "border-gold/50 bg-gold/15 text-gold"
+          : "border-subtle text-muted hover:border-gold/40 hover:text-offwhite",
+      )}
+    >
+      {label}{" "}
+      <span className={cn("tabular-nums", !active && "text-offwhite")}>
+        {count}
+        {target !== null && `/${target}`}
+      </span>
+    </button>
+  );
+}
+
 /** A single day expanded into an every-hour planner. */
 function DayPlanner({
   rows,
+  categories,
   title,
   hourOf,
   timeFmt,
@@ -550,6 +672,8 @@ function DayPlanner({
   onChanged,
 }: {
   rows: AgendaRow[];
+  /** Gauge buckets (groups + ungrouped services) with their display-only targets. */
+  categories: AgendaCategory[];
   title: string;
   hourOf: (iso: string) => number;
   timeFmt: Intl.DateTimeFormat;
@@ -560,10 +684,35 @@ function DayPlanner({
   /** Refetch the agenda so a row mutation shows without waiting for the poll. */
   onChanged: () => void;
 }) {
+  // ---- Day gauge: how full is this day, and in what? ----
+  // null = "All". Reset per day: `key={selectedDay}` on the wrapper remounts
+  // this component when the barber taps a different day, so a filter never
+  // silently carries over to a day where that category has nothing.
+  const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
+  const counts = countByCategory(rows);
+  // Only chip what's worth chipping: a bucket the barber set a target on (they
+  // want to watch it) or one with bookings today (it's on the day). A shop with
+  // no targets and one category gets no chip row at all - just the plain count.
+  const chipCategories = categories.filter(
+    (c) => c.target !== null || (counts.byId.get(c.id) ?? 0) > 0,
+  );
+  const showChips = chipCategories.length > 1;
+  const selected = chipCategories.find((c) => c.id === categoryFilter) ?? null;
+  // A filter the day can no longer satisfy (target cleared elsewhere) falls back
+  // to All rather than showing an empty planner with no way back.
+  const activeFilter = selected?.id ?? null;
+  const shownRows = activeFilter
+    ? rows.filter((r) => r.categoryId === activeFilter || r.source === "block")
+    : rows;
+  // Blocked time always shows (it's context for the day, not a booking), so the
+  // headline count comes from the bucket, never from shownRows.
+  const shownCount = selected ? (counts.byId.get(selected.id) ?? 0) : counts.all;
+  const shownTarget = selected ? selected.target : sumTargets(chipCategories, counts);
+
   // Group appointments into their start hour, then render every hour in the
   // day's working window (default 8a-11p, widened to fit any early/late booking).
   const byHour = new Map<number, AgendaRow[]>();
-  for (const r of rows) {
+  for (const r of shownRows) {
     const h = hourOf(r.start);
     byHour.set(h, [...(byHour.get(h) ?? []), r]);
   }
@@ -576,18 +725,42 @@ function DayPlanner({
   const hours: number[] = [];
   for (let h = startHour; h <= endHour; h++) hours.push(h);
 
-  const activeCount = rows.filter(
-    (r) => r.source !== "block" && r.status !== "canceled",
-  ).length;
-
   return (
     <div className="mt-4 border-t border-subtle pt-4">
       <div className="mb-3 flex items-baseline justify-between gap-3">
         <h3 className="font-display text-base">{title}</h3>
-        <span className="text-xs text-muted">
-          {activeCount} {activeCount === 1 ? "appointment" : "appointments"}
-        </span>
+        <DayGauge count={shownCount} target={shownTarget} />
       </div>
+
+      {/* Category filter: retunes the gauge AND the planner below, so "just
+          retwists" shows him the retwist bookings, not only their count. */}
+      {showChips && (
+        <div
+          className="mb-3 flex gap-1.5 overflow-x-auto pb-1"
+          role="group"
+          aria-label="Filter this day by service"
+        >
+          <CategoryChip
+            label="All"
+            count={counts.all}
+            target={sumTargets(chipCategories, counts)}
+            active={activeFilter === null}
+            onClick={() => setCategoryFilter(null)}
+          />
+          {chipCategories.map((c) => (
+            <CategoryChip
+              key={c.id}
+              label={c.name}
+              count={counts.byId.get(c.id) ?? 0}
+              target={c.target}
+              active={activeFilter === c.id}
+              onClick={() =>
+                setCategoryFilter((cur) => (cur === c.id ? null : c.id))
+              }
+            />
+          ))}
+        </div>
+      )}
 
       {/* Barber actions (native booking only). */}
       {isNative && (

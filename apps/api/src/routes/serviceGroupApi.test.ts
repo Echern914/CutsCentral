@@ -54,7 +54,6 @@ async function listGroups() {
     name: string;
     maxPerDay: number | null;
     maxConcurrent: number | null;
-    hoursWindows: Record<string, { s: number; e: number }[]>;
     serviceIds: string[];
   }[];
 }
@@ -98,26 +97,24 @@ afterAll(async () => {
 
 describe("service groups CRUD round-trip", () => {
   it("creates with caps + hours + members, lists them back, patches, and deletes", async () => {
-    const hoursWindows = { "1": [{ s: 600, e: 840 }] }; // Mondays 10:00-14:00
+    // NOTE: no hoursWindows here - hours belong to the SERVICE now.
     const create = await createGroup({
       name: "Chemical services",
       maxPerDay: 5,
       maxConcurrent: 2,
-      hoursWindows,
       serviceIds: [serviceAId, serviceBId],
     });
     expect(create.status).toBe(201);
     expect(typeof create.body.id).toBe("string");
     const groupId = create.body.id as string;
 
-    // GET: the group appears with its caps, hoursWindows, and member serviceIds.
+    // GET: the group appears with its caps and member serviceIds (no hours).
     let groups = await listGroups();
     let found = groups.find((g) => g.id === groupId)!;
     expect(found).toBeTruthy();
     expect(found.name).toBe("Chemical services");
     expect(found.maxPerDay).toBe(5);
     expect(found.maxConcurrent).toBe(2);
-    expect(found.hoursWindows).toEqual(hoursWindows);
     expect([...found.serviceIds].sort()).toEqual([serviceAId, serviceBId].sort());
 
     // Members carry the group id on the services endpoint too.
@@ -246,19 +243,19 @@ describe("service order within a group", () => {
   });
 });
 
-// REGRESSION - Drick's "hours keep resetting": the dashboard used to send the
-// FULL group form on every save, so a Save from a stale editor overwrote
-// hoursWindows (an untouched all-Open grid serialized to {} and CLEARED the
-// configured windows). The web client now PATCHes only the fields the barber
-// changed; these lock the API contract that makes that safe: a field ABSENT
-// from the PATCH body is never touched.
-describe("group hours survive unrelated PATCHes", () => {
-  const hoursWindows = { "1": [{ s: 600, e: 840 }], "2": [{ s: 600, e: 840 }] }; // Mon+Tue 10:00-14:00
-
-  it("membership-only, name-only, caps-only, and hours-only PATCHes each touch only their field", async () => {
+// REGRESSION - Drick's "it keeps resetting": the dashboard used to send the FULL
+// group form on every save, so a Save from a stale editor overwrote fields the
+// barber never touched. The web client now PATCHes only what changed; these lock
+// the API contract that makes that safe: a field ABSENT from the PATCH body is
+// never touched. Originally written around group hoursWindows - hours have since
+// moved onto the service, so the same guarantee is pinned here on the fields a
+// group still owns (name, caps, day target, membership).
+describe("a group's fields survive unrelated PATCHes", () => {
+  it("membership-only, name-only and caps-only PATCHes each touch only their field", async () => {
     const create = await createGroup({
       name: "After hours",
-      hoursWindows,
+      maxPerDay: 3,
+      maxConcurrent: 2,
       serviceIds: [serviceAId],
     });
     expect(create.status).toBe(201);
@@ -272,8 +269,10 @@ describe("group hours survive unrelated PATCHes", () => {
       .send({ serviceIds: [serviceAId, serviceBId] });
     expect(patch.status).toBe(200);
     let found = (await listGroups()).find((g) => g.id === groupId)!;
-    expect(found.hoursWindows).toEqual(hoursWindows);
     expect(found.serviceIds).toEqual([serviceAId, serviceBId]);
+    expect(found.maxPerDay).toBe(3); // caps untouched
+    expect(found.maxConcurrent).toBe(2);
+    expect(found.name).toBe("After hours");
 
     // Name-only PATCH.
     patch = await request(app)
@@ -283,10 +282,10 @@ describe("group hours survive unrelated PATCHes", () => {
     expect(patch.status).toBe(200);
     found = (await listGroups()).find((g) => g.id === groupId)!;
     expect(found.name).toBe("After hours (renamed)");
-    expect(found.hoursWindows).toEqual(hoursWindows);
+    expect(found.maxPerDay).toBe(3);
     expect(found.serviceIds).toEqual([serviceAId, serviceBId]); // members untouched too
 
-    // Caps-only PATCH.
+    // Caps-only PATCH leaves membership and name alone.
     patch = await request(app)
       .patch(`/api/booking/groups/${groupId}`)
       .set("Cookie", cookie)
@@ -294,27 +293,9 @@ describe("group hours survive unrelated PATCHes", () => {
     expect(patch.status).toBe(200);
     found = (await listGroups()).find((g) => g.id === groupId)!;
     expect(found.maxPerDay).toBe(4);
-    expect(found.hoursWindows).toEqual(hoursWindows);
-
-    // Hours-only PATCH updates hours and leaves membership alone.
-    const newWindows = { "5": [{ s: 540, e: 720 }] }; // Fri 9:00-12:00
-    patch = await request(app)
-      .patch(`/api/booking/groups/${groupId}`)
-      .set("Cookie", cookie)
-      .send({ hoursWindows: newWindows });
-    expect(patch.status).toBe(200);
-    found = (await listGroups()).find((g) => g.id === groupId)!;
-    expect(found.hoursWindows).toEqual(newWindows);
+    expect(found.maxConcurrent).toBe(2);
+    expect(found.name).toBe("After hours (renamed)");
     expect(found.serviceIds).toEqual([serviceAId, serviceBId]);
-
-    // Explicit {} clears - the documented "every day back to Open" intent.
-    patch = await request(app)
-      .patch(`/api/booking/groups/${groupId}`)
-      .set("Cookie", cookie)
-      .send({ hoursWindows: {} });
-    expect(patch.status).toBe(200);
-    found = (await listGroups()).find((g) => g.id === groupId)!;
-    expect(found.hoursWindows).toEqual({});
 
     await request(app).delete(`/api/booking/groups/${groupId}`).set("Cookie", cookie);
   });
@@ -322,7 +303,7 @@ describe("group hours survive unrelated PATCHes", () => {
   it("an empty PATCH body changes nothing (and 200s)", async () => {
     const create = await createGroup({
       name: "No-op",
-      hoursWindows,
+      maxPerDay: 5,
       serviceIds: [serviceAId],
     });
     expect(create.status).toBe(201);
@@ -335,8 +316,37 @@ describe("group hours survive unrelated PATCHes", () => {
     expect(patch.status).toBe(200);
     const found = (await listGroups()).find((g) => g.id === groupId)!;
     expect(found.name).toBe("No-op");
-    expect(found.hoursWindows).toEqual(hoursWindows);
+    expect(found.maxPerDay).toBe(5);
     expect(found.serviceIds).toEqual([serviceAId]);
+
+    await request(app).delete(`/api/booking/groups/${groupId}`).set("Cookie", cookie);
+  });
+
+  // Deploy-skew contract: a client from BEFORE hours moved off the group may
+  // still send hoursWindows in a batched save. It must be accepted and ignored,
+  // never 400 - the group editor puts a rename, a cap change and a membership
+  // change in the SAME payload, so rejecting the stray key would take those
+  // unrelated edits down with it.
+  it("accepts and ignores a legacy hoursWindows key without disturbing the save", async () => {
+    const create = await createGroup({ name: "Legacy", serviceIds: [serviceAId] });
+    expect(create.status).toBe(201);
+    const groupId = create.body.id as string;
+
+    const patch = await request(app)
+      .patch(`/api/booking/groups/${groupId}`)
+      .set("Cookie", cookie)
+      .send({
+        name: "Legacy (renamed)",
+        maxPerDay: 6,
+        hoursWindows: { "1": [{ s: 600, e: 840 }] }, // from an old client
+      });
+    expect(patch.status).toBe(200);
+    const found = (await listGroups()).find((g) => g.id === groupId)!;
+    // The real fields landed...
+    expect(found.name).toBe("Legacy (renamed)");
+    expect(found.maxPerDay).toBe(6);
+    // ...and hours are simply not part of a group any more.
+    expect("hoursWindows" in found).toBe(false);
 
     await request(app).delete(`/api/booking/groups/${groupId}`).set("Cookie", cookie);
   });

@@ -62,6 +62,25 @@ export const BILLING = {
 } as const;
 
 /**
+ * Referral program: "refer a barber, you both get a month".
+ *
+ * `rewardDays` goes to BOTH sides, but at different moments. The friend's month
+ * is added to their trial the instant their shop is created, so the benefit is
+ * immediate - and it stacks ON TOP of the standard trial, which is why the copy
+ * says an EXTRA month rather than "your first month free": they'd have had 30
+ * days anyway, so the real offer is 60.
+ *
+ * The referrer's month is granted only once the friend's first invoice actually
+ * clears. Any earlier trigger - signup, or merely entering a card - is farmable
+ * with throwaway accounts, and a free month is real revenue.
+ */
+export const REFERRAL = {
+  rewardDays: 30,
+  /** Bytes of entropy in a share code; base64url, so ~8 chars at 6 bytes. */
+  codeBytes: 6,
+} as const;
+
+/**
  * Shop verticals. The product is service-business generic (Shop/Client/Visit);
  * industry only flavors defaults and copy. `defaultReward` seeds the first
  * loyalty menu item during onboarding. `serviceNoun` is the singular word for a

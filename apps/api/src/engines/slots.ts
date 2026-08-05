@@ -196,17 +196,25 @@ export async function computeOpenSlots(
     });
     if (!service || service.durationMin <= 0) return null;
 
-    // SERVICE GROUP (Acuity-style bundle). When the service belongs to an active
-    // group, the group carries: shared available-hours (OVERRIDE this service's
-    // own hoursWindows below) and two shop-wide caps - maxPerDay (bookings per
-    // shop-local day across all member services) and maxConcurrent (overlapping
-    // bookings at once across the group). Ungrouped services (serviceGroupId
-    // null - every existing service, every new shop) skip this entirely and the
-    // rest of the engine is byte-for-byte the pre-group behavior.
+    // SERVICE GROUP (Acuity-style bundle). A group carries the two shop-wide
+    // caps - maxPerDay (bookings per shop-local day across all member services)
+    // and maxConcurrent (overlapping bookings at once across the group).
+    //
+    // It no longer carries HOURS. A group's hoursWindows used to override the
+    // member service's own, which meant a service's hours were edited in one
+    // place and displayed in another, and a grouped service's own windows were
+    // dead config the engine silently ignored. Hours now live on the service,
+    // always - one owner, one place to edit (see the migration that copied each
+    // active group's windows down onto its members). ServiceGroup.hoursWindows
+    // is deliberately still in the schema but no longer read.
+    //
+    // Ungrouped services (serviceGroupId null - every existing service, every
+    // new shop) skip this entirely and the rest of the engine is byte-for-byte
+    // the pre-group behavior.
     const group = service.serviceGroupId
       ? await tx.serviceGroup.findFirst({
           where: { id: service.serviceGroupId, shopId: input.shopId, active: true },
-          select: { id: true, hoursWindows: true, maxPerDay: true, maxConcurrent: true },
+          select: { id: true, maxPerDay: true, maxConcurrent: true },
         })
       : null;
 
@@ -405,15 +413,11 @@ export async function computeOpenSlots(
   // with staff hours); present + empty means the service isn't offered that day.
   // Empty map (every existing service) => nothing is ever restricted.
   //
-  // GROUP OVERRIDES SERVICE: when the service is in an active group, the GROUP's
-  // hoursWindows feed the restriction instead of the service's own - the shared
-  // group hours win. Ungrouped (group === null) is the fast path: identical to
-  // parsing the service's own hoursWindows, byte-for-byte unchanged. The
-  // intersection-with-staff-rules walk below is untouched either way; only which
-  // map it reads changes.
-  const serviceByWeekday = parseServiceHours(
-    group ? group.hoursWindows : service.hoursWindows,
-  );
+  // THE SERVICE OWNS ITS HOURS, grouped or not. This used to consult the
+  // service's active group first, so a grouped service's own windows were dead
+  // config; the group's map is no longer read at all here (see the group query
+  // above). Group membership now affects only the shared CAPS below.
+  const serviceByWeekday = parseServiceHours(service.hoursWindows);
 
   // Build the recurring windows by walking each shop-local calendar date across
   // the range (plus a day of slack on each side so a window that straddles
@@ -553,16 +557,24 @@ export async function computeOpenSlots(
     });
   }
 
-  // free = windows - blocks, clipped to [max(earliest, rangeStart), rangeEnd].
-  // The window walk starts a day BEFORE rangeStart (tz-straddle slack), so the
-  // lower clip must honor the caller's fromDate too - clipping only to
-  // `earliest` (now + lead) leaked the day-before's windows into a FUTURE-dated
-  // query (e.g. asking for tomorrow returned today's remaining slots, anchored
-  // at odd now-based minutes). The public page queries from=now (unaffected);
-  // the barber's Time picker for a future day was the visible victim.
+  // The lower bound every candidate slot must clear: now + lead, and never
+  // before the caller's fromDate. The window walk starts a day BEFORE
+  // rangeStart (tz-straddle slack), so honoring fromDate here is what keeps a
+  // FUTURE-dated query from returning today's leftovers (asking for tomorrow
+  // used to return today's remaining slots).
+  const lowerBound = Math.max(earliest, rangeStart);
+
+  // free = windows - blocks, clipped only at the TOP. The lower bound is
+  // deliberately NOT clipped in: clipping it re-anchored the slot grid to the
+  // bound itself, which is an arbitrary instant (now + lead, to the
+  // millisecond). A customer loading the page at 10:23:07.123 with the default
+  // 2h lead was offered "12:23 PM, 1:23 PM, 2:23 PM" while every FUTURE day
+  // showed a clean 9:00 / 10:00 / 11:00 grid off the window start. Keeping the
+  // window's own start as the grid origin and filtering candidates below makes
+  // today read exactly like every other day.
   const free = clipRanges(
     subtractRanges(windows, blocks),
-    Math.max(earliest, rangeStart),
+    Number.NEGATIVE_INFINITY,
     rangeEnd,
   );
 
@@ -589,7 +601,13 @@ export async function computeOpenSlots(
       const spanMs = (effDur + extraMin) * MS_PER_MIN;
       const tailMs = spanMs + buffer * MS_PER_MIN;
       if (t + tailMs > w.end) break;
-      slots.push({ startsAt: new Date(t), endsAt: new Date(t + spanMs) });
+      // Below the bound (already past, inside the lead, or before the caller's
+      // fromDate) - step over it WITHOUT moving the grid. `>=` matches the
+      // write path's own too_soon test (startsAt < earliest), so the engine can
+      // never offer a time the booking POST would turn around and reject.
+      if (t >= lowerBound) {
+        slots.push({ startsAt: new Date(t), endsAt: new Date(t + spanMs) });
+      }
       t += effDur * MS_PER_MIN;
     }
   }

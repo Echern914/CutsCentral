@@ -606,10 +606,12 @@ describe("day-first bundles endpoint (/api/book/:slug/day)", () => {
     expect(far.status).toBe(200);
     expect(far.body.bundles).toEqual([]);
 
-    // Group hours: close the bundle on the queried weekday -> it vanishes.
+    // Close the SERVICE on the queried weekday -> its grid slots vanish.
+    // (This used to be done through the group's hoursWindows; hours belong to
+    // the service now, so the group is no longer where a day gets closed.)
     const wd = new Date(`${key}T12:00:00Z`).getUTCDay();
     const close = await request(app)
-      .patch(`/api/booking/groups/${group.body.id}`)
+      .patch(`/api/booking/services/${serviceId}`)
       .set("Cookie", cookie)
       .send({ hoursWindows: { [String(wd)]: [] } });
     expect(close.status).toBe(200);

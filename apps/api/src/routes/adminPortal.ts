@@ -1,10 +1,21 @@
 import { Router } from "express";
 import { z } from "zod";
-import { BILLING } from "@chairback/config";
+import { apiEnv, BILLING } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { requireUser } from "../middleware/auth.js";
 import { requireAdmin } from "../middleware/admin.js";
-import { ACTIVE_STATUSES, billingEnabled, hasActiveAccess } from "../billing/stripe.js";
+import {
+  ACTIVE_STATUSES,
+  billingEnabled,
+  connectEnabled,
+  hasActiveAccess,
+} from "../billing/stripe.js";
+import { emailEnabled } from "../messaging/email.js";
+import { pushEnabled } from "../messaging/push.js";
+import { squareEnabled } from "../square/client.js";
+import { walletEnabled } from "../wallet/pass.js";
+import { receptionistConfigured } from "../receptionist/config.js";
+import { buildPreflight } from "../ops/preflight.js";
 
 /**
  * Operator portal API (the founder's own admin surface). Session-gated to
@@ -206,6 +217,32 @@ adminPortalRouter.get("/analytics", async (req, res) => {
       ledToBooking: nudgeBookings,
     },
   });
+});
+
+/**
+ * Launch preflight - which integrations are actually live on THIS deployment.
+ *
+ * Every capability boolean comes from the subsystem's own `*Enabled()` helper
+ * rather than being re-derived here, so the report can never disagree with the
+ * gate that actually runs. Returns booleans, counts and non-secret scalars
+ * only - never a key or secret value.
+ */
+adminPortalRouter.get("/preflight", (_req, res) => {
+  res.json(
+    buildPreflight(
+      apiEnv(),
+      {
+        billing: billingEnabled(),
+        connect: connectEnabled(),
+        email: emailEnabled(),
+        push: pushEnabled(),
+        wallet: walletEnabled(),
+        square: squareEnabled(),
+        receptionist: receptionistConfigured(),
+      },
+      Boolean(process.env.WEB_PROXY_SECRET),
+    ),
+  );
 });
 
 // Comp a shop to free full access (or revoke it). The one operator write that

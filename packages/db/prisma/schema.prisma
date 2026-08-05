@@ -406,7 +406,71 @@ model Shop {
   members     ShopMember[]
   teamInvites TeamInvite[]
 
+  // The code THIS shop hands out ("share this link, you both get a month").
+  // Distinct from User.referralCode, which is the code a user ARRIVED with -
+  // one is outbound, the other inbound. Null until the shop first opens the
+  // referrals page, which mints it lazily; unique so a code resolves to exactly
+  // one referrer.
+  referralCode String? @unique
+  // Referrals this shop drove, and the single row (if any) recording that this
+  // shop was itself referred.
+  referralsGiven    Referral[] @relation("ReferralsGiven")
+  referralReceived  Referral?  @relation("ReferralsReceived")
+
   @@index([ownerId])
+}
+
+enum ReferralStatus {
+  // Friend signed up with the code but hasn't paid yet. No reward exists.
+  PENDING
+  // Friend's first invoice actually cleared; the referrer's month was granted.
+  REWARDED
+  // Disqualified and never payable - today only self-referral (same owner).
+  VOID
+}
+
+// One row per referred shop, created when a shop is created by a user who
+// arrived with a referral code.
+//
+// The reward deliberately fires on the friend's FIRST SUCCESSFUL PAYMENT, not
+// on signup: a signup-triggered reward is free money for anyone willing to make
+// throwaway accounts, and "a free month" is real revenue. Waiting for cleared
+// money means farming a reward costs more than the reward is worth.
+model Referral {
+  id String @id @default(cuid())
+
+  // Who earns the reward.
+  referrerShopId String
+  referrerShop   Shop   @relation("ReferralsGiven", fields: [referrerShopId], references: [id], onDelete: Cascade)
+
+  // Who used the code. Unique: a shop can only ever be referred once, which is
+  // also what stops a second signup from re-triggering a payout.
+  referredShopId String @unique
+  referredShop   Shop   @relation("ReferralsReceived", fields: [referredShopId], references: [id], onDelete: Cascade)
+
+  // The code as actually used, kept even if the referrer later rotates theirs -
+  // without it an audit can't reconstruct why a payout happened.
+  code   String
+  status ReferralStatus @default(PENDING)
+
+  // When the friend's first payment cleared, and when the referrer's reward was
+  // actually applied. Set together today, but kept separate so a failed grant is
+  // visible as "qualified but not rewarded" rather than silently looking unpaid.
+  qualifiedAt DateTime?
+  rewardedAt  DateTime?
+
+  // How the referrer's month was delivered: "trial_extension" when they hadn't
+  // subscribed yet (their trialEndsAt moved, which the checkout flow already
+  // honors as Stripe's trial_end) or "stripe_credit" when they were already
+  // paying and needed money off their next invoice instead.
+  rewardKind        String?
+  rewardAmountCents Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // "How many has this shop driven, and which are still pending?"
+  @@index([referrerShopId, status])
 }
 
 // What a signed-in member may do in a shop.
@@ -1134,6 +1198,15 @@ model Service {
   offeredByAll   Boolean  @default(false)
   active         Boolean  @default(true)
   sortOrder      Int      @default(0)
+  // DISPLAY-ONLY daily slot target ("I aim for 12 haircuts a day"), used as the
+  // denominator of the calendar day gauge (12/16). Deliberately NOT a cap: no
+  // read or write path consults this, so booking past it is allowed and simply
+  // reads 13/12. The enforced ceiling is ServiceGroup.maxPerDay - keeping the
+  // two apart means a barber can track fullness without accidentally turning
+  // away work. Ignored while the service is in a group (the GROUP's target
+  // covers all its members, mirroring how group hours override service hours).
+  // null = no target; the gauge falls back to a plain count.
+  dailyTarget    Int?
   // Optional membership in a ServiceGroup. null = the service is standalone and
   // uses its OWN hoursWindows/limits (the default; every existing service is null
   // so nothing changes). When set, the group's hoursWindows OVERRIDE this
@@ -1161,8 +1234,10 @@ model Service {
 // A ServiceGroup bundles several services under ONE shared config (Acuity-style
 // "Group N appointment types"). A member service inherits the group's shared
 // availability and booking caps:
-//   - hoursWindows  same shape/semantics as Service.hoursWindows, but when a
-//     service is in a group THIS map OVERRIDES the service's own windows.
+//   - hoursWindows  LEGACY, no longer read by anything. It used to override the
+//     member service's own windows; hours now live on the Service (migration
+//     20260804120000 copied each active group's map down onto its members). Kept
+//     populated so the change stays revertible.
 //   - maxPerDay     null => no daily cap; N => at most N bookings per shop-local
 //     day counted ACROSS all member services.
 //   - maxConcurrent null => no per-slot cap; N => at most N overlapping bookings
@@ -1178,6 +1253,10 @@ model ServiceGroup {
   hoursWindows  Json     @default("{}")
   maxPerDay     Int? // null = no daily cap across the group
   maxConcurrent Int? // null = no per-slot (overlapping) cap across the group
+  // DISPLAY-ONLY daily slot target for the calendar day gauge ("Haircuts 10/12"),
+  // counted across all member services. NOT enforced anywhere - see the twin
+  // field on Service for why this is deliberately separate from maxPerDay.
+  dailyTarget   Int?
   active        Boolean  @default(true)
   sortOrder     Int      @default(0)
   createdAt     DateTime @default(now())

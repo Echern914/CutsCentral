@@ -166,7 +166,11 @@ export function buildPunchEarnedBody(params: {
   cardName?: string | null;
   nextReward?: { name: string; remaining: number } | null;
 }): string {
-  const rewardsUrl = `${env.APP_BASE_URL}/r/${params.magicToken}`;
+  // Straight to the punch card (/rewards), not the shop-page landing: this text
+  // promises punches, so the tap must open punches. The nudge/winback builders
+  // above deliberately keep the bare /r/ landing - those messages say "come
+  // back in", and the landing is the shop page with the Book button.
+  const rewardsUrl = `${env.APP_BASE_URL}/r/${params.magicToken}/rewards`;
   const who = params.firstName ?? "there";
   const punchWord = params.earned === 1 ? "punch" : "punches";
   const totalWord = params.balance === 1 ? "punch" : "punches";
@@ -199,7 +203,9 @@ export function buildRewardRedeemedBody(params: {
   // null/absent = default card -> copy reads exactly as before card types.
   cardName?: string | null;
 }): string {
-  const rewardsUrl = `${env.APP_BASE_URL}/r/${params.magicToken}`;
+  // /rewards for the same reason as buildPunchEarnedBody: the message is about
+  // their card, so the link opens their card.
+  const rewardsUrl = `${env.APP_BASE_URL}/r/${params.magicToken}/rewards`;
   const who = params.firstName ?? "there";
   const totalWord = params.balance === 1 ? "punch" : "punches";
   const onCard = params.cardName ? ` on your ${params.cardName} card` : "";

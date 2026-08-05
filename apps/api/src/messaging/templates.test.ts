@@ -120,6 +120,30 @@ describe("loyalty copy is card-aware", () => {
     expect(withNull).toBe(body);
   });
 
+  // Since /r/<token> became the shop-page landing, each link must match its
+  // message: a text about punches opens the punch card (/rewards); a rebooking
+  // nudge lands on the shop page (bare /r/), which owns the Book button.
+  it("loyalty texts link to the punch card; nudges link to the landing", () => {
+    expect(buildPunchEarnedBody(base)).toContain("/r/tok123/rewards");
+    expect(
+      buildRewardRedeemedBody({
+        firstName: "Sam",
+        shopName: "Fades",
+        magicToken: "tok123",
+        rewardName: "Free Cut",
+        balance: 1,
+      }),
+    ).toContain("/r/tok123/rewards");
+    const nudge = buildNudgeBody({
+      firstName: "Sam",
+      shopName: "Fades",
+      bookingUrl: null,
+      magicToken: "tok123",
+    });
+    expect(nudge).toContain("/r/tok123");
+    expect(nudge).not.toContain("/r/tok123/rewards");
+  });
+
   it("a named card is called out in SMS and push", () => {
     const body = buildPunchEarnedBody({ ...base, cardName: "VIP" });
     expect(body).toContain("you just earned 2 punches on your VIP card at Fades!");

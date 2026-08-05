@@ -8,10 +8,12 @@ import {
   frequencySegment,
   cadenceToDays,
   LOYALTY_TIER_KEYS,
+  REFERRAL,
   type LoyaltyTierKey,
 } from "@chairback/config";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
+import { ensureReferralCode } from "../services/referral.js";
 import { requireActiveAccess } from "../middleware/billing.js";
 import { hasActiveAccess } from "../billing/stripe.js";
 import { remainingMonthlySms } from "../billing/quota.js";
@@ -1612,6 +1614,34 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
       orderBy: { createdAt: "desc" },
       take: 50,
     });
+    // What this client has COMING UP. `visits` above is a past-only ledger
+    // (VisitHistory rejects future dates outright), so before this the detail
+    // page could show everything a client had ever done and still not tell you
+    // they were booked in tomorrow.
+    //
+    // PENDING sits alongside BOOKED because it holds the slot the same way -
+    // it's a request awaiting approval, and whoever is reading this page needs
+    // to know it's there. CANCELED/COMPLETED/NO_SHOW are terminal and belong to
+    // history, not to "upcoming".
+    const upcoming = await tx.appointment.findMany({
+      where: {
+        shopId: shop.id,
+        clientId: client.id,
+        startsAt: { gte: now },
+        status: { in: ["BOOKED", "PENDING"] },
+      },
+      orderBy: { startsAt: "asc" },
+      take: 10,
+      select: {
+        id: true,
+        startsAt: true,
+        endsAt: true,
+        status: true,
+        priceAtBooking: true,
+        service: { select: { name: true } },
+        staff: { select: { name: true } },
+      },
+    });
     // Per-card balances (cardTypeId null = the default card). Rewards redeem
     // from their OWN card, so "affordable" must compare against that balance.
     const groups = await tx.punchLedger.groupBy({
@@ -1637,14 +1667,15 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
       },
       orderBy: { createdAt: "desc" },
     });
-    return { client, visits, nudges, groups, shopCards, rewards, livePromos };
+    return { client, visits, nudges, upcoming, groups, shopCards, rewards, livePromos };
   });
 
   if (!data) {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const { client, visits, nudges, groups, shopCards, rewards, livePromos } = data;
+  const { client, visits, nudges, upcoming, groups, shopCards, rewards, livePromos } =
+    data;
   const balanceByCard = new Map(
     groups.map((g) => [
       g.cardTypeId,
@@ -1710,6 +1741,21 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
       status: v.status,
       service: v.serviceName,
     })),
+    upcoming: upcoming.map((a) => ({
+      id: a.id,
+      startsAt: a.startsAt.toISOString(),
+      endsAt: a.endsAt.toISOString(),
+      status: a.status,
+      service: a.service.name,
+      staff: a.staff.name,
+      // Decimal doesn't survive JSON as a number; send a plain string (or null)
+      // and let the client format it.
+      price: a.priceAtBooking?.toString() ?? null,
+    })),
+    // Appointment times render in the SHOP's zone, not the reader's. A barber
+    // checking the book from another timezone must see the time the client is
+    // actually walking in at. Same rule the agenda follows.
+    timezone: shop.timezone,
     nudges: nudges.map((n) => ({
       sentAt: (n.sentAt ?? n.createdAt).toISOString(),
       status: n.status,
@@ -2296,5 +2342,46 @@ dashboardRouter.post(
     res.json({ ok: true, status });
   },
 );
+
+/**
+ * The referrals page: this shop's share code plus who they've brought in.
+ *
+ * GET mints the code on first view (lazily, so no backfill was needed), which
+ * is why a read endpoint writes. Referral rows are read with plain prisma
+ * rather than forShop: a row spans two shops, and the referrer needs the
+ * REFERRED shop's name, which a shop-scoped read can't reach.
+ */
+dashboardRouter.get("/referrals", async (req, res) => {
+  const shop = req.shop!;
+  const code = await ensureReferralCode(shop.id);
+  const rows = await prisma.referral.findMany({
+    // VOID rows are self-referrals; showing them would just look like a bug.
+    where: { referrerShopId: shop.id, status: { not: "VOID" } },
+    orderBy: { createdAt: "desc" },
+    take: 100,
+    select: {
+      id: true,
+      status: true,
+      createdAt: true,
+      rewardedAt: true,
+      referredShop: { select: { name: true } },
+    },
+  });
+  res.json({
+    code,
+    referrals: rows.map((r) => ({
+      id: r.id,
+      shopName: r.referredShop.name,
+      status: r.status,
+      joinedAt: r.createdAt.toISOString(),
+      rewardedAt: r.rewardedAt?.toISOString() ?? null,
+    })),
+    // Counters the page leads with, computed here so the client never has to
+    // re-derive them from a truncated list.
+    earnedMonths: rows.filter((r) => r.status === "REWARDED").length,
+    pendingCount: rows.filter((r) => r.status === "PENDING").length,
+    rewardDays: REFERRAL.rewardDays,
+  });
+});
 
 export { NUDGE };

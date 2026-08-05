@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/Card";
 import { LocalDate } from "@/components/ui/LocalDate";
 import { CompToggle } from "./CompToggle";
 import { AnalyticsSection, type Analytics } from "./Analytics";
+import { PreflightSection, type Preflight } from "./Preflight";
 
 export const metadata = { title: `${APP_NAME} Admin` };
 
@@ -46,15 +47,17 @@ interface AdminShop {
  * This page never trusts a client flag - the API session check is the gate.
  */
 export default async function AdminPage() {
-  const [metricsRes, shopsRes, analyticsRes] = await Promise.all([
+  const [metricsRes, shopsRes, analyticsRes, preflightRes] = await Promise.all([
     apiGet<Metrics>("/api/admin-portal/metrics"),
     apiGet<{ shops: AdminShop[] }>("/api/admin-portal/shops"),
     apiGet<Analytics>("/api/admin-portal/analytics?days=30"),
+    apiGet<Preflight>("/api/admin-portal/preflight"),
   ]);
   if (metricsRes.status === 404 || metricsRes.status === 401) redirect("/dashboard");
   const m = metricsRes.data;
   const shops = shopsRes.data?.shops ?? [];
   const analytics = analyticsRes.data;
+  const preflight = preflightRes.data;
 
   return (
     <div className="min-h-dvh">
@@ -90,6 +93,8 @@ export default async function AdminPage() {
             <Stat label="Clients" value={m.totalClients} hint={`${m.totalVisits} visits`} />
           </div>
         )}
+
+        {preflight && <PreflightSection p={preflight} />}
 
         {analytics && <AnalyticsSection a={analytics} />}
 

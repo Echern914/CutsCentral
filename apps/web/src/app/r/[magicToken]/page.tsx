@@ -1,123 +1,45 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { APP_NAME, type CadenceKey } from "@chairback/config/constants";
+import { APP_NAME, serviceNounFor } from "@chairback/config/constants";
 import { apiPublicGet } from "@/lib/api";
+import { ShopPageClient } from "@/app/s/[slug]/ShopPageClient";
+import type { ShopPageData } from "@/app/s/[slug]/page";
 import { RewardsClient } from "./RewardsClient";
+import type { RewardsData } from "./rewards/page";
 
-export interface RewardsData {
-  shop: {
-    name: string;
-    // Master rewards switch. False = this page is a booking/visit hub with NO
-    // punch/reward surfaces (the API also empties rewards/cards/redemptions).
-    // Optional so a web deploy ahead of the API defaults to the old behavior.
-    rewardsEnabled?: boolean;
-    bookingUrl: string | null;
-    logoUrl: string | null;
-    accentColor: string | null;
-    // The barber's page identity (PAGE_THEMES / PAGE_FONTS / LAYOUT_STYLES keys).
-    // The rewards page renders in these so it matches the shop's public mini-site.
-    theme: string | null;
-    fontKey: string | null;
-    layoutStyle: string | null;
-    // Content control set by the barber: an optional welcome line and the list of
-    // visible REWARDS_SECTIONS keys (always non-empty from the API; defaults to all).
-    rewardsWelcome: string | null;
-    rewardsSections: string[];
-    pageSlug: string | null;
-  };
-  client: { firstName: string | null };
-  // Apple Wallet punch card: available once the API's WALLET_* env is set.
-  // Optional so a web deploy ahead of the API doesn't break the page.
-  wallet?: { available: boolean };
-  // Self-reported visit cadence. `preference` is null until the client answers
-  // the one-tap prompt; `computed` is true once there's enough visit history for
-  // the engine to derive a cadence (after which the prompt is moot).
-  cadence: {
-    preference: CadenceKey | null;
-    computed: boolean;
-  };
-  // Loyalty status tier by lifetime completed visits. `tier` is null below the
-  // first threshold; `nextTier` shows how many visits to the next one (or to the
-  // first tier for a brand-new client), and is null once the top tier is reached.
-  loyalty: {
-    tier: "BRONZE" | "SILVER" | "GOLD" | null;
-    label: string | null;
-    color: string | null;
-    visits: number;
-    nextTier: { label: string; visitsAway: number } | null;
-  };
-  consent: {
-    state: "opted_in" | "needs_consent" | "opted_out";
-    hasPhone: boolean;
-  };
-  punches: {
-    balance: number;
-    nextTarget: { name: string; punchCost: number; remaining: number } | null;
-  };
-  rewards: {
-    id: string;
-    name: string;
-    description: string | null;
-    emoji: string | null;
-    punchCost: number;
-    ready: boolean;
-    remaining: number;
-  }[];
-  // One entry per punch card the client can see (default card first; custom
-  // cards when public/granted/holding history). More than one entry switches
-  // the page to the stacked multi-card layout. Optional so a web deploy ahead
-  // of the API keeps rendering the classic single-card page.
-  cards?: {
-    id: string | null; // null = the default card
-    name: string;
-    emoji: string | null;
-    accentColor: string | null;
-    exclusive: boolean;
-    balance: number;
-    nextTarget: { name: string; punchCost: number; remaining: number } | null;
-    rewards: {
-      id: string;
-      name: string;
-      description: string | null;
-      emoji: string | null;
-      punchCost: number;
-      ready: boolean;
-      remaining: number;
-    }[];
-  }[];
-  promotions: {
-    id: string;
-    kind: "PERCENT_OFF" | "AMOUNT_OFF" | "FREE_ADDON" | "EXTRA_PUNCHES";
-    title: string;
-    description: string | null;
-    code: string | null;
-    percentOff: number | null;
-    amountOff: number | null;
-    extraPunches: number | null;
-    endsAt: string | null;
-  }[];
-  rebook: {
-    state: "booked" | "counting" | "overdue" | "none";
-    deadline: string | null;
-    windowDays: number;
-    upcomingAt: string | null;
-  };
-  // `card` = which punch card the activity landed on (null = default card).
-  visits: { date: string; service: string | null; punches: number | null; card?: string | null }[];
-  redemptions: { date: string; reward: string | null; punches: number; card?: string | null }[];
-}
+/**
+ * What a client sees when they open their link.
+ *
+ * This used to be the rewards page, with a "More from {shop} →" link buried at
+ * the bottom. That had it backwards: the punch card is the thing you check
+ * occasionally, and the shop - photos, services, reviews, and the Book button -
+ * is the thing you actually came for. So the shop's page is the landing surface
+ * and rewards moved to /r/<token>/rewards, one tap away.
+ *
+ * It renders here rather than redirecting to /s/<slug> because the magic token
+ * IS the client's identity. Bouncing to the anonymous shop page would drop it,
+ * and there'd be no way back to their punches without re-opening the text.
+ *
+ * Every existing /r/<token> link - four SMS templates, the wallet pass, push
+ * notifications, the iOS customer WebView - therefore keeps working and simply
+ * lands somewhere better.
+ */
 
-// Short 10s cache: the token IS the identity (no cookie), so it's a valid cache
-// key. The main win is deduping the metadata + render calls to this endpoint
-// into one; the tiny window also speeds rapid re-opens. Kept short because the
-// punch balance changes when the client earns/redeems — 10s stale at most, and
-// they'd reload after a counter visit anyway.
 const REWARDS_REVALIDATE_S = 10;
+const SHOP_PAGE_REVALIDATE_S = 60;
 
-async function getData(magicToken: string): Promise<RewardsData | null> {
+async function getRewards(magicToken: string): Promise<RewardsData | null> {
   const res = await apiPublicGet<RewardsData>(
     `/api/rewards/${magicToken}`,
     REWARDS_REVALIDATE_S,
+  );
+  return res.ok ? res.data : null;
+}
+
+async function getShopPage(slug: string): Promise<ShopPageData | null> {
+  const res = await apiPublicGet<ShopPageData>(
+    `/api/page/${encodeURIComponent(slug)}`,
+    SHOP_PAGE_REVALIDATE_S,
   );
   return res.ok ? res.data : null;
 }
@@ -127,57 +49,68 @@ export async function generateMetadata({
 }: {
   params: { magicToken: string };
 }): Promise<Metadata> {
-  const data = await getData(params.magicToken);
+  const data = await getRewards(params.magicToken);
   if (!data) return { title: APP_NAME };
-  const title = `${data.shop.name} Rewards`;
-  const ready = data.rewards.filter((r) => r.ready).length;
-  const description = ready > 0
-    ? `${ready} reward${ready === 1 ? "" : "s"} ready to claim at ${data.shop.name}.`
-    : data.punches.nextTarget
-      ? `${data.punches.nextTarget.remaining} punches to your ${data.punches.nextTarget.name}.`
-      : `${data.punches.balance} punches at ${data.shop.name}.`;
+  const shopPage = data.shop.pageSlug ? await getShopPage(data.shop.pageSlug) : null;
+  const description =
+    shopPage?.bio ??
+    `Book your next ${serviceNounFor(shopPage?.industry ?? "barber")} at ${data.shop.name}.`;
   return {
-    title,
+    title: data.shop.name,
     description,
-    openGraph: { title, description, type: "website" },
-    twitter: { card: "summary", title, description },
-    // Per-shop installable PWA: the manifest is generated per magicToken so the
-    // home-screen app is branded for THIS shop (name + theme color).
+    openGraph: { title: data.shop.name, description, type: "website" },
+    twitter: { card: "summary", title: data.shop.name, description },
+    // Per-shop installable PWA, unchanged: the home-screen app is branded for
+    // THIS shop and now opens on the shop page like every other entry point.
     manifest: `/r/${params.magicToken}/manifest.webmanifest`,
-    // iOS ignores parts of the manifest, so set the Apple bits explicitly: a
-    // capable web app, the shop name as the title, and a PNG touch icon (iOS
-    // ignores SVG apple icons).
-    appleWebApp: {
-      capable: true,
-      title: data.shop.name,
-      statusBarStyle: "default",
-    },
+    appleWebApp: { capable: true, title: data.shop.name, statusBarStyle: "default" },
     icons: { apple: [{ url: "/apple-touch-icon-180.png", sizes: "180x180" }] },
+    // The URL contains a client's identity token — never index it.
+    robots: { index: false, follow: false },
   };
 }
 
-export default async function RewardsPage({
+export default async function ClientLandingPage({
   params,
 }: {
   params: { magicToken: string };
 }) {
-  const data = await getData(params.magicToken);
+  const data = await getRewards(params.magicToken);
   if (!data) notFound();
-  // VAPID public key (safe to expose - it's a PUBLIC key) threaded to the client
-  // so the push opt-in can subscribe. Absent => the push UI stays hidden and
-  // everything falls back to SMS.
-  const vapidPublicKey = process.env.PUSH_VAPID_PUBLIC_KEY ?? null;
-  // Store links for the "Get the app" banner. Absent => banner never shows, so
-  // this is safe to ship before the app is live (set APP_STORE_URL to turn on).
-  const appStoreUrl = process.env.APP_STORE_URL ?? null;
-  const playStoreUrl = process.env.PLAY_STORE_URL ?? null;
+
+  // A shop with no public page (no slug yet, or the page turned off) has no
+  // shop surface to land on. Rather than strand the client on an empty screen,
+  // fall back to exactly what this URL did before: their rewards.
+  const shopPage = data.shop.pageSlug ? await getShopPage(data.shop.pageSlug) : null;
+  if (!shopPage) {
+    const vapidPublicKey = process.env.PUSH_VAPID_PUBLIC_KEY ?? null;
+    return (
+      <RewardsClient
+        data={data}
+        magicToken={params.magicToken}
+        vapidPublicKey={vapidPublicKey}
+        appStoreUrl={process.env.APP_STORE_URL ?? null}
+        playStoreUrl={process.env.PLAY_STORE_URL ?? null}
+      />
+    );
+  }
+
   return (
-    <RewardsClient
-      data={data}
-      magicToken={params.magicToken}
-      vapidPublicKey={vapidPublicKey}
-      appStoreUrl={appStoreUrl}
-      playStoreUrl={playStoreUrl}
+    <ShopPageClient
+      data={shopPage}
+      // Turns the shop page into the client's OWN view of the shop: it gains a
+      // rewards entry pointing back into their token. Anonymous visitors on
+      // /s/<slug> pass nothing here and see no such link.
+      rewardsHref={`/r/${params.magicToken}/rewards`}
+      rewardsLabel={
+        // Lead with the number when they have one - "4 punches" is a reason to
+        // tap; "Your rewards" is just a label.
+        data.shop.rewardsEnabled === false
+          ? "Your visits"
+          : data.punches.balance > 0
+            ? `Your rewards · ${data.punches.balance} ${data.punches.balance === 1 ? "punch" : "punches"}`
+            : "Your rewards"
+      }
     />
   );
 }

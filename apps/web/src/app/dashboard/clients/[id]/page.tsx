@@ -9,6 +9,8 @@ import {
 import { apiGet } from "@/lib/api";
 import { getMe } from "@/lib/me";
 import { Card } from "@/components/ui/Card";
+import { Avatar } from "@/components/ui/Avatar";
+import { UpcomingVisits, type UpcomingRow } from "./UpcomingVisits";
 import { ClientActions } from "./ClientActions";
 import { EditClient } from "./EditClient";
 import { MergeClient } from "./MergeClient";
@@ -56,6 +58,9 @@ interface ClientDetail {
   rewardReady: boolean;
   promotions: { id: string; title: string }[];
   visits: { id: string; date: string; status: string; service: string | null }[];
+  upcoming: UpcomingRow[];
+  /** Shop timezone — upcoming appointments render in shop time, not the reader's. */
+  timezone: string;
   nudges: { sentAt: string; status: string; resultedInBooking: boolean }[];
 }
 
@@ -92,6 +97,8 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
   // "Try again" card instead of a no-way-forward message.
   if (!res.ok || !res.data) throw new Error("Failed to load client");
   const { client, balance, cards, rewards, promotions, visits, nudges } = res.data;
+  const upcoming = res.data.upcoming ?? [];
+  const timezone = res.data.timezone ?? "UTC";
   const ledger = ledgerRes.data?.entries ?? [];
   // Gate for every punch/reward surface on this page (default true so a
   // transient /me failure never blanks a rewards shop's data).
@@ -120,7 +127,12 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
       </Link>
 
       <header className="mb-6 mt-2 flex flex-wrap items-start justify-between gap-4">
-        <div>
+        <div className="flex min-w-0 items-start gap-3">
+          {/* Clients have no photo (and no account to upload one from), so this
+              is always the generated initials chip — it gives the page a face
+              to anchor on instead of opening with bare text. */}
+          <Avatar name={client.name} size="md" className="mt-1" />
+          <div className="min-w-0">
           <h1 className="font-display text-3xl tracking-tight">
             {client.name}
             {client.archived && (
@@ -150,6 +162,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
               </span>
             )}
           </p>
+          </div>
         </div>
         {/* Right side: the "should I text them?" glance - days since their last
             cut with the Nudge button right under it. */}
@@ -261,6 +274,9 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           </ul>
         </Card>
       )}
+
+      {/* What's coming, before what's been. The history below is past-only. */}
+      <UpcomingVisits rows={upcoming} timezone={timezone} />
 
       <div className="mt-6 grid gap-6 md:grid-cols-2">
         {/* Visit history (per-row edit/delete) */}

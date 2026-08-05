@@ -24,6 +24,7 @@ import { adminRouter } from "./routes/admin.js";
 import { rewardsRouter } from "./routes/rewards.js";
 import { walletRouter } from "./routes/wallet.js";
 import { dashboardRouter } from "./routes/dashboard.js";
+import { barberRouter } from "./routes/barber.js";
 import { insightsRouter } from "./routes/insights.js";
 import { teamRouter } from "./routes/team.js";
 import { teamJoinRouter } from "./routes/teamJoin.js";
@@ -119,6 +120,9 @@ export function createApp(): Express {
   // these routers resolve the session themselves, so req.shopRole isn't set
   // until their own middleware has run.
   app.use("/api/dashboard", dashboardLimiter, dashboardRouter);
+  // Own-chair surface for employees. Deliberately NOT part of dashboardRouter:
+  // that router is manager-gated so new routes inherit the restriction.
+  app.use("/api/barber", dashboardLimiter, barberRouter);
   app.use("/api/insights", dashboardLimiter, insightsRouter); // barber analytics page
   app.use("/api/booking", dashboardLimiter, bookingDashboardRouter); // barber booking config
   app.use("/api/payments", dashboardLimiter, paymentsDashboardRouter); // barber payment settings

@@ -310,6 +310,10 @@ const dayQuerySchema = z.object({
 // body would fail them for a staleness prod explicitly accepts.
 const DAY_TTL_MS = process.env.VITEST === "true" ? 0 : 60_000;
 const dayCache = new Map<string, { at: number; body: unknown }>();
+// Day sweeps CURRENTLY RUNNING, keyed by shop|date. Same reasoning as the
+// open-days in-flight map below: the cache holds only finished bodies, so
+// without this a burst of visitors on one date each runs the whole sweep.
+const dayInFlight = new Map<string, Promise<unknown>>();
 const DAY_FANOUT_LIMIT = 4;
 
 /**
@@ -384,6 +388,36 @@ bookingPublicRouter.get("/:slug/day", bookingReadLimiter, async (req, res) => {
     return;
   }
 
+  const inFlightDay = dayInFlight.get(dayCacheKey);
+  if (inFlightDay) {
+    res.json(await inFlightDay);
+    return;
+  }
+  const dayWork = computeDayBody(shop, parsed.data.date, dayStart, dayEnd, now);
+  dayInFlight.set(dayCacheKey, dayWork);
+  try {
+    res.json(await dayWork);
+  } finally {
+    dayInFlight.delete(dayCacheKey);
+  }
+});
+
+/**
+ * One day's bundles. Factored out of the route so concurrent callers can share
+ * ONE run: the cache above only holds FINISHED bodies, so a burst of visitors
+ * landing on the same date each used to start their own full service x staff
+ * sweep - the shape that starves a fixed connection pool. Measured on prod:
+ * three simultaneous requests for one uncached day took 5.7s / 6.2s / 7.4s,
+ * each doing the whole job.
+ */
+async function computeDayBody(
+  shop: NonNullable<Awaited<ReturnType<typeof resolveNativeShop>>>,
+  date: string,
+  dayStart: Date,
+  dayEnd: Date,
+  now: Date,
+): Promise<unknown> {
+  const dayCacheKey = `${shop.id}|${date}`;
   const [services, links, groups, targeted] = await Promise.all([
     prisma.service.findMany({
       where: { shopId: shop.id, active: true },
@@ -559,10 +593,10 @@ bookingPublicRouter.get("/:slug/day", bookingReadLimiter, async (req, res) => {
   const groupedIds = new Set(bundles.flatMap((b) => b.services.map((s) => s.id)));
   const ungrouped = dayServices.filter((s) => !groupedIds.has(s.id));
 
-  const dayBody = { timezone: shop.timezone, date: parsed.data.date, bundles, ungrouped };
+  const dayBody = { timezone: shop.timezone, date, bundles, ungrouped };
   dayCache.set(dayCacheKey, { at: Date.now(), body: dayBody });
-  res.json(dayBody);
-});
+  return dayBody;
+}
 
 // GET /api/book/:slug/open-days — which shop-local days in the booking window
 // have at least ONE bookable opening across any service, plus the single
@@ -585,6 +619,17 @@ const OPEN_DAYS_SCAN_CAP = 45;
 // shop id, and a slug key also let case variants of the same slug each hold
 // their own entry.
 const openDaysCache = new Map<string, { at: number; body: unknown }>();
+// Sweeps CURRENTLY RUNNING, keyed by shop. The cache above only holds FINISHED
+// bodies, so on a cold cache every concurrent visitor used to kick off their own
+// full sweep - each one holding OPEN_DAYS_FANOUT_LIMIT pooled connections
+// (computeOpenSlots runs inside runWithShop), which with connection_limit=10 is
+// how a popular shop starves its own database. Late arrivals now await the sweep
+// already in flight and everyone gets the same body.
+const openDaysInFlight = new Map<string, Promise<unknown>>();
+// Concurrency for the service x staff sweep. Same bound and reasoning as
+// DAY_FANOUT_LIMIT: enough to cut wall-clock hard, low enough that one request
+// can't monopolize the connection pool.
+const OPEN_DAYS_FANOUT_LIMIT = 4;
 bookingPublicRouter.get("/:slug/open-days", bookingReadLimiter, async (req, res) => {
   const slug = req.params.slug!;
   const shop = await resolveNativeShop(slug);
@@ -597,6 +642,34 @@ bookingPublicRouter.get("/:slug/open-days", bookingReadLimiter, async (req, res)
     res.json(cached.body);
     return;
   }
+  const inFlight = openDaysInFlight.get(shop.id);
+  if (inFlight) {
+    res.json(await inFlight);
+    return;
+  }
+  const sweep = computeOpenDays(shop);
+  openDaysInFlight.set(shop.id, sweep);
+  try {
+    res.json(await sweep);
+  } finally {
+    openDaysInFlight.delete(shop.id);
+  }
+});
+
+/**
+ * The actual open-days sweep, factored out so the route can share ONE run
+ * between concurrent callers. Cold cost is the whole reason this page ever
+ * showed a dead day: it was a strictly sequential nested await over every
+ * service x staff pair across a 45-day window, which measured ~17.7s on a real
+ * shop - past the web layer's 12s fetch abort, so the booking page decided real
+ * availability was simply "unavailable" and fell back to a weekday heuristic
+ * that happily lands on a today with nothing left. Bounded-parallel now.
+ */
+async function computeOpenDays(shop: {
+  id: string;
+  timezone: string;
+  bookingMaxDays: number;
+}): Promise<unknown> {
   const now = new Date();
   const scanDays = Math.min(shop.bookingMaxDays, OPEN_DAYS_SCAN_CAP);
   const toDate = new Date(now.getTime() + scanDays * 24 * 60 * 60 * 1000);
@@ -650,19 +723,31 @@ bookingPublicRouter.get("/:slug/open-days", bookingReadLimiter, async (req, res)
       soonest.staffIds.push(staffId); // same instant, same service: merged chip
     }
   };
+  // Flatten to service x staff pairs, sweep them bounded-parallel, then fold
+  // the results IN PAIR ORDER. Order matters: consider() merges equal-instant
+  // hits into one chip and appends staffIds as it meets them, so consuming out
+  // of order would shuffle which barber leads the "soonest" chip. mapWithLimit
+  // preserves index order, so this is deterministic and matches the old nested
+  // loop exactly.
+  const pairs: { serviceId: string; staffId: string }[] = [];
   for (const svc of services) {
     for (const staffId of staffByService.get(svc.id) ?? []) {
-      const slots = await computeOpenSlots({
-        shopId: shop.id,
-        staffId,
-        serviceId: svc.id,
-        fromDate: now,
-        toDate,
-        now,
-      });
-      for (const s of slots) consider(s.startsAt, svc.id, staffId);
+      pairs.push({ serviceId: svc.id, staffId });
     }
   }
+  const swept = await mapWithLimit(pairs, OPEN_DAYS_FANOUT_LIMIT, (p) =>
+    computeOpenSlots({
+      shopId: shop.id,
+      staffId: p.staffId,
+      serviceId: p.serviceId,
+      fromDate: now,
+      toDate,
+      now,
+    }),
+  );
+  pairs.forEach((p, i) => {
+    for (const s of swept[i]!) consider(s.startsAt, p.serviceId, p.staffId);
+  });
   for (const t of targeted) consider(t.startsAt, t.serviceId, t.staffId);
   const soonestOut = soonest as {
     startsAt: Date;
@@ -683,8 +768,8 @@ bookingPublicRouter.get("/:slug/open-days", bookingReadLimiter, async (req, res)
       : null,
   };
   openDaysCache.set(shop.id, { at: Date.now(), body });
-  res.json(body);
-});
+  return body;
+}
 
 // POST /api/book/:slug - create a booking. Tighter (lead) limiter: anti-spam.
 const createSchema = z

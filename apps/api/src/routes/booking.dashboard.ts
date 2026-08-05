@@ -173,6 +173,10 @@ const serviceSchema = z
       .enum(SERVICE_COLOR_KEYS as [string, ...string[]])
       .nullable()
       .optional(),
+    // Display-only day-gauge denominator - NOT a cap (see Service.dailyTarget).
+    // Only consulted while the service is UNGROUPED; a grouped one is gauged by
+    // its group's target.
+    dailyTarget: z.number().int().min(1).max(1000).nullable().optional(),
     active: z.boolean().optional(),
     sortOrder: z.number().int().min(0).max(1000).optional(),
     // "Offered by every barber" as a live intent. When true, staffIds is ignored
@@ -234,6 +238,7 @@ bookingDashboardRouter.post("/services", async (req, res) => {
       priceOverrides: d.priceOverrides ?? {},
       active: d.active ?? true,
       sortOrder: d.sortOrder ?? 0,
+      dailyTarget: d.dailyTarget ?? null,
       offeredByAll: d.offeredByAll ?? false,
     },
   });
@@ -280,6 +285,9 @@ bookingDashboardRouter.patch("/services/:id", async (req, res) => {
     ...(d.color !== undefined ? { color: d.color } : {}),
     ...(d.price !== undefined ? { price: d.price } : {}),
     ...(d.priceOverrides !== undefined ? { priceOverrides: d.priceOverrides } : {}),
+    ...(d.dailyTarget !== undefined
+      ? { dailyTarget: d.dailyTarget ?? null }
+      : {}),
     ...(d.active !== undefined ? { active: d.active } : {}),
     ...(d.sortOrder !== undefined ? { sortOrder: d.sortOrder } : {}),
     ...(d.offeredByAll !== undefined ? { offeredByAll: d.offeredByAll } : {}),
@@ -311,18 +319,33 @@ bookingDashboardRouter.delete("/services/:id", async (req, res) => {
 
 //  Service groups (Acuity-style: several services share ONE hours + limits config)
 
-// A group bundles several services under one shared config. hoursWindows reuses
-// the SAME validator as a service's own windows (identical {weekday:[{s,e}]}
-// shape) - a grouped service's own windows are overridden by the group's. The
-// two caps are shop-local-day (maxPerDay) and overlapping (maxConcurrent) totals
-// across all member services; either null = uncapped. serviceIds is the member
-// set to (re)assign on write. .strict() rejects stray keys like the other schemas.
+// A group bundles several services under one shared config. It NO LONGER carries
+// hours: a group's windows used to override each member service's own, so hours
+// were set in one place and shown in another and a grouped service's own windows
+// were dead config. Hours live on the Service now (see the 20260804120000
+// migration, which copied each active group's windows down onto its members).
+// ServiceGroup.hoursWindows remains in the schema, unread, so the change stays
+// revertible.
+// The two caps are shop-local-day (maxPerDay) and overlapping (maxConcurrent)
+// totals across all member services; either null = uncapped. serviceIds is the
+// member set to (re)assign on write.
+//
+// hoursWindows is still ACCEPTED and then IGNORED, deliberately. The schema is
+// .strict() like its siblings, so simply deleting the key would 400 any client
+// still sending it - and the group editor batches its whole diff into ONE
+// payload, so a rename, a cap change and a membership change made in the same
+// save would die with it. web and api are separate deploy targets fired by one
+// merge with no ordering guarantee, so that skew window is real. Accepting the
+// key keeps those saves working; nothing writes it, and the field disappears
+// from the UI in the same release.
 const groupSchema = z
   .object({
     name: z.string().trim().min(1).max(120),
-    hoursWindows: hoursWindowsSchema,
+    hoursWindows: hoursWindowsSchema, // accepted for deploy-skew, never written
     maxPerDay: z.number().int().min(1).max(1000).nullable().optional(),
     maxConcurrent: z.number().int().min(1).max(100).nullable().optional(),
+    // Display-only day-gauge denominator - NOT a cap (see ServiceGroup.dailyTarget).
+    dailyTarget: z.number().int().min(1).max(1000).nullable().optional(),
     active: z.boolean().optional(),
     sortOrder: z.number().int().min(0).max(1000).optional(),
     serviceIds: z.array(z.string().min(1)).max(200).optional(),
@@ -348,9 +371,12 @@ bookingDashboardRouter.get("/groups", async (req, res) => {
     }),
   ]);
   res.json({
-    groups: groups.map((g) => ({
+    // hoursWindows is destructured OUT, not just left unused: the row spread
+    // would otherwise keep shipping a field nothing reads, which is how the
+    // dashboard ends up rendering hours that no longer govern anything. The
+    // column itself stays populated for revertibility.
+    groups: groups.map(({ hoursWindows: _legacyHours, ...g }) => ({
       ...g,
-      hoursWindows: g.hoursWindows ?? {},
       serviceIds: services
         .filter((s) => s.serviceGroupId === g.id)
         .map((s) => s.id),
@@ -376,9 +402,9 @@ bookingDashboardRouter.post("/groups", async (req, res) => {
       data: {
         shopId,
         name: d.name,
-        hoursWindows: d.hoursWindows ?? {},
         maxPerDay: d.maxPerDay ?? null,
         maxConcurrent: d.maxConcurrent ?? null,
+        dailyTarget: d.dailyTarget ?? null,
         active: d.active ?? true,
         sortOrder: d.sortOrder ?? 0,
       },
@@ -431,10 +457,12 @@ bookingDashboardRouter.patch("/groups/:id", async (req, res) => {
   }
   const data = {
     ...(d.name !== undefined ? { name: d.name } : {}),
-    ...(d.hoursWindows !== undefined ? { hoursWindows: d.hoursWindows } : {}),
     ...(d.maxPerDay !== undefined ? { maxPerDay: d.maxPerDay ?? null } : {}),
     ...(d.maxConcurrent !== undefined
       ? { maxConcurrent: d.maxConcurrent ?? null }
+      : {}),
+    ...(d.dailyTarget !== undefined
+      ? { dailyTarget: d.dailyTarget ?? null }
       : {}),
     ...(d.active !== undefined ? { active: d.active } : {}),
     ...(d.sortOrder !== undefined ? { sortOrder: d.sortOrder } : {}),
@@ -1058,6 +1086,44 @@ interface AgendaRow {
   // shops only) - drives the "Reward ready - apply to this visit?" prompt.
   // Skipping is a UI dismiss; the reward stays ready until actually applied.
   rewardReady: { rewardId: string; rewardName: string; punchCost: number } | null;
+  // Which AgendaCategory this row counts toward on the day gauge ("Haircuts
+  // 10/12") - a ServiceGroup id when the service is grouped, else the Service
+  // id. null = uncategorized: a block, or a synced visit whose serviceName
+  // matched no service. Uncategorized rows still count in the "All" total.
+  categoryId: string | null;
+}
+
+/**
+ * One bucket of the calendar day gauge. Categories are the barber's own
+ * grouping: every active ServiceGroup, plus each active UNGROUPED service (a
+ * grouped service is represented by its group, never twice). `target` is the
+ * display-only Service/ServiceGroup.dailyTarget - null means the gauge shows a
+ * plain count for this bucket instead of a fraction.
+ */
+interface AgendaCategory {
+  id: string;
+  name: string;
+  target: number | null;
+}
+
+/**
+ * Fold a service name to a comparison key so a synced Visit (which stores only
+ * a name string - Visit has no service relation) can be matched to the shop's
+ * own service list. Case/spacing/punctuation and the emoji barbers decorate
+ * Acuity names with ("⭐The VIP Package!⭐") are all noise here.
+ *
+ * Deliberately EXACT-after-folding, never fuzzy: putting a booking in the wrong
+ * bucket silently corrupts the number the barber is trying to read, which is
+ * worse than leaving it uncategorized.
+ */
+function serviceNameKey(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize("NFKD")
+    // Keep letters/digits/spaces; drop emoji, punctuation and combining marks.
+    .replace(/[^\p{L}\p{N} ]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 const agendaQuerySchema = z.object({
@@ -1119,7 +1185,7 @@ type ApptAgendaRow = {
   checkInStatus: string | null;
   etaMinutes: number | null;
   runningLate: boolean;
-  service: { name: string; color: string | null } | null;
+  service: { id: string; name: string; color: string | null } | null;
   // Frozen AddOnSnapshotItem[] (see engines/addOns.ts) - JSON on the row.
   addOns: Prisma.JsonValue | null;
 };
@@ -1153,6 +1219,67 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
   }
 
   const db = forShop(req.shop!.id);
+
+  // ---- Day-gauge categories (both booking modes) ----
+  // A grouped service is represented ONLY by its group, so a booking is never
+  // counted in two buckets and the per-bucket totals sum to the "All" total -
+  // which is the whole point of the gauge (10/12 + 2/4 = 12/16).
+  const [groupRows, serviceRows] = await Promise.all([
+    db.serviceGroup.findMany({
+      where: { active: true },
+      orderBy: { sortOrder: "asc" },
+      select: { id: true, name: true, dailyTarget: true },
+    }) as unknown as Promise<
+      { id: string; name: string; dailyTarget: number | null }[]
+    >,
+    // NOT filtered to active: a booking on a since-retired service must still
+    // land in its group's bucket, or past days would silently under-count. The
+    // category LIST below is filtered instead, so a retired service never grows
+    // a chip of its own.
+    db.service.findMany({
+      orderBy: { sortOrder: "asc" },
+      select: {
+        id: true,
+        name: true,
+        dailyTarget: true,
+        serviceGroupId: true,
+        active: true,
+      },
+    }) as unknown as Promise<
+      {
+        id: string;
+        name: string;
+        dailyTarget: number | null;
+        serviceGroupId: string | null;
+        active: boolean;
+      }[]
+    >,
+  ]);
+  const categories: AgendaCategory[] = [
+    ...groupRows.map((g) => ({ id: g.id, name: g.name, target: g.dailyTarget })),
+    ...serviceRows
+      .filter((s) => s.active && s.serviceGroupId === null)
+      .map((s) => ({ id: s.id, name: s.name, target: s.dailyTarget })),
+  ];
+  /** Service id -> the category it counts toward (its group, else itself). */
+  const categoryOfService = new Map<string, string>(
+    serviceRows.map((s) => [s.id, s.serviceGroupId ?? s.id]),
+  );
+  // Folded service name -> category, for synced Visits. A name that folds to the
+  // same key on two DIFFERENT categories is ambiguous, so it maps to nothing
+  // rather than guessing (see serviceNameKey).
+  const categoryOfName = new Map<string, string | null>();
+  for (const s of serviceRows.filter((s) => s.active)) {
+    const key = serviceNameKey(s.name);
+    if (!key) continue;
+    const category = s.serviceGroupId ?? s.id;
+    const seen = categoryOfName.get(key);
+    categoryOfName.set(
+      key,
+      seen === undefined || seen === category ? category : null,
+    );
+  }
+
   let agenda: AgendaRow[];
 
   if (shop.bookingMode === "native") {
@@ -1178,7 +1305,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         checkInStatus: true,
         etaMinutes: true,
         runningLate: true,
-        service: { select: { name: true, color: true } },
+        service: { select: { id: true, name: true, color: true } },
         addOns: true,
       },
     })) as unknown as ApptAgendaRow[];
@@ -1288,6 +1415,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         a.clientId !== null
           ? (rewardReadyByClient.get(a.clientId) ?? null)
           : null,
+      categoryId: (a.service && categoryOfService.get(a.service.id)) ?? null,
     }));
 
     // Blocked time (barber "Block Off Time") shows on the calendar too, as
@@ -1328,6 +1456,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         nudgeLimit: APPOINTMENT_NUDGE_LIMIT,
         clientId: null,
         rewardReady: null,
+        categoryId: null, // blocked time isn't a booking - never gauged
       });
     }
 
@@ -1349,7 +1478,17 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
     // its window — hiding it under a filter would recreate the same mystery
     // one level down.
     const externalVisits = (await db.visit.findMany({
-      where: { scheduledAt: { gte: from, lte: to }, appointment: null },
+      where: {
+        scheduledAt: { gte: from, lte: to },
+        appointment: null,
+        // A cancelled booking is not on the schedule. Acuity tells us via the
+        // appointment.canceled webhook (or the 90-day resync sweep) and the row
+        // flips to CANCELED; it used to keep rendering, just dimmed, so a client
+        // who cancelled still looked like they were coming in. RESCHEDULED is
+        // the same story - the moved appointment arrives as its own row, so
+        // keeping the old one would show the client twice.
+        status: { notIn: ["CANCELED", "RESCHEDULED"] },
+      },
       orderBy: { scheduledAt: "asc" },
       take: 500,
       select: {
@@ -1389,6 +1528,13 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         nudgeLimit: APPOINTMENT_NUDGE_LIMIT,
         clientId: null,
         rewardReady: null,
+        // Name-matched like any synced visit (#153 puts these on a NATIVE
+        // shop's calendar too). Without this a shop mid-transition would see
+        // its Acuity bookings land outside every bucket, so "Haircuts 10/12"
+        // would undercount exactly the days it's busiest.
+        categoryId: v.serviceName
+          ? (categoryOfName.get(serviceNameKey(v.serviceName)) ?? null)
+          : null,
       });
     }
 
@@ -1397,7 +1543,12 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
     // Synced shops (Acuity / Square / link): appointments are Visit rows. There's
     // no staff relation on Visit, so a staffId filter simply doesn't apply.
     const rows = (await db.visit.findMany({
-      where: { scheduledAt: { gte: from, lte: to } },
+      where: {
+        scheduledAt: { gte: from, lte: to },
+        // Same rule as the native branch above: cancelled and rescheduled
+        // bookings are off the schedule, not dimmed on it.
+        status: { notIn: ["CANCELED", "RESCHEDULED"] },
+      },
       orderBy: { scheduledAt: "asc" },
       take: 500,
       select: {
@@ -1430,6 +1581,11 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       nudgeLimit: APPOINTMENT_NUDGE_LIMIT,
       clientId: null,
       rewardReady: null,
+      // Visit carries only a name string, so the bucket is name-matched. No
+      // match (or an ambiguous one) = uncategorized, counted in "All" only.
+      categoryId: v.serviceName
+        ? (categoryOfName.get(serviceNameKey(v.serviceName)) ?? null)
+        : null,
     }));
   }
 
@@ -1437,6 +1593,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
     agenda,
     source: shop.bookingMode === "native" ? "appointment" : "visit",
     timezone: shop.timezone,
+    categories,
   });
 });
 

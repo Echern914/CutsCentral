@@ -6,11 +6,15 @@ import { computeOpenSlots, isSlotBookable } from "./slots.js";
 /**
  * Service Groups (Acuity-style bundles) through the REAL slot engine, in a
  * non-UTC shop timezone (America/New_York) so DST/local-minute logic is
- * exercised. A group bundles several services under one shared config:
- *   - shared available-hours that OVERRIDE each member service's own
- *     hoursWindows, and
- *   - two shop-wide caps: maxPerDay (bookings per shop-local day across all
- *     members) and maxConcurrent (overlapping bookings across the group).
+ * exercised. A group bundles several services under two shop-wide caps:
+ * maxPerDay (bookings per shop-local day across all members) and maxConcurrent
+ * (overlapping bookings across the group).
+ *
+ * A group does NOT carry hours. It used to: the group's windows overrode each
+ * member's own, which meant a service's hours were edited in one place and
+ * displayed in another, and a grouped service's own windows were dead config the
+ * engine ignored. Hours now belong to the service, grouped or not - the case
+ * below pins exactly that.
  *
  * The invariant every case guards: an UNGROUPED service (serviceGroupId null -
  * every existing service, every new shop) is byte-for-byte the pre-group
@@ -107,8 +111,9 @@ beforeAll(async () => {
   });
   plainStaffId = plainStaff.id;
 
-  // ---- Case 1: hours override ----
-  // Group hours restrict Monday to 13:00-15:00 (no cap on this group).
+  // ---- Case 1: hours belong to the SERVICE, group membership is irrelevant ----
+  // This group still carries windows in the column (the migration leaves them
+  // populated so the change stays revertible); the engine must ignore them.
   const hoursGroup = await prisma.serviceGroup.create({
     data: {
       shopId,
@@ -118,7 +123,8 @@ beforeAll(async () => {
     select: { id: true },
   });
 
-  // Grouped: own window is Mon 09:00-10:00, but the GROUP (13:00-15:00) wins.
+  // Grouped, with its OWN Mon 09:00-10:00 window. The group's 13:00-15:00 is
+  // no longer consulted, so this must behave exactly like the ungrouped twin.
   const groupedRestricted = await prisma.service.create({
     data: {
       shopId,
@@ -249,20 +255,49 @@ function slotsFor(
   });
 }
 
-describe("service group OVERRIDES service hours", () => {
-  it("a grouped service uses the GROUP window (Mon 13:00-15:00), not its own 09:00-10:00", async () => {
+describe("hours belong to the SERVICE, not the group", () => {
+  it("a grouped service uses its OWN Mon 09:00-10:00, ignoring the group's 13:00-15:00", async () => {
     const slots = await slotsFor(groupedRestrictedServiceId, MON);
-    // Group Mon 13:00-15:00; a 60-min service fits starts 13:00, 14:00 - NOT the
-    // service's own 09:00-10:00 (which would offer only a 09:00 start).
-    expect(starts(slots)).toEqual(
-      [13, 14].map((h) => local(MON, h * 60).toISOString()),
-    );
+    // Own Mon 09:00-10:00 -> a single 09:00 start. The group's 13:00-15:00 is
+    // still sitting in ServiceGroup.hoursWindows and must not be read.
+    expect(starts(slots)).toEqual([local(MON, 9 * 60).toISOString()]);
   });
 
-  it("an UNGROUPED service with the same own-hours still uses its OWN 09:00-10:00 window", async () => {
+  it("an UNGROUPED service with the same own-hours behaves identically", async () => {
     const slots = await slotsFor(ungroupedRestrictedServiceId, MON);
-    // Own Mon 09:00-10:00 -> a single 09:00 start.
     expect(starts(slots)).toEqual([local(MON, 9 * 60).toISOString()]);
+  });
+
+  it("grouping a service does not change what it offers", async () => {
+    // The whole point: same own-hours in and out of a group => same grid.
+    const grouped = await slotsFor(groupedRestrictedServiceId, MON);
+    const ungrouped = await slotsFor(ungroupedRestrictedServiceId, MON);
+    expect(starts(grouped)).toEqual(starts(ungrouped));
+  });
+
+  it("the write path agrees with the grid for a grouped service", async () => {
+    // Read/write parity: every start the grid offers must pass isSlotBookable,
+    // and a time only the GROUP's old window allowed must be refused.
+    for (const s of await slotsFor(groupedRestrictedServiceId, MON)) {
+      expect(
+        await isSlotBookable({
+          shopId,
+          staffId,
+          serviceId: groupedRestrictedServiceId,
+          startsAt: s.startsAt,
+          now: NOW, // fixture dates are fixed; the real clock has passed them
+        }),
+      ).toBe(true);
+    }
+    expect(
+      await isSlotBookable({
+        shopId,
+        staffId,
+        serviceId: groupedRestrictedServiceId,
+        startsAt: local(MON, 13 * 60), // the group's old window
+        now: NOW,
+      }),
+    ).toBe(false);
   });
 });
 

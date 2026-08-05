@@ -97,6 +97,9 @@ const WEEKDAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
  * action (CSP blocks a direct browser fetch); the create action returns a manage
  * token so we can link the customer to cancel/reschedule. Accent-themed to the shop.
  */
+/** Fixed gold for special slots — see the note in BookingClient. */
+const SPECIAL_GOLD = "#D4AF37";
+
 export function BookingClient({ data }: { data: BookShopData }) {
   // Clear the native app's WebView spinner (reachable from the shop page's Book
   // CTA inside the app; the shell may be waiting on this ready signal).
@@ -107,6 +110,17 @@ export function BookingClient({ data }: { data: BookShopData }) {
   // arbitrary accents, so a hardcoded near-black fails WCAG on dark ones.
   const onAccent = readableOn(accent);
   const tz = data.shop.timezone;
+
+  /**
+   * Specials (barber-published targeted slots — the late-night cut, the model
+   * rate) are painted GOLD and starred, deliberately NOT in the shop's accent.
+   *
+   * They used to render in the accent at low opacity, which meant that for any
+   * shop whose accent IS gold-ish the "extra" slot looked exactly like every
+   * ordinary time. A special is a different KIND of thing — its own price, its
+   * own hours — so it gets its own fixed colour and a ★ that survives whatever
+   * accent the shop picks.
+   */
 
   const [serviceId, setServiceId] = useState<string | null>(null);
   // The provider the slots were loaded for. For a MULTI-barber shop this is the
@@ -342,10 +356,41 @@ export function BookingClient({ data }: { data: BookShopData }) {
     if (!dayFirst) return;
     let alive = true;
     (async () => {
-      const res = await getOpenDaysAction(data.shop.slug);
-      if (!alive) return;
-      // On failure the calendar simply keeps the heuristic — never a dead page.
-      setOpenInfo(res.ok && res.data ? res.data : "unavailable");
+      // Real availability is the ONLY thing that keeps the page off a dead day
+      // (the weekday heuristic below happily offers a today whose times are all
+      // gone), and losing it also hides the "Next available" way out. One failed
+      // request must therefore not strand the visitor in heuristic mode for the
+      // whole session: retry before accepting the degraded answer. The public
+      // read limiter is per-minute and per-IP, so a burst - every visitor
+      // sharing one proxy egress IP, say - is exactly the transient this
+      // recovers from.
+      for (let attempt = 0; ; attempt++) {
+        // try/catch, not just an ok check: a server action that THROWS (a
+        // function-duration cap, a transport failure) would otherwise skip
+        // every setOpenInfo below and leave openInfo null forever, which is
+        // the same dead end by a different route.
+        let res: Awaited<ReturnType<typeof getOpenDaysAction>> | null = null;
+        try {
+          res = await getOpenDaysAction(data.shop.slug);
+        } catch {
+          res = null;
+        }
+        if (!alive) return;
+        if (res?.ok && res.data) {
+          setOpenInfo(res.data);
+          return;
+        }
+        if (attempt >= 2) break;
+        // Back off past a slow cold sweep rather than stacking another one on
+        // top of it. The server dedupes concurrent sweeps per shop, so a retry
+        // that lands mid-sweep attaches to the run already going instead of
+        // starting a second.
+        await new Promise((r) => setTimeout(r, 2_000 * (attempt + 1)));
+        if (!alive) return;
+      }
+      // Still nothing: keep the heuristic calendar rather than a dead page. The
+      // empty-day self-heal in pickDay is what covers the customer from here.
+      setOpenInfo("unavailable");
     })();
     return () => {
       alive = false;
@@ -412,6 +457,43 @@ export function BookingClient({ data }: { data: BookShopData }) {
   // Which day the AUTO-select landed on (null after any manual pick) — only an
   // auto-picked day may be silently re-aimed when real availability arrives.
   const autoPickedDay = useRef<string | null>(null);
+
+  // Days the API has told us are EMPTY this session. The open-days scan can be
+  // missing (request failed), stale (60s cache), or simply not back yet, so the
+  // day we auto-land on is a guess until its own bundles arrive. Recording the
+  // duds lets the auto-hop below skip them and keeps the "Next available"
+  // button from pointing at one. A ref so the async hop reads the live set;
+  // the version counter is only there to re-render the button.
+  const emptyDaysRef = useRef<Set<string>>(new Set());
+  const [, bumpEmptyDays] = useState(0);
+  function markDayEmpty(day: string) {
+    if (emptyDaysRef.current.has(day)) return;
+    emptyDaysRef.current.add(day);
+    bumpEmptyDays((v) => v + 1);
+  }
+
+  // The days worth trying, freshest-first-known: real availability when we have
+  // it, else the weekday heuristic. Held in a ref because the auto-hop runs
+  // inside an async transition and must not read a stale render's closure.
+  const candidateDaysRef = useRef<string[]>([]);
+  /** Next day after `day` that we have no evidence against. */
+  function nextCandidateDay(day: string): string | null {
+    return (
+      candidateDaysRef.current.find(
+        (d) => d > day && !emptyDaysRef.current.has(d),
+      ) ?? null
+    );
+  }
+  // How many empty days the page may skip on its own before it stops and shows
+  // the honest empty state. Bounded so a shop with nothing open anywhere can
+  // never turn this into a walk through all 45 scanned days.
+  const MAX_AUTO_HOPS = 10;
+  const autoHops = useRef(0);
+  useEffect(() => {
+    candidateDaysRef.current = openDaySet
+      ? [...openDaySet].sort()
+      : [...calendarDays].sort();
+  }, [openDaySet, calendarDays]);
   // Set when the "Soonest available" chip is tapped: once that day's bundles
   // load, bind this exact service + slot so one tap really books the soonest.
   const pendingSoonest = useRef<{ serviceId: string; startsAt: string } | null>(
@@ -489,6 +571,33 @@ export function BookingClient({ data }: { data: BookShopData }) {
     startTransition(async () => {
       const res = await getDayBundlesAction(data.shop.slug, day);
       if (seq !== daySeq.current) return; // superseded by a newer pick — drop it
+
+      // AUTO-HOP. The day's own bundles are the authoritative answer, and this
+      // is the first point where a landing day can be PROVEN dead. If the page
+      // chose this day itself and it came back with nothing, move on to the
+      // next candidate instead of parking the customer on an empty day —
+      // "should start on the next date available" (Drick). This is deliberately
+      // driven by the day payload rather than the open-days scan, so it still
+      // works when that scan failed, went stale, or hasn't landed: those are
+      // exactly the cases that produced the dead end. A MANUAL pick is never
+      // hopped — if someone taps a specific date they get an honest answer for
+      // that date.
+      if (res.ok && res.data) {
+        const empty =
+          res.data.bundles.length === 0 && res.data.ungrouped.length === 0;
+        if (empty && autoPickedDay.current === day) {
+          markDayEmpty(day);
+          const next =
+            autoHops.current < MAX_AUTO_HOPS ? nextCandidateDay(day) : null;
+          if (next) {
+            autoHops.current += 1;
+            autoPickedDay.current = next;
+            pickDay(next); // owns the loading/day state from here
+            return;
+          }
+        }
+      }
+
       if (res.ok && res.data) setDayData(res.data);
       else setDayError(true);
       setDayLoading(false);
@@ -546,6 +655,11 @@ export function BookingClient({ data }: { data: BookShopData }) {
     if (!dayData) return null;
     return { bundles: dayData.bundles, ungrouped: dayData.ungrouped };
   }, [dayData]);
+  /** The selected day loaded and has nothing bookable on it. */
+  const dayEmpty =
+    visibleDay !== null &&
+    visibleDay.bundles.length === 0 &&
+    visibleDay.ungrouped.length === 0;
 
   /** One service's row in the day view: name + that-day price + time chips. */
   function dayServiceRow(svc: DayService) {
@@ -586,11 +700,26 @@ export function BookingClient({ data }: { data: BookShopData }) {
                   aria-pressed={chosen}
                   className="rounded-lg border px-3 py-1.5 text-xs transition-colors"
                   style={{
-                    borderColor: chosen ? accent : "rgba(255,255,255,0.15)",
-                    backgroundColor: chosen ? `${accent}14` : "transparent",
-                    color: chosen ? accent : undefined,
+                    // A special keeps its gold even when it isn't the chosen
+                    // chip, so it reads as "extra" while scanning the grid.
+                    borderColor: s.targeted
+                      ? SPECIAL_GOLD
+                      : chosen
+                        ? accent
+                        : "rgba(255,255,255,0.15)",
+                    backgroundColor: s.targeted
+                      ? `${SPECIAL_GOLD}${chosen ? "2E" : "14"}`
+                      : chosen
+                        ? `${accent}14`
+                        : "transparent",
+                    color: s.targeted ? SPECIAL_GOLD : chosen ? accent : undefined,
                   }}
                 >
+                  {s.targeted && (
+                    <span aria-hidden className="mr-1">
+                      ★
+                    </span>
+                  )}
                   {timeFmt.format(new Date(s.startsAt))}
                   {s.targeted && (
                     <span className="ml-1 opacity-80">
@@ -1197,7 +1326,15 @@ export function BookingClient({ data }: { data: BookShopData }) {
           Tapping a service's time chip books it. */}
       {dayFirst && (
         <Section title="2 · Choose a service" tour="services">
-          {(dayLoading || (!dayData && !dayError && calendarDays.size > 0)) && (
+          {(dayLoading ||
+            (!dayData && !dayError && calendarDays.size > 0) ||
+            // Availability still in flight. /day answers in ~1s while the
+            // open-days sweep takes several, so an empty landing day would
+            // otherwise flash the full "nothing left today" dead end — with no
+            // Next-available button, because that needs the sweep — on every
+            // single page load before quietly re-aiming. Read as loading until
+            // we actually know.
+            (openInfo === null && dayEmpty)) && (
             <p className="text-sm text-muted">Checking the day&apos;s openings…</p>
           )}
           {!dayLoading && dayError && (
@@ -1272,7 +1409,12 @@ export function BookingClient({ data }: { data: BookShopData }) {
                 </div>
               )}
 
-              {visibleDay.bundles.length === 0 && visibleDay.ungrouped.length === 0 && (
+              {visibleDay.bundles.length === 0 &&
+                visibleDay.ungrouped.length === 0 &&
+                // Only once availability is known either way — see the loading
+                // branch above. Showing a dead end before the sweep lands is
+                // what made this screen look final when it wasn't.
+                openInfo !== null && (
                 <div className="flex flex-col gap-3">
                   {/* Honest booked-out state (Drick: "it should show on a day
                       that is booked out completely that there is no available
@@ -1297,15 +1439,27 @@ export function BookingClient({ data }: { data: BookShopData }) {
                     })()}
                   </p>
                   {(() => {
-                    const nextOpen = openDaySet
-                      ? [...openDaySet].sort().find((d) => d > (dayDate ?? ""))
-                      : null;
+                    // Fall back to the heuristic calendar when the open-days
+                    // scan is missing: losing it used to remove the only way
+                    // forward from this screen, leaving the waitlist as the
+                    // sole option on a shop that was open the very next day.
+                    // Days already proven empty are skipped either way.
+                    const pool = openDaySet
+                      ? [...openDaySet].sort()
+                      : [...calendarDays].sort();
+                    const nextOpen = pool.find(
+                      (d) => d > (dayDate ?? "") && !emptyDaysRef.current.has(d),
+                    );
                     if (!nextOpen) return null;
                     return (
                       <button
                         type="button"
                         onClick={() => {
-                          autoPickedDay.current = null;
+                          // Stays eligible for the auto-hop: this button is the
+                          // page's own suggestion, not the customer naming a
+                          // date, so if it also turns out empty we keep going
+                          // rather than dead-ending a second time.
+                          autoPickedDay.current = nextOpen;
                           pendingSoonest.current = null;
                           pickDay(nextOpen);
                         }}
@@ -1628,19 +1782,34 @@ export function BookingClient({ data }: { data: BookShopData }) {
                       aria-pressed={picked}
                       className="rounded-lg border py-2 text-center text-sm transition-colors"
                       style={{
-                        borderColor: picked
-                          ? accent
-                          : s.targeted
-                            ? `${accent}99`
+                        // Gold marks a special whether or not it's picked; when
+                        // picked it fills, so it still reads as the selection.
+                        borderColor: s.targeted
+                          ? SPECIAL_GOLD
+                          : picked
+                            ? accent
                             : "rgba(255,255,255,0.12)",
-                        backgroundColor: picked
-                          ? accent
-                          : s.targeted
-                            ? `${accent}14`
+                        backgroundColor: s.targeted
+                          ? picked
+                            ? SPECIAL_GOLD
+                            : `${SPECIAL_GOLD}14`
+                          : picked
+                            ? accent
                             : "transparent",
-                        color: picked ? onAccent : undefined,
+                        color: s.targeted
+                          ? picked
+                            ? readableOn(SPECIAL_GOLD)
+                            : SPECIAL_GOLD
+                          : picked
+                            ? onAccent
+                            : undefined,
                       }}
                     >
+                      {s.targeted && (
+                        <span aria-hidden className="mr-1">
+                          ★
+                        </span>
+                      )}
                       {timeFmt.format(new Date(s.startsAt))}
                       {s.targeted && (
                         <span className="block text-[10px] font-semibold">
