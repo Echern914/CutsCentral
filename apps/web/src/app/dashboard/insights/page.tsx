@@ -8,6 +8,8 @@ export const metadata: Metadata = { title: "Insights" };
 
 /** Keys of the page's one period control (mirrors PERIODS in the API engine). */
 export type PeriodKey = "7d" | "30d" | "90d" | "180d" | "365d";
+/** Bar sizes a period can be viewed at (mirrors BUCKET_COUNTS in the engine). */
+export type Bucket = "day" | "week" | "month";
 
 // Module-local, NOT exported: a Next page module may only export `default`,
 // `metadata` and friends, so a runtime export here fails the build's type check.
@@ -22,8 +24,10 @@ const DEFAULT_PERIOD: PeriodKey = "30d";
 export interface PeriodMeta {
   period: PeriodKey;
   periodLabel: string; // "Last 30 days"
-  bucket: "day" | "week" | "month";
+  bucket: Bucket;
   bucketNoun: string; // "day" | "week" | "month" — drives the chart's title
+  /** Which bar sizes THIS period offers — drives the Day/Week/Month pills. */
+  bucketOptions: Bucket[];
   windowStart: string; // YYYY-MM-DD, shop-local
   windowEnd: string;
   periods: { key: PeriodKey; label: string }[];
@@ -43,6 +47,9 @@ export interface InsightsData extends PeriodMeta {
     name: string;
     count: number;
     revenue: number;
+    /** Menu price/duration (null = no menu match, e.g. a synced free-text name). */
+    price: number | null;
+    durationMin: number | null;
   }[];
   totals: {
     visits: number;
@@ -110,14 +117,48 @@ export interface GoalProgress {
   pct: number; // actual / target, capped at 1
   series: { day: number; cumulative: number | null }[]; // null = future day
 }
+/** The planner's saved levers — how the barber intends to hit the target. */
+export interface GoalPlan {
+  bookedPct: number; // "if I ran at N% booked"
+  services: { serviceId: string; priceDelta: number; extraCuts: number }[];
+}
 export interface Goal {
   metric: GoalMetric;
   period: GoalPeriod;
   target: number | null; // null = not set yet
+  plan: GoalPlan | null;
   progress: GoalProgress | null;
+}
+/** A per-service quota with its live actual. */
+export interface ServiceGoalRow {
+  serviceId: string;
+  name: string;
+  metric: GoalMetric;
+  period: GoalPeriod;
+  target: number;
+  actual: number;
+  pct: number;
+}
+/** Per-service run-rates + schedule capacity, for the what-if projection. */
+export interface PlannerData {
+  services: {
+    serviceId: string;
+    name: string;
+    price: number | null;
+    durationMin: number;
+    week: { cuts: number; revenue: number };
+    month: { cuts: number; revenue: number };
+  }[];
+  capacity: {
+    week: { openMin: number };
+    month: { openMin: number };
+  };
 }
 export interface GoalResponse {
   goals: Goal[];
+  chairTime: { target: number | null };
+  serviceGoals: ServiceGoalRow[];
+  planner: PlannerData;
 }
 
 export default async function InsightsPage() {
@@ -146,7 +187,7 @@ export default async function InsightsPage() {
       <div data-tour="charts">
         <InsightsClient
           initial={res.data}
-          initialGoals={goalRes.ok ? (goalRes.data?.goals ?? null) : null}
+          initialGoalData={goalRes.ok ? (goalRes.data ?? null) : null}
           rewardsEnabled={me.data?.rewardsEnabled ?? true}
         />
       </div>

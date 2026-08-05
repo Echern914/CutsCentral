@@ -1,4 +1,4 @@
-import { prisma } from "@chairback/db";
+import { runWithShop } from "@chairback/db";
 import { zonedWallTimeToUtc } from "@chairback/config";
 
 /**
@@ -44,6 +44,32 @@ export const DEFAULT_PERIOD: PeriodKey = "30d";
 /** Unknown/absent -> the default, so a stale client never gets a 400. */
 export function resolvePeriod(raw: unknown): PeriodKey {
   return typeof raw === "string" && raw in PERIODS ? (raw as PeriodKey) : DEFAULT_PERIOD;
+}
+
+/**
+ * Which bucket sizes each period may be viewed at, and how many buckets that
+ * makes. The default (PERIODS[key].bucket) is always present. Combinations
+ * that can't render (365 day-bars in a hand-rolled div chart) or can't inform
+ * (a 7-day window as one week bar) are simply absent - resolveBucket falls
+ * back rather than 400ing, same forgiving contract as resolvePeriod.
+ *
+ * Non-default week/month views keep the "whole clean buckets ending with the
+ * bucket containing today" rule, so their WINDOW can be slightly longer than
+ * the period's name (30d by week = 5 Mon-start weeks = 35 days). The response
+ * echoes windowStart/windowEnd, so the label never lies about it.
+ */
+export const BUCKET_COUNTS: Record<PeriodKey, Partial<Record<Bucket, number>>> = {
+  "7d": { day: 7 },
+  "30d": { day: 30, week: 5 },
+  "90d": { day: 90, week: 13, month: 3 },
+  "180d": { week: 26, month: 6 },
+  "365d": { week: 52, month: 12 },
+};
+
+/** Unknown/absent/not-offered -> the period's default bucket. */
+export function resolveBucket(key: PeriodKey, raw: unknown): Bucket {
+  if (typeof raw === "string" && raw in BUCKET_COUNTS[key]) return raw as Bucket;
+  return PERIODS[key].bucket;
 }
 
 export const DAY_MS = 86_400_000;
@@ -153,13 +179,18 @@ export function resolvePeriodWindow(
   now: Date,
   timezone: string,
   key: PeriodKey,
+  bucketOverride?: Bucket,
 ): ResolvedPeriod {
   const spec = PERIODS[key];
+  const bucket = bucketOverride ?? spec.bucket;
+  // resolveBucket guarantees the pair exists; a direct caller passing a combo
+  // that isn't offered gets the default count rather than NaN windows.
+  const count = BUCKET_COUNTS[key][bucket] ?? spec.count;
   const today = shopLocalDay(now, timezone);
   const buckets: PeriodBucket[] = [];
 
-  if (spec.bucket === "day") {
-    for (let i = spec.count - 1; i >= 0; i--) {
+  if (bucket === "day") {
+    for (let i = count - 1; i >= 0; i--) {
       const start = new Date(today.getTime() - i * DAY_MS);
       buckets.push({
         key: start.toISOString().slice(0, 10),
@@ -169,9 +200,9 @@ export function resolvePeriodWindow(
         end: new Date(start.getTime() + DAY_MS),
       });
     }
-  } else if (spec.bucket === "week") {
+  } else if (bucket === "week") {
     const thisWeek = weekStart(today);
-    for (let i = spec.count - 1; i >= 0; i--) {
+    for (let i = count - 1; i >= 0; i--) {
       const start = new Date(thisWeek.getTime() - i * 7 * DAY_MS);
       buckets.push({
         key: start.toISOString().slice(0, 10),
@@ -184,7 +215,7 @@ export function resolvePeriodWindow(
   } else {
     const y = today.getUTCFullYear();
     const m = today.getUTCMonth();
-    for (let i = spec.count - 1; i >= 0; i--) {
+    for (let i = count - 1; i >= 0; i--) {
       const start = new Date(Date.UTC(y, m - i, 1));
       buckets.push({
         key: start.toISOString().slice(0, 7),
@@ -202,9 +233,11 @@ export function resolvePeriodWindow(
 
   return {
     key,
-    bucket: spec.bucket,
+    bucket,
     label: spec.label,
-    noun: spec.noun,
+    // The noun IS the bucket ("Cuts per day/week/month"), so a re-bucketed
+    // view retitles itself and the label can't drift from the bars.
+    noun: bucket,
     windowStart: buckets[0]!.start,
     today,
     buckets,
@@ -275,44 +308,54 @@ export async function readChairEvents(
   opts: { staffId?: string } = {},
 ): Promise<{ events: ChairEvent[]; syncedExcluded: boolean }> {
   const { staffId } = opts;
+  // Appointment and Visit are ENABLE+FORCE RLS tables (tenant_isolation checks
+  // app.current_shop_id): a bare prisma read returns ZERO rows under an
+  // enforcing role, and this engine feeds every card on Insights - so the reads
+  // must run through runWithShop (each in its own transaction; a Prisma tx
+  // client must not run concurrent queries). The explicit shopId in each where
+  // stays as the app-layer half of the two-layer isolation.
   const [appts, visits] = await Promise.all([
-    prisma.appointment.findMany({
-      where: {
-        shopId,
-        ...(staffId ? { staffId } : {}),
-        holdExpiresAt: null,
-        status: { in: [...NATIVE_STATUSES] },
-        startsAt: { gte: from, lt: to },
-      },
-      select: {
-        startsAt: true,
-        endsAt: true,
-        priceAtBooking: true,
-        clientId: true,
-        serviceId: true,
-        service: { select: { name: true } },
-      },
-    }),
+    runWithShop(shopId, (tx) =>
+      tx.appointment.findMany({
+        where: {
+          shopId,
+          ...(staffId ? { staffId } : {}),
+          holdExpiresAt: null,
+          status: { in: [...NATIVE_STATUSES] },
+          startsAt: { gte: from, lt: to },
+        },
+        select: {
+          startsAt: true,
+          endsAt: true,
+          priceAtBooking: true,
+          clientId: true,
+          serviceId: true,
+          service: { select: { name: true } },
+        },
+      }),
+    ),
     // `appointment: null` keeps a Visit that was promoted FROM a native
     // appointment from double-counting the same hour - the appointment row above
     // already represents it.
     staffId
       ? Promise.resolve([])
-      : prisma.visit.findMany({
-          where: {
-            shopId,
-            appointment: null,
-            status: { in: [...SYNCED_STATUSES] },
-            scheduledAt: { gte: from, lt: to },
-          },
-          select: {
-            scheduledAt: true,
-            endAt: true,
-            price: true,
-            clientId: true,
-            serviceName: true,
-          },
-        }),
+      : runWithShop(shopId, (tx) =>
+          tx.visit.findMany({
+            where: {
+              shopId,
+              appointment: null,
+              status: { in: [...SYNCED_STATUSES] },
+              scheduledAt: { gte: from, lt: to },
+            },
+            select: {
+              scheduledAt: true,
+              endAt: true,
+              price: true,
+              clientId: true,
+              serviceName: true,
+            },
+          }),
+        ),
   ]);
 
   const events: ChairEvent[] = [];
