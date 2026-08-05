@@ -1024,6 +1024,7 @@ function ServicesTab({
       <ServiceGroupsManager
         initial={initialServiceGroups}
         services={initial}
+        onEditService={setEditing}
         toast={toast}
         unsavedRef={groupUnsavedRef}
       />
@@ -2137,10 +2138,13 @@ function ServiceGroupsManager({
   services,
   toast,
   unsavedRef,
+  onEditService,
 }: {
   initial: ServiceGroupRow[];
   services: ServiceRow[];
   toast: Toast;
+  /** Open a member service's edit sheet - hours are edited there now. */
+  onEditService: (s: ServiceRow) => void;
   // Dirty/saving check registered by the open editor (see ServiceGroupEditor).
   unsavedRef: MutableRefObject<(() => EditorGuardState) | null>;
 }) {
@@ -2205,6 +2209,7 @@ function ServiceGroupsManager({
             key={g.id}
             group={g}
             services={services}
+            onEditService={onEditService}
             expanded={expandedId === g.id}
             onToggle={() => toggle(g.id)}
             toast={toast}
@@ -2239,9 +2244,11 @@ function ServiceGroupItem({
   onToggle,
   toast,
   unsavedRef,
+  onEditService,
 }: {
   group: ServiceGroupRow;
   services: ServiceRow[];
+  onEditService: (s: ServiceRow) => void;
   expanded: boolean;
   onToggle: () => void;
   toast: Toast;
@@ -2305,6 +2312,7 @@ function ServiceGroupItem({
         <ServiceGroupEditor
           group={current}
           services={services}
+          onEditService={onEditService}
           toast={toast}
           unsavedRef={unsavedRef}
           onSaved={setLastSaved}
@@ -2331,9 +2339,11 @@ function ServiceGroupEditor({
   toast,
   unsavedRef,
   onSaved,
+  onEditService,
 }: {
   group: ServiceGroupRow;
   services: ServiceRow[];
+  onEditService: (s: ServiceRow) => void;
   toast: Toast;
   unsavedRef: MutableRefObject<(() => EditorGuardState) | null>;
   // Reports the row a successful save persisted, so the parent item can seed
@@ -2343,6 +2353,24 @@ function ServiceGroupEditor({
   const activeServices = services.filter((s) => s.active);
   const [name, setName] = useState(group.name);
   const [serviceIds, setServiceIds] = useState<string[]>(group.serviceIds);
+  // This group's members with the hours they ACTUALLY run on, for the read-only
+  // panel below. In the draft's own order so it matches the membership list the
+  // barber is looking at, and derived from each service's own windows because
+  // that is now the only thing the engine reads.
+  const memberHours: { svc: ServiceRow; offHours: boolean; summary: string }[] =
+    serviceIds
+      .map((id) => activeServices.find((s) => s.id === id))
+      .filter((s): s is ServiceRow => Boolean(s))
+      .map((svc) => {
+        const offHours = hasCustomHours(svc.hoursWindows);
+        return {
+          svc,
+          offHours,
+          summary: offHours
+            ? hoursWindowsSummary(svc.hoursWindows)
+            : "Open whenever the barber works",
+        };
+      });
   // 0 = no cap (sent to the API as null). NumberField holds a number and settles
   // an emptied field back to 0, so 0 is the natural "no cap" sentinel here.
   const [maxPerDay, setMaxPerDay] = useState<number>(group.maxPerDay ?? 0);
@@ -2610,19 +2638,53 @@ function ServiceGroupEditor({
         </div>
       )}
 
-      {/* Shared available-hours grid - same idiom as ServiceEditForm; these
-          hours OVERRIDE each member service's own windows. */}
-      {/* Hours are NOT edited here. They used to be: a group's windows
-          overrode every member service's own, so the barber set a service's
-          hours in one place and read them in another, and a grouped service's
-          own windows were config the engine silently ignored. Hours now live
-          on the service (Services -> Edit). A group is a bundle with shared
-          booking limits. */}
-      <p className="mb-1 rounded-lg border border-subtle px-3 py-2 text-[11px] leading-relaxed text-muted">
-        Hours are set per service now — open a service and use{" "}
-        <span className="text-offwhite">Available hours</span>. This group shares
-        the booking limits below with its services.
-      </p>
+      {/* Hours are not EDITED here any more — a group's windows used to override
+          every member's own, so hours got set in one place and read in another.
+          They are still worth SEEING here: "what hours does this bundle actually
+          run on" is the question the old grid answered, and deleting it outright
+          would trade one confusion for another. So: read-only, one line per
+          member, each a shortcut into the service where its hours now live.
+          Reads the live `serviceIds` draft, so adding or removing a member above
+          updates this immediately. */}
+      <div>
+        <span className={labelCls}>Hours · set per service</span>
+        {memberHours.length === 0 ? (
+          <p className="mt-1 rounded-xl border border-subtle px-3 py-2 text-[11px] text-muted">
+            No services in this group yet.
+          </p>
+        ) : (
+          <ul className="mt-1 divide-y divide-subtle overflow-hidden rounded-xl border border-subtle">
+            {memberHours.map(({ svc, offHours, summary }) => (
+              <li key={svc.id}>
+                <button
+                  type="button"
+                  onClick={() => onEditService(svc)}
+                  className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition-colors hover:bg-white/[0.03]"
+                  aria-label={`Edit hours for ${svc.name}`}
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-xs text-offwhite">
+                      {offHours && <OffHoursStar />}
+                      {svc.name}
+                    </span>
+                    <span
+                      className={cn(
+                        "mt-0.5 block truncate text-[11px]",
+                        offHours ? "text-gold/90" : "text-muted",
+                      )}
+                    >
+                      {summary}
+                    </span>
+                  </span>
+                  <span aria-hidden="true" className="shrink-0 text-[11px] text-gold">
+                    Edit →
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
 
       {/* Booking limits across the whole group. Blank/0 = no cap. */}
       <div className="grid gap-3 sm:grid-cols-2">
