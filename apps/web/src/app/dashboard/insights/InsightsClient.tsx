@@ -3,9 +3,11 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Card, CardHeader } from "@/components/ui/Card";
+import { Segmented } from "@/components/ui/Segmented";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { cn } from "@/lib/cn";
 import type {
+  Bucket,
   Goal,
   GoalMetric,
   GoalPeriod,
@@ -50,6 +52,11 @@ export function InsightsClient({
   rewardsEnabled?: boolean;
 }) {
   const [period, setPeriod] = useState<PeriodKey>(initial.period);
+  // null = the period's default bar size; a click on the Day/Week/Month pills
+  // overrides it. Reset on period change - a bucket that suits 30 days may not
+  // exist for a year (the API would quietly fall back, but the pills should
+  // never show a choice the response didn't honor).
+  const [bucket, setBucket] = useState<Bucket | null>(null);
   // Keep showing the last good payload while the next one loads, so the page
   // dims rather than collapsing to empty every time the range changes.
   const [data, setData] = useState<InsightsData>(initial);
@@ -57,11 +64,12 @@ export function InsightsClient({
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    if (period === data.period) return; // already showing this window
+    // Already showing this window at this bar size.
+    if (period === data.period && (bucket === null || bucket === data.bucket)) return;
     let cancelled = false;
     setPending(true);
     setFailed(false);
-    void insightsAction(period).then((d) => {
+    void insightsAction(period, bucket ?? undefined).then((d) => {
       if (cancelled) return;
       if (d) setData(d);
       else setFailed(true);
@@ -70,7 +78,7 @@ export function InsightsClient({
     return () => {
       cancelled = true;
     };
-  }, [period, data.period]);
+  }, [period, bucket, data.period, data.bucket]);
 
   const { buckets, services, totals, busiest, loyalty } = data;
 
@@ -92,7 +100,10 @@ export function InsightsClient({
             <button
               key={p.key}
               type="button"
-              onClick={() => setPeriod(p.key)}
+              onClick={() => {
+                setPeriod(p.key);
+                setBucket(null); // each range starts at its natural bar size
+              }}
               aria-pressed={period === p.key}
               className={cn(
                 "shrink-0 rounded-full border px-3.5 py-1.5 text-xs transition-colors duration-150 ease-out",
@@ -144,12 +155,26 @@ export function InsightsClient({
         <Tile label="Busiest day" value={busiest.weekday ?? "n/a"} />
       </motion.div>
 
-      {/* Cuts over time — the bar is whatever the range makes it. */}
+      {/* Cuts over time — the bar is whatever the range makes it, and the
+          Day/Week/Month pills re-slice the same range on demand. */}
       <motion.div variants={fadeUp}>
         <Card className="p-5">
-          <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-            <h2 className="font-display text-lg">Cuts per {data.bucketNoun}</h2>
-            <span className="text-xs text-muted">{data.periodLabel}</span>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+            <div className="flex items-baseline gap-3">
+              <h2 className="font-display text-lg">Cuts per {data.bucketNoun}</h2>
+              <span className="text-xs text-muted">{data.periodLabel}</span>
+            </div>
+            {data.bucketOptions.length > 1 && (
+              <Segmented
+                options={data.bucketOptions.map((b) => ({
+                  key: b,
+                  label: b === "day" ? "Day" : b === "week" ? "Week" : "Month",
+                }))}
+                value={bucket ?? data.bucket}
+                onChange={setBucket}
+                ariaLabel="Bar size"
+              />
+            )}
           </div>
           <BucketBars buckets={buckets} pending={pending} noun={data.bucketNoun} />
         </Card>
@@ -174,7 +199,7 @@ export function InsightsClient({
 
       {/* Open chair time vs sold chair time */}
       <motion.div variants={fadeUp}>
-        <UtilizationCard period={period} />
+        <UtilizationCard period={period} bucket={bucket} />
       </motion.div>
 
       <motion.div
@@ -184,9 +209,12 @@ export function InsightsClient({
           pending && "opacity-60",
         )}
       >
-        {/* Day-of-week shape */}
+        {/* Day-of-week shape. Titled "Cuts by day" - Chair time's weekday view
+            is ALSO called "By day of week", and two cards with one name and two
+            different measures (booking counts here, minutes there) read as the
+            page contradicting itself. */}
         <Card className="p-5">
-          <h2 className="mb-1 font-display text-lg">By day of week</h2>
+          <h2 className="mb-1 font-display text-lg">Cuts by day</h2>
           <p className="mb-4 text-xs text-muted">
             Every cut in this range, stacked onto the day it fell on.
           </p>
@@ -338,21 +366,16 @@ function ServiceBars({
 
   return (
     <div className={cn("px-5 py-4", pending && "opacity-50")}>
-      <div className="mb-3 flex w-fit items-center gap-1 self-start rounded-full border border-subtle p-0.5">
-        {(["count", "revenue"] as const).map((m) => (
-          <button
-            key={m}
-            onClick={() => setMode(m)}
-            aria-pressed={mode === m}
-            className={cn(
-              "rounded-full px-3 py-1 text-xs transition-colors duration-150 ease-out",
-              mode === m ? "bg-gold/15 text-gold" : "text-muted hover:text-offwhite",
-            )}
-          >
-            {m === "count" ? "By bookings" : "By revenue"}
-          </button>
-        ))}
-      </div>
+      <Segmented
+        className="mb-3"
+        options={[
+          { key: "count", label: "By bookings" },
+          { key: "revenue", label: "By revenue" },
+        ]}
+        value={mode}
+        onChange={setMode}
+        ariaLabel="Rank services by"
+      />
       {booked.length === 0 && (
         <p className="mb-3 text-sm text-muted">
           Nothing booked in this range — your menu is listed below at zero.
@@ -415,9 +438,14 @@ function fmtDuration(min: number): string {
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 
-/** Color the bar by how full it is — red/amber/green reads at a glance. */
+/**
+ * Color the bar by how full it is — red/amber/green reads at a glance. A null
+ * percentage (work booked outside any scheduled hours) must still be VISIBLE:
+ * the old charcoal-600 painted on the charcoal-700 track was a bar you could
+ * not see, so every off-hours weekday looked like an empty row.
+ */
 function utilTone(pct: number | null): string {
-  if (pct === null) return "bg-charcoal-600";
+  if (pct === null) return "bg-amber-400/60";
   if (pct >= 75) return "bg-emerald-soft";
   if (pct >= 40) return "bg-gold";
   return "bg-rose-400/80";
@@ -437,7 +465,13 @@ const UTIL_VIEWS = [
  * thinks in: which weekday runs empty, whether it's trending up or down over the
  * selected range, or what fills the chair. Range follows the page's one control.
  */
-function UtilizationCard({ period }: { period: PeriodKey }) {
+function UtilizationCard({
+  period,
+  bucket,
+}: {
+  period: PeriodKey;
+  bucket: Bucket | null;
+}) {
   const [by, setBy] = useState<"weekday" | "period" | "service">("weekday");
   const [staffId, setStaffId] = useState<string>("");
   const [data, setData] = useState<UtilizationData | null>(null);
@@ -448,7 +482,14 @@ function UtilizationCard({ period }: { period: PeriodKey }) {
     let cancelled = false;
     setLoading(true);
     setFailed(false);
-    void utilizationAction({ period, by, ...(staffId ? { staffId } : {}) }).then((d) => {
+    void utilizationAction({
+      period,
+      by,
+      // Follow the page's bar-size override so "Over time" re-buckets in step
+      // with the cuts chart instead of contradicting it.
+      ...(bucket ? { bucket } : {}),
+      ...(staffId ? { staffId } : {}),
+    }).then((d) => {
       if (cancelled) return;
       if (d) setData(d);
       else setFailed(true);
@@ -457,9 +498,19 @@ function UtilizationCard({ period }: { period: PeriodKey }) {
     return () => {
       cancelled = true;
     };
-  }, [period, by, staffId]);
+  }, [period, bucket, by, staffId]);
 
-  const rows = data?.rows ?? [];
+  const rawRows = data?.rows ?? [];
+  // Weekday rows accumulate the WHOLE window - at a year that's "210h / 470h",
+  // 52 Mondays summed, which answers nothing. The API sends how many of each
+  // weekday the window held (r.days); showing the per-weekday AVERAGE is what
+  // makes "which day runs empty?" readable. The percentage is a ratio, so it
+  // survives the division untouched.
+  const rows = rawRows.map((r) =>
+    by === "weekday" && r.days > 0
+      ? { ...r, openMin: Math.round(r.openMin / r.days), bookedMin: Math.round(r.bookedMin / r.days) }
+      : r,
+  );
   // Scale bars to the busiest row, not to 100%: a shop that never exceeds 40%
   // would otherwise render seven near-invisible slivers.
   const maxBooked = Math.max(1, ...rows.map((r) => r.bookedMin));
@@ -467,12 +518,8 @@ function UtilizationCard({ period }: { period: PeriodKey }) {
   const scale = Math.max(maxBooked, maxOpen);
   // Weekday and over-time rows carry real capacity; service rows share one chair.
   const hasCapacity = by !== "service";
-
-  const chip = (active: boolean) =>
-    cn(
-      "rounded-full px-3 py-1 text-xs transition-colors",
-      active ? "bg-gold/15 text-gold" : "border border-subtle text-muted hover:text-offwhite",
-    );
+  // "over 4 Mondays" context for the weekday view's caption.
+  const weekdaySpan = by === "weekday" ? Math.max(...rawRows.map((r) => r.days), 0) : 0;
 
   return (
     <Card className="overflow-hidden">
@@ -485,19 +532,12 @@ function UtilizationCard({ period }: { period: PeriodKey }) {
       <div className="flex flex-col gap-4 px-5 py-5">
         {/* Controls: how to slice it, and (multi-chair shops) whose chair. */}
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Group by">
-            {UTIL_VIEWS.map((v) => (
-              <button
-                key={v.key}
-                type="button"
-                onClick={() => setBy(v.key)}
-                aria-pressed={by === v.key}
-                className={chip(by === v.key)}
-              >
-                {v.label}
-              </button>
-            ))}
-          </div>
+          <Segmented
+            options={UTIL_VIEWS.map((v) => ({ key: v.key, label: v.label }))}
+            value={by}
+            onChange={setBy}
+            ariaLabel="Group by"
+          />
           {(data?.staff.length ?? 0) > 1 && (
             <select
               value={staffId}
@@ -589,9 +629,9 @@ function UtilizationCard({ period }: { period: PeriodKey }) {
                       {closed ? (
                         "closed"
                       ) : offSchedule ? (
-                        <span title="Booked outside your weekly hours — there's no scheduled capacity to measure it against.">
-                          <span className="text-offwhite">{fmtDuration(r.bookedMin)}</span>
-                          {" off-hours"}
+                        <span title="Booked outside your weekly hours — there's no scheduled capacity to measure it against. Add this day to your hours and it gets a real percentage.">
+                          <span className="text-offwhite">{fmtDuration(r.bookedMin)}</span>{" "}
+                          <span className="text-amber-400/90">off-hours</span>
                         </span>
                       ) : (
                         <>
@@ -608,6 +648,13 @@ function UtilizationCard({ period }: { period: PeriodKey }) {
             </div>
 
             <div className="flex flex-col gap-1 text-[11px] text-muted/80">
+              {by === "weekday" && weekdaySpan > 1 && (
+                <p>
+                  Each row is the average for that weekday across the range
+                  (about {weekdaySpan} of each) — not the total, so a year and a
+                  week read on the same scale.
+                </p>
+              )}
               <p>
                 {by === "service"
                   ? "Share of your open time each service filled. Services share one chair, so these add up to your total booked time."

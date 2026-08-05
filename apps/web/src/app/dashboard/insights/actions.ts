@@ -2,6 +2,7 @@
 
 import { apiGet, apiSend } from "@/lib/api";
 import type {
+  Bucket,
   GoalMetric,
   GoalPeriod,
   GoalResponse,
@@ -11,8 +12,15 @@ import type {
 } from "./page";
 
 /** Re-fetch the page's numbers for another period (mirrors trendsAction). */
-export async function insightsAction(period: PeriodKey): Promise<InsightsData | null> {
-  const res = await apiGet<InsightsData>(`/api/insights?period=${period}`);
+export async function insightsAction(
+  period: PeriodKey,
+  bucket?: Bucket,
+): Promise<InsightsData | null> {
+  const params = new URLSearchParams({
+    period,
+    ...(bucket ? { bucket } : {}),
+  });
+  const res = await apiGet<InsightsData>(`/api/insights?${params}`);
   return res.ok ? (res.data ?? null) : null;
 }
 
@@ -23,12 +31,14 @@ export async function insightsAction(period: PeriodKey): Promise<InsightsData | 
  */
 export async function utilizationAction(input: {
   period: PeriodKey;
+  bucket?: Bucket;
   by: "weekday" | "period" | "service";
   staffId?: string;
 }): Promise<UtilizationData | null> {
   const params = new URLSearchParams({
     period: input.period,
     by: input.by,
+    ...(input.bucket ? { bucket: input.bucket } : {}),
     ...(input.staffId ? { staffId: input.staffId } : {}),
   });
   const res = await apiGet<UtilizationData>(`/api/insights/utilization?${params}`);

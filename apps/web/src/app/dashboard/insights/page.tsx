@@ -8,6 +8,8 @@ export const metadata: Metadata = { title: "Insights" };
 
 /** Keys of the page's one period control (mirrors PERIODS in the API engine). */
 export type PeriodKey = "7d" | "30d" | "90d" | "180d" | "365d";
+/** Bar sizes a period can be viewed at (mirrors BUCKET_COUNTS in the engine). */
+export type Bucket = "day" | "week" | "month";
 
 // Module-local, NOT exported: a Next page module may only export `default`,
 // `metadata` and friends, so a runtime export here fails the build's type check.
@@ -22,8 +24,10 @@ const DEFAULT_PERIOD: PeriodKey = "30d";
 export interface PeriodMeta {
   period: PeriodKey;
   periodLabel: string; // "Last 30 days"
-  bucket: "day" | "week" | "month";
+  bucket: Bucket;
   bucketNoun: string; // "day" | "week" | "month" — drives the chart's title
+  /** Which bar sizes THIS period offers — drives the Day/Week/Month pills. */
+  bucketOptions: Bucket[];
   windowStart: string; // YYYY-MM-DD, shop-local
   windowEnd: string;
   periods: { key: PeriodKey; label: string }[];
@@ -43,6 +47,9 @@ export interface InsightsData extends PeriodMeta {
     name: string;
     count: number;
     revenue: number;
+    /** Menu price/duration (null = no menu match, e.g. a synced free-text name). */
+    price: number | null;
+    durationMin: number | null;
   }[];
   totals: {
     visits: number;
