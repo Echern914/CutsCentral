@@ -85,9 +85,11 @@ export async function ingestSquareBooking(
   // Square bookings don't inline an end time or price; derive end from the first
   // segment's duration when present. Service name needs a Catalog lookup we skip
   // in v1 (null is fine — punches earn on the shop's default punchesPerVisit).
+  // Never null: a null endAt is invisible to the slot engine's `endAt: { gt }`
+  // busy-join (Prisma gt excludes NULL) and the visit would block nothing.
+  // Missing duration falls back to the same half hour utilization assumes.
   const durationMin = booking.appointment_segments[0]?.duration_minutes ?? null;
-  const endAt =
-    durationMin != null ? new Date(scheduledAt.getTime() + durationMin * 60_000) : null;
+  const endAt = new Date(scheduledAt.getTime() + (durationMin ?? 30) * 60_000);
   const sourceId = `square:${booking.id}`;
 
   const { clientId, clawedBack, earn } = await runWithShop(shop.id, async (tx) => {

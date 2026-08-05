@@ -1139,14 +1139,17 @@ const APPT_STATUS: Record<string, AgendaStatus> = {
   CANCELED: "canceled",
   NO_SHOW: "no_show",
 };
-// RESCHEDULED -> canceled: the moved slot is defunct; the new time arrives as its
-// own SCHEDULED visit, so treating the old row as canceled avoids a phantom.
+// RESCHEDULED -> upcoming: for a synced (Acuity/Square) visit a reschedule
+// UPDATES the same row to its new time - ingest upserts on
+// @@unique([shopId, acuityAppointmentId]) - so the row IS the live booking.
+// There is no separate "old slot" row to hide. The slot engine, status
+// promotion and insights all already treat RESCHEDULED as live.
 const VISIT_STATUS: Record<string, AgendaStatus> = {
   SCHEDULED: "upcoming",
   COMPLETED: "completed",
   CANCELED: "canceled",
   NO_SHOW: "no_show",
-  RESCHEDULED: "canceled",
+  RESCHEDULED: "upcoming",
 };
 
 function fullName(first: string | null, last: string | null): string {
@@ -1205,7 +1208,15 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
     res.status(400).json({ error: "invalid_input" });
     return;
   }
-  const { from, to, staffId } = parsed.data;
+  const { from, staffId } = parsed.data;
+  // The web asks for a month plus padding (~59 days). Bound the window so the
+  // generous row caps below can't be turned into a full-table read by a
+  // hand-crafted range.
+  const MAX_AGENDA_MS = 93 * 24 * 60 * 60 * 1000;
+  const to =
+    parsed.data.to.getTime() - from.getTime() > MAX_AGENDA_MS
+      ? new Date(from.getTime() + MAX_AGENDA_MS)
+      : parsed.data.to;
 
   // Shop has RLS with no policy, so bookingMode/timezone must be read as the
   // OWNER (outside forShop), exactly like the /complete handler below.
@@ -1291,7 +1302,11 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         holdExpiresAt: null,
       },
       orderBy: { startsAt: "asc" },
-      take: 500,
+      // High enough that a busy multi-chair shop's full month (the web asks
+      // for ~59 days) can never truncate: ascending order + a tight cap used
+      // to silently eat the BACK of the window - later days rendered empty
+      // and read as "sync stops partway through the month".
+      take: 2000,
       select: {
         id: true,
         status: true,
@@ -1427,7 +1442,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         ...(staffId ? { staffId } : {}),
       },
       orderBy: { startsAt: "asc" },
-      take: 200,
+      take: 1000,
       select: { id: true, startsAt: true, endsAt: true, reason: true },
     })) as unknown as {
       id: string;
@@ -1482,15 +1497,15 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         scheduledAt: { gte: from, lte: to },
         appointment: null,
         // A cancelled booking is not on the schedule. Acuity tells us via the
-        // appointment.canceled webhook (or the 90-day resync sweep) and the row
-        // flips to CANCELED; it used to keep rendering, just dimmed, so a client
-        // who cancelled still looked like they were coming in. RESCHEDULED is
-        // the same story - the moved appointment arrives as its own row, so
-        // keeping the old one would show the client twice.
-        status: { notIn: ["CANCELED", "RESCHEDULED"] },
+        // appointment.canceled webhook (or the resync sweep) and the row flips
+        // to CANCELED; it used to keep rendering, just dimmed, so a client who
+        // cancelled still looked like they were coming in. RESCHEDULED stays:
+        // a reschedule UPDATES this same row to its new time (see
+        // VISIT_STATUS), so filtering it would erase a live booking.
+        status: { not: "CANCELED" },
       },
       orderBy: { scheduledAt: "asc" },
-      take: 500,
+      take: 2000,
       select: {
         id: true,
         status: true,
@@ -1545,12 +1560,12 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
     const rows = (await db.visit.findMany({
       where: {
         scheduledAt: { gte: from, lte: to },
-        // Same rule as the native branch above: cancelled and rescheduled
-        // bookings are off the schedule, not dimmed on it.
-        status: { notIn: ["CANCELED", "RESCHEDULED"] },
+        // Same rule as the native branch above: cancelled bookings are off the
+        // schedule; RESCHEDULED rows are live at their new time and stay.
+        status: { not: "CANCELED" },
       },
       orderBy: { scheduledAt: "asc" },
-      take: 500,
+      take: 2000,
       select: {
         id: true,
         status: true,
