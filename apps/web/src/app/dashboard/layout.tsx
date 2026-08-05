@@ -103,12 +103,17 @@ export default async function DashboardLayout({
           <TrialBanner />
         </HideInNativeApp>
       )}
-      {/* Phones scroll under a fixed tab bar, so the last card needs clearance
-          or it sits permanently behind it. ~4.5rem of bar plus the home-indicator
-          inset; from `sm` up the bar is hidden and no padding is needed. */}
+      {/* Phones scroll under the floating tab pill, so the last card needs
+          clearance or it sits permanently behind it. The pill is ~3.6rem tall
+          and floats 0.625rem above the home-indicator inset, so budget a little
+          over the sum; from `sm` up the pill is hidden and no padding applies. */}
       <div
         className="sm:!pb-0"
-        style={{ paddingBottom: barberOnly ? undefined : "calc(4.5rem + env(safe-area-inset-bottom))" }}
+        style={{
+          paddingBottom: barberOnly
+            ? undefined
+            : "calc(5.5rem + env(safe-area-inset-bottom))",
+        }}
       >
         {children}
       </div>

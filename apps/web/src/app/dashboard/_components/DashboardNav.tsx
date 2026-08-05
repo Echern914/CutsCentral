@@ -85,14 +85,19 @@ export function DashboardTabBar({
 
   return (
     <>
+      {/* A floating pill rather than an edge-to-edge strip: it reads as a
+          control sitting ON the app instead of a band welded to the bottom of
+          the screen, and the page visibly scrolls underneath it. */}
       <nav
         aria-label="Primary"
-        className="fixed inset-x-0 bottom-0 z-30 border-t border-subtle bg-charcoal-900/95 backdrop-blur sm:hidden"
-        // The native shell insets only the TOP edge (SafeAreaView edges={["top"]})
-        // and disables automatic content insets, so without this the bar sits
-        // under the iOS home indicator. The WebView injects viewport-fit=cover,
-        // so env() resolves correctly in-app; on plain web it's simply 0.
-        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+        className="glass fixed inset-x-3 z-30 overflow-hidden rounded-full shadow-ambient-lg sm:hidden"
+        // Floats CLEAR of the home indicator instead of padding itself out of
+        // the way. The native shell insets only the TOP edge (SafeAreaView
+        // edges={["top"]}) and disables automatic content insets, so this offset
+        // has to include the inset itself — otherwise the pill would sit ON the
+        // indicator rather than above it. The WebView injects viewport-fit=cover
+        // so env() resolves in-app; on plain web it's simply 0.
+        style={{ bottom: "calc(0.625rem + env(safe-area-inset-bottom))" }}
       >
         <ul className="flex items-stretch">
           {tabs.map((t) => (
