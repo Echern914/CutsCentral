@@ -204,10 +204,12 @@ describe("native shop agenda: synced Acuity/Square appointments", () => {
     await prisma.visit.delete({ where: { id: canceled.id } });
   });
 
-  // RESCHEDULED is the same problem wearing a different hat: Acuity sends the
-  // moved appointment as its OWN row, so keeping the old one shows the client
-  // twice — once at a time they are not coming.
-  it("drops a RESCHEDULED synced visit (the new time arrives as its own row)", async () => {
+  // RESCHEDULED is NOT the cancel story: for a synced visit a reschedule
+  // UPDATES the same row to its new time — ingest upserts on
+  // @@unique([shopId, acuityAppointmentId]), so there can never be a second
+  // row for the same Acuity appointment. This row IS the live booking; hiding
+  // it erased rescheduled clients from the calendar entirely.
+  it("keeps a RESCHEDULED synced visit — it IS the live booking at its new time", async () => {
     const moved = await prisma.visit.create({
       data: {
         shopId,
@@ -220,7 +222,54 @@ describe("native shop agenda: synced Acuity/Square appointments", () => {
       },
     });
     const rows = await agenda();
-    expect(rows.some((r) => r.serviceName === "Moved Fade")).toBe(false);
+    const row = rows.find((r) => r.serviceName === "Moved Fade") as
+      | (AgendaItem & { status?: string })
+      | undefined;
+    expect(row, "a rescheduled Acuity booking must stay on the calendar").toBeDefined();
+    expect(row!.status).toBe("upcoming");
     await prisma.visit.delete({ where: { id: moved.id } });
+  });
+
+  // The agenda used to read visits with `take: 500` ASCENDING over the web's
+  // ~2-month window — a busy synced shop blew the cap and the BACK of the
+  // window silently rendered empty ("it syncs partway through the month and
+  // stops"). Seed more visits than the old cap and assert the LAST day shows.
+  it("renders a window denser than 500 visits through its last day", async () => {
+    const first = utcMidnightPlus(3);
+    const days = 45;
+    const perDay = 12; // 540 > the old 500 cap
+    await prisma.visit.createMany({
+      data: Array.from({ length: days * perDay }, (_, i) => {
+        const day = Math.floor(i / perDay);
+        const slot = i % perDay;
+        return {
+          shopId,
+          clientId,
+          acuityAppointmentId: `dense-${i}`,
+          status: "SCHEDULED" as const,
+          scheduledAt: at(new Date(first.getTime() + day * DAY_MS), 8, slot * 30),
+          endAt: at(new Date(first.getTime() + day * DAY_MS), 8, slot * 30 + 25),
+          serviceName: "Dense Fade",
+        };
+      }),
+    });
+    const res = await request(app)
+      .get("/api/booking/agenda")
+      .query({
+        from: first.toISOString(),
+        to: new Date(first.getTime() + days * DAY_MS).toISOString(),
+      })
+      .set("Cookie", cookie);
+    expect(res.status).toBe(200);
+    const dense = (res.body.agenda as AgendaItem[]).filter(
+      (r) => r.serviceName === "Dense Fade",
+    );
+    expect(dense.length).toBe(days * perDay);
+    const lastDay = at(new Date(first.getTime() + (days - 1) * DAY_MS), 8).toISOString();
+    expect(
+      dense.some((r) => r.start === lastDay),
+      "the final day of the window must not be truncated away",
+    ).toBe(true);
+    await prisma.visit.deleteMany({ where: { shopId, serviceName: "Dense Fade" } });
   });
 });

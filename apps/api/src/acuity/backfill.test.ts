@@ -34,9 +34,13 @@ vi.mock("./client.js", () => ({
     listAppointments: async (p: { minDate?: string; max?: number; canceled?: boolean }) => {
       if (p.canceled) return []; // no canceled history
       const min = p.minDate ? new Date(p.minDate).getTime() : 0;
+      // The real Acuity SILENTLY CAPS max at 100 - the mock must too, or the
+      // walk's termination logic is tested against a server that doesn't exist.
+      // (The old walk stopped on `page.length < requested max` and synced
+      // exactly 100 appointments against this behavior.)
       return ACTIVE.filter((a) => new Date(a.datetime).getTime() >= min).slice(
         0,
-        p.max ?? 100,
+        Math.min(p.max ?? 100, 100),
       );
     },
   })),

@@ -54,7 +54,21 @@ export async function ingestAppointment(
     );
     return;
   }
-  const endAt = parseDate(appt.endTime);
+  // endAt drives slot-blocking: `slots.ts` joins live external Visits into the
+  // busy set via `endAt: { gt: ... }`, and Prisma's gt excludes NULL - so a
+  // visit stored with a null endAt silently never blocks a slot and the chair
+  // double-books. Never store null: fall back to Acuity's duration, then to a
+  // half hour (the same default utilization already assumes for missing ends).
+  const durationMin = appt.duration != null ? Number(appt.duration) : null;
+  const endAt =
+    parseDate(appt.endTime) ??
+    new Date(
+      scheduledAt.getTime() +
+        (durationMin != null && Number.isFinite(durationMin) && durationMin > 0
+          ? durationMin
+          : 30) *
+          60_000,
+    );
   const priceNum = appt.price != null ? Number(appt.price) : null;
   const price = priceNum != null && Number.isFinite(priceNum) ? priceNum : null;
   // TCPA consent from the intake form (if the barber added the checkbox and the

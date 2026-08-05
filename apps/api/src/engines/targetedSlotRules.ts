@@ -7,22 +7,37 @@ import {
 import { logger } from "../logger.js";
 
 /**
- * Materialization for INDEFINITE targeted-slot series ("repeat until I turn it
- * off"). A rule stores only its anchor occurrence; concrete TargetedSlot rows
- * are what block the grid and get claimed by bookings, so somebody has to keep
+ * Materialization for targeted-slot series ("repeat until I turn it off").
+ * A rule stores its anchor + weekly SCHEDULE; concrete TargetedSlot rows are
+ * what block the grid and get claimed by bookings, so somebody has to keep
  * creating them as time passes — that's this engine, called from the POST that
  * creates a rule (first horizon) and from the daily roll-forward job (every
  * horizon after).
  *
- * Occurrence k = anchor's shop-local wall time, k weeks later (DST-stable via
- * zonedWallTimeToUtc). weeksMaterialized is the ONLY cursor: we extend from it
- * and advance it in the same transaction as the createMany, so a crashed or
- * double-fired run can never double-create a week.
+ * Week k spans the 7 days starting at the anchor's shop-local DATE, k weeks
+ * later (DST-stable via zonedWallTimeToUtc). One week can hold many rows now —
+ * any set of weekdays x any set of times — so weeksMaterialized counts WEEKS,
+ * not rows. It is still the ONLY cursor: we extend from it and advance it in
+ * the same transaction as the createMany, so a crashed or double-fired run can
+ * never double-create a week. Weeks materialize whole or not at all, which
+ * keeps that invariant with multi-row weeks (the horizon is 91 days against a
+ * 90-day booking window, so a partially-fitting final week can just wait for
+ * tomorrow's run).
  */
 
 /** How far ahead an indefinite series keeps concrete rows. Comfortably past
  *  the max booking window (Shop.bookingMaxDays caps at 90). */
 export const TARGETED_RULE_HORIZON_DAYS = 91;
+
+/** One time-of-day in a rule's weekly schedule. durationMin/price fall back to
+ *  the rule's base columns. */
+export interface RuleTime {
+  startMin: number;
+  durationMin?: number;
+  price?: number;
+}
+/** {"0".."6": RuleTime[]} — Service.hoursWindows key convention (0=Sun). */
+export type RuleSchedule = Record<string, RuleTime[]>;
 
 interface RuleRow {
   id: string;
@@ -33,7 +48,43 @@ interface RuleRow {
   anchor: Date;
   durationMin: number;
   price: unknown; // Prisma.Decimal — passed through to createMany untouched
+  schedule: unknown; // Json column — parsed defensively below
   weeksMaterialized: number;
+}
+
+/**
+ * The rule's weekly schedule, with the pre-schedule fallback: a legacy rule
+ * (schedule {}) means exactly its anchor's weekday and wall time. Malformed
+ * entries are dropped rather than crashing the roll-forward for every shop.
+ */
+export function effectiveSchedule(
+  rule: { anchor: Date; schedule: unknown },
+  timezone: string,
+): RuleSchedule {
+  const out: RuleSchedule = {};
+  const raw = rule.schedule;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+      const wd = Number(key);
+      if (!Number.isInteger(wd) || wd < 0 || wd > 6 || !Array.isArray(value)) continue;
+      const times: RuleTime[] = [];
+      for (const t of value) {
+        if (typeof t !== "object" || t === null) continue;
+        const { startMin, durationMin, price } = t as Record<string, unknown>;
+        if (typeof startMin !== "number" || startMin < 0 || startMin >= 24 * 60) continue;
+        times.push({
+          startMin,
+          ...(typeof durationMin === "number" && durationMin > 0 ? { durationMin } : {}),
+          ...(typeof price === "number" && price >= 0 ? { price } : {}),
+        });
+      }
+      if (times.length > 0) out[String(wd)] = times.sort((a, b) => a.startMin - b.startMin);
+    }
+  }
+  if (Object.keys(out).length > 0) return out;
+  // Legacy rule: derive the single occurrence from the anchor.
+  const wd = zonedDateParts(rule.anchor, timezone).weekday;
+  return { [String(wd)]: [{ startMin: localMinutesOfDay(rule.anchor, timezone) }] };
 }
 
 /**
@@ -46,7 +97,7 @@ export async function materializeTargetedRule(
   horizonEnd: Date,
 ): Promise<number> {
   const anchor = zonedDateParts(rule.anchor, timezone);
-  const wallMin = localMinutesOfDay(rule.anchor, timezone);
+  const schedule = effectiveSchedule(rule, timezone);
   const rows: {
     staffId: string;
     serviceId: string;
@@ -56,31 +107,53 @@ export async function materializeTargetedRule(
     price: unknown;
     ruleId: string;
   }[] = [];
+
   let k = rule.weeksMaterialized;
   for (;;) {
-    const startsAt =
-      k === 0
-        ? rule.anchor
-        : zonedWallTimeToUtc(
-            anchor.year,
-            anchor.month0,
-            anchor.day + k * 7, // Date.UTC in the helper normalizes overflow
-            wallMin,
-            timezone,
-          );
-    if (startsAt.getTime() > horizonEnd.getTime()) break;
-    rows.push({
-      staffId: rule.staffId,
-      serviceId: rule.serviceId,
-      label: rule.label,
-      startsAt,
-      durationMin: rule.durationMin,
-      price: rule.price,
-      ruleId: rule.id,
-    });
+    // Build week k in full before deciding: whole weeks or nothing (see top).
+    const week: (typeof rows)[number][] = [];
+    let overHorizon = false;
+    for (const [key, times] of Object.entries(schedule)) {
+      const wd = Number(key);
+      // Days count forward from the anchor's date, so week 0 never reaches
+      // back before the series start.
+      const offset = (wd - anchor.weekday + 7) % 7;
+      for (const t of times) {
+        const startsAt = zonedWallTimeToUtc(
+          anchor.year,
+          anchor.month0,
+          anchor.day + k * 7 + offset, // Date.UTC in the helper normalizes overflow
+          t.startMin,
+          timezone,
+        );
+        // Week 0 can straddle the series start on the anchor's own day (a
+        // morning time when the series was created for tonight): never
+        // materialize before the anchor.
+        if (startsAt.getTime() < rule.anchor.getTime()) continue;
+        if (startsAt.getTime() > horizonEnd.getTime()) {
+          overHorizon = true;
+          break;
+        }
+        week.push({
+          staffId: rule.staffId,
+          serviceId: rule.serviceId,
+          label: rule.label,
+          startsAt,
+          durationMin: t.durationMin ?? rule.durationMin,
+          price: t.price ?? rule.price,
+          ruleId: rule.id,
+        });
+      }
+      if (overHorizon) break;
+    }
+    if (overHorizon) break;
+    rows.push(...week);
     k++;
+    // A schedule that materialized nothing in its first week (all times before
+    // the anchor) still advances k - the loop terminates on the horizon.
   }
-  if (rows.length === 0) return 0;
+
+  if (k === rule.weeksMaterialized) return 0;
   // createMany + cursor advance in ONE tx (shop-scoped for RLS), guarded on the
   // cursor still being where we read it — if a concurrent run already extended,
   // the guard matches 0 rows and we skip instead of duplicating. `active: true`
@@ -93,9 +166,11 @@ export async function materializeTargetedRule(
       data: { weeksMaterialized: k },
     });
     if (advanced.count === 0) return 0;
-    await tx.targetedSlot.createMany({
-      data: rows.map((r) => ({ ...r, shopId: rule.shopId, price: r.price as never })),
-    });
+    if (rows.length > 0) {
+      await tx.targetedSlot.createMany({
+        data: rows.map((r) => ({ ...r, shopId: rule.shopId, price: r.price as never })),
+      });
+    }
     return rows.length;
   });
 }
@@ -116,6 +191,7 @@ export async function rollForwardTargetedRules(): Promise<void> {
       anchor: true,
       durationMin: true,
       price: true,
+      schedule: true,
       weeksMaterialized: true,
       shop: { select: { timezone: true } },
     },

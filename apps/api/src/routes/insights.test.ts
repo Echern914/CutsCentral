@@ -33,26 +33,28 @@ function daysAgoAtNoon(daysAgo: number): Date {
   return when;
 }
 
-/** An externally-synced (Acuity/Square-like) completed visit. */
+/** An externally-synced (Acuity/Square-like) visit, COMPLETED by default. */
 async function makeVisit(
   clientId: string,
   daysAgo: number,
   serviceName: string | null,
   price: number | null,
+  status: "COMPLETED" | "SCHEDULED" | "RESCHEDULED" | "CANCELED" = "COMPLETED",
 ) {
   const when = daysAgoAtNoon(daysAgo);
-  await prisma.visit.create({
+  return prisma.visit.create({
     data: {
       shopId,
       clientId,
       acuityAppointmentId: `ins-${++seq}`,
-      status: "COMPLETED",
+      status,
       scheduledAt: when,
       endAt: new Date(when.getTime() + 30 * 60_000),
-      completedAt: when,
+      ...(status === "COMPLETED" ? { completedAt: when } : {}),
       serviceName,
       price,
     },
+    select: { id: true },
   });
 }
 
@@ -270,6 +272,84 @@ describe("GET /api/insights", () => {
     expect(junk.status).toBe(200);
     expect(junk.body.period).toBe("30d");
     expect(junk.body.buckets).toHaveLength(30);
+  });
+
+  it("honors an explicit bucket override and retitles itself", async () => {
+    const res = await get("?period=30d&bucket=week");
+    expect(res.status).toBe(200);
+    expect(res.body.bucket).toBe("week");
+    expect(res.body.bucketNoun).toBe("week"); // drives "Cuts per week"
+    // 5 Mon-start weeks ending with the current one. The window is honest
+    // about being 35 days - it's echoed, so the label can't lie.
+    expect(res.body.buckets).toHaveLength(5);
+    // Same events, same total, different slicing.
+    const total = res.body.buckets.reduce(
+      (sum: number, b: { cuts: number }) => sum + b.cuts,
+      0,
+    );
+    expect(total).toBeGreaterThanOrEqual(6); // 35d window ⊇ the 30d seed set
+  });
+
+  it("advertises which buckets each period offers", async () => {
+    const res = await get("?period=90d");
+    expect(res.body.bucketOptions).toEqual(["day", "week", "month"]);
+    const week = await get("?period=7d");
+    expect(week.body.bucketOptions).toEqual(["day"]);
+  });
+
+  it("falls back to the period's default bucket when the combo isn't offered", async () => {
+    // 365 day-bars would be unreadable; the API quietly serves the default.
+    const res = await get("?period=365d&bucket=day");
+    expect(res.status).toBe(200);
+    expect(res.body.bucket).toBe("month");
+    expect(res.body.buckets).toHaveLength(12);
+    const junk = await get("?bucket=banana");
+    expect(junk.body.bucket).toBe("day");
+    expect(junk.body.buckets).toHaveLength(30);
+  });
+
+  it("counts live SCHEDULED and RESCHEDULED synced visits that already happened", async () => {
+    // An Acuity visit the promotion cron hasn't flipped yet, and one whose
+    // client rescheduled (same row, new time): both really held the chair.
+    const a = await makeVisit(clientA, 1, "Haircut", 40, "SCHEDULED");
+    const b = await makeVisit(clientB, 1, "Haircut", 40, "RESCHEDULED");
+    try {
+      const res = await get();
+      expect(res.body.totals.visits).toBe(8); // 6 seeded + these 2
+    } finally {
+      await prisma.visit.deleteMany({ where: { id: { in: [a.id, b.id] } } });
+    }
+  });
+
+  it("folds a synced visit's menu-matching name into the service's own row", async () => {
+    // An Acuity visit only carries "Fade" as text - it must land on the NATIVE
+    // Fade row, not open a second row with the same name (two rows, one name
+    // reads as "top services isn't syncing").
+    const v = await makeVisit(clientA, 1, "Fade", 45);
+    try {
+      const res = await get();
+      const fades = (res.body.services as { name: string; count: number; serviceId: string | null }[]).filter(
+        (s) => s.name === "Fade",
+      );
+      expect(fades).toHaveLength(1);
+      expect(fades[0]!.serviceId).toBe(fadeId);
+      expect(fades[0]!.count).toBe(3); // 2 native + this synced one
+    } finally {
+      await prisma.visit.delete({ where: { id: v.id } });
+    }
+  });
+
+  it("ships each menu service's price and duration for the goal planner", async () => {
+    const res = await get();
+    const byName = new Map(
+      (res.body.services as { name: string; price: number | null; durationMin: number | null }[]).map(
+        (s) => [s.name, s],
+      ),
+    );
+    expect(byName.get("Fade")).toMatchObject({ price: 45, durationMin: 45 });
+    expect(byName.get("Hot Towel Shave")).toMatchObject({ price: 25, durationMin: 30 });
+    // A synced free-text name with no menu match is honestly un-plannable.
+    expect(byName.get("Loc Retwist")).toMatchObject({ price: null, durationMin: null });
   });
 
   it("never leaks another shop's numbers", async () => {
