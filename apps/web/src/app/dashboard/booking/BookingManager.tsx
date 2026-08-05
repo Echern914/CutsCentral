@@ -71,7 +71,11 @@ function exampleBooked(target: number): number {
   return Math.max(1, Math.min(3, target - 1));
 }
 
-const tabs = ["Settings", "Staff", "Services", "Appointments"] as const;
+// Order is the order a barber needs them in: the day's book first, the things
+// that shape it next, the one-time configuration last. Settings led for
+// historical reasons - it was the first tab that existed - so opening Booking
+// always landed on shop config instead of on today's appointments.
+const tabs = ["Appointments", "Staff", "Services", "Settings"] as const;
 type Tab = (typeof tabs)[number];
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -167,7 +171,10 @@ export function BookingManager({
   // Narrow the untrusted query value to a real tab; anything else (typo, stale
   // link) falls back to the default rather than rendering nothing.
   const [tab, setTab] = useState<Tab>(() =>
-    tabs.includes(initialTab as Tab) ? (initialTab as Tab) : "Settings",
+    // Default is the book, not the config. ?tab= still wins when present, so
+    // the existing deep links (QuickActions, a client's upcoming visits) are
+    // unaffected - they already point at Appointments.
+    tabs.includes(initialTab as Tab) ? (initialTab as Tab) : "Appointments",
   );
   const bookUrl = `${appBase}/book/${shop.slug ?? "your-shop"}`;
   const needsSetup = initialStaff.length === 0 || initialServices.length === 0;
