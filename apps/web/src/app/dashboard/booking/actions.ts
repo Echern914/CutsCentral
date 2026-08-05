@@ -437,14 +437,22 @@ export interface TargetedSlotRow {
   booked: boolean;
 }
 
-/** A weekly series ("every Sunday 3pm"), condensed to one dashboard card. */
+/** One time-of-day in a rule's weekly schedule (shop-local minutes).
+ *  durationMin/price fall back to the rule's base when absent. */
+export interface RuleScheduleTime {
+  startMin: number;
+  durationMin?: number;
+  price?: number;
+}
+
+/** A weekly series ("every night 9pm", "Mon+Sat mornings"), condensed to one
+ *  dashboard card. `schedule` keys are shop-local weekdays "0"(Sun).."6". */
 export interface TargetedSlotRuleRow {
   id: string;
   staffId: string;
   serviceId: string;
   label: string | null;
-  weekday: number; // 0=Sun, shop-local
-  startMin: number; // shop-local minutes of day
+  schedule: Record<string, RuleScheduleTime[]>;
   durationMin: number;
   price: number;
   // true = repeats until turned off; false = a finite "N more weeks" batch.
@@ -471,6 +479,25 @@ export async function createTargetedSlotAction(input: {
   startsAt: string;
   durationMin: number;
   price: number;
+  repeatWeeks?: number;
+  repeatForever?: boolean;
+}): Promise<Result> {
+  return done(await apiSend("POST", "/api/booking/targeted-slots", input));
+}
+
+/**
+ * The schedule-shaped create: any weekdays x times per week in ONE rule
+ * ("every night at 9pm", "mornings and afternoons daily"). Times are shop-tz
+ * wall clock "HH:MM"; a per-time price/duration overrides the base.
+ */
+export async function createTargetedScheduleAction(input: {
+  staffId: string;
+  serviceId: string;
+  label?: string;
+  durationMin: number;
+  price: number;
+  schedule: Record<string, { start: string; durationMin?: number; price?: number }[]>;
+  startDate?: string; // YYYY-MM-DD, shop-local; defaults to today
   repeatWeeks?: number;
   repeatForever?: boolean;
 }): Promise<Result> {
