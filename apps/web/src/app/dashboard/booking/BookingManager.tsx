@@ -32,12 +32,14 @@ import { ConnectPlatforms } from "./ConnectPlatforms";
 import { Sheet } from "./AppointmentForm";
 import { TimeSelect } from "@/components/ui/TimeSelect";
 import { ImageField } from "../site/ImageField";
+import { Segmented } from "@/components/ui/Segmented";
 import {
   bulkDeleteTargetedSlotsAction,
   createAddOnAction,
   createServiceAction,
   createServiceGroupAction,
   createStaffAction,
+  createTargetedScheduleAction,
   createTargetedSlotAction,
   deleteAddOnAction,
   deleteServiceAction,
@@ -1425,7 +1427,14 @@ function TargetedSlotsManager({
   const [serviceId, setServiceId] = useState("");
   const [staffId, setStaffId] = useState("");
   const [label, setLabel] = useState("");
-  const [when, setWhen] = useState(""); // datetime-local string
+  // "One time" = the classic single date+time (optionally repeated weekly).
+  // "Weekly schedule" = pick weekdays + times, ONE rule ("every night 9pm").
+  const [mode, setMode] = useState<"once" | "weekly">("once");
+  const [when, setWhen] = useState(""); // datetime-local string (once-mode)
+  // Weekly mode: "HH:MM" times per weekday key "0"(Sun).."6". A day with no
+  // key is off — same key-presence convention as service hours.
+  const [weekTimes, setWeekTimes] = useState<Record<string, string[]>>({});
+  const [startDate, setStartDate] = useState(""); // YYYY-MM-DD, blank = today
   const [minutes, setMinutes] = useState(30);
   const [price, setPrice] = useState("");
   const [repeatWeeks, setRepeatWeeks] = useState(0);
@@ -1454,7 +1463,43 @@ function TargetedSlotsManager({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  function addWeekly() {
+    const days = Object.entries(weekTimes).filter(([, t]) => t.length > 0);
+    if (!serviceId || !staffId || !price.trim() || days.length === 0) {
+      toast("Pick a service, barber, price, and at least one day & time", "error");
+      return;
+    }
+    start(async () => {
+      const r = await createTargetedScheduleAction({
+        staffId,
+        serviceId,
+        label: label.trim() || undefined,
+        durationMin: minutes,
+        price: Number(price),
+        schedule: Object.fromEntries(
+          days.map(([wd, times]) => [wd, [...times].sort().map((t) => ({ start: t }))]),
+        ),
+        startDate: startDate || undefined,
+        repeatWeeks: !repeatForever && repeatWeeks > 0 ? repeatWeeks : undefined,
+        repeatForever: repeatForever || undefined,
+      });
+      if (r.ok) {
+        toast("Schedule published", "success");
+        setLabel("");
+        setWeekTimes({});
+        setStartDate("");
+        setPrice("");
+        setRepeatWeeks(0);
+        refresh();
+      } else toast("Couldn't publish", "error");
+    });
+  }
+
   function add() {
+    if (mode === "weekly") {
+      addWeekly();
+      return;
+    }
     if (!serviceId || !staffId || !when || !price.trim()) {
       toast("Pick a service, barber, time, and price", "error");
       return;
@@ -1580,13 +1625,46 @@ function TargetedSlotsManager({
             </option>
           ))}
         </select>
-        <input
-          className={field}
-          type="datetime-local"
-          value={when}
-          onChange={(e) => setWhen(e.target.value)}
-          aria-label="Date and time"
-        />
+        <div className="sm:col-span-2">
+          <Segmented
+            options={[
+              { key: "once", label: "One time" },
+              { key: "weekly", label: "Weekly schedule" },
+            ]}
+            value={mode}
+            onChange={(m) => {
+              setMode(m);
+              // A weekly schedule is almost always "until I turn it off" -
+              // that's the whole reason to set one up.
+              if (m === "weekly" && repeatWeeks === 0) setRepeatForever(true);
+            }}
+            ariaLabel="Slot type"
+          />
+        </div>
+        {mode === "once" ? (
+          <input
+            className={field}
+            type="datetime-local"
+            value={when}
+            onChange={(e) => setWhen(e.target.value)}
+            aria-label="Date and time"
+          />
+        ) : (
+          <div className="flex flex-col gap-2 sm:col-span-2">
+            <WeeklyTimesGrid times={weekTimes} onChange={setWeekTimes} />
+            <label className="flex flex-wrap items-center gap-2 text-xs text-muted">
+              Starting
+              <input
+                className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                aria-label="First day of the schedule"
+              />
+              <span>(blank = today; times already passed roll to next week)</span>
+            </label>
+          </div>
+        )}
         <input
           className={field}
           placeholder="Label (optional, e.g. Late night retwist)"
@@ -1629,10 +1707,14 @@ function TargetedSlotsManager({
               disabled={repeatForever}
               className="w-16 rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite disabled:opacity-50"
               value={repeatWeeks}
-              onChange={setRepeatWeeks}
+              onChange={(n) => {
+                setRepeatWeeks(n);
+                if (n > 0) setRepeatForever(false);
+              }}
               aria-label="Repeat weeks"
             />
-            more week{repeatWeeks === 1 ? "" : "s"} (same day &amp; time)
+            more week{repeatWeeks === 1 ? "" : "s"}
+            {mode === "once" ? " (same day & time)" : ""}
           </label>
           <label className="flex items-center gap-2 text-xs text-muted">
             <input
@@ -1651,7 +1733,7 @@ function TargetedSlotsManager({
         disabled={pending}
         className="mt-4 rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
       >
-        Publish slot
+        {mode === "weekly" ? "Publish schedule" : "Publish slot"}
       </button>
 
       {/* Bulk remove bar — appears once anything is checked. */}
@@ -1699,7 +1781,7 @@ function TargetedSlotsManager({
                   className="flex-1 text-left"
                 >
                   <span className="text-sm">
-                    {WEEKDAYS[rule.weekday]}s · {fmtWallTime(rule.startMin)}{" "}
+                    {scheduleSummary(rule.schedule)}{" "}
                     <span className="text-xs text-muted">
                       · {nameOf(activeServices, rule.serviceId)} ·{" "}
                       {nameOf(activeStaff, rule.staffId)} · {rule.durationMin} min · $
@@ -1802,6 +1884,140 @@ function fmtWallTime(min: number): string {
   const m = min % 60;
   const h12 = h % 12 === 0 ? 12 : h % 12;
   return `${h12}:${String(m).padStart(2, "0")} ${h >= 12 ? "PM" : "AM"}`;
+}
+
+// Mon-first display order for weekly grids (keys stay 0=Sun like the API).
+const MON_FIRST_WEEKDAYS = [1, 2, 3, 4, 5, 6, 0];
+
+/**
+ * A rule's weekly schedule in plain words, grouping days that share the same
+ * times: "Every night · 9:00 PM", "Mon, Tue · 7:30 AM & 6:30 PM; Sat · 8:00 AM".
+ */
+function scheduleSummary(schedule: Record<string, { startMin: number }[]>): string {
+  const byTimes = new Map<string, number[]>();
+  for (const wd of MON_FIRST_WEEKDAYS) {
+    const times = schedule[String(wd)];
+    if (!times || times.length === 0) continue;
+    const key = times.map((t) => t.startMin).join(",");
+    byTimes.set(key, [...(byTimes.get(key) ?? []), wd]);
+  }
+  const groups = [...byTimes.entries()].map(([key, days]) => {
+    const times = key.split(",").map((n) => fmtWallTime(Number(n))).join(" & ");
+    const dayLabel =
+      days.length === 7
+        ? "Every day"
+        : days.map((wd) => WEEKDAYS[wd]).join(", ") + (days.length === 1 ? "s" : "");
+    return `${dayLabel} · ${times}`;
+  });
+  return groups.join("; ") || "No days set";
+}
+
+/**
+ * The weekly times grid: one row per weekday (Mon-first), toggle the day on,
+ * then add one or more start times. The targeted-slot cousin of the service
+ * hours grid — start INSTANTS rather than open windows, because a special is
+ * a bookable moment, not a range.
+ */
+function WeeklyTimesGrid({
+  times,
+  onChange,
+}: {
+  times: Record<string, string[]>;
+  onChange: (next: Record<string, string[]>) => void;
+}) {
+  const setDay = (wd: number, dayTimes: string[] | null) => {
+    const next = { ...times };
+    if (dayTimes === null) delete next[String(wd)];
+    else next[String(wd)] = dayTimes;
+    onChange(next);
+  };
+  const anyDay = Object.values(times).some((t) => t.length > 0);
+  return (
+    <div className="flex flex-col gap-1 rounded-xl border border-subtle p-3">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="text-xs text-muted">
+          Days &amp; times (shop time) — e.g. every night at 9:00 PM
+        </span>
+        {anyDay && (
+          <button
+            type="button"
+            onClick={() => {
+              // Copy the FIRST configured day's times to all seven days - the
+              // "every night at 9pm" case in one tap.
+              const first = MON_FIRST_WEEKDAYS.map((wd) => times[String(wd)]).find(
+                (t) => t && t.length > 0,
+              );
+              if (!first) return;
+              onChange(
+                Object.fromEntries(
+                  MON_FIRST_WEEKDAYS.map((wd) => [String(wd), [...first]]),
+                ),
+              );
+            }}
+            className="shrink-0 rounded-full border border-subtle px-2.5 py-0.5 text-[11px] text-muted transition-colors hover:border-gold/50 hover:text-gold"
+          >
+            Same times every day
+          </button>
+        )}
+      </div>
+      {MON_FIRST_WEEKDAYS.map((wd) => {
+        const dayTimes = times[String(wd)] ?? null;
+        const on = dayTimes !== null;
+        return (
+          <div key={wd} className="flex flex-wrap items-center gap-2 py-0.5">
+            <label className="flex w-14 shrink-0 items-center gap-1.5 text-xs">
+              <input
+                type="checkbox"
+                checked={on}
+                onChange={(e) => setDay(wd, e.target.checked ? [] : null)}
+                aria-label={`${WEEKDAYS[wd]} on`}
+              />
+              <span className={on ? "text-offwhite" : "text-muted"}>
+                {WEEKDAYS[wd]}
+              </span>
+            </label>
+            {on && (
+              <>
+                {dayTimes.map((t, i) => (
+                  <span
+                    key={`${t}-${i}`}
+                    className="inline-flex items-center gap-1 rounded-full border border-gold/40 bg-gold/10 px-2 py-0.5 text-[11px] text-gold"
+                  >
+                    {fmtWallTime(
+                      Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5)),
+                    )}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDay(wd, dayTimes.filter((_, j) => j !== i))
+                      }
+                      aria-label={`Remove ${t} on ${WEEKDAYS[wd]}`}
+                      className="text-gold/70 hover:text-gold"
+                    >
+                      ✕
+                    </button>
+                  </span>
+                ))}
+                {dayTimes.length < 8 && (
+                  <input
+                    type="time"
+                    className="rounded-lg border border-subtle bg-charcoal-700 px-1.5 py-0.5 text-[11px] text-offwhite"
+                    value=""
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (!v || dayTimes.includes(v)) return;
+                      setDay(wd, [...dayTimes, v].sort());
+                    }}
+                    aria-label={`Add a time on ${WEEKDAYS[wd]}`}
+                  />
+                )}
+              </>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 //  Add-ons (optional extras that add time + price to a service)

@@ -229,6 +229,31 @@ insightsRouter.get("/", async (req, res) => {
     }
   }
 
+  // The menu's price/duration, joined by id (native) or lowercased name
+  // (synced bookings carry only a free-text name). Null when there's no menu
+  // match - the planner treats those as un-plannable and says so.
+  const menuById = new Map(shopServices.map((s) => [s.id, s]));
+  const menuByName = new Map(shopServices.map((s) => [s.name.trim().toLowerCase(), s]));
+
+  // A synced booking whose free-text name IS a menu service is that service:
+  // fold its name-keyed tally into the id-keyed row. Without this a shop with
+  // native "Fade" bookings AND Acuity "Fade" visits saw two rows with one
+  // name - which reads as "top services isn't syncing", not as a nuance.
+  for (const [key, s] of [...byService.entries()]) {
+    if (!key.startsWith("name:")) continue;
+    const menu = menuByName.get(s.name.trim().toLowerCase());
+    if (!menu) continue;
+    const idKey = `id:${menu.id}`;
+    const target = byService.get(idKey);
+    if (target) {
+      target.count += s.count;
+      target.revenue += s.revenue;
+    } else {
+      byService.set(idKey, { ...s, serviceId: menu.id });
+    }
+    byService.delete(key);
+  }
+
   // Booked services first (by count), then the untouched menu at 0 so the list
   // is the whole menu, not a truncated top-8.
   const booked = [...byService.values()].sort(
@@ -243,12 +268,6 @@ insightsRouter.get("/", async (req, res) => {
       (s) => !bookedServiceIds.has(s.id) && !bookedNames.has(s.name.trim().toLowerCase()),
     )
     .map((s) => ({ serviceId: s.id, name: s.name, count: 0, revenue: 0 }));
-
-  // The menu's price/duration, joined by id (native) or lowercased name
-  // (synced bookings carry only a free-text name). Null when there's no menu
-  // match - the planner treats those as un-plannable and says so.
-  const menuById = new Map(shopServices.map((s) => [s.id, s]));
-  const menuByName = new Map(shopServices.map((s) => [s.name.trim().toLowerCase(), s]));
   const services = [...booked, ...unbooked].map((s) => {
     const menu =
       (s.serviceId ? menuById.get(s.serviceId) : undefined) ??
@@ -384,12 +403,18 @@ insightsRouter.get("/utilization", async (req, res) => {
         },
         select: { staffId: true, startsAt: true, endsAt: true, isBlock: true },
       }),
+      // For folding a synced booking's free-text name into its menu service's
+      // by=service row (same merge the services list does).
+      menu: await tx.service.findMany({
+        where: { shopId: shop.id, active: true },
+        select: { id: true, name: true },
+      }),
     })),
     readChairEvents(shop.id, fetchFrom, fetchTo, {
       ...(staffFilter ? { staffId: staffFilter } : {}),
     }),
   ]);
-  const { staffRows, rules, recurringBlocks, exceptions } = schedule;
+  const { staffRows, rules, recurringBlocks, exceptions, menu } = schedule;
 
   const staffIds = staffFilter
     ? staffRows.filter((s) => s.id === staffFilter).map((s) => s.id)
@@ -468,6 +493,24 @@ insightsRouter.get("/utilization", async (req, res) => {
     s.min += minutes;
     s.count += 1;
     byService.set(key, s);
+  }
+
+  // Same fold as the services list: a synced "Fade" visit belongs on the menu
+  // service's row, not on a second row with the same name.
+  const utilMenuByName = new Map(menu.map((m) => [m.name.trim().toLowerCase(), m]));
+  for (const [key, s] of [...byService.entries()]) {
+    if (!key.startsWith("name:")) continue;
+    const m = utilMenuByName.get(s.name.trim().toLowerCase());
+    if (!m) continue;
+    const idKey = `id:${m.id}`;
+    const target = byService.get(idKey);
+    if (target) {
+      target.min += s.min;
+      target.count += s.count;
+    } else {
+      byService.set(idKey, { ...s, serviceId: m.id });
+    }
+    byService.delete(key);
   }
 
   const totalOpen = openByWeekday.reduce((a, b) => a + b, 0);

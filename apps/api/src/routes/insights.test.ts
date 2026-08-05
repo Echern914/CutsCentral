@@ -321,6 +321,24 @@ describe("GET /api/insights", () => {
     }
   });
 
+  it("folds a synced visit's menu-matching name into the service's own row", async () => {
+    // An Acuity visit only carries "Fade" as text - it must land on the NATIVE
+    // Fade row, not open a second row with the same name (two rows, one name
+    // reads as "top services isn't syncing").
+    const v = await makeVisit(clientA, 1, "Fade", 45);
+    try {
+      const res = await get();
+      const fades = (res.body.services as { name: string; count: number; serviceId: string | null }[]).filter(
+        (s) => s.name === "Fade",
+      );
+      expect(fades).toHaveLength(1);
+      expect(fades[0]!.serviceId).toBe(fadeId);
+      expect(fades[0]!.count).toBe(3); // 2 native + this synced one
+    } finally {
+      await prisma.visit.delete({ where: { id: v.id } });
+    }
+  });
+
   it("ships each menu service's price and duration for the goal planner", async () => {
     const res = await get();
     const byName = new Map(

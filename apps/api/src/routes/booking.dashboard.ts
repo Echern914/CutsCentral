@@ -24,8 +24,10 @@ import {
 } from "../engines/appointmentNudge.js";
 import { resolveAddOns } from "../engines/addOns.js";
 import {
+  effectiveSchedule,
   materializeTargetedRule,
   TARGETED_RULE_HORIZON_DAYS,
+  type RuleSchedule,
 } from "../engines/targetedSlotRules.js";
 import { effectiveDurationAt, effectivePriceAt } from "../engines/pricing.js";
 import {
@@ -2076,6 +2078,43 @@ const targetedSlotSchema = z
     path: ["repeatWeeks"],
   });
 
+// The schedule-shaped create: any set of weekdays x times per week ("every
+// night at 9pm", "mornings AND afternoons daily"), one rule. Times are
+// wall-clock "HH:MM" in the shop's timezone; per-time duration/price override
+// the rule's base when a morning special runs shorter or cheaper than the
+// evening one.
+const scheduleTimeSchema = z
+  .object({
+    start: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+    durationMin: z.number().int().min(5).max(600).optional(),
+    price: z.number().min(0).max(100000).optional(),
+  })
+  .strict();
+const targetedScheduleSchema = z
+  .object({
+    staffId: z.string().min(1),
+    serviceId: z.string().min(1),
+    label: z.string().trim().max(60).optional().or(z.literal("")),
+    durationMin: z.number().int().min(5).max(600),
+    price: z.number().min(0).max(100000),
+    // {"0".."6": [{start, ...}]} - hoursWindows key convention (0=Sun).
+    schedule: z
+      .record(z.string().regex(/^[0-6]$/), z.array(scheduleTimeSchema).min(1).max(8))
+      .refine((m) => Object.keys(m).length >= 1, { message: "pick at least one day" }),
+    // First day the series may run (shop-local). Defaults to today.
+    startDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .optional(),
+    repeatWeeks: z.number().int().min(0).max(26).optional(),
+    repeatForever: z.boolean().optional(),
+  })
+  .strict()
+  .refine((d) => !(d.repeatForever && (d.repeatWeeks ?? 0) > 0), {
+    message: "repeatWeeks and repeatForever are mutually exclusive",
+    path: ["repeatWeeks"],
+  });
+
 bookingDashboardRouter.get("/targeted-slots", async (req, res) => {
   const db = forShop(req.shop!.id);
   const shop = await prisma.shop.findUnique({
@@ -2126,6 +2165,7 @@ bookingDashboardRouter.get("/targeted-slots", async (req, res) => {
         anchor: true,
         durationMin: true,
         price: true,
+        schedule: true,
         indefinite: true,
       },
     }),
@@ -2140,16 +2180,18 @@ bookingDashboardRouter.get("/targeted-slots", async (req, res) => {
     })),
     rules: rules.map((r) => {
       // Display-ready cadence, computed server-side (the server knows the shop
-      // timezone; the dashboard shouldn't re-derive weekday math).
-      const weekday = zonedDateParts(r.anchor, tz).weekday;
-      const wallMin = localMinutesOfDay(r.anchor, tz);
+      // timezone; the dashboard shouldn't re-derive weekday math). A legacy
+      // rule (schedule {}) comes back as the derived single-day map, so the
+      // dashboard renders exactly one shape.
       return {
         id: r.id,
         staffId: r.staffId,
         serviceId: r.serviceId,
         label: r.label,
-        weekday,
-        startMin: wallMin,
+        schedule: effectiveSchedule(
+          { anchor: r.anchor, schedule: r.schedule },
+          tz,
+        ),
         durationMin: r.durationMin,
         price: Number(r.price),
         indefinite: r.indefinite,
@@ -2159,6 +2201,122 @@ bookingDashboardRouter.get("/targeted-slots", async (req, res) => {
 });
 
 bookingDashboardRouter.post("/targeted-slots", async (req, res) => {
+  // The schedule-shaped create: weekdays x times, one rule. Detected by the
+  // `schedule` key so the one-off/legacy shape below keeps working untouched.
+  if (req.body && typeof req.body === "object" && "schedule" in req.body) {
+    const parsedSched = targetedScheduleSchema.safeParse(req.body);
+    if (!parsedSched.success) {
+      res
+        .status(400)
+        .json({ error: "invalid_input", issues: parsedSched.error.issues });
+      return;
+    }
+    const s = parsedSched.data;
+    const shopId = req.shop!.id;
+    const shop = await prisma.shop.findUnique({
+      where: { id: shopId },
+      select: { timezone: true, bookingMode: true },
+    });
+    if (!shop || shop.bookingMode !== "native") {
+      res.status(400).json({ error: "not_native" });
+      return;
+    }
+    const db = forShop(shopId);
+    const [service, staff] = await Promise.all([
+      db.service.findFirst({ where: { id: s.serviceId, active: true }, select: { id: true } }),
+      db.staff.findFirst({ where: { id: s.staffId, active: true }, select: { id: true } }),
+    ]);
+    if (!service || !staff) {
+      res.status(400).json({ error: "invalid_input" });
+      return;
+    }
+
+    const tz = shop.timezone;
+    const now = new Date();
+    // "HH:MM" -> shop-local minutes, the storage shape.
+    const schedule: RuleSchedule = {};
+    for (const [wd, times] of Object.entries(s.schedule)) {
+      schedule[wd] = times
+        .map((t) => ({
+          startMin:
+            Number(t.start.slice(0, 2)) * 60 + Number(t.start.slice(3, 5)),
+          ...(t.durationMin !== undefined ? { durationMin: t.durationMin } : {}),
+          ...(t.price !== undefined ? { price: t.price } : {}),
+        }))
+        .sort((a, b) => a.startMin - b.startMin);
+    }
+
+    // The series starts at its FIRST future occurrence on/after startDate
+    // (default today). Scan 8 days so a single-weekday schedule whose times
+    // already passed today lands on next week's occurrence.
+    const todayParts = zonedDateParts(now, tz);
+    let base = { year: todayParts.year, month0: todayParts.month0, day: todayParts.day };
+    if (s.startDate) {
+      const [y, m, day] = s.startDate.split("-").map(Number);
+      const requested = { year: y!, month0: m! - 1, day: day! };
+      // A past startDate means "already running" - series start from today.
+      if (zonedWallTimeToUtc(requested.year, requested.month0, requested.day + 1, 0, tz) > now) {
+        base = requested;
+      }
+    }
+    const baseWeekday = zonedDateParts(
+      zonedWallTimeToUtc(base.year, base.month0, base.day, 12 * 60, tz),
+      tz,
+    ).weekday;
+    let anchor: Date | null = null;
+    outer: for (let d = 0; d <= 7; d++) {
+      const times = schedule[String((baseWeekday + d) % 7)];
+      if (!times) continue;
+      for (const t of times) {
+        const instant = zonedWallTimeToUtc(base.year, base.month0, base.day + d, t.startMin, tz);
+        if (instant.getTime() > now.getTime()) {
+          anchor = instant;
+          break outer;
+        }
+      }
+    }
+    if (!anchor) {
+      res.status(400).json({ error: "in_the_past" });
+      return;
+    }
+
+    const rule = await db.targetedSlotRule.create({
+      data: {
+        staffId: s.staffId,
+        serviceId: s.serviceId,
+        label: s.label?.trim() || null,
+        anchor,
+        durationMin: s.durationMin,
+        price: s.price,
+        schedule: schedule as never,
+        indefinite: Boolean(s.repeatForever),
+      },
+    });
+    // Indefinite: the standard rolling horizon (the daily job extends it).
+    // Finite: exactly repeat+1 weeks, all up front - the horizon lands at the
+    // shop-local midnight after the last week (minus 1ms so a midnight time
+    // in week repeat+1 can't sneak in).
+    const anchorParts = zonedDateParts(anchor, tz);
+    const horizonEnd = s.repeatForever
+      ? new Date(Date.now() + TARGETED_RULE_HORIZON_DAYS * 24 * 60 * 60 * 1000)
+      : new Date(
+          zonedWallTimeToUtc(
+            anchorParts.year,
+            anchorParts.month0,
+            anchorParts.day + ((s.repeatWeeks ?? 0) + 1) * 7,
+            0,
+            tz,
+          ).getTime() - 1,
+        );
+    const created = await materializeTargetedRule(
+      { ...rule, shopId },
+      tz,
+      horizonEnd,
+    );
+    res.status(201).json({ ok: true, created, ruleId: rule.id });
+    return;
+  }
+
   const parsed = targetedSlotSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
