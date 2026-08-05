@@ -1,10 +1,11 @@
 import { Router } from "express";
 import { z } from "zod";
-import { prisma, runWithShop } from "@chairback/db";
+import { runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 import { openMinutesForDay, shopLocalDays } from "../engines/utilization.js";
 import {
+  BUCKET_COUNTS,
   DAY_MS,
   PERIODS,
   PERIOD_KEYS,
@@ -13,12 +14,14 @@ import {
   localMidnightInstant,
   minutesIntoLocalDay,
   readChairEvents,
+  resolveBucket,
   resolvePeriod,
   resolvePeriodWindow,
   serviceKey,
   serviceLabel,
   shopLocalDay,
   weekStart,
+  type Bucket,
   type ChairEvent,
   type PeriodKey,
 } from "../engines/insightsWindow.js";
@@ -55,6 +58,8 @@ function periodMeta(p: ReturnType<typeof resolvePeriodWindow>) {
     periodLabel: p.label,
     bucket: p.bucket,
     bucketNoun: p.noun,
+    // Which bucket sizes THIS period offers - drives the Day/Week/Month pills.
+    bucketOptions: Object.keys(BUCKET_COUNTS[p.key]) as Bucket[],
     windowStart: p.windowStart.toISOString().slice(0, 10),
     windowEnd: p.today.toISOString().slice(0, 10),
     periods: PERIOD_KEYS.map((k) => ({ key: k, label: PERIODS[k].label })),
@@ -64,7 +69,13 @@ function periodMeta(p: ReturnType<typeof resolvePeriodWindow>) {
 insightsRouter.get("/", async (req, res) => {
   const shop = req.shop!;
   const now = new Date();
-  const period = resolvePeriodWindow(now, shop.timezone, resolvePeriod(req.query.period));
+  const key = resolvePeriod(req.query.period);
+  const period = resolvePeriodWindow(
+    now,
+    shop.timezone,
+    key,
+    resolveBucket(key, req.query.bucket),
+  );
 
   // The DB filter needs real instants. Pad a day each side so a shop-local day
   // whose instants straddle UTC midnight can never be clipped; events outside
@@ -72,42 +83,52 @@ insightsRouter.get("/", async (req, res) => {
   const fetchFrom = new Date(period.windowStart.getTime() - DAY_MS);
   const fetchTo = new Date(period.today.getTime() + 2 * DAY_MS);
 
-  const [{ events }, ledgerAgg, redemptions, shopServices] = await Promise.all([
+  // PunchLedger and Service are FORCE-RLS tenant tables: bare prisma reads
+  // return zero rows under an enforcing role, so everything here goes through
+  // runWithShop (the loyalty pair shares one transaction; the reads inside a
+  // tx run sequentially because a Prisma tx client can't multiplex).
+  const [{ events }, loyaltyReads, shopServices] = await Promise.all([
     readChairEvents(shop.id, fetchFrom, fetchTo),
-    prisma.punchLedger.aggregate({
-      // Standing activity only: exclude a reversed original (reversedAt set) AND
-      // its offsetting correction (reversalOfId set), so a punch-and-undo pair
-      // nets to 0/0 instead of showing "1 earned, 1 redeemed". A regrant from an
-      // "edit count" (correctionOfId set, reversalOfId null) is a REAL earn and
-      // stays included - mirrors the redemptions predicate just below.
-      where: {
-        shopId: shop.id,
-        createdAt: { gte: period.windowStart },
-        reversedAt: null,
-        reversalOfId: null,
-      },
-      _sum: { punchesEarned: true, punchesRedeemed: true },
-    }),
-    // Standing redemptions (same predicate as the loyalty designer's
-    // timesRedeemed): real redemptions, not undone, not correction rows.
-    prisma.punchLedger.count({
-      where: {
-        shopId: shop.id,
-        createdAt: { gte: period.windowStart },
-        punchesRedeemed: { gt: 0 },
-        reversedAt: null,
-        reversalOfId: null,
-      },
-    }),
+    runWithShop(shop.id, async (tx) => ({
+      ledgerAgg: await tx.punchLedger.aggregate({
+        // Standing activity only: exclude a reversed original (reversedAt set)
+        // AND its offsetting correction (reversalOfId set), so a punch-and-undo
+        // pair nets to 0/0 instead of showing "1 earned, 1 redeemed". A regrant
+        // from an "edit count" (correctionOfId set, reversalOfId null) is a
+        // REAL earn and stays included - mirrors the redemptions count below.
+        where: {
+          shopId: shop.id,
+          createdAt: { gte: period.windowStart },
+          reversedAt: null,
+          reversalOfId: null,
+        },
+        _sum: { punchesEarned: true, punchesRedeemed: true },
+      }),
+      // Standing redemptions (same predicate as the loyalty designer's
+      // timesRedeemed): real redemptions, not undone, not correction rows.
+      redemptions: await tx.punchLedger.count({
+        where: {
+          shopId: shop.id,
+          createdAt: { gte: period.windowStart },
+          punchesRedeemed: { gt: 0 },
+          reversedAt: null,
+          reversalOfId: null,
+        },
+      }),
+    })),
     // The live menu, so a service nobody booked can still be listed at 0 rather
     // than silently missing - "where did my service go?" is the complaint that
-    // an omission-only list produces.
-    prisma.service.findMany({
-      where: { shopId: shop.id, active: true },
-      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-      select: { id: true, name: true },
-    }),
+    // an omission-only list produces. Price + duration ride along for the goal
+    // planner ("raise Haircut $5" needs to know Haircut is $50 for 45 min).
+    runWithShop(shop.id, (tx) =>
+      tx.service.findMany({
+        where: { shopId: shop.id, active: true },
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+        select: { id: true, name: true, price: true, durationMin: true },
+      }),
+    ),
   ]);
+  const { ledgerAgg, redemptions } = loyaltyReads;
 
   const buckets = period.buckets.map((b) => ({
     key: b.key,
@@ -169,26 +190,31 @@ insightsRouter.get("/", async (req, res) => {
   let newClients = 0;
   if (clientIds.size > 0) {
     const ids = [...clientIds];
+    // Visit + Appointment are FORCE-RLS tables - same runWithShop rule as above.
     const [firstVisits, firstAppts] = await Promise.all([
-      prisma.visit.groupBy({
-        by: ["clientId"],
-        where: {
-          shopId: shop.id,
-          status: { in: ["SCHEDULED", "RESCHEDULED", "COMPLETED", "NO_SHOW"] },
-          clientId: { in: ids },
-        },
-        _min: { scheduledAt: true },
-      }),
-      prisma.appointment.groupBy({
-        by: ["clientId"],
-        where: {
-          shopId: shop.id,
-          holdExpiresAt: null,
-          status: { in: ["BOOKED", "COMPLETED", "NO_SHOW"] },
-          clientId: { in: ids },
-        },
-        _min: { startsAt: true },
-      }),
+      runWithShop(shop.id, (tx) =>
+        tx.visit.groupBy({
+          by: ["clientId"],
+          where: {
+            shopId: shop.id,
+            status: { in: ["SCHEDULED", "RESCHEDULED", "COMPLETED", "NO_SHOW"] },
+            clientId: { in: ids },
+          },
+          _min: { scheduledAt: true },
+        }),
+      ),
+      runWithShop(shop.id, (tx) =>
+        tx.appointment.groupBy({
+          by: ["clientId"],
+          where: {
+            shopId: shop.id,
+            holdExpiresAt: null,
+            status: { in: ["BOOKED", "COMPLETED", "NO_SHOW"] },
+            clientId: { in: ids },
+          },
+          _min: { startsAt: true },
+        }),
+      ),
     ]);
     const firstEver = new Map<string, Date>();
     const note = (clientId: string | null, at: Date | null) => {
@@ -218,12 +244,24 @@ insightsRouter.get("/", async (req, res) => {
     )
     .map((s) => ({ serviceId: s.id, name: s.name, count: 0, revenue: 0 }));
 
-  const services = [...booked, ...unbooked].map((s) => ({
-    serviceId: s.serviceId,
-    name: s.name,
-    count: s.count,
-    revenue: Math.round(s.revenue),
-  }));
+  // The menu's price/duration, joined by id (native) or lowercased name
+  // (synced bookings carry only a free-text name). Null when there's no menu
+  // match - the planner treats those as un-plannable and says so.
+  const menuById = new Map(shopServices.map((s) => [s.id, s]));
+  const menuByName = new Map(shopServices.map((s) => [s.name.trim().toLowerCase(), s]));
+  const services = [...booked, ...unbooked].map((s) => {
+    const menu =
+      (s.serviceId ? menuById.get(s.serviceId) : undefined) ??
+      menuByName.get(s.name.trim().toLowerCase());
+    return {
+      serviceId: s.serviceId ?? menu?.id ?? null,
+      name: s.name,
+      count: s.count,
+      revenue: Math.round(s.revenue),
+      price: menu?.price != null ? Number(menu.price) : null,
+      durationMin: menu?.durationMin ?? null,
+    };
+  });
 
   const busiestIndex = dayCounts.some((c) => c > 0)
     ? dayCounts.indexOf(Math.max(...dayCounts))
@@ -287,6 +325,7 @@ insightsRouter.get("/", async (req, res) => {
  */
 const utilizationQuerySchema = z.object({
   period: z.string().optional(),
+  bucket: z.string().optional(),
   by: z.enum(["weekday", "period", "service"]).optional(),
   staffId: z.string().min(1).optional(),
 });
@@ -300,7 +339,15 @@ insightsRouter.get("/utilization", async (req, res) => {
   }
   const by = parsed.data.by ?? "weekday";
   const now = new Date();
-  const period = resolvePeriodWindow(now, shop.timezone, resolvePeriod(parsed.data.period));
+  const key = resolvePeriod(parsed.data.period);
+  // Same bucket override as the cuts chart, so "Over time" re-buckets in step
+  // with the page instead of contradicting the chart above it.
+  const period = resolvePeriodWindow(
+    now,
+    shop.timezone,
+    key,
+    resolveBucket(key, parsed.data.bucket),
+  );
   const staffFilter = parsed.data.staffId;
 
   // Concrete UTC bounds for the DB reads (pad a day so a shop-local day whose
@@ -309,33 +356,40 @@ insightsRouter.get("/utilization", async (req, res) => {
   const fetchTo = new Date(period.today.getTime() + 2 * DAY_MS);
   const nowMin = minutesIntoLocalDay(now, shop.timezone);
 
-  const [staffRows, rules, recurringBlocks, exceptions, chair] = await Promise.all([
-    prisma.staff.findMany({
-      where: { shopId: shop.id, active: true },
-      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-      select: { id: true, name: true },
-    }),
-    prisma.availabilityRule.findMany({
-      where: { shopId: shop.id, ...(staffFilter ? { staffId: staffFilter } : {}) },
-      select: { staffId: true, weekday: true, startMin: true, endMin: true },
-    }),
-    prisma.recurringBlock.findMany({
-      where: { shopId: shop.id, ...(staffFilter ? { staffId: staffFilter } : {}) },
-      select: { staffId: true, weekday: true, startMin: true, endMin: true },
-    }),
-    prisma.availabilityException.findMany({
-      where: {
-        shopId: shop.id,
-        ...(staffFilter ? { staffId: staffFilter } : {}),
-        startsAt: { lt: fetchTo },
-        endsAt: { gt: fetchFrom },
-      },
-      select: { staffId: true, startsAt: true, endsAt: true, isBlock: true },
-    }),
+  // Staff / AvailabilityRule / RecurringBlock / AvailabilityException are all
+  // FORCE-RLS tenant tables (native_booking migration) - read them through
+  // runWithShop or an enforcing role sees an empty schedule and the card
+  // reports the shop as closed.
+  const [schedule, chair] = await Promise.all([
+    runWithShop(shop.id, async (tx) => ({
+      staffRows: await tx.staff.findMany({
+        where: { shopId: shop.id, active: true },
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+        select: { id: true, name: true },
+      }),
+      rules: await tx.availabilityRule.findMany({
+        where: { shopId: shop.id, ...(staffFilter ? { staffId: staffFilter } : {}) },
+        select: { staffId: true, weekday: true, startMin: true, endMin: true },
+      }),
+      recurringBlocks: await tx.recurringBlock.findMany({
+        where: { shopId: shop.id, ...(staffFilter ? { staffId: staffFilter } : {}) },
+        select: { staffId: true, weekday: true, startMin: true, endMin: true },
+      }),
+      exceptions: await tx.availabilityException.findMany({
+        where: {
+          shopId: shop.id,
+          ...(staffFilter ? { staffId: staffFilter } : {}),
+          startsAt: { lt: fetchTo },
+          endsAt: { gt: fetchFrom },
+        },
+        select: { staffId: true, startsAt: true, endsAt: true, isBlock: true },
+      }),
+    })),
     readChairEvents(shop.id, fetchFrom, fetchTo, {
       ...(staffFilter ? { staffId: staffFilter } : {}),
     }),
   ]);
+  const { staffRows, rules, recurringBlocks, exceptions } = schedule;
 
   const staffIds = staffFilter
     ? staffRows.filter((s) => s.id === staffFilter).map((s) => s.id)
