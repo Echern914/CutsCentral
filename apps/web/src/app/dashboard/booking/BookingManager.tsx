@@ -755,6 +755,9 @@ function ServicesTab({
   const [staffIds, setStaffIds] = useState<string[]>([]);
   // Which service the pencil opened for editing (null = the edit Sheet is closed).
   const [editing, setEditing] = useState<ServiceRow | null>(null);
+  // Set when the service sheet hands off to the group that owns its hours: the
+  // groups card expands that group and scrolls to it, then clears this.
+  const [focusGroupId, setFocusGroupId] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const activeStaff = staff.filter((s) => s.active);
 
@@ -1001,6 +1004,11 @@ function ServicesTab({
           }
           toast={toast}
           onClose={() => setEditing(null)}
+          onJumpToGroup={() => {
+            const id = editing.serviceGroupId;
+            setEditing(null);
+            if (id) setFocusGroupId(id);
+          }}
         />
       )}
 
@@ -1009,6 +1017,8 @@ function ServicesTab({
         services={initial}
         toast={toast}
         unsavedRef={groupUnsavedRef}
+        focusId={focusGroupId}
+        onFocusHandled={() => setFocusGroupId(null)}
       />
 
       <AddOnsManager initial={initialAddOns} services={initial} toast={toast} />
@@ -1029,6 +1039,7 @@ function ServiceEditForm({
   groupName,
   toast,
   onClose,
+  onJumpToGroup,
 }: {
   service: ServiceRow;
   staff: StaffRow[];
@@ -1037,6 +1048,9 @@ function ServiceEditForm({
   groupName: string | null;
   toast: Toast;
   onClose: () => void;
+  // Close this sheet and open the owning group's editor. Only ever called when
+  // groupName is non-null (the button lives inside that branch).
+  onJumpToGroup: () => void;
 }) {
   const activeStaff = staff.filter((s) => s.active);
   const [name, setName] = useState(service.name);
@@ -1076,6 +1090,47 @@ function ServiceEditForm({
     timeRowsFromOverrides(service.timeOverrides),
   );
   const [pending, start] = useTransition();
+
+  // Leaving for the group editor unmounts this sheet and its draft. Compare the
+  // draft to what it was seeded with so a jump can't silently eat half-typed
+  // edits — the same failure mode that made the group hours "reset every save".
+  function isDirty(): boolean {
+    const seededStaff = service.offeredByAll
+      ? activeStaff.map((s) => s.id)
+      : (service.staffIds ?? []);
+    const sameSet = (a: string[], b: string[]) =>
+      a.length === b.length && [...a].sort().join() === [...b].sort().join();
+    return (
+      name !== service.name ||
+      description !== (service.description ?? "") ||
+      imageUrl !== (service.imageUrl ?? "") ||
+      duration !== service.durationMin ||
+      price !== (service.price !== null ? String(service.price) : "") ||
+      color !== (service.color ?? null) ||
+      offeredByAll !== (service.offeredByAll ?? false) ||
+      !sameSet(staffIds, seededStaff) ||
+      JSON.stringify(buildPriceOverrides(dayPrices)) !==
+        JSON.stringify(service.priceOverrides ?? {}) ||
+      JSON.stringify(buildDurationOverrides(dayDurations)) !==
+        JSON.stringify(service.durationOverrides ?? {}) ||
+      JSON.stringify(buildTimeOverrides(timeRows)) !==
+        JSON.stringify(service.timeOverrides ?? []) ||
+      JSON.stringify(hoursRows) !== JSON.stringify(hoursRowsFromWindows(service.hoursWindows))
+    );
+  }
+
+  function jumpToGroup() {
+    if (pending) return; // mid-save: ignore, like the group editor's toggle
+    if (
+      isDirty() &&
+      !window.confirm(
+        "You have unsaved changes to this service. Leave for the group's hours and lose them?",
+      )
+    ) {
+      return;
+    }
+    onJumpToGroup();
+  }
 
   function toggleStaff(id: string) {
     // Picking specific barbers means it's no longer "all".
@@ -1296,11 +1351,23 @@ function ServiceEditForm({
         {groupName ? (
           <div>
             <span className={labelCls}>Available hours for this service</span>
-            <p className="mt-1 rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-xs text-muted">
-              Hours &amp; limits are managed by the group{" "}
-              <span className="text-offwhite">“{groupName}”</span>. Edit them in{" "}
-              <span className="text-offwhite">Service groups</span> below.
-            </p>
+            <div className="mt-1 rounded-xl border border-subtle bg-charcoal-700 px-3 py-2.5">
+              <p className="text-xs text-muted">
+                Hours &amp; limits are managed by the group{" "}
+                <span className="text-offwhite">“{groupName}”</span>.
+              </p>
+              {/* Telling the barber where the hours live but making him close
+                  this, scroll past three cards and find the right group is the
+                  slow half of the job. This does it: closes the sheet, opens
+                  that group's editor and scrolls to it. */}
+              <button
+                type="button"
+                onClick={jumpToGroup}
+                className="mt-2 rounded-full border border-gold/50 px-3 py-1 text-xs text-gold transition-colors hover:bg-gold/10"
+              >
+                Edit “{groupName}” hours →
+              </button>
+            </div>
           </div>
         ) : (
           <CollapsibleHours
@@ -2082,17 +2149,52 @@ function ServiceGroupsManager({
   services,
   toast,
   unsavedRef,
+  focusId = null,
+  onFocusHandled,
 }: {
   initial: ServiceGroupRow[];
   services: ServiceRow[];
   toast: Toast;
   // Dirty/saving check registered by the open editor (see ServiceGroupEditor).
   unsavedRef: MutableRefObject<(() => EditorGuardState) | null>;
+  // A group to jump straight into — set when the service sheet hands off to the
+  // group that owns that service's hours.
+  focusId?: string | null;
+  onFocusHandled?: () => void;
 }) {
   const [name, setName] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const activeGroups = initial.filter((g) => g.active);
+  const listRef = useRef<HTMLUListElement>(null);
+  // The group whose hours grid should start OPEN — set only by the handoff, so a
+  // normally-expanded group still opens compact. Cleared on any manual toggle.
+  const [autoHoursId, setAutoHoursId] = useState<string | null>(null);
+  // Held in a ref so clearing the focus can't re-trigger the effect that clears
+  // it: an inline parent callback changes identity every render, and calling it
+  // inside the effect flipped `focusId` to null — which ran the CLEANUP and
+  // cancelled the scroll timer before it ever fired.
+  const onFocusHandledRef = useRef(onFocusHandled);
+  onFocusHandledRef.current = onFocusHandled;
+
+  // Handing off from the service sheet: expand the target group and bring it
+  // into view. Bypasses `toggle`'s unsaved-edits confirm on purpose — the sheet
+  // already asked, and no group editor can be open at this point anyway.
+  useEffect(() => {
+    if (!focusId) return;
+    setExpandedId(focusId);
+    setAutoHoursId(focusId);
+    // Let the editor mount and the row grow before measuring, or we scroll to
+    // where the COLLAPSED row was. The focus is cleared only after the scroll
+    // is issued, so this effect owns the whole handoff.
+    const t = setTimeout(() => {
+      listRef.current
+        ?.querySelector(`[data-group-id="${focusId}"]`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      onFocusHandledRef.current?.();
+    }, 80);
+    return () => clearTimeout(t);
+  }, [focusId]);
 
   // Collapsing this group — or expanding another — unmounts the open editor
   // and its draft. Confirm first when it holds unsaved edits, so a stray tap
@@ -2107,6 +2209,7 @@ function ServiceGroupsManager({
     ) {
       return;
     }
+    setAutoHoursId(null); // a manual open is a normal (compact) open
     setExpandedId((cur) => (cur === id ? null : id));
   }
 
@@ -2144,7 +2247,7 @@ function ServiceGroupsManager({
         </button>
       </div>
 
-      <ul className="mt-5 flex flex-col gap-2">
+      <ul ref={listRef} className="mt-5 flex flex-col gap-2">
         {activeGroups.map((g) => (
           <ServiceGroupItem
             key={g.id}
@@ -2154,6 +2257,7 @@ function ServiceGroupsManager({
             onToggle={() => toggle(g.id)}
             toast={toast}
             unsavedRef={unsavedRef}
+            openHours={autoHoursId === g.id}
           />
         ))}
         {activeGroups.length === 0 && (
@@ -2184,6 +2288,7 @@ function ServiceGroupItem({
   onToggle,
   toast,
   unsavedRef,
+  openHours = false,
 }: {
   group: ServiceGroupRow;
   services: ServiceRow[];
@@ -2191,6 +2296,8 @@ function ServiceGroupItem({
   onToggle: () => void;
   toast: Toast;
   unsavedRef: MutableRefObject<(() => EditorGuardState) | null>;
+  // Opened via "Edit <group> hours" from a service — start on the time grid.
+  openHours?: boolean;
 }) {
   // The row a save JUST persisted, until the server props catch up. After Save,
   // revalidatePath refetches this page's eight API calls — seconds on prod —
@@ -2219,7 +2326,12 @@ function ServiceGroupItem({
   // too, reading from `current` so a just-saved change stars immediately.
   const offHours = hasCustomHours(current.hoursWindows);
   return (
-    <li className={cn("rounded-xl border", offHours ? "border-gold/40" : "border-subtle")}>
+    // data-group-id is the scroll anchor for the "Edit <group> hours" handoff
+    // from the service sheet (see ServiceGroupsManager's focus effect).
+    <li
+      data-group-id={group.id}
+      className={cn("rounded-xl border", offHours ? "border-gold/40" : "border-subtle")}
+    >
       {/* COMPACT header - always visible; the chevron toggles the editor. */}
       <button
         onClick={onToggle}
@@ -2261,6 +2373,7 @@ function ServiceGroupItem({
           toast={toast}
           unsavedRef={unsavedRef}
           onSaved={setLastSaved}
+          openHours={openHours}
         />
       )}
     </li>
@@ -2284,6 +2397,7 @@ function ServiceGroupEditor({
   toast,
   unsavedRef,
   onSaved,
+  openHours = false,
 }: {
   group: ServiceGroupRow;
   services: ServiceRow[];
@@ -2292,6 +2406,8 @@ function ServiceGroupEditor({
   // Reports the row a successful save persisted, so the parent item can seed
   // a re-opened editor from it while the post-save refetch is in flight.
   onSaved: (row: ServiceGroupRow) => void;
+  // Opened via "Edit <group> hours" from a service — start on the time grid.
+  openHours?: boolean;
 }) {
   const activeServices = services.filter((s) => s.active);
   const [name, setName] = useState(group.name);
@@ -2581,6 +2697,7 @@ function ServiceGroupEditor({
       <CollapsibleHours
         title="Available hours for this group (optional)"
         summary={hoursSummary(hoursRows)}
+        defaultOpen={openHours}
       >
         <div className="flex items-center justify-end">
           <button
@@ -3144,12 +3261,17 @@ function CollapsibleHours({
   title,
   summary,
   children,
+  defaultOpen = false,
 }: {
   title: string;
   summary: string;
   children: ReactNode;
+  // Seeds the initial state only (the editor remounts on expand, so it re-seeds
+  // then). Used by the "Edit <group> hours" handoff to land ON the time grid
+  // rather than on one more thing to click.
+  defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <div>
       <button

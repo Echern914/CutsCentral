@@ -109,9 +109,22 @@ export function openMinutesForDay(input: {
   rules: WeeklyRule[];
   recurringBlocks: WeeklyRule[];
   exceptions: (DatedSpan & { isBlock: boolean })[];
+  /**
+   * Stop counting at this many minutes past shop-local midnight. Used for TODAY,
+   * whose remaining hours are still sellable: counting a 9-5 day as 8 open hours
+   * at 10am would read as a slump every morning. Omit for a finished day.
+   */
+  untilMin?: number;
 }): number {
-  const { dayStartUtc, weekday, staffIds, rules, recurringBlocks, exceptions } = input;
+  const { dayStartUtc, weekday, staffIds, rules, recurringBlocks, exceptions, untilMin } =
+    input;
   const dayEndUtc = new Date(dayStartUtc.getTime() + 24 * 60 * 60_000);
+  const DAY_END_MIN = 24 * 60;
+  // The not-yet-happened tail of today is subtracted like any other block.
+  const futureTail: Span[] =
+    untilMin === undefined || untilMin >= DAY_END_MIN
+      ? []
+      : [{ start: Math.max(0, untilMin), end: DAY_END_MIN }];
 
   // A concrete exception -> minutes-from-local-midnight on THIS day, clipped to
   // the day so an overnight block only subtracts the part that lands here.
@@ -147,7 +160,9 @@ export function openMinutesForDay(input: {
     // One-off opens are added BEFORE blocks are subtracted: a same-day block
     // must be able to cut into an extra hour the barber opened up.
     const opened = mergeSpans([...base, ...oneOffOpens]);
-    total += spanMinutes(subtractSpans(opened, [...standing, ...dayBlocks]));
+    total += spanMinutes(
+      subtractSpans(opened, [...standing, ...dayBlocks, ...futureTail]),
+    );
   }
   return total;
 }

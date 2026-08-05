@@ -397,7 +397,7 @@ model Shop {
   recurringSeries        RecurringSeries[]
   serviceAddOns          ServiceAddOn[]
   serviceGroups          ServiceGroup[]
-  goal                   ShopGoal?
+  goals                  ShopGoal[]
   targetedSlots          TargetedSlot[]
   targetedSlotRules      TargetedSlotRule[]
   payments               Payment[]
@@ -1188,14 +1188,16 @@ model ServiceGroup {
   @@index([shopId, active])
 }
 
-// The barber's Insights quota: ONE active goal per shop ("$4,000 this month" /
-// "60 cuts this week"). Progress is computed from COMPLETED Visits (the same
-// source Insights totals use, so it works identically for native and synced
-// shops); the goal row itself is just the target. Period windows are derived
-// in the SHOP's timezone at read time - nothing here stores dates.
+// The barber's Insights quota: one target per (metric, period) combination, so
+// "$4,000 a month" and "60 cuts a week" coexist and each remembers its own
+// number. Progress is computed at read time from the SAME chair events the rest
+// of Insights counts (native appointments + external synced visits), so it
+// reads identically for native and synced shops; the row itself is just the
+// target. Period windows are derived in the SHOP's timezone - nothing here
+// stores dates.
 model ShopGoal {
   id     String     @id @default(cuid())
-  shopId String     @unique // one active goal per shop (edit in place)
+  shopId String
   shop   Shop       @relation(fields: [shopId], references: [id], onDelete: Cascade)
   metric GoalMetric
   period GoalPeriod
@@ -1203,6 +1205,12 @@ model ShopGoal {
   target    Int
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // One target per (metric, period): "$4,000 a month" and "60 cuts a week" are
+  // DIFFERENT goals and each keeps its own number. Switching the metric or the
+  // period in the UI selects another goal rather than overwriting this one.
+  @@unique([shopId, metric, period])
+  @@index([shopId])
 }
 
 enum GoalMetric {

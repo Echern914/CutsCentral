@@ -30,6 +30,7 @@ const at = (h: number) => new Date(measuredDay.getTime() + h * 3_600_000);
 
 type Row = {
   key: string;
+  label: string;
   openMin: number;
   bookedMin: number;
   bookings: number;
@@ -38,9 +39,12 @@ type Row = {
 };
 type Payload = {
   by: string;
+  period: string;
+  bucket: string;
   rows: Row[];
   totals: { openMin: number; bookedMin: number; bookings: number; utilizationPct: number | null };
   noSchedule: boolean;
+  syncedExcluded: boolean;
 };
 
 async function util(query: Record<string, string> = {}): Promise<Payload> {
@@ -155,7 +159,7 @@ afterAll(async () => {
 });
 
 // The shop works one weekday, so capacity is 480 min times however many times
-// that weekday falls in the (default 12-week) window. Derive it rather than
+// that weekday falls in the (default 30-day) window. Derive it rather than
 // hardcode it, so the window length can change without breaking these.
 const DAY_OPEN_MIN = 480;
 
@@ -163,6 +167,7 @@ describe("insights utilization", () => {
   it("reports open vs sold minutes and the resulting percentage", async () => {
     const body = await util();
     expect(body.by).toBe("weekday");
+    expect(body.period).toBe("30d");
     expect(body.noSchedule).toBe(false);
     const worked = body.rows.find((r) => r.openMin > 0)!;
     expect(worked.days).toBeGreaterThan(1); // the weekday recurs in the window
@@ -192,13 +197,33 @@ describe("insights utilization", () => {
   it("by=service splits the sold time by what filled it", async () => {
     const body = await util({ by: "service" });
     expect(body.by).toBe("service");
-    expect(body.rows.map((r) => r.key).sort()).toEqual(["Beard", "Fade"]);
+    // Labels are the service names; the native row is KEYED by its real service
+    // id, so renaming a service can't split it into two rows.
+    expect(body.rows.map((r) => r.label).sort()).toEqual(["Beard", "Fade"]);
     for (const r of body.rows) {
       expect(r.bookedMin).toBe(60);
       expect(r.bookings).toBe(1);
       // Share of TOTAL open time — capacity is shared across services.
       expect(r.utilizationPct).toBe(Math.round((60 / body.totals.openMin) * 100));
     }
+  });
+
+  it("by=period tracks the same measure over time, one row per bucket", async () => {
+    const body = await util({ by: "period" });
+    expect(body.by).toBe("period");
+    expect(body.bucket).toBe("day");
+    expect(body.rows).toHaveLength(30); // the default 30-day window, daily
+    // The sold time lands on exactly one day, and the day-rows sum to the total.
+    const sold = body.rows.filter((r) => r.bookedMin > 0);
+    expect(sold).toHaveLength(1);
+    expect(sold[0]!.bookedMin).toBe(120);
+    expect(body.rows.reduce((s, r) => s + r.openMin, 0)).toBe(body.totals.openMin);
+
+    // A longer range re-buckets without changing what it measures.
+    const quarterly = await util({ by: "period", period: "90d" });
+    expect(quarterly.bucket).toBe("week");
+    expect(quarterly.rows).toHaveLength(13);
+    expect(quarterly.totals.bookedMin).toBe(120);
   });
 
   it("a block-off removes capacity while sold time stays put", async () => {
@@ -230,6 +255,10 @@ describe("insights utilization", () => {
     expect(mine.totals.openMin).toBe(all.totals.openMin); // Sam is the only barber
     expect(mine.totals.bookedMin).toBe(60); // only his native appointment
     expect(mine.totals.bookings).toBe(1);
+    // The caveat is flagged rather than silently under-reporting: a Visit
+    // carries no staff, so it cannot honestly be attributed to Sam.
+    expect(mine.syncedExcluded).toBe(true);
+    expect(all.syncedExcluded).toBe(false);
   });
 
   it("rejects an unknown grouping", async () => {
