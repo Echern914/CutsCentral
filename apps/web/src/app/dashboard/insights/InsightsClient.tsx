@@ -6,19 +6,26 @@ import { Card, CardHeader } from "@/components/ui/Card";
 import { Segmented } from "@/components/ui/Segmented";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { cn } from "@/lib/cn";
+import { NumberField } from "@/components/ui/NumberField";
+import { GoalPlanner } from "./GoalPlanner";
 import type {
   Bucket,
   Goal,
   GoalMetric,
   GoalPeriod,
+  GoalResponse,
   InsightsData,
   PeriodKey,
+  PlannerData,
+  ServiceGoalRow,
   UtilizationData,
 } from "./page";
 import {
+  clearChairTimeGoalAction,
   clearGoalAction,
   goalAction,
   insightsAction,
+  saveChairTimeGoalAction,
   saveGoalAction,
   utilizationAction,
 } from "./actions";
@@ -44,14 +51,22 @@ function fmtDay(ymd: string): string {
  */
 export function InsightsClient({
   initial,
-  initialGoals = null,
+  initialGoalData = null,
   rewardsEnabled = true,
 }: {
   initial: InsightsData;
-  initialGoals?: Goal[] | null;
+  initialGoalData?: GoalResponse | null;
   rewardsEnabled?: boolean;
 }) {
   const [period, setPeriod] = useState<PeriodKey>(initial.period);
+  // Goals + planner data live here because three cards read them: GoalsCard
+  // (the four quota slots + planner sheet), Chair time (the % target) and
+  // Services (per-service quotas). One fetch, one refresh, no drift.
+  const [goalData, setGoalData] = useState<GoalResponse | null>(initialGoalData);
+  async function refreshGoals() {
+    const r = await goalAction();
+    if (r) setGoalData(r);
+  }
   // null = the period's default bar size; a click on the Day/Week/Month pills
   // overrides it. Reset on period change - a bucket that suits 30 days may not
   // exist for a year (the API would quietly fall back, but the pills should
@@ -130,7 +145,11 @@ export function InsightsClient({
 
       {/* Goals — one target per metric AND period, each kept separately. */}
       <motion.div variants={fadeUp}>
-        <GoalsCard initial={initialGoals} />
+        <GoalsCard
+          goals={goalData?.goals ?? null}
+          planner={goalData?.planner ?? null}
+          onRefresh={refreshGoals}
+        />
       </motion.div>
 
       {/* Headline numbers for the window */}
@@ -192,14 +211,24 @@ export function InsightsClient({
               No services on the menu yet — add them under Booking → Services.
             </p>
           ) : (
-            <ServiceBars services={services} pending={pending} />
+            <ServiceBars
+              services={services}
+              pending={pending}
+              serviceGoals={goalData?.serviceGoals ?? []}
+              onRefreshGoals={refreshGoals}
+            />
           )}
         </Card>
       </motion.div>
 
       {/* Open chair time vs sold chair time */}
       <motion.div variants={fadeUp}>
-        <UtilizationCard period={period} bucket={bucket} />
+        <UtilizationCard
+          period={period}
+          bucket={bucket}
+          chairTimeTarget={goalData?.chairTime.target ?? null}
+          onRefreshGoals={refreshGoals}
+        />
       </motion.div>
 
       <motion.div
@@ -349,12 +378,65 @@ function BucketBars({
 function ServiceBars({
   services,
   pending,
+  serviceGoals,
+  onRefreshGoals,
 }: {
   services: InsightsData["services"];
   pending: boolean;
+  serviceGoals: ServiceGoalRow[];
+  onRefreshGoals: () => Promise<void>;
 }) {
   const [mode, setMode] = useState<"count" | "revenue">("count");
   const [showAll, setShowAll] = useState(false);
+  // Per-service quota editor: which row is open, and its draft.
+  const [goalEditor, setGoalEditor] = useState<string | null>(null); // serviceId
+  const [goalTarget, setGoalTarget] = useState<number>(10);
+  const [goalPeriod, setGoalPeriod] = useState<GoalPeriod>("week");
+  const [goalSaving, setGoalSaving] = useState(false);
+
+  // The metric a row's quota uses follows the card's toggle: ranking by
+  // bookings sets cut quotas, ranking by revenue sets dollar quotas.
+  const goalMetric: GoalMetric = mode === "count" ? "visits" : "revenue";
+  const goalFor = (serviceId: string | null): ServiceGoalRow | undefined =>
+    serviceId
+      ? serviceGoals.find((g) => g.serviceId === serviceId && g.metric === goalMetric)
+      : undefined;
+
+  function openGoalEditor(serviceId: string) {
+    const existing = goalFor(serviceId);
+    setGoalTarget(existing?.target ?? (goalMetric === "visits" ? 10 : 500));
+    setGoalPeriod(existing?.period ?? "week");
+    setGoalEditor(serviceId);
+  }
+
+  async function saveServiceGoal(serviceId: string) {
+    setGoalSaving(true);
+    const r = await saveGoalAction({
+      metric: goalMetric,
+      period: goalPeriod,
+      target: goalTarget,
+      serviceId,
+    });
+    if (r.ok) {
+      await onRefreshGoals();
+      setGoalEditor(null);
+    }
+    setGoalSaving(false);
+  }
+
+  async function removeServiceGoal(g: ServiceGoalRow) {
+    setGoalSaving(true);
+    const r = await clearGoalAction({
+      metric: g.metric,
+      period: g.period,
+      serviceId: g.serviceId,
+    });
+    if (r.ok) {
+      await onRefreshGoals();
+      setGoalEditor(null);
+    }
+    setGoalSaving(false);
+  }
 
   const booked = services.filter((s) => s.count > 0);
   const unbooked = services.filter((s) => s.count === 0);
@@ -382,34 +464,108 @@ function ServiceBars({
         </p>
       )}
       <ul className="flex flex-col gap-2.5">
-        {visible.map((s) => (
-          <li key={s.serviceId ?? `name:${s.name}`}>
-            <div className="mb-1 flex items-center justify-between gap-3 text-xs">
-              <span
-                className={cn(
-                  "truncate",
-                  s.count === 0 || s.name === "(no service name)"
-                    ? "text-muted"
-                    : "text-offwhite",
-                )}
-                title={s.name}
-              >
-                {s.name}
-              </span>
-              <span className="shrink-0 tabular-nums text-muted">
-                {mode === "count"
-                  ? `${s.count} ${s.count === 1 ? "booking" : "bookings"}`
-                  : `$${s.revenue.toLocaleString()}`}
-              </span>
-            </div>
-            <div className="h-2 w-full overflow-hidden rounded-full bg-charcoal-700">
-              <div
-                className="h-full rounded-full bg-gold/70 transition-all duration-200 ease-out"
-                style={{ width: `${Math.max(s[mode] > 0 ? 2 : 0, Math.round((s[mode] / max) * 100))}%` }}
-              />
-            </div>
-          </li>
-        ))}
+        {visible.map((s) => {
+          const g = goalFor(s.serviceId);
+          const editingThis = goalEditor !== null && goalEditor === s.serviceId;
+          return (
+            <li key={s.serviceId ?? `name:${s.name}`}>
+              <div className="mb-1 flex items-center justify-between gap-3 text-xs">
+                <span className="flex min-w-0 items-center gap-2">
+                  <span
+                    className={cn(
+                      "truncate",
+                      s.count === 0 || s.name === "(no service name)"
+                        ? "text-muted"
+                        : "text-offwhite",
+                    )}
+                    title={s.name}
+                  >
+                    {s.name}
+                  </span>
+                  {s.serviceId && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        editingThis ? setGoalEditor(null) : openGoalEditor(s.serviceId!)
+                      }
+                      className={cn(
+                        "shrink-0 rounded-full border px-2 py-0.5 text-[10px] tabular-nums transition-colors",
+                        g
+                          ? g.pct >= 1
+                            ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
+                            : "border-gold/40 bg-gold/10 text-gold"
+                          : "border-subtle text-muted hover:border-gold/50 hover:text-gold",
+                      )}
+                      title={
+                        g
+                          ? `${g.actual} of ${g.target} ${g.metric === "visits" ? "cuts" : "$"} ${PERIOD_LABEL[g.period]}`
+                          : "Set a target for this service"
+                      }
+                    >
+                      {g
+                        ? `${g.actual}/${g.target}${g.period === "week" ? " wk" : " mo"}`
+                        : "+ target"}
+                    </button>
+                  )}
+                </span>
+                <span className="shrink-0 tabular-nums text-muted">
+                  {mode === "count"
+                    ? `${s.count} ${s.count === 1 ? "booking" : "bookings"}`
+                    : `$${s.revenue.toLocaleString()}`}
+                </span>
+              </div>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-charcoal-700">
+                <div
+                  className="h-full rounded-full bg-gold/70 transition-all duration-200 ease-out"
+                  style={{ width: `${Math.max(s[mode] > 0 ? 2 : 0, Math.round((s[mode] / max) * 100))}%` }}
+                />
+              </div>
+              {editingThis && (
+                <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl border border-gold/40 bg-charcoal-800/50 px-3 py-2">
+                  <NumberField
+                    value={goalTarget}
+                    onChange={setGoalTarget}
+                    min={1}
+                    max={1_000_000}
+                    integer
+                    className="w-20 rounded-lg border border-subtle bg-charcoal-800 px-2 py-1 text-right text-xs tabular-nums"
+                    aria-label={`${goalMetric === "visits" ? "Cuts" : "Revenue"} target for ${s.name}`}
+                  />
+                  <span className="text-[11px] text-muted">
+                    {goalMetric === "visits" ? "cuts" : "$"} per
+                  </span>
+                  <Segmented
+                    options={[
+                      { key: "week", label: "week" },
+                      { key: "month", label: "month" },
+                    ]}
+                    value={goalPeriod}
+                    onChange={setGoalPeriod}
+                    ariaLabel="Quota period"
+                  />
+                  <div className="ml-auto flex gap-1.5">
+                    {g && (
+                      <button
+                        onClick={() => void removeServiceGoal(g)}
+                        disabled={goalSaving}
+                        className="rounded-full border border-subtle px-2.5 py-1 text-[11px] text-muted transition-colors hover:text-red-400"
+                      >
+                        Remove
+                      </button>
+                    )}
+                    <button
+                      onClick={() => void saveServiceGoal(s.serviceId!)}
+                      disabled={goalSaving}
+                      className="rounded-full bg-gold px-3 py-1 text-[11px] font-semibold text-charcoal-900 disabled:opacity-50"
+                    >
+                      {goalSaving ? "Saving…" : "Save"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </li>
+          );
+        })}
       </ul>
       {hidden > 0 && (
         <button
@@ -468,15 +624,43 @@ const UTIL_VIEWS = [
 function UtilizationCard({
   period,
   bucket,
+  chairTimeTarget,
+  onRefreshGoals,
 }: {
   period: PeriodKey;
   bucket: Bucket | null;
+  chairTimeTarget: number | null;
+  onRefreshGoals: () => Promise<void>;
 }) {
   const [by, setBy] = useState<"weekday" | "period" | "service">("weekday");
   const [staffId, setStaffId] = useState<string>("");
   const [data, setData] = useState<UtilizationData | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
+  // The standing "run at N% booked" target editor.
+  const [editingTarget, setEditingTarget] = useState(false);
+  const [targetDraft, setTargetDraft] = useState<number>(chairTimeTarget ?? 75);
+  const [savingTarget, setSavingTarget] = useState(false);
+
+  async function saveTarget() {
+    setSavingTarget(true);
+    const r = await saveChairTimeGoalAction(targetDraft);
+    if (r.ok) {
+      await onRefreshGoals();
+      setEditingTarget(false);
+    }
+    setSavingTarget(false);
+  }
+
+  async function clearTarget() {
+    setSavingTarget(true);
+    const r = await clearChairTimeGoalAction();
+    if (r.ok) {
+      await onRefreshGoals();
+      setEditingTarget(false);
+    }
+    setSavingTarget(false);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -528,8 +712,61 @@ function UtilizationCard({
         subtitle={`How much of the time you were open actually got booked${
           data ? ` — ${data.periodLabel.toLowerCase()}` : ""
         }.`}
+        action={
+          <button
+            type="button"
+            onClick={() => {
+              setTargetDraft(chairTimeTarget ?? 75);
+              setEditingTarget((v) => !v);
+            }}
+            className="rounded-full border border-gold/50 px-3 py-1 text-xs text-gold transition-colors hover:bg-gold/10"
+          >
+            {chairTimeTarget === null ? "Set a target" : "Edit target"}
+          </button>
+        }
       />
       <div className="flex flex-col gap-4 px-5 py-5">
+        {editingTarget && (
+          <div className="flex flex-wrap items-center gap-3 rounded-xl border border-gold/40 bg-charcoal-800/50 px-4 py-3">
+            <label className="flex items-center gap-2 text-xs text-muted">
+              I want to run at
+              <NumberField
+                value={targetDraft}
+                onChange={setTargetDraft}
+                min={1}
+                max={100}
+                integer
+                className="w-16 rounded-lg border border-subtle bg-charcoal-800 px-2 py-1.5 text-right text-sm tabular-nums"
+                aria-label="Chair time target percent"
+              />
+              % booked
+            </label>
+            <div className="ml-auto flex gap-2">
+              {chairTimeTarget !== null && (
+                <button
+                  onClick={() => void clearTarget()}
+                  disabled={savingTarget}
+                  className="rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:text-red-400"
+                >
+                  Remove
+                </button>
+              )}
+              <button
+                onClick={() => setEditingTarget(false)}
+                className="rounded-full border border-subtle px-3 py-1 text-xs text-muted hover:text-offwhite"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void saveTarget()}
+                disabled={savingTarget}
+                className="rounded-full bg-gold px-3 py-1 text-xs font-semibold text-charcoal-900 disabled:opacity-50"
+              >
+                {savingTarget ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        )}
         {/* Controls: how to slice it, and (multi-chair shops) whose chair. */}
         <div className="flex flex-wrap items-center gap-2">
           <Segmented
@@ -568,7 +805,7 @@ function UtilizationCard({
           </p>
         ) : (
           <>
-            {/* The headline number. */}
+            {/* The headline number, measured against the standing target. */}
             <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
               <span className="font-display text-3xl tabular-nums text-offwhite">
                 {data?.totals.utilizationPct ?? 0}%
@@ -584,6 +821,19 @@ function UtilizationCard({
                 </span>{" "}
                 open
               </span>
+              {chairTimeTarget !== null && (
+                <span
+                  className={cn(
+                    "rounded-full border px-2 py-0.5 text-[10px] font-semibold tabular-nums",
+                    (data?.totals.utilizationPct ?? 0) >= chairTimeTarget
+                      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
+                      : "border-amber-500/40 bg-amber-500/10 text-amber-400",
+                  )}
+                  title={`Your standing target: run at ${chairTimeTarget}% booked.`}
+                >
+                  target {chairTimeTarget}%
+                </span>
+              )}
             </div>
 
             <div className={cn("flex flex-col gap-2.5", loading && "opacity-50")}>
@@ -733,41 +983,17 @@ function goalKey(g: { metric: GoalMetric; period: GoalPeriod }): string {
  * layout so the numbers line up down the column instead of wandering with the
  * length of each label.
  */
-function GoalsCard({ initial }: { initial: Goal[] | null }) {
-  const [goals, setGoals] = useState<Goal[] | null>(initial);
-  const [editing, setEditing] = useState<string | null>(null); // goalKey
-  const [target, setTarget] = useState("");
+function GoalsCard({
+  goals,
+  planner,
+  onRefresh,
+}: {
+  goals: Goal[] | null;
+  planner: PlannerData | null;
+  onRefresh: () => Promise<void>;
+}) {
+  const [planning, setPlanning] = useState<string | null>(null); // goalKey
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function refresh() {
-    const r = await goalAction();
-    if (r) setGoals(r.goals);
-  }
-
-  function beginEdit(g: Goal) {
-    setTarget(g.target === null ? "" : String(g.target));
-    setError(null);
-    setEditing(goalKey(g));
-  }
-
-  async function save(g: Goal) {
-    const n = Number(target.trim());
-    if (!Number.isInteger(n) || n < 1) {
-      setError("Target must be a whole number of at least 1.");
-      return;
-    }
-    setSaving(true);
-    setError(null);
-    const r = await saveGoalAction({ metric: g.metric, period: g.period, target: n });
-    if (r.ok) {
-      await refresh();
-      setEditing(null);
-    } else {
-      setError("Couldn't save that goal. Try again.");
-    }
-    setSaving(false);
-  }
 
   async function clear(g: Goal) {
     if (
@@ -779,7 +1005,7 @@ function GoalsCard({ initial }: { initial: Goal[] | null }) {
     }
     setSaving(true);
     const r = await clearGoalAction({ metric: g.metric, period: g.period });
-    if (r.ok) await refresh();
+    if (r.ok) await onRefresh();
     setSaving(false);
   }
 
@@ -792,40 +1018,40 @@ function GoalsCard({ initial }: { initial: Goal[] | null }) {
   }
 
   const anySet = goals.some((g) => g.target !== null);
+  const planningGoal = goals.find((g) => goalKey(g) === planning) ?? null;
 
   return (
     <Card className="p-5">
       <CardHeader
         title="Goals"
-        subtitle="Set a quota for the week and the month — revenue and cuts are tracked separately, so each keeps its own number."
+        subtitle="Set a quota for the week and the month — then plan how to hit it: raise a price, add cuts, pick how booked you want to run."
       />
       {!anySet && (
         <p className="mt-3 text-sm text-muted">
           Nothing set yet. Pick any of the four below and Insights tracks whether
-          you&apos;re on pace.
+          you&apos;re on pace — and helps you plan the prices and volume to get
+          there.
         </p>
       )}
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        {goals.map((g) => {
-          const key = goalKey(g);
-          const isEditing = editing === key;
-          return (
-            <GoalCell
-              key={key}
-              goal={g}
-              editing={isEditing}
-              saving={saving}
-              error={isEditing ? error : null}
-              target={target}
-              onTargetChange={setTarget}
-              onBeginEdit={() => beginEdit(g)}
-              onCancel={() => setEditing(null)}
-              onSave={() => void save(g)}
-              onClear={() => void clear(g)}
-            />
-          );
-        })}
+        {goals.map((g) => (
+          <GoalCell
+            key={goalKey(g)}
+            goal={g}
+            saving={saving}
+            onBeginEdit={() => setPlanning(goalKey(g))}
+            onClear={() => void clear(g)}
+          />
+        ))}
       </div>
+      {planningGoal && planner && (
+        <GoalPlanner
+          goal={planningGoal}
+          planner={planner}
+          onSaved={onRefresh}
+          onClose={() => setPlanning(null)}
+        />
+      )}
     </Card>
   );
 }
@@ -837,81 +1063,17 @@ function GoalsCard({ initial }: { initial: Goal[] | null }) {
  */
 function GoalCell({
   goal,
-  editing,
   saving,
-  error,
-  target,
-  onTargetChange,
   onBeginEdit,
-  onCancel,
-  onSave,
   onClear,
 }: {
   goal: Goal;
-  editing: boolean;
   saving: boolean;
-  error: string | null;
-  target: string;
-  onTargetChange: (v: string) => void;
   onBeginEdit: () => void;
-  onCancel: () => void;
-  onSave: () => void;
   onClear: () => void;
 }) {
   const title = `${METRIC_LABEL[goal.metric]} · ${PERIOD_LABEL[goal.period]}`;
   const p = goal.progress;
-
-  if (editing) {
-    return (
-      <div className="rounded-xl border border-gold/40 bg-charcoal-800/50 p-4">
-        <p className="text-[11px] uppercase tracking-wide text-muted">{title}</p>
-        <label className="mt-2 block">
-          <span className="text-xs text-muted">
-            Target {goal.metric === "revenue" ? "($)" : "(cuts)"}
-          </span>
-          <input
-            className="mt-1 w-full rounded-xl border border-subtle bg-charcoal-800 px-3 py-2 text-sm tabular-nums"
-            type="number"
-            min={1}
-            inputMode="numeric"
-            autoFocus
-            placeholder={
-              goal.metric === "revenue"
-                ? goal.period === "week"
-                  ? "1000"
-                  : "4000"
-                : goal.period === "week"
-                  ? "15"
-                  : "60"
-            }
-            value={target}
-            onChange={(e) => onTargetChange(e.target.value)}
-            aria-label={`${title} target`}
-          />
-        </label>
-        {error && (
-          <p role="alert" className="mt-2 text-xs text-red-400">
-            {error}
-          </p>
-        )}
-        <div className="mt-3 flex gap-2">
-          <button
-            onClick={onSave}
-            disabled={saving}
-            className="rounded-xl bg-gold px-4 py-1.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
-          >
-            {saving ? "Saving…" : "Save"}
-          </button>
-          <button
-            onClick={onCancel}
-            className="rounded-xl border border-subtle px-3 py-1.5 text-sm text-muted hover:text-offwhite"
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   if (goal.target === null || !p) {
     return (
@@ -980,12 +1142,23 @@ function GoalCell({
         </span>
       </div>
 
+      {goal.plan && (
+        <p className="mt-2 text-[11px] text-muted">
+          <span className="text-gold/90">Plan:</span> run at {goal.plan.bookedPct}%
+          booked
+          {goal.plan.services.length > 0 &&
+            ` · ${goal.plan.services.length} service ${
+              goal.plan.services.length === 1 ? "lever" : "levers"
+            }`}
+        </p>
+      )}
+
       <div className="mt-auto flex gap-2 pt-3">
         <button
           onClick={onBeginEdit}
-          className="rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:text-offwhite"
+          className="rounded-full border border-gold/50 px-3 py-1 text-xs text-gold transition-colors hover:bg-gold/10"
         >
-          Edit
+          Edit &amp; plan
         </button>
         <button
           onClick={onClear}

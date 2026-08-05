@@ -5,6 +5,7 @@ import type {
   Bucket,
   GoalMetric,
   GoalPeriod,
+  GoalPlan,
   GoalResponse,
   InsightsData,
   PeriodKey,
@@ -52,25 +53,53 @@ export async function goalAction(): Promise<GoalResponse | null> {
 }
 
 /**
- * Set the target for ONE (metric, period). The other three slots are untouched:
+ * Set the target for ONE (metric, period). The other slots are untouched:
  * switching metric or period in the UI selects a different goal, it never
- * overwrites the one you were just looking at.
+ * overwrites the one you were just looking at. `plan` rides along from the
+ * planner (absent = keep the saved plan, null = clear it); `serviceId` makes
+ * it a per-service quota instead.
  */
 export async function saveGoalAction(input: {
   metric: GoalMetric;
   period: GoalPeriod;
   target: number;
+  plan?: GoalPlan | null;
+  serviceId?: string;
 }): Promise<{ ok: boolean }> {
   const res = await apiSend<{ ok: boolean }>("PUT", "/api/insights/goal", input);
   return { ok: res.ok };
 }
 
-/** Clear ONE goal, leaving the others in place. */
+/** The standing chair-time level: "run at N% booked". */
+export async function saveChairTimeGoalAction(target: number): Promise<{ ok: boolean }> {
+  const res = await apiSend<{ ok: boolean }>("PUT", "/api/insights/goal", {
+    metric: "chairTime",
+    period: "overall",
+    target,
+  });
+  return { ok: res.ok };
+}
+
+export async function clearChairTimeGoalAction(): Promise<{ ok: boolean }> {
+  const res = await apiSend<{ ok: boolean }>(
+    "DELETE",
+    "/api/insights/goal?metric=chairTime",
+    {},
+  );
+  return { ok: res.ok };
+}
+
+/** Clear ONE goal (or one service's quota), leaving the others in place. */
 export async function clearGoalAction(input: {
   metric: GoalMetric;
   period: GoalPeriod;
+  serviceId?: string;
 }): Promise<{ ok: boolean }> {
-  const params = new URLSearchParams({ metric: input.metric, period: input.period });
+  const params = new URLSearchParams({
+    metric: input.metric,
+    period: input.period,
+    ...(input.serviceId ? { serviceId: input.serviceId } : {}),
+  });
   const res = await apiSend<{ ok: boolean }>(
     "DELETE",
     `/api/insights/goal?${params}`,

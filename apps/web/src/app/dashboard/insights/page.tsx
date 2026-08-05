@@ -117,14 +117,48 @@ export interface GoalProgress {
   pct: number; // actual / target, capped at 1
   series: { day: number; cumulative: number | null }[]; // null = future day
 }
+/** The planner's saved levers — how the barber intends to hit the target. */
+export interface GoalPlan {
+  bookedPct: number; // "if I ran at N% booked"
+  services: { serviceId: string; priceDelta: number; extraCuts: number }[];
+}
 export interface Goal {
   metric: GoalMetric;
   period: GoalPeriod;
   target: number | null; // null = not set yet
+  plan: GoalPlan | null;
   progress: GoalProgress | null;
+}
+/** A per-service quota with its live actual. */
+export interface ServiceGoalRow {
+  serviceId: string;
+  name: string;
+  metric: GoalMetric;
+  period: GoalPeriod;
+  target: number;
+  actual: number;
+  pct: number;
+}
+/** Per-service run-rates + schedule capacity, for the what-if projection. */
+export interface PlannerData {
+  services: {
+    serviceId: string;
+    name: string;
+    price: number | null;
+    durationMin: number;
+    week: { cuts: number; revenue: number };
+    month: { cuts: number; revenue: number };
+  }[];
+  capacity: {
+    week: { openMin: number };
+    month: { openMin: number };
+  };
 }
 export interface GoalResponse {
   goals: Goal[];
+  chairTime: { target: number | null };
+  serviceGoals: ServiceGoalRow[];
+  planner: PlannerData;
 }
 
 export default async function InsightsPage() {
@@ -153,7 +187,7 @@ export default async function InsightsPage() {
       <div data-tour="charts">
         <InsightsClient
           initial={res.data}
-          initialGoals={goalRes.ok ? (goalRes.data?.goals ?? null) : null}
+          initialGoalData={goalRes.ok ? (goalRes.data ?? null) : null}
           rewardsEnabled={me.data?.rewardsEnabled ?? true}
         />
       </div>
