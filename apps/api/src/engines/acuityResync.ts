@@ -1,6 +1,7 @@
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
-import { getAcuityClientForShop, type ListParams } from "../acuity/client.js";
+import { getAcuityClientForShop } from "../acuity/client.js";
+import { walkAcuityAppointments } from "../acuity/walk.js";
 import { ingestAppointment } from "../ingest.js";
 
 /**
@@ -14,11 +15,17 @@ import { ingestAppointment } from "../ingest.js";
  * names/numbers self-heal without manual intervention.
  *
  * Deliberately NOT a full backfill: backfillShop walks from 2015 every run,
- * which is wasteful at scale. A small recent window (a couple days back for
- * late edits, out to the shop's booking horizon for new future bookings) keeps
- * each run cheap. Ingest is idempotent via Visit's @@unique([shopId,
- * acuityAppointmentId]), so re-reading the same appointments creates no
- * duplicate clients/visits - re-running is always safe.
+ * which is wasteful at scale. The window is a week back (a missed webhook on a
+ * PAST appointment - a late cancel, an edit - is unrecoverable once it ages out
+ * of the lookback, so give it real slack) and a year forward (Acuity itself has
+ * no booking horizon: standing clients book months out, and anything past the
+ * lookahead only ever landed via connect-time backfill - it would stay
+ * invisible until it drifted inside the window). A year of one shop's
+ * appointments is a handful of pages per pass - the cost is a few HTTP calls
+ * every 30 minutes, the payoff is that the calendar simply has everything.
+ * Ingest is idempotent via Visit's @@unique([shopId, acuityAppointmentId]), so
+ * re-reading the same appointments creates no duplicate clients/visits -
+ * re-running is always safe.
  *
  * Idempotent + safe on the single-replica scheduler (see scheduler.ts). Never
  * throws out of a single shop's failure - one shop's expired token or Acuity
@@ -26,11 +33,9 @@ import { ingestAppointment } from "../ingest.js";
  */
 
 // How far BACK to look, to catch appointments edited/canceled since last sync.
-const LOOKBACK_MS = 2 * 24 * 60 * 60 * 1000; // 2 days
-// How far FORWARD, to catch newly-created future bookings. Comfortably beyond
-// any shop's booking horizon (bookingMaxDays is typically <= 60).
-const LOOKAHEAD_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
-const PAGE_SIZE = 200;
+const LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+// How far FORWARD, to catch newly-created future bookings.
+const LOOKAHEAD_MS = 365 * 24 * 60 * 60 * 1000; // 365 days
 
 /** Acuity minDate/maxDate accept a plain YYYY-MM-DD (see BACKFILL_MIN_DATE). */
 function ymd(d: Date): string {
@@ -48,42 +53,13 @@ async function resyncShop(shopId: string, now: Date): Promise<number> {
 
   // Both active and canceled passes (a cancel edited in Acuity must reconcile).
   for (const canceled of [false, true]) {
-    let cursor = minDate;
-    let lastCursor = "";
-    let sameCursorRuns = 0;
-
-    for (;;) {
-      const params: ListParams = {
-        minDate: cursor,
-        maxDate,
-        max: PAGE_SIZE,
-        direction: "ASC",
-        canceled,
-      };
-      const page = await acuity.listAppointments(params);
-      if (page.length === 0) break;
-
-      for (const appt of page) {
+    ingested += await walkAcuityAppointments(
+      acuity,
+      { shopId, minDate, maxDate, canceled },
+      async (appt) => {
         await ingestAppointment(shop, canceled ? "canceled" : "scheduled", appt.id, appt);
-        ingested++;
-      }
-
-      if (page.length < PAGE_SIZE) break; // final partial page
-
-      // Advance the cursor to the last appointment's date. Guard against a whole
-      // page sharing one timestamp (mirrors backfillShop's stuck-cursor guard).
-      const nextCursor = ymd(new Date(page[page.length - 1]!.datetime));
-      if (nextCursor === lastCursor) {
-        if (++sameCursorRuns >= 2) {
-          logger.warn({ shopId, cursor }, "acuity resync cursor stuck; stopping page walk");
-          break;
-        }
-      } else {
-        sameCursorRuns = 0;
-      }
-      lastCursor = nextCursor;
-      cursor = nextCursor;
-    }
+      },
+    );
   }
 
   return ingested;

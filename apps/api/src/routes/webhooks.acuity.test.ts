@@ -119,8 +119,10 @@ describe("acuity webhook receiver", () => {
   it("ingests an appointment with an UNPARSEABLE endTime (real-data regression)", async () => {
     // The backfill-imported-0 bug: a present-but-invalid endTime produced
     // `new Date("Invalid Date")`, which Postgres rejected and crashed the whole
-    // upsert - silently dropping every appointment. Must now ingest fine with
-    // endAt left null.
+    // upsert - silently dropping every appointment. Must ingest fine - and the
+    // endAt must FALL BACK (duration, else 30 min) rather than store null: a
+    // null endAt is invisible to the slot engine's `endAt: { gt }` busy-join,
+    // so the visit would never block a slot and the chair double-books.
     const d = await prisma.shop.create({
       data: {
         ownerId: userId,
@@ -139,10 +141,42 @@ describe("acuity webhook receiver", () => {
       });
       const visit = await prisma.visit.findFirst({ where: { shopId: d.id } });
       expect(visit?.acuityAppointmentId).toBe("appt-bad-endtime");
-      expect(visit?.endAt).toBeNull(); // bad endTime -> null, not a crash
+      // No duration on the fixture -> scheduledAt + 30 min default.
+      expect(visit?.endAt?.toISOString()).toBe(
+        new Date(new Date(fixture.datetime).getTime() + 30 * 60_000).toISOString(),
+      );
     } finally {
       fixture.id = original.id;
       fixture.endTime = original.endTime;
+    }
+  });
+
+  it("derives endAt from Acuity's duration when endTime is missing", async () => {
+    const e = await prisma.shop.create({
+      data: {
+        ownerId: userId,
+        name: "WH E",
+        bookingUrl: "https://e.test",
+        webhookSecret: randomToken(),
+      },
+    });
+    const original = { id: fixture.id, endTime: fixture.endTime };
+    fixture.id = "appt-duration-endtime";
+    fixture.endTime = null as unknown as string; // absent from the payload
+    (fixture as Record<string, unknown>).duration = 45;
+    try {
+      await postWebhook(e.webhookSecret, "action=scheduled&id=appt-duration-endtime");
+      await vi.waitFor(async () => {
+        expect(await prisma.visit.count({ where: { shopId: e.id } })).toBe(1);
+      });
+      const visit = await prisma.visit.findFirst({ where: { shopId: e.id } });
+      expect(visit?.endAt?.toISOString()).toBe(
+        new Date(new Date(fixture.datetime).getTime() + 45 * 60_000).toISOString(),
+      );
+    } finally {
+      fixture.id = original.id;
+      fixture.endTime = original.endTime;
+      delete (fixture as Record<string, unknown>).duration;
     }
   });
 
