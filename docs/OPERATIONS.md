@@ -10,8 +10,16 @@ node scripts/status.mjs
 ```
 
 It probes prod (web, API, public booking), the nightly backup, open PRs/issues, and whether
-your local `main` is current, then prints a green/yellow/red summary. Everything below is the
-part a script can't check: human tasks, judgment calls, and where things live.
+your local `main` is current, then prints a green/yellow/red summary.
+
+`status.mjs` can only see prod from the *outside*. For the inside — which integrations are
+actually configured on the running API — open **/admin → Launch readiness** (or
+`GET /api/admin-portal/preflight`). It lists every optional-env seam as blocker / warning /
+info with the env var that fixes each. Read it before handing any shop the keys: a missing env
+var never crashes anything, it just makes the feature silently do nothing, and `DRY_RUN`
+**defaults to true** — a box where nobody set it records "sent" and texts nobody.
+
+Everything below is the part neither can check: human tasks, judgment calls, and where things live.
 
 > Last full human review: **2026-07-22**. Update the date + boxes when you work an item.
 > (The live-health facts here are just the last snapshot — trust `status.mjs` over this prose.)
@@ -106,7 +114,8 @@ email/password); noted as a known gap, not a bug.
 
 | Thing | Where |
 |---|---|
-| Live status check | `node scripts/status.mjs` |
+| Live status check (outside view) | `node scripts/status.mjs` |
+| Which integrations are configured (inside view) | `/admin` → Launch readiness · `apps/api/src/ops/preflight.ts` |
 | This dashboard | `docs/OPERATIONS.md` |
 | Deploy mechanics + the Supabase/Railway connection gotcha | `docs/GO-LIVE-CHECKLIST.md`, `DEPLOY.md` |
 | Backup + restore procedure | `docs/BACKUP.md` |
