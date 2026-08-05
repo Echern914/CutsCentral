@@ -678,3 +678,194 @@ describe("day-first bundles endpoint (/api/book/:slug/day)", () => {
     expect([...(pub.body.openWeekdays as number[])].sort()).toEqual([0, 1, 2, 3, 4, 5, 6]);
   });
 });
+
+describe("weekly SCHEDULE series: weekdays x times in one rule", () => {
+  const rollForwardTargetedRules = async () =>
+    (await import("../engines/targetedSlotRules.js")).rollForwardTargetedRules();
+
+  /** Tomorrow's shop-local (UTC) calendar date as YYYY-MM-DD. */
+  function tomorrowYmd(): string {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() + 1);
+    return d.toISOString().slice(0, 10);
+  }
+
+  it("'every night at 9pm': one rule, seven rows a week, to the horizon", async () => {
+    const schedule = Object.fromEntries(
+      [0, 1, 2, 3, 4, 5, 6].map((wd) => [String(wd), [{ start: "21:00" }]]),
+    );
+    const created = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        label: "Nightly retwist",
+        durationMin: 45,
+        price: 160,
+        schedule,
+        startDate: tomorrowYmd(),
+        repeatForever: true,
+      });
+    expect(created.status).toBe(201);
+    const ruleId = created.body.ruleId as string;
+    expect(ruleId).toBeTruthy();
+    // Whole weeks inside the 91-day horizon: 12-13 weeks x 7 nights.
+    expect(created.body.created).toBeGreaterThanOrEqual(84);
+    expect(created.body.created).toBeLessThanOrEqual(91);
+
+    const rows = await prisma.targetedSlot.findMany({
+      where: { shopId, ruleId },
+      orderBy: { startsAt: "asc" },
+      select: { startsAt: true, durationMin: true, price: true },
+    });
+    expect(rows.length).toBe(created.body.created);
+    // Every night: the first 7 rows are 7 CONSECUTIVE days, all at 21:00 wall
+    // (shop tz is UTC here), all at the rule's base duration/price.
+    for (let i = 0; i < 7; i++) {
+      const s = rows[i]!.startsAt;
+      expect(s.getUTCHours()).toBe(21);
+      expect(s.getUTCMinutes()).toBe(0);
+      if (i > 0) {
+        expect(s.getTime() - rows[i - 1]!.startsAt.getTime()).toBe(24 * 60 * 60_000);
+      }
+      expect(rows[i]!.durationMin).toBe(45);
+      expect(Number(rows[i]!.price)).toBe(160);
+    }
+
+    // The dashboard list renders the rule as its schedule map.
+    const list = await request(app)
+      .get("/api/booking/targeted-slots")
+      .set("Cookie", cookie);
+    const rule = (list.body.rules as {
+      id: string;
+      schedule: Record<string, { startMin: number }[]>;
+      indefinite: boolean;
+    }[]).find((r) => r.id === ruleId);
+    expect(rule).toBeDefined();
+    expect(rule!.indefinite).toBe(true);
+    expect(Object.keys(rule!.schedule).sort()).toEqual(["0", "1", "2", "3", "4", "5", "6"]);
+    expect(rule!.schedule["3"]![0]!.startMin).toBe(21 * 60);
+
+    // Roll-forward is idempotent for schedule rules: same horizon, 0 new rows.
+    const before = await prisma.targetedSlot.count({ where: { shopId, ruleId } });
+    await rollForwardTargetedRules();
+    const after = await prisma.targetedSlot.count({ where: { shopId, ruleId } });
+    // The daily job may legitimately extend by at most ONE fresh week (clock
+    // moved since creation); never duplicates within the same horizon.
+    expect(after - before).toBeLessThanOrEqual(7);
+    await rollForwardTargetedRules();
+    expect(await prisma.targetedSlot.count({ where: { shopId, ruleId } })).toBe(after);
+
+    // Turn the series off: future unbooked rows go, rule deactivates.
+    const off = await request(app)
+      .delete(`/api/booking/targeted-slots/rules/${ruleId}`)
+      .set("Cookie", cookie);
+    expect(off.status).toBe(200);
+    expect(await prisma.targetedSlot.count({ where: { shopId, ruleId } })).toBe(0);
+  });
+
+  it("'mornings and afternoons' on two days for two weeks, per-time price override", async () => {
+    // Tomorrow's weekday and the day after (shop tz UTC).
+    const t = new Date();
+    t.setUTCDate(t.getUTCDate() + 1);
+    const wdA = t.getUTCDay();
+    const wdB = (wdA + 1) % 7;
+    const created = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        label: "After hours cuts",
+        durationMin: 30,
+        price: 60,
+        schedule: {
+          [String(wdA)]: [{ start: "07:30" }, { start: "18:30", price: 75 }],
+          [String(wdB)]: [{ start: "07:30" }, { start: "18:30", price: 75 }],
+        },
+        startDate: tomorrowYmd(),
+        repeatWeeks: 1,
+      });
+    expect(created.status).toBe(201);
+    const ruleId = created.body.ruleId as string;
+    // 2 weeks x 2 days x 2 times.
+    expect(created.body.created).toBe(8);
+
+    const rows = await prisma.targetedSlot.findMany({
+      where: { shopId, ruleId },
+      orderBy: { startsAt: "asc" },
+      select: { startsAt: true, price: true },
+    });
+    expect(rows).toHaveLength(8);
+    const mornings = rows.filter((r) => r.startsAt.getUTCHours() === 7);
+    const evenings = rows.filter((r) => r.startsAt.getUTCHours() === 18);
+    expect(mornings).toHaveLength(4);
+    expect(evenings).toHaveLength(4);
+    // Base price for the mornings, the per-time override for the evenings.
+    expect(mornings.every((r) => Number(r.price) === 60)).toBe(true);
+    expect(evenings.every((r) => Number(r.price) === 75)).toBe(true);
+    // A finite batch does NOT roll forward: it is complete at creation.
+    await rollForwardTargetedRules();
+    expect(await prisma.targetedSlot.count({ where: { shopId, ruleId } })).toBe(8);
+
+    await request(app)
+      .delete(`/api/booking/targeted-slots/rules/${ruleId}`)
+      .set("Cookie", cookie);
+  });
+
+  it("rejects an empty schedule and out-of-range times", async () => {
+    const bad = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        durationMin: 30,
+        price: 60,
+        schedule: {},
+        repeatForever: true,
+      });
+    expect(bad.status).toBe(400);
+    const badTime = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        durationMin: 30,
+        price: 60,
+        schedule: { "1": [{ start: "24:30" }] },
+        repeatForever: true,
+      });
+    expect(badTime.status).toBe(400);
+  });
+
+  it("a single-day schedule whose time already passed today lands on NEXT week's day", async () => {
+    // startDate = today, schedule = today's weekday at 00:01 (surely past).
+    const todayWd = new Date().getUTCDay();
+    const created = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        label: "Wrap around",
+        durationMin: 30,
+        price: 40,
+        schedule: { [String(todayWd)]: [{ start: "00:01" }] },
+        repeatWeeks: 0,
+      });
+    expect(created.status).toBe(201);
+    expect(created.body.created).toBe(1);
+    const row = await prisma.targetedSlot.findFirst({
+      where: { shopId, ruleId: created.body.ruleId as string },
+      select: { startsAt: true },
+    });
+    expect(row!.startsAt.getTime()).toBeGreaterThan(Date.now());
+    expect(row!.startsAt.getUTCDay()).toBe(todayWd);
+    await request(app)
+      .delete(`/api/booking/targeted-slots/rules/${created.body.ruleId as string}`)
+      .set("Cookie", cookie);
+  });
+});
