@@ -7,6 +7,7 @@ import { serviceColorHex } from "@chairback/config/constants";
 import { zonedMinutesOfDay } from "@chairback/config/time";
 import { BackToDashboard } from "@/components/BackToDashboard";
 import { CustomerBack } from "@/components/CustomerBack";
+import { PullToRefresh } from "@/components/PullToRefresh";
 import { useSignalNativeReady } from "@/lib/nativeReady";
 import { DemoTour } from "@/components/tour/DemoTour";
 import { useDemoTour } from "@/components/tour/state";
@@ -1216,6 +1217,19 @@ export function BookingClient({ data }: { data: BookShopData }) {
 
   return (
     <main className="mx-auto max-w-md px-5 py-8 text-offwhite">
+      {/* Swipe down at the top to reload. Open times are the one thing on this
+          page that goes stale while you look at it - somebody else books the
+          4:30 - and a customer on a phone (or inside the iOS shell, which has
+          no browser chrome at all) has no refresh button to reach for.
+
+          Deliberately mounted HERE, in the menu/calendar flow, and not in the
+          payment or confirmation screens above: those return early, so the
+          gesture simply does not exist on them. A reload after
+          `paymentSecret` is issued would throw away the Stripe client secret
+          while the slot is already held, and one on the confirmation screen
+          would wipe the booking's manage link off the screen. Refreshing must
+          never be able to cost a customer the thing they just did. */}
+      <PullToRefresh />
       {/* Guided client-experience tour — demo tenant only. Step anchors are the
           data-tour attributes below (keep in sync with
           packages/config/src/demoTour.ts). */}
