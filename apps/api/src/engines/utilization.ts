@@ -110,14 +110,29 @@ export function openMinutesForDay(input: {
   recurringBlocks: WeeklyRule[];
   exceptions: (DatedSpan & { isBlock: boolean })[];
   /**
+   * Time blocked off in the EXTERNAL system (Acuity). Carries no staff, so it
+   * subtracts from EVERY chair - the same shop-wide stance synced visits take.
+   * Without it, hours the barber deliberately blocked count as open time that
+   * "went unsold" and drag utilization down.
+   */
+  externalBlocks?: { startsAt: Date; endsAt: Date }[];
+  /**
    * Stop counting at this many minutes past shop-local midnight. Used for TODAY,
    * whose remaining hours are still sellable: counting a 9-5 day as 8 open hours
    * at 10am would read as a slump every morning. Omit for a finished day.
    */
   untilMin?: number;
 }): number {
-  const { dayStartUtc, weekday, staffIds, rules, recurringBlocks, exceptions, untilMin } =
-    input;
+  const {
+    dayStartUtc,
+    weekday,
+    staffIds,
+    rules,
+    recurringBlocks,
+    exceptions,
+    externalBlocks,
+    untilMin,
+  } = input;
   const dayEndUtc = new Date(dayStartUtc.getTime() + 24 * 60 * 60_000);
   const DAY_END_MIN = 24 * 60;
   // The not-yet-happened tail of today is subtracted like any other block.
@@ -128,7 +143,8 @@ export function openMinutesForDay(input: {
 
   // A concrete exception -> minutes-from-local-midnight on THIS day, clipped to
   // the day so an overnight block only subtracts the part that lands here.
-  const toLocalSpan = (e: DatedSpan): Span | null => {
+  // Takes any dated span - per-staff exceptions AND shop-wide external blocks.
+  const toLocalSpan = (e: { startsAt: Date; endsAt: Date }): Span | null => {
     if (e.endsAt <= dayStartUtc || e.startsAt >= dayEndUtc) return null;
     const clippedStart = e.startsAt < dayStartUtc ? dayStartUtc : e.startsAt;
     const clippedEnd = e.endsAt > dayEndUtc ? dayEndUtc : e.endsAt;
@@ -137,6 +153,11 @@ export function openMinutesForDay(input: {
       end: Math.round((clippedEnd.getTime() - dayStartUtc.getTime()) / 60_000),
     };
   };
+
+  // Shop-wide external blocks, resolved once for the day rather than per staff.
+  const externalDayBlocks = (externalBlocks ?? [])
+    .map(toLocalSpan)
+    .filter((s): s is Span => s !== null);
 
   let total = 0;
   for (const staffId of staffIds) {
@@ -161,7 +182,12 @@ export function openMinutesForDay(input: {
     // must be able to cut into an extra hour the barber opened up.
     const opened = mergeSpans([...base, ...oneOffOpens]);
     total += spanMinutes(
-      subtractSpans(opened, [...standing, ...dayBlocks, ...futureTail]),
+      subtractSpans(opened, [
+        ...standing,
+        ...dayBlocks,
+        ...externalDayBlocks,
+        ...futureTail,
+      ]),
     );
   }
   return total;

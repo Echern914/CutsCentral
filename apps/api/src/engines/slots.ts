@@ -366,6 +366,18 @@ export async function computeOpenSlots(
           select: { scheduledAt: true, endAt: true },
         });
 
+    // Time the barber blocked off in Acuity. Like external visits it carries no
+    // staff, so it blocks every chair for its span - offering a time he blocked
+    // in the system he actually manages is the same double-book bug.
+    const externalBlocks = await tx.externalBlock.findMany({
+      where: {
+        shopId: input.shopId,
+        startsAt: { lt: new Date(rangeEnd) },
+        endsAt: { gt: new Date(rangeStart) },
+      },
+      select: { startsAt: true, endsAt: true },
+    });
+
     return {
       service,
       rules,
@@ -373,6 +385,7 @@ export async function computeOpenSlots(
       exceptions,
       booked,
       externalVisits,
+      externalBlocks,
       targeted,
       group,
       groupCapAppts,
@@ -386,6 +399,7 @@ export async function computeOpenSlots(
     exceptions,
     booked,
     externalVisits,
+    externalBlocks,
     targeted,
     group,
     groupCapAppts,
@@ -549,6 +563,11 @@ export async function computeOpenSlots(
       start: v.scheduledAt.getTime(),
       end: (v.endAt ?? v.scheduledAt).getTime() + buffer * MS_PER_MIN,
     });
+  }
+  // Acuity blocked-off time. No booking buffer: this is the barber saying "I'm
+  // not here", not a cut that needs cleanup time after it.
+  for (const b of externalBlocks) {
+    blocks.push({ start: b.startsAt.getTime(), end: b.endsAt.getTime() });
   }
   for (const t of targeted) {
     blocks.push({

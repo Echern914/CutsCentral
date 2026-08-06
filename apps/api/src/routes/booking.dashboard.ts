@@ -1292,6 +1292,40 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
     );
   }
 
+  // Acuity blocked-off time, on BOTH calendars: a synced shop's barber blocks
+  // his lunch in Acuity and the ChairBack calendar showed an unexplained gap;
+  // a native shop mid-transition had those hours silently offered. Read-only
+  // here - Acuity owns them (see ExternalBlock).
+  const externalBlockRows = await tx.externalBlock.findMany({
+    where: { shopId, startsAt: { lte: to }, endsAt: { gte: from } },
+    orderBy: { startsAt: "asc" },
+    take: 1000,
+    select: { id: true, startsAt: true, endsAt: true, reason: true },
+  });
+  const externalBlockAgenda: AgendaRow[] = externalBlockRows.map((b) => ({
+    id: b.id,
+    source: "block" as const,
+    syncedExternal: true,
+    start: b.startsAt.toISOString(),
+    end: b.endsAt.toISOString(),
+    clientName: b.reason || "Blocked in Acuity",
+    serviceName: null,
+    serviceColor: null,
+    price: null,
+    status: "blocked" as const,
+    seriesId: null,
+    checkInStatus: null,
+    etaMinutes: null,
+    runningLate: false,
+    addOns: [],
+    hasPush: false,
+    nudgesSent: 0,
+    nudgeLimit: APPOINTMENT_NUDGE_LIMIT,
+    clientId: null,
+    rewardReady: null,
+    categoryId: null, // blocked time isn't a booking - never gauged
+  }));
+
   let agenda: AgendaRow[];
 
   if (shop.bookingMode === "native") {
@@ -1546,6 +1580,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       });
     }
 
+    agenda.push(...externalBlockAgenda);
     agenda.sort((a, b) => a.start.localeCompare(b.start));
   } else {
     // Synced shops (Acuity / Square / link): appointments are Visit rows. There's
@@ -1596,6 +1631,8 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         ? (categoryOfName.get(serviceNameKey(v.serviceName)) ?? null)
         : null,
     }));
+    agenda.push(...externalBlockAgenda);
+    agenda.sort((a, b) => a.start.localeCompare(b.start));
   }
 
   return { agenda, categories };

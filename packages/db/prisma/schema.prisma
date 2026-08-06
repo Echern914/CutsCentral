@@ -399,6 +399,7 @@ model Shop {
   serviceGroups          ServiceGroup[]
   goals                  ShopGoal[]
   serviceGoals           ServiceGoal[]
+  externalBlocks         ExternalBlock[]
   targetedSlots          TargetedSlot[]
   targetedSlotRules      TargetedSlotRule[]
   payments               Payment[]
@@ -1419,6 +1420,39 @@ model RecurringBlock {
   updatedAt DateTime @updatedAt
 
   @@index([shopId, staffId, weekday])
+}
+
+// Time the barber blocked off in the EXTERNAL system (Acuity "blocked off
+// time"), synced in alongside appointments. Without this, time a barber
+// blocks in Acuity is invisible here: the native picker offers it, the
+// calendar doesn't show why the chair is empty, and Chair time counts it as
+// open capacity that "went unsold" - so the utilization number reads low for
+// hours the barber deliberately took off.
+//
+// Shop-wide by design, exactly like synced Visits: Acuity reports a
+// calendarID, but ChairBack has no calendar->Staff mapping, so a block
+// conservatively covers every chair (exact for a single-barber shop, safe for
+// multi-chair). Distinct from AvailabilityException, which is a ChairBack-side
+// per-staff block the barber owns here; these are mirrored from Acuity and are
+// READ-ONLY on this side - the resync reconciles them, including DELETING ones
+// the barber removed in Acuity.
+model ExternalBlock {
+  id         String   @id @default(cuid())
+  shopId     String
+  shop       Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  // "acuity:{blockId}" - the idempotency key a re-sync upserts on.
+  externalId String
+  startsAt   DateTime
+  endsAt     DateTime
+  // Acuity's `notes` (falling back to its `description`), shown on the calendar.
+  reason     String?
+  // The source calendar, kept for a future calendar->staff mapping. Unused today.
+  externalCalendarId String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([shopId, externalId])
+  @@index([shopId, startsAt])
 }
 
 // A one-off override on a staff member's calendar. isBlock=true subtracts time
