@@ -673,11 +673,17 @@ function ServiceBars({
 //  Chair utilization
 
 /** "6h 30m" / "45m" — hours read better than 390 minutes to a barber. */
-function fmtDuration(min: number): string {
+/**
+ * A duration ALWAYS spelled out to the minute — "336h 0m", never "336h".
+ * Every number on this card is compared against another one (sold vs open,
+ * and each row's pair), and a bare "336h" sitting next to "265h 25m" reads as
+ * a rounded-off estimate. It isn't: minutes are the stored unit, so this is
+ * the exact value, and showing the 0m says so.
+ */
+function fmtDurationExact(min: number): string {
   const h = Math.floor(min / 60);
   const m = Math.round(min % 60);
-  if (h === 0) return `${m}m`;
-  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+  return h === 0 ? `${m}m` : `${h}h ${m}m`;
 }
 
 /**
@@ -904,11 +910,11 @@ function UtilizationCard({
               <span className="text-sm text-muted">
                 of your open time booked ·{" "}
                 <span className="tabular-nums">
-                  {fmtDuration(data?.totals.bookedMin ?? 0)}
+                  {fmtDurationExact(data?.totals.bookedMin ?? 0)}
                 </span>{" "}
                 sold of{" "}
                 <span className="tabular-nums">
-                  {fmtDuration(data?.totals.openMin ?? 0)}
+                  {fmtDurationExact(data?.totals.openMin ?? 0)}
                 </span>{" "}
                 open
               </span>
@@ -971,15 +977,15 @@ function UtilizationCard({
                         "closed"
                       ) : offSchedule ? (
                         <span title="Booked outside your weekly hours — there's no scheduled capacity to measure it against. Add this day to your hours and it gets a real percentage.">
-                          <span className="text-offwhite">{fmtDuration(r.bookedMin)}</span>{" "}
+                          <span className="text-offwhite">{fmtDurationExact(r.bookedMin)}</span>{" "}
                           <span className="text-amber-400/90">off-hours</span>
                         </span>
                       ) : (
                         <>
                           <span className="text-offwhite">{r.utilizationPct ?? 0}%</span>
                           {" · "}
-                          {fmtDuration(r.bookedMin)}
-                          {hasCapacity && ` / ${fmtDuration(r.openMin)}`}
+                          {fmtDurationExact(r.bookedMin)}
+                          {hasCapacity && ` / ${fmtDurationExact(r.openMin)}`}
                         </>
                       )}
                     </span>
