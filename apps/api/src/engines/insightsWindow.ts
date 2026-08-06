@@ -410,13 +410,64 @@ export function bucketIndexFor(period: ResolvedPeriod, localDay: Date): number {
 export interface ChairEvent {
   start: Date;
   end: Date | null;
-  /** Null = unpriced (a manual walk-in), which is NOT the same as $0. */
+  /**
+   * The TICKET this booking carried - what the cut is worth. Null = unpriced (a
+   * manual walk-in), which is NOT the same as $0.
+   *
+   * This is the number that answers "what does a cut here go for", so it drives
+   * average ticket. It is NOT revenue: a no-show carries a $40 ticket and earns
+   * nothing. Use `earned` for money.
+   */
   price: number | null;
+  /**
+   * Money actually EARNED by this booking - what revenue and every goal count.
+   *
+   * Where the shop takes payment through the app, this is real collected money
+   * net of refunds, straight off the Payment row: a refunded booking earns 0,
+   * a partly refunded one earns the remainder, and a cancellation fee kept on a
+   * no-show earns exactly the fee. Where there is no payment record - a cash
+   * shop, pay-direct, anything synced from Acuity or Square - it falls back to
+   * the ticket, which is the best information that exists and is what every
+   * card showed before.
+   *
+   * THE FALLBACK IS LOAD-BEARING. Reading only real payments would take every
+   * cash shop's revenue to $0, so "no Payment row" must mean "trust the ticket",
+   * never "earned nothing".
+   */
+  earned: number;
+  /** True when the chair was held but no work was sold - a no-show. */
+  noShow: boolean;
   serviceId: string | null;
   serviceName: string | null;
   /** Null for a walk-in booked without a client record. */
   clientId: string | null;
   source: "native" | "synced";
+}
+
+/**
+ * Money in hand for one payment, in whole dollars, net of refunds.
+ *
+ * Mirrors the refund path's own arithmetic (billing/payments.ts): `collected`
+ * is capturedAmount when set (hold mode captures a possibly-different amount)
+ * else the authorized amount, and refunds come straight off it.
+ *
+ * Statuses that are still IN FLIGHT - authorized but uncaptured, processing,
+ * awaiting action - have collected nothing yet, so they earn 0 and start
+ * counting the moment the webhook marks them succeeded. `refunded` stays in the
+ * list deliberately: it collected and then gave it all back, and the same
+ * subtraction lands on exactly 0.
+ */
+const COLLECTED_STATUSES = new Set(["succeeded", "partially_refunded", "refunded"]);
+
+function collectedDollars(p: {
+  status: string;
+  amount: number;
+  capturedAmount: number | null;
+  refundedAmount: number;
+}): number {
+  if (!COLLECTED_STATUSES.has(p.status)) return 0;
+  const collected = p.capturedAmount ?? p.amount;
+  return Math.max(0, collected - p.refundedAmount) / 100;
 }
 
 // A native booking that held the chair. PENDING (awaiting approval) and holds
@@ -463,9 +514,21 @@ export async function readChairEvents(
         startsAt: true,
         endsAt: true,
         priceAtBooking: true,
+        status: true,
         clientId: true,
         serviceId: true,
         service: { select: { name: true } },
+        // Real money, when the shop takes payment through the app. Null for
+        // every cash / pay-direct shop, which is why `earned` falls back to
+        // the ticket rather than to zero.
+        payment: {
+          select: {
+            status: true,
+            amount: true,
+            capturedAmount: true,
+            refundedAmount: true,
+          },
+        },
       },
     }),
     // `appointment: null` keeps a Visit that was promoted FROM a native
@@ -484,6 +547,7 @@ export async function readChairEvents(
             scheduledAt: true,
             endAt: true,
             price: true,
+            status: true,
             clientId: true,
             serviceName: true,
           },
@@ -492,10 +556,22 @@ export async function readChairEvents(
 
   const events: ChairEvent[] = [];
   for (const a of appts) {
+    const ticket = a.priceAtBooking === null ? null : Number(a.priceAtBooking);
+    const noShow = a.status === "NO_SHOW";
     events.push({
       start: a.startsAt,
       end: a.endsAt,
-      price: a.priceAtBooking === null ? null : Number(a.priceAtBooking),
+      price: ticket,
+      // Real money wins wherever it exists - it already accounts for refunds,
+      // for a partial capture, and for a fee kept on a no-show. With no payment
+      // record we trust the ticket, EXCEPT on a no-show: nobody sat in the
+      // chair and no cash changed hands, so the shop earned nothing.
+      earned: a.payment
+        ? collectedDollars(a.payment)
+        : noShow
+          ? 0
+          : (ticket ?? 0),
+      noShow,
       serviceId: a.serviceId,
       serviceName: a.service?.name ?? null,
       clientId: a.clientId,
@@ -503,10 +579,15 @@ export async function readChairEvents(
     });
   }
   for (const v of visits) {
+    const ticket = v.price === null ? null : Number(v.price);
+    // Synced systems never send us a payment, so the ticket is all we have.
+    const noShow = v.status === "NO_SHOW";
     events.push({
       start: v.scheduledAt,
       end: v.endAt,
-      price: v.price === null ? null : Number(v.price),
+      price: ticket,
+      earned: noShow ? 0 : (ticket ?? 0),
+      noShow,
       serviceId: null,
       serviceName: v.serviceName,
       clientId: v.clientId,
