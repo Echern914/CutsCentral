@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { ACCENT_HEX_REGEX, BOOKING_MODES, SLUG_REGEX } from "./constants.js";
+import {
+  ACCENT_HEX_REGEX,
+  BOOKING_MODES,
+  SLUG_REGEX,
+  pluralServiceNoun,
+  serviceNounForShop,
+} from "./constants.js";
 
 describe("SLUG_REGEX", () => {
   it("accepts real handles, including interior dashes", () => {
@@ -28,5 +34,30 @@ describe("ACCENT_HEX_REGEX", () => {
 describe("BOOKING_MODES", () => {
   it("includes every mode the product supports (square once went missing from a hand-copied union)", () => {
     expect([...BOOKING_MODES].sort()).toEqual(["acuity", "link", "native", "square"]);
+  });
+});
+
+describe("serviceNounForShop", () => {
+  it("prefers the shop's custom noun over the industry default", () => {
+    expect(serviceNounForShop({ industry: "barber", serviceNoun: "twist" })).toBe("twist");
+  });
+
+  it("falls back to the industry noun when custom is null, undefined, or whitespace", () => {
+    expect(serviceNounForShop({ industry: "barber", serviceNoun: null })).toBe("cut");
+    expect(serviceNounForShop({ industry: "tattoo" })).toBe("session");
+    expect(serviceNounForShop({ industry: "barber", serviceNoun: "   " })).toBe("cut");
+  });
+
+  it("falls back to a neutral 'visit' for an unknown or missing industry", () => {
+    expect(serviceNounForShop({ industry: null, serviceNoun: null })).toBe("visit");
+    expect(serviceNounForShop({ industry: "florist", serviceNoun: "" })).toBe("visit");
+  });
+});
+
+describe("pluralServiceNoun", () => {
+  it("appends s, leaving words that already end in s alone", () => {
+    expect(pluralServiceNoun("cut")).toBe("cuts");
+    expect(pluralServiceNoun("twist")).toBe("twists");
+    expect(pluralServiceNoun("gloss")).toBe("gloss");
   });
 });

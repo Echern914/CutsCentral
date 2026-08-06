@@ -380,12 +380,21 @@ const utilizationQuerySchema = z.object({
   to: z.string().optional(),
   by: z.enum(["weekday", "period", "service"]).optional(),
   staffId: z.string().min(1).optional(),
+  // Narrow BOOKED time to one service, or one service group's members. Capacity
+  // stays shop-wide (services share one chair), so the filtered % reads "share
+  // of your open time". Mutually exclusive.
+  serviceId: z.string().min(1).optional(),
+  groupId: z.string().min(1).optional(),
 });
 
 insightsRouter.get("/utilization", async (req, res) => {
   const shop = req.shop!;
   const parsed = utilizationQuerySchema.safeParse(req.query);
   if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  if (parsed.data.serviceId && parsed.data.groupId) {
     res.status(400).json({ error: "invalid_input" });
     return;
   }
@@ -408,7 +417,7 @@ insightsRouter.get("/utilization", async (req, res) => {
   // shop-scoped transaction or an enforcing role sees an empty schedule and
   // the card reports the shop as closed. ONE transaction for the request:
   // every extra runWithShop is a BEGIN/SET/COMMIT round trip.
-  const { staffRows, rules, recurringBlocks, exceptions, menu, externalBlocks, chair } =
+  const { staffRows, rules, recurringBlocks, exceptions, menu, groups, externalBlocks, chair } =
     await runWithShop(shop.id, async (tx) => ({
       staffRows: await tx.staff.findMany({
         where: { shopId: shop.id, active: true },
@@ -433,9 +442,18 @@ insightsRouter.get("/utilization", async (req, res) => {
         select: { staffId: true, startsAt: true, endsAt: true, isBlock: true },
       }),
       // For folding a synced booking's free-text name into its menu service's
-      // by=service row (same merge the services list does).
+      // by=service row (same merge the services list does), and for resolving
+      // the serviceId/groupId filter's membership. Deliberately UNFILTERED by
+      // active (day-gauge precedent): a retired member service's bookings still
+      // belong to its group. The fold map + dropdown options use active only.
       menu: await tx.service.findMany({
+        where: { shopId: shop.id },
+        select: { id: true, name: true, active: true, serviceGroupId: true },
+      }),
+      // The service-filter dropdown's group options (same precedent as `staff`).
+      groups: await tx.serviceGroup.findMany({
         where: { shopId: shop.id, active: true },
+        orderBy: { sortOrder: "asc" },
         select: { id: true, name: true },
       }),
       // Acuity blocked-off time: hours the barber took off are NOT open
@@ -504,11 +522,27 @@ insightsRouter.get("/utilization", async (req, res) => {
   >();
   const DEFAULT_MIN = 30; // a booking with no recorded end still held the chair
 
+  // Service/group filter membership. A synced Visit has no serviceId - only a
+  // free-text name - so membership is the id match OR the same lowercased-name
+  // match the fold below uses (an unmatched synced visit can never match).
+  const members = parsed.data.serviceId
+    ? menu.filter((m) => m.id === parsed.data.serviceId)
+    : parsed.data.groupId
+      ? menu.filter((m) => m.serviceGroupId === parsed.data.groupId)
+      : null;
+  const memberIds = members ? new Set(members.map((m) => m.id)) : null;
+  const memberNames = members ? new Set(members.map((m) => m.name.trim().toLowerCase())) : null;
+
   for (const e of chair.events) {
     if (e.start > now) continue; // future bookings are capacity, not sold work
     const local = shopLocalDay(e.start, shop.timezone);
     const bi = bucketIndexFor(period, local);
     if (bi < 0) continue;
+    if (memberIds && memberNames) {
+      const name = e.serviceName?.trim().toLowerCase();
+      const match = e.serviceId ? memberIds.has(e.serviceId) : !!name && memberNames.has(name);
+      if (!match) continue;
+    }
     const minutes =
       e.end && e.end > e.start
         ? Math.round((e.end.getTime() - e.start.getTime()) / 60_000)
@@ -532,8 +566,11 @@ insightsRouter.get("/utilization", async (req, res) => {
   }
 
   // Same fold as the services list: a synced "Fade" visit belongs on the menu
-  // service's row, not on a second row with the same name.
-  const utilMenuByName = new Map(menu.map((m) => [m.name.trim().toLowerCase(), m]));
+  // service's row, not on a second row with the same name. Active only - the
+  // unfiltered menu is for filter membership, not for creating retired rows.
+  const utilMenuByName = new Map(
+    menu.filter((m) => m.active).map((m) => [m.name.trim().toLowerCase(), m]),
+  );
   for (const [key, s] of [...byService.entries()]) {
     if (!key.startsWith("name:")) continue;
     const m = utilMenuByName.get(s.name.trim().toLowerCase());
@@ -599,6 +636,23 @@ insightsRouter.get("/utilization", async (req, res) => {
     timezone: shop.timezone,
     staff: staffRows,
     staffId: staffFilter ?? null,
+    // The filter dropdown's options (active only), mirroring `staff` above.
+    serviceOptions: menu
+      .filter((m) => m.active)
+      .map((m) => ({ id: m.id, name: m.name, groupId: m.serviceGroupId })),
+    groups,
+    // Echo of the active service/group filter; label for the caption. Null
+    // label = the id matched nothing (permissive: booked simply reads 0).
+    serviceFilter:
+      members && memberIds
+        ? {
+            serviceId: parsed.data.serviceId ?? null,
+            groupId: parsed.data.groupId ?? null,
+            label: parsed.data.groupId
+              ? (groups.find((g) => g.id === parsed.data.groupId)?.name ?? null)
+              : (members[0]?.name ?? null),
+          }
+        : null,
     rows,
     totals: {
       openMin: totalOpen,

@@ -185,6 +185,7 @@ export function PageEditor({
       slug: slug || "your-shop",
       bio: bio.trim() || null,
       industry: settings.industry,
+      serviceNoun: settings.serviceNoun,
       theme,
       logoUrl: logoUrl.trim() || null,
       heroImageUrl: heroImageUrl.trim() || null,
@@ -213,6 +214,7 @@ export function PageEditor({
     [
       settings.name,
       settings.industry,
+      settings.serviceNoun,
       settings.bookingUrl,
       settings.punchesPerVisit,
       slug,

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { apiEnv, ACTIVE_SHOP_COOKIE_NAME } from "@chairback/config";
+import { apiEnv, ACTIVE_SHOP_COOKIE_NAME, serviceNounForShop } from "@chairback/config";
 import { prisma, Prisma } from "@chairback/db";
 import { hashPassword, verifyPassword } from "../auth/password.js";
 import {
@@ -227,11 +227,12 @@ authRouter.get("/me", requireUser, async (req, res) => {
   const activeShop = access?.shop ?? null;
   const { welcomeSeenAt, passwordHash, googleId, appleId, ...rest } = user;
   // Whether the ACTIVE shop has rewards on - the dashboard chrome hides every
-  // rewards surface (nav tab etc.) for a rewards-off shop.
+  // rewards surface (nav tab etc.) for a rewards-off shop. industry/serviceNoun
+  // ride the same read so /me can hand the dashboard its resolved visit-noun.
   const activeShopRewards = activeShop
     ? await prisma.shop.findUnique({
         where: { id: activeShop.id },
-        select: { rewardsEnabled: true },
+        select: { rewardsEnabled: true, industry: true, serviceNoun: true },
       })
     : null;
   res.json({
@@ -252,6 +253,9 @@ authRouter.get("/me", requireUser, async (req, res) => {
     // this a barber's chrome had no shop name to render at all.
     activeShopName: activeShop?.name ?? null,
     rewardsEnabled: activeShopRewards?.rewardsEnabled ?? false,
+    // The ACTIVE shop's singular visit-noun ("cut"/"twist"), custom-first with
+    // the industry fallback resolved HERE so the web never re-derives it.
+    serviceNoun: activeShopRewards ? serviceNounForShop(activeShopRewards) : "visit",
     // Read-only demo session (the public dashboard tour) — the web chrome
     // shows the demo banner + signup CTA and hides account-level actions.
     demo: req.demoSession === true,

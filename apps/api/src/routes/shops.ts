@@ -194,6 +194,9 @@ const updateShopSchema = createShopSchema
     receptionistEnabled: z.boolean(),
     receptionistTone: z.string().trim().max(120).nullish().or(z.literal("")),
     acceptReceptionistTerms: z.boolean(),
+    // Custom singular visit-noun ("twist"); ""/null clears back to the industry
+    // default. Lowercased - it reads mid-sentence in SMS copy; labels re-cap.
+    serviceNoun: z.string().trim().toLowerCase().max(24).nullish().or(z.literal("")),
   })
   .partial();
 
@@ -360,6 +363,8 @@ shopsRouter.patch("/me", requireUser, requireShop, async (req, res) => {
   if (data.layoutStyle === "") data.layoutStyle = null;
   // Rewards welcome: blank clears the custom line.
   if (data.rewardsWelcome === "") data.rewardsWelcome = null;
+  // Custom visit-noun: blank clears back to the industry default.
+  if (data.serviceNoun === "") data.serviceNoun = null;
   // When the new `gallery` payload is present, it's the source of truth: write
   // galleryItems (captions stripped to undefined when blank) and keep the legacy
   // galleryUrls column mirrored so a rollback still renders photos.
@@ -475,8 +480,10 @@ publicPageRouter.get("/:slug", async (req, res) => {
     slug: shop.slug,
     bio: shop.bio,
     // For vertical-correct copy on the page + OG description ("book your next
-    // cut" is wrong for a nail studio).
+    // cut" is wrong for a nail studio). serviceNoun is the shop's custom word
+    // when set (see serviceNounForShop).
     industry: shop.industry,
+    serviceNoun: shop.serviceNoun,
     theme: shop.theme,
     logoUrl: shop.logoUrl,
     heroImageUrl: shop.heroImageUrl,
@@ -749,7 +756,13 @@ shopsRouter.delete("/me", requireUser, requireShop, async (req, res) => {
 shopsRouter.post("/me/sms-preview", requireUser, requireShop, (req, res) => {
   const template = typeof req.body?.template === "string" ? req.body.template : null;
   res.json({
-    preview: previewNudgeBody(template, req.shop!.name, req.shop!.bookingUrl, req.shop!.industry),
+    preview: previewNudgeBody(
+      template,
+      req.shop!.name,
+      req.shop!.bookingUrl,
+      req.shop!.industry,
+      req.shop!.serviceNoun,
+    ),
   });
 });
 
@@ -758,6 +771,7 @@ function serializeShop(shop: {
   name: string;
   timezone: string;
   industry: string;
+  serviceNoun: string | null;
   bookingUrl: string | null;
   punchesPerVisit: number;
   nudgeBufferDays: number;
@@ -808,6 +822,7 @@ function serializeShop(shop: {
     name: shop.name,
     timezone: shop.timezone,
     industry: shop.industry,
+    serviceNoun: shop.serviceNoun,
     bookingUrl: shop.bookingUrl,
     punchesPerVisit: shop.punchesPerVisit,
     nudgeBufferDays: shop.nudgeBufferDays,

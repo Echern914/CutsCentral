@@ -264,6 +264,7 @@ async function doSweepShopWinback(
         firstName: client.firstName,
         shopName: shop.name,
         industry: shop.industry,
+        serviceNoun: shop.serviceNoun,
       });
       const res = await sendPushToClient({
         shopId: shop.id,
@@ -296,6 +297,7 @@ async function doSweepShopWinback(
       magicToken: client.magicToken,
       template: shop.winbackTemplate,
       industry: shop.industry,
+      serviceNoun: shop.serviceNoun,
     });
 
     // WRITE-AHEAD: persist a PENDING kind="winback" nudge BEFORE dispatch so a

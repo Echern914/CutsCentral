@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import {
   APP_NAME,
-  serviceNounFor,
+  serviceNounForShop,
   type BookingModeKey,
 } from "@chairback/config/constants";
 import { apiPublicGet } from "@/lib/api";
@@ -12,8 +12,10 @@ export interface ShopPageData {
   name: string;
   slug: string;
   bio: string | null;
-  // Vertical key ("barber" | "salon" | "nails" | ...) for noun-correct copy.
+  // Vertical key ("barber" | "salon" | "nails" | ...) for noun-correct copy;
+  // serviceNoun is the shop's own word for a visit when they set one ("twist").
   industry: string;
+  serviceNoun: string | null;
   theme: string;
   logoUrl: string | null;
   heroImageUrl: string | null;
@@ -82,7 +84,7 @@ export async function generateMetadata({
   if (!data) return { title: APP_NAME };
   const description =
     data.bio ??
-    `Book your next ${serviceNounFor(data.industry)} at ${data.name} and earn rewards every visit.`;
+    `Book your next ${serviceNounForShop(data)} at ${data.name} and earn rewards every visit.`;
   return {
     title: data.name,
     description,

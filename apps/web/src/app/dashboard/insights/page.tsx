@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pluralServiceNoun } from "@chairback/config/constants";
 import { apiGet } from "@/lib/api";
 import { getMe } from "@/lib/me";
 import { DemoTour } from "@/components/tour/DemoTour";
@@ -92,6 +93,15 @@ export interface UtilizationData extends PeriodMeta {
   timezone: string;
   staff: { id: string; name: string }[];
   staffId: string | null;
+  /** The service-filter dropdown's options (active services + active groups). */
+  serviceOptions: { id: string; name: string; groupId: string | null }[];
+  groups: { id: string; name: string }[];
+  /** Echo of the applied service/group filter; null = all services. */
+  serviceFilter: {
+    serviceId: string | null;
+    groupId: string | null;
+    label: string | null;
+  } | null;
   rows: UtilizationRow[];
   totals: {
     openMin: number;
@@ -185,9 +195,9 @@ export default async function InsightsPage() {
       <header className="mb-6">
         <h1 className="font-display text-3xl tracking-tight">Insights</h1>
         <p className="mt-1 text-sm text-muted">
-          How your shop is doing: cuts over time, what people book most, and
-          where the money comes from. Counts every booking that took the chair —
-          native, Acuity and Square alike.
+          How your shop is doing: {pluralServiceNoun(me.data?.serviceNoun ?? "cut")} over
+          time, what people book most, and where the money comes from. Counts
+          every booking that took the chair — native, Acuity and Square alike.
         </p>
       </header>
       <div data-tour="charts">
@@ -195,6 +205,7 @@ export default async function InsightsPage() {
           initial={res.data}
           initialGoalData={goalRes.ok ? (goalRes.data ?? null) : null}
           rewardsEnabled={me.data?.rewardsEnabled ?? true}
+          serviceNoun={me.data?.serviceNoun ?? "cut"}
         />
       </div>
     </main>

@@ -226,6 +226,24 @@ export function serviceNounFor(industry: string | null | undefined): string {
   return (INDUSTRIES as Record<string, { serviceNoun?: string }>)[industry]?.serviceNoun ?? "visit";
 }
 
+/**
+ * The visit-noun for a specific shop: the owner's custom word (Shop.serviceNoun,
+ * e.g. "twist") when set, else the industry default. Pass the shop row (or any
+ * object with the two fields) so the fallback logic lives in exactly one place.
+ */
+export function serviceNounForShop(shop: {
+  industry?: string | null;
+  serviceNoun?: string | null;
+}): string {
+  const custom = shop.serviceNoun?.trim();
+  return custom ? custom : serviceNounFor(shop.industry);
+}
+
+/** Naive plural for UI labels ("cut" -> "cuts"); words already ending in s stay. */
+export function pluralServiceNoun(noun: string): string {
+  return noun.endsWith("s") ? noun : `${noun}s`;
+}
+
 /** Nudge engine windows. */
 export const NUDGE = {
   /** Minimum completed visits before a client has enough history for a cadence. */

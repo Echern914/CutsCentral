@@ -98,6 +98,29 @@ describe("default nudge copy is vertical-aware", () => {
       "next cut",
     );
   });
+
+  it("a shop's CUSTOM serviceNoun overrides the industry word (SMS + push)", () => {
+    expect(defaultSmsTemplate("barber", true, "twist")).toContain("last twist");
+    const body = buildNudgeBody({
+      firstName: "Sam",
+      shopName: "Locs & Co",
+      bookingUrl: "https://book.test",
+      magicToken: "tok",
+      industry: "barber",
+      serviceNoun: "twist",
+    });
+    expect(body).toContain("last twist at Locs & Co");
+    expect(body).not.toContain("cut");
+    expect(
+      buildNudgePush({ firstName: "Sam", shopName: "Locs & Co", industry: "barber", serviceNoun: "twist" })
+        .title,
+    ).toContain("next twist");
+  });
+
+  it("a blank custom serviceNoun falls back to the industry word", () => {
+    expect(defaultSmsTemplate("barber", true, "  ")).toContain("last cut");
+    expect(defaultSmsTemplate("barber", true, null)).toContain("last cut");
+  });
 });
 
 // Card-aware loyalty copy. The default card (cardName null/absent) must render

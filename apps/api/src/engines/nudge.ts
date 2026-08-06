@@ -259,6 +259,7 @@ async function doSweepShop(
         firstName: client.firstName,
         shopName: shop.name,
         industry: shop.industry,
+        serviceNoun: shop.serviceNoun,
       });
       const res = await sendPushToClient({
         shopId: shop.id,
@@ -297,6 +298,7 @@ async function doSweepShop(
       magicToken: client.magicToken,
       template: shop.smsTemplate,
       industry: shop.industry,
+      serviceNoun: shop.serviceNoun,
     });
 
     // WRITE-AHEAD: persist a PENDING nudge BEFORE dispatch so a crash can't

@@ -117,6 +117,8 @@ export async function saveSettingsAction(
     // - otherwise JSON.stringify drops the key and a barber can never REMOVE a
     // booking link they previously set.
     bookingUrl: String(formData.get("bookingUrl") ?? "").trim(),
+    // Same ""-clears rule as bookingUrl: blank resets to the industry noun.
+    serviceNoun: String(formData.get("serviceNoun") ?? "").trim(),
     nudgeBufferDays: Number(formData.get("nudgeBufferDays") ?? 7),
     dailySendCap: Number(formData.get("dailySendCap") ?? 50),
     rebookWindowDays: Number(formData.get("rebookWindowDays") ?? 14),
@@ -125,6 +127,8 @@ export async function saveSettingsAction(
     loyaltyTextsEnabled: formData.get("loyaltyTextsEnabled") === "on",
   });
   revalidatePath("/dashboard");
+  // The noun renders all over Insights ("Twists per week") - refresh it too.
+  revalidatePath("/dashboard/insights");
   return res.ok ? { saved: true } : { error: "Could not save settings." };
 }
 
