@@ -3,9 +3,11 @@ import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import {
   acuityAppointmentSchema,
+  acuityBlockSchema,
   acuityMeSchema,
   acuityTokenSchema,
   type AcuityAppointment,
+  type AcuityBlock,
   type AcuityMe,
 } from "./types.js";
 
@@ -30,6 +32,7 @@ export interface AcuityClient {
   me(): Promise<AcuityMe>;
   getAppointment(id: string): Promise<AcuityAppointment>;
   listAppointments(params: ListParams): Promise<AcuityAppointment[]>;
+  listBlocks(params: ListParams): Promise<AcuityBlock[]>;
 }
 
 export interface ListParams {
@@ -96,6 +99,28 @@ export async function getAcuityClientForShop(
       if (params.canceled) q.set("canceled", "true");
       const data = await call(`/appointments?${q.toString()}`);
       return acuityAppointmentSchema.array().parse(data);
+    },
+    /**
+     * Blocked-off time. Same min/maxDate window as appointments; a shop has
+     * orders of magnitude fewer blocks than bookings, so one generous page
+     * covers a year rather than needing the appointment walk's date cursor.
+     * A non-array body (Acuity returning an error object) yields [] instead of
+     * throwing - blocked time is additive information and must never take the
+     * whole resync down with it.
+     */
+    async listBlocks(params: ListParams) {
+      const q = new URLSearchParams();
+      if (params.minDate) q.set("minDate", params.minDate);
+      if (params.maxDate) q.set("maxDate", params.maxDate);
+      q.set("max", String(params.max ?? 1000));
+      const data = await call(`/blocks?${q.toString()}`);
+      if (!Array.isArray(data)) return [];
+      const out: AcuityBlock[] = [];
+      for (const raw of data) {
+        const parsed = acuityBlockSchema.safeParse(raw);
+        if (parsed.success) out.push(parsed.data);
+      }
+      return out;
     },
   };
 }

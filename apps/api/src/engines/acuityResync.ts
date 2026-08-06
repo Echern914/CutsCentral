@@ -2,6 +2,7 @@ import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import { getAcuityClientForShop } from "../acuity/client.js";
 import { walkAcuityAppointments } from "../acuity/walk.js";
+import { syncAcuityBlocks } from "../acuity/blocks.js";
 import { ingestAppointment } from "../ingest.js";
 
 /**
@@ -60,6 +61,25 @@ async function resyncShop(shopId: string, now: Date): Promise<number> {
         await ingestAppointment(shop, canceled ? "canceled" : "scheduled", appt.id, appt);
       },
     );
+  }
+
+  // Blocked-off time, reconciled over the same window: time the barber blocked
+  // in Acuity must not be offered by the native picker, must show on the
+  // calendar, and must not count as open capacity in Chair time. Never fatal -
+  // a shop whose blocks fail to read still gets its appointments.
+  try {
+    const blocks = await acuity.listBlocks({ minDate, maxDate });
+    const res = await syncAcuityBlocks(
+      shopId,
+      blocks,
+      new Date(`${minDate}T00:00:00.000Z`),
+      new Date(new Date(`${maxDate}T00:00:00.000Z`).getTime() + 24 * 60 * 60 * 1000),
+    );
+    if (res.upserted > 0 || res.removed > 0) {
+      logger.info({ shopId, ...res }, "acuity blocked time synced");
+    }
+  } catch (err) {
+    logger.error({ err, shopId }, "acuity block sync failed (appointments still synced)");
   }
 
   return ingested;

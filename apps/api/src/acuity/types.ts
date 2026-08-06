@@ -65,6 +65,32 @@ export const acuityAppointmentSchema = z
 
 export type AcuityAppointment = z.infer<typeof acuityAppointmentSchema>;
 
+/**
+ * Blocked-off time on an Acuity calendar (GET /blocks).
+ *
+ * Acuity documents the CREATE side (start/end/calendarID/notes) but not the
+ * list response's exact shape, so this parses defensively: every field except
+ * the id is optional, `start`/`end` accept Acuity's several spellings, and
+ * unknown keys pass through. A block we can't read a start+end from is skipped
+ * at ingest rather than throwing - one odd row must never stop the sweep.
+ * [VERIFY LIVE] confirm the field names against a real account's response.
+ */
+export const acuityBlockSchema = z
+  .object({
+    id: z.union([z.number(), z.string()]).transform(String),
+    calendarID: z.union([z.number(), z.string()]).nullish(),
+    start: z.string().nullish(),
+    end: z.string().nullish(),
+    // Seen on some payloads as start/endTime instead.
+    startTime: z.string().nullish(),
+    endTime: z.string().nullish(),
+    notes: z.string().nullish(),
+    description: z.string().nullish(),
+  })
+  .passthrough();
+
+export type AcuityBlock = z.infer<typeof acuityBlockSchema>;
+
 export const acuityMeSchema = z
   .object({
     id: z.union([z.number(), z.string()]).transform(String),

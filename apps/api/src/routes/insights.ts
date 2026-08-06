@@ -408,7 +408,7 @@ insightsRouter.get("/utilization", async (req, res) => {
   // shop-scoped transaction or an enforcing role sees an empty schedule and
   // the card reports the shop as closed. ONE transaction for the request:
   // every extra runWithShop is a BEGIN/SET/COMMIT round trip.
-  const { staffRows, rules, recurringBlocks, exceptions, menu, chair } =
+  const { staffRows, rules, recurringBlocks, exceptions, menu, externalBlocks, chair } =
     await runWithShop(shop.id, async (tx) => ({
       staffRows: await tx.staff.findMany({
         where: { shopId: shop.id, active: true },
@@ -437,6 +437,12 @@ insightsRouter.get("/utilization", async (req, res) => {
       menu: await tx.service.findMany({
         where: { shopId: shop.id, active: true },
         select: { id: true, name: true },
+      }),
+      // Acuity blocked-off time: hours the barber took off are NOT open
+      // capacity that went unsold.
+      externalBlocks: await tx.externalBlock.findMany({
+        where: { shopId: shop.id, startsAt: { lt: fetchTo }, endsAt: { gt: fetchFrom } },
+        select: { startsAt: true, endsAt: true },
       }),
       chair: await readChairEvents(shop.id, fetchFrom, fetchTo, {
         ...(staffFilter ? { staffId: staffFilter } : {}),
@@ -753,6 +759,10 @@ insightsRouter.get("/goal", async (req, res) => {
           where: { shopId: shop.id, startsAt: { lt: to }, endsAt: { gt: from } },
           select: { staffId: true, startsAt: true, endsAt: true, isBlock: true },
         }),
+        externalBlocks: await tx.externalBlock.findMany({
+          where: { shopId: shop.id, startsAt: { lt: to }, endsAt: { gt: from } },
+          select: { startsAt: true, endsAt: true },
+        }),
       },
       events: (await readChairEvents(shop.id, from, to, { tx })).events,
     }),
@@ -837,6 +847,8 @@ insightsRouter.get("/goal", async (req, res) => {
         rules: schedule.rules,
         recurringBlocks: schedule.recurringBlocks,
         exceptions: schedule.exceptions,
+        // Time blocked in Acuity isn't chair time you can plan to sell.
+        externalBlocks: schedule.externalBlocks,
       });
     }
     return open;
