@@ -84,6 +84,7 @@ export function BookingCalendar({
         month: "numeric",
         day: "numeric",
         hour: "numeric",
+        minute: "numeric",
         hour12: false,
       }),
     [tz],
@@ -108,11 +109,12 @@ export function BookingCalendar({
     [tz],
   );
 
-  /** {year, month(1-12), day(1-31), hour(0-23)} of an ISO instant, in shop tz. */
+  /** {year, month(1-12), day(1-31), hour(0-23), min(0-59)} of an ISO instant, in shop tz. */
   const shopParts = (iso: string) => {
     const p = partsFmt.formatToParts(new Date(iso));
     const get = (t: string) => Number(p.find((x) => x.type === t)?.value);
-    return { y: get("year"), m: get("month"), d: get("day"), h: get("hour") };
+    // Intl with hour12:false can report midnight as "24" - normalize to 0.
+    return { y: get("year"), m: get("month"), d: get("day"), h: get("hour") % 24, min: get("minute") };
   };
   const dayKeyOf = (iso: string) => {
     const { y, m, d } = shopParts(iso);
@@ -348,6 +350,10 @@ export function BookingCalendar({
                     : labelFromKey(selectedDay, dayTitleFmt)
               }
               hourOf={(iso) => shopParts(iso).h}
+              minuteOf={(iso) => {
+                const p = shopParts(iso);
+                return p.h * 60 + p.min;
+              }}
               timeFmt={timeFmt}
               toast={toast}
               isNative={isNative}
@@ -658,12 +664,27 @@ function CategoryChip({
   );
 }
 
+/** "2h", "1h 30m", "45m" - how long a block runs, from minutes. */
+function fmtBlockDur(min: number): string {
+  const h = Math.floor(min / 60);
+  const m = Math.round(min % 60);
+  if (h === 0) return `${m}m`;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}
+
+// Soft diagonal hatching for blocked-off time - the one texture in the app, so
+// blocked bands read as "not sellable" at a glance without shouting. Must stay
+// a literal for the Tailwind JIT to pick it up.
+const BLOCK_STRIPES =
+  "bg-[repeating-linear-gradient(-45deg,transparent,transparent_6px,rgba(255,255,255,0.04)_6px,rgba(255,255,255,0.04)_12px)]";
+
 /** A single day expanded into an every-hour planner. */
 function DayPlanner({
   rows,
   categories,
   title,
   hourOf,
+  minuteOf,
   timeFmt,
   toast,
   isNative,
@@ -676,6 +697,8 @@ function DayPlanner({
   categories: AgendaCategory[];
   title: string;
   hourOf: (iso: string) => number;
+  /** Minutes into the shop-local day, for block-coverage math. */
+  minuteOf: (iso: string) => number;
   timeFmt: Intl.DateTimeFormat;
   toast: Toast;
   isNative: boolean;
@@ -724,6 +747,55 @@ function DayPlanner({
   const endHour = Math.min(23, Math.max(DEFAULT_END_HOUR, ...bookedHours));
   const hours: number[] = [];
   for (let h = startHour; h <= endHour; h++) hours.push(h);
+
+  // Blocked intervals in shop-local minutes, so a 12-3 PM block can mark the
+  // 1 PM and 2 PM rows as blocked instead of leaving them inviting "+ Add
+  // appointment" inside time the barber explicitly took off. A block only
+  // renders its card on its START hour; the covered hours get a slim
+  // continuation strip via blockCovering().
+  const blockIntervals = rows
+    .filter((r) => r.source === "block" && r.end && r.end > r.start)
+    .map((r) => ({ startMin: minuteOf(r.start), endMin: minuteOf(r.end!), endIso: r.end! }));
+  const blockCovering = (h: number) =>
+    blockIntervals.find((iv) => iv.startMin <= h * 60 && iv.endMin >= (h + 1) * 60) ?? null;
+
+  // ---- Day summary (the totals footer) ----
+  // Always the WHOLE day, never the category-filtered slice - it says "Day
+  // total" and must keep meaning that while a chip filter narrows the list.
+  // Money follows the app's revenue rules: upcoming + completed tickets count,
+  // canceled and pending never do, and a no-show earns nothing (the chair sat
+  // empty) - it's surfaced as its own count instead of inflating the total.
+  let dayRevenue = 0;
+  let doneRevenue = 0;
+  let unpricedCount = 0;
+  let pendingRevenue = 0;
+  let noShowCount = 0;
+  let blockedMin = 0;
+  for (const r of rows) {
+    if (r.source === "block") {
+      if (r.end && r.end > r.start) {
+        blockedMin += Math.round((Date.parse(r.end) - Date.parse(r.start)) / 60_000);
+      }
+      continue;
+    }
+    if (r.status === "no_show") noShowCount++;
+    if (r.status === "pending") pendingRevenue += r.price ?? 0;
+    if (r.status !== "upcoming" && r.status !== "completed") continue;
+    if (r.price === null) unpricedCount++;
+    dayRevenue += r.price ?? 0;
+    if (r.status === "completed") doneRevenue += r.price ?? 0;
+  }
+  const toComeRevenue = dayRevenue - doneRevenue;
+  // "N to fill" per bucket, from the same display-only targets the gauge uses.
+  const fillables = categories
+    .filter((c) => c.target !== null)
+    .map((c) => ({
+      id: c.id,
+      name: c.name,
+      left: Math.max(0, c.target! - (counts.byId.get(c.id) ?? 0)),
+    }));
+  const allFull = fillables.length > 0 && fillables.every((f) => f.left === 0);
+  const showSummary = counts.all > 0 || fillables.length > 0 || blockedMin > 0;
 
   return (
     <div className="mt-4 border-t border-subtle pt-4">
@@ -801,23 +873,41 @@ function DayPlanner({
               </div>
               <div className="min-w-0 flex-1">
                 {slot.length === 0 ? (
-                  isNative ? (
-                    // A "+" bubble to add an appointment at this open hour.
-                    <button
-                      type="button"
-                      onClick={() => onAddAt(h)}
-                      className="group flex w-full items-center gap-2 py-1 text-xs text-muted/40 transition-colors hover:text-gold"
-                    >
-                      <span className="flex h-5 w-5 items-center justify-center rounded-full border border-subtle text-muted transition-colors group-hover:border-gold/50 group-hover:text-gold">
-                        +
-                      </span>
-                      <span className="opacity-0 transition-opacity group-hover:opacity-100">
-                        Add appointment
-                      </span>
-                    </button>
-                  ) : (
-                    <div className="py-1 text-xs text-muted/40">— open —</div>
-                  )
+                  (() => {
+                    // An hour sitting fully inside a block is NOT open - don't
+                    // invite a booking into it. A slim continuation strip keeps
+                    // the block's span readable down the grid.
+                    const covering = blockCovering(h);
+                    if (covering) {
+                      return (
+                        <div
+                          className={cn(
+                            "flex items-center gap-2 rounded-md border-l-2 border-charcoal-600 py-1 pl-2 text-[11px] text-muted/50",
+                            BLOCK_STRIPES,
+                          )}
+                        >
+                          blocked until {timeFmt.format(new Date(covering.endIso))}
+                        </div>
+                      );
+                    }
+                    return isNative ? (
+                      // A "+" bubble to add an appointment at this open hour.
+                      <button
+                        type="button"
+                        onClick={() => onAddAt(h)}
+                        className="group flex w-full items-center gap-2 py-1 text-xs text-muted/40 transition-colors hover:text-gold"
+                      >
+                        <span className="flex h-5 w-5 items-center justify-center rounded-full border border-subtle text-muted transition-colors group-hover:border-gold/50 group-hover:text-gold">
+                          +
+                        </span>
+                        <span className="opacity-0 transition-opacity group-hover:opacity-100">
+                          Add appointment
+                        </span>
+                      </button>
+                    ) : (
+                      <div className="py-1 text-xs text-muted/40">— open —</div>
+                    );
+                  })()
                 ) : (
                   <div className="flex flex-col gap-1.5">
                     {slot.map((r) => (
@@ -844,6 +934,80 @@ function DayPlanner({
           );
         })}
       </motion.div>
+
+      {/* ---- Day totals: what the day is worth, and what's left to fill ---- */}
+      {showSummary && (
+        <div className="mt-4 overflow-hidden rounded-xl border border-gold/25 bg-gradient-to-br from-gold/10 via-charcoal-800/60 to-charcoal-800/30">
+          <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-2 px-4 pb-2 pt-3">
+            <div>
+              <p className="text-[10px] uppercase tracking-wide text-muted">
+                On the books
+              </p>
+              <p className="font-display text-2xl tabular-nums text-gold">
+                ${Math.round(dayRevenue).toLocaleString()}
+              </p>
+              <p className="mt-0.5 text-[11px] tabular-nums text-muted">
+                {doneRevenue > 0 || toComeRevenue > 0 ? (
+                  <>
+                    <span className="text-emerald-soft">
+                      ${Math.round(doneRevenue).toLocaleString()} done
+                    </span>
+                    {" · "}${Math.round(toComeRevenue).toLocaleString()} to come
+                  </>
+                ) : (
+                  "nothing booked yet"
+                )}
+                {unpricedCount > 0 &&
+                  ` · ${unpricedCount} unpriced`}
+                {pendingRevenue > 0 &&
+                  ` · +$${Math.round(pendingRevenue).toLocaleString()} awaiting approval`}
+              </p>
+            </div>
+            <div className="text-right text-[11px] text-muted">
+              <p className="text-sm text-offwhite">
+                <span className="font-semibold tabular-nums">{counts.all}</span>{" "}
+                {counts.all === 1 ? "appointment" : "appointments"}
+              </p>
+              {noShowCount > 0 && (
+                <p className="text-danger-soft">
+                  {noShowCount} no-show{noShowCount === 1 ? "" : "s"} — earned $0
+                </p>
+              )}
+              {blockedMin > 0 && <p>{fmtBlockDur(blockedMin)} blocked off</p>}
+            </div>
+          </div>
+          {fillables.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 border-t border-gold/15 px-4 py-2.5">
+              <span className="mr-1 text-[10px] uppercase tracking-wide text-muted">
+                To fill
+              </span>
+              {allFull ? (
+                <span className="rounded-full border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-0.5 text-[11px] font-medium text-emerald-soft">
+                  Every target hit — the day is full ✦
+                </span>
+              ) : (
+                fillables.map((f) =>
+                  f.left === 0 ? (
+                    <span
+                      key={f.id}
+                      className="rounded-full border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-0.5 text-[11px] tabular-nums text-emerald-soft"
+                    >
+                      {f.name} full ✓
+                    </span>
+                  ) : (
+                    <span
+                      key={f.id}
+                      className="rounded-full border border-gold/40 bg-gold/10 px-2.5 py-0.5 text-[11px] tabular-nums text-gold"
+                    >
+                      {f.name} · {f.left} to fill
+                    </span>
+                  ),
+                )
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -904,12 +1068,48 @@ function AppointmentBlock({
   const canApprove = row.source === "appointment" && row.status === "pending";
   const isRecurring = Boolean(row.seriesId);
 
-  // Blocked-off time: a distinct, muted band (no client/service/actions).
+  // Blocked-off time: a calm hatched band (no client/service/actions). The
+  // reason rides in clientName; a synced Acuity block says where it came from.
+  // The covered hours below this card get continuation strips (DayPlanner), so
+  // the card itself just needs to read clearly: when, how long, why.
   if (row.source === "block") {
+    const durMin =
+      row.end && row.end > row.start
+        ? Math.round((Date.parse(row.end) - Date.parse(row.start)) / 60_000)
+        : null;
+    // The Acuity badge already says where a synced block came from; a custom
+    // reason ("Lunch + bank run") gets its own line so a narrow screen never
+    // truncates it into nothing.
+    const reason = row.clientName === "Blocked in Acuity" ? "" : row.clientName || "";
     return (
-      <div className="flex items-center gap-2 rounded-lg border border-dashed border-subtle bg-charcoal-800/30 px-3 py-2 text-xs text-muted">
-        <span className="tabular-nums">{timeLabel}</span>
-        <span className="font-medium">⛔ {row.clientName || "Blocked"}</span>
+      <div
+        className={cn(
+          "flex flex-col gap-0.5 rounded-lg border border-subtle/80 border-l-2 border-l-charcoal-600 bg-charcoal-800/30 px-3 py-2 text-xs",
+          BLOCK_STRIPES,
+        )}
+      >
+        <div className="flex items-center gap-2.5">
+          <span className="min-w-0 truncate tabular-nums text-muted">{timeLabel}</span>
+          <span className="ml-auto flex shrink-0 items-center gap-1.5">
+            {durMin !== null && (
+              <span className="rounded-full bg-charcoal-700/80 px-2 py-0.5 text-[10px] tabular-nums text-muted">
+                {fmtBlockDur(durMin)}
+              </span>
+            )}
+            {row.syncedExternal ? (
+              <span className="rounded-full bg-sky-400/15 px-2 py-0.5 text-[10px] font-medium text-sky-300">
+                Acuity
+              </span>
+            ) : (
+              <span className="rounded-full bg-charcoal-700 px-2 py-0.5 text-[10px] font-medium text-muted">
+                Blocked
+              </span>
+            )}
+          </span>
+        </div>
+        {reason && reason !== "Blocked" && (
+          <p className="truncate font-medium text-offwhite/75">{reason}</p>
+        )}
       </div>
     );
   }
