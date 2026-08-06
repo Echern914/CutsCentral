@@ -116,6 +116,7 @@ model User {
   // Shops this user can sign in to as staff (separate from `shops` above,
   // which is shops they OWN).
   shopMemberships     ShopMember[]
+  notifyPrefs         BarberNotifyPref[]
   // Barber/manager devices registered for native push (dashboard app).
   pushSubscriptions   PushSubscription[]
 
@@ -400,6 +401,7 @@ model Shop {
   goals                  ShopGoal[]
   serviceGoals           ServiceGoal[]
   externalBlocks         ExternalBlock[]
+  notifyPrefs            BarberNotifyPref[]
   targetedSlots          TargetedSlot[]
   targetedSlotRules      TargetedSlotRule[]
   payments               Payment[]
@@ -497,6 +499,53 @@ enum ShopRole {
 //
 // A row is NOT created for a pending invite - only when the invite is
 // accepted - so "members" always means people who can actually sign in.
+// What a barber wants to be told about, and how. One row per (person, shop):
+// preferences belong to the PERSON - a barber working two shops can want a
+// morning digest at one and nothing at the other - and the owner is a person
+// here too, so this is keyed by userId rather than hanging off ShopMember
+// (the owner has no ShopMember row).
+//
+// Absent row = the defaults below, which is why every read goes through
+// resolveNotifyPrefs() rather than a bare findUnique: a barber who never opened
+// settings still gets the sensible set (push on, SMS off - texts cost money).
+model BarberNotifyPref {
+  id     String @id @default(cuid())
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // --- Channels ---
+  pushEnabled  Boolean @default(true) // free; needs a registered device
+  // Texts about BOOKINGS (someone booked / canceled). Default TRUE because a
+  // shop with a notifyPhone already got these before preferences existed -
+  // defaulting it off would silently remove a channel shops rely on.
+  smsEnabled   Boolean @default(true)
+  // Texts for the RECURRING reminders (next-up, day-ahead). Off by default:
+  // that is one text per appointment, which is real money - opt IN.
+  smsRemindersEnabled Boolean @default(false)
+  emailEnabled Boolean @default(false)
+  // Where SMS goes. Falls back to Shop.notifyPhone, then the owner's phone.
+  notifyPhone  String?
+
+  // --- Events ---
+  // "Your next client is Sam at 2:30 - Fade." The headline feature.
+  nextUpEnabled Boolean @default(true)
+  nextUpLeadMin Int     @default(30) // minutes before the appointment starts
+  // "Tomorrow: 6 cuts, 9:00am-4:30pm." Sent the evening before.
+  dayAheadEnabled Boolean @default(true)
+  dayAheadHour    Int     @default(19) // shop-local hour (0-23) to send it
+  // Reactive alerts that already existed - now switchable.
+  newBookingEnabled Boolean @default(true)
+  cancelEnabled     Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, shopId])
+  @@index([shopId])
+}
+
 model ShopMember {
   id        String   @id @default(cuid())
   shopId    String
@@ -1617,6 +1666,10 @@ model Appointment {
   // twice. Gated per shop by pushReminder24h/2hEnabled.
   reminder24hPushSentAt DateTime?
   reminder2hPushSentAt  DateTime?
+  // BARBER-side "your next client" reminder (engines/barberReminders.ts). Its
+  // own stamp because it is a different recipient on a different lead time -
+  // the client tiers above must never suppress the barber's heads-up.
+  barberNextUpSentAt    DateTime?
   canceledAt         DateTime?
   completedAt        DateTime?
   // Recurring series link. null = a one-off appointment (every row before this

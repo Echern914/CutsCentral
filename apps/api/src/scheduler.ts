@@ -10,6 +10,7 @@ import { linkBookingsToNudges } from "./engines/attribution.js";
 import { promoteFulfilledAppointments } from "./engines/appointmentPromotion.js";
 import { runAppointmentReminders } from "./engines/appointmentReminders.js";
 import { runPushReminders } from "./engines/pushReminders.js";
+import { runBarberReminders } from "./engines/barberReminders.js";
 import { refreshExpiringSquareTokens } from "./engines/squareTokenRefresh.js";
 import { rollForwardTargetedRules } from "./engines/targetedSlotRules.js";
 import { runAcuityResync } from "./engines/acuityResync.js";
@@ -124,6 +125,17 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
     ttlMs: 5 * MINUTE,
     run: () => runPushReminders(),
     failMsg: "push reminder job failed",
+  },
+  // The BARBER's own reminders: "next up: Sam - Fade at 2:30" before each
+  // appointment, and the evening "here's tomorrow" digest. Every 5 minutes
+  // because the per-barber lead time can be as short as 5; idempotent via the
+  // appointment's barberNextUpSentAt stamp and a per-(shop,user,day) claim.
+  {
+    cronExpr: "*/5 * * * *",
+    name: "barber-reminders",
+    ttlMs: 4 * MINUTE,
+    run: () => runBarberReminders(),
+    failMsg: "barber reminder job failed",
   },
   // Targeted slots: roll every ACTIVE indefinite series ("repeat until I turn
   // it off") forward to the horizon, daily at 04:10. Idempotent via the rule's

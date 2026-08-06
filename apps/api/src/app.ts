@@ -26,6 +26,7 @@ import { walletRouter } from "./routes/wallet.js";
 import { dashboardRouter } from "./routes/dashboard.js";
 import { barberRouter } from "./routes/barber.js";
 import { insightsRouter } from "./routes/insights.js";
+import { notificationsRouter } from "./routes/notifications.js";
 import { teamRouter } from "./routes/team.js";
 import { teamJoinRouter } from "./routes/teamJoin.js";
 import { bookingPublicRouter } from "./routes/booking.public.js";
@@ -124,6 +125,7 @@ export function createApp(): Express {
   // that router is manager-gated so new routes inherit the restriction.
   app.use("/api/barber", dashboardLimiter, barberRouter);
   app.use("/api/insights", dashboardLimiter, insightsRouter); // barber analytics page
+  app.use("/api/notifications", dashboardLimiter, notificationsRouter); // the barber's own alert settings
   app.use("/api/booking", dashboardLimiter, bookingDashboardRouter); // barber booking config
   app.use("/api/payments", dashboardLimiter, paymentsDashboardRouter); // barber payment settings
   app.use("/api/loyalty", dashboardLimiter, loyaltyRouter);
