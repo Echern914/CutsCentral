@@ -4,7 +4,7 @@ import { apiPublicGet, apiPublicSend } from "@/lib/api";
 
 export interface SlotsResult {
   timezone: string;
-  slots: { startsAt: string; endsAt: string }[];
+  slots: { startsAt: string; endsAt: string; maxExtraMin: number }[];
 }
 
 /** A single open instant, tagged with every staffId who can serve it. */
@@ -12,6 +12,13 @@ export interface MergedSlot {
   startsAt: string;
   // Staff free at this instant (>1 when several barbers offer the same time).
   staffIds: string[];
+  /**
+   * Spare minutes after the service at this start — how much room there is to
+   * offer add-ons. Belongs to staffIds[0], the barber the booking is written
+   * against, because room is per-barber: one may be free until close while the
+   * next has a client 20 minutes later.
+   */
+  maxExtraMin: number;
 }
 
 export interface MergedSlotsResult {
@@ -57,17 +64,24 @@ export async function getMergedSlotsAction(
     return { ok: false, error: failed?.res.error ?? "failed" };
   }
   const timezone = ok[0]!.res.data!.timezone;
-  // Union by instant; accumulate which staff are free at each.
-  const byInstant = new Map<string, Set<string>>();
+  // Union by instant; accumulate which staff are free at each, keeping each
+  // one's own spare room alongside so the pair can't drift (the booking is
+  // written against staffIds[0], so the upsell must describe THAT barber's gap
+  // — taking a max across barbers would promise room the assigned one lacks).
+  const byInstant = new Map<string, { staffId: string; maxExtraMin: number }[]>();
   for (const { staffId, res } of ok) {
     for (const s of res.data!.slots) {
-      const set = byInstant.get(s.startsAt) ?? new Set<string>();
-      set.add(staffId);
-      byInstant.set(s.startsAt, set);
+      const list = byInstant.get(s.startsAt) ?? [];
+      list.push({ staffId, maxExtraMin: s.maxExtraMin });
+      byInstant.set(s.startsAt, list);
     }
   }
   const slots: MergedSlot[] = [...byInstant.entries()]
-    .map(([startsAt, set]) => ({ startsAt, staffIds: [...set] }))
+    .map(([startsAt, free]) => ({
+      startsAt,
+      staffIds: free.map((f) => f.staffId),
+      maxExtraMin: free[0]!.maxExtraMin,
+    }))
     .sort((a, b) => a.startsAt.localeCompare(b.startsAt));
   return { ok: true, data: { timezone, slots } };
 }
@@ -89,6 +103,9 @@ export interface DayService {
     // day-level price/durationMin above (e.g. the 9 PM chip is $65 / 20 min).
     price?: number | null;
     durationMin?: number;
+    /** Spare minutes after this service here — drives the add-on offer.
+     *  Absent on a targeted slot: its length is fixed inventory. */
+    maxExtraMin?: number;
   }[];
 }
 
@@ -110,6 +127,47 @@ export async function getDayBundlesAction(
   );
   if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
   return { ok: true, data: res.data };
+}
+
+/** One "you have time for more" offer: a longer, dearer service at the SAME time. */
+export interface UpgradeOffer {
+  serviceId: string;
+  name: string;
+  description: string | null;
+  durationMin: number;
+  price: number;
+  /** How much more than the service the customer already picked. */
+  priceDelta: number;
+  /** How much longer it runs. */
+  extraMin: number;
+}
+
+export interface UpgradesResult {
+  /** Spare minutes after the chosen service at this exact slot. */
+  maxExtraMin: number;
+  upgrades: UpgradeOffer[];
+}
+
+/**
+ * What else the customer could book at the slot they just tapped.
+ *
+ * Every offer here is confirmed by the booking engine for that exact instant,
+ * barber and service — NOT inferred from the size of the gap. A longer service
+ * steps its own slot grid and carries its own hours and group caps, so "the gap
+ * is big enough" can still be a time the booking POST refuses. Suggesting one
+ * of those would dead-end the customer at the last step of the flow.
+ *
+ * Failure is silent by design: an upsell that can't load is simply not shown.
+ */
+export async function getUpgradesAction(
+  slug: string,
+  input: { startsAt: string; staffId: string; serviceId: string },
+): Promise<UpgradesResult | null> {
+  const qs = new URLSearchParams(input).toString();
+  const res = await apiPublicGet<UpgradesResult>(
+    `/api/book/${encodeURIComponent(slug)}/upgrades?${qs}`,
+  );
+  return res.ok && res.data ? res.data : null;
 }
 
 export interface OpenDaysResult {

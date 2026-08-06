@@ -38,6 +38,27 @@ export interface TimeRange {
 export interface Slot {
   startsAt: Date;
   endsAt: Date;
+  /**
+   * How many MORE minutes would still fit at this start, beyond the service's
+   * own effective duration (and beyond any `extraDurationMin` the caller asked
+   * for - this is always measured from the bare service, so it reads the same
+   * whoever asks). Bounded by the end of the free window this slot sits in,
+   * which is already "the next booking plus its buffer" or "the end of the
+   * barber's hours", whichever comes first.
+   *
+   * This is what lets the booking page say "you have 25 minutes of room here"
+   * and offer only the add-ons that genuinely fit. It is EXACT for add-ons:
+   * extra minutes lengthen the appointment's tail but never move the grid (the
+   * walk below steps by effDur regardless of extraMin), so
+   * `addOn.durationMin <= maxExtraMin` is equivalent to re-running this engine
+   * with that add-on and finding the same slot still offered.
+   *
+   * It is NOT sufficient for offering a different, longer SERVICE: that service
+   * steps its own grid and carries its own hours and group caps, so it can be
+   * unbookable at this instant even when the raw room is there. Ask the engine
+   * for that service instead - see the /upgrades route.
+   */
+  maxExtraMin: number;
 }
 
 const MS_PER_MIN = 60_000;
@@ -656,7 +677,19 @@ export async function computeOpenSlots(
       // write path's own too_soon test (startsAt < earliest), so the engine can
       // never offer a time the booking POST would turn around and reject.
       if (t >= lowerBound) {
-        slots.push({ startsAt: new Date(t), endsAt: new Date(t + spanMs) });
+        // Room left at this start, measured from the BARE service (not from
+        // effDur + extraMin): `w` is a free range, so everything from `t` to
+        // `w.end` is open, and the appointment's tail still needs the buffer.
+        // Floored to whole minutes - a stray half minute is not a real offer.
+        const maxExtraMin = Math.max(
+          0,
+          Math.floor((w.end - t) / MS_PER_MIN) - buffer - effDur,
+        );
+        slots.push({
+          startsAt: new Date(t),
+          endsAt: new Date(t + spanMs),
+          maxExtraMin,
+        });
       }
       t += effDur * MS_PER_MIN;
     }

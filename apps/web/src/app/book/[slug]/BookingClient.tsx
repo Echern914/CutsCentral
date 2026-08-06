@@ -18,10 +18,12 @@ import {
   getDayBundlesAction,
   getMergedSlotsAction,
   getOpenDaysAction,
+  getUpgradesAction,
   type DayBundlesResult,
   type DayService,
   type MergedSlotsResult,
   type OpenDaysResult,
+  type UpgradeOffer,
 } from "./actions";
 import { PaymentStep } from "./PaymentStep";
 import { WaitlistForm } from "./WaitlistForm";
@@ -33,6 +35,9 @@ interface DaySlot {
   staffIds: string[];
   // Present when this is a barber-published targeted "special" slot.
   targeted?: { id: string; price: number; label: string | null };
+  // Spare minutes after the service here, for staffIds[0] (the barber the
+  // booking is written against). Absent on a targeted slot — fixed inventory.
+  maxExtraMin?: number;
 }
 
 // ---- Calendar date math. All operate on shop-local "YYYY-MM-DD" / "YYYY-MM"
@@ -141,6 +146,16 @@ export function BookingClient({ data }: { data: BookShopData }) {
     price: number;
     label: string | null;
   } | null>(null);
+  // "You have time for more." Spare minutes after the chosen slot comes off the
+  // slot itself, so add-ons can be filtered the instant a chip is tapped with no
+  // round trip; the UPGRADE offers need the server (a longer service steps its
+  // own grid and has its own hours/caps — see getUpgradesAction) and arrive a
+  // moment later.
+  const [slotRoomMin, setSlotRoomMin] = useState<number | null>(null);
+  const [upgrades, setUpgrades] = useState<UpgradeOffer[]>([]);
+  // Guards the upsell fetch against out-of-order replies: tapping 4:00 then
+  // 4:30 must never render 4:00's offers under 4:30. Bumped on every pick.
+  const upsellToken = useRef(0);
   const [slotsByDay, setSlotsByDay] = useState<Map<string, DaySlot[]>>(new Map());
   const [loadingSlots, setLoadingSlots] = useState(false);
   // The barber pool the current calendar was loaded for, so a slot_taken refresh
@@ -643,9 +658,13 @@ export function BookingClient({ data }: { data: BookShopData }) {
   function pickDaySlot(svc: DayService, s: DayService["slots"][number]) {
     setServiceId(svc.id);
     setAddOnIds([]);
-    setSlot(s.startsAt);
-    setSlotTargeted(s.targeted ?? null);
-    setPickedStaffId(s.staffIds[0] ?? null);
+    commitSlotPick({
+      svcId: svc.id,
+      startsAt: s.startsAt,
+      staffIds: s.staffIds,
+      targeted: s.targeted ?? null,
+      room: s.maxExtraMin,
+    });
   }
 
   // The selected day's menu: every bundle/service the API returned as having an
@@ -802,6 +821,62 @@ export function BookingClient({ data }: { data: BookShopData }) {
     setSlot(null);
     setSlotTargeted(null);
     setPickedStaffId(null);
+    // Invalidate any upsell fetch still in flight for the old slot.
+    upsellToken.current += 1;
+    setSlotRoomMin(null);
+    setUpgrades([]);
+  }
+
+  /**
+   * Commit a chosen time — the ONE place both pick surfaces go through (the day
+   * view's service chips and the per-service calendar's time grid), so the
+   * upsell can never be wired to one and silently missing from the other.
+   *
+   * `room` is the slot's own spare minutes, applied immediately so the add-on
+   * list narrows the instant the chip is tapped. The upgrade offers need the
+   * server and land a moment later.
+   */
+  function commitSlotPick(args: {
+    svcId: string;
+    startsAt: string;
+    staffIds: string[];
+    targeted?: { id: string; price: number; label: string | null } | null;
+    room?: number | undefined;
+  }) {
+    const staffId = args.staffIds[0] ?? null;
+    setSlot(args.startsAt);
+    setSlotTargeted(args.targeted ?? null);
+    setPickedStaffId(staffId);
+
+    const token = (upsellToken.current += 1);
+    // A targeted slot is fixed-length, fixed-price inventory: nothing to extend
+    // and nothing to upgrade into, so don't offer (or fetch) either.
+    if (args.targeted) {
+      setAddOnIds([]);
+      setSlotRoomMin(null);
+      setUpgrades([]);
+      return;
+    }
+    setSlotRoomMin(args.room ?? null);
+    pruneAddOnsToRoom(args.room ?? null);
+    setUpgrades([]);
+    if (!staffId) return;
+    startTransition(async () => {
+      const res = await getUpgradesAction(data.shop.slug, {
+        startsAt: args.startsAt,
+        staffId,
+        serviceId: args.svcId,
+      });
+      // A newer pick (or a cleared one) happened while this was in flight.
+      if (token !== upsellToken.current) return;
+      if (!res) return; // an upsell that can't load is simply not shown
+      setUpgrades(res.upgrades);
+      // The server's number is authoritative — it re-derived the slot rather
+      // than trusting the payload the page was holding, so a stale calendar
+      // can't leave an over-long booking selected.
+      setSlotRoomMin(res.maxExtraMin);
+      pruneAddOnsToRoom(res.maxExtraMin);
+    });
   }
 
   /**
@@ -809,7 +884,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
    * calendar. `staffPool` is the lone barber for a single-barber shop, or the
    * one the customer chose for a multi-barber shop.
    */
-  function loadSlots(svc: string, staffPool: string[]) {
+  function loadSlots(svc: string, staffPool: string[], keepStartsAt?: string) {
     setLoadingSlots(true);
     setError(null);
     setLoadedPool(staffPool); // remember the pool so a slot_taken retry reloads it
@@ -824,17 +899,26 @@ export function BookingClient({ data }: { data: BookShopData }) {
         setLoadingSlots(false);
         return;
       }
-      bucketSlots(res.data, svc, staffPool);
+      bucketSlots(res.data, svc, staffPool, keepStartsAt);
       setLoadingSlots(false);
     });
   }
 
-  function bucketSlots(result: MergedSlotsResult, svc: string, staffPool: string[]) {
+  function bucketSlots(
+    result: MergedSlotsResult,
+    svc: string,
+    staffPool: string[],
+    keepStartsAt?: string,
+  ) {
     const map = new Map<string, DaySlot[]>();
     for (const s of result.slots) {
       const key = dayKey(s.startsAt);
       const list = map.get(key) ?? [];
-      list.push({ startsAt: s.startsAt, staffIds: s.staffIds });
+      list.push({
+        startsAt: s.startsAt,
+        staffIds: s.staffIds,
+        maxExtraMin: s.maxExtraMin,
+      });
       map.set(key, list);
     }
     // Merge in the barbers' targeted slots for this service (only those from a
@@ -855,11 +939,55 @@ export function BookingClient({ data }: { data: BookShopData }) {
       map.set(key, list);
     }
     setSlotsByDay(map);
+    // Reloading UNDER a pick the customer already made (they upgraded to a
+    // longer service at the same time): keep their slot and the day it lives
+    // on. The upgrade was confirmed against this exact instant by the server,
+    // so the new service really does offer it - blanking the pick here would
+    // throw away a valid choice and drop them back to an empty calendar.
+    if (keepStartsAt) {
+      const keepDay = dayKey(keepStartsAt);
+      setDay(keepDay);
+      setViewMonth(monthKey(keepDay));
+      return;
+    }
     // Land on the first day with availability, and open its month in the calendar.
     const firstDay = [...map.keys()].sort()[0] ?? null;
     setDay(firstDay);
     setViewMonth(firstDay ? monthKey(firstDay) : monthKey(dayKey(new Date().toISOString())));
     clearSlotPick();
+  }
+
+  /**
+   * Take an upgrade: same time, same barber, a longer and dearer service.
+   *
+   * The server already confirmed this exact instant is bookable for the new
+   * service (that is the whole point of /upgrades), so the pick survives the
+   * swap. Add-ons are dropped because they belong to the OLD service — the new
+   * one has its own list, and its own remaining room, both of which arrive from
+   * the fresh /upgrades call that commitSlotPick fires.
+   *
+   * The per-service calendar is reloaded underneath so its chips describe the
+   * service the customer now has: leaving the old service's grid on screen
+   * would let them tap a time that isn't on the new service's grid, which the
+   * booking POST rejects.
+   */
+  function applyUpgrade(u: UpgradeOffer) {
+    if (!slot) return;
+    const staffIds = pickedStaffId ? [pickedStaffId] : [];
+    setServiceId(u.serviceId);
+    setAddOnIds([]);
+    commitSlotPick({
+      svcId: u.serviceId,
+      startsAt: slot,
+      staffIds,
+      targeted: null,
+      room: undefined, // unknown until /upgrades answers for the new service
+    });
+    // Only the per-service calendar needs rebuilding; the day view's chips are
+    // already per-service and complete.
+    if (staffId && slotsByDay.size > 0) {
+      loadSlots(u.serviceId, staffPoolFor(u.serviceId), slot);
+    }
   }
 
   /** Barbers who offer a given service (used to decide skip-provider + pool). */
@@ -895,8 +1023,57 @@ export function BookingClient({ data }: { data: BookShopData }) {
     );
   }, [serviceId, data.addOns]);
 
+  /**
+   * Add-on time already spoken for, and what's left of the slot's room.
+   *
+   * Add-ons STACK: the engine checks the SUM against the free window, so "each
+   * one is shorter than the gap" is the wrong test — two 15-minute extras don't
+   * both fit in 25 minutes. Everything below reasons about the remaining room,
+   * never about a single add-on in isolation.
+   *
+   * null = room unknown (no slot picked yet, or a targeted slot). Unknown must
+   * mean "no restriction", not "nothing fits", or a shop whose slots predate
+   * this field would show an empty add-on list.
+   */
+  const addOnMinutesChosen = addOnsForService
+    .filter((a) => addOnIds.includes(a.id))
+    .reduce((sum, a) => sum + a.durationMin, 0);
+  const roomLeftMin = slotRoomMin === null ? null : slotRoomMin - addOnMinutesChosen;
+
+  /** Can this add-on still be turned ON? (Turning one OFF is always allowed.) */
+  function addOnFits(a: { id: string; durationMin: number }): boolean {
+    if (addOnIds.includes(a.id) || roomLeftMin === null) return true;
+    return a.durationMin <= roomLeftMin;
+  }
+
   function toggleAddOn(id: string) {
     setAddOnIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
+  }
+
+  /**
+   * Keep only the add-ons that still fit once the room changes (picking a
+   * different time). Greedy in selection order, so the customer keeps as much
+   * of their choice as the new slot allows instead of losing all of it.
+   *
+   * Without this, choosing extras at a slot with an hour of room and then
+   * moving to one with ten minutes sends an over-long booking that the create
+   * endpoint rejects with invalid_slot — at the final step, which is the worst
+   * place to discover it.
+   */
+  function pruneAddOnsToRoom(room: number | null) {
+    if (room === null) return;
+    setAddOnIds((cur) => {
+      let used = 0;
+      const kept: string[] = [];
+      for (const id of cur) {
+        const a = data.addOns.find((x) => x.id === id);
+        if (!a) continue;
+        if (used + a.durationMin > room) continue;
+        used += a.durationMin;
+        kept.push(id);
+      }
+      return kept.length === cur.length ? cur : kept;
+    });
   }
 
   function pickStaff(id: string) {
@@ -1025,6 +1202,11 @@ export function BookingClient({ data }: { data: BookShopData }) {
   }
 
   const selectedService = data.services.find((s) => s.id === serviceId) ?? null;
+  // The barber the booking will actually be written against — named in the
+  // upgrade offer so "keeps your time" is a concrete promise, not a vague one.
+  const pickedStaffName = pickedStaffId
+    ? (data.staff.find((s) => s.id === pickedStaffId)?.name ?? null)
+    : null;
 
   /** Shop-tz weekday (0=Sun..6=Sat) for an ISO instant, matching the API. */
   function weekdayInTz(iso: string): number {
@@ -1801,12 +1983,17 @@ export function BookingClient({ data }: { data: BookShopData }) {
                       key={s.targeted?.id ?? s.startsAt}
                       type="button"
                       onClick={() => {
-                        setSlot(s.startsAt);
-                        setSlotTargeted(s.targeted ?? null);
-                        // Bind the barber who will actually take this booking
-                        // (several may be free at this instant on a merged fetch).
-                        setPickedStaffId(s.staffIds[0] ?? null);
-                        if (s.targeted) setAddOnIds([]); // fixed length/price
+                        // Binds the barber who will actually take this booking
+                        // (several may be free at this instant on a merged
+                        // fetch), and kicks off the "room for more" offers.
+                        if (!serviceId) return;
+                        commitSlotPick({
+                          svcId: serviceId,
+                          startsAt: s.startsAt,
+                          staffIds: s.staffIds,
+                          targeted: s.targeted ?? null,
+                          room: s.maxExtraMin,
+                        });
                       }}
                       aria-pressed={picked}
                       className="rounded-lg border py-2 text-center text-sm transition-colors"
@@ -1855,6 +2042,62 @@ export function BookingClient({ data }: { data: BookShopData }) {
         </Section>
       )}
 
+      {/* "You have time for more." Sits between the time the customer just
+          picked and the details form, because that is the moment the spare time
+          becomes a real, specific fact ("25 minutes, after YOUR 4:00, with
+          Drick") rather than a general suggestion.
+
+          Every offer here was confirmed by the booking engine for this exact
+          instant, barber and service - never inferred from the size of the gap.
+          A longer service walks its own slot grid and carries its own hours and
+          group caps, so a gap that LOOKS big enough can still be a time the
+          create endpoint refuses. See getUpgradesAction. */}
+      {slot && !slotTargeted && upgrades.length > 0 && (
+        <div
+          className="mb-4 rounded-xl border p-4"
+          style={{ borderColor: `${accent}55`, backgroundColor: `${accent}0f` }}
+        >
+          <p className="text-sm font-semibold" style={{ color: accent }}>
+            You have time for more
+          </p>
+          <p className="mt-0.5 text-xs text-muted">
+            {slotRoomMin !== null && slotRoomMin > 0
+              ? `Your ${timeFmt.format(new Date(slot))} has ${slotRoomMin} spare min after ${selectedService?.name ?? "your service"}.`
+              : `These also fit at ${timeFmt.format(new Date(slot))}.`}
+          </p>
+          <div className="mt-3 flex flex-col gap-2">
+            {/* Two at most: this is a nudge, not a second menu. They arrive
+                cheapest-first, so the gentlest step up leads. */}
+            {upgrades.slice(0, 2).map((u) => (
+              <button
+                key={u.serviceId}
+                type="button"
+                onClick={() => applyUpgrade(u)}
+                className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors hover:bg-white/5"
+                style={{ borderColor: "rgba(255,255,255,0.15)" }}
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium">{u.name}</span>
+                  <span className="block text-xs text-muted">
+                    {u.durationMin} min · {u.extraMin} min longer
+                  </span>
+                </span>
+                <span
+                  className="shrink-0 rounded-full px-3 py-1 text-xs font-semibold"
+                  style={{ backgroundColor: accent, color: onAccent }}
+                >
+                  +${u.priceDelta.toFixed(0)}
+                </span>
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 text-[11px] text-muted">
+            Keeps your {timeFmt.format(new Date(slot))} time
+            {pickedStaffName ? ` with ${pickedStaffName}` : ""}.
+          </p>
+        </div>
+      )}
+
       {/* Details step: contact + consent. Numbered after the time step. */}
       {slot && (
         <Section
@@ -1866,19 +2109,34 @@ export function BookingClient({ data }: { data: BookShopData }) {
               length/price are fixed, so add-ons don't apply there). */}
           {!slotTargeted && addOnsForService.length > 0 && (
             <div className="mb-3 rounded-xl border border-white/10 p-3" data-tour="addons">
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide opacity-60">
-                Add-ons
+              <p className="mb-2 flex items-baseline justify-between gap-2 text-xs font-medium uppercase tracking-wide opacity-60">
+                <span>Add-ons</span>
+                {/* The budget, stated once. Without it a greyed-out row reads as
+                    broken rather than as "that one is too long for this slot". */}
+                {roomLeftMin !== null && (
+                  <span className="normal-case tracking-normal">
+                    {roomLeftMin} min left
+                  </span>
+                )}
               </p>
               <div className="flex flex-col gap-1.5">
                 {addOnsForService.map((a) => {
                   const on = addOnIds.includes(a.id);
+                  // Add-ons STACK, so this is about the room REMAINING, not the
+                  // slot's total. Shown disabled rather than hidden: a customer
+                  // who can't find the beard trim they had last time assumes the
+                  // page is broken, where "won't fit at 4:00" tells them to try
+                  // another time.
+                  const fits = addOnFits(a);
                   return (
                     <button
                       key={a.id}
                       type="button"
                       onClick={() => toggleAddOn(a.id)}
                       aria-pressed={on}
-                      className="flex items-center justify-between rounded-lg border px-3 py-2 text-left text-sm transition-colors"
+                      disabled={!fits}
+                      title={fits ? undefined : "Not enough time left at this slot"}
+                      className="flex items-center justify-between rounded-lg border px-3 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40"
                       style={{
                         borderColor: on ? accent : "rgba(255,255,255,0.1)",
                         backgroundColor: on ? `${accent}14` : "transparent",
