@@ -4,7 +4,12 @@ import {
   zonedDateParts,
   zonedWallTimeToUtc,
 } from "@chairback/config";
-import { effectiveDurationAt, parseServiceHours } from "./pricing.js";
+import {
+  effectiveDurationAt,
+  hasOpeningWindows,
+  openingSpansForWeekday,
+  parseServiceHours,
+} from "./pricing.js";
 
 /**
  * Open-slot computation for the native booking engine.
@@ -433,6 +438,19 @@ export async function computeOpenSlots(
   // above). Group membership now affects only the shared CAPS below.
   const serviceByWeekday = parseServiceHours(service.hoursWindows);
 
+  // Time-of-day windows the barber explicitly ticked "also open these hours" on.
+  // This is the ONE input that WIDENS availability: everything else here can
+  // only narrow the staff schedule. It exists because "Sundays I close at 3, but
+  // I'll take 9-11pm" had no expressible form - a service-hours window past 3pm
+  // intersected to nothing, so the day simply showed no slots.
+  //
+  // Opened time is UNIONED with the staff span for the day, and deliberately is
+  // NOT intersected with the service-hours restriction: an explicit "open this"
+  // outranks an implicit "only these hours". It stays subject to everything that
+  // subtracts - breaks, block-offs, external blocks, existing bookings, lead
+  // time and caps - so it adds candidate time and never overrides a conflict.
+  const opensAnyHours = hasOpeningWindows(service.timeOverrides);
+
   // Build the recurring windows by walking each shop-local calendar date across
   // the range (plus a day of slack on each side so a window that straddles
   // midnight in UTC is still captured).
@@ -443,20 +461,31 @@ export async function computeOpenSlots(
     list.push({ startMin: r.startMin, endMin: r.endMin });
     byWeekday.set(r.weekday, list);
   }
-  if (byWeekday.size > 0) {
+  // An opening window must be walked even on a weekday the staff has NO rule for
+  // (a barber closed Sundays outright), so the walk can no longer be gated on
+  // the staff schedule alone.
+  if (byWeekday.size > 0 || opensAnyHours) {
     let cursor = addDays(new Date(rangeStart), -1);
     const walkEnd = addDays(new Date(rangeEnd), 1);
     while (cursor.getTime() <= walkEnd.getTime()) {
       const parts = zonedDateParts(cursor, shop.timezone);
       const dayRules = byWeekday.get(parts.weekday);
-      if (dayRules) {
+      const opened = opensAnyHours
+        ? openingSpansForWeekday(service.timeOverrides, parts.weekday)
+        : [];
+      if (dayRules || opened.length > 0) {
         // Service-hours restriction for THIS weekday. `restricted` is true iff
         // the barber set any windows for this weekday; when true, `allowed` is
         // the (possibly empty) list of allowed local windows.
         const restricted = serviceByWeekday.has(parts.weekday);
         const allowed = restricted ? serviceByWeekday.get(parts.weekday)! : null;
 
-        for (const dr of dayRules) {
+        // Spans are collected for the WHOLE day before conversion, so opened
+        // time can be unioned in alongside the staff rules. Overlaps are fine:
+        // subtractRanges merges `windows` before use, so an opened window that
+        // abuts or overlaps the schedule can't offer the same start twice.
+        const localSpans: { startMin: number; endMin: number }[] = [];
+        for (const dr of dayRules ?? []) {
           if (dr.endMin <= dr.startMin) continue;
 
           // Intersect the staff rule with the service's allowed windows in
@@ -464,7 +493,6 @@ export async function computeOpenSlots(
           // handled per edge by zonedWallTimeToUtc). Unrestricted => the staff
           // rule passes through unchanged (identical to the original behavior);
           // an empty `allowed` yields no spans, so the day is closed.
-          const localSpans: { startMin: number; endMin: number }[] = [];
           if (!restricted) {
             localSpans.push({ startMin: dr.startMin, endMin: dr.endMin });
           } else {
@@ -474,24 +502,27 @@ export async function computeOpenSlots(
               if (e > s) localSpans.push({ startMin: s, endMin: e });
             }
           }
+        }
+        // Explicitly opened hours join the day AFTER the narrowing above - they
+        // are the barber overriding his own schedule, not something to clip by it.
+        localSpans.push(...opened);
 
-          for (const span of localSpans) {
-            const start = zonedWallTimeToUtc(
-              parts.year,
-              parts.month0,
-              parts.day,
-              span.startMin,
-              shop.timezone,
-            );
-            const end = zonedWallTimeToUtc(
-              parts.year,
-              parts.month0,
-              parts.day,
-              span.endMin,
-              shop.timezone,
-            );
-            windows.push({ start: start.getTime(), end: end.getTime() });
-          }
+        for (const span of localSpans) {
+          const start = zonedWallTimeToUtc(
+            parts.year,
+            parts.month0,
+            parts.day,
+            span.startMin,
+            shop.timezone,
+          );
+          const end = zonedWallTimeToUtc(
+            parts.year,
+            parts.month0,
+            parts.day,
+            span.endMin,
+            shop.timezone,
+          );
+          windows.push({ start: start.getTime(), end: end.getTime() });
         }
       }
       cursor = addDays(cursor, 1);

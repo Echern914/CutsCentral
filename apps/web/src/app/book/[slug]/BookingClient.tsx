@@ -1043,14 +1043,29 @@ export function BookingClient({ data }: { data: BookShopData }) {
     svc: {
       price: number | null;
       priceOverrides: Record<string, number>;
-      timeOverrides: { s: number; e: number; price: number | null }[];
+      timeOverrides: {
+        s: number;
+        e: number;
+        /** Weekdays the window repeats on; [] = every day. */
+        days?: number[];
+        price: number | null;
+      }[];
     },
     iso: string,
   ): number | null {
     const minute = zonedMinutesOfDay(new Date(iso), tz);
-    const win = svc.timeOverrides.find((w) => minute >= w.s && minute < w.e);
+    const weekday = weekdayInTz(iso);
+    // A window matches on TIME **and** DAY. Matching on the minute alone would
+    // quote a Sunday-only evening rate on every night of the week - and this
+    // number is what the customer is shown before they book.
+    const win = svc.timeOverrides.find(
+      (w) =>
+        minute >= w.s &&
+        minute < w.e &&
+        (!w.days || w.days.length === 0 || w.days.includes(weekday)),
+    );
     if (win && win.price !== null) return win.price;
-    const wd = String(weekdayInTz(iso));
+    const wd = String(weekday);
     if (Object.prototype.hasOwnProperty.call(svc.priceOverrides, wd)) return svc.priceOverrides[wd]!;
     return svc.price;
   }

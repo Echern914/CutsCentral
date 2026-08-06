@@ -53,7 +53,16 @@ export interface BookShopData {
     // Time-of-day windows ([{s,e,price,durationMin}] in SHOP-local minutes, e
     // exclusive, every day) layered over the weekday overrides - the client
     // resolves each slot's exact price/length from the slot's own start time.
-    timeOverrides: { s: number; e: number; price: number | null; durationMin: number | null }[];
+    // `days` = weekdays the window repeats on ([] / absent = every day);
+    // `opensHours` = it also opens that time past the staff schedule.
+    timeOverrides: {
+      s: number;
+      e: number;
+      days?: number[];
+      price: number | null;
+      durationMin: number | null;
+      opensHours?: boolean;
+    }[];
     // Groups-first: which group card this files under (null = ungrouped) and
     // its saved position within that group.
     serviceGroupId: string | null;
