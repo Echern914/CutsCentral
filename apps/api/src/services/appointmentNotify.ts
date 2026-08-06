@@ -10,6 +10,7 @@ import {
 } from "../messaging/templates.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
+import { resolveNotifyPrefs, sendToBarber } from "./barberNotify.js";
 import { sendPushToUser } from "../messaging/push.js";
 import { inQuietHours } from "../engines/quietHours.js";
 import { hasActiveAccess } from "../billing/stripe.js";
@@ -487,6 +488,15 @@ export async function notifyBarberBookingEvent(params: {
     );
     if (!appt) return;
 
+    // The barber whose chair it is, else the owner - and HIS preferences.
+    // A cancel and a new booking are separately switchable, so a barber who
+    // only wants to hear about cancellations gets exactly that.
+    const userId = appt.staff.userId ?? shop.ownerId;
+    const prefs = await resolveNotifyPrefs(shop.id, userId);
+    if (params.kind === "canceled" ? !prefs.cancelEnabled : !prefs.newBookingEnabled) {
+      return;
+    }
+
     const who =
       [appt.firstName, appt.lastName].filter(Boolean).join(" ") || "A customer";
     const when = formatApptTime(appt.startsAt, shop.timezone);
@@ -500,10 +510,14 @@ export async function notifyBarberBookingEvent(params: {
             ? `${who} moved their ${what} to ${when}`
             : `${who} canceled their ${what} - ${when}`;
 
-    await sendPushToUser({
-      userId: appt.staff.userId ?? shop.ownerId,
+    // One delivery path for every barber alert (push + optional SMS/email,
+    // each honoring this barber's channel switches and his own notify number).
+    await sendToBarber({
       shopId: shop.id,
-      payload: {
+      userId,
+      kind: params.kind === "canceled" ? "cancel" : "newBooking",
+      prefs,
+      message: {
         title: BARBER_EVENT_TITLE[params.kind],
         body,
         url: `${apiEnv().APP_BASE_URL}/dashboard/booking`,
@@ -512,24 +526,6 @@ export async function notifyBarberBookingEvent(params: {
         tag: `booking-event-${appt.id}`,
       },
     });
-
-    if (shop.notifyPhone) {
-      if (apiEnv().DRY_RUN) {
-        logger.info(
-          { shopId: shop.id, to: shop.notifyPhone, kind: params.kind },
-          "barber booking-event SMS (dry-run, not sent)",
-        );
-      } else {
-        await getMessageProvider()
-          .send({ to: shop.notifyPhone, body: `${shop.name}: ${body}` })
-          .catch((err) =>
-            logger.error(
-              { err, shopId: shop.id, appointmentId: params.appointmentId },
-              "barber booking-event SMS failed",
-            ),
-          );
-      }
-    }
   } catch (err) {
     logger.error(
       { err, shopId: params.shopId, appointmentId: params.appointmentId },
