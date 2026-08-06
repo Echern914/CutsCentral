@@ -47,8 +47,13 @@ import {
  *   - busiest weekday
  *   - loyalty activity (punches earned/redeemed, standing redemptions)
  *
- * Revenue is real summed price (Appointment.priceAtBooking / Visit.price), never
- * an estimate; anything unpriced contributes 0 revenue but still counts as a cut.
+ * REVENUE IS MONEY EARNED, not the sum of tickets. Where the shop takes payment
+ * through the app it is real collected money net of refunds (so a refund lowers
+ * it and a cancelled booking never enters); where it doesn't - cash, pay-direct,
+ * anything synced - it falls back to the booked price, which is the best
+ * information that exists. A no-show earns nothing. Average TICKET is the other
+ * half of the pair: it reads the price of the work, excluding no-shows, so it
+ * still answers "what does a cut here go for". See ChairEvent.earned.
  */
 export const insightsRouter: Router = Router();
 insightsRouter.use(requireUser, requireShop, requireManager);
@@ -200,6 +205,7 @@ insightsRouter.get("/", async (req, res) => {
   const clientIds = new Set<string>();
   let pricedRevenue = 0;
   let pricedCount = 0;
+  let noShows = 0;
   let totalRevenue = 0;
   let inWindow = 0;
   let walkIns = 0; // counted as cuts, but not attributable to a client
@@ -213,16 +219,23 @@ insightsRouter.get("/", async (req, res) => {
     if (index < 0) continue; // fetch padding, not the window
 
     inWindow++;
-    const price = e.price ?? 0;
+    // Revenue is money EARNED, never the ticket: real collected money net of
+    // refunds where the shop takes payment in-app, the ticket where it doesn't,
+    // and nothing at all for a no-show. See ChairEvent.earned.
+    const earned = e.earned;
     const bucket = buckets[index]!;
     bucket.cuts++;
-    bucket.revenue += price;
+    bucket.revenue += earned;
     dayCounts[(day.getUTCDay() + 6) % 7]!++;
-    totalRevenue += price;
+    totalRevenue += earned;
     if (e.clientId) clientIds.add(e.clientId);
     else walkIns++;
-    if (e.price !== null) {
-      pricedRevenue += price;
+    if (e.noShow) noShows++;
+    // Average TICKET, so it reads off the price of the work - not off what was
+    // collected. A no-show is excluded from both halves rather than counted as
+    // a $0 sale, which would drag the average down for work nobody did.
+    if (e.price !== null && !e.noShow) {
+      pricedRevenue += e.price;
       pricedCount++;
     }
 
@@ -234,7 +247,7 @@ insightsRouter.get("/", async (req, res) => {
       revenue: 0,
     };
     s.count++;
-    s.revenue += price;
+    s.revenue += earned;
     byService.set(key, s);
   }
 
@@ -334,6 +347,10 @@ insightsRouter.get("/", async (req, res) => {
       // revenue, but they cannot be counted as a person - saying so keeps
       // "cuts" and "clients seen" from looking like a contradiction.
       walkIns,
+      // Chairs held for someone who never came. Surfaced so the revenue drop
+      // explains itself: without it a week with three no-shows just looks like
+      // a bad week.
+      noShows,
     },
     busiest: {
       weekday: busiestIndex >= 0 ? WEEKDAYS[busiestIndex] : null,
@@ -670,7 +687,7 @@ function goalProgress(
     const day = shopLocalDay(e.start, timezone);
     const idx = Math.round((day.getTime() - start.getTime()) / DAY_MS);
     if (idx < 0 || idx >= totalDays) continue; // outside this goal's period
-    const amount = goal.metric === "revenue" ? (e.price ?? 0) : 1;
+    const amount = goal.metric === "revenue" ? e.earned : 1;
     perDay[idx]! += amount;
     actual += amount;
   }
@@ -806,7 +823,7 @@ insightsRouter.get("/goal", async (req, res) => {
       if (!id) continue;
       const t = m.get(id) ?? { cuts: 0, revenue: 0 };
       t.cuts++;
-      t.revenue += e.price ?? 0;
+      t.revenue += e.earned;
       m.set(id, t);
     }
     return m;
