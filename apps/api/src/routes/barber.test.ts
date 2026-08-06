@@ -202,8 +202,12 @@ describe("barber home: their own chair", () => {
   });
 
   it("counts only the barber's own completed cuts", async () => {
-    const mine = await makeAppointment(chairA, todayAtUtc(8), "DoneMine");
-    const theirs = await makeAppointment(chairB, todayAtUtc(8), "DoneTheirs");
+    // Two hours AGO, not a fixed hour of the UTC day: the counts only sum
+    // completed work in [monthAgo, now], so `todayAtUtc(8)` was in the FUTURE
+    // whenever the suite ran between 00:00 and 08:00 UTC (i.e. every US
+    // evening) and this counted 0.
+    const mine = await makeAppointment(chairA, hoursFromNow(-2), "DoneMine");
+    const theirs = await makeAppointment(chairB, hoursFromNow(-2), "DoneTheirs");
     await prisma.appointment.updateMany({
       where: { id: { in: [mine.id, theirs.id] } },
       data: { status: "COMPLETED" },

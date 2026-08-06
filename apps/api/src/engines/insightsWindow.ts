@@ -1,4 +1,4 @@
-import { runWithShop } from "@chairback/db";
+import { runWithShop, type Prisma } from "@chairback/db";
 import { zonedWallTimeToUtc } from "@chairback/config";
 
 /**
@@ -38,12 +38,30 @@ export const PERIODS = {
 >;
 
 export type PeriodKey = keyof typeof PERIODS;
+/** A resolved window is either one of the presets or an explicit date range. */
+export type WindowKey = PeriodKey | "custom";
 export const PERIOD_KEYS = Object.keys(PERIODS) as PeriodKey[];
 export const DEFAULT_PERIOD: PeriodKey = "30d";
 
 /** Unknown/absent -> the default, so a stale client never gets a 400. */
 export function resolvePeriod(raw: unknown): PeriodKey {
   return typeof raw === "string" && raw in PERIODS ? (raw as PeriodKey) : DEFAULT_PERIOD;
+}
+
+/** A shop-local YYYY-MM-DD as that day's UTC-midnight marker, or null. */
+export function parseYmd(raw: unknown): Date | null {
+  if (typeof raw !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+  const d = new Date(`${raw}T00:00:00Z`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** Bar sizes that make sense for an explicit range of `days` days. */
+export function customBucketOptions(days: number): Bucket[] {
+  const out: Bucket[] = [];
+  if (days <= 92) out.push("day"); // 92 day-bars is the readable ceiling
+  if (days >= 14) out.push("week");
+  if (days >= 60) out.push("month");
+  return out.length > 0 ? out : ["day"];
 }
 
 /**
@@ -149,16 +167,23 @@ export interface PeriodBucket {
 }
 
 export interface ResolvedPeriod {
-  key: PeriodKey;
+  key: WindowKey;
   bucket: Bucket;
   label: string;
   /** "day" | "week" | "month" - what one bar represents, for card titles. */
   noun: string;
   /** Shop-local first day of the window (UTC midnight), inclusive. */
   windowStart: Date;
-  /** Shop-local today (UTC midnight). The window ends at `now`, inside it. */
+  /**
+   * The window's LAST day (UTC-midnight shop-local marker), inclusive. For a
+   * preset that is today; for a custom range it is the chosen end date, which
+   * may be in the past. Named `today` for history - every consumer treats it as
+   * "the last day this window measures", and capacity stops there.
+   */
   today: Date;
   buckets: PeriodBucket[];
+  /** Which bar sizes this window offers (drives the Day/Week/Month pills). */
+  bucketOptions: Bucket[];
 }
 
 const MONTHS = [
@@ -241,6 +266,102 @@ export function resolvePeriodWindow(
     windowStart: buckets[0]!.start,
     today,
     buckets,
+    bucketOptions: Object.keys(BUCKET_COUNTS[key]) as Bucket[],
+  };
+}
+
+/**
+ * An EXPLICIT date-to-date window ("Jun 1 - Jul 15"), shop-local and inclusive
+ * of both ends.
+ *
+ * Unlike the presets, the bars here are clipped to exactly the range asked for:
+ * a week bucket that straddles the start renders from the start date, not from
+ * its Monday. Barbers pick a range because they mean THAT range (a promo, a
+ * month they worked a booth), so silently widening it to clean bucket edges
+ * would answer a different question than the one they asked.
+ */
+export function resolveCustomWindow(
+  now: Date,
+  timezone: string,
+  fromDay: Date,
+  toDay: Date,
+  bucketOverride?: Bucket,
+): ResolvedPeriod {
+  const todayLocal = shopLocalDay(now, timezone);
+  // Never measure the future: capacity and bookings both stop at today.
+  const end = toDay.getTime() > todayLocal.getTime() ? todayLocal : toDay;
+  const start = fromDay.getTime() > end.getTime() ? end : fromDay;
+  const days = Math.round((end.getTime() - start.getTime()) / DAY_MS) + 1;
+  const options = customBucketOptions(days);
+  const bucket = bucketOverride && options.includes(bucketOverride) ? bucketOverride : options[0]!;
+
+  const buckets: PeriodBucket[] = [];
+  if (bucket === "day") {
+    for (let i = 0; i < days; i++) {
+      const s = new Date(start.getTime() + i * DAY_MS);
+      buckets.push({
+        key: s.toISOString().slice(0, 10),
+        label: shortDate(s),
+        fullLabel: `${WEEKDAYS[(s.getUTCDay() + 6) % 7]} ${shortDate(s)}`,
+        start: s,
+        end: new Date(s.getTime() + DAY_MS),
+      });
+    }
+  } else if (bucket === "week") {
+    let s = weekStart(start);
+    while (s.getTime() <= end.getTime()) {
+      const rawEnd = new Date(s.getTime() + 7 * DAY_MS);
+      // Clip the first and last buckets to the requested range.
+      const bStart = s.getTime() < start.getTime() ? start : s;
+      const bEnd = rawEnd.getTime() > end.getTime() + DAY_MS ? new Date(end.getTime() + DAY_MS) : rawEnd;
+      buckets.push({
+        key: bStart.toISOString().slice(0, 10),
+        label: shortDate(bStart),
+        fullLabel: `Week of ${shortDate(bStart)}`,
+        start: bStart,
+        end: bEnd,
+      });
+      s = rawEnd;
+    }
+  } else {
+    let y = start.getUTCFullYear();
+    let m = start.getUTCMonth();
+    for (;;) {
+      const rawStart = new Date(Date.UTC(y, m, 1));
+      if (rawStart.getTime() > end.getTime()) break;
+      const rawEnd = new Date(Date.UTC(y, m + 1, 1));
+      const bStart = rawStart.getTime() < start.getTime() ? start : rawStart;
+      const bEnd = rawEnd.getTime() > end.getTime() + DAY_MS ? new Date(end.getTime() + DAY_MS) : rawEnd;
+      buckets.push({
+        key: rawStart.toISOString().slice(0, 7),
+        label: MONTHS[rawStart.getUTCMonth()]!,
+        fullLabel: rawStart.toLocaleDateString("en-US", {
+          month: "long",
+          year: "numeric",
+          timeZone: "UTC",
+        }),
+        start: bStart,
+        end: bEnd,
+      });
+      m += 1;
+      if (m > 11) {
+        m = 0;
+        y += 1;
+      }
+    }
+  }
+
+  const fmt = (d: Date) =>
+    `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
+  return {
+    key: "custom",
+    bucket,
+    label: `${fmt(start)} – ${fmt(end)}`,
+    noun: bucket,
+    windowStart: start,
+    today: end,
+    buckets,
+    bucketOptions: options,
   };
 }
 
@@ -249,6 +370,17 @@ export function bucketIndexFor(period: ResolvedPeriod, localDay: Date): number {
   const t = localDay.getTime();
   if (t < period.windowStart.getTime()) return -1;
   const { bucket, buckets } = period;
+  // A custom range clips its first/last bucket to the chosen dates, so the
+  // uniform-width arithmetic below doesn't hold - walk instead (a custom
+  // window is at most ~92 day-buckets).
+  if (period.key === "custom" && bucket !== "day") {
+    for (let i = buckets.length - 1; i >= 0; i--) {
+      if (t >= buckets[i]!.start.getTime()) {
+        return t < buckets[i]!.end.getTime() ? i : -1;
+      }
+    }
+    return -1;
+  }
   // Day and week buckets are uniform, so index is arithmetic. Months vary in
   // length, so walk them (12 at most).
   if (bucket === "day") {
@@ -305,58 +437,58 @@ export async function readChairEvents(
   shopId: string,
   from: Date,
   to: Date,
-  opts: { staffId?: string } = {},
+  opts: { staffId?: string; tx?: Prisma.TransactionClient } = {},
 ): Promise<{ events: ChairEvent[]; syncedExcluded: boolean }> {
   const { staffId } = opts;
   // Appointment and Visit are ENABLE+FORCE RLS tables (tenant_isolation checks
   // app.current_shop_id): a bare prisma read returns ZERO rows under an
-  // enforcing role, and this engine feeds every card on Insights - so the reads
-  // must run through runWithShop (each in its own transaction; a Prisma tx
-  // client must not run concurrent queries). The explicit shopId in each where
-  // stays as the app-layer half of the two-layer isolation.
-  const [appts, visits] = await Promise.all([
-    runWithShop(shopId, (tx) =>
-      tx.appointment.findMany({
-        where: {
-          shopId,
-          ...(staffId ? { staffId } : {}),
-          holdExpiresAt: null,
-          status: { in: [...NATIVE_STATUSES] },
-          startsAt: { gte: from, lt: to },
-        },
-        select: {
-          startsAt: true,
-          endsAt: true,
-          priceAtBooking: true,
-          clientId: true,
-          serviceId: true,
-          service: { select: { name: true } },
-        },
-      }),
-    ),
+  // enforcing role, so the reads run inside a shop-scoped transaction. Every
+  // transaction is real latency (BEGIN + SET ROLE + set_config + COMMIT are
+  // each a DB round trip), so callers that already hold a runWithShop tx pass
+  // it in and this becomes two plain queries on the caller's transaction -
+  // one tx per REQUEST, not per read. The explicit shopId in each where stays
+  // as the app-layer half of the two-layer isolation.
+  const run = <T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> =>
+    opts.tx ? fn(opts.tx) : runWithShop(shopId, fn);
+  const { appts, visits } = await run(async (tx) => ({
+    appts: await tx.appointment.findMany({
+      where: {
+        shopId,
+        ...(staffId ? { staffId } : {}),
+        holdExpiresAt: null,
+        status: { in: [...NATIVE_STATUSES] },
+        startsAt: { gte: from, lt: to },
+      },
+      select: {
+        startsAt: true,
+        endsAt: true,
+        priceAtBooking: true,
+        clientId: true,
+        serviceId: true,
+        service: { select: { name: true } },
+      },
+    }),
     // `appointment: null` keeps a Visit that was promoted FROM a native
-    // appointment from double-counting the same hour - the appointment row above
-    // already represents it.
-    staffId
-      ? Promise.resolve([])
-      : runWithShop(shopId, (tx) =>
-          tx.visit.findMany({
-            where: {
-              shopId,
-              appointment: null,
-              status: { in: [...SYNCED_STATUSES] },
-              scheduledAt: { gte: from, lt: to },
-            },
-            select: {
-              scheduledAt: true,
-              endAt: true,
-              price: true,
-              clientId: true,
-              serviceName: true,
-            },
-          }),
-        ),
-  ]);
+    // appointment from double-counting the same hour - the appointment row
+    // above already represents it.
+    visits: staffId
+      ? []
+      : await tx.visit.findMany({
+          where: {
+            shopId,
+            appointment: null,
+            status: { in: [...SYNCED_STATUSES] },
+            scheduledAt: { gte: from, lt: to },
+          },
+          select: {
+            scheduledAt: true,
+            endAt: true,
+            price: true,
+            clientId: true,
+            serviceName: true,
+          },
+        }),
+  }));
 
   const events: ChairEvent[] = [];
   for (const a of appts) {

@@ -308,6 +308,63 @@ describe("GET /api/insights", () => {
     expect(junk.body.buckets).toHaveLength(30);
   });
 
+  it("measures an explicit date-to-date range, inclusive of both ends", async () => {
+    // The seeds live 1-9 days back (plus one 94 days back). Ask for exactly
+    // the 3-day window that holds the day-2 and day-3 visits.
+    const ymd = (daysAgo: number) =>
+      new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
+    const res = await get(`?period=custom&from=${ymd(3)}&to=${ymd(2)}`);
+    expect(res.status).toBe(200);
+    expect(res.body.period).toBe("custom");
+    // Bars are clipped to the range asked for - 2 days, not a padded week.
+    expect(res.body.buckets).toHaveLength(2);
+    expect(res.body.windowStart).toBe(ymd(3));
+    expect(res.body.windowEnd).toBe(ymd(2));
+    // Only the two Haircut visits (day 2 and day 3) fall inside.
+    expect(res.body.totals.visits).toBe(2);
+    expect(res.body.totals.revenue).toBe(80);
+    // The label spells the range out, so no card can mislabel it.
+    expect(res.body.periodLabel).toMatch(/\w+ \d+, \d{4} – \w+ \d+, \d{4}/);
+  });
+
+  it("custom range: swaps a backwards range and never measures the future", async () => {
+    const ymd = (daysAgo: number) =>
+      new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
+    // from AFTER to - normalized rather than rejected.
+    const swapped = await get(`?period=custom&from=${ymd(2)}&to=${ymd(3)}`);
+    expect(swapped.status).toBe(200);
+    expect(swapped.body.windowStart).toBe(ymd(3));
+    expect(swapped.body.windowEnd).toBe(ymd(2));
+
+    // A range running into next week stops at today: future bookings are
+    // capacity, not work done.
+    const future = await get(`?period=custom&from=${ymd(1)}&to=${ymd(-7)}`);
+    expect(future.body.windowEnd).toBe(ymd(0));
+  });
+
+  it("custom range: offers sensible bar sizes and honors an override", async () => {
+    const ymd = (daysAgo: number) =>
+      new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
+    const short = await get(`?period=custom&from=${ymd(6)}&to=${ymd(0)}`);
+    expect(short.body.bucketOptions).toEqual(["day"]); // a week: days only
+    expect(short.body.bucket).toBe("day");
+
+    const long = await get(`?period=custom&from=${ymd(120)}&to=${ymd(0)}`);
+    expect(long.body.bucketOptions).toEqual(["week", "month"]); // 121 days
+    expect(long.body.bucket).toBe("week");
+    const byMonth = await get(`?period=custom&from=${ymd(120)}&to=${ymd(0)}&bucket=month`);
+    expect(byMonth.body.bucket).toBe("month");
+    // Every bar is inside the range - the first is clipped to the start date.
+    expect(byMonth.body.buckets.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("falls back to the preset when a custom range is malformed", async () => {
+    const junk = await get("?period=custom&from=nope&to=alsonope");
+    expect(junk.status).toBe(200);
+    expect(junk.body.period).toBe("30d");
+    expect(junk.body.buckets).toHaveLength(30);
+  });
+
   it("counts live SCHEDULED and RESCHEDULED synced visits that already happened", async () => {
     // An Acuity visit the promotion cron hasn't flipped yet, and one whose
     // client rescheduled (same row, new time): both really held the chair.

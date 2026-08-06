@@ -1,11 +1,10 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
 import { z } from "zod";
 import { Prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 import { openMinutesForDay, shopLocalDays } from "../engines/utilization.js";
 import {
-  BUCKET_COUNTS,
   DAY_MS,
   PERIODS,
   PERIOD_KEYS,
@@ -13,8 +12,10 @@ import {
   bucketIndexFor,
   localMidnightInstant,
   minutesIntoLocalDay,
+  parseYmd,
   readChairEvents,
   resolveBucket,
+  resolveCustomWindow,
   resolvePeriod,
   resolvePeriodWindow,
   serviceKey,
@@ -24,6 +25,7 @@ import {
   type Bucket,
   type ChairEvent,
   type PeriodKey,
+  type ResolvedPeriod,
 } from "../engines/insightsWindow.js";
 
 /**
@@ -52,30 +54,50 @@ export const insightsRouter: Router = Router();
 insightsRouter.use(requireUser, requireShop, requireManager);
 
 /** Every response echoes the window it measured, so no label can drift from it. */
-function periodMeta(p: ReturnType<typeof resolvePeriodWindow>) {
+function periodMeta(p: ResolvedPeriod) {
   return {
     period: p.key,
     periodLabel: p.label,
     bucket: p.bucket,
     bucketNoun: p.noun,
-    // Which bucket sizes THIS period offers - drives the Day/Week/Month pills.
-    bucketOptions: Object.keys(BUCKET_COUNTS[p.key]) as Bucket[],
+    // Which bucket sizes THIS window offers - drives the Day/Week/Month pills.
+    bucketOptions: p.bucketOptions,
     windowStart: p.windowStart.toISOString().slice(0, 10),
     windowEnd: p.today.toISOString().slice(0, 10),
     periods: PERIOD_KEYS.map((k) => ({ key: k, label: PERIODS[k].label })),
   };
 }
 
+/**
+ * The window this request measures: one of the presets, or an explicit
+ * date-to-date range when `period=custom` with valid from/to. Anything
+ * malformed falls back to the preset path rather than 400ing (same forgiving
+ * contract as resolvePeriod - a stale client never gets an error page).
+ */
+function resolveWindow(now: Date, timezone: string, query: Request["query"]): ResolvedPeriod {
+  const rawBucket = query.bucket;
+  if (query.period === "custom") {
+    const from = parseYmd(query.from);
+    const to = parseYmd(query.to);
+    if (from && to) {
+      const [a, b] = from.getTime() <= to.getTime() ? [from, to] : [to, from];
+      return resolveCustomWindow(
+        now,
+        timezone,
+        a!,
+        b!,
+        typeof rawBucket === "string" ? (rawBucket as Bucket) : undefined,
+      );
+    }
+  }
+  const key = resolvePeriod(query.period);
+  return resolvePeriodWindow(now, timezone, key, resolveBucket(key, rawBucket));
+}
+
 insightsRouter.get("/", async (req, res) => {
   const shop = req.shop!;
   const now = new Date();
-  const key = resolvePeriod(req.query.period);
-  const period = resolvePeriodWindow(
-    now,
-    shop.timezone,
-    key,
-    resolveBucket(key, req.query.bucket),
-  );
+  const period = resolveWindow(now, shop.timezone, req.query);
 
   // The DB filter needs real instants. Pad a day each side so a shop-local day
   // whose instants straddle UTC midnight can never be clipped; events outside
@@ -83,14 +105,16 @@ insightsRouter.get("/", async (req, res) => {
   const fetchFrom = new Date(period.windowStart.getTime() - DAY_MS);
   const fetchTo = new Date(period.today.getTime() + 2 * DAY_MS);
 
-  // PunchLedger and Service are FORCE-RLS tenant tables: bare prisma reads
-  // return zero rows under an enforcing role, so everything here goes through
-  // runWithShop (the loyalty pair shares one transaction; the reads inside a
-  // tx run sequentially because a Prisma tx client can't multiplex).
-  const [{ events }, loyaltyReads, shopServices] = await Promise.all([
-    readChairEvents(shop.id, fetchFrom, fetchTo),
-    runWithShop(shop.id, async (tx) => ({
-      ledgerAgg: await tx.punchLedger.aggregate({
+  // ONE shop-scoped transaction for every tenant read on this request. These
+  // are FORCE-RLS tables (bare prisma reads return zero rows under an
+  // enforcing role), and every runWithShop is a real BEGIN/SET/COMMIT round
+  // trip - the page used to open five per load, which is what "insights is
+  // slow" feels like from a phone. Reads run sequentially inside (a Prisma tx
+  // client can't multiplex), which still beats parallel transactions.
+  const { events, ledgerAgg, redemptions, shopServices, firstVisits, firstAppts } =
+    await runWithShop(shop.id, async (tx) => {
+      const { events } = await readChairEvents(shop.id, fetchFrom, fetchTo, { tx });
+      const ledgerAgg = await tx.punchLedger.aggregate({
         // Standing activity only: exclude a reversed original (reversedAt set)
         // AND its offsetting correction (reversalOfId set), so a punch-and-undo
         // pair nets to 0/0 instead of showing "1 earned, 1 redeemed". A regrant
@@ -103,10 +127,10 @@ insightsRouter.get("/", async (req, res) => {
           reversalOfId: null,
         },
         _sum: { punchesEarned: true, punchesRedeemed: true },
-      }),
+      });
       // Standing redemptions (same predicate as the loyalty designer's
       // timesRedeemed): real redemptions, not undone, not correction rows.
-      redemptions: await tx.punchLedger.count({
+      const redemptions = await tx.punchLedger.count({
         where: {
           shopId: shop.id,
           createdAt: { gte: period.windowStart },
@@ -114,21 +138,52 @@ insightsRouter.get("/", async (req, res) => {
           reversedAt: null,
           reversalOfId: null,
         },
-      }),
-    })),
-    // The live menu, so a service nobody booked can still be listed at 0 rather
-    // than silently missing - "where did my service go?" is the complaint that
-    // an omission-only list produces. Price + duration ride along for the goal
-    // planner ("raise Haircut $5" needs to know Haircut is $50 for 45 min).
-    runWithShop(shop.id, (tx) =>
-      tx.service.findMany({
+      });
+      // The live menu, so a service nobody booked can still be listed at 0
+      // rather than silently missing. Price + duration ride along for the goal
+      // planner ("raise Haircut $5" needs to know Haircut is $50 for 45 min).
+      const shopServices = await tx.service.findMany({
         where: { shopId: shop.id, active: true },
         orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
         select: { id: true, name: true, price: true, durationMin: true },
-      }),
-    ),
-  ]);
-  const { ledgerAgg, redemptions } = loyaltyReads;
+      });
+      // New-vs-returning needs the window's client ids. Derive them here with
+      // the SAME in-window predicate the main loop uses below, so the groupBys
+      // ride this transaction instead of opening two more.
+      const ids = new Set<string>();
+      for (const e of events) {
+        if (e.start > now) continue;
+        if (bucketIndexFor(period, shopLocalDay(e.start, shop.timezone)) < 0) continue;
+        if (e.clientId) ids.add(e.clientId);
+      }
+      const idList = [...ids];
+      const firstVisits =
+        idList.length === 0
+          ? []
+          : await tx.visit.groupBy({
+              by: ["clientId"],
+              where: {
+                shopId: shop.id,
+                status: { in: ["SCHEDULED", "RESCHEDULED", "COMPLETED", "NO_SHOW"] },
+                clientId: { in: idList },
+              },
+              _min: { scheduledAt: true },
+            });
+      const firstAppts =
+        idList.length === 0
+          ? []
+          : await tx.appointment.groupBy({
+              by: ["clientId"],
+              where: {
+                shopId: shop.id,
+                holdExpiresAt: null,
+                status: { in: ["BOOKED", "COMPLETED", "NO_SHOW"] },
+                clientId: { in: idList },
+              },
+              _min: { startsAt: true },
+            });
+      return { events, ledgerAgg, redemptions, shopServices, firstVisits, firstAppts };
+    });
 
   const buckets = period.buckets.map((b) => ({
     key: b.key,
@@ -189,33 +244,8 @@ insightsRouter.get("/", async (req, res) => {
   // booking happens to be this week.
   let newClients = 0;
   if (clientIds.size > 0) {
-    const ids = [...clientIds];
-    // Visit + Appointment are FORCE-RLS tables - same runWithShop rule as above.
-    const [firstVisits, firstAppts] = await Promise.all([
-      runWithShop(shop.id, (tx) =>
-        tx.visit.groupBy({
-          by: ["clientId"],
-          where: {
-            shopId: shop.id,
-            status: { in: ["SCHEDULED", "RESCHEDULED", "COMPLETED", "NO_SHOW"] },
-            clientId: { in: ids },
-          },
-          _min: { scheduledAt: true },
-        }),
-      ),
-      runWithShop(shop.id, (tx) =>
-        tx.appointment.groupBy({
-          by: ["clientId"],
-          where: {
-            shopId: shop.id,
-            holdExpiresAt: null,
-            status: { in: ["BOOKED", "COMPLETED", "NO_SHOW"] },
-            clientId: { in: ids },
-          },
-          _min: { startsAt: true },
-        }),
-      ),
-    ]);
+    // firstVisits/firstAppts were read inside the request's one transaction
+    // above, keyed by the same in-window client ids this loop just collected.
     const firstEver = new Map<string, Date>();
     const note = (clientId: string | null, at: Date | null) => {
       if (!clientId || !at) return;
@@ -345,6 +375,9 @@ insightsRouter.get("/", async (req, res) => {
 const utilizationQuerySchema = z.object({
   period: z.string().optional(),
   bucket: z.string().optional(),
+  // Explicit date-to-date range, used when period=custom.
+  from: z.string().optional(),
+  to: z.string().optional(),
   by: z.enum(["weekday", "period", "service"]).optional(),
   staffId: z.string().min(1).optional(),
 });
@@ -358,15 +391,10 @@ insightsRouter.get("/utilization", async (req, res) => {
   }
   const by = parsed.data.by ?? "weekday";
   const now = new Date();
-  const key = resolvePeriod(parsed.data.period);
-  // Same bucket override as the cuts chart, so "Over time" re-buckets in step
-  // with the page instead of contradicting the chart above it.
-  const period = resolvePeriodWindow(
-    now,
-    shop.timezone,
-    key,
-    resolveBucket(key, parsed.data.bucket),
-  );
+  // Same window resolution as the cuts chart (presets, bucket override AND
+  // custom ranges), so this card never measures a different span than the
+  // chart above it.
+  const period = resolveWindow(now, shop.timezone, parsed.data);
   const staffFilter = parsed.data.staffId;
 
   // Concrete UTC bounds for the DB reads (pad a day so a shop-local day whose
@@ -376,11 +404,12 @@ insightsRouter.get("/utilization", async (req, res) => {
   const nowMin = minutesIntoLocalDay(now, shop.timezone);
 
   // Staff / AvailabilityRule / RecurringBlock / AvailabilityException are all
-  // FORCE-RLS tenant tables (native_booking migration) - read them through
-  // runWithShop or an enforcing role sees an empty schedule and the card
-  // reports the shop as closed.
-  const [schedule, chair] = await Promise.all([
-    runWithShop(shop.id, async (tx) => ({
+  // FORCE-RLS tenant tables (native_booking migration) - read them through a
+  // shop-scoped transaction or an enforcing role sees an empty schedule and
+  // the card reports the shop as closed. ONE transaction for the request:
+  // every extra runWithShop is a BEGIN/SET/COMMIT round trip.
+  const { staffRows, rules, recurringBlocks, exceptions, menu, chair } =
+    await runWithShop(shop.id, async (tx) => ({
       staffRows: await tx.staff.findMany({
         where: { shopId: shop.id, active: true },
         orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
@@ -409,12 +438,11 @@ insightsRouter.get("/utilization", async (req, res) => {
         where: { shopId: shop.id, active: true },
         select: { id: true, name: true },
       }),
-    })),
-    readChairEvents(shop.id, fetchFrom, fetchTo, {
-      ...(staffFilter ? { staffId: staffFilter } : {}),
-    }),
-  ]);
-  const { staffRows, rules, recurringBlocks, exceptions, menu } = schedule;
+      chair: await readChairEvents(shop.id, fetchFrom, fetchTo, {
+        ...(staffFilter ? { staffId: staffFilter } : {}),
+        tx,
+      }),
+    }));
 
   const staffIds = staffFilter
     ? staffRows.filter((s) => s.id === staffFilter).map((s) => s.id)
@@ -432,7 +460,9 @@ insightsRouter.get("/utilization", async (req, res) => {
   const openByWeekday = new Array(7).fill(0) as number[];
   const daysByWeekday = new Array(7).fill(0) as number[];
   const openByBucket = new Array(period.buckets.length).fill(0) as number[];
-  const todayMs = period.today.getTime();
+  // The REAL today, not the window's last day: a custom range that ended in
+  // the past has no partial day to prorate - every one of its days is over.
+  const todayMs = shopLocalDay(now, shop.timezone).getTime();
 
   for (const d of days) {
     // shopLocalDays yields the day's local midnight as a UTC instant; the
@@ -687,47 +717,46 @@ insightsRouter.get("/goal", async (req, res) => {
   );
   const to = new Date(Math.max(monthWin.end.getTime(), weekWin.end.getTime()) + DAY_MS);
 
-  const [rows, serviceGoalRows, menu, schedule, { events }] = await Promise.all([
-    runWithShop(shop.id, (tx) =>
-      tx.shopGoal.findMany({
+  // ONE shop-scoped transaction for the request (five parallel ones cost five
+  // BEGIN/SET/COMMIT round trips AND five pool slots - the pool holds 10).
+  const { rows, serviceGoalRows, menu, schedule, events } = await runWithShop(
+    shop.id,
+    async (tx) => ({
+      rows: await tx.shopGoal.findMany({
         where: { shopId: shop.id },
         select: { metric: true, period: true, target: true, plan: true },
       }),
-    ),
-    runWithShop(shop.id, (tx) =>
-      tx.serviceGoal.findMany({
+      serviceGoalRows: await tx.serviceGoal.findMany({
         where: { shopId: shop.id },
         select: { serviceId: true, metric: true, period: true, target: true },
       }),
-    ),
-    runWithShop(shop.id, (tx) =>
-      tx.service.findMany({
+      menu: await tx.service.findMany({
         where: { shopId: shop.id, active: true },
         orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
         select: { id: true, name: true, price: true, durationMin: true },
       }),
-    ),
-    // The weekly schedule, for full-window capacity (see plannerCapacity).
-    runWithShop(shop.id, async (tx) => ({
-      staffRows: await tx.staff.findMany({
-        where: { shopId: shop.id, active: true },
-        select: { id: true },
-      }),
-      rules: await tx.availabilityRule.findMany({
-        where: { shopId: shop.id },
-        select: { staffId: true, weekday: true, startMin: true, endMin: true },
-      }),
-      recurringBlocks: await tx.recurringBlock.findMany({
-        where: { shopId: shop.id },
-        select: { staffId: true, weekday: true, startMin: true, endMin: true },
-      }),
-      exceptions: await tx.availabilityException.findMany({
-        where: { shopId: shop.id, startsAt: { lt: to }, endsAt: { gt: from } },
-        select: { staffId: true, startsAt: true, endsAt: true, isBlock: true },
-      }),
-    })),
-    readChairEvents(shop.id, from, to),
-  ]);
+      // The weekly schedule, for full-window capacity (see plannerCapacity).
+      schedule: {
+        staffRows: await tx.staff.findMany({
+          where: { shopId: shop.id, active: true },
+          select: { id: true },
+        }),
+        rules: await tx.availabilityRule.findMany({
+          where: { shopId: shop.id },
+          select: { staffId: true, weekday: true, startMin: true, endMin: true },
+        }),
+        recurringBlocks: await tx.recurringBlock.findMany({
+          where: { shopId: shop.id },
+          select: { staffId: true, weekday: true, startMin: true, endMin: true },
+        }),
+        exceptions: await tx.availabilityException.findMany({
+          where: { shopId: shop.id, startsAt: { lt: to }, endsAt: { gt: from } },
+          select: { staffId: true, startsAt: true, endsAt: true, isBlock: true },
+        }),
+      },
+      events: (await readChairEvents(shop.id, from, to, { tx })).events,
+    }),
+  );
 
   const set = new Map(rows.map((r) => [`${r.metric}:${r.period}`, r]));
   const goals = GOAL_METRICS.flatMap((metric) =>
