@@ -3,6 +3,7 @@
 import { apiGet, apiSend } from "@/lib/api";
 import type {
   Bucket,
+  CustomRange,
   GoalMetric,
   GoalPeriod,
   GoalPlan,
@@ -16,10 +17,12 @@ import type {
 export async function insightsAction(
   period: PeriodKey,
   bucket?: Bucket,
+  range?: CustomRange,
 ): Promise<InsightsData | null> {
   const params = new URLSearchParams({
     period,
     ...(bucket ? { bucket } : {}),
+    ...(period === "custom" && range ? { from: range.from, to: range.to } : {}),
   });
   const res = await apiGet<InsightsData>(`/api/insights?${params}`);
   return res.ok ? (res.data ?? null) : null;
@@ -33,6 +36,7 @@ export async function insightsAction(
 export async function utilizationAction(input: {
   period: PeriodKey;
   bucket?: Bucket;
+  range?: CustomRange;
   by: "weekday" | "period" | "service";
   staffId?: string;
 }): Promise<UtilizationData | null> {
@@ -40,6 +44,9 @@ export async function utilizationAction(input: {
     period: input.period,
     by: input.by,
     ...(input.bucket ? { bucket: input.bucket } : {}),
+    ...(input.period === "custom" && input.range
+      ? { from: input.range.from, to: input.range.to }
+      : {}),
     ...(input.staffId ? { staffId: input.staffId } : {}),
   });
   const res = await apiGet<UtilizationData>(`/api/insights/utilization?${params}`);

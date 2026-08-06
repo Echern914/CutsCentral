@@ -1231,43 +1231,42 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
     return;
   }
 
-  const db = forShop(req.shop!.id);
+  const shopId = req.shop!.id;
+  // ONE shop-scoped transaction for the whole request. The agenda used to make
+  // up to nine forShop calls, and every forShop call is its own transaction -
+  // BEGIN + SET ROLE + set_config + query + COMMIT, each a real DB round trip.
+  // On the phone (device -> Vercel -> Railway -> Supabase) that stacked into
+  // "the calendar is slow". Same reads, same RLS guarantees, one transaction.
+  const { agenda, categories } = await runWithShop(shopId, async (tx) => {
 
   // ---- Day-gauge categories (both booking modes) ----
   // A grouped service is represented ONLY by its group, so a booking is never
   // counted in two buckets and the per-bucket totals sum to the "All" total -
   // which is the whole point of the gauge (10/12 + 2/4 = 12/16).
-  const [groupRows, serviceRows] = await Promise.all([
-    db.serviceGroup.findMany({
-      where: { active: true },
+  const [groupRows, serviceRows] = await tx.serviceGroup
+    .findMany({
+      where: { shopId, active: true },
       orderBy: { sortOrder: "asc" },
       select: { id: true, name: true, dailyTarget: true },
-    }) as unknown as Promise<
-      { id: string; name: string; dailyTarget: number | null }[]
-    >,
-    // NOT filtered to active: a booking on a since-retired service must still
-    // land in its group's bucket, or past days would silently under-count. The
-    // category LIST below is filtered instead, so a retired service never grows
-    // a chip of its own.
-    db.service.findMany({
-      orderBy: { sortOrder: "asc" },
-      select: {
-        id: true,
-        name: true,
-        dailyTarget: true,
-        serviceGroupId: true,
-        active: true,
-      },
-    }) as unknown as Promise<
-      {
-        id: string;
-        name: string;
-        dailyTarget: number | null;
-        serviceGroupId: string | null;
-        active: boolean;
-      }[]
-    >,
-  ]);
+    })
+    .then(async (groups) => [
+      groups,
+      // NOT filtered to active: a booking on a since-retired service must still
+      // land in its group's bucket, or past days would silently under-count.
+      // The category LIST below is filtered instead, so a retired service never
+      // grows a chip of its own.
+      await tx.service.findMany({
+        where: { shopId },
+        orderBy: { sortOrder: "asc" },
+        select: {
+          id: true,
+          name: true,
+          dailyTarget: true,
+          serviceGroupId: true,
+          active: true,
+        },
+      }),
+    ] as const);
   const categories: AgendaCategory[] = [
     ...groupRows.map((g) => ({ id: g.id, name: g.name, target: g.dailyTarget })),
     ...serviceRows
@@ -1296,8 +1295,9 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
   let agenda: AgendaRow[];
 
   if (shop.bookingMode === "native") {
-    const rows = (await db.appointment.findMany({
+    const rows = (await tx.appointment.findMany({
       where: {
+        shopId,
         startsAt: { gte: from, lte: to },
         ...(staffId ? { staffId } : {}),
         // Keep AI-receptionist holds off the calendar (see the list above).
@@ -1334,25 +1334,26 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       clientIds.length === 0
         ? []
         : (
-            (await db.pushSubscription.findMany({
-              where: { clientId: { in: clientIds } },
+            await tx.pushSubscription.findMany({
+              where: { shopId, clientId: { in: clientIds } },
               select: { clientId: true },
-            })) as unknown as { clientId: string | null }[]
+            })
           ).map((s) => s.clientId),
     );
     const apptIds = rows.map((r) => r.id);
     const nudgeCounts = new Map<string, number>();
     if (apptIds.length > 0) {
-      const nudgeRows = (await db.nudge.findMany({
+      const nudgeRows = await tx.nudge.findMany({
         // Mirror the engine's cap predicate: FAILED (undelivered) attempts
         // don't consume a nudge, so they mustn't show as used here either.
         where: {
+          shopId,
           appointmentId: { in: apptIds },
           kind: APPOINTMENT_NUDGE_KIND,
           status: { in: ["PENDING", "SENT"] },
         },
         select: { appointmentId: true },
-      })) as unknown as { appointmentId: string | null }[];
+      });
       for (const n of nudgeRows) {
         if (!n.appointmentId) continue;
         nudgeCounts.set(n.appointmentId, (nudgeCounts.get(n.appointmentId) ?? 0) + 1);
@@ -1367,24 +1368,17 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       { rewardId: string; rewardName: string; punchCost: number }
     >();
     if (shop.rewardsEnabled && clientIds.length > 0) {
-      const rewardRows = (await db.reward.findMany({
-        where: { active: true },
+      const rewardRows = await tx.reward.findMany({
+        where: { shopId, active: true },
         orderBy: { punchCost: "asc" },
         select: { id: true, name: true, punchCost: true, cardTypeId: true },
-      })) as unknown as {
-        id: string;
-        name: string;
-        punchCost: number;
-        cardTypeId: string | null;
-      }[];
+      });
       if (rewardRows.length > 0) {
-        const groups = await runWithShop(req.shop!.id, (tx) =>
-          tx.punchLedger.groupBy({
-            by: ["clientId", "cardTypeId"],
-            where: { shopId: req.shop!.id, clientId: { in: clientIds } },
-            _sum: { punchesEarned: true, punchesRedeemed: true },
-          }),
-        );
+        const groups = await tx.punchLedger.groupBy({
+          by: ["clientId", "cardTypeId"],
+          where: { shopId, clientId: { in: clientIds } },
+          _sum: { punchesEarned: true, punchesRedeemed: true },
+        });
         const balances = new Map<string, number>();
         for (const g of groups) {
           balances.set(
@@ -1437,8 +1431,9 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
 
     // Blocked time (barber "Block Off Time") shows on the calendar too, as
     // distinct rows so the day view reflects when the chair is unavailable.
-    const blocks = (await db.availabilityException.findMany({
+    const blocks = await tx.availabilityException.findMany({
       where: {
+        shopId,
         isBlock: true,
         startsAt: { gte: from, lte: to },
         ...(staffId ? { staffId } : {}),
@@ -1446,12 +1441,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       orderBy: { startsAt: "asc" },
       take: 1000,
       select: { id: true, startsAt: true, endsAt: true, reason: true },
-    })) as unknown as {
-      id: string;
-      startsAt: Date;
-      endsAt: Date;
-      reason: string | null;
-    }[];
+    });
     for (const b of blocks) {
       agenda.push({
         id: b.id,
@@ -1494,8 +1484,9 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
     // Visit carries no staff, and the engine blocks EVERY staffer's slots for
     // its window — hiding it under a filter would recreate the same mystery
     // one level down.
-    const externalVisits = (await db.visit.findMany({
+    const externalVisits = (await tx.visit.findMany({
       where: {
+        shopId,
         scheduledAt: { gte: from, lte: to },
         appointment: null,
         // A cancelled booking is not on the schedule. Acuity tells us via the
@@ -1559,8 +1550,9 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
   } else {
     // Synced shops (Acuity / Square / link): appointments are Visit rows. There's
     // no staff relation on Visit, so a staffId filter simply doesn't apply.
-    const rows = (await db.visit.findMany({
+    const rows = (await tx.visit.findMany({
       where: {
+        shopId,
         scheduledAt: { gte: from, lte: to },
         // Same rule as the native branch above: cancelled bookings are off the
         // schedule; RESCHEDULED rows are live at their new time and stay.
@@ -1605,6 +1597,9 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         : null,
     }));
   }
+
+  return { agenda, categories };
+  }); // end of the one shop-scoped transaction
 
   res.json({
     agenda,
@@ -2116,14 +2111,15 @@ const targetedScheduleSchema = z
   });
 
 bookingDashboardRouter.get("/targeted-slots", async (req, res) => {
-  const db = forShop(req.shop!.id);
+  const tsShopId = req.shop!.id;
   const shop = await prisma.shop.findUnique({
-    where: { id: req.shop!.id },
+    where: { id: tsShopId },
     select: { timezone: true },
   });
-  const [slots, rules] = await Promise.all([
-    db.targetedSlot.findMany({
-      where: { startsAt: { gt: new Date() } },
+  // One transaction for both reads (each forShop call is its own tx).
+  const { slots, rules } = await runWithShop(tsShopId, async (tx) => ({
+    slots: await tx.targetedSlot.findMany({
+      where: { shopId: tsShopId, startsAt: { gt: new Date() } },
       orderBy: { startsAt: "asc" },
       take: 200,
       select: {
@@ -2138,24 +2134,11 @@ bookingDashboardRouter.get("/targeted-slots", async (req, res) => {
         ruleId: true,
         bookedAppointmentId: true,
       },
-    }) as unknown as Promise<
-      {
-        id: string;
-        staffId: string;
-        serviceId: string;
-        label: string | null;
-        startsAt: Date;
-        durationMin: number;
-        price: Prisma.Decimal;
-        active: boolean;
-        ruleId: string | null;
-        bookedAppointmentId: string | null;
-      }[]
-    >,
+    }),
     // Active rules drive the condensed series cards (and the finite ones give
     // a batch its group header + "Remove series").
-    db.targetedSlotRule.findMany({
-      where: { active: true },
+    rules: await tx.targetedSlotRule.findMany({
+      where: { shopId: tsShopId, active: true },
       orderBy: { createdAt: "asc" },
       select: {
         id: true,
@@ -2169,7 +2152,7 @@ bookingDashboardRouter.get("/targeted-slots", async (req, res) => {
         indefinite: true,
       },
     }),
-  ]);
+  }));
   const tz = shop?.timezone ?? "America/New_York";
   res.json({
     targetedSlots: slots.map((t) => ({

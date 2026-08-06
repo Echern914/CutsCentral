@@ -6,8 +6,14 @@ import { InsightsClient } from "./InsightsClient";
 
 export const metadata: Metadata = { title: "Insights" };
 
-/** Keys of the page's one period control (mirrors PERIODS in the API engine). */
-export type PeriodKey = "7d" | "30d" | "90d" | "180d" | "365d";
+/** Keys of the page's one period control (mirrors PERIODS in the API engine).
+ *  "custom" is an explicit date-to-date range carried by `from`/`to`. */
+export type PeriodKey = "7d" | "30d" | "90d" | "180d" | "365d" | "custom";
+/** An explicit range, both ends shop-local YYYY-MM-DD and inclusive. */
+export interface CustomRange {
+  from: string;
+  to: string;
+}
 /** Bar sizes a period can be viewed at (mirrors BUCKET_COUNTS in the engine). */
 export type Bucket = "day" | "week" | "month";
 

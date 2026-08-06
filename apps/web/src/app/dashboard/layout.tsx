@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { APP_NAME } from "@chairback/config/constants";
 import { getMe } from "@/lib/me";
 import { HideInNativeApp } from "@/components/HideInNativeApp";
+import { PullToRefresh } from "@/components/PullToRefresh";
 import { logoutAction } from "../(auth)/actions";
 import { DashboardNavInline, DashboardTabBar } from "./_components/DashboardNav";
 import { DemoBanner } from "./_components/DemoBanner";
@@ -45,6 +46,9 @@ export default async function DashboardLayout({
   const activeShopId = me.data?.activeShopId ?? null;
   return (
     <div className="min-h-dvh">
+      {/* Swipe down at the top of any dashboard page to reload - the phone
+          (and the iOS shell especially) has no refresh button. */}
+      <PullToRefresh />
       <header className="sticky top-0 z-20 px-4">
         <nav className="glass mx-auto mt-3 flex w-full max-w-6xl items-center justify-between gap-2 rounded-full px-4 py-2.5 sm:px-5">
           <Link href="/dashboard" className="flex shrink-0 items-center gap-2">

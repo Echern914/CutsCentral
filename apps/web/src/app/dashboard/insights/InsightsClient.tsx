@@ -10,6 +10,7 @@ import { NumberField } from "@/components/ui/NumberField";
 import { GoalPlanner } from "./GoalPlanner";
 import type {
   Bucket,
+  CustomRange,
   Goal,
   GoalMetric,
   GoalPeriod,
@@ -72,6 +73,12 @@ export function InsightsClient({
   // exist for a year (the API would quietly fall back, but the pills should
   // never show a choice the response didn't honor).
   const [bucket, setBucket] = useState<Bucket | null>(null);
+  // The custom date-to-date range. `range` is what's APPLIED (drives fetches);
+  // the two inputs edit a draft so a half-typed range never fires a request.
+  const [range, setRange] = useState<CustomRange | null>(null);
+  const [draftFrom, setDraftFrom] = useState("");
+  const [draftTo, setDraftTo] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
   // Keep showing the last good payload while the next one loads, so the page
   // dims rather than collapsing to empty every time the range changes.
   const [data, setData] = useState<InsightsData>(initial);
@@ -79,12 +86,21 @@ export function InsightsClient({
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    // Already showing this window at this bar size.
-    if (period === data.period && (bucket === null || bucket === data.bucket)) return;
+    // Already showing this window at this bar size. A custom range compares on
+    // its dates too - the key alone stays "custom" while the dates change.
+    const sameWindow =
+      period === data.period &&
+      (bucket === null || bucket === data.bucket) &&
+      (period !== "custom" ||
+        (range !== null &&
+          range.from === data.windowStart &&
+          range.to === data.windowEnd));
+    if (sameWindow) return;
+    if (period === "custom" && !range) return; // nothing applied yet
     let cancelled = false;
     setPending(true);
     setFailed(false);
-    void insightsAction(period, bucket ?? undefined).then((d) => {
+    void insightsAction(period, bucket ?? undefined, range ?? undefined).then((d) => {
       if (cancelled) return;
       if (d) setData(d);
       else setFailed(true);
@@ -93,7 +109,7 @@ export function InsightsClient({
     return () => {
       cancelled = true;
     };
-  }, [period, bucket, data.period, data.bucket]);
+  }, [period, bucket, range, data.period, data.bucket, data.windowStart, data.windowEnd]);
 
   const { buckets, services, totals, busiest, loyalty } = data;
 
@@ -118,6 +134,7 @@ export function InsightsClient({
               onClick={() => {
                 setPeriod(p.key);
                 setBucket(null); // each range starts at its natural bar size
+                setPickerOpen(false);
               }}
               aria-pressed={period === p.key}
               className={cn(
@@ -130,7 +147,75 @@ export function InsightsClient({
               {p.label}
             </button>
           ))}
+          {/* Any two dates you like - a promo week, last month, a season. */}
+          <button
+            type="button"
+            onClick={() => {
+              // Seed the draft from the window on screen, so opening the picker
+              // starts where you already are instead of empty.
+              setDraftFrom((f) => f || data.windowStart);
+              setDraftTo((t) => t || data.windowEnd);
+              setPickerOpen((v) => !v);
+            }}
+            aria-pressed={period === "custom"}
+            aria-expanded={pickerOpen}
+            className={cn(
+              "shrink-0 rounded-full border px-3.5 py-1.5 text-xs transition-colors duration-150 ease-out",
+              period === "custom"
+                ? "border-gold/60 bg-gold/15 text-gold"
+                : "border-subtle text-muted hover:text-offwhite",
+            )}
+          >
+            {period === "custom" ? data.periodLabel : "Custom…"}
+          </button>
         </div>
+        {pickerOpen && (
+          <div className="mt-2 flex flex-wrap items-end gap-2 rounded-xl border border-gold/40 bg-charcoal-800/50 px-3 py-2.5">
+            <label className="flex flex-col gap-1 text-[11px] text-muted">
+              From
+              <input
+                type="date"
+                value={draftFrom}
+                max={draftTo || undefined}
+                onChange={(e) => setDraftFrom(e.target.value)}
+                className="rounded-lg border border-subtle bg-charcoal-800 px-2 py-1.5 text-xs text-offwhite"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-[11px] text-muted">
+              To
+              <input
+                type="date"
+                value={draftTo}
+                min={draftFrom || undefined}
+                onChange={(e) => setDraftTo(e.target.value)}
+                className="rounded-lg border border-subtle bg-charcoal-800 px-2 py-1.5 text-xs text-offwhite"
+              />
+            </label>
+            <button
+              type="button"
+              disabled={!draftFrom || !draftTo}
+              onClick={() => {
+                // Normalize backwards ranges rather than rejecting them.
+                const [from, to] =
+                  draftFrom <= draftTo ? [draftFrom, draftTo] : [draftTo, draftFrom];
+                setRange({ from, to });
+                setPeriod("custom");
+                setBucket(null);
+                setPickerOpen(false);
+              }}
+              className="rounded-full bg-gold px-3.5 py-1.5 text-xs font-semibold text-charcoal-900 disabled:opacity-50"
+            >
+              Show this range
+            </button>
+            <button
+              type="button"
+              onClick={() => setPickerOpen(false)}
+              className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted hover:text-offwhite"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
         <p className="mt-2 text-[11px] text-muted">
           {fmtDay(data.windowStart)} – {fmtDay(data.windowEnd)} · every card below
           covers this range, in your shop&apos;s time.
@@ -226,6 +311,7 @@ export function InsightsClient({
         <UtilizationCard
           period={period}
           bucket={bucket}
+          range={range}
           chairTimeTarget={goalData?.chairTime.target ?? null}
           onRefreshGoals={refreshGoals}
         />
@@ -587,11 +673,17 @@ function ServiceBars({
 //  Chair utilization
 
 /** "6h 30m" / "45m" — hours read better than 390 minutes to a barber. */
-function fmtDuration(min: number): string {
+/**
+ * A duration ALWAYS spelled out to the minute — "336h 0m", never "336h".
+ * Every number on this card is compared against another one (sold vs open,
+ * and each row's pair), and a bare "336h" sitting next to "265h 25m" reads as
+ * a rounded-off estimate. It isn't: minutes are the stored unit, so this is
+ * the exact value, and showing the 0m says so.
+ */
+function fmtDurationExact(min: number): string {
   const h = Math.floor(min / 60);
   const m = Math.round(min % 60);
-  if (h === 0) return `${m}m`;
-  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+  return h === 0 ? `${m}m` : `${h}h ${m}m`;
 }
 
 /**
@@ -624,11 +716,13 @@ const UTIL_VIEWS = [
 function UtilizationCard({
   period,
   bucket,
+  range,
   chairTimeTarget,
   onRefreshGoals,
 }: {
   period: PeriodKey;
   bucket: Bucket | null;
+  range: CustomRange | null;
   chairTimeTarget: number | null;
   onRefreshGoals: () => Promise<void>;
 }) {
@@ -672,6 +766,7 @@ function UtilizationCard({
       // Follow the page's bar-size override so "Over time" re-buckets in step
       // with the cuts chart instead of contradicting it.
       ...(bucket ? { bucket } : {}),
+      ...(range ? { range } : {}),
       ...(staffId ? { staffId } : {}),
     }).then((d) => {
       if (cancelled) return;
@@ -682,7 +777,9 @@ function UtilizationCard({
     return () => {
       cancelled = true;
     };
-  }, [period, bucket, by, staffId]);
+    // range is an object: depend on its DATES, not its identity, or every
+    // parent render would refetch this card.
+  }, [period, bucket, range?.from, range?.to, by, staffId]);
 
   const rawRows = data?.rows ?? [];
   // Weekday rows accumulate the WHOLE window - at a year that's "210h / 470h",
@@ -813,11 +910,11 @@ function UtilizationCard({
               <span className="text-sm text-muted">
                 of your open time booked ·{" "}
                 <span className="tabular-nums">
-                  {fmtDuration(data?.totals.bookedMin ?? 0)}
+                  {fmtDurationExact(data?.totals.bookedMin ?? 0)}
                 </span>{" "}
                 sold of{" "}
                 <span className="tabular-nums">
-                  {fmtDuration(data?.totals.openMin ?? 0)}
+                  {fmtDurationExact(data?.totals.openMin ?? 0)}
                 </span>{" "}
                 open
               </span>
@@ -880,15 +977,15 @@ function UtilizationCard({
                         "closed"
                       ) : offSchedule ? (
                         <span title="Booked outside your weekly hours — there's no scheduled capacity to measure it against. Add this day to your hours and it gets a real percentage.">
-                          <span className="text-offwhite">{fmtDuration(r.bookedMin)}</span>{" "}
+                          <span className="text-offwhite">{fmtDurationExact(r.bookedMin)}</span>{" "}
                           <span className="text-amber-400/90">off-hours</span>
                         </span>
                       ) : (
                         <>
                           <span className="text-offwhite">{r.utilizationPct ?? 0}%</span>
                           {" · "}
-                          {fmtDuration(r.bookedMin)}
-                          {hasCapacity && ` / ${fmtDuration(r.openMin)}`}
+                          {fmtDurationExact(r.bookedMin)}
+                          {hasCapacity && ` / ${fmtDurationExact(r.openMin)}`}
                         </>
                       )}
                     </span>
