@@ -35,10 +35,15 @@ interface Tab {
   Icon: (props: { className?: string }) => JSX.Element;
 }
 
+// Order is deliberate and left-to-right: Home sits in the MIDDLE rather than
+// first. On the bottom bar (the phone's real navigation, and the iOS shell's
+// only navigation) the centre two slots are the easiest thumb reach, so the
+// screens opened most often live there. "More" is appended by the renderers,
+// always last.
 const TABS: Tab[] = [
-  { href: "/dashboard", label: "Home", Icon: HomeIcon },
   { href: "/dashboard/booking", label: "Calendar", Icon: CalendarIcon },
   { href: "/dashboard/clients", label: "Clients", Icon: ClientsIcon },
+  { href: "/dashboard", label: "Home", Icon: HomeIcon },
   { href: "/dashboard/insights", label: "Insights", Icon: InsightsIcon },
 ];
 
