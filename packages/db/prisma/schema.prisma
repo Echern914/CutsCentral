@@ -216,6 +216,9 @@ model Shop {
   // Vertical (INDUSTRIES key in packages/config). Flavors onboarding defaults
   // and copy only - the data model is service-business generic.
   industry            String  @default("barber")
+  // Optional custom singular visit-noun ("twist"); null = the industry default
+  // via serviceNounFor. Flavors Insights copy + client texts. Stored lowercase.
+  serviceNoun         String?
 
   // Billing (Stripe). Access = active/trialing/past_due subscription OR an
   // unexpired trial. When the STRIPE_* env vars are absent, billing is

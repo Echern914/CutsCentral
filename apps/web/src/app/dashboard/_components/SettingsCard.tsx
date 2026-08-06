@@ -2,11 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { useFormState, useFormStatus } from "react-dom";
+import { serviceNounFor } from "@chairback/config/constants";
 import { Card } from "@/components/ui/Card";
 import { saveSettingsAction, smsPreviewAction } from "../actions";
 
 export interface ShopSettings {
   name: string;
+  industry: string;
+  serviceNoun: string | null;
   bookingUrl: string | null;
   nudgeBufferDays: number;
   dailySendCap: number;
@@ -65,6 +68,19 @@ export function SettingsCard({ settings }: { settings: ShopSettings }) {
               placeholder="Acuity, Booksy, Square… or leave blank"
               className={`mt-1 ${field}`}
             />
+          </label>
+          <label className={labelCls}>
+            What do you call a visit? <span className="text-muted">(optional)</span>
+            <input
+              name="serviceNoun"
+              maxLength={24}
+              defaultValue={settings.serviceNoun ?? ""}
+              placeholder={`Leave blank for "${serviceNounFor(settings.industry)}"`}
+              className={`mt-1 ${field}`}
+            />
+            <span className="mt-1 block text-muted/70">
+              One word, singular — e.g. twist. Used across Insights and client texts.
+            </span>
           </label>
         </div>
 

@@ -403,6 +403,7 @@ dashboardRouter.post("/nudge/:clientId", smsLimiter, requireActiveAccess, async 
     magicToken: client.magicToken,
     template: shop.smsTemplate,
     industry: shop.industry,
+    serviceNoun: shop.serviceNoun,
   });
   const nudge = await db.nudge.create({
     data: { clientId: client.id, channel: "SMS", status: "PENDING", body },
@@ -1296,6 +1297,7 @@ dashboardRouter.post("/clients/bulk", smsLimiter, async (req, res) => {
       magicToken: client.magicToken,
       template: shop.smsTemplate,
       industry: shop.industry,
+      serviceNoun: shop.serviceNoun,
     });
     const nudge = await db.nudge.create({
       data: { clientId: client.id, channel: "SMS", status: "PENDING", body },

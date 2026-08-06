@@ -39,6 +39,9 @@ export async function utilizationAction(input: {
   range?: CustomRange;
   by: "weekday" | "period" | "service";
   staffId?: string;
+  /** Narrow booked time to one service or one group (mutually exclusive). */
+  serviceId?: string;
+  groupId?: string;
 }): Promise<UtilizationData | null> {
   const params = new URLSearchParams({
     period: input.period,
@@ -48,6 +51,8 @@ export async function utilizationAction(input: {
       ? { from: input.range.from, to: input.range.to }
       : {}),
     ...(input.staffId ? { staffId: input.staffId } : {}),
+    ...(input.serviceId ? { serviceId: input.serviceId } : {}),
+    ...(input.groupId ? { groupId: input.groupId } : {}),
   });
   const res = await apiGet<UtilizationData>(`/api/insights/utilization?${params}`);
   return res.ok ? (res.data ?? null) : null;

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { pluralServiceNoun } from "@chairback/config/constants";
 import { cn } from "@/lib/cn";
 import { NumberField } from "@/components/ui/NumberField";
 import { Segmented } from "@/components/ui/Segmented";
@@ -39,14 +40,18 @@ export function GoalPlanner({
   planner,
   onSaved,
   onClose,
+  serviceNoun = "cut",
 }: {
   goal: Goal;
   planner: PlannerData;
   onSaved: () => Promise<void> | void;
   onClose: () => void;
+  /** The shop's singular visit-noun ("cut"/"twist") for all the copy below. */
+  serviceNoun?: string;
 }) {
   const period = goal.period;
   const metric = goal.metric;
+  const nounPlural = pluralServiceNoun(serviceNoun);
   const [target, setTarget] = useState<number>(
     goal.target ?? (metric === "revenue" ? (period === "week" ? 1000 : 4000) : period === "week" ? 15 : 60),
   );
@@ -115,7 +120,7 @@ export function GoalPlanner({
   }, [planner.services, levers, period, metric, sellableMin]);
 
   const fmt = (n: number) =>
-    metric === "revenue" ? fmtMoney(n) : `${Math.round(n).toLocaleString()} cuts`;
+    metric === "revenue" ? fmtMoney(n) : `${Math.round(n).toLocaleString()} ${nounPlural}`;
   const overCapacity = proj.plannedMin > sellableMin;
   const deltaToGoal = proj.plannedTotal - target;
 
@@ -142,7 +147,7 @@ export function GoalPlanner({
     }
   }
 
-  const metricLabel = metric === "revenue" ? "Revenue" : "Completed cuts";
+  const metricLabel = metric === "revenue" ? "Revenue" : `Completed ${nounPlural}`;
   const periodNoun = period === "week" ? "week" : "month";
 
   return (
@@ -172,7 +177,7 @@ export function GoalPlanner({
           <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
             <label className="block">
               <span className="text-xs text-muted">
-                Target {metric === "revenue" ? "($ per " : "(cuts per "}
+                Target {metric === "revenue" ? "($ per " : `(${nounPlural} per `}
                 {periodNoun})
               </span>
               <NumberField
@@ -234,7 +239,7 @@ export function GoalPlanner({
             ) : (
               <>
                 <span className="font-semibold tabular-nums">{fmt(-deltaToGoal)}</span>{" "}
-                short of your goal — add cuts or raise a price below.
+                short of your goal — add {nounPlural} or raise a price below.
               </>
             )}
             {proj.plannedTotal !== proj.currentTotal && (
@@ -257,7 +262,7 @@ export function GoalPlanner({
             <div className="mb-2 grid grid-cols-[1fr_5rem_5rem] items-end gap-2 text-[10px] uppercase tracking-wide text-muted sm:grid-cols-[1fr_5rem_5rem_auto]">
               <span>Service · today</span>
               <span>Price +/-$</span>
-              <span>More cuts</span>
+              <span>More {nounPlural}</span>
               <span className="hidden text-right sm:block">
                 Ceiling at {bookedPct}%
               </span>
@@ -322,13 +327,13 @@ export function GoalPlanner({
                         integer
                         emptyValue={0}
                         className="w-full rounded-lg border border-subtle bg-charcoal-800 px-2 py-1.5 text-right text-sm tabular-nums"
-                        aria-label={`Extra cuts per ${periodNoun} for ${s.name}`}
+                        aria-label={`Extra ${nounPlural} per ${periodNoun} for ${s.name}`}
                       />
                       <span
                         className="hidden text-right text-[11px] tabular-nums text-muted sm:block"
                         title={`If ${s.name} alone filled your ${bookedPct}%-booked chair time this ${periodNoun}.`}
                       >
-                        {s.maxCuts} cuts
+                        {s.maxCuts} {nounPlural}
                         {s.maxRevenue !== null && (
                           <span className="block text-offwhite">{fmtMoney(s.maxRevenue)}</span>
                         )}

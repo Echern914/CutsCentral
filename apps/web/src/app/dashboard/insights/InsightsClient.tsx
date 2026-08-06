@@ -2,12 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
+import { pluralServiceNoun } from "@chairback/config/constants";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { Segmented } from "@/components/ui/Segmented";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { cn } from "@/lib/cn";
 import { NumberField } from "@/components/ui/NumberField";
 import { GoalPlanner } from "./GoalPlanner";
+import { PeriodControl } from "./PeriodControl";
 import type {
   Bucket,
   CustomRange,
@@ -42,6 +44,11 @@ function fmtDay(ymd: string): string {
   });
 }
 
+/** "twists" -> "Twists" for labels; the noun is stored lowercase. */
+function cap(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 /**
  * The barber's analytics page. Same dependency-free chart approach as
  * TrendsChart: scaled divs, no chart library.
@@ -54,11 +61,15 @@ export function InsightsClient({
   initial,
   initialGoalData = null,
   rewardsEnabled = true,
+  serviceNoun = "cut",
 }: {
   initial: InsightsData;
   initialGoalData?: GoalResponse | null;
   rewardsEnabled?: boolean;
+  /** The shop's singular visit-noun ("cut"/"twist"), resolved by the API. */
+  serviceNoun?: string;
 }) {
+  const nounPlural = pluralServiceNoun(serviceNoun);
   const [period, setPeriod] = useState<PeriodKey>(initial.period);
   // Goals + planner data live here because three cards read them: GoalsCard
   // (the four quota slots + planner sheet), Chair time (the % target) and
@@ -73,17 +84,26 @@ export function InsightsClient({
   // exist for a year (the API would quietly fall back, but the pills should
   // never show a choice the response didn't honor).
   const [bucket, setBucket] = useState<Bucket | null>(null);
-  // The custom date-to-date range. `range` is what's APPLIED (drives fetches);
-  // the two inputs edit a draft so a half-typed range never fires a request.
+  // The custom date-to-date range: what's APPLIED (drives fetches). The draft
+  // lives inside each PeriodControl instance so a half-typed range never fires.
   const [range, setRange] = useState<CustomRange | null>(null);
-  const [draftFrom, setDraftFrom] = useState("");
-  const [draftTo, setDraftTo] = useState("");
-  const [pickerOpen, setPickerOpen] = useState(false);
   // Keep showing the last good payload while the next one loads, so the page
   // dims rather than collapsing to empty every time the range changes.
   const [data, setData] = useState<InsightsData>(initial);
   const [pending, setPending] = useState(false);
   const [failed, setFailed] = useState(false);
+
+  // Shared by both PeriodControl instances (page top + the Chair time chip) so
+  // there is exactly ONE applied window however it was chosen.
+  const selectPeriod = (p: PeriodKey) => {
+    setPeriod(p);
+    setBucket(null); // each range starts at its natural bar size
+  };
+  const applyRange = (r: CustomRange) => {
+    setRange(r);
+    setPeriod("custom");
+    setBucket(null);
+  };
 
   useEffect(() => {
     // Already showing this window at this bar size. A custom range compares on
@@ -122,100 +142,15 @@ export function InsightsClient({
     >
       {/* The one range control for the whole tab. */}
       <motion.div variants={fadeUp}>
-        <div
-          className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1"
-          role="group"
-          aria-label="Time range"
-        >
-          {data.periods.map((p) => (
-            <button
-              key={p.key}
-              type="button"
-              onClick={() => {
-                setPeriod(p.key);
-                setBucket(null); // each range starts at its natural bar size
-                setPickerOpen(false);
-              }}
-              aria-pressed={period === p.key}
-              className={cn(
-                "shrink-0 rounded-full border px-3.5 py-1.5 text-xs transition-colors duration-150 ease-out",
-                period === p.key
-                  ? "border-gold/60 bg-gold/15 text-gold"
-                  : "border-subtle text-muted hover:text-offwhite",
-              )}
-            >
-              {p.label}
-            </button>
-          ))}
-          {/* Any two dates you like - a promo week, last month, a season. */}
-          <button
-            type="button"
-            onClick={() => {
-              // Seed the draft from the window on screen, so opening the picker
-              // starts where you already are instead of empty.
-              setDraftFrom((f) => f || data.windowStart);
-              setDraftTo((t) => t || data.windowEnd);
-              setPickerOpen((v) => !v);
-            }}
-            aria-pressed={period === "custom"}
-            aria-expanded={pickerOpen}
-            className={cn(
-              "shrink-0 rounded-full border px-3.5 py-1.5 text-xs transition-colors duration-150 ease-out",
-              period === "custom"
-                ? "border-gold/60 bg-gold/15 text-gold"
-                : "border-subtle text-muted hover:text-offwhite",
-            )}
-          >
-            {period === "custom" ? data.periodLabel : "Custom…"}
-          </button>
-        </div>
-        {pickerOpen && (
-          <div className="mt-2 flex flex-wrap items-end gap-2 rounded-xl border border-gold/40 bg-charcoal-800/50 px-3 py-2.5">
-            <label className="flex flex-col gap-1 text-[11px] text-muted">
-              From
-              <input
-                type="date"
-                value={draftFrom}
-                max={draftTo || undefined}
-                onChange={(e) => setDraftFrom(e.target.value)}
-                className="rounded-lg border border-subtle bg-charcoal-800 px-2 py-1.5 text-xs text-offwhite"
-              />
-            </label>
-            <label className="flex flex-col gap-1 text-[11px] text-muted">
-              To
-              <input
-                type="date"
-                value={draftTo}
-                min={draftFrom || undefined}
-                onChange={(e) => setDraftTo(e.target.value)}
-                className="rounded-lg border border-subtle bg-charcoal-800 px-2 py-1.5 text-xs text-offwhite"
-              />
-            </label>
-            <button
-              type="button"
-              disabled={!draftFrom || !draftTo}
-              onClick={() => {
-                // Normalize backwards ranges rather than rejecting them.
-                const [from, to] =
-                  draftFrom <= draftTo ? [draftFrom, draftTo] : [draftTo, draftFrom];
-                setRange({ from, to });
-                setPeriod("custom");
-                setBucket(null);
-                setPickerOpen(false);
-              }}
-              className="rounded-full bg-gold px-3.5 py-1.5 text-xs font-semibold text-charcoal-900 disabled:opacity-50"
-            >
-              Show this range
-            </button>
-            <button
-              type="button"
-              onClick={() => setPickerOpen(false)}
-              className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted hover:text-offwhite"
-            >
-              Cancel
-            </button>
-          </div>
-        )}
+        <PeriodControl
+          periods={data.periods}
+          period={period}
+          periodLabel={data.periodLabel}
+          windowStart={data.windowStart}
+          windowEnd={data.windowEnd}
+          onSelectPeriod={selectPeriod}
+          onApplyRange={applyRange}
+        />
         <p className="mt-2 text-[11px] text-muted">
           {fmtDay(data.windowStart)} – {fmtDay(data.windowEnd)} · every card below
           covers this range, in your shop&apos;s time.
@@ -234,6 +169,7 @@ export function InsightsClient({
           goals={goalData?.goals ?? null}
           planner={goalData?.planner ?? null}
           onRefresh={refreshGoals}
+          serviceNoun={serviceNoun}
         />
       </motion.div>
 
@@ -245,7 +181,7 @@ export function InsightsClient({
           pending && "opacity-60",
         )}
       >
-        <Tile label="Cuts" value={String(totals.visits)} accent />
+        <Tile label={cap(nounPlural)} value={String(totals.visits)} accent />
         <Tile label="Revenue" value={`$${totals.revenue.toLocaleString()}`} />
         <Tile
           label="Avg ticket"
@@ -265,7 +201,9 @@ export function InsightsClient({
         <Card className="p-5">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
             <div className="flex items-baseline gap-3">
-              <h2 className="font-display text-lg">Cuts per {data.bucketNoun}</h2>
+              <h2 className="font-display text-lg">
+                {cap(nounPlural)} per {data.bucketNoun}
+              </h2>
               <span className="text-xs text-muted">{data.periodLabel}</span>
             </div>
             {data.bucketOptions.length > 1 && (
@@ -280,7 +218,12 @@ export function InsightsClient({
               />
             )}
           </div>
-          <BucketBars buckets={buckets} pending={pending} noun={data.bucketNoun} />
+          <BucketBars
+            buckets={buckets}
+            pending={pending}
+            noun={data.bucketNoun}
+            serviceNoun={serviceNoun}
+          />
         </Card>
       </motion.div>
 
@@ -301,6 +244,7 @@ export function InsightsClient({
               pending={pending}
               serviceGoals={goalData?.serviceGoals ?? []}
               onRefreshGoals={refreshGoals}
+              serviceNoun={serviceNoun}
             />
           )}
         </Card>
@@ -314,6 +258,8 @@ export function InsightsClient({
           range={range}
           chairTimeTarget={goalData?.chairTime.target ?? null}
           onRefreshGoals={refreshGoals}
+          onSelectPeriod={selectPeriod}
+          onApplyRange={applyRange}
         />
       </motion.div>
 
@@ -329,9 +275,9 @@ export function InsightsClient({
             different measures (booking counts here, minutes there) read as the
             page contradicting itself. */}
         <Card className="p-5">
-          <h2 className="mb-1 font-display text-lg">Cuts by day</h2>
+          <h2 className="mb-1 font-display text-lg">{cap(nounPlural)} by day</h2>
           <p className="mb-4 text-xs text-muted">
-            Every cut in this range, stacked onto the day it fell on.
+            Every {serviceNoun} in this range, stacked onto the day it fell on.
           </p>
           <DayBars counts={busiest.counts} />
         </Card>
@@ -355,9 +301,9 @@ export function InsightsClient({
           </dl>
           {totals.walkIns > 0 && (
             <p className="mt-3 text-[11px] text-muted/80">
-              Walk-ins booked without a client record count as cuts and revenue,
-              but there&apos;s no person to count them against — which is why
-              cuts can run ahead of clients seen.
+              Walk-ins booked without a client record count as {nounPlural} and
+              revenue, but there&apos;s no person to count them against — which
+              is why {nounPlural} can run ahead of clients seen.
             </p>
           )}
         </Card>
@@ -409,13 +355,19 @@ function BucketBars({
   buckets,
   pending,
   noun,
+  serviceNoun,
 }: {
   buckets: InsightsData["buckets"];
   pending: boolean;
   noun: string;
+  serviceNoun: string;
 }) {
   const max = Math.max(1, ...buckets.map((b) => b.cuts));
   const hasData = buckets.some((b) => b.cuts > 0);
+  const nounPlural = pluralServiceNoun(serviceNoun);
+  // The count under each bar, when the bars are wide enough to carry one: a
+  // 30-bar day view on a phone has no room, so dense views keep the tooltip.
+  const showCounts = buckets.length <= 16;
   if (!hasData) {
     return (
       <p className="py-6 text-sm text-muted">
@@ -427,22 +379,39 @@ function BucketBars({
   return (
     <div className={cn("transition-opacity duration-150 ease-out", pending && "opacity-50")}>
       {/* Each column must STRETCH to the track's height: a percentage height
-          resolves against a definite parent only, so `items-end` here would
-          collapse every column to auto and render an empty chart. The columns
-          stretch; the bar inside each one is what sits at the bottom. */}
-      <div className="flex h-36 gap-1" role="img" aria-label={`Cuts per ${noun}`}>
+          resolves against a definite parent only, so `items-end` on the column
+          would collapse it to auto and render an empty chart. The column is a
+          flex-col whose TRACK stretches (like DayBars); the bar sits at the
+          track's bottom, with the count label under it. */}
+      <div
+        className={cn("flex gap-1", showCounts ? "h-40" : "h-36")}
+        role="img"
+        aria-label={`${cap(nounPlural)} per ${noun}`}
+      >
         {buckets.map((b) => (
           <div
             key={b.key}
-            className="group relative flex flex-1 items-end"
-            title={`${b.fullLabel}: ${b.cuts} ${b.cuts === 1 ? "cut" : "cuts"}${
+            className="group relative flex flex-1 flex-col"
+            title={`${b.fullLabel}: ${b.cuts} ${b.cuts === 1 ? serviceNoun : nounPlural}${
               b.revenue > 0 ? ` · $${b.revenue.toLocaleString()}` : ""
             }`}
           >
-            <div
-              className="w-full rounded-t bg-gold/70 transition-all duration-200 ease-out group-hover:bg-gold"
-              style={{ height: `${Math.max(2, Math.round((b.cuts / max) * 100))}%` }}
-            />
+            <div className="flex w-full flex-1 items-end">
+              <div
+                className="w-full rounded-t bg-gold/70 transition-all duration-200 ease-out group-hover:bg-gold"
+                style={{ height: `${Math.max(2, Math.round((b.cuts / max) * 100))}%` }}
+              />
+            </div>
+            {showCounts && (
+              <span
+                className={cn(
+                  "mt-1 text-center text-[10px] tabular-nums",
+                  b.cuts > 0 ? "text-muted" : "text-muted/50",
+                )}
+              >
+                {b.cuts}
+              </span>
+            )}
           </div>
         ))}
       </div>
@@ -466,12 +435,15 @@ function ServiceBars({
   pending,
   serviceGoals,
   onRefreshGoals,
+  serviceNoun,
 }: {
   services: InsightsData["services"];
   pending: boolean;
   serviceGoals: ServiceGoalRow[];
   onRefreshGoals: () => Promise<void>;
+  serviceNoun: string;
 }) {
+  const nounPlural = pluralServiceNoun(serviceNoun);
   const [mode, setMode] = useState<"count" | "revenue">("count");
   const [showAll, setShowAll] = useState(false);
   // Per-service quota editor: which row is open, and its draft.
@@ -584,7 +556,7 @@ function ServiceBars({
                       )}
                       title={
                         g
-                          ? `${g.actual} of ${g.target} ${g.metric === "visits" ? "cuts" : "$"} ${PERIOD_LABEL[g.period]}`
+                          ? `${g.actual} of ${g.target} ${g.metric === "visits" ? nounPlural : "$"} ${PERIOD_LABEL[g.period]}`
                           : "Set a target for this service"
                       }
                     >
@@ -615,10 +587,10 @@ function ServiceBars({
                     max={1_000_000}
                     integer
                     className="w-20 rounded-lg border border-subtle bg-charcoal-800 px-2 py-1 text-right text-xs tabular-nums"
-                    aria-label={`${goalMetric === "visits" ? "Cuts" : "Revenue"} target for ${s.name}`}
+                    aria-label={`${goalMetric === "visits" ? cap(nounPlural) : "Revenue"} target for ${s.name}`}
                   />
                   <span className="text-[11px] text-muted">
-                    {goalMetric === "visits" ? "cuts" : "$"} per
+                    {goalMetric === "visits" ? nounPlural : "$"} per
                   </span>
                   <Segmented
                     options={[
@@ -719,15 +691,24 @@ function UtilizationCard({
   range,
   chairTimeTarget,
   onRefreshGoals,
+  onSelectPeriod,
+  onApplyRange,
 }: {
   period: PeriodKey;
   bucket: Bucket | null;
   range: CustomRange | null;
   chairTimeTarget: number | null;
   onRefreshGoals: () => Promise<void>;
+  // The page-level period setters: the card's chip opens the SAME control the
+  // page top has, so however the range is chosen there is one applied window.
+  onSelectPeriod: (p: PeriodKey) => void;
+  onApplyRange: (r: CustomRange) => void;
 }) {
   const [by, setBy] = useState<"weekday" | "period" | "service">("weekday");
   const [staffId, setStaffId] = useState<string>("");
+  // "" = all services, "s:<id>" = one service, "g:<id>" = one group.
+  const [svcFilter, setSvcFilter] = useState<string>("");
+  const [periodOpen, setPeriodOpen] = useState(false);
   const [data, setData] = useState<UtilizationData | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
@@ -768,6 +749,8 @@ function UtilizationCard({
       ...(bucket ? { bucket } : {}),
       ...(range ? { range } : {}),
       ...(staffId ? { staffId } : {}),
+      ...(svcFilter.startsWith("s:") ? { serviceId: svcFilter.slice(2) } : {}),
+      ...(svcFilter.startsWith("g:") ? { groupId: svcFilter.slice(2) } : {}),
     }).then((d) => {
       if (cancelled) return;
       if (d) setData(d);
@@ -779,7 +762,7 @@ function UtilizationCard({
     };
     // range is an object: depend on its DATES, not its identity, or every
     // parent render would refetch this card.
-  }, [period, bucket, range?.from, range?.to, by, staffId]);
+  }, [period, bucket, range?.from, range?.to, by, staffId, svcFilter]);
 
   const rawRows = data?.rows ?? [];
   // Weekday rows accumulate the WHOLE window - at a year that's "210h / 470h",
@@ -864,30 +847,95 @@ function UtilizationCard({
             </div>
           </div>
         )}
-        {/* Controls: how to slice it, and (multi-chair shops) whose chair. */}
+        {/* Controls: the range (same control as the page top), how to slice it,
+            which service fills it, and (multi-chair shops) whose chair. */}
         <div className="flex flex-wrap items-center gap-2">
+          {data && (
+            <button
+              type="button"
+              onClick={() => setPeriodOpen((v) => !v)}
+              aria-expanded={periodOpen}
+              className={cn(
+                "shrink-0 rounded-full border px-3 py-1 text-xs transition-colors duration-150 ease-out",
+                periodOpen
+                  ? "border-gold/60 bg-gold/15 text-gold"
+                  : "border-subtle text-muted hover:text-offwhite",
+              )}
+            >
+              {data.periodLabel} ▾
+            </button>
+          )}
           <Segmented
             options={UTIL_VIEWS.map((v) => ({ key: v.key, label: v.label }))}
             value={by}
             onChange={setBy}
             ariaLabel="Group by"
           />
-          {(data?.staff.length ?? 0) > 1 && (
-            <select
-              value={staffId}
-              onChange={(e) => setStaffId(e.target.value)}
-              aria-label="Barber"
-              className="ml-auto rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
-            >
-              <option value="">All barbers</option>
-              {data!.staff.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          )}
+          <div className="ml-auto flex items-center gap-2">
+            {data &&
+              (data.serviceOptions.length > 0 || data.groups.length > 0) && (
+                <select
+                  value={svcFilter}
+                  onChange={(e) => setSvcFilter(e.target.value)}
+                  aria-label="Service"
+                  className="max-w-[11rem] rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
+                >
+                  <option value="">All services</option>
+                  {data.groups.length > 0 && (
+                    <optgroup label="Groups">
+                      {data.groups.map((g) => (
+                        <option key={g.id} value={`g:${g.id}`}>
+                          {g.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  <optgroup label="Services">
+                    {data.serviceOptions.map((s) => (
+                      <option key={s.id} value={`s:${s.id}`}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                </select>
+              )}
+            {(data?.staff.length ?? 0) > 1 && (
+              <select
+                value={staffId}
+                onChange={(e) => setStaffId(e.target.value)}
+                aria-label="Barber"
+                className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
+              >
+                <option value="">All barbers</option>
+                {data!.staff.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
         </div>
+        {/* The SAME period control as the page top, right where Drick looks for
+            it. It drives the page-level state, so the whole tab moves in step. */}
+        {periodOpen && data && (
+          <PeriodControl
+            compact
+            periods={data.periods}
+            period={period}
+            periodLabel={data.periodLabel}
+            windowStart={data.windowStart}
+            windowEnd={data.windowEnd}
+            onSelectPeriod={(p) => {
+              setPeriodOpen(false);
+              onSelectPeriod(p);
+            }}
+            onApplyRange={(r) => {
+              setPeriodOpen(false);
+              onApplyRange(r);
+            }}
+          />
+        )}
 
         {loading && !data ? (
           <p className="py-4 text-sm text-muted">Working out your chair time…</p>
@@ -995,6 +1043,12 @@ function UtilizationCard({
             </div>
 
             <div className="flex flex-col gap-1 text-[11px] text-muted/80">
+              {data?.serviceFilter && (
+                <p>
+                  Showing {data.serviceFilter.label ?? "the selected service"}{" "}
+                  only — the % is its share of your total open time.
+                </p>
+              )}
               {by === "weekday" && weekdaySpan > 1 && (
                 <p>
                   Each row is the average for that weekday across the range
@@ -1050,17 +1104,18 @@ function DayBars({ counts }: { counts: number[] }) {
 
 //  Quota goals
 
-/** "$1,234" for revenue goals, "17 cuts" for cut-count goals. */
-function fmtAmount(metric: GoalMetric, n: number): string {
+/** "$1,234" for revenue goals, "17 cuts"/"17 twists" for count goals. */
+function fmtAmount(metric: GoalMetric, n: number, noun: string): string {
   return metric === "revenue"
     ? `$${n.toLocaleString()}`
-    : `${n.toLocaleString()} cut${n === 1 ? "" : "s"}`;
+    : `${n.toLocaleString()} ${n === 1 ? noun : pluralServiceNoun(noun)}`;
 }
 
-const METRIC_LABEL: Record<GoalMetric, string> = {
-  revenue: "Revenue",
-  visits: "Completed cuts",
-};
+/** "Revenue" / "Completed cuts" (or the shop's own word for a cut). */
+function metricLabel(metric: GoalMetric, noun: string): string {
+  return metric === "revenue" ? "Revenue" : `Completed ${pluralServiceNoun(noun)}`;
+}
+
 const PERIOD_LABEL: Record<GoalPeriod, string> = {
   week: "this week",
   month: "this month",
@@ -1084,18 +1139,21 @@ function GoalsCard({
   goals,
   planner,
   onRefresh,
+  serviceNoun,
 }: {
   goals: Goal[] | null;
   planner: PlannerData | null;
   onRefresh: () => Promise<void>;
+  serviceNoun: string;
 }) {
   const [planning, setPlanning] = useState<string | null>(null); // goalKey
   const [saving, setSaving] = useState(false);
+  const nounPlural = pluralServiceNoun(serviceNoun);
 
   async function clear(g: Goal) {
     if (
       !window.confirm(
-        `Remove your ${METRIC_LABEL[g.metric].toLowerCase()} ${g.period} goal? Your other goals are unaffected.`,
+        `Remove your ${metricLabel(g.metric, serviceNoun).toLowerCase()} ${g.period} goal? Your other goals are unaffected.`,
       )
     ) {
       return;
@@ -1121,7 +1179,7 @@ function GoalsCard({
     <Card className="p-5">
       <CardHeader
         title="Goals"
-        subtitle="Set a quota for the week and the month — then plan how to hit it: raise a price, add cuts, pick how booked you want to run."
+        subtitle={`Set a quota for the week and the month — then plan how to hit it: raise a price, add ${nounPlural}, pick how booked you want to run.`}
       />
       {!anySet && (
         <p className="mt-3 text-sm text-muted">
@@ -1136,6 +1194,7 @@ function GoalsCard({
             key={goalKey(g)}
             goal={g}
             saving={saving}
+            serviceNoun={serviceNoun}
             onBeginEdit={() => setPlanning(goalKey(g))}
             onClear={() => void clear(g)}
           />
@@ -1145,6 +1204,7 @@ function GoalsCard({
         <GoalPlanner
           goal={planningGoal}
           planner={planner}
+          serviceNoun={serviceNoun}
           onSaved={onRefresh}
           onClose={() => setPlanning(null)}
         />
@@ -1161,15 +1221,17 @@ function GoalsCard({
 function GoalCell({
   goal,
   saving,
+  serviceNoun,
   onBeginEdit,
   onClear,
 }: {
   goal: Goal;
   saving: boolean;
+  serviceNoun: string;
   onBeginEdit: () => void;
   onClear: () => void;
 }) {
-  const title = `${METRIC_LABEL[goal.metric]} · ${PERIOD_LABEL[goal.period]}`;
+  const title = `${metricLabel(goal.metric, serviceNoun)} · ${PERIOD_LABEL[goal.period]}`;
   const p = goal.progress;
 
   if (goal.target === null || !p) {
@@ -1209,14 +1271,17 @@ function GoalCell({
           {p.delta === 0
             ? "On pace"
             : onPace
-              ? `+${fmtAmount(goal.metric, p.delta)}`
-              : `-${fmtAmount(goal.metric, -p.delta)}`}
+              ? `+${fmtAmount(goal.metric, p.delta, serviceNoun)}`
+              : `-${fmtAmount(goal.metric, -p.delta, serviceNoun)}`}
         </span>
       </div>
 
       <p className="mt-1 font-display text-2xl tabular-nums text-offwhite">
-        {fmtAmount(goal.metric, p.actual)}
-        <span className="text-sm text-muted"> of {fmtAmount(goal.metric, goal.target)}</span>
+        {fmtAmount(goal.metric, p.actual, serviceNoun)}
+        <span className="text-sm text-muted">
+          {" "}
+          of {fmtAmount(goal.metric, goal.target, serviceNoun)}
+        </span>
       </p>
 
       {/* Progress bar with the pace tick: fill = actual/target, tick = where the
@@ -1229,7 +1294,7 @@ function GoalCell({
         <div
           className="absolute top-0 h-full w-0.5 bg-offwhite/70"
           style={{ left: `${paceMark}%` }}
-          title={`Pace: ${fmtAmount(goal.metric, p.paceTarget)} by today`}
+          title={`Pace: ${fmtAmount(goal.metric, p.paceTarget, serviceNoun)} by today`}
         />
       </div>
       <div className="mt-1 flex justify-between text-[10px] tabular-nums text-muted">

@@ -10,8 +10,10 @@ export interface ShopPageSettings {
   name: string;
   slug: string | null;
   // Vertical key ("barber" | "salon" | ...) — the live preview needs it for
-  // noun-correct copy (ShopPageData.industry).
+  // noun-correct copy (ShopPageData.industry). serviceNoun is the shop's own
+  // word for a visit when set, overriding the industry noun.
   industry: string;
+  serviceNoun: string | null;
   publicPageEnabled: boolean;
   theme: string;
   bio: string | null;

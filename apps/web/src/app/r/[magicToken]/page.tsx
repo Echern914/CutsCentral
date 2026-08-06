@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { APP_NAME, serviceNounFor } from "@chairback/config/constants";
+import { APP_NAME, serviceNounForShop } from "@chairback/config/constants";
 import { apiPublicGet } from "@/lib/api";
 import { ShopPageClient } from "@/app/s/[slug]/ShopPageClient";
 import type { ShopPageData } from "@/app/s/[slug]/page";
@@ -54,7 +54,7 @@ export async function generateMetadata({
   const shopPage = data.shop.pageSlug ? await getShopPage(data.shop.pageSlug) : null;
   const description =
     shopPage?.bio ??
-    `Book your next ${serviceNounFor(shopPage?.industry ?? "barber")} at ${data.shop.name}.`;
+    `Book your next ${serviceNounForShop(shopPage ?? { industry: "barber" })} at ${data.shop.name}.`;
   return {
     title: data.shop.name,
     description,

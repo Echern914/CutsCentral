@@ -45,6 +45,9 @@ type Payload = {
   totals: { openMin: number; bookedMin: number; bookings: number; utilizationPct: number | null };
   noSchedule: boolean;
   syncedExcluded: boolean;
+  serviceOptions: { id: string; name: string; groupId: string | null }[];
+  groups: { id: string; name: string }[];
+  serviceFilter: { serviceId: string | null; groupId: string | null; label: string | null } | null;
 };
 
 async function util(query: Record<string, string> = {}): Promise<Payload> {
@@ -267,5 +270,132 @@ describe("insights utilization", () => {
       .query({ by: "banana" })
       .set("Cookie", cookie);
     expect(res.status).toBe(400);
+  });
+});
+
+/**
+ * The service/group filter: booked time narrows to the selection while capacity
+ * stays shop-wide, so the % reads "this service's share of my open time".
+ * Synced visits join by the SAME lowercased-name fold the by=service rows use.
+ */
+describe("utilization service/group filter", () => {
+  let fadeId: string;
+  let beardTrimId: string;
+  let groupId: string;
+
+  beforeAll(async () => {
+    const fade = await prisma.service.findFirst({
+      where: { shopId, name: "Fade" },
+      select: { id: true },
+    });
+    fadeId = fade!.id;
+    const group = await prisma.serviceGroup.create({
+      data: { shopId, name: "Fades" },
+      select: { id: true },
+    });
+    groupId = group.id;
+    await prisma.service.update({ where: { id: fadeId }, data: { serviceGroupId: groupId } });
+
+    // A second native service + booking (15:00-16:00), initially ungrouped.
+    const beardTrim = await prisma.service.create({
+      data: { shopId, name: "Beard Trim", durationMin: 60, price: 25 },
+      select: { id: true },
+    });
+    beardTrimId = beardTrim.id;
+    await prisma.appointment.create({
+      data: {
+        shopId,
+        staffId,
+        serviceId: beardTrimId,
+        firstName: "Walkin",
+        status: "COMPLETED",
+        startsAt: at(15),
+        endsAt: at(16),
+        manageToken: randomToken(),
+      },
+    });
+    // A synced visit named "fade" (lowercase) — must join the Fade filter by name.
+    await prisma.visit.create({
+      data: {
+        shopId,
+        clientId: (await prisma.client.findFirst({ where: { shopId }, select: { id: true } }))!.id,
+        acuityAppointmentId: `acu-${randomToken(6)}`,
+        status: "COMPLETED",
+        scheduledAt: at(16),
+        endAt: new Date(at(16).getTime() + 30 * 60_000),
+        serviceName: "fade",
+      },
+    });
+    // A synced visit with NO name — can never match any filter.
+    await prisma.visit.create({
+      data: {
+        shopId,
+        clientId: (await prisma.client.findFirst({ where: { shopId }, select: { id: true } }))!.id,
+        acuityAppointmentId: `acu-${randomToken(6)}`,
+        status: "COMPLETED",
+        scheduledAt: at(14),
+        endAt: new Date(at(14).getTime() + 30 * 60_000),
+      },
+    });
+  });
+
+  it("serviceId narrows booked time to that service (native by id + synced by name)", async () => {
+    const all = await util();
+    // 120 original + 60 Beard Trim + 30 synced "fade" + 30 unnamed synced.
+    expect(all.totals.bookedMin).toBe(240);
+    expect(all.serviceFilter).toBeNull();
+
+    const filtered = await util({ serviceId: fadeId });
+    expect(filtered.totals.bookedMin).toBe(90); // native Fade 60 + synced "fade" 30
+    expect(filtered.totals.bookings).toBe(2);
+    expect(filtered.totals.openMin).toBe(all.totals.openMin); // capacity stays shop-wide
+    expect(filtered.serviceFilter).toEqual({ serviceId: fadeId, groupId: null, label: "Fade" });
+  });
+
+  it("groupId sums its member services, including a retired member's bookings", async () => {
+    const byGroup = await util({ groupId });
+    expect(byGroup.totals.bookedMin).toBe(90); // only Fade is a member so far
+    expect(byGroup.serviceFilter).toEqual({ serviceId: null, groupId, label: "Fades" });
+
+    // Add Beard Trim to the group, then retire it: its sold time still counts
+    // (day-gauge precedent) while the dropdown options drop it.
+    await prisma.service.update({
+      where: { id: beardTrimId },
+      data: { serviceGroupId: groupId, active: false },
+    });
+    const after = await util({ groupId });
+    expect(after.totals.bookedMin).toBe(150); // 90 + Beard Trim's 60
+    expect(after.serviceOptions.map((o) => o.name)).not.toContain("Beard Trim");
+    expect(after.serviceOptions.find((o) => o.id === fadeId)?.groupId).toBe(groupId);
+    expect(after.groups.map((g) => g.name)).toContain("Fades");
+
+    // A retired service is still directly filterable (permissive by design).
+    const retired = await util({ serviceId: beardTrimId });
+    expect(retired.totals.bookedMin).toBe(60);
+  });
+
+  it("by=service with a filter returns only matching rows (synced folds into the id row)", async () => {
+    const body = await util({ by: "service", serviceId: fadeId });
+    expect(body.rows).toHaveLength(1);
+    expect(body.rows[0]!.label).toBe("Fade");
+    expect(body.rows[0]!.bookedMin).toBe(90);
+  });
+
+  it("serviceId + groupId together is a 400; an unknown id is a permissive 200/zero", async () => {
+    const res = await request(app)
+      .get("/api/insights/utilization")
+      .query({ serviceId: fadeId, groupId })
+      .set("Cookie", cookie);
+    expect(res.status).toBe(400);
+
+    const unknown = await util({ serviceId: "nope" });
+    expect(unknown.totals.bookedMin).toBe(0);
+    expect(unknown.serviceFilter).toEqual({ serviceId: "nope", groupId: null, label: null });
+  });
+
+  it("composes with the staff filter (native rows only) and never matches the unnamed synced visit", async () => {
+    const mine = await util({ staffId, serviceId: fadeId });
+    expect(mine.totals.bookedMin).toBe(60); // synced "fade" has no staff
+    expect(mine.syncedExcluded).toBe(true);
   });
 });

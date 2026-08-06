@@ -1,4 +1,4 @@
-import { apiEnv, serviceNounFor } from "@chairback/config";
+import { apiEnv, serviceNounForShop } from "@chairback/config";
 
 const env = apiEnv();
 
@@ -8,10 +8,15 @@ export const SMS_PLACEHOLDERS = ["{firstName}", "{shop}", "{bookingUrl}", "{rewa
 /**
  * The built-in default template (used when a shop hasn't set a custom one),
  * keyed by the vertical's service noun so a nail/spa client isn't texted about a
- * "cut". `industry` is optional → falls back to the neutral "visit".
+ * "cut". `industry` is optional → falls back to the neutral "visit"; a shop's
+ * custom `serviceNoun` ("twist") wins over the industry word when set.
  */
-export function defaultSmsTemplate(industry?: string | null, hasBookingLink = true): string {
-  const noun = serviceNounFor(industry);
+export function defaultSmsTemplate(
+  industry?: string | null,
+  hasBookingLink = true,
+  serviceNoun?: string | null,
+): string {
+  const noun = serviceNounForShop({ industry, serviceNoun });
   // No external booking link: a single CTA to the rewards page (where the client
   // can rebook/contact), instead of printing the same URL twice for "book" and
   // "rewards".
@@ -42,12 +47,14 @@ export function buildNudgeBody(params: {
   magicToken: string;
   template?: string | null;
   industry?: string | null;
+  serviceNoun?: string | null;
 }): string {
   const rewardsUrl = `${env.APP_BASE_URL}/r/${params.magicToken}`;
   const hasLink = Boolean(params.bookingUrl?.trim());
   // The default template drops the duplicate "book" line when there's no link;
   // a CUSTOM template is honored verbatim (its {bookingUrl} falls back below).
-  const tpl = params.template?.trim() || defaultSmsTemplate(params.industry, hasLink);
+  const tpl =
+    params.template?.trim() || defaultSmsTemplate(params.industry, hasLink, params.serviceNoun);
 
   // No external booking link => point "Book" at the client's rewards page.
   const bookingUrl = params.bookingUrl?.trim() || rewardsUrl;
@@ -66,6 +73,7 @@ export function previewNudgeBody(
   shopName: string,
   bookingUrl: string | null,
   industry?: string | null,
+  serviceNoun?: string | null,
 ): string {
   return buildNudgeBody({
     firstName: "Marcus",
@@ -76,6 +84,7 @@ export function previewNudgeBody(
     magicToken: "PREVIEW",
     template,
     industry,
+    serviceNoun,
   });
 }
 
@@ -85,8 +94,12 @@ export function previewNudgeBody(
  * recipient is DEEPLY lapsed (well past their cadence) rather than just overdue.
  * Same placeholders + STOP-notice safety net as the nudge default.
  */
-export function defaultWinbackTemplate(industry?: string | null, hasBookingLink = true): string {
-  const noun = serviceNounFor(industry);
+export function defaultWinbackTemplate(
+  industry?: string | null,
+  hasBookingLink = true,
+  serviceNoun?: string | null,
+): string {
+  const noun = serviceNounForShop({ industry, serviceNoun });
   const opener =
     `Hey {firstName}, we've missed you at {shop}! ` +
     `It's been a while since your last ${noun} - we'd love to see you back. `;
@@ -109,10 +122,13 @@ export function buildWinbackBody(params: {
   magicToken: string;
   template?: string | null;
   industry?: string | null;
+  serviceNoun?: string | null;
 }): string {
   const rewardsUrl = `${env.APP_BASE_URL}/r/${params.magicToken}`;
   const hasLink = Boolean(params.bookingUrl?.trim());
-  const tpl = params.template?.trim() || defaultWinbackTemplate(params.industry, hasLink);
+  const tpl =
+    params.template?.trim() ||
+    defaultWinbackTemplate(params.industry, hasLink, params.serviceNoun);
 
   // No external booking link => point "Book" at the client's rewards page.
   const bookingUrl = params.bookingUrl?.trim() || rewardsUrl;
@@ -131,6 +147,7 @@ export function previewWinbackBody(
   shopName: string,
   bookingUrl: string | null,
   industry?: string | null,
+  serviceNoun?: string | null,
 ): string {
   return buildWinbackBody({
     firstName: "Marcus",
@@ -139,6 +156,7 @@ export function previewWinbackBody(
     magicToken: "PREVIEW",
     template,
     industry,
+    serviceNoun,
   });
 }
 
@@ -273,9 +291,10 @@ export function buildNudgePush(params: {
   firstName: string | null;
   shopName: string;
   industry?: string | null;
+  serviceNoun?: string | null;
 }): PushCopy {
   const who = params.firstName ?? "there";
-  const noun = serviceNounFor(params.industry);
+  const noun = serviceNounForShop(params);
   return {
     title: `Time for your next ${noun}, ${who}?`,
     body: `It's been a while since ${params.shopName}. Tap to book your next one.`,
@@ -287,9 +306,10 @@ export function buildWinbackPush(params: {
   firstName: string | null;
   shopName: string;
   industry?: string | null;
+  serviceNoun?: string | null;
 }): PushCopy {
   const who = params.firstName ?? "there";
-  const noun = serviceNounFor(params.industry);
+  const noun = serviceNounForShop(params);
   return {
     title: `We've missed you, ${who}!`,
     body: `It's been a while since your last ${noun} at ${params.shopName}. Tap to book.`,
