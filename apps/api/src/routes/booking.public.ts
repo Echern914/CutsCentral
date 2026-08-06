@@ -598,6 +598,185 @@ async function computeDayBody(
   return dayBody;
 }
 
+/**
+ * GET /api/book/:slug/upgrades?startsAt=&staffId=&serviceId=
+ *
+ * "You picked the 4:00 — you actually have room for more." Given a slot the
+ * customer just tapped, returns the LONGER, pricier services that are genuinely
+ * bookable at that exact instant with that same barber, plus the spare minutes
+ * after the chosen service (which is what decides which add-ons fit).
+ *
+ * WHY THIS IS A ROUND TRIP AND NOT ARITHMETIC ON THE PAGE. It is tempting to
+ * take the gap and offer anything shorter than it. That fails open twice over:
+ *
+ *   1. THE GRID. computeOpenSlots steps each service by its OWN effective
+ *      duration from the window start, and the booking POST validates via
+ *      isSlotBookable, which requires the requested time to be a member of that
+ *      service's grid. A 30-min service offers 9:00/9:30/10:00; a 60-min one
+ *      offers 9:00/10:00. Offering "upgrade to the 60" on the 9:30 chip yields
+ *      a slot the POST turns around and rejects with invalid_slot - the
+ *      customer gets a dead end at the last step, which is the worst possible
+ *      place to find out.
+ *   2. SERVICE HOURS AND CAPS. A service can be narrower than the barber's
+ *      hours and can sit in a group with maxPerDay/maxConcurrent. Both live
+ *      inside the engine. Room in the calendar says nothing about either.
+ *
+ * So each candidate is confirmed by the engine itself, with booked time
+ * subtracted (unlike isSlotBookable, which deliberately ignores it and leaves
+ * conflicts to the write tx): a longer service runs past the chosen slot's end,
+ * so it is exactly the case where the NEXT appointment matters.
+ *
+ * Cost is bounded on both sides: candidates that cannot fit the raw gap are
+ * dropped for free before any query, and what survives is capped and fanned out
+ * through the same limiter /day uses.
+ */
+const upgradesQuerySchema = z.object({
+  startsAt: z.string().min(1),
+  staffId: z.string().min(1),
+  serviceId: z.string().min(1),
+});
+
+/** Engine runs we'll spend confirming candidates (each is one scoped tx). */
+const UPGRADE_CHECK_LIMIT = 4;
+
+bookingPublicRouter.get("/:slug/upgrades", bookingReadLimiter, async (req, res) => {
+  const shop = await resolveNativeShop(req.params.slug);
+  if (!shop) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const parsed = upgradesQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const startsAt = new Date(parsed.data.startsAt);
+  if (Number.isNaN(startsAt.getTime())) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const now = new Date();
+  // An upsell is a suggestion, never a gate: anything we can't answer comes
+  // back as "no suggestions" rather than an error the page has to render.
+  const empty = { maxExtraMin: 0, upgrades: [] as unknown[] };
+  if (startsAt.getTime() <= now.getTime()) {
+    res.json(empty);
+    return;
+  }
+
+  const [services, links] = await Promise.all([
+    prisma.service.findMany({
+      where: { shopId: shop.id, active: true },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        durationMin: true,
+        durationOverrides: true,
+        price: true,
+        priceOverrides: true,
+        timeOverrides: true,
+      },
+    }),
+    prisma.serviceStaff.findMany({
+      where: { shopId: shop.id, staffId: parsed.data.staffId },
+      select: { serviceId: true },
+    }),
+  ]);
+  const chosen = services.find((s) => s.id === parsed.data.serviceId);
+  if (!chosen) {
+    res.json(empty);
+    return;
+  }
+
+  /** Effective duration/price for a service at THIS slot's instant. */
+  const durationOf = (s: (typeof services)[number]): number =>
+    effectiveDurationAt(s.durationMin, {
+      at: startsAt,
+      timezone: shop.timezone,
+      weekdayOverrides: s.durationOverrides,
+      timeWindows: s.timeOverrides,
+    });
+  const priceOf = (s: (typeof services)[number]): number | null =>
+    effectivePriceAt(s.price === null ? null : Number(s.price), {
+      at: startsAt,
+      timezone: shop.timezone,
+      weekdayOverrides: s.priceOverrides,
+      timeWindows: s.timeOverrides,
+    });
+
+  // Confirm the customer's own slot is real (a stale page can ask about a time
+  // that has since been taken) and learn its spare room from the same pass.
+  const mineSlots = await computeOpenSlots({
+    shopId: shop.id,
+    staffId: parsed.data.staffId,
+    serviceId: chosen.id,
+    fromDate: new Date(startsAt.getTime() - 24 * 60 * 60_000),
+    toDate: new Date(startsAt.getTime() + 24 * 60 * 60_000),
+    now,
+  });
+  const mine = mineSlots.find((s) => s.startsAt.getTime() === startsAt.getTime());
+  if (!mine) {
+    res.json(empty);
+    return;
+  }
+  const room = mine.maxExtraMin;
+
+  const chosenDuration = durationOf(chosen);
+  const chosenPrice = priceOf(chosen);
+  const offered = new Set(links.map((l) => l.serviceId));
+
+  // An UPGRADE is longer AND dearer. Longer, because the whole premise is
+  // "there's time going spare"; dearer, because a longer service for the same
+  // money isn't an upsell, it's just a different booking. An unpriced menu
+  // gets no suggestions rather than a guessed comparison against 0.
+  const candidates =
+    chosenPrice === null
+      ? []
+      : services
+          .filter((s) => {
+            if (s.id === chosen.id || !offered.has(s.id)) return false;
+            const p = priceOf(s);
+            if (p === null || p <= chosenPrice) return false;
+            const d = durationOf(s);
+            // Free prefilter: anything that can't fit the raw gap can't fit,
+            // full stop - no need to spend an engine run finding that out.
+            return d > chosenDuration && d - chosenDuration <= room;
+          })
+          // Gentlest step up first: the nearest upgrade is the believable one.
+          .sort((a, b) => (priceOf(a) ?? 0) - (priceOf(b) ?? 0))
+          .slice(0, UPGRADE_CHECK_LIMIT);
+
+  const confirmed = (
+    await mapWithLimit(candidates, DAY_FANOUT_LIMIT, async (s) => {
+      const slots = await computeOpenSlots({
+        shopId: shop.id,
+        staffId: parsed.data.staffId,
+        serviceId: s.id,
+        fromDate: new Date(startsAt.getTime() - 24 * 60 * 60_000),
+        toDate: new Date(startsAt.getTime() + 24 * 60 * 60_000),
+        now,
+      });
+      const fits = slots.some((x) => x.startsAt.getTime() === startsAt.getTime());
+      if (!fits) return null;
+      const price = priceOf(s)!;
+      return {
+        serviceId: s.id,
+        name: s.name,
+        description: s.description,
+        durationMin: durationOf(s),
+        price,
+        // What the customer actually weighs: how much more, for how much longer.
+        priceDelta: price - chosenPrice!,
+        extraMin: durationOf(s) - chosenDuration,
+      };
+    })
+  ).filter((u): u is NonNullable<typeof u> => u !== null);
+
+  res.json({ maxExtraMin: room, upgrades: confirmed });
+});
+
 // GET /api/book/:slug/open-days — which shop-local days in the booking window
 // have at least ONE bookable opening across any service, plus the single
 // soonest slot overall. The day-first calendar used to offer days on a weekday
