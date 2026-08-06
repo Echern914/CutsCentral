@@ -66,8 +66,60 @@ describe("parseTimeWindows", () => {
         { s: 600, e: 720, durationMin: 20 },
       ]),
     ).toEqual([
-      { s: 600, e: 720, price: null, durationMin: 20 },
-      { s: 1260, e: 1440, price: 65, durationMin: null },
+      // `days: []` = every day (what a window with no days has always meant),
+      // `opensHours: false` = price/duration only, never adds availability.
+      { s: 600, e: 720, days: [], price: null, durationMin: 20, opensHours: false },
+      { s: 1260, e: 1440, days: [], price: 65, durationMin: null, opensHours: false },
+    ]);
+  });
+
+  it("carries repeat days, normalizing junk, dupes and all-seven", () => {
+    expect(
+      parseTimeWindows([
+        { s: 600, e: 720, days: [5, 0, 5, 9, -1, 6], price: 60 },
+      ]),
+    ).toEqual([
+      // Sorted + de-duped; out-of-range entries dropped, not fatal.
+      { s: 600, e: 720, days: [0, 5, 6], price: 60, durationMin: null, opensHours: false },
+    ]);
+    // All seven IS "every day" - normalized so the two can't read as different.
+    expect(
+      parseTimeWindows([{ s: 600, e: 720, days: [0, 1, 2, 3, 4, 5, 6], price: 60 }])[0]!.days,
+    ).toEqual([]);
+    // An all-junk list collapses to every day rather than to "no days".
+    expect(parseTimeWindows([{ s: 600, e: 720, days: [42], price: 60 }])[0]!.days).toEqual([]);
+  });
+
+  it("treats overlap as a conflict only on a SHARED weekday", () => {
+    // Same minutes, disjoint days: both survive.
+    expect(
+      parseTimeWindows([
+        { s: 1260, e: 1380, days: [0], price: 60 },
+        { s: 1260, e: 1380, days: [6], price: 70 },
+      ]),
+    ).toHaveLength(2);
+    // Sharing Sunday: the later one is dropped.
+    expect(
+      parseTimeWindows([
+        { s: 1260, e: 1380, days: [0], price: 60 },
+        { s: 1300, e: 1400, days: [0, 6], price: 70 },
+      ]),
+    ).toHaveLength(1);
+    // An every-day window shares every day, so it still collides.
+    expect(
+      parseTimeWindows([
+        { s: 1260, e: 1380, price: 60 },
+        { s: 1300, e: 1400, days: [3], price: 70 },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  it("keeps an opensHours window that sets no price and no minutes", () => {
+    // It does something on its own: "open 9-11pm Sundays at the usual rate".
+    expect(
+      parseTimeWindows([{ s: 1260, e: 1380, days: [0], opensHours: true }]),
+    ).toEqual([
+      { s: 1260, e: 1380, days: [0], price: null, durationMin: null, opensHours: true },
     ]);
   });
   it("drops junk: bad bounds, e<=s, no-effect entries, overlaps, non-arrays", () => {
@@ -85,8 +137,8 @@ describe("parseTimeWindows", () => {
         { s: 700, e: 800, durationMin: 15 }, // abuts (e exclusive) -> kept
       ]),
     ).toEqual([
-      { s: 500, e: 700, price: 40, durationMin: null },
-      { s: 700, e: 800, price: null, durationMin: 15 },
+      { s: 500, e: 700, days: [], price: 40, durationMin: null, opensHours: false },
+      { s: 700, e: 800, days: [], price: null, durationMin: 15, opensHours: false },
     ]);
   });
 });

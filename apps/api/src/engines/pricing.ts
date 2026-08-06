@@ -8,12 +8,18 @@ import { zonedDateParts, zonedMinutesOfDay } from "@chairback/config";
  * surcharge is never a surprise, and it's snapshotted onto priceAtBooking.
  *
  * Layered ON TOP of the weekday maps: per-service TIME-OF-DAY windows
- * (`Service.timeOverrides`, an array of {s,e,price?,durationMin?} in shop-local
- * minutes-of-day, every day). Resolution order for any instant:
- *   time window (slot START minute inside [s,e)) > weekday override > base.
+ * (`Service.timeOverrides`, an array of {s,e,days?,price?,durationMin?,
+ * opensHours?} in shop-local minutes-of-day). Resolution order for any instant:
+ *   time window (slot START minute inside [s,e) AND that weekday in `days`)
+ *   > weekday override > base.
  * Everything keys off the slot's START instant - a 8:45pm slot that RUNS past a
  * 9pm window boundary is priced/sized by 8:45pm's layer, exactly what the
  * customer was shown when they picked it.
+ *
+ * `days` repeats a window on chosen weekdays ([] = every day, the original
+ * behavior). `opensHours` additionally makes the window BOOKABLE outside the
+ * staff schedule - see the TimeWindow doc below; it is the one knob in the
+ * system that widens availability rather than narrowing it.
  */
 
 /** Parse the JSON override blob defensively into a clean weekday->number map. */
@@ -35,8 +41,35 @@ export function parsePriceOverrides(raw: unknown): Record<number, number> {
 export interface TimeWindow {
   s: number;
   e: number;
+  /**
+   * Shop-local weekdays (0=Sun..6=Sat) the window repeats on. EMPTY = every day,
+   * which is what every window written before per-day windows existed means - so
+   * an absent/malformed `days` parses to [] and behaves exactly as it always did.
+   */
+  days: number[];
   price: number | null;
   durationMin: number | null;
+  /**
+   * Opt-in: also OPEN [s,e) for booking on `days`, even where it falls outside
+   * the staff's weekly hours ("Sundays I stop at 3, but 9-11pm is bookable").
+   *
+   * This is the ONE thing in the system that WIDENS availability - service hours
+   * and group hours only ever narrow it (see slots.ts). It is off by default and
+   * must be ticked per window, so no existing config gains hours. Opened time is
+   * still cut by breaks, block-offs, external blocks and existing bookings; it
+   * adds candidate time, it never overrides a conflict.
+   */
+  opensHours: boolean;
+}
+
+/** The weekdays a window actually covers ([] is stored shorthand for all 7). */
+export function windowDays(w: Pick<TimeWindow, "days">): number[] {
+  return w.days.length > 0 ? w.days : [0, 1, 2, 3, 4, 5, 6];
+}
+
+/** Does this window apply on a given shop-local weekday? */
+export function windowAppliesOn(w: Pick<TimeWindow, "days">, weekday: number): boolean {
+  return w.days.length === 0 || w.days.includes(weekday);
 }
 
 /**
@@ -54,7 +87,14 @@ export function parseTimeWindows(raw: unknown): TimeWindow[] {
   const parsed: TimeWindow[] = [];
   for (const entry of raw) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const o = entry as { s?: unknown; e?: unknown; price?: unknown; durationMin?: unknown };
+    const o = entry as {
+      s?: unknown;
+      e?: unknown;
+      days?: unknown;
+      price?: unknown;
+      durationMin?: unknown;
+      opensHours?: unknown;
+    };
     const s = Number(o.s);
     const e = Number(o.e);
     if (!Number.isInteger(s) || !Number.isInteger(e)) continue;
@@ -65,25 +105,76 @@ export function parseTimeWindows(raw: unknown): TimeWindow[] {
     const price = priceNum !== null && Number.isFinite(priceNum) && priceNum >= 0 ? priceNum : null;
     const durationMin =
       durNum !== null && Number.isInteger(durNum) && durNum >= 5 ? durNum : null;
-    if (price === null && durationMin === null) continue;
-    parsed.push({ s, e, price, durationMin });
+    const opensHours = o.opensHours === true;
+    // A window that sets no price, no duration and opens nothing is inert.
+    // `opensHours` alone IS meaningful: "open 9-11pm Sundays at the usual rate".
+    if (price === null && durationMin === null && !opensHours) continue;
+    // Junk weekdays are dropped, not fatal; an all-junk list collapses to []
+    // (= every day), matching how a window with no `days` has always behaved.
+    const days = Array.isArray(o.days)
+      ? [...new Set(o.days.map(Number).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort(
+          (a, b) => a - b,
+        )
+      : [];
+    parsed.push({ s, e, days: days.length === 7 ? [] : days, price, durationMin, opensHours });
   }
-  parsed.sort((a, b) => a.s - b.s);
+  parsed.sort((a, b) => a.s - b.s || a.e - b.e);
   const out: TimeWindow[] = [];
   for (const w of parsed) {
-    const last = out[out.length - 1];
-    if (last && w.s < last.e) continue; // overlap -> keep the earlier window
+    // Overlap is only a conflict when two windows share a WEEKDAY - "Fri 9pm $60"
+    // and "Sat 9pm $70" are the same minutes but never compete. Checked against
+    // every kept window (not just the last), since sorting by start no longer
+    // implies the previous one is the only possible clash. n <= 8, so linear.
+    const mine = windowDays(w);
+    const clash = out.some(
+      (k) => k.s < w.e && w.s < k.e && windowDays(k).some((d) => mine.includes(d)),
+    );
+    if (clash) continue; // keep the earlier window
     out.push(w);
   }
   return out;
 }
 
-/** The window containing a shop-local minute-of-day, or null. */
-function windowAt(windows: TimeWindow[], minuteOfDay: number): TimeWindow | null {
+/** The window covering a shop-local minute-of-day ON that weekday, or null. */
+function windowAt(
+  windows: TimeWindow[],
+  minuteOfDay: number,
+  weekday: number,
+): TimeWindow | null {
   for (const w of windows) {
-    if (minuteOfDay >= w.s && minuteOfDay < w.e) return w;
+    if (minuteOfDay >= w.s && minuteOfDay < w.e && windowAppliesOn(w, weekday)) return w;
   }
   return null;
+}
+
+/**
+ * The shop-local spans a service's windows explicitly OPEN on a weekday, merged.
+ * Fed to the slot engine as extra availability (see slots.ts) - the only path by
+ * which a service can be bookable outside the staff's weekly hours.
+ */
+export function openingSpansForWeekday(
+  raw: unknown,
+  weekday: number,
+): { startMin: number; endMin: number }[] {
+  const spans = parseTimeWindows(raw)
+    .filter((w) => w.opensHours && windowAppliesOn(w, weekday))
+    .map((w) => ({ startMin: w.s, endMin: w.e }))
+    .sort((a, b) => a.startMin - b.startMin);
+  const out: { startMin: number; endMin: number }[] = [];
+  for (const sp of spans) {
+    const last = out[out.length - 1];
+    if (last && sp.startMin <= last.endMin) {
+      if (sp.endMin > last.endMin) last.endMin = sp.endMin;
+    } else {
+      out.push({ ...sp });
+    }
+  }
+  return out;
+}
+
+/** True when ANY window on this service opens hours (cheap pre-check). */
+export function hasOpeningWindows(raw: unknown): boolean {
+  return parseTimeWindows(raw).some((w) => w.opensHours);
 }
 
 /**
@@ -112,12 +203,13 @@ export function effectivePriceAt(
   basePrice: number | null,
   args: EffectiveAtArgs,
 ): number | null {
+  const { weekday } = zonedDateParts(args.at, args.timezone);
   const w = windowAt(
     parseTimeWindows(args.timeWindows),
     zonedMinutesOfDay(args.at, args.timezone),
+    weekday,
   );
   if (w && w.price !== null) return w.price;
-  const { weekday } = zonedDateParts(args.at, args.timezone);
   const overrides = parsePriceOverrides(args.weekdayOverrides);
   if (Object.prototype.hasOwnProperty.call(overrides, weekday)) {
     return overrides[weekday]!;
@@ -214,12 +306,13 @@ export function effectiveDurationAt(
   baseDurationMin: number,
   args: EffectiveAtArgs,
 ): number {
+  const { weekday } = zonedDateParts(args.at, args.timezone);
   const w = windowAt(
     parseTimeWindows(args.timeWindows),
     zonedMinutesOfDay(args.at, args.timezone),
+    weekday,
   );
   if (w && w.durationMin !== null) return w.durationMin;
-  const { weekday } = zonedDateParts(args.at, args.timezone);
   const overrides = parseDurationOverrides(args.weekdayOverrides);
   if (Object.prototype.hasOwnProperty.call(overrides, weekday)) {
     return overrides[weekday]!;

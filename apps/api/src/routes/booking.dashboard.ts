@@ -111,39 +111,55 @@ const hoursWindowsSchema = z
   .record(z.enum(["0", "1", "2", "3", "4", "5", "6"]), z.array(serviceWindowSchema).max(6))
   .optional();
 
-// Time-of-day price/duration windows: an ARRAY of {s,e,price?,durationMin?}
+// Time-of-day windows: an ARRAY of {s,e,days?,price?,durationMin?,opensHours?}
 // (same s/e minute bounds as serviceWindowSchema; price/durationMin bounds
-// mirror the base fields). Every-day windows layered over the weekday maps -
-// "after 9pm this runs $65 and takes 20 min". A window must set at least one
-// of price/durationMin (else it does nothing), and windows must not overlap
-// (kept in lockstep with the read-side defense in parseTimeWindows).
+// mirror the base fields), layered over the weekday maps - "after 9pm this runs
+// $65 and takes 20 min".
+//
+//   days       shop-local weekdays it repeats on; omitted/[] = every day.
+//   opensHours also OPEN [s,e) on those days, past the staff schedule.
+//
+// A window must DO something: set a price, set minutes, or open hours. Windows
+// must not overlap ON A SHARED WEEKDAY - two windows covering the same minutes
+// on different days are fine. Kept in lockstep with parseTimeWindows.
 const timeOverridesSchema = z
   .array(
     z
       .object({
         s: z.number().int().min(0).max(1439),
         e: z.number().int().min(1).max(1440),
+        days: z.array(z.number().int().min(0).max(6)).max(7).optional(),
         price: z.number().min(0).max(100000).nullable().optional(),
         durationMin: z.number().int().min(5).max(600).nullable().optional(),
+        opensHours: z.boolean().optional(),
       })
       .refine((w) => w.e > w.s, { message: "window end must be after start" })
       .refine(
         (w) =>
           (w.price !== null && w.price !== undefined) ||
-          (w.durationMin !== null && w.durationMin !== undefined),
-        { message: "window must set a price and/or minutes" },
+          (w.durationMin !== null && w.durationMin !== undefined) ||
+          w.opensHours === true,
+        { message: "window must set a price, minutes, and/or open its hours" },
       ),
   )
   .max(8)
   .refine(
     (windows) => {
-      const sorted = [...windows].sort((a, b) => a.s - b.s);
+      const daysOf = (w: { days?: number[] }) =>
+        w.days && w.days.length > 0 ? w.days : [0, 1, 2, 3, 4, 5, 6];
+      const sorted = [...windows].sort((a, b) => a.s - b.s || a.e - b.e);
       for (let i = 1; i < sorted.length; i++) {
-        if (sorted[i]!.s < sorted[i - 1]!.e) return false;
+        const mine = daysOf(sorted[i]!);
+        for (let j = 0; j < i; j++) {
+          const other = sorted[j]!;
+          if (other.s < sorted[i]!.e && sorted[i]!.s < other.e) {
+            if (daysOf(other).some((d) => mine.includes(d))) return false;
+          }
+        }
       }
       return true;
     },
-    { message: "time windows must not overlap" },
+    { message: "time windows on the same day must not overlap" },
   )
   .optional();
 

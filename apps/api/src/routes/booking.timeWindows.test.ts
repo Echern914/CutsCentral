@@ -129,8 +129,12 @@ describe("service time-of-day windows", () => {
     const svc = res.body.services.find((s: { id: string }) => s.id === serviceId);
     expect(svc.priceRange).toEqual({ min: 45, max: 65 });
     expect(svc.durationRange).toEqual({ min: 20, max: 30 });
+    // The PUBLIC payload is the PARSED window, so it now carries the repeat days
+    // ([] = every day) and the open-hours flag — the customer page needs both to
+    // match a window on DAY as well as time. (The dashboard list above returns
+    // the stored JSON verbatim and is unchanged.)
     expect(svc.timeOverrides).toEqual([
-      { s: 1260, e: 1380, price: 65, durationMin: 20 },
+      { s: 1260, e: 1380, days: [], price: 65, durationMin: 20, opensHours: false },
     ]);
   });
 

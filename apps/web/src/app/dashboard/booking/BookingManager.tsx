@@ -3908,28 +3908,57 @@ function VaryByDayEditor({
 //  settings above. Inside a window the slot grid steps by the window's length
 //  and the customer is shown (and charged) the window's price.
 
-/** One draft row: HH:MM bounds + string drafts for the two optional fields. */
-type TimeWindowRow = { start: string; end: string; price: string; durationMin: string };
+/**
+ * One draft row: HH:MM bounds, the weekdays it repeats on, string drafts for the
+ * two optional fields, and whether it also OPENS those hours.
+ *
+ * `days: []` is stored shorthand for "every day" — the only thing a window could
+ * mean before it could repeat, so old rows seed to [] and read unchanged.
+ */
+type TimeWindowRow = {
+  start: string;
+  end: string;
+  days: number[];
+  price: string;
+  durationMin: string;
+  opensHours: boolean;
+};
 
 const DEFAULT_TIME_WINDOW: TimeWindowRow = {
   start: "21:00",
   end: "23:00",
+  days: [],
   price: "",
   durationMin: "",
+  opensHours: false,
+};
+
+type StoredTimeWindow = {
+  s: number;
+  e: number;
+  days?: number[] | null;
+  price: number | null;
+  durationMin: number | null;
+  opensHours?: boolean | null;
 };
 
 /** Seed rows from the stored windows ([] -> no rows). */
 function timeRowsFromOverrides(
-  overrides:
-    | { s: number; e: number; price: number | null; durationMin: number | null }[]
-    | undefined,
+  overrides: StoredTimeWindow[] | undefined,
 ): TimeWindowRow[] {
   return (overrides ?? []).map((w) => ({
     start: minToHHMM(w.s),
     end: minToHHMM(w.e),
+    days: Array.isArray(w.days) ? [...w.days].sort((a, b) => a - b) : [],
     price: w.price !== null ? String(w.price) : "",
     durationMin: w.durationMin !== null ? String(w.durationMin) : "",
+    opensHours: w.opensHours === true,
   }));
+}
+
+/** The weekdays a row covers ([] is shorthand for all seven). */
+function rowDays(r: Pick<TimeWindowRow, "days">): number[] {
+  return r.days.length > 0 ? r.days : [0, 1, 2, 3, 4, 5, 6];
 }
 
 /**
@@ -3939,15 +3968,17 @@ function timeRowsFromOverrides(
  * generic 400 "Couldn't save".
  */
 function timeRowsError(rows: TimeWindowRow[]): string | null {
-  const spans: { s: number; e: number }[] = [];
+  const spans: { s: number; e: number; days: number[] }[] = [];
   for (const r of rows) {
     const s = hhmmToMin(r.start);
     const e = hhmmToMin(r.end);
     if (e <= s) return "Time windows: each window's end must be after its start";
     const price = r.price.trim();
     const mins = r.durationMin.trim();
-    if (!price && !mins) {
-      return "Time windows: set a price and/or minutes for each window (or remove it)";
+    // Opening hours is on its own a reason for the window to exist ("open
+    // 9-11pm Sundays at the usual price"), so it satisfies this too.
+    if (!price && !mins && !r.opensHours) {
+      return "Time windows: set a price, minutes, or 'also open these times' for each window (or remove it)";
     }
     if (price && (!Number.isFinite(Number(price)) || Number(price) < 0)) {
       return "Time windows: price must be a number";
@@ -3955,39 +3986,61 @@ function timeRowsError(rows: TimeWindowRow[]): string | null {
     if (mins && (!Number.isInteger(Number(mins)) || Number(mins) < 5)) {
       return "Time windows: minutes must be a whole number of 5 or more";
     }
-    spans.push({ s, e });
+    spans.push({ s, e, days: rowDays(r) });
   }
-  const sorted = [...spans].sort((a, b) => a.s - b.s);
+  // Overlap only conflicts when two windows share a weekday — "Fri 9pm" and
+  // "Sat 9pm" are the same clock but never compete. Mirrors the API refine.
+  const sorted = [...spans].sort((a, b) => a.s - b.s || a.e - b.e);
   for (let i = 1; i < sorted.length; i++) {
-    if (sorted[i]!.s < sorted[i - 1]!.e) return "Time windows can't overlap";
+    for (let j = 0; j < i; j++) {
+      const a = sorted[j]!;
+      const b = sorted[i]!;
+      if (a.s < b.e && b.s < a.e && a.days.some((d) => b.days.includes(d))) {
+        return "Time windows on the same day can't overlap";
+      }
+    }
   }
   return null;
 }
 
 /** API payload from validated rows (the FULL array; [] clears every window). */
-function buildTimeOverrides(
-  rows: TimeWindowRow[],
-): { s: number; e: number; price?: number | null; durationMin?: number | null }[] {
+function buildTimeOverrides(rows: TimeWindowRow[]): {
+  s: number;
+  e: number;
+  days: number[];
+  price?: number | null;
+  durationMin?: number | null;
+  opensHours: boolean;
+}[] {
   return rows.map((r) => ({
     s: hhmmToMin(r.start),
     e: hhmmToMin(r.end),
+    // All seven selected is the same thing as "every day"; normalize so the two
+    // can't read as different configs.
+    days: r.days.length === 7 ? [] : [...r.days].sort((a, b) => a - b),
     price: r.price.trim() ? Number(r.price) : null,
     durationMin: r.durationMin.trim() ? Number(r.durationMin) : null,
+    opensHours: r.opensHours,
   }));
 }
 
-/** Compact "9:00 PM–11:00 PM $65 / 20 min" label for the services list. */
-function timeWindowSummary(w: {
-  s: number;
-  e: number;
-  price: number | null;
-  durationMin: number | null;
-}): string {
+/** "Fri, Sat 9:00 PM–11:00 PM $65 / 20 min · opens" for the services list. */
+function timeWindowSummary(w: StoredTimeWindow): string {
+  const days = Array.isArray(w.days) ? w.days : [];
+  const when =
+    days.length === 0 || days.length === 7
+      ? ""
+      : `${days
+          .slice()
+          .sort((a, b) => a - b)
+          .map((d) => WEEKDAYS[d])
+          .join(", ")} `;
   const bits = [
     w.price !== null ? `$${w.price}` : null,
     w.durationMin !== null ? `${w.durationMin}min` : null,
+    w.opensHours === true ? "opens" : null,
   ].filter(Boolean);
-  return `${fmtClock(w.s)}–${fmtClock(w.e)} ${bits.join(" / ")}`;
+  return `${when}${fmtClock(w.s)}–${fmtClock(w.e)}${bits.length ? ` ${bits.join(" / ")}` : ""}`;
 }
 
 function VaryByTimeEditor({
@@ -4010,15 +4063,18 @@ function VaryByTimeEditor({
     <div>
       <span className={labelCls}>Vary by time of day? (optional — price and/or minutes)</span>
       <p className="mt-0.5 text-[11px] text-muted">
-        e.g. after 9 PM cuts run $60 and take 20 min. Applies every day, on top
-        of any per-day settings. Leave a field blank to keep the usual{" "}
+        e.g. after 9 PM cuts run $60 and take 20 min. Pick the days it repeats on
+        (or leave them all off for every day), on top of any per-day settings.
+        Leave a field blank to keep the usual{" "}
         {basePrice.trim() ? `$${basePrice}` : "price"} / {baseDuration || "?"} min.
       </p>
       <div className="mt-2 flex flex-col gap-2">
         {rows.map((r, i) => (
           <div
             key={i}
-            className="grid grid-cols-2 items-center gap-2 sm:grid-cols-[1fr_1fr_96px_96px_auto]"
+            // Bordered: a row now carries times, days and a toggle, so without a
+            // box two windows read as one long row of controls.
+            className="grid grid-cols-2 items-center gap-2 rounded-xl border border-subtle p-2.5 sm:grid-cols-[1fr_1fr_96px_96px_auto]"
           >
             <TimeSelect
               value={r.start}
@@ -4070,6 +4126,68 @@ function VaryByTimeEditor({
             >
               Remove
             </button>
+
+            {/* Repeat-days + the open-hours opt-in span the whole row. */}
+            <div className="col-span-2 -mt-0.5 flex flex-col gap-2 sm:col-span-5">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] text-muted">Repeat on</span>
+                {WEEKDAYS.map((label, day) => {
+                  const on = r.days.includes(day);
+                  return (
+                    <button
+                      key={day}
+                      type="button"
+                      aria-pressed={on}
+                      aria-label={`${label} — window ${i + 1}`}
+                      onClick={() =>
+                        patch(i, {
+                          days: on
+                            ? r.days.filter((d) => d !== day)
+                            : [...r.days, day].sort((a, b) => a - b),
+                        })
+                      }
+                      className={cn(
+                        "rounded-full border px-2 py-0.5 text-[11px] transition-colors",
+                        on
+                          ? "border-gold/60 bg-gold/15 text-gold"
+                          : "border-subtle text-muted hover:text-offwhite",
+                      )}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+                <span className="text-[11px] text-muted/70">
+                  {r.days.length === 0 ? "every day" : ""}
+                </span>
+              </div>
+
+              {/* The ONE control that adds bookable time. Everything else here
+                  only narrows, so a barber who closes at 3 on Sundays had no way
+                  to say "but 9-11pm is fine" — the window priced hours that were
+                  never offered. */}
+              <label className="flex cursor-pointer items-start gap-2 text-[11px] text-muted">
+                <input
+                  type="checkbox"
+                  checked={r.opensHours}
+                  onChange={(e) => patch(i, { opensHours: e.target.checked })}
+                  className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-gold"
+                />
+                <span>
+                  Also <span className="text-offwhite">open these times</span> for
+                  booking, even outside my regular hours
+                  {r.opensHours && (
+                    <span className="mt-0.5 block text-muted/70">
+                      Adds {fmtClock(hhmmToMin(r.start))}–{fmtClock(hhmmToMin(r.end))}{" "}
+                      {r.days.length === 0
+                        ? "every day"
+                        : `on ${r.days.map((d) => WEEKDAYS[d]).join(", ")}`}
+                      . Breaks, time off and existing bookings still apply.
+                    </span>
+                  )}
+                </span>
+              </label>
+            </div>
           </div>
         ))}
       </div>
