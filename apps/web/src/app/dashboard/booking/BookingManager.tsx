@@ -57,6 +57,7 @@ import {
   type ServiceGroupInput,
   type TargetedSlotRow,
   type TargetedSlotRuleRow,
+  type RuleScheduleTime,
 } from "./actions";
 
 const field =
@@ -1431,9 +1432,10 @@ function TargetedSlotsManager({
   // "Weekly schedule" = pick weekdays + times, ONE rule ("every night 9pm").
   const [mode, setMode] = useState<"once" | "weekly">("once");
   const [when, setWhen] = useState(""); // datetime-local string (once-mode)
-  // Weekly mode: "HH:MM" times per weekday key "0"(Sun).."6". A day with no
-  // key is off — same key-presence convention as service hours.
-  const [weekTimes, setWeekTimes] = useState<Record<string, string[]>>({});
+  // Weekly mode: start–end windows per weekday key "0"(Sun).."6". A day with
+  // no key is off — same key-presence convention as service hours. Each
+  // window's length publishes as that occurrence's durationMin override.
+  const [weekTimes, setWeekTimes] = useState<Record<string, WeekRange[]>>({});
   const [startDate, setStartDate] = useState(""); // YYYY-MM-DD, blank = today
   const [minutes, setMinutes] = useState(30);
   const [price, setPrice] = useState("");
@@ -1469,6 +1471,23 @@ function TargetedSlotsManager({
       toast("Pick a service, barber, price, and at least one day & time", "error");
       return;
     }
+    // Each window's LENGTH is what the server stores, so an end that isn't
+    // after its start has no meaning - catch it here rather than let the API
+    // 400 with a generic message. 600 min is the schema's per-time ceiling.
+    for (const [wd, ranges] of days) {
+      for (const r of ranges) {
+        const span = hhmmToMinutes(r.end) - hhmmToMinutes(r.start);
+        if (span < 5 || span > 600) {
+          toast(
+            `${WEEKDAYS[Number(wd)]}: ${fmtWallTime(hhmmToMinutes(r.start))}–${fmtWallTime(
+              hhmmToMinutes(r.end),
+            )} must end after it starts, and run 5–600 minutes`,
+            "error",
+          );
+          return;
+        }
+      }
+    }
     start(async () => {
       const r = await createTargetedScheduleAction({
         staffId,
@@ -1477,7 +1496,17 @@ function TargetedSlotsManager({
         durationMin: minutes,
         price: Number(price),
         schedule: Object.fromEntries(
-          days.map(([wd, times]) => [wd, [...times].sort().map((t) => ({ start: t }))]),
+          days.map(([wd, ranges]) => [
+            wd,
+            [...ranges]
+              .sort((a, b) => hhmmToMinutes(a.start) - hhmmToMinutes(b.start))
+              .map((r) => ({
+                start: r.start,
+                // The window's length IS this occurrence's duration; it
+                // overrides the rule's base minutes for just this time.
+                durationMin: hhmmToMinutes(r.end) - hhmmToMinutes(r.start),
+              })),
+          ]),
         ),
         startDate: startDate || undefined,
         repeatWeeks: !repeatForever && repeatWeeks > 0 ? repeatWeeks : undefined,
@@ -1651,7 +1680,11 @@ function TargetedSlotsManager({
           />
         ) : (
           <div className="flex flex-col gap-2 sm:col-span-2">
-            <WeeklyTimesGrid times={weekTimes} onChange={setWeekTimes} />
+            <WeeklyTimesGrid
+              times={weekTimes}
+              onChange={setWeekTimes}
+              defaultDurationMin={minutes}
+            />
             <label className="flex flex-wrap items-center gap-2 text-xs text-muted">
               Starting
               <input
@@ -1781,11 +1814,18 @@ function TargetedSlotsManager({
                   className="flex-1 text-left"
                 >
                   <span className="text-sm">
-                    {scheduleSummary(rule.schedule)}{" "}
+                    {scheduleSummary(rule.schedule, rule.durationMin)}{" "}
                     <span className="text-xs text-muted">
                       · {nameOf(activeServices, rule.serviceId)} ·{" "}
-                      {nameOf(activeStaff, rule.staffId)} · {rule.durationMin} min · $
-                      {rule.price.toFixed(0)}
+                      {nameOf(activeStaff, rule.staffId)}
+                      {/* The base length is only worth stating when some time
+                          still USES it. Once every window carries its own, the
+                          summary above already spells each one out and this
+                          would contradict it ("45 min" beside a 9-10 PM slot). */}
+                      {everyTimeHasOwnDuration(rule.schedule)
+                        ? ""
+                        : ` · ${rule.durationMin} min`}{" "}
+                      · ${rule.price.toFixed(0)}
                       {rule.label ? ` · ${rule.label}` : ""}
                     </span>
                   </span>
@@ -1889,20 +1929,48 @@ function fmtWallTime(min: number): string {
 // Mon-first display order for weekly grids (keys stay 0=Sun like the API).
 const MON_FIRST_WEEKDAYS = [1, 2, 3, 4, 5, 6, 0];
 
+// Specials one weekday may carry. Mirrors the schedule API's per-day cap
+// (targetedScheduleSchema: .max(8)) - publishing more would 400.
+const MAX_SCHEDULE_TIMES = 8;
+
 /**
  * A rule's weekly schedule in plain words, grouping days that share the same
- * times: "Every night · 9:00 PM", "Mon, Tue · 7:30 AM & 6:30 PM; Sat · 8:00 AM".
+ * times: "Every day · 9:00 PM – 10:00 PM", "Mons · 7:30 AM – 8:00 AM & 6:30 PM
+ * – 7:15 PM".
+ *
+ * Each time reads as the WINDOW it occupies, matching the start–end grid that
+ * publishes it. A time with no length of its own runs for the rule's base
+ * duration, so the card can't disagree with the calendar.
  */
-function scheduleSummary(schedule: Record<string, { startMin: number }[]>): string {
+/**
+ * True when every scheduled time carries its own length, so the rule's base
+ * duration is never actually used and printing it would only mislead.
+ */
+function everyTimeHasOwnDuration(
+  schedule: Record<string, RuleScheduleTime[]>,
+): boolean {
+  const times = Object.values(schedule).flat();
+  return times.length > 0 && times.every((t) => typeof t.durationMin === "number");
+}
+
+function scheduleSummary(
+  schedule: Record<string, RuleScheduleTime[]>,
+  baseDurationMin: number,
+): string {
+  const span = (t: RuleScheduleTime) =>
+    `${fmtWallTime(t.startMin)} – ${fmtWallTime(
+      t.startMin + (t.durationMin ?? baseDurationMin),
+    )}`;
   const byTimes = new Map<string, number[]>();
   for (const wd of MON_FIRST_WEEKDAYS) {
     const times = schedule[String(wd)];
     if (!times || times.length === 0) continue;
-    const key = times.map((t) => t.startMin).join(",");
+    // Group on the rendered windows, so two days merge only when they run the
+    // same times AND the same lengths.
+    const key = times.map(span).join(" & ");
     byTimes.set(key, [...(byTimes.get(key) ?? []), wd]);
   }
-  const groups = [...byTimes.entries()].map(([key, days]) => {
-    const times = key.split(",").map((n) => fmtWallTime(Number(n))).join(" & ");
+  const groups = [...byTimes.entries()].map(([times, days]) => {
     const dayLabel =
       days.length === 7
         ? "Every day"
@@ -1913,109 +1981,183 @@ function scheduleSummary(schedule: Record<string, { startMin: number }[]>): stri
 }
 
 /**
+ * One scheduled special: the wall-clock window it occupies. `end` is not a
+ * separate concept on the server — it's how the barber says how long THIS
+ * occurrence runs, and publishes as the per-time `durationMin` override.
+ */
+export type WeekRange = { start: string; end: string };
+
+/** Minutes since midnight for an "HH:MM" wall-clock string. */
+function hhmmToMinutes(v: string): number {
+  return Number(v.slice(0, 2)) * 60 + Number(v.slice(3, 5));
+}
+/** "HH:MM" for a minute-of-day, clamped inside the day. */
+function minutesToHhmm(min: number): string {
+  const m = Math.max(0, Math.min(23 * 60 + 45, min));
+  return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+}
+/** A day's default first window, using the rule's base length. */
+function defaultRange(durationMin: number): WeekRange {
+  return { start: "09:00", end: minutesToHhmm(9 * 60 + durationMin) };
+}
+
+/**
  * The weekly times grid: one row per weekday (Mon-first), toggle the day on,
- * then add one or more start times. The targeted-slot cousin of the service
- * hours grid — start INSTANTS rather than open windows, because a special is
- * a bookable moment, not a range.
+ * then give each special a start and end time. Deliberately the same control
+ * as the service/group hours editor (AvailableHoursRows) — same TimeSelect
+ * pair, same en-dash, same "+ hours" for a second window on one day — because
+ * "when does this run" is the same question in both places and was being asked
+ * with two different widgets.
+ *
+ * The end time is not a new server concept: it publishes as that occurrence's
+ * `durationMin` override, which the schedule API already accepts per time.
  */
 function WeeklyTimesGrid({
   times,
   onChange,
+  defaultDurationMin,
 }: {
-  times: Record<string, string[]>;
-  onChange: (next: Record<string, string[]>) => void;
+  times: Record<string, WeekRange[]>;
+  onChange: (next: Record<string, WeekRange[]>) => void;
+  /** The rule's base length — seeds each new window's end time. */
+  defaultDurationMin: number;
 }) {
-  const setDay = (wd: number, dayTimes: string[] | null) => {
+  const setDay = (wd: number, ranges: WeekRange[] | null) => {
     const next = { ...times };
-    if (dayTimes === null) delete next[String(wd)];
-    else next[String(wd)] = dayTimes;
+    if (ranges === null) delete next[String(wd)];
+    else next[String(wd)] = ranges;
     onChange(next);
   };
-  const anyDay = Object.values(times).some((t) => t.length > 0);
+  const patchRange = (wd: number, i: number, patch: Partial<WeekRange>) => {
+    const day = times[String(wd)] ?? [];
+    setDay(
+      wd,
+      day.map((r, j) => (j === i ? { ...r, ...patch } : r)),
+    );
+  };
+  // The first day that already has windows — what a newly-ticked day copies,
+  // and what "Same times every day" fans out.
+  const firstConfigured = MON_FIRST_WEEKDAYS.map((wd) => times[String(wd)]).find(
+    (r) => r && r.length > 0,
+  );
   return (
-    <div className="flex flex-col gap-1 rounded-xl border border-subtle p-3">
-      <div className="mb-1 flex items-center justify-between gap-2">
+    <div className="rounded-xl border border-subtle p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
         <span className="text-xs text-muted">
-          Days &amp; times (shop time) — e.g. every night at 9:00 PM
+          Days &amp; times (shop time) — e.g. every night 9:00 PM – 10:00 PM
         </span>
-        {anyDay && (
+        {firstConfigured && (
           <button
             type="button"
-            onClick={() => {
-              // Copy the FIRST configured day's times to all seven days - the
-              // "every night at 9pm" case in one tap.
-              const first = MON_FIRST_WEEKDAYS.map((wd) => times[String(wd)]).find(
-                (t) => t && t.length > 0,
-              );
-              if (!first) return;
+            onClick={() =>
               onChange(
                 Object.fromEntries(
-                  MON_FIRST_WEEKDAYS.map((wd) => [String(wd), [...first]]),
+                  MON_FIRST_WEEKDAYS.map((wd) => [
+                    String(wd),
+                    firstConfigured.map((r) => ({ ...r })),
+                  ]),
                 ),
-              );
-            }}
+              )
+            }
             className="shrink-0 rounded-full border border-subtle px-2.5 py-0.5 text-[11px] text-muted transition-colors hover:border-gold/50 hover:text-gold"
           >
             Same times every day
           </button>
         )}
       </div>
-      {MON_FIRST_WEEKDAYS.map((wd) => {
-        const dayTimes = times[String(wd)] ?? null;
-        const on = dayTimes !== null;
-        return (
-          <div key={wd} className="flex flex-wrap items-center gap-2 py-0.5">
-            <label className="flex w-14 shrink-0 items-center gap-1.5 text-xs">
-              <input
-                type="checkbox"
-                checked={on}
-                onChange={(e) => setDay(wd, e.target.checked ? [] : null)}
-                aria-label={`${WEEKDAYS[wd]} on`}
-              />
-              <span className={on ? "text-offwhite" : "text-muted"}>
-                {WEEKDAYS[wd]}
-              </span>
-            </label>
-            {on && (
-              <>
-                {dayTimes.map((t, i) => (
-                  <span
-                    key={`${t}-${i}`}
-                    className="inline-flex items-center gap-1 rounded-full border border-gold/40 bg-gold/10 px-2 py-0.5 text-[11px] text-gold"
-                  >
-                    {fmtWallTime(
-                      Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5)),
-                    )}
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setDay(wd, dayTimes.filter((_, j) => j !== i))
-                      }
-                      aria-label={`Remove ${t} on ${WEEKDAYS[wd]}`}
-                      className="text-gold/70 hover:text-gold"
-                    >
-                      ✕
-                    </button>
-                  </span>
-                ))}
-                {dayTimes.length < 8 && (
-                  <input
-                    type="time"
-                    className="rounded-lg border border-subtle bg-charcoal-700 px-1.5 py-0.5 text-[11px] text-offwhite"
-                    value=""
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      if (!v || dayTimes.includes(v)) return;
-                      setDay(wd, [...dayTimes, v].sort());
-                    }}
-                    aria-label={`Add a time on ${WEEKDAYS[wd]}`}
-                  />
-                )}
-              </>
-            )}
-          </div>
-        );
-      })}
+      {/* Same bordered, rule-separated list as the hours editor: seven bare
+          rows read as one dense block and you lose track of which day you're
+          editing. */}
+      <div className="divide-y divide-subtle overflow-hidden rounded-xl border border-subtle">
+        {MON_FIRST_WEEKDAYS.map((wd) => {
+          const day = times[String(wd)] ?? null;
+          const on = day !== null;
+          return (
+            <div
+              key={wd}
+              className={cn(
+                "flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5",
+                !on && "opacity-60",
+              )}
+            >
+              <label className="flex w-16 shrink-0 items-center gap-1.5 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={on}
+                  onChange={(e) =>
+                    setDay(
+                      wd,
+                      e.target.checked
+                        ? // Copying an already-configured day is almost always
+                          // what's meant (the same special on another night)
+                          // and saves re-picking both times.
+                          (firstConfigured?.map((r) => ({ ...r })) ?? [
+                            defaultRange(defaultDurationMin),
+                          ])
+                        : null,
+                    )
+                  }
+                  aria-label={`${WEEKDAYS[wd]} on`}
+                />
+                <span className={on ? "text-offwhite" : "text-muted"}>
+                  {WEEKDAYS[wd]}
+                </span>
+              </label>
+              {on && (
+                <div className="flex flex-col gap-2 border-l border-subtle pl-3">
+                  {day.map((r, i) => (
+                    <div key={i} className="flex items-center gap-2.5">
+                      <TimeSelect
+                        value={r.start}
+                        onChange={(v) => patchRange(wd, i, { start: v })}
+                        className={timeSelectCls}
+                        aria-label={`${WEEKDAYS[wd]} special ${i + 1} from`}
+                      />
+                      <span className="px-0.5 text-muted">–</span>
+                      <TimeSelect
+                        value={r.end}
+                        onChange={(v) => patchRange(wd, i, { end: v })}
+                        className={timeSelectCls}
+                        aria-label={`${WEEKDAYS[wd]} special ${i + 1} until`}
+                      />
+                      {day.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setDay(wd, day.filter((_, j) => j !== i))}
+                          className="ml-1 rounded px-1.5 py-1 text-xs text-muted transition-colors hover:text-danger-soft"
+                          aria-label={`Remove ${WEEKDAYS[wd]} special ${i + 1}`}
+                        >
+                          ✕
+                        </button>
+                      )}
+                      {i === day.length - 1 && day.length < MAX_SCHEDULE_TIMES && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDay(wd, [
+                              ...day,
+                              {
+                                start: r.end,
+                                end: minutesToHhmm(
+                                  hhmmToMinutes(r.end) + defaultDurationMin,
+                                ),
+                              },
+                            ])
+                          }
+                          className="ml-1 whitespace-nowrap rounded px-1.5 py-1 text-xs text-muted transition-colors hover:text-gold"
+                          aria-label={`Add another ${WEEKDAYS[wd]} special`}
+                        >
+                          + hours
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
