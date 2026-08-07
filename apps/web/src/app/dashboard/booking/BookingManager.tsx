@@ -845,7 +845,8 @@ function ServicesTab({
   function duplicate(s: ServiceRow) {
     start(async () => {
       const r = await createServiceAction({
-        name: `${s.name} copy`,
+        // The column caps at 120 - a long original must not make its copy 400.
+        name: `${s.name.slice(0, 115)} copy`,
         description: s.description ?? undefined,
         imageUrl: s.imageUrl ?? undefined,
         durationMin: s.durationMin,

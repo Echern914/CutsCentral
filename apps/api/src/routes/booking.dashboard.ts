@@ -2644,7 +2644,19 @@ bookingDashboardRouter.patch("/targeted-slots/rules/:id", async (req, res) => {
           );
           if (startsAt.getTime() <= now.getTime()) continue;
           if (startsAt.getTime() < rule.anchor.getTime()) continue;
-          if (horizonEnd && startsAt.getTime() > horizonEnd.getTime()) {
+          // The horizon stops NEW weeks only. Weeks below the cursor were
+          // already materialized under the old schedule, and their unbooked
+          // rows are gone (deleted above) - stopping short of the cursor would
+          // strand them: the cursor stays monotonic (lowering it would make
+          // the roll-forward re-create weeks whose BOOKED survivors it can't
+          // see, i.e. duplicates), so a week skipped here would never be built
+          // again. Rebuild every already-materialized week in full; the
+          // horizon gates only the frontier beyond the cursor.
+          if (
+            horizonEnd &&
+            startsAt.getTime() > horizonEnd.getTime() &&
+            k >= rule.weeksMaterialized
+          ) {
             overHorizon = true;
             break;
           }
