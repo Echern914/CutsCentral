@@ -22,6 +22,7 @@ import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { BackToDashboard } from "@/components/BackToDashboard";
 import { CustomerBack } from "@/components/CustomerBack";
 import { DemoTour } from "@/components/tour/DemoTour";
+import { TextToBook } from "@/components/TextToBook";
 import { RequestForm } from "./RequestForm";
 import { ShopWaitlistForm } from "./ShopWaitlistForm";
 import { ReviewForm } from "./ReviewForm";
@@ -226,6 +227,22 @@ export function ShopPageClient({
             )}
           </div>
         </motion.header>
+
+        {/* The AI text line, above the booking CTA: for a lot of clients
+            texting IS the booking flow, and it answers "are you open Saturday?"
+            which no button on this page can. Renders only when the shop has a
+            reachable receptionist (the API nulls the number otherwise). */}
+        {data.receptionistNumber && (
+          <motion.div variants={fadeUp} className="mt-6">
+            <TextToBook
+              number={data.receptionistNumber}
+              shopName={data.name}
+              accent={accent}
+              muted={theme.muted}
+              text={theme.text}
+            />
+          </motion.div>
+        )}
 
         {/* Primary CTA. Native booking and the lead form are mutually exclusive:
             native is real self-serve booking, so it replaces the request form. */}

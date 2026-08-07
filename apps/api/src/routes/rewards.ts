@@ -16,6 +16,7 @@ import { prisma, runAsOwner } from "@chairback/db";
 import { toE164 } from "../acuity/clientKey.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 import { buildPassForClient, walletEnabled } from "../wallet/pass.js";
+import { receptionistEnabledForShop } from "../receptionist/config.js";
 import { logger } from "../logger.js";
 
 const env = apiEnv();
@@ -359,6 +360,16 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
           : REWARDS_SECTION_DEFAULT,
       // Link to the shop's public mini-site when it's live.
       pageSlug: client.shop.publicPageEnabled ? client.shop.slug : null,
+      // The shop's AI text line. Same gate as the public page: only surfaced
+      // when a text would really be answered (receptionistEnabledForShop) and
+      // the shop owns its number. THIS reader is already a known client, so the
+      // shared line could in principle route them - but a client who saw the
+      // number here and passed it to a friend would send that friend into
+      // silence, so the rule stays "own number only", matching /s/[slug].
+      receptionistNumber:
+        client.shop.twilioNumber && receptionistEnabledForShop(client.shop, { now })
+          ? client.shop.twilioNumber
+          : null,
     },
     client: {
       firstName: client.firstName,
