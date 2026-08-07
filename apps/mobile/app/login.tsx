@@ -55,6 +55,17 @@ GoogleSignin.configure({
 
 type Provider = "apple" | "google" | "email";
 
+/**
+ * An Apple/Google token we verified but couldn't sign in with, because the
+ * provider's email matches no account - Apple's "Hide My Email" relay address
+ * never can. Held in memory only (never persisted) until the barber proves who
+ * they are with their password, then POSTed to /apple|google/link so the next
+ * tap of that button just works. See auth/native.ts linkProviderToUser.
+ */
+type PendingLink =
+  | { provider: "apple"; identityToken: string; name?: string }
+  | { provider: "google"; idToken: string };
+
 /** The API's structured auth error ({error: code}), or null if unparseable. */
 async function errorCode(res: Response): Promise<string | null> {
   try {
@@ -65,12 +76,30 @@ async function errorCode(res: Response): Promise<string | null> {
   }
 }
 
+/**
+ * Copy for the failures worth naming. Everything else stays the generic retry
+ * message. 429 is checked by STATUS, not by code: express-rate-limit answers
+ * with a plain-text body, so errorCode() parses nothing out of it.
+ */
+function knownFailure(res: Response, code: string | null, label: string): string | null {
+  if (res.status === 429) {
+    return "Too many attempts. Wait a few minutes and try again.";
+  }
+  if (code === "apple_native_unconfigured" || code === "google_native_unconfigured") {
+    return `${label} sign-in isn't available right now. Use your email and password below.`;
+  }
+  return null;
+}
+
 export default function LoginScreen() {
   const [busy, setBusy] = useState<Provider | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const handing = useRef(false); // guard a double handoff
+  // Set when Apple/Google verified fine but matched no account; consumed by the
+  // email sign-in below to connect that provider to the account it just proved.
+  const pendingLink = useRef<PendingLink | null>(null);
   // A returning barber already has a stored 30-day session: skip the buttons and
   // go straight to /barber, which re-asserts the dashboard cookie through
   // /app-auth. Render nothing until this resolves so the buttons never flash.
@@ -99,6 +128,35 @@ export default function LoginScreen() {
     router.replace("/barber");
   }
 
+  /**
+   * Connect the Apple/Google identity the barber just failed to sign in with to
+   * the account they've now authenticated as. Best-effort by design: they ARE
+   * signed in, so a link failure (network, 409 already-claimed) must never keep
+   * them out of the dashboard - the button simply doesn't work yet next time.
+   */
+  async function linkPending(token: string) {
+    const pending = pendingLink.current;
+    if (!pending) return;
+    pendingLink.current = null;
+    const path = pending.provider === "apple" ? "apple" : "google";
+    const body =
+      pending.provider === "apple"
+        ? { identityToken: pending.identityToken, name: pending.name }
+        : { idToken: pending.idToken };
+    try {
+      await fetch(`${API_ORIGIN}/api/auth/${path}/link`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+      });
+    } catch {
+      // Swallowed on purpose - see the note above.
+    }
+  }
+
   async function onApple() {
     setError(null);
     setBusy("apple");
@@ -124,11 +182,21 @@ export default function LoginScreen() {
         body: JSON.stringify({ identityToken, name }),
       });
       if (!res.ok) {
+        const code = await errorCode(res);
+        const known = knownFailure(res, code, "Apple");
+        if (known) {
+          setError(known);
+          setBusy(null);
+          return;
+        }
         // Login-only: no account is created in the app (Guideline 3.1.1), so an
-        // unknown Apple ID is a normal outcome, not a failure to retry.
-        if ((await errorCode(res)) === "account_not_found") {
+        // unknown Apple ID is a normal outcome, not a failure to retry. It is
+        // also what "Hide My Email" always produces on a web-made account, so
+        // hold the token and offer to connect it once they sign in below.
+        if (code === "account_not_found") {
+          pendingLink.current = { provider: "apple", identityToken, name };
           setError(
-            "No ChairBack account found for that Apple ID. Sign in with the account your shop is set up with, or use your email below.",
+            "That Apple ID isn't connected to a ChairBack account yet. Sign in with your email and password below and we'll connect it for next time.",
           );
           setBusy(null);
           return;
@@ -167,9 +235,17 @@ export default function LoginScreen() {
         body: JSON.stringify({ idToken }),
       });
       if (!res.ok) {
-        if ((await errorCode(res)) === "account_not_found") {
+        const code = await errorCode(res);
+        const known = knownFailure(res, code, "Google");
+        if (known) {
+          setError(known);
+          setBusy(null);
+          return;
+        }
+        if (code === "account_not_found") {
+          pendingLink.current = { provider: "google", idToken };
           setError(
-            "No ChairBack account found for that Google account. Sign in with the account your shop is set up with, or use your email below.",
+            "That Google account isn't connected to a ChairBack account yet. Sign in with your email and password below and we'll connect it for next time.",
           );
           setBusy(null);
           return;
@@ -206,14 +282,31 @@ export default function LoginScreen() {
         body: JSON.stringify({ email: trimmed, password }),
       });
       if (!res.ok) {
-        if ((await errorCode(res)) === "invalid_credentials") {
-          setError("Email or password is incorrect.");
+        const code = await errorCode(res);
+        const known = knownFailure(res, code, "Email");
+        if (known) {
+          setError(known);
+          setBusy(null);
+          return;
+        }
+        if (code === "invalid_credentials") {
+          // The API answers identically for a wrong password, an unknown email
+          // and an account that has NO password (made with Google on the web) -
+          // deliberately, so the response can't be used to probe which emails
+          // have accounts. That last case is the likely one here, so the copy
+          // has to name it; otherwise a Google barber reads "incorrect" about a
+          // password they never set and has nowhere to go.
+          setError(
+            "Email or password is incorrect. If you made your account with Google or Apple, use the buttons above — or tap Forgot password to set one.",
+          );
           setBusy(null);
           return;
         }
         throw new Error(`Sign-in failed (${res.status})`);
       }
       const { token } = (await res.json()) as { token: string };
+      // Connect a provider they tapped first, before leaving this screen.
+      await linkPending(token);
       await completeSignIn(token);
     } catch {
       setError("Sign-in didn't work. Please try again.");

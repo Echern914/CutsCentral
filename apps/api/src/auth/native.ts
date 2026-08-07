@@ -141,8 +141,14 @@ export async function signInWithProfile(
   // 2) Else, an existing account with this email -> link it. Only when the
   // provider attests the email is VERIFIED: an unverified provider email must
   // never be able to claim (take over) the account that owns that address.
-  if (!user && profile.email && profile.emailVerified) {
-    const byEmail = await prisma.user.findUnique({ where: { email: profile.email } });
+  //
+  // Email is normalized the SAME way signup/login normalize it (auth.ts) before
+  // the lookup. Signup stores lowercase and the column is a plain case-sensitive
+  // unique, so a provider that returns "Eric@X.com" would otherwise miss the row
+  // and tell a barber with a real account that no account exists.
+  const linkEmail = profile.email?.trim().toLowerCase();
+  if (!user && linkEmail && profile.emailVerified) {
+    const byEmail = await prisma.user.findUnique({ where: { email: linkEmail } });
     if (byEmail) {
       user = await prisma.user.update({
         where: { id: byEmail.id },
@@ -165,4 +171,47 @@ export async function signInWithProfile(
     tokenVersion: user.tokenVersion,
     user: { id: user.id, email: user.email, name: user.name },
   };
+}
+
+/**
+ * Attach a verified provider identity to an ALREADY-AUTHENTICATED account.
+ *
+ * This is the escape hatch for the one case `signInWithProfile` cannot solve on
+ * its own: the provider's email doesn't match the account's. Apple's "Hide My
+ * Email" mints a per-app `@privaterelay.appleid.com` address that can never
+ * equal what the barber signed up with on the web, and Apple is the FIRST
+ * button on the login screen (iOS HIG), so it's the first thing many people
+ * tap. Without this, that barber is told no account exists - which is false.
+ *
+ * The app calls this AFTER the user proves who they are with their email and
+ * password, so identity is established by the session, not by the email claim.
+ * That's why an unverified provider email is fine here and fatal in
+ * `signInWithProfile`: there, the email IS the proof; here, the session is.
+ *
+ * Idempotent for the same user (re-linking their own id is a no-op success).
+ * A sub already owned by SOMEONE ELSE is refused rather than moved: silently
+ * re-pointing it would lock the other barber out of their own sign-in button.
+ */
+export async function linkProviderToUser(
+  userId: string,
+  provider: "apple" | "google",
+  profile: NativeProfile,
+): Promise<void> {
+  const owner =
+    provider === "apple"
+      ? await prisma.user.findUnique({ where: { appleId: profile.sub } })
+      : await prisma.user.findUnique({ where: { googleId: profile.sub } });
+
+  if (owner) {
+    if (owner.id === userId) return; // already this account's - nothing to do
+    throw new NativeAuthError("provider_taken", 409);
+  }
+
+  // Only the id column is written. Email and name stay as the account has them:
+  // the barber set those up on the web, and a private-relay address or an Apple
+  // display name must never quietly overwrite them.
+  await prisma.user.update({
+    where: { id: userId },
+    data: provider === "apple" ? { appleId: profile.sub } : { googleId: profile.sub },
+  });
 }
