@@ -516,7 +516,17 @@ function SettingsTab({
                 className={field}
                 value={buffer}
                 onChange={setBuffer}
+                aria-describedby="buffer-help"
               />
+              {/* The buffer must FIT after every slot, including the day's
+                  last - so it silently retreats the final bookable time
+                  (pilot: "no 7pm slot" on a 7:30 close with a buffer). Say it
+                  here, the one place the number is set. */}
+              <p id="buffer-help" className="mt-1 text-[11px] text-muted">
+                Breathing room after every booking. The last slot of the day
+                needs its buffer too — a 15-min buffer means the final booking
+                ends 15 min before closing.
+              </p>
             </label>
           </div>
           <p className="mt-3 text-xs text-muted">
@@ -825,6 +835,37 @@ function ServicesTab({
       } else toast("Couldn't add", "error");
     });
   }
+  /**
+   * Clone everything a service carries into "<name> copy" (the pilot:
+   * "Duplicate Service to make it easier instead of retyping each day's
+   * custom hours individually"). The one thing deliberately NOT copied is the
+   * group membership - a copy starts ungrouped so it can't silently join the
+   * original's booking caps.
+   */
+  function duplicate(s: ServiceRow) {
+    start(async () => {
+      const r = await createServiceAction({
+        name: `${s.name} copy`,
+        description: s.description ?? undefined,
+        imageUrl: s.imageUrl ?? undefined,
+        durationMin: s.durationMin,
+        price: s.price,
+        priceOverrides: s.priceOverrides ?? undefined,
+        durationOverrides: s.durationOverrides ?? undefined,
+        hoursWindows: s.hoursWindows ?? undefined,
+        timeOverrides: s.timeOverrides ?? undefined,
+        color: s.color ?? null,
+        dailyTarget: s.dailyTarget ?? null,
+        offeredByAll: s.offeredByAll ?? false,
+        staffIds: s.offeredByAll ? undefined : (s.staffIds ?? []),
+      });
+      toast(
+        r.ok ? `Duplicated — "${s.name} copy" added below` : "Couldn't duplicate",
+        r.ok ? "success" : "error",
+      );
+    });
+  }
+
   function remove(id: string) {
     // One tap here used to destroy a fully-configured service — per-day prices
     // and durations, hours, time-of-day windows, staff assignments — with no
@@ -1002,6 +1043,14 @@ function ServicesTab({
                   Edit
                 </button>
                 <button
+                  onClick={() => duplicate(s)}
+                  disabled={pending}
+                  className="text-xs text-muted hover:text-gold hover:underline disabled:opacity-50"
+                  aria-label={`Duplicate ${s.name}`}
+                >
+                  Duplicate
+                </button>
+                <button
                   onClick={() => remove(s.id)}
                   className="text-xs text-danger-soft hover:underline"
                 >
@@ -1021,6 +1070,7 @@ function ServicesTab({
         <ServiceEditForm
           key={editing.id}
           service={editing}
+          services={initial}
           staff={staff}
           groupName={
             editing.serviceGroupId
@@ -1055,12 +1105,16 @@ function ServicesTab({
 
 function ServiceEditForm({
   service,
+  services,
   staff,
   groupName,
   toast,
   onClose,
 }: {
   service: ServiceRow;
+  /** The whole menu, for "Copy hours from" (retyping 7 days of custom windows
+   *  per service was the pilot's exact complaint). */
+  services: ServiceRow[];
   staff: StaffRow[];
   // Non-null = this service is in a group; the group owns hours + limits, so the
   // per-service hours editor is replaced with a note (the group overrides it).
@@ -1109,7 +1163,92 @@ function ServiceEditForm({
   const [timeRows, setTimeRows] = useState<TimeWindowRow[]>(() =>
     timeRowsFromOverrides(service.timeOverrides),
   );
+  // The staff weekly hours behind this service, per weekday. The engine can
+  // only offer times INSIDE them - a service window reaching past them is a
+  // silent no-op the barber can't see anywhere else (the pilot set service
+  // hours to extend his evening and concluded the site was broken when nothing
+  // changed). Fetched once; capped at 4 barbers so a big shop doesn't fan out
+  // requests - past that the union is wide enough that the warning is noise.
+  const [staffSpans, setStaffSpans] = useState<Record<
+    number,
+    { startMin: number; endMin: number }[]
+  > | null>(null);
+  useEffect(() => {
+    const relevant = (
+      service.offeredByAll || (service.staffIds ?? []).length === 0
+        ? activeStaff.map((s) => s.id)
+        : (service.staffIds ?? [])
+    ).slice(0, 4);
+    if (relevant.length === 0) {
+      setStaffSpans({});
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const all: Record<number, { startMin: number; endMin: number }[]> = {};
+      for (const id of relevant) {
+        const r = await getAvailabilityAction(id);
+        if (!r.ok || !r.data) continue;
+        for (const rule of r.data.rules) {
+          (all[rule.weekday] ??= []).push({
+            startMin: rule.startMin,
+            endMin: rule.endMin,
+          });
+        }
+      }
+      if (!cancelled) setStaffSpans(all);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Snapshot on open: the sheet is short-lived and the rules don't change
+    // underneath it from here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [pending, start] = useTransition();
+
+  // Windows that reach outside the bookable hours, spelled per day. Bounds
+  // (earliest open / latest close across the offering barbers) rather than
+  // exact span coverage: the failure that burns people is "I set 9 PM but my
+  // day ends at 7:30", not a mid-day gap.
+  const hoursConflicts: string[] = [];
+  if (staffSpans !== null) {
+    hoursRows.forEach((row, wd) => {
+      if (row.mode !== "custom") return;
+      const spans = staffSpans[wd] ?? [];
+      for (const w of row.windows) {
+        const s = hhmmToMinutes(w.start);
+        const e = hhmmToMinutes(w.end);
+        if (e <= s) continue;
+        if (spans.length === 0) {
+          hoursConflicts.push(
+            `${WEEKDAYS[wd]}: no bookable hours that day — this window won't appear until you add ${WEEKDAYS[wd]} hours under Staff → Hours.`,
+          );
+          break;
+        }
+        const open = Math.min(...spans.map((x) => x.startMin));
+        const close = Math.max(...spans.map((x) => x.endMin));
+        if (e > close) {
+          hoursConflicts.push(
+            `${WEEKDAYS[wd]}: ends ${fmtClock(e)} but you're bookable until ${fmtClock(close)} — times past that won't be offered. Extend your hours under Staff → Hours to go later.`,
+          );
+        } else if (s < open) {
+          hoursConflicts.push(
+            `${WEEKDAYS[wd]}: starts ${fmtClock(s)} but you open at ${fmtClock(open)} — earlier times won't be offered.`,
+          );
+        }
+      }
+    });
+  }
+
+  // "Copy hours from" donors: other active services that actually configured
+  // hours (an all-open donor would just wipe the rows to defaults).
+  const hoursDonors = services.filter(
+    (s) =>
+      s.id !== service.id &&
+      s.active &&
+      Object.keys(s.hoursWindows ?? {}).length > 0,
+  );
 
   function toggleStaff(id: string) {
     // Picking specific barbers means it's no longer "all".
@@ -1354,7 +1493,12 @@ function ServiceEditForm({
           <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
             Open = whenever the barber works that day. Custom = only the windows
             you set (add a second window for a split day). Not open = no
-            bookings that day.
+            bookings that day.{" "}
+            <span className="text-offwhite">
+              These can only narrow when you&apos;re bookable
+            </span>{" "}
+            — to work later than your day currently ends, extend your hours
+            under Staff → Hours.
             {groupName ? (
               <>
                 {" "}
@@ -1364,11 +1508,46 @@ function ServiceEditForm({
               </>
             ) : null}
           </p>
+          {hoursDonors.length > 0 && (
+            <label className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
+              Copy hours from
+              <select
+                className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
+                value=""
+                onChange={(e) => {
+                  const donor = hoursDonors.find((d) => d.id === e.target.value);
+                  if (donor) {
+                    setHoursRows(hoursRowsFromWindows(donor.hoursWindows));
+                    toast(`Hours copied from ${donor.name}`, "success");
+                  }
+                }}
+                aria-label="Copy hours from another service"
+              >
+                <option value="">another service…</option>
+                {hoursDonors.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+              <span className="text-muted/70">(replaces the rows below — save to keep)</span>
+            </label>
+          )}
           <AvailableHoursRows
             rows={hoursRows}
             onChange={setHoursRows}
             ariaScope="this service"
           />
+          {hoursConflicts.length > 0 && (
+            <div
+              role="alert"
+              className="mt-2 flex flex-col gap-1 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-300"
+            >
+              {hoursConflicts.map((c) => (
+                <p key={c}>{c}</p>
+              ))}
+            </div>
+          )}
         </CollapsibleHours>
 
         {/* Day-gauge target. Hidden while grouped for the same reason as the
