@@ -508,6 +508,32 @@ export async function deleteTargetedSlotAction(id: string): Promise<Result> {
   return done(await apiSend("DELETE", `/api/booking/targeted-slots/${id}`));
 }
 
+/**
+ * Edit a series in place: label/price/base duration/schedule. The server
+ * regenerates the FUTURE UNBOOKED occurrences from the new values; booked and
+ * past ones keep what the client claimed. Staff/service are deliberately not
+ * editable - that's a different special (turn off + republish).
+ */
+export async function updateTargetedSlotRuleAction(
+  id: string,
+  input: {
+    label?: string; // "" clears it
+    durationMin?: number;
+    price?: number;
+    schedule?: Record<string, { start: string; durationMin?: number; price?: number }[]>;
+  },
+): Promise<Result> {
+  return done(await apiSend("PATCH", `/api/booking/targeted-slots/rules/${id}`, input));
+}
+
+/** Edit one UNBOOKED occurrence (move/reprice/relabel). Booked ones 409. */
+export async function updateTargetedSlotAction(
+  id: string,
+  input: { startsAt?: string; durationMin?: number; price?: number; label?: string },
+): Promise<Result> {
+  return done(await apiSend("PATCH", `/api/booking/targeted-slots/${id}`, input));
+}
+
 /** Turn a series off / remove a finite batch (future unbooked rows deleted). */
 export async function deleteTargetedSlotRuleAction(id: string): Promise<Result> {
   return done(await apiSend("DELETE", `/api/booking/targeted-slots/rules/${id}`));

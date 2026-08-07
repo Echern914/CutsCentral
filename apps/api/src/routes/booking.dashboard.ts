@@ -2502,6 +2502,249 @@ bookingDashboardRouter.post("/targeted-slots/bulk-delete", async (req, res) => {
   res.json({ ok: true, removed: count });
 });
 
+// Edit a series. Everything a barber gets wrong on publish is editable - label,
+// price, base duration, the weekday x time schedule - WITHOUT losing the rule's
+// booked history. Staff/service are not: changing what a special IS is a new
+// special (turn off + republish), and re-pointing existing bookings' rows at a
+// different service would rewrite history.
+//
+// Semantics: the rule row is stamped, then the FUTURE UNBOOKED rows are dropped
+// and regenerated from the new values. Three things deliberately survive
+// untouched: past rows (history), booked future rows (a client already claimed
+// that time at that price - the regeneration also skips their exact instants so
+// an unchanged schedule can't double-create them), and rows of OTHER rules.
+// The regeneration runs in the SAME shop tx as the rule stamp, so a crash can't
+// leave the card text disagreeing with the rows under it.
+const targetedRulePatchSchema = z
+  .object({
+    label: z.string().trim().max(60).optional().or(z.literal("")),
+    durationMin: z.number().int().min(5).max(600).optional(),
+    price: z.number().min(0).max(100000).optional(),
+    schedule: z
+      .record(z.string().regex(/^[0-6]$/), z.array(scheduleTimeSchema).min(1).max(8))
+      .refine((m) => Object.keys(m).length >= 1, { message: "pick at least one day" })
+      .optional(),
+  })
+  .strict()
+  .refine((d) => Object.keys(d).length > 0, { message: "nothing to change" });
+
+bookingDashboardRouter.patch("/targeted-slots/rules/:id", async (req, res) => {
+  const parsed = targetedRulePatchSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const p = parsed.data;
+  const shopId = req.shop!.id;
+  const shop = await prisma.shop.findUnique({
+    where: { id: shopId },
+    select: { timezone: true },
+  });
+  if (!shop) {
+    res.status(404).json({ ok: false });
+    return;
+  }
+  const tz = shop.timezone;
+  const now = new Date();
+
+  // "HH:MM" -> shop-local minutes, the storage shape (same as the create).
+  let newSchedule: RuleSchedule | undefined;
+  if (p.schedule) {
+    newSchedule = {};
+    for (const [wd, times] of Object.entries(p.schedule)) {
+      newSchedule[wd] = times
+        .map((t) => ({
+          startMin: Number(t.start.slice(0, 2)) * 60 + Number(t.start.slice(3, 5)),
+          ...(t.durationMin !== undefined ? { durationMin: t.durationMin } : {}),
+          ...(t.price !== undefined ? { price: t.price } : {}),
+        }))
+        .sort((a, b) => a.startMin - b.startMin);
+    }
+  }
+
+  const result = await runWithShop(shopId, async (tx) => {
+    const rule = await tx.targetedSlotRule.findFirst({
+      where: { shopId, id: req.params.id!, active: true },
+    });
+    if (!rule) return null;
+
+    const label = p.label === undefined ? rule.label : p.label.trim() || null;
+    const durationMin = p.durationMin ?? rule.durationMin;
+    const price = p.price ?? rule.price;
+    const scheduleJson = (newSchedule ?? rule.schedule) as never;
+
+    await tx.targetedSlotRule.updateMany({
+      where: { shopId, id: rule.id },
+      data: { label, durationMin, price, schedule: scheduleJson },
+    });
+
+    // Booked future rows hold their instants: the regeneration below must not
+    // recreate a row on top of one (an unchanged schedule would otherwise
+    // double-create every time already claimed).
+    const bookedFuture = await tx.targetedSlot.findMany({
+      where: {
+        shopId,
+        ruleId: rule.id,
+        startsAt: { gt: now },
+        bookedAppointmentId: { not: null },
+      },
+      select: { startsAt: true },
+    });
+    const claimed = new Set(bookedFuture.map((b) => b.startsAt.getTime()));
+
+    const removed = await tx.targetedSlot.deleteMany({
+      where: { shopId, ruleId: rule.id, bookedAppointmentId: null, startsAt: { gt: now } },
+    });
+
+    // Regenerate the future from the CURRENT week. Same week arithmetic as
+    // materializeTargetedRule (anchor-relative, DST-stable), but starting at
+    // the week containing "now" instead of the extend-only cursor - only
+    // instants > now are created, so past weeks never resurrect. Finite series
+    // keep their original length (weeks 0..weeksMaterialized-1); indefinite
+    // ones regenerate to a fresh horizon and the cursor advances to match, so
+    // the nightly roll-forward keeps extending from AFTER what we made here.
+    const effSched = effectiveSchedule({ anchor: rule.anchor, schedule: scheduleJson }, tz);
+    const anchor = zonedDateParts(rule.anchor, tz);
+    const anchorNoon = zonedWallTimeToUtc(anchor.year, anchor.month0, anchor.day, 720, tz);
+    const nowParts = zonedDateParts(now, tz);
+    const todayNoon = zonedWallTimeToUtc(nowParts.year, nowParts.month0, nowParts.day, 720, tz);
+    const daysSinceAnchor = Math.round(
+      (todayNoon.getTime() - anchorNoon.getTime()) / 86_400_000,
+    );
+    const kStart = Math.max(0, Math.floor(daysSinceAnchor / 7));
+    const horizonEnd = rule.indefinite
+      ? new Date(now.getTime() + TARGETED_RULE_HORIZON_DAYS * 86_400_000)
+      : null;
+
+    const rows: {
+      shopId: string;
+      staffId: string;
+      serviceId: string;
+      label: string | null;
+      startsAt: Date;
+      durationMin: number;
+      price: never;
+      ruleId: string;
+    }[] = [];
+    let k = kStart;
+    for (;;) {
+      if (!rule.indefinite && k >= rule.weeksMaterialized) break;
+      let overHorizon = false;
+      const week: typeof rows = [];
+      for (const [key, times] of Object.entries(effSched)) {
+        const wd = Number(key);
+        const offset = (wd - anchor.weekday + 7) % 7;
+        for (const t of times) {
+          const startsAt = zonedWallTimeToUtc(
+            anchor.year,
+            anchor.month0,
+            anchor.day + k * 7 + offset,
+            t.startMin,
+            tz,
+          );
+          if (startsAt.getTime() <= now.getTime()) continue;
+          if (startsAt.getTime() < rule.anchor.getTime()) continue;
+          if (horizonEnd && startsAt.getTime() > horizonEnd.getTime()) {
+            overHorizon = true;
+            break;
+          }
+          if (claimed.has(startsAt.getTime())) continue;
+          week.push({
+            shopId,
+            staffId: rule.staffId,
+            serviceId: rule.serviceId,
+            label,
+            startsAt,
+            durationMin: t.durationMin ?? durationMin,
+            price: (t.price ?? price) as never,
+            ruleId: rule.id,
+          });
+        }
+        if (overHorizon) break;
+      }
+      if (overHorizon) break;
+      rows.push(...week);
+      k++;
+    }
+    if (rows.length > 0) {
+      await tx.targetedSlot.createMany({ data: rows });
+    }
+    if (rule.indefinite && k > rule.weeksMaterialized) {
+      await tx.targetedSlotRule.updateMany({
+        where: { shopId, id: rule.id },
+        data: { weeksMaterialized: k },
+      });
+    }
+    return { removed: removed.count, created: rows.length };
+  });
+
+  if (!result) {
+    res.status(404).json({ ok: false });
+    return;
+  }
+  res.json({ ok: true, ...result });
+});
+
+// Edit ONE unbooked occurrence (move it, reprice it, relabel it). A booked one
+// is a client's claim - 409, same stance as the delete. Editing a past row is
+// editing history - refused. The row keeps its ruleId, so a later rule edit or
+// turn-off still governs it (the barber sees it under the series either way).
+const targetedSlotPatchSchema = z
+  .object({
+    startsAt: z.coerce.date().optional(),
+    durationMin: z.number().int().min(5).max(600).optional(),
+    price: z.number().min(0).max(100000).optional(),
+    label: z.string().trim().max(60).optional().or(z.literal("")),
+  })
+  .strict()
+  .refine((d) => Object.keys(d).length > 0, { message: "nothing to change" });
+
+bookingDashboardRouter.patch("/targeted-slots/:id", async (req, res) => {
+  const parsed = targetedSlotPatchSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const p = parsed.data;
+  if (p.startsAt && p.startsAt.getTime() <= Date.now()) {
+    res.status(400).json({ error: "in_the_past" });
+    return;
+  }
+  const db = forShop(req.shop!.id);
+  const existing = await db.targetedSlot.findFirst({
+    where: { id: req.params.id },
+    select: { bookedAppointmentId: true, startsAt: true },
+  });
+  if (!existing) {
+    res.status(404).json({ ok: false });
+    return;
+  }
+  if (existing.bookedAppointmentId !== null) {
+    res.status(409).json({ ok: false });
+    return;
+  }
+  if (existing.startsAt.getTime() <= Date.now()) {
+    res.status(400).json({ error: "in_the_past" });
+    return;
+  }
+  // Guarded write: if a client books between the read above and this update,
+  // the unbooked filter matches nothing and the edit loses (correctly).
+  const { count } = await db.targetedSlot.updateMany({
+    where: { id: req.params.id, bookedAppointmentId: null },
+    data: {
+      ...(p.startsAt ? { startsAt: p.startsAt } : {}),
+      ...(p.durationMin !== undefined ? { durationMin: p.durationMin } : {}),
+      ...(p.price !== undefined ? { price: p.price } : {}),
+      ...(p.label !== undefined ? { label: p.label.trim() || null } : {}),
+    },
+  });
+  if (count === 0) {
+    res.status(409).json({ ok: false });
+    return;
+  }
+  res.json({ ok: true });
+});
+
 // Delete an UNBOOKED targeted slot (a booked one is history - 409).
 bookingDashboardRouter.delete("/targeted-slots/:id", async (req, res) => {
   const db = forShop(req.shop!.id);

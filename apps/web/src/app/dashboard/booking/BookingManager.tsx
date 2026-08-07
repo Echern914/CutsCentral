@@ -54,6 +54,8 @@ import {
   updateAddOnAction,
   updateServiceAction,
   updateServiceGroupAction,
+  updateTargetedSlotAction,
+  updateTargetedSlotRuleAction,
   type ServiceGroupInput,
   type TargetedSlotRow,
   type TargetedSlotRuleRow,
@@ -1447,6 +1449,15 @@ function TargetedSlotsManager({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // Which series cards are expanded to their individual dates.
   const [openRules, setOpenRules] = useState<Set<string>>(new Set());
+  // Series being edited: the publish form becomes its edit form (Drick's
+  // barber: "No way to edit Targeted Slots" - the only verbs were turn off and
+  // remove, so a wrong time meant retyping the whole schedule).
+  const [editingRule, setEditingRule] = useState<TargetedSlotRuleRow | null>(null);
+  // One occurrence being edited inline (unbooked only).
+  const [editingSlotId, setEditingSlotId] = useState<string | null>(null);
+  const [editWhen, setEditWhen] = useState("");
+  const [editMinutes, setEditMinutes] = useState(30);
+  const [editPrice, setEditPrice] = useState("");
   const [pending, start] = useTransition();
 
   function refresh() {
@@ -1464,6 +1475,41 @@ function TargetedSlotsManager({
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /** Seed the publish form with a rule so it becomes that rule's edit form. */
+  function beginEditRule(rule: TargetedSlotRuleRow) {
+    setEditingRule(rule);
+    setMode("weekly");
+    setServiceId(rule.serviceId);
+    setStaffId(rule.staffId);
+    setLabel(rule.label ?? "");
+    setMinutes(rule.durationMin);
+    setPrice(String(rule.price));
+    // Inverse of the publish mapping: each stored time's duration (or the base)
+    // becomes the window's end again, so the grid shows what was published.
+    const seeded: Record<string, WeekRange[]> = {};
+    for (const [wd, times] of Object.entries(rule.schedule)) {
+      seeded[wd] = times.map((t) => ({
+        start: minutesToHhmm(t.startMin),
+        end: minutesToHhmm(t.startMin + (t.durationMin ?? rule.durationMin)),
+      }));
+    }
+    setWeekTimes(seeded);
+    setStartDate("");
+    setRepeatForever(rule.indefinite);
+    setRepeatWeeks(0);
+  }
+
+  function cancelEdit() {
+    setEditingRule(null);
+    setLabel("");
+    setWeekTimes({});
+    setStartDate("");
+    setPrice("");
+    setRepeatWeeks(0);
+    setRepeatForever(false);
+    setMode("once");
+  }
 
   function addWeekly() {
     const days = Object.entries(weekTimes).filter(([, t]) => t.length > 0);
@@ -1488,6 +1534,38 @@ function TargetedSlotsManager({
         }
       }
     }
+    const schedule = Object.fromEntries(
+      days.map(([wd, ranges]) => [
+        wd,
+        [...ranges]
+          .sort((a, b) => hhmmToMinutes(a.start) - hhmmToMinutes(b.start))
+          .map((r) => ({
+            start: r.start,
+            // The window's length IS this occurrence's duration; it
+            // overrides the rule's base minutes for just this time.
+            durationMin: hhmmToMinutes(r.end) - hhmmToMinutes(r.start),
+          })),
+      ]),
+    );
+    // Editing: same form, same validation - PATCH instead of POST. The server
+    // regenerates future unbooked dates; booked ones keep their claim.
+    if (editingRule) {
+      const ruleId = editingRule.id;
+      start(async () => {
+        const r = await updateTargetedSlotRuleAction(ruleId, {
+          label: label.trim(),
+          durationMin: minutes,
+          price: Number(price),
+          schedule,
+        });
+        if (r.ok) {
+          toast("Series updated", "success");
+          cancelEdit();
+          refresh();
+        } else toast("Couldn't update", "error");
+      });
+      return;
+    }
     start(async () => {
       const r = await createTargetedScheduleAction({
         staffId,
@@ -1495,19 +1573,7 @@ function TargetedSlotsManager({
         label: label.trim() || undefined,
         durationMin: minutes,
         price: Number(price),
-        schedule: Object.fromEntries(
-          days.map(([wd, ranges]) => [
-            wd,
-            [...ranges]
-              .sort((a, b) => hhmmToMinutes(a.start) - hhmmToMinutes(b.start))
-              .map((r) => ({
-                start: r.start,
-                // The window's length IS this occurrence's duration; it
-                // overrides the rule's base minutes for just this time.
-                durationMin: hhmmToMinutes(r.end) - hhmmToMinutes(r.start),
-              })),
-          ]),
-        ),
+        schedule,
         startDate: startDate || undefined,
         repeatWeeks: !repeatForever && repeatWeeks > 0 ? repeatWeeks : undefined,
         repeatForever: repeatForever || undefined,
@@ -1576,6 +1642,53 @@ function TargetedSlotsManager({
     });
   }
 
+  /** "2026-08-07T20:45" in the SHOP's tz for the datetime-local prefill —
+   *  device-local formatting would show a different hour than was published. */
+  function toShopLocalInput(iso: string): string {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(new Date(iso));
+    const get = (t: string) => parts.find((x) => x.type === t)?.value ?? "00";
+    return `${get("year")}-${get("month")}-${get("day")}T${get("hour") === "24" ? "00" : get("hour")}:${get("minute")}`;
+  }
+
+  function beginEditSlot(t: TargetedSlotRow) {
+    setEditingSlotId(t.id);
+    setEditWhen(toShopLocalInput(t.startsAt));
+    setEditMinutes(t.durationMin);
+    setEditPrice(String(t.price));
+  }
+
+  function saveSlotEdit(id: string) {
+    const [day, time] = editWhen.split("T");
+    const [y, m, d] = (day ?? "").split("-").map(Number);
+    const [hh, mm] = (time ?? "").split(":").map(Number);
+    // Same wall-clock interpretation as publish: the shop's tz, not the device's.
+    const startsAt = zonedWallTimeToUtc(y!, m! - 1, d!, hh! * 60 + mm!, timezone);
+    if (Number.isNaN(startsAt.getTime()) || startsAt.getTime() <= Date.now()) {
+      toast("Pick a future time", "error");
+      return;
+    }
+    start(async () => {
+      const r = await updateTargetedSlotAction(id, {
+        startsAt: startsAt.toISOString(),
+        durationMin: editMinutes,
+        price: Number(editPrice) >= 0 ? Number(editPrice) : undefined,
+      });
+      toast(r.ok ? "Slot updated" : "Couldn't update (already booked?)", r.ok ? "success" : "error");
+      if (r.ok) {
+        setEditingSlotId(null);
+        refresh();
+      }
+    });
+  }
+
   function removeRule(rule: TargetedSlotRuleRow) {
     start(async () => {
       const r = await deleteTargetedSlotRuleAction(rule.id);
@@ -1620,6 +1733,9 @@ function TargetedSlotsManager({
     hour: "numeric",
     minute: "2-digit",
   });
+  // Names resolve against the FULL lists: a rule whose barber was since
+  // deactivated must still say who it was, not "?". The publish selects below
+  // keep offering active people only.
   const nameOf = (list: { id: string; name: string }[], id: string) =>
     list.find((x) => x.id === id)?.name ?? "?";
 
@@ -1629,11 +1745,25 @@ function TargetedSlotsManager({
         title="Targeted slots"
         subtitle="Publish specific one-off times at their own price - a late-night special, a model rate. They show under the service with a badge, can be booked exactly once, and block that time from normal booking."
       />
+      {editingRule && (
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-gold/40 bg-gold/10 px-4 py-2.5 text-sm text-gold">
+          <span>
+            Editing this series — booked dates keep their time and price; every
+            open date follows your changes.
+          </span>
+          <button onClick={cancelEdit} className="text-xs text-muted hover:text-offwhite">
+            Cancel
+          </button>
+        </div>
+      )}
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
         <select
           className={field}
           value={serviceId}
           onChange={(e) => setServiceId(e.target.value)}
+          // What a special IS (service/barber) isn't editable - that's a new
+          // special. Turn this one off and publish again to change them.
+          disabled={editingRule !== null}
         >
           <option value="">Service…</option>
           {activeServices.map((s) => (
@@ -1646,6 +1776,7 @@ function TargetedSlotsManager({
           className={field}
           value={staffId}
           onChange={(e) => setStaffId(e.target.value)}
+          disabled={editingRule !== null}
         >
           <option value="">Barber…</option>
           {activeStaff.map((s) => (
@@ -1654,22 +1785,24 @@ function TargetedSlotsManager({
             </option>
           ))}
         </select>
-        <div className="sm:col-span-2">
-          <Segmented
-            options={[
-              { key: "once", label: "One time" },
-              { key: "weekly", label: "Weekly schedule" },
-            ]}
-            value={mode}
-            onChange={(m) => {
-              setMode(m);
-              // A weekly schedule is almost always "until I turn it off" -
-              // that's the whole reason to set one up.
-              if (m === "weekly" && repeatWeeks === 0) setRepeatForever(true);
-            }}
-            ariaLabel="Slot type"
-          />
-        </div>
+        {!editingRule && (
+          <div className="sm:col-span-2">
+            <Segmented
+              options={[
+                { key: "once", label: "One time" },
+                { key: "weekly", label: "Weekly schedule" },
+              ]}
+              value={mode}
+              onChange={(m) => {
+                setMode(m);
+                // A weekly schedule is almost always "until I turn it off" -
+                // that's the whole reason to set one up.
+                if (m === "weekly" && repeatWeeks === 0) setRepeatForever(true);
+              }}
+              ariaLabel="Slot type"
+            />
+          </div>
+        )}
         {mode === "once" ? (
           <input
             className={field}
@@ -1685,17 +1818,19 @@ function TargetedSlotsManager({
               onChange={setWeekTimes}
               defaultDurationMin={minutes}
             />
-            <label className="flex flex-wrap items-center gap-2 text-xs text-muted">
-              Starting
-              <input
-                className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                aria-label="First day of the schedule"
-              />
-              <span>(blank = today; times already passed roll to next week)</span>
-            </label>
+            {!editingRule && (
+              <label className="flex flex-wrap items-center gap-2 text-xs text-muted">
+                Starting
+                <input
+                  className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  aria-label="First day of the schedule"
+                />
+                <span>(blank = today; times already passed roll to next week)</span>
+              </label>
+            )}
           </div>
         )}
         <input
@@ -1725,49 +1860,66 @@ function TargetedSlotsManager({
           onChange={(e) => setPrice(e.target.value)}
           aria-label="Price"
         />
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 sm:col-span-2">
-          <label
-            className={cn(
-              "flex items-center gap-2 text-xs text-muted",
-              repeatForever && "opacity-40",
-            )}
-          >
-            Repeat weekly for
-            <NumberField
-              min={0}
-              max={26}
-              integer
-              disabled={repeatForever}
-              className="w-16 rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite disabled:opacity-50"
-              value={repeatWeeks}
-              onChange={(n) => {
-                setRepeatWeeks(n);
-                if (n > 0) setRepeatForever(false);
-              }}
-              aria-label="Repeat weeks"
-            />
-            more week{repeatWeeks === 1 ? "" : "s"}
-            {mode === "once" ? " (same day & time)" : ""}
-          </label>
-          <label className="flex items-center gap-2 text-xs text-muted">
-            <input
-              type="checkbox"
-              checked={repeatForever}
-              onChange={(e) => setRepeatForever(e.target.checked)}
-            />
-            <span className={cn(repeatForever && "text-gold")}>
-              Repeat until I turn it off
-            </span>
-          </label>
-        </div>
+        {!editingRule && (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 sm:col-span-2">
+            <label
+              className={cn(
+                "flex items-center gap-2 text-xs text-muted",
+                repeatForever && "opacity-40",
+              )}
+            >
+              Repeat weekly for
+              <NumberField
+                min={0}
+                max={26}
+                integer
+                disabled={repeatForever}
+                className="w-16 rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite disabled:opacity-50"
+                value={repeatWeeks}
+                onChange={(n) => {
+                  setRepeatWeeks(n);
+                  if (n > 0) setRepeatForever(false);
+                }}
+                aria-label="Repeat weeks"
+              />
+              more week{repeatWeeks === 1 ? "" : "s"}
+              {mode === "once" ? " (same day & time)" : ""}
+            </label>
+            <label className="flex items-center gap-2 text-xs text-muted">
+              <input
+                type="checkbox"
+                checked={repeatForever}
+                onChange={(e) => setRepeatForever(e.target.checked)}
+              />
+              <span className={cn(repeatForever && "text-gold")}>
+                Repeat until I turn it off
+              </span>
+            </label>
+          </div>
+        )}
       </div>
-      <button
-        onClick={add}
-        disabled={pending}
-        className="mt-4 rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
-      >
-        {mode === "weekly" ? "Publish schedule" : "Publish slot"}
-      </button>
+      <div className="mt-4 flex items-center gap-3">
+        <button
+          onClick={add}
+          disabled={pending}
+          className="rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+        >
+          {editingRule
+            ? "Save changes"
+            : mode === "weekly"
+              ? "Publish schedule"
+              : "Publish slot"}
+        </button>
+        {editingRule && (
+          <button
+            onClick={cancelEdit}
+            disabled={pending}
+            className="rounded-xl border border-subtle px-5 py-2.5 text-sm text-muted hover:text-offwhite disabled:opacity-50"
+          >
+            Cancel
+          </button>
+        )}
+      </div>
 
       {/* Bulk remove bar — appears once anything is checked. */}
       {selected.size > 0 && (
@@ -1816,8 +1968,8 @@ function TargetedSlotsManager({
                   <span className="text-sm">
                     {scheduleSummary(rule.schedule, rule.durationMin)}{" "}
                     <span className="text-xs text-muted">
-                      · {nameOf(activeServices, rule.serviceId)} ·{" "}
-                      {nameOf(activeStaff, rule.staffId)}
+                      · {nameOf(services, rule.serviceId)} ·{" "}
+                      {nameOf(staff, rule.staffId)}
                       {/* The base length is only worth stating when some time
                           still USES it. Once every window carries its own, the
                           summary above already spells each one out and this
@@ -1840,13 +1992,22 @@ function TargetedSlotsManager({
                     {isOpen ? "▴" : "▾"}
                   </span>
                 </button>
-                <button
-                  onClick={() => removeRule(rule)}
-                  disabled={pending}
-                  className="shrink-0 text-xs text-danger-soft hover:underline disabled:opacity-50"
-                >
-                  {rule.indefinite ? "Turn off" : "Remove series"}
-                </button>
+                <span className="flex shrink-0 items-center gap-3">
+                  <button
+                    onClick={() => beginEditRule(rule)}
+                    disabled={pending}
+                    className="text-xs text-gold hover:underline disabled:opacity-50"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    onClick={() => removeRule(rule)}
+                    disabled={pending}
+                    className="text-xs text-danger-soft hover:underline disabled:opacity-50"
+                  >
+                    {rule.indefinite ? "Turn off" : "Remove series"}
+                  </button>
+                </span>
               </div>
               {isOpen && (
                 <ul className="flex flex-col gap-1 border-t border-subtle px-4 py-2">
@@ -1870,48 +2031,96 @@ function TargetedSlotsManager({
     </Card>
   );
 
-  /** One slot row: checkbox (unbooked) + when + meta + badge + Remove. */
+  /** One slot row: checkbox (unbooked) + when + meta + badge + Edit/Remove.
+   *  Unbooked rows expand to an inline editor (move / re-length / reprice). */
   function slotRow(t: TargetedSlotRow) {
+    const isEditing = editingSlotId === t.id;
     return (
       <li
         key={t.id}
-        className="flex items-center justify-between gap-3 rounded-xl border border-subtle px-4 py-2.5"
+        className="flex flex-col gap-2 rounded-xl border border-subtle px-4 py-2.5"
       >
-        <span className="flex items-center gap-3 text-sm">
-          {!t.booked && (
-            <input
-              type="checkbox"
-              checked={selected.has(t.id)}
-              onChange={() => toggleSelected(t.id)}
-              aria-label={`Select ${whenFmt.format(new Date(t.startsAt))}`}
-            />
-          )}
-          <span>
-            {whenFmt.format(new Date(t.startsAt))}{" "}
-            <span className="text-xs text-muted">
-              · {nameOf(activeServices, t.serviceId)} · {nameOf(activeStaff, t.staffId)} ·{" "}
-              {t.durationMin} min · ${t.price.toFixed(0)}
-              {t.label ? ` · ${t.label}` : ""}
-            </span>{" "}
-            <span
-              className={cn(
-                "ml-1 rounded-full px-2 py-0.5 text-[10px] font-medium",
-                t.booked
-                  ? "bg-emerald-soft/15 text-emerald-soft"
-                  : "bg-gold/15 text-gold",
-              )}
-            >
-              {t.booked ? "Booked" : "Open"}
+        <span className="flex items-center justify-between gap-3">
+          <span className="flex items-center gap-3 text-sm">
+            {!t.booked && (
+              <input
+                type="checkbox"
+                checked={selected.has(t.id)}
+                onChange={() => toggleSelected(t.id)}
+                aria-label={`Select ${whenFmt.format(new Date(t.startsAt))}`}
+              />
+            )}
+            <span>
+              {whenFmt.format(new Date(t.startsAt))}{" "}
+              <span className="text-xs text-muted">
+                · {nameOf(services, t.serviceId)} · {nameOf(staff, t.staffId)} ·{" "}
+                {t.durationMin} min · ${t.price.toFixed(0)}
+                {t.label ? ` · ${t.label}` : ""}
+              </span>{" "}
+              <span
+                className={cn(
+                  "ml-1 rounded-full px-2 py-0.5 text-[10px] font-medium",
+                  t.booked
+                    ? "bg-emerald-soft/15 text-emerald-soft"
+                    : "bg-gold/15 text-gold",
+                )}
+              >
+                {t.booked ? "Booked" : "Open"}
+              </span>
             </span>
           </span>
+          {!t.booked && (
+            <span className="flex shrink-0 items-center gap-3">
+              <button
+                onClick={() => (isEditing ? setEditingSlotId(null) : beginEditSlot(t))}
+                className="text-xs text-gold hover:underline"
+              >
+                {isEditing ? "Close" : "Edit"}
+              </button>
+              <button
+                onClick={() => remove(t.id)}
+                className="text-xs text-danger-soft hover:underline"
+              >
+                Remove
+              </button>
+            </span>
+          )}
         </span>
-        {!t.booked && (
-          <button
-            onClick={() => remove(t.id)}
-            className="text-xs text-danger-soft hover:underline"
-          >
-            Remove
-          </button>
+        {isEditing && (
+          <span className="flex flex-wrap items-center gap-2">
+            <input
+              className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
+              type="datetime-local"
+              value={editWhen}
+              onChange={(e) => setEditWhen(e.target.value)}
+              aria-label="New date and time"
+            />
+            <NumberField
+              min={5}
+              max={600}
+              integer
+              className="w-16 rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
+              value={editMinutes}
+              onChange={setEditMinutes}
+              aria-label="Minutes"
+            />
+            <input
+              className="w-20 rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
+              type="number"
+              min={0}
+              inputMode="decimal"
+              value={editPrice}
+              onChange={(e) => setEditPrice(e.target.value)}
+              aria-label="Price"
+            />
+            <button
+              onClick={() => saveSlotEdit(t.id)}
+              disabled={pending}
+              className="rounded-lg bg-gold px-3 py-1 text-xs font-semibold text-charcoal-900 disabled:opacity-50"
+            >
+              Save
+            </button>
+          </span>
         )}
       </li>
     );

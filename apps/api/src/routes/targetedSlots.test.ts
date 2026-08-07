@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { computeOpenSlots } from "../engines/slots.js";
+import { rollForwardTargetedRules } from "../engines/targetedSlotRules.js";
 import { createApp } from "../app.js";
 
 /**
@@ -867,5 +868,245 @@ describe("weekly SCHEDULE series: weekdays x times in one rule", () => {
     await request(app)
       .delete(`/api/booking/targeted-slots/rules/${created.body.ruleId as string}`)
       .set("Cookie", cookie);
+  });
+});
+
+/**
+ * EDITING (the pilot's "No way to edit Targeted Slots"). A rule edit stamps the
+ * rule and regenerates the FUTURE UNBOOKED rows from the new values; three
+ * things must survive byte-identical: past rows, booked rows (a client's claim,
+ * including their exact instant - no double-create), and other rules' rows.
+ * The nightly roll-forward must keep extending cleanly AFTER an edit.
+ */
+describe("editing a weekly series", () => {
+  /** All future rows of a rule. */
+  const futureRows = (ruleId: string) =>
+    prisma.targetedSlot.findMany({
+      where: { shopId, ruleId, startsAt: { gt: new Date() } },
+      orderBy: { startsAt: "asc" },
+    });
+
+  it("regenerates future unbooked dates with the new time/price and stays roll-forward-safe", async () => {
+    const created = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        label: "Nightcap",
+        durationMin: 45,
+        price: 50,
+        schedule: { "1": [{ start: "21:00" }], "4": [{ start: "21:00" }] },
+        repeatForever: true,
+      });
+    expect(created.status).toBe(201);
+    const ruleId = created.body.ruleId as string;
+    const before = await futureRows(ruleId);
+    expect(before.length).toBeGreaterThan(20); // ~2/wk to the 91-day horizon
+
+    const patched = await request(app)
+      .patch(`/api/booking/targeted-slots/rules/${ruleId}`)
+      .set("Cookie", cookie)
+      .send({
+        price: 65,
+        durationMin: 30,
+        schedule: { "1": [{ start: "20:30" }], "4": [{ start: "20:30" }] },
+      });
+    expect(patched.status).toBe(200);
+    expect(patched.body.removed).toBe(before.length);
+    expect(patched.body.created).toBeGreaterThan(20);
+
+    const after = await futureRows(ruleId);
+    // Every future date moved to the new wall time at the new price/length;
+    // nothing remains at the old time.
+    for (const row of after) {
+      expect(row.startsAt.getUTCHours()).toBe(20);
+      expect(row.startsAt.getUTCMinutes()).toBe(30);
+      expect(Number(row.price)).toBe(65);
+      expect(row.durationMin).toBe(30);
+    }
+    // The dashboard card reflects the edit.
+    const list = await request(app)
+      .get("/api/booking/targeted-slots")
+      .set("Cookie", cookie);
+    const rule = (list.body.rules as { id: string; price: number; schedule: Record<string, { startMin: number }[]> }[]).find(
+      (r) => r.id === ruleId,
+    )!;
+    expect(rule.price).toBe(65);
+    expect(rule.schedule["1"]![0]!.startMin).toBe(20 * 60 + 30);
+
+    // The roll-forward keeps extending from AFTER the regenerated horizon:
+    // re-running it immediately must not duplicate or resurrect anything.
+    await rollForwardTargetedRules();
+    const rolled = await futureRows(ruleId);
+    expect(rolled.length).toBe(after.length);
+    expect(rolled.every((r) => r.startsAt.getUTCMinutes() === 30)).toBe(true);
+
+    await request(app)
+      .delete(`/api/booking/targeted-slots/rules/${ruleId}`)
+      .set("Cookie", cookie);
+  });
+
+  it("a booked date keeps its claim, time and price through an edit - and is never double-created", async () => {
+    const first = tomorrowAt(3, 15); // deep off-hours: no other test touches 3am
+    const created = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        durationMin: 45,
+        price: 50,
+        startsAt: first.toISOString(),
+        repeatForever: true,
+      });
+    expect(created.status).toBe(201);
+    const ruleId = created.body.ruleId as string;
+
+    // A client books tomorrow's date at the published $50.
+    const claimRow = await prisma.targetedSlot.findFirst({
+      where: { shopId, ruleId, startsAt: first },
+      select: { id: true },
+    });
+    const booked = await publicBooking(first, { targetedSlotId: claimRow!.id });
+    expect(booked.status).toBe(201);
+
+    const patched = await request(app)
+      .patch(`/api/booking/targeted-slots/rules/${ruleId}`)
+      .set("Cookie", cookie)
+      .send({ price: 80 });
+    expect(patched.status).toBe(200);
+
+    const rows = await futureRows(ruleId);
+    const bookedRows = rows.filter((r) => r.bookedAppointmentId !== null);
+    expect(bookedRows).toHaveLength(1);
+    // The claim is untouched: same instant, same price the client agreed to.
+    expect(bookedRows[0]!.startsAt.getTime()).toBe(first.getTime());
+    expect(Number(bookedRows[0]!.price)).toBe(50);
+    // Exactly ONE row at the booked instant - the regeneration skipped it.
+    expect(rows.filter((r) => r.startsAt.getTime() === first.getTime())).toHaveLength(1);
+    // Every open date follows the edit.
+    for (const r of rows.filter((r) => r.bookedAppointmentId === null)) {
+      expect(Number(r.price)).toBe(80);
+    }
+
+    await request(app)
+      .delete(`/api/booking/targeted-slots/rules/${ruleId}`)
+      .set("Cookie", cookie);
+  });
+
+  it("a finite batch keeps its length on edit", async () => {
+    const created = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        durationMin: 30,
+        price: 40,
+        startsAt: tomorrowAt(19, 20).toISOString(),
+        repeatWeeks: 3, // 4 rows, all in the future
+      });
+    expect(created.status).toBe(201);
+    const ruleId = created.body.ruleId as string;
+    expect((await futureRows(ruleId)).length).toBe(4);
+
+    const patched = await request(app)
+      .patch(`/api/booking/targeted-slots/rules/${ruleId}`)
+      .set("Cookie", cookie)
+      .send({ price: 45 });
+    expect(patched.status).toBe(200);
+
+    const after = await futureRows(ruleId);
+    expect(after.length).toBe(4); // edited, not extended
+    expect(after.every((r) => Number(r.price) === 45)).toBe(true);
+    // The legacy (anchor-derived) schedule kept its wall time.
+    expect(after.every((r) => r.startsAt.getUTCHours() === 19 && r.startsAt.getUTCMinutes() === 20)).toBe(true);
+
+    await request(app)
+      .delete(`/api/booking/targeted-slots/rules/${ruleId}`)
+      .set("Cookie", cookie);
+  });
+
+  it("editing a turned-off rule 404s; garbage input 400s", async () => {
+    const created = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        durationMin: 30,
+        price: 40,
+        startsAt: tomorrowAt(18).toISOString(),
+        repeatForever: true,
+      });
+    const ruleId = created.body.ruleId as string;
+    await request(app)
+      .delete(`/api/booking/targeted-slots/rules/${ruleId}`)
+      .set("Cookie", cookie);
+    const gone = await request(app)
+      .patch(`/api/booking/targeted-slots/rules/${ruleId}`)
+      .set("Cookie", cookie)
+      .send({ price: 99 });
+    expect(gone.status).toBe(404);
+
+    const empty = await request(app)
+      .patch(`/api/booking/targeted-slots/rules/${ruleId}`)
+      .set("Cookie", cookie)
+      .send({});
+    expect(empty.status).toBe(400);
+  });
+});
+
+describe("editing one occurrence", () => {
+  it("moves/reprices an unbooked slot; refuses booked (409), past-target (400), unknown (404)", async () => {
+    const at = tomorrowAt(20, 40);
+    const created = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        durationMin: 45,
+        price: 50,
+        startsAt: at.toISOString(),
+      });
+    expect(created.status).toBe(201);
+    const row = await prisma.targetedSlot.findFirst({
+      where: { shopId, startsAt: at, ruleId: null },
+      select: { id: true },
+    });
+    const movedTo = tomorrowAt(22, 40);
+    const ok = await request(app)
+      .patch(`/api/booking/targeted-slots/${row!.id}`)
+      .set("Cookie", cookie)
+      .send({ startsAt: movedTo.toISOString(), price: 60, durationMin: 30 });
+    expect(ok.status).toBe(200);
+    const after = await prisma.targetedSlot.findFirst({ where: { id: row!.id } });
+    expect(after!.startsAt.getTime()).toBe(movedTo.getTime());
+    expect(Number(after!.price)).toBe(60);
+    expect(after!.durationMin).toBe(30);
+
+    // Moving it into the past is refused.
+    const past = await request(app)
+      .patch(`/api/booking/targeted-slots/${row!.id}`)
+      .set("Cookie", cookie)
+      .send({ startsAt: new Date(Date.now() - 3_600_000).toISOString() });
+    expect(past.status).toBe(400);
+
+    // A client books it - now it's their claim, not editable.
+    const bookedRes = await publicBooking(movedTo, { targetedSlotId: row!.id });
+    expect(bookedRes.status).toBe(201);
+    const locked = await request(app)
+      .patch(`/api/booking/targeted-slots/${row!.id}`)
+      .set("Cookie", cookie)
+      .send({ price: 70 });
+    expect(locked.status).toBe(409);
+
+    const missing = await request(app)
+      .patch(`/api/booking/targeted-slots/nope`)
+      .set("Cookie", cookie)
+      .send({ price: 70 });
+    expect(missing.status).toBe(404);
   });
 });
