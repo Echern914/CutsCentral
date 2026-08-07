@@ -267,6 +267,11 @@ bookingDashboardRouter.post("/services", async (req, res) => {
   } else if (d.staffIds) {
     await setServiceStaff(req.shop!.id, service.id, d.staffIds);
   }
+  // Runs AFTER the staff link so a solo shop is recognized as solo on the very
+  // first service, not one save later.
+  if (d.hoursWindows !== undefined) {
+    await extendSoloStaffHoursFromServices(req.shop!.id);
+  }
   res.status(201).json({ id: service.id });
 });
 
@@ -320,6 +325,11 @@ bookingDashboardRouter.patch("/services/:id", async (req, res) => {
     await linkServiceToAllActiveStaff(req.shop!.id, req.params.id!);
   } else if (d.staffIds !== undefined) {
     await setServiceStaff(req.shop!.id, req.params.id!, d.staffIds);
+  }
+  // A solo barber setting hours on a service is setting HIS hours. Widen his
+  // weekly rules to match, so he never has to retype them under Staff -> Hours.
+  if (d.hoursWindows !== undefined) {
+    await extendSoloStaffHoursFromServices(req.shop!.id);
   }
   res.json({ ok: true });
 });
@@ -601,6 +611,129 @@ async function linkServiceToAllActiveStaff(
         data: active.map((s) => ({ shopId, serviceId, staffId: s.id })),
       });
     }
+  });
+}
+
+/** Collapse overlapping/adjacent [s,e) windows into the fewest that cover them. */
+function mergeWindows(
+  windows: Array<{ s: number; e: number }>,
+): Array<{ s: number; e: number }> {
+  const sorted = windows
+    .filter((w) => w.e > w.s)
+    .sort((a, b) => a.s - b.s || a.e - b.e);
+  const out: Array<{ s: number; e: number }> = [];
+  for (const w of sorted) {
+    const last = out[out.length - 1];
+    // `<=` so 9-12 and 12-5 become 9-5: touching windows are one span, not two.
+    if (last && w.s <= last.e) {
+      if (w.e > last.e) last.e = w.e;
+    } else {
+      out.push({ s: w.s, e: w.e });
+    }
+  }
+  return out;
+}
+
+/**
+ * SOLO SHOPS: a service's hours ARE the barber's hours.
+ *
+ * The pilot's complaint, verbatim: "if i set my hours and select myself as
+ * staff i shouldnt have to set my hours in staff section as well." He is right
+ * that it is double entry. The engine cannot just read service hours instead:
+ * AvailabilityRule is the HARD OUTER BOUND of the whole grid and service
+ * windows only INTERSECT it (slots.ts), so a window reaching past his staff
+ * hours saved fine and changed nothing on the booking page - which is exactly
+ * what "no 7pm slot" and "the site is buggin" were.
+ *
+ * When a shop has exactly ONE active staff member there is no ambiguity about
+ * whose hours a service window refers to, so saving service hours EXTENDS that
+ * barber's weekly rules to cover them.
+ *
+ * EXTEND-ONLY, never shrink. Narrowing stays the job of the intersect and of
+ * the Staff -> Hours editor, which remains the only way to take time away. The
+ * asymmetry is deliberate: a service window that silently DELETED bookable
+ * hours could close a day the barber never meant to close, and unlike a missing
+ * slot that failure is invisible until a client cannot book.
+ *
+ * Multi-staff shops are untouched - "my hours" means nothing there.
+ *
+ * Returns true when the rules actually changed.
+ */
+async function extendSoloStaffHoursFromServices(shopId: string): Promise<boolean> {
+  return runWithShop(shopId, async (tx) => {
+    const active = await tx.staff.findMany({
+      where: { shopId, active: true },
+      select: { id: true },
+    });
+    if (active.length !== 1) return false;
+    const staffId = active[0]!.id;
+
+    const services = await tx.service.findMany({
+      where: { shopId, active: true },
+      select: { hoursWindows: true },
+    });
+
+    // Every window any active service declares, per weekday. A weekday ABSENT
+    // from a service's map means "unrestricted" and a weekday present with []
+    // means "not offered that day" - neither states a time, so neither gives us
+    // anything to derive from. Only explicit windows widen the schedule.
+    const declared = new Map<number, Array<{ s: number; e: number }>>();
+    for (const svc of services) {
+      const hw = svc.hoursWindows as Record<
+        string,
+        Array<{ s?: unknown; e?: unknown }>
+      > | null;
+      if (!hw || typeof hw !== "object") continue;
+      for (const [key, wins] of Object.entries(hw)) {
+        const weekday = Number(key);
+        if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) continue;
+        if (!Array.isArray(wins) || wins.length === 0) continue;
+        const list = declared.get(weekday) ?? [];
+        for (const w of wins) {
+          if (typeof w?.s !== "number" || typeof w?.e !== "number") continue;
+          if (w.e > w.s) list.push({ s: w.s, e: w.e });
+        }
+        if (list.length > 0) declared.set(weekday, list);
+      }
+    }
+    if (declared.size === 0) return false;
+
+    const existing = await tx.availabilityRule.findMany({
+      where: { shopId, staffId },
+      select: { weekday: true, startMin: true, endMin: true },
+    });
+
+    const byDay = new Map<number, Array<{ s: number; e: number }>>();
+    for (const r of existing) {
+      byDay.set(r.weekday, [
+        ...(byDay.get(r.weekday) ?? []),
+        { s: r.startMin, e: r.endMin },
+      ]);
+    }
+    for (const [weekday, wins] of declared) {
+      byDay.set(weekday, [...(byDay.get(weekday) ?? []), ...wins]);
+    }
+
+    const next: Array<{ weekday: number; startMin: number; endMin: number }> = [];
+    for (const [weekday, wins] of [...byDay].sort((a, b) => a[0] - b[0])) {
+      for (const w of mergeWindows(wins)) {
+        next.push({ weekday, startMin: w.s, endMin: w.e });
+      }
+    }
+
+    const key = (r: { weekday: number; startMin: number; endMin: number }) =>
+      `${r.weekday}:${r.startMin}-${r.endMin}`;
+    const before = existing.map(key).sort().join(",");
+    const after = next.map(key).sort().join(",");
+    if (before === after) return false;
+
+    await tx.availabilityRule.deleteMany({ where: { shopId, staffId } });
+    if (next.length > 0) {
+      await tx.availabilityRule.createMany({
+        data: next.map((r) => ({ shopId, staffId, ...r })),
+      });
+    }
+    return true;
   });
 }
 

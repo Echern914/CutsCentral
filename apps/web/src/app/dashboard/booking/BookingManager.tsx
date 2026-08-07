@@ -1212,8 +1212,15 @@ function ServiceEditForm({
   // (earliest open / latest close across the offering barbers) rather than
   // exact span coverage: the failure that burns people is "I set 9 PM but my
   // day ends at 7:30", not a mid-day gap.
+  //
+  // A ONE-BARBER shop never sees these: there, saving the service widens his
+  // weekly rules to cover the windows (extendSoloStaffHoursFromServices on the
+  // API), so the conflict this warns about cannot survive the save. Warning him
+  // about a state he leaves by pressing the button he is already pressing would
+  // be noise — he gets the note below instead.
+  const isSoloShop = activeStaff.length === 1;
   const hoursConflicts: string[] = [];
-  if (staffSpans !== null) {
+  if (staffSpans !== null && !isSoloShop) {
     hoursRows.forEach((row, wd) => {
       if (row.mode !== "custom") return;
       const spans = staffSpans[wd] ?? [];
@@ -1539,6 +1546,14 @@ function ServiceEditForm({
             onChange={setHoursRows}
             ariaScope="this service"
           />
+          {isSoloShop && (
+            <p className="mt-2 text-[11px] leading-relaxed text-muted/80">
+              You&rsquo;re the only barber here, so these are your hours —
+              saving opens your schedule to match, and you never have to retype
+              them under Staff &rarr; Hours. To book less, shorten them here or
+              trim your hours there.
+            </p>
+          )}
           {hoursConflicts.length > 0 && (
             <div
               role="alert"
