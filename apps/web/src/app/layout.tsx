@@ -5,6 +5,7 @@ import { APP_NAME } from "@chairback/config/constants";
 import { MotionConfigProvider } from "@/components/motion/MotionConfigProvider";
 import { ToastProvider } from "@/components/ui/Toast";
 import { AnalyticsScripts } from "@/components/AnalyticsScripts";
+import { HelpBubble } from "@/components/help/HelpBubble";
 import "./globals.css";
 
 const inter = Inter({
@@ -89,6 +90,10 @@ export default function RootLayout({
             <div id="main" tabIndex={-1} className="outline-none">
               {children}
             </div>
+            {/* Owner-facing support bot. Answers locally from a curated corpus
+                — no API call, no per-message cost — and hides itself on the
+                client-facing pages. See components/help/HelpBubble.tsx. */}
+            <HelpBubble />
           </ToastProvider>
         </MotionConfigProvider>
         {/* Vercel Web Analytics: cookieless page-view + funnel counts (no
