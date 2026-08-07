@@ -31,7 +31,10 @@ import { toE164 } from "../acuity/clientKey.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 import { sendPushToUser } from "../messaging/push.js";
 import { leadLimiter, waitlistLimiter } from "../middleware/rateLimit.js";
-import { hasReceptionistEntitlement } from "../receptionist/config.js";
+import {
+  hasReceptionistEntitlement,
+  receptionistEnabledForShop,
+} from "../receptionist/config.js";
 import { logger } from "../logger.js";
 
 export const shopsRouter: Router = Router();
@@ -484,6 +487,17 @@ publicPageRouter.get("/:slug", async (req, res) => {
     // when set (see serviceNounForShop).
     industry: shop.industry,
     serviceNoun: shop.serviceNoun,
+    // The shop's AI text line, for the "text us to book" block. Exposed ONLY
+    // when a text would actually be answered: the same gate inbound.ts uses to
+    // decide whether to reply, AND the shop owning its own number. A shop on
+    // the shared platform line is deliberately excluded - inbound routing there
+    // resolves the shop from the SENDER's phone, so a brand-new visitor (the
+    // whole audience of this page) could not be routed and would text into
+    // silence. Premium AI provisions a dedicated number on purchase.
+    receptionistNumber:
+      shop.twilioNumber && receptionistEnabledForShop(shop, { now })
+        ? shop.twilioNumber
+        : null,
     theme: shop.theme,
     logoUrl: shop.logoUrl,
     heroImageUrl: shop.heroImageUrl,

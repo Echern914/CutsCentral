@@ -17,6 +17,7 @@ import { CadenceCard } from "./CadenceCard";
 import { PushOptIn } from "./PushOptIn";
 import { GetTheApp } from "./GetTheApp";
 import { AddToWallet } from "./AddToWallet";
+import { TextToBook } from "@/components/TextToBook";
 import { DeleteMyData } from "./DeleteMyData";
 import { resolveRewardsTheme, rewardsFontVars, surfaceStyle, type RewardsTheme } from "./theme";
 // The interface lives with the rewards sub-route (its page owns the API call);
@@ -219,6 +220,22 @@ export function RewardsClient({
               </p>
             )}
           </motion.header>
+
+          {/* The shop's AI text line. High on the page on purpose: this is a
+              returning client, and "text to see what's open" is the fastest
+              path back into the chair — faster than any booking link. Renders
+              only when the receptionist would actually answer. */}
+          {shop.receptionistNumber && (
+            <motion.div variants={fadeUp}>
+              <TextToBook
+                number={shop.receptionistNumber}
+                shopName={shop.name}
+                accent={accent}
+                muted={t.muted}
+                text={t.text}
+              />
+            </motion.div>
+          )}
 
           {/* Punch balance. Multi-card shops get one stacked surface per card
               (each with its own balance, accent, rewards, and grid); everyone

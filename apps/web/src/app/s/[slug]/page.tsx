@@ -16,6 +16,8 @@ export interface ShopPageData {
   // serviceNoun is the shop's own word for a visit when they set one ("twist").
   industry: string;
   serviceNoun: string | null;
+  /** The shop's AI text line, or null when texting wouldn't be answered. */
+  receptionistNumber?: string | null;
   theme: string;
   logoUrl: string | null;
   heroImageUrl: string | null;

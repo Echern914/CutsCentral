@@ -24,6 +24,9 @@ export interface RewardsData {
     rewardsWelcome: string | null;
     rewardsSections: string[];
     pageSlug: string | null;
+    /** The shop's AI text line, or null when texting wouldn't be answered.
+     *  Optional so a web deploy ahead of the API just renders nothing. */
+    receptionistNumber?: string | null;
   };
   client: { firstName: string | null };
   // Apple Wallet punch card: available once the API's WALLET_* env is set.
