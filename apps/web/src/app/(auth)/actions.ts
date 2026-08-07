@@ -3,7 +3,7 @@
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@chairback/config/constants";
-import { API_BASE } from "@/lib/api";
+import { API_BASE, clientIpHeaders } from "@/lib/api";
 import { sessionCookieDomain } from "@/lib/sessionCookieDomain";
 
 /**
@@ -22,7 +22,10 @@ async function proxyAuth(
 ): Promise<{ ok: boolean; error?: string; setCookie?: string }> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    // clientIpHeaders: login/signup reach the API from THIS server, so without
+    // the forwarded visitor IP the API's per-IP auth limit (20/15min) is one
+    // shared bucket for the whole platform — a busy evening locks everyone out.
+    headers: { "Content-Type": "application/json", ...clientIpHeaders() },
     body: JSON.stringify(payload),
     cache: "no-store",
   });
@@ -107,13 +110,15 @@ export async function signupAction(
     const email = String(formData.get("email") ?? "");
     const password = String(formData.get("password") ?? "");
     const error =
-      result.error === "email_taken"
-        ? "That email is already registered. Try signing in instead."
-        : !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-          ? "That doesn't look like a valid email address."
-          : password.length < 8
-            ? "Password must be at least 8 characters."
-            : "Could not sign up. Please try again.";
+      result.error === "rate_limited" || result.error === "http_429"
+        ? "Too many attempts. Please wait a minute and try again."
+        : result.error === "email_taken"
+          ? "That email is already registered. Try signing in instead."
+          : !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+            ? "That doesn't look like a valid email address."
+            : password.length < 8
+              ? "Password must be at least 8 characters."
+              : "Could not sign up. Please try again.";
     return { error };
   }
   applySessionCookie(result.setCookie);
@@ -129,6 +134,15 @@ export async function loginAction(
     password: String(formData.get("password") ?? ""),
   });
   if (!result.ok) {
+    // A rate limit is NOT a credential failure — telling a correct-password
+    // user "Invalid email or password" during a 429 sends them to password
+    // reset (which burns more of the same bucket). http_429 covers an API
+    // still answering plain-text 429s mid-deploy.
+    if (result.error === "rate_limited" || result.error === "http_429") {
+      return {
+        error: "Too many sign-in attempts. Please wait a minute and try again.",
+      };
+    }
     return { error: "Invalid email or password." };
   }
   applySessionCookie(result.setCookie);

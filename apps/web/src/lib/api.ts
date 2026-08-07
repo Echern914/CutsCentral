@@ -45,7 +45,7 @@ function authHeader(): Record<string, string> {
  * NEVER attach to a cached public GET: Next's Data Cache keys on headers, so a
  * per-visitor header would fragment the shared cache into per-visitor entries.
  */
-function clientIpHeaders(): Record<string, string> {
+export function clientIpHeaders(): Record<string, string> {
   const secret = process.env.WEB_PROXY_SECRET;
   if (!secret) return {};
   try {

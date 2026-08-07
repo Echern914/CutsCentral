@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { Request } from "express";
-import { publicIpKey } from "./rateLimit.js";
+import type { Request, Response } from "express";
+import { publicIpKey, rateLimitedHandler } from "./rateLimit.js";
 
 /**
  * publicIpKey decides which bucket a PUBLIC request lands in. The stakes:
@@ -57,5 +57,27 @@ describe("publicIpKey", () => {
       reqWith({ "x-cb-client-ip": "a".repeat(500), "x-cb-proxy-secret": SECRET }),
     );
     expect(key.length).toBeLessThanOrEqual(68);
+  });
+});
+
+describe("rateLimitedHandler", () => {
+  it("answers JSON (not the library's plain text) so client error mapping can tell a 429 from bad credentials", () => {
+    let status = 0;
+    let body: unknown;
+    const res = {
+      status(code: number) {
+        status = code;
+        return this;
+      },
+      json(payload: unknown) {
+        body = payload;
+      },
+    } as unknown as Response;
+    rateLimitedHandler("auth")(
+      { path: "/api/auth/login", ip: "203.0.113.9" } as Request,
+      res,
+    );
+    expect(status).toBe(429);
+    expect(body).toEqual({ error: "rate_limited" });
   });
 });
