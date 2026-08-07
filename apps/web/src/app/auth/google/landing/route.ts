@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE_NAME } from "@chairback/config/constants";
-import { API_BASE } from "@/lib/api";
+import { API_BASE, clientIpHeaders } from "@/lib/api";
 import { sessionCookieDomain } from "@/lib/sessionCookieDomain";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +19,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const res = await fetch(`${API_BASE}/api/auth/google/exchange`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    // Forward the visitor IP: this hop is server-to-server, so without it every
+    // Google sign-in platform-wide shares one bucket in the API's auth limiter.
+    headers: { "Content-Type": "application/json", ...clientIpHeaders() },
     body: JSON.stringify({ code }),
     cache: "no-store",
   });

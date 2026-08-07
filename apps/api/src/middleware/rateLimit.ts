@@ -1,8 +1,9 @@
 import rateLimit, { type RateLimitRequestHandler } from "express-rate-limit";
-import type { Request } from "express";
+import type { Request, Response } from "express";
 import { timingSafeEqual } from "node:crypto";
 import { SESSION_COOKIE_NAME } from "@chairback/config";
 import { PgRateStore } from "./pgRateStore.js";
+import { logger } from "../logger.js";
 
 /**
  * Reusable rate limiters. Default key is the client IP; some limiters key on the
@@ -20,6 +21,24 @@ import { PgRateStore } from "./pgRateStore.js";
  */
 const TEST = process.env.VITEST === "true";
 
+/**
+ * 429 handler shared by every limiter. Two jobs: (1) answer JSON, not the
+ * library's plain-text default — web/mobile clients parse every API response
+ * as JSON, and a plain-text 429 fell through their error mapping (the login
+ * form showed "Invalid email or password" for a rate limit); (2) log a warn
+ * with the limiter name so 429 storms are VISIBLE in Railway logs instead of
+ * surfacing only as user complaints.
+ */
+export function rateLimitedHandler(name: string) {
+  return (req: Request, res: Response): void => {
+    logger.warn(
+      { limiter: name, path: req.path, ip: req.ip },
+      "rate limit exceeded",
+    );
+    res.status(429).json({ error: "rate_limited" });
+  };
+}
+
 function make(opts: {
   name: string;
   windowMs: number;
@@ -32,6 +51,7 @@ function make(opts: {
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: opts.keyGenerator,
+    handler: rateLimitedHandler(opts.name),
     // Postgres store in real envs; MemoryStore (default) in tests.
     ...(TEST ? {} : { store: new PgRateStore(`${opts.name}:`) }),
   });
@@ -75,8 +95,21 @@ function bearerKey(req: Request): string {
   return (req.header("Authorization") ?? req.ip ?? "anon").slice(0, 64);
 }
 
-/** Auth (signup/login): blunt credential stuffing. Per IP. */
-export const authLimiter = make({ name: "auth", windowMs: 15 * 60 * 1000, limit: 20 });
+/**
+ * Auth (signup/login): blunt credential stuffing. Per VISITOR via publicIpKey,
+ * not raw req.ip — login/signup arrive as server actions from the Vercel web
+ * app, so req.ip is Vercel's egress IP and 20/15min was a PLATFORM-WIDE login
+ * budget: a handful of users signing in the same evening 429'd everyone (and
+ * the login form reported it as "Invalid email or password"). The web app
+ * forwards the real visitor IP (x-cb-client-ip + WEB_PROXY_SECRET); direct
+ * traffic (OAuth redirects, mobile, attackers) still keys on its own real IP.
+ */
+export const authLimiter = make({
+  name: "auth",
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  keyGenerator: publicIpKey,
+});
 
 /** Public rewards lookup: blunt magic-token enumeration. Per visitor. */
 export const rewardsLimiter = make({
