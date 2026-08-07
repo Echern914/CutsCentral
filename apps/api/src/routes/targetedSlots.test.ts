@@ -1028,6 +1028,67 @@ describe("editing a weekly series", () => {
       .set("Cookie", cookie);
   });
 
+  it("an edit that moves times LATER in the anchor week can't strand the cursor week", async () => {
+    // The trap: regeneration walks to the fresh 91-day horizon, but the cursor
+    // (weeksMaterialized) is monotonic. An edit whose new times sit LATER in
+    // the anchor-relative week than the old ones can hit the horizon one week
+    // BEFORE the cursor - and a week below the cursor that isn't rebuilt here
+    // is never built again (the roll-forward only extends from the cursor).
+    // Construct it deterministically: anchor early on weekday W, edit to a
+    // time ~6d19h later in the week (weekday W+6 at 23:00).
+    const anchorAt = tomorrowAt(4); // 4am tomorrow; anchor weekday = W
+    const created = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        durationMin: 30,
+        price: 40,
+        startsAt: anchorAt.toISOString(),
+        repeatForever: true,
+      });
+    expect(created.status).toBe(201);
+    const ruleId = created.body.ruleId as string;
+    const cursor = (await prisma.targetedSlotRule.findFirst({
+      where: { id: ruleId },
+      select: { weeksMaterialized: true },
+    }))!.weeksMaterialized;
+
+    const lateWd = String((anchorAt.getUTCDay() + 6) % 7);
+    const patched = await request(app)
+      .patch(`/api/booking/targeted-slots/rules/${ruleId}`)
+      .set("Cookie", cookie)
+      .send({ schedule: { [lateWd]: [{ start: "23:00" }] } });
+    expect(patched.status).toBe(200);
+
+    // Every week below the cursor must have its occurrence - especially the
+    // LAST one (cursor-1), the week the naive horizon break would strand.
+    const strandedWeekStart = new Date(
+      anchorAt.getTime() + (cursor - 1) * 7 * 86_400_000,
+    );
+    const strandedWeekEnd = new Date(strandedWeekStart.getTime() + 7 * 86_400_000);
+    const inStranded = await prisma.targetedSlot.count({
+      where: {
+        shopId,
+        ruleId,
+        startsAt: { gte: strandedWeekStart, lt: strandedWeekEnd },
+      },
+    });
+    expect(inStranded).toBe(1);
+    // And the cursor didn't move backwards (that would make the roll-forward
+    // double-create on top of booked survivors).
+    const cursorAfter = (await prisma.targetedSlotRule.findFirst({
+      where: { id: ruleId },
+      select: { weeksMaterialized: true },
+    }))!.weeksMaterialized;
+    expect(cursorAfter).toBeGreaterThanOrEqual(cursor);
+
+    await request(app)
+      .delete(`/api/booking/targeted-slots/rules/${ruleId}`)
+      .set("Cookie", cookie);
+  });
+
   it("editing a turned-off rule 404s; garbage input 400s", async () => {
     const created = await request(app)
       .post("/api/booking/targeted-slots")
