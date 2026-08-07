@@ -614,24 +614,31 @@ async function linkServiceToAllActiveStaff(
   });
 }
 
-/** Collapse overlapping/adjacent [s,e) windows into the fewest that cover them. */
-function mergeWindows(
-  windows: Array<{ s: number; e: number }>,
-): Array<{ s: number; e: number }> {
-  const sorted = windows
-    .filter((w) => w.e > w.s)
-    .sort((a, b) => a.s - b.s || a.e - b.e);
-  const out: Array<{ s: number; e: number }> = [];
-  for (const w of sorted) {
-    const last = out[out.length - 1];
-    // `<=` so 9-12 and 12-5 become 9-5: touching windows are one span, not two.
-    if (last && w.s <= last.e) {
-      if (w.e > last.e) last.e = w.e;
-    } else {
-      out.push({ s: w.s, e: w.e });
-    }
+/**
+ * The latest minute any of these [s,e) windows reaches, or null if there are
+ * none. Deliberately NOT an interval merge: an earlier version of this file
+ * merged the declared windows into the existing rules and collapsed anything
+ * that merely TOUCHED, which silently swallowed a barber's lunch break (rules
+ * 09:00-12:00 + 13:00-19:00, plus a declared 09:00-19:00, became one 09:00-19:00
+ * row and the gap was gone for good, since the write is delete-then-recreate).
+ * Only the day's closing minute is ever derived from a service now, so there is
+ * no interior geometry left to destroy.
+ */
+function latestEnd(windows: Array<{ s: number; e: number }>): number | null {
+  let max: number | null = null;
+  for (const w of windows) {
+    if (w.e > w.s && (max === null || w.e > max)) max = w.e;
   }
-  return out;
+  return max;
+}
+
+/** The earliest minute any of these [s,e) windows starts at, or null. */
+function earliestStart(windows: Array<{ s: number; e: number }>): number | null {
+  let min: number | null = null;
+  for (const w of windows) {
+    if (w.e > w.s && (min === null || w.s < min)) min = w.s;
+  }
+  return min;
 }
 
 /**
@@ -649,9 +656,26 @@ function mergeWindows(
  * whose hours a service window refers to, so saving service hours EXTENDS that
  * barber's weekly rules to cover them.
  *
- * EXTEND-ONLY, never shrink. Narrowing stays the job of the intersect and of
- * the Staff -> Hours editor, which remains the only way to take time away. The
- * asymmetry is deliberate: a service window that silently DELETED bookable
+ * THE ONLY THING A SERVICE MAY MOVE IS A DAY'S CLOSING MINUTE. Three rules,
+ * each one closing a defect the first version of this shipped with:
+ *
+ *  1. NEVER move a day's START earlier. The slot grid is anchored at the free
+ *     window's start and steps by the service duration (slots.ts), so moving
+ *     the opening minute RE-PHASES the entire day: a 10:00-20:00 chair offering
+ *     18:30/19:00/19:30 starts offering 18:15/18:45/19:15 the moment anything
+ *     declares a 09:45 open. Coverage grows and the times the barber expects
+ *     vanish - the exact "where did my 7pm go" report this feature existed to
+ *     fix. Widening the tail cannot re-phase anything, so only the tail moves.
+ *  2. NEVER create a second window on a day that already has one. Disjoint
+ *     rules are a legal shape the engine reads correctly, but the Staff ->
+ *     Hours sheet renders only the LAST window of a weekday and its next save
+ *     deletes the rest, so manufacturing them here hands the barber a loaded
+ *     gun. The latest rule's end is extended in place instead.
+ *  3. NEVER bridge an interior gap. Only the closing minute is derived, so a
+ *     lunch break between two rules is not something this code can reach.
+ *
+ * Narrowing stays the job of the intersect and of the Staff -> Hours editor.
+ * The asymmetry is deliberate: a service window that silently DELETED bookable
  * hours could close a day the barber never meant to close, and unlike a missing
  * slot that failure is invisible until a client cannot book.
  *
@@ -700,25 +724,29 @@ async function extendSoloStaffHoursFromServices(shopId: string): Promise<boolean
 
     const existing = await tx.availabilityRule.findMany({
       where: { shopId, staffId },
-      select: { weekday: true, startMin: true, endMin: true },
+      select: { id: true, weekday: true, startMin: true, endMin: true },
     });
 
-    const byDay = new Map<number, Array<{ s: number; e: number }>>();
-    for (const r of existing) {
-      byDay.set(r.weekday, [
-        ...(byDay.get(r.weekday) ?? []),
-        { s: r.startMin, e: r.endMin },
-      ]);
-    }
+    const next = existing.map((r) => ({ ...r }));
     for (const [weekday, wins] of declared) {
-      byDay.set(weekday, [...(byDay.get(weekday) ?? []), ...wins]);
-    }
+      const wantEnd = latestEnd(wins);
+      if (wantEnd === null) continue;
+      const onDay = next.filter((r) => r.weekday === weekday);
 
-    const next: Array<{ weekday: number; startMin: number; endMin: number }> = [];
-    for (const [weekday, wins] of [...byDay].sort((a, b) => a[0] - b[0])) {
-      for (const w of mergeWindows(wins)) {
-        next.push({ weekday, startMin: w.s, endMin: w.e });
+      if (onDay.length === 0) {
+        // A weekday he is not bookable on at all. Opening it is the one case
+        // where a start minute may be set, because there is no existing grid
+        // origin to re-phase and no break to bridge.
+        const wantStart = earliestStart(wins);
+        if (wantStart === null) continue;
+        next.push({ id: "", weekday, startMin: wantStart, endMin: wantEnd });
+        continue;
       }
+
+      // Extend the LAST window of the day in place. Never a new row (rule 2),
+      // never the start (rule 1), never shorter than it already is.
+      const last = onDay.reduce((a, b) => (b.endMin > a.endMin ? b : a));
+      if (wantEnd > last.endMin) last.endMin = wantEnd;
     }
 
     const key = (r: { weekday: number; startMin: number; endMin: number }) =>
@@ -727,11 +755,29 @@ async function extendSoloStaffHoursFromServices(shopId: string): Promise<boolean
     const after = next.map(key).sort().join(",");
     if (before === after) return false;
 
-    await tx.availabilityRule.deleteMany({ where: { shopId, staffId } });
-    if (next.length > 0) {
-      await tx.availabilityRule.createMany({
-        data: next.map((r) => ({ shopId, staffId, ...r })),
-      });
+    // Update the rows that moved and insert only genuinely new weekdays, rather
+    // than delete-then-recreate. The old wholesale rewrite is what made the
+    // lunch-break bug unrecoverable, and it churns ids other rows may reference.
+    for (const r of next) {
+      if (!r.id) {
+        await tx.availabilityRule.create({
+          data: {
+            shopId,
+            staffId,
+            weekday: r.weekday,
+            startMin: r.startMin,
+            endMin: r.endMin,
+          },
+        });
+        continue;
+      }
+      const was = existing.find((e) => e.id === r.id)!;
+      if (was.endMin !== r.endMin || was.startMin !== r.startMin) {
+        await tx.availabilityRule.update({
+          where: { id: r.id },
+          data: { startMin: r.startMin, endMin: r.endMin },
+        });
+      }
     }
     return true;
   });

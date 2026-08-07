@@ -179,7 +179,76 @@ describe("solo shop: service hours are the barber's hours", () => {
     expect(await rules()).toEqual(["1:540-1140", "2:540-1020", "3:600-840"]);
   });
 
+  it("never moves a day's START earlier — that re-phases the whole grid", async () => {
+    // The defect this pins: the slot grid is anchored at the window start and
+    // steps by duration, so pulling Monday open at 08:15 would re-time every
+    // slot in the day and DELETE 7:00/7:30 PM while adding coverage. Widening
+    // the tail is safe; widening the head is not.
+    expect(
+      (await setHours({ "1": [{ s: 8 * 60 + 15, e: 20 * 60 }] })).status,
+    ).toBe(200);
+    const after = await rules();
+    expect(after).toContain("1:540-1200"); // end moved 19:00 -> 20:00
+    expect(after.some((r) => r.startsWith("1:495"))).toBe(false); // 08:15 refused
+  });
+
+  it("never bridges a lunch break, and never adds a second window to a day", async () => {
+    // Hand-build the split shape the old merge destroyed: Tue 09:00-12:00 and
+    // 13:00-17:00 with a protected hour between.
+    expect(
+      (
+        await request(app)
+          .put(`/api/booking/staff/${staffId}/availability`)
+          .set("Cookie", cookie)
+          .send({
+            rules: [
+              { weekday: TUESDAY, startMin: 9 * 60, endMin: 12 * 60 },
+              { weekday: TUESDAY, startMin: 13 * 60, endMin: 17 * 60 },
+              { weekday: MONDAY, startMin: 9 * 60, endMin: 20 * 60 },
+            ],
+          })
+      ).status,
+    ).toBe(200);
+
+    // A service declaring straight through the break must NOT swallow it.
+    expect((await setHours({ "2": [{ s: 9 * 60, e: 19 * 60 }] })).status).toBe(200);
+    const after = await rules();
+    expect(after).toContain("2:540-720"); // 09:00-12:00 intact
+    expect(after).toContain("2:780-1140"); // 13:00-17:00 extended to 19:00
+    expect(after.filter((r) => r.startsWith("2:"))).toHaveLength(2); // no third row
+  });
+
+  it("extends the existing day instead of creating a disjoint evening window", async () => {
+    // Give Wednesday a real 10:00-19:00 day to extend (the previous test's
+    // replace-all PUT left only Mon/Tue).
+    expect(
+      (
+        await request(app)
+          .put(`/api/booking/staff/${staffId}/availability`)
+          .set("Cookie", cookie)
+          .send({
+            rules: [
+              { weekday: MONDAY, startMin: 9 * 60, endMin: 20 * 60 },
+              { weekday: TUESDAY, startMin: 9 * 60, endMin: 12 * 60 },
+              { weekday: TUESDAY, startMin: 13 * 60, endMin: 19 * 60 },
+              { weekday: WEDNESDAY, startMin: 10 * 60, endMin: 19 * 60 },
+            ],
+          })
+      ).status,
+    ).toBe(200);
+
+    // A window that starts AFTER the day closes used to create a SECOND rule,
+    // which the Staff -> Hours sheet then renders alone and deletes the rest of
+    // the day on save. One row per weekday keeps that gun unloaded.
+    expect((await setHours({ "3": [{ s: 20 * 60, e: 22 * 60 }] })).status).toBe(200);
+    const wed = (await rules()).filter((r) => r.startsWith("3:"));
+    expect(wed).toHaveLength(1);
+    expect(wed[0]).toBe("3:600-1320"); // 10:00 open kept, close pushed to 22:00
+  });
+
   it("stops write-through the moment a second barber exists", async () => {
+    const before = await rules();
+
     const second = await request(app)
       .post("/api/booking/staff")
       .set("Cookie", cookie)
@@ -187,9 +256,9 @@ describe("solo shop: service hours are the barber's hours", () => {
     expect(second.status).toBe(201);
 
     // With two chairs, "my hours" is meaningless - the intersect is back and
-    // this window past 19:00 must change nobody's rules.
-    expect((await setHours({ "1": [{ s: 9 * 60, e: 22 * 60 }] })).status).toBe(200);
-    expect(await rules()).toEqual(["1:540-1140", "2:540-1020", "3:600-840"]);
+    // this window past every close must change nobody's rules.
+    expect((await setHours({ "1": [{ s: 9 * 60, e: 23 * 60 }] })).status).toBe(200);
+    expect(await rules()).toEqual(before);
 
     await request(app)
       .delete(`/api/booking/staff/${second.body.id}`)
