@@ -1,7 +1,12 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
-import { NativeAuthError, signInWithProfile, type NativeProfile } from "./native.js";
+import {
+  NativeAuthError,
+  linkProviderToUser,
+  signInWithProfile,
+  type NativeProfile,
+} from "./native.js";
 import { sessionFromToken } from "./session.js";
 
 /**
@@ -97,6 +102,23 @@ describe("signInWithProfile", () => {
     expect(sessionFromToken(token)?.v).toBe(3);
   });
 
+  it("links a provider email that differs only in CASE from the stored one", async () => {
+    // Signup lowercases, and User.email is a plain case-sensitive unique - so a
+    // provider returning "Barber@Test.local" must still find "barber@test.local"
+    // or a barber with a real web account is told no account exists.
+    const email = `native-case-${suffix}@test.local`;
+    createdEmails.push(email);
+    const existing = await prisma.user.create({
+      data: { email, name: "Case Owner", passwordHash: "x" },
+    });
+    const p = profile({ email: `Native-Case-${suffix.toUpperCase()}@Test.Local ` });
+    const { user } = await signInWithProfile("google", p);
+    expect(user.id).toBe(existing.id);
+    expect((await prisma.user.findUnique({ where: { id: existing.id } }))?.googleId).toBe(
+      p.sub,
+    );
+  });
+
   it("signs in an already-linked user even if the email is unverified", async () => {
     const email = `native-relink-${suffix}@test.local`;
     createdEmails.push(email);
@@ -114,5 +136,69 @@ describe("signInWithProfile", () => {
     };
     const again = await signInWithProfile("apple", reauth);
     expect(again.user.id).toBe(existing.id);
+  });
+});
+
+/**
+ * linkProviderToUser: attaching a provider to an ALREADY-AUTHENTICATED account.
+ * This is what rescues Apple's "Hide My Email" - a relay address can never match
+ * a web-made account's email, so the id gets stamped after a password sign-in
+ * instead. Identity comes from the session here, not from the email claim,
+ * which is why an unverified email is acceptable in this path and fatal in
+ * signInWithProfile.
+ */
+describe("linkProviderToUser", () => {
+  it("stamps the provider id without touching email or name", async () => {
+    const email = `native-linkto-${suffix}@test.local`;
+    createdEmails.push(email);
+    const user = await prisma.user.create({
+      data: { email, name: "Link Owner", passwordHash: "x" },
+    });
+    // A private-relay address with emailVerified false: the session is the proof.
+    const p: NativeProfile = {
+      sub: `sub-${randomToken(8)}`,
+      email: `${randomToken(6)}@privaterelay.appleid.com`,
+      name: "Apple Display Name",
+      emailVerified: false,
+    };
+    await linkProviderToUser(user.id, "apple", p);
+    const after = await prisma.user.findUnique({ where: { id: user.id } });
+    expect(after?.appleId).toBe(p.sub);
+    // The barber set these up on the web - the relay address and Apple's
+    // display name must not overwrite them.
+    expect(after?.email).toBe(email);
+    expect(after?.name).toBe("Link Owner");
+  });
+
+  it("is idempotent when the id already belongs to this account", async () => {
+    const email = `native-linkidem-${suffix}@test.local`;
+    createdEmails.push(email);
+    const sub = `sub-${randomToken(8)}`;
+    const user = await prisma.user.create({
+      data: { email, name: "Idem Owner", googleId: sub },
+    });
+    const p: NativeProfile = { sub, email, name: null, emailVerified: true };
+    await expect(linkProviderToUser(user.id, "google", p)).resolves.toBeUndefined();
+    expect((await prisma.user.findUnique({ where: { id: user.id } }))?.googleId).toBe(sub);
+  });
+
+  it("refuses an id already claimed by a DIFFERENT account", async () => {
+    const ownerEmail = `native-linkowner-${suffix}@test.local`;
+    const otherEmail = `native-linkother-${suffix}@test.local`;
+    createdEmails.push(ownerEmail, otherEmail);
+    const sub = `sub-${randomToken(8)}`;
+    await prisma.user.create({
+      data: { email: ownerEmail, name: "First Owner", appleId: sub },
+    });
+    const other = await prisma.user.create({
+      data: { email: otherEmail, name: "Second Owner", passwordHash: "x" },
+    });
+    const p: NativeProfile = { sub, email: otherEmail, name: null, emailVerified: true };
+    // Moving the id would lock the first barber out of their own Apple button.
+    await expect(linkProviderToUser(other.id, "apple", p)).rejects.toMatchObject({
+      message: "provider_taken",
+      status: 409,
+    } satisfies Partial<NativeAuthError>);
+    expect((await prisma.user.findUnique({ where: { id: other.id } }))?.appleId).toBeNull();
   });
 });

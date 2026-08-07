@@ -23,6 +23,7 @@ import {
   NativeAuthError,
   appleNativeEnabled,
   googleNativeEnabled,
+  linkProviderToUser,
   signInWithProfile,
   verifyApple,
   verifyGoogle,
@@ -570,6 +571,66 @@ authRouter.post("/google/native", authLimiter, async (req, res) => {
     const { token, tokenVersion, user } = await signInWithProfile("google", profile);
     setSessionCookie(res, user.id, tokenVersion);
     res.json({ token, ...user });
+  } catch (err) {
+    if (err instanceof NativeAuthError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
+});
+
+// Attach an Apple/Google identity to the account you are ALREADY signed in as.
+//
+// The app calls these when /apple/native or /google/native answered
+// account_not_found and the barber then signed in with their email and
+// password: the provider email didn't match (Apple's "Hide My Email" relay
+// address never can), but the session now proves who they are, so the id can be
+// stamped and the next tap of that button just works.
+//
+// requireUser accepts the app's Authorization: Bearer as well as the cookie.
+// accountLimiter (not authLimiter) because this is an authenticated account
+// mutation - a retry loop here must not spend the shared login budget.
+// The provider token is re-verified server-side; a client-supplied sub is never
+// trusted, or anyone could bind their own Apple ID to someone else's account.
+authRouter.post("/apple/link", accountLimiter, requireUser, async (req, res) => {
+  const parsed = z
+    .object({
+      identityToken: z.string().min(1).max(5000),
+      name: z.string().max(120).optional(),
+    })
+    .strict()
+    .safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  try {
+    const profile = await verifyApple(parsed.data.identityToken, parsed.data.name);
+    await linkProviderToUser(req.userId!, "apple", profile);
+    res.json({ ok: true });
+  } catch (err) {
+    if (err instanceof NativeAuthError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
+});
+
+authRouter.post("/google/link", accountLimiter, requireUser, async (req, res) => {
+  const parsed = z
+    .object({ idToken: z.string().min(1).max(5000) })
+    .strict()
+    .safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  try {
+    const profile = await verifyGoogle(parsed.data.idToken);
+    await linkProviderToUser(req.userId!, "google", profile);
+    res.json({ ok: true });
   } catch (err) {
     if (err instanceof NativeAuthError) {
       res.status(err.status).json({ error: err.message });
