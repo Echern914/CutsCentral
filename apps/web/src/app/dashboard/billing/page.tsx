@@ -330,12 +330,36 @@ export default async function BillingPage({
                 </HideInNativeApp>
                 <ShowInNativeApp>
                   <p className="mt-5 rounded-2xl border border-subtle bg-charcoal-800 px-4 py-3 text-sm text-muted">
-                    Manage your plan and payment from{" "}
+                    Plans, prices and upgrades live on{" "}
                     <span className="text-offwhite">getchairback.com</span> in your
                     web browser.
                   </p>
+                  {/* Cancelling is NOT a purchase, so it belongs here as well as
+                      on the web: 3.1.1 forbids in-app access to BUYING
+                      mechanisms, and a barber must never have to hunt for the
+                      exit. Everything that sells — prices, tier grid, upgrade
+                      CTAs — stays hidden in-app; this opens Stripe's hosted
+                      cancel flow directly (portal flow=cancel), not the general
+                      portal, so nothing here can be used to purchase. */}
+                  {b.subscribed && (
+                    <div className="mt-3">
+                      <CancelMembershipButton />
+                    </div>
+                  )}
                 </ShowInNativeApp>
               </>
+            )}
+
+            {/* A comped shop has no Stripe customer at all, so there is nothing
+                to manage and nothing to cancel - every button below is absent by
+                design. Say so: the alternative is plan cards with empty bottoms
+                and no explanation, which reads as the page being broken. */}
+            {b.compAccess && (
+              <p className="mt-5 rounded-2xl border border-subtle bg-charcoal-800 px-4 py-3 text-sm text-muted">
+                Your access is complimentary, so there&apos;s no card on file, no
+                payment to manage and nothing to cancel. The plans below are what
+                paying shops see and choose between.
+              </p>
             )}
 
             {/* Receptionist on/off + one-time liability acknowledgment, once
@@ -429,6 +453,13 @@ export default async function BillingPage({
                   </div>
                 </HideInNativeApp>
               )}
+              {/* Comped: the buy button is deliberately absent - name why, so an
+                  empty card bottom doesn't read as a missing button. */}
+              {b.compAccess && (
+                <p className="mt-auto pt-5 text-xs text-muted">
+                  Already yours, on the house.
+                </p>
+              )}
             </Card>
 
             {/* Premium AI — the showcase card. This should read like hiring
@@ -491,6 +522,11 @@ export default async function BillingPage({
                     One filled cancellation usually covers the month. The rest
                     is profit.
                   </p>
+                  {b.compAccess && (
+                    <p className="mt-3 text-xs text-muted">
+                      Already yours, on the house.
+                    </p>
+                  )}
                   {!b.compAccess && (
                     <div className="mt-3">
                       {b.plan !== "pro_ai" &&
