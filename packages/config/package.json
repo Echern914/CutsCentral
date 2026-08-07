@@ -14,7 +14,9 @@
     "./session": "./src/session.ts",
     "./demo": "./src/demo.ts",
     "./demoTour": "./src/demoTour.ts",
-    "./features": "./src/features.ts"
+    "./features": "./src/features.ts",
+    "./help": "./src/help.ts",
+    "./helpMatch": "./src/helpMatch.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
