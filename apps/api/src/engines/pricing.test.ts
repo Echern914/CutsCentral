@@ -4,6 +4,7 @@ import {
   effectiveDurationAt,
   effectivePriceAt,
   parseDurationOverrides,
+  parseDateOverrides,
   parsePriceOverrides,
   parseTimeWindows,
   priceRangeForService,
@@ -11,7 +12,7 @@ import {
 
 /** No-window layer args, for the weekday-only cases. */
 function layers(weekdayOverrides: unknown, at: Date, timezone: string) {
-  return { at, timezone, weekdayOverrides, timeWindows: null };
+  return { at, timezone, weekdayOverrides, dateOverrides: null, timeWindows: null };
 }
 
 /** Pure day-of-week pricing helpers. */
@@ -54,6 +55,81 @@ describe("effectivePriceAt (weekday layer)", () => {
       effectivePriceAt(45, layers({ "0": 55 }, lateSundayNy, "America/New_York")),
     ).toBe(55);
     expect(effectivePriceAt(45, layers({ "0": 55 }, lateSundayNy, "UTC"))).toBe(45);
+  });
+});
+
+describe("parseDateOverrides", () => {
+  it("keeps well-formed YYYY-MM-DD entries and coerces numeric strings", () => {
+    expect(parseDateOverrides({ "2026-12-24": 75, "2026-07-04": "60" })).toEqual({
+      "2026-12-24": 75,
+      "2026-07-04": 60,
+    });
+  });
+  it("drops junk keys, impossible dates, negatives and non-objects", () => {
+    expect(
+      parseDateOverrides({
+        "2026-13-01": 50, // month 13
+        "2026-02-30": 50, // Feb 30 does not exist
+        "12-24-2026": 50, // wrong order
+        "2026-12-24": -5, // negative
+        "2026-12-25": 80, // kept
+      }),
+    ).toEqual({ "2026-12-25": 80 });
+    expect(parseDateOverrides(null)).toEqual({});
+    expect(parseDateOverrides([1, 2])).toEqual({});
+  });
+});
+
+describe("effectivePriceAt (date layer)", () => {
+  // 2026-12-24 is a Thursday. Base $45, Thursday override $50, 9pm window $65.
+  const xmasEveNoon = new Date("2026-12-24T12:00:00Z");
+  const xmasEveNight = new Date("2026-12-24T21:30:00Z");
+  const otherThursday = new Date("2026-12-17T12:00:00Z");
+  const windows = [{ s: 1260, e: 1440, price: 65 }];
+
+  const args = (at: Date, dateOverrides: unknown) => ({
+    at,
+    timezone: "UTC",
+    weekdayOverrides: { "4": 50 },
+    dateOverrides,
+    timeWindows: windows,
+  });
+
+  it("a named date beats the weekday override", () => {
+    expect(effectivePriceAt(45, args(xmasEveNoon, { "2026-12-24": 75 }))).toBe(75);
+  });
+  it("a named date ALSO beats a time-of-day window - most specific wins", () => {
+    // Without the date rule this instant is inside the 9pm $65 window.
+    expect(effectivePriceAt(45, args(xmasEveNight, null))).toBe(65);
+    expect(effectivePriceAt(45, args(xmasEveNight, { "2026-12-24": 75 }))).toBe(75);
+  });
+  it("only touches the named date, not the same weekday in other weeks", () => {
+    expect(effectivePriceAt(45, args(otherThursday, { "2026-12-24": 75 }))).toBe(50);
+  });
+  it("resolves the calendar date in the SHOP timezone", () => {
+    // 2026-12-25T02:00:00Z is the 25th in UTC but still 9pm on the 24th in NY.
+    const lateXmasEveNy = new Date("2026-12-25T02:00:00Z");
+    expect(
+      effectivePriceAt(45, {
+        at: lateXmasEveNy,
+        timezone: "America/New_York",
+        weekdayOverrides: {},
+        dateOverrides: { "2026-12-24": 75 },
+        timeWindows: null,
+      }),
+    ).toBe(75);
+    expect(
+      effectivePriceAt(45, {
+        at: lateXmasEveNy,
+        timezone: "UTC",
+        weekdayOverrides: {},
+        dateOverrides: { "2026-12-24": 75 },
+        timeWindows: null,
+      }),
+    ).toBe(45);
+  });
+  it("a $0 holiday price is honored, not treated as unset", () => {
+    expect(effectivePriceAt(45, args(xmasEveNoon, { "2026-12-24": 0 }))).toBe(0);
   });
 });
 
@@ -155,6 +231,7 @@ describe("effectivePriceAt / effectiveDurationAt (time windows)", () => {
       at: friEvening,
       timezone: "UTC",
       weekdayOverrides: { "5": 50 },
+      dateOverrides: null,
       timeWindows: windows,
     };
     expect(effectivePriceAt(45, argsIn)).toBe(65);
@@ -169,6 +246,7 @@ describe("effectivePriceAt / effectiveDurationAt (time windows)", () => {
         at: friEvening,
         timezone: "UTC",
         weekdayOverrides: {},
+        dateOverrides: null,
         timeWindows: durOnly,
       }),
     ).toBe(45);
@@ -189,6 +267,7 @@ describe("effectivePriceAt / effectiveDurationAt (time windows)", () => {
       at: nyEvening,
       timezone: "America/New_York",
       weekdayOverrides: {},
+      dateOverrides: null,
       timeWindows: windows,
     };
     expect(effectivePriceAt(45, args)).toBe(65);
@@ -201,6 +280,7 @@ describe("effectivePriceAt / effectiveDurationAt (time windows)", () => {
     const args = {
       timezone: "UTC",
       weekdayOverrides: {},
+      dateOverrides: null,
       timeWindows: [{ s: 1260, e: 1320, price: 65 }], // 21:00-22:00
     };
     expect(effectivePriceAt(45, { ...args, at: nineOClock })).toBe(65);

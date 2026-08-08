@@ -599,6 +599,7 @@ async function loadSlotContext(
         timeOverrides: true,
         price: true,
         priceOverrides: true,
+        dateOverrides: true,
       },
     }),
     db.staff.findFirst({
@@ -613,6 +614,7 @@ async function loadSlotContext(
       at: decoded.startsAt,
       timezone: shop.timezone,
       weekdayOverrides: service.priceOverrides,
+      dateOverrides: service.dateOverrides,
       timeWindows: service.timeOverrides,
     },
   );

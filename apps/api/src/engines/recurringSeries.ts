@@ -120,6 +120,8 @@ export interface MaterializeInput {
   timeOverrides: unknown;
   basePrice: number | null;
   priceOverrides: unknown;
+  /** Service.dateOverrides - a holiday price applies to a series occurrence too. */
+  dateOverrides: unknown;
   // Shop facts.
   timezone: string;
   bookingBufferMin: number;
@@ -214,6 +216,7 @@ export async function materializeSeries(
       at: startsAt,
       timezone: input.timezone,
       weekdayOverrides: input.priceOverrides,
+      dateOverrides: input.dateOverrides,
       timeWindows: input.timeOverrides,
     });
 

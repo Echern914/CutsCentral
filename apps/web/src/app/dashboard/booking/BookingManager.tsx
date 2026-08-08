@@ -1142,6 +1142,15 @@ function ServiceEditForm({
     for (const [wd, m] of Object.entries(service.durationOverrides ?? {})) out[Number(wd)] = String(m);
     return out;
   });
+  // Holiday pricing: named calendar dates, not weekdays. Held as an ORDERED
+  // ARRAY rather than the stored map so a half-typed row keeps its identity
+  // while the barber edits it - keying rows by date would make the row jump or
+  // collide the moment two rows briefly share a value.
+  const [specialDates, setSpecialDates] = useState<SpecialDateRow[]>(() =>
+    Object.entries(service.dateOverrides ?? {})
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, price]) => ({ date, price: String(price) })),
+  );
   // "Offered by all" is a live intent (see the API): when on, the chips show all
   // active barbers lit and a barber added later is auto-included. Toggling any
   // single chip switches to a hand-picked set. Seed from the stored flag; the
@@ -1328,6 +1337,7 @@ function ServiceEditForm({
         // Always send the FULL maps (including {}) so clearing an override or a
         // restriction actually persists - PATCH is partial, absent = unchanged.
         priceOverrides: buildPriceOverrides(dayPrices),
+        dateOverrides: buildDateOverrides(specialDates),
         durationOverrides: buildDurationOverrides(dayDurations),
         // Same rule for the time windows ([] clears them all).
         timeOverrides: buildTimeOverrides(timeRows),
@@ -1461,6 +1471,15 @@ function ServiceEditForm({
           baseDuration={duration}
           onPrice={(wd, v) => setDayPrices((cur) => ({ ...cur, [wd]: v }))}
           onDuration={(wd, v) => setDayDurations((cur) => ({ ...cur, [wd]: v }))}
+        />
+
+        {/* Named calendar dates - the holiday knob. Sits directly under "vary
+            by day" because a barber reaching for one usually wants the other,
+            and above the time windows because a date OUTRANKS them. */}
+        <SpecialDatesEditor
+          rows={specialDates}
+          onChange={setSpecialDates}
+          basePrice={price}
         />
 
         {/* Time-of-day windows: "after 9 PM this runs $60 and takes 20 min".
@@ -3833,6 +3852,34 @@ function buildPriceOverrides(dayPrices: Record<number, string>): Record<string, 
   return out;
 }
 
+/** One holiday-pricing row while it is being edited (see specialDates). */
+type SpecialDateRow = { date: string; price: string };
+
+/**
+ * {"YYYY-MM-DD": price} from the holiday rows. Incomplete rows are dropped
+ * rather than rejected - a barber who added a row and never filled it in has
+ * not made a mistake, he just has not finished, and blocking Save on it would
+ * be hostile. A later duplicate date silently loses to the earlier one, which
+ * is also what the stored map can represent.
+ */
+function buildDateOverrides(rows: SpecialDateRow[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  // Drop dates that have already passed. They resolve against nothing, and
+  // without this every holiday a shop ever priced accumulates in the blob and
+  // in the editor. The row is labelled "past - will be dropped" so this is
+  // never a surprise.
+  const today = new Date().toISOString().slice(0, 10);
+  for (const r of rows) {
+    const date = r.date.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    if (date < today) continue;
+    if (Object.prototype.hasOwnProperty.call(out, date)) continue;
+    const n = Number(r.price);
+    if (r.price.trim() !== "" && Number.isFinite(n) && n >= 0) out[date] = n;
+  }
+  return out;
+}
+
 /** {weekday: minutes} - whole minutes, 5 min floor (mirrors the API bound). */
 function buildDurationOverrides(
   dayDurations: Record<number, string>,
@@ -4208,6 +4255,97 @@ function AvailableHoursRows({
           )}
         </div>
       ))}
+    </div>
+  );
+}
+
+/**
+ * Holiday pricing: a named calendar DATE charges a named price.
+ *
+ * "Vary by day" cannot express this - Christmas Eve is a Thursday one year and a
+ * Friday the next, and a Sunday rule would reprice every Sunday of the year.
+ * So this is its own list of dates, and a date beats every other pricing layer
+ * (see engines/pricing.ts): what the barber set for that one day is what he
+ * meant.
+ *
+ * Rows carry their own identity rather than being keyed by date, so a
+ * half-typed date does not make the row jump around or collide with a sibling.
+ * Past dates are pruned on load-and-save rather than blocked: they are harmless
+ * (nothing resolves against them) but they make the list grow forever.
+ */
+function SpecialDatesEditor({
+  rows,
+  onChange,
+  basePrice,
+}: {
+  rows: SpecialDateRow[];
+  onChange: (next: SpecialDateRow[]) => void;
+  basePrice: string;
+}) {
+  // Shop-local "today" is close enough here: this only dims a row that has
+  // already passed, and being an hour off either way changes nothing.
+  const today = new Date().toISOString().slice(0, 10);
+  const field =
+    "rounded-lg border border-subtle bg-charcoal-700 px-2.5 py-1.5 text-sm text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50";
+  function patch(i: number, p: Partial<SpecialDateRow>) {
+    onChange(rows.map((r, j) => (j === i ? { ...r, ...p } : r)));
+  }
+  return (
+    <div>
+      <span className={labelCls}>Holiday &amp; special dates (optional)</span>
+      <p className="mt-0.5 text-[11px] text-muted">
+        Charge a different price on one specific date — Christmas Eve, a game
+        day, the Saturday before prom. Beats every other price rule for that
+        day, including &ldquo;vary by day&rdquo; and any time-of-day window.
+        Everything else stays {basePrice.trim() ? `$${basePrice}` : "the base price"}.
+      </p>
+      <div className="mt-2 flex flex-col gap-1.5">
+        {rows.map((r, i) => {
+          const past = r.date !== "" && r.date < today;
+          return (
+            <div key={i} className="flex flex-wrap items-center gap-2">
+              <input
+                type="date"
+                value={r.date}
+                onChange={(e) => patch(i, { date: e.target.value })}
+                aria-label={`Special date ${i + 1}`}
+                className={cn(field, past && "opacity-50")}
+              />
+              <div className="relative">
+                <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted">
+                  $
+                </span>
+                <input
+                  inputMode="decimal"
+                  value={r.price}
+                  onChange={(e) => patch(i, { price: e.target.value })}
+                  placeholder={basePrice.trim() || "0"}
+                  aria-label={`Price on special date ${i + 1}`}
+                  className={cn(field, "w-24 pl-6")}
+                />
+              </div>
+              {past && (
+                <span className="text-[11px] text-muted">past — will be dropped</span>
+              )}
+              <button
+                type="button"
+                onClick={() => onChange(rows.filter((_, j) => j !== i))}
+                aria-label={`Remove special date ${i + 1}`}
+                className="rounded-lg border border-subtle px-2.5 py-1.5 text-xs text-muted hover:text-offwhite"
+              >
+                Remove
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <button
+        type="button"
+        onClick={() => onChange([...rows, { date: "", price: "" }])}
+        className="mt-2 rounded-lg border border-subtle px-3 py-1.5 text-xs text-muted hover:text-offwhite"
+      >
+        + Add a date
+      </button>
     </div>
   );
 }

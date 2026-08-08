@@ -1218,6 +1218,17 @@ model Service {
   // they pick (so a Sunday surcharge is never a surprise), and it's snapshotted
   // onto Appointment.priceAtBooking. See engines/pricing.ts (effectivePriceForDate).
   priceOverrides Json     @default("{}")
+  // Per-DATE price overrides - the holiday knob. A JSON map of shop-local
+  // calendar date ("YYYY-MM-DD") to the price charged that day, e.g.
+  // {"2026-12-24": 75}. A weekday map cannot express "Christmas Eve" (Dec 24
+  // is a different weekday every year), which is why this is its own layer
+  // rather than more keys in priceOverrides. It is the MOST specific layer and
+  // therefore wins over every other: a named date beats an after-9pm window
+  // beats a Sunday rule beats the base price. Dates in the past are harmless
+  // (nothing resolves against them) but the editor prunes them so the list
+  // stays short. Snapshotted onto Appointment.priceAtBooking like every other
+  // layer. See engines/pricing.ts (parseDateOverrides / effectivePriceAt).
+  dateOverrides  Json     @default("{}")
   // Per-weekday DURATION overrides, the same shape/semantics as priceOverrides:
   // {"5": 20} = Friday cuts take 20 min. Drives the slot grid for that day (a
   // Friday service consumes a 20-min block) and the appointment's endsAt, which
