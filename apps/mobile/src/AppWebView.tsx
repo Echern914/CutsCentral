@@ -25,8 +25,10 @@ const READY_MESSAGE = "cb:ready";
 /**
  * The shared WebView for every screen, tuned to feel like a native app rather
  * than a web page in a box:
- *  - NO pinch-zoom / double-tap-zoom (scalesPageToFit off + a viewport lock that
- *    forces maximum-scale=1, user-scalable=no even if the page didn't set it)
+ *  - a viewport pinned to width=device-width so the page lays out at phone
+ *    width. Pinch-zoom is deliberately LEFT ON: blocking it fails WCAG and
+ *    takes away the only escape hatch when something overflows (see the
+ *    LOCK_VIEWPORT note below)
  *  - NO rubber-band scroll bounce (bounces=false)
  *  - NO automatic content insets (we own the safe-area, so iOS must not add its
  *    own — that was the "moving around" drift)
@@ -41,7 +43,23 @@ const READY_MESSAGE = "cb:ready";
 // refuses to zoom. Belt-and-suspenders with the native zoom flags below.
 const LOCK_VIEWPORT = `
 (function () {
-  var content = 'width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover';
+  // DELIBERATELY NOT locking scale. This string used to carry
+  // 'maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover',
+  // but it never actually took effect: it APPENDED a second viewport meta and
+  // on iOS the last tag in the document wins, so Next's own tag always beat it.
+  // Making the injection correct (below) would therefore have switched all of
+  // it on for the first time, in the same change that was meant to fix how the
+  // app fits on screen. Two reasons not to:
+  //   - user-scalable=no removes pinch-zoom, which is a WCAG failure on its own
+  //     AND is currently the only way a barber can reach content that overflows
+  //     the viewport.
+  //   - viewport-fit=cover starts reporting a real safe-area inset to four
+  //     pieces of UI that have read 0 for their entire life (the tab pill, the
+  //     help bubble, the nav, the page padding). That may well be the intended
+  //     design, but it has never been seen on a device and does not belong in
+  //     this change.
+  // Both are worth revisiting deliberately, on a phone, on their own branch.
+  var content = 'width=device-width, initial-scale=1';
   // documentElement ALWAYS exists at document-start; document.head usually does
   // NOT. This used to read the meta, appendChild to a null head, and throw -
   // taking the text-size lock on the next line down with it, which let iOS

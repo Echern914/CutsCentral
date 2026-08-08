@@ -215,14 +215,22 @@ export default async function DashboardPage({
       {/* These two carry demo-tour anchors ("at-risk", "activity"), so they stay
           expanded — the spotlight can't anchor to an element inside a closed
           <details>. They're also the two a barber actually reads daily. */}
+      {/* min-w-0 on BOTH cells is load-bearing, not tidying. A grid item
+          defaults to min-width:auto, so it refuses to shrink below its
+          content's intrinsic width - the at-risk table's widest client row
+          held this column at ~473px against a 390px iPhone, pushing the whole
+          page off the right edge. iOS cannot shrink-to-fit that, so it read as
+          "the app is zoomed in". With min-w-0 the cell is allowed to shrink and
+          the long names ellipsize, which is what the table always intended.
+          Desktop is unaffected (measured identical at 1430px). */}
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
-        <div data-tour="at-risk">
+        <div data-tour="at-risk" className="min-w-0">
           <AtRiskTable
             rows={atRisk.data?.clients ?? []}
             appBaseUrl={appBase}
           />
         </div>
-        <div data-tour="activity">
+        <div data-tour="activity" className="min-w-0">
           <ActivityFeed
             items={activity.data?.items ?? []}
             seeAllHref="/dashboard/activity"
