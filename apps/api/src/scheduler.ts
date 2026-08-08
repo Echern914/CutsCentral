@@ -9,6 +9,7 @@ import { runWinbackSweep } from "./engines/winback.js";
 import { linkBookingsToNudges } from "./engines/attribution.js";
 import { promoteFulfilledAppointments } from "./engines/appointmentPromotion.js";
 import { runAppointmentReminders } from "./engines/appointmentReminders.js";
+import { runSyncedVisitReminders } from "./engines/syncedVisitReminders.js";
 import { runPushReminders } from "./engines/pushReminders.js";
 import { runBarberReminders } from "./engines/barberReminders.js";
 import { refreshExpiringSquareTokens } from "./engines/squareTokenRefresh.js";
@@ -115,6 +116,17 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
     ttlMs: 5 * MINUTE,
     run: () => runAppointmentReminders(),
     failMsg: "appointment reminder job failed",
+  },
+  // The SYNCED twin: same 24h reminder for shops that kept Acuity/Square, whose
+  // bookings are Visit rows the native job above cannot see. Separate lease so
+  // one job failing never suppresses the other, and offset off the :00/:20/:40
+  // tick so the two sweeps don't contend for the same connections.
+  {
+    cronExpr: "10-59/20 * * * *",
+    name: "synced-visit-reminders",
+    ttlMs: 5 * MINUTE,
+    run: () => runSyncedVisitReminders(),
+    failMsg: "synced visit reminder job failed",
   },
   // Native booking: PUSH reminders (24h + 2h tiers, per-shop toggles) every 10
   // minutes - the 2h tier needs a tighter cadence than the SMS/email job.

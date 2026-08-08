@@ -972,6 +972,16 @@ model Visit {
   noShow              Boolean     @default(false)
   price               Decimal?    @db.Decimal(10, 2)
   serviceName         String?
+  // Reminder idempotency for SYNCED bookings (Acuity/Square). The native side
+  // stamps the same pair on Appointment; a Visit needs its own because a shop
+  // that kept its old calendar has no Appointment row to stamp, and until this
+  // existed those shops got no appointment reminders at all. Only Visits with
+  // NO linked `appointment` are ever reminded from here - a promoted Visit is
+  // already covered by its native row, and reminding both would double-text.
+  // Per-channel, like the native pair: an SMS-dark shop can still remind by
+  // email and vice versa.
+  reminderSentAt      DateTime?
+  reminderEmailSentAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -983,6 +993,7 @@ model Visit {
   @@index([shopId, clientId, scheduledAt]) // cadence + future-booking checks
   @@index([shopId, clientId, createdAt]) // attribution booking lookup (createdAt window)
   @@index([status, endAt]) // promotion scan
+  @@index([status, scheduledAt]) // cross-shop reminder sweep (synced bookings)
   @@index([shopId, status, scheduledAt]) // insights/trends/avg-ticket + activity feed by (shop, status, date)
 }
 
