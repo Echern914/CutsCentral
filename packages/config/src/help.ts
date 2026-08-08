@@ -574,12 +574,31 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   },
   {
     id: "custom-domain",
-    q: "Can I use my own domain?",
-    a: "Yes. Connect a domain you own from your Shop page settings and anyone who types it — or clicks it anywhere — lands straight on your ChairBack page.\n\nWe show you the two records to add where you bought the domain (GoDaddy, Namecheap, and so on); they usually take effect in minutes. Google search results show your page's getchairback.com address — your domain is the door, your ChairBack page is the shop.",
+    q: "How do I connect my own domain?",
+    a: "It lives at the bottom of your page settings: open your dashboard, tap More, then Public shop page, and scroll down to \"Use your own domain.\"\n\nFrom there:\n1. Type your domain (like drickcuttinup.com) and tap Connect.\n2. Two records appear. Add them wherever you bought the domain (GoDaddy, Namecheap, Squarespace…) — in that site's DNS settings, add an A record with name @ and value 76.76.21.21, and a CNAME record with name www and value cname.vercel-dns.com.\n3. Come back and tap \"I've added them — check again.\" It usually flips to Connected within minutes; DNS can occasionally take up to 48 hours.\n\nOnce it's Connected, anyone who types your domain lands straight on your ChairBack page. Google search results show your page's getchairback.com address — your domain is the door, your ChairBack page is the shop.",
     keywords: [
-      "domain", "custom domain", "own url", "dns", "www", "my website address",
-      "godaddy", "namecheap", "connect domain", "point domain", "bought a domain",
+      // "my website URL", not "address": the word "address" belongs to the
+      // street-address answer (show-up-on-google) since #204 added real ones.
+      "domain", "custom domain", "own url", "dns", "www", "my website url",
+      "godaddy", "namecheap", "squarespace domain", "connect domain",
+      "point domain", "bought a domain", "add domain", "where domain",
+      "a record", "cname", "hook up domain", "link domain",
     ],
+    primaryFor: ["domain", "dns"],
+    category: "brand",
+    action: { label: "Open Shop page", href: "/dashboard/site" },
+  },
+  {
+    id: "show-up-on-google",
+    q: "How do I show up on Google?",
+    a: "Three things, all on your page settings (dashboard → More → Public shop page):\n\n1. Fill in your address — street, city, state, ZIP. That's what tells Google you're a real local business, which is how you appear for searches like \"barber near me.\" It's the single biggest lever.\n2. Keep your page live, with your services, photos, and reviews on it — that's the page Google reads and shows, at your getchairback.com/s/ link.\n3. Own a domain? Connect it in the same place, and people who type it land straight on your page.\n\nGoogle indexes on its own schedule, so a brand-new page can take days to appear — but the address is what does the heavy lifting.",
+    keywords: [
+      "google", "search", "seo", "show up", "found", "findable", "searchable",
+      "rank", "near me", "google maps", "search results", "visibility",
+      "discover", "appear", "address", "add my address", "street address",
+      "my location", "zip",
+    ],
+    primaryFor: ["google", "seo", "address"],
     category: "brand",
     action: { label: "Open Shop page", href: "/dashboard/site" },
   },
@@ -587,7 +606,9 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     id: "shop-name",
     q: "How do I change my shop name?",
     a: "In your Account settings — your shop's name and details live there, next to your own profile.\n\nThe look of your public page — logo, colours, photos — is separate, on the Shop page.",
-    keywords: ["shop name", "rename", "business name", "change name", "shop details", "address"],
+    // "address" deliberately NOT a keyword here: the street address lives on
+    // the Shop page (it feeds Google), and show-up-on-google owns that word.
+    keywords: ["shop name", "rename", "business name", "change name", "shop details"],
     category: "account",
     action: { label: "Open account", href: "/dashboard/account" },
   },

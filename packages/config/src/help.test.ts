@@ -158,6 +158,12 @@ describe("findHelp — questions asked cold", () => {
     expectAnswer("how do i see how much i made last month", "insights");
     expectAnswer("is there a contract", "contract");
     expectAnswer("can i use my own domain", "custom-domain");
+    expectAnswer("how do i connect my domain", "custom-domain");
+    expectAnswer("where do i add my domain", "custom-domain");
+    expectAnswer("i bought a domain on godaddy", "custom-domain");
+    expectAnswer("how do i show up on google", "show-up-on-google");
+    expectAnswer("how do i add my address", "show-up-on-google");
+    expectAnswer("how do people find me on google", "show-up-on-google");
     expectAnswer("how do i get more clients", "more-clients");
     expectAnswer("what happens if i go over my texts", "texts-run-out");
     expectAnswer("can clients tip", "tips");
