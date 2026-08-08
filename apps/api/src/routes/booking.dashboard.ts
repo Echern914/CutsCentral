@@ -86,6 +86,33 @@ const priceOverridesSchema = z
   .record(z.enum(["0", "1", "2", "3", "4", "5", "6"]), z.number().min(0).max(100000))
   .optional();
 
+// Per-DATE price overrides - the holiday knob: {"YYYY-MM-DD": price}. A weekday
+// map cannot express "Christmas Eve" (Dec 24 lands on a different weekday every
+// year), so named dates are their own layer and outrank every other one. Keys
+// are shop-local calendar dates; the regex pins the shape and the refine
+// rejects dates that do not exist (2026-02-30 would otherwise sit in the editor
+// forever, matching nothing). Capped so the blob cannot grow unbounded.
+const dateOverridesSchema = z
+  .record(
+    z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD")
+      .refine((k) => {
+        const [y, m, d] = k.split("-").map(Number) as [number, number, number];
+        const probe = new Date(Date.UTC(y, m - 1, d));
+        return (
+          probe.getUTCFullYear() === y &&
+          probe.getUTCMonth() === m - 1 &&
+          probe.getUTCDate() === d
+        );
+      }, "Not a real date"),
+    z.number().min(0).max(100000),
+  )
+  .refine((m) => Object.keys(m).length <= 120, {
+    message: "At most 120 special dates",
+  })
+  .optional();
+
 // Per-weekday DURATION overrides, same key shape ({weekday: minutes}). Bounds
 // mirror durationMin's 5..600.
 const durationOverridesSchema = z
@@ -185,6 +212,7 @@ const serviceSchema = z
     timeOverrides: timeOverridesSchema,
     price: z.number().min(0).max(100000).nullable().optional(),
     priceOverrides: priceOverridesSchema,
+    dateOverrides: dateOverridesSchema,
     // Calendar color: one of the palette keys, or null to clear. Validated
     // against the known keys so a bad value can't land in the column.
     color: z
@@ -219,6 +247,7 @@ bookingDashboardRouter.get("/services", async (req, res) => {
       ...s,
       price: s.price === null ? null : Number(s.price),
       priceOverrides: s.priceOverrides ?? {},
+      dateOverrides: s.dateOverrides ?? {},
       durationOverrides: s.durationOverrides ?? {},
       hoursWindows: s.hoursWindows ?? {},
       timeOverrides: s.timeOverrides ?? [],
@@ -254,6 +283,7 @@ bookingDashboardRouter.post("/services", async (req, res) => {
       color: d.color ?? null,
       price: d.price ?? null,
       priceOverrides: d.priceOverrides ?? {},
+      dateOverrides: d.dateOverrides ?? {},
       active: d.active ?? true,
       sortOrder: d.sortOrder ?? 0,
       dailyTarget: d.dailyTarget ?? null,
@@ -308,6 +338,7 @@ bookingDashboardRouter.patch("/services/:id", async (req, res) => {
     ...(d.color !== undefined ? { color: d.color } : {}),
     ...(d.price !== undefined ? { price: d.price } : {}),
     ...(d.priceOverrides !== undefined ? { priceOverrides: d.priceOverrides } : {}),
+    ...(d.dateOverrides !== undefined ? { dateOverrides: d.dateOverrides } : {}),
     ...(d.dailyTarget !== undefined
       ? { dailyTarget: d.dailyTarget ?? null }
       : {}),
@@ -1986,6 +2017,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
       timeOverrides: true,
       price: true,
       priceOverrides: true,
+        dateOverrides: true,
       name: true,
     },
   });
@@ -2025,6 +2057,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
       at: startsAt,
       timezone: shop.timezone,
       weekdayOverrides: service.priceOverrides,
+      dateOverrides: service.dateOverrides,
       timeWindows: service.timeOverrides,
     },
   );
@@ -2096,6 +2129,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         timeOverrides: service.timeOverrides,
         basePrice: service.price === null ? null : Number(service.price),
         priceOverrides: service.priceOverrides,
+        dateOverrides: service.dateOverrides,
         timezone: shop.timezone,
         bookingBufferMin: shop.bookingBufferMin,
         // customTime bypasses the per-occurrence availability gate (barber force).

@@ -89,6 +89,7 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
         timeOverrides: true,
         price: true,
         priceOverrides: true,
+        dateOverrides: true,
         // Groups-first layout: which group card the service files under and
         // its saved position within that group.
         serviceGroupId: true,
@@ -434,6 +435,7 @@ async function computeDayBody(
         timeOverrides: true,
         price: true,
         priceOverrides: true,
+        dateOverrides: true,
         serviceGroupId: true,
       },
     }),
@@ -524,6 +526,7 @@ async function computeDayBody(
         at: midDay,
         timezone: shop!.timezone,
         weekdayOverrides: service.priceOverrides,
+      dateOverrides: service.dateOverrides,
         timeWindows: null,
       },
     );
@@ -540,6 +543,7 @@ async function computeDayBody(
             at,
             timezone: shop!.timezone,
             weekdayOverrides: service.priceOverrides,
+      dateOverrides: service.dateOverrides,
             timeWindows: service.timeOverrides,
           },
         );
@@ -676,6 +680,7 @@ bookingPublicRouter.get("/:slug/upgrades", bookingReadLimiter, async (req, res) 
         durationOverrides: true,
         price: true,
         priceOverrides: true,
+        dateOverrides: true,
         timeOverrides: true,
       },
     }),
@@ -703,6 +708,7 @@ bookingPublicRouter.get("/:slug/upgrades", bookingReadLimiter, async (req, res) 
       at: startsAt,
       timezone: shop.timezone,
       weekdayOverrides: s.priceOverrides,
+      dateOverrides: s.dateOverrides,
       timeWindows: s.timeOverrides,
     });
 
@@ -1007,6 +1013,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {
       timeOverrides: true,
       price: true,
       priceOverrides: true,
+        dateOverrides: true,
       name: true,
     },
   });
@@ -1098,6 +1105,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {
         at: startsAt,
         timezone: shop.timezone,
         weekdayOverrides: service.priceOverrides,
+      dateOverrides: service.dateOverrides,
         timeWindows: service.timeOverrides,
       });
   const effectivePrice =
@@ -1677,6 +1685,7 @@ bookingPublicRouter.post(
             timeOverrides: true,
             price: true,
             priceOverrides: true,
+        dateOverrides: true,
           },
         },
         shop: {
@@ -1724,13 +1733,14 @@ bookingPublicRouter.post(
         }) *
           60_000,
     );
-    // The new slot may carry a different weekday/window price - reprice to match.
+    // The new slot may carry a different date/window/weekday price - reprice.
     const effectivePrice = effectivePriceAt(
       appt.service.price === null ? null : Number(appt.service.price),
       {
         at: startsAt,
         timezone: appt.shop.timezone,
         weekdayOverrides: appt.service.priceOverrides,
+        dateOverrides: appt.service.dateOverrides,
         timeWindows: appt.service.timeOverrides,
       },
     );

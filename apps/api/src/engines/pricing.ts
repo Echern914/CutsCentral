@@ -195,15 +195,75 @@ export interface EffectiveAtArgs {
 }
 
 /**
- * The price in effect at an instant: its time-of-day window's price when the
- * shop-local start minute falls in one, else the weekday override for that
- * shop-local date, else the base price, else null (no price set).
+ * Price resolution takes one more layer than duration does: a per-DATE map.
+ * Kept as its own interface rather than an optional field on EffectiveAtArgs so
+ * that adding it made every price call site a COMPILE ERROR until it passed the
+ * blob. An optional field would have failed open - holiday pricing silently
+ * skipped on whichever path nobody remembered - which is the failure mode this
+ * codebase keeps re-learning.
+ */
+export interface EffectivePriceArgs extends EffectiveAtArgs {
+  /** Service.dateOverrides ({"YYYY-MM-DD": price}). Pass null to skip. */
+  dateOverrides: unknown;
+}
+
+/** Shop-local calendar date as the "YYYY-MM-DD" key dateOverrides is keyed by. */
+export function zonedDateKey(at: Date, timezone: string): string {
+  const { year, month0, day } = zonedDateParts(at, timezone);
+  const mm = String(month0 + 1).padStart(2, "0");
+  const dd = String(day).padStart(2, "0");
+  return `${year}-${mm}-${dd}`;
+}
+
+/**
+ * Parse the per-date blob defensively into a clean "YYYY-MM-DD" -> price map.
+ * Mirrors parsePriceOverrides: junk keys and junk values are dropped rather
+ * than throwing, so a hand-edited row can never break pricing. The key must be
+ * a real calendar date - "2026-13-40" is rejected, not silently kept, or it
+ * would sit in the editor forever matching nothing.
+ */
+export function parseDateOverrides(raw: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(k)) continue;
+      const [y, m, d] = k.split("-").map(Number) as [number, number, number];
+      // Round-trip through UTC to reject 2026-02-30 and friends: Date would
+      // roll them into March and the key would never match a real date.
+      const probe = new Date(Date.UTC(y, m - 1, d));
+      if (
+        probe.getUTCFullYear() !== y ||
+        probe.getUTCMonth() !== m - 1 ||
+        probe.getUTCDate() !== d
+      ) {
+        continue;
+      }
+      const price = typeof v === "number" ? v : Number(v);
+      if (Number.isFinite(price) && price >= 0) out[k] = price;
+    }
+  }
+  return out;
+}
+
+/**
+ * The price in effect at an instant, MOST SPECIFIC LAYER FIRST: the named
+ * calendar date, else its time-of-day window's price when the shop-local start
+ * minute falls in one, else the weekday override, else the base price, else
+ * null (no price set).
+ *
+ * A named DATE outranks a time window on purpose. "Christmas Eve is $75" is a
+ * deliberate, dated decision a barber makes a handful of times a year; an
+ * after-9pm rule is a standing default. When the two collide, the thing he set
+ * for that one day is the thing he meant.
  */
 export function effectivePriceAt(
   basePrice: number | null,
-  args: EffectiveAtArgs,
+  args: EffectivePriceArgs,
 ): number | null {
   const { weekday } = zonedDateParts(args.at, args.timezone);
+  const dates = parseDateOverrides(args.dateOverrides);
+  const key = zonedDateKey(args.at, args.timezone);
+  if (Object.prototype.hasOwnProperty.call(dates, key)) return dates[key]!;
   const w = windowAt(
     parseTimeWindows(args.timeWindows),
     zonedMinutesOfDay(args.at, args.timezone),

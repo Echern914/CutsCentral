@@ -121,6 +121,7 @@ export async function createServiceAction(input: {
   timeOverrides?: ServiceTimeWindow[];
   price?: number | null;
   priceOverrides?: Record<string, number>;
+  dateOverrides?: Record<string, number>;
   color?: string | null;
   // Display-only daily slot target for the calendar day gauge. NOT a cap, and
   // only used while the service is ungrouped (a grouped one uses its group's).
@@ -143,6 +144,7 @@ export async function updateServiceAction(
     timeOverrides?: ServiceTimeWindow[];
     price?: number | null;
     priceOverrides?: Record<string, number>;
+    dateOverrides?: Record<string, number>;
     active?: boolean;
     color?: string | null;
     dailyTarget?: number | null;
