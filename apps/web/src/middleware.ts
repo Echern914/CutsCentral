@@ -33,8 +33,40 @@ const ATTRIBUTION_PARAMS = [
 export const ATTRIBUTION_COOKIE = "cb_attn";
 const GATED_PREFIXES = ["/dashboard", "/onboarding", "/admin"];
 
+/**
+ * Hosts that ARE this app. Anything else is a shop's custom domain (attached
+ * to the Vercel project by /api/domains) and gets rewritten to the internal
+ * /from-domain resolver, which 308s to the shop's canonical getchairback.com
+ * URL - the REDIRECT model: Google indexes the ChairBack URL; the barber's
+ * domain is a clean pointer to it.
+ */
+function isPlatformHost(host: string): boolean {
+  const h = host.toLowerCase().replace(/:\d+$/, "");
+  return (
+    h === "getchairback.com" ||
+    h.endsWith(".getchairback.com") || // www + any future subdomain
+    h.endsWith(".vercel.app") || // preview deployments
+    h === "localhost" ||
+    h === "127.0.0.1"
+  );
+}
+
 export function middleware(req: NextRequest) {
   const { pathname, searchParams } = req.nextUrl;
+
+  // Custom-domain traffic never sees the app: hand the host to the resolver
+  // route (which looks the shop up and 308s). Runs BEFORE the auth gate - a
+  // gated path on a foreign host should land on the shop page, not /login.
+  const host = req.headers.get("host") ?? "";
+  if (host && !isPlatformHost(host)) {
+    const url = req.nextUrl.clone();
+    url.pathname = `/from-domain/${host.toLowerCase().replace(/:\d+$/, "")}`;
+    url.search = "";
+    // Carry the original path so /book on their domain can land on booking.
+    url.searchParams.set("p", pathname.slice(0, 200));
+    return NextResponse.rewrite(url);
+  }
+
   const res = gateResponse(req, pathname);
 
   // First-touch capture: only when a source param is present AND no cookie yet.

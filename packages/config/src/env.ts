@@ -48,6 +48,15 @@ const apiSchema = z.object({
   // skipped (fail-open) so you can never lock yourself out by misconfiguring it.
   ADMIN_IP_ALLOWLIST: z.string().optional().default(""),
 
+  // Custom shop domains (barber's own domain 301s to their /s/ page). All three
+  // optional, same pattern as Square/Stripe: while TOKEN or PROJECT_ID is unset
+  // the dashboard shows "email support to connect a domain" and no Vercel call
+  // is ever made. TOKEN = a Vercel API token; PROJECT_ID = the WEB project the
+  // domains attach to; TEAM_ID only if the project lives in a team scope.
+  VERCEL_DOMAINS_TOKEN: z.string().min(1).optional(),
+  VERCEL_DOMAINS_PROJECT_ID: z.string().min(1).optional(),
+  VERCEL_DOMAINS_TEAM_ID: z.string().min(1).optional(),
+
   ACUITY_OAUTH_CLIENT_ID: z.string().min(1),
   ACUITY_OAUTH_CLIENT_SECRET: z.string().min(1),
   ACUITY_OAUTH_REDIRECT_URI: cleanUrl(),

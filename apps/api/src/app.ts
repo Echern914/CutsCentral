@@ -14,6 +14,7 @@ import { passwordResetRouter } from "./routes/passwordReset.js";
 import { emailChangeRouter } from "./routes/emailChange.js";
 import { healthRouter } from "./routes/health.js";
 import { publicPageRouter, shopsRouter } from "./routes/shops.js";
+import { domainsRouter } from "./routes/domains.js";
 import { uploadRouter } from "./routes/upload.js";
 import { acuityWebhookRouter } from "./routes/webhooks.acuity.js";
 import { squareWebhookRouter } from "./routes/webhooks.square.js";
@@ -100,6 +101,9 @@ export function createApp(): Express {
   // Change-login-email: same composition pattern (verify-the-new-inbox flow).
   app.use("/api/auth", emailChangeRouter);
   app.use("/api/shops", shopsRouter);
+  // Custom shop domain lifecycle (owner-facing; the public resolve lives on
+  // /api/page/-/by-domain with the other public page reads).
+  app.use("/api/domains", dashboardLimiter, domainsRouter);
   // Photo upload proxy. Uses a per-route express.raw() parser (image/*), so the
   // global express.json() above leaves its body untouched. Limited per-user.
   app.use("/api", uploadRouter);

@@ -141,6 +141,12 @@ const updateShopSchema = createShopSchema
       .nullish()
       .or(z.literal("")),
     hoursText: z.string().trim().max(400).nullish().or(z.literal("")),
+    // Street address for the public page + LocalBusiness structured data.
+    // Free-text on purpose (no geocoding dependency); "" clears a field.
+    addressStreet: z.string().trim().max(200).nullish().or(z.literal("")),
+    addressCity: z.string().trim().max(120).nullish().or(z.literal("")),
+    addressRegion: z.string().trim().max(60).nullish().or(z.literal("")),
+    addressPostal: z.string().trim().max(20).nullish().or(z.literal("")),
     // Legacy bare-URL gallery (still accepted from old clients). New clients send
     // `gallery` (items with captions); when present it wins, see the PATCH below.
     galleryUrls: z.array(httpUrl(500)).max(GALLERY_MAX),
@@ -361,6 +367,10 @@ shopsRouter.patch("/me", requireUser, requireShop, async (req, res) => {
   if (data.heroImageUrl === "") data.heroImageUrl = null;
   if (data.instagramHandle === "") data.instagramHandle = null;
   if (data.hoursText === "") data.hoursText = null;
+  if (data.addressStreet === "") data.addressStreet = null;
+  if (data.addressCity === "") data.addressCity = null;
+  if (data.addressRegion === "") data.addressRegion = null;
+  if (data.addressPostal === "") data.addressPostal = null;
   // Optional style keys: "" means "clear it" (fall back to the page default).
   if (data.fontKey === "") data.fontKey = null;
   if (data.layoutStyle === "") data.layoutStyle = null;
@@ -425,7 +435,53 @@ shopsRouter.patch("/me", requireUser, requireShop, async (req, res) => {
 
 // Public shop page payload, by slug. No auth - this IS the public mini-site.
 // Mounted with the rewards (public) rate limiter in app.ts.
+// The "/-/" routes are registered BEFORE "/:slug" on purpose: express matches
+// in order, and the "-" first segment can never be a real slug (SLUG_REGEX
+// requires an alphanumeric start), so no shop handle can ever shadow them.
 export const publicPageRouter: Router = Router();
+
+// Resolve a custom domain to its shop slug - the web middleware's redirect
+// lookup (cached there for 5 min). Only shops with a live public page resolve;
+// a disabled page 404s the domain rather than redirecting to a dead page.
+publicPageRouter.get("/-/by-domain/:host", async (req, res) => {
+  const raw = String(req.params.host).toLowerCase().replace(/^www\./, "");
+  // Same shape check the connect route enforces; garbage never hits the DB.
+  if (!/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/.test(raw)) {
+    res.status(400).json({ error: "invalid_host" });
+    return;
+  }
+  const shop = await prisma.shop.findUnique({
+    where: { customDomain: raw },
+    select: { slug: true, publicPageEnabled: true },
+  });
+  if (!shop || !shop.publicPageEnabled || !shop.slug) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.json({ slug: shop.slug });
+});
+
+// Every live public page, for the web sitemap - the piece that makes shop
+// pages DISCOVERABLE (nothing else on the crawlable web links /s/[slug], so
+// without this Google may simply never find a shop). updatedAt gives crawlers
+// a real lastModified signal.
+publicPageRouter.get("/-/sitemap", async (_req, res) => {
+  const shops = await prisma.shop.findMany({
+    where: { publicPageEnabled: true, slug: { not: null } },
+    select: { slug: true, updatedAt: true },
+    orderBy: { createdAt: "asc" },
+    // Far above the shop count for years; revisit pagination past ~40k shops
+    // (the sitemap protocol's own cap is 50k URLs per file).
+    take: 40_000,
+  });
+  res.json({
+    shops: shops.map((s) => ({
+      slug: s.slug,
+      updatedAt: s.updatedAt.toISOString(),
+    })),
+  });
+});
+
 publicPageRouter.get("/:slug", async (req, res) => {
   const slug = String(req.params.slug).toLowerCase();
   const shop = await prisma.shop.findUnique({ where: { slug } });
@@ -504,6 +560,11 @@ publicPageRouter.get("/:slug", async (req, res) => {
     accentColor: shop.accentColor,
     instagramHandle: shop.instagramHandle,
     hoursText: shop.hoursText,
+    // Street address for the page footer + LocalBusiness JSON-LD (local SEO).
+    addressStreet: shop.addressStreet,
+    addressCity: shop.addressCity,
+    addressRegion: shop.addressRegion,
+    addressPostal: shop.addressPostal,
     gallery: readGallery(shop),
     fontKey: shop.fontKey,
     layoutStyle: shop.layoutStyle,
@@ -802,6 +863,10 @@ function serializeShop(shop: {
   heroImageUrl: string | null;
   instagramHandle: string | null;
   hoursText: string | null;
+  addressStreet: string | null;
+  addressCity: string | null;
+  addressRegion: string | null;
+  addressPostal: string | null;
   galleryUrls: string[];
   galleryItems: unknown;
   fontKey: string | null;
@@ -853,6 +918,10 @@ function serializeShop(shop: {
     heroImageUrl: shop.heroImageUrl,
     instagramHandle: shop.instagramHandle,
     hoursText: shop.hoursText,
+    addressStreet: shop.addressStreet,
+    addressCity: shop.addressCity,
+    addressRegion: shop.addressRegion,
+    addressPostal: shop.addressPostal,
     gallery: readGallery(shop),
     fontKey: shop.fontKey,
     layoutStyle: shop.layoutStyle,
