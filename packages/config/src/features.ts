@@ -93,7 +93,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "themes",
     name: "Themes, fonts & branding",
-    synonyms: ["theme", "colors", "fonts", "accent", "logo", "branding", "style"],
+    synonyms: ["theme", "colors", "fonts", "accent", "logo", "branding", "style", "qr code", "logo", "colors", "brand"],
     description: "Make your page and rewards hub look like YOUR shop",
     href: "/dashboard/site",
     category: "brand",
@@ -107,6 +107,52 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     href: "/dashboard/site",
     category: "brand",
     tourStepId: "shop-hero",
+  },
+  {
+    // Shipped in #204 and never indexed, so "domain" - the exact word a barber
+    // would type - returned nothing at all.
+    id: "custom-domain",
+    name: "Your own domain",
+    synonyms: [
+      "domain",
+      "custom domain",
+      "website address",
+      "url",
+      "dns",
+      "godaddy",
+      "namecheap",
+      "www",
+    ],
+    description: "Point a domain you own at your ChairBack page",
+    href: "/dashboard/site",
+    category: "brand",
+  },
+  {
+    // Acuity/Square connection lives inside the Booking tab's ConnectPlatforms
+    // card. None of these words hit anything before.
+    id: "integrations",
+    name: "Acuity & Square sync",
+    synonyms: [
+      "acuity",
+      "square",
+      "sync",
+      "connect",
+      "integration",
+      "import bookings",
+      "existing calendar",
+      "switch over",
+    ],
+    description: "Keep your current booking site and sync it into ChairBack",
+    href: "/dashboard/booking",
+    category: "booking",
+  },
+  {
+    id: "shop-timezone",
+    name: "Time zone",
+    synonyms: ["timezone", "time zone", "clock", "wrong time", "hours are off"],
+    description: "The time zone every booking and reminder is shown in",
+    href: "/dashboard/account",
+    category: "account",
   },
   {
     id: "promotions",
@@ -129,7 +175,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "online-booking",
     name: "Online booking",
-    synonyms: ["book", "booking", "appointments", "scheduling", "calendar", "agenda"],
+    synonyms: ["book", "booking", "appointments", "scheduling", "calendar", "agenda", "buffer", "turnaround", "cleanup time", "minimum notice", "lead time", "days ahead", "how far out", "booking rules", "walk in"],
     description: "Your own booking engine — services, staff, hours, agenda",
     href: "/dashboard/booking",
     category: "booking",
@@ -138,7 +184,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "staff",
     name: "Staff & providers",
-    synonyms: ["barbers", "team", "providers", "employees", "chairs"],
+    synonyms: ["barbers", "team", "providers", "employees", "chairs", "staff hours", "weekly hours", "availability", "time off", "vacation", "day off", "lunch break", "break", "closed", "block off", "blocked time", "working hours"],
     description: "Multiple barbers, each with their own services and hours",
     href: "/dashboard/booking?tab=Staff",
     category: "booking",
@@ -146,7 +192,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "services",
     name: "Services & pricing",
-    synonyms: ["menu", "prices", "haircut", "service list", "duration"],
+    synonyms: ["menu", "prices", "haircut", "service list", "duration", "service group", "group", "add service", "edit service", "photo", "description", "service photo", "holiday", "holiday pricing", "special date", "max per day"],
     description: "Your service menu with durations and prices",
     href: "/dashboard/booking?tab=Services",
     category: "booking",
@@ -155,7 +201,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "day-pricing",
     name: "Day-specific pricing & durations",
-    synonyms: ["saturday price", "weekend pricing", "price overrides", "surge", "day rates"],
+    synonyms: ["saturday price", "weekend pricing", "price overrides", "surge", "day rates", "holiday price", "specific date", "sunday surcharge", "date pricing"],
     description: "Charge (or pace) differently per weekday — shown honestly at booking",
     href: "/dashboard/booking?tab=Services",
     category: "booking",
@@ -215,7 +261,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "pay-ahead",
     name: "Card & Apple Pay at booking",
-    synonyms: ["stripe", "card payments", "apple pay", "pay ahead", "prepay", "deposit"],
+    synonyms: ["stripe", "card payments", "apple pay", "pay ahead", "prepay", "deposit", "deposit", "tax", "receipt", "refund", "cancellation policy", "no show fee"],
     description: "Collect payment when they book — money hits your Stripe account",
     href: "/dashboard/payments",
     category: "money",
@@ -233,7 +279,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "reminders",
     name: "Automatic reminders",
-    synonyms: ["24 hour reminder", "no-show", "notifications", "confirmations"],
+    synonyms: ["24 hour reminder", "no-show", "notifications", "confirmations", "no show", "reminder", "text reminder", "email reminder", "day before"],
     description: "Booking confirmations plus 24h and 2h reminders, hands-off",
     href: "/dashboard/booking?tab=Settings",
     category: "booking",
@@ -287,7 +333,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "clients",
     name: "Client book",
-    synonyms: ["customers", "contacts", "client list", "crm", "export"],
+    synonyms: ["customers", "contacts", "client list", "crm", "export", "csv", "import", "merge", "merge clients", "duplicate client", "opt out", "consent", "unsubscribe", "client notes"],
     description: "Your client list — yours to keep, filter, and export",
     href: "/dashboard/clients",
     category: "data",
@@ -303,7 +349,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "insights",
     name: "Insights & trends",
-    synonyms: ["analytics", "stats", "charts", "revenue", "trends", "reports"],
+    synonyms: ["analytics", "stats", "charts", "revenue", "trends", "reports", "goal", "chair time", "utilization", "how busy", "daily target", "quota", "planner"],
     description: "Visits, revenue, retention, and loyalty trends over time",
     href: "/dashboard/insights",
     category: "data",
@@ -363,7 +409,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "billing",
     name: "Plan & billing",
-    synonyms: ["subscription", "upgrade", "premium", "price", "plan"],
+    synonyms: ["subscription", "upgrade", "premium", "price", "plan", "quota", "texts left", "sms usage", "invoice", "cancel plan", "comped"],
     description: "Your ChairBack plan, texting quota, and add-ons",
     href: "/dashboard/billing",
     category: "money",
