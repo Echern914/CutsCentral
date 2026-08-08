@@ -702,6 +702,30 @@ export function BookingClient({ data }: { data: BookShopData }) {
             )}
           </span>
           <span className="mt-0.5 block text-xs text-muted">{svc.durationMin} min</span>
+          {/* The photo and blurb the barber wrote in the service editor. Both
+              have shipped in this payload since the day-first layout landed and
+              neither has ever been rendered: the only markup that read them sat
+              inside a `{!dayFirst && ...}` branch, and dayFirst is hardcoded
+              true. The editor promises three times over that this is "what the
+              customer sees when they pick this service" - so it now is.
+              whitespace-pre-line preserves the "INCLUDES:" lists barbers type. */}
+          {(svc.imageUrl || svc.description) && (
+            <div className="mt-2 flex items-start gap-3">
+              {svc.imageUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={svc.imageUrl}
+                  alt=""
+                  className="h-14 w-14 shrink-0 rounded-lg object-cover"
+                />
+              )}
+              {svc.description && (
+                <p className="min-w-0 whitespace-pre-line text-xs leading-relaxed text-muted">
+                  {svc.description}
+                </p>
+              )}
+            </div>
+          )}
           <div className="mt-2.5 flex flex-wrap gap-2">
             {chips.map((s) => {
               // Compound key incl. the targeted id (same as the service-first
