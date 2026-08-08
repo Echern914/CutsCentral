@@ -4596,8 +4596,13 @@ function VaryByTimeEditor({
   basePrice: string;
   baseDuration: number;
 }) {
+  // w-full + min-w-0: a <select> is a GRID ITEM here, and a grid item defaults
+  // to min-width:auto - it refuses to shrink below its widest option
+  // ("12:45 PM"). Two of them in `1fr` columns therefore pushed the row wider
+  // than the phone and shoved Remove off the right edge. Same class of bug as
+  // the home page holding itself at 473px on a 390px screen.
   const select =
-    "rounded-lg border border-subtle bg-charcoal-700 py-1.5 px-2 text-sm text-offwhite outline-none focus:border-gold/50";
+    "w-full min-w-0 rounded-lg border border-subtle bg-charcoal-700 py-1.5 px-2 text-sm text-offwhite outline-none focus:border-gold/50";
   function patch(i: number, part: Partial<TimeWindowRow>) {
     onChange(rows.map((r, idx) => (idx === i ? { ...r, ...part } : r)));
   }
@@ -4616,7 +4621,13 @@ function VaryByTimeEditor({
             key={i}
             // Bordered: a row now carries times, days and a toggle, so without a
             // box two windows read as one long row of controls.
-            className="grid grid-cols-2 items-center gap-2 rounded-xl border border-subtle p-2.5 sm:grid-cols-[1fr_1fr_96px_96px_auto]"
+            //
+            // FOUR columns, not five. Remove used to sit in a fifth `auto`
+            // column, which cost it a whole orphan row on a phone (two columns:
+            // times, then price/minutes, then Remove alone in a half-width
+            // cell) and squeezed it off the edge at `sm`. It now lives on the
+            // "Repeat on" line below, where there is always room for it.
+            className="grid grid-cols-2 items-center gap-2 rounded-xl border border-subtle p-2.5 sm:grid-cols-[1fr_1fr_96px_96px]"
           >
             <TimeSelect
               value={r.start}
@@ -4630,7 +4641,7 @@ function VaryByTimeEditor({
               className={select}
               aria-label={`Window ${i + 1} end time`}
             />
-            <div className="relative">
+            <div className="relative min-w-0">
               <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-sm text-muted">
                 $
               </span>
@@ -4645,7 +4656,7 @@ function VaryByTimeEditor({
                 aria-label={`Window ${i + 1} price in dollars`}
               />
             </div>
-            <div className="relative">
+            <div className="relative min-w-0">
               <input
                 type="number"
                 min={5}
@@ -4660,17 +4671,8 @@ function VaryByTimeEditor({
                 min
               </span>
             </div>
-            <button
-              type="button"
-              onClick={() => onChange(rows.filter((_, idx) => idx !== i))}
-              className="justify-self-start text-xs text-danger-soft hover:underline"
-              aria-label={`Remove time window ${i + 1}`}
-            >
-              Remove
-            </button>
-
-            {/* Repeat-days + the open-hours opt-in span the whole row. */}
-            <div className="col-span-2 -mt-0.5 flex flex-col gap-2 sm:col-span-5">
+            {/* Repeat-days, the open-hours opt-in and Remove span the whole row. */}
+            <div className="col-span-2 -mt-0.5 flex flex-col gap-2 sm:col-span-4">
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="text-[11px] text-muted">Repeat on</span>
                 {WEEKDAYS.map((label, day) => {
@@ -4702,6 +4704,18 @@ function VaryByTimeEditor({
                 <span className="text-[11px] text-muted/70">
                   {r.days.length === 0 ? "every day" : ""}
                 </span>
+                {/* ml-auto parks Remove at the right of whatever line it lands
+                    on. The row wraps, so it can never be pushed off-screen the
+                    way a fixed grid column could - on a narrow phone it simply
+                    drops under the day chips. */}
+                <button
+                  type="button"
+                  onClick={() => onChange(rows.filter((_, idx) => idx !== i))}
+                  className="ml-auto rounded-lg border border-subtle px-2.5 py-1 text-[11px] text-danger-soft transition-colors hover:border-danger-soft/50"
+                  aria-label={`Remove time window ${i + 1}`}
+                >
+                  Remove
+                </button>
               </div>
 
               {/* The ONE control that adds bookable time. Everything else here
