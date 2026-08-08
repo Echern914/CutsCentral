@@ -340,10 +340,24 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   },
   {
     id: "receptionist",
+    // This pointed at /dashboard/billing, which made the receptionist
+    // UNREACHABLE inside the iOS app: both FeatureSearch and MoreSheet strip
+    // every billing href for Guideline 3.1.1, so the feature that justifies the
+    // top tier appeared in neither surface. It now has its own page, which
+    // quotes no price and can therefore render natively.
     name: "AI receptionist",
-    synonyms: ["ai", "text booking", "sms assistant", "answering", "missed calls"],
+    synonyms: [
+      "ai",
+      "text booking",
+      "sms assistant",
+      "answering",
+      "missed calls",
+      "auto reply",
+      "robot",
+      "assistant",
+    ],
     description: "An AI that books clients over text when you're behind the chair",
-    href: "/dashboard/billing",
+    href: "/dashboard/receptionist",
     category: "account",
   },
   {
