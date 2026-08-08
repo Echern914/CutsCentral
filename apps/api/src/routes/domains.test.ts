@@ -1,7 +1,7 @@
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
-import { randomToken } from "@chairback/config";
+import { __resetEnvCacheForTests, randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
 import { normalizeDomain } from "./domains.js";
 
@@ -137,6 +137,122 @@ describe("public sitemap feed", () => {
     const after = await request(app).get("/api/page/-/sitemap");
     expect(after.body.shops.some((s: { slug: string }) => s.slug === slug)).toBe(false);
     await prisma.shop.update({ where: { id: shopId }, data: { publicPageEnabled: true } });
+  });
+});
+
+/**
+ * CONFIGURED mode, with the Vercel API mocked at global.fetch. This exercises
+ * OUR conflict logic, not Vercel's response shapes (those stay [VERIFY LIVE]).
+ * The scenario that matters: connecting a domain ANOTHER shop already owns
+ * must never touch Vercel - the original code "cleaned up" by detaching,
+ * which took the other shop's live domain down.
+ *
+ * Runs AFTER the unconfigured describes above (vitest preserves order); env is
+ * restored in afterAll so this file leaves no state behind.
+ */
+describe("owner routes with the Vercel seam SET (mocked fetch)", () => {
+  const realFetch = global.fetch;
+  /** Every request the mock saw: "METHOD host/path". */
+  const vercelCalls: string[] = [];
+  let cookieB = "";
+  let shopBId = "";
+  const emailB = `dom-b-${suffix}@test.local`;
+  const domainB = `second-${suffix}.example.com`;
+
+  beforeAll(async () => {
+    process.env.VERCEL_DOMAINS_TOKEN = "test-token";
+    process.env.VERCEL_DOMAINS_PROJECT_ID = "prj_test";
+    __resetEnvCacheForTests();
+    // Typed via Parameters<typeof fetch> rather than RequestInfo: the DOM lib
+    // isn't loaded here, and Railway's build tsc compiles test files too.
+    global.fetch = vi.fn(async (...[input, init]: Parameters<typeof fetch>) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      // Attach carries the domain in the BODY ({name}), not the URL — record
+      // both so assertions can match either way.
+      vercelCalls.push(`${method} ${url} ${typeof init?.body === "string" ? init.body : ""}`);
+      // Attach: pretend every domain is new to the project (created).
+      if (method === "POST" && url.includes("/domains") && !url.includes("/verify")) {
+        return new Response(JSON.stringify({ name: "x", verified: true }), { status: 200 });
+      }
+      if (method === "DELETE") return new Response("{}", { status: 200 });
+      // Status reads: verified + configured.
+      if (url.includes("/config")) {
+        return new Response(JSON.stringify({ misconfigured: false }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ verified: true }), { status: 200 });
+    }) as typeof fetch;
+
+    // A second shop to stage the conflict.
+    const signup = await request(app)
+      .post("/api/auth/signup")
+      .send({ email: emailB, password, name: "Domain Tester B", smsAttested: true });
+    cookieB = (signup.headers["set-cookie"] as unknown as string[])[0]!;
+    const shopB = await request(app)
+      .post("/api/shops")
+      .set("Cookie", cookieB)
+      .send({ name: `Domain Cuts B ${suffix}`, smsAttested: true });
+    shopBId = shopB.body.id;
+  });
+
+  afterAll(async () => {
+    global.fetch = realFetch;
+    delete process.env.VERCEL_DOMAINS_TOKEN;
+    delete process.env.VERCEL_DOMAINS_PROJECT_ID;
+    __resetEnvCacheForTests();
+    const user = await prisma.user.findUnique({ where: { email: emailB } });
+    if (user) {
+      await prisma.shop.deleteMany({ where: { ownerId: user.id } });
+      await prisma.user.delete({ where: { id: user.id } });
+    }
+  });
+
+  it("connects: attaches apex + www, stores, reports status", async () => {
+    const res = await request(app)
+      .post("/api/domains")
+      .set("Cookie", cookieB)
+      .send({ domain: `HTTPS://www.${domainB}/` }); // normalization exercised too
+    expect(res.status).toBe(201);
+    expect(res.body.domain).toBe(domainB);
+    expect(vercelCalls.some((c) => c.startsWith("POST") && c.includes(domainB))).toBe(true);
+    expect(vercelCalls.some((c) => c.startsWith("POST") && c.includes(`www.${domainB}`))).toBe(true);
+    const row = await prisma.shop.findUnique({ where: { id: shopBId } });
+    expect(row?.customDomain).toBe(domainB);
+  });
+
+  it("REFUSES a domain another shop owns - and never calls Vercel for it", async () => {
+    // `domain` (from the resolver describe) is stored on shop A's row.
+    const before = vercelCalls.length;
+    const res = await request(app)
+      .post("/api/domains")
+      .set("Cookie", cookieB)
+      .send({ domain });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("domain_taken");
+    // THE regression: no attach, and above all NO DETACH of shop A's domain.
+    expect(vercelCalls.slice(before)).toEqual([]);
+    // Shop A's row is untouched.
+    const rowA = await prisma.shop.findUnique({ where: { id: shopId } });
+    expect(rowA?.customDomain).toBe(domain);
+    // Shop B keeps its own domain.
+    const rowB = await prisma.shop.findUnique({ where: { id: shopBId } });
+    expect(rowB?.customDomain).toBe(domainB);
+  });
+
+  it("verify stamps verifiedAt when Vercel reports green", async () => {
+    const res = await request(app).post("/api/domains/verify").set("Cookie", cookieB);
+    expect(res.status).toBe(200);
+    expect(res.body.verifiedAt).not.toBeNull();
+  });
+
+  it("disconnect detaches only the shop's own domain", async () => {
+    const before = vercelCalls.length;
+    const res = await request(app).delete("/api/domains").set("Cookie", cookieB);
+    expect(res.status).toBe(200);
+    const deletes = vercelCalls.slice(before).filter((c) => c.startsWith("DELETE"));
+    expect(deletes.some((c) => c.includes(domainB))).toBe(true);
+    // Shop A's domain was never in any DELETE this whole suite.
+    expect(vercelCalls.filter((c) => c.startsWith("DELETE") && c.includes(domain))).toEqual([]);
   });
 });
 

@@ -125,6 +125,18 @@ domainsRouter.post("/", requireUser, requireShop, async (req, res) => {
   const shop = req.shop!;
   const previous = shop.customDomain;
 
+  // Refuse a domain another shop already owns BEFORE any Vercel call. The
+  // unique index below is the real guarantee (this read races); this check
+  // exists so the common case never touches the other shop's live attachment.
+  const holder = await prisma.shop.findUnique({
+    where: { customDomain: domain },
+    select: { id: true },
+  });
+  if (holder && holder.id !== shop.id) {
+    res.status(409).json({ error: "domain_taken" });
+    return;
+  }
+
   // Attach BEFORE persisting: if Vercel hard-rejects, nothing is stored and
   // the barber sees the error now rather than a domain stuck "pending" forever.
   const attached = await attachDomain(domain);
@@ -140,13 +152,13 @@ domainsRouter.post("/", requireUser, requireShop, async (req, res) => {
       data: { customDomain: domain, customDomainVerifiedAt: null },
     });
   } catch (err) {
-    // Unique violation = another shop owns this domain. Detach what we just
-    // attached so the project doesn't accumulate orphans.
+    // Unique violation = another shop won the race for this domain (the
+    // pre-check above already handled the common sequential case). Detach
+    // NOTHING here: this used to "clean up" by detaching, which took down the
+    // OTHER shop's live domain - the attachment on the project is either the
+    // winner's (working, must not be touched) or, at worst, an orphan that
+    // serves nothing and costs nothing. Safety beats tidiness.
     if ((err as { code?: string }).code === "P2002") {
-      if (domain !== previous) {
-        await detachDomain(domain);
-        await detachDomain(`www.${domain}`);
-      }
       res.status(409).json({ error: "domain_taken" });
       return;
     }
