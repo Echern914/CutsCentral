@@ -24,6 +24,10 @@ export interface ShopPageData {
   accentColor: string | null;
   instagramHandle: string | null;
   hoursText: string | null;
+  addressStreet: string | null;
+  addressCity: string | null;
+  addressRegion: string | null;
+  addressPostal: string | null;
   gallery: { url: string; caption?: string }[];
   fontKey: string | null;
   layoutStyle: string | null;
@@ -100,6 +104,60 @@ export async function generateMetadata({
   };
 }
 
+/**
+ * schema.org business type by vertical - the most specific type Google
+ * recognizes for each. Specificity matters: "BarberShop" is eligible for
+ * treatments a generic LocalBusiness is not.
+ */
+const SCHEMA_TYPE_BY_INDUSTRY: Record<string, string> = {
+  barber: "BarberShop",
+  salon: "HairSalon",
+  nails: "NailSalon",
+  lashes: "BeautySalon",
+  spa: "DaySpa",
+  tattoo: "TattooParlor",
+  other: "LocalBusiness",
+};
+
+/**
+ * LocalBusiness structured data - the piece that makes the shop's ChairBack
+ * page read as a BUSINESS to Google (name + address + rating rich results,
+ * local-pack eligibility), not just a web page. Address is included only when
+ * street + city are both set; aggregateRating only with 1+ approved reviews
+ * (Google flags a rating block with zero reviews as spammy markup).
+ */
+function shopJsonLd(data: ShopPageData): Record<string, unknown> {
+  const ld: Record<string, unknown> = {
+    "@context": "https://schema.org",
+    "@type": SCHEMA_TYPE_BY_INDUSTRY[data.industry] ?? "LocalBusiness",
+    name: data.name,
+    url: `https://getchairback.com/s/${encodeURIComponent(data.slug)}`,
+    ...(data.bio ? { description: data.bio } : {}),
+    ...(data.logoUrl ? { image: data.logoUrl } : {}),
+    ...(data.receptionistNumber ? { telephone: data.receptionistNumber } : {}),
+  };
+  if (data.addressStreet && data.addressCity) {
+    ld.address = {
+      "@type": "PostalAddress",
+      streetAddress: data.addressStreet,
+      addressLocality: data.addressCity,
+      ...(data.addressRegion ? { addressRegion: data.addressRegion } : {}),
+      ...(data.addressPostal ? { postalCode: data.addressPostal } : {}),
+      addressCountry: "US",
+    };
+  }
+  if (data.reviewSummary.count > 0 && data.reviewSummary.avgRating !== null) {
+    ld.aggregateRating = {
+      "@type": "AggregateRating",
+      ratingValue: Number(data.reviewSummary.avgRating.toFixed(2)),
+      reviewCount: data.reviewSummary.count,
+      bestRating: 5,
+      worstRating: 1,
+    };
+  }
+  return ld;
+}
+
 export default async function PublicShopPage({
   params,
 }: {
@@ -107,5 +165,18 @@ export default async function PublicShopPage({
 }) {
   const data = await getData(params.slug);
   if (!data) notFound();
-  return <ShopPageClient data={data} />;
+  return (
+    <>
+      {/* JSON.stringify output is safe inside a script tag except for a
+          literal "</script>" in a string field - the < escape closes that
+          hole. Standard Next.js JSON-LD pattern. */}
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify(shopJsonLd(data)).replace(/</g, "\\u003c"),
+        }}
+      />
+      <ShopPageClient data={data} />
+    </>
+  );
 }

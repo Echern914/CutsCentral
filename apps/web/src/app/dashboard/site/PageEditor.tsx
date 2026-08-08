@@ -85,6 +85,10 @@ export function PageEditor({
   const [heroImageUrl, setHeroImageUrl] = useState(settings.heroImageUrl ?? "");
   const [instagramHandle, setInstagramHandle] = useState(settings.instagramHandle ?? "");
   const [hoursText, setHoursText] = useState(settings.hoursText ?? "");
+  const [addressStreet, setAddressStreet] = useState(settings.addressStreet ?? "");
+  const [addressCity, setAddressCity] = useState(settings.addressCity ?? "");
+  const [addressRegion, setAddressRegion] = useState(settings.addressRegion ?? "");
+  const [addressPostal, setAddressPostal] = useState(settings.addressPostal ?? "");
   const [gallery, setGallery] = useState(settings.gallery ?? []);
   const [fontKey, setFontKey] = useState<PageFontKey>(
     (settings.fontKey as PageFontKey) in PAGE_FONTS ? (settings.fontKey as PageFontKey) : DEFAULT_PAGE_FONT,
@@ -153,6 +157,10 @@ export function PageEditor({
     heroImageUrl: heroImageUrl.trim(),
     instagramHandle: instagramHandle.trim(),
     hoursText: hoursText.trim(),
+    addressStreet: addressStreet.trim(),
+    addressCity: addressCity.trim(),
+    addressRegion: addressRegion.trim(),
+    addressPostal: addressPostal.trim(),
     gallery: gallery.map((g) => ({
       url: g.url,
       ...(g.caption?.trim() ? { caption: g.caption.trim() } : {}),
@@ -192,6 +200,10 @@ export function PageEditor({
       accentColor: validHex ? accentTrimmed : null,
       instagramHandle: instagramHandle.trim().replace(/^@/, "") || null,
       hoursText: hoursText.trim() || null,
+      addressStreet: addressStreet.trim() || null,
+      addressCity: addressCity.trim() || null,
+      addressRegion: addressRegion.trim() || null,
+      addressPostal: addressPostal.trim() || null,
       gallery,
       fontKey,
       layoutStyle,
@@ -226,6 +238,10 @@ export function PageEditor({
       validHex,
       instagramHandle,
       hoursText,
+      addressStreet,
+      addressCity,
+      addressRegion,
+      addressPostal,
       gallery,
       fontKey,
       layoutStyle,
@@ -528,6 +544,54 @@ export function PageEditor({
                   {fieldErrors.hoursText}
                 </FormError>
               </label>
+            </div>
+            {/* Street address: shown on the page and emitted as LocalBusiness
+                structured data - it's what makes the shop findable for
+                "barber near me" searches. All optional. */}
+            <div>
+              <span className={labelCls}>Address (helps you show up on Google)</span>
+              <div className="mt-1 grid gap-3 sm:grid-cols-2">
+                <label className={labelCls}>
+                  <span className="sr-only">Street address</span>
+                  <input
+                    value={addressStreet}
+                    onChange={(e) => setAddressStreet(e.target.value)}
+                    placeholder="Street — 123 Main St"
+                    maxLength={200}
+                    className={field}
+                  />
+                </label>
+                <label className={labelCls}>
+                  <span className="sr-only">City</span>
+                  <input
+                    value={addressCity}
+                    onChange={(e) => setAddressCity(e.target.value)}
+                    placeholder="City — Wilmington"
+                    maxLength={120}
+                    className={field}
+                  />
+                </label>
+                <label className={labelCls}>
+                  <span className="sr-only">State</span>
+                  <input
+                    value={addressRegion}
+                    onChange={(e) => setAddressRegion(e.target.value)}
+                    placeholder="State — DE"
+                    maxLength={60}
+                    className={field}
+                  />
+                </label>
+                <label className={labelCls}>
+                  <span className="sr-only">ZIP code</span>
+                  <input
+                    value={addressPostal}
+                    onChange={(e) => setAddressPostal(e.target.value)}
+                    placeholder="ZIP — 19801"
+                    maxLength={20}
+                    className={field}
+                  />
+                </label>
+              </div>
             </div>
           </div>
         </Card>

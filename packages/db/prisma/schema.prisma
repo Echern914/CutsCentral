@@ -246,6 +246,22 @@ model Shop {
   heroImageUrl      String? // wide banner image
   instagramHandle   String? // without the @
   hoursText         String? // freeform hours ("Mon-Fri 9-6 ...")
+  // Custom domain (REDIRECT model - the deliberate SEO choice): the barber's
+  // own domain 301s to getchairback.com/s/[slug], so Google indexes and shows
+  // the ChairBack URL and every shop strengthens the platform domain. Stored as
+  // the bare apex host ("drickcuttinup.com"), lowercase, no scheme/www - the
+  // www variant is attached alongside on Vercel and normalized away on resolve.
+  // verifiedAt = Vercel confirmed DNS points at us (status display; resolution
+  // itself only requires the row to exist).
+  customDomain           String?   @unique
+  customDomainVerifiedAt DateTime?
+  // Street address, shown on the public page and emitted as LocalBusiness
+  // structured data - the real local-SEO lever ("barber near me"). All
+  // optional; JSON-LD includes the address only when street + city are set.
+  addressStreet String?
+  addressCity   String?
+  addressRegion String? // state/province abbreviation ("NY")
+  addressPostal String?
   galleryUrls       String[] @default([]) // legacy: bare photo URLs (superseded by galleryItems)
   // Gallery photos with optional per-photo captions: [{ url, caption? }, ...].
   // Migrated from galleryUrls; galleryUrls is kept for one release as a safety net.

@@ -13,6 +13,10 @@ export interface PageSettingsInput {
   heroImageUrl: string;
   instagramHandle: string;
   hoursText: string;
+  addressStreet: string;
+  addressCity: string;
+  addressRegion: string;
+  addressPostal: string;
   gallery: { url: string; caption?: string }[];
   fontKey: string;
   layoutStyle: string;
@@ -49,6 +53,10 @@ const PAGE_FIELDS = [
   "heroImageUrl",
   "instagramHandle",
   "hoursText",
+  "addressStreet",
+  "addressCity",
+  "addressRegion",
+  "addressPostal",
   "gallery",
   "fontKey",
   "layoutStyle",

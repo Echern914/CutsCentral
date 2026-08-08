@@ -575,9 +575,13 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "custom-domain",
     q: "Can I use my own domain?",
-    a: "Not yet — your page lives at a ChairBack address today, and that's the link to share.\n\nIf a custom domain matters to your shop, email support@getchairback.com and say so. That's genuinely how the next thing gets picked.",
-    keywords: ["domain", "custom domain", "own url", "dns", "www", "my website address", "godaddy"],
+    a: "Yes. Connect a domain you own from your Shop page settings and anyone who types it — or clicks it anywhere — lands straight on your ChairBack page.\n\nWe show you the two records to add where you bought the domain (GoDaddy, Namecheap, and so on); they usually take effect in minutes. Google search results show your page's getchairback.com address — your domain is the door, your ChairBack page is the shop.",
+    keywords: [
+      "domain", "custom domain", "own url", "dns", "www", "my website address",
+      "godaddy", "namecheap", "connect domain", "point domain", "bought a domain",
+    ],
     category: "brand",
+    action: { label: "Open Shop page", href: "/dashboard/site" },
   },
   {
     id: "shop-name",
