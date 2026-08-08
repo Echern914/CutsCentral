@@ -22,6 +22,34 @@ import { useEffect, useRef, useState } from "react";
 const ARM_AT_PX = 80; // pull distance that triggers the reload
 const MAX_PULL_PX = 130; // indicator stops following past this (resistance)
 
+/**
+ * Did this touch begin inside something that scrolls (or floats) on its own?
+ *
+ * `window.scrollY` only describes the DOCUMENT. A modal sheet is
+ * `fixed inset-0` with its own `max-h-[90dvh] overflow-y-auto` body, so the
+ * document never scrolls while you drag inside it - scrollY sits at 0 and the
+ * pull arms on every downward swipe. The barber scrolling the hours editor got
+ * a full `location.reload()` instead, which also threw away his unsaved week.
+ *
+ * So: walk up from the touch target and refuse to arm if any ancestor either
+ * scrolls itself or is fixed-position (an overlay - the page behind it is not
+ * what the finger is on). Deliberately structural rather than a list of known
+ * components, so a sheet added later is covered without touching this file.
+ */
+function insideOwnScroller(target: EventTarget | null): boolean {
+  let el: Element | null = target instanceof Element ? target : null;
+  while (el && el !== document.body && el !== document.documentElement) {
+    const style = window.getComputedStyle(el);
+    if (style.position === "fixed") return true;
+    const oy = style.overflowY;
+    if ((oy === "auto" || oy === "scroll") && el.scrollHeight > el.clientHeight + 1) {
+      return true;
+    }
+    el = el.parentElement;
+  }
+  return false;
+}
+
 export function PullToRefresh() {
   const [pull, setPull] = useState(0); // resisted px the indicator shows
   const [refreshing, setRefreshing] = useState(false);
@@ -37,6 +65,10 @@ export function PullToRefresh() {
       if (refreshingRef.current) return;
       // Only arm at the very top of the page - elsewhere it's a normal scroll.
       if (window.scrollY > 0) return;
+      // ...and never when the finger is on a sheet, modal or any other element
+      // with its own scrollbar: scrollY is 0 the whole time it is open, so
+      // without this every drag inside one reloads the page.
+      if (insideOwnScroller(e.target)) return;
       startY.current = e.touches[0]?.clientY ?? null;
       active.current = false;
     };

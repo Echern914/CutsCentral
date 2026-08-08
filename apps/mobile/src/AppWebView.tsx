@@ -42,14 +42,35 @@ const READY_MESSAGE = "cb:ready";
 const LOCK_VIEWPORT = `
 (function () {
   var content = 'width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover';
-  var meta = document.querySelector('meta[name="viewport"]');
-  if (!meta) {
-    meta = document.createElement('meta');
-    meta.name = 'viewport';
-    document.head.appendChild(meta);
+  // documentElement ALWAYS exists at document-start; document.head usually does
+  // NOT. This used to read the meta, appendChild to a null head, and throw -
+  // taking the text-size lock on the next line down with it, which let iOS
+  // Dynamic Type inflate every label ("the app is very zoomed in"). So the text
+  // lock now runs first, on its own, and cannot be starved by the meta work.
+  try {
+    document.documentElement.style.webkitTextSizeAdjust = '100%';
+  } catch (e) {}
+  function apply() {
+    try {
+      var head = document.head || document.documentElement;
+      if (!head) return;
+      var metas = document.querySelectorAll('meta[name="viewport"]');
+      if (!metas.length) {
+        var m = document.createElement('meta');
+        m.name = 'viewport';
+        m.setAttribute('content', content);
+        head.appendChild(m);
+        return;
+      }
+      // Rewrite EVERY viewport meta rather than appending another. The page
+      // ships its own (Next exports one) and on iOS the LAST tag in the
+      // document wins, so an appended lock would simply lose to it.
+      for (var i = 0; i < metas.length; i++) metas[i].setAttribute('content', content);
+    } catch (e) {}
   }
-  meta.setAttribute('content', content);
-  document.documentElement.style.webkitTextSizeAdjust = '100%';
+  apply();
+  // Re-apply once the page's own <meta> has actually been parsed.
+  document.addEventListener('DOMContentLoaded', apply);
 })();
 true;
 `;
