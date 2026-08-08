@@ -37,6 +37,10 @@ export function BlockOffForm({
   );
   const [fromTime, setFromTime] = useState(pad(defaultFromHour) + ":00");
   const [toTime, setToTime] = useState(pad(Math.min(23, defaultFromHour + 1)) + ":00");
+  // Whole-day switch: testers blocking a vacation were hand-typing 00:00-23:00
+  // per day, which leaves 23:00-midnight open — a real slot for late-hours
+  // shops. All day = local midnight to next-midnight, DST-exact.
+  const [allDay, setAllDay] = useState(false);
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -49,8 +53,14 @@ export function BlockOffForm({
     // tz - a device-local `new Date(...)` would block the wrong hours whenever
     // the barber's device is in a different timezone than the shop.
     const [y, m, d] = dayKey.split("-").map(Number);
-    const startsAt = zonedWallTimeToUtc(y!, m! - 1, d!, minutesOf(fromTime), timezone);
-    const endsAt = zonedWallTimeToUtc(y!, m! - 1, d!, minutesOf(toTime), timezone);
+    const startsAt = allDay
+      ? zonedWallTimeToUtc(y!, m! - 1, d!, 0, timezone)
+      : zonedWallTimeToUtc(y!, m! - 1, d!, minutesOf(fromTime), timezone);
+    const endsAt = allDay
+      ? // Minute 1440 of the same date = 00:00 of the NEXT local day; the
+        // day+1 form keeps DST right (a 23h/25h day blocks exactly that day).
+        zonedWallTimeToUtc(y!, m! - 1, d! + 1, 0, timezone)
+      : zonedWallTimeToUtc(y!, m! - 1, d!, minutesOf(toTime), timezone);
     if (!(endsAt.getTime() > startsAt.getTime())) {
       return setError("End time must be after the start time.");
     }
@@ -101,23 +111,42 @@ export function BlockOffForm({
         )}
 
         <div>
-          <p className={label}>Time</p>
-          <div className="mt-1.5 flex items-center gap-3">
-            <input
-              type="time"
-              className={input}
-              value={fromTime}
-              onChange={(e) => setFromTime(e.target.value)}
-            />
-            <span className="text-sm text-muted">to</span>
-            <input
-              type="time"
-              className={input}
-              value={toTime}
-              onChange={(e) => setToTime(e.target.value)}
-            />
+          <div className="flex items-center justify-between">
+            <p className={label}>Time</p>
+            <button
+              type="button"
+              onClick={() => setAllDay((v) => !v)}
+              aria-pressed={allDay}
+              className={cn(
+                "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                allDay
+                  ? "border-gold/50 bg-gold/10 text-gold"
+                  : "border-subtle text-muted hover:text-offwhite",
+              )}
+            >
+              All day
+            </button>
           </div>
-          <p className="mt-1.5 text-[11px] text-muted">{dayKey}</p>
+          {!allDay && (
+            <div className="mt-1.5 flex items-center gap-3">
+              <input
+                type="time"
+                className={input}
+                value={fromTime}
+                onChange={(e) => setFromTime(e.target.value)}
+              />
+              <span className="text-sm text-muted">to</span>
+              <input
+                type="time"
+                className={input}
+                value={toTime}
+                onChange={(e) => setToTime(e.target.value)}
+              />
+            </div>
+          )}
+          <p className="mt-1.5 text-[11px] text-muted">
+            {allDay ? `All of ${dayKey} — nothing bookable` : dayKey}
+          </p>
         </div>
 
         <div>

@@ -4,6 +4,11 @@ import { apiEnv, randomToken, zonedWallTimeToUtc } from "@chairback/config";
 import { prisma, Prisma } from "@chairback/db";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
+import {
+  blockedRangesByStaff,
+  dropBlockedTargetedSlots,
+  staffSpanBlocked,
+} from "../engines/blockedTime.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import { resolveAddOns } from "../engines/addOns.js";
 import {
@@ -52,6 +57,33 @@ const validDate = z.coerce.date().refine((dt) => !Number.isNaN(dt.getTime()), {
   message: "Invalid date.",
 });
 
+/**
+ * Drop targeted slots that fall on blocked time (one-off exception, recurring
+ * break, or Acuity-synced block) for their own staff. Every public surface
+ * that reads TargetedSlot rows goes through here so none can drift: the flat
+ * payload, the /day chips, and the open-days sweep. The covering time range is
+ * computed from the rows themselves, so callers can't under-fetch blocks.
+ */
+async function filterBlockedTargeted<
+  T extends { staffId: string; startsAt: Date; durationMin: number },
+>(shopId: string, timezone: string, slots: T[]): Promise<T[]> {
+  if (slots.length === 0) return slots;
+  let fromMs = Number.POSITIVE_INFINITY;
+  let toMs = Number.NEGATIVE_INFINITY;
+  for (const t of slots) {
+    fromMs = Math.min(fromMs, t.startsAt.getTime());
+    toMs = Math.max(toMs, t.startsAt.getTime() + t.durationMin * 60_000);
+  }
+  const blocked = await blockedRangesByStaff({
+    shopId,
+    staffIds: slots.map((t) => t.staffId),
+    fromMs,
+    toMs,
+    timezone,
+  });
+  return dropBlockedTargetedSlots(slots, blocked);
+}
+
 /** Resolve a live, native-booking shop by slug, or null. */
 async function resolveNativeShop(slugRaw: string | undefined) {
   const slug = String(slugRaw).toLowerCase();
@@ -69,7 +101,7 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const [staff, services, links, addOns, targetedSlots, groups, availRules] = await Promise.all([
+  const [staff, services, links, addOns, rawTargetedSlots, groups, availRules] = await Promise.all([
     prisma.staff.findMany({
       where: { shopId: shop.id, active: true },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
@@ -145,6 +177,12 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
       availRules.filter((r) => activeStaffIds.has(r.staffId)).map((r) => r.weekday),
     ),
   ];
+  // BLOCKED TIME WINS over published specials: drop any targeted slot whose
+  // span the barber has since blocked off (one-off, recurring, or synced from
+  // Acuity). The grid subtracts these inside the engine; specials are appended
+  // from their own table, so they need the same subtraction here or a weekly
+  // special keeps selling chips straight through a blocked vacation week.
+  const targetedSlots = await filterBlockedTargeted(shop.id, shop.timezone, rawTargetedSlots);
   res.json({
     shop: {
       name: shop.name,
@@ -419,7 +457,7 @@ async function computeDayBody(
   now: Date,
 ): Promise<unknown> {
   const dayCacheKey = `${shop.id}|${date}`;
-  const [services, links, groups, targeted] = await Promise.all([
+  const [services, links, groups, rawTargeted] = await Promise.all([
     prisma.service.findMany({
       where: { shopId: shop.id, active: true },
       // groupSortOrder first so each bundle's members come out in saved order.
@@ -474,6 +512,10 @@ async function computeDayBody(
       },
     }),
   ]);
+
+  // Blocked time wins: a special chip must not render on a span the barber has
+  // blocked off (the grid slots below already honor blocks inside the engine).
+  const targeted = await filterBlockedTargeted(shop.id, shop.timezone, rawTargeted);
 
   // Per service: union the open slots across every staff who offers it (same
   // merge the client does for the per-service calendar, done server-side here
@@ -858,7 +900,7 @@ async function computeOpenDays(shop: {
   const now = new Date();
   const scanDays = Math.min(shop.bookingMaxDays, OPEN_DAYS_SCAN_CAP);
   const toDate = new Date(now.getTime() + scanDays * 24 * 60 * 60 * 1000);
-  const [services, links, targeted] = await Promise.all([
+  const [services, links, rawTargeted] = await Promise.all([
     prisma.service.findMany({
       where: { shopId: shop.id, active: true },
       select: { id: true },
@@ -876,9 +918,13 @@ async function computeOpenDays(shop: {
         bookedAppointmentId: null,
         startsAt: { gt: now, lt: toDate },
       },
-      select: { startsAt: true, serviceId: true, staffId: true },
+      select: { startsAt: true, serviceId: true, staffId: true, durationMin: true },
     }),
   ]);
+  // Blocked time wins: a special on a blocked span must not mark its day open
+  // in the date strip (that was the vacation-week leak: the day rendered
+  // pickable, then sold the special).
+  const targeted = await filterBlockedTargeted(shop.id, shop.timezone, rawTargeted);
   const staffByService = new Map<string, string[]>();
   for (const l of links) {
     staffByService.set(l.serviceId, [
@@ -1067,6 +1113,24 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {
       return;
     }
     if (!slot.active || slot.bookedAppointmentId !== null || startsAt <= now) {
+      res.status(409).json({ error: "slot_taken" });
+      return;
+    }
+    // BLOCKED TIME WINS. A targeted slot deliberately bypasses hours and the
+    // lead/max window (it is explicit barber inventory) — but a block is the
+    // barber saying "I'm not there", and it beats his own standing special.
+    // Without this, a crafted POST (or a chip served just before the block
+    // landed) books straight into a blocked-off vacation day. 409 as
+    // slot_taken: to the client it IS "no longer available".
+    if (
+      await staffSpanBlocked({
+        shopId: shop.id,
+        staffId: slot.staffId,
+        startsAt: slot.startsAt,
+        endsAt: new Date(slot.startsAt.getTime() + slot.durationMin * 60_000),
+        timezone: shop.timezone,
+      })
+    ) {
       res.status(409).json({ error: "slot_taken" });
       return;
     }

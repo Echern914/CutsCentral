@@ -382,6 +382,33 @@ export function buildAppointmentReminderBody(params: {
 }
 
 /**
+ * Reminder for a SYNCED booking (Acuity / Square), the twin of
+ * buildAppointmentReminderBody with one deliberate difference: no manage link.
+ *
+ * A synced visit has no ChairBack manage token - the booking lives in the
+ * barber's own calendar, and /book/manage/<token> would 404. Pointing a client
+ * at a dead link is worse than not offering one, so the copy tells them to
+ * reply to the shop instead, which lands in the inbox the barber already reads.
+ */
+export function buildSyncedVisitReminderBody(params: {
+  firstName: string | null;
+  shopName: string;
+  serviceName: string | null;
+  startsAt: Date;
+  timezone: string;
+}): string {
+  const when = formatApptTime(params.startsAt, params.timezone);
+  const who = params.firstName ?? "there";
+  // serviceName is nullable on Visit (some syncs carry no service label), so
+  // the sentence has to read correctly without it.
+  const what = params.serviceName ? `your ${params.serviceName}` : "your appointment";
+  const body =
+    `Reminder, ${who}: ${what} at ${params.shopName} is ${when}. ` +
+    `See you then! Need to change it? Just reply.`;
+  return withStopNotice(body);
+}
+
+/**
  * Transactional email for native bookings. Distinct from the SMS builders: email
  * carries NO STOP notice (that's a TCPA/SMS thing) and returns subject + a plain
  * text part + an HTML part. The HTML is a single self-contained inline-styled
@@ -402,11 +429,17 @@ function appointmentEmailHtml(params: {
   serviceName: string;
   when: string;
   staffName?: string | null;
-  manageUrl: string;
+  /** Omitted for SYNCED bookings: they have no ChairBack manage page, and a
+   *  "Manage appointment" button leading to a 404 is worse than no button. */
+  manageUrl?: string | null;
 }): string {
   const withWhom = params.staffName
     ? `<div style="color:#71717a;font-size:14px;margin-top:2px">with ${escapeHtml(params.staffName)}</div>`
     : "";
+  const footer = params.manageUrl
+    ? `<a href="${escapeAttr(params.manageUrl)}" style="display:inline-block;background:#D4AF37;color:#0f0f0f;font-size:14px;font-weight:700;text-decoration:none;padding:11px 20px;border-radius:10px">Manage appointment</a>
+      <p style="color:#71717a;font-size:12px;line-height:1.5;margin:16px 0 0">Need to cancel or reschedule? Use the button above, or reply to this email.</p>`
+    : `<p style="color:#71717a;font-size:12px;line-height:1.5;margin:0">Need to cancel or reschedule? Just reply to this email.</p>`;
   return `<!-- appointment email -->
 <div style="background:#0f0f0f;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
   <div style="max-width:480px;margin:0 auto;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:16px;overflow:hidden">
@@ -421,8 +454,7 @@ function appointmentEmailHtml(params: {
       <div style="color:#D4AF37;font-size:15px;font-weight:600;margin-top:8px">${escapeHtml(params.when)}</div>
     </div>
     <div style="padding:4px 28px 28px">
-      <a href="${escapeAttr(params.manageUrl)}" style="display:inline-block;background:#D4AF37;color:#0f0f0f;font-size:14px;font-weight:700;text-decoration:none;padding:11px 20px;border-radius:10px">Manage appointment</a>
-      <p style="color:#71717a;font-size:12px;line-height:1.5;margin:16px 0 0">Need to cancel or reschedule? Use the button above, or reply to this email.</p>
+      ${footer}
     </div>
   </div>
 </div>`;
@@ -485,6 +517,40 @@ export function buildAppointmentReminderEmail(params: {
       when,
       staffName: params.staffName,
       manageUrl,
+    }),
+  };
+}
+
+/**
+ * Reminder EMAIL for a SYNCED booking - the email twin of
+ * buildSyncedVisitReminderBody. No manage button (no ChairBack manage page
+ * exists for it) and no staff line (Visit carries no staff), so the card
+ * degrades to shop + service + when, and the footer asks for a reply.
+ *
+ * Email matters more here than on the native side: a shop that has not cleared
+ * 10DLC is SMS-dark, and for those shops this is the only reminder that can
+ * physically go out.
+ */
+export function buildSyncedVisitReminderEmail(params: {
+  firstName: string | null;
+  shopName: string;
+  serviceName: string | null;
+  startsAt: Date;
+  timezone: string;
+}): EmailCopy {
+  const when = formatApptTime(params.startsAt, params.timezone);
+  const who = params.firstName ?? "there";
+  const service = params.serviceName ?? "Appointment";
+  const what = params.serviceName ? `your ${params.serviceName}` : "your appointment";
+  return {
+    subject: `Reminder: ${service} at ${params.shopName}`,
+    text: `Reminder, ${who}: ${what} at ${params.shopName} is ${when}. See you then!`,
+    html: appointmentEmailHtml({
+      heading: "See you soon",
+      intro: `Hi ${who}, this is a reminder about your upcoming appointment:`,
+      shopName: params.shopName,
+      serviceName: service,
+      when,
     }),
   };
 }

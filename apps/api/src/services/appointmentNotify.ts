@@ -6,6 +6,8 @@ import {
   buildAppointmentConfirmationEmail,
   buildAppointmentReminderBody,
   buildAppointmentReminderEmail,
+  buildSyncedVisitReminderBody,
+  buildSyncedVisitReminderEmail,
   formatApptTime,
 } from "../messaging/templates.js";
 import { getMessageProvider } from "../messaging/twilio.js";
@@ -418,6 +420,146 @@ export async function notifyAppointmentReminder(params: {
     logger.error(
       { err, shopId: params.shopId, appointmentId: params.appointmentId },
       "notifyAppointmentReminder failed",
+    );
+    return false;
+  }
+}
+
+/**
+ * The ~24h reminder for a SYNCED booking (Acuity / Square).
+ *
+ * Shops that kept their old calendar have Visit rows and no Appointment row, so
+ * runAppointmentReminders - which reads Appointment - never saw them and those
+ * shops got NO appointment reminders at all. That is the single most expected
+ * feature in the category, and "keep your calendar, get everything else" is the
+ * pitch, so the gap was commercial as much as technical.
+ *
+ * Deliberately routed through the SAME gates as the native reminder rather than
+ * a parallel implementation: skipReason (access, archived, opt-out, consent,
+ * phone, quiet hours) for SMS, emailSkipReason for email, sendAppointmentSms for
+ * the Nudge ledger + DRY_RUN + provider. A synced client is a client; nothing
+ * about consent or quiet hours changes because the booking arrived over an API.
+ *
+ * Idempotent per channel via Visit.reminderSentAt / reminderEmailSentAt. Callers
+ * must exclude Visits that have a linked Appointment - see runSyncedVisitReminders.
+ * Never throws.
+ */
+export async function notifySyncedVisitReminder(params: {
+  shopId: string;
+  visitId: string;
+  now?: Date;
+}): Promise<boolean> {
+  const now = params.now ?? new Date();
+  try {
+    const [shop, visit] = await Promise.all([
+      // Shop is read with PLAIN prisma, not forShop: Shop is default-deny under
+      // RLS inside a shop transaction and would come back null.
+      prisma.shop.findUnique({ where: { id: params.shopId }, select: SHOP_SELECT }),
+      runWithShop(params.shopId, (tx) =>
+        tx.visit.findFirst({
+          where: { id: params.visitId },
+          select: {
+            id: true,
+            status: true,
+            scheduledAt: true,
+            serviceName: true,
+            reminderSentAt: true,
+            reminderEmailSentAt: true,
+            client: {
+              select: {
+                id: true,
+                firstName: true,
+                optedOut: true,
+                smsConsentAt: true,
+                phone: true,
+                email: true,
+                archivedAt: true,
+              },
+            },
+          },
+        }),
+      ),
+    ]);
+    if (!shop || !visit || !visit.client) return false;
+    // Canceled / rescheduled / already-completed since the sweep queued it.
+    if (visit.status !== "SCHEDULED") return false;
+
+    let anySent = false;
+
+    // --- SMS channel ---
+    if (!visit.reminderSentAt) {
+      const skip = skipReason(shop, visit.client, now);
+      if (skip) {
+        logger.info(
+          { shopId: shop.id, visitId: visit.id, reason: skip },
+          "synced visit reminder SMS skipped",
+        );
+      } else {
+        const body = buildSyncedVisitReminderBody({
+          firstName: visit.client.firstName,
+          shopName: shop.name,
+          serviceName: visit.serviceName,
+          startsAt: visit.scheduledAt,
+          timezone: shop.timezone,
+        });
+        const sent = await sendAppointmentSms(
+          shop.id,
+          visit.client.id,
+          visit.client.phone!,
+          body,
+          shop.twilioNumber,
+        );
+        if (sent) {
+          await forShop(shop.id).visit.update({
+            where: { id: visit.id },
+            data: { reminderSentAt: now },
+          });
+          anySent = true;
+        }
+      }
+    }
+
+    // --- EMAIL channel (independent gate + stamp) ---
+    if (!visit.reminderEmailSentAt) {
+      // No typed-email fallback here: a synced visit carries no booking form,
+      // so the client record is the only address there is.
+      const emailTo = visit.client.email;
+      const skip = emailSkipReason(shop, visit.client, emailTo, now);
+      if (skip) {
+        logger.info(
+          { shopId: shop.id, visitId: visit.id, reason: skip },
+          "synced visit reminder email skipped",
+        );
+      } else {
+        const email = buildSyncedVisitReminderEmail({
+          firstName: visit.client.firstName,
+          shopName: shop.name,
+          serviceName: visit.serviceName,
+          startsAt: visit.scheduledAt,
+          timezone: shop.timezone,
+        });
+        const sent = await sendAppointmentEmail(
+          shop.id,
+          emailTo!,
+          email.subject,
+          email.text,
+          email.html,
+        );
+        if (sent) {
+          await forShop(shop.id).visit.update({
+            where: { id: visit.id },
+            data: { reminderEmailSentAt: now },
+          });
+          anySent = true;
+        }
+      }
+    }
+
+    return anySent;
+  } catch (err) {
+    logger.error(
+      { err, shopId: params.shopId, visitId: params.visitId },
+      "notifySyncedVisitReminder failed",
     );
     return false;
   }
