@@ -5,14 +5,23 @@ import { motion } from "framer-motion";
 import { Card } from "@/components/ui/Card";
 import { fadeUp } from "@/components/motion/variants";
 import { winbackPreviewAction, type WinbackPreview } from "../actions";
+import { PlanBadge } from "./PlanBadge";
 
 /**
  * Win-back ("Growth Agent") preview. A barber clicks to see WHO the agent would
  * re-engage today (deeply lapsed clients), without sending anything. There's no
  * "send now" here on purpose: win-back goes out automatically on the daily cron -
  * this is the see-it-working surface, not a manual blast.
+ *
+ * `premiumLocked` (lapsed shop): the cron SKIPS the shop entirely, so without
+ * the honest line below this card previewed clients who would never actually
+ * be texted — a promise the product wasn't keeping.
  */
-export function WinbackPreview() {
+export function WinbackPreview({
+  premiumLocked = false,
+}: {
+  premiumLocked?: boolean;
+} = {}) {
   const [pending, startTransition] = useTransition();
   const [preview, setPreview] = useState<WinbackPreview | null>(null);
   const [errored, setErrored] = useState(false);
@@ -35,10 +44,14 @@ export function WinbackPreview() {
       <Card className="flex flex-col gap-4 p-5">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="font-display text-lg">Win-back · Growth Agent</h2>
+            <h2 className="flex items-center gap-2 font-display text-lg">
+              Win-back · Growth Agent
+              {premiumLocked && <PlanBadge tier="pro" />}
+            </h2>
             <p className="text-xs text-muted">
-              Deeply lapsed clients ChairBack will automatically text back to the
-              chair. Preview who&apos;s up next — no texts are sent here.
+              {premiumLocked
+                ? "These clients won't be texted on the Free plan — win-back runs automatically on Premium."
+                : "Deeply lapsed clients ChairBack will automatically text back to the chair. Preview who's up next — no texts are sent here."}
             </p>
           </div>
           <button

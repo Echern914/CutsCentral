@@ -6,9 +6,12 @@ import { createPortal } from "react-dom";
 import {
   FEATURE_CATEGORIES,
   FEATURE_INDEX,
+  isBillingHref,
   type FeatureIndexEntry,
 } from "@chairback/config/features";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
+import { lockedTier, type FeatureLocks } from "@/lib/featureLocks";
+import { PlanBadge } from "./PlanBadge";
 
 /**
  * The "More" tab's sheet: the whole FEATURE_INDEX as a browsable directory,
@@ -26,11 +29,14 @@ export function MoreSheet({
   onClose,
   isAdmin = false,
   rewardsEnabled = true,
+  locks,
 }: {
   open: boolean;
   onClose: () => void;
   isAdmin?: boolean;
   rewardsEnabled?: boolean;
+  /** Premium lock flags — tier-tagged rows get a diamond when locked. */
+  locks?: FeatureLocks;
 }) {
   // Portals need a DOM to target; SSR has none. Same mounted gate the feature
   // palette and demo tour use.
@@ -47,7 +53,7 @@ export function MoreSheet({
   const inApp = useIsNativeApp();
   const visible = FEATURE_INDEX.filter(
     (f) =>
-      !(inApp && f.href.startsWith("/dashboard/billing")) &&
+      !(inApp && isBillingHref(f.href)) &&
       // A rewards-off shop has no Rewards pages (they redirect), so don't
       // advertise the loyalty features that land there.
       (rewardsEnabled || !f.href.startsWith("/dashboard/rewards")),
@@ -116,7 +122,11 @@ export function MoreSheet({
               <ul className="mt-2 grid gap-1.5 sm:grid-cols-2">
                 {items.map((f) => (
                   <li key={f.id}>
-                    <FeatureLink feature={f} onNavigate={onClose} />
+                    <FeatureLink
+                      feature={f}
+                      onNavigate={onClose}
+                      lockedAs={lockedTier(f.tier, locks)}
+                    />
                   </li>
                 ))}
               </ul>
@@ -172,17 +182,26 @@ export function MoreSheet({
 function FeatureLink({
   feature,
   onNavigate,
+  lockedAs,
 }: {
   feature: FeatureIndexEntry;
   onNavigate: () => void;
+  /** Plan diamond to show when the shop's plan doesn't include this feature. */
+  lockedAs: "pro" | "pro_ai" | null;
 }) {
   return (
+    // A locked row still NAVIGATES — the feature's own page explains the lock
+    // and (on the web) carries the upgrade link. A dead row would just read
+    // as broken.
     <Link
       href={feature.href}
       onClick={onNavigate}
       className="block rounded-2xl border border-subtle px-3.5 py-3 transition-colors duration-150 ease-out hover:bg-charcoal-700"
     >
-      <span className="text-sm font-medium">{feature.name}</span>
+      <span className="flex items-center gap-2">
+        <span className="text-sm font-medium">{feature.name}</span>
+        {lockedAs && <PlanBadge tier={lockedAs} />}
+      </span>
       <span className="mt-0.5 block text-xs text-muted">{feature.description}</span>
     </Link>
   );

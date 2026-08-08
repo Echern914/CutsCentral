@@ -6,6 +6,7 @@ import { NumberField } from "@/components/ui/NumberField";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
+import { PlanBadge } from "../_components/PlanBadge";
 import type { Promo } from "./page";
 import {
   blastPromoAction,
@@ -56,7 +57,14 @@ function fmtDate(iso: string | null): string {
     : "";
 }
 
-export function PromotionsManager({ promotions }: { promotions: Promo[] }) {
+export function PromotionsManager({
+  promotions,
+  premiumLocked = false,
+}: {
+  promotions: Promo[];
+  /** Lapsed shop: the blast trigger carries the diamond and says so up front. */
+  premiumLocked?: boolean;
+}) {
   const { toast } = useToast();
   const [pending, startTransition] = useTransition();
   const [creating, setCreating] = useState(false);
@@ -101,7 +109,7 @@ export function PromotionsManager({ promotions }: { promotions: Promo[] }) {
       ) : (
         <ul className="divide-y divide-subtle">
           {promotions.map((promo) => (
-            <PromoRow key={promo.id} promo={promo} />
+            <PromoRow key={promo.id} promo={promo} premiumLocked={premiumLocked} />
           ))}
         </ul>
       )}
@@ -109,7 +117,7 @@ export function PromotionsManager({ promotions }: { promotions: Promo[] }) {
   );
 }
 
-function PromoRow({ promo }: { promo: Promo }) {
+function PromoRow({ promo, premiumLocked }: { promo: Promo; premiumLocked?: boolean }) {
   const { toast } = useToast();
   // No "upgrade" steering inside the iOS app (Guideline 3.1.1).
   const inApp = useIsNativeApp();
@@ -159,15 +167,18 @@ function PromoRow({ promo }: { promo: Promo }) {
         </div>
         <div className="flex items-center gap-2">
           {promo.status === "live" && (
-            <button
-              onClick={() => {
-                setBlastOpen((v) => !v);
-                setPreview(null);
-              }}
-              className="rounded-full border border-gold/50 px-3 py-1.5 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
-            >
-              Text clients
-            </button>
+            <span className="flex items-center gap-1.5">
+              {premiumLocked && <PlanBadge tier="pro" />}
+              <button
+                onClick={() => {
+                  setBlastOpen((v) => !v);
+                  setPreview(null);
+                }}
+                className="rounded-full border border-gold/50 px-3 py-1.5 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
+              >
+                Text clients
+              </button>
+            </span>
           )}
           <button
             disabled={pending}
@@ -261,7 +272,7 @@ function PromoRow({ promo }: { promo: Promo }) {
                         inApp
                           ? "Promo blasts are a Premium feature"
                           : "Promo blasts are a Premium feature - upgrade from the Billing page",
-                        "error",
+                        "info",
                       );
                     else if (r.error === "quiet_hours")
                       toast("Texting is paused 9pm-8am (client local time). Try again in the morning.", "error");

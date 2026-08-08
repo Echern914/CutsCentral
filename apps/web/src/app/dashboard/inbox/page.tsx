@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { apiGet } from "@/lib/api";
+import { featureLocks, getBillingSummary } from "@/lib/billing";
 import { Card } from "@/components/ui/Card";
+import { UpgradeCallout } from "../_components/UpgradeCallout";
 
 interface ConversationRow {
   id: string;
@@ -27,6 +29,9 @@ export default async function InboxPage() {
     conversations: ConversationRow[];
     escalatedCount: number;
   }>("/api/dashboard/receptionist/conversations");
+  // Sequential on purpose — memoized fetch; keeps apiGet's generic intact
+  // (the dual-React `cache` typing hole would otherwise any-poison the tuple).
+  const locks = featureLocks(await getBillingSummary());
   const conversations = res.data?.conversations ?? [];
   const escalated = res.data?.escalatedCount ?? 0;
 
@@ -45,11 +50,24 @@ export default async function InboxPage() {
         Open one to read it or take over.
       </p>
 
+      {locks.premiumAi && (
+        <div className="mb-6">
+          <UpgradeCallout tier="pro_ai">
+            The Inbox fills when your AI receptionist answers client texts —
+            it&apos;s part of the Premium AI plan.
+          </UpgradeCallout>
+        </div>
+      )}
+
       <Card className="overflow-hidden">
         {conversations.length === 0 ? (
           <p className="px-5 py-8 text-center text-sm text-muted">
-            No conversations yet. When a client texts your shop&apos;s number, the AI
-            answers and the thread shows up here.
+            No conversations yet. Conversations start when your{" "}
+            <Link href="/dashboard/receptionist" className="text-gold hover:underline">
+              AI receptionist
+            </Link>{" "}
+            answers a client&apos;s text — every thread lands here for you to read
+            or take over.
           </p>
         ) : (
           <ul className="divide-y divide-subtle">

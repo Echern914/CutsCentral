@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { apiGet } from "@/lib/api";
+import { featureLocks, getBillingSummary } from "@/lib/billing";
 import { Card } from "@/components/ui/Card";
 import { DemoTour } from "@/components/tour/DemoTour";
+import { UpgradeCallout } from "../_components/UpgradeCallout";
 
 interface NudgeRow {
   who: string;
@@ -12,6 +14,11 @@ interface NudgeRow {
 
 export default async function NudgesPage() {
   const res = await apiGet<{ nudges: NudgeRow[] }>("/api/dashboard/nudges");
+  // Sequential on purpose: getBillingSummary is render-memoized (the layout
+  // already awaited it), so this costs nothing — and keeping it OUT of a
+  // Promise.all tuple avoids the dual-React `cache` typing hole any-poisoning
+  // apiGet's generic.
+  const locks = featureLocks(await getBillingSummary());
   const nudges = res.data?.nudges ?? [];
   const sent = nudges.filter((n) => n.status === "SENT").length;
   const converted = nudges.filter((n) => n.resultedInBooking).length;
@@ -38,6 +45,17 @@ export default async function NudgesPage() {
         {sent} sent · {converted} led to a rebooking
         {sent > 0 ? ` · ${rate}% conversion` : ""}
       </p>
+
+      {/* Lapsed shops keep their history (the data is theirs) but must know
+          WHY nothing new appears — the silent-empty state read as broken. */}
+      {locks.premium && (
+        <div className="mb-6">
+          <UpgradeCallout tier="pro">
+            Rebooking nudges are a Premium feature — automatic &ldquo;time to
+            rebook&rdquo; texts and manual sends are paused on the Free plan.
+          </UpgradeCallout>
+        </div>
+      )}
 
       <div data-tour="nudge-history">
         <Card className="overflow-hidden">

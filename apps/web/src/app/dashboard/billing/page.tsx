@@ -1,5 +1,6 @@
 import { PLANS } from "@chairback/config/constants";
 import { apiGet } from "@/lib/api";
+import { getBillingSummary, type BillingSummary } from "@/lib/billing";
 import { getMe } from "@/lib/me";
 import { Card } from "@/components/ui/Card";
 import { DemoTour } from "@/components/tour/DemoTour";
@@ -15,29 +16,9 @@ import {
 } from "./BillingActions";
 import { ReceptionistControls } from "./ReceptionistControls";
 
-interface BillingStatus {
-  billingEnabled: boolean;
-  planName: string;
-  priceMonthlyUsd: number;
-  trialDays: number;
-  plan: string;
-  subscriptionStatus: string;
-  subscribed: boolean;
-  compAccess: boolean;
-  trialEndsAt: string | null;
-  trialDaysLeft: number | null;
-  hasAccess: boolean;
-  canManage: boolean;
-  smsUsage: { used: number; quota: number | null; resetsAt: string };
-  premiumAi: { billingEnabled: boolean; priceMonthlyUsd: number };
-  receptionist: {
-    billingEnabled: boolean;
-    subscriptionStatus: string;
-    compAccess: boolean;
-    entitled: boolean;
-    included: boolean;
-  };
-}
+// The /api/billing shape lives ONCE in lib/billing.ts (shared with the
+// layout's lock plumbing, TrialBanner, and the receptionist page).
+type BillingStatus = BillingSummary;
 
 interface ShopSettings {
   receptionistEnabled: boolean;
@@ -141,7 +122,7 @@ export default async function BillingPage({
   searchParams?: { checkout?: string; upgrade?: string; receptionist?: string };
 }) {
   const [res, shopRes, me] = await Promise.all([
-    apiGet<BillingStatus>("/api/billing"),
+    getBillingSummary(),
     apiGet<ShopSettings>("/api/shops/me"),
     // Memoized: shares the layout's /api/auth/me round-trip for this render.
     getMe(),

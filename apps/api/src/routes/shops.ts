@@ -406,6 +406,15 @@ shopsRouter.patch("/me", requireUser, requireShop, async (req, res) => {
   // an acceptance on record is rejected: the barber must acknowledge that the
   // AI can make scheduling mistakes (double-bookings, misses) and that
   // ChairBack isn't liable for them, BEFORE the AI ever touches their calendar.
+  // Enabling requires the ENTITLEMENT, checked before anything is stamped: a
+  // free shop could previously flip the toggle ON, the UI showed it running,
+  // and nothing ever answered a text - the worst kind of broken. Disabling
+  // stays always allowed, and the helper returns true when billing is off
+  // (dev/self-host), so this gate is inert outside real billing.
+  if (data.receptionistEnabled === true && !hasReceptionistEntitlement(req.shop!)) {
+    res.status(409).json({ error: "receptionist_not_entitled" });
+    return;
+  }
   const acceptedNow = data.acceptReceptionistTerms === true;
   delete data.acceptReceptionistTerms;
   if (data.receptionistTone === "") data.receptionistTone = null;

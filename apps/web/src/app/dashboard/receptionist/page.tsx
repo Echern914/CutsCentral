@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { apiGet } from "@/lib/api";
+import { featureLocks, getBillingSummary } from "@/lib/billing";
 import { Card } from "@/components/ui/Card";
 import { CardHeader } from "@/components/ui/Card";
 import { HideInNativeApp } from "@/components/HideInNativeApp";
 import { ReceptionistControls } from "../billing/ReceptionistControls";
+import { UpgradeCallout } from "../_components/UpgradeCallout";
 
 /**
  * The AI receptionist's own page.
@@ -20,10 +22,6 @@ import { ReceptionistControls } from "../billing/ReceptionistControls";
  * can render natively too"), so hosting them here is safe in-app. Everything
  * that SELLS stays on /dashboard/billing and stays hidden in the app.
  */
-interface BillingStatus {
-  receptionist: { entitled: boolean };
-}
-
 interface ShopSettings {
   receptionistEnabled: boolean;
   receptionistTermsAcceptedAt: string | null;
@@ -32,13 +30,15 @@ interface ShopSettings {
 }
 
 export default async function ReceptionistPage() {
-  const [res, shopRes] = await Promise.all([
-    apiGet<BillingStatus>("/api/billing"),
-    apiGet<ShopSettings>("/api/shops/me"),
-  ]);
-  const b = res.data;
+  // getBillingSummary replaces the page's own /api/billing round trip (it is
+  // render-memoized and shared with the layout's lock computation).
+  const shopRes = await apiGet<ShopSettings>("/api/shops/me");
+  // Sequential on purpose — memoized fetch; keeps apiGet's generic intact
+  // (the dual-React `cache` typing hole would otherwise any-poison the tuple).
+  const res = await getBillingSummary();
   const shop = shopRes.data;
-  const entitled = b?.receptionist.entitled ?? false;
+  const entitled = res.data?.receptionist.entitled ?? false;
+  const locks = featureLocks(res);
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -56,6 +56,18 @@ export default async function ReceptionistPage() {
               bookingMode={shop.bookingMode}
               shopNumber={shop.twilioNumber ?? null}
             />
+          </div>
+        ) : locks.premiumAi ? (
+          /* LAPSED shop: the full diamond treatment (badge + web-only upgrade
+             steering). Distinct from the fork below, which is a shop WITH
+             access (trial/Premium) that simply hasn't added the AI tier — that
+             one keeps the soft copy and no diamond, because a trialing shop
+             must never see a lock. */
+          <div className="mt-4">
+            <UpgradeCallout tier="pro_ai">
+              The AI receptionist answers your clients&apos; texts and books them
+              in, 24/7 — it&apos;s part of the Premium AI plan.
+            </UpgradeCallout>
           </div>
         ) : (
           <div className="mt-4 rounded-2xl border border-subtle bg-charcoal-800 px-4 py-3 text-sm text-muted">

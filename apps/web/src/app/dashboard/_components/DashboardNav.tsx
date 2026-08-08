@@ -62,6 +62,8 @@ interface NavProps {
    * that refuse to open reads as a broken app rather than a limited one.
    */
   barberOnly?: boolean;
+  /** Premium lock flags for the More sheet's diamond badges (lib/featureLocks). */
+  locks?: import("@/lib/featureLocks").FeatureLocks;
 }
 
 /** The tabs a given role can actually reach. */
@@ -77,6 +79,7 @@ export function DashboardTabBar({
   isAdmin = false,
   rewardsEnabled = true,
   barberOnly = false,
+  locks,
 }: NavProps) {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
@@ -121,6 +124,7 @@ export function DashboardTabBar({
         onClose={() => setMoreOpen(false)}
         isAdmin={isAdmin}
         rewardsEnabled={rewardsEnabled}
+        locks={locks}
       />
     </>
   );
@@ -131,6 +135,7 @@ export function DashboardNavInline({
   isAdmin = false,
   rewardsEnabled = true,
   barberOnly = false,
+  locks,
 }: NavProps) {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
@@ -184,6 +189,7 @@ export function DashboardNavInline({
         onClose={() => setMoreOpen(false)}
         isAdmin={isAdmin}
         rewardsEnabled={rewardsEnabled}
+        locks={locks}
       />
     </>
   );
