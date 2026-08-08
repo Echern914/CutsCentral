@@ -96,22 +96,31 @@ function readChallenges(raw: unknown): VercelVerificationChallenge[] {
  * Attach a domain to the project. 409/"already exists" counts as success -
  * re-connecting after a partial earlier attempt must be idempotent, and the
  * error code Vercel uses for it has changed across API versions.
+ *
+ * `created` distinguishes "this call added the attachment" (fresh 200) from
+ * "it was already attached before this call" (409 / already-in-use). The
+ * distinction is LOAD-BEARING for the caller's failure cleanup: an attachment
+ * we did not create may be another shop's LIVE domain, and rolling it back
+ * would take their site down. Only ever detach what `created` says we made.
  */
-export async function attachDomain(domain: string): Promise<{ ok: boolean; error?: string }> {
+export async function attachDomain(
+  domain: string,
+): Promise<{ ok: boolean; created: boolean; error?: string }> {
   const { status, json } = await vercelFetch(
     `/v10/projects/${encodeURIComponent(config()!.projectId)}/domains`,
     { method: "POST", body: { name: domain } },
   );
-  if (status === 200 || status === 409) return { ok: true };
+  if (status === 200) return { ok: true, created: true };
+  if (status === 409) return { ok: true, created: false };
   const err = json.error as Record<string, unknown> | undefined;
   const code = typeof err?.code === "string" ? err.code : `http_${status}`;
   if (code === "domain_already_in_use_by_project" || code === "domain_already_in_use") {
     // In use by THIS project = fine; by another Vercel account = the TXT
     // ownership challenge surfaces on the status read, so still not fatal here.
-    return { ok: true };
+    return { ok: true, created: false };
   }
   logger.warn({ domain, status, code }, "vercel domain attach failed");
-  return { ok: false, error: code };
+  return { ok: false, created: false, error: code };
 }
 
 /** Live status: ownership verification + whether DNS actually points at us. */
