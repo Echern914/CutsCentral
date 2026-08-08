@@ -78,6 +78,28 @@ export interface FeatureIndexEntry {
   category: FeatureCategoryId;
   /** Optional DEMO_TOUR_STEPS id showing this feature in the live demo. */
   tourStepId?: string;
+  /**
+   * Plan that unlocks this feature for shops whose access has LAPSED.
+   * "pro" locks when billing hasAccess is false; "pro_ai" additionally
+   * requires the receptionist entitlement. Untagged = free forever.
+   *
+   * Tag ONLY features the API genuinely refuses to free shops (402/409/cron
+   * skip). Marketing says more is premium than the server enforces — a badge
+   * on a feature that actually works free is a lie that cheapens the real
+   * locks. NEVER derive a lock from plan === "free": trialing shops are
+   * plan "free" WITH full access, and comped shops are free forever.
+   */
+  tier?: "pro" | "pro_ai";
+}
+
+/**
+ * App Store 3.1.1: anything landing on the billing page is a purchase back
+ * door inside the native shell. The ONE predicate every surface filters with
+ * (FeatureSearch, the More sheet, and the help corpus used to carry three
+ * subtly different copies of this rule).
+ */
+export function isBillingHref(href: string): boolean {
+  return href.startsWith("/dashboard/billing");
 }
 
 export const FEATURE_INDEX: FeatureIndexEntry[] = [
@@ -115,6 +137,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     description: "Run specials that show on your page and can be texted out",
     href: "/dashboard/promotions",
     category: "retention",
+    tier: "pro",
     tourStepId: "shop-promotions",
   },
   {
@@ -186,6 +209,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     description: "Full days feed a waitlist; freed slots ping the queue automatically",
     href: "/dashboard/booking?tab=Settings",
     category: "booking",
+    tier: "pro",
     tourStepId: "book-waitlist",
   },
   {
@@ -282,6 +306,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     description: "Overdue clients get an automatic 'time to rebook' text or push",
     href: "/dashboard/nudges",
     category: "retention",
+    tier: "pro",
     tourStepId: "rewards-extras",
   },
   {
@@ -326,6 +351,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     description: "Text conversations with your clients, including AI receptionist chats",
     href: "/dashboard/inbox",
     category: "data",
+    tier: "pro_ai",
   },
   {
     // Same orphaning as inbox: the Team pill died with the old nav strip.
@@ -359,6 +385,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     description: "An AI that books clients over text when you're behind the chair",
     href: "/dashboard/receptionist",
     category: "account",
+    tier: "pro_ai",
   },
   {
     id: "billing",

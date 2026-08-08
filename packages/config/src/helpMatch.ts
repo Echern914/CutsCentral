@@ -26,9 +26,11 @@
 
 import {
   FEATURE_INDEX,
+  isBillingHref,
   type FeatureCategoryId,
   type FeatureIndexEntry,
 } from "./features.js";
+import { PLANS } from "./constants.js";
 import { HELP_ANSWERS, type HelpAnswer, type HelpCategoryId } from "./help.js";
 
 /* =============================== tokenizing ============================== */
@@ -227,16 +229,19 @@ const FEATURE_TO_HELP_CATEGORY: Record<FeatureCategoryId, HelpCategoryId> = {
  * one sentence we've already committed to for that feature everywhere else.
  */
 function featureAnswer(f: FeatureIndexEntry): HelpAnswer {
+  // Label-only plan mention for tiered features: names the plan, quotes no
+  // price and steers nowhere, so it is safe inside the native shell too.
+  const tierNote = f.tier ? `\n\nPart of the ${PLANS[f.tier].name} plan.` : "";
   return {
     id: `feature-${f.id}`,
     q: `Where do I find ${f.name}?`,
-    a: `${f.description}.\n\nIt's under ${f.name} in your dashboard — the button below opens it.`,
+    a: `${f.description}.\n\nIt's under ${f.name} in your dashboard — the button below opens it.${tierNote}`,
     keywords: [f.name, ...f.synonyms],
     category: FEATURE_TO_HELP_CATEGORY[f.category],
+    // Matches the shared 3.1.1 rule: anything landing on the subscription page
+    // is a back door onto a purchase flow Apple forbids in-app.
     action: { label: `Open ${f.name}`, href: f.href },
-    // Matches FeatureSearch's rule: anything landing on the subscription page
-    // is a back door onto a purchase flow Apple forbids in-app (3.1.1).
-    hidesInApp: f.href.startsWith("/dashboard/billing"),
+    hidesInApp: isBillingHref(f.href),
   };
 }
 

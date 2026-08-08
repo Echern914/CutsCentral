@@ -10,13 +10,25 @@ import {
   sweepPreviewAction,
   type SweepSummary,
 } from "../actions";
+import { PlanBadge } from "./PlanBadge";
 
 /**
  * Bulk rebooking action. Step 1: preview (dry-run) shows how many clients would
  * be texted today. Step 2: send for real, gated behind an explicit confirm so a
  * barber never blasts SMS by accident.
+ *
+ * `premiumLocked` (lapsed shop): the diamond sits on the heading and the truth
+ * is stated UP FRONT — previously the lock only surfaced after Preview →
+ * Send → Confirm, a three-tap walk into a wall. Preview stays usable, and the
+ * 402 handler below stays as the backstop for stale pages.
  */
-export function SweepControl({ atRiskCount }: { atRiskCount: number }) {
+export function SweepControl({
+  atRiskCount,
+  premiumLocked = false,
+}: {
+  atRiskCount: number;
+  premiumLocked?: boolean;
+}) {
   // No "upgrade" steering inside the iOS app (Guideline 3.1.1).
   const inApp = useIsNativeApp();
   const [pending, startTransition] = useTransition();
@@ -59,11 +71,15 @@ export function SweepControl({ atRiskCount }: { atRiskCount: number }) {
     <motion.div variants={fadeUp} initial="hidden" animate="show">
       <Card className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="font-display text-lg">Rebooking nudges</h2>
+          <h2 className="flex items-center gap-2 font-display text-lg">
+            Rebooking nudges
+            {premiumLocked && <PlanBadge tier="pro" />}
+          </h2>
           <p className="text-xs text-muted">
             {atRiskCount > 0
               ? `${atRiskCount} ${atRiskCount === 1 ? "client is" : "clients are"} overdue and textable.`
               : "No clients are overdue right now."}
+            {premiumLocked && " Sending is a Premium feature."}
           </p>
         </div>
 
