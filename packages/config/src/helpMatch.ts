@@ -461,6 +461,136 @@ function fallbackAnswers(pool: Indexed[]): HelpAnswer[] {
 }
 
 /** Look an answer up by id — used when a suggestion chip is tapped. */
+/* ========================= feature-directory search ====================== */
+
+/**
+ * Keyword search over FEATURE_INDEX, for the Cmd-K palette.
+ *
+ * The palette used to score by whole-query SUBSTRING: `name.startsWith(q)` >
+ * `name.includes(q)` > synonym > description. Measured against the real index,
+ * that returned NOTHING for 37 of 46 things a barber would actually type -
+ * buffer, lunch break, no show, block off, timezone, csv, acuity, qr code,
+ * card punch - while confidently returning garbage for others, because a bare
+ * substring matches inside words: "age" hit "Public shop p-AGE" (10 results,
+ * top-ranked), "tip" hit "mul-TIP-le", "ical" hit "automat-ICAL-ly".
+ *
+ * Three things were wrong and all three are fixed by matching TOKENS, not
+ * substrings:
+ *  1. no tokenization - "punch card" matched and "card punch" did not, because
+ *     the whole query had to appear as one contiguous run of characters.
+ *  2. no word boundaries - hence age/tip/ical.
+ *  3. no typo tolerance - "waitlst" found nothing, while the CLIENT search two
+ *     screens away finds "José" from "Jose".
+ *
+ * Deliberately shares this file's tokenizer, stemmer, synonym table and
+ * Damerau distance with findHelp rather than growing a second dialect: a
+ * barber who types "cancle" into the help bubble and the palette should not
+ * get two different qualities of answer.
+ *
+ * AND semantics: every real query token must hit something, so "punch card"
+ * cannot match an entry that only knows "card". Ranking is field-weighted -
+ * name beats synonym beats description - and a fuzzy hit always scores below
+ * an exact one, so typo tolerance can never outrank a real match.
+ */
+export interface FeatureHit {
+  entry: FeatureIndexEntry;
+  score: number;
+}
+
+/** Field weights. A name hit is worth more than a description hit. */
+const FIELD_WEIGHT = { name: 3, synonym: 2, description: 1 } as const;
+
+function tokenSetFor(f: FeatureIndexEntry): {
+  name: Set<string>;
+  synonym: Set<string>;
+  description: Set<string>;
+} {
+  return {
+    name: new Set(tokenize(f.name)),
+    synonym: new Set(f.synonyms.flatMap((s) => tokenize(s))),
+    description: new Set(tokenize(f.description)),
+  };
+}
+
+/** Best score for one query token against one field's token set. */
+function hitScore(token: string, field: Set<string>, weight: number): number {
+  if (field.has(token)) return weight;
+  // Prefix match: "cancel" should find "cancellation" without a synonym entry.
+  for (const t of field) {
+    if (t.length > token.length && t.startsWith(token) && token.length >= 4) {
+      return weight * 0.9;
+    }
+  }
+  // Fuzzy last, and always below an exact hit of the SAME weight so a typo can
+  // never beat a real match.
+  const slop = slopFor(token.length);
+  if (slop > 0) {
+    for (const t of field) {
+      if (Math.abs(t.length - token.length) > slop) continue;
+      if (editDistance(token, t, slop) <= slop) return weight * 0.6;
+    }
+  }
+  return 0;
+}
+
+export function searchFeatures(
+  query: string,
+  index: readonly FeatureIndexEntry[],
+): FeatureHit[] {
+  const expanded = expandQuery(query);
+  if (expanded.length === 0) return [];
+  // Only unweighted (i.e. literally typed) tokens are REQUIRED. A synonym
+  // expansion is a bonus; demanding it would make the AND rule stricter than
+  // what the barber actually typed.
+  const required = expanded.filter((t) => t.weight === 1).map((t) => t.token);
+
+  const hits: FeatureHit[] = [];
+  for (const entry of index) {
+    const fields = tokenSetFor(entry);
+    let score = 0;
+    let matchedRequired = 0;
+    for (const { token, weight } of expanded) {
+      const best = Math.max(
+        hitScore(token, fields.name, FIELD_WEIGHT.name),
+        hitScore(token, fields.synonym, FIELD_WEIGHT.synonym),
+        hitScore(token, fields.description, FIELD_WEIGHT.description),
+      );
+      if (best > 0) {
+        score += best * weight;
+        if (weight === 1) matchedRequired++;
+      }
+    }
+    // AND: every typed token has to land somewhere on this entry.
+    if (required.length > 0 && matchedRequired < required.length) continue;
+    if (score <= 0) continue;
+
+    // PHRASE BONUS. Per-token scoring alone lets one strong token beat an
+    // entry that spells the whole phrase out: "time off" scored higher on
+    // "Time zone" (name hit on "time") than on Staff, whose synonym is
+    // literally "time off"; "walk in" preferred "Dashboard walkthrough"
+    // (prefix hit on "walk") over the entry that lists "walk in". An exact
+    // multi-word synonym is the strongest signal in the index - somebody sat
+    // down and wrote that phrase against that feature - so it has to outrank
+    // an incidental single-token hit.
+    const nq = normalize(query);
+    if (nq) {
+      if (normalize(entry.name) === nq) score += 10;
+      else if (entry.synonyms.some((s) => normalize(s) === nq)) score += 8;
+      else if (
+        nq.includes(" ") &&
+        (normalize(entry.name).includes(nq) ||
+          entry.synonyms.some((s) => normalize(s).includes(nq)))
+      ) {
+        score += 4;
+      }
+    }
+    hits.push({ entry, score });
+  }
+  return hits.sort(
+    (a, b) => b.score - a.score || a.entry.name.localeCompare(b.entry.name),
+  );
+}
+
 export function helpAnswerById(id: string): HelpAnswer | undefined {
   return HELP_CORPUS.find((e) => e.id === id);
 }
