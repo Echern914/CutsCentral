@@ -29,13 +29,13 @@ export const metadata: Metadata = {
     template: `%s | ${APP_NAME}`,
   },
   description:
-    "Automatic loyalty punch cards and perfectly-timed rebooking texts for barbershops, salons, and studios. Syncs with your Acuity or Square scheduling.",
+    "Online booking, automatic loyalty punch cards, perfectly-timed rebooking texts, and an AI receptionist for barbershops, salons, and studios. Bring your own domain. Syncs with Acuity or Square.",
   openGraph: {
     type: "website",
     siteName: APP_NAME,
     title: `${APP_NAME}: loyalty & rebooking for barbershops, salons & studios`,
     description:
-      "Automatic loyalty punch cards and perfectly-timed rebooking texts. 0% commission - you keep 100% of your revenue and own your client list.",
+      "Online booking, automatic punch cards, perfectly-timed rebooking texts, and an AI receptionist. 0% commission - you keep 100% of your revenue and own your client list.",
     url: "https://getchairback.com",
   },
   twitter: {
