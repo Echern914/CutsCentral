@@ -372,4 +372,70 @@ describe("goal planner: plans, chair-time target, per-service quotas", () => {
     expect(planner.capacity.week.openMin).toBeGreaterThanOrEqual(7 * 8 * 60);
     expect(planner.capacity.month.openMin).toBeGreaterThan(planner.capacity.week.openMin);
   });
+
+  it("joins a synced service name that differs only by punctuation or case", async () => {
+    // The reported symptom: every planner row read "0 / month" while the shop's
+    // WHOLE-SHOP revenue was fine. Shop-wide totals need no serviceId; per-service
+    // ones join synced events by NAME, and that join was trim+lowercase only - so
+    // "Men's Haircut" in Acuity never matched "Mens Haircut" on the menu and the
+    // barber's real volume vanished from the planner he was trying to plan with.
+    const svc = await prisma.service.create({
+      data: { shopId, name: "Mens Haircut", durationMin: 30, price: 50 },
+      select: { id: true },
+    });
+    for (const name of ["Men's Haircut", "MENS  HAIRCUT", "mens haircut"]) {
+      await prisma.visit.create({
+        data: {
+          shopId,
+          clientId,
+          acuityAppointmentId: `punct-${randomToken(8)}`,
+          status: "COMPLETED",
+          scheduledAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+          endAt: new Date(Date.now() - 2 * 60 * 60 * 1000 + 30 * 60 * 1000),
+          completedAt: new Date(),
+          serviceName: name,
+          price: 50,
+        },
+      });
+    }
+
+    const res = await request(app).get("/api/insights/goal").set("Cookie", cookie);
+    const row = (
+      res.body.planner.services as { serviceId: string; week: { cuts: number } }[]
+    ).find((s) => s.serviceId === svc.id);
+    // All three spellings are the same haircut.
+    expect(row!.week.cuts).toBe(3);
+  });
+
+  it("refuses to guess when two menu names normalize the same", async () => {
+    // "Cut & Beard" and "Cut + Beard" both fold to "cut beard". Picking whichever
+    // was defined first would silently credit one service with the other's
+    // volume, which is worse than showing nothing - so an ambiguous name joins
+    // to neither and only the explicit serviceId counts.
+    await prisma.service.create({
+      data: { shopId, name: "Cut & Beard", durationMin: 45, price: 70 },
+    });
+    const b = await prisma.service.create({
+      data: { shopId, name: "Cut + Beard", durationMin: 45, price: 70 },
+      select: { id: true },
+    });
+    await prisma.visit.create({
+      data: {
+        shopId,
+        clientId,
+        acuityAppointmentId: `ambig-${randomToken(8)}`,
+        status: "COMPLETED",
+        scheduledAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+        endAt: new Date(Date.now() - 2 * 60 * 60 * 1000 + 45 * 60 * 1000),
+        completedAt: new Date(),
+        serviceName: "Cut and Beard",
+        price: 70,
+      },
+    });
+    const res = await request(app).get("/api/insights/goal").set("Cookie", cookie);
+    const row = (
+      res.body.planner.services as { serviceId: string; week: { cuts: number } }[]
+    ).find((s) => s.serviceId === b.id);
+    expect(row!.week.cuts).toBe(0);
+  });
 });

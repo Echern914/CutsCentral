@@ -861,11 +861,35 @@ insightsRouter.get("/goal", async (req, res) => {
   // the card compares it against whatever window it is showing).
   const chairTimeTarget = rows.find((r) => r.metric === "chairTime")?.target ?? null;
 
-  // Per-service actuals for each window. Native events carry serviceId;
-  // synced ones only a name, so the menu's name is the join key for those.
-  const nameToId = new Map(menu.map((s) => [s.name.trim().toLowerCase(), s.id]));
+  // Per-service actuals for each window. Native events carry serviceId; synced
+  // ones (Acuity / Square) carry only a NAME, so the menu's name is the join key.
+  //
+  // That join used to be `trim().toLowerCase()`, which is too strict to survive
+  // a barber typing his menu into two systems: "Men's Haircut" in Acuity never
+  // matched "Mens Haircut" on the menu, so every event from it fell out and the
+  // planner showed 0 for a service the shop actually sells all week. The
+  // shop-wide totals looked fine the whole time, because those never need a
+  // serviceId - which is exactly why nobody caught it.
+  //
+  // Fold punctuation and repeated whitespace too. Anything that survives is a
+  // genuinely different name.
+  const normName = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/['’]/g, "")
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+  // A collision means two menu items normalize the same ("Cut+Beard" and
+  // "Cut & Beard"). Attributing a synced event to whichever was defined first
+  // would be a silent lie, so an ambiguous key joins to NOTHING instead.
+  const nameToId = new Map<string, string | null>();
+  for (const s of menu) {
+    const key = normName(s.name);
+    if (!key) continue;
+    nameToId.set(key, nameToId.has(key) ? null : s.id);
+  }
   const eventServiceId = (e: ChairEvent): string | null =>
-    e.serviceId ?? (e.serviceName ? (nameToId.get(e.serviceName.trim().toLowerCase()) ?? null) : null);
+    e.serviceId ?? (e.serviceName ? (nameToId.get(normName(e.serviceName)) ?? null) : null);
   type Tally = { cuts: number; revenue: number };
   const tally = (win: { start: Date; end: Date }): Map<string, Tally> => {
     const m = new Map<string, Tally>();
