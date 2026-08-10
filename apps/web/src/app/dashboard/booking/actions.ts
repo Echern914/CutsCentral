@@ -251,8 +251,17 @@ export async function getDashSlotsAction(
 
 export interface ClientOption {
   id: string;
-  firstName: string | null;
-  lastName: string | null;
+  /**
+   * The COMBINED display name ("Jordan D.") - which is what GET
+   * /api/dashboard/clients actually sends. This interface originally declared
+   * firstName/lastName, fields that endpoint has never returned in the life of
+   * the platform, so every picker row rendered its fallback: a bare phone
+   * number, or the literal word "Client". The search itself always worked -
+   * typing a name found the right rows - they just came back nameless, which
+   * reads as "names don't come up". (Only the client DETAIL endpoint sends
+   * first/last; the list deliberately sends the display shape.)
+   */
+  name: string | null;
   phone: string | null;
 }
 
