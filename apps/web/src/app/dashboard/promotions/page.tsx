@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { apiGet } from "@/lib/api";
+import { featureLocks, getBillingSummary } from "@/lib/billing";
 import { PromotionsManager } from "./PromotionsManager";
+import { UpgradeCallout } from "../_components/UpgradeCallout";
 
 export const metadata: Metadata = { title: "Promotions" };
 
@@ -24,6 +26,9 @@ export interface Promo {
 
 export default async function PromotionsPage() {
   const res = await apiGet<{ promotions: Promo[] }>("/api/promos");
+  // Sequential on purpose — memoized fetch; keeps apiGet's generic intact
+  // (the dual-React `cache` typing hole would otherwise any-poison the tuple).
+  const locks = featureLocks(await getBillingSummary());
   if (!res.ok || !res.data) {
     return <main className="p-8 text-muted">Could not load your promotions.</main>;
   }
@@ -37,7 +42,17 @@ export default async function PromotionsPage() {
           promos show on your clients&apos; rewards page, and you can text them out.
         </p>
       </header>
-      <PromotionsManager promotions={res.data.promotions} />
+      {/* The nuance a bare diamond can't carry: promos themselves stay free
+          (they render on the public page); only TEXTING them out is Premium. */}
+      {locks.premium && (
+        <div className="mb-6">
+          <UpgradeCallout tier="pro">
+            Creating promos is free and they show on your page — texting them
+            out to clients is a Premium feature.
+          </UpgradeCallout>
+        </div>
+      )}
+      <PromotionsManager promotions={res.data.promotions} premiumLocked={locks.premium} />
     </main>
   );
 }

@@ -74,7 +74,9 @@ export async function enableReceptionistAction(input: {
     error:
       res.error === "receptionist_terms_required"
         ? "Please check the acknowledgment box first."
-        : "Could not update the receptionist. Try again in a moment.",
+        : res.error === "receptionist_not_entitled"
+          ? "The AI receptionist isn't part of this shop's plan yet."
+          : "Could not update the receptionist. Try again in a moment.",
   };
 }
 

@@ -4,6 +4,7 @@ import { getMe } from "@/lib/me";
 import { StatCards, type Stats } from "./_components/StatCards";
 import { TrendsChart, type TrendPoint } from "./_components/TrendsChart";
 import { RevenueTrends } from "./_components/RevenueTrends";
+import { featureLocks, getBillingSummary } from "@/lib/billing";
 import { SweepControl } from "./_components/SweepControl";
 import { WinbackPreview } from "./_components/WinbackPreview";
 import { AtRiskTable, type AtRiskRow } from "./_components/AtRiskTable";
@@ -118,6 +119,9 @@ export default async function DashboardPage({
     // first read - idempotent, and a code every shop can share is the point.
     apiGet<ReferralSummary>("/api/dashboard/referrals"),
   ]);
+  // Premium lock flags for SweepControl / WinbackPreview. Memoized: shares the
+  // layout's /api/billing round-trip for this render (see lib/billing.ts).
+  const locks = featureLocks(await getBillingSummary());
 
   if (shopRes.status === 401) redirect("/login");
   if (shopRes.status === 404) redirect("/onboarding");
@@ -248,8 +252,11 @@ export default async function DashboardPage({
       </Section>
 
       <Section title="Win back clients" hint="Reach the people who've gone quiet">
-        <SweepControl atRiskCount={atRisk.data?.clients?.length ?? 0} />
-        <WinbackPreview />
+        <SweepControl
+          atRiskCount={atRisk.data?.clients?.length ?? 0}
+          premiumLocked={locks.premium}
+        />
+        <WinbackPreview premiumLocked={locks.premium} />
       </Section>
 
       <Section title="Shop settings" hint="Texting, rewards, and the client demo">

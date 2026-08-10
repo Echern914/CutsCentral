@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEMO_TOUR_STEPS } from "./demoTour.js";
-import { FEATURE_CATEGORIES, FEATURE_INDEX } from "./features.js";
+import { FEATURE_CATEGORIES, FEATURE_INDEX, isBillingHref } from "./features.js";
 
 describe("FEATURE_INDEX", () => {
   it("has unique ids and names", () => {
@@ -70,6 +70,48 @@ describe("FEATURE_INDEX", () => {
     const indexed = new Set(FEATURE_INDEX.map((f) => f.href));
     for (const href of REQUIRED_HREFS) {
       expect(indexed.has(href), `${href} has no FEATURE_INDEX entry - orphaned page`).toBe(true);
+    }
+  });
+});
+
+describe("tier tags (the locked-feature diamonds)", () => {
+  // The set is pinned EXACTLY: a tier tag renders a lock badge, and a badge on
+  // a feature the API actually serves to free shops is a lie that cheapens the
+  // real locks. Server truth at time of writing: nudge/sweep/bulk 402
+  // subscription_required, promo blast 402, waitlist slot-opened alerts skip
+  // without access, receptionist + inbox need the pro_ai entitlement.
+  // Adding a tag here means the API refuses that feature to free shops — prove
+  // it (or gate it) before extending this list.
+  it("tags exactly the features the API genuinely locks", () => {
+    const tiered = FEATURE_INDEX.filter((f) => f.tier !== undefined)
+      .map((f) => `${f.id}:${f.tier}`)
+      .sort();
+    expect(tiered).toEqual([
+      "inbox:pro_ai",
+      "promotions:pro",
+      "rebook-nudges:pro",
+      "receptionist:pro_ai",
+      "waitlist:pro",
+    ]);
+  });
+
+  it("isBillingHref matches the billing page and nothing else", () => {
+    expect(isBillingHref("/dashboard/billing")).toBe(true);
+    expect(isBillingHref("/dashboard/billing?upgrade=1")).toBe(true);
+    expect(isBillingHref("/dashboard/booking")).toBe(false);
+    expect(isBillingHref("/dashboard")).toBe(false);
+    expect(isBillingHref("/pricing")).toBe(false);
+  });
+
+  // 3.1.1 hygiene: a tier-tagged entry must be reachable in the native app
+  // (its page explains the lock there), so it must never sit on a billing href
+  // — that combination would strip the feature from in-app nav entirely, which
+  // is exactly the receptionist bug #210 fixed.
+  it("no tiered entry hides behind a billing href", () => {
+    for (const f of FEATURE_INDEX) {
+      if (f.tier) {
+        expect(isBillingHref(f.href), `${f.id} is tiered but lives on a billing href`).toBe(false);
+      }
     }
   });
 });

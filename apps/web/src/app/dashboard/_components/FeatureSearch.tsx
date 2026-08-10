@@ -3,9 +3,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
-import { FEATURE_INDEX, type FeatureIndexEntry } from "@chairback/config/features";
+import {
+  FEATURE_INDEX,
+  isBillingHref,
+  type FeatureIndexEntry,
+} from "@chairback/config/features";
 import { searchFeatures } from "@chairback/config/helpMatch";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
+import { lockedTier, type FeatureLocks } from "@/lib/featureLocks";
+import { PlanBadge } from "./PlanBadge";
 
 /**
  * The dashboard's feature finder: a magnifier in the nav (or Ctrl/Cmd-K) opens
@@ -18,7 +24,7 @@ import { useIsNativeApp } from "@/lib/useIsNativeApp";
  * synonym substring beats description substring. The index's synonyms carry
  * the vocabulary load.
  */
-export function FeatureSearch() {
+export function FeatureSearch({ locks }: { locks?: FeatureLocks } = {}) {
   const router = useRouter();
   // Inside the iOS app, drop the plan/billing entries ("Plan & billing", "AI
   // receptionist") — both deep-link to /dashboard/billing, and this palette
@@ -28,7 +34,7 @@ export function FeatureSearch() {
   // but the palette only opens on a tap, by which point the check has resolved.
   const inApp = useIsNativeApp();
   const index = useMemo(
-    () => (inApp ? FEATURE_INDEX.filter((f) => f.href !== "/dashboard/billing") : FEATURE_INDEX),
+    () => (inApp ? FEATURE_INDEX.filter((f) => !isBillingHref(f.href)) : FEATURE_INDEX),
     [inApp],
   );
   const [open, setOpen] = useState(false);
@@ -247,6 +253,7 @@ export function FeatureSearch() {
                   onHover={() => setCursor(i)}
                   onOpen={() => go(f.href)}
                   onDemo={f.tourStepId ? () => go(`/demo?step=${f.tourStepId}`) : undefined}
+                  lockedAs={lockedTier(f.tier, locks)}
                 />
               ))}
             </ul>
@@ -265,6 +272,7 @@ function Row({
   onHover,
   onOpen,
   onDemo,
+  lockedAs,
 }: {
   feature: FeatureIndexEntry;
   index: number;
@@ -273,6 +281,8 @@ function Row({
   onOpen: () => void;
   /** Present when this feature has a live-demo step to jump to. */
   onDemo?: () => void;
+  /** Plan diamond when the shop's plan doesn't include this feature. */
+  lockedAs?: "pro" | "pro_ai" | null;
 }) {
   return (
     <li
@@ -290,7 +300,10 @@ function Row({
           onClick={onOpen}
           className="flex-1 rounded-lg px-2 py-1.5 text-left"
         >
-          <p className="text-sm font-medium text-offwhite">{feature.name}</p>
+          <p className="flex items-center gap-2 text-sm font-medium text-offwhite">
+            {feature.name}
+            {lockedAs && <PlanBadge tier={lockedAs} />}
+          </p>
           <p className="text-xs text-muted">{feature.description}</p>
         </button>
         {onDemo && (

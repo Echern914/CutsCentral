@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { APP_NAME } from "@chairback/config/constants";
 import { getMe } from "@/lib/me";
-import { HideInNativeApp } from "@/components/HideInNativeApp";
+import { featureLocks, getBillingSummary } from "@/lib/billing";
 import { PullToRefresh } from "@/components/PullToRefresh";
 import { logoutAction } from "../(auth)/actions";
 import { DashboardNavInline, DashboardTabBar } from "./_components/DashboardNav";
@@ -44,6 +44,11 @@ export default async function DashboardLayout({
   // sees it (list has one entry).
   const shops = me.data?.shops ?? [];
   const activeShopId = me.data?.activeShopId ?? null;
+  // Which premium features render locked (diamond badges). NO_LOCKS for
+  // trialing/subscribed/comped shops, billing-off installs, demo, and employee
+  // seats (403 on /api/billing) — see lib/billing.ts. Employee seats skip the
+  // fetch entirely: it can only 403 for them.
+  const locks = barberOnly ? undefined : featureLocks(await getBillingSummary());
   return (
     <div className="min-h-dvh">
       {/* Swipe down at the top of any dashboard page to reload - the phone
@@ -57,9 +62,9 @@ export default async function DashboardLayout({
               {APP_NAME}
             </span>
           </Link>
-          <DashboardNavInline isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} barberOnly={barberOnly} />
+          <DashboardNavInline isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} barberOnly={barberOnly} locks={locks} />
           <div className="flex shrink-0 items-center gap-2">
-            {!barberOnly && <FeatureSearch />}
+            {!barberOnly && <FeatureSearch locks={locks} />}
             {shops.length > 1 && (
               <ShopSwitcher shops={shops} activeShopId={activeShopId} />
             )}
@@ -102,10 +107,10 @@ export default async function DashboardLayout({
           <DemoBanner />
         </div>
       ) : (
-        /* Hidden inside the native app: it links to Stripe billing (App Store 3.1.1). */
-        <HideInNativeApp>
-          <TrialBanner />
-        </HideInNativeApp>
+        /* TrialBanner owns its own 3.1.1 split now: the price-quoting banner
+           renders web-only INSIDE it, while a lapsed shop still gets a plain
+           factual line in the native app (previously: total silence in-app). */
+        <TrialBanner />
       )}
       {/* Phones scroll under the floating tab pill, so the last card needs
           clearance or it sits permanently behind it. The pill is ~3.6rem tall
@@ -121,7 +126,7 @@ export default async function DashboardLayout({
       >
         {children}
       </div>
-      <DashboardTabBar isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} barberOnly={barberOnly} />
+      <DashboardTabBar isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} barberOnly={barberOnly} locks={locks} />
     </div>
   );
 }
