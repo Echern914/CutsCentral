@@ -112,7 +112,7 @@ describe("booking with add-ons", () => {
         staffId,
         serviceId,
         startsAt,
-        firstName: "Adds",
+        firstName: "Adds", lastName: "Tester",
         customTime: true,
         addOnIds: [addOn.body.id],
       });
@@ -134,7 +134,7 @@ describe("booking with add-ons", () => {
     const res = await request(app)
       .post("/api/booking/appointments")
       .set("Cookie", cookie)
-      .send({ staffId, serviceId, startsAt, firstName: "NoAdds", customTime: true, addOnIds: ["nope"] });
+      .send({ staffId, serviceId, startsAt, firstName: "NoAdds", lastName: "Tester", customTime: true, addOnIds: ["nope"] });
     expect(res.status).toBe(201);
     const appt = await prisma.appointment.findUnique({ where: { id: res.body.id } });
     expect(appt!.endsAt.getTime() - appt!.startsAt.getTime()).toBe(30 * 60 * 1000); // just the haircut
@@ -158,7 +158,7 @@ describe("booking with add-ons", () => {
         staffId,
         serviceId: otherServiceId,
         startsAt: tomorrowAt(8),
-        firstName: "Scoped",
+        firstName: "Scoped", lastName: "Tester",
         customTime: true,
         addOnIds: [scoped.body.id],
       });
@@ -184,7 +184,7 @@ describe("booking with add-ons", () => {
         staffId,
         serviceId: otherServiceId,
         startsAt: tomorrowAt(12),
-        firstName: "Multi",
+        firstName: "Multi", lastName: "Tester",
         customTime: true,
         addOnIds: [multi.body.id],
       });
@@ -217,7 +217,7 @@ describe("public booking with add-ons (real availability gate)", () => {
         staffId,
         serviceId,
         startsAt: tomorrowAt(10),
-        firstName: "Grid",
+        firstName: "Grid", lastName: "Tester",
         phone: "(302) 555-0421",
         addOnIds: [addOn.body.id],
       });
@@ -238,7 +238,7 @@ describe("public booking with add-ons (real availability gate)", () => {
         staffId,
         serviceId,
         startsAt: new Date(new Date(tomorrowAt(16)).getTime() + 30 * 60 * 1000).toISOString(),
-        firstName: "Overflow",
+        firstName: "Overflow", lastName: "Tester",
         phone: "(302) 555-0422",
         addOnIds: [addOn.body.id],
       });

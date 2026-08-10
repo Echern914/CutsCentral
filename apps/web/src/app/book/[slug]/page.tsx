@@ -11,6 +11,8 @@ export interface BookShopData {
     timezone: string;
     logoUrl: string | null;
     accentColor: string | null;
+    // Instagram handle WITHOUT the "@" (the API strips it on save).
+    instagramHandle: string | null;
     bookingLeadHours: number;
     bookingMaxDays: number;
     // True when the shop's subscription/trial has lapsed: the create POST

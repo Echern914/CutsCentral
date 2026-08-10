@@ -190,6 +190,11 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
       timezone: shop.timezone,
       logoUrl: shop.logoUrl,
       accentColor: shop.accentColor,
+      // Stored without the "@" (stripped on save). The shop mini-site has shown
+      // this since it shipped; the booking page — which is the link barbers
+      // actually put in their Instagram bio — never did, so the traffic arrived
+      // from Instagram with no way back to it.
+      instagramHandle: shop.instagramHandle,
       bookingLeadHours: shop.bookingLeadHours,
       bookingMaxDays: shop.bookingMaxDays,
       // Lapsed shops can't take bookings (the create POST 403s) - tell the UI
@@ -1009,7 +1014,11 @@ const createSchema = z
     serviceId: z.string().min(1),
     startsAt: validDate,
     firstName: z.string().trim().min(1).max(80),
-    lastName: z.string().trim().max(80).optional().or(z.literal("")),
+    // REQUIRED on the public flow. Deliberately NOT required where the barber
+    // books for someone (dashboard walk-ins, the SMS receptionist): those write
+    // Appointment rows directly and a first name is often genuinely all he has.
+    // A customer filling in his own details always knows his surname.
+    lastName: z.string().trim().min(1).max(80),
     phone: z.string().trim().max(40).optional().or(z.literal("")),
     email: z.string().trim().email().max(200).optional().or(z.literal("")),
     smsConsent: z.boolean().optional(),

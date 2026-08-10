@@ -23,6 +23,8 @@ export interface ShopPageData {
   heroImageUrl: string | null;
   accentColor: string | null;
   instagramHandle: string | null;
+  /** Shop's Google "write a review" link; null = the CTA never renders. */
+  googleReviewUrl: string | null;
   hoursText: string | null;
   addressStreet: string | null;
   addressCity: string | null;

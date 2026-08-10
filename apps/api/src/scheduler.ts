@@ -11,6 +11,7 @@ import { promoteFulfilledAppointments } from "./engines/appointmentPromotion.js"
 import { runAppointmentReminders } from "./engines/appointmentReminders.js";
 import { runSyncedVisitReminders } from "./engines/syncedVisitReminders.js";
 import { runPushReminders } from "./engines/pushReminders.js";
+import { runRebookNudges } from "./engines/rebookNudges.js";
 import { runBarberReminders } from "./engines/barberReminders.js";
 import { refreshExpiringSquareTokens } from "./engines/squareTokenRefresh.js";
 import { rollForwardTargetedRules } from "./engines/targetedSlotRules.js";
@@ -137,6 +138,17 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
     ttlMs: 5 * MINUTE,
     run: () => runPushReminders(),
     failMsg: "push reminder job failed",
+  },
+  // "Book your next one?" ~30 min after the chair empties, while the client is
+  // still holding the phone. Sweeps BOTH native Appointments and synced Visits
+  // (an Acuity shop has no Appointment rows at all). Every 10 minutes, so the
+  // worst case lands 40 min out; idempotent via rebookPromptSentAt.
+  {
+    cronExpr: "*/10 * * * *",
+    name: "rebook-nudges",
+    ttlMs: 5 * MINUTE,
+    run: () => runRebookNudges(),
+    failMsg: "rebook nudge job failed",
   },
   // The BARBER's own reminders: "next up: Sam - Fade at 2:30" before each
   // appointment, and the evening "here's tomorrow" digest. Every 5 minutes

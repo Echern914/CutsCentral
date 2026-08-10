@@ -47,6 +47,7 @@ const INLINE_ERROR_FIELDS = new Set([
   "slug",
   "accentColor",
   "instagramHandle",
+  "googleReviewUrl",
   "bio",
   "hoursText",
   "notifyPhone",
@@ -84,6 +85,7 @@ export function PageEditor({
   const [accentColor, setAccentColor] = useState(settings.accentColor ?? "");
   const [heroImageUrl, setHeroImageUrl] = useState(settings.heroImageUrl ?? "");
   const [instagramHandle, setInstagramHandle] = useState(settings.instagramHandle ?? "");
+  const [googleReviewUrl, setGoogleReviewUrl] = useState(settings.googleReviewUrl ?? "");
   const [hoursText, setHoursText] = useState(settings.hoursText ?? "");
   const [addressStreet, setAddressStreet] = useState(settings.addressStreet ?? "");
   const [addressCity, setAddressCity] = useState(settings.addressCity ?? "");
@@ -156,6 +158,7 @@ export function PageEditor({
     accentColor: accentTrimmed,
     heroImageUrl: heroImageUrl.trim(),
     instagramHandle: instagramHandle.trim(),
+    googleReviewUrl: googleReviewUrl.trim(),
     hoursText: hoursText.trim(),
     addressStreet: addressStreet.trim(),
     addressCity: addressCity.trim(),
@@ -199,6 +202,7 @@ export function PageEditor({
       heroImageUrl: heroImageUrl.trim() || null,
       accentColor: validHex ? accentTrimmed : null,
       instagramHandle: instagramHandle.trim().replace(/^@/, "") || null,
+      googleReviewUrl: googleReviewUrl.trim() || null,
       hoursText: hoursText.trim() || null,
       addressStreet: addressStreet.trim() || null,
       addressCity: addressCity.trim() || null,
@@ -237,6 +241,7 @@ export function PageEditor({
       accentColor,
       validHex,
       instagramHandle,
+      googleReviewUrl,
       hoursText,
       addressStreet,
       addressCity,
@@ -526,6 +531,27 @@ export function PageEditor({
                 />
                 <FormError id="err-instagram" className="mt-1">
                   {fieldErrors.instagramHandle}
+                </FormError>
+              </label>
+              <label className={labelCls}>
+                Google review link
+                <input
+                  value={googleReviewUrl}
+                  onChange={(e) => setGoogleReviewUrl(e.target.value)}
+                  placeholder="https://g.page/r/…/review"
+                  maxLength={500}
+                  inputMode="url"
+                  aria-invalid={fieldErrors.googleReviewUrl ? true : undefined}
+                  aria-describedby="hint-google-review"
+                  className={`mt-1 ${field}`}
+                />
+                <p id="hint-google-review" className="mt-1 text-xs text-muted">
+                  From your Google Business Profile → Ask for reviews. After
+                  someone reviews you here, they get a one-tap “Post it on
+                  Google” button.
+                </p>
+                <FormError id="err-google-review" className="mt-1">
+                  {fieldErrors.googleReviewUrl}
                 </FormError>
               </label>
               <label className={labelCls}>

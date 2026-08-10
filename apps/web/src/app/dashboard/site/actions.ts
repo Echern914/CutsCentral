@@ -12,6 +12,7 @@ export interface PageSettingsInput {
   accentColor: string;
   heroImageUrl: string;
   instagramHandle: string;
+  googleReviewUrl: string;
   hoursText: string;
   addressStreet: string;
   addressCity: string;
@@ -52,6 +53,7 @@ const PAGE_FIELDS = [
   "accentColor",
   "heroImageUrl",
   "instagramHandle",
+  "googleReviewUrl",
   "hoursText",
   "addressStreet",
   "addressCity",

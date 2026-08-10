@@ -37,7 +37,7 @@ function publicBooking(startsAt: Date, extra: Record<string, unknown> = {}) {
       staffId,
       serviceId,
       startsAt: startsAt.toISOString(),
-      firstName: `C${randomToken(4)}`,
+      firstName: `C${randomToken(4)}`, lastName: "Tester",
       email: `c-${randomToken(6)}@test.local`,
       ...extra,
     });
@@ -475,7 +475,7 @@ describe("weekly series: until-turned-off + condensed grouping + bulk delete", (
         staffId,
         serviceId,
         startsAt: first.toISOString(),
-        firstName: "SeriesKeeper",
+        firstName: "SeriesKeeper", lastName: "Tester",
         email: `sk-${randomToken(6)}@test.local`,
         targetedSlotId: slot!.id,
       });
@@ -521,7 +521,7 @@ describe("weekly series: until-turned-off + condensed grouping + bulk delete", (
         staffId,
         serviceId,
         startsAt: mid.startsAt.toISOString(),
-        firstName: "BulkKeeper",
+        firstName: "BulkKeeper", lastName: "Tester",
         email: `bk-${randomToken(6)}@test.local`,
         targetedSlotId: mid.id,
       });
