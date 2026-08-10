@@ -15,7 +15,8 @@ import { notifyPunchEarned } from "../services/loyaltyNotify.js";
 import { notifyAppointmentConfirmation } from "../services/appointmentNotify.js";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
-import { lockStaffAndAssertSlotFree } from "../engines/bookingWrite.js";
+import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
+import { toCents } from "../billing/payments.js";
 import {
   APPOINTMENT_NUDGE_KIND,
   APPOINTMENT_NUDGE_LIMIT,
@@ -2293,6 +2294,186 @@ bookingDashboardRouter.get("/slots", async (req, res) => {
 bookingDashboardRouter.post("/appointments/:id/cancel", async (req, res) => {
   const ok = await cancelAppointment(req.shop!.id, req.params.id!, "CANCELED");
   res.status(ok ? 200 : 404).json({ ok });
+});
+
+/**
+ * POST /appointments/:id/reschedule - the barber moves a booking to a new time.
+ *
+ * The customer has been able to do this since the manage page got a real
+ * reschedule; the barber - whose calendar it actually is - could only cancel and
+ * rebook, which drops the client's manage link and their reminders. Same engine,
+ * same guards, from the other side of the chair.
+ *
+ * `customTime` mirrors the CREATE route exactly: without it the new time must be
+ * genuinely bookable (inside hours, not blocked); with it the barber overrides
+ * that, because "come in at 7, I'll stay late" is a real thing a barber does and
+ * the posted hours are not a law about his own chair. OVERLAP IS NEVER
+ * OVERRIDABLE either way - `lockStaffAndAssertSlotFree` runs in the write
+ * transaction regardless, so no flag can double-book a chair.
+ *
+ * Only a native BOOKED appointment that hasn't happened yet: a synced
+ * Acuity/Square row isn't an Appointment at all (it's a Visit, managed where it
+ * was made), and moving something already completed or canceled is meaningless.
+ */
+const rescheduleApptSchema = z
+  .object({
+    startsAt: z.string().min(1),
+    /** Barber override: skip the hours/blocked check. Overlap still applies. */
+    customTime: z.boolean().optional(),
+  })
+  .strict();
+
+bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => {
+  const shopId = req.shop!.id;
+  const parsed = rescheduleApptSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const startsAt = new Date(parsed.data.startsAt);
+  if (Number.isNaN(startsAt.getTime())) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+
+  const appt = await prisma.appointment.findFirst({
+    // shopId in the WHERE is the app-layer half of tenant isolation - an id
+    // from another shop resolves to nothing rather than to someone else's row.
+    where: { id: req.params.id!, shopId },
+    select: {
+      id: true,
+      staffId: true,
+      serviceId: true,
+      status: true,
+      startsAt: true,
+      payment: { select: { status: true, amount: true } },
+      service: {
+        select: {
+          durationMin: true,
+          durationOverrides: true,
+          timeOverrides: true,
+          price: true,
+          priceOverrides: true,
+          dateOverrides: true,
+        },
+      },
+    },
+  });
+  if (!appt) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if (appt.status !== "BOOKED" || appt.startsAt <= new Date()) {
+    res.status(409).json({ error: "not_reschedulable" });
+    return;
+  }
+
+  const shop = req.shop!;
+  // The new slot can land on a different weekday, date override or time-of-day
+  // window, so both length and price are re-measured for the NEW instant rather
+  // than carried over. Same layering the create path uses.
+  const endsAt = new Date(
+    startsAt.getTime() +
+      effectiveDurationAt(appt.service.durationMin, {
+        at: startsAt,
+        timezone: shop.timezone,
+        weekdayOverrides: appt.service.durationOverrides,
+        timeWindows: appt.service.timeOverrides,
+      }) *
+        60_000,
+  );
+  const effectivePrice = effectivePriceAt(
+    appt.service.price === null ? null : Number(appt.service.price),
+    {
+      at: startsAt,
+      timezone: shop.timezone,
+      weekdayOverrides: appt.service.priceOverrides,
+      dateOverrides: appt.service.dateOverrides,
+      timeWindows: appt.service.timeOverrides,
+    },
+  );
+
+  // A PAID booking moving to a differently-priced day can't be reconciled here
+  // (no partial capture or top-up on this path), so it's refused rather than
+  // silently leaving the customer over- or under-charged. Same rule the
+  // customer's own reschedule follows.
+  if (appt.payment && appt.payment.status === "succeeded") {
+    const newCents = toCents(effectivePrice);
+    if (newCents !== null && newCents !== appt.payment.amount) {
+      res.status(409).json({
+        error: "price_changed",
+        message:
+          "That day has a different price and this booking is already paid. Refund or take the difference in person, then move it.",
+      });
+      return;
+    }
+  }
+
+  if (
+    !parsed.data.customTime &&
+    !(await isSlotBookable({
+      shopId,
+      staffId: appt.staffId,
+      serviceId: appt.serviceId,
+      startsAt,
+      // Without this the appointment's own current slot reads as busy and the
+      // barber can't move it 15 minutes - it would be hiding its own hour.
+      excludeAppointmentId: appt.id,
+    }))
+  ) {
+    res.status(400).json({ error: "invalid_slot" });
+    return;
+  }
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      await lockStaffAndAssertSlotFree(tx, {
+        staffId: appt.staffId,
+        shopId,
+        startsAt,
+        endsAt,
+        bufferMin: shop.bookingBufferMin,
+        excludeAppointmentId: appt.id,
+      });
+      // Send-state is reset so the moved booking gets a fresh confirmation and
+      // fresh reminders - including the PUSH stamps, or a moved appointment
+      // silently never gets its 24h/2h push. Check-in state is cleared too: an
+      // "en route" tapped for the OLD time says nothing about the new one.
+      await tx.appointment.update({
+        where: { id: appt.id },
+        data: {
+          startsAt,
+          endsAt,
+          priceAtBooking: effectivePrice ?? null,
+          confirmationSentAt: null,
+          reminderSentAt: null,
+          reminder24hPushSentAt: null,
+          reminder2hPushSentAt: null,
+          checkInStatus: null,
+          checkedInAt: null,
+          etaMinutes: null,
+          runningLate: false,
+        },
+      });
+    });
+  } catch (err) {
+    if (
+      err instanceof SlotTakenError ||
+      (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002")
+    ) {
+      res.status(409).json({ error: "slot_taken" });
+      return;
+    }
+    logger.error({ err, appointmentId: appt.id }, "barber reschedule failed");
+    res.status(500).json({ error: "reschedule_failed" });
+    return;
+  }
+
+  // The customer is told their time moved. No barber alert here, unlike the
+  // customer-initiated path - the barber is the one who just did it.
+  void notifyAppointmentConfirmation({ shopId, appointmentId: appt.id });
+  invalidateShopAvailabilityCaches(shopId);
+  res.json({ ok: true, startsAt: startsAt.toISOString() });
 });
 
 bookingDashboardRouter.post("/appointments/:id/no-show", async (req, res) => {
