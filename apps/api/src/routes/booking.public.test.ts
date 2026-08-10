@@ -538,3 +538,110 @@ describe("day-of-week pricing", () => {
     expect(Number(appt!.priceAtBooking)).toBe(55);
   });
 });
+
+/**
+ * The reschedule OPTIONS feed behind the manage page's in-page picker.
+ *
+ * Before this endpoint the manage page told customers to "book a new time and
+ * cancel this one" — two operations in a required order, where forgetting the
+ * second left a phantom booking holding a slot the barber couldn't sell, and
+ * doing the second first surrendered the original time for nothing.
+ */
+describe("reschedule options (GET /manage/:token/slots)", () => {
+  async function bookAt(hourUtc: number, phone: string): Promise<string> {
+    const res = await request(app)
+      .post(`/api/book/${slugA}`)
+      .send({
+        staffId,
+        serviceId,
+        startsAt: futureAtHour(3, hourUtc).toISOString(),
+        firstName: "Resched",
+        phone,
+      });
+    expect(res.status).toBe(201);
+    return res.body.manageToken as string;
+  }
+
+  it("lists this barber's open times for the booking's own service", async () => {
+    const token = await bookAt(10, "(302) 555-0810");
+    const res = await request(app).get(`/api/book/manage/${token}/slots`);
+    expect(res.status).toBe(200);
+    expect(res.body.timezone).toBe("UTC");
+    expect(res.body.slots.length).toBeGreaterThan(0);
+    // Availability is 09:00-17:00, so nothing outside it may be offered.
+    for (const s of res.body.slots as { startsAt: string }[]) {
+      const h = new Date(s.startsAt).getUTCHours();
+      expect(h).toBeGreaterThanOrEqual(9);
+      expect(h).toBeLessThan(17);
+    }
+  });
+
+  // THE bug this endpoint exists to avoid: without excludeAppointmentId the
+  // customer's own booking reads as busy, so the one appointment they are
+  // allowed to move makes its own hour disappear — and the slot they already
+  // hold looks taken by a stranger.
+  it("offers the appointment's OWN slot back rather than treating it as busy", async () => {
+    const mine = futureAtHour(3, 11);
+    const token = await bookAt(11, "(302) 555-0811");
+    const res = await request(app).get(`/api/book/manage/${token}/slots`);
+    expect(res.status).toBe(200);
+    const starts = (res.body.slots as { startsAt: string }[]).map((s) => s.startsAt);
+    expect(starts).toContain(mine.toISOString());
+  });
+
+  it("omits a time another client already holds", async () => {
+    const token = await bookAt(12, "(302) 555-0812");
+    const taken = futureAtHour(3, 14);
+    const other = await request(app)
+      .post(`/api/book/${slugA}`)
+      .send({
+        staffId,
+        serviceId,
+        startsAt: taken.toISOString(),
+        firstName: "Other",
+        phone: "(302) 555-0813",
+      });
+    expect(other.status).toBe(201);
+
+    const res = await request(app).get(`/api/book/manage/${token}/slots`);
+    const starts = (res.body.slots as { startsAt: string }[]).map((s) => s.startsAt);
+    expect(starts).not.toContain(taken.toISOString());
+  });
+
+  it("the listed times are actually bookable — pick one and the move succeeds", async () => {
+    const token = await bookAt(15, "(302) 555-0814");
+    const listed = await request(app).get(`/api/book/manage/${token}/slots`);
+    const target = (listed.body.slots as { startsAt: string }[]).find(
+      (s) => s.startsAt !== futureAtHour(3, 15).toISOString(),
+    )!;
+    expect(target).toBeDefined();
+
+    const move = await request(app)
+      .post(`/api/book/manage/${token}/reschedule`)
+      .send({ startsAt: target.startsAt });
+    expect(move.status).toBe(200);
+
+    // Same appointment, new time — not a cancel-and-recreate.
+    const appt = await prisma.appointment.findFirst({
+      where: { phone: "+13025550814" },
+      select: { startsAt: true, status: true, manageToken: true },
+    });
+    expect(appt?.status).toBe("BOOKED");
+    expect(appt?.manageToken).toBe(token);
+    expect(appt?.startsAt.toISOString()).toBe(target.startsAt);
+  });
+
+  it("404s an unknown token (the token IS the authorization)", async () => {
+    const res = await request(app).get("/api/book/manage/not-a-real-token/slots");
+    expect(res.status).toBe(404);
+  });
+
+  it("returns an empty list for a canceled booking instead of erroring", async () => {
+    const token = await bookAt(16, "(302) 555-0815");
+    const cancel = await request(app).post(`/api/book/manage/${token}/cancel`);
+    expect(cancel.status).toBe(200);
+    const res = await request(app).get(`/api/book/manage/${token}/slots`);
+    expect(res.status).toBe(200);
+    expect(res.body.slots).toEqual([]);
+  });
+});
