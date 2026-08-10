@@ -61,7 +61,11 @@ async function makeClient(): Promise<string> {
 async function seedAppt(opts: {
   endedMinAgo: number;
   clientId: string;
-  status?: string;
+  // A literal union, NOT `string`: Railway's build runs `tsc` over the test
+  // files too and is stricter than vitest, which transpiles without checking
+  // types. A plain `string` here compiles and passes locally, then fails the
+  // production build.
+  status?: "PENDING" | "BOOKED" | "COMPLETED" | "CANCELED" | "NO_SHOW";
   canceledAt?: Date;
 }): Promise<string> {
   const endsAt = new Date(NOW.getTime() - opts.endedMinAgo * MIN + ++seedSeq * 1000);

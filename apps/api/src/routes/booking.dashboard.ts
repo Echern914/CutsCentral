@@ -1192,12 +1192,26 @@ bookingDashboardRouter.post("/staff/:id/exceptions", async (req, res) => {
   res.status(201).json({ ok: true });
 });
 
+// Remove a one-off exception - in practice "unblock this time". Shop-scoped by
+// forShop, so another shop's id simply matches nothing.
+//
+// 404s when nothing was removed rather than returning 200 {ok:false}: the web
+// layer's apiSend reads the HTTP STATUS, so the old shape reported a failed
+// delete as a success and the block would sit there while the UI said it was
+// gone. An already-deleted id is the same 404, which is the honest answer.
 bookingDashboardRouter.delete("/exceptions/:id", async (req, res) => {
   const db = forShop(req.shop!.id);
   const { count } = await db.availabilityException.deleteMany({
     where: { id: req.params.id },
   });
-  res.json({ ok: count > 0 });
+  if (count === 0) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  // The freed hours become bookable immediately: the router-level hook above
+  // invalidates this shop's availability caches on any non-GET that finishes
+  // under 400, so the 404 path deliberately skips it (nothing changed).
+  res.json({ ok: true });
 });
 
 //  Appointments (the barber's calendar / inbox)
