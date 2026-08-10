@@ -381,6 +381,22 @@ export async function addBlockAction(input: BlockOffInput): Promise<Result> {
   );
 }
 
+/**
+ * Un-block time: delete the one-off exception behind a hatched band.
+ *
+ * The block was always removable through the API, but nothing in the app ever
+ * called it — a barber who blocked a day off had no way to give it back. The
+ * id here is the AgendaRow id of a `source: "block"` row, which IS the
+ * AvailabilityException id.
+ *
+ * Only NATIVE blocks. Acuity/Square blocks are ExternalBlock rows owned by the
+ * upstream calendar; deleting one here would be undone by the next re-sync, so
+ * the UI points the barber at Acuity instead of pretending.
+ */
+export async function removeBlockAction(exceptionId: string): Promise<Result> {
+  return done(await apiSend("DELETE", `/api/booking/exceptions/${exceptionId}`));
+}
+
 //  Waitlist
 
 export async function setWaitlistStatusAction(

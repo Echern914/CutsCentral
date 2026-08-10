@@ -26,6 +26,7 @@ import {
   markArrivedAction,
   noShowAppointmentAction,
   nudgeAppointmentAction,
+  removeBlockAction,
   setWaitlistStatusAction,
 } from "./actions";
 import { AppointmentForm } from "./AppointmentForm";
@@ -1105,10 +1106,33 @@ function AppointmentBlock({
                 Blocked
               </span>
             )}
+            {/* Unblock, right on the band. Blocking time was always one tap and
+                un-blocking it was impossible anywhere in the app — the endpoint
+                existed but nothing called it, so a barber who blocked a day off
+                could never give it back. Deliberately a plain visible button,
+                not a menu: this is the one action a block has. Single tap
+                matches Cancel on an appointment, which is far more destructive
+                and also asks nothing. */}
+            {!row.syncedExternal && (
+              <button
+                type="button"
+                onClick={() => act(removeBlockAction, "Time unblocked")}
+                disabled={pending}
+                aria-label={`Unblock ${timeLabel}`}
+                className="rounded-md border border-emerald-soft/40 px-2.5 py-1 text-[11px] font-medium text-emerald-soft transition-colors hover:bg-emerald-soft/10 disabled:opacity-50"
+              >
+                {pending ? "…" : "Unblock"}
+              </button>
+            )}
           </span>
         </div>
         {reason && reason !== "Blocked" && (
           <p className="truncate font-medium text-offwhite/75">{reason}</p>
+        )}
+        {/* Say WHY there's no button here, instead of leaving a dead band that
+            looks identical to a removable one. */}
+        {row.syncedExternal && (
+          <p className="text-[10px] text-muted">Remove this in Acuity — it syncs back.</p>
         )}
       </div>
     );
