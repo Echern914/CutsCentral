@@ -309,6 +309,9 @@ export function GoalPlanner({
                   </div>
                   {s.plannable ? (
                     <>
+                      {/* blankAtFallback: these two are "no change" levers, so a
+                          literal 0 sitting in the box is something to type
+                          around rather than a value. See NumberField. */}
                       <NumberField
                         value={s.priceDelta}
                         onChange={(n) => setLever(s.serviceId, { priceDelta: n })}
@@ -316,6 +319,7 @@ export function GoalPlanner({
                         max={1000}
                         integer
                         emptyValue={0}
+                        blankAtFallback
                         className="w-full rounded-lg border border-subtle bg-charcoal-800 px-2 py-1.5 text-right text-sm tabular-nums"
                         aria-label={`Price change for ${s.name}`}
                       />
@@ -326,6 +330,7 @@ export function GoalPlanner({
                         max={1000}
                         integer
                         emptyValue={0}
+                        blankAtFallback
                         className="w-full rounded-lg border border-subtle bg-charcoal-800 px-2 py-1.5 text-right text-sm tabular-nums"
                         aria-label={`Extra ${nounPlural} per ${periodNoun} for ${s.name}`}
                       />

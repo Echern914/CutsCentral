@@ -8,6 +8,7 @@ import {
   isBillingHref,
   type FeatureIndexEntry,
 } from "@chairback/config/features";
+import { searchFeatures } from "@chairback/config/helpMatch";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { lockedTier, type FeatureLocks } from "@/lib/featureLocks";
 import { PlanBadge } from "./PlanBadge";
@@ -101,23 +102,15 @@ export function FeatureSearch({ locks }: { locks?: FeatureLocks } = {}) {
     }
   }
 
+  // Matching moved into packages/config (searchFeatures) so this palette and
+  // the help bubble share one tokenizer, one synonym table and one Damerau
+  // distance. The ladder that used to live here scored by whole-query
+  // SUBSTRING, which returned nothing for 37 of 46 real keywords ("buffer",
+  // "lunch break", "card punch") and confident garbage for others ("age" hit
+  // "Public shop p-AGE"). See the note on searchFeatures for the full autopsy.
   const results = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return index;
-    const scored = index.map((f) => {
-      const name = f.name.toLowerCase();
-      let score = 0;
-      if (name.startsWith(q)) score = 4;
-      else if (name.includes(q)) score = 3;
-      else if (f.synonyms.some((s) => s.toLowerCase().startsWith(q))) score = 2;
-      else if (f.synonyms.some((s) => s.toLowerCase().includes(q))) score = 1.5;
-      else if (f.description.toLowerCase().includes(q)) score = 1;
-      return { f, score };
-    });
-    return scored
-      .filter((r) => r.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .map((r) => r.f);
+    if (!query.trim()) return index;
+    return searchFeatures(query, index).map((h) => h.entry);
   }, [query, index]);
 
   const go = useCallback(

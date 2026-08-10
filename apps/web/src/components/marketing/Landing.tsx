@@ -140,10 +140,16 @@ export function Landing() {
             items={[
               "Automatic punch cards",
               "Smart rebooking texts",
+              "AI receptionist",
+              "Your own domain",
+              "Found on Google",
+              "Holiday & weekend pricing",
+              "Special-priced slots",
               "Revenue attribution",
               "At-risk client radar",
               "Acuity + Square sync",
               "Built-in online booking",
+              "0% booking commission",
               "Magic-link rewards page",
               "STOP handling built in",
               "Daily send caps",
@@ -469,6 +475,21 @@ const FEATURES = [
     icon: <UsersIcon className="h-5 w-5" />,
   },
   {
+    title: "Your name, your domain",
+    body: "Connect the domain you own and it lands clients straight on your page — and with your address filled in, your shop shows up when people search on Google.",
+    icon: <GlobeIcon className="h-5 w-5" />,
+  },
+  {
+    title: "Charge what the day is worth",
+    body: "Saturday prices on Saturday, holiday rates on holidays, late-night specials at their own price — every rate shown honestly before the client books.",
+    icon: <TagIcon className="h-5 w-5" />,
+  },
+  {
+    title: "Get paid with 0% commission",
+    body: "Card and Apple Pay at booking straight into your own Stripe account, or Zelle, Venmo, and Cash App direct. Your money never routes through us.",
+    icon: <WalletIcon className="h-5 w-5" />,
+  },
+  {
     title: "Built-in compliance",
     body: "STOP replies opt clients out instantly, send caps stop runaway texting, and every message is logged.",
     icon: <ShieldIcon className="h-5 w-5" />,
@@ -483,7 +504,15 @@ const FAQ: readonly { q: string; a: string; hasPrices?: boolean }[] = [
   },
   {
     q: "Does it work with my existing Acuity account?",
-    a: "Yes. You connect Acuity once with one click. Past appointments backfill automatically, and new ones flow in as they happen.",
+    a: "Yes. You connect Acuity once with one click. Past appointments backfill automatically, new ones flow in as they happen, and clients with synced appointments get reminder texts just like native bookings — you don't have to move your booking anywhere.",
+  },
+  {
+    q: "Can I use my own domain?",
+    a: "Yes. Connect a domain you own from your page settings and anyone who types it lands straight on your booking page. We show you the two records to add wherever you bought it (GoDaddy, Namecheap, and so on) — most domains connect in minutes.",
+  },
+  {
+    q: "Will clients find me on Google?",
+    a: "Your page carries the structured business info Google reads — your name, address, hours, photos, and reviews — so once your address is filled in, your shop can surface for local searches. Own a domain? Connect it and it points people straight to your page.",
   },
   {
     q: "What counts as a punch?",
@@ -562,6 +591,35 @@ function UsersIcon({ className }: { className?: string }) {
       <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
       <circle cx="9" cy="7" r="4" />
       <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  );
+}
+
+function GlobeIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18" />
+      <path d="M12 3a15.3 15.3 0 0 1 4 9 15.3 15.3 0 0 1-4 9 15.3 15.3 0 0 1-4-9 15.3 15.3 0 0 1 4-9Z" />
+    </svg>
+  );
+}
+
+function TagIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M12.6 2.6 21 11a2 2 0 0 1 0 2.8l-7.2 7.2a2 2 0 0 1-2.8 0L2.6 12.6A2 2 0 0 1 2 11.2V4a2 2 0 0 1 2-2h7.2a2 2 0 0 1 1.4.6Z" />
+      <circle cx="7.5" cy="7.5" r="1.3" />
+    </svg>
+  );
+}
+
+function WalletIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M21 7H5a2 2 0 0 1-2-2 2 2 0 0 1 2-2h14v4" />
+      <path d="M3 5v14a2 2 0 0 0 2 2h16V7" />
+      <path d="M16 14h.01" />
     </svg>
   );
 }

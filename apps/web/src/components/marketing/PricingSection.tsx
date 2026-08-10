@@ -41,7 +41,8 @@ export function PricingSection() {
                 {[
                   "Digital punch cards & your loyalty menu",
                   "Your branded rewards page & public mini-site",
-                  "Client book, notes & CSV export",
+                  "Connect your own domain",
+                  "Client book, notes & CSV import/export",
                   "One-tap visit logging, no booking app needed",
                   "At-risk radar: see who's overdue",
                   "Free web push notifications",
@@ -90,8 +91,9 @@ export function PricingSection() {
                   "Win-back texts that recover lapsed clients",
                   "Promo blasts with revenue attribution",
                   "Waitlist with “a slot just opened” alerts",
-                  "Recurring appointments, add-ons, day pricing & request approval",
-                  "Square, Acuity & CSV import",
+                  "Recurring appointments, add-ons & request approval",
+                  "Holiday, weekend & time-of-day pricing, plus special-priced slots",
+                  "Square & Acuity sync — reminder texts cover synced bookings too",
                 ].map((t) => (
                   <li key={t} className="flex items-start gap-2.5">
                     <CheckIcon className="mt-0.5 h-4 w-4 shrink-0 text-gold" />
