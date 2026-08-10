@@ -294,6 +294,13 @@ export function BookingCalendar({
           const active = rows.filter(
             (r) => r.source !== "block" && r.status !== "canceled",
           ).length;
+          // A blocked day used to render as a COMPLETELY BLANK cell — the count
+          // badge deliberately skips blocks, so "day off" and "nothing booked"
+          // looked identical on the month grid. That's why blocks felt
+          // impossible to undo: you couldn't find the day you'd blocked without
+          // tapping through the month. The hatching is the same texture the
+          // bands use, so it already reads as "not sellable" everywhere else.
+          const hasBlock = rows.some((r) => r.source === "block");
           const isToday = key === todayKey;
           const isSelected = key === selectedDay;
           return (
@@ -301,9 +308,11 @@ export function BookingCalendar({
               key={key}
               type="button"
               onClick={() => setSelectedDay(isSelected ? null : key)}
+              aria-label={hasBlock ? `${dayNum} — has blocked time` : undefined}
               className={cn(
                 "relative flex aspect-square flex-col items-center justify-center rounded-lg text-sm transition-colors",
                 inMonth ? "text-offwhite" : "text-muted/40",
+                hasBlock && !isSelected && BLOCK_STRIPES,
                 isSelected
                   ? "bg-gold/20 ring-1 ring-gold/50"
                   : isToday
@@ -314,14 +323,34 @@ export function BookingCalendar({
               <span className={cn(isToday && !isSelected && "font-semibold text-gold")}>
                 {dayNum}
               </span>
-              {active > 0 && (
-                <span
-                  className={cn(
-                    "mt-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9px] font-semibold leading-none",
-                    isSelected ? "bg-gold text-charcoal-900" : "bg-gold/20 text-gold",
+              {/* Markers. The hatching above is deliberately faint (it was
+                  tuned for wide bands, not a 40px cell), so the badge is what
+                  actually has to carry "this day is blocked" — a day off with
+                  nothing booked was the case that read as an ordinary free
+                  day. Both can show at once: a half-day block on a day that
+                  still has cuts on it. */}
+              {(active > 0 || hasBlock) && (
+                <span className="mt-0.5 flex items-center gap-0.5">
+                  {active > 0 && (
+                    <span
+                      className={cn(
+                        "flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9px] font-semibold leading-none",
+                        isSelected ? "bg-gold text-charcoal-900" : "bg-gold/20 text-gold",
+                      )}
+                    >
+                      {active}
+                    </span>
                   )}
-                >
-                  {active}
+                  {hasBlock && (
+                    // A bar, not a glyph: it stays legible at 9px, needs no
+                    // font support, and is narrow enough to sit beside the
+                    // count on a 390px phone (7 columns leaves ~44px a cell).
+                    <span
+                      title="Blocked time"
+                      className="h-1.5 w-3 rounded-full bg-muted/80"
+                      aria-hidden="true"
+                    />
+                  )}
                 </span>
               )}
             </button>
