@@ -140,6 +140,10 @@ const updateShopSchema = createShopSchema
       .pipe(z.string().regex(/^[A-Za-z0-9._]{0,30}$/, "Letters, numbers, dots, underscores"))
       .nullish()
       .or(z.literal("")),
+    // Where "Post it on Google" sends a reviewer. Any https URL: barbers paste
+    // whatever their Google Business profile hands them (g.page/..., a maps
+    // share link, the ?placeid= form), and we must not reject a valid one.
+    googleReviewUrl: httpUrl(500).nullish().or(z.literal("")),
     hoursText: z.string().trim().max(400).nullish().or(z.literal("")),
     // Street address for the public page + LocalBusiness structured data.
     // Free-text on purpose (no geocoding dependency); "" clears a field.
@@ -366,6 +370,7 @@ shopsRouter.patch("/me", requireUser, requireShop, async (req, res) => {
   if (data.bio === "") data.bio = null;
   if (data.heroImageUrl === "") data.heroImageUrl = null;
   if (data.instagramHandle === "") data.instagramHandle = null;
+  if (data.googleReviewUrl === "") data.googleReviewUrl = null;
   if (data.hoursText === "") data.hoursText = null;
   if (data.addressStreet === "") data.addressStreet = null;
   if (data.addressCity === "") data.addressCity = null;
@@ -568,6 +573,7 @@ publicPageRouter.get("/:slug", async (req, res) => {
     heroImageUrl: shop.heroImageUrl,
     accentColor: shop.accentColor,
     instagramHandle: shop.instagramHandle,
+    googleReviewUrl: shop.googleReviewUrl,
     hoursText: shop.hoursText,
     // Street address for the page footer + LocalBusiness JSON-LD (local SEO).
     addressStreet: shop.addressStreet,
@@ -871,6 +877,7 @@ function serializeShop(shop: {
   bio: string | null;
   heroImageUrl: string | null;
   instagramHandle: string | null;
+  googleReviewUrl: string | null;
   hoursText: string | null;
   addressStreet: string | null;
   addressCity: string | null;
@@ -926,6 +933,7 @@ function serializeShop(shop: {
     bio: shop.bio,
     heroImageUrl: shop.heroImageUrl,
     instagramHandle: shop.instagramHandle,
+    googleReviewUrl: shop.googleReviewUrl,
     hoursText: shop.hoursText,
     addressStreet: shop.addressStreet,
     addressCity: shop.addressCity,

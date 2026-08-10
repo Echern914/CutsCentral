@@ -572,6 +572,7 @@ function Reviews({
           slug={data.slug}
           shopName={data.name}
           accent={accent}
+          googleReviewUrl={data.googleReviewUrl}
           preview={preview}
           theme={{
             surface: theme.surface,

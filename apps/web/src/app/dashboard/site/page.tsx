@@ -23,6 +23,7 @@ export interface ShopPageSettings {
   accentColor: string | null;
   heroImageUrl: string | null;
   instagramHandle: string | null;
+  googleReviewUrl: string | null;
   hoursText: string | null;
   addressStreet: string | null;
   addressCity: string | null;

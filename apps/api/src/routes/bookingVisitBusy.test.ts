@@ -89,7 +89,7 @@ beforeAll(async () => {
       shopId,
       acuityClientKey: `visitbusy-${randomToken(6)}`,
       magicToken: randomToken(),
-      firstName: "Legacy",
+      firstName: "Legacy", lastName: "Tester",
     },
     select: { id: true },
   });
@@ -157,7 +157,7 @@ describe("external synced visits block native booking", () => {
           staffId,
           serviceId,
           startsAt: at(tomorrow, h).toISOString(),
-          firstName: "Walkin",
+          firstName: "Walkin", lastName: "Tester",
           email: `walkin-${h}@test.chairback`,
           smsConsent: false,
         });
@@ -185,7 +185,7 @@ describe("external synced visits block native booking", () => {
         shopId,
         staffId,
         serviceId,
-        firstName: "Native",
+        firstName: "Native", lastName: "Tester",
         status: "BOOKED",
         startsAt: at(tomorrow, 13),
         endsAt: at(tomorrow, 14),

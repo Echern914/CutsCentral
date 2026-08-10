@@ -14,12 +14,15 @@ export function ReviewForm({
   slug,
   shopName,
   accent,
+  googleReviewUrl = null,
   theme,
   preview = false,
 }: {
   slug: string;
   shopName: string;
   accent: string;
+  /** Shop's Google review link; null/unset = the Google CTA never renders. */
+  googleReviewUrl?: string | null;
   theme: {
     surface: string;
     border: string;
@@ -75,6 +78,27 @@ export function ReviewForm({
         <p className="mt-1 text-xs" style={{ color: theme.muted }}>
           {shopName} will review it shortly. Once approved it appears here.
         </p>
+        {/* The hand-off to Google, once the review is already safely saved.
+            Shown to EVERY reviewer regardless of the stars they gave: sending
+            only the happy ones to Google is "review gating", which Google
+            explicitly prohibits and which can get a listing penalized. The
+            self-selection takes care of itself — someone who just tapped 5
+            stars is the one who clicks this. */}
+        {googleReviewUrl && !preview && (
+          <a
+            href={googleReviewUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-4 inline-block w-full py-3 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01]"
+            style={{
+              backgroundColor: accent,
+              color: readableOn(accent),
+              borderRadius: theme.buttonRadius,
+            }}
+          >
+            Post it on Google too →
+          </a>
+        )}
       </div>
     );
   }

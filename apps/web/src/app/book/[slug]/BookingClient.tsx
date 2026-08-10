@@ -1128,7 +1128,15 @@ export function BookingClient({ data }: { data: BookShopData }) {
   function submit() {
     setError(null);
     if (!firstName.trim()) {
-      setError("Please add your name.");
+      setError("Please add your first name.");
+      return;
+    }
+    // Last name is REQUIRED on the customer flow (it is not on the barber's own
+    // walk-in form, where a first name is often all he has). Two "Mike"s in one
+    // client list are indistinguishable in search, in the agenda, and in every
+    // reminder — the barber ends up guessing which one is in his chair.
+    if (!lastName.trim()) {
+      setError("Please add your last name.");
       return;
     }
     if (!phone.trim() && !email.trim()) {
@@ -1152,7 +1160,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
         serviceId,
         startsAt: slot,
         firstName: firstName.trim(),
-        lastName: lastName.trim() || undefined,
+        lastName: lastName.trim(),
         phone: phone.trim() || undefined,
         email: email.trim() || undefined,
         smsConsent: consent && Boolean(phone.trim()),
@@ -1471,6 +1479,19 @@ export function BookingClient({ data }: { data: BookShopData }) {
           />
         ) : null}
         <h1 className="font-display text-2xl tracking-tight">Book at {data.shop.name}</h1>
+        {/* The handle, under the name — this page is what gets pasted into an
+            Instagram bio, so the trip back to the shop's feed should be one tap.
+            Stored without the "@"; we render it. */}
+        {data.shop.instagramHandle && (
+          <a
+            href={`https://instagram.com/${data.shop.instagramHandle}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-2 inline-block text-sm font-medium text-muted transition-colors hover:text-offwhite"
+          >
+            @{data.shop.instagramHandle}
+          </a>
+        )}
       </header>
 
       {/* Standing waitlist entry: available regardless of slot availability. */}
@@ -2229,7 +2250,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
               />
               <input
                 className={input}
-                placeholder="Last name (optional)"
+                placeholder="Last name"
                 value={lastName}
                 onChange={(e) => setLastName(e.target.value)}
                 aria-label="Last name"

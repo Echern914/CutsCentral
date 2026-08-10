@@ -245,6 +245,12 @@ model Shop {
   bio               String? // short intro shown on the hero
   heroImageUrl      String? // wide banner image
   instagramHandle   String? // without the @
+  // The shop's Google "write a review" link. We can only ever push OUT to
+  // Google: the Places API returns at most 5 reviews and forbids storing or
+  // re-displaying them, so pulling Google reviews in as testimonials is not a
+  // thing we can legally build. Pushing is the valuable direction anyway —
+  // the Google listing is where "barber near me" is decided.
+  googleReviewUrl   String?
   hoursText         String? // freeform hours ("Mon-Fri 9-6 ...")
   // Custom domain (REDIRECT model - the deliberate SEO choice): the barber's
   // own domain 301s to getchairback.com/s/[slug], so Google indexes and shows
@@ -307,6 +313,8 @@ model Shop {
   // their own gates. See engines/pushReminders.ts.
   pushReminder24hEnabled Boolean @default(true)
   pushReminder2hEnabled  Boolean @default(true)
+  // "Book your next one?" push, ~30 min after the chair empties.
+  rebookPushEnabled      Boolean @default(true)
 
   // Request-before-booking: when on, a public NATIVE booking lands as PENDING
   // (holds the slot, no confirmation sent) until the barber approves it in the
@@ -982,6 +990,8 @@ model Visit {
   // email and vice versa.
   reminderSentAt      DateTime?
   reminderEmailSentAt DateTime?
+  // Rebook-nudge stamp, the Visit twin of Appointment.rebookPromptSentAt.
+  rebookPromptSentAt  DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1707,6 +1717,8 @@ model Appointment {
   // twice. Gated per shop by pushReminder24h/2hEnabled.
   reminder24hPushSentAt DateTime?
   reminder2hPushSentAt  DateTime?
+  // "Book your next one?" push, fired ~30 min AFTER endsAt. At-most-once.
+  rebookPromptSentAt    DateTime?
   // BARBER-side "your next client" reminder (engines/barberReminders.ts). Its
   // own stamp because it is a different recipient on a different lead time -
   // the client tiers above must never suppress the barber's heads-up.

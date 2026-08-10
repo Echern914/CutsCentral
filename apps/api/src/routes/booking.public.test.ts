@@ -179,7 +179,7 @@ describe("creating a booking", () => {
         staffId,
         serviceId,
         startsAt,
-        firstName: "Casey",
+        firstName: "Casey", lastName: "Tester",
         phone: "(302) 555-0400",
         smsConsent: true,
       });
@@ -215,7 +215,7 @@ describe("creating a booking", () => {
     const startsAt = futureAtHour(400, 10).toISOString();
     const res = await request(app)
       .post(`/api/book/${slugA}`)
-      .send({ staffId, serviceId, startsAt, firstName: "Far", phone: "(302) 555-0401" });
+      .send({ staffId, serviceId, startsAt, firstName: "Far", lastName: "Tester", phone: "(302) 555-0401" });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("too_far");
   });
@@ -226,7 +226,7 @@ describe("creating a booking", () => {
     const startsAt = futureAtHour(2, 3).toISOString();
     const res = await request(app)
       .post(`/api/book/${slugA}`)
-      .send({ staffId, serviceId, startsAt, firstName: "OffHours", phone: "(302) 555-0410" });
+      .send({ staffId, serviceId, startsAt, firstName: "OffHours", lastName: "Tester", phone: "(302) 555-0410" });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_slot");
   });
@@ -249,7 +249,7 @@ describe("creating a booking", () => {
     const startsAt = futureAtHour(5, 10).toISOString(); // 10:00 on the blocked day
     const res = await request(app)
       .post(`/api/book/${slugA}`)
-      .send({ staffId, serviceId, startsAt, firstName: "Blocked", phone: "(302) 555-0411" });
+      .send({ staffId, serviceId, startsAt, firstName: "Blocked", lastName: "Tester", phone: "(302) 555-0411" });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_slot");
   });
@@ -258,14 +258,41 @@ describe("creating a booking", () => {
     const startsAt = futureAtHour(2, 11).toISOString();
     const first = await request(app)
       .post(`/api/book/${slugA}`)
-      .send({ staffId, serviceId, startsAt, firstName: "One", phone: "(302) 555-0402" });
+      .send({ staffId, serviceId, startsAt, firstName: "One", lastName: "Tester", phone: "(302) 555-0402" });
     expect(first.status).toBe(201);
 
     const second = await request(app)
       .post(`/api/book/${slugA}`)
-      .send({ staffId, serviceId, startsAt, firstName: "Two", phone: "(302) 555-0403" });
+      .send({ staffId, serviceId, startsAt, firstName: "Two", lastName: "Tester", phone: "(302) 555-0403" });
     expect(second.status).toBe(409);
     expect(second.body.error).toBe("slot_taken");
+  });
+
+  it("requires a last name on the PUBLIC flow", async () => {
+    // A customer filling in his own details always knows his surname, and two
+    // "Mike"s in a client list are indistinguishable in search, on the agenda
+    // and in every reminder. Enforced server-side, not just in the form: the
+    // POST is reachable directly.
+    const startsAt = futureAtHour(2, 15).toISOString();
+    const missing = await request(app)
+      .post(`/api/book/${slugA}`)
+      .send({ staffId, serviceId, startsAt, firstName: "Solo", phone: "(302) 555-0404" });
+    expect(missing.status).toBe(400);
+    expect(missing.body.error).toBe("invalid_input");
+
+    // Whitespace is not a last name either.
+    const blank = await request(app)
+      .post(`/api/book/${slugA}`)
+      .send({ staffId, serviceId, startsAt, firstName: "Solo", lastName: "   ", phone: "(302) 555-0404" });
+    expect(blank.status).toBe(400);
+
+    // Same request with a surname goes through.
+    const ok = await request(app)
+      .post(`/api/book/${slugA}`)
+      .send({ staffId, serviceId, startsAt, firstName: "Solo", lastName: "Rivera", phone: "(302) 555-0404" });
+    expect(ok.status).toBe(201);
+    const appt = await prisma.appointment.findFirst({ where: { firstName: "Solo" } });
+    expect(appt!.lastName).toBe("Rivera");
   });
 
   it("books cleanly under DRY_RUN (send routes to the noop provider)", async () => {
@@ -285,7 +312,7 @@ describe("creating a booking", () => {
           staffId,
           serviceId,
           startsAt,
-          firstName: "Dry",
+          firstName: "Dry", lastName: "Tester",
           phone: "(302) 555-0404",
           smsConsent: true,
         });
@@ -323,7 +350,7 @@ describe("appointment promotion + loyalty", () => {
         staffId,
         serviceId,
         startsAt,
-        firstName: "Pat",
+        firstName: "Pat", lastName: "Tester",
         phone: "(302) 555-0500",
         smsConsent: true,
       });
@@ -396,7 +423,7 @@ describe("appointment reminders", () => {
         staffId,
         serviceId,
         startsAt: tomorrowNoon.toISOString(),
-        firstName: "Remy",
+        firstName: "Remy", lastName: "Tester",
         phone: "(302) 555-0600",
         smsConsent: true,
       });
@@ -423,7 +450,7 @@ describe("manage by token + tenant isolation", () => {
     const startsAt = futureAtHour(4, 14).toISOString();
     const booking = await request(app)
       .post(`/api/book/${slugA}`)
-      .send({ staffId, serviceId, startsAt, firstName: "Mona", phone: "(302) 555-0700" });
+      .send({ staffId, serviceId, startsAt, firstName: "Mona", lastName: "Tester", phone: "(302) 555-0700" });
     expect(booking.status).toBe(201);
     const token = booking.body.manageToken;
 
@@ -495,7 +522,7 @@ describe("day-of-week pricing", () => {
     const sunday = nextWeekdayAt(0, 10); // Sunday 10:00 UTC, in 09-17 window
     const res = await request(app)
       .post(`/api/book/${slugA}`)
-      .send({ staffId, serviceId: premiumId, startsAt: sunday.toISOString(), firstName: "SunPay", phone: "(302) 555-0801" });
+      .send({ staffId, serviceId: premiumId, startsAt: sunday.toISOString(), firstName: "SunPay", lastName: "Tester", phone: "(302) 555-0801" });
     expect(res.status).toBe(201);
     const appt = await prisma.appointment.findFirst({
       where: { phone: "+13025550801" },
@@ -508,7 +535,7 @@ describe("day-of-week pricing", () => {
     const saturday = nextWeekdayAt(6, 11); // Saturday 11:00 UTC
     const res = await request(app)
       .post(`/api/book/${slugA}`)
-      .send({ staffId, serviceId: premiumId, startsAt: saturday.toISOString(), firstName: "SatPay", phone: "(302) 555-0802" });
+      .send({ staffId, serviceId: premiumId, startsAt: saturday.toISOString(), firstName: "SatPay", lastName: "Tester", phone: "(302) 555-0802" });
     expect(res.status).toBe(201);
     const appt = await prisma.appointment.findFirst({
       where: { phone: "+13025550802" },
@@ -521,7 +548,7 @@ describe("day-of-week pricing", () => {
     const saturday = nextWeekdayAt(6, 13);
     const booking = await request(app)
       .post(`/api/book/${slugA}`)
-      .send({ staffId, serviceId: premiumId, startsAt: saturday.toISOString(), firstName: "Mover", phone: "(302) 555-0803" });
+      .send({ staffId, serviceId: premiumId, startsAt: saturday.toISOString(), firstName: "Mover", lastName: "Tester", phone: "(302) 555-0803" });
     expect(booking.status).toBe(201);
     const token = booking.body.manageToken;
 
@@ -555,7 +582,7 @@ describe("reschedule options (GET /manage/:token/slots)", () => {
         staffId,
         serviceId,
         startsAt: futureAtHour(3, hourUtc).toISOString(),
-        firstName: "Resched",
+        firstName: "Resched", lastName: "Tester",
         phone,
       });
     expect(res.status).toBe(201);
@@ -598,7 +625,7 @@ describe("reschedule options (GET /manage/:token/slots)", () => {
         staffId,
         serviceId,
         startsAt: taken.toISOString(),
-        firstName: "Other",
+        firstName: "Other", lastName: "Tester",
         phone: "(302) 555-0813",
       });
     expect(other.status).toBe(201);

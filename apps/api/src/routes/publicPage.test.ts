@@ -90,15 +90,21 @@ describe("public shop page", () => {
         theme: "midnight",
         bio: "Precision fades downtown.",
         instagramHandle: "@fadefactory",
+        googleReviewUrl: "https://g.page/r/fadefactory/review",
         hoursText: "Tue-Sat 9-6",
         galleryUrls: ["https://img.test/one.jpg", "https://img.test/two.jpg"],
       });
     expect(patch.status).toBe(200);
     expect(patch.body.instagramHandle).toBe("fadefactory"); // @ stripped
+    // The Google review link has to reach the PUBLIC payload, not just the
+    // settings echo — the "Post it on Google" button renders off the public
+    // page and would silently never appear if only the echo carried it.
+    expect(patch.body.googleReviewUrl).toBe("https://g.page/r/fadefactory/review");
 
     const page = await request(app).get(`/api/page/${slugA}`);
     expect(page.body.theme).toBe("midnight");
     expect(page.body.bio).toBe("Precision fades downtown.");
+    expect(page.body.googleReviewUrl).toBe("https://g.page/r/fadefactory/review");
     // Legacy galleryUrls input surfaces in the new `gallery` shape (caption-less).
     expect(page.body.gallery).toHaveLength(2);
     expect(page.body.gallery[0]).toEqual({ url: "https://img.test/one.jpg" });

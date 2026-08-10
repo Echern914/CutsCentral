@@ -43,7 +43,7 @@ function futureAtHour(daysAhead: number, hourUtc: number): Date {
 async function book(startsAt: Date, firstName: string, overrides: Record<string, unknown> = {}) {
   return request(app)
     .post(`/api/book/${slug}`)
-    .send({ staffId, serviceId, startsAt: startsAt.toISOString(), firstName, phone: "(302) 555-0400", smsConsent: true, ...overrides });
+    .send({ staffId, serviceId, startsAt: startsAt.toISOString(), firstName, lastName: "Tester", phone: "(302) 555-0400", smsConsent: true, ...overrides });
 }
 
 beforeAll(async () => {

@@ -192,7 +192,7 @@ describe("service time-of-day windows", () => {
       staffId,
       serviceId,
       startsAt: inWindow.toISOString(),
-      firstName: "Evening",
+      firstName: "Evening", lastName: "Tester",
       phone: "(302) 555-0322",
     });
     expect(resIn.status).toBe(201);
@@ -208,7 +208,7 @@ describe("service time-of-day windows", () => {
       staffId,
       serviceId,
       startsAt: daytime.toISOString(),
-      firstName: "Daytime",
+      firstName: "Daytime", lastName: "Tester",
       phone: "(302) 555-0323",
     });
     expect(resOut.status).toBe(201);

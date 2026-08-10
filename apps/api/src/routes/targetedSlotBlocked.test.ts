@@ -60,7 +60,7 @@ function bookSlot(startsAt: Date, targetedSlotId: string) {
       serviceId,
       startsAt: startsAt.toISOString(),
       targetedSlotId,
-      firstName: `C${randomToken(4)}`,
+      firstName: `C${randomToken(4)}`, lastName: "Tester",
       email: `c-${randomToken(6)}@test.local`,
     });
 }
@@ -229,7 +229,7 @@ describe("a one-off block beats a published special (the vacation-day bug)", () 
         staffId,
         serviceId,
         startsAt: daysOutAt(3, 10).toISOString(),
-        firstName: "X",
+        firstName: "X", lastName: "Tester",
         email: `x-${randomToken(6)}@test.local`,
       });
     expect(res.status).toBe(400);
