@@ -349,7 +349,7 @@ export function AppointmentForm({
               {results.length > 0 && (
                 <div className="flex flex-col gap-1 rounded-lg border border-subtle p-1">
                   {results.map((c) => {
-                    const nm = `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || c.phone || "Client";
+                    const nm = c.name?.trim() || c.phone || "Client";
                     return (
                       <button
                         key={c.id}
