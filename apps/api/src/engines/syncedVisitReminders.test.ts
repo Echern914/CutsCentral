@@ -20,8 +20,23 @@ let shopId: string;
 let clientId: string;
 let userId: string;
 
-/** N hours from now, which is what the 24h window is measured against. */
-const inHours = (h: number) => new Date(Date.now() + h * 60 * 60 * 1000);
+/**
+ * A PINNED clock, not the wall clock. The sweep takes `now` precisely so tests
+ * can be deterministic, and the first version of this file didn't use it - so
+ * the whole suite went red whenever it ran between 21:00 and 08:00 UTC: the
+ * SMS gate correctly said quiet_hours, DEFERRED the send (that is the feature),
+ * nothing was stamped, and the "reminds and stamps" assertion saw 0. Noon UTC
+ * puts every relative time this file uses (now .. now+6h) inside the 08-21
+ * allowed window, on any machine, at any hour of the night.
+ */
+const NOW = (() => {
+  const d = new Date();
+  d.setUTCHours(12, 0, 0, 0);
+  return d;
+})();
+
+/** N hours from the pinned now - what the 24h window is measured against. */
+const inHours = (h: number) => new Date(NOW.getTime() + h * 60 * 60 * 1000);
 
 async function makeVisit(opts: {
   at: Date;
@@ -120,12 +135,12 @@ afterAll(async () => {
 describe("synced visit reminders", () => {
   it("reminds a synced booking inside the 24h window and stamps it once", async () => {
     const id = await makeVisit({ at: inHours(3) });
-    expect(await runSyncedVisitReminders()).toBeGreaterThan(0);
+    expect(await runSyncedVisitReminders(NOW)).toBeGreaterThan(0);
     const first = await stamps(id);
     expect(first.reminderSentAt).not.toBeNull();
 
     // Idempotent: a second sweep must not re-stamp (i.e. not re-send).
-    await runSyncedVisitReminders();
+    await runSyncedVisitReminders(NOW);
     const second = await stamps(id);
     expect(second.reminderSentAt?.getTime()).toBe(first.reminderSentAt?.getTime());
   });
@@ -133,7 +148,7 @@ describe("synced visit reminders", () => {
   it("NEVER reminds a Visit promoted from a native booking - that would double-text", async () => {
     // The native reminder job already covers this row via its Appointment.
     const id = await makeVisit({ at: inHours(4), withAppointment: true });
-    await runSyncedVisitReminders();
+    await runSyncedVisitReminders(NOW);
     expect((await stamps(id)).reminderSentAt).toBeNull();
   });
 
@@ -141,7 +156,7 @@ describe("synced visit reminders", () => {
     const tooFar = await makeVisit({ at: inHours(30) });
     const past = await makeVisit({ at: inHours(-2) });
     const canceled = await makeVisit({ at: inHours(5), status: "CANCELED" });
-    await runSyncedVisitReminders();
+    await runSyncedVisitReminders(NOW);
     expect((await stamps(tooFar)).reminderSentAt).toBeNull();
     expect((await stamps(past)).reminderSentAt).toBeNull();
     expect((await stamps(canceled)).reminderSentAt).toBeNull();
@@ -170,7 +185,7 @@ describe("synced visit reminders", () => {
       },
       select: { id: true },
     });
-    await runSyncedVisitReminders();
+    await runSyncedVisitReminders(NOW);
     expect((await stamps(v.id)).reminderSentAt).toBeNull();
   });
 });
