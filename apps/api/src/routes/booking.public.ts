@@ -1720,6 +1720,74 @@ bookingPublicRouter.post(
   },
 );
 
+/**
+ * GET /api/book/manage/:token/slots - the open times this booking could move
+ * to, so the manage page can offer a real one-tap reschedule.
+ *
+ * The TOKEN is the authorization, exactly as for cancel/reschedule, which is
+ * why this exists as its own route rather than the client calling the public
+ * /slots feed: the appointment already knows its own staff and service, so
+ * those ids never have to be handed to the browser.
+ *
+ * Its OWN slot is excluded from the busy set (excludeAppointmentId) - without
+ * that, the time the customer currently holds reads as taken, and the one
+ * appointment they are allowed to move looks like the one time they can't pick.
+ */
+bookingPublicRouter.get(
+  "/manage/:token/slots",
+  bookingReadLimiter,
+  async (req, res) => {
+    const appt = await prisma.appointment.findUnique({
+      where: { manageToken: String(req.params.token) },
+      select: {
+        id: true,
+        shopId: true,
+        staffId: true,
+        serviceId: true,
+        status: true,
+        startsAt: true,
+        shop: { select: { timezone: true, bookingMaxDays: true } },
+      },
+    });
+    if (!appt) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    const now = new Date();
+    // A canceled or past booking has nothing to move. Empty list rather than
+    // an error: the page renders "no times available" without a failure state.
+    if (appt.status !== "BOOKED" || appt.startsAt <= now) {
+      res.json({ timezone: appt.shop.timezone, slots: [] });
+      return;
+    }
+    // WINDOW, not the whole booking horizon. Sweeping all bookingMaxDays (45 by
+    // default) returned ~960 slots on a normal 9-5 week - a payload nobody
+    // reads and a picker nobody can scroll, where the last chip sat two months
+    // out. Someone MOVING an appointment wants a nearby time, so offer the next
+    // fortnight, extended a little past the booking itself when it is further
+    // out than that (otherwise a customer booked 6 weeks ahead would be shown
+    // only times in the next two weeks, nowhere near the date they care about).
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const horizon = Math.min(
+      now.getTime() + appt.shop.bookingMaxDays * DAY_MS,
+      Math.max(now.getTime() + 14 * DAY_MS, appt.startsAt.getTime() + 3 * DAY_MS),
+    );
+    const slots = await computeOpenSlots({
+      shopId: appt.shopId,
+      staffId: appt.staffId,
+      serviceId: appt.serviceId,
+      fromDate: now,
+      toDate: new Date(horizon),
+      now,
+      excludeAppointmentId: appt.id,
+    });
+    res.json({
+      timezone: appt.shop.timezone,
+      slots: slots.map((s) => ({ startsAt: s.startsAt.toISOString() })),
+    });
+  },
+);
+
 // POST /api/book/manage/:token/reschedule - move a booking to a new open slot.
 const rescheduleSchema = z.object({ startsAt: validDate }).strict();
 

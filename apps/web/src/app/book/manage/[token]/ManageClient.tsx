@@ -8,13 +8,20 @@ import { CustomerBack } from "@/components/CustomerBack";
 import { DemoTour } from "@/components/tour/DemoTour";
 import { useDemoTour } from "@/components/tour/state";
 import type { ManageData } from "./page";
-import { cancelBookingAction, checkInAction, nudgeReplyAction } from "./actions";
+import {
+  cancelBookingAction,
+  checkInAction,
+  nudgeReplyAction,
+  rescheduleBookingAction,
+  rescheduleOptionsAction,
+} from "./actions";
 
 /**
  * Customer self-service for a single booking (auth = the manage token in the
- * URL). Shows the appointment and lets the customer cancel. Reschedule is a
- * cancel-and-rebook link to the shop's booking page - the booking funnel there
- * is the single source of truth for picking a new open slot.
+ * URL). Shows the appointment and lets the customer cancel or reschedule in
+ * place: ReschedulePicker below lists the barber's own open times and moves the
+ * booking in a single call, so the appointment keeps its identity, its manage
+ * link, and its slot in the calendar rather than being cancelled and recreated.
  */
 export function ManageClient({
   token,
@@ -30,6 +37,9 @@ export function ManageClient({
   const [canceled, setCanceled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  // Set once a reschedule succeeds, so the page shows the NEW time immediately
+  // instead of the stale one it was server-rendered with.
+  const [movedTo, setMovedTo] = useState<string | null>(null);
   // Check-in state is shared between the nudge banner and the check-in card so
   // answering "On my way" in one place updates both.
   const [checkinStatus, setCheckinStatus] = useState(data.checkin.status);
@@ -59,7 +69,7 @@ export function ManageClient({
       }),
     [data.shop.timezone],
   );
-  const when = whenFmt.format(new Date(data.startsAt));
+  const when = whenFmt.format(new Date(movedTo ?? data.startsAt));
 
   function cancel() {
     setError(null);
@@ -150,13 +160,16 @@ export function ManageClient({
               onStatus={setCheckinStatus}
               demoMode={demoTour}
             />
-            {data.canReschedule && data.shop.slug && !demoTour && (
-              <Link
-                href={`/book/${data.shop.slug}`}
-                className="rounded-xl border border-white/20 py-3 text-center text-sm font-semibold"
-              >
-                Reschedule (pick a new time)
-              </Link>
+            {data.canReschedule && !demoTour && (
+              <ReschedulePicker
+                token={token}
+                timezone={data.shop.timezone}
+                currentStartsAt={data.startsAt}
+                onMoved={(iso) => {
+                  setMovedTo(iso);
+                  setError(null);
+                }}
+              />
             )}
             {data.canCancel && !demoTour && (
               <button
@@ -171,11 +184,6 @@ export function ManageClient({
             {demoTour && (
               <p className="text-center text-[11px] text-muted">
                 Cancel and reschedule live here too — parked during the demo.
-              </p>
-            )}
-            {data.canReschedule && !demoTour && (
-              <p className="text-center text-[11px] text-muted">
-                To reschedule, book a new time and cancel this one.
               </p>
             )}
           </div>
@@ -406,6 +414,195 @@ function CheckInCard({
           Couldn&apos;t send that - try again.
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * One-tap reschedule: open the panel, pick a new time, done. The times come
+ * from the manage token itself (same barber, same service), so this is a real
+ * move — the appointment keeps its identity, its manage link, and its place in
+ * the barber's calendar.
+ *
+ * It replaces an instruction to "book a new time and cancel this one", which
+ * asked the customer to perform two operations in the correct order and
+ * punished both mistakes: rebook-then-forget-to-cancel left a phantom booking
+ * holding a slot the barber couldn't sell, and cancel-first surrendered the
+ * original time with no guarantee the new one was still there.
+ *
+ * Slots are loaded lazily on open — most visitors come to check details or
+ * tap "on my way", and a full availability sweep on every page view would be
+ * wasted work.
+ */
+function ReschedulePicker({
+  token,
+  timezone,
+  currentStartsAt,
+  onMoved,
+}: {
+  token: string;
+  timezone: string;
+  currentStartsAt: string;
+  onMoved: (startsAt: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [slots, setSlots] = useState<string[] | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  const dayFmt = useMemo(
+    () =>
+      new Intl.DateTimeFormat("en-US", {
+        timeZone: timezone,
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+      }),
+    [timezone],
+  );
+  const timeFmt = useMemo(
+    () =>
+      new Intl.DateTimeFormat("en-US", {
+        timeZone: timezone,
+        hour: "numeric",
+        minute: "2-digit",
+      }),
+    [timezone],
+  );
+
+  // Group by shop-local day so the list reads as a calendar rather than a wall
+  // of timestamps. Insertion order is preserved (slots arrive sorted), so the
+  // days come out chronological without a second sort.
+  const byDay = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const iso of slots ?? []) {
+      if (iso === currentStartsAt) continue; // their current time isn't a move
+      const key = dayFmt.format(new Date(iso));
+      map.set(key, [...(map.get(key) ?? []), iso]);
+    }
+    return [...map.entries()];
+  }, [slots, currentStartsAt, dayFmt]);
+
+  function load() {
+    setOpen(true);
+    if (slots !== null || loading) return;
+    setLoading(true);
+    setErr(null);
+    startTransition(async () => {
+      const res = await rescheduleOptionsAction(token);
+      setLoading(false);
+      if (!res) {
+        setErr("Couldn't load available times. Please try again.");
+        return;
+      }
+      setSlots(res.slots);
+    });
+  }
+
+  function move(iso: string) {
+    setErr(null);
+    setSelected(iso);
+    startTransition(async () => {
+      const res = await rescheduleBookingAction(token, iso);
+      if (!res.ok) {
+        setSelected(null);
+        // slot_taken is the one error worth its own words: somebody booked it
+        // in the seconds since the list rendered, and the fix is "pick another",
+        // not "try again".
+        setErr(
+          res.error === "slot_taken"
+            ? "That time was just taken. Please pick another."
+            : "Couldn't move your appointment. Please try again or call the shop.",
+        );
+        // Re-pull availability so the taken slot disappears from the list.
+        const fresh = await rescheduleOptionsAction(token);
+        if (fresh) setSlots(fresh.slots);
+        return;
+      }
+      setDone(iso);
+      setOpen(false);
+      onMoved(iso);
+    });
+  }
+
+  if (done) {
+    return (
+      <p
+        role="status"
+        className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 py-3 text-center text-sm font-semibold text-emerald-300"
+      >
+        Moved — see you {timeFmt.format(new Date(done))} on{" "}
+        {dayFmt.format(new Date(done))}.
+      </p>
+    );
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={load}
+        className="rounded-xl border border-white/20 py-3 text-center text-sm font-semibold transition-colors hover:bg-white/5"
+      >
+        Reschedule
+      </button>
+    );
+  }
+
+  return (
+    <div className="rounded-xl border border-white/15 bg-white/5 p-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-semibold">Pick a new time</p>
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          className="rounded-full border border-white/15 px-3 py-1 text-xs text-muted transition-colors hover:text-offwhite"
+        >
+          Close
+        </button>
+      </div>
+
+      {err && (
+        <p role="alert" className="mt-3 text-xs text-red-400">
+          {err}
+        </p>
+      )}
+
+      {loading && <p className="mt-3 text-xs text-muted">Loading times…</p>}
+
+      {!loading && slots !== null && byDay.length === 0 && (
+        <p className="mt-3 text-xs text-muted">
+          No other openings right now. Call the shop and they&apos;ll sort you out.
+        </p>
+      )}
+
+      <div className="mt-3 max-h-72 space-y-4 overflow-y-auto">
+        {byDay.map(([day, times]) => (
+          <div key={day}>
+            <p className="text-[11px] uppercase tracking-wide text-muted">{day}</p>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {times.map((iso) => (
+                <button
+                  key={iso}
+                  type="button"
+                  disabled={pending}
+                  onClick={() => move(iso)}
+                  className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-40 ${
+                    selected === iso
+                      ? "border-gold bg-gold text-charcoal"
+                      : "border-white/20 hover:bg-white/10"
+                  }`}
+                >
+                  {selected === iso && pending ? "Moving…" : timeFmt.format(new Date(iso))}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

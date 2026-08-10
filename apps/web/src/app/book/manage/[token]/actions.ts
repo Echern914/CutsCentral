@@ -1,6 +1,6 @@
 "use server";
 
-import { apiPublicSend } from "@/lib/api";
+import { apiPublicGet, apiPublicSend } from "@/lib/api";
 
 /** Cancel a booking by its manage token (customer-initiated, no login). */
 export async function cancelBookingAction(
@@ -44,8 +44,44 @@ export async function nudgeReplyAction(
   return { ok: true };
 }
 
-// NOTE: the API exposes POST /api/book/manage/:token/reschedule (validated +
-// availability-checked), but V1's manage page uses cancel-and-rebook instead of
-// an in-page slot picker (the manage GET doesn't expose staff/service ids needed
-// to render one). The reschedule client action is intentionally omitted until
-// that UI exists, to avoid an unwired export.
+/**
+ * The open times this booking can move to (same barber, same service). The
+ * manage token is the authorization, so the browser never handles staff or
+ * service ids - see GET /api/book/manage/:token/slots.
+ */
+export async function rescheduleOptionsAction(
+  token: string,
+): Promise<{ timezone: string; slots: string[] } | null> {
+  const res = await apiPublicGet<{
+    timezone: string;
+    slots: { startsAt: string }[];
+  }>(`/api/book/manage/${encodeURIComponent(token)}/slots`);
+  if (!res.ok || !res.data) return null;
+  return {
+    timezone: res.data.timezone,
+    slots: res.data.slots.map((s) => s.startsAt),
+  };
+}
+
+/**
+ * Move the booking to a new time in ONE call. This replaces the old
+ * cancel-and-rebook instruction, which asked the customer to do two things in
+ * the right order and punished both mistakes: rebook-then-forget-to-cancel
+ * left a phantom appointment holding a slot the barber couldn't sell, and
+ * cancel-first lost the original time if the new one was gone by the time they
+ * got there. The API re-checks availability under the same overlap guard the
+ * create path uses, so a slot taken between render and tap comes back as
+ * `slot_taken` rather than a double-book.
+ */
+export async function rescheduleBookingAction(
+  token: string,
+  startsAt: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiPublicSend(
+    "POST",
+    `/api/book/manage/${encodeURIComponent(token)}/reschedule`,
+    { startsAt },
+  );
+  if (!res.ok) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true };
+}
