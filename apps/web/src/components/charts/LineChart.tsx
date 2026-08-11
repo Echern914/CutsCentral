@@ -114,7 +114,10 @@ export function LineChart({
                     cy={c.cy}
                     r={3.5}
                     fill={stroke}
-                    stroke="#141416"
+                    // The dot's rim is the CARD color so it reads as punched
+                    // through the line - must follow the theme or light-mode
+                    // dots wear a dark halo.
+                    style={{ stroke: "rgb(var(--cb-s800))" }}
                     strokeWidth={1.5}
                     vectorEffect="non-scaling-stroke"
                   />

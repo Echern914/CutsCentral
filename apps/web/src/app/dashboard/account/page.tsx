@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { apiGet, apiPublicGet } from "@/lib/api";
 import { getMe } from "@/lib/me";
 import { AccountCard } from "../_components/AccountCard";
+import { AppearanceCard } from "./AppearanceCard";
 import { AdvancedCard, NotificationsCard } from "./NotificationsCard";
 import type { NotificationsResponse } from "./types";
 
@@ -47,6 +48,9 @@ export default async function AccountPage() {
         hasApple={me.data?.hasApple ?? false}
         emailChangeAvailable={emailChange.data?.available ?? false}
       />
+      {/* Appearance is per-PERSON too - the dashboard theme is about the
+          reader's eyes, and never leaks to what clients see. */}
+      <AppearanceCard initialTheme={me.data?.theme ?? "dark"} />
       {/* Notifications are per-PERSON (a barber's own chair, his own phone),
           so they belong here rather than with the shop settings. */}
       {notify.data && (

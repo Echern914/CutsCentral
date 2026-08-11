@@ -400,6 +400,20 @@ export async function mergeClientAction(
   return { ok: res.ok, error: res.error, balance: res.data?.balance };
 }
 
+/**
+ * Persist the dashboard appearance ("dark" | "light"). The visual flip already
+ * happened client-side (ThemePicker applies before persisting - the app
+ * flipping IS the preview); this just makes the choice follow the account to
+ * other devices. Validated to the enum here AND by zod on the API.
+ */
+export async function saveThemeAction(
+  theme: "dark" | "light",
+): Promise<{ ok: boolean }> {
+  const safe = theme === "light" ? "light" : "dark";
+  const res = await apiSend("PATCH", "/api/auth/me", { theme: safe });
+  return { ok: res.ok };
+}
+
 export async function updateNameAction(
   _prev: { ok?: boolean; error?: string },
   formData: FormData,

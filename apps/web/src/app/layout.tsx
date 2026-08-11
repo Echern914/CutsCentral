@@ -6,6 +6,7 @@ import { MotionConfigProvider } from "@/components/motion/MotionConfigProvider";
 import { ToastProvider } from "@/components/ui/Toast";
 import { AnalyticsScripts } from "@/components/AnalyticsScripts";
 import { HelpBubble } from "@/components/help/HelpBubble";
+import { ThemeScope } from "@/components/ThemeScope";
 import "./globals.css";
 
 const inter = Inter({
@@ -81,6 +82,9 @@ export default function RootLayout({
         >
           Skip to content
         </a>
+        {/* Scopes the personal light/dark theme to barber-facing routes and
+            drops back to brand-dark on public ones (see lib/theme.ts). */}
+        <ThemeScope />
         <MotionConfigProvider>
           <ToastProvider>
             {/* Skip-link target + focus anchor. NOT a <main> element: pages render
