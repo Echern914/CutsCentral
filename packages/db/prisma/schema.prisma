@@ -1708,6 +1708,14 @@ model Appointment {
   // add-on is later edited/deleted. [] = no add-ons (every pre-feature row).
   addOns             Json              @default("[]")
   manageToken        String            @unique // cancel/reschedule auth (no login)
+  // Chair-side checkout (the barber's "Start checkout" at the end of the cut).
+  // What was COLLECTED IN PERSON, on top of any Stripe pre-payment (which lives
+  // in the Payment row) - the two never overlap, so revenue = Payment + this.
+  // method: "cash" | "direct" (Zelle/Venmo/CashApp) | "card" | "other".
+  // Null everywhere = not checked out at the chair (every pre-feature row).
+  paidAmount         Decimal?          @db.Decimal(10, 2)
+  paidMethod         String?
+  paidAt             DateTime?
   visitId            String?           @unique // the Visit promoted from this appointment
   visit              Visit?            @relation(fields: [visitId], references: [id], onDelete: SetNull)
   confirmationSentAt DateTime? // SMS confirmation stamp (at-most-once)

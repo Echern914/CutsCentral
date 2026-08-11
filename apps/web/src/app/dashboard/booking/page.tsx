@@ -147,6 +147,15 @@ export interface AgendaRow {
   // uncategorized (a block, or a synced visit whose service name matched
   // nothing); those still count in the "All" total.
   categoryId?: string | null;
+  // Add-ons chosen at booking. Names only — their price is already folded into
+  // `price`, so the checkout itemises them without ever re-adding them.
+  addOns?: { id: string; name: string }[];
+  // Chair-side checkout. `paid` = dollars collected in person (null = not
+  // checked out yet), `prepaid` = dollars Stripe already holds. They never
+  // overlap, so what the chair still owes is price - prepaid - (paid ?? 0).
+  paid?: number | null;
+  paidMethod?: string | null;
+  prepaid?: number;
 }
 
 /**

@@ -1434,7 +1434,43 @@ type ApptAgendaRow = {
   service: { id: string; name: string; color: string | null } | null;
   // Frozen AddOnSnapshotItem[] (see engines/addOns.ts) - JSON on the row.
   addOns: Prisma.JsonValue | null;
+  // Chair-side checkout + the Stripe pre-payment, if any.
+  paidAmount: Prisma.Decimal | null;
+  paidMethod: string | null;
+  paidAt: Date | null;
+  payment: {
+    status: string;
+    amount: number;
+    capturedAmount: number | null;
+    refundedAmount: number;
+  } | null;
 };
+
+/** Dollars collected AT THE CHAIR (null until the barber checks the cut out). */
+function chairPaid(a: { paidAmount: Prisma.Decimal | null }): number | null {
+  return a.paidAmount == null ? null : Number(a.paidAmount);
+}
+
+/**
+ * Dollars Stripe actually holds for this appointment: the captured amount when
+ * a hold was taken, else the intent amount, minus refunds. Only statuses that
+ * represent real money count - a `requires_capture` hold is NOT collected yet,
+ * so it stays owed at the chair and the barber can still take cash for it.
+ */
+const STRIPE_COLLECTED = new Set(["succeeded", "partially_refunded", "refunded"]);
+function stripeCollected(a: {
+  payment: {
+    status: string;
+    amount: number;
+    capturedAmount: number | null;
+    refundedAmount: number;
+  } | null;
+}): number {
+  const p = a.payment;
+  if (!p || !STRIPE_COLLECTED.has(p.status)) return 0;
+  const cents = (p.capturedAmount ?? p.amount) - p.refundedAmount;
+  return Math.max(0, cents) / 100;
+}
 type VisitAgendaRow = {
   id: string;
   status: string;
@@ -1599,6 +1635,12 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         runningLate: true,
         service: { select: { id: true, name: true, color: true } },
         addOns: true,
+        // Chair-side checkout state + any Stripe pre-payment, so the row can
+        // say what is still owed without a second round trip.
+        paidAmount: true,
+        paidMethod: true,
+        paidAt: true,
+        payment: { select: { status: true, amount: true, capturedAmount: true, refundedAmount: true } },
       },
     })) as unknown as ApptAgendaRow[];
 
@@ -1697,6 +1739,11 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       nudgesSent: nudgeCounts.get(a.id) ?? 0,
       nudgeLimit: APPOINTMENT_NUDGE_LIMIT,
       clientId: a.clientId,
+      // What the chair still needs to collect. Stripe money (pre-paid or
+      // captured hold) and chair money never overlap, so they simply add.
+      paid: chairPaid(a),
+      paidMethod: a.paidMethod ?? null,
+      prepaid: stripeCollected(a),
       rewardReady:
         a.clientId !== null
           ? (rewardReadyByClient.get(a.clientId) ?? null)
@@ -3403,6 +3450,131 @@ bookingDashboardRouter.post("/appointments/:id/complete", async (req, res) => {
       cardName: result.earn.cardName,
       now,
     });
+  }
+  res.json({ ok: true });
+});
+
+/**
+ * POST /appointments/:id/checkout — the chair-side "Start checkout".
+ *
+ * Records what the barber actually collected (cash / Zelle-Venmo-CashApp /
+ * card / other) and completes the cut in the same breath, through the SAME
+ * promotion path as /complete — one loyalty pipeline, never a second ledger.
+ *
+ * amount is the money COLLECTED AT THE CHAIR, on top of any Stripe
+ * pre-payment (that lives in the Payment row); the two never overlap, so
+ * revenue for the appointment is Payment + paidAmount. The client sends the
+ * final figure because the barber can adjust it at checkout (tip folded in, a
+ * regular's discount) — "Modify" on the checkout screen is real, not chrome.
+ *
+ * Idempotent per appointment: a second checkout 409s (paid_already) instead of
+ * silently overwriting the first record — a double-tap must not turn one $60
+ * cut into a $120 day. Completion stays idempotent inside the promotion
+ * (booking:{id} visit key), so checking out an already-completed cut only
+ * records the payment.
+ */
+const checkoutSchema = z
+  .object({
+    amount: z.number().min(0).max(100_000),
+    method: z.enum(["cash", "direct", "card", "other"]),
+  })
+  .strict();
+
+bookingDashboardRouter.post("/appointments/:id/checkout", async (req, res) => {
+  const parsed = checkoutSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const shopId = req.shop!.id;
+  const now = new Date();
+  // Owner read BEFORE the tx (Shop is RLS default-deny inside runWithShop).
+  const shop = await prisma.shop.findUnique({
+    where: { id: shopId },
+    select: { id: true, punchesPerVisit: true },
+  });
+  if (!shop) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+
+  const result = await runWithShop(shopId, async (tx) => {
+    const appt = await tx.appointment.findFirst({
+      where: {
+        id: req.params.id,
+        shopId,
+        // BOOKED = the normal flow; COMPLETED = "marked done earlier, collecting
+        // now". CANCELED / NO_SHOW / PENDING have no chair moment to pay for.
+        status: { in: ["BOOKED", "COMPLETED"] },
+      },
+      select: {
+        id: true,
+        clientId: true,
+        startsAt: true,
+        endsAt: true,
+        priceAtBooking: true,
+        paidAt: true,
+        service: { select: { name: true } },
+      },
+    });
+    if (!appt) return { kind: "not_found" as const };
+    if (appt.paidAt) return { kind: "paid_already" as const };
+
+    // The atomic claim: only the update that flips paidAt null -> now wins, so
+    // two simultaneous checkouts of one cut record exactly one payment.
+    const claimed = await tx.appointment.updateMany({
+      where: { id: appt.id, paidAt: null },
+      data: {
+        paidAmount: new Prisma.Decimal(parsed.data.amount.toFixed(2)),
+        paidMethod: parsed.data.method,
+        paidAt: now,
+      },
+    });
+    if (claimed.count === 0) return { kind: "paid_already" as const };
+
+    // Complete through the one promotion path (idempotent via booking:{id}).
+    // A walk-in style row without a client still gets its payment recorded —
+    // there is just no loyalty to earn.
+    let earn = null;
+    if (appt.clientId) {
+      earn = await promoteOneAppointmentInTx(
+        tx,
+        shop,
+        {
+          id: appt.id,
+          clientId: appt.clientId,
+          startsAt: appt.startsAt,
+          endsAt: appt.endsAt,
+          priceAtBooking: appt.priceAtBooking,
+          serviceName: appt.service?.name ?? null,
+        },
+        now,
+      );
+    }
+    return { kind: "ok" as const, clientId: appt.clientId, earn };
+  });
+
+  if (result.kind === "not_found") {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if (result.kind === "paid_already") {
+    res.status(409).json({ error: "paid_already" });
+    return;
+  }
+  if (result.clientId) {
+    await recomputeCadence(shopId, result.clientId);
+    if (result.earn) {
+      void notifyPunchEarned({
+        shopId,
+        clientId: result.clientId,
+        earned: result.earn.earned,
+        balance: result.earn.balance,
+        cardTypeId: result.earn.cardTypeId,
+        cardName: result.earn.cardName,
+        now,
+      });
+    }
   }
   res.json({ ok: true });
 });

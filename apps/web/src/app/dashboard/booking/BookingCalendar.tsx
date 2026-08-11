@@ -31,6 +31,7 @@ import {
   setWaitlistStatusAction,
 } from "./actions";
 import { AppointmentForm } from "./AppointmentForm";
+import { CheckoutSheet } from "./CheckoutSheet";
 import { BlockOffForm } from "./BlockOffForm";
 import { useRouter } from "next/navigation";
 
@@ -1074,6 +1075,8 @@ function AppointmentBlock({
   const [pending, start] = useTransition();
   const [seriesMenu, setSeriesMenu] = useState(false);
   const [nudgeMenu, setNudgeMenu] = useState(false);
+  // Appointment detail + chair-side checkout, opened from this row.
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [customNudge, setCustomNudge] = useState("");
   // Skip = dismiss for THIS render only; the reward stays ready and the prompt
   // returns on reload (deliberate - skipping never consumes anything).
@@ -1392,6 +1395,16 @@ function AppointmentBlock({
               Arrived
             </button>
           )}
+          {/* Checkout: the money moment. Sits BEFORE Done because checking out
+              already completes the cut — a barber who taps this never needs
+              Done, and one who works for free still has Done next to it. */}
+          <button
+            onClick={() => setCheckoutOpen(true)}
+            disabled={pending}
+            className="rounded-md border border-gold/50 bg-gold/10 px-2.5 py-1 text-[11px] font-medium text-gold disabled:opacity-50"
+          >
+            {row.paid != null ? "Paid ✓" : "Checkout"}
+          </button>
           <button
             onClick={() => act(completeAppointmentAction, "Marked done")}
             disabled={pending}
@@ -1448,6 +1461,21 @@ function AppointmentBlock({
             </button>
           )}
         </div>
+      )}
+
+      {/* Appointment detail -> charges -> payment. Mounted from the row so it
+          always carries THAT booking's live figures; onDone refreshes the
+          agenda, which is what flips the button to "Paid ✓". */}
+      {checkoutOpen && (
+        <CheckoutSheet
+          row={row}
+          toast={toast}
+          onClose={() => setCheckoutOpen(false)}
+          onDone={() => {
+            setCheckoutOpen(false);
+            onChanged();
+          }}
+        />
       )}
     </div>
   );

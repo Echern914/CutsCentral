@@ -82,6 +82,7 @@ async function book(opts: {
     capturedAmount?: number | null;
     refundedAmount?: number;
   };
+  paid?: number;
 }): Promise<string> {
   const startsAt = new Date(WHEN.getTime() + opts.offsetMin * 60_000);
   const appt = await prisma.appointment.create({
@@ -94,6 +95,9 @@ async function book(opts: {
       startsAt,
       endsAt: new Date(startsAt.getTime() + 30 * 60_000),
       priceAtBooking: opts.price,
+      ...(opts.paid === undefined
+        ? {}
+        : { paidAmount: opts.paid, paidMethod: "cash", paidAt: new Date() }),
       manageToken: randomToken(),
     },
     select: { id: true },
@@ -221,5 +225,36 @@ describe("ChairEvent.earned — revenue is money, not tickets", () => {
     // null, not 0 — "we never set a price" is not "this cut was free", and the
     // average-ticket maths depends on being able to tell them apart.
     expect(e?.price).toBeNull();
+  });
+
+  it("chair-side checkout is the final word on what was earned", async () => {
+    // The barber counted the cash. A $60 ticket that came back $75 with the tip
+    // earned $75, and the ticket stays $60 so average-ticket is not inflated.
+    await book({ offsetMin: 100, status: "COMPLETED", price: 60, paid: 75 });
+    const tipped = await eventAt(100);
+    expect(tipped?.earned).toBe(75);
+    expect(tipped?.price).toBe(60);
+
+    // And a discount is respected rather than snapped back up to the ticket.
+    await book({ offsetMin: 110, status: "COMPLETED", price: 60, paid: 50 });
+    expect((await eventAt(110))?.earned).toBe(50);
+
+    // $0 collected is a real answer (comped cut) — not "fall back to the
+    // ticket", which is what an `|| ticket` would have quietly done.
+    await book({ offsetMin: 120, status: "COMPLETED", price: 60, paid: 0 });
+    expect((await eventAt(120))?.earned).toBe(0);
+  });
+
+  it("a deposit taken online ADDS to what the chair collected", async () => {
+    // $20 paid ahead through Stripe, $40 handed over at the chair. The two are
+    // different money and both are real; counting only one loses $20 a cut.
+    await book({
+      offsetMin: 130,
+      status: "COMPLETED",
+      price: 60,
+      paid: 40,
+      payment: { status: "succeeded", amount: 2000 },
+    });
+    expect((await eventAt(130))?.earned).toBe(60);
   });
 });
