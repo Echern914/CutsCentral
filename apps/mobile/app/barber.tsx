@@ -16,6 +16,7 @@ import {
   WEB_ORIGIN,
 } from "@/src/config";
 import { registerBarberPush } from "@/src/push";
+import { ModeSwitchBar } from "@/src/ModeSwitchBar";
 
 /**
  * Barber mode: a WebView of the existing /dashboard. The barber reaches here via
@@ -115,6 +116,9 @@ export default function BarberScreen() {
 
   return (
     <SafeAreaView style={styles.flex} edges={["top"]}>
+      {/* The way back to the picker. Sits in the top strip this screen already
+          reserves, so it never covers the dashboard's own bottom nav. */}
+      <ModeSwitchBar label="Barbershop" />
       <AppWebView
         source={source}
         style={styles.flex}
