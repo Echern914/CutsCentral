@@ -1368,19 +1368,24 @@ export function BookingClient({ data }: { data: BookShopData }) {
             </p>
           )}
           <p className="mt-2 text-sm text-muted">
+            {/* Confirmations go by EMAIL now (SMS confirmation is off for
+                cost - see appointmentNotify.ts); the reminder TEXT stays. The
+                promises below must track the channels that actually fire. */}
             {wasRequest ? (
               <>
                 {data.shop.name} will review your request and confirm your time.
-                {consent && phone.trim()
-                  ? " We'll text you as soon as it's approved."
+                {email.trim()
+                  ? " We'll email you as soon as it's approved."
                   : " Save this page to check the status."}
               </>
             ) : (
               <>
                 {data.shop.name} has your appointment.
-                {consent && phone.trim()
-                  ? " We'll text you a confirmation and a reminder."
-                  : " Save this page to manage your appointment."}
+                {email.trim() ? " We'll email your confirmation." : ""}
+                {consent && phone.trim() ? " We'll text you a reminder before your visit." : ""}
+                {!email.trim() && !(consent && phone.trim())
+                  ? " Save this page to manage your appointment."
+                  : ""}
               </>
             )}
           </p>

@@ -153,11 +153,14 @@ describe("request-before-booking", () => {
     expect(again.status).toBe(404);
   });
 
-  it("the approval confirmation is deliverable once BOOKED", async () => {
+  it("the approval confirmation does NOT text - confirmations are email-only now", async () => {
     // The create path skips the confirmation for a PENDING request (proven by
-    // the "sends NO confirmation" test); approval makes it a normal BOOKED row,
-    // and its confirmation then sends. Assert on a freshly-flipped row driven at
-    // a midday now (no endpoint fire-and-forget in play, so no race).
+    // the "sends NO confirmation" test); approval makes it a normal BOOKED row
+    // and its confirmation fires - but confirmation SMS is OFF for cost
+    // (Eric, 2026-08-10; see appointmentNotify.ts), so even midday with full
+    // consent no text goes out and the SMS stamp stays null. The email half
+    // (and its stamp) is covered by appointmentNotify.test.ts, which mocks the
+    // mail seam; this suite runs email-dark.
     await book(futureAtHour(1, 13), "Deliver Me");
     const appt = await prisma.appointment.findFirst({
       where: { firstName: "Deliver Me" },
@@ -166,7 +169,12 @@ describe("request-before-booking", () => {
     await prisma.appointment.update({ where: { id: appt!.id }, data: { status: "BOOKED" } });
     sent = [];
     await notifyAppointmentConfirmation({ shopId: appt!.shopId, appointmentId: appt!.id, now: middayNow() });
-    expect(sent.length).toBe(1);
+    expect(sent.length).toBe(0);
+    const row = await prisma.appointment.findUnique({
+      where: { id: appt!.id },
+      select: { confirmationSentAt: true },
+    });
+    expect(row?.confirmationSentAt).toBeNull();
   });
 
   it("decline flips PENDING → CANCELED (no confirmation)", async () => {
