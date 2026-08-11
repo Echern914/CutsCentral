@@ -17,6 +17,7 @@ import * as Linking from "expo-linking";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { rewardsUrl, API_ORIGIN, DEMO_REWARDS_TOKEN, STORAGE } from "@/src/config";
 import { registerCustomerPush } from "@/src/push";
+import { ModeSwitchBar } from "@/src/ModeSwitchBar";
 
 /**
  * Customer mode: a WebView of the existing /r/[magicToken] rewards page - the
@@ -144,6 +145,9 @@ export default function CustomerScreen() {
   if (token || demoActive) {
     return (
       <SafeAreaView style={styles.flex} edges={["top"]}>
+        {/* The way back to the picker — a customer who is also a barber gets
+            to their chair from here. */}
+        <ModeSwitchBar label="Customer" />
         {/* A real token always wins over the demo (a customer with their own
             link never sees demo chrome). */}
         {!token && (
@@ -197,6 +201,9 @@ export default function CustomerScreen() {
   // dismissing the keyboard.
   return (
     <SafeAreaView style={styles.flex}>
+      {/* Without this the entry screen is a DEAD END: a barber who switched to
+          customer mode and has no magic link yet could not get back. */}
+      <ModeSwitchBar label="Customer" />
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
