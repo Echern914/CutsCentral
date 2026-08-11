@@ -8,6 +8,11 @@ import {
   createOnboardingLink,
   getConnectStatus,
 } from "../billing/connect.js";
+import {
+  createConnectionToken,
+  ensureTerminalLocation,
+  terminalEnabled,
+} from "../billing/terminal.js";
 import { logger } from "../logger.js";
 
 /**
@@ -184,4 +189,44 @@ paymentsDashboardRouter.patch("/pay-direct", async (req, res) => {
     },
   });
   res.json({ ok: true });
+});
+
+//  Stripe Terminal — Tap to Pay on iPhone (phase 1: server groundwork)
+
+/**
+ * POST /api/payments/terminal/connection-token
+ *
+ * The mobile SDK calls this to connect a reader. Returns the short-lived
+ * secret, the shop's Terminal Location (created on first use — a reader cannot
+ * connect without one), and the connected account id, which the SDK must pass
+ * in its Tap to Pay connection configuration because we take DESTINATION
+ * charges with on_behalf_of rather than charging on the connected account.
+ *
+ * 503 when Stripe isn't configured, so the app can hide Tap to Pay entirely
+ * rather than offer a button that dead-ends.
+ */
+paymentsDashboardRouter.post("/terminal/connection-token", async (req, res) => {
+  if (!terminalEnabled()) {
+    res.status(503).json({ error: "terminal_unavailable" });
+    return;
+  }
+  const shop = await prisma.shop.findUnique({
+    where: { id: req.shop!.id },
+    select: { stripeConnectAccountId: true },
+  });
+  // No connected account = nowhere for the money to land. Refuse up front
+  // rather than let the reader connect and fail at the charge.
+  if (!shop?.stripeConnectAccountId) {
+    res.status(409).json({ error: "connect_required" });
+    return;
+  }
+  const [secret, locationId] = await Promise.all([
+    createConnectionToken(),
+    ensureTerminalLocation(req.shop!.id),
+  ]);
+  if (!secret || !locationId) {
+    res.status(502).json({ error: "stripe_error" });
+    return;
+  }
+  res.json({ secret, locationId, connectAccountId: shop.stripeConnectAccountId });
 });
