@@ -149,14 +149,36 @@ describe("appointment confirmation email", () => {
     expect(appt?.confirmationSentAt).toBeNull();
   });
 
-  it("sends BOTH sms and email when the client is consented", async () => {
+  it("sends email ONLY, even with full sms consent (confirmation SMS is off for cost)", async () => {
+    // Eric, 2026-08-10: "Booked email Confirmation should be only neccessary
+    // not also text. Will cost to much." A consented client used to get BOTH;
+    // now the confirmation rides email alone and the text budget is saved for
+    // the ~24h reminder, which is the message that actually prevents no-shows.
+    // The SMS stamp stays null so flipping CONFIRMATION_SMS_ENABLED back on
+    // would not consider these rows already-texted... they were never texted.
     const shop = await makeShop();
     const appointmentId = await makeAppointment(shop.id, { consented: true });
 
     await notifyAppointmentConfirmation({ shopId: shop.id, appointmentId, now: NOON });
 
-    expect(sms.length).toBe(1);
+    expect(sms.length).toBe(0);
     expect(emails.length).toBe(1);
+    const appt = await prisma.appointment.findUnique({
+      where: { id: appointmentId },
+      select: { confirmationEmailSentAt: true, confirmationSentAt: true },
+    });
+    expect(appt?.confirmationEmailSentAt).not.toBeNull();
+    expect(appt?.confirmationSentAt).toBeNull();
+  });
+
+  it("still texts the ~24h REMINDER to a consented client - only the confirmation went email-only", async () => {
+    const shop = await makeShop();
+    const appointmentId = await makeAppointment(shop.id, { consented: true });
+
+    await notifyAppointmentReminder({ shopId: shop.id, appointmentId, now: NOON });
+
+    // The reminder is the no-show killer; its SMS is deliberately untouched.
+    expect(sms.length).toBe(1);
   });
 
   it("is idempotent — a second call does not re-email", async () => {

@@ -237,6 +237,19 @@ async function loadAppointment(shopId: string, appointmentId: string) {
  * Text a customer that their booking is confirmed. Stamps confirmationSentAt on
  * success (idempotency). Skips silently (logged) if the gate fails. Never throws.
  */
+/**
+ * NOTE (2026-08-10, Eric): confirmation SMS is OFF for cost - "Booked email
+ * Confirmation should be only necessary not also text. Will cost to much."
+ * Every native booking was burning a text on a message the on-screen success
+ * state and the email already deliver; the ~24h REMINDER text (the one that
+ * actually prevents no-shows) is deliberately untouched, as are slot-opened
+ * waitlist texts and the barber's own alerts. Halves per-booking SMS spend.
+ * Flip this constant to bring the channel back (or promote it to a per-shop
+ * setting if shops ever want to pay for it); the send path below is kept
+ * intact and tested against the flag rather than deleted.
+ */
+const CONFIRMATION_SMS_ENABLED = false;
+
 export async function notifyAppointmentConfirmation(params: {
   shopId: string;
   appointmentId: string;
@@ -248,8 +261,14 @@ export async function notifyAppointmentConfirmation(params: {
     if (!loaded) return;
     const { shop, appt } = loaded;
 
-    // --- SMS channel (consent + quiet-hours gated) ---
-    if (!appt.confirmationSentAt) {
+    // --- SMS channel (consent + quiet-hours gated; currently disabled) ---
+    if (!CONFIRMATION_SMS_ENABLED && !appt.confirmationSentAt) {
+      logger.info(
+        { shopId: shop.id, appointmentId: appt.id, reason: "confirmation_sms_disabled_cost" },
+        "appointment confirmation SMS skipped",
+      );
+    }
+    if (CONFIRMATION_SMS_ENABLED && !appt.confirmationSentAt) {
       const skip = skipReason(shop, appt.client!, now);
       if (skip) {
         logger.info(

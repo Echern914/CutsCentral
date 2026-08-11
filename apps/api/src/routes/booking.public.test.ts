@@ -208,7 +208,10 @@ describe("creating a booking", () => {
       appointmentId: appt!.id,
       now: middayNow(),
     });
-    expect(sent.some((s) => s.body.includes("Casey"))).toBe(true);
+    // Confirmation SMS is OFF (email-only, for cost - appointmentNotify.ts):
+    // even at midday with fresh consent, the confirmation must not text. The
+    // consent capture above is unchanged - it still arms the ~24h reminder.
+    expect(sent.length).toBe(0);
   });
 
   it("rejects a slot too far in the future", async () => {
