@@ -406,6 +406,22 @@ export async function removeBlockAction(exceptionId: string): Promise<Result> {
   return done(await apiSend("DELETE", `/api/booking/exceptions/${exceptionId}`));
 }
 
+/**
+ * Chair-side checkout: record what was collected and complete the cut.
+ *
+ * Returns the API's error string untouched so the caller can tell the double
+ * -tap case apart — a 409 `paid_already` means the money DID land, and telling
+ * the barber to "try again" would be exactly the wrong advice.
+ */
+export async function checkoutAppointmentAction(
+  appointmentId: string,
+  input: { amount: number; method: "cash" | "direct" | "card" | "other" },
+): Promise<Result> {
+  return done(
+    await apiSend("POST", `/api/booking/appointments/${appointmentId}/checkout`, input),
+  );
+}
+
 //  Waitlist
 
 export async function setWaitlistStatusAction(

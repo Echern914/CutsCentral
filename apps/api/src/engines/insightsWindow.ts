@@ -517,6 +517,9 @@ export async function readChairEvents(
         status: true,
         clientId: true,
         serviceId: true,
+        // What the barber actually collected at the chair. Overrides the
+        // ticket when set - see `earned` below.
+        paidAmount: true,
         service: { select: { name: true } },
         // Real money, when the shop takes payment through the app. Null for
         // every cash / pay-direct shop, which is why `earned` falls back to
@@ -566,11 +569,19 @@ export async function readChairEvents(
       // for a partial capture, and for a fee kept on a no-show. With no payment
       // record we trust the ticket, EXCEPT on a no-show: nobody sat in the
       // chair and no cash changed hands, so the shop earned nothing.
-      earned: a.payment
-        ? collectedDollars(a.payment)
-        : noShow
-          ? 0
-          : (ticket ?? 0),
+      // Chair-side checkout is the barber's own final word on what he took,
+      // so once a cut is checked out that figure IS the revenue (plus anything
+      // Stripe already collected - the two never overlap by construction).
+      // Falling back to the ticket only for cuts never checked out keeps every
+      // cash shop, which is most of them, from reading $0.
+      earned:
+        a.paidAmount != null
+          ? Number(a.paidAmount) + (a.payment ? collectedDollars(a.payment) : 0)
+          : a.payment
+            ? collectedDollars(a.payment)
+            : noShow
+              ? 0
+              : (ticket ?? 0),
       noShow,
       serviceId: a.serviceId,
       serviceName: a.service?.name ?? null,
