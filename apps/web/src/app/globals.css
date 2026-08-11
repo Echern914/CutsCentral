@@ -2,29 +2,90 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ============================== THEME TOKENS ==============================
+   Every Tailwind color token (tailwind.config.ts) resolves to one of these
+   R G B channel variables, so a theme is nothing but a remap. :root IS the
+   dark theme - the values are byte-identical to the hex the app shipped with,
+   so existing users see zero change. [data-theme="light"] flips the whole
+   dashboard to white & gold.
+
+   LIGHT-MODE CONTRAST NOTES (checked against WCAG AA):
+   - Brand gold #D4AF37 on white is ~1.9:1 - unreadable as TEXT. Light mode
+     deepens the gold family (#9A7A1F ≈ 4.6:1 on white) so `text-gold`
+     stays AA everywhere without touching a single class. Gold FILLS (buttons
+     carry dark text on gold) read fine in both, and the literal gold-gradient
+     backgrounds are exempt for the same reason.
+   - emerald/danger "soft" variants are soft against CHARCOAL; on white they
+     wash out (#4ADE80 ≈ 1.9:1), so light mode uses their deep siblings.
+   - Hairline borders are foreground-at-alpha; 8% white reads on charcoal but
+     8% ink vanishes on warm white, so light runs 12%/20%. */
 :root {
   color-scheme: dark;
+  --cb-bg: 10 10 11; /* #0A0A0B */
+  --cb-s900: 14 14 16; /* #0E0E10 */
+  --cb-s800: 20 20 22; /* #141416 */
+  --cb-s700: 28 28 31; /* #1C1C1F */
+  --cb-s600: 38 38 43; /* #26262B */
+  --cb-fg: 245 245 244; /* #F5F5F4 */
+  --cb-fg-muted: 161 161 170; /* #A1A1AA */
+  --cb-gold: 212 175 55; /* #D4AF37 */
+  --cb-gold-muted: 184 150 47; /* #B8962F */
+  --cb-gold-soft: 230 201 100; /* #E6C964 */
+  --cb-gold-deep: 140 110 27; /* #8C6E1B */
+  --cb-emerald: 74 222 128; /* #4ADE80 */
+  --cb-danger: 248 113 113; /* #F87171 */
+  --cb-border-a: 0.08;
+  --cb-border-a-strong: 0.14;
+  --cb-shadow: 0 0 0;
+  --cb-shadow-a: 0.6;
+  --cb-shadow-a-lg: 0.8;
+  --cb-sheen: 245 245 244; /* white glaze on dark cards */
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --cb-bg: 250 248 243; /* #FAF8F3 warm white */
+  --cb-s900: 244 240 231; /* #F4F0E7 */
+  --cb-s800: 255 255 255; /* cards */
+  --cb-s700: 242 238 228; /* #F2EEE4 inputs */
+  --cb-s600: 228 222 208; /* #E4DED0 */
+  --cb-fg: 28 25 23; /* #1C1917 warm near-black */
+  --cb-fg-muted: 87 83 78; /* #57534E ≈ 6.4:1 on white */
+  --cb-gold: 154 122 31; /* #9A7A1F ≈ 4.6:1 on white */
+  --cb-gold-muted: 128 101 26; /* hover: darker, like dark mode dims */
+  --cb-gold-soft: 176 141 43;
+  --cb-gold-deep: 110 86 20;
+  --cb-emerald: 21 128 61; /* #15803D */
+  --cb-danger: 220 38 38; /* #DC2626 */
+  --cb-border-a: 0.12;
+  --cb-border-a-strong: 0.2;
+  --cb-shadow: 28 25 23; /* warm ink, not pitch black */
+  --cb-shadow-a: 0.14;
+  --cb-shadow-a-lg: 0.18;
+  --cb-sheen: 255 255 255; /* invisible on white - by design */
 }
 
 html,
 body {
-  background-color: #0a0a0b;
-  color: #f5f5f4;
+  background-color: rgb(var(--cb-bg));
+  color: rgb(var(--cb-fg));
   -webkit-font-smoothing: antialiased;
 }
 
 ::selection {
-  background: rgba(212, 175, 55, 0.35);
-  color: #f5f5f4;
+  background: rgb(var(--cb-gold) / 0.35);
+  color: rgb(var(--cb-fg));
 }
 
 /* Layered ambient backdrop: two warm radial glows + a faint dot grid + vignette.
-   Sits on body so every page inherits the same atmosphere for free. */
+   Sits on body so every page inherits the same atmosphere for free. The same
+   recipe works in light mode because every color is a token: the glows stay
+   gold and the dot grid becomes faint ink instead of faint white. */
 body {
   background-image:
-    radial-gradient(800px 500px at 15% -5%, rgba(212, 175, 55, 0.07), transparent 60%),
-    radial-gradient(900px 600px at 110% 110%, rgba(212, 175, 55, 0.05), transparent 55%),
-    radial-gradient(rgba(245, 245, 244, 0.025) 1px, transparent 1px);
+    radial-gradient(800px 500px at 15% -5%, rgb(var(--cb-gold) / 0.07), transparent 60%),
+    radial-gradient(900px 600px at 110% 110%, rgb(var(--cb-gold) / 0.05), transparent 55%),
+    radial-gradient(rgb(var(--cb-fg) / 0.025) 1px, transparent 1px);
   background-size:
     100% 100%,
     100% 100%,
@@ -34,7 +95,7 @@ body {
 
 /* Accessible focus ring everywhere (keyboard users), invisible for mouse. */
 :focus-visible {
-  outline: 2px solid rgba(212, 175, 55, 0.7);
+  outline: 2px solid rgb(var(--cb-gold) / 0.7);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -42,30 +103,32 @@ body {
 /* Thin themed scrollbar */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #26262b transparent;
+  scrollbar-color: rgb(var(--cb-s600)) transparent;
 }
 *::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 *::-webkit-scrollbar-thumb {
-  background: #26262b;
+  background: rgb(var(--cb-s600));
   border-radius: 8px;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: #34343a;
+  background: rgb(var(--cb-s600) / 0.8);
 }
 
 @layer components {
-  /* Glass surface: translucent charcoal + blur + top sheen. The workhorse card. */
+  /* Glass surface: translucent surface + blur + top sheen. The workhorse card.
+     Fully token-driven so it reads as smoked glass on charcoal and frosted
+     glass on warm white. */
   .glass {
-    background-color: rgba(20, 20, 22, 0.72);
+    background-color: rgb(var(--cb-s800) / 0.72);
     backdrop-filter: blur(14px);
     -webkit-backdrop-filter: blur(14px);
-    border: 1px solid rgba(245, 245, 244, 0.08);
+    border: 1px solid rgb(var(--cb-fg) / var(--cb-border-a));
     box-shadow:
-      inset 0 1px 0 0 rgba(245, 245, 244, 0.06),
-      0 8px 40px -12px rgba(0, 0, 0, 0.6);
+      inset 0 1px 0 0 rgb(var(--cb-sheen) / 0.06),
+      0 8px 40px -12px rgb(var(--cb-shadow) / var(--cb-shadow-a));
   }
 
   /* Gradient headline text (gold) */
@@ -82,7 +145,7 @@ body {
     background: linear-gradient(
       90deg,
       transparent,
-      rgba(245, 245, 244, 0.14),
+      rgb(var(--cb-fg) / var(--cb-border-a-strong)),
       transparent
     );
   }
@@ -143,7 +206,7 @@ body {
 .skeleton {
   position: relative;
   overflow: hidden;
-  background-color: #141416;
+  background-color: rgb(var(--cb-s800));
 }
 .skeleton::after {
   content: "";
@@ -153,7 +216,7 @@ body {
   background: linear-gradient(
     90deg,
     transparent,
-    rgba(245, 245, 244, 0.06),
+    rgb(var(--cb-fg) / 0.06),
     transparent
   );
   animation: shimmer 1.6s infinite;

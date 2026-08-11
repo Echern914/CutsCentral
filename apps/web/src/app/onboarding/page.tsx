@@ -9,6 +9,8 @@ import {
   type IndustryKey,
 } from "@chairback/config/constants";
 import { createShopAction } from "./actions";
+import { saveThemeAction } from "../dashboard/actions";
+import { ThemePicker } from "@/components/ThemePicker";
 import { fadeUp } from "@/components/motion/variants";
 import { Card } from "@/components/ui/Card";
 import { FormError } from "@/components/ui/FormError";
@@ -147,6 +149,21 @@ export default function OnboardingShopPage() {
             </div>
           </form>
         </Card>
+        {/* Eric: "at the beginning when creating the account should have a
+            choose a Dark Mode and Light Mode." Taps apply instantly (the page
+            flipping under the tap IS the preview) and persist to the account -
+            the user exists by this point. Below the form rather than a gating
+            step: picking a look must never stand between a barber and their
+            first shop. */}
+        <div className="mt-5">
+          <p className="mb-2 text-center text-xs uppercase tracking-[0.2em] text-muted">
+            Pick your look
+          </p>
+          <ThemePicker value="dark" onPick={(t) => void saveThemeAction(t)} />
+          <p className="mt-2 text-center text-xs text-muted">
+            You can switch anytime in Account.
+          </p>
+        </div>
       </motion.div>
     </main>
   );

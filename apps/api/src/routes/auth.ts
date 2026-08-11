@@ -193,6 +193,7 @@ authRouter.get("/me", requireUser, async (req, res) => {
       avatarUrl: true,
       isAdmin: true,
       welcomeSeenAt: true,
+      theme: true,
       // Exposed only as the hasPassword boolean below - lets the account card
       // say "Set a password" instead of asking a social-only (Apple/Google)
       // account for a current password it doesn't have.
@@ -288,6 +289,9 @@ const patchMeSchema = z
       .refine((u) => /^https?:\/\//i.test(u), "Must be an http(s) URL")
       .nullish()
       .or(z.literal("")),
+    // Dashboard appearance. An enum, not a free string - the web sets
+    // data-theme from this value, so junk here would be a styling injection.
+    theme: z.enum(["dark", "light"]).optional(),
   })
   .strict();
 
@@ -297,9 +301,10 @@ authRouter.patch("/me", accountLimiter, requireUser, async (req, res) => {
     res.status(400).json({ error: "invalid_input" });
     return;
   }
-  const data: { name?: string; avatarUrl?: string | null } = {};
+  const data: { name?: string; avatarUrl?: string | null; theme?: string } = {};
   if (parsed.data.name !== undefined) data.name = parsed.data.name.trim();
   if (parsed.data.avatarUrl !== undefined) data.avatarUrl = parsed.data.avatarUrl || null;
+  if (parsed.data.theme !== undefined) data.theme = parsed.data.theme;
   if (Object.keys(data).length === 0) {
     res.status(400).json({ error: "invalid_input" });
     return;

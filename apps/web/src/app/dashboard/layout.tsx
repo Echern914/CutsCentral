@@ -4,6 +4,8 @@ import { APP_NAME } from "@chairback/config/constants";
 import { getMe } from "@/lib/me";
 import { featureLocks, getBillingSummary } from "@/lib/billing";
 import { PullToRefresh } from "@/components/PullToRefresh";
+import { ThemeSync } from "@/components/ThemeSync";
+import { PREPAINT_SCRIPT } from "@/lib/theme";
 import { logoutAction } from "../(auth)/actions";
 import { DashboardNavInline, DashboardTabBar } from "./_components/DashboardNav";
 import { DemoBanner } from "./_components/DemoBanner";
@@ -51,6 +53,11 @@ export default async function DashboardLayout({
   const locks = barberOnly ? undefined : featureLocks(await getBillingSummary());
   return (
     <div className="min-h-dvh">
+      {/* Apply the stored theme BEFORE first paint (a light-mode barber must
+          never flash dark on a hard load), then sync the API's answer - the
+          server value wins so the choice follows the account to new devices. */}
+      <script dangerouslySetInnerHTML={{ __html: PREPAINT_SCRIPT }} />
+      <ThemeSync theme={me.data?.theme ?? "dark"} />
       {/* Swipe down at the top of any dashboard page to reload - the phone
           (and the iOS shell especially) has no refresh button. */}
       <PullToRefresh />

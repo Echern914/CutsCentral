@@ -38,6 +38,11 @@ export interface Me {
   serviceNoun?: string;
   /** Read-only public demo session (/demo/dashboard) — banner + hidden account UI. */
   demo?: boolean;
+  /**
+   * Dashboard appearance: "dark" (black & gold) or "light" (white & gold).
+   * Optional so a web deploy ahead of the API defaults to dark.
+   */
+  theme?: "dark" | "light";
 }
 
 /**
