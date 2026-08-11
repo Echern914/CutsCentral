@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { pluralServiceNoun } from "@chairback/config/constants";
 import { cn } from "@/lib/cn";
+import { fmtDuration } from "@/lib/duration";
 import { NumberField } from "@/components/ui/NumberField";
 import { Segmented } from "@/components/ui/Segmented";
 import { saveGoalAction } from "./actions";
@@ -28,12 +29,9 @@ function fmtMoney(n: number): string {
   return `$${Math.round(n).toLocaleString()}`;
 }
 
-function fmtHours(min: number): string {
-  const h = Math.floor(min / 60);
-  const m = Math.round(min % 60);
-  if (h === 0) return `${m}m`;
-  return m === 0 ? `${h}h` : `${h}h ${m}m`;
-}
+// Capacity here is a whole period of chair time - a month of it runs to
+// hundreds of hours - so it goes through the shared days/hours/minutes
+// formatter rather than a bare hour count. See lib/duration.ts.
 
 export function GoalPlanner({
   goal,
@@ -204,9 +202,9 @@ export function GoalPlanner({
           </div>
           <p className="-mt-2 text-[11px] text-muted">
             Your schedule holds{" "}
-            <span className="tabular-nums text-offwhite">{fmtHours(capacityMin)}</span> of
+            <span className="tabular-nums text-offwhite">{fmtDuration(capacityMin)}</span> of
             chair time a {periodNoun}; at {bookedPct}% booked that&apos;s{" "}
-            <span className="tabular-nums text-offwhite">{fmtHours(sellableMin)}</span> to
+            <span className="tabular-nums text-offwhite">{fmtDuration(sellableMin)}</span> to
             sell.
           </p>
 
@@ -251,8 +249,8 @@ export function GoalPlanner({
           </div>
           {overCapacity && (
             <p role="alert" className="-mt-2 text-[11px] text-amber-400">
-              Heads up: this plan needs {fmtHours(proj.plannedMin)} of chair time — more
-              than the {fmtHours(sellableMin)} you&apos;d have at {bookedPct}% booked.
+              Heads up: this plan needs {fmtDuration(proj.plannedMin)} of chair time — more
+              than the {fmtDuration(sellableMin)} you&apos;d have at {bookedPct}% booked.
               Raise prices instead of volume, or pick a higher booked %.
             </p>
           )}

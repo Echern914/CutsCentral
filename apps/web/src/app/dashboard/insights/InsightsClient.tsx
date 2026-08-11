@@ -7,6 +7,7 @@ import { Card, CardHeader } from "@/components/ui/Card";
 import { Segmented } from "@/components/ui/Segmented";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { cn } from "@/lib/cn";
+import { fmtDurationExact } from "@/lib/duration";
 import { NumberField } from "@/components/ui/NumberField";
 import { GoalPlanner } from "./GoalPlanner";
 import { PeriodControl } from "./PeriodControl";
@@ -645,18 +646,11 @@ function ServiceBars({
 //  Chair utilization
 
 /** "6h 30m" / "45m" — hours read better than 390 minutes to a barber. */
-/**
- * A duration ALWAYS spelled out to the minute — "336h 0m", never "336h".
- * Every number on this card is compared against another one (sold vs open,
- * and each row's pair), and a bare "336h" sitting next to "265h 25m" reads as
- * a rounded-off estimate. It isn't: minutes are the stored unit, so this is
- * the exact value, and showing the 0m says so.
- */
-function fmtDurationExact(min: number): string {
-  const h = Math.floor(min / 60);
-  const m = Math.round(min % 60);
-  return h === 0 ? `${m}m` : `${h}h ${m}m`;
-}
+// Chair time is compared against itself all over this card (sold vs open, and
+// each weekday row's pair), so it uses the spell-it-out variant - see
+// lib/duration.ts. Hours roll into days at 24 there: a month-long window holds
+// hundreds of hours, and "202h 56m" is arithmetic nobody can picture. The
+// per-weekday rows never exceed a day, so they keep their "8h 0m" shape.
 
 /**
  * Color the bar by how full it is — red/amber/green reads at a glance. A null
