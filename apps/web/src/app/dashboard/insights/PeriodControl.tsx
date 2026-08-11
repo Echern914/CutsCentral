@@ -21,6 +21,7 @@ export function PeriodControl({
   onSelectPeriod,
   onApplyRange,
   compact = false,
+  presets,
 }: {
   periods: { key: PeriodKey; label: string }[];
   period: PeriodKey;
@@ -34,6 +35,12 @@ export function PeriodControl({
   onApplyRange: (r: CustomRange) => void;
   /** Tighter pills for inline-panel placements (the Chair time card). */
   compact?: boolean;
+  /**
+   * Show a SHORTER preset list than the page offers (Chair time wants just
+   * 7 days / Month / Custom). `periods` is still required — it's the source of
+   * truth for labelling a period this list doesn't carry.
+   */
+  presets?: readonly { key: PeriodKey; label: string }[];
 }) {
   // The two inputs edit a DRAFT; only "Show this range" applies it.
   const [draftFrom, setDraftFrom] = useState("");
@@ -42,6 +49,17 @@ export function PeriodControl({
 
   const pill = compact ? "px-3 py-1" : "px-3.5 py-1.5";
 
+  // Both instances drive the SAME page-level period, so a shortened list can be
+  // handed a period it doesn't contain (the page top picks "Last 3 months",
+  // this control only offers 7d/30d). Append the applied one rather than render
+  // a control with nothing selected, which reads as broken.
+  const shown = presets ?? periods;
+  const applied =
+    period === "custom" || shown.some((p) => p.key === period)
+      ? null
+      : periods.find((p) => p.key === period);
+  const visible = applied ? [...shown, applied] : shown;
+
   return (
     <div>
       <div
@@ -49,7 +67,7 @@ export function PeriodControl({
         role="group"
         aria-label="Time range"
       >
-        {periods.map((p) => (
+        {visible.map((p) => (
           <button
             key={p.key}
             type="button"

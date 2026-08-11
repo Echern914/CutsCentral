@@ -645,6 +645,18 @@ function ServiceBars({
 
 //  Chair utilization
 
+/**
+ * Chair time's period pills. "How full was my chair" is asked about this week
+ * or this month; the quarter/half/year presets on the page top are a trends
+ * question, and five pills wrap in the compact chip. Anything else is Custom.
+ * "Month" labels the rolling 30-day window - shorter than "Last 30 days", and
+ * the card's own header states the exact dates.
+ */
+const CHAIR_TIME_PRESETS = [
+  { key: "7d", label: "7 days" },
+  { key: "30d", label: "Month" },
+] as const satisfies readonly { key: PeriodKey; label: string }[];
+
 /** "6h 30m" / "45m" — hours read better than 390 minutes to a barber. */
 // Chair time is compared against itself all over this card (sold vs open, and
 // each weekday row's pair), so it uses the spell-it-out variant - see
@@ -911,10 +923,13 @@ function UtilizationCard({
           </div>
         </div>
         {/* The SAME period control as the page top, right where Drick looks for
-            it. It drives the page-level state, so the whole tab moves in step. */}
+            it. It drives the page-level state, so the whole tab moves in step -
+            but offers the short list: chair time is a "this week / this month"
+            question, and five presets in a compact chip is a scroll. */}
         {periodOpen && data && (
           <PeriodControl
             compact
+            presets={CHAIR_TIME_PRESETS}
             periods={data.periods}
             period={period}
             periodLabel={data.periodLabel}
