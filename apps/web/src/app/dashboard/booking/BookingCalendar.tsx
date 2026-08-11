@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Card } from "@/components/ui/Card";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { cn } from "@/lib/cn";
+import { fmtDuration } from "@/lib/duration";
 import { serviceColorHex } from "@chairback/config/constants";
 import { zonedWallTimeToUtc } from "@chairback/config/time";
 import type {
@@ -665,13 +666,8 @@ function CategoryChip({
   );
 }
 
-/** "2h", "1h 30m", "45m" - how long a block runs, from minutes. */
-function fmtBlockDur(min: number): string {
-  const h = Math.floor(min / 60);
-  const m = Math.round(min % 60);
-  if (h === 0) return `${m}m`;
-  return m === 0 ? `${h}h` : `${h}h ${m}m`;
-}
+// How long a block runs comes from the shared formatter (lib/duration.ts), so
+// an all-day block reads "1d" instead of "24h".
 
 // Soft diagonal hatching for blocked-off time - the one texture in the app, so
 // blocked bands read as "not sellable" at a glance without shouting. Must stay
@@ -759,6 +755,31 @@ function DayPlanner({
     .map((r) => ({ startMin: minuteOf(r.start), endMin: minuteOf(r.end!), endIso: r.end! }));
   const blockCovering = (h: number) =>
     blockIntervals.find((iv) => iv.startMin <= h * 60 && iv.endMin >= (h + 1) * 60) ?? null;
+
+  // Collapse each RUN of covered, empty hours into one band. Printing the strip
+  // per hour meant a day off rendered as fifteen identical "blocked until 11:00
+  // PM" lines marching down the grid - the block card directly above them
+  // already gives the range and the duration, so every repeat was noise you had
+  // to scroll past to reach the next bookable hour. One band per run says the
+  // same thing: this stretch is spoken for, here's when it lets up. Hours that
+  // hold an appointment are never folded in - a booking made before the block
+  // still has to be visible.
+  type HourRow =
+    | { kind: "hour"; hour: number }
+    | { kind: "blocked"; hour: number; endIso: string };
+  const hourRows: HourRow[] = [];
+  for (const h of hours) {
+    const covering = (byHour.get(h) ?? []).length === 0 ? blockCovering(h) : null;
+    if (!covering) {
+      hourRows.push({ kind: "hour", hour: h });
+      continue;
+    }
+    // Same run only while it's the same block; back-to-back blocks with
+    // different end times stay separate bands.
+    const prev = hourRows[hourRows.length - 1];
+    if (prev?.kind === "blocked" && prev.endIso === covering.endIso) continue;
+    hourRows.push({ kind: "blocked", hour: h, endIso: covering.endIso });
+  }
 
   // ---- Day summary (the totals footer) ----
   // Always the WHOLE day, never the category-filtered slice - it says "Day
@@ -861,7 +882,33 @@ function DayPlanner({
         animate="show"
         className="flex flex-col"
       >
-        {hours.map((h) => {
+        {hourRows.map((item) => {
+          // An hour sitting fully inside a block is NOT open - don't invite a
+          // booking into it. One slim band covers the whole covered run.
+          if (item.kind === "blocked") {
+            return (
+              <motion.div
+                key={`blocked-${item.hour}`}
+                variants={fadeUp}
+                className="flex gap-3 border-b border-subtle/60 py-2 last:border-b-0"
+              >
+                <div className="w-14 shrink-0 pt-0.5 text-right text-[11px] font-medium text-muted">
+                  {formatHour(item.hour)}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div
+                    className={cn(
+                      "flex items-center gap-2 rounded-md border-l-2 border-charcoal-600 py-1 pl-2 text-[11px] text-muted/50",
+                      BLOCK_STRIPES,
+                    )}
+                  >
+                    blocked until {timeFmt.format(new Date(item.endIso))}
+                  </div>
+                </div>
+              </motion.div>
+            );
+          }
+          const h = item.hour;
           const slot = (byHour.get(h) ?? []).sort((a, b) => a.start.localeCompare(b.start));
           return (
             <motion.div
@@ -874,41 +921,23 @@ function DayPlanner({
               </div>
               <div className="min-w-0 flex-1">
                 {slot.length === 0 ? (
-                  (() => {
-                    // An hour sitting fully inside a block is NOT open - don't
-                    // invite a booking into it. A slim continuation strip keeps
-                    // the block's span readable down the grid.
-                    const covering = blockCovering(h);
-                    if (covering) {
-                      return (
-                        <div
-                          className={cn(
-                            "flex items-center gap-2 rounded-md border-l-2 border-charcoal-600 py-1 pl-2 text-[11px] text-muted/50",
-                            BLOCK_STRIPES,
-                          )}
-                        >
-                          blocked until {timeFmt.format(new Date(covering.endIso))}
-                        </div>
-                      );
-                    }
-                    return isNative ? (
-                      // A "+" bubble to add an appointment at this open hour.
-                      <button
-                        type="button"
-                        onClick={() => onAddAt(h)}
-                        className="group flex w-full items-center gap-2 py-1 text-xs text-muted/40 transition-colors hover:text-gold"
-                      >
-                        <span className="flex h-5 w-5 items-center justify-center rounded-full border border-subtle text-muted transition-colors group-hover:border-gold/50 group-hover:text-gold">
-                          +
-                        </span>
-                        <span className="opacity-0 transition-opacity group-hover:opacity-100">
-                          Add appointment
-                        </span>
-                      </button>
-                    ) : (
-                      <div className="py-1 text-xs text-muted/40">— open —</div>
-                    );
-                  })()
+                  isNative ? (
+                    // A "+" bubble to add an appointment at this open hour.
+                    <button
+                      type="button"
+                      onClick={() => onAddAt(h)}
+                      className="group flex w-full items-center gap-2 py-1 text-xs text-muted/40 transition-colors hover:text-gold"
+                    >
+                      <span className="flex h-5 w-5 items-center justify-center rounded-full border border-subtle text-muted transition-colors group-hover:border-gold/50 group-hover:text-gold">
+                        +
+                      </span>
+                      <span className="opacity-0 transition-opacity group-hover:opacity-100">
+                        Add appointment
+                      </span>
+                    </button>
+                  ) : (
+                    <div className="py-1 text-xs text-muted/40">— open —</div>
+                  )
                 ) : (
                   <div className="flex flex-col gap-1.5">
                     {slot.map((r) => (
@@ -974,7 +1003,7 @@ function DayPlanner({
                   {noShowCount} no-show{noShowCount === 1 ? "" : "s"} — earned $0
                 </p>
               )}
-              {blockedMin > 0 && <p>{fmtBlockDur(blockedMin)} blocked off</p>}
+              {blockedMin > 0 && <p>{fmtDuration(blockedMin)} blocked off</p>}
             </div>
           </div>
           {fillables.length > 0 && (
@@ -1082,6 +1111,10 @@ function AppointmentBlock({
     // reason ("Lunch + bank run") gets its own line so a narrow screen never
     // truncates it into nothing.
     const reason = row.clientName === "Blocked in Acuity" ? "" : row.clientName || "";
+    // Duration rides INSIDE the identity pill rather than beside it. Three
+    // separate chips (11h / Blocked / Unblock) crowded the right edge of every
+    // band, and "how long" is a property of the block, not a second fact.
+    const durSuffix = durMin !== null ? ` · ${fmtDuration(durMin)}` : "";
     return (
       <div
         className={cn(
@@ -1092,18 +1125,13 @@ function AppointmentBlock({
         <div className="flex items-center gap-2.5">
           <span className="min-w-0 truncate tabular-nums text-muted">{timeLabel}</span>
           <span className="ml-auto flex shrink-0 items-center gap-1.5">
-            {durMin !== null && (
-              <span className="rounded-full bg-charcoal-700/80 px-2 py-0.5 text-[10px] tabular-nums text-muted">
-                {fmtBlockDur(durMin)}
-              </span>
-            )}
             {row.syncedExternal ? (
-              <span className="rounded-full bg-sky-400/15 px-2 py-0.5 text-[10px] font-medium text-sky-300">
-                Acuity
+              <span className="rounded-full bg-sky-400/15 px-2 py-0.5 text-[10px] font-medium tabular-nums text-sky-300">
+                Acuity{durSuffix}
               </span>
             ) : (
-              <span className="rounded-full bg-charcoal-700 px-2 py-0.5 text-[10px] font-medium text-muted">
-                Blocked
+              <span className="rounded-full bg-charcoal-700 px-2 py-0.5 text-[10px] font-medium tabular-nums text-muted">
+                Blocked{durSuffix}
               </span>
             )}
             {/* Unblock, right on the band. Blocking time was always one tap and
