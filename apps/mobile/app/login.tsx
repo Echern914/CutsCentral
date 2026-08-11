@@ -81,6 +81,29 @@ async function errorCode(res: Response): Promise<string | null> {
  * message. 429 is checked by STATUS, not by code: express-rate-limit answers
  * with a plain-text body, so errorCode() parses nothing out of it.
  */
+/**
+ * What we say when Apple/Google verified fine but matched no ChairBack account.
+ *
+ * This has to serve TWO people at once, and it used to only serve the first:
+ *
+ *  1. Someone with an existing (web-made) account whose provider identity isn't
+ *     linked yet - including every Apple "Hide My Email" user, whose relay
+ *     address can never match their signup email. They sign in below once and
+ *     we stamp the link (see pendingLink).
+ *  2. Someone with NO account, tapping the button to SIGN UP. The old copy sent
+ *     them to "sign in with your email and password below" - which they also do
+ *     not have. A dead end with no way out of the screen.
+ *
+ * Shop accounts are deliberately not creatable in the app (Guideline 3.1.1 -
+ * in-app business registration is exactly what got an early build rejected), so
+ * the honest answer for (2) is where accounts actually get made. Plain text, no
+ * tappable link and no pricing: the app must not steer to a purchase.
+ */
+const NO_ACCOUNT_COPY = (label: string): string =>
+  `No ChairBack account is linked to that ${label} yet. ` +
+  `Already have one? Sign in with your email and password below and we'll connect it for next time. ` +
+  `New here? Shop accounts are set up on the ChairBack website first, then this button works.`;
+
 function knownFailure(res: Response, code: string | null, label: string): string | null {
   if (res.status === 429) {
     return "Too many attempts. Wait a few minutes and try again.";
@@ -195,9 +218,7 @@ export default function LoginScreen() {
         // hold the token and offer to connect it once they sign in below.
         if (code === "account_not_found") {
           pendingLink.current = { provider: "apple", identityToken, name };
-          setError(
-            "That Apple ID isn't connected to a ChairBack account yet. Sign in with your email and password below and we'll connect it for next time.",
-          );
+          setError(NO_ACCOUNT_COPY("Apple ID"));
           setBusy(null);
           return;
         }
@@ -244,9 +265,7 @@ export default function LoginScreen() {
         }
         if (code === "account_not_found") {
           pendingLink.current = { provider: "google", idToken };
-          setError(
-            "That Google account isn't connected to a ChairBack account yet. Sign in with your email and password below and we'll connect it for next time.",
-          );
+          setError(NO_ACCOUNT_COPY("Google account"));
           setBusy(null);
           return;
         }
