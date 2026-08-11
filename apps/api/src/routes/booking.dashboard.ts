@@ -17,6 +17,7 @@ import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import { toCents } from "../billing/payments.js";
+import { createTerminalPaymentIntent, terminalEnabled } from "../billing/terminal.js";
 import {
   APPOINTMENT_NUDGE_KIND,
   APPOINTMENT_NUDGE_LIMIT,
@@ -3452,6 +3453,92 @@ bookingDashboardRouter.post("/appointments/:id/complete", async (req, res) => {
     });
   }
   res.json({ ok: true });
+});
+
+/**
+ * POST /appointments/:id/terminal-intent — Tap to Pay for one cut.
+ *
+ * Mints a CARD-PRESENT PaymentIntent and hands its client secret to the mobile
+ * SDK, which drives the NFC reader. Money settles to the barber's connected
+ * account exactly like every other charge here (destination charge +
+ * on_behalf_of); Apple takes nothing — a haircut is a real-world service and is
+ * excluded from in-app purchase.
+ *
+ * The Payment row is written up front with the intent's initial status and then
+ * reconciled by the existing webhook (applyPaymentEvent keys on
+ * metadata.paymentId), so a card-present sale lands in revenue through the same
+ * path as a pay-ahead one. `paidAmount` stays NULL for these — the Payment row
+ * IS the money, and insightsWindow adds the two without double-counting.
+ *
+ * Amount comes from the ticket, never the client: a request body that could set
+ * its own price would let anyone with a session charge an arbitrary card.
+ */
+bookingDashboardRouter.post("/appointments/:id/terminal-intent", async (req, res) => {
+  if (!terminalEnabled()) {
+    res.status(503).json({ error: "terminal_unavailable" });
+    return;
+  }
+  const shopId = req.shop!.id;
+  const shop = await prisma.shop.findUnique({
+    where: { id: shopId },
+    select: { stripeConnectAccountId: true, platformFeeBps: true, name: true },
+  });
+  if (!shop?.stripeConnectAccountId) {
+    res.status(409).json({ error: "connect_required" });
+    return;
+  }
+
+  const appt = await forShop(shopId).appointment.findFirst({
+    where: { id: req.params.id!, status: { in: ["BOOKED", "COMPLETED"] } },
+    // No relation select here: forShop()'s client does not carry relation
+    // types through, so the service name is fetched separately below.
+    select: { id: true, priceAtBooking: true, paidAt: true, serviceId: true },
+  });
+  if (!appt) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  // Already settled at the chair (cash, Zelle, ...). Charging a card now would
+  // take the money twice for one cut.
+  if (appt.paidAt) {
+    res.status(409).json({ error: "paid_already" });
+    return;
+  }
+  const amountCents = toCents(
+    appt.priceAtBooking == null ? null : Number(appt.priceAtBooking),
+  );
+  if (amountCents === null) {
+    // An unpriced cut has nothing to charge. toCents also rejects 0/negative,
+    // so this covers "free" without ever creating a $0 intent Stripe rejects.
+    res.status(400).json({ error: "no_amount" });
+    return;
+  }
+
+  // Cosmetic only (the Stripe sheet + statement descriptor), so a miss is fine.
+  const service = appt.serviceId
+    ? await forShop(shopId).service.findFirst({
+        where: { id: appt.serviceId },
+        select: { name: true },
+      })
+    : null;
+
+  const created = await createTerminalPaymentIntent({
+    shopId,
+    appointmentId: appt.id,
+    connectAccountId: shop.stripeConnectAccountId,
+    amountCents,
+    platformFeeBps: shop.platformFeeBps,
+    description: `${service?.name ?? "Appointment"} at ${shop.name}`,
+  });
+  if (!created.ok) {
+    const status = created.reason === "payment_exists" ? 409 : 502;
+    res.status(status).json({ error: created.reason });
+    return;
+  }
+  res.json({
+    clientSecret: created.clientSecret,
+    paymentIntentId: created.paymentIntentId,
+  });
 });
 
 /**
