@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Card } from "@/components/ui/Card";
+import { Segmented } from "@/components/ui/Segmented";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { cn } from "@/lib/cn";
 import { fmtDuration } from "@/lib/duration";
@@ -38,9 +39,22 @@ import { useRouter } from "next/navigation";
 type Toast = (msg: string, kind?: "success" | "error") => void;
 
 /**
- * The barber's schedule as a MONTH CALENDAR. Each day is a cell; tapping a day
- * drops down an hour-by-hour planner of that day's appointments (every working
- * hour shown, empty hours as open gaps), with the haircut type on each booking.
+ * The barber's schedule, in two views he switches between.
+ *
+ * MONTH is the overview: each day a cell, tapping one drops down that day's
+ * hour-by-hour planner inline (every working hour shown, empty hours as open
+ * gaps), with the haircut type on each booking.
+ *
+ * DAY is the same planner given the whole card, paged one day at a time. It
+ * exists because the month grid answers "how does the month look" while the
+ * barber standing at the chair is asking "what's my day" - and getting that
+ * out of the month view costs a tap on the right cell, with the planner then
+ * squeezed under six rows of grid.
+ *
+ * Both render the SAME `DayPlanner`, so a row action, the gauge and the
+ * category chips behave identically in either. The views share `selectedDay`
+ * too: switch to Day and you land on the day you were looking at; switch back
+ * and that day is the one selected.
  *
  * Data: the current month is loaded server-side on first paint; paging to
  * another month refetches via getAgendaAction. Everything is bucketed and
@@ -50,6 +64,11 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
  */
 
 const WEEKDAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
+const VIEWS = [
+  { key: "month", label: "Month" },
+  { key: "day", label: "Day" },
+] as const;
+type CalendarView = (typeof VIEWS)[number]["key"];
 // Default planner window (barber's local hours). Runs to midnight because some
 // barbers cut late into the night; the window auto-widens earlier/later to fit
 // any booking outside it (e.g. a 6am or 1am appointment).
@@ -161,6 +180,10 @@ export function BookingCalendar({
   const [viewYear, setViewYear] = useState(todayParts.y);
   const [viewMonth, setViewMonth] = useState(todayParts.m); // 1-12
   const [selectedDay, setSelectedDay] = useState<string | null>(todayKey);
+  // Month overview vs one-day planner. Day view needs a day, so the switch
+  // falls back to today when the month view was sitting collapsed.
+  const [view, setView] = useState<CalendarView>("month");
+  const shownDay = selectedDay ?? todayKey;
 
   // Fetch a month's data on demand (paged to a month we haven't loaded yet).
   function ensureMonthLoaded(year: number, month1to12: number) {
@@ -237,6 +260,52 @@ export function BookingCalendar({
     ensureMonthLoaded(y, m);
   }
 
+  /**
+   * Move the day view by N days. Paging off the end of a month has to bring
+   * `viewYear`/`viewMonth` with it: they're what `refreshAgenda` and the poll
+   * fetch, so leaving them behind would show Sep 1 while quietly polling
+   * August - and the new day's rows would never arrive.
+   */
+  function gotoDay(delta: number) {
+    const next = shiftDayKey(shownDay, delta);
+    const [y, m] = next.split("-").map(Number);
+    setSelectedDay(next);
+    if (y !== viewYear || m !== viewMonth) {
+      setViewYear(y!);
+      setViewMonth(m!);
+      ensureMonthLoaded(y!, m!);
+    }
+  }
+
+  /** Jump both views back to today (the day view's "you've paged away" escape). */
+  function gotoToday() {
+    setSelectedDay(todayKey);
+    if (todayParts.y !== viewYear || todayParts.m !== viewMonth) {
+      setViewYear(todayParts.y);
+      setViewMonth(todayParts.m);
+      ensureMonthLoaded(todayParts.y, todayParts.m);
+    }
+  }
+
+  /**
+   * Switching views keeps the day you were on. Month -> Day opens the selected
+   * day (or today); Day -> Month pages the grid to that day's month so the cell
+   * you were just looking at is on screen and selected, rather than dumping you
+   * back on whatever month you started from.
+   */
+  function switchView(next: CalendarView) {
+    setView(next);
+    if (next === "day") {
+      setSelectedDay(shownDay);
+      const [y, m] = shownDay.split("-").map(Number);
+      if (y !== viewYear || m !== viewMonth) {
+        setViewYear(y!);
+        setViewMonth(m!);
+        ensureMonthLoaded(y!, m!);
+      }
+    }
+  }
+
   // ---- Build the month grid (weeks of 7, Sun-first, incl. leading/trailing) --
   const weeks = useMemo(
     () => buildMonthGrid(viewYear, viewMonth),
@@ -247,6 +316,13 @@ export function BookingCalendar({
   const monthTitle = monthTitleFmt.format(new Date(viewYear, viewMonth - 1, 15, 12));
 
   const selectedRows = selectedDay ? byDay.get(selectedDay) ?? [] : [];
+  const isDayView = view === "day";
+  // The day view's own rows/title, independent of whether a month cell is
+  // selected - `shownDay` always names a day.
+  const shownDayRows = byDay.get(shownDay) ?? [];
+  const dayTitle = labelFromKey(shownDay, dayTitleFmt);
+  const navBtn =
+    "rounded-lg border border-subtle px-2.5 py-1.5 text-sm text-muted transition-colors hover:text-offwhite";
 
   return (
     <div className="flex flex-col gap-4">
@@ -254,30 +330,77 @@ export function BookingCalendar({
       <WaitlistPanel initial={initialWaitlist} toast={toast} />
 
       <Card className="p-4 sm:p-5">
-      {/* Month header + nav */}
-      <div className="flex items-center justify-between">
+      {/* View switch. Above the pager because it changes what the pager PAGES
+          (months vs days) - reading it after the arrows would be backwards. */}
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <Segmented
+          options={VIEWS}
+          value={view}
+          onChange={switchView}
+          ariaLabel="Calendar view"
+        />
+        {/* Only offered once it does something - on today it's a no-op button. */}
+        {shownDay !== todayKey && (
+          <button
+            type="button"
+            onClick={gotoToday}
+            className="rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors duration-150 ease-out hover:border-gold/50 hover:text-gold"
+          >
+            Today
+          </button>
+        )}
+      </div>
+
+      {/* Pager: months in month view, days in day view. */}
+      <div className="flex items-center justify-between gap-2">
         <button
           type="button"
-          onClick={() => gotoMonth(-1)}
-          aria-label="Previous month"
-          className="rounded-lg border border-subtle px-2.5 py-1.5 text-sm text-muted transition-colors hover:text-offwhite"
+          onClick={() => (isDayView ? gotoDay(-1) : gotoMonth(-1))}
+          aria-label={isDayView ? "Previous day" : "Previous month"}
+          className={navBtn}
         >
           ‹
         </button>
-        <h2 className="font-display text-lg">
-          {monthTitle}
+        <h2 className="min-w-0 truncate text-center font-display text-lg">
+          {isDayView ? dayTitle : monthTitle}
           {pendingMonth && <span className="ml-2 text-xs text-muted">loading…</span>}
         </h2>
         <button
           type="button"
-          onClick={() => gotoMonth(1)}
-          aria-label="Next month"
-          className="rounded-lg border border-subtle px-2.5 py-1.5 text-sm text-muted transition-colors hover:text-offwhite"
+          onClick={() => (isDayView ? gotoDay(1) : gotoMonth(1))}
+          aria-label={isDayView ? "Next day" : "Next month"}
+          className={navBtn}
         >
           ›
         </button>
       </div>
 
+      {isDayView ? (
+        /* DAY VIEW: the planner gets the whole card. Keyed on the day so it
+           remounts as you page - which is what resets DayPlanner's category
+           filter, exactly as tapping a different month cell does. */
+        <div className="mt-4">
+          <DayPlanner
+            key={shownDay}
+            standalone
+            rows={shownDayRows}
+            categories={categories}
+            title={dayTitle}
+            hourOf={(iso) => shopParts(iso).h}
+            minuteOf={(iso) => {
+              const p = shopParts(iso);
+              return p.h * 60 + p.min;
+            }}
+            timeFmt={timeFmt}
+            toast={toast}
+            isNative={isNative}
+            onAddAt={(hour) => setAddAt(isoForDayHour(shownDay, hour, tz))}
+            onBlock={() => setBlockDay({ dayKey: shownDay, hour: 12 })}
+            onChanged={refreshAgenda}
+          />
+        </div>
+      ) : (
+      <>
       {/* Weekday header */}
       <div className="mt-4 grid grid-cols-7 gap-1 text-center text-[11px] font-medium text-muted">
         {WEEKDAY_LABELS.map((w, i) => (
@@ -367,6 +490,8 @@ export function BookingCalendar({
           </motion.div>
         )}
       </AnimatePresence>
+      </>
+      )}
       </Card>
 
       {/* New Appointment / Block Off sheets (native only). */}
@@ -689,6 +814,7 @@ function DayPlanner({
   onAddAt,
   onBlock,
   onChanged,
+  standalone = false,
 }: {
   rows: AgendaRow[];
   /** Gauge buckets (groups + ungrouped services) with their display-only targets. */
@@ -704,6 +830,9 @@ function DayPlanner({
   onBlock: () => void;
   /** Refetch the agenda so a row mutation shows without waiting for the poll. */
   onChanged: () => void;
+  /** DAY view: the planner owns the card, so it drops the repeated date
+   *  heading and the divider that separated it from the month grid. */
+  standalone?: boolean;
 }) {
   // ---- Day gauge: how full is this day, and in what? ----
   // null = "All". Reset per day: `key={selectedDay}` on the wrapper remounts
@@ -821,9 +950,17 @@ function DayPlanner({
   const showSummary = counts.all > 0 || fillables.length > 0 || blockedMin > 0;
 
   return (
-    <div className="mt-4 border-t border-subtle pt-4">
-      <div className="mb-3 flex items-baseline justify-between gap-3">
-        <h3 className="font-display text-base">{title}</h3>
+    <div className={standalone ? "" : "mt-4 border-t border-subtle pt-4"}>
+      {/* In DAY view the pager heading above already IS this date, and the
+          planner owns the whole card - so no repeated title, and no divider
+          separating it from a grid that isn't there. */}
+      <div
+        className={cn(
+          "mb-3 flex items-baseline gap-3",
+          standalone ? "justify-end" : "justify-between",
+        )}
+      >
+        {!standalone && <h3 className="font-display text-base">{title}</h3>}
         <DayGauge count={shownCount} target={shownTarget} />
       </div>
 
@@ -1519,6 +1656,20 @@ function buildMonthGrid(year: number, month1to12: number): Cell[][] {
 
 function keyOf(y: number, m: number, d: number): string {
   return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+/**
+ * Move a YYYY-MM-DD key by N calendar days, rolling months and years.
+ *
+ * Pure calendar arithmetic on a LOCAL noon Date: the key is a wall-clock day in
+ * the shop's zone, and we only ever read y/m/d back out, so no zone conversion
+ * happens in either direction. Noon (not midnight) so a DST jump can't land the
+ * result on the previous day.
+ */
+function shiftDayKey(key: string, delta: number): string {
+  const [y, m, d] = key.split("-").map(Number);
+  const shifted = new Date(y!, m! - 1, d! + delta, 12);
+  return keyOf(shifted.getFullYear(), shifted.getMonth() + 1, shifted.getDate());
 }
 
 /** Label a YYYY-MM-DD key for an EMPTY day (no real instant to format). Builds a
