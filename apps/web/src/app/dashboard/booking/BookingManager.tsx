@@ -28,6 +28,7 @@ import type {
   WaitlistRow,
 } from "./page";
 import { BookingCalendar } from "./BookingCalendar";
+import { ShopQrCard } from "./ShopQrCard";
 import { ConnectPlatforms } from "./ConnectPlatforms";
 import { Sheet } from "./AppointmentForm";
 import { TimeSelect } from "@/components/ui/TimeSelect";
@@ -548,6 +549,12 @@ function SettingsTab({
             {pending ? "Saving…" : "Save booking rules"}
           </button>
         </Card>
+      )}
+
+      {/* Right under the booking link, because the code IS that link - a
+          barber looking for one is looking at the other. */}
+      {mode === "native" && (
+        <ShopQrCard bookUrl={bookUrl} shopName={shop.name} toast={toast} />
       )}
 
       {mode === "native" && (
