@@ -14,6 +14,7 @@ import { runPushReminders } from "./engines/pushReminders.js";
 import { runRebookNudges } from "./engines/rebookNudges.js";
 import { runBarberReminders } from "./engines/barberReminders.js";
 import { refreshExpiringSquareTokens } from "./engines/squareTokenRefresh.js";
+import { runSquareResync } from "./engines/squareResync.js";
 import { rollForwardTargetedRules } from "./engines/targetedSlotRules.js";
 import { runAcuityResync } from "./engines/acuityResync.js";
 import { runTrialReminders } from "./engines/trialReminder.js";
@@ -179,6 +180,23 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
     ttlMs: 10 * MINUTE,
     run: () => refreshExpiringSquareTokens(),
     failMsg: "square token refresh sweep failed",
+  },
+  // Square: the same self-healing sweep Acuity gets below, for the same
+  // reasons - webhooks are a single point of failure, and a synced Visit both
+  // blocks native slots (#147) and drives the ~24h reminder (#212), so a
+  // booking we never heard about is a double-booking and a missed reminder.
+  // Offset to :15/:45 so the two integration sweeps don't run head-to-head on
+  // a multi-source account (same trick as synced-visit-reminders vs
+  // appointment-reminders). No-op when no Square shops are connected.
+  {
+    cronExpr: "15-59/30 * * * *",
+    name: "square-resync",
+    ttlMs: 15 * MINUTE,
+    run: async () => {
+      const { ingested } = await runSquareResync();
+      if (ingested > 0) logger.info({ ingested }, "square resync ingested bookings");
+    },
+    failMsg: "square resync sweep failed",
   },
   // Acuity: re-sync a recent window of appointments for every connected shop
   // every 30 minutes, so client names/numbers added or edited directly in
