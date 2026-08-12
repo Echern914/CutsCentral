@@ -7,6 +7,9 @@ import { BookingManager } from "./BookingManager";
 export const metadata: Metadata = { title: "Booking" };
 
 export interface BookingShop {
+  /** Already on the wire from /api/shops/me (serializeShop) - the interface
+   *  just never declared it. Printed on the QR card. */
+  name: string;
   slug: string | null;
   bookingMode: BookingModeKey;
   bookingUrl: string | null;
