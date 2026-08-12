@@ -3665,3 +3665,163 @@ bookingDashboardRouter.post("/appointments/:id/checkout", async (req, res) => {
   }
   res.json({ ok: true });
 });
+
+/**
+ * POST /appointments/walk-in — the no-name, one-tap walk-in.
+ *
+ * Someone sits down without an appointment, gets a cut, pays, leaves. Booking
+ * them properly means inventing a name, a phone and a service before you can
+ * record forty dollars, which is why walk-ins were simply never recorded: the
+ * fastest correct path was to not use the app at all. So the shop's busiest
+ * days looked like its quietest, and every revenue number was short.
+ *
+ * This records the money and nothing else: no client row (nobody is signing up
+ * for loyalty on the way out the door), no availability check (it already
+ * happened - the chair is literally occupied), no overlap check (a walk-in
+ * squeezed between two bookings is the normal case, not a conflict).
+ *
+ * It lands as a COMPLETED Appointment already checked out, so it flows through
+ * every existing surface for free: the calendar, Chair time, and Insights
+ * revenue - which already reads `paidAmount` alongside Payment rows.
+ *
+ * NO LOYALTY, on purpose: a punch belongs to a person, and this row has none.
+ * Same rule the chair-side checkout already applies to a clientless row.
+ */
+const walkInSchema = z
+  .object({
+    amount: z.number().min(0).max(100_000),
+    // Whose chair. Optional: resolved from the signed-in barber or a solo
+    // shop's only staff member, so the common case sends just an amount.
+    staffId: z.string().min(1).optional(),
+    // 'cash' is the default because that is what a walk-in almost always is;
+    // the barber can correct it on the appointment afterwards.
+    method: z.enum(["cash", "direct", "card", "other"]).default("cash"),
+  })
+  .strict();
+
+/** Name of the auto-provisioned service every walk-in is booked against. */
+const WALK_IN_SERVICE_NAME = "Walk-in";
+/** Chair time a walk-in is assumed to occupy when the shop has no signal. */
+const WALK_IN_FALLBACK_MIN = 30;
+
+/**
+ * The shop's walk-in service, created on first use.
+ *
+ * Appointment.serviceId is NOT NULL, so a walk-in needs one. Pointing it at a
+ * real service would quietly inflate that service in top-services; a dedicated
+ * one keeps the books honest and makes "how many walk-ins" answerable.
+ *
+ * It is created INACTIVE so it can never appear on the public booking page -
+ * nobody should be able to book "Walk-in" online.
+ *
+ * There is no unique constraint on (shopId, name), so two simultaneous first
+ * walk-ins could create two. Harmless, and self-correcting: we always take the
+ * OLDEST match, so every later walk-in converges on the same row.
+ */
+async function ensureWalkInService(
+  tx: Prisma.TransactionClient,
+  shopId: string,
+): Promise<{ id: string; durationMin: number }> {
+  const existing = await tx.service.findFirst({
+    where: { shopId, name: WALK_IN_SERVICE_NAME },
+    orderBy: { createdAt: "asc" },
+    select: { id: true, durationMin: true },
+  });
+  if (existing) return existing;
+
+  // Match the shop's own rhythm rather than guessing: a shop whose cuts are 45
+  // minutes should not have its walk-ins counted as 30 in Chair time.
+  const typical = await tx.service.findFirst({
+    where: { shopId, active: true },
+    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    select: { durationMin: true },
+  });
+  const created = await tx.service.create({
+    data: {
+      shopId,
+      name: WALK_IN_SERVICE_NAME,
+      durationMin: typical?.durationMin ?? WALK_IN_FALLBACK_MIN,
+      active: false,
+      sortOrder: 999,
+    },
+    select: { id: true, durationMin: true },
+  });
+  return created;
+}
+
+bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
+  const parsed = walkInSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const shopId = req.shop!.id;
+  const now = new Date();
+
+  const result = await runWithShop(shopId, async (tx) => {
+    // Whose chair, in order of confidence: an explicit pick, the signed-in
+    // barber's own chair, or a solo shop's only barber. An owner with several
+    // staff and no chair of their own has to say - guessing would pile every
+    // walk-in onto one person's earnings.
+    const active = await tx.staff.findMany({
+      where: { shopId, active: true },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      select: { id: true, name: true },
+    });
+    let staffId: string | null = null;
+    if (parsed.data.staffId) {
+      if (!active.some((s) => s.id === parsed.data.staffId)) {
+        return { kind: "bad_staff" as const };
+      }
+      staffId = parsed.data.staffId;
+    } else if (req.shopStaffId && active.some((s) => s.id === req.shopStaffId)) {
+      staffId = req.shopStaffId;
+    } else if (active.length === 1) {
+      staffId = active[0]!.id;
+    }
+    if (!staffId) {
+      return { kind: "staff_required" as const, staff: active };
+    }
+
+    const service = await ensureWalkInService(tx, shopId);
+    const appt = await tx.appointment.create({
+      data: {
+        shopId,
+        staffId,
+        serviceId: service.id,
+        // The whole point: no Client row, so nothing to register and nothing
+        // to clutter the client book with one-off strangers.
+        clientId: null,
+        firstName: WALK_IN_SERVICE_NAME,
+        status: "COMPLETED",
+        startsAt: now,
+        endsAt: new Date(now.getTime() + service.durationMin * 60_000),
+        // The ticket IS what they paid - there was no booked price to compare
+        // against, so the two are the same number here.
+        priceAtBooking: new Prisma.Decimal(parsed.data.amount.toFixed(2)),
+        paidAmount: new Prisma.Decimal(parsed.data.amount.toFixed(2)),
+        paidMethod: parsed.data.method,
+        paidAt: now,
+        manageToken: randomToken(),
+      },
+      select: { id: true },
+    });
+    return { kind: "ok" as const, id: appt.id, staffId };
+  });
+
+  if (result.kind === "bad_staff") {
+    res.status(404).json({ error: "staff_not_found" });
+    return;
+  }
+  if (result.kind === "staff_required") {
+    // 400 with the roster so the UI can put up a one-tap picker instead of a
+    // dead end.
+    res.status(400).json({ error: "staff_required", staff: result.staff });
+    return;
+  }
+  logger.info(
+    { shopId, appointmentId: result.id, amount: parsed.data.amount },
+    "walk-in recorded",
+  );
+  res.status(201).json({ ok: true, id: result.id });
+});
