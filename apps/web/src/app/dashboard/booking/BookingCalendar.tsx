@@ -28,6 +28,7 @@ import {
   markArrivedAction,
   noShowAppointmentAction,
   nudgeAppointmentAction,
+  recordWalkInAction,
   removeBlockAction,
   setWaitlistStatusAction,
 } from "./actions";
@@ -394,6 +395,7 @@ export function BookingCalendar({
             timeFmt={timeFmt}
             toast={toast}
             isNative={isNative}
+            staff={staff}
             onAddAt={(hour) => setAddAt(isoForDayHour(shownDay, hour, tz))}
             onBlock={() => setBlockDay({ dayKey: shownDay, hour: 12 })}
             onChanged={refreshAgenda}
@@ -483,6 +485,7 @@ export function BookingCalendar({
               timeFmt={timeFmt}
               toast={toast}
               isNative={isNative}
+              staff={staff}
               onAddAt={(hour) => setAddAt(isoForDayHour(selectedDay, hour, tz))}
               onBlock={() => setBlockDay({ dayKey: selectedDay, hour: 12 })}
               onChanged={refreshAgenda}
@@ -801,6 +804,147 @@ function CategoryChip({
 const BLOCK_STRIPES =
   "bg-[repeating-linear-gradient(-45deg,transparent,transparent_6px,rgba(255,255,255,0.04)_6px,rgba(255,255,255,0.04)_12px)]";
 
+/**
+ * "Walk-in" — one tap, type what they paid, done.
+ *
+ * Deliberately an INLINE STRIP, not a sheet: the whole feature exists because
+ * booking a walk-in properly (invent a name, a phone, pick a service) cost more
+ * than it was worth, so the shop just... didn't. A modal would spend the saving
+ * it's meant to create. Collapsed it is one button; expanded it is one number
+ * field and Save, with Enter submitting and Esc backing out.
+ *
+ * The barber picker only appears when the shop has more than one active barber
+ * AND the API says it can't tell whose chair it was - a solo shop and a
+ * signed-in barber both resolve server-side and never see it.
+ */
+function WalkInBar({
+  staff,
+  toast,
+  onRecorded,
+}: {
+  staff: StaffRow[];
+  toast: Toast;
+  onRecorded: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [amount, setAmount] = useState("");
+  // Set only once the server says it genuinely can't resolve the chair.
+  const [needStaff, setNeedStaff] = useState(false);
+  const [staffId, setStaffId] = useState("");
+  const [pending, start] = useTransition();
+  const active = staff.filter((s) => s.active);
+
+  function reset() {
+    setOpen(false);
+    setAmount("");
+    setNeedStaff(false);
+    setStaffId("");
+  }
+
+  function submit() {
+    const value = Number(amount);
+    // Empty is not zero: "$0" is a real answer a barber may mean, but a blank
+    // box is someone who hasn't typed yet.
+    if (amount.trim() === "" || !Number.isFinite(value) || value < 0) {
+      toast("Enter what they paid", "error");
+      return;
+    }
+    if (needStaff && !staffId) {
+      toast("Pick whose chair", "error");
+      return;
+    }
+    start(async () => {
+      const res = await recordWalkInAction({
+        amount: value,
+        ...(staffId ? { staffId } : {}),
+      });
+      if (res.ok) {
+        toast("Walk-in recorded", "success");
+        reset();
+        onRecorded();
+        return;
+      }
+      if (res.error === "staff_required") {
+        // Ask once, keep the amount they already typed.
+        setNeedStaff(true);
+        toast("Whose chair was it?", "error");
+        return;
+      }
+      toast("Couldn't record that walk-in", "error");
+    });
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="rounded-lg border border-subtle px-3 py-1.5 text-xs font-medium text-muted transition-colors hover:border-gold/50 hover:text-gold"
+      >
+        Walk-in
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gold/40 bg-gold/5 px-2 py-1.5">
+      <span className="text-xs font-medium text-gold">Walk-in</span>
+      <label className="flex items-center gap-1 text-xs text-muted">
+        <span aria-hidden="true">$</span>
+        <span className="sr-only">Amount the walk-in paid</span>
+        <input
+          type="number"
+          min={0}
+          step="0.01"
+          inputMode="decimal"
+          autoFocus
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              submit();
+            } else if (e.key === "Escape") {
+              reset();
+            }
+          }}
+          className="w-20 rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
+        />
+      </label>
+      {needStaff && (
+        <select
+          value={staffId}
+          onChange={(e) => setStaffId(e.target.value)}
+          aria-label="Whose chair"
+          className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
+        >
+          <option value="">Whose chair…</option>
+          {active.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+      )}
+      <button
+        type="button"
+        onClick={submit}
+        disabled={pending}
+        className="rounded-lg bg-gold/20 px-3 py-1 text-xs font-semibold text-gold transition-colors hover:bg-gold/30 disabled:opacity-50"
+      >
+        {pending ? "Saving…" : "Save"}
+      </button>
+      <button
+        type="button"
+        onClick={reset}
+        className="rounded px-1.5 py-1 text-xs text-muted transition-colors hover:text-offwhite"
+      >
+        Cancel
+      </button>
+    </div>
+  );
+}
+
 /** A single day expanded into an every-hour planner. */
 function DayPlanner({
   rows,
@@ -811,6 +955,7 @@ function DayPlanner({
   timeFmt,
   toast,
   isNative,
+  staff,
   onAddAt,
   onBlock,
   onChanged,
@@ -826,6 +971,8 @@ function DayPlanner({
   timeFmt: Intl.DateTimeFormat;
   toast: Toast;
   isNative: boolean;
+  /** Active barbers - the walk-in bar asks whose chair when there's a choice. */
+  staff: StaffRow[];
   onAddAt: (hour: number) => void;
   onBlock: () => void;
   /** Refetch the agenda so a row mutation shows without waiting for the poll. */
@@ -996,7 +1143,7 @@ function DayPlanner({
 
       {/* Barber actions (native booking only). */}
       {isNative && (
-        <div className="mb-3 flex gap-2">
+        <div className="mb-3 flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => onAddAt(DEFAULT_START_HOUR)}
@@ -1004,6 +1151,7 @@ function DayPlanner({
           >
             + New appointment
           </button>
+          <WalkInBar staff={staff} toast={toast} onRecorded={onChanged} />
           <button
             type="button"
             onClick={onBlock}

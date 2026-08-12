@@ -445,6 +445,22 @@ export async function completeAppointmentAction(id: string): Promise<Result> {
   return done(await apiSend("POST", `/api/booking/appointments/${id}/complete`));
 }
 
+/**
+ * Record a nameless walk-in and what they paid, in one call. No client row, no
+ * service pick, no availability check - see the route for why.
+ *
+ * `staffId` is omitted when the shop has one barber: the API resolves a solo
+ * shop or the signed-in barber itself and only answers `staff_required` when it
+ * genuinely cannot tell, so the UI asks only when it has to.
+ */
+export async function recordWalkInAction(input: {
+  amount: number;
+  staffId?: string;
+  method?: "cash" | "direct" | "card" | "other";
+}): Promise<Result> {
+  return done(await apiSend("POST", "/api/booking/appointments/walk-in", input));
+}
+
 /** Barber marks the client as physically arrived (check-in pill -> Arrived). */
 export async function markArrivedAction(id: string): Promise<Result> {
   return done(await apiSend("POST", `/api/booking/appointments/${id}/arrived`));
