@@ -5,7 +5,7 @@ import { recomputeCadence } from "../engines/cadence.js";
 import { clawBackVisitEarn, earnPunchForVisitInTx } from "../services/punch.js";
 import { notifyPunchEarned } from "../services/loyaltyNotify.js";
 import { logger } from "../logger.js";
-import { getSquareClientForShop } from "./client.js";
+import { getSquareClientForShop, type SquareClient } from "./client.js";
 import { resolveSquareStatus } from "./mapping.js";
 import type { SquareBooking, SquareCustomer } from "./types.js";
 
@@ -47,22 +47,48 @@ function contactFromCustomer(customer: SquareCustomer | null): {
   };
 }
 
+/**
+ * Optional shared state for BULK callers (backfill, the resync sweep). A
+ * webhook ingests one booking and passes nothing; a sweep ingests hundreds and
+ * would otherwise re-read + decrypt the shop's OAuth token, and re-fetch the
+ * same customers, once per booking.
+ */
+export interface SquareIngestDeps {
+  /** Build the authed client ONCE per sweep instead of per booking. */
+  client?: SquareClient;
+  /** customer_id -> customer (or null when the fetch failed), per sweep. */
+  customers?: Map<string, SquareCustomer | null>;
+}
+
 export async function ingestSquareBooking(
   shop: Shop,
   bookingId: string,
   prefetched?: SquareBooking,
+  deps?: SquareIngestDeps,
 ): Promise<void> {
-  const client = await getSquareClientForShop(shop.id);
+  const client = deps?.client ?? (await getSquareClientForShop(shop.id));
   const booking = prefetched ?? (await client.getBooking(bookingId));
 
   // Bookings only carry a customer_id; fetch the customer for name/phone/email.
   // Best-effort: a missing customer becomes an anon client (still trackable).
+  //
+  // A bulk caller passes a cache: a barbershop's window is mostly REPEAT
+  // clients, so the same handful of customer_ids recur across hundreds of
+  // bookings and this collapses a request-per-booking into one per person.
+  // Negative results are cached too - a deleted customer must not be retried
+  // on every one of their past bookings, every sweep.
   let customer: SquareCustomer | null = null;
   if (booking.customer_id) {
-    try {
-      customer = await client.getCustomer(booking.customer_id);
-    } catch (err) {
-      logger.warn({ err, shopId: shop.id, bookingId }, "square customer fetch failed");
+    const cache = deps?.customers;
+    if (cache?.has(booking.customer_id)) {
+      customer = cache.get(booking.customer_id) ?? null;
+    } else {
+      try {
+        customer = await client.getCustomer(booking.customer_id);
+      } catch (err) {
+        logger.warn({ err, shopId: shop.id, bookingId }, "square customer fetch failed");
+      }
+      cache?.set(booking.customer_id, customer);
     }
   }
   const contact = contactFromCustomer(customer);
