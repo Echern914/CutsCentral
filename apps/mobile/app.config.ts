@@ -43,10 +43,16 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   // Must match the slug of the EAS project (projectId below), created on expo.dev.
   slug: "chairback",
   scheme: "chairback", // custom-scheme deep links: chairback://r/<token>
-  // Bumped so the launch-hang-fixed build is visually distinguishable from the
-  // earlier broken one in TestFlight (the iOS buildNumber is auto-incremented by
-  // EAS remotely, so this user-facing version is the reliable marker).
-  version: "1.0.4",
+  // 🔴 THIS STRING DOES NOT IDENTIFY A BUILD. It sat at "1.0.4" across builds 33
+  // AND 34 - two different commits, one of them carrying a sign-in bug the other
+  // fixed - so "1.0.4 is installed" told you nothing and nearly shipped testers
+  // the exact bug they were reporting. The buildNumber (auto-incremented by EAS
+  // under appVersionSource:"remote") plus `gitCommitHash` are the real identity;
+  // resolve any build with `eas build:list` before trusting what's in it.
+  //
+  // Bump it anyway, every release, so the store listing and release notes line
+  // up with something. 1.0.5 = build 35, the first release after 34 (6c9d03d).
+  version: "1.0.5",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
