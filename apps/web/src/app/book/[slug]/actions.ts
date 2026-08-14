@@ -229,6 +229,12 @@ export async function bookAction(
   ok: boolean;
   manageToken?: string;
   paymentClientSecret?: string | null;
+  /** What is actually being charged now, in cents (deposit < full price). */
+  paymentAmountCents?: number | null;
+  /** True when this is a DEPOSIT and money is still owed at the shop. */
+  paymentIsDeposit?: boolean;
+  /** Cents still due in person after this charge. */
+  paymentBalanceDueCents?: number | null;
   // true = the shop requires approval; this is a REQUEST awaiting confirmation.
   pending?: boolean;
   error?: string;
@@ -236,7 +242,12 @@ export async function bookAction(
   const res = await apiPublicSend<{
     ok: boolean;
     manageToken: string;
-    payment: { clientSecret: string } | null;
+    payment: {
+      clientSecret: string;
+      amountCents: number;
+      isDeposit: boolean;
+      balanceDueCents: number;
+    } | null;
     pending?: boolean;
   }>("POST", `/api/book/${encodeURIComponent(slug)}`, input);
   if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
@@ -244,6 +255,9 @@ export async function bookAction(
     ok: true,
     manageToken: res.data.manageToken,
     paymentClientSecret: res.data.payment?.clientSecret ?? null,
+    paymentAmountCents: res.data.payment?.amountCents ?? null,
+    paymentIsDeposit: res.data.payment?.isDeposit ?? false,
+    paymentBalanceDueCents: res.data.payment?.balanceDueCents ?? null,
     pending: Boolean(res.data.pending),
   };
 }

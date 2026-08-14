@@ -33,6 +33,7 @@ paymentsDashboardRouter.get("/status", async (req, res) => {
       platformFeeBps: true,
       cancelWindowHours: true,
       cancelFeeBps: true,
+      depositAmountCents: true,
       payDirectEnabled: true,
       payDirectZelle: true,
       payDirectVenmo: true,
@@ -54,6 +55,7 @@ paymentsDashboardRouter.get("/status", async (req, res) => {
     platformFeeBps: shop.platformFeeBps,
     cancelWindowHours: shop.cancelWindowHours,
     cancelFeeBps: shop.cancelFeeBps,
+    depositAmountCents: shop.depositAmountCents,
     // Fee-free pay-direct (Zelle/Venmo/Cash App) — display-only, no Stripe needed.
     payDirect: {
       enabled: shop.payDirectEnabled,
@@ -91,9 +93,13 @@ paymentsDashboardRouter.post("/connect/onboard", async (req, res) => {
 // PATCH /api/payments/settings - payment mode + cancellation policy.
 const settingsSchema = z
   .object({
-    paymentsMode: z.enum(["off", "ahead", "hold"]).optional(),
+    paymentsMode: z.enum(["off", "ahead", "deposit", "hold"]).optional(),
     cancelWindowHours: z.number().int().min(0).max(720).optional(),
     cancelFeeBps: z.number().int().min(0).max(10000).optional(),
+    // Deposit taken at booking, in CENTS. Floor of $1 so "deposit mode with a
+    // $0 deposit" can't be saved as a silently-free booking; ceiling of $1,000
+    // is far past any real haircut and bounds a fat-finger.
+    depositAmountCents: z.number().int().min(100).max(100_000).optional(),
   })
   .strict();
 
@@ -132,6 +138,9 @@ paymentsDashboardRouter.patch("/settings", async (req, res) => {
       ...(d.paymentsMode !== undefined ? { paymentsMode: d.paymentsMode } : {}),
       ...(d.cancelWindowHours !== undefined ? { cancelWindowHours: d.cancelWindowHours } : {}),
       ...(d.cancelFeeBps !== undefined ? { cancelFeeBps: d.cancelFeeBps } : {}),
+      ...(d.depositAmountCents !== undefined
+        ? { depositAmountCents: d.depositAmountCents }
+        : {}),
     },
   });
   res.json({ ok: true });

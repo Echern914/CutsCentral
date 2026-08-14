@@ -185,6 +185,15 @@ export function BookingClient({ data }: { data: BookShopData }) {
   // Set when the shop charges at booking: the booking is created (BOOKED) and we
   // collect payment before showing the confirmation screen.
   const [paymentSecret, setPaymentSecret] = useState<string | null>(null);
+  // What is actually being charged, straight from the API. Never derive this
+  // from the service price: in DEPOSIT mode the two differ, and labelling the
+  // button "Pay $45" while taking $20 is the one thing a payment screen must
+  // never do.
+  const [payCharge, setPayCharge] = useState<{
+    amountCents: number;
+    isDeposit: boolean;
+    balanceDueCents: number;
+  } | null>(null);
   // The manage token of a booking awaiting payment (shown after the card clears).
   const [manageTokenPending, setManageTokenPending] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -1196,6 +1205,15 @@ export function BookingClient({ data }: { data: BookShopData }) {
       if (res.paymentClientSecret) {
         setManageTokenPending(res.manageToken ?? null);
         setPaymentSecret(res.paymentClientSecret);
+        setPayCharge(
+          res.paymentAmountCents != null
+            ? {
+                amountCents: res.paymentAmountCents,
+                isDeposit: res.paymentIsDeposit ?? false,
+                balanceDueCents: res.paymentBalanceDueCents ?? 0,
+              }
+            : null,
+        );
         return;
       }
       setWasRequest(Boolean(res.pending));
@@ -1317,15 +1335,45 @@ export function BookingClient({ data }: { data: BookShopData }) {
       <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-5 py-10 text-offwhite">
         <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
           <h1 ref={paymentHeadingRef} tabIndex={-1} className="font-display text-2xl outline-none">
-            Pay to confirm
+            {payCharge?.isDeposit ? "Deposit to confirm" : "Pay to confirm"}
           </h1>
           <p className="mt-1 mb-4 text-sm text-muted">
-            Your time is held. Enter payment to lock in your appointment with{" "}
-            {data.shop.name}.
+            {payCharge?.isDeposit ? (
+              <>
+                Your time is held. Pay a{" "}
+                <strong className="text-offwhite">
+                  ${(payCharge.amountCents / 100).toFixed(0)} deposit
+                </strong>{" "}
+                to lock it in
+                {payCharge.balanceDueCents > 0 ? (
+                  <>
+                    {" "}
+                    — the remaining{" "}
+                    <strong className="text-offwhite">
+                      ${(payCharge.balanceDueCents / 100).toFixed(0)}
+                    </strong>{" "}
+                    is due at {data.shop.name}.
+                  </>
+                ) : (
+                  <> with {data.shop.name}.</>
+                )}
+              </>
+            ) : (
+              <>
+                Your time is held. Enter payment to lock in your appointment
+                with {data.shop.name}.
+              </>
+            )}
           </p>
           <PaymentStep
             clientSecret={paymentSecret}
-            amountLabel={selectedPrice !== null ? `$${selectedPrice.toFixed(0)}` : null}
+            amountLabel={
+              payCharge
+                ? `$${(payCharge.amountCents / 100).toFixed(0)}`
+                : selectedPrice !== null
+                  ? `$${selectedPrice.toFixed(0)}`
+                  : null
+            }
             accent={accent}
             onPaid={() => setConfirmedToken(manageTokenPending)}
           />

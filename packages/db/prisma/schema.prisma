@@ -397,6 +397,11 @@ model Shop {
   // reconcile them — Zelle/Venmo/Cash App have no third-party platform API, so the
   // barber confirms payment themselves. Independent of the Stripe paymentsMode
   // flow above; a shop can offer card (Stripe) AND/OR pay-direct.
+  // Deposit taken at booking when paymentsMode = deposit, in CENTS. Capped at
+  // the service price at charge time, so a $20 deposit never overcharges a $15
+  // line-up. Null = the shop has not chosen one yet (UI offers $20).
+  depositAmountCents Int?
+
   payDirectEnabled Boolean @default(false)
   payDirectZelle   String? // Zelle email or phone number
   payDirectVenmo   String? // Venmo @handle (without the leading @)
@@ -1852,6 +1857,9 @@ model RecurringSeries {
 enum PaymentsMode {
   off
   ahead
+  // Take a fixed DEPOSIT at booking; the rest is collected at the chair. The
+  // no-show deterrent without asking a stranger to prepay a whole haircut.
+  deposit
   hold
   // Card-present (Tap to Pay on iPhone / Stripe Terminal). Only ever a Payment
   // row SNAPSHOT - never a shop setting, because a shop does not "run in

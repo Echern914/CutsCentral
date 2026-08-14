@@ -18,9 +18,11 @@ export async function startConnectOnboardingAction(): Promise<{
 
 /** Save payment mode + cancellation policy. */
 export async function savePaymentSettingsAction(input: {
-  paymentsMode?: "off" | "ahead" | "hold";
+  paymentsMode?: "off" | "ahead" | "deposit" | "hold";
   cancelWindowHours?: number;
   cancelFeeBps?: number;
+  /** Deposit taken at booking, in CENTS (deposit mode only). */
+  depositAmountCents?: number;
 }): Promise<Result> {
   const res = await apiSend("PATCH", "/api/payments/settings", input);
   if (res.ok) revalidatePath("/dashboard/payments");
@@ -56,7 +58,9 @@ export interface PaymentStatus {
     payoutsEnabled: boolean;
     detailsSubmitted: boolean;
   };
-  paymentsMode: "off" | "ahead" | "hold";
+  paymentsMode: "off" | "ahead" | "deposit" | "hold";
+  /** Null until the shop picks one; the UI suggests $20. */
+  depositAmountCents: number | null;
   platformFeeBps: number;
   cancelWindowHours: number;
   cancelFeeBps: number;
