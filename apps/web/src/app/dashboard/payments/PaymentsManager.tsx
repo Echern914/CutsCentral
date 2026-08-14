@@ -29,6 +29,12 @@ export function PaymentsManager({ initial }: { initial: PaymentStatus }) {
   const [cancelFeePct, setCancelFeePct] = useState(
     String(initial.cancelFeeBps / 100),
   );
+  // Deposit shown in DOLLARS (cents is a storage detail, not something a barber
+  // should type). $20 is the suggested default for a shop that has never set
+  // one - it is the number Eric asked for and a realistic no-show deterrent.
+  const [depositDollars, setDepositDollars] = useState(
+    String((initial.depositAmountCents ?? 2000) / 100),
+  );
 
   // Fee-free pay-direct (Zelle/Venmo/Cash App) — independent of Stripe Connect.
   const [pd, setPd] = useState(initial.payDirect);
@@ -69,10 +75,17 @@ export function PaymentsManager({ initial }: { initial: PaymentStatus }) {
       // -> 0-10000 bps, hours 0-720). An empty/garbage field saves as 0.
       const feePct = Math.min(100, Math.max(0, Number(cancelFeePct) || 0));
       const hours = Math.min(720, Math.max(0, Math.round(Number(cancelHours) || 0)));
+      // $1 floor matches the API: "deposit mode with a $0 deposit" would be a
+      // silently free booking, which is never what the barber meant.
+      const depositCents = Math.min(
+        100_000,
+        Math.max(100, Math.round((Number(depositDollars) || 0) * 100)),
+      );
       const r = await savePaymentSettingsAction({
         paymentsMode: mode,
         cancelWindowHours: hours,
         cancelFeeBps: Math.round(feePct * 100),
+        ...(mode === "deposit" ? { depositAmountCents: depositCents } : {}),
       });
       if (r.ok) toast("Payment settings saved", "success");
       else if (r.error === "connect_not_ready")
@@ -223,7 +236,43 @@ export function PaymentsManager({ initial }: { initial: PaymentStatus }) {
             title="Pay when booking"
             desc={ready ? "Card or Apple Pay, charged at booking." : "Connect Stripe first."}
           />
+          <ModeButton
+            active={mode === "deposit"}
+            onClick={() => ready && setMode("deposit")}
+            disabled={!ready}
+            title="Deposit to book"
+            desc={
+              ready
+                ? "A set amount now, the rest at the chair."
+                : "Connect Stripe first."
+            }
+          />
         </div>
+        {mode === "deposit" && (
+          <label className="mt-3 block max-w-56">
+            <span className={labelCls}>Deposit amount</span>
+            <div className="mt-1 flex items-center gap-2">
+              <span className="text-sm text-muted" aria-hidden="true">
+                $
+              </span>
+              <input
+                type="number"
+                min={1}
+                step="1"
+                inputMode="decimal"
+                className={field}
+                value={depositDollars}
+                onChange={(e) => setDepositDollars(e.target.value)}
+                aria-label="Deposit amount in dollars"
+              />
+            </div>
+            <span className="mt-1 block text-[11px] text-muted">
+              Charged when they book. If a service costs less than this, we
+              charge the service price instead — never more. A no-show keeps it;
+              a cancellation follows your policy below.
+            </span>
+          </label>
+        )}
         <p className="mt-3 text-xs text-muted">
           Pay-after (hold the card until the cut is done) is coming soon.
         </p>

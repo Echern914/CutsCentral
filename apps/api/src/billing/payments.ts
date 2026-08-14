@@ -25,6 +25,27 @@ export function toCents(price: number | null | undefined): number | null {
   return Number.isFinite(cents) && cents > 0 ? cents : null;
 }
 
+/**
+ * What a DEPOSIT-mode booking charges NOW, in cents.
+ *
+ * Two rules, both there to stop a deposit becoming a surprise:
+ *  - CAP AT THE PRICE. A shop-wide $20 deposit must not overcharge a $15
+ *    line-up. Capped, the customer pays $15 now and owes nothing at the chair,
+ *    which is honest; charging $20 for a $15 service is not.
+ *  - NO CHARGE WITHOUT BOTH NUMBERS. An unpriced service, or a shop that
+ *    switched to deposit mode without setting an amount, charges NOTHING and
+ *    falls back to paying in person. Guessing a deposit is worse than not
+ *    taking one.
+ */
+export function depositChargeCents(
+  depositCents: number | null | undefined,
+  fullCents: number | null,
+): number | null {
+  if (fullCents === null || fullCents <= 0) return null;
+  if (depositCents === null || depositCents === undefined || depositCents <= 0) return null;
+  return Math.min(depositCents, fullCents);
+}
+
 interface CreateIntentInput {
   shopId: string;
   appointmentId: string;

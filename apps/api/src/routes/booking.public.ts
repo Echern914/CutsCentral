@@ -21,7 +21,11 @@ import {
   priceRangeForService,
 } from "../engines/pricing.js";
 import { connectEnabled, hasActiveAccess } from "../billing/stripe.js";
-import { createAheadPaymentIntent, toCents } from "../billing/payments.js";
+import {
+  createAheadPaymentIntent,
+  depositChargeCents,
+  toCents,
+} from "../billing/payments.js";
 import {
   notifyAppointmentConfirmation,
   notifyBarberBookingEvent,
@@ -1363,27 +1367,56 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {
   // with a connected, charges-enabled account, Connect configured, and a real
   // price. AFTER commit (no Stripe call inside the booking tx). A failure here
   // never fails the booking — the customer falls back to paying in person.
-  let payment: { clientSecret: string } | null = null;
-  const amountCents = toCents(effectivePrice);
+  let payment: {
+    clientSecret: string;
+    amountCents: number;
+    isDeposit: boolean;
+    balanceDueCents: number;
+  } | null = null;
+  const fullCents = toCents(effectivePrice);
+  // DEPOSIT charges a fixed amount now and leaves the rest for the chair; AHEAD
+  // charges the whole ticket. Capped at the price either way, so a $20 deposit
+  // can never overcharge a $15 line-up.
+  const chargeCents =
+    shop.paymentsMode === "deposit"
+      ? depositChargeCents(shop.depositAmountCents, fullCents)
+      : fullCents;
   if (
     connectEnabled() &&
-    // Don't charge a card for a hold that may be declined - pay-ahead is
+    // Don't charge a card for a hold that may be declined - payment is
     // collected on/after approval (or the shop runs approval + pay-in-person).
     !shop.requireBookingApproval &&
-    shop.paymentsMode === "ahead" &&
+    (shop.paymentsMode === "ahead" || shop.paymentsMode === "deposit") &&
     shop.connectChargesEnabled &&
     shop.stripeConnectAccountId &&
-    amountCents !== null
+    chargeCents !== null
   ) {
+    const isDeposit = shop.paymentsMode === "deposit" && chargeCents !== fullCents;
     const created = await createAheadPaymentIntent({
       shopId: shop.id,
       appointmentId,
       connectAccountId: shop.stripeConnectAccountId,
-      amountCents,
+      amountCents: chargeCents,
       platformFeeBps: shop.platformFeeBps,
-      description: `${service.name} at ${shop.name}`,
+      // The customer reads this on the Apple Pay sheet and on their statement,
+      // so it has to say WHICH this is - otherwise a deposit looks like a
+      // mysteriously short charge for the whole cut.
+      description: isDeposit
+        ? `Deposit for ${service.name} at ${shop.name}`
+        : `${service.name} at ${shop.name}`,
     });
-    if (created) payment = { clientSecret: created.clientSecret };
+    if (created) {
+      payment = {
+        clientSecret: created.clientSecret,
+        // What we are ACTUALLY charging. The client used to label its button
+        // from the full service price, which in deposit mode would read
+        // "Pay $45" while taking $20.
+        amountCents: chargeCents,
+        isDeposit,
+        // What they still owe at the shop; 0 when the whole ticket is paid.
+        balanceDueCents: Math.max(0, (fullCents ?? 0) - chargeCents),
+      };
+    }
   }
 
   res.status(201).json({
