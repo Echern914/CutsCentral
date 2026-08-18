@@ -1152,6 +1152,13 @@ export function BookingClient({ data }: { data: BookShopData }) {
       setError("Add a phone or email so we can confirm.");
       return;
     }
+    // Confirmations go by email, so a phone-only booking would be silent - the
+    // customer would never be told it exists. Caught here so they fix it at the
+    // field instead of bouncing off the server.
+    if (data.shop.emailRequired && !email.trim()) {
+      setError("Add your email — that's where your confirmation goes.");
+      return;
+    }
     // The barber to write against: the one bound to the chosen slot (may differ
     // from `staffId` when the provider step was skipped and several were free).
     const writeStaffId = pickedStaffId ?? staffId;
@@ -2323,7 +2330,8 @@ export function BookingClient({ data }: { data: BookShopData }) {
               className={input}
               type="email"
               autoComplete="email"
-              placeholder="Email (optional)"
+              required={data.shop.emailRequired}
+              placeholder={data.shop.emailRequired ? "Email" : "Email (optional)"}
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               aria-label="Email"

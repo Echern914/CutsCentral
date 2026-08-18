@@ -29,6 +29,7 @@ import {
 import {
   notifyAppointmentConfirmation,
   notifyBarberBookingEvent,
+  publicBookingEmailRequired,
 } from "../services/appointmentNotify.js";
 import { sendPushToUser } from "../messaging/push.js";
 import { cancelAppointment } from "../engines/appointmentPromotion.js";
@@ -208,6 +209,9 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
       // When on, the booking page offers "Join the waitlist" (a standing button
       // and when a day is fully booked).
       waitlistEnabled: shop.waitlistEnabled,
+      // The form marks Email required when true, so the customer finds out at
+      // the field rather than at submit. The server enforces it regardless.
+      emailRequired: publicBookingEmailRequired(),
       // When on (and groups exist), the menu shows group cards first instead
       // of every service "off rip".
       groupsFirst: shop.bookingGroupsFirst,
@@ -1024,6 +1028,10 @@ const createSchema = z
     // A customer filling in his own details always knows his surname.
     lastName: z.string().trim().min(1).max(80),
     phone: z.string().trim().max(40).optional().or(z.literal("")),
+    // REQUIRED while confirmation SMS is off - see publicBookingEmailRequired().
+    // Email is then the only channel a customer is told their booking exists on,
+    // so a blank one books them into silence. Enforced BELOW rather than with a
+    // plain .min(1) so the message names the reason instead of "Required".
     email: z.string().trim().email().max(200).optional().or(z.literal("")),
     smsConsent: z.boolean().optional(),
     // Chosen service add-ons (ids). Invalid/foreign ids are dropped server-side.
@@ -1036,6 +1044,13 @@ const createSchema = z
   .refine((d) => Boolean(d.phone?.trim()) || Boolean(d.email?.trim()), {
     message: "Provide a phone or email.",
     path: ["phone"],
+  })
+  // Email is the confirmation channel while SMS is off, so "phone only" books
+  // someone into silence. Enforced here, not just in the form: the form flag is
+  // a hint a client could ignore - this is the rule.
+  .refine((d) => !publicBookingEmailRequired() || Boolean(d.email?.trim()), {
+    message: "We send your confirmation by email, so we need an address.",
+    path: ["email"],
   });
 
 bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {

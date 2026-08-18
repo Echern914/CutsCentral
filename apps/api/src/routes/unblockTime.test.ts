@@ -103,6 +103,7 @@ function book(s: Awaited<ReturnType<typeof makeShop>>, when: Date) {
     firstName: "Pat",
     lastName: "Rivera",
     phone: "(302) 555-0900",
+    email: "cust0900@example.com",
   });
 }
 

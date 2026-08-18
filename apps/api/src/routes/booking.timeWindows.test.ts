@@ -194,6 +194,7 @@ describe("service time-of-day windows", () => {
       startsAt: inWindow.toISOString(),
       firstName: "Evening", lastName: "Tester",
       phone: "(302) 555-0322",
+      email: "cust0322@example.com",
     });
     expect(resIn.status).toBe(201);
     const rowIn = await prisma.appointment.findUnique({
@@ -210,6 +211,7 @@ describe("service time-of-day windows", () => {
       startsAt: daytime.toISOString(),
       firstName: "Daytime", lastName: "Tester",
       phone: "(302) 555-0323",
+      email: "cust0323@example.com",
     });
     expect(resOut.status).toBe(201);
     const rowOut = await prisma.appointment.findUnique({
