@@ -250,6 +250,27 @@ async function loadAppointment(shopId: string, appointmentId: string) {
  */
 const CONFIRMATION_SMS_ENABLED = false;
 
+/**
+ * Must a PUBLIC booking carry an email address?
+ *
+ * Yes, while confirmation SMS is off — because then email is the ONLY way a
+ * customer is told their booking exists. The web form used to say "Email
+ * (optional)", which was true when a text was the fallback and became a lie the
+ * moment the text was switched off: a booking with no email sent NOTHING, the
+ * server logged `no_email`, and neither the customer nor the barber was told
+ * the customer would never hear anything. A real tester hit exactly that.
+ *
+ * Derived from the flag rather than hard-coded, so bringing the text back
+ * relaxes the form in the same edit — the two can never drift.
+ *
+ * Scope is the PUBLIC booking page only. A barber adding an appointment (or a
+ * walk-in) at the chair still needs no email: they are standing in front of the
+ * person, and a walk-in has no name, let alone an inbox.
+ */
+export function publicBookingEmailRequired(): boolean {
+  return !CONFIRMATION_SMS_ENABLED;
+}
+
 export async function notifyAppointmentConfirmation(params: {
   shopId: string;
   appointmentId: string;

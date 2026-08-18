@@ -55,6 +55,7 @@ async function book(startsAt: Date, firstName: string) {
     firstName,
     lastName: "Reyes",
     phone: "(302) 555-0355",
+    email: "cust0355@example.com",
     smsConsent: true,
   });
   expect(res.status).toBe(201);

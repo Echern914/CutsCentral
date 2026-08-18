@@ -219,6 +219,7 @@ describe("public booking with add-ons (real availability gate)", () => {
         startsAt: tomorrowAt(10),
         firstName: "Grid", lastName: "Tester",
         phone: "(302) 555-0421",
+        email: "cust0421@example.com",
         addOnIds: [addOn.body.id],
       });
     expect(res.status).toBe(201);
@@ -240,6 +241,7 @@ describe("public booking with add-ons (real availability gate)", () => {
         startsAt: new Date(new Date(tomorrowAt(16)).getTime() + 30 * 60 * 1000).toISOString(),
         firstName: "Overflow", lastName: "Tester",
         phone: "(302) 555-0422",
+        email: "cust0422@example.com",
         addOnIds: [addOn.body.id],
       });
     expect(res.status).toBe(400);
