@@ -356,7 +356,7 @@ export function buildAppointmentConfirmationBody(params: {
   const withWhom = params.staffName ? ` with ${params.staffName}` : "";
   const body =
     `Hi ${who}, your ${params.serviceName} at ${params.shopName}${withWhom} is booked for ${when}. ` +
-    `Need to change it? ${manageUrl}`;
+    `Need to reschedule or cancel? ${manageUrl}`;
   return withStopNotice(body);
 }
 
@@ -421,7 +421,20 @@ export interface EmailCopy {
   html: string;
 }
 
-/** A small inline-styled "manage" button + wrapper shared by both emails. */
+/**
+ * The shared appointment-email shell: details card + one action button.
+ *
+ * 🔴 THE BUTTON MUST BE THE ONLY ROUTE OFFERED. This footer used to end with
+ * "…or reply to this email", and clients did exactly that - which is how a
+ * tester's client tried to reschedule. Replies go NOWHERE: every appointment
+ * email is sent `from: EMAIL_FROM` (the platform address) with no reply-to, so
+ * a reply reaches ChairBack's own inbox, not the barber who could actually move
+ * the appointment. Inviting a reply was inviting silence.
+ *
+ * The label names the ACTION rather than the page ("Reschedule or cancel", not
+ * "Manage appointment") - a client skimming on a phone is looking for the verb
+ * they came for, and /book/manage really does both in a tap since #218.
+ */
 function appointmentEmailHtml(params: {
   heading: string;
   intro: string;
@@ -437,9 +450,11 @@ function appointmentEmailHtml(params: {
     ? `<div style="color:#71717a;font-size:14px;margin-top:2px">with ${escapeHtml(params.staffName)}</div>`
     : "";
   const footer = params.manageUrl
-    ? `<a href="${escapeAttr(params.manageUrl)}" style="display:inline-block;background:#D4AF37;color:#0f0f0f;font-size:14px;font-weight:700;text-decoration:none;padding:11px 20px;border-radius:10px">Manage appointment</a>
-      <p style="color:#71717a;font-size:12px;line-height:1.5;margin:16px 0 0">Need to cancel or reschedule? Use the button above, or reply to this email.</p>`
-    : `<p style="color:#71717a;font-size:12px;line-height:1.5;margin:0">Need to cancel or reschedule? Just reply to this email.</p>`;
+    ? `<a href="${escapeAttr(params.manageUrl)}" style="display:inline-block;background:#D4AF37;color:#0f0f0f;font-size:15px;font-weight:700;text-decoration:none;padding:13px 22px;border-radius:10px">Reschedule or cancel</a>
+      <p style="color:#71717a;font-size:12px;line-height:1.5;margin:16px 0 0">Pick a new time yourself — no need to call or reply.</p>`
+    // SYNCED bookings have no ChairBack manage page, so there is no button to
+    // offer. Point them at the shop rather than at a reply nobody reads.
+    : `<p style="color:#71717a;font-size:12px;line-height:1.5;margin:0">Need to cancel or reschedule? Contact ${escapeHtml(params.shopName)} directly.</p>`;
   return `<!-- appointment email -->
 <div style="background:#0f0f0f;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
   <div style="max-width:480px;margin:0 auto;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:16px;overflow:hidden">
@@ -478,7 +493,7 @@ export function buildAppointmentConfirmationEmail(params: {
     subject: `Booking confirmed: ${params.serviceName} at ${params.shopName}`,
     text:
       `Hi ${who}, your ${params.serviceName} at ${params.shopName}${withWhom} is booked for ${when}.\n\n` +
-      `Need to change it? ${manageUrl}`,
+      `Need to reschedule or cancel? ${manageUrl}`,
     html: appointmentEmailHtml({
       heading: "You're booked",
       intro: `Hi ${who}, your appointment is confirmed. Here are the details:`,
@@ -508,7 +523,7 @@ export function buildAppointmentReminderEmail(params: {
     subject: `Reminder: ${params.serviceName} at ${params.shopName}`,
     text:
       `Reminder, ${who}: your ${params.serviceName} at ${params.shopName} is ${when}. See you then!\n\n` +
-      `Manage: ${manageUrl}`,
+      `Reschedule or cancel: ${manageUrl}`,
     html: appointmentEmailHtml({
       heading: "See you soon",
       intro: `Hi ${who}, this is a reminder about your upcoming appointment:`,
