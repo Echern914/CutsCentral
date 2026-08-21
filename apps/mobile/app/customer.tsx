@@ -265,17 +265,13 @@ export default function CustomerScreen() {
           <Pressable
             accessibilityRole="button"
             style={styles.back}
-            onPress={async () => {
-              // Clear the saved "customer" role first, otherwise the picker
-              // immediately redirects right back here (it auto-routes a returning
-              // user to their saved mode) - the same loop login.tsx's back fixes.
-              try {
-                await AsyncStorage.removeItem(STORAGE.mode);
-              } catch {
-                // best-effort; still go back to the picker
-              }
-              router.replace("/");
-            }}
+            onPress={() =>
+              // "switching=1" asks the picker to SHOW itself instead of
+              // auto-routing this returning user straight back here - without
+              // deleting the saved role, which is what used to make the picker
+              // a dead end. See src/mode.ts.
+              router.replace({ pathname: "/", params: { switching: "1" } })
+            }
           >
             <Text style={styles.backText}>← Not a customer? Go back</Text>
           </Pressable>

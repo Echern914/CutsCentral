@@ -464,18 +464,14 @@ export default function LoginScreen() {
             </Pressable>
 
             <Pressable
-              onPress={async () => {
-                // Clear the saved "barber"/"manager" role first, otherwise the
-                // picker immediately redirects right back here (it auto-routes a
-                // returning user to their saved mode). Clearing it shows the
-                // 3-way picker so they can choose "customer".
-                try {
-                  await AsyncStorage.removeItem(STORAGE.mode);
-                } catch {
-                  // best-effort; still go back to the picker
-                }
-                router.replace("/");
-              }}
+              onPress={() =>
+                // "switching=1" asks the picker to SHOW itself instead of
+                // auto-routing this returning user straight back here. It used
+                // to delete the saved role to get the same effect, which threw
+                // away the one record of where they came from and left the
+                // picker with no way back - see src/mode.ts.
+                router.replace({ pathname: "/", params: { switching: "1" } })
+              }
               style={styles.back}
               accessibilityRole="button"
             >
