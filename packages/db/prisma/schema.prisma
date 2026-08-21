@@ -1060,8 +1060,14 @@ model WaitlistOffer {
   entryId String
   entry   WaitlistEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
 
-  // The physical slot being held. staffId + startsAt identify it, exactly as
-  // the appointment overlap guard does.
+  // The physical slot being held. staffId is NOT NULL on purpose: an ENTRY may
+  // ask for "any barber", but a HOLD is always on one real person's calendar,
+  // so there is no null to slip past a unique index.
+  //
+  // 🔑 Overlap is a database guarantee, not a convention: the GiST constraint
+  // WaitlistOffer_no_overlapping_hold (raw SQL - Prisma cannot express EXCLUDE)
+  // refuses a second live hold whose span touches an existing one on the same
+  // barber. Half-open, so back-to-back holds are still allowed.
   staffId   String
   serviceId String
   startsAt  DateTime
