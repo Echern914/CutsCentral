@@ -514,6 +514,9 @@ export interface RuleScheduleTime {
 export interface TargetedSlotRuleRow {
   id: string;
   staffId: string;
+  /** Duplicated but never published: no slots, no public availability, and it
+   *  goes live only when the barber saves it. */
+  draft?: boolean;
   serviceId: string;
   /** Every service this slot is bookable as. serviceId is the primary and is
    *  always a member; the API is authoritative via the join table. */
@@ -524,6 +527,29 @@ export interface TargetedSlotRuleRow {
   price: number;
   // true = repeats until turned off; false = a finite "N more weeks" batch.
   indefinite: boolean;
+}
+
+/**
+ * Duplicate a weekly series. The copy is a DRAFT: same configuration, new id,
+ * zero materialized slots, invisible to the public page until published.
+ */
+export async function duplicateTargetedRuleAction(
+  id: string,
+): Promise<Result & { ruleId?: string }> {
+  const r = await apiSend<{ ruleId: string }>(
+    "POST",
+    `/api/booking/targeted-slots/rules/${id}/duplicate`,
+    {},
+  );
+  // The new id comes back so the caller can open the copy in edit mode - the
+  // barber has to review and publish it, so landing them anywhere else would
+  // strand a draft they cannot see the point of.
+  return { ...done(r), ruleId: r.data?.ruleId };
+}
+
+/** Duplicate a one-off slot. The copy is INACTIVE and carries no booking. */
+export async function duplicateTargetedSlotAction(id: string): Promise<Result> {
+  return done(await apiSend("POST", `/api/booking/targeted-slots/${id}/duplicate`, {}));
 }
 
 export async function listTargetedSlotsAction(): Promise<{
