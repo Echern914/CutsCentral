@@ -27,6 +27,7 @@ import {
 } from "./actions";
 import { PaymentStep } from "./PaymentStep";
 import { WaitlistForm } from "./WaitlistForm";
+import { groupsToAutoExpand } from "./autoExpand";
 
 /** One selectable time in the calendar grid, with who can serve it. */
 interface DaySlot {
@@ -683,6 +684,26 @@ export function BookingClient({ data }: { data: BookShopData }) {
   const visibleDay = useMemo(() => {
     if (!dayData) return null;
     return { bundles: dayData.bundles, ungrouped: dayData.ungrouped };
+  }, [dayData]);
+
+  // AUTO-EXPAND on a quiet day. Groups collapse by default so a long menu stays
+  // scannable, but on a day whose only availability is one or two specials the
+  // customer lands on closed cards and sees NO times - which is what a barber
+  // reported as "my after-hours slots aren't appearing". See ./autoExpand.
+  //
+  // Keyed on dayData, so it runs once per loaded day and never fights a manual
+  // collapse on the day you are already looking at. Additive (never closes a
+  // card the customer opened).
+  useEffect(() => {
+    if (!dayData) return;
+    const open = groupsToAutoExpand(dayData.bundles, dayData.ungrouped);
+    if (open.length === 0) return;
+    setExpandedGroups((cur) => {
+      if (open.every((id) => cur.has(id))) return cur; // no-op: don't re-render
+      const next = new Set(cur);
+      for (const id of open) next.add(id);
+      return next;
+    });
   }, [dayData]);
   /** The selected day loaded and has nothing bookable on it. */
   const dayEmpty =
