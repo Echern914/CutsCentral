@@ -1,6 +1,7 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Animated,
+  BackHandler,
   Easing,
   Pressable,
   StyleSheet,
@@ -8,8 +9,8 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import { Redirect, router } from "expo-router";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { Redirect, router, useLocalSearchParams } from "expo-router";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import Svg, {
   Circle,
@@ -22,6 +23,14 @@ import Svg, {
 } from "react-native-svg";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { STORAGE } from "@/src/config";
+import {
+  DESTINATION,
+  isMode,
+  resolveReturn,
+  returnToDashboard,
+  type Mode,
+  type ModeRoute,
+} from "@/src/mode";
 
 /**
  * First screen: a 3-way role picker ("Spotlight Hero" direction).
@@ -31,16 +40,28 @@ import { STORAGE } from "@/src/config";
  * of full-width pill rows (each with a leading icon). The emblem fades/scales in
  * first, then the rows cascade.
  *
- * THREE roles, TWO destinations:
+ * THREE roles, TWO destinations - the table lives in src/mode.ts, because the
+ * BACK ARROW resolves through it too and the two must never disagree:
  *   - "I own a barbershop"      -> mode "barber"   -> /login -> /barber
  *   - "I manage multiple shops" -> mode "manager"  -> /login -> /barber  (same
  *                                                     dashboard; switcher later)
  *   - "I'm a customer"          -> mode "customer" -> /customer
  *
  * The choice is remembered: a returning user is sent straight to their mode on
- * next launch (they only see this picker the first time, or after switching
- * modes). A deep link (chairback://r/<token> or the universal link) bypasses
- * this entirely and lands in customer mode.
+ * next launch (they only see this picker the first time, or when they ask for
+ * it). A deep link (chairback://r/<token> or the universal link) bypasses this
+ * entirely and lands in customer mode.
+ *
+ * ARRIVING ON PURPOSE ("?switching=1"). "⇄ Switch" in the dashboard's top strip
+ * sends people here, and it used to DELETE the saved mode so that the
+ * returning-user redirect below wouldn't bounce them straight back. That made
+ * this screen a ONE-WAY DOOR - a tap that is easy to hit by accident, with no
+ * answer but to pick a role again. The flag says "show yourself" without
+ * destroying anything, so the saved mode survives to name the dashboard the
+ * back arrow returns to. Choosing a role is now the ONLY write to cb.mode.
+ *
+ * With no saved mode there is genuinely nowhere to go back TO (a first run), so
+ * no arrow is drawn, rather than one that lies.
  *
  * The 3-way picker is LIVE (it no longer gates on a barber-mode flag).
  * Hooks run unconditionally (rules of hooks); the returning-user fast path is a
@@ -50,25 +71,6 @@ import { STORAGE } from "@/src/config";
  * this app's _layout.tsx explicitly warns about). If storage fails we SHOW the
  * picker rather than hang on a spinner.
  */
-
-type Mode = "barber" | "manager" | "customer";
-
-/**
- * Where each saved mode sends the user. Barber AND manager route to /login
- * first: the dashboard is a WebView and Google blocks OAuth inside embedded
- * WebViews, so they sign in NATIVELY on /login, which hands off to /barber (the
- * dashboard WebView) once authenticated. Manager shares the barber dashboard.
- */
-const DESTINATION: Record<Mode, "/login" | "/customer"> = {
-  barber: "/login",
-  manager: "/login",
-  customer: "/customer",
-};
-
-/** Narrow a stored value to a Mode (ignores any legacy/garbage string). */
-function isMode(v: string | null): v is Mode {
-  return v === "barber" || v === "manager" || v === "customer";
-}
 
 const COLORS = {
   bg: "#0A0A0B",
@@ -88,13 +90,21 @@ const COLORS = {
 const GOLD_GRADIENT = [COLORS.goldSoft, COLORS.gold, COLORS.goldMuted] as const;
 
 export default function ModePicker() {
+  // "?switching=1" - the user pressed "⇄ Switch" (or a screen's own "Go back")
+  // and asked to SEE this screen. Their saved mode is deliberately left intact
+  // now, so without this flag the returning-user redirect below would bounce
+  // them straight back where they came from and Switch would look broken.
+  const { switching } = useLocalSearchParams<{ switching?: string }>();
+  const isSwitching = switching === "1";
+
   // Three render states: still reading storage (Loading), redirect a returning
   // user (declarative <Redirect>), or show the picker. The effect only flips
   // state - it never navigates imperatively, so there is no on-mount launch-hang.
-  const [redirectTo, setRedirectTo] = useState<"/login" | "/customer" | null>(
-    null,
-  );
+  const [redirectTo, setRedirectTo] = useState<ModeRoute | null>(null);
   const [checking, setChecking] = useState(true);
+  // The mode they already had. Kept even when we are SHOWING the picker,
+  // because it is what tells the back arrow which dashboard to return to.
+  const [savedMode, setSavedMode] = useState<Mode | null>(null);
   // Guards against a fast double-tap firing two writes + two navigations.
   const choosing = useRef(false);
 
@@ -106,34 +116,70 @@ export default function ModePicker() {
       try {
         const saved = await AsyncStorage.getItem(STORAGE.mode);
         if (!active) return;
-        // Returning user: resolve to their destination and let the render path
-        // below hand off to <Redirect>, so the picker never flashes.
-        if (isMode(saved)) setRedirectTo(DESTINATION[saved]);
-        else setChecking(false);
+        if (isMode(saved)) {
+          setSavedMode(saved);
+          // Returning user: resolve to their destination and let the render path
+          // below hand off to <Redirect>, so the picker never flashes. Unless
+          // they asked to be here - then show the picker and keep the mode as
+          // the back arrow's destination.
+          if (!isSwitching) {
+            setRedirectTo(DESTINATION[saved]);
+            return;
+          }
+        }
+        setChecking(false);
       } catch {
-        // Storage failed - SHOW the picker rather than hang on a spinner.
+        // Storage failed - SHOW the picker rather than hang on a spinner. With
+        // no readable mode there is no back target either, so the arrow simply
+        // doesn't render; the picker still works.
         if (active) setChecking(false);
       }
     })();
     return () => {
       active = false;
     };
-  }, []);
+  }, [isSwitching]);
 
   function choose(mode: Mode) {
     if (choosing.current) return; // ignore a double tap
     choosing.current = true;
     // Persisting the choice is best-effort; still route the user this session.
+    // This is the ONLY write to cb.mode in the app - leaving the picker by the
+    // back arrow deliberately changes nothing.
     AsyncStorage.setItem(STORAGE.mode, mode).catch(() => {});
     router.replace(DESTINATION[mode]);
   }
+
+  /**
+   * Leave the picker the way we came. Navigation ONLY: no sign-out, no write,
+   * no clearing of the saved mode - a user who opened this screen by mistake
+   * must land back on their dashboard with nothing about their account touched.
+   *
+   * Returns true when it navigated, which is also exactly the contract Android's
+   * hardware back button wants ("I consumed this, don't quit the app"), so the
+   * arrow and the system gesture are literally the same function.
+   */
+  const goBack = useCallback(
+    () => returnToDashboard(savedMode, (href) => router.replace(href)),
+    [savedMode],
+  );
+
+  // The system back gesture/button gets the same treatment as the arrow. When
+  // there is nothing to go back to (first run) goBack returns false and the OS
+  // default stands - quitting from the app's first screen is correct there.
+  useEffect(() => {
+    const sub = BackHandler.addEventListener("hardwareBackPress", goBack);
+    return () => sub.remove();
+  }, [goBack]);
 
   if (redirectTo) return <Redirect href={redirectTo} />;
   if (checking) {
     // A quiet, on-brand hold (no jarring spinner) while we read the saved mode.
     return <Loading />;
   }
-  return <Picker onChoose={choose} />;
+  return (
+    <Picker onChoose={choose} onBack={resolveReturn(savedMode) ? goBack : null} />
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -214,9 +260,17 @@ const ROLES: Role[] = [
   },
 ];
 
-function Picker({ onChoose }: { onChoose: (mode: Mode) => void }) {
+function Picker({
+  onChoose,
+  onBack,
+}: {
+  onChoose: (mode: Mode) => void;
+  /** null on a genuine first run - no saved mode means nowhere to go back to. */
+  onBack: (() => void) | null;
+}) {
   const { width } = useWindowDimensions();
   const contentWidth = Math.min(width - 40, 440);
+  const insets = useSafeAreaInsets();
 
   // Spotlight Hero entrance: the emblem leads (index 0), the wordmark block
   // follows (index 1), then each row cascades (indices 2..n). One driver per
@@ -320,7 +374,69 @@ function Picker({ onChoose }: { onChoose: (mode: Mode) => void }) {
           <Text style={styles.footnote}>You can switch anytime.</Text>
         </View>
       </SafeAreaView>
+
+      {/* Top-LEFT of the SCREEN, not of the centred content column: on a phone
+          those are nearly the same point, but on an iPad the column is a 440pt
+          island in the middle of the display and an arrow pinned to it would
+          float in mid-air.
+
+          Insets are applied by hand rather than by nesting this in the
+          SafeAreaView above, because an absolutely-positioned child is laid out
+          against its parent's PADDING box - which is exactly the box the safe
+          area lives in - so a notch or a Dynamic Island could sit right on top
+          of it. insets.left is not padding either: landscape on a notched phone
+          puts real screen furniture down the left edge.
+
+          Last child of the root and zIndex'd, so nothing - not the ambient
+          glow, not content overflowing a short landscape screen - can ever end
+          up on top of the one control that gets you out of here. */}
+      {onBack && (
+        <Animated.View
+          style={[
+            styles.backWrap,
+            { top: insets.top + 8, left: insets.left + 16 },
+            fadeUp(0, 6),
+          ]}
+        >
+          <BackButton onPress={onBack} />
+        </Animated.View>
+      )}
     </View>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Back - the way out of the picker                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * "Never mind, put me back."
+ *
+ * Reaching the picker used to be one-way: "⇄ Switch" is a single tap in the top
+ * strip of the dashboard, easy to hit by accident, and the only way off this
+ * screen was to pick a role. Now the mode survives the trip (see src/mode.ts),
+ * so there is always a dashboard to hand someone back to - and this is it.
+ *
+ * Same gold-on-black pill as the Switch button it undoes, deliberately: it is
+ * the other half of that control, and it should read that way. The arrow does
+ * the work but the word carries it on a big screen, where a lone 16pt glyph in
+ * a corner of an iPad is easy to miss.
+ */
+function BackButton({ onPress }: { onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel="Back"
+      accessibilityHint="Returns to the dashboard you came from. Nothing about your account changes."
+      // The pill is ~34pt tall; hitSlop takes the actual target past the 44pt
+      // HIG minimum without making the chrome heavy.
+      hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+      style={({ pressed }) => [styles.back, pressed && styles.backPressed]}
+    >
+      <ArrowLeftIcon size={16} color={COLORS.goldSoft} />
+      <Text style={styles.backText}>Back</Text>
+    </Pressable>
   );
 }
 
@@ -526,6 +642,15 @@ function CustomerIcon({ size, color }: { size: number; color: string }) {
   );
 }
 
+function ArrowLeftIcon({ size, color }: { size: number; color: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24">
+      <Path d="M19 12H5" stroke={color} {...ICON} />
+      <Path d="M12 19l-7-7 7-7" stroke={color} {...ICON} />
+    </Svg>
+  );
+}
+
 function ChevronIcon({ size, color }: { size: number; color: string }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24">
@@ -554,6 +679,24 @@ const styles = StyleSheet.create({
   },
 
   content: { paddingHorizontal: 4 },
+
+  // Back control. The wrapper owns the position (so the entrance animation can
+  // wrap it without disturbing layout); the pill owns the look.
+  // top/left come from the safe-area insets at render time.
+  backWrap: { position: "absolute", zIndex: 3 },
+  back: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(212,175,55,0.35)",
+    backgroundColor: COLORS.surface,
+  },
+  backPressed: { backgroundColor: "rgba(212,175,55,0.14)" },
+  backText: { color: COLORS.goldSoft, fontSize: 13, fontWeight: "600" },
 
   // Hero / spotlight
   hero: { alignItems: "center", marginBottom: 34 },

@@ -1,7 +1,5 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { router } from "expo-router";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { STORAGE } from "@/src/config";
 
 /**
  * The way back to the welcome picker.
@@ -18,33 +16,29 @@ import { STORAGE } from "@/src/config";
  * own nav sits at the BOTTOM of the WebView and a floating pill down there
  * would sit on top of a tab.
  *
- * 🔑 ONLY `cb.mode` is cleared. The barber's `cb.session` and the customer's
- * `cb.lastToken` both survive, so switching back is instant — no re-login, no
- * re-texting yourself the magic link. Switching is meant to be cheap enough to
- * do mid-day between a cut and checking your own punches.
+ * 🔑 NOTHING IS CLEARED. Not `cb.session`, not `cb.customerToken`, and — since
+ * the round trip has a back arrow — not `cb.mode` either.
+ *
+ * This bar used to delete `cb.mode` before navigating, purely to stop the
+ * picker's returning-user <Redirect> from bouncing the user straight back here.
+ * That worked, and it made the picker a ONE-WAY DOOR: by the time you arrived,
+ * the app had already forgotten which dashboard you came from, so "I opened
+ * this by mistake" had no answer but to pick a role again. `?switching=1` says
+ * the same thing to the picker ("show yourself, don't redirect") without
+ * destroying the one piece of state that knows the way home. Choosing a role is
+ * now the ONLY thing that writes `cb.mode`.
  */
 export function ModeSwitchBar({ label }: { label: string }) {
-  async function switchMode() {
-    // Best-effort: if storage fails we still navigate, and the picker's own
-    // read-failure path shows the picker rather than hanging.
-    try {
-      await AsyncStorage.removeItem(STORAGE.mode);
-    } catch {
-      // ignored — the picker handles an unreadable mode by showing itself
-    }
-    router.replace("/");
-  }
-
   return (
     <View style={styles.bar}>
       <Text style={styles.label} numberOfLines={1}>
         {label}
       </Text>
       <Pressable
-        onPress={switchMode}
+        onPress={() => router.replace({ pathname: "/", params: { switching: "1" } })}
         accessibilityRole="button"
         accessibilityLabel="Switch mode"
-        accessibilityHint="Returns to the welcome screen to choose barbershop or customer."
+        accessibilityHint="Opens the welcome screen to choose barbershop or customer. You can come straight back."
         // A generous tap target on a thin bar: the visible pill is small, the
         // pressable is not.
         hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
