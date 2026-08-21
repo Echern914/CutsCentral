@@ -15,6 +15,7 @@ import { FormError } from "@/components/ui/FormError";
 import { NumberField } from "@/components/ui/NumberField";
 import { useToast } from "@/components/ui/Toast";
 import { useDemoTour } from "@/components/tour/state";
+import Link from "next/link";
 import { cn } from "@/lib/cn";
 import { useLeaveGuard } from "@/lib/useLeaveGuard";
 import type {
@@ -69,6 +70,8 @@ import {
   MinutesNumberField,
   MoneyField,
 } from "@/components/ui/UnitField";
+import { TargetedSlotCard } from "./TargetedSlotCard";
+import { ServiceCard, serviceSummary } from "./ServiceCard";
 import {
   MIN_SERVICE_MINUTES,
   parseDuration,
@@ -79,15 +82,6 @@ const field =
   "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 const labelCls = "text-xs text-muted";
 
-/**
- * A part-way-through numerator for the "shows on your calendar as X 3/12" hint.
- * Stays BELOW the target so the example never reads as an already-full day - a
- * target of 3 rendering "3/3" made the field look like a cap, which is the exact
- * confusion the helper text exists to prevent.
- */
-function exampleBooked(target: number): number {
-  return Math.max(1, Math.min(3, target - 1));
-}
 
 // Order is the order a barber needs them in: the day's book first, the things
 // that shape it next, the one-time configuration last. Settings led for
@@ -1023,61 +1017,51 @@ function ServicesTab({
           const { windows } = effectiveServiceHours(s, initialServiceGroups);
           const offHours = hasCustomHours(windows);
           return (
-            <li
+            <ServiceCard
               key={s.id}
-              className={cn(
-                "flex items-start justify-between gap-3 rounded-xl border px-4 py-2.5",
-                offHours ? "border-gold/40 bg-gold/[0.04]" : "border-subtle",
-              )}
-            >
-              <span className="min-w-0 text-sm">
-                {offHours && <OffHoursStar />}
-                {s.name}{" "}
-                <span className="text-xs text-muted">
-                  · {s.durationMin} min{s.price !== null ? ` · $${s.price}` : ""}
-                  {Object.keys(s.priceOverrides ?? {}).length > 0 &&
-                    " · " +
-                      Object.entries(s.priceOverrides)
-                        .map(([wd, p]) => `${WEEKDAYS[Number(wd)]} $${p}`)
-                        .join(", ")}
-                  {Object.keys(s.durationOverrides ?? {}).length > 0 &&
-                    " · " +
-                      Object.entries(s.durationOverrides ?? {})
-                        .map(([wd, m]) => `${WEEKDAYS[Number(wd)]} ${m}min`)
-                        .join(", ")}
-                  {(s.timeOverrides ?? []).length > 0 &&
-                    " · " + (s.timeOverrides ?? []).map(timeWindowSummary).join(", ")}
-                </span>
-                {offHours && (
-                  <span className="mt-0.5 block text-xs text-gold/90">
-                    {hoursWindowsSummary(windows)}
-                  </span>
-                )}
-              </span>
-              <div className="flex shrink-0 items-center gap-3">
-                <button
-                  onClick={() => setEditing(s)}
-                  className="text-xs text-gold hover:underline"
-                  aria-label={`Edit ${s.name}`}
-                >
-                  Edit
-                </button>
-                <button
-                  onClick={() => duplicate(s)}
-                  disabled={pending}
-                  className="text-xs text-muted hover:text-gold hover:underline disabled:opacity-50"
-                  aria-label={`Duplicate ${s.name}`}
-                >
-                  Duplicate
-                </button>
-                <button
-                  onClick={() => remove(s.id)}
-                  className="text-xs text-danger-soft hover:underline"
-                >
-                  Remove
-                </button>
-              </div>
-            </li>
+              name={s.name}
+              selected={editing?.id === s.id}
+              flagged={offHours}
+              flagTitle="Not on regular hours"
+              summary={serviceSummary({
+                durationMin: s.durationMin,
+                price: s.price,
+                priceOverrides: s.priceOverrides,
+                durationOverrides: s.durationOverrides,
+                timeOverrides: s.timeOverrides,
+                offeredByAll: s.offeredByAll ?? false,
+                staffNames: (s.staffIds ?? [])
+                  .map((id) => staff.find((m) => m.id === id)?.name)
+                  .filter((n): n is string => Boolean(n)),
+                customHours: offHours ? hoursWindowsSummary(windows) : null,
+              })}
+              actions={
+                <>
+                  <button
+                    onClick={() => setEditing(s)}
+                    className="text-xs text-gold hover:underline"
+                    aria-label={`Edit ${s.name}`}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    onClick={() => duplicate(s)}
+                    disabled={pending}
+                    className="text-xs text-muted hover:text-gold hover:underline disabled:opacity-50"
+                    aria-label={`Duplicate ${s.name}`}
+                  >
+                    Duplicate
+                  </button>
+                  <button
+                    onClick={() => remove(s.id)}
+                    className="text-xs text-danger-soft hover:underline"
+                    aria-label={`Remove ${s.name}`}
+                  >
+                    Remove
+                  </button>
+                </>
+              }
+            />
           );
         })}
         {initial.filter((s) => s.active).length === 0 && (
@@ -1188,7 +1172,6 @@ function ServiceEditForm({
   // Display-only daily slot target (0 = none). Only meaningful while UNGROUPED —
   // a grouped service is gauged by its group's target, so the field is hidden
   // and the value left untouched, exactly like the hours editor above.
-  const [dailyTarget, setDailyTarget] = useState<number>(service.dailyTarget ?? 0);
   // Per-weekday HARD caps. Strings so a box can genuinely be empty, which is
   // what "no limit" is - a number cannot express it (0 would mean "closed").
   const [dayLimits, setDayLimits] = useState<Record<number, string>>(() => {
@@ -1381,8 +1364,6 @@ function ServiceEditForm({
         // them - which meant the editor could show a grid that was impossible to
         // save.
         hoursWindows: buildHoursWindows(hoursRows),
-        // Ditto the day-gauge target: the group owns it while grouped.
-        ...(groupName ? {} : { dailyTarget: dailyTarget > 0 ? dailyTarget : null }),
         color,
         // offeredByAll wins server-side; send staffIds only for the hand-picked
         // case so a later-added barber is auto-included when "all" is chosen.
@@ -1626,32 +1607,21 @@ function ServiceEditForm({
           )}
         </CollapsibleHours>
 
-        {/* Day-gauge target. Hidden while grouped for the same reason as the
-            hours editor: the group owns it across all its members. */}
-        {!groupName && (
-          <label className="block">
-            {/* See the group editor's twin: labelCls is inline, and this input
-                is narrow, so the label needs `block` to sit above it. */}
-            <span className={cn(labelCls, "block")}>Daily target (blank = none)</span>
-            <NumberField
-              min={0}
-              max={1000}
-              integer
-              className={cn(field, "mt-1 sm:max-w-[12rem]")}
-              placeholder="No target"
-              value={dailyTarget}
-              onChange={setDailyTarget}
-              aria-label="Daily slot target for this service"
-              aria-describedby="service-target-help"
-            />
-            <p id="service-target-help" className="mt-1 text-[11px] text-muted">
-              How many of these you aim to do in a day. Shows on your calendar
-              as &ldquo;{name.trim() || "Service"} {exampleBooked(dailyTarget || 8)}/
-              {dailyTarget || 8}&rdquo; so you can see how full the day is.{" "}
-              <span className="text-offwhite">It never stops bookings.</span>
-            </p>
-          </label>
-        )}
+        {/* "Daily target" USED TO SIT HERE, one field below the daily LIMIT.
+            Two boxes that looked alike, both a number of cuts a day, and only
+            one of them stopped a booking - a barber who mixed them up turned
+            away work to make a number look right. A goal is not an
+            availability setting, so it is no longer edited on this screen.
+            Insights owns it. Existing targets are untouched and the calendar
+            gauge still reads them. */}
+        <p className="rounded-xl border border-subtle bg-charcoal-800/40 p-3 text-[11px] text-muted">
+          Looking for a <span className="text-offwhite">daily target</span>? That
+          is a goal, not an availability rule — set it under{" "}
+          <Link href="/dashboard/insights" className="text-gold hover:underline">
+            Insights → Services
+          </Link>
+          . The limits above are the ones that actually stop a booking.
+        </p>
 
         <button
           onClick={save}
@@ -1708,6 +1678,8 @@ function TargetedSlotsManager({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // Which series cards are expanded to their individual dates.
   const [openRules, setOpenRules] = useState<Set<string>>(new Set());
+  // Same for one-off slots: collapsed by default, details on request.
+  const [openSlotIds, setOpenSlotIds] = useState<Set<string>>(new Set());
   // Series being edited: the publish form becomes its edit form (Drick's
   // barber: "No way to edit Targeted Slots" - the only verbs were turn off and
   // remove, so a wrong time meant retyping the whole schedule).
@@ -2262,48 +2234,35 @@ function TargetedSlotsManager({
           const next = ruleSlots[0];
           const isOpen = openRules.has(rule.id);
           return (
-            <li key={`rule-${rule.id}`} className="rounded-xl border border-subtle">
-              <div className="flex items-center justify-between gap-3 px-4 py-2.5">
-                <button
-                  onClick={() =>
-                    setOpenRules((cur) => {
-                      const nextSet = new Set(cur);
-                      if (nextSet.has(rule.id)) nextSet.delete(rule.id);
-                      else nextSet.add(rule.id);
-                      return nextSet;
-                    })
-                  }
-                  aria-expanded={isOpen}
-                  className="flex-1 text-left"
-                >
-                  <span className="text-sm">
-                    {scheduleSummary(rule.schedule, rule.durationMin)}{" "}
-                    <span className="text-xs text-muted">
-                      · {nameOf(services, rule.serviceId)} ·{" "}
-                      {nameOf(staff, rule.staffId)}
-                      {/* The base length is only worth stating when some time
-                          still USES it. Once every window carries its own, the
-                          summary above already spells each one out and this
-                          would contradict it ("45 min" beside a 9-10 PM slot). */}
-                      {everyTimeHasOwnDuration(rule.schedule)
-                        ? ""
-                        : ` · ${rule.durationMin} min`}{" "}
-                      · ${rule.price.toFixed(0)}
-                      {rule.label ? ` · ${rule.label}` : ""}
-                    </span>
-                  </span>
-                  <span className="mt-0.5 block text-[11px] text-muted">
-                    {rule.indefinite
-                      ? "Repeats weekly until turned off"
-                      : `${ruleSlots.length} upcoming date${ruleSlots.length === 1 ? "" : "s"}`}
-                    {" · "}
-                    {openCount} open
-                    {bookedCount > 0 ? ` · ${bookedCount} booked` : ""}
-                    {next ? ` · next ${whenFmt.format(new Date(next.startsAt))}` : ""}{" "}
-                    {isOpen ? "▴" : "▾"}
-                  </span>
-                </button>
-                <span className="flex shrink-0 items-center gap-3">
+            <TargetedSlotCard
+              key={`rule-${rule.id}`}
+              // The barber's own name for it if they gave one; otherwise the
+              // service, which is the next most recognisable thing. Never the
+              // schedule string - "Fri 9:00 PM, 45 min" is what you expand to
+              // find out, not what you scan the list by.
+              title={rule.label?.trim() || nameOf(services, rule.serviceId)}
+              subtitle={
+                next
+                  ? `Next ${whenFmt.format(new Date(next.startsAt))}`
+                  : rule.indefinite
+                    ? "Repeats weekly"
+                    : "No upcoming dates"
+              }
+              status={{
+                label: rule.indefinite ? "On" : `${openCount} open`,
+                tone: openCount > 0 || rule.indefinite ? "open" : "muted",
+              }}
+              open={isOpen}
+              onToggle={() =>
+                setOpenRules((cur) => {
+                  const nextSet = new Set(cur);
+                  if (nextSet.has(rule.id)) nextSet.delete(rule.id);
+                  else nextSet.add(rule.id);
+                  return nextSet;
+                })
+              }
+              actions={
+                <>
                   <button
                     onClick={() => beginEditRule(rule)}
                     disabled={pending}
@@ -2318,17 +2277,37 @@ function TargetedSlotsManager({
                   >
                     {rule.indefinite ? "Turn off" : "Remove series"}
                   </button>
-                </span>
-              </div>
-              {isOpen && (
-                <ul className="flex flex-col gap-1 border-t border-subtle px-4 py-2">
-                  {ruleSlots.map((t) => slotRow(t))}
-                  {ruleSlots.length === 0 && (
-                    <li className="text-xs text-muted">No upcoming dates.</li>
-                  )}
-                </ul>
-              )}
-            </li>
+                </>
+              }
+            >
+              {/* Everything that used to be printed on the collapsed line. */}
+              <p className="text-xs text-muted">
+                {scheduleSummary(rule.schedule, rule.durationMin)} ·{" "}
+                {nameOf(services, rule.serviceId)} · {nameOf(staff, rule.staffId)}
+                {/* The base length is only worth stating when some time still
+                    USES it. Once every window carries its own, the summary
+                    already spells each one out and this would contradict it
+                    ("45 min" beside a 9-10 PM slot). */}
+                {everyTimeHasOwnDuration(rule.schedule)
+                  ? ""
+                  : ` · ${rule.durationMin} min`}{" "}
+                · ${rule.price.toFixed(0)}
+              </p>
+              <p className="mt-1 text-[11px] text-muted">
+                {rule.indefinite
+                  ? "Repeats weekly until turned off"
+                  : `${ruleSlots.length} upcoming date${ruleSlots.length === 1 ? "" : "s"}`}
+                {" · "}
+                {openCount} open
+                {bookedCount > 0 ? ` · ${bookedCount} booked` : ""}
+              </p>
+              <ul className="mt-2 flex flex-col gap-1">
+                {ruleSlots.map((t) => slotRow(t))}
+                {ruleSlots.length === 0 && (
+                  <li className="text-xs text-muted">No upcoming dates.</li>
+                )}
+              </ul>
+            </TargetedSlotCard>
           );
         })}
         {/* One-off slots (and booked leftovers of turned-off series). */}
@@ -2346,44 +2325,59 @@ function TargetedSlotsManager({
    *  Unbooked rows expand to an inline editor (move / re-length / reprice). */
   function slotRow(t: TargetedSlotRow) {
     const isEditing = editingSlotId === t.id;
+    // Editing forces the card open: the editor lives in the panel, so an Edit
+    // that left the card collapsed would put the fields somewhere nobody can
+    // see them.
+    const isOpen = openSlotIds.has(t.id) || isEditing;
+    const when = whenFmt.format(new Date(t.startsAt));
     return (
-      <li
+      <TargetedSlotCard
         key={t.id}
-        className="flex flex-col gap-2 rounded-xl border border-subtle px-4 py-2.5"
-      >
-        <span className="flex items-center justify-between gap-3">
-          <span className="flex items-center gap-3 text-sm">
-            {!t.booked && (
-              <input
-                type="checkbox"
-                checked={selected.has(t.id)}
-                onChange={() => toggleSelected(t.id)}
-                aria-label={`Select ${whenFmt.format(new Date(t.startsAt))}`}
-              />
-            )}
-            <span>
-              {whenFmt.format(new Date(t.startsAt))}{" "}
-              <span className="text-xs text-muted">
-                · {nameOf(services, t.serviceId)} · {nameOf(staff, t.staffId)} ·{" "}
-                {t.durationMin} min · ${t.price.toFixed(0)}
-                {t.label ? ` · ${t.label}` : ""}
-              </span>{" "}
-              <span
-                className={cn(
-                  "ml-1 rounded-full px-2 py-0.5 text-[10px] font-medium",
-                  t.booked
-                    ? "bg-emerald-soft/15 text-emerald-soft"
-                    : "bg-gold/15 text-gold",
-                )}
-              >
-                {t.booked ? "Booked" : "Open"}
-              </span>
-            </span>
-          </span>
-          {!t.booked && (
-            <span className="flex shrink-0 items-center gap-3">
+        // Same rule as the series card: the barber's own name for it, falling
+        // back to the service. "AFTER HOUR HAIRCUT" is what they scan for.
+        title={t.label?.trim() || nameOf(services, t.serviceId)}
+        subtitle={when}
+        status={{
+          label: t.booked ? "Booked" : "Open",
+          tone: t.booked ? "booked" : "open",
+        }}
+        open={isOpen}
+        onToggle={() => {
+          setOpenSlotIds((cur) => {
+            const next = new Set(cur);
+            if (next.has(t.id)) next.delete(t.id);
+            else next.add(t.id);
+            return next;
+          });
+          // Collapsing while the editor is open closes the editor too, rather
+          // than leaving an invisible half-finished edit armed.
+          if (isEditing) setEditingSlotId(null);
+        }}
+        leading={
+          !t.booked ? (
+            // OUTSIDE the disclosure button: a checkbox inside a button is
+            // invalid, and ticking it would toggle the card.
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={selected.has(t.id)}
+              onChange={() => toggleSelected(t.id)}
+              aria-label={`Select ${when}`}
+            />
+          ) : undefined
+        }
+        actions={
+          !t.booked ? (
+            <>
               <button
-                onClick={() => (isEditing ? setEditingSlotId(null) : beginEditSlot(t))}
+                onClick={() => {
+                  if (isEditing) {
+                    setEditingSlotId(null);
+                  } else {
+                    beginEditSlot(t);
+                    setOpenSlotIds((cur) => new Set(cur).add(t.id));
+                  }
+                }}
                 className="text-xs text-gold hover:underline"
               >
                 {isEditing ? "Close" : "Edit"}
@@ -2394,11 +2388,16 @@ function TargetedSlotsManager({
               >
                 Remove
               </button>
-            </span>
-          )}
-        </span>
+            </>
+          ) : undefined
+        }
+      >
+        <p className="text-xs text-muted">
+          {nameOf(services, t.serviceId)} · {nameOf(staff, t.staffId)} ·{" "}
+          {t.durationMin} min · ${t.price.toFixed(0)}
+        </p>
         {isEditing && (
-          <span className="flex flex-wrap items-center gap-2">
+          <div className="mt-2 flex flex-wrap items-end gap-2">
             {/* This row had NO labels at all - three bare boxes holding a
                 date, a number and a number. The units now sit in the boxes and
                 the labels sit above them, at the row's smaller type scale. */}
@@ -2433,9 +2432,9 @@ function TargetedSlotsManager({
             >
               Save
             </button>
-          </span>
+          </div>
         )}
-      </li>
+      </TargetedSlotCard>
     );
   }
 }
@@ -3260,14 +3259,12 @@ function ServiceGroupEditor({
   );
   // Same 0 = "unset" sentinel as the caps, but this one is DISPLAY ONLY: it's
   // the denominator of the calendar day gauge and never blocks a booking.
-  const [dailyTarget, setDailyTarget] = useState<number>(group.dailyTarget ?? 0);
   const [pending, start] = useTransition();
   // The last-persisted values in PAYLOAD form — the baseline the Save diff and
   // the dirty flag compare against.
   const [saved, setSaved] = useState(() => ({
     name: group.name,
     maxConcurrent: group.maxConcurrent ?? null,
-    dailyTarget: group.dailyTarget ?? null,
     serviceIds: JSON.stringify(group.serviceIds),
   }));
 
@@ -3288,7 +3285,6 @@ function ServiceGroupEditor({
   const dirty =
     name.trim() !== saved.name ||
     (maxConcurrent <= 0 ? null : maxConcurrent) !== saved.maxConcurrent ||
-    (dailyTarget <= 0 ? null : dailyTarget) !== saved.dailyTarget ||
     JSON.stringify(serviceIds) !== saved.serviceIds;
 
   // While this editor is the open one, its dirty/saving state is what the
@@ -3331,13 +3327,6 @@ function ServiceGroupEditor({
       toast("Limits must be a whole number (or blank for no cap)", "error");
       return;
     }
-    // Same 0/blank -> null shape as the caps, so the diff below compares like
-    // for like even though this one is only ever displayed.
-    const target = parseCap(dailyTarget);
-    if (!target.ok) {
-      toast("Daily target must be a whole number (or blank)", "error");
-      return;
-    }
     const trimmed = name.trim();
     const idsJson = JSON.stringify(serviceIds);
     // Only what changed in THIS editor goes in the PATCH (the API keeps absent
@@ -3346,9 +3335,6 @@ function ServiceGroupEditor({
       ...(trimmed !== saved.name ? { name: trimmed } : {}),
       ...(concurrent.value !== saved.maxConcurrent
         ? { maxConcurrent: concurrent.value }
-        : {}),
-      ...(target.value !== saved.dailyTarget
-        ? { dailyTarget: target.value }
         : {}),
       ...(idsJson !== saved.serviceIds ? { serviceIds } : {}),
     };
@@ -3361,7 +3347,6 @@ function ServiceGroupEditor({
     const next = {
       name: trimmed,
       maxConcurrent: concurrent.value,
-      dailyTarget: target.value,
       serviceIds: idsJson,
     };
     start(async () => {
@@ -3375,7 +3360,6 @@ function ServiceGroupEditor({
           ...group,
           name: trimmed,
           maxConcurrent: concurrent.value,
-          dailyTarget: target.value,
           serviceIds: [...serviceIds],
         });
         toast("Group saved", "success");
@@ -3583,35 +3567,17 @@ function ServiceGroupEditor({
         </label>
       </div>
 
-      {/* Display-only target, kept OUT of the limits grid above on purpose: the
-          two look alike but only the caps stop a booking, and a barber who
-          confuses them turns away work to make a number look right. */}
-      <label className="block">
-        {/* `block` because labelCls alone is inline: the fields above only wrap
-            because their input is w-full, and this one is deliberately narrow. */}
-        <span className={cn(labelCls, "block")}>Daily target (blank = none)</span>
-        <NumberField
-          min={0}
-          max={1000}
-          integer
-          className={cn(field, "mt-1 sm:max-w-[12rem]")}
-          placeholder="No target"
-          value={dailyTarget}
-          onChange={setDailyTarget}
-          aria-label="Daily slot target for this group"
-          aria-describedby={`group-target-help-${group.id}`}
-        />
-        <p id={`group-target-help-${group.id}`} className="mt-1 text-[11px] text-muted">
-          How many of these you aim to do in a day. Shows on your calendar as
-          &ldquo;{group.name || "Group"} {exampleBooked(dailyTarget || 8)}/
-          {dailyTarget || 8}&rdquo; so you can see how full the day is.{" "}
-          <span className="text-offwhite">
-            This never stops bookings — go past it and it just reads{" "}
-            {(dailyTarget || 8) + 1}/{dailyTarget || 8}.
-          </span>{" "}
-          Use &ldquo;Max per day&rdquo; above if you actually want a hard cap.
-        </p>
-      </label>
+      {/* The group's "Daily target" is gone from here for the same reason as
+          the service's: it is a GOAL, and goals live on Insights. The stored
+          value is untouched and the calendar gauge still reads it. */}
+      <p className="rounded-xl border border-subtle bg-charcoal-800/40 p-3 text-[11px] text-muted">
+        Daily targets are goals, not limits — set them under{" "}
+        <Link href="/dashboard/insights" className="text-gold hover:underline">
+          Insights → Services
+        </Link>
+        . To actually cap bookings, use each service&rsquo;s{" "}
+        <span className="text-offwhite">&ldquo;Limit how many a day&rdquo;</span>.
+      </p>
 
       <div className="flex items-center gap-3">
         <button
@@ -4715,24 +4681,6 @@ function buildTimeOverrides(rows: TimeWindowRow[]): {
   }));
 }
 
-/** "Fri, Sat 9:00 PM–11:00 PM $65 / 20 min · opens" for the services list. */
-function timeWindowSummary(w: StoredTimeWindow): string {
-  const days = Array.isArray(w.days) ? w.days : [];
-  const when =
-    days.length === 0 || days.length === 7
-      ? ""
-      : `${days
-          .slice()
-          .sort((a, b) => a - b)
-          .map((d) => WEEKDAYS[d])
-          .join(", ")} `;
-  const bits = [
-    w.price !== null ? `$${w.price}` : null,
-    w.durationMin !== null ? `${w.durationMin}min` : null,
-    w.opensHours === true ? "opens" : null,
-  ].filter(Boolean);
-  return `${when}${fmtClock(w.s)}–${fmtClock(w.e)}${bits.length ? ` ${bits.join(" / ")}` : ""}`;
-}
 
 function VaryByTimeEditor({
   rows,
