@@ -51,6 +51,8 @@ import {
   deleteTargetedSlotAction,
   deleteTargetedSlotRuleAction,
   getAvailabilityAction,
+  duplicateTargetedRuleAction,
+  duplicateTargetedSlotAction,
   listTargetedSlotsAction,
   saveAvailabilityAction,
   saveBookingSettingsAction,
@@ -1652,6 +1654,9 @@ function TargetedSlotsManager({
   const activeStaff = staff.filter((s) => s.active);
   const [slots, setSlots] = useState<TargetedSlotRow[] | null>(null);
   const [rules, setRules] = useState<TargetedSlotRuleRow[]>([]);
+  // A duplicate we just made and want to open for review. The id exists before
+  // the refreshed list does, so it waits here until the rule shows up.
+  const [pendingEditRuleId, setPendingEditRuleId] = useState<string | null>(null);
   const [serviceId, setServiceId] = useState("");
   // Every OTHER service this slot is also bookable as. serviceId stays the
   // primary (the API keeps it denormalised on the row); this is the rest of
@@ -1706,6 +1711,41 @@ function TargetedSlotsManager({
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // A duplicate must open in edit mode - the barber has to review and publish
+  // it, and a draft they never see is a draft that never goes live. The copy's
+  // id is known immediately but the rule object only exists after the refresh,
+  // so this waits for it rather than racing it.
+  useEffect(() => {
+    if (!pendingEditRuleId) return;
+    const fresh = rules.find((r) => r.id === pendingEditRuleId);
+    if (!fresh) return;
+    setPendingEditRuleId(null);
+    beginEditRule(fresh);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingEditRuleId, rules]);
+
+  function duplicateRule(rule: TargetedSlotRuleRow) {
+    start(async () => {
+      const r = await duplicateTargetedRuleAction(rule.id);
+      if (r.ok) {
+        toast("Copied — review it, then publish", "success");
+        if (r.ruleId) setPendingEditRuleId(r.ruleId);
+        refresh();
+      } else toast("Couldn't duplicate", "error");
+    });
+  }
+
+  function duplicateSlot(t: TargetedSlotRow) {
+    start(async () => {
+      const r = await duplicateTargetedSlotAction(t.id);
+      toast(
+        r.ok ? "Copied — it's off until you turn it on" : "Couldn't duplicate",
+        r.ok ? "success" : "error",
+      );
+      if (r.ok) refresh();
+    });
+  }
 
   /** Seed the publish form with a rule so it becomes that rule's edit form. */
   function beginEditRule(rule: TargetedSlotRuleRow) {
@@ -2248,10 +2288,17 @@ function TargetedSlotsManager({
                     ? "Repeats weekly"
                     : "No upcoming dates"
               }
-              status={{
-                label: rule.indefinite ? "On" : `${openCount} open`,
-                tone: openCount > 0 || rule.indefinite ? "open" : "muted",
-              }}
+              status={
+                rule.draft
+                  ? // A duplicate nobody has published yet: no slots, no public
+                    // availability. Says so, rather than reading as a live
+                    // series that has mysteriously produced nothing.
+                    { label: "Draft", tone: "muted" as const }
+                  : {
+                      label: rule.indefinite ? "On" : `${openCount} open`,
+                      tone: openCount > 0 || rule.indefinite ? "open" : "muted",
+                    }
+              }
               open={isOpen}
               onToggle={() =>
                 setOpenRules((cur) => {
@@ -2269,6 +2316,14 @@ function TargetedSlotsManager({
                     className="text-xs text-gold hover:underline disabled:opacity-50"
                   >
                     Edit
+                  </button>
+                  <button
+                    onClick={() => duplicateRule(rule)}
+                    disabled={pending}
+                    aria-label={`Duplicate ${rule.label?.trim() || "series"}`}
+                    className="text-xs text-muted hover:text-gold hover:underline disabled:opacity-50"
+                  >
+                    Duplicate
                   </button>
                   <button
                     onClick={() => removeRule(rule)}
@@ -2381,6 +2436,14 @@ function TargetedSlotsManager({
                 className="text-xs text-gold hover:underline"
               >
                 {isEditing ? "Close" : "Edit"}
+              </button>
+              <button
+                onClick={() => duplicateSlot(t)}
+                disabled={pending}
+                aria-label={`Duplicate ${t.label?.trim() || "slot"}`}
+                className="text-xs text-muted hover:text-gold hover:underline disabled:opacity-50"
+              >
+                Duplicate
               </button>
               <button
                 onClick={() => remove(t.id)}
