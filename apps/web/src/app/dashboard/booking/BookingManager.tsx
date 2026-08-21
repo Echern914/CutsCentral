@@ -1683,6 +1683,10 @@ function TargetedSlotsManager({
   const [slots, setSlots] = useState<TargetedSlotRow[] | null>(null);
   const [rules, setRules] = useState<TargetedSlotRuleRow[]>([]);
   const [serviceId, setServiceId] = useState("");
+  // Every OTHER service this slot is also bookable as. serviceId stays the
+  // primary (the API keeps it denormalised on the row); this is the rest of
+  // the set. ONE physical slot, several doors into it.
+  const [alsoServiceIds, setAlsoServiceIds] = useState<string[]>([]);
   const [staffId, setStaffId] = useState("");
   const [label, setLabel] = useState("");
   // "One time" = the classic single date+time (optionally repeated weekly).
@@ -1736,6 +1740,7 @@ function TargetedSlotsManager({
     setEditingRule(rule);
     setMode("weekly");
     setServiceId(rule.serviceId);
+    setAlsoServiceIds((rule.serviceIds ?? []).filter((id) => id !== rule.serviceId));
     setStaffId(rule.staffId);
     setLabel(rule.label ?? "");
     setMinutes(rule.durationMin);
@@ -1825,6 +1830,7 @@ function TargetedSlotsManager({
       const r = await createTargetedScheduleAction({
         staffId,
         serviceId,
+        serviceIds: [serviceId, ...alsoServiceIds],
         label: label.trim() || undefined,
         durationMin: minutes,
         price: Number(price),
@@ -1870,6 +1876,7 @@ function TargetedSlotsManager({
       const r = await createTargetedSlotAction({
         staffId,
         serviceId,
+        serviceIds: [serviceId, ...alsoServiceIds],
         label: label.trim() || undefined,
         startsAt: startsAt.toISOString(),
         durationMin: minutes,
@@ -2040,6 +2047,65 @@ function TargetedSlotsManager({
             </option>
           ))}
         </select>
+
+        {/* ALSO BOOKABLE AS. One physical slot listed under several services -
+            a toggle group, not a <select multiple>, which is close to unusable
+            on a phone and invisible to most people on a desktop. Each chip is
+            a real button with aria-pressed, so it is reachable by keyboard and
+            announced as on/off. */}
+        {serviceId && (
+          <div className="sm:col-span-2">
+            <span className={cn(labelCls, "block")}>Also bookable as (optional)</span>
+            <p className="mt-0.5 text-[11px] text-muted">
+              Offer this one time under more than one service. It stays a single
+              slot — whoever books it first takes the time, and it disappears
+              from all of them.
+            </p>
+            <div
+              role="group"
+              aria-label="Other services this slot is bookable as"
+              className="mt-1.5 flex flex-wrap gap-2"
+            >
+              {activeServices
+                .filter((sv) => sv.id !== serviceId)
+                .map((sv) => {
+                  const on = alsoServiceIds.includes(sv.id);
+                  return (
+                    <button
+                      key={sv.id}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() =>
+                        setAlsoServiceIds((cur) =>
+                          cur.includes(sv.id)
+                            ? cur.filter((x) => x !== sv.id)
+                            : [...cur, sv.id],
+                        )
+                      }
+                      className={cn(
+                        "rounded-full border px-3 py-1 text-xs transition-colors",
+                        on
+                          ? "border-gold/60 bg-gold/15 text-gold"
+                          : "border-subtle text-muted hover:text-offwhite",
+                      )}
+                    >
+                      {sv.name}
+                    </button>
+                  );
+                })}
+            </div>
+            {/* The set, spelled out, BEFORE publishing - so nobody has to infer
+                it from which chips look lit. */}
+            <p className="mt-2 text-[11px] text-muted">
+              Publishing under:{" "}
+              <span className="font-medium text-offwhite">
+                {[serviceId, ...alsoServiceIds]
+                  .map((id) => nameOf(services, id))
+                  .join(", ")}
+              </span>
+            </p>
+          </div>
+        )}
         {!editingRule && (
           <div className="sm:col-span-2">
             <Segmented

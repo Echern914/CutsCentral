@@ -488,6 +488,9 @@ export interface TargetedSlotRow {
   id: string;
   staffId: string;
   serviceId: string;
+  /** Every service this slot is bookable as. serviceId is the primary and is
+   *  always a member; the API is authoritative via the join table. */
+  serviceIds?: string[];
   label: string | null;
   startsAt: string;
   durationMin: number;
@@ -512,6 +515,9 @@ export interface TargetedSlotRuleRow {
   id: string;
   staffId: string;
   serviceId: string;
+  /** Every service this slot is bookable as. serviceId is the primary and is
+   *  always a member; the API is authoritative via the join table. */
+  serviceIds?: string[];
   label: string | null;
   schedule: Record<string, RuleScheduleTime[]>;
   durationMin: number;
@@ -536,6 +542,8 @@ export async function listTargetedSlotsAction(): Promise<{
 export async function createTargetedSlotAction(input: {
   staffId: string;
   serviceId: string;
+  /** Every service this ONE slot is bookable as. Omitted => just serviceId. */
+  serviceIds?: string[];
   label?: string;
   startsAt: string;
   durationMin: number;
@@ -554,6 +562,7 @@ export async function createTargetedSlotAction(input: {
 export async function createTargetedScheduleAction(input: {
   staffId: string;
   serviceId: string;
+  serviceIds?: string[];
   label?: string;
   durationMin: number;
   price: number;

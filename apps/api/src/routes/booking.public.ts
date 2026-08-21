@@ -11,6 +11,11 @@ import {
 } from "../engines/blockedTime.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import { ServiceDayFullError } from "../engines/serviceDailyLimit.js";
+import {
+  SLOT_SERVICES_SELECT,
+  slotOffersService,
+  slotServiceIds,
+} from "../engines/targetedSlotServices.js";
 import { resolveAddOns } from "../engines/addOns.js";
 import {
   durationRangeForService,
@@ -158,6 +163,7 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
         id: true,
         staffId: true,
         serviceId: true,
+        services: SLOT_SERVICES_SELECT,
         label: true,
         startsAt: true,
         durationMin: true,
@@ -280,7 +286,10 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
     targetedSlots: targetedSlots.map((t) => ({
       id: t.id,
       staffId: t.staffId,
+      // serviceId stays for older clients; serviceIds is the real answer and is
+      // what the picker keys off - one slot can be listed under several.
       serviceId: t.serviceId,
+      serviceIds: slotServiceIds(t),
       label: t.label,
       startsAt: t.startsAt.toISOString(),
       durationMin: t.durationMin,
@@ -519,6 +528,7 @@ async function computeDayBody(
         id: true,
         staffId: true,
         serviceId: true,
+        services: SLOT_SERVICES_SELECT,
         label: true,
         startsAt: true,
         durationMin: true,
@@ -615,7 +625,9 @@ async function computeDayBody(
       })
       .sort((a, b) => a.startsAt.localeCompare(b.startsAt));
     // The day's targeted specials for this service, at THEIR price.
-    for (const t of targeted.filter((t) => t.serviceId === service.id)) {
+    // Every service the slot is listed under gets the chip - the SAME slot id
+    // each time, so whichever one the customer taps claims the one row.
+    for (const t of targeted.filter((t) => slotOffersService(t, service.id))) {
       out.push({
         startsAt: t.startsAt.toISOString(),
         staffIds: [t.staffId],
@@ -932,7 +944,13 @@ async function computeOpenDays(shop: {
         bookedAppointmentId: null,
         startsAt: { gt: now, lt: toDate },
       },
-      select: { startsAt: true, serviceId: true, staffId: true, durationMin: true },
+      select: {
+        startsAt: true,
+        serviceId: true,
+        services: SLOT_SERVICES_SELECT,
+        staffId: true,
+        durationMin: true,
+      },
     }),
   ]);
   // Blocked time wins: a special on a blocked span must not mark its day open
@@ -993,7 +1011,11 @@ async function computeOpenDays(shop: {
   pairs.forEach((p, i) => {
     for (const s of swept[i]!) consider(s.startsAt, p.serviceId, p.staffId);
   });
-  for (const t of targeted) consider(t.startsAt, t.serviceId, t.staffId);
+  // A multi-service special opens its day for EVERY service it is listed
+  // under, or the date strip greys out a day that is genuinely bookable.
+  for (const t of targeted) {
+    for (const sid of slotServiceIds(t)) consider(t.startsAt, sid, t.staffId);
+  }
   const soonestOut = soonest as {
     startsAt: Date;
     serviceId: string;
@@ -1123,6 +1145,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {
         id: true,
         staffId: true,
         serviceId: true,
+        services: SLOT_SERVICES_SELECT,
         startsAt: true,
         durationMin: true,
         price: true,
@@ -1132,10 +1155,16 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {
     });
     // Mismatched ids/time = a crafted POST -> 400. A real slot that's gone
     // (booked or deactivated) -> the clean "no longer available" 409.
+    //
+    // The service check is now MEMBERSHIP, not equality: the slot may be
+    // listed under several, and booking it as any ONE of them is legitimate.
+    // It is still a real check - a service the slot is not listed under is
+    // rejected exactly as before - and because there is only one slot row,
+    // claiming it here consumes it for every other service too.
     if (
       !slot ||
       slot.staffId !== d.staffId ||
-      slot.serviceId !== d.serviceId ||
+      !slotOffersService(slot, d.serviceId) ||
       slot.startsAt.getTime() !== startsAt.getTime()
     ) {
       res.status(400).json({ error: "invalid_slot" });
