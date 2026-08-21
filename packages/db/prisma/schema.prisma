@@ -425,6 +425,8 @@ model Shop {
   promoUses           PromotionRedemption[]
   appointmentRequests AppointmentRequest[]
   waitlist            WaitlistEntry[]
+  waitlistWindows     WaitlistWindow[]
+  waitlistOffers      WaitlistOffer[]
   reviews             Review[]
   receptionistConversations ReceptionistConversation[]
   receptionistMessages      ReceptionistMessage[]
@@ -955,13 +957,136 @@ model WaitlistEntry {
   staffId       String? // "" / null = any provider
   preferredTime String? // freeform ("Sat morning") for standing joins
   note          String? // freeform note from the client
-  status        String    @default("WAITING") // WAITING | CONTACTED | BOOKED | REMOVED
+  // WAITING | CONTACTED | BOOKED | REMOVED | EXPIRED.
+  // Left a String rather than promoted to an enum: an enum change is not
+  // additive (it rewrites the column type), and a CHECK constraint pins the
+  // same set with none of the risk. EXPIRED is new and nothing writes it yet -
+  // the sweeper arrives with the offer worker.
+  status        String    @default("WAITING")
   notifiedAt    DateTime? // reserved for the auto-notify fast-follow (dedupe stamp)
+
+  // ---- Preferences (PR A: columns only; the client flow lands in PR B) ----
+
+  // The client's OWN timezone, so "Saturday morning" means their morning. Null
+  // on every existing row - the shop's timezone is the fallback.
+  timezone      String?
+  // Minimum notice before an appointment they would still take ("don't offer
+  // me anything inside 2 hours"). Null = the shop default.
+  minHoursNotice Int?
+
+  // ---- Consent ----
+
+  // 🔴 DELIBERATELY NOT BACKFILLED. Every existing row stays null, because
+  // nobody who already joined was ever asked. Customer SMS is out of scope
+  // until 10DLC clears; this is captured now so the record exists the day it
+  // does, and push + email remain the only customer channels meanwhile.
+  smsConsentAt     DateTime?
+  smsConsentSource String? // "waitlist_join" | "manual" - mirrors Client's field
+
+  // ---- Self-service ----
+
+  // 🔑 HASHED, never the token itself. It goes in a link sent by email, so a
+  // leaked backup or a stray log must not hand out the ability to cancel
+  // someone's place. Same reasoning as every other bearer secret here.
+  cancelTokenHash String? @unique
+
+  // Set when this entry turns into a real booking, so Booked is a LINK and not
+  // a status someone flipped by hand.
+  bookedAppointmentId String?      @unique
+  bookedAppointment   Appointment? @relation("WaitlistBooked", fields: [bookedAppointmentId], references: [id], onDelete: SetNull)
+
+  // When this entry stops being offered anything. Null = no expiry yet; the
+  // sweeper in a later PR sets/acts on it.
+  expiresAt DateTime?
+
+  windows WaitlistWindow[]
+  offers  WaitlistOffer[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([shopId, status, createdAt])
+  // The matcher asks "who is still waiting and not yet expired".
+  @@index([shopId, status, expiresAt])
+}
+
+// One date/time preference on a waitlist entry. Up to five per entry (enforced
+// at the API in PR B - Postgres has no clean per-parent row cap).
+//
+// BOTH HALVES ARE NULLABLE AND NULL MEANS "ANY". A window with no dates is any
+// date; with no times, any time. That is what lets every existing entry be
+// backfilled to a single "Any date / Any time" row and behave exactly as it
+// does today.
+model WaitlistWindow {
+  id      String        @id @default(cuid())
+  shopId  String
+  shop    Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  entryId String
+  entry   WaitlistEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  // Shop-local calendar dates, "YYYY-MM-DD". Strings, not DateTime: these are
+  // CALENDAR days in the shop's timezone, and the same convention every other
+  // date map here uses (Service.dateOverrides). ISO strings also compare
+  // correctly, so a range query is a plain BETWEEN. A single date sets both to
+  // the same value.
+  startDate String?
+  endDate   String?
+
+  // Minutes from shop-local midnight, end exclusive. Null/null = any time.
+  startMin Int?
+  endMin   Int?
+
+  createdAt DateTime @default(now())
+
+  @@index([shopId, entryId])
+}
+
+// A specific freed slot offered to ONE waitlisted client, held for them.
+//
+// 🔑 THIS IS THE CONCURRENCY FIX (wired up in PR C; the table and its
+// constraint land here). Today a cancellation emails up to five people the same
+// booking link and lets them race - the first to finish wins and the rest hit
+// slot_taken at checkout. An offer is a short exclusive hold on one physical
+// slot, released to the next eligible client when it lapses.
+//
+// The partial unique index below is what makes "one active offer per physical
+// slot" a database guarantee rather than something application code has to
+// remember - the same shape as Appointment's
+// (staffId, startsAt) WHERE status IN ('BOOKED','PENDING') guard.
+model WaitlistOffer {
+  id      String        @id @default(cuid())
+  shopId  String
+  shop    Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  entryId String
+  entry   WaitlistEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  // The physical slot being held. staffId + startsAt identify it, exactly as
+  // the appointment overlap guard does.
+  staffId   String
+  serviceId String
+  startsAt  DateTime
+  endsAt    DateTime
+
+  // 🔑 HASHED. The raw token is in a one-time claim link; only its hash is
+  // stored, so the table cannot be used to claim anyone's slot.
+  tokenHash String @unique
+
+  // OFFERED | CLAIMED | EXPIRED | RELEASED
+  status    String   @default("OFFERED")
+  // 30 minutes from creation. Past this the worker releases it to the next
+  // eligible client.
+  expiresAt DateTime
+
+  claimedAppointmentId String?      @unique
+  claimedAppointment   Appointment? @relation("WaitlistOfferClaim", fields: [claimedAppointmentId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // The worker sweeps by expiry; the matcher asks "is this slot already held".
+  @@index([shopId, status, expiresAt])
+  @@index([shopId, staffId, startsAt])
+  @@index([entryId])
 }
 
 // Customer review submitted from the public shop page. Same trust model as
@@ -1929,6 +2054,10 @@ model Appointment {
   nudges  Nudge[] // appointment-scoped sends (checkin_nudge + replies)
   // Set when this booking claimed a barber-published targeted slot.
   targetedSlot TargetedSlot?
+  // Set when this appointment came out of the waitlist: the Booked link, and
+  // the claimed offer that produced it.
+  waitlistEntry WaitlistEntry? @relation("WaitlistBooked")
+  waitlistOffer WaitlistOffer? @relation("WaitlistOfferClaim")
 
   // The double-booking guard (a partial unique on BOOKED rows) is added by hand
   // in the migration - Prisma can't express a WHERE-filtered unique index.
