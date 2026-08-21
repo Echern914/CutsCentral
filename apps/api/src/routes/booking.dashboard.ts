@@ -32,6 +32,7 @@ import {
   type RuleSchedule,
 } from "../engines/targetedSlotRules.js";
 import { effectiveDurationAt, effectivePriceAt } from "../engines/pricing.js";
+import { slotServiceIds } from "../engines/targetedSlotServices.js";
 import {
   materializeSeries,
   type RecurrencePattern,
@@ -2584,10 +2585,45 @@ bookingDashboardRouter.post("/appointments/:id/no-show", async (req, res) => {
 
 //  Targeted slots (one-off special-priced bookable slots under a service)
 
+/**
+ * The eligible-service set for a targeted slot or series.
+ *
+ * Union of the (still required) serviceId and any serviceIds, deduped, with
+ * serviceId FIRST so it stays the denormalised "primary" on the row.
+ *
+ * 🔑 EVERY id is re-checked against THIS shop's active services. The ids come
+ * straight off the request body, so without this a crafted POST could list a
+ * slot under another tenant's service - the join carries shopId and is
+ * RLS-protected, but a cross-tenant serviceId would still be a leak. Returns
+ * null when anything fails to resolve, which the callers turn into a 400.
+ */
+async function resolveTargetedServiceIds(
+  db: ReturnType<typeof forShop>,
+  serviceId: string,
+  serviceIds: string[] | undefined,
+): Promise<string[] | null> {
+  const wanted = [...new Set([serviceId, ...(serviceIds ?? [])])];
+  const found = await db.service.findMany({
+    where: { id: { in: wanted }, active: true },
+    select: { id: true },
+  });
+  if (found.length !== wanted.length) return null;
+  return wanted;
+}
+
+/** Nested-create payload for a rule/slot's service listings. */
+function serviceLinks(shopId: string, ids: string[]) {
+  return ids.map((sid) => ({ shopId, serviceId: sid }));
+}
+
 const targetedSlotSchema = z
   .object({
     staffId: z.string().min(1),
     serviceId: z.string().min(1),
+    // Every service this ONE slot is offered under. Omitted => just serviceId,
+    // which is exactly the old behaviour. At least one is required (enforced
+    // by serviceId always being present), and the set is deduped server-side.
+    serviceIds: z.array(z.string().min(1)).min(1).max(50).optional(),
     label: z.string().trim().max(60).optional().or(z.literal("")),
     startsAt: z.coerce.date().refine((dt) => !Number.isNaN(dt.getTime())),
     durationMin: z.number().int().min(5).max(600),
@@ -2622,6 +2658,10 @@ const targetedScheduleSchema = z
   .object({
     staffId: z.string().min(1),
     serviceId: z.string().min(1),
+    // Every service this ONE slot is offered under. Omitted => just serviceId,
+    // which is exactly the old behaviour. At least one is required (enforced
+    // by serviceId always being present), and the set is deduped server-side.
+    serviceIds: z.array(z.string().min(1)).min(1).max(50).optional(),
     label: z.string().trim().max(60).optional().or(z.literal("")),
     durationMin: z.number().int().min(5).max(600),
     price: z.number().min(0).max(100000),
@@ -2659,6 +2699,7 @@ bookingDashboardRouter.get("/targeted-slots", async (req, res) => {
         id: true,
         staffId: true,
         serviceId: true,
+        services: { select: { serviceId: true } },
         label: true,
         startsAt: true,
         durationMin: true,
@@ -2677,6 +2718,7 @@ bookingDashboardRouter.get("/targeted-slots", async (req, res) => {
         id: true,
         staffId: true,
         serviceId: true,
+        services: { select: { serviceId: true } },
         label: true,
         anchor: true,
         durationMin: true,
@@ -2690,6 +2732,8 @@ bookingDashboardRouter.get("/targeted-slots", async (req, res) => {
   res.json({
     targetedSlots: slots.map((t) => ({
       ...t,
+      // The editor needs the whole eligible set, not just the primary.
+      serviceIds: slotServiceIds(t),
       startsAt: t.startsAt.toISOString(),
       price: Number(t.price),
       booked: t.bookedAppointmentId !== null,
@@ -2703,6 +2747,7 @@ bookingDashboardRouter.get("/targeted-slots", async (req, res) => {
         id: r.id,
         staffId: r.staffId,
         serviceId: r.serviceId,
+        serviceIds: slotServiceIds(r),
         label: r.label,
         schedule: effectiveSchedule(
           { anchor: r.anchor, schedule: r.schedule },
@@ -2796,6 +2841,11 @@ bookingDashboardRouter.post("/targeted-slots", async (req, res) => {
       return;
     }
 
+    const schedIds = await resolveTargetedServiceIds(db, s.serviceId, s.serviceIds);
+    if (!schedIds) {
+      res.status(400).json({ error: "invalid_service" });
+      return;
+    }
     const rule = await db.targetedSlotRule.create({
       data: {
         staffId: s.staffId,
@@ -2806,6 +2856,8 @@ bookingDashboardRouter.post("/targeted-slots", async (req, res) => {
         price: s.price,
         schedule: schedule as never,
         indefinite: Boolean(s.repeatForever),
+        // The set every slot this rule materializes will be listed under.
+        services: { create: serviceLinks(shopId, schedIds) },
       },
     });
     // Indefinite: the standard rolling horizon (the daily job extends it).
@@ -2864,6 +2916,15 @@ bookingDashboardRouter.post("/targeted-slots", async (req, res) => {
 
   const label = d.label?.trim() || null;
 
+  // Which services this slot is bookable as. Re-checked against this shop's
+  // active services (see resolveTargetedServiceIds) - the ids come off the
+  // request body.
+  const eligibleIds = await resolveTargetedServiceIds(db, d.serviceId, d.serviceIds);
+  if (!eligibleIds) {
+    res.status(400).json({ error: "invalid_service" });
+    return;
+  }
+
   // "Until I turn it off": store a rule and let the shared materializer create
   // the first horizon of rows; the roll-forward job keeps extending it.
   if (d.repeatForever) {
@@ -2876,6 +2937,7 @@ bookingDashboardRouter.post("/targeted-slots", async (req, res) => {
         durationMin: d.durationMin,
         price: d.price,
         indefinite: true,
+        services: { create: serviceLinks(req.shop!.id, eligibleIds) },
       },
     });
     const created = await materializeTargetedRule(
@@ -2905,6 +2967,7 @@ bookingDashboardRouter.post("/targeted-slots", async (req, res) => {
             price: d.price,
             indefinite: false,
             weeksMaterialized: repeat + 1,
+            services: { create: serviceLinks(req.shop!.id, eligibleIds) },
           },
         })
       : null;
@@ -2932,7 +2995,23 @@ bookingDashboardRouter.post("/targeted-slots", async (req, res) => {
       ruleId: rule?.id ?? null,
     });
   }
-  await db.targetedSlot.createMany({ data: rows });
+  // createManyAndReturn so the service listings can be attached to the new
+  // rows. ONE slot row per physical time, each listed under every eligible
+  // service - never one row per service, which would be a double-book.
+  const createdSlots = await db.targetedSlot.createManyAndReturn({
+    data: rows,
+    select: { id: true },
+  });
+  await db.targetedSlotService.createMany({
+    data: createdSlots.flatMap((slot) =>
+      eligibleIds.map((sid) => ({
+        shopId: req.shop!.id,
+        slotId: slot.id,
+        serviceId: sid,
+      })),
+    ),
+    skipDuplicates: true,
+  });
   res.status(201).json({ ok: true, created: rows.length, ruleId: rule?.id ?? null });
 });
 
@@ -2998,6 +3077,10 @@ bookingDashboardRouter.post("/targeted-slots/bulk-delete", async (req, res) => {
 const targetedRulePatchSchema = z
   .object({
     label: z.string().trim().max(60).optional().or(z.literal("")),
+    // Re-point the series at a different set of services. Applies to the rows
+    // this edit re-materializes (future, unbooked) - already-booked and past
+    // rows keep the listing they were published with.
+    serviceIds: z.array(z.string().min(1)).min(1).max(50).optional(),
     durationMin: z.number().int().min(5).max(600).optional(),
     price: z.number().min(0).max(100000).optional(),
     schedule: z
@@ -3158,8 +3241,39 @@ bookingDashboardRouter.patch("/targeted-slots/rules/:id", async (req, res) => {
       rows.push(...week);
       k++;
     }
+    // The eligible set for the rows this edit rebuilds. When the barber did
+    // not touch the services, it is the rule's current set - so a
+    // schedule-only edit re-lists the new rows exactly as before.
+    const nextServiceIds = p.serviceIds
+      ? [...new Set([rule.serviceId, ...p.serviceIds])]
+      : slotServiceIds(rule);
+    if (p.serviceIds) {
+      // Replace the RULE's set so future roll-forward weeks use it too.
+      await tx.targetedSlotRuleService.deleteMany({ where: { shopId, ruleId: rule.id } });
+      await tx.targetedSlotRuleService.createMany({
+        data: nextServiceIds.map((sid) => ({
+          shopId,
+          ruleId: rule.id,
+          serviceId: sid,
+        })),
+        skipDuplicates: true,
+      });
+    }
     if (rows.length > 0) {
-      await tx.targetedSlot.createMany({ data: rows });
+      const madeRows = await tx.targetedSlot.createManyAndReturn({
+        data: rows,
+        select: { id: true },
+      });
+      await tx.targetedSlotService.createMany({
+        data: madeRows.flatMap((slot) =>
+          nextServiceIds.map((sid) => ({
+            shopId,
+            slotId: slot.id,
+            serviceId: sid,
+          })),
+        ),
+        skipDuplicates: true,
+      });
     }
     if (rule.indefinite && k > rule.weeksMaterialized) {
       await tx.targetedSlotRule.updateMany({

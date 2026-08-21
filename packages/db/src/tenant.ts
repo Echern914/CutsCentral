@@ -141,6 +141,14 @@ type TargetedSlotCreateNoShop = Omit<
   Prisma.TargetedSlotUncheckedCreateInput,
   "shopId"
 >;
+type TargetedSlotServiceCreateNoShop = Omit<
+  Prisma.TargetedSlotServiceUncheckedCreateInput,
+  "shopId"
+>;
+type TargetedSlotRuleServiceCreateNoShop = Omit<
+  Prisma.TargetedSlotRuleServiceUncheckedCreateInput,
+  "shopId"
+>;
 type TargetedSlotRuleCreateNoShop = Omit<
   Prisma.TargetedSlotRuleUncheckedCreateInput,
   "shopId"
@@ -921,6 +929,20 @@ export function forShop(shopId: string) {
             ),
           }),
         ),
+      // Returns the new rows so their service listings can be attached. Same
+      // shop stamp + RLS scope as createMany.
+      createManyAndReturn: (args: {
+        data: TargetedSlotCreateNoShop[];
+        select?: Prisma.TargetedSlotSelect;
+      }) =>
+        runWithShop(shopId, (tx) =>
+          tx.targetedSlot.createManyAndReturn({
+            data: args.data.map(
+              (d) => stamp(d, shopId) as Prisma.TargetedSlotUncheckedCreateInput,
+            ),
+            ...(args.select ? { select: args.select } : {}),
+          }),
+        ),
       updateMany: (args: Prisma.TargetedSlotUpdateManyArgs) =>
         runWithShop(shopId, (tx) =>
           tx.targetedSlot.updateMany({
@@ -931,6 +953,71 @@ export function forShop(shopId: string) {
       deleteMany: (args: Prisma.TargetedSlotDeleteManyArgs) =>
         runWithShop(shopId, (tx) =>
           tx.targetedSlot.deleteMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+    },
+
+    // Which services a targeted SLOT is offered under (multi-service specials).
+    targetedSlotService: {
+      findMany: (args: Prisma.TargetedSlotServiceFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.targetedSlotService.findMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      createMany: (args: {
+        data: TargetedSlotServiceCreateNoShop[];
+        skipDuplicates?: boolean;
+      }) =>
+        runWithShop(shopId, (tx) =>
+          tx.targetedSlotService.createMany({
+            data: args.data.map(
+              (d) =>
+                stamp(d, shopId) as Prisma.TargetedSlotServiceUncheckedCreateInput,
+            ),
+            ...(args.skipDuplicates ? { skipDuplicates: true } : {}),
+          }),
+        ),
+      deleteMany: (args: Prisma.TargetedSlotServiceDeleteManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.targetedSlotService.deleteMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+    },
+
+    // Which services a targeted SERIES is offered under.
+    targetedSlotRuleService: {
+      findMany: (args: Prisma.TargetedSlotRuleServiceFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.targetedSlotRuleService.findMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      createMany: (args: {
+        data: TargetedSlotRuleServiceCreateNoShop[];
+        skipDuplicates?: boolean;
+      }) =>
+        runWithShop(shopId, (tx) =>
+          tx.targetedSlotRuleService.createMany({
+            data: args.data.map(
+              (d) =>
+                stamp(
+                  d,
+                  shopId,
+                ) as Prisma.TargetedSlotRuleServiceUncheckedCreateInput,
+            ),
+            ...(args.skipDuplicates ? { skipDuplicates: true } : {}),
+          }),
+        ),
+      deleteMany: (args: Prisma.TargetedSlotRuleServiceDeleteManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.targetedSlotRuleService.deleteMany({
             ...args,
             where: scopeWhere(args.where, shopId),
           }),

@@ -5,6 +5,7 @@ import {
   localMinutesOfDay,
 } from "@chairback/config";
 import { logger } from "../logger.js";
+import { slotServiceIds } from "./targetedSlotServices.js";
 
 /**
  * Materialization for targeted-slot series ("repeat until I turn it off").
@@ -44,6 +45,10 @@ interface RuleRow {
   shopId: string;
   staffId: string;
   serviceId: string;
+  /** The rule's service set. Copied onto every slot it materializes, so an
+   *  edit to the set changes FUTURE weeks only - already-created rows keep
+   *  the listing they were published with. */
+  services?: { serviceId: string }[];
   label: string | null;
   anchor: Date;
   durationMin: number;
@@ -167,8 +172,26 @@ export async function materializeTargetedRule(
     });
     if (advanced.count === 0) return 0;
     if (rows.length > 0) {
-      await tx.targetedSlot.createMany({
+      // createManyAndReturn (not createMany): the join rows below need the new
+      // slot ids, and doing it in one round trip keeps both inside the same
+      // cursor-guarded transaction - a crashed run can still never leave slots
+      // without their service listings.
+      const created = await tx.targetedSlot.createManyAndReturn({
         data: rows.map((r) => ({ ...r, shopId: rule.shopId, price: r.price as never })),
+        select: { id: true },
+      });
+      const serviceIds = slotServiceIds(rule);
+      await tx.targetedSlotService.createMany({
+        data: created.flatMap((slot) =>
+          serviceIds.map((serviceId) => ({
+            shopId: rule.shopId,
+            slotId: slot.id,
+            serviceId,
+          })),
+        ),
+        // Idempotent against the unique(slotId, serviceId): a retried run
+        // cannot duplicate a listing.
+        skipDuplicates: true,
       });
     }
     return rows.length;
@@ -187,6 +210,7 @@ export async function rollForwardTargetedRules(): Promise<void> {
       shopId: true,
       staffId: true,
       serviceId: true,
+      services: { select: { serviceId: true } },
       label: true,
       anchor: true,
       durationMin: true,
