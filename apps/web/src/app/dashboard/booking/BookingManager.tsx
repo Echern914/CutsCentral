@@ -71,6 +71,7 @@ import {
   MoneyField,
 } from "@/components/ui/UnitField";
 import { TargetedSlotCard } from "./TargetedSlotCard";
+import { ServiceCard, serviceSummary } from "./ServiceCard";
 import {
   MIN_SERVICE_MINUTES,
   parseDuration,
@@ -1016,61 +1017,51 @@ function ServicesTab({
           const { windows } = effectiveServiceHours(s, initialServiceGroups);
           const offHours = hasCustomHours(windows);
           return (
-            <li
+            <ServiceCard
               key={s.id}
-              className={cn(
-                "flex items-start justify-between gap-3 rounded-xl border px-4 py-2.5",
-                offHours ? "border-gold/40 bg-gold/[0.04]" : "border-subtle",
-              )}
-            >
-              <span className="min-w-0 text-sm">
-                {offHours && <OffHoursStar />}
-                {s.name}{" "}
-                <span className="text-xs text-muted">
-                  · {s.durationMin} min{s.price !== null ? ` · $${s.price}` : ""}
-                  {Object.keys(s.priceOverrides ?? {}).length > 0 &&
-                    " · " +
-                      Object.entries(s.priceOverrides)
-                        .map(([wd, p]) => `${WEEKDAYS[Number(wd)]} $${p}`)
-                        .join(", ")}
-                  {Object.keys(s.durationOverrides ?? {}).length > 0 &&
-                    " · " +
-                      Object.entries(s.durationOverrides ?? {})
-                        .map(([wd, m]) => `${WEEKDAYS[Number(wd)]} ${m}min`)
-                        .join(", ")}
-                  {(s.timeOverrides ?? []).length > 0 &&
-                    " · " + (s.timeOverrides ?? []).map(timeWindowSummary).join(", ")}
-                </span>
-                {offHours && (
-                  <span className="mt-0.5 block text-xs text-gold/90">
-                    {hoursWindowsSummary(windows)}
-                  </span>
-                )}
-              </span>
-              <div className="flex shrink-0 items-center gap-3">
-                <button
-                  onClick={() => setEditing(s)}
-                  className="text-xs text-gold hover:underline"
-                  aria-label={`Edit ${s.name}`}
-                >
-                  Edit
-                </button>
-                <button
-                  onClick={() => duplicate(s)}
-                  disabled={pending}
-                  className="text-xs text-muted hover:text-gold hover:underline disabled:opacity-50"
-                  aria-label={`Duplicate ${s.name}`}
-                >
-                  Duplicate
-                </button>
-                <button
-                  onClick={() => remove(s.id)}
-                  className="text-xs text-danger-soft hover:underline"
-                >
-                  Remove
-                </button>
-              </div>
-            </li>
+              name={s.name}
+              selected={editing?.id === s.id}
+              flagged={offHours}
+              flagTitle="Not on regular hours"
+              summary={serviceSummary({
+                durationMin: s.durationMin,
+                price: s.price,
+                priceOverrides: s.priceOverrides,
+                durationOverrides: s.durationOverrides,
+                timeOverrides: s.timeOverrides,
+                offeredByAll: s.offeredByAll ?? false,
+                staffNames: (s.staffIds ?? [])
+                  .map((id) => staff.find((m) => m.id === id)?.name)
+                  .filter((n): n is string => Boolean(n)),
+                customHours: offHours ? hoursWindowsSummary(windows) : null,
+              })}
+              actions={
+                <>
+                  <button
+                    onClick={() => setEditing(s)}
+                    className="text-xs text-gold hover:underline"
+                    aria-label={`Edit ${s.name}`}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    onClick={() => duplicate(s)}
+                    disabled={pending}
+                    className="text-xs text-muted hover:text-gold hover:underline disabled:opacity-50"
+                    aria-label={`Duplicate ${s.name}`}
+                  >
+                    Duplicate
+                  </button>
+                  <button
+                    onClick={() => remove(s.id)}
+                    className="text-xs text-danger-soft hover:underline"
+                    aria-label={`Remove ${s.name}`}
+                  >
+                    Remove
+                  </button>
+                </>
+              }
+            />
           );
         })}
         {initial.filter((s) => s.active).length === 0 && (
@@ -4624,24 +4615,6 @@ function buildTimeOverrides(rows: TimeWindowRow[]): {
   }));
 }
 
-/** "Fri, Sat 9:00 PM–11:00 PM $65 / 20 min · opens" for the services list. */
-function timeWindowSummary(w: StoredTimeWindow): string {
-  const days = Array.isArray(w.days) ? w.days : [];
-  const when =
-    days.length === 0 || days.length === 7
-      ? ""
-      : `${days
-          .slice()
-          .sort((a, b) => a - b)
-          .map((d) => WEEKDAYS[d])
-          .join(", ")} `;
-  const bits = [
-    w.price !== null ? `$${w.price}` : null,
-    w.durationMin !== null ? `${w.durationMin}min` : null,
-    w.opensHours === true ? "opens" : null,
-  ].filter(Boolean);
-  return `${when}${fmtClock(w.s)}–${fmtClock(w.e)}${bits.length ? ` ${bits.join(" / ")}` : ""}`;
-}
 
 function VaryByTimeEditor({
   rows,
