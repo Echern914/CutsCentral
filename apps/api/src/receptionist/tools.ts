@@ -5,6 +5,7 @@ import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { computeOpenSlots, isSlotBookable, type Slot } from "../engines/slots.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
+import { ServiceDayFullError } from "../engines/serviceDailyLimit.js";
 import { cancelAppointment } from "../engines/appointmentPromotion.js";
 import { effectiveDurationAt, effectivePriceAt } from "../engines/pricing.js";
 import { formatApptTime } from "../messaging/templates.js";
@@ -666,6 +667,15 @@ const SLOT_LOST =
   "that slot just got taken - apologize once, run check_availability again and " +
   "offer the next-closest times";
 
+// The barber caps how many of this service they will take on that weekday and
+// the day just filled. Distinct from SLOT_LOST on purpose: telling the model
+// "that slot went" would send it looking for another time on the SAME day,
+// which cannot succeed. It has to move to a different date.
+const DAY_FULL =
+  "that service is fully booked for that whole DAY (the barber caps how many " +
+  "they take) - do not offer another time on that date, run check_availability " +
+  "for a different day and offer those";
+
 async function holdSlot(ctx: ToolContext, rawInput: unknown): Promise<ToolExecutionResult> {
   const parsed = holdInput.safeParse(rawInput);
   if (!parsed.success) return fail("invalid input: slot_id required");
@@ -693,6 +703,9 @@ async function holdSlot(ctx: ToolContext, rawInput: unknown): Promise<ToolExecut
         startsAt: slot.startsAt,
         endsAt: slot.endsAt,
         bufferMin: slot.bufferMin,
+        // The receptionist books FOR a customer, so the barber's per-weekday
+        // cap applies exactly as it does on the public page.
+        serviceDayLimit: { serviceId: slot.serviceId, timezone: slot.timezone },
         now: ctx.now,
       });
       return tx.appointment.create({
@@ -730,6 +743,7 @@ async function holdSlot(ctx: ToolContext, rawInput: unknown): Promise<ToolExecut
     // an internal error that pushes the model to escalate.
     const uniqueRace =
       err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002";
+    if (err instanceof ServiceDayFullError) return fail(DAY_FULL);
     if (err instanceof SlotTakenError || uniqueRace) {
       // Idempotent re-hold: if the "conflict" is OUR OWN live hold on this
       // exact slot for this client, refresh its expiry instead of failing.
@@ -869,6 +883,9 @@ async function bookAppointment(
           startsAt: slot.startsAt,
           endsAt: slot.endsAt,
           bufferMin: slot.bufferMin,
+        // The receptionist books FOR a customer, so the barber's per-weekday
+        // cap applies exactly as it does on the public page.
+        serviceDayLimit: { serviceId: slot.serviceId, timezone: slot.timezone },
           excludeAppointmentId: hold.id,
           statuses: active ? ["BOOKED"] : ["BOOKED", "PENDING"],
           now: ctx.now,
@@ -894,6 +911,9 @@ async function bookAppointment(
         startsAt: slot.startsAt,
         endsAt: slot.endsAt,
         bufferMin: slot.bufferMin,
+        // The receptionist books FOR a customer, so the barber's per-weekday
+        // cap applies exactly as it does on the public page.
+        serviceDayLimit: { serviceId: slot.serviceId, timezone: slot.timezone },
         now: ctx.now,
       });
       const appt = await tx.appointment.create({
@@ -941,6 +961,7 @@ async function bookAppointment(
       note: "confirm the exact date+time+service back to the client in your reply",
     });
   } catch (err) {
+    if (err instanceof ServiceDayFullError) return fail(DAY_FULL);
     if (err instanceof SlotTakenError) return fail(SLOT_LOST);
     // P2002 = the partial-unique backstop fired on an identical-start race.
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
@@ -1050,6 +1071,9 @@ async function rescheduleTool(
         startsAt: slot.startsAt,
         endsAt: slot.endsAt,
         bufferMin: slot.bufferMin,
+        // The receptionist books FOR a customer, so the barber's per-weekday
+        // cap applies exactly as it does on the public page.
+        serviceDayLimit: { serviceId: slot.serviceId, timezone: slot.timezone },
         excludeAppointmentId: appt.id,
         now: ctx.now,
       });
@@ -1075,6 +1099,7 @@ async function rescheduleTool(
       });
     });
   } catch (err) {
+    if (err instanceof ServiceDayFullError) return fail(DAY_FULL);
     if (err instanceof SlotTakenError) return fail(SLOT_LOST);
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
       return fail(SLOT_LOST);

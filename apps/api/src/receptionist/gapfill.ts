@@ -285,6 +285,10 @@ export async function runGapFill(input: GapFillInput): Promise<void> {
           endsAt,
           bufferMin: 0,
           excludeAppointmentId: appt.id, // the just-canceled row
+          // Auto-offered to a waiting CUSTOMER, so the cap applies. The
+          // just-canceled row is excluded, which is what gives its place in
+          // the day back to whoever is being offered the slot.
+          serviceDayLimit: { serviceId: appt.serviceId, timezone: shop.timezone },
           now,
         });
         return tx.appointment.create({

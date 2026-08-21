@@ -11,6 +11,10 @@ import {
   parseServiceHours,
 } from "./pricing.js";
 import { weekdayWindowsToRanges } from "./blockedTime.js";
+import {
+  fullDaysForService,
+  shopLocalDayWindow,
+} from "./serviceDailyLimit.js";
 
 /**
  * Open-slot computation for the native booking engine.
@@ -219,6 +223,7 @@ export async function computeOpenSlots(
         timeOverrides: true,
         hoursWindows: true,
         serviceGroupId: true,
+        dailyLimits: true,
       },
     });
     if (!service || service.durationMin <= 0) return null;
@@ -286,6 +291,27 @@ export async function computeOpenSlots(
             select: { startsAt: true, endsAt: true },
           })
         : [];
+
+    // PER-SERVICE DAILY CAP. Which shop-local days already hold as many of
+    // THIS service as the barber allows on that weekday. One query for the
+    // whole window; skipped entirely (no query) when the service has no caps,
+    // which is every existing service.
+    //
+    // Fetched unconditionally rather than behind ignoreBooked, for the same
+    // reason the group caps are: a cap is an availability RULE, so the
+    // write-path re-check (isSlotBookable, ignoreBooked=true) has to see it
+    // too. The authoritative guard is still assertServiceDayHasRoom inside the
+    // booking transaction - this is what stops the slot being OFFERED.
+    const serviceFullDays = await fullDaysForService(tx, {
+      shopId: input.shopId,
+      serviceId: input.serviceId,
+      dailyLimits: service.dailyLimits,
+      timezone: shop.timezone,
+      rangeStart: new Date(rangeStart),
+      rangeEnd: new Date(rangeEnd),
+      excludeAppointmentId: input.excludeAppointmentId,
+      now,
+    });
 
     // The staff must exist, be active, and actually offer this service.
     const offers = await tx.serviceStaff.findMany({
@@ -416,6 +442,7 @@ export async function computeOpenSlots(
       targeted,
       group,
       groupCapAppts,
+      serviceFullDays,
     };
   });
   if (!data) return [];
@@ -430,6 +457,7 @@ export async function computeOpenSlots(
     targeted,
     group,
     groupCapAppts,
+    serviceFullDays,
   } = data;
 
   // The slot GRID steps by the service length (the start times the picker
@@ -664,6 +692,17 @@ export async function computeOpenSlots(
   }
   slots.sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime());
 
+  // PER-SERVICE DAILY CAP: drop every remaining candidate on a day that is
+  // already full for this service. Applied here, before the group block, so
+  // BOTH exits below return a capped list - a filter placed after the group
+  // block's early return would silently not apply to grouped services.
+  const dayCapped =
+    serviceFullDays.size > 0
+      ? slots.filter(
+          (s) => !serviceFullDays.has(shopLocalDayWindow(s.startsAt, shop.timezone).key),
+        )
+      : slots;
+
   // GROUP CAPS. Only when the service is in an active group AND a cap is set.
   // The counts are computed from groupCapAppts (BOOKED+PENDING member-service
   // rows shop-wide, hold-aware, excluding the reschedule's own row) - a SEPARATE
@@ -704,7 +743,7 @@ export async function computeOpenSlots(
     }
 
     const kept: Slot[] = [];
-    for (const s of slots) {
+    for (const s of dayCapped) {
       // maxPerDay: this candidate's shop-local day already at/over the cap.
       if (group.maxPerDay !== null) {
         const k = dayKey(s.startsAt);
@@ -727,7 +766,7 @@ export async function computeOpenSlots(
     return kept;
   }
 
-  return slots;
+  return dayCapped;
 }
 
 /**

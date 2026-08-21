@@ -1189,6 +1189,15 @@ function ServiceEditForm({
   // a grouped service is gauged by its group's target, so the field is hidden
   // and the value left untouched, exactly like the hours editor above.
   const [dailyTarget, setDailyTarget] = useState<number>(service.dailyTarget ?? 0);
+  // Per-weekday HARD caps. Strings so a box can genuinely be empty, which is
+  // what "no limit" is - a number cannot express it (0 would mean "closed").
+  const [dayLimits, setDayLimits] = useState<Record<number, string>>(() => {
+    const out: Record<number, string> = {};
+    for (const [wd, n] of Object.entries(service.dailyLimits ?? {})) {
+      out[Number(wd)] = String(n);
+    }
+    return out;
+  });
   // Per-service available-hours rows (one window/day in v1), seeded from storage.
   const [hoursRows, setHoursRows] = useState<ServiceHoursRow[]>(() =>
     hoursRowsFromWindows(service.hoursWindows),
@@ -1361,6 +1370,7 @@ function ServiceEditForm({
         price: priceNum,
         // Always send the FULL maps (including {}) so clearing an override or a
         // restriction actually persists - PATCH is partial, absent = unchanged.
+        dailyLimits: buildDailyLimits(dayLimits),
         priceOverrides: buildPriceOverrides(dayPrices),
         dateOverrides: buildDateOverrides(specialDates),
         durationOverrides: buildDurationOverrides(dayDurations),
@@ -1493,6 +1503,15 @@ function ServiceEditForm({
           baseDuration={duration}
           onPrice={(wd, v) => setDayPrices((cur) => ({ ...cur, [wd]: v }))}
           onDuration={(wd, v) => setDayDurations((cur) => ({ ...cur, [wd]: v }))}
+        />
+
+        {/* How MANY of this service will be taken per day. Directly under
+            "vary by day" because both are read weekday-by-weekday, and the
+            barber setting a Sunday price is often the one who wants a Sunday
+            ceiling too. */}
+        <DailyLimitsEditor
+          limits={dayLimits}
+          onChange={(wd, v) => setDayLimits((cur) => ({ ...cur, [wd]: v }))}
         />
 
         {/* Named calendar dates - the holiday knob. Sits directly under "vary
@@ -3019,11 +3038,16 @@ function ServiceGroupsManager({
 
 /** A limits summary for the collapsed header ("Using global limits" / "5/day ·
  *  2 at once" / "5/day" / "2 at once"). Both null = no caps set on the group. */
-function limitsSummary(maxPerDay: number | null, maxConcurrent: number | null): string {
-  const parts: string[] = [];
-  if (maxPerDay != null) parts.push(`${maxPerDay}/day`);
-  if (maxConcurrent != null) parts.push(`${maxConcurrent} at once`);
-  return parts.length ? parts.join(" · ") : "Using global limits";
+/**
+ * The group's remaining limit, for the collapsed row.
+ *
+ * maxPerDay is gone from here - a daily cap now belongs to a SERVICE and can
+ * differ by weekday (see DailyLimitsEditor). Only the overlap cap is still a
+ * group-level idea: it is about how many chairs the bundle may occupy at once,
+ * which is genuinely shared.
+ */
+function limitsSummary(maxConcurrent: number | null): string {
+  return maxConcurrent != null ? `${maxConcurrent} at once` : "No group limit";
 }
 
 // One group row: COMPACT header (name · N services · limits · chevron). The
@@ -3060,7 +3084,6 @@ function ServiceGroupItem({
     if (!lastSaved) return;
     if (
       group.name === lastSaved.name &&
-      group.maxPerDay === lastSaved.maxPerDay &&
       group.maxConcurrent === lastSaved.maxConcurrent &&
       JSON.stringify(group.serviceIds) === JSON.stringify(lastSaved.serviceIds)
     ) {
@@ -3084,7 +3107,7 @@ function ServiceGroupItem({
           <span className="text-xs text-muted">
             · {current.serviceIds.length} service
             {current.serviceIds.length === 1 ? "" : "s"} ·{" "}
-            {limitsSummary(current.maxPerDay, current.maxConcurrent)}
+            {limitsSummary(current.maxConcurrent)}
           </span>
         </span>
         <span
@@ -3166,7 +3189,6 @@ function ServiceGroupEditor({
       });
   // 0 = no cap (sent to the API as null). NumberField holds a number and settles
   // an emptied field back to 0, so 0 is the natural "no cap" sentinel here.
-  const [maxPerDay, setMaxPerDay] = useState<number>(group.maxPerDay ?? 0);
   const [maxConcurrent, setMaxConcurrent] = useState<number>(
     group.maxConcurrent ?? 0,
   );
@@ -3178,7 +3200,6 @@ function ServiceGroupEditor({
   // the dirty flag compare against.
   const [saved, setSaved] = useState(() => ({
     name: group.name,
-    maxPerDay: group.maxPerDay ?? null,
     maxConcurrent: group.maxConcurrent ?? null,
     dailyTarget: group.dailyTarget ?? null,
     serviceIds: JSON.stringify(group.serviceIds),
@@ -3200,7 +3221,6 @@ function ServiceGroupEditor({
   // Unsaved edits? Caps compare through the same 0/blank -> null they save as.
   const dirty =
     name.trim() !== saved.name ||
-    (maxPerDay <= 0 ? null : maxPerDay) !== saved.maxPerDay ||
     (maxConcurrent <= 0 ? null : maxConcurrent) !== saved.maxConcurrent ||
     (dailyTarget <= 0 ? null : dailyTarget) !== saved.dailyTarget ||
     JSON.stringify(serviceIds) !== saved.serviceIds;
@@ -3240,9 +3260,8 @@ function ServiceGroupEditor({
       toast("Group name is required", "error");
       return;
     }
-    const perDay = parseCap(maxPerDay);
     const concurrent = parseCap(maxConcurrent);
-    if (!perDay.ok || !concurrent.ok) {
+    if (!concurrent.ok) {
       toast("Limits must be a whole number (or blank for no cap)", "error");
       return;
     }
@@ -3259,7 +3278,6 @@ function ServiceGroupEditor({
     // fields as-is) — an untouched field can never overwrite anything.
     const payload: Partial<ServiceGroupInput> = {
       ...(trimmed !== saved.name ? { name: trimmed } : {}),
-      ...(perDay.value !== saved.maxPerDay ? { maxPerDay: perDay.value } : {}),
       ...(concurrent.value !== saved.maxConcurrent
         ? { maxConcurrent: concurrent.value }
         : {}),
@@ -3276,7 +3294,6 @@ function ServiceGroupEditor({
     // dirty; a failure keeps the draft AND the flag (nothing silently lost).
     const next = {
       name: trimmed,
-      maxPerDay: perDay.value,
       maxConcurrent: concurrent.value,
       dailyTarget: target.value,
       serviceIds: idsJson,
@@ -3291,7 +3308,6 @@ function ServiceGroupEditor({
         onSaved({
           ...group,
           name: trimmed,
-          maxPerDay: perDay.value,
           maxConcurrent: concurrent.value,
           dailyTarget: target.value,
           serviceIds: [...serviceIds],
@@ -3479,21 +3495,13 @@ function ServiceGroupEditor({
         )}
       </div>
 
-      {/* Booking limits across the whole group. Blank/0 = no cap. */}
+      {/* "Max per day" USED TO SIT HERE. It has moved onto each service, where
+          it can differ by weekday - see DailyLimitsEditor. One number shared by
+          a whole bundle, identical every day, could not say "three retwists on
+          a Sunday, fades as usual", which is what barbers actually wanted.
+          ServiceGroup.maxPerDay is no longer read by anything; the migration
+          copied each active group's value down onto its members. */}
       <div className="grid gap-3 sm:grid-cols-2">
-        <label className="block">
-          <span className={labelCls}>Max per day (blank = no cap)</span>
-          <NumberField
-            min={0}
-            max={1000}
-            integer
-            className={cn(field, "mt-1")}
-            placeholder="No cap"
-            value={maxPerDay}
-            onChange={setMaxPerDay}
-            aria-label="Max bookings per day for this group"
-          />
-        </label>
         <label className="block">
           <span className={labelCls}>Max at once (blank = no cap)</span>
           <NumberField
@@ -3886,6 +3894,90 @@ function buildDateOverrides(rows: SpecialDateRow[]): Record<string, number> {
     if (parsed.ok && parsed.value !== null) out[date] = parsed.value;
   }
   return out;
+}
+
+/**
+ * {weekday: max bookings} from the limit boxes.
+ *
+ * 🔴 A BLANK OR ZERO BOX MUST NOT PRODUCE A KEY. Unlimited is the ABSENCE of a
+ * weekday, and a stored 0 would read as "zero bookings allowed" and make the
+ * service unbookable that day. This is the same trap the migration off
+ * ServiceGroup.maxPerDay had to dodge - that control used 0 to MEAN unlimited.
+ */
+function buildDailyLimits(dayLimits: Record<number, string>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [wd, val] of Object.entries(dayLimits)) {
+    const n = Number(val);
+    if (val.trim() === "" || !Number.isFinite(n)) continue;
+    const whole = Math.floor(n);
+    if (whole < 1) continue; // blank/0/negative all mean "no limit"
+    out[wd] = Math.min(whole, 1000);
+  }
+  return out;
+}
+
+/**
+ * "Only three retwists on a Sunday."
+ *
+ * A HARD ceiling, per weekday, on how many of this service the shop will take
+ * in a day. Once a day is full the service's remaining times stop being
+ * offered on the booking page and the server refuses them too.
+ *
+ * Deliberately laid out like VaryByDayEditor - same seven rows, same blank =
+ * "nothing special" rule - because it is read the same way. It replaces the
+ * group-level "Max per day", which was one number for a whole bundle and the
+ * same on every day of the week.
+ */
+function DailyLimitsEditor({
+  limits,
+  onChange,
+}: {
+  limits: Record<number, string>;
+  onChange: (wd: number, value: string) => void;
+}) {
+  return (
+    <div>
+      <span className={labelCls}>Limit how many a day? (optional)</span>
+      <p className="mt-0.5 text-[11px] text-muted">
+        A hard cap, per day of the week. Leave a day blank for no limit. When a
+        day hits its number this service stops being bookable for the rest of
+        that day — other services are unaffected, and you can still add someone
+        yourself from your calendar.
+      </p>
+      <div className="mt-2 grid grid-cols-[3rem_1fr] gap-2 px-0.5 text-[10px] uppercase tracking-wide text-muted">
+        <span />
+        <span>Most per day</span>
+      </div>
+      <div className="mt-1 flex flex-col gap-1.5">
+        {WEEKDAYS.map((label, wd) => {
+          const capped = (limits[wd] ?? "").trim() !== "";
+          return (
+            <div key={wd} className="grid grid-cols-[3rem_1fr] items-center gap-2">
+              <span
+                className={cn(
+                  "text-xs",
+                  capped ? "font-semibold text-gold" : "text-muted",
+                )}
+              >
+                {label}
+              </span>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                inputMode="numeric"
+                placeholder="No limit"
+                value={limits[wd] ?? ""}
+                onChange={(e) => onChange(wd, e.target.value)}
+                aria-label={`Most ${label} bookings of this service in a day`}
+                className="w-full rounded-lg border border-subtle bg-charcoal-700 px-2.5 py-1.5 text-sm text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50"
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 /** {weekday: minutes} - whole minutes, 5 min floor (mirrors the API bound). */

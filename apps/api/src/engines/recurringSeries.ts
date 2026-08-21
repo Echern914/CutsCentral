@@ -225,6 +225,10 @@ export async function materializeSeries(
         // Shared advisory-lock + overlap guard (throws SlotTakenError, whose
         // message is "slot_taken" - the catch below matches unchanged).
         await lockStaffAndAssertSlotFree(tx, {
+          // A standing appointment the BARBER set up for a regular. Capping it
+          // would let a busy Saturday quietly drop occurrences out of a series
+          // months later, with nothing on screen to explain the gap.
+          serviceDayLimit: null,
           staffId: input.staffId,
           shopId: input.shopId,
           startsAt,
