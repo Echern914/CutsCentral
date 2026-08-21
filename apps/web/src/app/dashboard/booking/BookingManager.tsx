@@ -29,6 +29,7 @@ import type {
 } from "./page";
 import { BookingCalendar } from "./BookingCalendar";
 import { ShopQrCard } from "./ShopQrCard";
+import { HolidayPricing } from "./HolidayPricing";
 import { ConnectPlatforms } from "./ConnectPlatforms";
 import { Sheet } from "./AppointmentForm";
 import { TimeSelect } from "@/components/ui/TimeSelect";
@@ -1098,6 +1099,11 @@ function ServicesTab({
         toast={toast}
         unsavedRef={groupUnsavedRef}
       />
+
+      {/* Holiday pricing, shop-wide. The per-service editor can still set a
+          date one service at a time; this is the same data grouped BY DATE,
+          which is how a barber actually thinks about a holiday. */}
+      <HolidayPricing services={initial} toast={toast} />
 
       <AddOnsManager initial={initialAddOns} services={initial} toast={toast} />
 

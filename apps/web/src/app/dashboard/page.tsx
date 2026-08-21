@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { apiGet, apiSend } from "@/lib/api";
 import { getMe } from "@/lib/me";
 import { StatCards, type Stats } from "./_components/StatCards";
+import { HomeQrCard } from "./_components/HomeQrCard";
 import { TrendsChart, type TrendPoint } from "./_components/TrendsChart";
 import { RevenueTrends } from "./_components/RevenueTrends";
 import { featureLocks, getBillingSummary } from "@/lib/billing";
@@ -197,6 +198,13 @@ export default async function DashboardPage({
           "who's coming in today?" before any of the analytics below. Rendered
           whenever the agenda call succeeded (an empty day says so itself). */}
       {agenda.ok && <TodayAgenda rows={todayRows} timezone={agendaTz} />}
+
+      {/* "How do I book you?" gets asked at the chair, so the answer belongs on
+          the page the barber already has open - not three taps into Booking →
+          Settings. Same card that tab renders; needs a slug to point at. */}
+      {shop.slug && (
+        <HomeQrCard bookUrl={`${appBase}/book/${shop.slug}`} shopName={shop.name} />
+      )}
 
       {stats.data && (
         <div data-tour="stats">
