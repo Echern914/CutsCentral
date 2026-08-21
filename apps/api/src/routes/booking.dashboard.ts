@@ -33,6 +33,7 @@ import {
 } from "../engines/targetedSlotRules.js";
 import { effectiveDurationAt, effectivePriceAt } from "../engines/pricing.js";
 import { slotServiceIds } from "../engines/targetedSlotServices.js";
+import { validateUpgradeRule } from "../engines/serviceUpgradeRules.js";
 import {
   materializeSeries,
   type RecurrencePattern,
@@ -2682,6 +2683,193 @@ const targetedScheduleSchema = z
     message: "repeatWeeks and repeatForever are mutually exclusive",
     path: ["repeatWeeks"],
   });
+
+/* ------------------------------------------------------------------ */
+/* Upgrade rules: "book any of THESE, get offered THAT"                 */
+/* ------------------------------------------------------------------ */
+
+const upgradeRuleSchema = z
+  .object({
+    sourceServiceIds: z.array(z.string().min(1)).min(1).max(50),
+    destinationServiceId: z.string().min(1),
+    active: z.boolean().optional(),
+  })
+  .strict();
+
+/**
+ * The shop's other active edges, for cycle detection. Excluding the rule being
+ * edited is essential: without it, re-saving a rule unchanged reports a cycle
+ * against itself.
+ */
+async function otherUpgradeEdges(
+  tx: Parameters<Parameters<typeof runWithShop>[1]>[0],
+  shopId: string,
+  exceptRuleId?: string,
+) {
+  const rows = await tx.serviceUpgradeRuleSource.findMany({
+    where: {
+      shopId,
+      rule: { active: true },
+      ...(exceptRuleId ? { ruleId: { not: exceptRuleId } } : {}),
+    },
+    select: { serviceId: true, rule: { select: { destinationServiceId: true } } },
+  });
+  return rows.map((r) => ({
+    sourceServiceId: r.serviceId,
+    destinationServiceId: r.rule.destinationServiceId,
+  }));
+}
+
+bookingDashboardRouter.get("/upgrade-rules", async (req, res) => {
+  const shopId = req.shop!.id;
+  const rules = await runWithShop(shopId, (tx) =>
+    tx.serviceUpgradeRule.findMany({
+      where: { shopId },
+      orderBy: { createdAt: "asc" },
+      select: {
+        id: true,
+        destinationServiceId: true,
+        active: true,
+        sources: { select: { serviceId: true } },
+      },
+    }),
+  );
+  res.json({
+    rules: rules.map((r) => ({
+      id: r.id,
+      destinationServiceId: r.destinationServiceId,
+      sourceServiceIds: r.sources.map((x) => x.serviceId),
+      active: r.active,
+    })),
+  });
+});
+
+bookingDashboardRouter.post("/upgrade-rules", async (req, res) => {
+  const parsed = upgradeRuleSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const d = parsed.data;
+  const shopId = req.shop!.id;
+  const db = forShop(shopId);
+
+  // Every id re-checked against THIS shop's active services - they come off the
+  // request body, so without this a crafted POST could point a rule at another
+  // tenant's service.
+  const wanted = [...new Set([...d.sourceServiceIds, d.destinationServiceId])];
+  const found = await db.service.findMany({
+    where: { id: { in: wanted }, active: true },
+    select: { id: true },
+  });
+  if (found.length !== wanted.length) {
+    res.status(400).json({ error: "invalid_service" });
+    return;
+  }
+
+  const created = await runWithShop(shopId, async (tx) => {
+    const err = validateUpgradeRule(d, await otherUpgradeEdges(tx, shopId));
+    if (err) return { err };
+    const rule = await tx.serviceUpgradeRule.create({
+      data: {
+        shopId,
+        destinationServiceId: d.destinationServiceId,
+        active: d.active ?? true,
+        sources: {
+          create: [...new Set(d.sourceServiceIds)].map((serviceId) => ({
+            shopId,
+            serviceId,
+          })),
+        },
+      },
+      select: { id: true },
+    });
+    return { ruleId: rule.id };
+  });
+  if ("err" in created && created.err) {
+    res.status(400).json({ error: created.err.code, message: created.err.message });
+    return;
+  }
+  res.status(201).json({ ok: true, ruleId: (created as { ruleId: string }).ruleId });
+});
+
+bookingDashboardRouter.patch("/upgrade-rules/:id", async (req, res) => {
+  const parsed = upgradeRuleSchema.partial().safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const d = parsed.data;
+  const shopId = req.shop!.id;
+  const ruleId = req.params.id!;
+
+  const out = await runWithShop(shopId, async (tx) => {
+    const rule = await tx.serviceUpgradeRule.findFirst({
+      where: { shopId, id: ruleId },
+      select: {
+        id: true,
+        destinationServiceId: true,
+        sources: { select: { serviceId: true } },
+      },
+    });
+    if (!rule) return { missing: true as const };
+
+    const nextSources = d.sourceServiceIds ?? rule.sources.map((x) => x.serviceId);
+    const nextDest = d.destinationServiceId ?? rule.destinationServiceId;
+
+    // Only re-validate the SHAPE when it actually changed. A plain
+    // enable/disable must not be able to fail on a rule that already exists.
+    if (d.sourceServiceIds || d.destinationServiceId) {
+      const err = validateUpgradeRule(
+        { sourceServiceIds: nextSources, destinationServiceId: nextDest },
+        await otherUpgradeEdges(tx, shopId, ruleId),
+      );
+      if (err) return { err };
+    }
+
+    await tx.serviceUpgradeRule.updateMany({
+      where: { shopId, id: ruleId },
+      data: {
+        ...(d.destinationServiceId ? { destinationServiceId: nextDest } : {}),
+        ...(d.active !== undefined ? { active: d.active } : {}),
+      },
+    });
+    if (d.sourceServiceIds) {
+      await tx.serviceUpgradeRuleSource.deleteMany({ where: { shopId, ruleId } });
+      await tx.serviceUpgradeRuleSource.createMany({
+        data: [...new Set(nextSources)].map((serviceId) => ({
+          shopId,
+          ruleId,
+          serviceId,
+        })),
+        skipDuplicates: true,
+      });
+    }
+    return { ok: true as const };
+  });
+
+  if ("missing" in out) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if ("err" in out && out.err) {
+    res.status(400).json({ error: out.err.code, message: out.err.message });
+    return;
+  }
+  res.json({ ok: true });
+});
+
+bookingDashboardRouter.delete("/upgrade-rules/:id", async (req, res) => {
+  const shopId = req.shop!.id;
+  const removed = await runWithShop(shopId, (tx) =>
+    tx.serviceUpgradeRule.deleteMany({ where: { shopId, id: req.params.id! } }),
+  );
+  if (removed.count === 0) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.json({ ok: true });
+});
 
 bookingDashboardRouter.get("/targeted-slots", async (req, res) => {
   const tsShopId = req.shop!.id;

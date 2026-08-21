@@ -450,6 +450,8 @@ model Shop {
   targetedSlotRules      TargetedSlotRule[]
   targetedSlotServices     TargetedSlotService[]
   targetedSlotRuleServices TargetedSlotRuleService[]
+  serviceUpgradeRules       ServiceUpgradeRule[]
+  serviceUpgradeRuleSources ServiceUpgradeRuleSource[]
   payments               Payment[]
 
   // Team: who else can sign in to this shop, and outstanding invites.
@@ -1370,6 +1372,9 @@ model Service {
   // Slots/series offered under this service via the multi-service join.
   targetedSlotServices     TargetedSlotService[]
   targetedSlotRuleServices TargetedSlotRuleService[]
+  // Upsells: rules that OFFER this service, and rules it triggers.
+  upgradeRulesTo  ServiceUpgradeRule[]       @relation("UpgradeDestination")
+  upgradeRuleUses ServiceUpgradeRuleSource[] @relation("UpgradeSource")
   serviceGoals    ServiceGoal[]
   serviceGroup    ServiceGroup? @relation(fields: [serviceGroupId], references: [id], onDelete: SetNull)
 
@@ -1693,6 +1698,54 @@ model TargetedSlot {
 // exist, so the roll-forward is idempotent (extend-only, never re-create).
 // Turning a series off deactivates the rule and deletes its future UNBOOKED
 // rows; booked ones are history.
+// A barber-configured upsell: "when someone books any of THESE, offer them
+// THAT instead."
+//
+// The /upgrades endpoint has always suggested upgrades - it derived them
+// automatically as "longer AND dearer, offered by this barber". That is a
+// decent guess and it is not the barber's judgement: it will happily push a
+// beard trim at someone booking a kids' cut. These rules let them say exactly
+// which upsell belongs on which service.
+//
+// 🔑 THE RULE ONLY CHOOSES CANDIDATES. Whether an upgrade is actually OFFERED
+// is still decided by the availability engine at the customer's exact instant
+// (grid alignment, service hours, blocked time, daily limits, targeted slots,
+// the next appointment). A rule can never conjure a bookable time.
+model ServiceUpgradeRule {
+  id     String @id @default(cuid())
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  // What the customer is offered. Cascade: the upsell is meaningless once the
+  // destination service is gone.
+  destinationServiceId String
+  destinationService   Service @relation("UpgradeDestination", fields: [destinationServiceId], references: [id], onDelete: Cascade)
+  // Which services trigger it. At least one, enforced at the API.
+  sources ServiceUpgradeRuleSource[]
+  // false = configured but paused. Kept rather than deleted so a seasonal
+  // upsell can be switched back on without rebuilding it.
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([shopId, active])
+}
+
+// One source service on an upgrade rule.
+model ServiceUpgradeRuleSource {
+  id        String             @id @default(cuid())
+  shopId    String
+  shop      Shop               @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  ruleId    String
+  rule      ServiceUpgradeRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  serviceId String
+  service   Service            @relation("UpgradeSource", fields: [serviceId], references: [id], onDelete: Cascade)
+  createdAt DateTime           @default(now())
+
+  @@unique([ruleId, serviceId])
+  // "What can this service be upgraded to" - the booking-page lookup.
+  @@index([shopId, serviceId])
+}
+
 // Which services one targeted SLOT is offered under. See TargetedSlot.services.
 model TargetedSlotService {
   id        String       @id @default(cuid())

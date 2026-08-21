@@ -74,6 +74,7 @@ import {
 } from "@/components/ui/UnitField";
 import { TargetedSlotCard } from "./TargetedSlotCard";
 import { ServiceCard, serviceSummary } from "./ServiceCard";
+import { UpgradeRules } from "./UpgradeRules";
 import {
   MIN_SERVICE_MINUTES,
   parseDuration,
@@ -1088,6 +1089,10 @@ function ServicesTab({
           onClose={() => setEditing(null)}
         />
       )}
+
+      {/* Upsells. Beside the service list because it is read as part of the
+          menu: which service leads to which. */}
+      <UpgradeRules services={initial} toast={toast} />
 
       <ServiceGroupsManager
         initial={initialServiceGroups}
