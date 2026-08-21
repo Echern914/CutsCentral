@@ -64,6 +64,17 @@ import {
   type RuleScheduleTime,
 } from "./actions";
 
+import {
+  MinutesField,
+  MinutesNumberField,
+  MoneyField,
+} from "@/components/ui/UnitField";
+import {
+  MIN_SERVICE_MINUTES,
+  parseDuration,
+  parsePrice,
+} from "@/lib/serviceFields";
+
 const field =
   "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 const labelCls = "text-xs text-muted";
@@ -808,6 +819,23 @@ function ServicesTab({
 
   function add() {
     if (!name.trim()) return;
+    // Length and price go through the SAME parsers the edit Sheet uses, so a
+    // value that is refused here is refused there and vice versa. They used to
+    // be checked in one form and not the other, which is how a service could be
+    // created with a NaN price (saved as null, i.e. free) that the edit form
+    // would then refuse to save.
+    const parsedDuration = parseDuration(String(duration), {
+      min: MIN_SERVICE_MINUTES,
+    });
+    if (!parsedDuration.ok) {
+      toast(parsedDuration.error, "error");
+      return;
+    }
+    const parsedPrice = parsePrice(price);
+    if (!parsedPrice.ok) {
+      toast(parsedPrice.error, "error");
+      return;
+    }
     // Time windows get the same specific validation as the edit Sheet.
     const timeErr = timeRowsError(timeRows);
     if (timeErr) {
@@ -823,8 +851,8 @@ function ServicesTab({
     start(async () => {
       const r = await createServiceAction({
         name: name.trim(),
-        durationMin: duration,
-        price: price.trim() ? Number(price) : null,
+        durationMin: parsedDuration.value ?? MIN_SERVICE_MINUTES,
+        price: parsedPrice.value,
         priceOverrides: Object.keys(overrides).length > 0 ? overrides : undefined,
         durationOverrides:
           Object.keys(durOverrides).length > 0 ? durOverrides : undefined,
@@ -907,44 +935,27 @@ function ServicesTab({
     <div className="flex flex-col gap-5">
       <Card className="p-5">
       <CardHeader title="Services" subtitle="What customers can book, with a length." />
+      {/* All three carry a real label above the box. The unit lives INSIDE the
+          box as chrome (see UnitField), so it is still on screen after a value
+          is typed - a placeholder reading "Length" or "Price ($)" vanished on
+          the first keystroke and left a bare number meaning nothing. */}
       <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_120px_120px]">
-        <input
-          className={field}
-          placeholder="Service name (e.g. Haircut)"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
-        {/* Minutes — persistent "min" suffix so the unit shows even after a
-            value is typed (the placeholder alone vanished on input). */}
-        <div className="relative">
-          <NumberField
-            className={`${field} pr-11`}
-            min={5}
-            integer
-            placeholder="Length"
-            value={duration}
-            onChange={setDuration}
-            aria-label="Service length in minutes"
-          />
-          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted">
-            min
-          </span>
-        </div>
-        {/* Price — persistent "$" prefix, same reasoning. */}
-        <div className="relative">
-          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted">
-            $
-          </span>
+        <label className="block min-w-0">
+          <span className={labelCls}>Service name</span>
           <input
-            className={`${field} pl-7`}
-            type="number"
-            min={0}
-            placeholder="Price"
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-            aria-label="Price in dollars"
+            className={cn(field, "mt-1")}
+            placeholder="e.g. Haircut"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
           />
-        </div>
+        </label>
+        <MinutesNumberField
+          value={duration}
+          onChange={setDuration}
+          min={MIN_SERVICE_MINUTES}
+          placeholder="30"
+        />
+        <MoneyField value={price} onChange={setPrice} placeholder="45" />
       </div>
       {activeStaff.length > 0 && (
         <div className="mt-3">
@@ -1301,23 +1312,24 @@ function ServiceEditForm({
       toast("Name is required", "error");
       return;
     }
-    // Duration must be a whole number >= 5 (mirrors the API bound). Clearing the
-    // field yields Number("")=0 and letters yield NaN - both are user errors, not
-    // "0 minutes", so catch them here with a clear message instead of a generic
-    // 400 "Couldn't save" (or, for price, a silent NaN->null "free" service).
-    if (!Number.isInteger(duration) || duration < 5) {
-      toast("Minutes must be a whole number of 5 or more", "error");
+    // Length and price are both parsed by lib/serviceFields, the same code the
+    // add form uses. Clearing the box yields Number("")=0 and letters yield NaN
+    // - both are user errors, not "0 minutes" and not a FREE service, so they
+    // are caught here with a specific message rather than a generic 400.
+    const parsedDuration = parseDuration(String(duration), {
+      min: MIN_SERVICE_MINUTES,
+    });
+    if (!parsedDuration.ok) {
+      toast(parsedDuration.error, "error");
       return;
     }
-    // Price is optional (blank = no set price). But a non-empty, non-numeric
-    // price (e.g. pasted "abc") must NOT silently serialize to null and save the
-    // service as FREE - reject it so the barber sees the problem.
-    const trimmedPrice = price.trim();
-    const priceNum = trimmedPrice ? Number(trimmedPrice) : null;
-    if (priceNum !== null && (!Number.isFinite(priceNum) || priceNum < 0)) {
-      toast("Price must be a number (or blank)", "error");
+    // Price is optional - blank means "no set price" and must stay saveable.
+    const parsedPrice = parsePrice(price);
+    if (!parsedPrice.ok) {
+      toast(parsedPrice.error, "error");
       return;
     }
+    const priceNum = parsedPrice.value;
     // A custom window whose end is not after its start is a user error, not a
     // "closed" instruction - block save so they don't silently lose the day.
     // Skipped when grouped: the group owns hours, so the editor is hidden and we
@@ -1345,7 +1357,7 @@ function ServiceEditForm({
         // Send trimmed values (empty string clears the column server-side).
         description: description.trim(),
         imageUrl: imageUrl.trim(),
-        durationMin: duration,
+        durationMin: parsedDuration.value ?? MIN_SERVICE_MINUTES,
         price: priceNum,
         // Always send the FULL maps (including {}) so clearing an override or a
         // restriction actually persists - PATCH is partial, absent = unchanged.
@@ -1377,29 +1389,26 @@ function ServiceEditForm({
   return (
     <Sheet title="Edit service" onClose={onClose}>
       <div className="flex flex-col gap-4">
+        {/* Identical chrome to the add form. These three were the worst of the
+            placeholder-only fields: "Minutes" and "Price ($)" were the ONLY
+            thing naming the unit, and both disappeared the moment you typed. */}
         <div className="grid gap-2 sm:grid-cols-[1fr_110px_110px]">
-          <input
-            className={field}
-            placeholder="Service name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-          <NumberField
-            className={field}
-            min={5}
-            integer
-            placeholder="Minutes"
+          <label className="block min-w-0">
+            <span className={labelCls}>Service name</span>
+            <input
+              className={cn(field, "mt-1")}
+              placeholder="e.g. Haircut"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </label>
+          <MinutesNumberField
             value={duration}
             onChange={setDuration}
+            min={MIN_SERVICE_MINUTES}
+            placeholder="30"
           />
-          <input
-            className={field}
-            type="number"
-            min={0}
-            placeholder="Price ($)"
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-          />
+          <MoneyField value={price} onChange={setPrice} placeholder="45" />
         </div>
 
         {/* Public booking-card content: what the customer sees when they pick
@@ -2060,33 +2069,23 @@ function TargetedSlotsManager({
             )}
           </div>
         )}
-        <input
-          className={field}
-          placeholder="Label (optional, e.g. Late night retwist)"
-          maxLength={60}
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-        />
-        <NumberField
-          className={field}
-          min={5}
-          integer
-          inputMode="numeric"
-          placeholder="Minutes"
+        <label className="block min-w-0">
+          <span className={labelCls}>Label (optional)</span>
+          <input
+            className={cn(field, "mt-1")}
+            placeholder="e.g. Late night retwist"
+            maxLength={60}
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+          />
+        </label>
+        <MinutesNumberField
           value={minutes}
           onChange={setMinutes}
-          aria-label="Minutes"
+          min={MIN_SERVICE_MINUTES}
+          placeholder="30"
         />
-        <input
-          className={field}
-          type="number"
-          min={0}
-          inputMode="decimal"
-          placeholder="Price ($)"
-          value={price}
-          onChange={(e) => setPrice(e.target.value)}
-          aria-label="Price"
-        />
+        <MoneyField value={price} onChange={setPrice} placeholder="45" />
         {!editingRule && (
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 sm:col-span-2">
             <label
@@ -2315,30 +2314,32 @@ function TargetedSlotsManager({
         </span>
         {isEditing && (
           <span className="flex flex-wrap items-center gap-2">
-            <input
-              className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
-              type="datetime-local"
-              value={editWhen}
-              onChange={(e) => setEditWhen(e.target.value)}
-              aria-label="New date and time"
-            />
-            <NumberField
-              min={5}
-              max={600}
-              integer
-              className="w-16 rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
+            {/* This row had NO labels at all - three bare boxes holding a
+                date, a number and a number. The units now sit in the boxes and
+                the labels sit above them, at the row's smaller type scale. */}
+            <label className="block">
+              <span className="text-[11px] text-muted">When</span>
+              <input
+                className="mt-0.5 block rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
+                type="datetime-local"
+                value={editWhen}
+                onChange={(e) => setEditWhen(e.target.value)}
+                aria-label="New date and time"
+              />
+            </label>
+            <MinutesNumberField
               value={editMinutes}
               onChange={setEditMinutes}
-              aria-label="Minutes"
+              min={MIN_SERVICE_MINUTES}
+              max={600}
+              className="w-24"
+              inputClassName="py-1 text-xs"
             />
-            <input
-              className="w-20 rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
-              type="number"
-              min={0}
-              inputMode="decimal"
+            <MoneyField
               value={editPrice}
-              onChange={(e) => setEditPrice(e.target.value)}
-              aria-label="Price"
+              onChange={setEditPrice}
+              className="w-24"
+              inputClassName="py-1 text-xs"
             />
             <button
               onClick={() => saveSlotEdit(t.id)}
@@ -2633,11 +2634,23 @@ function AddOnsManager({
 
   function add() {
     if (!name.trim()) return;
+    // saveEdit() has always checked these; add() never did, so a pasted "abc"
+    // here serialized to null and created a FREE add-on without a word.
+    const parsedPrice = parsePrice(price);
+    if (!parsedPrice.ok) {
+      toast(parsedPrice.error, "error");
+      return;
+    }
+    const parsedDuration = parseDuration(String(duration));
+    if (!parsedDuration.ok) {
+      toast(parsedDuration.error, "error");
+      return;
+    }
     start(async () => {
       const r = await createAddOnAction({
         name: name.trim(),
-        durationMin: duration,
-        price: price.trim() ? Number(price) : null,
+        durationMin: parsedDuration.value ?? 0,
+        price: parsedPrice.value,
         serviceIds,
       });
       if (r.ok) {
@@ -2673,22 +2686,23 @@ function AddOnsManager({
   }
   function saveEdit() {
     if (!editingId || !draftName.trim()) return;
-    const trimmed = draftPrice.trim();
-    const priceNum = trimmed ? Number(trimmed) : null;
     // A non-numeric price must not silently save the add-on as free.
-    if (priceNum !== null && (!Number.isFinite(priceNum) || priceNum < 0)) {
-      toast("Extra price must be a number (or blank)", "error");
+    const parsedPrice = parsePrice(draftPrice);
+    if (!parsedPrice.ok) {
+      toast(parsedPrice.error, "error");
       return;
     }
-    if (!Number.isInteger(draftDuration) || draftDuration < 0) {
-      toast("Extra minutes must be a whole number", "error");
+    const priceNum = parsedPrice.value;
+    const parsedDuration = parseDuration(String(draftDuration));
+    if (!parsedDuration.ok) {
+      toast(parsedDuration.error, "error");
       return;
     }
     const id = editingId;
     start(async () => {
       const r = await updateAddOnAction(id, {
         name: draftName.trim(),
-        durationMin: draftDuration,
+        durationMin: parsedDuration.value ?? 0,
         price: priceNum,
         serviceIds: draftServiceIds,
       });
@@ -2717,31 +2731,21 @@ function AddOnsManager({
             onChange={(e) => setName(e.target.value)}
           />
         </label>
-        <label className="block">
-          <span className={labelCls}>Extra minutes</span>
-          <NumberField
-            className={cn(field, "mt-1")}
-            min={0}
-            integer
-            placeholder="+ min"
-            value={duration}
-            onChange={setDuration}
-            aria-label="Extra minutes"
-          />
-        </label>
-        <label className="block">
-          <span className={labelCls}>Extra price ($)</span>
-          <input
-            className={cn(field, "mt-1")}
-            type="number"
-            min={0}
-            inputMode="decimal"
-            placeholder="+ $"
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-            aria-label="Extra price in dollars"
-          />
-        </label>
+        {/* "Extra price ($)" beside a "$" in the box would read "$" - the
+            label names the FIELD, the box shows the unit, never both. */}
+        <MinutesNumberField
+          label="Extra time"
+          value={duration}
+          onChange={setDuration}
+          min={0}
+          placeholder="0"
+        />
+        <MoneyField
+          label="Extra price"
+          value={price}
+          onChange={setPrice}
+          placeholder="0"
+        />
       </div>
       <div className="mt-3">
         <span className={labelCls}>Offer on</span>
@@ -2809,29 +2813,17 @@ function AddOnsManager({
                     aria-label="Add-on name"
                   />
                 </label>
-                <label className="block">
-                  <span className={labelCls}>Extra minutes</span>
-                  <NumberField
-                    className={cn(field, "mt-1")}
-                    min={0}
-                    integer
-                    value={draftDuration}
-                    onChange={setDraftDuration}
-                    aria-label="Extra minutes"
-                  />
-                </label>
-                <label className="block">
-                  <span className={labelCls}>Extra price ($)</span>
-                  <input
-                    className={cn(field, "mt-1")}
-                    type="number"
-                    min={0}
-                    inputMode="decimal"
-                    value={draftPrice}
-                    onChange={(e) => setDraftPrice(e.target.value)}
-                    aria-label="Extra price in dollars"
-                  />
-                </label>
+                <MinutesNumberField
+                  label="Extra time"
+                  value={draftDuration}
+                  onChange={setDraftDuration}
+                  min={0}
+                />
+                <MoneyField
+                  label="Extra price"
+                  value={draftPrice}
+                  onChange={setDraftPrice}
+                />
               </div>
               <div className="mt-2">
                 <span className={labelCls}>Offer on</span>
@@ -3859,8 +3851,11 @@ function hhmmToMin(hhmm: string): number {
 function buildPriceOverrides(dayPrices: Record<number, string>): Record<string, number> {
   const out: Record<string, number> = {};
   for (const [wd, val] of Object.entries(dayPrices)) {
-    const n = Number(val);
-    if (val.trim() !== "" && Number.isFinite(n) && n >= 0) out[wd] = n;
+    const parsed = parsePrice(val);
+    // A blank day is not an override, it inherits the base price. Anything the
+    // parser refuses was already blocked at save time; dropping it here is the
+    // belt to that braces.
+    if (parsed.ok && parsed.value !== null) out[wd] = parsed.value;
   }
   return out;
 }
@@ -3887,8 +3882,8 @@ function buildDateOverrides(rows: SpecialDateRow[]): Record<string, number> {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
     if (date < today) continue;
     if (Object.prototype.hasOwnProperty.call(out, date)) continue;
-    const n = Number(r.price);
-    if (r.price.trim() !== "" && Number.isFinite(n) && n >= 0) out[date] = n;
+    const parsed = parsePrice(r.price);
+    if (parsed.ok && parsed.value !== null) out[date] = parsed.value;
   }
   return out;
 }
@@ -3899,8 +3894,11 @@ function buildDurationOverrides(
 ): Record<string, number> {
   const out: Record<string, number> = {};
   for (const [wd, val] of Object.entries(dayDurations)) {
-    const n = Number(val);
-    if (val.trim() !== "" && Number.isInteger(n) && n >= 5) out[wd] = n;
+    // parseDuration ROUNDS a fractional entry. The old Number.isInteger test
+    // failed on "7.5" and skipped the key entirely, so a barber typing seven
+    // and a half minutes saw their Friday override silently disappear on save.
+    const parsed = parseDuration(val, { min: MIN_SERVICE_MINUTES });
+    if (parsed.ok && parsed.value !== null) out[wd] = parsed.value;
   }
   return out;
 }
@@ -4324,19 +4322,15 @@ function SpecialDatesEditor({
                 aria-label={`Special date ${i + 1}`}
                 className={cn(field, past && "opacity-50")}
               />
-              <div className="relative">
-                <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted">
-                  $
-                </span>
-                <input
-                  inputMode="decimal"
-                  value={r.price}
-                  onChange={(e) => patch(i, { price: e.target.value })}
-                  placeholder={basePrice.trim() || "0"}
-                  aria-label={`Price on special date ${i + 1}`}
-                  className={cn(field, "w-24 pl-6")}
-                />
-              </div>
+              <MoneyField
+                label={`Price on special date ${i + 1}`}
+                srOnlyLabel
+                value={r.price}
+                onChange={(v) => patch(i, { price: v })}
+                placeholder={basePrice.trim() || "0"}
+                className="w-28"
+                inputClassName="rounded-lg py-1.5"
+              />
               {past && (
                 <span className="text-[11px] text-muted">past — will be dropped</span>
               )}
@@ -4387,20 +4381,21 @@ function VaryByDayEditor({
   onPrice: (wd: number, value: string) => void;
   onDuration: (wd: number, value: string) => void;
 }) {
-  const cell =
-    "w-full rounded-lg border border-subtle bg-charcoal-700 py-1.5 pl-6 pr-2 text-sm text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50";
   return (
     <div>
-      <span className={labelCls}>Vary by day? (optional — price and/or minutes)</span>
+      <span className={labelCls}>Vary by day? (optional — price and/or length)</span>
       <p className="mt-0.5 text-[11px] text-muted">
         Leave a day blank to use the base {basePrice.trim() ? `$${basePrice}` : "price"} /{" "}
         {baseDuration || "?"} min. Fill one in to charge or run that day differently.
       </p>
-      {/* Column headers so it's obvious which field is dollars vs. minutes. */}
+      {/* Column headers so it's obvious which field is dollars vs. length.
+          They are the VISIBLE labels for this grid; each field carries its own
+          screen-reader label naming the weekday too, so a box read out of
+          context still says which row it belongs to. */}
       <div className="mt-2 grid grid-cols-[3rem_1fr_1fr] gap-2 px-0.5 text-[10px] uppercase tracking-wide text-muted">
         <span />
         <span>Price</span>
-        <span>Minutes</span>
+        <span>Duration</span>
       </div>
       <div className="mt-1 flex flex-col gap-1.5">
         {WEEKDAYS.map((label, wd) => {
@@ -4416,38 +4411,23 @@ function VaryByDayEditor({
               >
                 {label}
               </span>
-              {/* Price — a persistent "$" prefix so the unit is never in doubt. */}
-              <div className="relative">
-                <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-sm text-muted">
-                  $
-                </span>
-                <input
-                  type="number"
-                  min={0}
-                  inputMode="decimal"
-                  placeholder={basePrice.trim() ? basePrice : "base"}
-                  value={dayPrices[wd] ?? ""}
-                  onChange={(e) => onPrice(wd, e.target.value)}
-                  className={cell}
-                  aria-label={`${label} price in dollars`}
-                />
-              </div>
-              {/* Minutes — a persistent "min" suffix. */}
-              <div className="relative">
-                <input
-                  type="number"
-                  min={5}
-                  inputMode="numeric"
-                  placeholder={`${baseDuration || "?"}`}
-                  value={dayDurations[wd] ?? ""}
-                  onChange={(e) => onDuration(wd, e.target.value)}
-                  className="w-full rounded-lg border border-subtle bg-charcoal-700 py-1.5 pl-2 pr-10 text-sm text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50"
-                  aria-label={`${label} minutes`}
-                />
-                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted">
-                  min
-                </span>
-              </div>
+              <MoneyField
+                label={`${label} price`}
+                srOnlyLabel
+                value={dayPrices[wd] ?? ""}
+                onChange={(v) => onPrice(wd, v)}
+                placeholder={basePrice.trim() ? basePrice : "base"}
+                inputClassName="rounded-lg py-1.5"
+              />
+              <MinutesField
+                label={`${label} length`}
+                srOnlyLabel
+                value={dayDurations[wd] ?? ""}
+                onChange={(v) => onDuration(wd, v)}
+                min={MIN_SERVICE_MINUTES}
+                placeholder={`${baseDuration || "?"}`}
+                inputClassName="rounded-lg py-1.5"
+              />
             </div>
           );
         })}
@@ -4535,12 +4515,10 @@ function timeRowsError(rows: TimeWindowRow[]): string | null {
     if (!price && !mins && !r.opensHours) {
       return "Time windows: set a price, minutes, or 'also open these times' for each window (or remove it)";
     }
-    if (price && (!Number.isFinite(Number(price)) || Number(price) < 0)) {
-      return "Time windows: price must be a number";
-    }
-    if (mins && (!Number.isInteger(Number(mins)) || Number(mins) < 5)) {
-      return "Time windows: minutes must be a whole number of 5 or more";
-    }
+    const parsedPrice = parsePrice(price);
+    if (!parsedPrice.ok) return `Time windows: ${parsedPrice.error.toLowerCase()}`;
+    const parsedMins = parseDuration(mins, { min: MIN_SERVICE_MINUTES });
+    if (!parsedMins.ok) return `Time windows: ${parsedMins.error.toLowerCase()}`;
     spans.push({ s, e, days: rowDays(r) });
   }
   // Overlap only conflicts when two windows share a weekday — "Fri 9pm" and
@@ -4621,7 +4599,7 @@ function VaryByTimeEditor({
   }
   return (
     <div>
-      <span className={labelCls}>Vary by time of day? (optional — price and/or minutes)</span>
+      <span className={labelCls}>Vary by time of day? (optional — price and/or length)</span>
       <p className="mt-0.5 text-[11px] text-muted">
         e.g. after 9 PM cuts run $60 and take 20 min. Pick the days it repeats on
         (or leave them all off for every day), on top of any per-day settings.
@@ -4654,36 +4632,23 @@ function VaryByTimeEditor({
               className={select}
               aria-label={`Window ${i + 1} end time`}
             />
-            <div className="relative min-w-0">
-              <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-sm text-muted">
-                $
-              </span>
-              <input
-                type="number"
-                min={0}
-                inputMode="decimal"
-                placeholder={basePrice.trim() ? basePrice : "base"}
-                value={r.price}
-                onChange={(e) => patch(i, { price: e.target.value })}
-                className="w-full rounded-lg border border-subtle bg-charcoal-700 py-1.5 pl-6 pr-2 text-sm text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50"
-                aria-label={`Window ${i + 1} price in dollars`}
-              />
-            </div>
-            <div className="relative min-w-0">
-              <input
-                type="number"
-                min={5}
-                inputMode="numeric"
-                placeholder={`${baseDuration || "?"}`}
-                value={r.durationMin}
-                onChange={(e) => patch(i, { durationMin: e.target.value })}
-                className="w-full rounded-lg border border-subtle bg-charcoal-700 py-1.5 pl-2 pr-10 text-sm text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50"
-                aria-label={`Window ${i + 1} minutes`}
-              />
-              <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted">
-                min
-              </span>
-            </div>
+            <MoneyField
+              label={`Window ${i + 1} price`}
+              srOnlyLabel
+              value={r.price}
+              onChange={(v) => patch(i, { price: v })}
+              placeholder={basePrice.trim() ? basePrice : "base"}
+              inputClassName="rounded-lg py-1.5"
+            />
+            <MinutesField
+              label={`Window ${i + 1} length`}
+              srOnlyLabel
+              value={r.durationMin}
+              onChange={(v) => patch(i, { durationMin: v })}
+              min={MIN_SERVICE_MINUTES}
+              placeholder={`${baseDuration || "?"}`}
+              inputClassName="rounded-lg py-1.5"
+            />
             {/* Repeat-days, the open-hours opt-in and Remove span the whole row. */}
             <div className="col-span-2 -mt-0.5 flex flex-col gap-2 sm:col-span-4">
               <div className="flex flex-wrap items-center gap-1.5">
