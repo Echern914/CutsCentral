@@ -3,6 +3,24 @@ import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 
 /**
+ * 🔴 TIME IS FROZEN IN THIS SUITE, and it has to be.
+ *
+ * The day-ahead digest is claimed once per (shop, barber, date) - that is what
+ * stops the 5-minutely job sending it twice. The DEFAULT dayAheadHour is 19.
+ * Several cases below call run() with the REAL clock, so whenever the suite
+ * happened to run between 19:00 and 19:59 UTC those cases claimed the digest
+ * first, and "summarizes tomorrow at the barber's chosen hour" then found the
+ * claim already taken and sent nothing.
+ *
+ * It failed for exactly one hour a day, every day, and passed in isolation -
+ * which is the worst kind of red, because it reads like a real scheduling bug.
+ * It is not: the engine takes `now` as a parameter and derives the shop-local
+ * window from it correctly. The test was reading the wall clock.
+ *
+ * So: Date is frozen at a fixed instant well away from 19:00 and from midnight,
+ * and the shop's timezone is pinned to UTC in the fixture below. ONLY Date is
+ * faked - setTimeout and friends stay real, or Prisma's own timers hang.
+ *
  * The barber's own reminders. What matters:
  *  - the message names the CLIENT and the SERVICE (that's the whole ask);
  *  - it fires on the barber's OWN lead time, not a global one;
@@ -29,6 +47,11 @@ vi.mock("../services/barberNotify.js", async (importOriginal) => {
     }),
   };
 });
+
+/** Monday 2026-06-15, 12:00 UTC. Mid-day so no case can drift into another
+ *  hour, mid-week so weekday logic is unremarkable, and nowhere near the
+ *  default 19:00 digest hour that caused the flake. */
+const FROZEN_NOW = new Date("2026-06-15T12:00:00.000Z");
 
 const { runBarberRemindersForShop } = await import("./barberReminders.js");
 
@@ -70,6 +93,11 @@ async function makeAppt(staffId: string, minutesFromNow: number, first = "Sam") 
 }
 
 beforeAll(async () => {
+  // toFake: ["Date"] ONLY. Faking setTimeout/setInterval too would stall
+  // Prisma's internal timers and hang the suite; all this needs is for
+  // new Date() / Date.now() to stop moving.
+  vi.useFakeTimers({ toFake: ["Date"], now: FROZEN_NOW });
+
   const owner = await prisma.user.create({
     data: { email: `bn-own-${randomToken(6)}@test.local`, passwordHash: "x", name: "Own" },
   });
@@ -126,6 +154,7 @@ function afterEachCleanup() {
 }
 
 afterAll(async () => {
+  vi.useRealTimers();
   await prisma.shop.deleteMany({ where: { ownerId } });
   await prisma.user.deleteMany({ where: { id: { in: [ownerId, otherUserId] } } });
   await prisma.$disconnect();
@@ -211,7 +240,10 @@ describe("barber next-up reminder", () => {
 describe("barber day-ahead digest", () => {
   /** Run the job as if it were the given shop-local hour. */
   async function runAtHour(hour: number) {
-    const now = new Date();
+    // Built from the FROZEN date, not the wall clock: the appointments below
+    // are created relative to the same frozen instant, so the two can never
+    // land on different calendar days (a real midnight-straddle risk before).
+    const now = new Date(FROZEN_NOW);
     now.setUTCHours(hour, 5, 0, 0); // shop tz is UTC in this suite
     await run(now);
   }
