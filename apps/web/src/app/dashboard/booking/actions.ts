@@ -657,3 +657,48 @@ export async function nudgeAppointmentAction(
   if (!res.ok) return { ok: false, error: res.error ?? "failed" };
   return { ok: true, delivered: res.data?.delivered };
 }
+
+/* ------------------------------------------------------------------ */
+/* Upgrade prompts                                                     */
+/* ------------------------------------------------------------------ */
+
+/** "Book any of sourceServiceIds, get offered destinationServiceId." */
+export interface UpgradeRuleRow {
+  id: string;
+  sourceServiceIds: string[];
+  destinationServiceId: string;
+  active: boolean;
+}
+
+export async function listUpgradeRulesAction(): Promise<{
+  ok: boolean;
+  rules?: UpgradeRuleRow[];
+}> {
+  const res = await apiGet<{ rules: UpgradeRuleRow[] }>("/api/booking/upgrade-rules");
+  return res.ok ? { ok: true, rules: res.data?.rules ?? [] } : { ok: false };
+}
+
+export async function createUpgradeRuleAction(input: {
+  sourceServiceIds: string[];
+  destinationServiceId: string;
+}): Promise<Result> {
+  // The API answers self_upgrade / cycle with a human message; surface it
+  // rather than a generic failure, because the barber can act on it.
+  const res = await apiSend<{ ruleId: string }>(
+    "POST",
+    "/api/booking/upgrade-rules",
+    input,
+  );
+  return done(res);
+}
+
+export async function updateUpgradeRuleAction(
+  id: string,
+  input: { active?: boolean; sourceServiceIds?: string[]; destinationServiceId?: string },
+): Promise<Result> {
+  return done(await apiSend("PATCH", `/api/booking/upgrade-rules/${id}`, input));
+}
+
+export async function deleteUpgradeRuleAction(id: string): Promise<Result> {
+  return done(await apiSend("DELETE", `/api/booking/upgrade-rules/${id}`));
+}

@@ -11,6 +11,7 @@ import {
 } from "../engines/blockedTime.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import { ServiceDayFullError } from "../engines/serviceDailyLimit.js";
+import { destinationsFor } from "../engines/serviceUpgradeRules.js";
 import {
   SLOT_SERVICES_SELECT,
   slotOffersService,
@@ -736,7 +737,7 @@ bookingPublicRouter.get("/:slug/upgrades", bookingReadLimiter, async (req, res) 
     return;
   }
 
-  const [services, links] = await Promise.all([
+  const [services, links, ruleSources] = await Promise.all([
     prisma.service.findMany({
       where: { shopId: shop.id, active: true },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
@@ -755,6 +756,12 @@ bookingPublicRouter.get("/:slug/upgrades", bookingReadLimiter, async (req, res) 
     prisma.serviceStaff.findMany({
       where: { shopId: shop.id, staffId: parsed.data.staffId },
       select: { serviceId: true },
+    }),
+    // The barber's configured upsells. Only ACTIVE rules count - pausing one
+    // is how a seasonal offer is switched off without rebuilding it.
+    prisma.serviceUpgradeRuleSource.findMany({
+      where: { shopId: shop.id, rule: { active: true } },
+      select: { serviceId: true, rule: { select: { destinationServiceId: true } } },
     }),
   ]);
   const chosen = services.find((s) => s.id === parsed.data.serviceId);
@@ -801,26 +808,63 @@ bookingPublicRouter.get("/:slug/upgrades", bookingReadLimiter, async (req, res) 
   const chosenPrice = priceOf(chosen);
   const offered = new Set(links.map((l) => l.serviceId));
 
-  // An UPGRADE is longer AND dearer. Longer, because the whole premise is
-  // "there's time going spare"; dearer, because a longer service for the same
-  // money isn't an upsell, it's just a different booking. An unpriced menu
-  // gets no suggestions rather than a guessed comparison against 0.
+  // WHICH services are worth asking the engine about.
+  //
+  // Configured rules win when the barber has set any up: they said which upsell
+  // belongs on which service, and that beats a heuristic that would happily
+  // push a beard trim at a kids' cut. `destinationsFor` returns null - NOT [] -
+  // when the shop has no rules at all, which is what keeps every existing shop
+  // on the automatic behaviour it has always had instead of silently losing its
+  // upsells the day this ships.
+  const configured = destinationsFor(
+    chosen.id,
+    ruleSources.map((r) => ({
+      sourceServiceId: r.serviceId,
+      destinationServiceId: r.rule.destinationServiceId,
+    })),
+  );
+
+  /** Room in the calendar. Applies either way - a rule cannot invent time. */
+  const fitsTheGap = (s: (typeof services)[number]) => {
+    const d = durationOf(s);
+    return d - chosenDuration <= room;
+  };
+
   const candidates =
-    chosenPrice === null
-      ? []
-      : services
-          .filter((s) => {
-            if (s.id === chosen.id || !offered.has(s.id)) return false;
-            const p = priceOf(s);
-            if (p === null || p <= chosenPrice) return false;
-            const d = durationOf(s);
-            // Free prefilter: anything that can't fit the raw gap can't fit,
-            // full stop - no need to spend an engine run finding that out.
-            return d > chosenDuration && d - chosenDuration <= room;
-          })
-          // Gentlest step up first: the nearest upgrade is the believable one.
-          .sort((a, b) => (priceOf(a) ?? 0) - (priceOf(b) ?? 0))
-          .slice(0, UPGRADE_CHECK_LIMIT);
+    configured !== null
+      ? // CONFIGURED: the barber's list, in their menu order. Deliberately NOT
+        // filtered by longer-and-dearer - they chose it, and a shorter or
+        // cheaper "upgrade" is their call to make. Still must be offered by
+        // this barber, and still must fit.
+        services
+          .filter(
+            (s) =>
+              s.id !== chosen.id &&
+              offered.has(s.id) &&
+              configured.includes(s.id) &&
+              fitsTheGap(s),
+          )
+          .slice(0, UPGRADE_CHECK_LIMIT)
+      : // AUTOMATIC (unchanged): longer AND dearer. Longer, because the whole
+        // premise is "there's time going spare"; dearer, because a longer
+        // service for the same money isn't an upsell, it's just a different
+        // booking. An unpriced menu gets no suggestions rather than a guessed
+        // comparison against 0.
+        chosenPrice === null
+        ? []
+        : services
+            .filter((s) => {
+              if (s.id === chosen.id || !offered.has(s.id)) return false;
+              const p = priceOf(s);
+              if (p === null || p <= chosenPrice) return false;
+              const d = durationOf(s);
+              // Free prefilter: anything that can't fit the raw gap can't fit,
+              // full stop - no need to spend an engine run finding that out.
+              return d > chosenDuration && fitsTheGap(s);
+            })
+            // Gentlest step up first: the nearest upgrade is the believable one.
+            .sort((a, b) => (priceOf(a) ?? 0) - (priceOf(b) ?? 0))
+            .slice(0, UPGRADE_CHECK_LIMIT);
 
   const confirmed = (
     await mapWithLimit(candidates, DAY_FANOUT_LIMIT, async (s) => {
@@ -834,15 +878,19 @@ bookingPublicRouter.get("/:slug/upgrades", bookingReadLimiter, async (req, res) 
       });
       const fits = slots.some((x) => x.startsAt.getTime() === startsAt.getTime());
       if (!fits) return null;
-      const price = priceOf(s)!;
+      const price = priceOf(s);
       return {
         serviceId: s.id,
         name: s.name,
         description: s.description,
         durationMin: durationOf(s),
         price,
-        // What the customer actually weighs: how much more, for how much longer.
-        priceDelta: price - chosenPrice!,
+        // What the customer actually weighs: how much more, for how much
+        // longer. Null when either side is unpriced - a configured rule can
+        // point at an unpriced service, and inventing a delta against 0 would
+        // read as a discount.
+        priceDelta:
+          price === null || chosenPrice === null ? null : price - chosenPrice,
         extraMin: durationOf(s) - chosenDuration,
       };
     })
