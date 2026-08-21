@@ -3,6 +3,8 @@
 import { useMemo, useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { cn } from "@/lib/cn";
+import { MoneyField } from "@/components/ui/UnitField";
+import { parsePrice } from "@/lib/serviceFields";
 import { updateServiceAction } from "./actions";
 import type { ServiceRow } from "./page";
 
@@ -105,15 +107,24 @@ export function HolidayPricing({
   }
 
   function save() {
-    const value = Number(price);
     if (!date) {
       toast("Pick a date", "error");
       return;
     }
-    if (!price.trim() || !Number.isFinite(value) || value < 0) {
+    // Same parser as every other price box in the app, so "$75" pasted off a
+    // price list works here too and a negative is refused with the same words.
+    const parsed = parsePrice(price);
+    if (!parsed.ok) {
+      toast(parsed.error, "error");
+      return;
+    }
+    if (parsed.value === null) {
+      // Blank is "inherit" on an override field, but a holiday IS the override
+      // - there is nothing to inherit, so it has to be a number.
       toast("Set the price for that day", "error");
       return;
     }
+    const value = parsed.value;
     if (picked.size === 0) {
       toast("Choose at least one service", "error");
       return;
@@ -236,24 +247,14 @@ export function HolidayPricing({
                 className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1.5 text-xs text-offwhite"
               />
             </label>
-            <label className="flex flex-col gap-1 text-[11px] text-muted">
-              Price that day
-              <span className="flex items-center gap-1">
-                <span aria-hidden="true" className="text-muted">
-                  $
-                </span>
-                <input
-                  type="number"
-                  min={0}
-                  step="1"
-                  inputMode="decimal"
-                  value={price}
-                  onChange={(e) => setPrice(e.target.value)}
-                  aria-label="Holiday price"
-                  className="w-24 rounded-lg border border-subtle bg-charcoal-700 px-2 py-1.5 text-xs text-offwhite"
-                />
-              </span>
-            </label>
+            <MoneyField
+              label="Price that day"
+              value={price}
+              onChange={setPrice}
+              placeholder="75"
+              className="w-32"
+              inputClassName="rounded-lg py-1.5 text-xs"
+            />
           </div>
 
           <p className="mt-3 text-[11px] text-muted">Applies to</p>
