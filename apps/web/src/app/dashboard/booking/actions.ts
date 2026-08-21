@@ -117,6 +117,7 @@ export async function createServiceAction(input: {
   imageUrl?: string;
   durationMin: number;
   durationOverrides?: Record<string, number>;
+  dailyLimits?: Record<string, number>;
   hoursWindows?: ServiceHoursWindows;
   timeOverrides?: ServiceTimeWindow[];
   price?: number | null;
@@ -140,6 +141,7 @@ export async function updateServiceAction(
     imageUrl?: string;
     durationMin?: number;
     durationOverrides?: Record<string, number>;
+  dailyLimits?: Record<string, number>;
     hoursWindows?: ServiceHoursWindows;
     timeOverrides?: ServiceTimeWindow[];
     price?: number | null;

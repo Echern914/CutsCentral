@@ -52,6 +52,12 @@ export interface ServiceRow {
   dateOverrides: Record<string, number>;
   // Per-weekday duration overrides ({ "5": 20 } = Friday 20 min). {} = base.
   durationOverrides: Record<string, number>;
+  /**
+   * Per-weekday cap on how many of this service may be booked in one
+   * shop-local day: {"0": 3} = at most 3 on Sundays. A weekday absent is
+   * UNLIMITED. Enforced server-side on the customer paths only.
+   */
+  dailyLimits: Record<string, number>;
   // Per-weekday available-hours restriction ({ "1": [{ s: 600, e: 840 }] } =
   // "Mondays only 10:00-14:00"). Weekday absent = unrestricted; [] = closed that
   // day. {} = no restriction on any day (the default).

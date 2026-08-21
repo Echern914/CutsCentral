@@ -121,6 +121,18 @@ const durationOverridesSchema = z
   .record(z.enum(["0", "1", "2", "3", "4", "5", "6"]), z.number().int().min(5).max(600))
   .optional();
 
+// Per-weekday DAILY BOOKING CAP: {"0": 3} = at most 3 of this service on a
+// Sunday. Same weekday-key shape as the maps above; a weekday absent is
+// UNLIMITED.
+//
+// 🔴 min(1), NOT min(0). The control this replaces (ServiceGroup.maxPerDay)
+// used 0 to mean "no cap", so accepting a 0 here would let that old habit
+// write a cap of ZERO and make the service unbookable. Unlimited is expressed
+// by omitting the key - the editor deletes it when the box is cleared.
+const dailyLimitsSchema = z
+  .record(z.enum(["0", "1", "2", "3", "4", "5", "6"]), z.number().int().min(1).max(1000))
+  .optional();
+
 // Per-weekday AVAILABLE-HOURS restriction: {weekday: [{s,e}]} where s/e are
 // minutes from shop-local midnight (e exclusive), e.g. {"1":[{"s":600,"e":840}]}
 // = "Mondays only 10:00-14:00". A weekday absent from the map is unrestricted; a
@@ -210,6 +222,7 @@ const serviceSchema = z
       .or(z.literal("")),
     durationMin: z.number().int().min(5).max(600),
     durationOverrides: durationOverridesSchema,
+    dailyLimits: dailyLimitsSchema,
     hoursWindows: hoursWindowsSchema,
     timeOverrides: timeOverridesSchema,
     price: z.number().min(0).max(100000).nullable().optional(),
@@ -251,6 +264,7 @@ bookingDashboardRouter.get("/services", async (req, res) => {
       priceOverrides: s.priceOverrides ?? {},
       dateOverrides: s.dateOverrides ?? {},
       durationOverrides: s.durationOverrides ?? {},
+      dailyLimits: s.dailyLimits ?? {},
       hoursWindows: s.hoursWindows ?? {},
       timeOverrides: s.timeOverrides ?? [],
       // Which group (if any) this service belongs to. null for every service on
@@ -280,6 +294,7 @@ bookingDashboardRouter.post("/services", async (req, res) => {
       // Per-weekday overrides ({} = base every day). Stored verbatim; the zod
       // schemas already constrained them to known weekday keys + valid values.
       durationOverrides: d.durationOverrides ?? {},
+      dailyLimits: d.dailyLimits ?? {},
       hoursWindows: d.hoursWindows ?? {},
       timeOverrides: d.timeOverrides ?? [],
       color: d.color ?? null,
@@ -332,6 +347,7 @@ bookingDashboardRouter.patch("/services/:id", async (req, res) => {
     ...(d.description !== undefined ? { description: d.description || null } : {}),
     ...(d.imageUrl !== undefined ? { imageUrl: d.imageUrl || null } : {}),
     ...(d.durationMin !== undefined ? { durationMin: d.durationMin } : {}),
+    ...(d.dailyLimits !== undefined ? { dailyLimits: d.dailyLimits } : {}),
     ...(d.durationOverrides !== undefined
       ? { durationOverrides: d.durationOverrides }
       : {}),
@@ -2224,6 +2240,12 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         startsAt,
         endsAt,
         bufferMin: shop.bookingBufferMin,
+        // The BARBER is adding this from their own calendar. A daily cap is a
+        // rule for the public booking page - it stops customers filling a
+        // Sunday, it does not stop the barber squeezing in a regular who
+        // walked up. Deliberately overridable, exactly like hours and blocked
+        // time already are from this screen.
+        serviceDayLimit: null,
       });
 
       // Resolve the client: an existing one, or create inline from the name.
@@ -2496,6 +2518,8 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
         endsAt,
         bufferMin: shop.bookingBufferMin,
         excludeAppointmentId: appt.id,
+        // Barber-driven move: overridable, same as the dashboard create above.
+        serviceDayLimit: null,
       });
       // Send-state is reset so the moved booking gets a fresh confirmation and
       // fresh reminders - including the PUSH stamps, or a moved appointment
@@ -3311,6 +3335,12 @@ bookingDashboardRouter.post("/appointments/:id/approve", async (req, res) => {
         bufferMin: shop.bookingBufferMin,
         excludeAppointmentId: appt.id,
         statuses: ["BOOKED"],
+        // Approving a request must NOT re-check the cap. The PENDING row has
+        // counted against its day since the moment the customer submitted it
+        // (PENDING consumes capacity - see serviceDailyLimit.ts), so checking
+        // again here would make the barber unable to approve the very last
+        // request the cap allowed.
+        serviceDayLimit: null,
       });
 
       await tx.appointment.update({

@@ -1297,6 +1297,27 @@ model Service {
   // [] (every existing service) = no windows, byte-for-byte prior behavior.
   // See engines/pricing.ts (parseTimeWindows / effective*At).
   timeOverrides  Json     @default("[]")
+  // Per-weekday HARD CAP on how many of this service may be booked on one
+  // SHOP-LOCAL day: {"0": 3, "6": 8} = at most 3 on Sundays, 8 on Saturdays.
+  // Tri-state by KEY PRESENCE, exactly like priceOverrides/durationOverrides:
+  //   - weekday absent  => UNLIMITED. The default; every existing service is {}
+  //     so nothing changes for them.
+  //   - present, n >= 1 => at most n bookings that weekday, counted shop-wide
+  //     across every barber (the cap belongs to the SERVICE, not to a chair).
+  // A stored 0 is deliberately impossible (the API floor is 1). The control
+  // this replaces - ServiceGroup.maxPerDay - used 0 to MEAN unlimited in its
+  // editor, so a 0 arriving here would silently make a service unbookable
+  // forever. Blank in the UI clears the key rather than writing 0, and the
+  // migration that carried the group caps down skipped 0 for the same reason.
+  //
+  // Enforced on the CUSTOMER paths only (public booking, receptionist,
+  // gap-fill): read-side it removes that day's remaining slots, write-side it
+  // re-counts under an advisory lock keyed on (service, day) so two
+  // simultaneous bookings cannot both take the last one. A barber adding an
+  // appointment from their own dashboard deliberately overrides it, the same
+  // way they can already override hours and exceptions.
+  // See engines/serviceDailyLimit.ts.
+  dailyLimits    Json     @default("{}")
   // Calendar color-coding: one of the SERVICE_COLORS keys (packages/config), or
   // null for no color. Stored as the KEY (not hex) so the palette can be
   // re-tuned without a migration. Purely cosmetic - drives the accent stripe on

@@ -1,4 +1,5 @@
 import { Prisma } from "@chairback/db";
+import { assertServiceDayHasRoom } from "./serviceDailyLimit.js";
 
 /**
  * THE double-booking guard for every Appointment write. One implementation of
@@ -7,6 +8,9 @@ import { Prisma } from "@chairback/db";
  * series) and is now also used by the AI receptionist's hold/book tools.
  *
  * Protocol (must run INSIDE the caller's transaction):
+ *  0. The per-service daily cap, when the caller asks for it. Its own advisory
+ *     lock, taken BEFORE the staff lock so the two can never be acquired in
+ *     opposite orders by different writers. See engines/serviceDailyLimit.ts.
  *  1. pg_advisory_xact_lock keyed on the staff id serializes ALL concurrent
  *     grabs on that calendar (a bare overlap SELECT locks nothing when the
  *     slot is free, so two overlapping-but-different-start bookings could both
@@ -61,6 +65,23 @@ export async function lockStaffAndAssertSlotFree(
      */
     statuses?: readonly ("BOOKED" | "PENDING")[];
     /**
+     * Per-service daily cap (Service.dailyLimits), or null to deliberately
+     * NOT enforce it.
+     *
+     * REQUIRED, with no default, on purpose: it makes the compiler list every
+     * Appointment write in the codebase and forces each one to answer. An
+     * optional flag would let a new booking path silently skip a cap the
+     * barber set, which is the whole failure this guards.
+     *
+     * null belongs on the BARBER's own paths - the dashboard create, a
+     * recurring series they set up. A cap is a rule for customers; a barber
+     * squeezing in a fourth cut is deliberately overriding it, the same way
+     * they can already override hours and blocked time from that screen.
+     * Pass the object on anything a CUSTOMER drives: public booking, the
+     * receptionist, waitlist gap-fill.
+     */
+    serviceDayLimit: { serviceId: string; timezone: string } | null;
+    /**
      * Booking INTO a targeted slot: exclude that one slot's own block so the
      * claim doesn't conflict with itself, while any OTHER overlapping targeted
      * slot still blocks. Normal bookings omit this and are blocked by every
@@ -75,6 +96,38 @@ export async function lockStaffAndAssertSlotFree(
   const overlapStart = new Date(opts.startsAt.getTime() - bufferMs);
   const overlapEnd = new Date(opts.endsAt.getTime() + bufferMs);
   const statuses = opts.statuses ?? (["BOOKED", "PENDING"] as const);
+
+  // PER-SERVICE DAILY CAP - taken FIRST, before the staff lock.
+  //
+  // Two advisory locks in one transaction can deadlock if different writers
+  // take them in different orders, so the order is fixed here, in the one
+  // place every writer goes through: service-day, then staff. Never the
+  // reverse, anywhere.
+  //
+  // It has to be its own lock because the staff lock guards the wrong thing: a
+  // daily cap is contended across ALL barbers, so two chairs taking the last
+  // Sunday retwist simultaneously hold different staff locks and would both
+  // pass. Keyed on (service, shop-local day), the second writer waits, re-counts
+  // after the first commits, and correctly loses.
+  if (opts.serviceDayLimit) {
+    const svc = await tx.service.findFirst({
+      // shopId in the predicate: the caps are read under the same tenant
+      // scoping as every other service read.
+      where: { id: opts.serviceDayLimit.serviceId, shopId: opts.shopId },
+      select: { dailyLimits: true },
+    });
+    if (svc) {
+      await assertServiceDayHasRoom(tx, {
+        shopId: opts.shopId,
+        serviceId: opts.serviceDayLimit.serviceId,
+        dailyLimits: svc.dailyLimits,
+        timezone: opts.serviceDayLimit.timezone,
+        startsAt: opts.startsAt,
+        excludeAppointmentId: opts.excludeAppointmentId,
+        now,
+      });
+    }
+  }
 
   await tx.$executeRaw(
     Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`appt:${opts.staffId}`}))`,

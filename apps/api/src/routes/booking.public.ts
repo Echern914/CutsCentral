@@ -10,6 +10,7 @@ import {
   staffSpanBlocked,
 } from "../engines/blockedTime.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
+import { ServiceDayFullError } from "../engines/serviceDailyLimit.js";
 import { resolveAddOns } from "../engines/addOns.js";
 import {
   durationRangeForService,
@@ -1266,6 +1267,8 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {
         // Booking INTO a targeted slot: its own block must not conflict with
         // this claim (any OTHER overlapping targeted slot still does).
         targetedSlotIdToIgnore: targeted?.id,
+        // The public page IS the path the per-weekday cap exists for.
+        serviceDayLimit: { serviceId: d.serviceId, timezone: shop.timezone },
         now,
       });
 
@@ -1343,6 +1346,14 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {
     appointmentId = result.id;
     manageToken = result.manageToken;
   } catch (err) {
+    // The barber's cap for that weekday filled while this customer was on the
+    // page. Its own code, not slot_taken: the time itself may well still be
+    // free, so "pick another time today" would be wrong advice - the whole DAY
+    // is done for this service.
+    if (err instanceof ServiceDayFullError) {
+      res.status(409).json({ error: "day_full" });
+      return;
+    }
     if (err instanceof SlotTakenError) {
       res.status(409).json({ error: "slot_taken" });
       return;
@@ -1983,6 +1994,13 @@ bookingPublicRouter.post(
           endsAt,
           bufferMin: appt.shop.bookingBufferMin,
           excludeAppointmentId: appt.id,
+          // Moving INTO a day counts against that day. Its own row is
+          // excluded, so moving within the same day is always allowed even
+          // when that day is at the cap.
+          serviceDayLimit: {
+            serviceId: appt.serviceId,
+            timezone: appt.shop.timezone,
+          },
         });
         // Move it, reprice for the new date, and reset send-state so a fresh
         // confirmation/reminder go out - the PUSH reminder stamps too, or the
@@ -2007,6 +2025,10 @@ bookingPublicRouter.post(
         });
       });
     } catch (err) {
+      if (err instanceof ServiceDayFullError) {
+        res.status(409).json({ error: "day_full" });
+        return;
+      }
       if (
         err instanceof SlotTakenError ||
         (err instanceof Prisma.PrismaClientKnownRequestError &&
