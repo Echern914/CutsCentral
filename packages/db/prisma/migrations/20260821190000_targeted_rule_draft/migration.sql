@@ -1,0 +1,16 @@
+-- Draft targeted-slot series: duplicated but never published.
+--
+-- A duplicate must not produce public availability the instant it is made, so
+-- it is created active=false with ZERO materialized slots. But the dashboard
+-- lists rules WHERE active = true, so an inactive duplicate would be invisible
+-- - the barber would click Duplicate and watch nothing appear.
+--
+-- This column is what tells the two apart. active=false + draft=true means
+-- "never published, still editable, show it with a Draft badge"; active=false
+-- + draft=false stays what it always was: a series the barber turned off, kept
+-- out of the list deliberately.
+--
+-- Every existing rule is a real published one, hence DEFAULT false: no row
+-- changes meaning. Public paths and the roll-forward job filter on active and
+-- are unaffected.
+ALTER TABLE "TargetedSlotRule" ADD COLUMN "draft" BOOLEAN NOT NULL DEFAULT false;

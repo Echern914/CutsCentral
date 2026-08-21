@@ -2712,7 +2712,10 @@ bookingDashboardRouter.get("/targeted-slots", async (req, res) => {
     // Active rules drive the condensed series cards (and the finite ones give
     // a batch its group header + "Remove series").
     rules: await tx.targetedSlotRule.findMany({
-      where: { shopId: tsShopId, active: true },
+      // Drafts included: a duplicate the barber has not published yet must
+      // still be visible, or the copy they just made disappears. A series they
+      // turned OFF (active=false, draft=false) stays hidden as before.
+      where: { shopId: tsShopId, OR: [{ active: true }, { draft: true }] },
       orderBy: { createdAt: "asc" },
       select: {
         id: true,
@@ -2725,6 +2728,7 @@ bookingDashboardRouter.get("/targeted-slots", async (req, res) => {
         price: true,
         schedule: true,
         indefinite: true,
+        draft: true,
       },
     }),
   }));
@@ -2748,6 +2752,7 @@ bookingDashboardRouter.get("/targeted-slots", async (req, res) => {
         staffId: r.staffId,
         serviceId: r.serviceId,
         serviceIds: slotServiceIds(r),
+        draft: r.draft,
         label: r.label,
         schedule: effectiveSchedule(
           { anchor: r.anchor, schedule: r.schedule },
@@ -3018,6 +3023,134 @@ bookingDashboardRouter.post("/targeted-slots", async (req, res) => {
 // Turn a series off (indefinite) / remove a finite batch: deactivate the rule
 // and delete its FUTURE UNBOOKED rows in one tx. Booked and past rows survive
 // as history — same stance as the single-row delete's 409.
+/**
+ * Add " Copy" to a label without letting it grow past the 60-char column, and
+ * without producing "(no label) Copy" for an unlabelled slot.
+ */
+function copyLabel(label: string | null): string {
+  const base = (label ?? "").trim();
+  if (!base) return "Copy";
+  const withCopy = `${base} Copy`;
+  return withCopy.length <= 60 ? withCopy : `${base.slice(0, 55).trim()} Copy`;
+}
+
+/**
+ * DUPLICATE A SERIES. Same shape, new id, published NOTHING.
+ *
+ * 🔑 THE COPY MUST NOT CREATE AVAILABILITY. It is written active=false +
+ * draft=true and materializes ZERO slots, so the moment it exists it is
+ * invisible to every public path and to the roll-forward job. That is the
+ * whole safety property: duplicating a live nightly series must not silently
+ * double the barber's evenings.
+ *
+ * WHAT IS COPIED: label (+ " Copy"), staff, the whole eligible-service set,
+ * price, duration, the weekly schedule and its per-time overrides, and the
+ * indefinite flag.
+ *
+ * WHAT IS NOT: bookings, clients, the slot rows themselves, weeksMaterialized
+ * (reset to 0 - the copy has published no weeks), and the original's id. The
+ * original is not touched at all.
+ */
+bookingDashboardRouter.post(
+  "/targeted-slots/rules/:id/duplicate",
+  async (req, res) => {
+    const shopId = req.shop!.id;
+    const db = forShop(shopId);
+    const src = await db.targetedSlotRule.findFirst({
+      where: { id: req.params.id },
+      select: {
+        id: true,
+        staffId: true,
+        serviceId: true,
+        services: { select: { serviceId: true } },
+        label: true,
+        anchor: true,
+        durationMin: true,
+        price: true,
+        schedule: true,
+        indefinite: true,
+      },
+    });
+    if (!src) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    const copy = await db.targetedSlotRule.create({
+      data: {
+        staffId: src.staffId,
+        serviceId: src.serviceId,
+        label: copyLabel(src.label),
+        anchor: src.anchor,
+        durationMin: src.durationMin,
+        price: src.price as never,
+        schedule: src.schedule as never,
+        indefinite: src.indefinite,
+        // Never published: no availability, no roll-forward, zero weeks.
+        active: false,
+        draft: true,
+        weeksMaterialized: 0,
+        services: {
+          create: slotServiceIds(src).map((sid) => ({ shopId, serviceId: sid })),
+        },
+      },
+    });
+    res.status(201).json({ ok: true, ruleId: copy.id, draft: true });
+  },
+);
+
+/**
+ * DUPLICATE A ONE-OFF SLOT. Same rules as a series: new id, inactive, and it
+ * carries none of the original's booking.
+ *
+ * A one-off needs no draft flag - the dashboard's slot list is not filtered by
+ * active, so an inactive row is already visible with its own state, while every
+ * public path filters active=true and therefore cannot see it.
+ */
+bookingDashboardRouter.post("/targeted-slots/:id/duplicate", async (req, res) => {
+  const shopId = req.shop!.id;
+  const db = forShop(shopId);
+  const src = await db.targetedSlot.findFirst({
+    where: { id: req.params.id },
+    select: {
+      id: true,
+      staffId: true,
+      serviceId: true,
+      services: { select: { serviceId: true } },
+      label: true,
+      startsAt: true,
+      durationMin: true,
+      price: true,
+    },
+  });
+  if (!src) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const copy = await db.targetedSlot.create({
+    data: {
+      staffId: src.staffId,
+      serviceId: src.serviceId,
+      label: copyLabel(src.label),
+      startsAt: src.startsAt,
+      durationMin: src.durationMin,
+      price: src.price as never,
+      // Inactive: no public availability until the barber turns it on. And
+      // deliberately NOT carrying bookedAppointmentId or ruleId - the copy owns
+      // no booking and belongs to no series.
+      active: false,
+    },
+  });
+  await db.targetedSlotService.createMany({
+    data: slotServiceIds(src).map((sid) => ({
+      shopId,
+      slotId: copy.id,
+      serviceId: sid,
+    })),
+    skipDuplicates: true,
+  });
+  res.status(201).json({ ok: true, slotId: copy.id, active: false });
+});
+
 bookingDashboardRouter.delete("/targeted-slots/rules/:id", async (req, res) => {
   const shopId = req.shop!.id;
   const ruleId = req.params.id!;
@@ -3126,8 +3259,15 @@ bookingDashboardRouter.patch("/targeted-slots/rules/:id", async (req, res) => {
   }
 
   const result = await runWithShop(shopId, async (tx) => {
+    // A DRAFT IS active=false, so an active-only lookup would 404 the very
+    // duplicate this editor exists to publish. A series the barber turned OFF
+    // stays unreachable here, which is the existing behaviour.
     const rule = await tx.targetedSlotRule.findFirst({
-      where: { shopId, id: req.params.id!, active: true },
+      where: {
+        shopId,
+        id: req.params.id!,
+        OR: [{ active: true }, { draft: true }],
+      },
     });
     if (!rule) return null;
 
@@ -3136,9 +3276,20 @@ bookingDashboardRouter.patch("/targeted-slots/rules/:id", async (req, res) => {
     const price = p.price ?? rule.price;
     const scheduleJson = (newSchedule ?? rule.schedule) as never;
 
+    // SAVING A DRAFT PUBLISHES IT. A duplicate exists precisely so the barber
+    // can review it and say yes; the Save button on a draft reads "Publish".
+    // Everything below then materializes its first rows for real - which is
+    // why the copy shipped with none. A rule that is already live is
+    // unaffected (draft is false, active stays whatever it was).
     await tx.targetedSlotRule.updateMany({
       where: { shopId, id: rule.id },
-      data: { label, durationMin, price, schedule: scheduleJson },
+      data: {
+        label,
+        durationMin,
+        price,
+        schedule: scheduleJson,
+        ...(rule.draft ? { draft: false, active: true } : {}),
+      },
     });
 
     // Booked future rows hold their instants: the regeneration below must not
