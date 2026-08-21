@@ -70,6 +70,7 @@ import {
   MinutesNumberField,
   MoneyField,
 } from "@/components/ui/UnitField";
+import { TargetedSlotCard } from "./TargetedSlotCard";
 import {
   MIN_SERVICE_MINUTES,
   parseDuration,
@@ -1682,6 +1683,8 @@ function TargetedSlotsManager({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // Which series cards are expanded to their individual dates.
   const [openRules, setOpenRules] = useState<Set<string>>(new Set());
+  // Same for one-off slots: collapsed by default, details on request.
+  const [openSlotIds, setOpenSlotIds] = useState<Set<string>>(new Set());
   // Series being edited: the publish form becomes its edit form (Drick's
   // barber: "No way to edit Targeted Slots" - the only verbs were turn off and
   // remove, so a wrong time meant retyping the whole schedule).
@@ -2174,48 +2177,35 @@ function TargetedSlotsManager({
           const next = ruleSlots[0];
           const isOpen = openRules.has(rule.id);
           return (
-            <li key={`rule-${rule.id}`} className="rounded-xl border border-subtle">
-              <div className="flex items-center justify-between gap-3 px-4 py-2.5">
-                <button
-                  onClick={() =>
-                    setOpenRules((cur) => {
-                      const nextSet = new Set(cur);
-                      if (nextSet.has(rule.id)) nextSet.delete(rule.id);
-                      else nextSet.add(rule.id);
-                      return nextSet;
-                    })
-                  }
-                  aria-expanded={isOpen}
-                  className="flex-1 text-left"
-                >
-                  <span className="text-sm">
-                    {scheduleSummary(rule.schedule, rule.durationMin)}{" "}
-                    <span className="text-xs text-muted">
-                      · {nameOf(services, rule.serviceId)} ·{" "}
-                      {nameOf(staff, rule.staffId)}
-                      {/* The base length is only worth stating when some time
-                          still USES it. Once every window carries its own, the
-                          summary above already spells each one out and this
-                          would contradict it ("45 min" beside a 9-10 PM slot). */}
-                      {everyTimeHasOwnDuration(rule.schedule)
-                        ? ""
-                        : ` · ${rule.durationMin} min`}{" "}
-                      · ${rule.price.toFixed(0)}
-                      {rule.label ? ` · ${rule.label}` : ""}
-                    </span>
-                  </span>
-                  <span className="mt-0.5 block text-[11px] text-muted">
-                    {rule.indefinite
-                      ? "Repeats weekly until turned off"
-                      : `${ruleSlots.length} upcoming date${ruleSlots.length === 1 ? "" : "s"}`}
-                    {" · "}
-                    {openCount} open
-                    {bookedCount > 0 ? ` · ${bookedCount} booked` : ""}
-                    {next ? ` · next ${whenFmt.format(new Date(next.startsAt))}` : ""}{" "}
-                    {isOpen ? "▴" : "▾"}
-                  </span>
-                </button>
-                <span className="flex shrink-0 items-center gap-3">
+            <TargetedSlotCard
+              key={`rule-${rule.id}`}
+              // The barber's own name for it if they gave one; otherwise the
+              // service, which is the next most recognisable thing. Never the
+              // schedule string - "Fri 9:00 PM, 45 min" is what you expand to
+              // find out, not what you scan the list by.
+              title={rule.label?.trim() || nameOf(services, rule.serviceId)}
+              subtitle={
+                next
+                  ? `Next ${whenFmt.format(new Date(next.startsAt))}`
+                  : rule.indefinite
+                    ? "Repeats weekly"
+                    : "No upcoming dates"
+              }
+              status={{
+                label: rule.indefinite ? "On" : `${openCount} open`,
+                tone: openCount > 0 || rule.indefinite ? "open" : "muted",
+              }}
+              open={isOpen}
+              onToggle={() =>
+                setOpenRules((cur) => {
+                  const nextSet = new Set(cur);
+                  if (nextSet.has(rule.id)) nextSet.delete(rule.id);
+                  else nextSet.add(rule.id);
+                  return nextSet;
+                })
+              }
+              actions={
+                <>
                   <button
                     onClick={() => beginEditRule(rule)}
                     disabled={pending}
@@ -2230,17 +2220,37 @@ function TargetedSlotsManager({
                   >
                     {rule.indefinite ? "Turn off" : "Remove series"}
                   </button>
-                </span>
-              </div>
-              {isOpen && (
-                <ul className="flex flex-col gap-1 border-t border-subtle px-4 py-2">
-                  {ruleSlots.map((t) => slotRow(t))}
-                  {ruleSlots.length === 0 && (
-                    <li className="text-xs text-muted">No upcoming dates.</li>
-                  )}
-                </ul>
-              )}
-            </li>
+                </>
+              }
+            >
+              {/* Everything that used to be printed on the collapsed line. */}
+              <p className="text-xs text-muted">
+                {scheduleSummary(rule.schedule, rule.durationMin)} ·{" "}
+                {nameOf(services, rule.serviceId)} · {nameOf(staff, rule.staffId)}
+                {/* The base length is only worth stating when some time still
+                    USES it. Once every window carries its own, the summary
+                    already spells each one out and this would contradict it
+                    ("45 min" beside a 9-10 PM slot). */}
+                {everyTimeHasOwnDuration(rule.schedule)
+                  ? ""
+                  : ` · ${rule.durationMin} min`}{" "}
+                · ${rule.price.toFixed(0)}
+              </p>
+              <p className="mt-1 text-[11px] text-muted">
+                {rule.indefinite
+                  ? "Repeats weekly until turned off"
+                  : `${ruleSlots.length} upcoming date${ruleSlots.length === 1 ? "" : "s"}`}
+                {" · "}
+                {openCount} open
+                {bookedCount > 0 ? ` · ${bookedCount} booked` : ""}
+              </p>
+              <ul className="mt-2 flex flex-col gap-1">
+                {ruleSlots.map((t) => slotRow(t))}
+                {ruleSlots.length === 0 && (
+                  <li className="text-xs text-muted">No upcoming dates.</li>
+                )}
+              </ul>
+            </TargetedSlotCard>
           );
         })}
         {/* One-off slots (and booked leftovers of turned-off series). */}
@@ -2258,44 +2268,59 @@ function TargetedSlotsManager({
    *  Unbooked rows expand to an inline editor (move / re-length / reprice). */
   function slotRow(t: TargetedSlotRow) {
     const isEditing = editingSlotId === t.id;
+    // Editing forces the card open: the editor lives in the panel, so an Edit
+    // that left the card collapsed would put the fields somewhere nobody can
+    // see them.
+    const isOpen = openSlotIds.has(t.id) || isEditing;
+    const when = whenFmt.format(new Date(t.startsAt));
     return (
-      <li
+      <TargetedSlotCard
         key={t.id}
-        className="flex flex-col gap-2 rounded-xl border border-subtle px-4 py-2.5"
-      >
-        <span className="flex items-center justify-between gap-3">
-          <span className="flex items-center gap-3 text-sm">
-            {!t.booked && (
-              <input
-                type="checkbox"
-                checked={selected.has(t.id)}
-                onChange={() => toggleSelected(t.id)}
-                aria-label={`Select ${whenFmt.format(new Date(t.startsAt))}`}
-              />
-            )}
-            <span>
-              {whenFmt.format(new Date(t.startsAt))}{" "}
-              <span className="text-xs text-muted">
-                · {nameOf(services, t.serviceId)} · {nameOf(staff, t.staffId)} ·{" "}
-                {t.durationMin} min · ${t.price.toFixed(0)}
-                {t.label ? ` · ${t.label}` : ""}
-              </span>{" "}
-              <span
-                className={cn(
-                  "ml-1 rounded-full px-2 py-0.5 text-[10px] font-medium",
-                  t.booked
-                    ? "bg-emerald-soft/15 text-emerald-soft"
-                    : "bg-gold/15 text-gold",
-                )}
-              >
-                {t.booked ? "Booked" : "Open"}
-              </span>
-            </span>
-          </span>
-          {!t.booked && (
-            <span className="flex shrink-0 items-center gap-3">
+        // Same rule as the series card: the barber's own name for it, falling
+        // back to the service. "AFTER HOUR HAIRCUT" is what they scan for.
+        title={t.label?.trim() || nameOf(services, t.serviceId)}
+        subtitle={when}
+        status={{
+          label: t.booked ? "Booked" : "Open",
+          tone: t.booked ? "booked" : "open",
+        }}
+        open={isOpen}
+        onToggle={() => {
+          setOpenSlotIds((cur) => {
+            const next = new Set(cur);
+            if (next.has(t.id)) next.delete(t.id);
+            else next.add(t.id);
+            return next;
+          });
+          // Collapsing while the editor is open closes the editor too, rather
+          // than leaving an invisible half-finished edit armed.
+          if (isEditing) setEditingSlotId(null);
+        }}
+        leading={
+          !t.booked ? (
+            // OUTSIDE the disclosure button: a checkbox inside a button is
+            // invalid, and ticking it would toggle the card.
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={selected.has(t.id)}
+              onChange={() => toggleSelected(t.id)}
+              aria-label={`Select ${when}`}
+            />
+          ) : undefined
+        }
+        actions={
+          !t.booked ? (
+            <>
               <button
-                onClick={() => (isEditing ? setEditingSlotId(null) : beginEditSlot(t))}
+                onClick={() => {
+                  if (isEditing) {
+                    setEditingSlotId(null);
+                  } else {
+                    beginEditSlot(t);
+                    setOpenSlotIds((cur) => new Set(cur).add(t.id));
+                  }
+                }}
                 className="text-xs text-gold hover:underline"
               >
                 {isEditing ? "Close" : "Edit"}
@@ -2306,11 +2331,16 @@ function TargetedSlotsManager({
               >
                 Remove
               </button>
-            </span>
-          )}
-        </span>
+            </>
+          ) : undefined
+        }
+      >
+        <p className="text-xs text-muted">
+          {nameOf(services, t.serviceId)} · {nameOf(staff, t.staffId)} ·{" "}
+          {t.durationMin} min · ${t.price.toFixed(0)}
+        </p>
         {isEditing && (
-          <span className="flex flex-wrap items-center gap-2">
+          <div className="mt-2 flex flex-wrap items-end gap-2">
             {/* This row had NO labels at all - three bare boxes holding a
                 date, a number and a number. The units now sit in the boxes and
                 the labels sit above them, at the row's smaller type scale. */}
@@ -2345,9 +2375,9 @@ function TargetedSlotsManager({
             >
               Save
             </button>
-          </span>
+          </div>
         )}
-      </li>
+      </TargetedSlotCard>
     );
   }
 }
