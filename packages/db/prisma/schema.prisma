@@ -448,6 +448,8 @@ model Shop {
   notifyPrefs            BarberNotifyPref[]
   targetedSlots          TargetedSlot[]
   targetedSlotRules      TargetedSlotRule[]
+  targetedSlotServices     TargetedSlotService[]
+  targetedSlotRuleServices TargetedSlotRuleService[]
   payments               Payment[]
 
   // Team: who else can sign in to this shop, and outstanding invites.
@@ -1365,6 +1367,9 @@ model Service {
   recurringSeries RecurringSeries[]
   targetedSlots   TargetedSlot[]
   targetedSlotRules TargetedSlotRule[]
+  // Slots/series offered under this service via the multi-service join.
+  targetedSlotServices     TargetedSlotService[]
+  targetedSlotRuleServices TargetedSlotRuleService[]
   serviceGoals    ServiceGoal[]
   serviceGroup    ServiceGroup? @relation(fields: [serviceGroupId], references: [id], onDelete: SetNull)
 
@@ -1638,9 +1643,22 @@ model TargetedSlot {
   shop        Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
   staffId     String
   staff       Staff    @relation(fields: [staffId], references: [id], onDelete: Cascade)
-  // The parent category the slot is listed under.
+  // The FIRST service this slot is listed under, kept denormalized so the
+  // column and its index stay valid. 🔑 NOT AUTHORITATIVE: `services` below is.
+  // A slot can be offered under several services at once ("this 8:30 PM hour is
+  // available as a retwist OR a lineup"), and reading serviceId would show it
+  // under only one of them. Retained rather than dropped so the pre-multi value
+  // stays recoverable, the same call made when hours moved off ServiceGroup.
   serviceId   String
   service     Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  // Every service this ONE physical slot is offered under.
+  //
+  // 🔑 THE WHOLE POINT IS THAT THERE IS STILL ONE ROW. Capacity lives on this
+  // row (bookedAppointmentId is unique), so booking the slot as ANY of its
+  // services consumes it for all of them - shared capacity comes free, and
+  // there is exactly one availability record per physical appointment time.
+  // Materializing one slot per service would double-book the barber.
+  services    TargetedSlotService[]
   label       String? // "Late night retwist", "Model rate"
   startsAt    DateTime
   durationMin Int
@@ -1675,14 +1693,52 @@ model TargetedSlot {
 // exist, so the roll-forward is idempotent (extend-only, never re-create).
 // Turning a series off deactivates the rule and deletes its future UNBOOKED
 // rows; booked ones are history.
+// Which services one targeted SLOT is offered under. See TargetedSlot.services.
+model TargetedSlotService {
+  id        String       @id @default(cuid())
+  shopId    String
+  shop      Shop         @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  slotId    String
+  slot      TargetedSlot @relation(fields: [slotId], references: [id], onDelete: Cascade)
+  serviceId String
+  service   Service      @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  createdAt DateTime     @default(now())
+
+  // One listing per (slot, service): re-saving the same set is idempotent and
+  // a slot can never appear twice under one service.
+  @@unique([slotId, serviceId])
+  // The public picker asks "which slots does THIS service offer today".
+  @@index([shopId, serviceId])
+}
+
+// Which services a targeted SERIES is offered under. Copied onto every slot the
+// rule materializes, so a mid-series edit changes future weeks only.
+model TargetedSlotRuleService {
+  id        String           @id @default(cuid())
+  shopId    String
+  shop      Shop             @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  ruleId    String
+  rule      TargetedSlotRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  serviceId String
+  service   Service          @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  createdAt DateTime         @default(now())
+
+  @@unique([ruleId, serviceId])
+  @@index([shopId, serviceId])
+}
+
 model TargetedSlotRule {
   id          String   @id @default(cuid())
   shopId      String
   shop        Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
   staffId     String
   staff       Staff    @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  // Denormalized first service - see the twin note on TargetedSlot. The
+  // `services` set below is authoritative and is what each materialized slot
+  // copies.
   serviceId   String
   service     Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  services    TargetedSlotRuleService[]
   label       String?
   // First occurrence (UTC instant). Also the start of "week 0" - the series
   // never materializes anything before it.
