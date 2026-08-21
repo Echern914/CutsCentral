@@ -1032,6 +1032,13 @@ export function forShop(shopId: string) {
             where: scopeWhere(args.where, shopId),
           }),
         ),
+      findFirst: (args: Prisma.TargetedSlotRuleFindFirstArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.targetedSlotRule.findFirst({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
       create: (args: { data: TargetedSlotRuleCreateNoShop }) =>
         runWithShop(shopId, (tx) =>
           tx.targetedSlotRule.create({

@@ -1756,6 +1756,17 @@ model TargetedSlotRule {
   // true = repeats until turned off; false = a finite batch (grouping only).
   indefinite  Boolean  @default(false)
   active      Boolean  @default(true) // false = turned off; no further roll-forward
+  // NEVER PUBLISHED. A duplicate starts here: it exists so the barber can edit
+  // it, but it has materialized no slots and must not until they say so.
+  //
+  // 🔑 DISTINCT FROM active=false. Both keep a series off the public page, but
+  // they are opposite intents: a turned-OFF series was live and the barber
+  // stopped it (and stays hidden from the list on purpose), while a DRAFT was
+  // never live and has to stay visible or the copy the barber just made would
+  // vanish the moment they navigated away. A draft is always active=false too,
+  // so every public path and the roll-forward job already exclude it without
+  // knowing this column exists.
+  draft       Boolean  @default(false)
   weeksMaterialized Int @default(0) // weeks created so far (k = 0..n-1)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
