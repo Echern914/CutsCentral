@@ -36,10 +36,15 @@ export interface QuotaShop extends BillingShop {
   plan: string;
   receptionistCompAccess: boolean;
   receptionistSubscriptionStatus: string;
+  // A shop mid-AI-trial gets the Premium AI allowance for the window: the
+  // receptionist is the thing eating texts, so trialling it on 600 would
+  // hit the wall halfway through and demo the cap instead of the feature.
+  aiTrialEndsAt: Date | null;
 }
 
 const QUOTA_SHOP_SELECT = {
   plan: true,
+  aiTrialEndsAt: true,
   subscriptionStatus: true,
   trialEndsAt: true,
   compAccess: true,

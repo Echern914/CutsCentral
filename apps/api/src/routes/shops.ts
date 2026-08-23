@@ -908,6 +908,7 @@ function serializeShop(shop: {
   receptionistEnabled: boolean;
   receptionistTone: string | null;
   receptionistTermsAcceptedAt: Date | null;
+  aiTrialEndsAt: Date | null;
   receptionistSubscriptionStatus: string;
   receptionistCompAccess: boolean;
   twilioNumber: string | null;

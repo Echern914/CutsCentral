@@ -57,6 +57,7 @@ const GATE_SELECT = {
   timezone: true,
   bookingMode: true,
   plan: true,
+  aiTrialEndsAt: true,
   receptionistEnabled: true,
   receptionistSubscriptionStatus: true,
   receptionistCompAccess: true,

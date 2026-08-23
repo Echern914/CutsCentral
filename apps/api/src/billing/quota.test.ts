@@ -70,6 +70,7 @@ const base = {
   compAccess: false,
   receptionistCompAccess: false,
   receptionistSubscriptionStatus: "none",
+  aiTrialEndsAt: null,
 };
 
 describe("monthlySmsQuotaFor (pure)", () => {

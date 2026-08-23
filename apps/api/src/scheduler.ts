@@ -18,6 +18,7 @@ import { runSquareResync } from "./engines/squareResync.js";
 import { rollForwardTargetedRules } from "./engines/targetedSlotRules.js";
 import { runAcuityResync } from "./engines/acuityResync.js";
 import { runTrialReminders } from "./engines/trialReminder.js";
+import { runAiTrialReminders } from "./engines/aiTrialReminder.js";
 import { autoCloseIdleConversations } from "./receptionist/conversation.js";
 import { sweepExpiredHolds } from "./engines/holdSweep.js";
 import { sweepExpiredRateCounters } from "./middleware/pgRateStore.js";
@@ -226,6 +227,17 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
     ttlMs: 10 * MINUTE,
     run: () => runTrialReminders(),
     failMsg: "trial reminder sweep failed",
+  },
+  // The 14-day Premium AI trial's own ladder, 20 minutes after the signup-trial
+  // sweep so the two never contend for the same mailbox in one minute. Shares
+  // trialStageAt() and the same compare-and-set, and is likewise a hard no-op
+  // until billing and email are both configured.
+  {
+    cronExpr: "20 14 * * *",
+    name: "ai-trial-reminders",
+    ttlMs: 10 * MINUTE,
+    run: () => runAiTrialReminders(),
+    failMsg: "ai trial reminder sweep failed",
   },
   // AI receptionist: close conversation threads idle >24h (hourly) so a
   // months-later text starts fresh instead of resuming a stale thread.

@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { prisma } from "@chairback/db";
 import { BILLING, PLANS } from "@chairback/config";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
@@ -20,7 +21,13 @@ import {
   monthlySmsQuotaFor,
   monthlySmsUsed,
 } from "../billing/quota.js";
-import { hasReceptionistEntitlement } from "../receptionist/config.js";
+import {
+  AI_TRIAL_DAYS,
+  aiTrialActive,
+  aiTrialAvailability,
+  aiTrialDaysLeft,
+  hasReceptionistEntitlement,
+} from "../receptionist/config.js";
 
 export const billingRouter: Router = Router();
 billingRouter.use(requireUser, requireShop, requireManager);
@@ -67,7 +74,49 @@ billingRouter.get("/", async (req, res) => {
       entitled: hasReceptionistEntitlement(shop),
       included: shop.plan === "pro_ai",
     },
+    // The 14-day free run at Premium AI, offered once to a paying Premium
+    // shop. `available` is what the button keys on; the shop pays nothing for
+    // the window and drops back to Premium at the end unless it upgrades.
+    aiTrial: {
+      days: AI_TRIAL_DAYS,
+      active: aiTrialActive(shop),
+      endsAt: shop.aiTrialEndsAt?.toISOString() ?? null,
+      daysLeft: aiTrialDaysLeft(shop),
+      used: shop.aiTrialStartedAt !== null,
+      available: aiTrialAvailability(shop) === null,
+    },
   });
+});
+
+/**
+ * Start the 14-day Premium AI trial. No Stripe call, no card, no proration -
+ * the shop keeps paying its Premium price and simply gets the entitlement for
+ * a dated window. Keeping it afterwards is the ordinary POST /upgrade.
+ */
+billingRouter.post("/ai-trial", async (req, res) => {
+  const reason = aiTrialAvailability(req.shop!);
+  if (reason) {
+    res.status(409).json({ error: reason });
+    return;
+  }
+  const endsAt = new Date(Date.now() + AI_TRIAL_DAYS * 86_400_000);
+  // Conditional on aiTrialStartedAt still being null, so two taps (or two
+  // tabs) cannot both start a trial and hand out 28 days.
+  const claimed = await prisma.shop.updateMany({
+    where: { id: req.shop!.id, aiTrialStartedAt: null },
+    data: { aiTrialStartedAt: new Date(), aiTrialEndsAt: endsAt, aiTrialReminderStage: 0 },
+  });
+  if (claimed.count === 0) {
+    res.status(409).json({ error: "ai_trial_used" });
+    return;
+  }
+  // 🔑 No ensureShopNumber here, unlike the pro_ai activation path. A number is
+  // a real ~$1.15/mo purchase against a 49-slot A2P campaign cap, and the
+  // receptionist works without one: routing falls back to known-client
+  // phone-match on the shared line, which is how every Premium shop's texts
+  // already flow. Converting to pro_ai provisions the number through the
+  // existing webhook. A trial must not be able to exhaust the campaign.
+  res.json({ ok: true, endsAt: endsAt.toISOString(), days: AI_TRIAL_DAYS });
 });
 
 // Start a hosted Checkout for the AI-receptionist ADD-ON -> { url }.
