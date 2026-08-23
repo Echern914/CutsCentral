@@ -346,6 +346,25 @@ model Shop {
   // the settings route when receptionistEnabled is first turned on; enabling is
   // REJECTED without it. null = never accepted.
   receptionistTermsAcceptedAt DateTime?
+
+  // A Premium shop's 14-day free run at Premium AI.
+  //
+  // 🔑 APP-LEVEL ONLY - there is deliberately NO Stripe call. The shop keeps
+  // paying its $34.99 throughout, so there is no proration to compute, no
+  // refund surface, and nothing to unwind if they walk away. It mirrors how
+  // the signup trial already grants access with no subscription at all.
+  //
+  // plan stays "pro" for the whole window: the entitlement comes from
+  // aiTrialEndsAt, never from the plan string. At the end they simply drop
+  // back to Premium; keeping it is the ordinary POST /api/billing/upgrade.
+  //
+  // aiTrialStartedAt is the used-once marker. It is NOT nulled when the trial
+  // ends, so a shop cannot take a second one by letting the first lapse.
+  aiTrialStartedAt DateTime?
+  aiTrialEndsAt    DateTime?
+  // 0=none, 1=week left, 2=tomorrow, 3=ended. Same ladder and the same
+  // compare-and-set-before-send discipline as trialReminderStage.
+  aiTrialReminderStage Int @default(0)
   // The shop's OWN Twilio number (E.164), bought under the platform's verified
   // A2P campaign. When set: inbound texts TO this number pin routing to this
   // shop (no client-phone guessing - the structural fix for wrong-shop routing

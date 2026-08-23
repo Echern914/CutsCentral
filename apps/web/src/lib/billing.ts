@@ -23,6 +23,15 @@ export interface BillingSummary {
   canManage: boolean;
   smsUsage: { used: number; quota: number | null; resetsAt: string };
   premiumAi: { billingEnabled: boolean; priceMonthlyUsd: number };
+  /** The once-only 14-day free run at Premium AI, for a paying Premium shop. */
+  aiTrial: {
+    days: number;
+    active: boolean;
+    endsAt: string | null;
+    daysLeft: number | null;
+    used: boolean;
+    available: boolean;
+  };
   receptionist: {
     billingEnabled: boolean;
     subscriptionStatus: string;

@@ -39,6 +39,26 @@ export async function upgradeAction(): Promise<{ error?: string }> {
   };
 }
 
+/**
+ * Start the 14-day free run at Premium AI. No card, no charge, no Stripe call
+ * at all - the shop keeps paying its Premium price and simply gets the
+ * entitlement for a dated window.
+ */
+export async function startAiTrialAction(): Promise<{ error?: string }> {
+  const res = await apiSend<{ ok: boolean }>("POST", "/api/billing/ai-trial");
+  if (res.ok) redirect("/dashboard/billing?ai_trial=started");
+  return {
+    error:
+      res.error === "ai_trial_used"
+        ? "You've already had the free trial of the AI receptionist."
+        : res.error === "already_entitled"
+          ? "You already have the AI receptionist."
+          : res.error === "no_subscription"
+            ? "The free trial is for shops on a paid Premium plan."
+            : "Could not start the trial. Try again in a moment.",
+  };
+}
+
 /** Hosted Checkout for the $40/mo receptionist add-on (Premium shops). */
 export async function receptionistCheckoutAction(): Promise<{ error?: string }> {
   const res = await apiSend<{ url: string }>(

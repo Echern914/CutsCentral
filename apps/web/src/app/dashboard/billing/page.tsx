@@ -12,6 +12,7 @@ import {
   ManageBillingButton,
   ReceptionistAddonButton,
   UpgradeButton,
+  StartAiTrialButton,
   UpgradeToPremiumAiButton,
 } from "./BillingActions";
 import { ReceptionistControls } from "./ReceptionistControls";
@@ -512,12 +513,32 @@ export default async function BillingPage({
                   )}
                   {!b.compAccess && (
                     <div className="mt-3">
+                      {/* Mid-trial: say what happens at the end, plainly. The
+                          shop is already paying us, so a surprise switch-off
+                          reads as the product breaking, not a trial ending. */}
+                      {b.aiTrial.active && (
+                        <p className="mb-3 text-xs text-gold">
+                          Free trial — {b.aiTrial.daysLeft} day
+                          {b.aiTrial.daysLeft === 1 ? "" : "s"} left. You
+                          won&apos;t be charged; it just switches off unless you
+                          keep it.
+                        </p>
+                      )}
+                      {/* Try-before-buy comes FIRST: offering the paid upgrade
+                          to someone who could have it free for 14 days would be
+                          a bad trade for them and a worse one for us. */}
+                      {b.aiTrial.available && b.premiumAi.billingEnabled && (
+                        <StartAiTrialButton
+                          label={`Try it free for ${b.aiTrial.days} days`}
+                        />
+                      )}
                       {b.plan !== "pro_ai" &&
                         b.subscribed &&
                         !b.receptionist.entitled &&
+                        !b.aiTrial.available &&
                         (b.premiumAi.billingEnabled ? (
                           <UpgradeToPremiumAiButton
-                            label={`Upgrade now — $${b.premiumAi.priceMonthlyUsd}/mo`}
+                            label={`${b.aiTrial.active ? "Keep it" : "Upgrade now"} — $${b.premiumAi.priceMonthlyUsd}/mo`}
                           />
                         ) : b.receptionist.billingEnabled ? (
                           <ReceptionistAddonButton label="Add the AI receptionist, $40/mo" />
