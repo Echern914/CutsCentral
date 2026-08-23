@@ -4,6 +4,7 @@ import { Prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 import { openMinutesForDay, shopLocalDays } from "../engines/utilization.js";
+import { requireActiveAccess } from "../middleware/billing.js";
 import {
   DAY_MS,
   PERIODS,
@@ -56,7 +57,7 @@ import {
  * still answers "what does a cut here go for". See ChairEvent.earned.
  */
 export const insightsRouter: Router = Router();
-insightsRouter.use(requireUser, requireShop, requireManager);
+insightsRouter.use(requireUser, requireShop, requireManager, requireActiveAccess);
 
 /** Every response echoes the window it measured, so no label can drift from it. */
 function periodMeta(p: ResolvedPeriod) {

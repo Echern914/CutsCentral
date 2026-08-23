@@ -23,44 +23,9 @@ export function PricingSection() {
                 <span className="text-gradient-gold">Upgrade when it pays for itself.</span>
               </>
             }
-            sub="Run a real loyalty program free forever. Add the texts that bring clients back whenever you're ready. One rebooked regular covers the month."
+            sub={`One plan, everything in it. Try the whole thing free for ${BILLING.trialDays} days — no card, nothing to cancel. One rebooked regular covers the month.`}
           />
-          <Reveal delay={0.1} className="mx-auto mt-12 grid max-w-6xl gap-6 md:grid-cols-3">
-            {/* Free */}
-            <div className="glass flex flex-col rounded-3xl p-8">
-              <p className="text-xs uppercase tracking-[0.25em] text-muted">
-                {PLANS.free.name}
-              </p>
-              <p className="mt-4 font-display text-5xl tracking-tight">
-                $0<span className="text-lg text-muted">/forever</span>
-              </p>
-              <p className="mt-2 text-sm text-muted">
-                Everything you need to run loyalty. No card, ever.
-              </p>
-              <ul className="mt-6 flex flex-1 flex-col gap-2.5 text-left text-sm text-offwhite">
-                {[
-                  "Digital punch cards & your loyalty menu",
-                  "Your branded rewards page & public mini-site",
-                  "Connect your own domain",
-                  "Client book, notes & CSV import/export",
-                  "One-tap visit logging, no booking app needed",
-                  "At-risk radar: see who's overdue",
-                  "Free web push notifications",
-                ].map((t) => (
-                  <li key={t} className="flex items-start gap-2.5">
-                    <CheckIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted" />
-                    {t}
-                  </li>
-                ))}
-              </ul>
-              <Link
-                href="/signup"
-                className="mt-7 rounded-full border border-subtle px-7 py-3 text-center text-sm font-medium text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
-              >
-                Get started free
-              </Link>
-            </div>
-
+          <Reveal delay={0.1} className="mx-auto mt-12 grid max-w-4xl gap-6 md:grid-cols-2">
             {/* Premium */}
             <div className="glass relative flex flex-col overflow-hidden rounded-3xl border border-gold/30 p-8">
               <div
@@ -80,12 +45,15 @@ export function PricingSection() {
                 <span className="text-lg text-muted">/month</span>
               </p>
               <p className="mt-2 text-sm text-muted">
-                Everything in Free, plus the part that brings clients back.{" "}
-                {BILLING.trialDays}-day free trial.
+                Everything ChairBack does, from day one.{" "}
+                {BILLING.trialDays}-day free trial, no card.
               </p>
               <ul className="mt-6 flex flex-1 flex-col gap-2.5 text-left text-sm text-offwhite">
                 {[
                   `${PLANS.pro.smsMonthlyQuota} texts a month included`,
+                  "Digital punch cards, rewards & your branded loyalty page",
+                  "Client book, notes & CSV import/export",
+                  "Your public mini-site on your own domain",
                   "Your own online booking page + confirmation & reminder texts and emails",
                   "Smart rebooking texts, timed per client",
                   "Win-back texts that recover lapsed clients",

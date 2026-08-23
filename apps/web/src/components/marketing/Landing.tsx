@@ -528,7 +528,7 @@ const FAQ: readonly { q: string; a: string; hasPrices?: boolean }[] = [
   },
   {
     q: "How much does it cost?",
-    a: `The loyalty program (punch cards, rewards page, public mini-site, client book) is free forever, no card required. Premium ($${PLANS.pro.priceMonthlyUsd}/month, ${PLANS.pro.smsMonthlyQuota} texts included) adds the texting that brings clients back: rebooking nudges, promo blasts, and auto-sync with Acuity or Square. Premium AI ($${PLANS.pro_ai.priceMonthlyUsd}/month, ${PLANS.pro_ai.smsMonthlyQuota.toLocaleString()} texts included) adds an AI receptionist that answers client texts and books appointments 24/7. Every new shop gets a ${BILLING.trialDays}-day full Premium trial, and one rebooked regular typically covers the month.`,
+    a: `ChairBack is one plan. Premium ($${PLANS.pro.priceMonthlyUsd}/month, ${PLANS.pro.smsMonthlyQuota} texts included) adds the texting that brings clients back: rebooking nudges, promo blasts, and auto-sync with Acuity or Square. Premium AI ($${PLANS.pro_ai.priceMonthlyUsd}/month, ${PLANS.pro_ai.smsMonthlyQuota.toLocaleString()} texts included) adds an AI receptionist that answers client texts and books appointments 24/7. Every new shop gets a ${BILLING.trialDays}-day full Premium trial, and one rebooked regular typically covers the month.`,
     hasPrices: true,
   },
   {

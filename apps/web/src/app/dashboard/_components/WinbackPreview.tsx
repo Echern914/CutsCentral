@@ -50,7 +50,7 @@ export function WinbackPreview({
             </h2>
             <p className="text-xs text-muted">
               {premiumLocked
-                ? "These clients won't be texted on the Free plan — win-back runs automatically on Premium."
+                ? "These clients won't be texted while your plan is lapsed — win-back runs automatically once you subscribe."
                 : "Deeply lapsed clients ChairBack will automatically text back to the chair. Preview who's up next — no texts are sent here."}
             </p>
           </div>

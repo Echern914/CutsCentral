@@ -42,6 +42,7 @@ import { zonedDateParts, zonedWallTimeToUtc, localMinutesOfDay } from "@chairbac
 import { invalidateShopAvailabilityCaches } from "./booking.public.js";
 import { logger } from "../logger.js";
 
+import { requireActiveAccess } from "../middleware/billing.js";
 /**
  * Authenticated dashboard config for the native booking engine: the barber's
  * CRUD over staff, services, weekly availability, and the upcoming appointment
@@ -51,7 +52,7 @@ import { logger } from "../logger.js";
  * The public customer-facing booking lives in booking.public.ts.
  */
 export const bookingDashboardRouter: Router = Router();
-bookingDashboardRouter.use(requireUser, requireShop, requireManager);
+bookingDashboardRouter.use(requireUser, requireShop, requireManager, requireActiveAccess);
 
 /**
  * Any successful mutation here can change what the public booking page offers

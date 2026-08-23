@@ -279,8 +279,19 @@ describe("stripe webhook + event folding", () => {
   });
 });
 
-describe("402 gate once the trial lapses", () => {
-  it("blocks manual nudges, real sweeps, and bulk texting; keeps the rest open", async () => {
+describe("the wall, once the trial lapses", () => {
+  it("stops the product but never the shop's own client book", async () => {
+    // Created BEFORE lapsing on purpose: writing a client is the product
+    // working, and under one plan that is walled too. This is the assertion
+    // that changed when the free tier was removed - it used to be a 201 AFTER
+    // the shop had lapsed, because a lapsed shop still had a real product.
+    const client = await request(app)
+      .post("/api/dashboard/clients")
+      .set("Cookie", cookie)
+      .send({ firstName: "Lapsed", phone: "(302) 555-0142" });
+    expect(client.status).toBe(201);
+    const clientId = client.body.id as string;
+
     // Kill the sub + expire the trial.
     await prisma.shop.update({
       where: { id: shopId },
@@ -291,53 +302,53 @@ describe("402 gate once the trial lapses", () => {
       },
     });
 
-    const client = await request(app)
-      .post("/api/dashboard/clients")
-      .set("Cookie", cookie)
-      .send({ firstName: "Lapsed", phone: "(302) 555-0142" });
-    expect(client.status).toBe(201);
+    // ---- WALLED: the product ------------------------------------------
+    const walled: [string, request.Test][] = [
+      ["manual nudge", request(app).post(`/api/dashboard/nudge/${clientId}`)],
+      ["sweep", request(app).post("/api/dashboard/sweep")],
+      // A dry run sends nothing, but it is still the product working.
+      ["sweep preview", request(app).post("/api/dashboard/sweep-preview")],
+      ["new client", request(app).post("/api/dashboard/clients")],
+      ["log a visit", request(app).post(`/api/dashboard/clients/${clientId}/visits`)],
+      ["stats", request(app).get("/api/dashboard/stats")],
+      ["agenda", request(app).get("/api/booking/agenda")],
+      ["promos", request(app).get("/api/promos")],
+      ["payments", request(app).get("/api/payments/status")],
+      ["shop settings write", request(app).patch("/api/shops/me")],
+    ];
+    for (const [label, pending] of walled) {
+      const res = await pending.set("Cookie", cookie);
+      expect(res.status, `${label} should be walled`).toBe(402);
+      expect(res.body.error, label).toBe("subscription_required");
+    }
 
-    const nudge = await request(app)
-      .post(`/api/dashboard/nudge/${client.body.id}`)
-      .set("Cookie", cookie);
-    expect(nudge.status).toBe(402);
-    expect(nudge.body.error).toBe("subscription_required");
-
-    const sweep = await request(app)
-      .post("/api/dashboard/sweep")
-      .set("Cookie", cookie);
-    expect(sweep.status).toBe(402);
-
-    const bulk = await request(app)
-      .post("/api/dashboard/clients/bulk")
-      .set("Cookie", cookie)
-      .send({ action: "nudge", clientIds: [client.body.id] });
-    expect(bulk.status).toBe(402);
-
-    // Dry-run preview and non-SMS work stay open.
-    const preview = await request(app)
-      .post("/api/dashboard/sweep-preview")
-      .set("Cookie", cookie);
-    expect(preview.status).toBe(200);
-
-    const optOut = await request(app)
-      .post("/api/dashboard/clients/bulk")
-      .set("Cookie", cookie)
-      .send({ action: "optOut", clientIds: [client.body.id] });
-    expect(optOut.status).toBe(200);
-
-    const stats = await request(app).get("/api/dashboard/stats").set("Cookie", cookie);
-    expect(stats.status).toBe(200);
-
-    const visit = await request(app)
-      .post(`/api/dashboard/clients/${client.body.id}/visits`)
-      .set("Cookie", cookie)
-      .send({});
-    expect(visit.status).toBe(201); // earning keeps working - data accrues
+    // ---- OPEN: their own data, and the way back in --------------------
+    const open: [string, request.Test][] = [
+      ["client list", request(app).get("/api/dashboard/clients")],
+      ["client detail", request(app).get(`/api/dashboard/clients/${clientId}`)],
+      ["client ledger", request(app).get(`/api/dashboard/clients/${clientId}/ledger`)],
+      // The whole reason the hole exists: a barber must always be able to get
+      // their own list out. Locking this reads as holding data hostage.
+      ["CSV export", request(app).get("/api/dashboard/export/clients.csv")],
+      // The billing page needs this one to render at all.
+      ["GET /shops/me", request(app).get("/api/shops/me")],
+    ];
+    for (const [label, pending] of open) {
+      const res = await pending.set("Cookie", cookie);
+      expect(res.status, `${label} must stay open`).toBe(200);
+    }
 
     const billing = await request(app).get("/api/billing").set("Cookie", cookie);
+    expect(billing.status).toBe(200);
     expect(billing.body.hasAccess).toBe(false);
     expect(billing.body.trialDaysLeft).toBe(0);
+  });
+
+  it("a comped shop walks straight through the wall", async () => {
+    await prisma.shop.update({ where: { id: shopId }, data: { compAccess: true } });
+    const agenda = await request(app).get("/api/booking/agenda").set("Cookie", cookie);
+    expect(agenda.status).not.toBe(402);
+    await prisma.shop.update({ where: { id: shopId }, data: { compAccess: false } });
   });
 });
 

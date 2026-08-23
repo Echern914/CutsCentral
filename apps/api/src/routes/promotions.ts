@@ -13,6 +13,7 @@ import { getMessageProvider } from "../messaging/twilio.js";
 import { hasActiveAccess } from "../billing/stripe.js";
 import { remainingMonthlySms } from "../billing/quota.js";
 
+import { requireActiveAccess } from "../middleware/billing.js";
 /**
  * Shop-designed promotions: percent/amount off, free add-ons, or extra-punch
  * windows. Live promos show on the client rewards page; blasts go out by SMS
@@ -21,7 +22,7 @@ import { remainingMonthlySms } from "../billing/quota.js";
  * so each promo's results are attributable.
  */
 export const promotionsRouter: Router = Router();
-promotionsRouter.use(requireUser, requireShop, requireManager);
+promotionsRouter.use(requireUser, requireShop, requireManager, requireActiveAccess);
 
 const MAX_PROMOS = 20;
 const MS_PER_DAY = 1000 * 60 * 60 * 24;

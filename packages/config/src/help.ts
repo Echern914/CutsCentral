@@ -267,7 +267,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "pricing",
     q: "How much does it cost?",
-    a: `The loyalty program — punch cards, rewards page, public mini-site, client book — is free forever, no card required.\n\nPremium (${proPrice}/month, ${proTexts} texts included) adds the texting that brings clients back: rebooking nudges, promo blasts, and auto-sync with Acuity or Square. Premium AI (${proAiPrice}/month, ${proAiTexts} texts included) adds an AI receptionist that answers client texts and books appointments 24/7.\n\nEvery new shop gets a ${BILLING.trialDays}-day full Premium trial, and one rebooked regular typically covers the month.`,
+    a: `ChairBack is one plan. Premium (${proPrice}/month, ${proTexts} texts included) adds the texting that brings clients back: rebooking nudges, promo blasts, and auto-sync with Acuity or Square. Premium AI (${proAiPrice}/month, ${proAiTexts} texts included) adds an AI receptionist that answers client texts and books appointments 24/7.\n\nEvery new shop gets a ${BILLING.trialDays}-day full Premium trial, and one rebooked regular typically covers the month.`,
     keywords: ["cost", "price", "pricing", "how much", "plan", "subscription", "fee", "monthly", "expensive"],
     // A bare "price"/"cost" collides with add-services ("change a price").
     // A prospect asking the bot what it costs is by far the commoner intent.
@@ -278,8 +278,10 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   },
   {
     id: "whats-free",
-    q: "What do I get for free?",
-    a: "Punch cards and rewards, your clients' rewards pages, your public booking mini-site, and your client book — free forever, no card required.\n\nThe paid plans add the outbound texting (rebooking nudges, promo blasts) and automatic syncing with Acuity or Square.",
+    q: "Is there a free plan?",
+    a: `No — ChairBack is one plan, and you get the whole thing free for ${BILLING.trialDays} days. No card to start, nothing to cancel if you walk away.
+
+When the trial ends your shop stops taking bookings until you subscribe. Your clients, history and loyalty data stay exactly where they are, and you can read or export your client book at any time.`,
     keywords: ["free", "free plan", "no card", "forever", "free forever", "without paying"],
     category: "money",
     hidesInApp: true,
