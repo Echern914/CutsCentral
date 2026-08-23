@@ -23,7 +23,7 @@ import {
   type GalleryItem,
   type IndustryKey,
 } from "@chairback/config";
-import { prisma } from "@chairback/db";
+import { Prisma, prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { linkReferralOnShopCreate } from "../services/referral.js";
 import { previewNudgeBody } from "../messaging/templates.js";
@@ -38,6 +38,21 @@ import {
 import { logger } from "../logger.js";
 
 import { requireActiveAccess } from "../middleware/billing.js";
+import {
+  ANY_WINDOW,
+  MAX_WINDOWS,
+  isValidTimezone,
+  shopLocalDate,
+  validateWindows,
+} from "../engines/waitlistWindows.js";
+import {
+  ACTIVE_WAITLIST_STATUSES,
+  consentFields,
+  joinFingerprint,
+  mintCancelToken,
+  sha256Hex,
+} from "../engines/waitlistJoin.js";
+import { sendWaitlistConfirmation } from "../messaging/waitlistEmail.js";
 export const shopsRouter: Router = Router();
 
 /** URL handle for the public page: lowercase, digits, single dashes. */
@@ -703,6 +718,25 @@ publicPageRouter.post("/:slug/request", leadLimiter, async (req, res) => {
 // the shop). Same trust model as the lead form: plain-prisma insert (connection
 // owner, bypasses FORCE RLS). serviceId/staffId are captured when the join comes
 // from a fully-booked day so the barber knows exactly what the customer wants.
+//
+// 🔑 PREFERENCES ARE STRUCTURED NOW. This used to take `preferredTime` as free
+// text ("Sat morning") for a human to read. That is unmatchable: the matcher in
+// a later phase has to ask "does this freed 10:15 slot fit anyone", and no
+// parser answers "whenever really". A window is a date part and a time part
+// where NULL means ANY on each half independently - exactly the shape PR A
+// migrated all 118 existing entries into, so they behave as they always did.
+//
+// preferredTime is still accepted and still stored: it is the barber-visible
+// note on those live rows, and dropping it would blank their dashboard.
+const windowSchema = z
+  .object({
+    startDate: z.string().trim().max(10).nullable().default(null),
+    endDate: z.string().trim().max(10).nullable().default(null),
+    startMin: z.number().int().min(0).max(1440).nullable().default(null),
+    endMin: z.number().int().min(0).max(1440).nullable().default(null),
+  })
+  .strict();
+
 const waitlistSchema = z
   .object({
     firstName: z.string().trim().min(1).max(80),
@@ -713,6 +747,13 @@ const waitlistSchema = z
     staffId: z.string().trim().max(60).optional().or(z.literal("")),
     preferredTime: z.string().trim().max(200).optional().or(z.literal("")),
     note: z.string().trim().max(1000).optional().or(z.literal("")),
+    // Absent = an older client, or a browser that could not tell us. The shop's
+    // own zone is the fallback, which is what every existing row uses.
+    timezone: z.string().trim().max(64).optional().or(z.literal("")),
+    // Absent = one "Any date / Any time" window, i.e. exactly today's behaviour.
+    windows: z.array(windowSchema).max(MAX_WINDOWS).optional(),
+    // 🔴 Must be explicitly true. An absent field is NOT consent.
+    smsConsent: z.boolean().optional().default(false),
   })
   .strict()
   .refine((d) => Boolean(d.phone?.trim()) || Boolean(d.email?.trim()), {
@@ -734,26 +775,85 @@ publicPageRouter.post("/:slug/waitlist", waitlistLimiter, async (req, res) => {
     return;
   }
   const d = parsed.data;
-  await prisma.waitlistEntry.create({
-    data: {
-      shopId: shop.id,
-      firstName: d.firstName,
-      lastName: d.lastName || null,
-      phone: toE164(d.phone) ?? (d.phone?.trim() || null),
-      email: d.email || null,
-      serviceId: d.serviceId || null,
-      staffId: d.staffId || null,
-      preferredTime: d.preferredTime || null,
-      note: d.note || null,
-    },
-  });
+  const now = new Date();
+
+  // The customer's own zone decides what "Saturday morning" means. Anything
+  // unparseable falls back to the shop's rather than 400-ing a join over a
+  // browser quirk - a wrong-but-close zone still books haircuts.
+  const timezone =
+    d.timezone && isValidTimezone(d.timezone) ? d.timezone : shop.timezone;
+
+  const windows = d.windows?.length ? d.windows : [ANY_WINDOW];
+  // Validated against the SHOP's today: the horizon is about the shop's
+  // calendar, not the customer's.
+  const bad = validateWindows(windows, shopLocalDate(now, shop.timezone));
+  if (bad) {
+    res.status(400).json({ error: "invalid_window", code: bad.code, index: bad.index });
+    return;
+  }
+
+  const phone = toE164(d.phone) ?? (d.phone?.trim() || null);
+  const email = d.email || null;
+  const serviceId = d.serviceId || null;
+  const staffId = d.staffId || null;
+
+  const dedupeKey = joinFingerprint({ phone, email, serviceId, staffId, windows });
+  const { token, hash } = mintCancelToken();
+
+  let entryId: string;
+  try {
+    const entry = await prisma.waitlistEntry.create({
+      data: {
+        shopId: shop.id,
+        firstName: d.firstName,
+        lastName: d.lastName || null,
+        phone,
+        email,
+        serviceId,
+        staffId,
+        preferredTime: d.preferredTime || null,
+        note: d.note || null,
+        timezone,
+        dedupeKey,
+        cancelTokenHash: hash,
+        ...consentFields({ smsConsent: d.smsConsent, phone, now }),
+        windows: {
+          create: windows.map((w) => ({
+            shopId: shop.id,
+            startDate: w.startDate,
+            endDate: w.endDate,
+            startMin: w.startMin,
+            endMin: w.endMin,
+          })),
+        },
+      },
+      select: { id: true },
+    });
+    entryId = entry.id;
+  } catch (err) {
+    // 🔑 The partial unique index did its job: this person already holds an
+    // active place for this exact request. Answered as success rather than an
+    // error - from the customer's side they ARE on the list, and telling them
+    // otherwise invites a second tap that cannot succeed either.
+    const dup =
+      err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002";
+    if (dup) {
+      logger.info({ shopId: shop.id }, "waitlist duplicate join ignored");
+      res.status(200).json({ ok: true, duplicate: true });
+      return;
+    }
+    throw err;
+  }
 
   // Best-effort barber alert (identical to the lead form). Never fails the join.
-  const contact = toE164(d.phone) ?? d.email ?? "no contact info";
+  const contact = phone ?? email ?? "no contact info";
   const body = `New waitlist join at ${shop.name} from ${d.firstName} (${contact})`;
   if (shop.notifyPhone) {
     if (apiEnv().DRY_RUN) {
-      logger.info({ shopId: shop.id, to: shop.notifyPhone }, "waitlist notify SMS (dry-run, not sent)");
+      logger.info(
+        { shopId: shop.id, to: shop.notifyPhone },
+        "waitlist notify SMS (dry-run, not sent)",
+      );
     } else {
       try {
         await getMessageProvider().send({ to: shop.notifyPhone, body });
@@ -773,7 +873,49 @@ publicPageRouter.post("/:slug/waitlist", waitlistLimiter, async (req, res) => {
     },
   });
 
-  res.status(201).json({ ok: true });
+  // 🔴 EMAIL ONLY, and only when we have an address. Customer SMS stays off
+  // until 10DLC clears. Joining by email alone must keep working, so the send
+  // is never a precondition of the join succeeding.
+  if (email) {
+    await sendWaitlistConfirmation({
+      to: email,
+      firstName: d.firstName,
+      shopName: shop.name,
+      serviceLabel: null,
+      windows,
+      cancelToken: token,
+    });
+  }
+
+  res.status(201).json({ ok: true, id: entryId, emailed: Boolean(email) });
+});
+
+// Self-service cancellation from the emailed link. UNauthenticated by design:
+// the token IS the credential, which is why only its sha256 is ever stored.
+//
+// 🔑 MARKS, NEVER DELETES. The row is the barber's record that someone wanted a
+// slot, and the consent evidence hangs off it. REMOVED is an existing status
+// the dashboard already understands.
+publicPageRouter.post("/waitlist/cancel/:token", waitlistLimiter, async (req, res) => {
+  const token = String(req.params.token ?? "");
+  // Constant response whatever happens: this endpoint takes a bearer secret and
+  // must not become an oracle for which tokens exist.
+  if (!token || token.length > 200) {
+    res.json({ ok: true });
+    return;
+  }
+  const { count } = await prisma.waitlistEntry.updateMany({
+    where: {
+      cancelTokenHash: sha256Hex(token),
+      status: { in: [...ACTIVE_WAITLIST_STATUSES] },
+    },
+    // dedupeKey is cleared so the same person can rejoin for the same thing.
+    // The partial index only covers active rows, but clearing it also stops a
+    // cancelled row colliding if it is ever reactivated by hand.
+    data: { status: "REMOVED", dedupeKey: null },
+  });
+  logger.info({ cancelled: count }, "waitlist self-cancel");
+  res.json({ ok: true });
 });
 
 // Customer review from the public page. UNauthenticated (slug resolves the shop);

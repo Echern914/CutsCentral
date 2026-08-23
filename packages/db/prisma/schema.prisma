@@ -1001,6 +1001,23 @@ model WaitlistEntry {
   // does, and push + email remain the only customer channels meanwhile.
   smsConsentAt     DateTime?
   smsConsentSource String? // "waitlist_join" | "manual" - mirrors Client's field
+  // 🔑 WHICH SENTENCE they agreed to. "They ticked a box in August" is worth
+  // very little in a carrier or FTC complaint; "they ticked this exact text,
+  // v1, at this time, from this number" is worth a great deal. Never edit a
+  // version's wording in place - that rewrites what past customers agreed to.
+  smsConsentVersion String?
+  // The number that consented, snapshotted. `phone` above can be edited later,
+  // and a consent record pointing at whatever the column says now is not
+  // evidence of anything.
+  smsConsentPhone   String?
+
+  // 🔑 One place per thing you actually asked for. A stable fingerprint of
+  // contact + service + provider + PREFERENCES, enforced by a partial unique
+  // index over the ACTIVE statuses only - so a cancelled entry frees the slot
+  // and a genuinely different request (Saturday as well as Tuesday) is still
+  // allowed. Null on all 118 backfilled rows, and nulls are distinct, so they
+  // are untouched.
+  dedupeKey String?
 
   // ---- Self-service ----
 
