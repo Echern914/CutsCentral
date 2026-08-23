@@ -124,6 +124,25 @@ export function createApp(): Express {
   // `requireManager` in auth/roles.ts. It can't be gated here at the mount:
   // these routers resolve the session themselves, so req.shopRole isn't set
   // until their own middleware has run.
+  //
+  // 🔑 THE WALL, written down once. ChairBack is ONE plan; when the trial ends
+  // and no subscription is live the shop stops working. `requireActiveAccess`
+  // is appended to each router's own requireShop line for the same reason the
+  // role gate is - req.shop does not exist yet at this mount point.
+  //
+  //   WALLED (whole router)  /api/booking  /api/payments  /api/promos
+  //                          /api/insights /api/loyalty   /api/notifications
+  //                          /api/barber   /api/team      /api/domains
+  //   WALLED (per route)     /api/shops PATCH /me, POST /me/sms-preview
+  //   WALLED (except reads)  /api/dashboard - GET of the client book and the
+  //                          CSV exports stay open (middleware/wallExemptions)
+  //   NEVER WALLED           /api/billing  /api/auth  /api/admin-portal
+  //                          /api/shops GET /me (the billing page needs it),
+  //                          DELETE /me (deleting your account is a right),
+  //                          POST / (creating a shop starts the trial),
+  //                          /api/team/join, and every PUBLIC router - those
+  //                          serve the shop's CLIENTS, not the barber. A
+  //                          lapsed shop's page says so instead of 404ing.
   app.use("/api/dashboard", dashboardLimiter, dashboardRouter);
   // Own-chair surface for employees. Deliberately NOT part of dashboardRouter:
   // that router is manager-gated so new routes inherit the restriction.

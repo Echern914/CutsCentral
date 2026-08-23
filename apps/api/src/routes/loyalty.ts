@@ -4,6 +4,7 @@ import { forShop, prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 
+import { requireActiveAccess } from "../middleware/billing.js";
 /**
  * Loyalty program designer: each shop curates its own reward MENU and decides
  * how punches are earned (base rate + per-service rules). All access is via
@@ -11,7 +12,7 @@ import { requireManager } from "../auth/roles.js";
  * the session's shop (updateMany/deleteMany return count 0 otherwise -> 404).
  */
 export const loyaltyRouter: Router = Router();
-loyaltyRouter.use(requireUser, requireShop, requireManager);
+loyaltyRouter.use(requireUser, requireShop, requireManager, requireActiveAccess);
 
 // Caps keep the client-facing menu scannable and the queries bounded.
 const MAX_REWARDS = 12;

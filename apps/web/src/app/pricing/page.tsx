@@ -14,7 +14,7 @@ import { HideInNativeApp } from "@/components/HideInNativeApp";
  * in-app surface links here.
  */
 
-const description = `${APP_NAME} pricing: run loyalty free forever, add ${
+const description = `${APP_NAME} pricing: ${
   PLANS.pro.name
 } ($${PLANS.pro.priceMonthlyUsd}/mo, ${PLANS.pro.smsMonthlyQuota} texts) or ${
   PLANS.pro_ai.name

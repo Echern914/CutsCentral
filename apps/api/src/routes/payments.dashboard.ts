@@ -15,13 +15,14 @@ import {
 } from "../billing/terminal.js";
 import { logger } from "../logger.js";
 
+import { requireActiveAccess } from "../middleware/billing.js";
 /**
  * Barber-facing payments settings: connect a Stripe account, read live Connect
  * status, and configure the per-shop payment mode + cancellation policy. All
  * auth + shop-scoped. Dark (503) unless connectEnabled().
  */
 export const paymentsDashboardRouter: Router = Router();
-paymentsDashboardRouter.use(requireUser, requireShop, requireManager);
+paymentsDashboardRouter.use(requireUser, requireShop, requireManager, requireActiveAccess);
 
 // GET /api/payments/status - live Connect status + current settings.
 paymentsDashboardRouter.get("/status", async (req, res) => {

@@ -37,6 +37,7 @@ import {
 } from "../receptionist/config.js";
 import { logger } from "../logger.js";
 
+import { requireActiveAccess } from "../middleware/billing.js";
 export const shopsRouter: Router = Router();
 
 /** URL handle for the public page: lowercase, digits, single dashes. */
@@ -349,7 +350,7 @@ shopsRouter.get("/me", requireUser, requireShop, async (req, res) => {
   });
 });
 
-shopsRouter.patch("/me", requireUser, requireShop, async (req, res) => {
+shopsRouter.patch("/me", requireUser, requireShop, requireActiveAccess, async (req, res) => {
   const parsed = updateShopSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
@@ -843,7 +844,7 @@ shopsRouter.delete("/me", requireUser, requireShop, async (req, res) => {
 });
 
 // SMS template preview (sample-rendered, no real client).
-shopsRouter.post("/me/sms-preview", requireUser, requireShop, (req, res) => {
+shopsRouter.post("/me/sms-preview", requireUser, requireShop, requireActiveAccess, (req, res) => {
   const template = typeof req.body?.template === "string" ? req.body.template : null;
   res.json({
     preview: previewNudgeBody(

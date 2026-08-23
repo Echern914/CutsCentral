@@ -183,7 +183,6 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     description: "Run specials that show on your page and can be texted out",
     href: "/dashboard/promotions",
     category: "retention",
-    tier: "pro",
     tourStepId: "shop-promotions",
   },
   {
@@ -255,7 +254,6 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     description: "Full days feed a waitlist; freed slots ping the queue automatically",
     href: "/dashboard/booking?tab=Settings",
     category: "booking",
-    tier: "pro",
     tourStepId: "book-waitlist",
   },
   {
@@ -352,7 +350,6 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     description: "Overdue clients get an automatic 'time to rebook' text or push",
     href: "/dashboard/nudges",
     category: "retention",
-    tier: "pro",
     tourStepId: "rewards-extras",
   },
   {

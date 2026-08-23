@@ -34,7 +34,8 @@ interface TierFeature {
   detail?: string;
 }
 
-// Free forever — the stuff that costs us nothing and hooks the shop.
+// The everyday half of the one plan. This was the old Free tier's whole
+// pitch; the features did not go anywhere, the separate free tier did.
 const FREE_FEATURES: TierFeature[] = [
   { lead: "Digital punch cards", detail: "loyalty that runs itself, visit by visit" },
   { lead: "Branded rewards page + mini-site", detail: "your colors, your fonts, one shareable link" },
@@ -217,7 +218,7 @@ export default async function BillingPage({
                         ? "Early access: everything is free right now."
                         : b.hasAccess
                           ? `${b.trialDaysLeft} day${b.trialDaysLeft === 1 ? "" : "s"} of full Premium left. No card on file.`
-                          : "Your punch cards, rewards page, and client book are free forever. Upgrade to Premium to text clients."}
+                          : "Your plan has ended — bookings and texts are off. Your clients and history are all still here."}
                 </p>
               </div>
               {/* Price is hidden in-app: the App Store forbids showing prices
@@ -278,9 +279,10 @@ export default async function BillingPage({
               // and upgrade on the web.
               <HideInNativeApp>
                 <div className="mt-4 rounded-2xl border border-gold/30 bg-gold/10 px-4 py-3 text-sm text-gold">
-                  You&apos;re on the Free plan. Punches, your rewards page, and your
-                  client book keep working. Premium adds the part that brings clients
-                  back: rebooking texts and promo blasts.
+                  Your ChairBack plan has ended, so the shop has stopped taking
+                  bookings. Nothing has been deleted — your clients, punches and
+                  history are waiting, and reading or exporting your client book
+                  still works. Subscribe to switch everything back on.
                 </div>
               </HideInNativeApp>
             )}
@@ -304,8 +306,8 @@ export default async function BillingPage({
                       <span className="text-offwhite">
                         Pick your plan below
                       </span>{" "}
-                      — every tier keeps your loyalty program and client book
-                      free forever.
+                      — your clients, punches and history stay exactly as they
+                      are either way.
                     </p>
                   )}
                 </HideInNativeApp>

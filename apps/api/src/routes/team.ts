@@ -9,6 +9,7 @@ import { accountLimiter, dashboardLimiter } from "../middleware/rateLimit.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
 import { logger } from "../logger.js";
 
+import { requireActiveAccess } from "../middleware/billing.js";
 /**
  * TEAM: the shop's people, and the invitations that let them sign in.
  *
@@ -42,7 +43,7 @@ export const teamRouter: Router = Router();
 // nobody had a session that could reach this one. A barber has no business
 // reading the roster; accepting an invite is a different router (teamJoin.ts)
 // and is unaffected.
-teamRouter.use(requireUser, requireShop, requireManager);
+teamRouter.use(requireUser, requireShop, requireManager, requireActiveAccess);
 
 /** A week: long enough for a barber to get to it, short enough to bound a stale mailbox. */
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;

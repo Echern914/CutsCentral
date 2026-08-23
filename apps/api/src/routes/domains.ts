@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
+import { requireActiveAccess } from "../middleware/billing.js";
 import {
   attachDomain,
   detachDomain,
@@ -89,7 +90,7 @@ function serializeStatus(
 }
 
 // Current domain + live DNS/verification status.
-domainsRouter.get("/", requireUser, requireShop, async (req, res) => {
+domainsRouter.get("/", requireUser, requireShop, requireActiveAccess, async (req, res) => {
   const shop = req.shop!;
   const live =
     shop.customDomain && vercelDomainsConfigured()
@@ -102,7 +103,7 @@ const connectSchema = z.object({ domain: z.string().min(4).max(300) }).strict();
 
 // Connect (or replace) the shop's domain: attach apex + www on Vercel, store,
 // and return the DNS records to set at the registrar.
-domainsRouter.post("/", requireUser, requireShop, async (req, res) => {
+domainsRouter.post("/", requireUser, requireShop, requireActiveAccess, async (req, res) => {
   if (!vercelDomainsConfigured()) {
     res.status(503).json({ error: "domains_not_configured" });
     return;
@@ -179,7 +180,7 @@ domainsRouter.post("/", requireUser, requireShop, async (req, res) => {
 
 // Re-check DNS + ownership now ("I've added the records" button). Stamps
 // verifiedAt the first time Vercel reports verified AND correctly configured.
-domainsRouter.post("/verify", requireUser, requireShop, async (req, res) => {
+domainsRouter.post("/verify", requireUser, requireShop, requireActiveAccess, async (req, res) => {
   const shop = req.shop!;
   if (!shop.customDomain) {
     res.status(404).json({ error: "no_domain" });
@@ -209,7 +210,7 @@ domainsRouter.post("/verify", requireUser, requireShop, async (req, res) => {
 
 // Disconnect: detach from Vercel (best-effort) and clear the columns. The
 // domain simply stops resolving to us; nothing else about the shop changes.
-domainsRouter.delete("/", requireUser, requireShop, async (req, res) => {
+domainsRouter.delete("/", requireUser, requireShop, requireActiveAccess, async (req, res) => {
   const shop = req.shop!;
   if (!shop.customDomain) {
     res.status(404).json({ error: "no_domain" });

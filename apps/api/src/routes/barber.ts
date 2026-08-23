@@ -4,6 +4,7 @@ import { forShop, prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireRole } from "../auth/roles.js";
 
+import { requireActiveAccess } from "../middleware/billing.js";
 /**
  * The barber-facing API: one chair, nothing else.
  *
@@ -25,7 +26,7 @@ export const barberRouter: Router = Router();
 // Managers and owners are allowed through so the view is testable from a real
 // account and so a working owner can use it as their own chair view; the
 // scoping below still applies to whichever chair their seat is linked to.
-barberRouter.use(requireUser, requireShop, requireRole("OWNER", "MANAGER", "BARBER"));
+barberRouter.use(requireUser, requireShop, requireRole("OWNER", "MANAGER", "BARBER"), requireActiveAccess);
 
 const homeQuerySchema = z.object({
   // Client-supplied window so the phone's own midnight decides "today"; the

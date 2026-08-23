@@ -6,7 +6,8 @@ import { getBillingSummary } from "@/lib/billing";
 /**
  * Slim banner under the dashboard nav. Silent while billing is disabled, the
  * shop is subscribed, or it's comped; counts down the trial; prompts upgrade
- * once the trial lapses to the Free tier.
+ * once the trial lapses. There is no free tier to fall back to: one plan, and
+ * when it ends the shop stops working.
  *
  * THE 3.1.1 SPLIT LIVES HERE, not in the layout. The layout used to wrap this
  * whole component in HideInNativeApp, which was compliant but left a lapsed
@@ -28,9 +29,9 @@ export async function TrialBanner() {
         <HideInNativeApp>
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-gold/30 bg-gold/10 px-4 py-2.5 text-xs text-gold sm:text-sm">
             <span>
-              You&apos;re on the Free plan — client texts and your online booking
-              page are paused. Go Premium (${b.priceMonthlyUsd}/mo) to turn them
-              back on.
+              Your ChairBack plan has ended — bookings, texts and your calendar
+              are switched off. Subscribe (${b.priceMonthlyUsd}/mo) to turn your
+              shop back on.
             </span>
             <Link
               href="/dashboard/billing"
@@ -42,8 +43,8 @@ export async function TrialBanner() {
         </HideInNativeApp>
         <ShowInNativeApp>
           <div className="rounded-2xl border border-gold/30 bg-gold/10 px-4 py-2.5 text-xs text-gold sm:text-sm">
-            You&apos;re on the Free plan — client texts and your online booking
-            page are paused.
+            Your ChairBack plan has ended — bookings, texts and your calendar are
+            switched off. Your clients and history are all still here.
           </div>
         </ShowInNativeApp>
       </div>

@@ -144,9 +144,9 @@ export function CancelMembershipButton() {
       <p className="text-sm text-offwhite">Cancel your membership?</p>
       <p className="text-xs text-muted">
         You&apos;ll keep your paid features until the end of the period you&apos;ve
-        already paid for, then drop to the Free plan. Your loyalty program, rewards
-        page, and client book stay free forever. Stripe will confirm the details on
-        the next screen.
+        already paid for, then ChairBack stops taking bookings for you. Your clients,
+        history and loyalty data all stay put, and you can read or export your
+        client book any time. Stripe will confirm the details on the next screen.
       </p>
       <div className="mt-1 flex items-center gap-2">
         <button

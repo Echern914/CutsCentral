@@ -14,7 +14,11 @@ import {
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 import { ensureReferralCode } from "../services/referral.js";
-import { requireActiveAccess } from "../middleware/billing.js";
+import {
+  requireActiveAccess,
+  requireActiveAccessExcept,
+} from "../middleware/billing.js";
+import { isOwnDataRead } from "../middleware/wallExemptions.js";
 import { hasActiveAccess } from "../billing/stripe.js";
 import { remainingMonthlySms } from "../billing/quota.js";
 import { smsLimiter } from "../middleware/rateLimit.js";
@@ -53,7 +57,14 @@ import { logger } from "../logger.js";
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
 export const dashboardRouter: Router = Router();
-dashboardRouter.use(requireUser, requireShop, requireManager);
+// The wall, with one hole: a lapsed shop can still READ and export its own
+// client book (see isOwnDataRead). Everything else here is walled.
+dashboardRouter.use(
+  requireUser,
+  requireShop,
+  requireManager,
+  requireActiveAccessExcept(isOwnDataRead),
+);
 
 const pushNativeSchema = z
   .object({

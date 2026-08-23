@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma, runAsOwner, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { logger } from "../logger.js";
+import { requireActiveAccess } from "../middleware/billing.js";
 import {
   NOTIFY_DEFAULTS,
   resolveNotifyPrefs,
@@ -19,7 +20,7 @@ import {
  * session's userId, so one member can never read or edit another's.
  */
 export const notificationsRouter: Router = Router();
-notificationsRouter.use(requireUser, requireShop);
+notificationsRouter.use(requireUser, requireShop, requireActiveAccess);
 
 /** GET /api/notifications - prefs + registered devices for the signed-in user. */
 notificationsRouter.get("/", async (req, res) => {
