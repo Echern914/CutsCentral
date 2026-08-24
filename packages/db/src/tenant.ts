@@ -585,6 +585,32 @@ export function forShop(shopId: string) {
         runWithShop(shopId, (tx) => tx.waitlistEntry.create(args)),
     },
 
+    // Waitlist audit trail (phase F1). APPEND-ONLY, and the shape of this
+    // accessor is part of that: there is deliberately no `update` and no
+    // `delete` here, so the tenant surface cannot express a rewrite of
+    // history even by mistake. The database refuses one too - a BEFORE UPDATE
+    // trigger raises on the table, which is the guarantee that actually binds
+    // (most waitlist writes run as the connection owner, never assuming the
+    // chairback_app role these grants apply to).
+    waitlistEvent: {
+      findMany: (args: Prisma.WaitlistEventFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.waitlistEvent.findMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      count: (args: Prisma.WaitlistEventCountArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.waitlistEvent.count({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      create: (args: Prisma.WaitlistEventCreateArgs) =>
+        runWithShop(shopId, (tx) => tx.waitlistEvent.create(args)),
+    },
+
     // AI receptionist threads: created on the Twilio-webhook path (plain prisma,
     // no shop context - same trust model as the waitlist join), then read back
     // here for the dashboard transcript view (RLS).

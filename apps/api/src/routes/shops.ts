@@ -55,6 +55,11 @@ import {
   sha256Hex,
 } from "../engines/waitlistJoin.js";
 import { sendWaitlistConfirmation } from "../messaging/waitlistEmail.js";
+import {
+  CUSTOMER_ACTOR,
+  recordWaitlistEvent,
+  recordWaitlistEventBestEffort,
+} from "../engines/waitlistAudit.js";
 export const shopsRouter: Router = Router();
 
 /** URL handle for the public page: lowercase, digits, single dashes. */
@@ -827,34 +832,56 @@ publicPageRouter.post("/:slug/waitlist", waitlistLimiter, async (req, res) => {
   );
 
   try {
-    const entry = await prisma.waitlistEntry.create({
-      data: {
-        shopId: shop.id,
-        firstName: d.firstName,
-        lastName: d.lastName || null,
-        phone,
-        email,
-        serviceId,
-        staffId,
-        preferredTime: d.preferredTime || null,
-        note: d.note || null,
-        timezone,
-        dedupeKey,
-        cancelTokenHash: hash,
-        ...consentFields({ smsConsent: d.smsConsent, phone, now }),
-        windows: {
-          create: storedWindows.map((w) => ({
-            shopId: shop.id,
-            startDate: w.startDate,
-            endDate: w.endDate,
-            startMin: w.startMin,
-            endMin: w.endMin,
-          })),
+    // 🔑 One transaction so the entry and its audit row land together. The
+    // audit write throws on failure by design (phase F1): a join we cannot
+    // account for should not have happened. In practice the insert has no
+    // constraints to violate, so the only thing that fails it is a database
+    // outage - which was failing the join anyway.
+    await prisma.$transaction(async (tx) => {
+      const entry = await tx.waitlistEntry.create({
+        data: {
+          shopId: shop.id,
+          firstName: d.firstName,
+          lastName: d.lastName || null,
+          phone,
+          email,
+          serviceId,
+          staffId,
+          preferredTime: d.preferredTime || null,
+          note: d.note || null,
+          timezone,
+          dedupeKey,
+          cancelTokenHash: hash,
+          ...consentFields({ smsConsent: d.smsConsent, phone, now }),
+          windows: {
+            create: storedWindows.map((w) => ({
+              shopId: shop.id,
+              startDate: w.startDate,
+              endDate: w.endDate,
+              startMin: w.startMin,
+              endMin: w.endMin,
+            })),
+          },
         },
-      },
-      select: { id: true },
+        select: { id: true },
+      });
+      await recordWaitlistEvent(tx, {
+        shopId: shop.id,
+        entryId: entry.id,
+        type: "entry.joined",
+        actor: CUSTOMER_ACTOR,
+        metadata: {
+          source: "public",
+          windowCount: storedWindows.length,
+          // Whether the customer picked "Any date" and we fixed it to a
+          // concrete 14-day span. A count and a flag - never the dates.
+          anyDateMaterialized: windows.some(
+            (w) => w.startDate === null && w.endDate === null,
+          ),
+          smsConsent: Boolean(d.smsConsent),
+        },
+      });
     });
-    void entry;
   } catch (err) {
     // 🔑 The partial unique index did its job: this person already holds an
     // active place for this exact request. Answered as success rather than an
@@ -864,6 +891,25 @@ publicPageRouter.post("/:slug/waitlist", waitlistLimiter, async (req, res) => {
       err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002";
     if (dup) {
       logger.info({ shopId: shop.id }, "waitlist duplicate join ignored");
+      // The collision names an entry we can identify - record the second
+      // attempt against it. Best-effort and AFTER the response decision: the
+      // customer is already on the list, so nothing here may change what they
+      // are told. The extra read happens only on the duplicate path.
+      const existing = await prisma.waitlistEntry
+        .findFirst({
+          where: { shopId: shop.id, dedupeKey, status: { in: [...ACTIVE_WAITLIST_STATUSES] } },
+          select: { id: true },
+        })
+        .catch(() => null);
+      if (existing) {
+        await recordWaitlistEventBestEffort({
+          shopId: shop.id,
+          entryId: existing.id,
+          type: "entry.join_deduped",
+          actor: CUSTOMER_ACTOR,
+          metadata: { source: "public", code: "already_waiting" },
+        });
+      }
       // 🔴 BYTE-IDENTICAL to a fresh join - same status, same body. Answering
       // 200 {duplicate:true} while a new join answered 201 {id,...} turned
       // this endpoint into an enumeration oracle: probe phone numbers, learn
@@ -939,17 +985,41 @@ publicPageRouter.post("/waitlist/cancel/:token", waitlistLimiter, async (req, re
     res.json({ ok: true });
     return;
   }
-  const { count } = await prisma.waitlistEntry.updateMany({
-    where: {
-      cancelTokenHash: sha256Hex(token),
-      status: { in: [...ACTIVE_WAITLIST_STATUSES] },
-    },
-    // dedupeKey is cleared so the same person can rejoin for the same thing.
-    // The partial index only covers active rows, but clearing it also stops a
-    // cancelled row colliding if it is ever reactivated by hand.
-    data: { status: "REMOVED", dedupeKey: null },
+  // 🔑 The update alone cannot be audited: it matches on a global token hash
+  // and updateMany returns only a count, so it never learns WHICH shop or
+  // entry it just changed. One indexed read on the same hash supplies both,
+  // inside the transaction so the row cannot move underneath us.
+  const hash = sha256Hex(token);
+  const { count, audited } = await prisma.$transaction(async (tx) => {
+    const target = await tx.waitlistEntry.findFirst({
+      where: { cancelTokenHash: hash, status: { in: [...ACTIVE_WAITLIST_STATUSES] } },
+      select: { id: true, shopId: true, status: true },
+    });
+    const res = await tx.waitlistEntry.updateMany({
+      where: {
+        cancelTokenHash: hash,
+        status: { in: [...ACTIVE_WAITLIST_STATUSES] },
+      },
+      // dedupeKey is cleared so the same person can rejoin for the same thing.
+      // The partial index only covers active rows, but clearing it also stops a
+      // cancelled row colliding if it is ever reactivated by hand.
+      data: { status: "REMOVED", dedupeKey: null },
+    });
+    if (target && res.count > 0) {
+      await recordWaitlistEvent(tx, {
+        shopId: target.shopId,
+        entryId: target.id,
+        type: "entry.cancelled_by_customer",
+        actor: CUSTOMER_ACTOR,
+        metadata: { source: "cancel_link", fromStatus: target.status, toStatus: "REMOVED" },
+      });
+    }
+    return { count: res.count, audited: Boolean(target) };
   });
-  logger.info({ cancelled: count }, "waitlist self-cancel");
+  // Still no shop id in the log line - an unauthenticated endpoint holding a
+  // bearer secret stays a constant, and `audited` says only whether we found
+  // a row to attribute, which the count already implies.
+  logger.info({ cancelled: count, audited }, "waitlist self-cancel");
   res.json({ ok: true });
 });
 

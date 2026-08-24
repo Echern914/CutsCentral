@@ -59,6 +59,7 @@ import {
 } from "../engines/waitlistWindows.js";
 import { addDaysToDateKey } from "../engines/waitlistMatch.js";
 import { joinFingerprint, mintCancelToken } from "../engines/waitlistJoin.js";
+import { recordWaitlistEvent } from "../engines/waitlistAudit.js";
 import { sendReceptionistSms } from "../receptionist/outbound.js";
 import { appendMessage } from "../receptionist/conversation.js";
 import { logger } from "../logger.js";
@@ -2264,32 +2265,56 @@ dashboardRouter.post("/waitlist", async (req, res) => {
   );
 
   try {
-    const entry = await forShop(shop.id).waitlistEntry.create({
-      data: {
-        shopId: shop.id,
-        firstName: d.firstName,
-        lastName: d.lastName || null,
-        phone,
-        email,
-        serviceId,
-        staffId,
-        note: d.note || null,
-        timezone: shop.timezone,
-        minHoursNotice: d.minHoursNotice ?? null,
-        dedupeKey,
-        cancelTokenHash: hash,
-        // 🔴 Consent columns deliberately absent - see the note above.
-        windows: {
-          create: storedWindows.map((w) => ({
-            shopId: shop.id,
-            startDate: w.startDate,
-            endDate: w.endDate,
-            startMin: w.startMin,
-            endMin: w.endMin,
-          })),
+    // runWithShop rather than forShop().create: the entry and its audit row
+    // have to be ONE transaction (phase F1), and each forShop() accessor opens
+    // its own. Same tenant session, same RLS, just held open across both writes.
+    const entry = await runWithShop(shop.id, async (tx) => {
+      const created = await tx.waitlistEntry.create({
+        data: {
+          shopId: shop.id,
+          firstName: d.firstName,
+          lastName: d.lastName || null,
+          phone,
+          email,
+          serviceId,
+          staffId,
+          note: d.note || null,
+          timezone: shop.timezone,
+          minHoursNotice: d.minHoursNotice ?? null,
+          dedupeKey,
+          cancelTokenHash: hash,
+          // 🔴 Consent columns deliberately absent - see the note above.
+          windows: {
+            create: storedWindows.map((w) => ({
+              shopId: shop.id,
+              startDate: w.startDate,
+              endDate: w.endDate,
+              startMin: w.startMin,
+              endMin: w.endMin,
+            })),
+          },
         },
-      },
-      select: { id: true },
+        select: { id: true },
+      });
+      await recordWaitlistEvent(tx, {
+        shopId: shop.id,
+        entryId: created.id,
+        type: "entry.created_by_staff",
+        actor: {
+          type: "staff",
+          userId: req.userId ?? null,
+          staffId: req.shopStaffId ?? null,
+        },
+        metadata: {
+          source: "dashboard",
+          windowCount: storedWindows.length,
+          // The record that this row carries NO consent, and why: a barber
+          // cannot consent on a customer's behalf, so the staff form never
+          // asks and the API never stores it.
+          consentRecorded: false,
+        },
+      });
+      return created;
     });
     res.status(201).json({ ok: true, id: entry.id });
   } catch (err) {
@@ -2322,16 +2347,50 @@ dashboardRouter.post("/waitlist/:id", async (req, res) => {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
     return;
   }
-  const db = forShop(req.shop!.id);
-  const existing = await db.waitlistEntry.findFirst({ where: { id: req.params.id } });
-  if (!existing) {
+  const shopId = req.shop!.id;
+  const actor = {
+    type: "staff" as const,
+    userId: req.userId ?? null,
+    staffId: req.shopStaffId ?? null,
+  };
+  // Read, write and audit in ONE tenant transaction, so `fromStatus` is the
+  // status this update actually replaced and not one that moved in between.
+  const found = await runWithShop(shopId, async (tx) => {
+    const existing = await tx.waitlistEntry.findFirst({
+      where: { id: req.params.id, shopId },
+      select: { id: true, status: true, bookedAppointmentId: true },
+    });
+    if (!existing) return false;
+    await tx.waitlistEntry.update({
+      where: { id: existing.id },
+      data: { status: parsed.data.status },
+    });
+    // 🔑 "Booked externally" is its own event, not a status change dressed up
+    // as one. This route NEVER links an appointment (booking inside ChairBack
+    // links atomically in the create transaction), so a BOOKED landing here
+    // with no existing link is by definition a booking made outside the app -
+    // and the trail has to say so, or a later reader cannot tell the two
+    // apart any better than the barber could before #265.
+    const externallyBooked =
+      parsed.data.status === "BOOKED" && existing.bookedAppointmentId === null;
+    await recordWaitlistEvent(tx, {
+      shopId,
+      entryId: existing.id,
+      type: externallyBooked ? "entry.booked_externally" : "entry.status_changed",
+      actor,
+      metadata: {
+        source: "dashboard",
+        fromStatus: existing.status,
+        toStatus: parsed.data.status,
+        ...(externallyBooked ? { linked: false } : {}),
+      },
+    });
+    return true;
+  });
+  if (!found) {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  await db.waitlistEntry.update({
-    where: { id: existing.id },
-    data: { status: parsed.data.status },
-  });
   res.json({ ok: true, status: parsed.data.status });
 });
 
