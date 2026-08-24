@@ -383,12 +383,25 @@ export function bucketIndexFor(period: ResolvedPeriod, localDay: Date): number {
   }
   // Day and week buckets are uniform, so index is arithmetic. Months vary in
   // length, so walk them (12 at most).
+  //
+  // 🔴 FLOOR, NOT ROUND. windowStart is buckets[0].start, so the quotient is
+  // "how far into the series is this day" - and for WEEK buckets that is a
+  // whole number only on the anchor day itself. Rounding sent days 4, 5 and 6
+  // of every week (Fri/Sat/Sun on a Mon-start week) into the FOLLOWING bucket,
+  // and in the newest week into index === buckets.length, which reads as
+  // outside the window and dropped the day entirely.
+  //
+  // So the weekly cuts/revenue chart mis-attributed three days in seven and
+  // silently lost the most recent Fri-Sun - the busiest part of a barber's
+  // week. It hid because it only shows when data lands in the back half of a
+  // bucket, which is also why the insights tests failed on a Monday and
+  // passed on a Friday.
   if (bucket === "day") {
-    const i = Math.round((t - period.windowStart.getTime()) / DAY_MS);
+    const i = Math.floor((t - period.windowStart.getTime()) / DAY_MS);
     return i < buckets.length ? i : -1;
   }
   if (bucket === "week") {
-    const i = Math.round((t - period.windowStart.getTime()) / (7 * DAY_MS));
+    const i = Math.floor((t - period.windowStart.getTime()) / (7 * DAY_MS));
     return i < buckets.length ? i : -1;
   }
   for (let i = buckets.length - 1; i >= 0; i--) {
