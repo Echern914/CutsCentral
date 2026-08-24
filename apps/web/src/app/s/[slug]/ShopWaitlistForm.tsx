@@ -122,10 +122,16 @@ export function ShopWaitlistForm({
         <p className="mt-1 text-xs" style={{ color: theme.muted }}>
           {shopName} will reach out if a spot opens up that fits.
         </p>
-        {emailed && (
+        {emailed ? (
           <p className="mt-2 text-xs" style={{ color: theme.muted }}>
             Check your email &mdash; there&apos;s a link in there to take
             yourself back off the list any time.
+          </p>
+        ) : (
+          <p className="mt-2 text-xs" style={{ color: theme.muted }}>
+            You joined by phone, so {shopName} will reach out personally when
+            something opens &mdash; automatic opening alerts go out by email
+            until texting is available.
           </p>
         )}
       </div>
@@ -191,6 +197,16 @@ export function ShopWaitlistForm({
           className="w-full px-4 py-2.5 text-sm placeholder:opacity-70"
           style={inputStyle}
         />
+        {/* 🔴 Honest channels (same rule as the booking page's form): openings
+            are offered automatically by EMAIL until texting is approved, so a
+            phone-only joiner is told they're on the manual path. */}
+        {phone.trim() !== "" && email.trim() === "" && (
+          <p className="text-xs" style={{ color: theme.muted }}>
+            Heads up: automatic offers for open spots go out by email until
+            texting is available — with just a phone number, {shopName} will
+            reach out personally instead.
+          </p>
+        )}
 
         {/* ---- when they're free (same rows as the booking page) ---- */}
         <fieldset className="p-3" style={{ border: `1px solid ${theme.border}`, borderRadius: `min(${theme.radius}, 0.75rem)` }}>

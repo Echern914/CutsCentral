@@ -7,11 +7,14 @@ export interface ClaimInput {
 }
 
 export type ClaimActionResult =
-  | { ok: true; startsAt: string; shopSlug: string | null }
+  /** pending = an approval-mode shop: a REQUEST was submitted, not a booking. */
+  | { ok: true; startsAt: string; shopSlug: string | null; pending: boolean }
   /** The hold lapsed (or was released/used) between page load and the tap. */
   | { ok: false; reason: "expired" }
   /** The physical time got taken through an overriding path. */
   | { ok: false; reason: "gone" }
+  /** The shop switched on deposits mid-hold; book through their page instead. */
+  | { ok: false; reason: "deposit" }
   | { ok: false; reason: "error" };
 
 /**
@@ -27,13 +30,21 @@ export async function claimOfferAction(
     ok: boolean;
     startsAt: string;
     shopSlug: string | null;
+    pending: boolean;
   }>("POST", `/api/book/offer/${encodeURIComponent(token)}/claim`, {
     email: input.email?.trim() || undefined,
   });
   if (res.ok && res.data) {
-    return { ok: true, startsAt: res.data.startsAt, shopSlug: res.data.shopSlug };
+    return {
+      ok: true,
+      startsAt: res.data.startsAt,
+      shopSlug: res.data.shopSlug,
+      pending: Boolean(res.data.pending),
+    };
   }
   if (res.status === 410 || res.status === 404) return { ok: false, reason: "expired" };
-  if (res.status === 409) return { ok: false, reason: "gone" };
+  if (res.status === 409) {
+    return { ok: false, reason: res.error === "deposit_required" ? "deposit" : "gone" };
+  }
   return { ok: false, reason: "error" };
 }

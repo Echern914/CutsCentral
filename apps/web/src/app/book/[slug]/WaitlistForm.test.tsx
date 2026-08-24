@@ -175,6 +175,35 @@ describe("both entry points", () => {
     expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(false);
   });
 
+  it("🔴 phone-only is told the truth: automatic offers travel by EMAIL", async () => {
+    // Customer SMS is off until carrier approval, so a phone-only joiner is
+    // on the manual path - the form says so BEFORE they join, and the
+    // confirmation repeats it after.
+    render(<WaitlistForm {...base} />);
+    expect(screen.queryByText(/reach out personally/i)).toBeNull();
+    fireEvent.change(screen.getByLabelText("Mobile number"), {
+      target: { value: "3025550100" },
+    });
+    expect(screen.getByText(/automatic offers .* go out by/i)).toBeTruthy();
+    // Adding an email clears the warning - they're on the automatic path now.
+    fireEvent.change(screen.getByLabelText("Email"), {
+      target: { value: "w@test.local" },
+    });
+    expect(screen.queryByText(/reach out personally instead/i)).toBeNull();
+  });
+
+  it("a phone-only confirmation says the shop reaches out personally", async () => {
+    render(<WaitlistForm {...base} />);
+    fireEvent.change(screen.getByLabelText("Your name"), { target: { value: "Wanda" } });
+    fireEvent.change(screen.getByLabelText("Mobile number"), {
+      target: { value: "3025550100" },
+    });
+    fireEvent.click(screen.getByText("Join the waitlist", { selector: "button" }));
+    expect(await screen.findByRole("status")).toBeTruthy();
+    expect(screen.getByText(/reach out personally when\s+something opens/i)).toBeTruthy();
+    expect(screen.queryByText(/take yourself back off the list/i)).toBeNull();
+  });
+
   it("both land on a confirmation screen that mentions the cancel link", async () => {
     render(<WaitlistForm {...base} />);
     fireEvent.change(screen.getByLabelText("Your name"), { target: { value: "Wanda" } });

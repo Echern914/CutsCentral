@@ -150,6 +150,22 @@ describe("the wire shape", () => {
   });
 });
 
+describe("🔴 phone-only honesty (same rule as the booking page)", () => {
+  it("warns a phone-only joiner that automatic offers travel by email", () => {
+    render(<ShopWaitlistForm {...props} />);
+    open();
+    expect(screen.queryByText(/reach out personally/i)).toBeNull();
+    fireEvent.change(screen.getByLabelText("Mobile number"), {
+      target: { value: "3025550100" },
+    });
+    expect(screen.getByText(/automatic offers for open spots go out by email/i)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Email"), {
+      target: { value: "s@test.local" },
+    });
+    expect(screen.queryByText(/reach out personally instead/i)).toBeNull();
+  });
+});
+
 describe("the confirmation", () => {
   it("an email join mentions the cancel link; a phone-only join does not", async () => {
     const { unmount } = render(<ShopWaitlistForm {...props} />);

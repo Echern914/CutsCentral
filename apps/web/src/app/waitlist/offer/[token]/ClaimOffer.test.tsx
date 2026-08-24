@@ -4,7 +4,12 @@ import { ClaimOffer, type OfferView } from "./ClaimOffer";
 import { claimOfferAction } from "./actions";
 
 vi.mock("./actions", () => ({
-  claimOfferAction: vi.fn(async () => ({ ok: true, startsAt: "", shopSlug: "cuts" })),
+  claimOfferAction: vi.fn(async () => ({
+    ok: true,
+    startsAt: "",
+    shopSlug: "cuts",
+    pending: false,
+  })),
 }));
 
 /**
@@ -25,6 +30,7 @@ const offer = (over: Partial<OfferView> = {}): OfferView => ({
   expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
   firstName: "Wanda",
   email: "w@test.local",
+  approvalRequired: false,
   ...over,
 });
 
@@ -73,5 +79,33 @@ describe("a live hold", () => {
     render(<ClaimOffer token="tok-3" offer={offer()} />);
     fireEvent.click(screen.getByText("Book this time"));
     expect(await screen.findByText(/just got taken/i)).toBeTruthy();
+  });
+
+  it("a deposit flipped on mid-hold explains itself and keeps them on the list", async () => {
+    mockClaim.mockResolvedValueOnce({ ok: false, reason: "deposit" });
+    render(<ClaimOffer token="tok-4" offer={offer()} />);
+    fireEvent.click(screen.getByText("Book this time"));
+    expect(await screen.findByText(/needs a deposit/i)).toBeTruthy();
+    expect(screen.getByText(/still on the\s+waitlist/i)).toBeTruthy();
+  });
+});
+
+describe("approval-mode shops", () => {
+  it("says REQUEST throughout - never promises a booking the shop hasn't confirmed", async () => {
+    mockClaim.mockResolvedValueOnce({
+      ok: true,
+      startsAt: "",
+      shopSlug: "cuts",
+      pending: true,
+    });
+    render(<ClaimOffer token="tok-5" offer={offer({ approvalRequired: true })} />);
+    // The button and the fine print both say request.
+    expect(screen.queryByText("Book this time")).toBeNull();
+    expect(screen.getByText(/confirms appointment requests/i)).toBeTruthy();
+    fireEvent.click(screen.getByText("Request this time"));
+    expect(await screen.findByRole("status")).toBeTruthy();
+    expect(screen.getByText(/request sent/i)).toBeTruthy();
+    expect(screen.getByText(/request .* was submitted/i)).toBeTruthy();
+    expect(screen.queryByText(/you.?re booked/i)).toBeNull();
   });
 });

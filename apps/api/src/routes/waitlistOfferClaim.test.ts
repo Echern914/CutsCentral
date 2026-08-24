@@ -4,6 +4,7 @@ import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
 import {
+  __setConnectEnabledForTests,
   HOLD_MS,
   offerFreedSlot,
   type FreedSlot,
@@ -145,6 +146,7 @@ describe("GET /api/book/offer/:token", () => {
     expect(res.body.expiresAt).toBe(o.expiresAt.toISOString());
     expect(res.body.serviceName).toBe("Cut");
     expect(res.body.staffName).toBe("Sam");
+    expect(res.body.approvalRequired).toBe(false); // normal shop: "Book this time"
     expect(res.body.shop).toEqual({ name: "Claim Cuts", slug, timezone: TZ });
     // Nothing that could open a wider door rides along.
     const raw = JSON.stringify(res.body);
@@ -248,5 +250,78 @@ describe("POST /api/book/offer/:token/claim", () => {
     expect(res.status).toBe(400);
     const offer = await prisma.waitlistOffer.findUnique({ where: { id: o.offerId } });
     expect(offer!.status).toBe("OFFERED"); // untouched
+  });
+});
+
+describe("shop policy over HTTP", () => {
+  it("approval-mode: the reveal says so, the claim lands PENDING, the body says pending", async () => {
+    await prisma.shop.update({
+      where: { id: shopId },
+      data: { requireBookingApproval: true },
+    });
+    try {
+      const o = await heldOffer();
+
+      const reveal = await request(app).get(`/api/book/offer/${o.token}`);
+      expect(reveal.status).toBe(200);
+      expect(reveal.body.approvalRequired).toBe(true); // page says "Request", not "Book"
+
+      const res = await request(app)
+        .post(`/api/book/offer/${o.token}/claim`)
+        .send({ email: `req-${randomToken(4)}@test.local` });
+      expect(res.status).toBe(201);
+      expect(res.body.pending).toBe(true); // "your request was submitted"
+
+      const appt = await prisma.appointment.findFirst({
+        where: { shopId, staffId, startsAt: o.slot.startsAt },
+        select: { status: true, bookedVia: true },
+      });
+      // The shop's approval policy holds; the slot is consumed by the request.
+      expect(appt).toEqual({ status: "PENDING", bookedVia: "waitlist_offer" });
+    } finally {
+      await prisma.shop.update({
+        where: { id: shopId },
+        data: { requireBookingApproval: false },
+      });
+    }
+  });
+
+  it("deposits flipped on mid-hold: 409 deposit_required, hold released, nothing minted", async () => {
+    const o = await heldOffer();
+    __setConnectEnabledForTests(true);
+    await prisma.service.update({ where: { id: serviceId }, data: { price: 40 } });
+    await prisma.shop.update({
+      where: { id: shopId },
+      data: {
+        paymentsMode: "deposit",
+        connectChargesEnabled: true,
+        stripeConnectAccountId: "acct_rt_policy",
+        depositAmountCents: 1500,
+      },
+    });
+    try {
+      const res = await request(app).post(`/api/book/offer/${o.token}/claim`).send({});
+      expect(res.status).toBe(409);
+      expect(res.body).toEqual({ error: "deposit_required" });
+
+      const offer = await prisma.waitlistOffer.findUnique({ where: { id: o.offerId } });
+      expect(offer!.status).toBe("RELEASED");
+      const appts = await prisma.appointment.count({
+        where: { shopId, staffId, startsAt: o.slot.startsAt },
+      });
+      expect(appts).toBe(0); // never an unpaid appointment
+    } finally {
+      __setConnectEnabledForTests(undefined);
+      await prisma.service.update({ where: { id: serviceId }, data: { price: null } });
+      await prisma.shop.update({
+        where: { id: shopId },
+        data: {
+          paymentsMode: "off",
+          connectChargesEnabled: false,
+          stripeConnectAccountId: null,
+          depositAmountCents: null,
+        },
+      });
+    }
   });
 });

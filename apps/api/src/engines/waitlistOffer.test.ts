@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import {
+  __setConnectEnabledForTests,
   claimOffer,
   expireDueOffers,
   HOLD_MINUTES,
@@ -9,6 +10,7 @@ import {
   mintClaimToken,
   notifyOffer,
   offerFreedSlot,
+  OFFER_COOLDOWN_MS,
   type FreedSlot,
 } from "./waitlistOffer.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "./bookingWrite.js";
@@ -140,6 +142,7 @@ beforeAll(async () => {
 
 afterEach(async () => {
   __setSendEmailForTests(undefined);
+  __setConnectEnabledForTests(undefined);
   // Neutralize THIS test's leftovers so no later test inherits them: a spare
   // WAITING entry would be "earliest eligible" for every slot after it, and a
   // spare live hold would be swept by any later worker tick. Same rows, dead
@@ -384,6 +387,7 @@ describe("claiming", () => {
     const claim = await claimOffer({ token: res.token, now: new Date() });
     expect(claim.outcome).toBe("claimed");
     if (claim.outcome !== "claimed") throw new Error("unreachable");
+    expect(claim.pending).toBe(false); // normal shop: a real booking
 
     const appt = await prisma.appointment.findUnique({
       where: { id: claim.appointmentId },
@@ -805,6 +809,7 @@ describe("the expiry worker", () => {
           expiresAt: res.expiresAt,
           serviceName: "Cut",
           staffName: "Sam",
+          approvalRequired: false,
         },
         entry: { firstName: entry.firstName, email: entry.email, clientId: null },
         token: res.token,
@@ -837,6 +842,7 @@ describe("the expiry worker", () => {
         expiresAt: res.expiresAt,
         serviceName: "Cut",
         staffName: "Sam",
+        approvalRequired: false,
       },
       entry: { firstName: entry.firstName, email: entry.email, clientId: null },
       token: res.token,
@@ -853,5 +859,254 @@ describe("the expiry worker", () => {
     const dup = await offerFreedSlot(slot, now);
     expect(dup.outcome).toBe("unavailable");
     expect(sent).toHaveLength(1);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Product policy: cooldown, deposits, approval mode, reachability     */
+/* ------------------------------------------------------------------ */
+
+/** Flip shop columns for one test and put them back whatever happens. */
+async function withShopPolicy(
+  data: Record<string, unknown>,
+  restore: Record<string, unknown>,
+  fn: () => Promise<void>,
+): Promise<void> {
+  await prisma.shop.update({ where: { id: shopId }, data });
+  try {
+    await fn();
+  } finally {
+    await prisma.shop.update({ where: { id: shopId }, data: restore });
+  }
+}
+
+describe("🔴 the six-hour cooldown", () => {
+  it("skips a recently-notified entry and offers the NEXT eligible one", async () => {
+    const slot = freshSlot();
+    const now = new Date();
+    const cooled = await makeEntry();
+    await prisma.waitlistEntry.update({
+      where: { id: cooled.id },
+      data: { notifiedAt: new Date(now.getTime() - 60 * 60 * 1000) }, // 1h ago
+    });
+    const fresh = await makeEntry();
+
+    const res = await offerTo(slot, now);
+    expect(res.entryId).toBe(fresh.id); // earliest ELIGIBLE, not earliest
+  });
+
+  it("with everyone in cooldown there is NO offer at all", async () => {
+    const slot = freshSlot();
+    const now = new Date();
+    const only = await makeEntry();
+    await prisma.waitlistEntry.update({
+      where: { id: only.id },
+      data: { notifiedAt: new Date(now.getTime() - 60 * 60 * 1000) },
+    });
+    expect((await offerFreedSlot(slot, now)).outcome).toBe("no_candidates");
+  });
+
+  it("the boundary is six hours exactly: 6h-1ms suppressed, 6h+1ms eligible", async () => {
+    const now = new Date();
+    const entry = await makeEntry();
+
+    await prisma.waitlistEntry.update({
+      where: { id: entry.id },
+      data: { notifiedAt: new Date(now.getTime() - OFFER_COOLDOWN_MS + 1) },
+    });
+    expect((await offerFreedSlot(freshSlot(), now)).outcome).toBe("no_candidates");
+
+    await prisma.waitlistEntry.update({
+      where: { id: entry.id },
+      data: { notifiedAt: new Date(now.getTime() - OFFER_COOLDOWN_MS - 1) },
+    });
+    expect((await offerFreedSlot(freshSlot(), now)).outcome).toBe("offered");
+  });
+
+  it("🔴 an ignored offer does NOT chain into a fresh email 30 minutes later", async () => {
+    // The exact spam scenario: A's hold lapses, another slot frees right
+    // after. A was notified 30 minutes ago -> still in cooldown -> B's turn.
+    const slot = freshSlot();
+    const now = new Date();
+    const a = await makeEntry();
+    const b = await makeEntry();
+
+    const first = await offerTo(slot, now);
+    expect(first.entryId).toBe(a.id);
+    // The offer flow stamps notifiedAt when the customer is reached.
+    await prisma.waitlistEntry.update({
+      where: { id: a.id },
+      data: { notifiedAt: now },
+    });
+
+    // A ignores it; the worker expires and advances - to B, both because A
+    // already had THIS slot and because A is in cooldown.
+    const t = new Date(first.expiresAt.getTime());
+    await expireDueOffers(t, { forceAdvance: true });
+    const next = await prisma.waitlistOffer.findFirst({
+      where: { shopId, staffId, startsAt: slot.startsAt, status: "OFFERED" },
+    });
+    expect(next!.entryId).toBe(b.id);
+
+    // A COMPLETELY DIFFERENT slot frees 30 minutes after A's notification:
+    // still inside the 6h window, so A is skipped there too.
+    const other = freshSlot();
+    const later = new Date(now.getTime() + 30 * 60_000);
+    const res = await offerFreedSlot(other, later);
+    // B holds a live offer, A is cooling down - nobody eligible.
+    expect(res.outcome).toBe("no_candidates");
+  });
+});
+
+describe("🔴 deposit-required services are never auto-offered unpaid", () => {
+  const DEPOSIT_ON = {
+    paymentsMode: "deposit",
+    connectChargesEnabled: true,
+    stripeConnectAccountId: "acct_test_policy",
+    depositAmountCents: 2000,
+  };
+  const DEPOSIT_OFF = {
+    paymentsMode: "off",
+    connectChargesEnabled: false,
+    stripeConnectAccountId: null,
+    depositAmountCents: null,
+  };
+
+  it("no offer is created; the entry stays WAITING for manual handling", async () => {
+    __setConnectEnabledForTests(true);
+    await prisma.service.update({ where: { id: serviceId }, data: { price: 35 } });
+    const entry = await makeEntry();
+    try {
+      await withShopPolicy(DEPOSIT_ON, DEPOSIT_OFF, async () => {
+        const res = await offerFreedSlot(freshSlot(), new Date());
+        expect(res.outcome).toBe("requires_deposit");
+        const offers = await prisma.waitlistOffer.count({
+          where: { shopId, entryId: entry.id },
+        });
+        expect(offers).toBe(0);
+        const e = await prisma.waitlistEntry.findUnique({ where: { id: entry.id } });
+        expect(e!.status).toBe("WAITING"); // manual handling, not silently dropped
+      });
+    } finally {
+      await prisma.service.update({ where: { id: serviceId }, data: { price: null } });
+    }
+  });
+
+  it("approval-mode shops are the carve-out: they collect on approval, so offers flow", async () => {
+    __setConnectEnabledForTests(true);
+    await prisma.service.update({ where: { id: serviceId }, data: { price: 35 } });
+    await makeEntry();
+    try {
+      await withShopPolicy(
+        { ...DEPOSIT_ON, requireBookingApproval: true },
+        { ...DEPOSIT_OFF, requireBookingApproval: false },
+        async () => {
+          expect((await offerFreedSlot(freshSlot(), new Date())).outcome).toBe("offered");
+        },
+      );
+    } finally {
+      await prisma.service.update({ where: { id: serviceId }, data: { price: null } });
+    }
+  });
+
+  it("🔴 deposits flipped on MID-HOLD: the claim refuses, releases, and mints nothing", async () => {
+    const slot = freshSlot();
+    const entry = await makeEntry();
+    const res = await offerTo(slot);
+
+    __setConnectEnabledForTests(true);
+    await prisma.service.update({ where: { id: serviceId }, data: { price: 35 } });
+    try {
+      await withShopPolicy(DEPOSIT_ON, DEPOSIT_OFF, async () => {
+        const claim = await claimOffer({ token: res.token, now: new Date() });
+        expect(claim.outcome).toBe("deposit_required");
+
+        const offer = await prisma.waitlistOffer.findUnique({ where: { id: res.offerId } });
+        expect(offer!.status).toBe("RELEASED");
+        const appts = await prisma.appointment.count({
+          where: { shopId, staffId, startsAt: slot.startsAt },
+        });
+        expect(appts).toBe(0); // never an unpaid appointment
+        const e = await prisma.waitlistEntry.findUnique({ where: { id: entry.id } });
+        expect(e!.status).toBe("WAITING"); // still on the list
+      });
+    } finally {
+      await prisma.service.update({ where: { id: serviceId }, data: { price: null } });
+    }
+  });
+});
+
+describe("approval-mode shops keep their policy", () => {
+  it("a claim creates a PENDING request that consumes the slot - never a silent booking", async () => {
+    const slot = freshSlot();
+    await makeEntry();
+    const res = await offerTo(slot);
+
+    await withShopPolicy(
+      { requireBookingApproval: true },
+      { requireBookingApproval: false },
+      async () => {
+        const claim = await claimOffer({ token: res.token, now: new Date() });
+        expect(claim.outcome).toBe("claimed");
+        if (claim.outcome !== "claimed") throw new Error("unreachable");
+        expect(claim.pending).toBe(true);
+
+        const appt = await prisma.appointment.findUnique({
+          where: { id: claim.appointmentId },
+        });
+        expect(appt!.status).toBe("PENDING"); // the shop approves, as always
+        expect(appt!.bookedVia).toBe("waitlist_offer");
+
+        // The request still owns the physical time.
+        await expect(
+          prisma.$transaction((tx) =>
+            lockStaffAndAssertSlotFree(tx, {
+              staffId,
+              shopId,
+              startsAt: slot.startsAt,
+              endsAt: slot.endsAt,
+              bufferMin: 0,
+              serviceDayLimit: null,
+            }),
+          ),
+        ).rejects.toThrow(SlotTakenError);
+
+        const offer = await prisma.waitlistOffer.findUnique({ where: { id: res.offerId } });
+        expect(offer!.status).toBe("CLAIMED");
+      },
+    );
+  });
+});
+
+describe("reachability is explicit, never pretended", () => {
+  it("email reaches; a known client's push reaches; an unknown phone-only entry waits for the barber", async () => {
+    const now = new Date();
+
+    // Oldest: unknown phone-only - must be SKIPPED (no channel exists).
+    const phoneOnly = await makeEntry({ email: null, phone: "+15550002222" });
+    // Next: email - reachable, and therefore the earliest ELIGIBLE.
+    const emailed = await makeEntry();
+
+    const first = await offerTo(freshSlot(), now);
+    expect(first.entryId).toBe(emailed.id);
+    expect(first.entry.email).not.toBeNull();
+
+    // Link the phone-only person to a Client (a push target): now reachable.
+    await prisma.client.create({
+      data: {
+        shopId,
+        firstName: "Knows",
+        phone: "+15550002222",
+        acuityClientKey: `policy-${randomToken(6)}`,
+        magicToken: randomToken(),
+      },
+    });
+    const second = await offerTo(freshSlot(), now);
+    expect(second.entryId).toBe(phoneOnly.id);
+    expect(second.entry.clientId).not.toBeNull(); // push-capable, not pretending
+
+    // And they stayed WAITING the whole time before that - never dropped.
+    const e = await prisma.waitlistEntry.findUnique({ where: { id: phoneOnly.id } });
+    expect(["WAITING"]).toContain(e!.status);
   });
 });

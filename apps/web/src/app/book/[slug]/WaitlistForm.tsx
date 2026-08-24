@@ -133,10 +133,16 @@ export function WaitlistForm({
         <p className="mt-1 text-xs text-muted">
           {shopName} will reach out if a spot opens up that fits.
         </p>
-        {emailed && (
+        {emailed ? (
           <p className="mt-2 text-xs text-muted">
             Check your email &mdash; there&rsquo;s a link in there to take
             yourself back off the list any time.
+          </p>
+        ) : (
+          <p className="mt-2 text-xs text-muted">
+            You joined by phone, so {shopName} will reach out personally when
+            something opens &mdash; automatic opening alerts go out by email
+            until texting is available.
           </p>
         )}
       </div>
@@ -181,6 +187,17 @@ export function WaitlistForm({
           value={email}
           onChange={(e) => setEmail(e.target.value)}
         />
+        {/* 🔴 Honest channels: customer texting is off until carrier approval,
+            so automatic opening offers travel by email (+ app push for known
+            clients). A phone-only joiner must be TOLD they're on the manual
+            path, not left assuming a text is coming. */}
+        {phone.trim() !== "" && email.trim() === "" && (
+          <p className="text-xs text-muted">
+            Heads up: automatic offers for open spots go out by <b>email</b>{" "}
+            until texting is available — with just a phone number,{" "}
+            {shopName} will reach out personally instead.
+          </p>
+        )}
 
         {/* ---- when they're free ---- */}
         <fieldset className="rounded-lg border border-white/10 p-3">
