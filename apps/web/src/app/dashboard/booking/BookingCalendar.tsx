@@ -1618,7 +1618,12 @@ function AppointmentBlock({
                       onChange={(e) => setCustomNudge(e.target.value.slice(0, NUDGE_MAX_LEN))}
                       placeholder="Custom message…"
                       maxLength={NUDGE_MAX_LEN}
-                      className="min-w-0 flex-1 rounded-md border border-subtle bg-charcoal-800 px-2 py-1 text-[11px] text-offwhite placeholder:text-muted/50"
+                      // text-xs on phones so the global 16px floor in globals.css can catch it:
+                      // an ARBITRARY value like text-[11px] cannot be enumerated by a
+                      // shared rule, and at 11px iOS zooms the whole agenda on focus.
+                      // sm: restores the original 11px from the sm breakpoint up, so the
+                      // desktop popover is pixel-identical.
+                      className="min-w-0 flex-1 rounded-md border border-subtle bg-charcoal-800 px-2 py-1 text-xs text-offwhite placeholder:text-muted/50 sm:text-[11px]"
                     />
                     <button
                       onClick={() => sendNudge(customNudge)}
