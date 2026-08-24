@@ -2,6 +2,7 @@ import { Prisma, prisma } from "@chairback/db";
 import { apiEnv, randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
 import { sha256Hex } from "./waitlistJoin.js";
+import { entryPrefsMatchSlot } from "./waitlistMatch.js";
 import {
   lockStaffAndAssertSlotFree,
   SlotTakenError,
@@ -69,8 +70,14 @@ export const HOLD_MS = HOLD_MINUTES * 60_000;
  */
 export const OFFER_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 
-/** How many WAITING entries we inspect per freed slot before giving up. */
-const CANDIDATE_SCAN = 20;
+/**
+ * Candidate scan bounds: entries come out of the database in ranked batches
+ * and are evaluated against their preference windows in JS (a window match
+ * is not expressible as a WHERE clause). The hard cap is a runaway backstop
+ * for pathological waitlists - hitting it is LOGGED, never silent.
+ */
+const CANDIDATE_BATCH = 50;
+const CANDIDATE_SCAN_CAP = 500;
 
 // Test seam for the deposit gate: connectEnabled() reads STRIPE_* env, which
 // the suite deliberately runs without. Mirrors __setSendEmailForTests.
@@ -293,10 +300,12 @@ export async function offerFreedSlot(
 }
 
 /**
- * Current matching rules, verbatim from slotOpened (phase D swaps THIS
- * function for window-aware matching): status WAITING, service matches or
- * standing join, staff matches or any-provider, earliest joiner first. Phase
- * C adds only what offers themselves require:
+ * Phase D matching: everything phase C filtered, PLUS the entry's own
+ * preference windows, timezone and minimum notice (engines/waitlistMatch.ts).
+ * Base eligibility is unchanged: status WAITING, service matches or standing
+ * join, staff matches or any-provider (a slot-entry join that captured no
+ * service/staff context stays Any/Any - context is never invented), earliest
+ * joiner first with the id as a stable tie-breaker. Phase C's own rules:
  *   - not currently holding a live offer (one held slot per person),
  *   - never offered THIS exact slot before (an expired offer must advance to
  *     the NEXT person, not bounce back),
@@ -313,39 +322,100 @@ async function pickCandidate(
   slot: FreedSlot,
   now: Date,
 ): Promise<{ id: string; firstName: string; email: string | null; clientId: string | null } | null> {
-  const candidates = await tx.waitlistEntry.findMany({
-    where: {
-      shopId: slot.shopId,
-      status: "WAITING",
-      AND: [
-        { OR: [{ serviceId: slot.serviceId }, { serviceId: null }] },
-        { OR: [{ staffId: slot.staffId }, { staffId: null }, { staffId: "" }] },
-        { offers: { none: { status: "OFFERED", expiresAt: { gt: now } } } },
-        { offers: { none: { staffId: slot.staffId, startsAt: slot.startsAt } } },
-        {
-          OR: [
-            { notifiedAt: null },
-            { notifiedAt: { lt: new Date(now.getTime() - OFFER_COOLDOWN_MS) } },
-          ],
+  // Phase D: what the DATABASE can filter, it filters (status, shop, service,
+  // staff, live-offer, same-slot, cooldown); what only the calendar can
+  // answer - do the entry's preference WINDOWS fit this physical slot, in
+  // the entry's own timezone, with their minimum notice - is evaluated per
+  // candidate by engines/waitlistMatch.ts, in ranked order, first fit wins.
+  let scanned = 0;
+  let skippedByPrefs = 0;
+  for (let offset = 0; scanned < CANDIDATE_SCAN_CAP; offset += CANDIDATE_BATCH) {
+    const batch = await tx.waitlistEntry.findMany({
+      where: {
+        shopId: slot.shopId,
+        status: "WAITING",
+        AND: [
+          { OR: [{ serviceId: slot.serviceId }, { serviceId: null }] },
+          { OR: [{ staffId: slot.staffId }, { staffId: null }, { staffId: "" }] },
+          { offers: { none: { status: "OFFERED", expiresAt: { gt: now } } } },
+          { offers: { none: { staffId: slot.staffId, startsAt: slot.startsAt } } },
+          {
+            OR: [
+              { notifiedAt: null },
+              { notifiedAt: { lt: new Date(now.getTime() - OFFER_COOLDOWN_MS) } },
+            ],
+          },
+        ],
+      },
+      // Deterministic ranking: earliest joiner first, id as the stable
+      // tie-breaker for same-instant joins.
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      skip: offset,
+      take: CANDIDATE_BATCH,
+      select: {
+        id: true,
+        firstName: true,
+        email: true,
+        phone: true,
+        timezone: true,
+        minHoursNotice: true,
+        windows: {
+          select: { startDate: true, endDate: true, startMin: true, endMin: true },
         },
-      ],
-    },
-    orderBy: { createdAt: "asc" },
-    take: CANDIDATE_SCAN,
-    select: { id: true, firstName: true, email: true, phone: true },
-  });
-
-  for (const c of candidates) {
-    if (c.email) return { id: c.id, firstName: c.firstName, email: c.email, clientId: null };
-    // No email: eligible only if they map to a client we can push to.
-    const or: { phone?: string; email?: string }[] = [];
-    if (c.phone) or.push({ phone: c.phone });
-    if (or.length === 0) continue;
-    const client = await tx.client.findFirst({
-      where: { shopId: slot.shopId, OR: or, archivedAt: null },
-      select: { id: true },
+      },
     });
-    if (client) return { id: c.id, firstName: c.firstName, email: null, clientId: client.id };
+    if (batch.length === 0) break;
+
+    for (const c of batch) {
+      scanned += 1;
+      const verdict = entryPrefsMatchSlot(c, slot, {
+        shopTimezone: slot.timezone,
+        now,
+      });
+      if (!verdict.ok) {
+        skippedByPrefs += 1;
+        logger.debug(
+          { shopId: slot.shopId, entryId: c.id, reason: verdict.reason },
+          "waitlist match: candidate skipped",
+        );
+        continue;
+      }
+      // Preferences fit - now can we actually TELL them within the hold?
+      if (c.email) {
+        logger.debug(
+          { shopId: slot.shopId, entryId: c.id, detail: verdict.detail, scanned },
+          "waitlist match: candidate selected (email)",
+        );
+        return { id: c.id, firstName: c.firstName, email: c.email, clientId: null };
+      }
+      if (c.phone) {
+        const client = await tx.client.findFirst({
+          where: { shopId: slot.shopId, phone: c.phone, archivedAt: null },
+          select: { id: true },
+        });
+        if (client) {
+          logger.debug(
+            { shopId: slot.shopId, entryId: c.id, detail: verdict.detail, scanned },
+            "waitlist match: candidate selected (push)",
+          );
+          return { id: c.id, firstName: c.firstName, email: null, clientId: client.id };
+        }
+      }
+      logger.debug(
+        { shopId: slot.shopId, entryId: c.id },
+        "waitlist match: preferences fit but no reachable channel; skipping",
+      );
+    }
+    if (batch.length < CANDIDATE_BATCH) break;
+  }
+
+  if (scanned >= CANDIDATE_SCAN_CAP) {
+    // Bounded on purpose, but never silently: a wall this deep means the
+    // matcher needs attention, not that the slot should quietly go unoffered.
+    logger.warn(
+      { shopId: slot.shopId, scanned, skippedByPrefs },
+      "waitlist match: candidate scan cap reached without a match",
+    );
   }
   return null;
 }

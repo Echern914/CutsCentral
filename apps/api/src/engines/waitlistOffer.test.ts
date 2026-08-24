@@ -14,6 +14,7 @@ import {
   type FreedSlot,
 } from "./waitlistOffer.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "./bookingWrite.js";
+import { addDaysToDateKey, wallParts } from "./waitlistMatch.js";
 import { computeOpenSlots } from "./slots.js";
 import { sha256Hex } from "./waitlistJoin.js";
 import {
@@ -1075,6 +1076,234 @@ describe("approval-mode shops keep their policy", () => {
         expect(offer!.status).toBe("CLAIMED");
       },
     );
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Phase D: preference-aware matching (DB side)                        */
+/* The pure window/timezone/notice matrix lives in waitlistMatch.test; */
+/* these prove the matcher through pickCandidate against real rows.    */
+/* ------------------------------------------------------------------ */
+
+/** Attach one preference window to an entry. */
+async function addWindow(
+  entryId: string,
+  over: Partial<{ startDate: string | null; endDate: string | null; startMin: number | null; endMin: number | null }> = {},
+) {
+  await prisma.waitlistWindow.create({
+    data: {
+      shopId,
+      entryId,
+      startDate: over.startDate ?? null,
+      endDate: over.endDate ?? null,
+      startMin: over.startMin ?? null,
+      endMin: over.endMin ?? null,
+    },
+  });
+}
+
+describe("phase D: the windows decide, in ranked order", () => {
+  it("🔴 an OLDER entry whose window does not fit is skipped for a younger one that fits", async () => {
+    const slot = freshSlot();
+    const slotDate = wallParts(slot.startsAt, TZ).date;
+
+    const older = await makeEntry();
+    await addWindow(older.id, {
+      startDate: addDaysToDateKey(slotDate, 1), // wants ONLY the day after
+      endDate: addDaysToDateKey(slotDate, 1),
+    });
+    const younger = await makeEntry();
+    await addWindow(younger.id, { startDate: slotDate, endDate: slotDate });
+
+    const res = await offerTo(slot);
+    expect(res.entryId).toBe(younger.id);
+    // The skipped entry lost nothing: still WAITING, no offer row.
+    const e = await prisma.waitlistEntry.findUnique({ where: { id: older.id } });
+    expect(e!.status).toBe("WAITING");
+    expect(await prisma.waitlistOffer.count({ where: { entryId: older.id } })).toBe(0);
+  });
+
+  it("a full-fit time window wins; a partial-overlap one is skipped", async () => {
+    const slot = freshSlot(); // 30 minutes long
+    const view = wallParts(slot.startsAt, TZ);
+    const slotDate = view.date;
+    const startMin = view.minutes;
+
+    const partial = await makeEntry();
+    // Window covers the start but ends mid-appointment.
+    await addWindow(partial.id, {
+      startDate: slotDate,
+      endDate: slotDate,
+      startMin: Math.max(0, startMin - 60),
+      endMin: startMin + 15,
+    });
+    const full = await makeEntry();
+    await addWindow(full.id, {
+      startDate: slotDate,
+      endDate: slotDate,
+      startMin,
+      endMin: startMin + 30,
+    });
+
+    const res = await offerTo(slot);
+    expect(res.entryId).toBe(full.id);
+  });
+
+  it("ranking is deterministic: same createdAt, the stable id tie-breaker decides", async () => {
+    const slot = freshSlot();
+    const instant = new Date("2026-01-05T12:00:00Z");
+    const a = await makeEntry({ createdAt: instant });
+    const b = await makeEntry({ createdAt: instant });
+    const winner = [a.id, b.id].sort()[0]!;
+
+    const res = await offerTo(slot);
+    expect(res.entryId).toBe(winner);
+  });
+
+  it("minHoursNotice is honored through the engine: too-soon slots skip to the next entry", async () => {
+    const slot = freshSlot(); // ~3 days out
+    const fussy = await makeEntry({ minHoursNotice: 24 * 14 }); // wants 2 weeks' warning
+    const easy = await makeEntry();
+
+    const res = await offerTo(slot);
+    expect(res.entryId).toBe(easy.id);
+
+    // Alone, the fussy entry means no offer at all.
+    await prisma.waitlistEntry.update({ where: { id: easy.id }, data: { status: "REMOVED" } });
+    await prisma.waitlistOffer.updateMany({
+      where: { shopId, status: "OFFERED" },
+      data: { status: "RELEASED" },
+    });
+    const alone = await offerFreedSlot(freshSlot(), new Date());
+    expect(alone.outcome).toBe("no_candidates");
+    void fussy;
+  });
+
+  it("🔴 the ENTRY's timezone decides the calendar date, not the shop's", async () => {
+    // A slot late in the New York evening is already TOMORROW in Tokyo. Two
+    // entries want "exactly that Tokyo date": the Tokyo-zoned one matches,
+    // the New York-zoned one does not - same window string, different clock.
+    const base = freshSlot();
+    const startsAt = new Date(base.startsAt.getTime() + 20 * 86_400_000); // clear of other lanes
+    // Force a late-NY-evening instant: 02:30Z is 22:30 EDT the previous day.
+    const lateEvening = new Date(
+      Date.UTC(
+        startsAt.getUTCFullYear(),
+        startsAt.getUTCMonth(),
+        startsAt.getUTCDate(),
+        2,
+        30,
+      ),
+    );
+    const slot: FreedSlot = {
+      ...base,
+      startsAt: lateEvening,
+      endsAt: new Date(lateEvening.getTime() + 30 * 60_000),
+    };
+    const tokyoDate = wallParts(slot.startsAt, "Asia/Tokyo").date;
+    const nyDate = wallParts(slot.startsAt, TZ).date;
+    expect(tokyoDate).not.toBe(nyDate); // the whole point
+
+    const nyEntry = await makeEntry({ timezone: TZ });
+    await addWindow(nyEntry.id, { startDate: tokyoDate, endDate: tokyoDate });
+    const tokyoEntry = await makeEntry({ timezone: "Asia/Tokyo" });
+    await addWindow(tokyoEntry.id, { startDate: tokyoDate, endDate: tokyoDate });
+
+    const res = await offerTo(slot);
+    expect(res.entryId).toBe(tokyoEntry.id);
+  });
+
+  it("a slot-entry join that captured no service/staff context matches ANY slot", async () => {
+    const slot = freshSlot();
+    const slotDate = wallParts(slot.startsAt, TZ).date;
+    // Exactly what the production dead-day form submits: no service, no staff.
+    const noContext = await makeEntry({ serviceId: null, staffId: null });
+    await addWindow(noContext.id, { startDate: slotDate, endDate: slotDate });
+
+    const res = await offerTo(slot);
+    expect(res.entryId).toBe(noContext.id);
+    const row = await prisma.waitlistOffer.findUnique({ where: { id: res.offerId } });
+    expect(row!.staffId).toBe(staffId); // the hold is concrete even if the wish wasn't
+    expect(row!.serviceId).toBe(serviceId);
+  });
+
+  it("service-specific and barber-specific entries still filter before windows", async () => {
+    const slot = freshSlot();
+    const slotDate = wallParts(slot.startsAt, TZ).date;
+    const otherSvc = await prisma.service.create({
+      data: { shopId, name: "Locs", durationMin: 60 },
+      select: { id: true },
+    });
+    const wrongService = await makeEntry({ serviceId: otherSvc.id });
+    await addWindow(wrongService.id, { startDate: slotDate, endDate: slotDate });
+    const wrongBarber = await makeEntry({ staffId: otherStaffId });
+    await addWindow(wrongBarber.id, { startDate: slotDate, endDate: slotDate });
+    const anyAny = await makeEntry({ serviceId: null, staffId: "" });
+    await addWindow(anyAny.id, { startDate: slotDate, endDate: slotDate });
+
+    const res = await offerTo(slot);
+    expect(res.entryId).toBe(anyAny.id);
+  });
+
+  it("nobody's windows fit -> no offer, and the slot stays public", async () => {
+    const slot = freshSlot();
+    const slotDate = wallParts(slot.startsAt, TZ).date;
+    for (let i = 0; i < 3; i++) {
+      const e = await makeEntry();
+      await addWindow(e.id, {
+        startDate: addDaysToDateKey(slotDate, 2 + i),
+        endDate: addDaysToDateKey(slotDate, 2 + i),
+      });
+    }
+    const res = await offerFreedSlot(slot, new Date());
+    expect(res.outcome).toBe("no_candidates");
+    const grid = await computeOpenSlots({
+      shopId,
+      staffId,
+      serviceId,
+      fromDate: new Date(slot.startsAt.getTime() - 3600_000),
+      toDate: new Date(slot.startsAt.getTime() + 3600_000),
+      now: new Date(),
+    });
+    expect(grid.some((s) => s.startsAt.getTime() === slot.startsAt.getTime())).toBe(true);
+  });
+
+  it("a large waitlist: 300 non-fitting entries are scanned past, the one fit wins, fast", async () => {
+    const slot = freshSlot();
+    const slotDate = wallParts(slot.startsAt, TZ).date;
+    const wrongDate = addDaysToDateKey(slotDate, 3);
+
+    // 300 older entries whose window is the wrong day - bulk-inserted with
+    // explicit ids so the windows can reference them in one statement.
+    const ids = Array.from({ length: 300 }, (_, i) => `d-perf-${slotSeq}-${i}`);
+    await prisma.waitlistEntry.createMany({
+      data: ids.map((id, i) => ({
+        id,
+        shopId,
+        firstName: `Perf${i}`,
+        email: `perf-${i}@test.local`,
+        createdAt: new Date(Date.now() - 86_400_000 + i * 1000),
+      })),
+    });
+    await prisma.waitlistWindow.createMany({
+      data: ids.map((id) => ({
+        shopId,
+        entryId: id,
+        startDate: wrongDate,
+        endDate: wrongDate,
+        startMin: null,
+        endMin: null,
+      })),
+    });
+    // The single fitting entry, YOUNGEST of all.
+    const fit = await makeEntry();
+    await addWindow(fit.id, { startDate: slotDate, endDate: slotDate });
+
+    const t0 = Date.now();
+    const res = await offerTo(slot);
+    const elapsed = Date.now() - t0;
+    expect(res.entryId).toBe(fit.id);
+    expect(elapsed).toBeLessThan(5000);
   });
 });
 
