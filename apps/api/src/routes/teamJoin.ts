@@ -4,6 +4,7 @@ import { z } from "zod";
 import { prisma } from "@chairback/db";
 import { requireUser } from "../middleware/auth.js";
 import { accountLimiter } from "../middleware/rateLimit.js";
+import { applyChairLink } from "../services/staffUserLink.js";
 
 /**
  * Accepting a team invitation.
@@ -146,6 +147,16 @@ teamJoinRouter.post("/", accountLimiter, requireUser, async (req, res) => {
           role: invite.role,
           staffId,
         },
+      });
+      // Mirror the seat->chair link onto Staff.userId in the SAME transaction,
+      // so a barber whose invite named a chair is reachable by their own
+      // alerts from the moment they accept - not from the next time an owner
+      // happens to re-save the seat. See services/staffUserLink.ts.
+      await applyChairLink(tx, {
+        shopId: invite.shopId,
+        userId: user.id,
+        previousStaffId: null,
+        nextStaffId: staffId,
       });
     });
   } catch (err) {
