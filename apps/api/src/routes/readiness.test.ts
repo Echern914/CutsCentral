@@ -228,7 +228,14 @@ describe("the owner report", () => {
     const after = await readiness(ownerCookie);
     expect(itemById(after, "shop.availability.rule")!.done).toBe(false);
     expect(after.canGoLive).toBe(false);
-    expect(after.milestonesComplete).toBeLessThan(before.milestonesComplete);
+    // Assert the SPECIFIC consequence rather than the aggregate: this
+    // deployment may already block a milestone for its own reasons (DRY_RUN
+    // makes every alert undeliverable, for one), so "milestonesComplete went
+    // down" is not a stable signal - "more things now block" is.
+    expect(after.blocking.length).toBeGreaterThan(before.blocking.length);
+    // The chair is no longer bookable either, since hours are part of it.
+    expect(itemById(after, "shop.bookable_chair")!.done).toBe(false);
+    expect(after.milestonesComplete).toBeLessThanOrEqual(before.milestonesComplete);
 
     // Put it back.
     await request(app)

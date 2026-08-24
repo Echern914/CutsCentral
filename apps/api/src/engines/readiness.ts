@@ -184,8 +184,20 @@ export interface StaffFacts {
   active: boolean;
   /** Weekly AvailabilityRule rows for this chair. */
   availabilityRuleCount: number;
-  /** ServiceStaff rows joining this chair to an ACTIVE service. */
+  /** ServiceStaff rows joining this chair to an ACTIVE service. Answers "does
+   *  this chair offer anything at all", NOT "can it be booked". */
   activeServiceLinkCount: number;
+  /**
+   * ServiceStaff rows joining this chair to a service that is active AND long
+   * enough AND open on at least one weekday - i.e. a link a customer could
+   * really book.
+   *
+   * 🔑 SEPARATE FROM activeServiceLinkCount ON PURPOSE. A chair linked only to a
+   * service that is closed every weekday has an active link and zero bookable
+   * ones, and an unrelated open service elsewhere in the shop must not paper
+   * over that. Bookability decisions read THIS field.
+   */
+  bookableServiceLinkCount: number;
   hasPhoto: boolean;
   hasBio: boolean;
   /** ShopMember.staffId points at this chair (the seat that works it). */
@@ -196,15 +208,31 @@ export interface StaffFacts {
   recipientIsOwnerFallback: boolean;
 }
 
-/** A person's alert reachability. Booleans only - never the number itself. */
+/**
+ * A person's alert reachability. Counts and booleans only - never an endpoint,
+ * token, phone number or email address.
+ */
 export interface RecipientFacts {
   userId: string;
   /** Resolved prefs (absent row = NOTIFY_DEFAULTS, resolved by the collector). */
   pushEnabled: boolean;
   smsEnabled: boolean;
   emailEnabled: boolean;
-  /** Registered push devices for this user, across shops. */
-  deviceCount: number;
+  /**
+   * The per-EVENT switch for "someone just booked". A recipient with every
+   * channel wired up but this off is told nothing about a new booking, which is
+   * precisely the event launch readiness is about.
+   */
+  newBookingEnabled: boolean;
+  /**
+   * Web-push subscriptions, SPLIT FROM Expo because they need different things:
+   * a web subscription is undeliverable without VAPID, while an Expo token is
+   * posted to Expo and needs no server key at all. One undifferentiated device
+   * count cannot answer "is this person reachable" on a deployment with no VAPID.
+   */
+  webDeviceCount: number;
+  /** Native-app (Expo) devices. Deliverable without VAPID. */
+  expoDeviceCount: number;
   /** A number exists (own pref, else the shop's alert line). */
   hasPhone: boolean;
   /** The user account has an email address on file. */
@@ -275,11 +303,22 @@ export interface ReadinessFacts {
  * ops/preflight.ts is fed.
  */
 export interface ReadinessCapabilities {
+  /** Resend configured. Says nothing about DRY_RUN - see below. */
   email: boolean;
-  push: boolean;
+  /** VAPID configured. WEB push only; Expo does not need it. */
+  webPush: boolean;
+  /** A real Twilio transport is configured. */
+  sms: boolean;
   connect: boolean;
   receptionist: boolean;
-  /** DRY_RUN - every send is simulated while true. */
+  /**
+   * DRY_RUN - the global kill switch. Kept SEPARATE from each transport's own
+   * "configured" flag so readiness can say which of the two is wrong. It
+   * suppresses every channel: web push and Expo (messaging/push.ts returns
+   * early), SMS (getMessageProvider returns the Noop provider) and email
+   * (sendEmail returns status "dry_run"). A configured key therefore does NOT
+   * mean anything is deliverable while this is true.
+   */
   dryRun: boolean;
   /** A2P campaigns configured; 0 = no shop ever gets its own number. */
   messagingCampaigns: number;
@@ -335,32 +374,100 @@ function isNative(f: ReadinessFacts): boolean {
 }
 
 /**
- * Can this chair take a booking on its own? Active, works some day, offers some
- * active service, and someone hears about it. This is the unit "one completely
- * bookable chair is enough to launch" is measured in.
+ * Can this ONE chair take a booking by itself? Active, works some day, offers a
+ * service that is really bookable, and a new booking on it genuinely reaches
+ * somebody.
+ *
+ * 🔴 ALL FOUR ON THE SAME CHAIR. Checking them independently across the shop
+ * passes a shop where chair A has hours but no service and chair B has a service
+ * but no hours - every individual check is satisfied by SOMEBODY and nothing is
+ * bookable. That is what `shop.bookable_chair` exists to catch.
  */
-function chairBookable(s: StaffFacts, recipient: RecipientFacts | undefined): boolean {
+function chairBookable(
+  s: StaffFacts,
+  recipient: RecipientFacts | undefined,
+  caps: ReadinessCapabilities,
+): boolean {
   return (
     s.active &&
     s.availabilityRuleCount > 0 &&
-    s.activeServiceLinkCount > 0 &&
-    reachable(recipient)
+    // Bookable, not merely linked: a chair whose only service is closed every
+    // weekday offers nothing, however many other services the shop has.
+    s.bookableServiceLinkCount > 0 &&
+    reachable(recipient, caps)
   );
 }
 
 /**
- * Is this person actually reachable? Push needs a registered device; SMS needs a
- * number (their own, else the shop's); email needs the platform seam AND an
- * address. A switch that is on with nothing behind it reaches nobody, which is
- * the whole point of checking this rather than trusting the toggle.
+ * Would a NEW-BOOKING alert to this person actually be delivered?
+ *
+ * Four things have to line up, and the earlier version checked only the last
+ * two - a stored preference and a stored destination - which is not evidence of
+ * delivery:
+ *
+ *   1. the per-event switch is on (`newBookingEnabled`); a recipient wired up on
+ *      every channel who turned new-booking alerts off hears nothing,
+ *   2. DRY_RUN is off; while it is on EVERY transport is suppressed and a
+ *      "configured" key delivers nothing,
+ *   3. that specific transport is configured, and
+ *   4. a destination for it exists.
+ *
+ * The transports genuinely differ, so they are evaluated separately rather than
+ * as one device count:
+ *   - WEB push needs VAPID. Without it a web subscription is undeliverable.
+ *   - EXPO push is posted to Expo and needs no server key, so a native device is
+ *     deliverable on a deployment with no VAPID at all.
+ *   - SMS needs a real Twilio transport, not just a saved number.
+ *   - EMAIL needs the Resend seam AND an address on the account.
  */
-function reachable(r: RecipientFacts | undefined): boolean {
-  if (!r) return false;
-  return (
-    (r.pushEnabled && r.deviceCount > 0) ||
-    (r.smsEnabled && r.hasPhone) ||
-    (r.emailEnabled && r.hasEmail)
-  );
+function reachable(
+  r: RecipientFacts | undefined,
+  caps: ReadinessCapabilities,
+): boolean {
+  return deliverableChannels(r, caps).length > 0;
+}
+
+/** Which channels would really carry a new-booking alert. Names only. */
+function deliverableChannels(
+  r: RecipientFacts | undefined,
+  caps: ReadinessCapabilities,
+): Array<"app" | "browser" | "text" | "email"> {
+  if (!r) return [];
+  // The per-event switch and the global kill switch gate every channel at once.
+  if (!r.newBookingEnabled) return [];
+  if (caps.dryRun) return [];
+  const out: Array<"app" | "browser" | "text" | "email"> = [];
+  if (r.pushEnabled && r.expoDeviceCount > 0) out.push("app");
+  if (r.pushEnabled && caps.webPush && r.webDeviceCount > 0) out.push("browser");
+  if (r.smsEnabled && caps.sms && r.hasPhone) out.push("text");
+  if (r.emailEnabled && caps.email && r.hasEmail) out.push("email");
+  return out;
+}
+
+/** Why a recipient is NOT reachable, in the customer's words. */
+function unreachableReason(
+  r: RecipientFacts | undefined,
+  caps: ReadinessCapabilities,
+): string {
+  if (!r) return "No one is set to receive these alerts";
+  if (caps.dryRun) {
+    return "Message sending is switched off on this ChairBack deployment - no alert would actually be delivered";
+  }
+  if (!r.newBookingEnabled) {
+    return "New-booking alerts are switched off, so a booking would notify nobody";
+  }
+  const hasWebOnly =
+    r.pushEnabled && r.webDeviceCount > 0 && r.expoDeviceCount === 0 && !caps.webPush;
+  if (hasWebOnly) {
+    return "The only registered device is a browser, and browser notifications are not configured on this deployment";
+  }
+  if (r.smsEnabled && r.hasPhone && !caps.sms) {
+    return "A text number is saved but texting is not configured on this deployment";
+  }
+  if (r.emailEnabled && r.hasEmail && !caps.email) {
+    return "Email alerts are on but email is not configured on this deployment";
+  }
+  return "No registered device and no alert number - a booking would reach nobody";
 }
 
 function recipientOf(
@@ -371,8 +478,13 @@ function recipientOf(
 }
 
 /** Per-chair items. Business data only - a chair's name, never a person's. */
-function staffItems(facts: ReadinessFacts, s: StaffFacts): ReadinessItem[] {
+function staffItems(
+  facts: ReadinessFacts,
+  s: StaffFacts,
+  caps: ReadinessCapabilities,
+): ReadinessItem[] {
   const r = recipientOf(facts, s);
+  const channels = deliverableChannels(r, caps);
   const shopHasSeats = facts.staff.some((x) => x.seatLinked);
   return [
     item({
@@ -428,20 +540,11 @@ function staffItems(facts: ReadinessFacts, s: StaffFacts): ReadinessItem[] {
       title: "Bookings reach whoever works this chair",
       why: "A booking nobody is told about is a missed appointment.",
       klass: "required",
-      done: reachable(r),
-      evidence: !r
-        ? "No one is set to receive this chair's alerts"
-        : reachable(r)
-          ? [
-              r.pushEnabled && r.deviceCount > 0
-                ? `${plural(r.deviceCount, "device")} registered`
-                : null,
-              r.smsEnabled && r.hasPhone ? "a text number is saved" : null,
-              r.emailEnabled && r.hasEmail ? "email alerts are on" : null,
-            ]
-              .filter(Boolean)
-              .join(", ")
-          : "No registered device and no alert number - alerts reach nobody",
+      done: channels.length > 0,
+      evidence:
+        channels.length > 0
+          ? `Delivered by ${channels.join(", ")}`
+          : unreachableReason(r, caps),
       role: "barber",
       cta: { label: "Turn on alerts", href: "/dashboard/account" },
     }),
@@ -508,13 +611,12 @@ function shopItems(
   // "every active chair's recipient, plus the owner as the fallback", so a shop
   // with no chairs yet still has the owner here - which is correct: the owner is
   // who a booking would alert.
-  const reachableRecipients = facts.recipients.filter(reachable);
-  const reachableDevices = reachableRecipients.reduce(
-    (n, r) => n + (r.pushEnabled ? r.deviceCount : 0),
-    0,
-  );
-  const anyReachablePhone = reachableRecipients.some((r) => r.smsEnabled && r.hasPhone);
-  const anyReachableEmail = reachableRecipients.some((r) => r.emailEnabled && r.hasEmail);
+  const reachableRecipients = facts.recipients.filter((r) => reachable(r, caps));
+  // Which channels would really carry an alert to ANY of them - used for the
+  // evidence line, so it names transports rather than a device tally.
+  const shopChannels = [
+    ...new Set(reachableRecipients.flatMap((r) => deliverableChannels(r, caps))),
+  ];
 
   const items: ReadinessItem[] = [
     // ----- Milestone 1: your shop (all silent while passing) -----
@@ -651,6 +753,39 @@ function shopItems(
       cta: { label: "Edit services", href: "/dashboard/booking?tab=Services" },
     }),
 
+    item({
+      id: "shop.bookable_chair",
+      milestone: "services_and_barber",
+      // Only once there is a barber AND a service; before that the gap is
+      // already named by its own item.
+      applicable: native && activeStaff.length > 0 && activeServices.length > 0,
+      title: "One barber is completely ready",
+      why: "Every other check can be satisfied by a DIFFERENT barber - one has hours, another has a service - and still leave nothing a customer can actually book. This is the one that says a single chair works end to end.",
+      klass: "required",
+      done: bookableChairs.length > 0,
+      evidence:
+        bookableChairs.length > 0
+          ? `${bookableChairs.map((c) => c.name).join(", ")} ${bookableChairs.length === 1 ? "is" : "are"} ready to take bookings`
+          : activeStaff.length === 0
+            ? "No active barbers"
+            : // Name the nearest chair and what it is missing, so this is one
+              // fix rather than a puzzle.
+              (() => {
+                const nearest = activeStaff[0]!;
+                const missing = [
+                  nearest.availabilityRuleCount === 0 ? "weekly hours" : null,
+                  nearest.bookableServiceLinkCount === 0
+                    ? nearest.activeServiceLinkCount > 0
+                      ? "a service that is open on some day"
+                      : "a service"
+                    : null,
+                  reachable(recipientOf(facts, nearest), caps) ? null : "a working alert",
+                ].filter(Boolean);
+                return `No single barber is fully set up - ${nearest.name} still needs ${missing.join(" and ")}`;
+              })(),
+      cta: { label: "Open Staff", href: "/dashboard/booking?tab=Staff" },
+    }),
+
     // ----- Milestone 3: hours and alerts -----
     item({
       id: "shop.availability.rule",
@@ -694,16 +829,8 @@ function shopItems(
       done: reachableRecipients.length > 0,
       evidence:
         reachableRecipients.length > 0
-          ? [
-              reachableDevices > 0
-                ? `${plural(reachableDevices, "device")} registered`
-                : null,
-              anyReachablePhone ? "an alert number is saved" : null,
-              anyReachableEmail ? "email alerts are on" : null,
-            ]
-              .filter(Boolean)
-              .join(", ")
-          : "No registered device and no alert number - a booking would reach nobody",
+          ? `A new booking would reach you by ${shopChannels.join(", ")}`
+          : unreachableReason(facts.recipients[0], caps),
       role: "barber",
       cta: { label: "Turn on alerts", href: "/dashboard/account" },
     }),
@@ -715,11 +842,16 @@ function shopItems(
       title: "Customer confirmations can be sent",
       why: "Booking confirmations go out by email only - the confirmation text is deliberately off for cost - so without email a customer is told nothing at all.",
       klass: "required",
-      done: caps.email,
+      // DRY_RUN suppresses email exactly like every other channel (sendEmail
+      // returns status "dry_run"), so a configured Resend key does NOT mean a
+      // customer would receive anything.
+      done: caps.email && !caps.dryRun,
       silentWhenDone: true,
-      evidence: caps.email
-        ? "Confirmation emails are configured"
-        : "Email is not configured on this ChairBack deployment - contact support; this is not something you can fix in settings",
+      evidence: caps.dryRun
+        ? "Message sending is switched off on this ChairBack deployment - a customer would get no confirmation"
+        : caps.email
+          ? "Confirmation emails are configured"
+          : "Email is not configured on this ChairBack deployment - contact support; this is not something you can fix in settings",
       role: "owner",
       cta: null,
     }),
@@ -943,7 +1075,7 @@ function shopItems(
 
   // ----- Post-launch polish -----
   const otherIncompleteChairs = activeStaff.filter(
-    (s) => !chairBookable(s, recipientOf(facts, s)),
+    (s) => !chairBookable(s, recipientOf(facts, s), caps),
   );
   items.push(
     item({
@@ -987,12 +1119,12 @@ export function buildReadiness(
   facts: ReadinessFacts,
   caps: ReadinessCapabilities,
 ): ReadinessReport {
-  const bookableChairs = facts.staff.filter(
-    (s) => s.active && chairBookable(s, recipientOf(facts, s)),
+  const bookableChairs = facts.staff.filter((s) =>
+    chairBookable(s, recipientOf(facts, s), caps),
   );
 
   const shopScoped = shopItems(facts, caps, bookableChairs);
-  const perChair = facts.staff.map((s) => ({ s, items: staffItems(facts, s) }));
+  const perChair = facts.staff.map((s) => ({ s, items: staffItems(facts, s, caps) }));
 
   // The go-live preflight is derived from every OTHER required item, so it can
   // never disagree with them. Computed here, after the rest exist.
@@ -1049,7 +1181,7 @@ export function buildReadiness(
       blocking: applicable.filter((i) => i.blocksLaunch),
       applicableCount: counted.length,
       completeCount: counted.filter((i) => i.done).length,
-      bookable: s.active && chairBookable(s, recipientOf(facts, s)),
+      bookable: chairBookable(s, recipientOf(facts, s), caps),
     };
   });
 

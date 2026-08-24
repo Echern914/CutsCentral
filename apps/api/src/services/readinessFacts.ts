@@ -3,15 +3,17 @@ import { prisma, runAsOwner, runWithShop } from "@chairback/db";
 import { connectEnabled, hasActiveAccess } from "../billing/stripe.js";
 import { emailEnabled } from "../messaging/email.js";
 import { pushEnabled } from "../messaging/push.js";
+import { smsConfigured } from "../messaging/twilio.js";
 import { hasReceptionistEntitlement, receptionistConfigured } from "../receptionist/config.js";
 import { countMessagingServices } from "../ops/preflight.js";
 import { parseServiceHours } from "../engines/pricing.js";
 import { NOTIFY_DEFAULTS } from "./barberNotify.js";
-import type {
-  ReadinessCapabilities,
-  ReadinessFacts,
-  RecipientFacts,
-  StaffFacts,
+import {
+  MIN_SERVICE_MINUTES,
+  type ReadinessCapabilities,
+  type ReadinessFacts,
+  type RecipientFacts,
+  type StaffFacts,
 } from "../engines/readiness.js";
 
 /**
@@ -70,7 +72,10 @@ export function collectCapabilities(): ReadinessCapabilities {
   const env = apiEnv();
   return {
     email: emailEnabled(),
-    push: pushEnabled(),
+    // VAPID. WEB push only - an Expo token needs no server key, so a native
+    // device stays deliverable on a deployment with no VAPID at all.
+    webPush: pushEnabled(),
+    sms: smsConfigured(),
     connect: connectEnabled(),
     receptionist: receptionistConfigured(),
     dryRun: env.DRY_RUN,
@@ -171,6 +176,7 @@ export async function collectReadinessFacts(
             pushEnabled: true,
             smsEnabled: true,
             emailEnabled: true,
+            newBookingEnabled: true,
             notifyPhone: true,
           },
         }),
@@ -186,6 +192,21 @@ export async function collectReadinessFacts(
   );
   const activeServiceIds = new Set(
     tenant.services.filter((s) => s.active).map((s) => s.id),
+  );
+  // Services a customer could really book: active, long enough to have been
+  // saved, and open on at least one weekday. A chair linked ONLY to a service
+  // that is closed all week offers nothing, and an unrelated open service
+  // elsewhere in the shop must not paper over that - hence a per-service set
+  // rather than a shop-wide boolean.
+  const bookableServiceIds = new Set(
+    tenant.services
+      .filter(
+        (s) =>
+          s.active &&
+          s.durationMin >= MIN_SERVICE_MINUTES &&
+          !isClosedEveryWeekday(s.hoursWindows),
+      )
+      .map((s) => s.id),
   );
   const rulesByStaff = new Map(
     tenant.availability.map((r) => [r.staffId, r._count._all]),
@@ -204,6 +225,8 @@ export async function collectReadinessFacts(
       active: s.active,
       availabilityRuleCount: rulesByStaff.get(s.id) ?? 0,
       activeServiceLinkCount: links.filter((o) => activeServiceIds.has(o.serviceId)).length,
+      bookableServiceLinkCount: links.filter((o) => bookableServiceIds.has(o.serviceId))
+        .length,
       hasPhoto: Boolean(s.imageUrl),
       hasBio: Boolean(s.bio?.trim()),
       seatLinked: seatByStaffId.has(s.id),
@@ -221,8 +244,13 @@ export async function collectReadinessFacts(
   const { devices, users } = recipientIds.length
     ? await runAsOwner(async (tx) => {
         const [devices, users] = await Promise.all([
+          // Grouped by KIND as well as user: web and Expo subscriptions are not
+          // interchangeable (web needs VAPID, Expo does not), so one
+          // undifferentiated count cannot answer "is this person reachable".
+          // Still ONE query - a second group-by column, not a second round trip,
+          // and emphatically not a query per chair.
           tx.pushSubscription.groupBy({
-            by: ["userId"],
+            by: ["userId", "kind"],
             where: { userId: { in: recipientIds } },
             _count: { _all: true },
           }),
@@ -236,9 +264,13 @@ export async function collectReadinessFacts(
       })
     : { devices: [], users: [] };
 
-  const deviceCounts = new Map(
-    devices.map((d) => [d.userId as string, d._count._all]),
-  );
+  const webDevices = new Map<string, number>();
+  const expoDevices = new Map<string, number>();
+  for (const d of devices) {
+    const target = d.kind === "expo" ? expoDevices : webDevices;
+    const key = d.userId as string;
+    target.set(key, (target.get(key) ?? 0) + d._count._all);
+  }
   const emailByUser = new Map(users.map((u) => [u.id, Boolean(u.email?.trim())]));
   const prefsByUser = new Map(tenant.prefs.map((p) => [p.userId, p]));
 
@@ -251,7 +283,9 @@ export async function collectReadinessFacts(
       pushEnabled: p?.pushEnabled ?? NOTIFY_DEFAULTS.pushEnabled,
       smsEnabled: p?.smsEnabled ?? NOTIFY_DEFAULTS.smsEnabled,
       emailEnabled: p?.emailEnabled ?? NOTIFY_DEFAULTS.emailEnabled,
-      deviceCount: deviceCounts.get(userId) ?? 0,
+      newBookingEnabled: p?.newBookingEnabled ?? NOTIFY_DEFAULTS.newBookingEnabled,
+      webDeviceCount: webDevices.get(userId) ?? 0,
+      expoDeviceCount: expoDevices.get(userId) ?? 0,
       // Their own alert number, else the shop-wide one - the same fallback
       // sendToBarber applies. Boolean only; the number never leaves this file.
       hasPhone: Boolean(p?.notifyPhone?.trim() || shop.notifyPhone?.trim()),

@@ -21,7 +21,8 @@ import {
 
 const CAPS: ReadinessCapabilities = {
   email: true,
-  push: true,
+  webPush: true,
+  sms: true,
   connect: true,
   receptionist: true,
   dryRun: false,
@@ -49,6 +50,7 @@ function ready(over: Partial<ReadinessFacts> = {}): ReadinessFacts {
         active: true,
         availabilityRuleCount: 5,
         activeServiceLinkCount: 1,
+        bookableServiceLinkCount: 1,
         hasPhoto: true,
         hasBio: true,
         seatLinked: false,
@@ -74,7 +76,9 @@ function ready(over: Partial<ReadinessFacts> = {}): ReadinessFacts {
         pushEnabled: true,
         smsEnabled: true,
         emailEnabled: false,
-        deviceCount: 1,
+        newBookingEnabled: true,
+        webDeviceCount: 1,
+        expoDeviceCount: 0,
         hasPhone: true,
         hasEmail: true,
       },
@@ -204,7 +208,9 @@ describe("notification reachability", () => {
     pushEnabled: true,
     smsEnabled: true,
     emailEnabled: false,
-    deviceCount: 0,
+    newBookingEnabled: true,
+    webDeviceCount: 0,
+    expoDeviceCount: 0,
     hasPhone: false,
     hasEmail: true,
   };
@@ -226,9 +232,9 @@ describe("notification reachability", () => {
   });
 
   it("passes on a registered device alone", () => {
-    const r = build({ recipients: [{ ...unreachable, deviceCount: 2 }] });
+    const r = build({ recipients: [{ ...unreachable, webDeviceCount: 2 }] });
     expect(find(r, "shop.alerts.reachable")!.done).toBe(true);
-    expect(find(r, "shop.alerts.reachable")!.evidence).toContain("2 devices");
+    expect(find(r, "shop.alerts.reachable")!.evidence).toContain("browser");
   });
 
   it("passes on a saved number alone", () => {
@@ -250,7 +256,7 @@ describe("notification reachability", () => {
           ...unreachable,
           pushEnabled: false,
           smsEnabled: false,
-          deviceCount: 5,
+          webDeviceCount: 5,
           hasPhone: true,
         },
       ],
@@ -411,7 +417,9 @@ describe("conditional features", () => {
           pushEnabled: true,
           smsEnabled: true,
           emailEnabled: false,
-          deviceCount: 0,
+          newBookingEnabled: true,
+          webDeviceCount: 0,
+          expoDeviceCount: 0,
           hasPhone: false,
           hasEmail: true,
         },
@@ -435,6 +443,7 @@ describe("multiple chairs", () => {
     active: true,
     availabilityRuleCount: 0,
     activeServiceLinkCount: 0,
+    bookableServiceLinkCount: 0,
     hasPhoto: false,
     hasBio: false,
     seatLinked: false,
@@ -475,7 +484,12 @@ describe("multiple chairs", () => {
     const r = build({
       staff: [
         { ...ready().staff[0]!, seatLinked: true },
-        { ...secondChair, availabilityRuleCount: 3, activeServiceLinkCount: 1 },
+        {
+          ...secondChair,
+          availabilityRuleCount: 3,
+          activeServiceLinkCount: 1,
+          bookableServiceLinkCount: 1,
+        },
       ],
     });
     const m = r.staff.find((s) => s.staffId === "staff_2")!;
@@ -534,6 +548,7 @@ describe("milestones", () => {
           active: true,
           availabilityRuleCount: 0,
           activeServiceLinkCount: 0,
+          bookableServiceLinkCount: 0,
           hasPhoto: false,
           hasBio: false,
           seatLinked: false,
@@ -659,5 +674,221 @@ describe("the report as data", () => {
     for (const i of build().items) {
       expect(i.deferrable).toBe(i.klass === "recommended");
     }
+  });
+});
+
+describe("one genuinely bookable chair (defect 1)", () => {
+  /**
+   * THE PRE-FIX HOLE. Every shop-wide check can be satisfied by a DIFFERENT
+   * chair - chair A has hours, chair B has a service, someone somewhere is
+   * reachable, and activeOfferingPairs > 0 - while NO single chair can take a
+   * booking. shop.availability.rule, shop.offering.pair and
+   * shop.alerts.reachable all passed and canGoLive returned true.
+   */
+  const chairAHoursNoService = {
+    id: "staff_a",
+    name: "Dre",
+    active: true,
+    availabilityRuleCount: 5, // works Mon-Fri...
+    activeServiceLinkCount: 0, // ...but offers nothing
+    bookableServiceLinkCount: 0,
+    hasPhoto: true,
+    hasBio: true,
+    seatLinked: false,
+    recipientUserId: "user_owner",
+    recipientIsOwnerFallback: true,
+  };
+  const chairBServiceNoHours = {
+    ...chairAHoursNoService,
+    id: "staff_b",
+    name: "Marcus",
+    availabilityRuleCount: 0, // never works...
+    activeServiceLinkCount: 1, // ...but offers a service
+    bookableServiceLinkCount: 1,
+  };
+  const split = () =>
+    build({
+      staff: [chairAHoursNoService, chairBServiceNoHours],
+      // A real pair exists (service <-> chair B), so the shop-wide check passes.
+      activeOfferingPairs: 1,
+    });
+
+  it("catches a shop whose requirements are split across two chairs", () => {
+    const r = split();
+    expect(r.staff.filter((s) => s.bookable)).toHaveLength(0);
+    expect(r.canGoLive).toBe(false);
+
+    // The individually-satisfied checks still pass - that is the whole trap.
+    expect(find(r, "shop.availability.rule")!.done).toBe(true);
+    expect(find(r, "shop.offering.pair")!.done).toBe(true);
+    expect(find(r, "shop.alerts.reachable")!.done).toBe(true);
+
+    // ...and the new item is the one actionable blocker.
+    expect(blockingIds(r).filter((x) => x !== "shop.preflight")).toEqual([
+      "shop.bookable_chair",
+    ]);
+    expect(find(r, "shop.bookable_chair")!.evidence).toContain("Dre");
+  });
+
+  it("turns true once EITHER chair is completed", () => {
+    const viaA = build({
+      staff: [
+        {
+          ...chairAHoursNoService,
+          activeServiceLinkCount: 1,
+          bookableServiceLinkCount: 1,
+        },
+        chairBServiceNoHours,
+      ],
+      activeOfferingPairs: 2,
+    });
+    expect(viaA.canGoLive).toBe(true);
+    expect(viaA.staff.find((s) => s.staffId === "staff_a")!.bookable).toBe(true);
+
+    const viaB = build({
+      staff: [chairAHoursNoService, { ...chairBServiceNoHours, availabilityRuleCount: 5 }],
+      activeOfferingPairs: 1,
+    });
+    expect(viaB.canGoLive).toBe(true);
+    expect(viaB.staff.find((s) => s.staffId === "staff_b")!.bookable).toBe(true);
+  });
+
+  it("will not let an unrelated open service cover a closed linked one", () => {
+    // The chair's ONLY linked service is closed every weekday. The shop has
+    // another service that is open, so the shop-wide checks are satisfied.
+    const r = build({
+      staff: [
+        {
+          ...chairAHoursNoService,
+          activeServiceLinkCount: 1, // linked...
+          bookableServiceLinkCount: 0, // ...but that link is unbookable
+        },
+      ],
+      services: [
+        { ...ready().services[0]!, id: "svc_closed", closedEveryWeekday: true },
+        { ...ready().services[0]!, id: "svc_open" },
+      ],
+      activeOfferingPairs: 1,
+    });
+    expect(find(r, "shop.service.hours_open")!.done).toBe(true); // one IS open
+    expect(find(r, "shop.bookable_chair")!.done).toBe(false);
+    expect(r.canGoLive).toBe(false);
+    expect(find(r, "shop.bookable_chair")!.evidence).toContain("open on some day");
+  });
+
+  it("stands down when the root problem is simply no barber or no service", () => {
+    expect(
+      find(build({ staff: [], activeOfferingPairs: 0 }), "shop.bookable_chair")!.applicable,
+    ).toBe(false);
+    expect(
+      find(build({ services: [], activeOfferingPairs: 0 }), "shop.bookable_chair")!
+        .applicable,
+    ).toBe(false);
+  });
+});
+
+describe("honest alert delivery (defect 2)", () => {
+  /**
+   * A stored preference plus a stored destination is NOT evidence of delivery.
+   * Each case below is a shop that would previously have read as reachable.
+   */
+  const base = {
+    userId: "user_owner",
+    pushEnabled: true,
+    smsEnabled: false,
+    emailEnabled: false,
+    newBookingEnabled: true,
+    webDeviceCount: 0,
+    expoDeviceCount: 0,
+    hasPhone: false,
+    hasEmail: false,
+  };
+  const withRecipient = (r: Partial<typeof base>, caps = CAPS) =>
+    build({ recipients: [{ ...base, ...r }], shopNotifyPhone: false }, caps);
+  const isReachable = (r: Partial<typeof base>, caps = CAPS) =>
+    find(withRecipient(r, caps), "shop.alerts.reachable")!.done;
+
+  it("1. a browser device with no VAPID is NOT reachable", () => {
+    const caps = { ...CAPS, webPush: false };
+    expect(isReachable({ webDeviceCount: 1 }, caps)).toBe(false);
+    expect(
+      find(withRecipient({ webDeviceCount: 1 }, caps), "shop.alerts.reachable")!.evidence,
+    ).toContain("browser notifications are not configured");
+  });
+
+  it("2. an Expo device IS reachable without VAPID", () => {
+    // The native app posts to Expo and needs no server key - so it must not be
+    // lumped in with web subscriptions.
+    const caps = { ...CAPS, webPush: false, dryRun: false };
+    expect(isReachable({ expoDeviceCount: 1 }, caps)).toBe(true);
+  });
+
+  it("3. a valid destination with new-booking alerts OFF is NOT reachable", () => {
+    const off = { expoDeviceCount: 1, newBookingEnabled: false };
+    expect(isReachable(off)).toBe(false);
+    expect(
+      find(withRecipient(off), "shop.alerts.reachable")!.evidence,
+    ).toContain("switched off");
+  });
+
+  it("4. every channel configured but DRY_RUN on is NOT launch-ready", () => {
+    const caps = { ...CAPS, dryRun: true };
+    const r = build(
+      {
+        recipients: [
+          {
+            ...base,
+            smsEnabled: true,
+            emailEnabled: true,
+            webDeviceCount: 2,
+            expoDeviceCount: 2,
+            hasPhone: true,
+            hasEmail: true,
+          },
+        ],
+      },
+      caps,
+    );
+    expect(find(r, "shop.alerts.reachable")!.done).toBe(false);
+    // ...and the customer's confirmation is equally undeliverable.
+    expect(find(r, "platform.email")!.done).toBe(false);
+    expect(find(r, "platform.email")!.evidence).toContain("switched off");
+    expect(r.canGoLive).toBe(false);
+  });
+
+  it("5. an email preference and address with no email provider is NOT reachable", () => {
+    const who = { pushEnabled: false, emailEnabled: true, hasEmail: true };
+    expect(isReachable(who, { ...CAPS, email: false })).toBe(false);
+    // ...and IS once the provider exists.
+    expect(isReachable(who, CAPS)).toBe(true);
+  });
+
+  it("6. a saved number with no SMS provider is NOT reachable", () => {
+    const who = { pushEnabled: false, smsEnabled: true, hasPhone: true };
+    const caps = { ...CAPS, sms: false };
+    expect(isReachable(who, caps)).toBe(false);
+    expect(
+      find(withRecipient(who, caps), "shop.alerts.reachable")!.evidence,
+    ).toContain("texting is not configured");
+  });
+
+  it("7. one genuinely deliverable channel is enough", () => {
+    const cases: Array<[string, Partial<typeof base>]> = [
+      ["expo", { expoDeviceCount: 1 }],
+      ["web + vapid", { webDeviceCount: 1 }],
+      ["sms", { pushEnabled: false, smsEnabled: true, hasPhone: true }],
+      ["email", { pushEnabled: false, emailEnabled: true, hasEmail: true }],
+    ];
+    for (const [label, who] of cases) {
+      expect(isReachable(who), label + " should be reachable").toBe(true);
+    }
+  });
+
+  it("names the channel rather than a device tally", () => {
+    const r = withRecipient({ expoDeviceCount: 3 });
+    const ev = find(r, "shop.alerts.reachable")!.evidence;
+    expect(ev).toContain("app");
+    // No device counts, and certainly no endpoints or tokens.
+    expect(ev).not.toContain("3");
   });
 });
