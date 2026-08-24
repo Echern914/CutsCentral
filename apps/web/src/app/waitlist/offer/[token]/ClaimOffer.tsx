@@ -12,6 +12,8 @@ export interface OfferView {
   expiresAt: string;
   firstName: string;
   email: string | null;
+  /** Approval-mode shop: the tap submits a REQUEST the shop still confirms. */
+  approvalRequired: boolean;
 }
 
 /**
@@ -29,9 +31,10 @@ export function ClaimOffer({
 }) {
   const [state, setState] = useState<
     | { phase: "idle" }
-    | { phase: "done"; startsAt: string }
+    | { phase: "done"; startsAt: string; pending: boolean }
     | { phase: "expired" }
     | { phase: "gone" }
+    | { phase: "deposit" }
     | { phase: "error" }
   >({ phase: "idle" });
   const [email, setEmail] = useState(offer?.email ?? "");
@@ -77,12 +80,37 @@ export function ClaimOffer({
   }
 
   if (state.phase === "done") {
-    return (
+    // Approval-mode shops confirm requests themselves - never tell the
+    // customer they're booked when the shop still has to say yes.
+    return state.pending ? (
+      <div role="status" className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
+        <h1 className="font-display text-2xl">Request sent &#10003;</h1>
+        <p className="mt-2 text-sm text-muted">
+          Your appointment request for {when} was submitted &mdash;{" "}
+          {offer.shopName} confirms requests before they&rsquo;re final, and
+          you&rsquo;ll hear back once they do.
+        </p>
+      </div>
+    ) : (
       <div role="status" className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
         <h1 className="font-display text-2xl">You&rsquo;re booked &#10003;</h1>
         <p className="mt-2 text-sm text-muted">
           {when} at {offer.shopName} is yours. A confirmation email with a
           manage link is on its way{email.trim() ? ` to ${email.trim()}` : ""}.
+        </p>
+      </div>
+    );
+  }
+
+  if (state.phase === "deposit") {
+    return (
+      <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
+        <h1 className="font-display text-2xl">This one needs a deposit</h1>
+        <p className="mt-2 text-sm text-muted">
+          {offer.shopName} now takes a deposit for this service, so this hold
+          link can&rsquo;t finish the booking. You&rsquo;re still on the
+          waitlist &mdash; book through their page to pay the deposit and lock
+          a time in.
         </p>
       </div>
     );
@@ -119,6 +147,12 @@ export function ClaimOffer({
         Held for you for another {mins}:{String(secs).padStart(2, "0")} — after
         that it goes to the next person in line.
       </p>
+      {offer.approvalRequired && (
+        <p className="mt-2 text-xs text-muted">
+          {offer.shopName} confirms appointment requests before they&rsquo;re
+          final — this sends yours in with the time reserved.
+        </p>
+      )}
       <label className="mt-4 block text-xs text-muted">
         Email for your confirmation
         <input
@@ -142,15 +176,23 @@ export function ClaimOffer({
         onClick={() =>
           start(async () => {
             const res = await claimOfferAction(token, { email });
-            if (res.ok) setState({ phase: "done", startsAt: res.startsAt });
+            if (res.ok)
+              setState({ phase: "done", startsAt: res.startsAt, pending: res.pending });
             else if (res.reason === "expired") setState({ phase: "expired" });
             else if (res.reason === "gone") setState({ phase: "gone" });
+            else if (res.reason === "deposit") setState({ phase: "deposit" });
             else setState({ phase: "error" });
           })
         }
         className="mt-5 w-full rounded-xl border border-white/15 bg-white/10 py-3 text-sm font-semibold text-offwhite transition-colors hover:bg-white/15 disabled:opacity-50"
       >
-        {pending ? "Booking…" : "Book this time"}
+        {pending
+          ? offer.approvalRequired
+            ? "Sending request…"
+            : "Booking…"
+          : offer.approvalRequired
+            ? "Request this time"
+            : "Book this time"}
       </button>
     </div>
   );

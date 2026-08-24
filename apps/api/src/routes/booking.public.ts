@@ -134,7 +134,15 @@ bookingPublicRouter.get("/offer/:token", bookingReadLimiter, async (req, res) =>
       expiresAt: true,
       serviceId: true,
       staffId: true,
-      shop: { select: { id: true, name: true, slug: true, timezone: true } },
+      shop: {
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          timezone: true,
+          requireBookingApproval: true,
+        },
+      },
       entry: { select: { firstName: true, email: true } },
     },
   });
@@ -167,6 +175,8 @@ bookingPublicRouter.get("/offer/:token", bookingReadLimiter, async (req, res) =>
     startsAt: offer.startsAt.toISOString(),
     endsAt: offer.endsAt.toISOString(),
     expiresAt: offer.expiresAt.toISOString(),
+    // Approval-mode shop: the claim page must say "request", not "book".
+    approvalRequired: offer.shop.requireBookingApproval,
     firstName: offer.entry.firstName,
     // Prefilled (and maskable) contact for the claim form - this goes only to
     // the link holder, who is the person the email was sent to.
@@ -206,17 +216,20 @@ bookingPublicRouter.post(
 
     switch (result.outcome) {
       case "claimed": {
-        // Same post-commit side effects as the public create: confirmation to
-        // the customer (email-only per #225), the barber's own alert, and the
-        // availability caches (the held slot just became a booked one).
-        void notifyAppointmentConfirmation({
-          shopId: result.shopId,
-          appointmentId: result.appointmentId,
-        });
+        // Same post-commit side effects as the public create - INCLUDING the
+        // approval-mode split: a PENDING request gets no confirmation (that
+        // fires when the barber approves) and the barber alert says
+        // "requested", exactly like a request from the booking page.
+        if (!result.pending) {
+          void notifyAppointmentConfirmation({
+            shopId: result.shopId,
+            appointmentId: result.appointmentId,
+          });
+        }
         void notifyBarberBookingEvent({
           shopId: result.shopId,
           appointmentId: result.appointmentId,
-          kind: "booked",
+          kind: result.pending ? "requested" : "booked",
         });
         invalidateShopAvailabilityCaches(result.shopId);
         res.status(201).json({
@@ -225,6 +238,8 @@ bookingPublicRouter.post(
           startsAt: result.startsAt.toISOString(),
           endsAt: result.endsAt.toISOString(),
           shopSlug: result.shopSlug,
+          // true = a REQUEST awaiting the barber's approval, not a booking.
+          pending: result.pending,
         });
         return;
       }
@@ -239,6 +254,11 @@ bookingPublicRouter.post(
         return;
       case "day_full":
         res.status(409).json({ error: "day_full" });
+        return;
+      case "deposit_required":
+        // The shop turned deposits on mid-hold. The offer was RELEASED; the
+        // entry is still on the waitlist. Never an unpaid appointment.
+        res.status(409).json({ error: "deposit_required" });
         return;
     }
   },

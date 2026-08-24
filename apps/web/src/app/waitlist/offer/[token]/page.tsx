@@ -27,6 +27,7 @@ interface OfferPayload {
   startsAt: string;
   endsAt: string;
   expiresAt: string;
+  approvalRequired: boolean;
   firstName: string;
   email: string | null;
 }
@@ -48,6 +49,7 @@ export default async function WaitlistOfferPage({
           staffName: res.data.staffName,
           startsAt: res.data.startsAt,
           expiresAt: res.data.expiresAt,
+          approvalRequired: Boolean(res.data.approvalRequired),
           firstName: res.data.firstName,
           email: res.data.email,
         }

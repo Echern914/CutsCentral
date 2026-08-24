@@ -234,16 +234,15 @@ describe("notifySlotOpened — customer nudge (toggle on)", () => {
     expect(emails.length).toBe(1);
   });
 
-  it("a past nudge stamp no longer suppresses - the OFFER discipline replaced it", async () => {
-    // The 6h notifiedAt window guarded the old broadcast against spamming the
-    // same person with "come race for it" blasts. Offers make that structural
-    // instead: at most one LIVE offer per person (they're excluded while one
-    // stands) and never a re-offer of the same physical slot - so a stamp
-    // from an hour ago must NOT stop them being offered a fresh slot held
-    // exclusively for them. One offer, one notification.
+  it("🔴 does NOT re-notify a waitlister within the six-hour cooldown", async () => {
+    // The 6h window survives the move from broadcast nudges to held offers:
+    // someone who was notified an hour ago (including an offer they ignored
+    // into expiry) must not get another automated email as the next slot
+    // frees - otherwise a run of cancels emails them every 30 minutes.
     const shop = await makeShop({ slotOpenedTextsEnabled: true });
     const { appointmentId, serviceId } = await makeCanceledAppointment(shop.id);
     const entryId = await addWaitlister(shop.id, { serviceId });
+    // Already notified 1h ago (inside the 6h cooldown).
     await forShop(shop.id).waitlistEntry.update({
       where: { id: entryId },
       data: { notifiedAt: new Date(NOON.getTime() - 60 * 60 * 1000) },
@@ -251,10 +250,52 @@ describe("notifySlotOpened — customer nudge (toggle on)", () => {
 
     await notifySlotOpened({ shopId: shop.id, appointmentId, now: NOON });
 
-    expect(emails.length).toBe(1);
-    // And the second cancellation event for the same freed slot stays silent:
-    // the live hold answers it.
+    expect(emails.length).toBe(0); // suppressed - and no hold was wasted on them
+    const holds = await prisma.waitlistOffer.count({
+      where: { shopId: shop.id, status: "OFFERED" },
+    });
+    expect(holds).toBe(0);
+  });
+
+  it("skips the cooled-down entry and offers the slot to the NEXT eligible one", async () => {
+    const shop = await makeShop({ slotOpenedTextsEnabled: true });
+    const { appointmentId, serviceId } = await makeCanceledAppointment(shop.id);
+    // Earliest joiner is in cooldown; the later joiner is fresh.
+    const cooled = await addWaitlister(shop.id, {
+      serviceId,
+      email: "cooled@example.com",
+    });
+    await forShop(shop.id).waitlistEntry.update({
+      where: { id: cooled },
+      data: { notifiedAt: new Date(NOON.getTime() - 60 * 60 * 1000) },
+    });
+    const freshId = await addWaitlister(shop.id, {
+      serviceId,
+      email: "fresh@example.com",
+    });
+
     await notifySlotOpened({ shopId: shop.id, appointmentId, now: NOON });
+
+    expect(emails.length).toBe(1);
+    expect(emails[0]!.to).toBe("fresh@example.com");
+    const hold = await prisma.waitlistOffer.findFirst({
+      where: { shopId: shop.id, status: "OFFERED" },
+      select: { entryId: true },
+    });
+    expect(hold!.entryId).toBe(freshId);
+  });
+
+  it("a stamp OLDER than six hours no longer suppresses", async () => {
+    const shop = await makeShop({ slotOpenedTextsEnabled: true });
+    const { appointmentId, serviceId } = await makeCanceledAppointment(shop.id);
+    const entryId = await addWaitlister(shop.id, { serviceId });
+    await forShop(shop.id).waitlistEntry.update({
+      where: { id: entryId },
+      data: { notifiedAt: new Date(NOON.getTime() - 7 * 60 * 60 * 1000) },
+    });
+
+    await notifySlotOpened({ shopId: shop.id, appointmentId, now: NOON });
+
     expect(emails.length).toBe(1);
   });
 

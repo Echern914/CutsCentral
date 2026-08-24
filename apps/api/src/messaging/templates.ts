@@ -675,11 +675,14 @@ export function buildWaitlistOfferCustomerPush(params: {
   shopName: string;
   when: string;
   holdMinutes: number;
+  /** Approval-mode shop: the tap submits a REQUEST, so never promise a booking. */
+  approvalRequired: boolean;
 }): PushCopy {
   const who = params.firstName ?? "there";
+  const cta = params.approvalRequired ? "Tap to request it." : "Tap to book.";
   return {
     title: `${params.shopName} is holding a spot for you`,
-    body: `${who}, ${params.when} is yours if you want it — we're holding it for ${params.holdMinutes} minutes. Tap to book.`,
+    body: `${who}, ${params.when} is yours if you want it — we're holding it for ${params.holdMinutes} minutes. ${cta}`,
   };
 }
 
@@ -696,19 +699,27 @@ export function buildWaitlistOfferCustomerEmail(params: {
   when: string;
   holdUntil: string;
   claimUrl: string;
+  /** Approval-mode shop: the link submits a REQUEST the shop still confirms. */
+  approvalRequired: boolean;
 }): EmailCopy {
   const who = params.firstName ?? "there";
   const svc = params.serviceName ?? "appointment";
+  const act = params.approvalRequired
+    ? `Request it here: ${params.claimUrl} (${params.shopName} confirms requests before they're final.)`
+    : `Book it here: ${params.claimUrl}`;
+  const intro = params.approvalRequired
+    ? `Hi ${who}, you're next on the waitlist at ${params.shopName} — this time is reserved for you until ${params.holdUntil}. One tap sends your request, and ${params.shopName} confirms it:`
+    : `Hi ${who}, you're next on the waitlist at ${params.shopName} — this time is reserved for you until ${params.holdUntil}. One tap books it:`;
   return {
     subject: `We're holding ${params.when} for you at ${params.shopName}`,
     text:
       `Hi ${who} — you're up. A ${svc} slot opened at ${params.shopName} on ${params.when}` +
       `${params.staffName ? ` with ${params.staffName}` : ""}, and it's being held just for you ` +
-      `until ${params.holdUntil}. Book it here: ${params.claimUrl} ` +
+      `until ${params.holdUntil}. ${act} ` +
       `If the time doesn't work, do nothing — the hold lapses on its own and the next person gets a turn.`,
     html: appointmentEmailHtml({
       heading: "This spot is being held for you",
-      intro: `Hi ${who}, you're next on the waitlist at ${params.shopName} — this time is reserved for you until ${params.holdUntil}. One tap books it:`,
+      intro,
       shopName: params.shopName,
       serviceName: svc,
       when: params.when,

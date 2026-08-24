@@ -10,7 +10,8 @@ import { ServiceDayFullError } from "./serviceDailyLimit.js";
 import { isSlotBookable } from "./slots.js";
 import { effectivePriceAt } from "./pricing.js";
 import { deriveAcuityClientKey } from "../acuity/clientKey.js";
-import { hasActiveAccess } from "../billing/stripe.js";
+import { connectEnabled, hasActiveAccess } from "../billing/stripe.js";
+import { depositChargeCents, toCents } from "../billing/payments.js";
 import {
   buildWaitlistOfferCustomerEmail,
   buildWaitlistOfferCustomerPush,
@@ -57,8 +58,62 @@ import { sendPushToClient } from "../messaging/push.js";
 export const HOLD_MINUTES = 30;
 export const HOLD_MS = HOLD_MINUTES * 60_000;
 
+/**
+ * 🔴 ANTI-SPAM COOLDOWN, carried over from the broadcast era and kept on
+ * purpose: after an offer notification (including one they ignored into
+ * expiry), the same entry gets NO further automated offer for six hours.
+ * Without this, a run of cancellations would email the same person every 30
+ * minutes as each hold lapsed and the next slot came looking. The one-live-
+ * offer rule and the never-the-same-slot rule still apply on top; entries in
+ * cooldown are SKIPPED and the slot goes to the next eligible person.
+ */
+export const OFFER_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+
 /** How many WAITING entries we inspect per freed slot before giving up. */
 const CANDIDATE_SCAN = 20;
+
+// Test seam for the deposit gate: connectEnabled() reads STRIPE_* env, which
+// the suite deliberately runs without. Mirrors __setSendEmailForTests.
+let connectOverride: boolean | undefined;
+export function __setConnectEnabledForTests(v: boolean | undefined): void {
+  connectOverride = v;
+}
+const connectOn = (): boolean => connectOverride ?? connectEnabled();
+
+/**
+ * Would redeeming a claim OWE MONEY under the shop's normal booking rules?
+ *
+ * 🔴 A waitlist claim is customer-initiated booking, and it must never mint
+ * an unpaid appointment for a service that normally collects a deposit or
+ * full payment up front. Phase C does not carry a checkout, so such slots
+ * are NOT auto-offered at all - the entries stay WAITING for the barber to
+ * work by hand. The condition mirrors the public create's payment gate
+ * exactly (booking.public.ts), including the approval-mode carve-out:
+ * approval shops collect on approval, not at booking, so their requests
+ * are safe to create unpaid.
+ */
+export function claimWouldRequirePayment(
+  shop: {
+    requireBookingApproval: boolean;
+    paymentsMode: string;
+    connectChargesEnabled: boolean;
+    stripeConnectAccountId: string | null;
+    depositAmountCents: number | null;
+  },
+  price: number | null,
+): boolean {
+  if (shop.requireBookingApproval) return false;
+  if (shop.paymentsMode !== "ahead" && shop.paymentsMode !== "deposit") return false;
+  if (!connectOn() || !shop.connectChargesEnabled || !shop.stripeConnectAccountId) {
+    return false;
+  }
+  const fullCents = toCents(price);
+  const chargeCents =
+    shop.paymentsMode === "deposit"
+      ? depositChargeCents(shop.depositAmountCents, fullCents)
+      : fullCents;
+  return chargeCents !== null && chargeCents > 0;
+}
 
 export function mintClaimToken(): { token: string; hash: string } {
   const token = randomToken(32);
@@ -95,7 +150,12 @@ export type OfferResult =
   /** Nobody eligible AND reachable - the slot stays public. */
   | { outcome: "no_candidates" }
   /** Held/booked/blocked/day-full/outside-hours - nothing to offer. */
-  | { outcome: "unavailable" };
+  | { outcome: "unavailable" }
+  /**
+   * The service collects a deposit/pay-ahead at booking and phase C carries
+   * no checkout: never auto-offered. Entries stay WAITING for manual work.
+   */
+  | { outcome: "requires_deposit" };
 
 /**
  * Hold a freed slot for the earliest eligible WAITING entry.
@@ -121,6 +181,39 @@ export async function offerFreedSlot(
     now,
   });
   if (!stillOffered) return { outcome: "unavailable" };
+
+  // 🔴 Deposit gate: if claiming this slot would owe money, don't offer it -
+  // there is no checkout inside the hold yet, and an unpaid appointment for a
+  // deposit-required service is exactly the thing that must never exist.
+  const [policyShop, policyService] = await Promise.all([
+    prisma.shop.findUnique({
+      where: { id: slot.shopId },
+      select: {
+        requireBookingApproval: true,
+        paymentsMode: true,
+        connectChargesEnabled: true,
+        stripeConnectAccountId: true,
+        depositAmountCents: true,
+      },
+    }),
+    prisma.service.findFirst({
+      where: { id: slot.serviceId, shopId: slot.shopId },
+      select: { price: true },
+    }),
+  ]);
+  if (!policyShop) return { outcome: "unavailable" };
+  if (
+    claimWouldRequirePayment(
+      policyShop,
+      policyService?.price == null ? null : Number(policyService.price),
+    )
+  ) {
+    logger.info(
+      { shopId: slot.shopId, serviceId: slot.serviceId },
+      "waitlist offer skipped: service requires a deposit; entries stay WAITING for manual handling",
+    );
+    return { outcome: "requires_deposit" };
+  }
 
   const expiresAt = new Date(now.getTime() + HOLD_MS);
   const { token, hash } = mintClaimToken();
@@ -207,6 +300,10 @@ export async function offerFreedSlot(
  *   - not currently holding a live offer (one held slot per person),
  *   - never offered THIS exact slot before (an expired offer must advance to
  *     the NEXT person, not bounce back),
+ *   - 🔴 not inside the six-hour notification COOLDOWN (OFFER_COOLDOWN_MS):
+ *     someone who just ignored an offer into expiry must not get another
+ *     automated email 30 minutes later as the next hold lapses. In cooldown =
+ *     skipped; the slot advances to the next eligible person.
  *   - reachable: an email address, or a linked client we can push to. A
  *     phone-only entry cannot be told about a 30-minute window while customer
  *     SMS is dark (10DLC), so holding a slot for them would just go dead.
@@ -225,6 +322,12 @@ async function pickCandidate(
         { OR: [{ staffId: slot.staffId }, { staffId: null }, { staffId: "" }] },
         { offers: { none: { status: "OFFERED", expiresAt: { gt: now } } } },
         { offers: { none: { staffId: slot.staffId, startsAt: slot.startsAt } } },
+        {
+          OR: [
+            { notifiedAt: null },
+            { notifiedAt: { lt: new Date(now.getTime() - OFFER_COOLDOWN_MS) } },
+          ],
+        },
       ],
     },
     orderBy: { createdAt: "asc" },
@@ -269,6 +372,8 @@ export async function notifyOffer(params: {
     expiresAt: Date;
     serviceName: string | null;
     staffName: string | null;
+    /** Approval-mode shop: the claim submits a REQUEST, so say "request". */
+    approvalRequired: boolean;
   };
   entry: { firstName: string; email: string | null; clientId: string | null };
   token: string;
@@ -292,6 +397,7 @@ export async function notifyOffer(params: {
       shopName: shop.name,
       when,
       holdMinutes: HOLD_MINUTES,
+      approvalRequired: offer.approvalRequired,
     });
     const res = await sendPushToClient({
       shopId: shop.id,
@@ -314,6 +420,7 @@ export async function notifyOffer(params: {
       when,
       holdUntil,
       claimUrl: url,
+      approvalRequired: offer.approvalRequired,
     });
     const res = await sendEmail({
       to: entry.email,
@@ -350,6 +457,12 @@ export type ClaimResult =
       shopSlug: string | null;
       startsAt: Date;
       endsAt: Date;
+      /**
+       * True on approval-mode shops: the claim created a PENDING REQUEST that
+       * consumes the slot but is not confirmed until the barber approves -
+       * exactly the shop's normal booking policy, never overridden.
+       */
+      pending: boolean;
     }
   /** Token matches nothing. */
   | { outcome: "invalid" }
@@ -357,7 +470,13 @@ export type ClaimResult =
   | { outcome: "expired" }
   /** The physical time got taken through an overriding path. */
   | { outcome: "slot_taken" }
-  | { outcome: "day_full" };
+  | { outcome: "day_full" }
+  /**
+   * The shop turned on deposits mid-hold: redeeming would mint an unpaid
+   * appointment that normally costs money, so the claim refuses and the
+   * offer is RELEASED. The entry stays on the waitlist.
+   */
+  | { outcome: "deposit_required" };
 
 /**
  * Redeem a claim token: revalidate and book ATOMICALLY.
@@ -427,6 +546,11 @@ export async function claimOffer(params: {
             name: true,
             timezone: true,
             bookingBufferMin: true,
+            requireBookingApproval: true,
+            paymentsMode: true,
+            connectChargesEnabled: true,
+            stripeConnectAccountId: true,
+            depositAmountCents: true,
           },
         }),
         tx.service.findFirst({
@@ -441,6 +565,23 @@ export async function claimOffer(params: {
         }),
       ]);
       if (!shop) return { outcome: "invalid" as const };
+
+      // Deposit re-check at REDEMPTION: offers are never created for paid
+      // services, but the shop can flip deposits on mid-hold. Refuse rather
+      // than mint an unpaid appointment; release the hold (we own the row
+      // lock) so the slot returns to the pool and the entry stays WAITING.
+      if (
+        claimWouldRequirePayment(
+          shop,
+          service?.price == null ? null : Number(service.price),
+        )
+      ) {
+        await tx.waitlistOffer.update({
+          where: { id: offer.id },
+          data: { status: "RELEASED" },
+        });
+        return { outcome: "deposit_required" as const };
+      }
 
       // Same guard as every booking write; our own hold must not block us.
       await lockStaffAndAssertSlotFree(tx, {
@@ -510,11 +651,11 @@ export async function claimOffer(params: {
           lastName,
           phone,
           email,
-          // Booked DIRECTLY, even for approval-mode shops: the hold was the
-          // shop's own standing promise ("we're saving this for you"), and a
-          // decline after that promise is worse than any surprise on the
-          // barber's calendar.
-          status: "BOOKED",
+          // The shop's own booking policy, never overridden: approval-mode
+          // shops get a PENDING REQUEST (it consumes the slot exactly like
+          // any pending request; the barber confirms it on their normal
+          // approval screen), everyone else books directly.
+          status: shop.requireBookingApproval ? "PENDING" : "BOOKED",
           startsAt: offer.startsAt,
           endsAt: offer.endsAt,
           priceAtBooking: priceAtBooking ?? undefined,
@@ -546,6 +687,7 @@ export async function claimOffer(params: {
         shopSlug: shop.slug,
         startsAt: offer.startsAt,
         endsAt: offer.endsAt,
+        pending: shop.requireBookingApproval,
       };
     });
   } catch (err) {
@@ -628,6 +770,7 @@ export async function expireDueOffers(
           bookingMode: true,
           waitlistEnabled: true,
           slotOpenedTextsEnabled: true,
+          requireBookingApproval: true,
           subscriptionStatus: true,
           trialEndsAt: true,
           compAccess: true,
@@ -679,6 +822,7 @@ export async function expireDueOffers(
           expiresAt: next.expiresAt,
           serviceName: service?.name ?? null,
           staffName: staff?.name ?? null,
+          approvalRequired: shop.requireBookingApproval,
         },
         entry: next.entry,
         token: next.token,
