@@ -7,6 +7,10 @@ import { Segmented } from "@/components/ui/Segmented";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { cn } from "@/lib/cn";
 import { fmtDuration } from "@/lib/duration";
+import {
+  NAME_WRAP_CLS,
+  initialsOf,
+} from "../_components/appointmentCardStyles";
 import { serviceColorHex } from "@chairback/config/constants";
 import { zonedWallTimeToUtc } from "@chairback/config/time";
 import type {
@@ -1337,6 +1341,12 @@ const NUDGE_PRESETS = [
 ];
 const NUDGE_MAX_LEN = 140;
 
+// Shared card language (name wrapping + initials) - see appointmentCardStyles.
+// The card is PRESENTATION-only work: statuses, permissions and every action
+// handler below are exactly as they were.
+const BTN_BASE =
+  "flex h-11 w-full items-center justify-center rounded-lg text-xs font-medium transition-colors disabled:opacity-50 sm:h-9";
+
 const STATUS_PILL: Record<AgendaRow["status"], { label: string; cls: string }> = {
   pending: { label: "Requested", cls: "bg-amber-400/15 text-amber-300" },
   upcoming: { label: "Upcoming", cls: "bg-gold/15 text-gold" },
@@ -1500,60 +1510,32 @@ function AppointmentBlock({
     });
   }
 
-  // Service color-coding: a left accent stripe (and a dot by the service name).
-  // Falls back to the default subtle border when the service has no color.
+  // Service color-coding: a slim left accent line (and a dot by the service
+  // name). Falls back to the default subtle border when the service has no color.
   const colorHex = serviceColorHex(row.serviceColor);
+  const durMin =
+    row.end && row.end > row.start
+      ? Math.round((Date.parse(row.end) - Date.parse(row.start)) / 60_000)
+      : null;
   return (
     <div
       className={cn(
-        "rounded-lg border border-subtle bg-charcoal-800/40 px-3 py-2",
-        colorHex && "border-l-4",
+        "rounded-xl border border-subtle bg-charcoal-800/60 px-3.5 py-3 shadow-[0_2px_10px_-6px_rgba(0,0,0,0.6)]",
+        colorHex && "border-l-[3px]",
         row.status === "canceled" && "opacity-60",
       )}
       style={colorHex ? { borderLeftColor: colorHex } : undefined}
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="flex items-center gap-2 text-sm font-medium">
-            <span className="tabular-nums text-muted">{timeLabel}</span>
-            <span className="truncate">{row.clientName || "Client"}</span>
-            {isRecurring && (
-              <span
-                title="Repeats weekly"
-                className="shrink-0 rounded-full bg-gold/15 px-1.5 py-0.5 text-[10px] font-medium text-gold"
-              >
-                ↻ Weekly
-              </span>
-            )}
-            {/* Booked in Acuity/Square, mirrored here. Says both "this time is
-                taken for online booking" and "manage it where it was made". */}
-            {row.syncedExternal && (
-              <span
-                title="Booked on your other platform (Acuity/Square). It blocks this time for online booking — change or cancel it there."
-                className="shrink-0 rounded-full bg-sky-400/15 px-1.5 py-0.5 text-[10px] font-medium text-sky-300"
-              >
-                Synced
-              </span>
-            )}
-          </p>
-          {/* The haircut / service type + price, with a color dot when set. */}
-          <p className="mt-0.5 flex items-center gap-1.5 truncate text-xs text-muted">
-            {colorHex && (
-              <span
-                aria-hidden
-                className="inline-block h-2 w-2 shrink-0 rounded-full"
-                style={{ backgroundColor: colorHex }}
-              />
-            )}
-            <span className="truncate">
-              {row.serviceName ?? "Appointment"}
-              {row.price != null && ` · $${row.price.toFixed(0)}`}
-            </span>
-          </p>
-        </div>
+      {/* When + status. Wraps rather than overflows: at 320px a time RANGE
+          plus a status pill does not fit one line, and a clipped "Upcomi" is
+          worse than a second row. */}
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+        <span className="whitespace-nowrap text-xs tabular-nums text-muted">
+          {timeLabel}
+        </span>
         <span
           className={cn(
-            "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium",
+            "shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-semibold",
             pill.cls,
           )}
         >
@@ -1561,19 +1543,68 @@ function AppointmentBlock({
         </span>
       </div>
 
+      {/* WHO. The one fact this card exists to show: full width, wraps
+          naturally, never truncates - "Ab…" is how double-books happen. */}
+      <div className="mt-2 flex items-start gap-2.5">
+        <span
+          aria-hidden
+          className="mt-px flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-charcoal-700 text-[11px] font-semibold text-offwhite/80 ring-1 ring-white/10"
+        >
+          {initialsOf(row.clientName || "Client")}
+        </span>
+        <p className={cn(NAME_WRAP_CLS, "flex-1 text-[17px]")}>
+          {row.clientName || "Client"}
+        </p>
+      </div>
+
+      {/* The service line: what, how long, how much - plus the origin chips,
+          which used to crowd the name row. */}
+      <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 pl-[38px] text-xs text-muted">
+        {colorHex && (
+          <span
+            aria-hidden
+            className="inline-block h-2 w-2 shrink-0 rounded-full"
+            style={{ backgroundColor: colorHex }}
+          />
+        )}
+        <span className="[overflow-wrap:anywhere]">
+          {row.serviceName ?? "Appointment"}
+          {durMin !== null && ` · ${fmtDuration(durMin)}`}
+          {row.price != null && ` · $${row.price.toFixed(0)}`}
+        </span>
+        {isRecurring && (
+          <span
+            title="Repeats weekly"
+            className="shrink-0 rounded-full bg-gold/15 px-1.5 py-0.5 text-[10px] font-medium text-gold"
+          >
+            ↻ Weekly
+          </span>
+        )}
+        {/* Booked in Acuity/Square, mirrored here. Says both "this time is
+            taken for online booking" and "manage it where it was made". */}
+        {row.syncedExternal && (
+          <span
+            title="Booked on your other platform (Acuity/Square). It blocks this time for online booking — change or cancel it there."
+            className="shrink-0 rounded-full bg-sky-400/15 px-1.5 py-0.5 text-[10px] font-medium text-sky-300"
+          >
+            Synced
+          </span>
+        )}
+      </p>
+
       {canApprove && (
-        <div className="mt-2 flex gap-2">
+        <div className="mt-3 grid grid-cols-2 gap-2">
           <button
             onClick={() => act(approveAppointmentAction, "Approved")}
             disabled={pending}
-            className="rounded-md border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-1 text-[11px] font-medium text-emerald-soft disabled:opacity-50"
+            className={cn(BTN_BASE, "border border-emerald-soft/45 bg-emerald-soft/10 font-semibold text-emerald-soft hover:bg-emerald-soft/15")}
           >
             Approve
           </button>
           <button
             onClick={() => act(declineAppointmentAction, "Declined")}
             disabled={pending}
-            className="rounded-md border border-danger-soft/40 px-2.5 py-1 text-[11px] text-danger-soft disabled:opacity-50"
+            className={cn(BTN_BASE, "border border-danger-soft/40 text-danger-soft hover:bg-danger-soft/10")}
           >
             Decline
           </button>
@@ -1619,11 +1650,14 @@ function AppointmentBlock({
       )}
 
       {canAct && (
-        <div className="mt-2 flex flex-wrap gap-2">
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
           {row.hasPush === false ? (
             <span
               title="This client hasn't allowed notifications, so a nudge won't reach them."
-              className="rounded-md border border-subtle px-2.5 py-1 text-[11px] text-muted/60"
+              className={cn(
+                BTN_BASE,
+                "col-span-2 cursor-default border border-subtle text-muted/60 sm:col-span-1",
+              )}
             >
               Notifications off
             </span>
@@ -1632,7 +1666,7 @@ function AppointmentBlock({
               <button
                 onClick={() => setNudgeMenu((v) => !v)}
                 disabled={pending}
-                className="rounded-md border border-gold/40 px-2.5 py-1 text-[11px] text-gold disabled:opacity-50"
+                className={cn(BTN_BASE, "border border-subtle text-muted hover:text-offwhite")}
               >
                 Nudge{(row.nudgesSent ?? 0) > 0 ? " (1 left)" : ""}
               </button>
@@ -1667,7 +1701,12 @@ function AppointmentBlock({
               )}
             </div>
           ) : (
-            <span className="rounded-md border border-subtle px-2.5 py-1 text-[11px] text-muted/60">
+            <span
+              className={cn(
+                BTN_BASE,
+                "col-span-2 cursor-default border border-subtle text-muted/60 sm:col-span-1",
+              )}
+            >
               Nudged ×2
             </span>
           )}
@@ -1675,32 +1714,38 @@ function AppointmentBlock({
             <button
               onClick={() => act(markArrivedAction, "Marked arrived")}
               disabled={pending}
-              className="rounded-md border border-amber-400/40 px-2.5 py-1 text-[11px] text-amber-300 disabled:opacity-50"
+              className={cn(BTN_BASE, "border border-gold/45 text-gold hover:bg-gold/10")}
             >
               Arrived
             </button>
           )}
-          {/* Checkout: the money moment. Sits BEFORE Done because checking out
-              already completes the cut — a barber who taps this never needs
+          {/* Checkout: the money moment - THE primary action on the card, so
+              it's the one solid-gold button. Sits BEFORE Done because checking
+              out already completes the cut — a barber who taps this never needs
               Done, and one who works for free still has Done next to it. */}
           <button
             onClick={() => setCheckoutOpen(true)}
             disabled={pending}
-            className="rounded-md border border-gold/50 bg-gold/10 px-2.5 py-1 text-[11px] font-medium text-gold disabled:opacity-50"
+            className={cn(
+              BTN_BASE,
+              row.paid != null
+                ? "border border-gold/40 bg-gold/10 font-semibold text-gold"
+                : "bg-gold font-semibold text-charcoal-900 hover:bg-gold/90",
+            )}
           >
             {row.paid != null ? "Paid ✓" : "Checkout"}
           </button>
           <button
             onClick={() => act(completeAppointmentAction, "Marked done")}
             disabled={pending}
-            className="rounded-md border border-emerald-soft/40 px-2.5 py-1 text-[11px] text-emerald-soft disabled:opacity-50"
+            className={cn(BTN_BASE, "border border-emerald-soft/45 text-emerald-soft hover:bg-emerald-soft/10")}
           >
             Done
           </button>
           <button
             onClick={() => act(noShowAppointmentAction, "Marked no-show")}
             disabled={pending}
-            className="rounded-md border border-subtle px-2.5 py-1 text-[11px] text-muted disabled:opacity-50"
+            className={cn(BTN_BASE, "border border-subtle text-muted hover:text-offwhite")}
           >
             No-show
           </button>
@@ -1709,7 +1754,7 @@ function AppointmentBlock({
               <button
                 onClick={() => setSeriesMenu((v) => !v)}
                 disabled={pending}
-                className="rounded-md border border-danger-soft/40 px-2.5 py-1 text-[11px] text-danger-soft disabled:opacity-50"
+                className={cn(BTN_BASE, "border border-danger-soft/40 text-danger-soft hover:bg-danger-soft/10")}
               >
                 Cancel ▾
               </button>
@@ -1740,7 +1785,7 @@ function AppointmentBlock({
             <button
               onClick={() => act(cancelAppointmentAction, "Canceled")}
               disabled={pending}
-              className="rounded-md border border-danger-soft/40 px-2.5 py-1 text-[11px] text-danger-soft disabled:opacity-50"
+              className={cn(BTN_BASE, "border border-danger-soft/40 text-danger-soft hover:bg-danger-soft/10")}
             >
               Cancel
             </button>

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { serviceColorHex } from "@chairback/config/constants";
+import { NAME_WRAP_CLS, initialsOf } from "./appointmentCardStyles";
 
 /** One row of today's agenda (the subset of /api/booking/agenda we render). */
 export interface TodayRow {
@@ -97,51 +98,61 @@ export function TodayAgenda({
             return (
               <li
                 key={r.id}
-                className="flex items-start gap-3 px-5 py-3"
+                className="px-5 py-3.5"
                 style={{
                   borderLeft: stripe ? `3px solid ${stripe}` : undefined,
                   opacity: closed ? 0.5 : undefined,
                 }}
               >
-                <span className="w-16 shrink-0 pt-0.5 text-sm tabular-nums text-muted">
-                  {timeFmt.format(new Date(r.start))}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="flex items-baseline justify-between gap-3">
-                    <span
-                      className="block truncate text-sm font-medium"
-                      style={{ textDecoration: closed ? "line-through" : undefined }}
-                    >
-                      {r.clientName}
+                {/* Same hierarchy as the booking card: when + status quietly on
+                    top, then WHO at full width, then the service line. */}
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs tabular-nums text-muted">
+                    {timeFmt.format(new Date(r.start))}
+                  </span>
+                  {r.status === "pending" ? (
+                    <span className="shrink-0 rounded-full bg-gold/15 px-2.5 py-0.5 text-[10px] font-semibold text-gold">
+                      Request
                     </span>
-                    {r.price !== null && (
-                      <span className="shrink-0 text-sm text-muted">${r.price}</span>
-                    )}
+                  ) : r.price !== null ? (
+                    <span className="shrink-0 text-xs tabular-nums text-muted">
+                      ${r.price}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="mt-1.5 flex items-start gap-2.5">
+                  <span
+                    aria-hidden
+                    className="mt-px flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-charcoal-700 text-[11px] font-semibold text-offwhite/80 ring-1 ring-white/10"
+                  >
+                    {initialsOf(r.clientName)}
                   </span>
-                  <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
-                    {r.serviceName && (
-                      <span className="text-xs text-muted">{r.serviceName}</span>
-                    )}
-                    {/* Add-on icons: the barber sees at a glance that this cut
-                        also has a beard trim, a wash, etc. Title carries the
-                        real name for anyone hovering / using a screen reader. */}
-                    {(r.addOns ?? []).map((a) => (
-                      <span
-                        key={a.id}
-                        title={a.name}
-                        aria-label={a.name}
-                        className="text-xs leading-none"
-                      >
-                        {addOnIcon(a.name)}
-                      </span>
-                    ))}
-                    {r.status === "pending" && (
-                      <span className="rounded-full border border-gold/40 px-1.5 py-0.5 text-[10px] font-medium text-gold">
-                        Request
-                      </span>
-                    )}
-                  </span>
-                </span>
+                  {/* Never truncated: the client's full name is the point. */}
+                  <p
+                    className={`${NAME_WRAP_CLS} flex-1 text-[17px]`}
+                    style={{ textDecoration: closed ? "line-through" : undefined }}
+                  >
+                    {r.clientName}
+                  </p>
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 pl-[38px] text-xs text-muted">
+                  {r.serviceName && (
+                    <span className="[overflow-wrap:anywhere]">{r.serviceName}</span>
+                  )}
+                  {/* Add-on icons: the barber sees at a glance that this cut
+                      also has a beard trim, a wash, etc. Title carries the
+                      real name for anyone hovering / using a screen reader. */}
+                  {(r.addOns ?? []).map((a) => (
+                    <span
+                      key={a.id}
+                      title={a.name}
+                      aria-label={a.name}
+                      className="leading-none"
+                    >
+                      {addOnIcon(a.name)}
+                    </span>
+                  ))}
+                </div>
               </li>
             );
           })}

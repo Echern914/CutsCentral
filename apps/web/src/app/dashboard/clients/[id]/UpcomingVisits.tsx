@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Card } from "@/components/ui/Card";
+import { NAME_WRAP_CLS } from "../../_components/appointmentCardStyles";
 
 export interface UpcomingRow {
   id: string;
@@ -66,18 +67,19 @@ export function UpcomingVisits({
       ) : (
         <ul className="divide-y divide-[rgba(245,245,244,0.08)]">
           {rows.map((r) => (
-            <li key={r.id} className="flex items-center gap-3 px-5 py-3.5">
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-offwhite">
-                  {r.service}
-                </p>
-                <p className="mt-0.5 truncate text-xs text-muted">
-                  {dayFmt.format(new Date(r.startsAt))} ·{" "}
-                  {timeFmt.format(new Date(r.startsAt))} · {r.staff}
-                  {r.price !== null && ` · ${formatPrice(r.price)}`}
-                </p>
+            <li key={r.id} className="px-5 py-3.5">
+              {/* Whose page this is is never in question here, so the SERVICE
+                  is the headline - but it wraps and never truncates, the same
+                  rule the client name gets on every other card. */}
+              <div className="flex items-start justify-between gap-3">
+                <p className={`${NAME_WRAP_CLS} flex-1 text-[15px]`}>{r.service}</p>
+                <StatusBadge status={r.status} />
               </div>
-              <StatusBadge status={r.status} />
+              <p className="mt-1 text-xs text-muted [overflow-wrap:anywhere]">
+                {dayFmt.format(new Date(r.startsAt))} ·{" "}
+                {timeFmt.format(new Date(r.startsAt))} · {r.staff}
+                {r.price !== null && ` · ${formatPrice(r.price)}`}
+              </p>
             </li>
           ))}
         </ul>
