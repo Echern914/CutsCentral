@@ -398,6 +398,27 @@ export async function computeOpenSlots(
           select: { startsAt: true, endsAt: true },
         });
 
+    // LIVE waitlist holds: a freed slot OFFERED to one customer is theirs
+    // until the hold lapses, so the public grid must not show it to anyone
+    // else. Same predicate discipline as receptionist holds - OFFERED and
+    // unexpired blocks; an expired-but-unswept row frees its time instantly
+    // (the worker's EXPIRED flip is hygiene). Skipped by the write-path check
+    // like booked rows: the tx guard in bookingWrite.ts is authoritative
+    // there, and it is also what lets a claim exclude its OWN hold.
+    const waitlistHolds = input.ignoreBooked
+      ? []
+      : await tx.waitlistOffer.findMany({
+          where: {
+            staffId: input.staffId,
+            shopId: input.shopId,
+            status: "OFFERED",
+            expiresAt: { gt: now },
+            startsAt: { lt: new Date(rangeEnd) },
+            endsAt: { gt: new Date(rangeStart) },
+          },
+          select: { startsAt: true, endsAt: true },
+        });
+
     // Synced EXTERNAL appointments (Acuity/Square Visits) occupy their span
     // too. A shop that switches to native booking often still has FUTURE
     // synced appointments on the books — without this the picker offers those
@@ -437,6 +458,7 @@ export async function computeOpenSlots(
       recurringBlocks,
       exceptions,
       booked,
+      waitlistHolds,
       externalVisits,
       externalBlocks,
       targeted,
@@ -452,6 +474,7 @@ export async function computeOpenSlots(
     recurringBlocks,
     exceptions,
     booked,
+    waitlistHolds,
     externalVisits,
     externalBlocks,
     targeted,
@@ -601,6 +624,14 @@ export async function computeOpenSlots(
     blocks.push({
       start: b.startsAt.getTime(),
       end: b.endsAt.getTime() + buffer * MS_PER_MIN,
+    });
+  }
+  // Live waitlist holds: buffered exactly like the appointment each would
+  // become, so the surrounding grid stays claim-compatible.
+  for (const h of waitlistHolds) {
+    blocks.push({
+      start: h.startsAt.getTime(),
+      end: h.endsAt.getTime() + buffer * MS_PER_MIN,
     });
   }
   // External synced appointments: same buffer treatment as native rows. The

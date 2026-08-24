@@ -229,6 +229,9 @@ export async function materializeSeries(
           // would let a busy Saturday quietly drop occurrences out of a series
           // months later, with nothing on screen to explain the gap.
           serviceDayLimit: null,
+          // A live waitlist hold here is the shop's own automation - the
+          // barber overrides it; the hold is RELEASED in this transaction.
+          overrideWaitlistHolds: true,
           staffId: input.staffId,
           shopId: input.shopId,
           startsAt,

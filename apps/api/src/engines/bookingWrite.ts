@@ -88,6 +88,21 @@ export async function lockStaffAndAssertSlotFree(
      * active unbooked targeted slot.
      */
     targetedSlotIdToIgnore?: string;
+    /**
+     * Redeeming a waitlist offer: exclude that offer's OWN hold so the claim
+     * doesn't conflict with itself. Any other live hold still blocks.
+     */
+    waitlistOfferIdToIgnore?: string;
+    /**
+     * BARBER-driven writes (dashboard create/approve/reschedule, recurring
+     * series) pass true: the barber booking over a customer's live waitlist
+     * hold is overriding their own automation, so the hold is RELEASED in
+     * this same transaction instead of failing the write. Customer-driven
+     * paths (public create/reschedule, receptionist, gap-fill) leave the
+     * default false and are blocked like any other taken slot - the held
+     * time belongs to exactly one customer until it expires.
+     */
+    overrideWaitlistHolds?: boolean;
     now?: Date;
   },
 ): Promise<void> {
@@ -169,6 +184,34 @@ export async function lockStaffAndAssertSlotFree(
                  AND ("startsAt" + "durationMin" * interval '1 minute') > ${overlapStart.toISOString()}::timestamp`,
   );
   if (targetedOverlap.length > 0) throw new SlotTakenError();
+
+  // Waitlist holds: a LIVE offer (OFFERED and unexpired) owns its span on this
+  // barber exactly like a pending appointment would - that slot is promised to
+  // ONE customer until they claim it or the hold lapses. Expired-but-unswept
+  // rows are excluded the same way expired receptionist holds are: the slot
+  // freed the instant the hold lapsed; the worker's EXPIRED flip is hygiene.
+  // The claim path excludes its OWN hold; barber-driven writers pass
+  // overrideWaitlistHolds and RELEASE the hold here, atomically, instead of
+  // being refused - it is their calendar.
+  const offerIgnoreFragment = opts.waitlistOfferIdToIgnore
+    ? Prisma.sql`AND "id" <> ${opts.waitlistOfferIdToIgnore}`
+    : Prisma.empty;
+  const holdOverlap = await tx.$queryRaw<{ id: string }[]>(
+    Prisma.sql`SELECT id FROM "WaitlistOffer"
+               WHERE "staffId" = ${opts.staffId}
+                 AND "status" = 'OFFERED'
+                 AND "expiresAt" > ${now.toISOString()}::timestamp
+                 ${offerIgnoreFragment}
+                 AND "startsAt" < ${overlapEnd.toISOString()}::timestamp
+                 AND "endsAt" > ${overlapStart.toISOString()}::timestamp`,
+  );
+  if (holdOverlap.length > 0) {
+    if (!opts.overrideWaitlistHolds) throw new SlotTakenError();
+    await tx.waitlistOffer.updateMany({
+      where: { id: { in: holdOverlap.map((h) => h.id) }, status: "OFFERED" },
+      data: { status: "RELEASED" },
+    });
+  }
 
   // Synced EXTERNAL appointments (Acuity/Square Visits): a live future visit
   // owns its span shop-wide — Visits carry no staffId, so this is deliberately
