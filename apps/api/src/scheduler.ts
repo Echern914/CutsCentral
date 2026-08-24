@@ -21,6 +21,7 @@ import { runTrialReminders } from "./engines/trialReminder.js";
 import { runAiTrialReminders } from "./engines/aiTrialReminder.js";
 import { autoCloseIdleConversations } from "./receptionist/conversation.js";
 import { sweepExpiredHolds } from "./engines/holdSweep.js";
+import { expireDueOffers } from "./engines/waitlistOffer.js";
 import { sweepExpiredRateCounters } from "./middleware/pgRateStore.js";
 import { runDemoReset } from "./engines/demoReset.js";
 
@@ -250,6 +251,19 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
       if (closed > 0) logger.info({ closed }, "receptionist conversations auto-closed");
     },
     failMsg: "receptionist conversation close failed",
+  },
+  // Waitlist: expire lapsed 30-minute offer holds and advance the freed slot
+  // to the NEXT eligible entry, every 2 minutes. Expiry is ENFORCED at claim
+  // time (a lapsed token is refused no matter when this last ran) and the
+  // grid/guards already exclude expired holds - the cadence only decides how
+  // fast the next person hears about the slot. Advancement respects DRY_RUN,
+  // billing gates and the per-shop toggle inside the engine.
+  {
+    cronExpr: "*/2 * * * *",
+    name: "waitlist-offer-expiry",
+    ttlMs: 4 * MINUTE,
+    run: () => expireDueOffers(),
+    failMsg: "waitlist offer expiry sweep failed",
   },
   // AI receptionist: sweep expired slot holds every 5 minutes. Hygiene only -
   // the slot engine + overlap guards already ignore expired holds, so the slot

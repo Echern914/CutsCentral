@@ -40,6 +40,8 @@ import {
 } from "../services/appointmentNotify.js";
 import { sendPushToUser } from "../messaging/push.js";
 import { cancelAppointment } from "../engines/appointmentPromotion.js";
+import { claimOffer } from "../engines/waitlistOffer.js";
+import { sha256Hex } from "../engines/waitlistJoin.js";
 import {
   rewardsLimiter,
   bookingReadLimiter,
@@ -105,6 +107,142 @@ async function resolveNativeShop(slugRaw: string | undefined) {
   }
   return shop;
 }
+
+// ---------------------------------------------------------------------------
+// Waitlist offer claim - the tokenized "we're holding this for you" link.
+//
+// Registered BEFORE the /:slug routes on purpose: Express matches in order,
+// and "/offer/..." must never parse as a shop slug. Both routes are slugless
+// (the token alone resolves shop + slot, exactly like the manage token), so a
+// token can never be pointed at a different shop's data - the server derives
+// everything from the offer row it hashes to.
+//
+// 🔑 The RAW token is the credential; only sha256(token) is stored. Unknown,
+// expired, released and already-claimed tokens all collapse into two generic
+// answers (404 not_found / 410 offer_expired) that carry no one's data.
+// ---------------------------------------------------------------------------
+
+// GET /api/book/offer/:token - reveal the held slot to the link holder.
+bookingPublicRouter.get("/offer/:token", bookingReadLimiter, async (req, res) => {
+  const now = new Date();
+  const offer = await prisma.waitlistOffer.findUnique({
+    where: { tokenHash: sha256Hex(String(req.params.token)) },
+    select: {
+      status: true,
+      startsAt: true,
+      endsAt: true,
+      expiresAt: true,
+      serviceId: true,
+      staffId: true,
+      shop: { select: { id: true, name: true, slug: true, timezone: true } },
+      entry: { select: { firstName: true, email: true } },
+    },
+  });
+  // One generic shape for every dead link: unknown token, lapsed hold, a slot
+  // whose start has already passed, or an offer already claimed/released.
+  if (
+    !offer ||
+    offer.status !== "OFFERED" ||
+    offer.expiresAt.getTime() <= now.getTime() ||
+    offer.startsAt.getTime() <= now.getTime()
+  ) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const [service, staff] = await Promise.all([
+    prisma.service.findFirst({
+      where: { id: offer.serviceId, shopId: offer.shop.id },
+      select: { name: true },
+    }),
+    prisma.staff.findFirst({
+      where: { id: offer.staffId, shopId: offer.shop.id },
+      select: { name: true },
+    }),
+  ]);
+  res.json({
+    ok: true,
+    shop: { name: offer.shop.name, slug: offer.shop.slug, timezone: offer.shop.timezone },
+    serviceName: service?.name ?? null,
+    staffName: staff?.name ?? null,
+    startsAt: offer.startsAt.toISOString(),
+    endsAt: offer.endsAt.toISOString(),
+    expiresAt: offer.expiresAt.toISOString(),
+    firstName: offer.entry.firstName,
+    // Prefilled (and maskable) contact for the claim form - this goes only to
+    // the link holder, who is the person the email was sent to.
+    email: offer.entry.email,
+  });
+});
+
+const claimSchema = z
+  .object({
+    firstName: z.string().trim().max(80).optional().or(z.literal("")),
+    lastName: z.string().trim().max(80).optional().or(z.literal("")),
+    email: z.string().trim().email().max(200).optional().or(z.literal("")),
+    phone: z.string().trim().max(40).optional().or(z.literal("")),
+  })
+  .strict();
+
+// POST /api/book/offer/:token/claim - revalidate + book, atomically.
+bookingPublicRouter.post(
+  "/offer/:token/claim",
+  bookingWriteLimiter,
+  async (req, res) => {
+    const parsed = claimSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+      return;
+    }
+    const d = parsed.data;
+    const result = await claimOffer({
+      token: String(req.params.token),
+      customer: {
+        firstName: d.firstName || undefined,
+        lastName: d.lastName || undefined,
+        email: d.email || undefined,
+        phone: d.phone || undefined,
+      },
+    });
+
+    switch (result.outcome) {
+      case "claimed": {
+        // Same post-commit side effects as the public create: confirmation to
+        // the customer (email-only per #225), the barber's own alert, and the
+        // availability caches (the held slot just became a booked one).
+        void notifyAppointmentConfirmation({
+          shopId: result.shopId,
+          appointmentId: result.appointmentId,
+        });
+        void notifyBarberBookingEvent({
+          shopId: result.shopId,
+          appointmentId: result.appointmentId,
+          kind: "booked",
+        });
+        invalidateShopAvailabilityCaches(result.shopId);
+        res.status(201).json({
+          ok: true,
+          manageToken: result.manageToken,
+          startsAt: result.startsAt.toISOString(),
+          endsAt: result.endsAt.toISOString(),
+          shopSlug: result.shopSlug,
+        });
+        return;
+      }
+      case "invalid":
+        res.status(404).json({ error: "not_found" });
+        return;
+      case "expired":
+        res.status(410).json({ error: "offer_expired" });
+        return;
+      case "slot_taken":
+        res.status(409).json({ error: "slot_taken" });
+        return;
+      case "day_full":
+        res.status(409).json({ error: "day_full" });
+        return;
+    }
+  },
+);
 
 // GET /api/book/:slug - shop meta + active staff + active services.
 bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {

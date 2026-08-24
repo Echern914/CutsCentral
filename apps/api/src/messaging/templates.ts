@@ -667,6 +667,58 @@ export function buildSlotOpenedCustomerEmail(params: {
 }
 
 /**
+ * Waitlist OFFER push: unlike the old "come fight for it" nudge, this slot is
+ * being HELD for exactly this person - say so, and say for how long.
+ */
+export function buildWaitlistOfferCustomerPush(params: {
+  firstName: string | null;
+  shopName: string;
+  when: string;
+  holdMinutes: number;
+}): PushCopy {
+  const who = params.firstName ?? "there";
+  return {
+    title: `${params.shopName} is holding a spot for you`,
+    body: `${who}, ${params.when} is yours if you want it — we're holding it for ${params.holdMinutes} minutes. Tap to book.`,
+  };
+}
+
+/**
+ * Waitlist OFFER email. The claim link is the credential (its hash is all the
+ * server keeps), and the deadline is stated in the shop's own clock so
+ * "holding until 3:42 PM" means what the customer thinks it means.
+ */
+export function buildWaitlistOfferCustomerEmail(params: {
+  firstName: string | null;
+  shopName: string;
+  serviceName: string | null;
+  staffName: string | null;
+  when: string;
+  holdUntil: string;
+  claimUrl: string;
+}): EmailCopy {
+  const who = params.firstName ?? "there";
+  const svc = params.serviceName ?? "appointment";
+  return {
+    subject: `We're holding ${params.when} for you at ${params.shopName}`,
+    text:
+      `Hi ${who} — you're up. A ${svc} slot opened at ${params.shopName} on ${params.when}` +
+      `${params.staffName ? ` with ${params.staffName}` : ""}, and it's being held just for you ` +
+      `until ${params.holdUntil}. Book it here: ${params.claimUrl} ` +
+      `If the time doesn't work, do nothing — the hold lapses on its own and the next person gets a turn.`,
+    html: appointmentEmailHtml({
+      heading: "This spot is being held for you",
+      intro: `Hi ${who}, you're next on the waitlist at ${params.shopName} — this time is reserved for you until ${params.holdUntil}. One tap books it:`,
+      shopName: params.shopName,
+      serviceName: svc,
+      when: params.when,
+      staffName: params.staffName,
+      manageUrl: params.claimUrl,
+    }),
+  };
+}
+
+/**
  * Promotion blast SMS copy. Same compliance safety net as nudges (STOP is
  * always present); the booking link is the call to action.
  */

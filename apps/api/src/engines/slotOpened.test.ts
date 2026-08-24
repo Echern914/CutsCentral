@@ -234,11 +234,16 @@ describe("notifySlotOpened — customer nudge (toggle on)", () => {
     expect(emails.length).toBe(1);
   });
 
-  it("does NOT re-notify a waitlister within the suppression window", async () => {
+  it("a past nudge stamp no longer suppresses - the OFFER discipline replaced it", async () => {
+    // The 6h notifiedAt window guarded the old broadcast against spamming the
+    // same person with "come race for it" blasts. Offers make that structural
+    // instead: at most one LIVE offer per person (they're excluded while one
+    // stands) and never a re-offer of the same physical slot - so a stamp
+    // from an hour ago must NOT stop them being offered a fresh slot held
+    // exclusively for them. One offer, one notification.
     const shop = await makeShop({ slotOpenedTextsEnabled: true });
     const { appointmentId, serviceId } = await makeCanceledAppointment(shop.id);
     const entryId = await addWaitlister(shop.id, { serviceId });
-    // Already notified 1h ago (inside the 6h suppression window).
     await forShop(shop.id).waitlistEntry.update({
       where: { id: entryId },
       data: { notifiedAt: new Date(NOON.getTime() - 60 * 60 * 1000) },
@@ -246,7 +251,11 @@ describe("notifySlotOpened — customer nudge (toggle on)", () => {
 
     await notifySlotOpened({ shopId: shop.id, appointmentId, now: NOON });
 
-    expect(emails.length).toBe(0); // suppressed
+    expect(emails.length).toBe(1);
+    // And the second cancellation event for the same freed slot stays silent:
+    // the live hold answers it.
+    await notifySlotOpened({ shopId: shop.id, appointmentId, now: NOON });
+    expect(emails.length).toBe(1);
   });
 
   it("skips a waitlister that doesn't match the freed service", async () => {

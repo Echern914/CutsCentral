@@ -2249,6 +2249,9 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         // walked up. Deliberately overridable, exactly like hours and blocked
         // time already are from this screen.
         serviceDayLimit: null,
+        // A live waitlist hold here is the shop's own automation - the barber
+        // overrides it and the hold is RELEASED in this same transaction.
+        overrideWaitlistHolds: true,
       });
 
       // Resolve the client: an existing one, or create inline from the name.
@@ -2523,6 +2526,9 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
         excludeAppointmentId: appt.id,
         // Barber-driven move: overridable, same as the dashboard create above.
         serviceDayLimit: null,
+        // A live waitlist hold here is the shop's own automation - the barber
+        // overrides it and the hold is RELEASED in this same transaction.
+        overrideWaitlistHolds: true,
       });
       // Send-state is reset so the moved booking gets a fresh confirmation and
       // fresh reminders - including the PUSH stamps, or a moved appointment
@@ -3795,6 +3801,9 @@ bookingDashboardRouter.post("/appointments/:id/approve", async (req, res) => {
         // again here would make the barber unable to approve the very last
         // request the cap allowed.
         serviceDayLimit: null,
+        // A live waitlist hold here is the shop's own automation - the barber
+        // overrides it and the hold is RELEASED in this same transaction.
+        overrideWaitlistHolds: true,
       });
 
       await tx.appointment.update({
