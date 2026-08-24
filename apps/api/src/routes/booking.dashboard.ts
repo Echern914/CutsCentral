@@ -41,6 +41,7 @@ import {
 import { zonedDateParts, zonedWallTimeToUtc, localMinutesOfDay } from "@chairback/config";
 import { invalidateShopAvailabilityCaches } from "./booking.public.js";
 import { logger } from "../logger.js";
+import { recordWaitlistEvent } from "../engines/waitlistAudit.js";
 
 import { requireActiveAccess } from "../middleware/billing.js";
 /**
@@ -2341,6 +2342,25 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
             "waitlist link skipped: entry not active for this shop",
           );
         }
+        // Both outcomes are recorded, in the SAME transaction as the booking.
+        // The skip is the interesting one: it means a barber booked from an
+        // entry that was already satisfied, removed, or another tenant's - and
+        // the appointment still stands, which is worth being able to explain.
+        await recordWaitlistEvent(tx, {
+          shopId,
+          entryId: d.waitlistEntryId,
+          appointmentId: appt.id,
+          type: linked.count === 0 ? "entry.link_skipped" : "entry.booked_linked",
+          actor: {
+            type: "staff",
+            userId: req.userId ?? null,
+            staffId: req.shopStaffId ?? null,
+          },
+          metadata:
+            linked.count === 0
+              ? { source: "dashboard", code: "not_active_for_shop", linked: false }
+              : { source: "dashboard", toStatus: "BOOKED", linked: true },
+        });
       }
       return appt;
     });

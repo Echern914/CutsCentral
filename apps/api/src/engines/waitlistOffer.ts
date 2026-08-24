@@ -4,6 +4,12 @@ import { logger } from "../logger.js";
 import { sha256Hex } from "./waitlistJoin.js";
 import { entryPrefsMatchSlot } from "./waitlistMatch.js";
 import {
+  CUSTOMER_ACTOR,
+  recordWaitlistEvent,
+  recordWaitlistEventBestEffort,
+  SYSTEM_ACTOR,
+} from "./waitlistAudit.js";
+import {
   lockStaffAndAssertSlotFree,
   SlotTakenError,
 } from "./bookingWrite.js";
@@ -268,6 +274,20 @@ export async function offerFreedSlot(
         },
         select: { id: true },
       });
+      // Same transaction as the hold itself: a slot held for someone with no
+      // record of why is exactly the state F1 exists to prevent.
+      await recordWaitlistEvent(tx, {
+        shopId: slot.shopId,
+        entryId: candidate.id,
+        offerId: offer.id,
+        type: "offer.created",
+        actor: SYSTEM_ACTOR,
+        metadata: {
+          holdMinutes: HOLD_MINUTES,
+          scanned: __lastScanStatsForTests.scanned,
+          pages: __lastScanStatsForTests.pages,
+        },
+      });
       return { offer, candidate };
     });
 
@@ -505,6 +525,12 @@ export async function notifyOffer(params: {
   const holdUntil = formatApptTime(offer.expiresAt, shop.timezone);
   const url = claimUrl(apiEnv().APP_BASE_URL, params.token);
   let reached = false;
+  // 🔴 The FACT of a send and its outcome - never the address, the subject or
+  // the body. "We never reached them" versus "we reached them and they let it
+  // lapse" is the difference between a bug and a customer's choice, and today
+  // that distinction survives only as a log line. `notifiedAt` (stamped below)
+  // is also the six-hour cooldown's sole evidence, so it deserves a row.
+  const channels: { channel: string; outcome: string }[] = [];
 
   if (entry.clientId) {
     const push = buildWaitlistOfferCustomerPush({
@@ -524,6 +550,10 @@ export async function notifyOffer(params: {
       return null;
     });
     if (res?.anyDelivered) reached = true;
+    channels.push({
+      channel: "push",
+      outcome: res === null ? "failed" : res.anyDelivered ? "delivered" : "not_delivered",
+    });
   }
 
   if (entry.email && emailEnabled()) {
@@ -547,6 +577,10 @@ export async function notifyOffer(params: {
       return null;
     });
     if (res && (res.status === "sent" || res.status === "dry_run")) reached = true;
+    channels.push({
+      channel: "email",
+      outcome: res === null ? "failed" : res.status,
+    });
   }
 
   if (reached) {
@@ -560,6 +594,28 @@ export async function notifyOffer(params: {
       { shopId: shop.id, entryId: offer.entryId },
       "waitlist offer created but NO channel reached the customer; hold will expire and advance",
     );
+  }
+
+  // Best-effort, and post-send by necessity: the message is already gone. An
+  // audit failure here costs a line of history; throwing would turn a
+  // delivered email into a failed offer.
+  for (const c of channels) {
+    await recordWaitlistEventBestEffort({
+      shopId: shop.id,
+      entryId: offer.entryId,
+      type: "offer.notified",
+      actor: SYSTEM_ACTOR,
+      metadata: { channel: c.channel, outcome: c.outcome },
+    });
+  }
+  if (!reached) {
+    await recordWaitlistEventBestEffort({
+      shopId: shop.id,
+      entryId: offer.entryId,
+      type: "offer.unreachable",
+      actor: SYSTEM_ACTOR,
+      metadata: { code: "no_channel", channel: channels.length === 0 ? "none" : "all_failed" },
+    });
   }
 }
 
@@ -649,6 +705,17 @@ export async function claimOffer(params: {
           where: { id: offer.id },
           data: { status: "EXPIRED" },
         });
+        await recordWaitlistEvent(tx, {
+          shopId: offer.shopId,
+          entryId: offer.entryId,
+          offerId: offer.id,
+          type: "offer.expired",
+          actor: CUSTOMER_ACTOR,
+          // `at` separates the two ways a hold dies: the sweep found it, or
+          // the customer arrived a moment too late. The second is the one a
+          // barber asks about.
+          metadata: { at: "claim" },
+        });
         return { outcome: "expired" as const };
       }
 
@@ -694,6 +761,14 @@ export async function claimOffer(params: {
         await tx.waitlistOffer.update({
           where: { id: offer.id },
           data: { status: "RELEASED" },
+        });
+        await recordWaitlistEvent(tx, {
+          shopId: offer.shopId,
+          entryId: offer.entryId,
+          offerId: offer.id,
+          type: "offer.released",
+          actor: CUSTOMER_ACTOR,
+          metadata: { code: "deposit_required", via: "claim" },
         });
         return { outcome: "deposit_required" as const };
       }
@@ -789,9 +864,27 @@ export async function claimOffer(params: {
       // The entry got what it was waiting for. updateMany: if the barber
       // REMOVED it meanwhile, the booking still stands - just don't resurrect
       // the entry's status.
-      await tx.waitlistEntry.updateMany({
+      const linked = await tx.waitlistEntry.updateMany({
         where: { id: offer.entryId, status: { in: ["WAITING", "CONTACTED"] } },
         data: { status: "BOOKED", bookedAppointmentId: appt.id },
+      });
+
+      await recordWaitlistEvent(tx, {
+        shopId: offer.shopId,
+        entryId: offer.entryId,
+        offerId: offer.id,
+        appointmentId: appt.id,
+        type: "offer.claimed",
+        actor: CUSTOMER_ACTOR,
+        metadata: {
+          // Approval-mode shops get a PENDING request, not a confirmed
+          // booking. Worth recording: it is the difference between "they have
+          // the slot" and "they have asked for it".
+          pending: shop.requireBookingApproval,
+          // False when the barber REMOVED the entry mid-hold: the booking
+          // still stands, but the entry was not resurrected.
+          linked: linked.count > 0,
+        },
       });
 
       return {
@@ -811,10 +904,30 @@ export async function claimOffer(params: {
       // The physical time is gone (admin override, block, or a ghost). The
       // hold can never be redeemed now - release it so the row's state says
       // what happened. Post-tx: the claim tx above rolled back.
-      await prisma.waitlistOffer
-        .updateMany({
-          where: { tokenHash: hash, status: "OFFERED" },
-          data: { status: "RELEASED" },
+      //
+      // The release and its audit row go in ONE transaction of their own, so
+      // the two cannot disagree - but the whole thing is swallowed, because
+      // the customer is already being told slot_taken and a failure here must
+      // not turn that into a 500.
+      await prisma
+        .$transaction(async (tx) => {
+          const released = await tx.waitlistOffer.findFirst({
+            where: { tokenHash: hash, status: "OFFERED" },
+            select: { id: true, shopId: true, entryId: true },
+          });
+          if (!released) return;
+          await tx.waitlistOffer.updateMany({
+            where: { id: released.id, status: "OFFERED" },
+            data: { status: "RELEASED" },
+          });
+          await recordWaitlistEvent(tx, {
+            shopId: released.shopId,
+            entryId: released.entryId,
+            offerId: released.id,
+            type: "offer.released",
+            actor: CUSTOMER_ACTOR,
+            metadata: { code: "slot_taken", via: "claim" },
+          });
         })
         .catch(() => undefined);
       return { outcome: "slot_taken" };
@@ -847,6 +960,7 @@ export async function expireDueOffers(
     select: {
       id: true,
       shopId: true,
+      entryId: true,
       staffId: true,
       serviceId: true,
       startsAt: true,
@@ -858,11 +972,26 @@ export async function expireDueOffers(
   let advanced = 0;
   for (const offer of due) {
     try {
-      const cas = await prisma.waitlistOffer.updateMany({
-        where: { id: offer.id, status: "OFFERED", expiresAt: { lte: now } },
-        data: { status: "EXPIRED" },
+      // The CAS and its audit row commit together: an offer that flipped to
+      // EXPIRED with no record of it is the state that makes a bad sweep
+      // unreviewable. A concurrent claim still wins - count 0 and we skip.
+      const won = await prisma.$transaction(async (tx) => {
+        const cas = await tx.waitlistOffer.updateMany({
+          where: { id: offer.id, status: "OFFERED", expiresAt: { lte: now } },
+          data: { status: "EXPIRED" },
+        });
+        if (cas.count === 0) return false;
+        await recordWaitlistEvent(tx, {
+          shopId: offer.shopId,
+          entryId: offer.entryId,
+          offerId: offer.id,
+          type: "offer.expired",
+          actor: SYSTEM_ACTOR,
+          metadata: { at: "sweep" },
+        });
+        return true;
       });
-      if (cas.count === 0) continue; // claimed in the race - their win
+      if (!won) continue; // claimed in the race - their win
       expired += 1;
 
       const advance = opts?.forceAdvance ?? !apiEnv().DRY_RUN;
@@ -918,6 +1047,17 @@ export async function expireDueOffers(
       );
       if (next.outcome !== "offered") continue;
       advanced += 1;
+      // Best-effort: offerFreedSlot has already committed the new hold and
+      // audited it as offer.created. This row only records that the new hold
+      // came from a lapsed one, so the chain reads end to end.
+      await recordWaitlistEventBestEffort({
+        shopId: offer.shopId,
+        entryId: next.entryId,
+        offerId: next.offerId,
+        type: "offer.advanced",
+        actor: SYSTEM_ACTOR,
+        metadata: { previousOfferId: offer.id },
+      });
 
       const [service, staff] = await Promise.all([
         prisma.service.findFirst({

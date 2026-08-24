@@ -446,6 +446,7 @@ model Shop {
   waitlist            WaitlistEntry[]
   waitlistWindows     WaitlistWindow[]
   waitlistOffers      WaitlistOffer[]
+  waitlistEvents      WaitlistEvent[]
   reviews             Review[]
   receptionistConversations ReceptionistConversation[]
   receptionistMessages      ReceptionistMessage[]
@@ -1129,6 +1130,66 @@ model WaitlistOffer {
   @@index([shopId, status, expiresAt])
   @@index([shopId, staffId, startsAt])
   @@index([entryId])
+}
+
+// APPEND-ONLY history of every waitlist lifecycle mutation: who did what to
+// which entry, and when. Phase F1.
+//
+// Why it exists: the waitlist is the one surface where the SYSTEM changes a
+// customer's standing without a human deciding to - an offer is minted from a
+// cancellation, a hold lapses, and (from F2) an entry expires on its own. When
+// that goes wrong, "which rows did the worker touch, and between which times"
+// has to be answerable exactly, or the only available repair is a blunt query
+// over status + updatedAt that also catches every change a barber made by hand.
+//
+// 🔴 IMMUTABLE BY TRIGGER, not by convention. A BEFORE UPDATE trigger raises on
+//    this table, because the GRANT everyone reaches for first does NOT bind the
+//    connection this app actually uses (see the migration for the full
+//    reasoning). DELETE is deliberately left alone: a row-level DELETE trigger
+//    also fires on the Shop cascade, which would make shop teardown - and any
+//    data-deletion request - impossible.
+//
+// 🔴 NO PERSONAL DATA, EVER. Not a name, phone, email, note, message body,
+//    preference date/time, or the matcher's human `reason` string (that one
+//    names a customer's schedule, which is exactly why waitlistMatch splits
+//    `code` from `reason`). Not a claim or cancel token, raw OR hashed. The
+//    metadata allowlist in engines/waitlistAudit.ts enforces this in code, and
+//    waitlistAudit.test.ts enforces the allowlist itself.
+model WaitlistEvent {
+  id     String @id @default(cuid())
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  // 🔑 DELIBERATELY NOT A FOREIGN KEY. History must outlive a deleted entry -
+  // the demo shop's nightly teardown deleteMany's them - while shop deletion
+  // still cascades through the shopId FK above. An audit row that vanishes
+  // when the thing it describes is removed is not an audit row.
+  entryId       String
+  offerId       String?
+  appointmentId String?
+
+  // CHECK-constrained vocabularies rather than enums, for the same reason
+  // WaitlistEntry.status is a String: an enum change rewrites the column type,
+  // a CHECK pins the same set additively. F2/F3's types are already in the
+  // constraint so neither needs a migration to alter it.
+  type      String
+  actorType String // customer | staff | system
+
+  // Present only when a signed-in human did it. A customer acting on a bearer
+  // token has no user id by design, and the booking engine's hold releases are
+  // recorded honestly as `system` with a `via` code rather than being pinned on
+  // whichever staff member happened to trigger the write.
+  actorUserId  String?
+  actorStaffId String?
+
+  // Codes, ids, enums and counts ONLY - see the allowlist above.
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  // The entry timeline (F4's eventual read), and the shop-wide sweep window
+  // that makes a bad automated run reversible.
+  @@index([shopId, entryId, createdAt])
+  @@index([shopId, createdAt])
 }
 
 // Customer review submitted from the public shop page. Same trust model as

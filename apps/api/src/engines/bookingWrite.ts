@@ -1,5 +1,6 @@
 import { Prisma } from "@chairback/db";
 import { assertServiceDayHasRoom } from "./serviceDailyLimit.js";
+import { recordWaitlistEvent, SYSTEM_ACTOR } from "./waitlistAudit.js";
 
 /**
  * THE double-booking guard for every Appointment write. One implementation of
@@ -196,8 +197,8 @@ export async function lockStaffAndAssertSlotFree(
   const offerIgnoreFragment = opts.waitlistOfferIdToIgnore
     ? Prisma.sql`AND "id" <> ${opts.waitlistOfferIdToIgnore}`
     : Prisma.empty;
-  const holdOverlap = await tx.$queryRaw<{ id: string }[]>(
-    Prisma.sql`SELECT id FROM "WaitlistOffer"
+  const holdOverlap = await tx.$queryRaw<{ id: string; entryId: string }[]>(
+    Prisma.sql`SELECT id, "entryId" FROM "WaitlistOffer"
                WHERE "staffId" = ${opts.staffId}
                  AND "status" = 'OFFERED'
                  AND "expiresAt" > ${now.toISOString()}::timestamp
@@ -211,6 +212,22 @@ export async function lockStaffAndAssertSlotFree(
       where: { id: { in: holdOverlap.map((h) => h.id) }, status: "OFFERED" },
       data: { status: "RELEASED" },
     });
+    // 🔑 Recorded as `system`, not as a staff member - deliberately. This is a
+    // shared engine behind ten call sites (barber calendar, admin override,
+    // reschedule, receptionist) and it carries NO request context, so any
+    // staff id attached here would be invented. `via` says which machinery
+    // released the hold; attributing it to a human is a later change that
+    // threads a real actor through the call sites, not a guess made here.
+    for (const h of holdOverlap) {
+      await recordWaitlistEvent(tx, {
+        shopId: opts.shopId,
+        entryId: h.entryId,
+        offerId: h.id,
+        type: "offer.released",
+        actor: SYSTEM_ACTOR,
+        metadata: { code: "override", via: "booking_write" },
+      });
+    }
   }
 
   // Synced EXTERNAL appointments (Acuity/Square Visits): a live future visit
