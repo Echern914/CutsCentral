@@ -205,6 +205,12 @@ const apiSchema = z.object({
   ENABLE_SCHEDULER: boolish.default("false"),
   DB_RLS_ENFORCE: boolish.default("true"),
   DRY_RUN: boolish.default("true"),
+  // Waitlist phase F2. OFF by default and shipped dark: the sweep is the first
+  // thing here that changes a customer's standing with nobody deciding to, so
+  // it goes out inert, gets watched through its dry-run counts, and is turned
+  // on deliberately. Not folded into DRY_RUN - that is the MESSAGING kill
+  // switch, and this worker never sends anything.
+  WAITLIST_ENTRY_EXPIRY_ENABLED: boolish.default("false"),
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace"])
     .default("info"),
