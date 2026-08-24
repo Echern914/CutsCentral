@@ -36,6 +36,7 @@ import { Sheet } from "./AppointmentForm";
 import { TimeSelect } from "@/components/ui/TimeSelect";
 import { ImageField } from "../site/ImageField";
 import { Segmented } from "@/components/ui/Segmented";
+import { WaitlistBoard } from "./WaitlistBoard";
 import {
   bulkDeleteTargetedSlotsAction,
   createAddOnAction,
@@ -90,7 +91,7 @@ const labelCls = "text-xs text-muted";
 // that shape it next, the one-time configuration last. Settings led for
 // historical reasons - it was the first tab that existed - so opening Booking
 // always landed on shop config instead of on today's appointments.
-const tabs = ["Appointments", "Staff", "Services", "Settings"] as const;
+const tabs = ["Appointments", "Waitlist", "Staff", "Services", "Settings"] as const;
 type Tab = (typeof tabs)[number];
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -317,11 +318,20 @@ export function BookingManager({
           />
         </div>
       )}
+      {tab === "Waitlist" && (
+        <WaitlistBoard
+          staff={initialStaff}
+          services={initialServices}
+          timezone={initialAgenda.timezone}
+          toast={toast}
+        />
+      )}
       {tab === "Appointments" && (
         <div data-tour="agenda">
           <BookingCalendar
             initial={initialAgenda}
             initialWaitlist={initialWaitlist}
+            onOpenWaitlist={() => switchTab("Waitlist")}
             isNative={shop.bookingMode === "native"}
             staff={initialStaff}
             services={initialServices}

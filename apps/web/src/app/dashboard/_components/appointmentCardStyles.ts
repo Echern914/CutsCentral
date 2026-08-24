@@ -34,3 +34,13 @@ export function initialsOf(name: string): string {
   const second = words.length > 1 ? ([...words[words.length - 1]!][0] ?? "") : "";
   return (first + second).toUpperCase() || "•";
 }
+
+/**
+ * One action button, everywhere: a 44px mobile touch target that relaxes to
+ * 36px once there is room, with identical radius and weight across surfaces.
+ * Color/role is layered on by the caller (gold primary, green done, red
+ * destructive, neutral secondary) so the SHAPE can never drift between the
+ * appointment card and the waitlist board.
+ */
+export const BTN_BASE =
+  "flex h-11 w-full items-center justify-center rounded-lg px-3 text-xs font-medium transition-colors disabled:opacity-50 sm:h-9";
