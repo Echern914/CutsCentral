@@ -3,9 +3,24 @@
 import { useState, useTransition } from "react";
 import { readableOn } from "@/lib/contrast";
 import {
+  browserTimezone,
+  CONSENT_TEXT,
+  EMPTY_ROW,
+  HORIZON_DAYS,
+  localDate,
+  MAX_WINDOWS,
+  rowToWindow,
+  type Row,
+} from "@/lib/waitlistRows";
+import {
   joinWaitlistAction,
   type WaitlistWindowInput,
 } from "./actions";
+
+// Row logic lives in lib/waitlistRows (shared with the shop page's form so the
+// two entry points cannot drift). Re-exported here because this form's tests
+// exercise the row contract through this module.
+export { rowToWindow };
 
 /**
  * "Join the waitlist" on the booking page.
@@ -24,87 +39,6 @@ import {
  * Styled for the booking page's dark chrome (unlike the theme-driven
  * RequestForm on the shop page). Collapses to a confirmation.
  */
-
-/** Matches the server: MAX_WINDOWS in engines/waitlistWindows.ts. */
-const MAX_WINDOWS = 5;
-/** Matches ANY_DATE_HORIZON_DAYS. Also the date input's `max`. */
-const HORIZON_DAYS = 14;
-
-/** The exact sentence stored against the consent record. Keep in step with
- *  SMS_CONSENT_TEXT / SMS_CONSENT_VERSION in engines/waitlistJoin.ts. */
-const CONSENT_TEXT =
-  "Text me when a spot opens up. Message and data rates may apply; " +
-  "message frequency varies. Reply STOP to opt out at any time.";
-
-type Row = {
-  /** "any" keeps the common case one tap instead of a date picker. */
-  dateMode: "any" | "on" | "between";
-  startDate: string;
-  endDate: string;
-  timeMode: "any" | "between";
-  startTime: string;
-  endTime: string;
-};
-
-const EMPTY_ROW: Row = {
-  dateMode: "any",
-  startDate: "",
-  endDate: "",
-  timeMode: "any",
-  startTime: "09:00",
-  endTime: "17:00",
-};
-
-/** Local YYYY-MM-DD, for the date inputs' min/max. */
-function localDate(offsetDays = 0): string {
-  const d = new Date();
-  d.setDate(d.getDate() + offsetDays);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-    d.getDate(),
-  ).padStart(2, "0")}`;
-}
-
-/** "09:30" -> 570. */
-function toMinutes(hhmm: string): number | null {
-  const m = /^(\d{2}):(\d{2})$/.exec(hhmm);
-  if (!m) return null;
-  return Number(m[1]) * 60 + Number(m[2]);
-}
-
-/** One UI row to the wire shape. Returns an error code the caller renders. */
-export function rowToWindow(
-  row: Row,
-): { ok: true; window: WaitlistWindowInput } | { ok: false; error: string } {
-  let startDate: string | null = null;
-  let endDate: string | null = null;
-  if (row.dateMode === "on") {
-    if (!row.startDate) return { ok: false, error: "Pick a date." };
-    startDate = row.startDate;
-    endDate = row.startDate;
-  } else if (row.dateMode === "between") {
-    if (!row.startDate || !row.endDate) return { ok: false, error: "Pick both dates." };
-    if (row.startDate > row.endDate) {
-      return { ok: false, error: "That date range runs backwards." };
-    }
-    startDate = row.startDate;
-    endDate = row.endDate;
-  }
-
-  let startMin: number | null = null;
-  let endMin: number | null = null;
-  if (row.timeMode === "between") {
-    startMin = toMinutes(row.startTime);
-    endMin = toMinutes(row.endTime);
-    if (startMin === null || endMin === null) {
-      return { ok: false, error: "Pick a start and end time." };
-    }
-    if (startMin >= endMin) {
-      return { ok: false, error: "The end time has to be after the start." };
-    }
-  }
-
-  return { ok: true, window: { startDate, endDate, startMin, endMin } };
-}
 
 export function WaitlistForm({
   slug,
@@ -175,7 +109,7 @@ export function WaitlistForm({
         staffId: staffId || undefined,
         windows,
         // Best-effort: an older browser just gets the shop's zone server-side.
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || undefined,
+        timezone: browserTimezone(),
         smsConsent: smsConsent && Boolean(phone.trim()),
       });
       if (!res.ok) {

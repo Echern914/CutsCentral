@@ -33,7 +33,12 @@ export interface WaitlistInput {
   firstName: string;
   phone?: string;
   email?: string;
-  preferredTime?: string;
+  /** Structured preference windows (lib/waitlistRows); omitted = Any/Any server-side. */
+  windows?: import("@/lib/waitlistRows").WaitlistWindowInput[];
+  /** The customer's own IANA zone; the server falls back to the shop's. */
+  timezone?: string;
+  /** 🔴 Only ever true from an explicit tick. Absent is not consent. */
+  smsConsent?: boolean;
 }
 
 /** Join the shop's waitlist from the public shop page (standing / any-time). */

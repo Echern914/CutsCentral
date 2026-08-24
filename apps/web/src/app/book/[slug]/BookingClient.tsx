@@ -1822,7 +1822,9 @@ export function BookingClient({ data }: { data: BookShopData }) {
                         className="w-full rounded-xl border py-3 text-center text-sm font-semibold transition-colors"
                         style={{ borderColor: accent, color: accent }}
                       >
-                        Join the waitlist — get texted if a time opens up
+                        {/* "get notified", not "get texted": customer SMS stays
+                            off until 10DLC clears — openings notify by email. */}
+                        Join the waitlist — get notified if a time opens up
                       </button>
                     ))}
                 </div>
