@@ -391,9 +391,21 @@ describe("appointment promotion + loyalty", () => {
     // The earn text fired.
     expect(sent.some((s) => s.body.toLowerCase().includes("punch"))).toBe(true);
 
-    // Re-running is idempotent: no second punch.
-    const again = await promoteFulfilledAppointments(new Date());
-    expect(again).toBe(0);
+    // Re-running is idempotent: no second visit, no second punch.
+    //
+    // 🔴 Asserted about THIS appointment, not about the global return value.
+    // promoteFulfilledAppointments sweeps EVERY shop in the database, and the
+    // suite shares one test DB with files running in parallel - so
+    // `expect(again).toBe(0)` was really asserting "no other suite happens to
+    // have a past BOOKED appointment right now", which is a coin flip and is
+    // why this test failed only in the full run. The same fixed `now` is
+    // reused too; passing a fresh new Date() made the second sweep consider a
+    // different set from the first.
+    await promoteFulfilledAppointments(now);
+    const visitCount = await prisma.visit.count({
+      where: { acuityAppointmentId: `booking:${appt!.id}` },
+    });
+    expect(visitCount).toBe(1);
     const punchCount = await prisma.punchLedger.count({
       where: { visitId: visit!.id },
     });

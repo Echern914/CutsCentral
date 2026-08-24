@@ -1,5 +1,5 @@
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
@@ -16,7 +16,17 @@ import { createApp } from "../app.js";
  * revenue goals sum the price (unpriced bookings contribute $0 but still count
  * as cuts), cut goals count bookings. Pace = straight-line target across the
  * shop-local period.
+ *
+ * 🔴 TIME IS FROZEN, and the instant is chosen deliberately. Fixtures are
+ * placed with `Date.now() - Nhours`, and a goal is measured over the current
+ * shop-local WEEK or MONTH. Run in the small hours of a Monday, "three hours
+ * ago" is last week, every fixture lands outside the window, and the actuals
+ * read 0 - which is exactly how this file failed. Wednesday midday is far from
+ * every boundary a few hours can cross: week start, month start and midnight.
  */
+
+/** Wednesday, mid-month, midday UTC (the shop below is UTC). */
+const FROZEN_NOW = new Date("2026-06-17T12:00:00.000Z");
 const app = createApp();
 const password = "supersecret123";
 let cookie: string;
@@ -85,6 +95,7 @@ async function seedVisit(price: number | null, hoursAgo = 1) {
 }
 
 beforeAll(async () => {
+  vi.useFakeTimers({ toFake: ["Date"], now: FROZEN_NOW });
   const email = `goal-${randomToken(6)}@test.local`.toLowerCase();
   emails.push(email);
   cookie = await signup(email);
@@ -111,6 +122,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  vi.useRealTimers();
   for (const email of emails) {
     const user = await prisma.user.findUnique({ where: { email } });
     if (user) {
