@@ -30,6 +30,7 @@ import { dashboardRouter } from "./routes/dashboard.js";
 import { barberRouter } from "./routes/barber.js";
 import { insightsRouter } from "./routes/insights.js";
 import { notificationsRouter } from "./routes/notifications.js";
+import { readinessRouter } from "./routes/readiness.js";
 import { teamRouter } from "./routes/team.js";
 import { teamJoinRouter } from "./routes/teamJoin.js";
 import { bookingPublicRouter } from "./routes/booking.public.js";
@@ -144,6 +145,8 @@ export function createApp(): Express {
   //   WALLED (except reads)  /api/dashboard - GET of the client book and the
   //                          CSV exports stay open (middleware/wallExemptions)
   //   NEVER WALLED           /api/billing  /api/auth  /api/admin-portal
+  //                          /api/readiness (read-only; a lapsed shop must be
+  //                          able to see why it stopped taking bookings),
   //                          /api/shops GET /me (the billing page needs it),
   //                          DELETE /me (deleting your account is a right),
   //                          POST / (creating a shop starts the trial),
@@ -156,6 +159,11 @@ export function createApp(): Express {
   app.use("/api/barber", dashboardLimiter, barberRouter);
   app.use("/api/insights", dashboardLimiter, insightsRouter); // barber analytics page
   app.use("/api/notifications", dashboardLimiter, notificationsRouter); // the barber's own alert settings
+  // Launch readiness (READ-ONLY). NEVER WALLED on purpose - see the router's
+  // own note: a lapsed shop has to be able to read WHY booking stopped, and
+  // "your subscription lapsed" is one of the answers it reports. It carries
+  // its own dashboardLimiter, auth and shop scoping.
+  app.use("/api/readiness", readinessRouter);
   app.use("/api/booking", dashboardLimiter, bookingDashboardRouter); // barber booking config
   app.use("/api/payments", dashboardLimiter, paymentsDashboardRouter); // barber payment settings
   app.use("/api/loyalty", dashboardLimiter, loyaltyRouter);
