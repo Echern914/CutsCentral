@@ -800,7 +800,6 @@ publicPageRouter.post("/:slug/waitlist", waitlistLimiter, async (req, res) => {
   const dedupeKey = joinFingerprint({ phone, email, serviceId, staffId, windows });
   const { token, hash } = mintCancelToken();
 
-  let entryId: string;
   try {
     const entry = await prisma.waitlistEntry.create({
       data: {
@@ -829,7 +828,7 @@ publicPageRouter.post("/:slug/waitlist", waitlistLimiter, async (req, res) => {
       },
       select: { id: true },
     });
-    entryId = entry.id;
+    void entry;
   } catch (err) {
     // 🔑 The partial unique index did its job: this person already holds an
     // active place for this exact request. Answered as success rather than an
@@ -839,7 +838,12 @@ publicPageRouter.post("/:slug/waitlist", waitlistLimiter, async (req, res) => {
       err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002";
     if (dup) {
       logger.info({ shopId: shop.id }, "waitlist duplicate join ignored");
-      res.status(200).json({ ok: true, duplicate: true });
+      // 🔴 BYTE-IDENTICAL to a fresh join - same status, same body. Answering
+      // 200 {duplicate:true} while a new join answered 201 {id,...} turned
+      // this endpoint into an enumeration oracle: probe phone numbers, learn
+      // who is on a shop's waitlist. The customer cannot tell either way, and
+      // does not need to: they ARE on the list.
+      res.status(201).json({ ok: true });
       return;
     }
     throw err;
@@ -887,7 +891,10 @@ publicPageRouter.post("/:slug/waitlist", waitlistLimiter, async (req, res) => {
     });
   }
 
-  res.status(201).json({ ok: true, id: entryId, emailed: Boolean(email) });
+  // Deliberately bare: see the duplicate branch above. `id` and `emailed`
+  // would each be a tell, and the form needs neither - it knows whether it
+  // supplied an email.
+  res.status(201).json({ ok: true });
 });
 
 // Self-service cancellation from the emailed link. UNauthenticated by design:

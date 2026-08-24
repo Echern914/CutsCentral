@@ -40,17 +40,29 @@ async function join(body: Record<string, unknown>) {
 
 /** A join with a unique contact, so dedupe never accidentally fires. */
 async function joinFresh(over: Record<string, unknown> = {}) {
-  return join({
-    firstName: "Wanda",
-    email: `w-${randomToken(6).toLowerCase()}@test.local`,
-    ...over,
-  });
+  const email = `w-${randomToken(6).toLowerCase()}@test.local`;
+  const res = await join({ firstName: "Wanda", email, ...over });
+  return Object.assign(res, { __email: email });
 }
 
-const entryById = (id: string) =>
-  prisma.waitlistEntry.findUniqueOrThrow({
-    where: { id },
+/**
+ * The join response is deliberately bare - {ok:true} and nothing else, so a
+ * duplicate cannot be told apart from a new entry. Tests therefore find their
+ * row by the unique contact they supplied, which is closer to how anything
+ * real would find it anyway.
+ */
+const entryByEmail = (email: string) =>
+  prisma.waitlistEntry.findFirstOrThrow({
+    where: { shopId, email },
     include: { windows: true },
+    orderBy: { createdAt: "desc" },
+  });
+
+const entryByPhone = (phone: string) =>
+  prisma.waitlistEntry.findFirstOrThrow({
+    where: { shopId, phone },
+    include: { windows: true },
+    orderBy: { createdAt: "desc" },
   });
 
 beforeAll(async () => {
@@ -101,7 +113,7 @@ describe("nothing changed for a plain join", () => {
     // to what the migration created.
     const res = await joinFresh();
     expect(res.status).toBe(201);
-    const e = await entryById(res.body.id);
+    const e = await entryByEmail(res.__email);
     expect(e.windows).toHaveLength(1);
     expect(e.windows[0]).toMatchObject({
       startDate: null,
@@ -117,7 +129,7 @@ describe("nothing changed for a plain join", () => {
     // field would blank their screen.
     const res = await joinFresh({ preferredTime: "Sat morning" });
     expect(res.status).toBe(201);
-    expect((await entryById(res.body.id)).preferredTime).toBe("Sat morning");
+    expect((await entryByEmail(res.__email)).preferredTime).toBe("Sat morning");
   });
 
   it("still refuses a join with neither phone nor email", async () => {
@@ -148,7 +160,7 @@ describe("structured windows", () => {
       ],
     });
     expect(res.status).toBe(201);
-    const e = await entryById(res.body.id);
+    const e = await entryByEmail(res.__email);
     expect(e.windows).toHaveLength(2);
     const sorted = [...e.windows].sort((a, b) => (a.startMin ?? -1) - (b.startMin ?? -1));
     expect(sorted[0]).toMatchObject({ startDate: d1, endDate: d1, startMin: null });
@@ -205,7 +217,7 @@ describe("structured windows", () => {
 describe("timezone", () => {
   it("keeps a valid IANA zone", async () => {
     const res = await joinFresh({ timezone: "Europe/London" });
-    expect((await entryById(res.body.id)).timezone).toBe("Europe/London");
+    expect((await entryByEmail(res.__email)).timezone).toBe("Europe/London");
   });
 
   it("🔑 falls back to the shop rather than rejecting the join", async () => {
@@ -213,14 +225,14 @@ describe("timezone", () => {
     // zone still books haircuts; a 400 does not.
     const res = await joinFresh({ timezone: "Mars/Olympus" });
     expect(res.status).toBe(201);
-    expect((await entryById(res.body.id)).timezone).toBe(shopTz);
+    expect((await entryByEmail(res.__email)).timezone).toBe(shopTz);
   });
 });
 
 describe("SMS consent", () => {
   it("🔴 records nothing when the box is not ticked", async () => {
     const res = await joinFresh({ phone: "(302) 555-0111" });
-    const e = await entryById(res.body.id);
+    const e = await entryByEmail(res.__email);
     expect(e.smsConsentAt).toBeNull();
     expect(e.smsConsentSource).toBeNull();
     expect(e.smsConsentVersion).toBeNull();
@@ -229,7 +241,7 @@ describe("SMS consent", () => {
 
   it("records time, source, version AND the number that agreed", async () => {
     const res = await joinFresh({ phone: "(302) 555-0112", smsConsent: true });
-    const e = await entryById(res.body.id);
+    const e = await entryByEmail(res.__email);
     expect(e.smsConsentAt).toBeInstanceOf(Date);
     expect(e.smsConsentSource).toBe("waitlist_join");
     expect(e.smsConsentVersion).toBe(SMS_CONSENT_VERSION);
@@ -243,7 +255,7 @@ describe("SMS consent", () => {
     // storing it would create a record that looks like permission.
     const res = await joinFresh({ smsConsent: true });
     expect(res.status).toBe(201);
-    expect((await entryById(res.body.id)).smsConsentAt).toBeNull();
+    expect((await entryByEmail(res.__email)).smsConsentAt).toBeNull();
   });
 
   it("🔑 joining by EMAIL with no consent still works", async () => {
@@ -260,8 +272,9 @@ describe("one active place per request", () => {
     const first = await join({ firstName: "Dup", phone, windows: [{ ...ANY }] });
     expect(first.status).toBe(201);
     const second = await join({ firstName: "Dup", phone, windows: [{ ...ANY }] });
-    expect(second.status).toBe(200);
-    expect(second.body.duplicate).toBe(true);
+    // 🔑 Indistinguishable from a fresh join: same status, same body.
+    expect(second.status).toBe(201);
+    expect(second.body).toEqual(first.body);
     const rows = await prisma.waitlistEntry.count({
       where: { shopId, phone: "+13025550199", status: "WAITING" },
     });
@@ -289,7 +302,7 @@ describe("one active place per request", () => {
       201,
     );
     const flipped = await join({ firstName: "Ord", phone: p, windows: [w(b), w(a)] });
-    expect(flipped.body.duplicate).toBe(true);
+    expect(flipped.body).toEqual({ ok: true });
   });
 });
 
@@ -298,14 +311,13 @@ describe("the confirmation email and self-cancellation", () => {
     const email = `cancel-${randomToken(6).toLowerCase()}@test.local`;
     const res = await join({ firstName: "Cass", email, windows: [{ ...ANY }] });
     expect(res.status).toBe(201);
-    expect(res.body.emailed).toBe(true);
 
     const mail = sent.filter((m) => m.to === email).pop();
     expect(mail, "confirmation email").toBeTruthy();
     const token = /waitlist\/cancel\/([A-Za-z0-9_-]+)/.exec(mail!.text ?? "")?.[1];
     expect(token, "cancel token in the link").toBeTruthy();
 
-    const e = await entryById(res.body.id);
+    const e = await entryByEmail(email);
     // 🔑 Only the hash is at rest. A leaked backup must not cancel anyone.
     expect(e.cancelTokenHash).toBe(sha256Hex(token!));
     expect(JSON.stringify(e)).not.toContain(token!);
@@ -313,24 +325,24 @@ describe("the confirmation email and self-cancellation", () => {
     const cancel = await request(app).post(`/api/page/waitlist/cancel/${token}`);
     expect(cancel.status).toBe(200);
 
-    const after = await entryById(res.body.id);
+    const after = await entryByEmail(email);
     expect(after.status).toBe("REMOVED");
     // 🔑 MARKED, not deleted - the barber's record and the consent evidence
-    // both hang off this row.
-    expect(after.id).toBe(res.body.id);
+    // both hang off this row. Same id, still there.
+    expect(after.id).toBe(e.id);
   });
 
   it("cancelling frees the request so they can rejoin", async () => {
     const phone = "(302) 555-0155";
-    const first = await join({ firstName: "Ret", phone, windows: [{ ...ANY }] });
-    expect(first.status).toBe(201);
+    expect((await join({ firstName: "Ret", phone, windows: [{ ...ANY }] })).status).toBe(201);
+    const row = await entryByPhone("+13025550155");
     await prisma.waitlistEntry.update({
-      where: { id: first.body.id },
+      where: { id: row.id },
       data: { status: "REMOVED", dedupeKey: null },
     });
     const again = await join({ firstName: "Ret", phone, windows: [{ ...ANY }] });
     expect(again.status).toBe(201);
-    expect(again.body.duplicate).toBeUndefined();
+    expect(again.body).toEqual({ ok: true });
   });
 
   it("a bad or reused token answers the same as a good one", async () => {
@@ -347,7 +359,6 @@ describe("the confirmation email and self-cancellation", () => {
     const before = sent.length;
     const res = await join({ firstName: "Phoney", phone: "(302) 555-0133" });
     expect(res.status).toBe(201);
-    expect(res.body.emailed).toBe(false);
     expect(sent.length).toBe(before);
   });
 });
