@@ -26,6 +26,7 @@ export function AppointmentForm({
   services,
   timezone,
   prefillISO,
+  waitlist,
   onClose,
   onCreated,
   toast,
@@ -35,6 +36,21 @@ export function AppointmentForm({
   timezone: string;
   /** ISO instant of the tapped hour, prefills date + time. */
   prefillISO: string;
+  /**
+   * Booking someone straight off the waitlist (phase E). Prefills who/what/
+   * which chair, shows what they actually asked for, and carries `entryId`
+   * into the create call so the entry flips to BOOKED and links to the new
+   * appointment inside the SAME transaction.
+   */
+  waitlist?: {
+    entryId: string;
+    name: string;
+    phone: string | null;
+    email: string | null;
+    serviceId: string | null;
+    staffId: string | null;
+    windowHint: string | null;
+  };
   onClose: () => void;
   onCreated: () => void;
   toast: Toast;
@@ -43,10 +59,13 @@ export function AppointmentForm({
   const activeStaff = staff.filter((s) => s.active);
 
   const [serviceId, setServiceId] = useState<string | null>(
-    activeServices.length === 1 ? activeServices[0]!.id : null,
+    // A waitlist prefill wins over the single-option shortcut: it is what the
+    // customer actually asked for.
+    waitlist?.serviceId ??
+      (activeServices.length === 1 ? activeServices[0]!.id : null),
   );
   const [staffId, setStaffId] = useState<string | null>(
-    activeStaff.length === 1 ? activeStaff[0]!.id : null,
+    waitlist?.staffId ?? (activeStaff.length === 1 ? activeStaff[0]!.id : null),
   );
   const [startsAt, setStartsAt] = useState<string>(prefillISO);
   const [customTime, setCustomTime] = useState(false);
@@ -57,8 +76,8 @@ export function AppointmentForm({
   const [clientLabel, setClientLabel] = useState<string>("");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<ClientOption[]>([]);
-  const [newName, setNewName] = useState("");
-  const [newPhone, setNewPhone] = useState("");
+  const [newName, setNewName] = useState(waitlist?.name ?? "");
+  const [newPhone, setNewPhone] = useState(waitlist?.phone ?? "");
   const [note, setNote] = useState("");
   // Recurrence: off by default ("Does not repeat"). When on, every N weeks for
   // `count` times OR until a date. Weekly only to start (the picked day+time is
@@ -173,6 +192,8 @@ export function AppointmentForm({
         note: note.trim() || undefined,
         customTime,
         recurrence,
+        // Atomic waitlist link - see CreateApptInput.
+        waitlistEntryId: waitlist?.entryId,
       });
       if (!res.ok) {
         setError(

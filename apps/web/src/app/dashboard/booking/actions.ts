@@ -289,6 +289,12 @@ export interface CreateApptInput {
   email?: string;
   note?: string;
   customTime?: boolean;
+  /**
+   * Booking someone off the waitlist: the entry flips to BOOKED and takes
+   * bookedAppointmentId INSIDE the same transaction that creates the
+   * appointment, so a half-linked state cannot exist.
+   */
+  waitlistEntryId?: string;
   // "Repeats every N weeks" — exactly one of count / until. Server generates the
   // occurrences and returns a series summary (booked + any skipped dates).
   recurrence?: {
@@ -424,11 +430,119 @@ export async function checkoutAppointmentAction(
   );
 }
 
-//  Waitlist
+//  Waitlist (phase E admin)
 
+export type WaitlistSection =
+  | "WAITING"
+  | "CONTACTED"
+  | "BOOKED"
+  | "EXPIRED"
+  | "REMOVED";
+export type WaitlistSort = "joined" | "requested";
+
+/** One preference window, exactly as stored (NULL dates = legacy). */
+export interface WaitlistWindowView {
+  startDate: string | null;
+  endDate: string | null;
+  startMin: number | null;
+  endMin: number | null;
+}
+
+/** A waitlist entry as the admin board reads it. */
+export interface WaitlistEntry {
+  id: string;
+  firstName: string;
+  lastName: string | null;
+  phone: string | null;
+  email: string | null;
+  serviceId: string | null;
+  staffId: string | null;
+  serviceName: string | null;
+  staffName: string | null;
+  preferredTime: string | null;
+  note: string | null;
+  status: string;
+  createdAt: string;
+  windows: WaitlistWindowView[];
+  timezone: string | null;
+  minHoursNotice: number | null;
+  notifiedAt: string | null;
+  requestedDate: string | null;
+  /** Joined before fixed 14-day windows - eligible with no end date. */
+  legacyAnyDate: boolean;
+  bookedAppointmentId: string | null;
+  /** Null on a BOOKED entry means it was booked OUTSIDE ChairBack. */
+  bookedAppointment: {
+    id: string;
+    startsAt: string;
+    status: string;
+    staffName: string | null;
+    serviceName: string | null;
+  } | null;
+}
+
+export interface WaitlistPage {
+  ok: true;
+  waitlist: WaitlistEntry[];
+  counts: Record<WaitlistSection, number>;
+  nextCursor: string | null;
+}
+
+/** One page of the board, filtered + sorted. Keyset - no offset, no cap. */
+export async function getWaitlistAction(opts: {
+  status?: WaitlistSection;
+  staffId?: string;
+  sort?: WaitlistSort;
+  cursor?: string;
+  limit?: number;
+}): Promise<WaitlistPage | { ok: false; error: string }> {
+  const q = new URLSearchParams();
+  if (opts.status) q.set("status", opts.status);
+  if (opts.staffId) q.set("staffId", opts.staffId);
+  if (opts.sort) q.set("sort", opts.sort);
+  if (opts.cursor) q.set("cursor", opts.cursor);
+  if (opts.limit) q.set("limit", String(opts.limit));
+  const res = await apiGet<{
+    waitlist: WaitlistEntry[];
+    counts: Record<WaitlistSection, number>;
+    nextCursor: string | null;
+  }>(`/api/dashboard/waitlist?${q.toString()}`);
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return {
+    ok: true,
+    waitlist: res.data.waitlist,
+    counts: res.data.counts,
+    nextCursor: res.data.nextCursor,
+  };
+}
+
+/**
+ * Staff-side create. No consent field exists on purpose - a barber cannot
+ * consent to texts on a customer's behalf (see the API route).
+ */
+export async function createWaitlistEntryAction(input: {
+  firstName: string;
+  lastName?: string;
+  phone?: string;
+  email?: string;
+  serviceId?: string;
+  staffId?: string;
+  note?: string;
+  minHoursNotice?: number | null;
+  windows?: { startDate: string | null; endDate: string | null; startMin: number | null; endMin: number | null }[];
+}): Promise<Result> {
+  return done(await apiSend("POST", "/api/dashboard/waitlist", input));
+}
+
+/**
+ * Status only. BOOKED through THIS action means "booked outside ChairBack" and
+ * deliberately leaves bookedAppointmentId null; booking inside the app links
+ * atomically in the create transaction instead (see createAppointmentAction's
+ * waitlistEntryId).
+ */
 export async function setWaitlistStatusAction(
   id: string,
-  status: "WAITING" | "CONTACTED" | "BOOKED" | "REMOVED",
+  status: WaitlistSection,
 ): Promise<Result> {
   return done(await apiSend("POST", `/api/dashboard/waitlist/${id}`, { status }));
 }

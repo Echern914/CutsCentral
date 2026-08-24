@@ -50,6 +50,15 @@ import { buildNudgeBody } from "../messaging/templates.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 import { pokeWalletPass } from "../wallet/pass.js";
 import { toE164 } from "../acuity/clientKey.js";
+import {
+  ANY_DATE_HORIZON_DAYS,
+  ANY_WINDOW,
+  MAX_WINDOWS,
+  shopLocalDate,
+  validateWindows,
+} from "../engines/waitlistWindows.js";
+import { addDaysToDateKey } from "../engines/waitlistMatch.js";
+import { joinFingerprint, mintCancelToken } from "../engines/waitlistJoin.js";
 import { sendReceptionistSms } from "../receptionist/outbound.js";
 import { appendMessage } from "../receptionist/conversation.js";
 import { logger } from "../logger.js";
@@ -1939,41 +1948,373 @@ dashboardRouter.post("/requests/:id", async (req, res) => {
   res.json({ ok: true, status: parsed.data.status });
 });
 
-// Waitlist: everyone waiting for a spot, newest first. Resolves the optional
-// serviceId/staffId (plain string columns on the entry) to display names via the
-// shop's current services/staff so the barber sees "what they want" at a glance.
+// Waitlist admin (phase E). Everyone on the list, in sections the barber works
+// through, with the structured preferences phase B captured and phase D matches
+// on. Resolves the optional serviceId/staffId (plain string columns) to display
+// names via the shop's current services/staff.
+//
+// BACKWARD COMPATIBLE ON PURPOSE: called with no query params it answers the
+// pre-phase-E shape (a `waitlist` array, newest first, plus `waitingCount`) with
+// extra fields added - the booking page's server render keeps working unchanged.
+//
+// 🔑 KEYSET, never OFFSET, and no silent cap: the old `take: 200` quietly hid
+// entry 201 forever. Paging is (createdAt, id) or (requested-date, id) strictly
+// after the cursor, so a concurrent join can never make a page repeat or skip.
+const waitlistQuerySchema = z
+  .object({
+    status: z
+      .enum(["WAITING", "CONTACTED", "BOOKED", "EXPIRED", "REMOVED"])
+      .optional(),
+    // "" = every provider (the filter's default), a real id = that chair, and
+    // "any" = only entries that asked for no particular barber.
+    staffId: z.string().trim().max(60).optional(),
+    sort: z.enum(["joined", "requested"]).optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+    cursor: z.string().trim().max(200).optional(),
+  })
+  .strict();
+
+/** One preference window as the admin board reads it. */
+interface AdminWindow {
+  startDate: string | null;
+  endDate: string | null;
+  startMin: number | null;
+  endMin: number | null;
+}
+
+/**
+ * A waitlist row WITH its windows. The forShop allowlist takes the broad
+ * FindManyArgs, so the `include` payload is erased from the return type -
+ * this restores it at the one place that asks for it.
+ */
+type EntryWithWindows = Awaited<
+  ReturnType<ReturnType<typeof forShop>["waitlistEntry"]["findMany"]>
+>[number] & { windows: AdminWindow[] };
+
+/** The earliest date this entry asked for; null = legacy (grandfathered). */
+function requestedDateOf(windows: AdminWindow[]): string | null {
+  const dated = windows
+    .map((w) => w.startDate)
+    .filter((d): d is string => d !== null)
+    .sort();
+  return dated[0] ?? null;
+}
+
 dashboardRouter.get("/waitlist", async (req, res) => {
+  const parsed = waitlistQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const q = parsed.data;
+  const limit = q.limit ?? 50;
   const db = forShop(req.shop!.id);
-  const [entries, services, staff] = await Promise.all([
-    db.waitlistEntry.findMany({ orderBy: { createdAt: "desc" }, take: 200 }),
+
+  const staffFilter =
+    q.staffId === undefined || q.staffId === ""
+      ? {}
+      : q.staffId === "any"
+        ? { OR: [{ staffId: null }, { staffId: "" }] }
+        : { staffId: q.staffId };
+
+  const where = { ...(q.status ? { status: q.status } : {}), ...staffFilter };
+  const sort = q.sort ?? "joined";
+
+  // ---- the page of ids, in the requested order, KEYSET-paged ----
+  //
+  // "joined" pages on (createdAt desc, id desc) straight through Prisma.
+  // "requested" orders by the EARLIEST date the entry asked for, which lives
+  // in its child window rows - not orderable in Prisma - so it resolves ids
+  // with one grouped query and keysets on (requestedDate, id). Legacy
+  // NULL-date rows have no requested date and deliberately sort LAST, after
+  // every dated request, rather than silently leading the list.
+  let pageIds: string[] | null = null;
+  let cursorRow: { createdAt: Date; id: string } | null = null;
+  if (q.cursor) {
+    const anchor = await db.waitlistEntry.findFirst({
+      where: { id: q.cursor },
+      select: { id: true, createdAt: true },
+    });
+    if (anchor) cursorRow = anchor;
+  }
+
+  if (sort === "requested") {
+    const rawRows = await runWithShop(req.shop!.id, (tx) =>
+      tx.$queryRaw<{ id: string; req: string | null }[]>(Prisma.sql`
+        SELECT e."id", MIN(w."startDate") AS req
+          FROM "WaitlistEntry" e
+          LEFT JOIN "WaitlistWindow" w ON w."entryId" = e."id"
+         WHERE e."shopId" = ${req.shop!.id}
+           ${q.status ? Prisma.sql`AND e."status" = ${q.status}` : Prisma.empty}
+           ${
+             q.staffId === undefined || q.staffId === ""
+               ? Prisma.empty
+               : q.staffId === "any"
+                 ? Prisma.sql`AND (e."staffId" IS NULL OR e."staffId" = '')`
+                 : Prisma.sql`AND e."staffId" = ${q.staffId}`
+           }
+         GROUP BY e."id"
+         ORDER BY MIN(w."startDate") ASC NULLS LAST, e."id" ASC
+      `),
+    );
+    const startAt = q.cursor ? rawRows.findIndex((r) => r.id === q.cursor) + 1 : 0;
+    pageIds = rawRows.slice(startAt, startAt + limit + 1).map((r) => r.id);
+  }
+
+  const [rows, services, staff, counts] = await Promise.all([
+    pageIds
+      ? db.waitlistEntry.findMany({
+          where: { id: { in: pageIds } },
+          include: {
+            windows: {
+              select: { startDate: true, endDate: true, startMin: true, endMin: true },
+            },
+          },
+        })
+      : db.waitlistEntry.findMany({
+          where: {
+            ...where,
+            // Strictly after the cursor row, in the exact scan order.
+            ...(cursorRow
+              ? {
+                  OR: [
+                    { createdAt: { lt: cursorRow.createdAt } },
+                    { createdAt: cursorRow.createdAt, id: { lt: cursorRow.id } },
+                  ],
+                }
+              : {}),
+          },
+          // One page plus a probe row, so `nextCursor` is only issued when a
+          // further page genuinely exists.
+          take: limit + 1,
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          include: {
+            windows: {
+              select: { startDate: true, endDate: true, startMin: true, endMin: true },
+            },
+          },
+        }),
     db.service.findMany({ select: { id: true, name: true } }),
-    db.staff.findMany({ select: { id: true, name: true } }),
+    db.staff.findMany({ select: { id: true, name: true, active: true } }),
+    db.waitlistEntry.groupBy({ by: ["status"], _count: { _all: true } }),
   ]);
+  // The raw path returns ids in order; Prisma's `in` does not preserve it.
+  const withWindows = rows as EntryWithWindows[];
+  const ordered: EntryWithWindows[] = pageIds
+    ? pageIds
+        .map((id) => withWindows.find((r) => r.id === id))
+        .filter((r): r is EntryWithWindows => Boolean(r))
+    : withWindows;
+
   const serviceName = new Map(services.map((s) => [s.id, s.name]));
   const staffName = new Map(staff.map((s) => [s.id, s.name]));
-  const waitingCount = entries.filter((e) => e.status === "WAITING").length;
-  res.json({
-    waitlist: entries.map((e) => ({
+
+  // Linked ChairBack appointments for the BOOKED rows on this page. One query,
+  // never per row. A BOOKED entry with no link was booked OUTSIDE ChairBack and
+  // is labelled that way in the UI - it must never read as a real appointment.
+  const linkedIds = ordered
+    .map((e) => e.bookedAppointmentId)
+    .filter((id): id is string => Boolean(id));
+  const linked = linkedIds.length
+    ? await db.appointment.findMany({
+        where: { id: { in: linkedIds } },
+        select: { id: true, startsAt: true, status: true, staffId: true, serviceId: true },
+      })
+    : [];
+  const linkedById = new Map(linked.map((a) => [a.id, a]));
+
+  const page = ordered.slice(0, limit);
+  const hasMore = ordered.length > limit;
+
+  const shaped = page.map((e) => {
+    const appt = e.bookedAppointmentId ? linkedById.get(e.bookedAppointmentId) : undefined;
+    return {
       id: e.id,
       firstName: e.firstName,
       lastName: e.lastName,
       phone: e.phone,
       email: e.email,
+      serviceId: e.serviceId,
+      staffId: e.staffId,
       serviceName: e.serviceId ? serviceName.get(e.serviceId) ?? null : null,
       staffName: e.staffId ? staffName.get(e.staffId) ?? null : null,
       preferredTime: e.preferredTime,
       note: e.note,
       status: e.status,
       createdAt: e.createdAt.toISOString(),
-    })),
-    waitingCount,
+      // ---- phase B/D facts the barber could not see before ----
+      windows: e.windows,
+      timezone: e.timezone,
+      minHoursNotice: e.minHoursNotice,
+      notifiedAt: e.notifiedAt ? e.notifiedAt.toISOString() : null,
+      requestedDate: requestedDateOf(e.windows),
+      // 🔑 A window with NULL dates predates phase D's materialization: the
+      // grandfathered rows (the 118 backfilled ones). Flagged so the UI can
+      // say "Any date (legacy)" rather than implying a live 14-day window.
+      legacyAnyDate: e.windows.some((w) => w.startDate === null),
+      bookedAppointmentId: e.bookedAppointmentId,
+      bookedAppointment: appt
+        ? {
+            id: appt.id,
+            startsAt: appt.startsAt.toISOString(),
+            status: appt.status,
+            staffName: staffName.get(appt.staffId) ?? null,
+            serviceName: serviceName.get(appt.serviceId) ?? null,
+          }
+        : null,
+    };
   });
+
+  const byStatus: Record<string, number> = {};
+  for (const c of counts) byStatus[c.status] = c._count._all;
+
+  res.json({
+    waitlist: shaped,
+    waitingCount: byStatus.WAITING ?? 0,
+    counts: {
+      WAITING: byStatus.WAITING ?? 0,
+      CONTACTED: byStatus.CONTACTED ?? 0,
+      BOOKED: byStatus.BOOKED ?? 0,
+      EXPIRED: byStatus.EXPIRED ?? 0,
+      REMOVED: byStatus.REMOVED ?? 0,
+    },
+    // The provider filter's options, so the client never has to guess.
+    providers: staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name })),
+    nextCursor: hasMore ? page[page.length - 1]!.id : null,
+  });
+});
+
+// Staff-side waitlist creation (phase E). A walk-in says "text me if something
+// opens" and the barber puts them on the list - previously impossible.
+//
+// 🔴 NO CONSENT, NO MESSAGE. The public join records SMS consent from a
+// checkbox the CUSTOMER ticks; a barber cannot consent on someone's behalf, so
+// every consent column stays null here. Nothing is emailed either - the person
+// is standing at the counter being told out loud.
+//
+// Everything else reuses the phase-B engines verbatim (validateWindows for the
+// rules, joinFingerprint for the dedupe key, and the SAME Any-Date
+// materialization as the public join) so a staff-created entry is
+// indistinguishable to phase D's matcher from one the customer typed.
+const staffWaitlistSchema = z
+  .object({
+    firstName: z.string().trim().min(1).max(80),
+    lastName: z.string().trim().max(80).optional().or(z.literal("")),
+    phone: z.string().trim().max(40).optional().or(z.literal("")),
+    email: z.string().trim().email().max(200).optional().or(z.literal("")),
+    serviceId: z.string().trim().max(60).optional().or(z.literal("")),
+    staffId: z.string().trim().max(60).optional().or(z.literal("")),
+    note: z.string().trim().max(1000).optional().or(z.literal("")),
+    minHoursNotice: z.number().int().min(0).max(720).nullable().optional(),
+    windows: z
+      .array(
+        z
+          .object({
+            startDate: z.string().trim().max(10).nullable().default(null),
+            endDate: z.string().trim().max(10).nullable().default(null),
+            startMin: z.number().int().min(0).max(1440).nullable().default(null),
+            endMin: z.number().int().min(0).max(1440).nullable().default(null),
+          })
+          .strict(),
+      )
+      .max(MAX_WINDOWS)
+      .optional(),
+  })
+  .strict()
+  .refine((d) => Boolean(d.phone?.trim()) || Boolean(d.email?.trim()), {
+    message: "Add a phone or email so they can be reached.",
+    path: ["phone"],
+  });
+
+dashboardRouter.post("/waitlist", async (req, res) => {
+  const parsed = staffWaitlistSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const d = parsed.data;
+  const shop = req.shop!;
+  const now = new Date();
+  const windows = d.windows?.length ? d.windows : [ANY_WINDOW];
+  const bad = validateWindows(windows, shopLocalDate(now, shop.timezone));
+  if (bad) {
+    res.status(400).json({ error: "invalid_window", code: bad.code, index: bad.index });
+    return;
+  }
+
+  const phone = toE164(d.phone) ?? (d.phone?.trim() || null);
+  const email = d.email || null;
+  const serviceId = d.serviceId || null;
+  const staffId = d.staffId || null;
+  const dedupeKey = joinFingerprint({ phone, email, serviceId, staffId, windows });
+  const { token, hash } = mintCancelToken();
+  void token; // no email goes out, so the raw token is simply never used
+
+  // Same fixed-window materialization the public join performs, in the SHOP's
+  // zone (the barber is entering this at the counter, on shop time).
+  const joinDate = shopLocalDate(now, shop.timezone);
+  const storedWindows = windows.map((w) =>
+    w.startDate === null && w.endDate === null
+      ? {
+          ...w,
+          startDate: joinDate,
+          endDate: addDaysToDateKey(joinDate, ANY_DATE_HORIZON_DAYS),
+        }
+      : w,
+  );
+
+  try {
+    const entry = await forShop(shop.id).waitlistEntry.create({
+      data: {
+        shopId: shop.id,
+        firstName: d.firstName,
+        lastName: d.lastName || null,
+        phone,
+        email,
+        serviceId,
+        staffId,
+        note: d.note || null,
+        timezone: shop.timezone,
+        minHoursNotice: d.minHoursNotice ?? null,
+        dedupeKey,
+        cancelTokenHash: hash,
+        // 🔴 Consent columns deliberately absent - see the note above.
+        windows: {
+          create: storedWindows.map((w) => ({
+            shopId: shop.id,
+            startDate: w.startDate,
+            endDate: w.endDate,
+            startMin: w.startMin,
+            endMin: w.endMin,
+          })),
+        },
+      },
+      select: { id: true },
+    });
+    res.status(201).json({ ok: true, id: entry.id });
+  } catch (err) {
+    // The partial unique index on the active statuses: this person already
+    // holds a live place for this exact request. Say so plainly - the barber
+    // is looking at the customer and needs to know they are already covered.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      res.status(409).json({ error: "already_waiting" });
+      return;
+    }
+    throw err;
+  }
 });
 
 // Update a waitlist entry's status as the barber works it. Tenant-scoped: the
 // findFirst through forShop returns 404 for another shop's entry.
+//
+// EXPIRED is settable by hand (phase F automates it). BOOKED here is the
+// "booked OUTSIDE ChairBack" path and deliberately leaves bookedAppointmentId
+// null - booking INSIDE the app links atomically in the create transaction
+// (booking.dashboard.ts) and never comes through this route.
 const waitlistStatusSchema = z
-  .object({ status: z.enum(["WAITING", "CONTACTED", "BOOKED", "REMOVED"]) })
+  .object({
+    status: z.enum(["WAITING", "CONTACTED", "BOOKED", "EXPIRED", "REMOVED"]),
+  })
   .strict();
 dashboardRouter.post("/waitlist/:id", async (req, res) => {
   const parsed = waitlistStatusSchema.safeParse(req.body);

@@ -569,6 +569,20 @@ export function forShop(shopId: string) {
             where: scopeWhere(args.where, shopId),
           }),
         ),
+      // Section counts for the admin board. groupBy takes the same scoped
+      // where, so a count can never leak across tenants.
+      groupBy: (args: Prisma.WaitlistEntryGroupByArgs) =>
+        runWithShop(shopId, (tx) =>
+          (tx.waitlistEntry.groupBy as (a: unknown) => Promise<unknown>)({
+            ...args,
+            where: scopeWhere((args as { where?: object }).where, shopId),
+          }),
+        ) as Promise<{ status: string; _count: { _all: number } }[]>,
+      // Staff-side creation (phase E). The PUBLIC join writes with plain
+      // prisma (it has no shop context); this one runs inside the tenant
+      // session like every other authenticated write.
+      create: (args: Prisma.WaitlistEntryCreateArgs) =>
+        runWithShop(shopId, (tx) => tx.waitlistEntry.create(args)),
     },
 
     // AI receptionist threads: created on the Twilio-webhook path (plain prisma,

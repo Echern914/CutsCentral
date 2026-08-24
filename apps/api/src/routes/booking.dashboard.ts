@@ -1983,6 +1983,11 @@ const createApptSchema = z
     // Chosen service add-ons (ids). Extend the appointment length + total; the
     // choice is snapshotted. Invalid/foreign ids are dropped server-side.
     addOnIds: z.array(z.string().min(1)).max(20).optional(),
+    // Booking someone straight off the waitlist (phase E). The entry flips to
+    // BOOKED and takes bookedAppointmentId INSIDE this transaction, so a
+    // half-linked state cannot exist: either the appointment and the link are
+    // both there, or neither is.
+    waitlistEntryId: z.string().trim().max(60).optional(),
     // Optional "repeats every N weeks" rule. When present, the appointment above
     // is occurrence 0 (its startsAt sets the weekday + time-of-day), and N-1 more
     // are generated. Exactly one of count / until. Capped so a bad rule can't
@@ -2315,6 +2320,28 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         },
         select: { id: true },
       });
+
+      // Waitlist -> appointment, atomically. Guarded on the ACTIVE statuses so
+      // an entry already satisfied by a phase-C offer claim can never be
+      // clobbered, and scoped by shopId so another tenant's id matches
+      // nothing. count 0 = nothing to link (already booked, removed, or not
+      // ours); the appointment still stands, which is the safe outcome.
+      if (d.waitlistEntryId) {
+        const linked = await tx.waitlistEntry.updateMany({
+          where: {
+            id: d.waitlistEntryId,
+            shopId,
+            status: { in: ["WAITING", "CONTACTED"] },
+          },
+          data: { status: "BOOKED", bookedAppointmentId: appt.id },
+        });
+        if (linked.count === 0) {
+          logger.info(
+            { shopId, entryId: d.waitlistEntryId, appointmentId: appt.id },
+            "waitlist link skipped: entry not active for this shop",
+          );
+        }
+      }
       return appt;
     });
     res.status(201).json({ ok: true, id: result.id });
