@@ -262,6 +262,14 @@ export async function bookAction(
   };
 }
 
+/** A date+time preference. Null on either half means ANY for that half. */
+export interface WaitlistWindowInput {
+  startDate: string | null;
+  endDate: string | null;
+  startMin: number | null;
+  endMin: number | null;
+}
+
 export interface WaitlistInput {
   firstName: string;
   phone?: string;
@@ -270,6 +278,12 @@ export interface WaitlistInput {
   staffId?: string;
   preferredTime?: string;
   note?: string;
+  /** The customer's IANA zone, so "Saturday morning" means their morning. */
+  timezone?: string;
+  /** Omitted = one "Any date / Any time" window, i.e. the old behaviour. */
+  windows?: WaitlistWindowInput[];
+  /** 🔴 Only ever true from an explicit tick. Absent is not consent. */
+  smsConsent?: boolean;
 }
 
 /**
@@ -279,12 +293,13 @@ export interface WaitlistInput {
 export async function joinWaitlistAction(
   slug: string,
   input: WaitlistInput,
-): Promise<{ ok: boolean; error?: string }> {
-  const res = await apiPublicSend<{ ok: boolean }>(
+): Promise<{ ok: boolean; error?: string; duplicate?: boolean }> {
+  const res = await apiPublicSend<{ ok: boolean; duplicate?: boolean }>(
     "POST",
     `/api/page/${encodeURIComponent(slug)}/waitlist`,
     input,
   );
   if (!res.ok) return { ok: false, error: res.error ?? "failed" };
-  return { ok: true };
+  // A duplicate is success from the customer's side - they ARE on the list.
+  return { ok: true, duplicate: res.data?.duplicate === true };
 }

@@ -2,14 +2,110 @@
 
 import { useState, useTransition } from "react";
 import { readableOn } from "@/lib/contrast";
-import { joinWaitlistAction } from "./actions";
+import {
+  joinWaitlistAction,
+  type WaitlistWindowInput,
+} from "./actions";
 
 /**
- * "Join the waitlist" form on the booking page. Styled for the booking page's
- * dark chrome (unlike the theme-driven RequestForm on the shop page). serviceId/
- * staffId are passed through when the join comes from a fully-booked day so the
- * barber sees exactly what the customer wants. Collapses to a confirmation.
+ * "Join the waitlist" on the booking page.
+ *
+ * 🔑 PREFERENCES ARE PICKED, NOT TYPED. This used to be one free-text box
+ * ("Sat morning") that only a human could read. The matcher has to answer
+ * "does this freed 10:15 slot fit anyone", so the customer now picks date and
+ * time windows - and the default is still one "Any date / Any time" window,
+ * which is exactly what a customer who does not care ends up with and exactly
+ * what every pre-existing entry already means.
+ *
+ * 🔴 THE CONSENT BOX SHIPS UNCHECKED and the join does not depend on it.
+ * Pre-ticking it, or refusing the join without it, would make the record
+ * worthless as evidence - which is the only reason to collect it.
+ *
+ * Styled for the booking page's dark chrome (unlike the theme-driven
+ * RequestForm on the shop page). Collapses to a confirmation.
  */
+
+/** Matches the server: MAX_WINDOWS in engines/waitlistWindows.ts. */
+const MAX_WINDOWS = 5;
+/** Matches ANY_DATE_HORIZON_DAYS. Also the date input's `max`. */
+const HORIZON_DAYS = 14;
+
+/** The exact sentence stored against the consent record. Keep in step with
+ *  SMS_CONSENT_TEXT / SMS_CONSENT_VERSION in engines/waitlistJoin.ts. */
+const CONSENT_TEXT =
+  "Text me when a spot opens up. Message and data rates may apply; " +
+  "message frequency varies. Reply STOP to opt out at any time.";
+
+type Row = {
+  /** "any" keeps the common case one tap instead of a date picker. */
+  dateMode: "any" | "on" | "between";
+  startDate: string;
+  endDate: string;
+  timeMode: "any" | "between";
+  startTime: string;
+  endTime: string;
+};
+
+const EMPTY_ROW: Row = {
+  dateMode: "any",
+  startDate: "",
+  endDate: "",
+  timeMode: "any",
+  startTime: "09:00",
+  endTime: "17:00",
+};
+
+/** Local YYYY-MM-DD, for the date inputs' min/max. */
+function localDate(offsetDays = 0): string {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate(),
+  ).padStart(2, "0")}`;
+}
+
+/** "09:30" -> 570. */
+function toMinutes(hhmm: string): number | null {
+  const m = /^(\d{2}):(\d{2})$/.exec(hhmm);
+  if (!m) return null;
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+
+/** One UI row to the wire shape. Returns an error code the caller renders. */
+export function rowToWindow(
+  row: Row,
+): { ok: true; window: WaitlistWindowInput } | { ok: false; error: string } {
+  let startDate: string | null = null;
+  let endDate: string | null = null;
+  if (row.dateMode === "on") {
+    if (!row.startDate) return { ok: false, error: "Pick a date." };
+    startDate = row.startDate;
+    endDate = row.startDate;
+  } else if (row.dateMode === "between") {
+    if (!row.startDate || !row.endDate) return { ok: false, error: "Pick both dates." };
+    if (row.startDate > row.endDate) {
+      return { ok: false, error: "That date range runs backwards." };
+    }
+    startDate = row.startDate;
+    endDate = row.endDate;
+  }
+
+  let startMin: number | null = null;
+  let endMin: number | null = null;
+  if (row.timeMode === "between") {
+    startMin = toMinutes(row.startTime);
+    endMin = toMinutes(row.endTime);
+    if (startMin === null || endMin === null) {
+      return { ok: false, error: "Pick a start and end time." };
+    }
+    if (startMin >= endMin) {
+      return { ok: false, error: "The end time has to be after the start." };
+    }
+  }
+
+  return { ok: true, window: { startDate, endDate, startMin, endMin } };
+}
+
 export function WaitlistForm({
   slug,
   shopName,
@@ -31,14 +127,24 @@ export function WaitlistForm({
   const [firstName, setFirstName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
-  const [preferredTime, setPreferredTime] = useState("");
+  const [rows, setRows] = useState<Row[]>([{ ...EMPTY_ROW }]);
+  const [smsConsent, setSmsConsent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
+  const [emailed, setEmailed] = useState(false);
   const [pending, startTransition] = useTransition();
 
   // No focus:outline-none — keep the global :focus-visible ring (WCAG 2.4.7).
   const input =
     "w-full rounded-lg border border-white/15 bg-white/5 px-4 py-2.5 text-sm text-offwhite placeholder:text-muted focus:border-white/40";
+  const chip = (on: boolean) =>
+    `rounded-full border px-3 py-1 text-xs transition-colors ${
+      on ? "border-white/50 bg-white/15 text-offwhite" : "border-white/15 text-muted"
+    }`;
+
+  function patch(i: number, next: Partial<Row>) {
+    setRows((cur) => cur.map((r, j) => (j === i ? { ...r, ...next } : r)));
+  }
 
   function submit() {
     setError(null);
@@ -50,6 +156,16 @@ export function WaitlistForm({
       setError("Add a phone or email so they can reach you.");
       return;
     }
+    const windows: WaitlistWindowInput[] = [];
+    for (const row of rows) {
+      const res = rowToWindow(row);
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      windows.push(res.window);
+    }
+
     startTransition(async () => {
       const res = await joinWaitlistAction(slug, {
         firstName: firstName.trim(),
@@ -57,26 +173,44 @@ export function WaitlistForm({
         email: email.trim() || undefined,
         serviceId: serviceId || undefined,
         staffId: staffId || undefined,
-        preferredTime: preferredTime.trim() || undefined,
+        windows,
+        // Best-effort: an older browser just gets the shop's zone server-side.
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || undefined,
+        smsConsent: smsConsent && Boolean(phone.trim()),
       });
       if (!res.ok) {
         setError("Something went wrong. Please try again.");
         return;
       }
+      setEmailed(Boolean(email.trim()));
       setSent(true);
     });
   }
 
   if (sent) {
     return (
-      <div role="status" className="rounded-xl border border-white/10 bg-white/5 p-5 text-center">
-        <p className="text-sm font-semibold text-offwhite">You're on the waitlist ✓</p>
-        <p className="mt-1 text-xs text-muted">
-          {shopName} will reach out if a spot opens up.
+      <div
+        role="status"
+        className="rounded-xl border border-white/10 bg-white/5 p-5 text-center"
+      >
+        <p className="text-sm font-semibold text-offwhite">
+          You&rsquo;re on the waitlist &#10003;
         </p>
+        <p className="mt-1 text-xs text-muted">
+          {shopName} will reach out if a spot opens up that fits.
+        </p>
+        {emailed && (
+          <p className="mt-2 text-xs text-muted">
+            Check your email &mdash; there&rsquo;s a link in there to take
+            yourself back off the list any time.
+          </p>
+        )}
       </div>
     );
   }
+
+  const min = localDate();
+  const max = localDate(HORIZON_DAYS);
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-5">
@@ -113,16 +247,149 @@ export function WaitlistForm({
           value={email}
           onChange={(e) => setEmail(e.target.value)}
         />
-        {/* Only ask for a preferred time on a standing join (no specific slot). */}
-        {!serviceId && (
-          <input
-            className={input}
-            placeholder="Preferred time (e.g. Sat morning)"
-            aria-label="Preferred time"
-            value={preferredTime}
-            onChange={(e) => setPreferredTime(e.target.value)}
-          />
+
+        {/* ---- when they're free ---- */}
+        <fieldset className="rounded-lg border border-white/10 p-3">
+          <legend className="px-1 text-xs text-muted">When are you free?</legend>
+          <div className="flex flex-col gap-3">
+            {rows.map((row, i) => (
+              <div key={i} className="flex flex-col gap-2">
+                {rows.length > 1 && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] uppercase tracking-wide text-muted">
+                      Option {i + 1}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setRows((c) => c.filter((_, j) => j !== i))}
+                      className="text-[11px] text-muted underline hover:text-offwhite"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                )}
+                <div
+                  role="group"
+                  aria-label={`Dates for option ${i + 1}`}
+                  className="flex flex-wrap gap-1.5"
+                >
+                  {(
+                    [
+                      ["any", "Any date"],
+                      ["on", "A date"],
+                      ["between", "A range"],
+                    ] as const
+                  ).map(([mode, label]) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      aria-pressed={row.dateMode === mode}
+                      onClick={() => patch(i, { dateMode: mode })}
+                      className={chip(row.dateMode === mode)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {row.dateMode !== "any" && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="date"
+                      className={`${input} sm:w-auto`}
+                      aria-label={
+                        row.dateMode === "between"
+                          ? `Option ${i + 1} first date`
+                          : `Option ${i + 1} date`
+                      }
+                      min={min}
+                      max={max}
+                      value={row.startDate}
+                      onChange={(e) => patch(i, { startDate: e.target.value })}
+                    />
+                    {row.dateMode === "between" && (
+                      <>
+                        <span className="text-xs text-muted">to</span>
+                        <input
+                          type="date"
+                          className={`${input} sm:w-auto`}
+                          aria-label={`Option ${i + 1} last date`}
+                          min={row.startDate || min}
+                          max={max}
+                          value={row.endDate}
+                          onChange={(e) => patch(i, { endDate: e.target.value })}
+                        />
+                      </>
+                    )}
+                  </div>
+                )}
+                <div
+                  role="group"
+                  aria-label={`Times for option ${i + 1}`}
+                  className="flex flex-wrap gap-1.5"
+                >
+                  {(
+                    [
+                      ["any", "Any time"],
+                      ["between", "A time range"],
+                    ] as const
+                  ).map(([mode, label]) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      aria-pressed={row.timeMode === mode}
+                      onClick={() => patch(i, { timeMode: mode })}
+                      className={chip(row.timeMode === mode)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {row.timeMode === "between" && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="time"
+                      className={`${input} sm:w-auto`}
+                      aria-label={`Option ${i + 1} start time`}
+                      value={row.startTime}
+                      onChange={(e) => patch(i, { startTime: e.target.value })}
+                    />
+                    <span className="text-xs text-muted">to</span>
+                    <input
+                      type="time"
+                      className={`${input} sm:w-auto`}
+                      aria-label={`Option ${i + 1} end time`}
+                      value={row.endTime}
+                      onChange={(e) => patch(i, { endTime: e.target.value })}
+                    />
+                  </div>
+                )}
+              </div>
+            ))}
+            {rows.length < MAX_WINDOWS && (
+              <button
+                type="button"
+                onClick={() => setRows((c) => [...c, { ...EMPTY_ROW }])}
+                className="self-start text-xs text-muted underline hover:text-offwhite"
+              >
+                + Add another option
+              </button>
+            )}
+          </div>
+        </fieldset>
+
+        {/* ---- consent: unchecked, and never a condition of joining ---- */}
+        {phone.trim() && (
+          <label className="flex items-start gap-2.5 text-xs text-muted">
+            <input
+              type="checkbox"
+              checked={smsConsent}
+              onChange={(e) => setSmsConsent(e.target.checked)}
+              className="mt-0.5 h-4 w-4 shrink-0 rounded border-white/30 bg-white/5"
+            />
+            <span>{CONSENT_TEXT}</span>
+          </label>
         )}
+
         {error && (
           <p role="alert" className="text-xs text-red-400">
             {error}
