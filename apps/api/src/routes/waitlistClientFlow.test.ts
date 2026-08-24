@@ -107,21 +107,54 @@ afterAll(async () => {
 /* ------------------------------------------------------------------ */
 
 describe("nothing changed for a plain join", () => {
-  it("🔑 a join with NO windows still works, and gets Any date / Any time", async () => {
-    // This is the compatibility promise to the 118 backfilled rows: the old
-    // client sends no windows, and the row it produces is identical in shape
-    // to what the migration created.
+  it("🔴 a join with NO windows gets a FIXED Any-Date window: [join date .. +14], stored", async () => {
+    // Phase D's correction: "Any date" means Acuity's "any opening in the
+    // next 14 days" - a fixed window materialized AT JOIN in the customer's
+    // zone and stored concrete, never recomputed from the offer moment.
+    // (NULL dates in storage now exclusively mark the grandfathered legacy
+    // rows - the 118 backfilled entries - until phase F retires them.)
     const res = await joinFresh();
     expect(res.status).toBe(201);
     const e = await entryByEmail(res.__email);
     expect(e.windows).toHaveLength(1);
+    const joined = shopLocalDate(new Date(), shopTz);
     expect(e.windows[0]).toMatchObject({
-      startDate: null,
-      endDate: null,
+      startDate: joined, // the join date itself is day one
+      endDate: addDays(joined, 14), // the inclusive eligibility boundary
       startMin: null,
       endMin: null,
     });
     expect(e.status).toBe("WAITING");
+  });
+
+  it("🔴 the Any-Date window is fixed in the ENTRY's zone, not the shop's", async () => {
+    // A Tokyo customer joining during a New York evening is already on
+    // TOMORROW's date - their eligibility window must start on THEIR today.
+    const res = await joinFresh({ timezone: "Asia/Tokyo" });
+    expect(res.status).toBe(201);
+    const e = await entryByEmail(res.__email);
+    const now = new Date();
+    const tokyoToday = shopLocalDate(now, "Asia/Tokyo");
+    expect(e.windows[0]).toMatchObject({
+      startDate: tokyoToday,
+      endDate: addDays(tokyoToday, 14),
+    });
+    // Explicitly: when Tokyo's calendar is a day ahead of the shop's, the
+    // stored window follows the customer.
+    const shopToday = shopLocalDate(now, shopTz);
+    if (tokyoToday !== shopToday) {
+      expect(e.windows[0]!.startDate).not.toBe(shopToday);
+    }
+  });
+
+  it("a join that PICKED dates is stored verbatim - materialization touches Any Date only", async () => {
+    const d1 = addDays(today(), 3);
+    const res = await joinFresh({
+      windows: [{ startDate: d1, endDate: d1, startMin: null, endMin: null }],
+    });
+    expect(res.status).toBe(201);
+    const e = await entryByEmail(res.__email);
+    expect(e.windows[0]).toMatchObject({ startDate: d1, endDate: d1 });
   });
 
   it("still accepts the old free-text preferredTime alongside", async () => {

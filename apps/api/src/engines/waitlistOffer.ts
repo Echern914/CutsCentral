@@ -2,6 +2,7 @@ import { Prisma, prisma } from "@chairback/db";
 import { apiEnv, randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
 import { sha256Hex } from "./waitlistJoin.js";
+import { entryPrefsMatchSlot } from "./waitlistMatch.js";
 import {
   lockStaffAndAssertSlotFree,
   SlotTakenError,
@@ -69,8 +70,24 @@ export const HOLD_MS = HOLD_MINUTES * 60_000;
  */
 export const OFFER_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 
-/** How many WAITING entries we inspect per freed slot before giving up. */
-const CANDIDATE_SCAN = 20;
+/**
+ * Candidate scan: entries stream out of the database in ranked KEYSET pages
+ * (createdAt asc, id asc - the id breaks same-instant ties AND anchors the
+ * cursor) and are evaluated against their preference windows in JS, because
+ * a window match is not expressible as a WHERE clause. The scan runs until
+ * a candidate fits or the list is EXHAUSTED - there is no correctness cap:
+ * candidate 5,001 deserves the slot exactly as much as candidate 1 did.
+ * Memory stays one page; keyset (never OFFSET) keeps pages stable while
+ * entries are concurrently inserted - a row added behind the cursor is
+ * simply seen by the NEXT freed slot, never double-visited by this one.
+ */
+const CANDIDATE_BATCH = 50;
+
+/** Last scan's shape, for the benchmark test. Not used by production code. */
+export let __lastScanStatsForTests: { scanned: number; pages: number } = {
+  scanned: 0,
+  pages: 0,
+};
 
 // Test seam for the deposit gate: connectEnabled() reads STRIPE_* env, which
 // the suite deliberately runs without. Mirrors __setSendEmailForTests.
@@ -293,10 +310,12 @@ export async function offerFreedSlot(
 }
 
 /**
- * Current matching rules, verbatim from slotOpened (phase D swaps THIS
- * function for window-aware matching): status WAITING, service matches or
- * standing join, staff matches or any-provider, earliest joiner first. Phase
- * C adds only what offers themselves require:
+ * Phase D matching: everything phase C filtered, PLUS the entry's own
+ * preference windows, timezone and minimum notice (engines/waitlistMatch.ts).
+ * Base eligibility is unchanged: status WAITING, service matches or standing
+ * join, staff matches or any-provider (a slot-entry join that captured no
+ * service/staff context stays Any/Any - context is never invented), earliest
+ * joiner first with the id as a stable tie-breaker. Phase C's own rules:
  *   - not currently holding a live offer (one held slot per person),
  *   - never offered THIS exact slot before (an expired offer must advance to
  *     the NEXT person, not bounce back),
@@ -313,40 +332,136 @@ async function pickCandidate(
   slot: FreedSlot,
   now: Date,
 ): Promise<{ id: string; firstName: string; email: string | null; clientId: string | null } | null> {
-  const candidates = await tx.waitlistEntry.findMany({
-    where: {
-      shopId: slot.shopId,
-      status: "WAITING",
-      AND: [
-        { OR: [{ serviceId: slot.serviceId }, { serviceId: null }] },
-        { OR: [{ staffId: slot.staffId }, { staffId: null }, { staffId: "" }] },
-        { offers: { none: { status: "OFFERED", expiresAt: { gt: now } } } },
-        { offers: { none: { staffId: slot.staffId, startsAt: slot.startsAt } } },
-        {
-          OR: [
-            { notifiedAt: null },
-            { notifiedAt: { lt: new Date(now.getTime() - OFFER_COOLDOWN_MS) } },
-          ],
-        },
-      ],
-    },
-    orderBy: { createdAt: "asc" },
-    take: CANDIDATE_SCAN,
-    select: { id: true, firstName: true, email: true, phone: true },
-  });
+  // Phase D: what the DATABASE can filter, it filters (status, shop, service,
+  // staff, live-offer, same-slot, cooldown); what only the calendar can
+  // answer - do the entry's preference WINDOWS fit this physical slot, in
+  // the entry's own timezone, with their minimum notice - is evaluated per
+  // candidate by engines/waitlistMatch.ts, in ranked order, first fit wins.
+  //
+  // 🔴 LOG HYGIENE: skip lines carry the machine CODE and ids only. The
+  // verdict's human reason names the customer's dates and time windows -
+  // preference details that belong in tests and the isolated trace, never
+  // in production logs.
+  let scanned = 0;
+  let pages = 0;
+  let cursor: { createdAt: Date; id: string } | null = null;
 
-  for (const c of candidates) {
-    if (c.email) return { id: c.id, firstName: c.firstName, email: c.email, clientId: null };
-    // No email: eligible only if they map to a client we can push to.
-    const or: { phone?: string; email?: string }[] = [];
-    if (c.phone) or.push({ phone: c.phone });
-    if (or.length === 0) continue;
-    const client = await tx.client.findFirst({
-      where: { shopId: slot.shopId, OR: or, archivedAt: null },
-      select: { id: true },
+  for (;;) {
+    const and: Prisma.WaitlistEntryWhereInput[] = [
+      { OR: [{ serviceId: slot.serviceId }, { serviceId: null }] },
+      { OR: [{ staffId: slot.staffId }, { staffId: null }, { staffId: "" }] },
+      { offers: { none: { status: "OFFERED", expiresAt: { gt: now } } } },
+      { offers: { none: { staffId: slot.staffId, startsAt: slot.startsAt } } },
+      {
+        OR: [
+          { notifiedAt: null },
+          { notifiedAt: { lt: new Date(now.getTime() - OFFER_COOLDOWN_MS) } },
+        ],
+      },
+    ];
+    // KEYSET, not OFFSET: strictly after the last row we saw, in the exact
+    // scan order. Stable under concurrent inserts and never re-reads or
+    // skips a page the way a shifting OFFSET would.
+    if (cursor) {
+      and.push({
+        OR: [
+          { createdAt: { gt: cursor.createdAt } },
+          { createdAt: cursor.createdAt, id: { gt: cursor.id } },
+        ],
+      });
+    }
+    const batch = await tx.waitlistEntry.findMany({
+      where: {
+        shopId: slot.shopId,
+        status: "WAITING",
+        AND: and,
+      },
+      // Deterministic ranking: earliest joiner first, id as the stable
+      // tie-breaker for same-instant joins (and the cursor anchor).
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: CANDIDATE_BATCH,
+      select: {
+        id: true,
+        createdAt: true,
+        firstName: true,
+        email: true,
+        phone: true,
+        timezone: true,
+        minHoursNotice: true,
+        windows: {
+          select: { startDate: true, endDate: true, startMin: true, endMin: true },
+        },
+      },
     });
-    if (client) return { id: c.id, firstName: c.firstName, email: null, clientId: client.id };
+    if (batch.length === 0) break;
+    pages += 1;
+    cursor = { createdAt: batch[batch.length - 1]!.createdAt, id: batch[batch.length - 1]!.id };
+
+    // ONE client lookup per page for its phone-only candidates (no N+1):
+    // fetched up front so the walk below never queries per candidate.
+    const phoneOnly = batch.filter((c) => !c.email && c.phone).map((c) => c.phone!);
+    const pushable = new Map<string, string>();
+    if (phoneOnly.length > 0) {
+      const clients = await tx.client.findMany({
+        where: { shopId: slot.shopId, phone: { in: phoneOnly }, archivedAt: null },
+        select: { id: true, phone: true },
+      });
+      for (const cl of clients) if (cl.phone) pushable.set(cl.phone, cl.id);
+    }
+
+    for (const c of batch) {
+      scanned += 1;
+      try {
+        const verdict = entryPrefsMatchSlot(c, slot, {
+          shopTimezone: slot.timezone,
+          now,
+        });
+        if (!verdict.ok) {
+          logger.debug(
+            { shopId: slot.shopId, entryId: c.id, code: verdict.code },
+            "waitlist match: candidate skipped",
+          );
+          continue;
+        }
+        if (c.email) {
+          __lastScanStatsForTests = { scanned, pages };
+          logger.info(
+            { shopId: slot.shopId, entryId: c.id, code: "selected_email", scanned, pages },
+            "waitlist match: candidate selected",
+          );
+          return { id: c.id, firstName: c.firstName, email: c.email, clientId: null };
+        }
+        const clientId = c.phone ? pushable.get(c.phone) : undefined;
+        if (clientId) {
+          __lastScanStatsForTests = { scanned, pages };
+          logger.info(
+            { shopId: slot.shopId, entryId: c.id, code: "selected_push", scanned, pages },
+            "waitlist match: candidate selected",
+          );
+          return { id: c.id, firstName: c.firstName, email: null, clientId };
+        }
+        logger.debug(
+          { shopId: slot.shopId, entryId: c.id, code: "unreachable" },
+          "waitlist match: candidate skipped",
+        );
+      } catch (err) {
+        // One candidate's bad data (a corrupt zone, a mangled window) must
+        // cost THEM the evaluation, not the whole offer - and never the
+        // cancellation this ultimately hangs off. Skip and keep walking.
+        logger.error(
+          { err, shopId: slot.shopId, entryId: c.id, code: "match_error" },
+          "waitlist match: candidate evaluation failed; skipping",
+        );
+      }
+    }
+    if (batch.length < CANDIDATE_BATCH) break;
   }
+
+  __lastScanStatsForTests = { scanned, pages };
+  logger.info(
+    { shopId: slot.shopId, code: "exhausted", scanned, pages },
+    "waitlist match: no eligible candidate",
+  );
   return null;
 }
 

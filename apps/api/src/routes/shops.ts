@@ -39,12 +39,14 @@ import { logger } from "../logger.js";
 
 import { requireActiveAccess } from "../middleware/billing.js";
 import {
+  ANY_DATE_HORIZON_DAYS,
   ANY_WINDOW,
   MAX_WINDOWS,
   isValidTimezone,
   shopLocalDate,
   validateWindows,
 } from "../engines/waitlistWindows.js";
+import { addDaysToDateKey } from "../engines/waitlistMatch.js";
 import {
   ACTIVE_WAITLIST_STATUSES,
   consentFields,
@@ -800,6 +802,30 @@ publicPageRouter.post("/:slug/waitlist", waitlistLimiter, async (req, res) => {
   const dedupeKey = joinFingerprint({ phone, email, serviceId, staffId, windows });
   const { token, hash } = mintCancelToken();
 
+  // 🔴 "Any Date" is a FIXED window, fixed NOW: [join date .. join date + 14]
+  // in the customer's own zone - Acuity's "any opening in the next 14 days",
+  // stored CONCRETE so matching only ever range-checks what was written here
+  // and never re-derives eligibility from the offer moment. Past the stored
+  // end date the entry stops matching; phase F marks it EXPIRED. From this
+  // point on, NULL dates in storage exclusively mean the grandfathered
+  // pre-materialization rows (the 118 backfilled + earlier joins), which stay
+  // eligible until phase F's deliberate legacy policy.
+  //
+  // The dedupe fingerprint above deliberately hashed the RAW shape: "any
+  // date" joined Monday and "any date" joined Tuesday are the SAME standing
+  // request while one is active - materialized dates in the key would let
+  // the same person re-join daily into multiple queue positions.
+  const joinDate = shopLocalDate(now, timezone);
+  const storedWindows = windows.map((w) =>
+    w.startDate === null && w.endDate === null
+      ? {
+          ...w,
+          startDate: joinDate,
+          endDate: addDaysToDateKey(joinDate, ANY_DATE_HORIZON_DAYS),
+        }
+      : w,
+  );
+
   try {
     const entry = await prisma.waitlistEntry.create({
       data: {
@@ -817,7 +843,7 @@ publicPageRouter.post("/:slug/waitlist", waitlistLimiter, async (req, res) => {
         cancelTokenHash: hash,
         ...consentFields({ smsConsent: d.smsConsent, phone, now }),
         windows: {
-          create: windows.map((w) => ({
+          create: storedWindows.map((w) => ({
             shopId: shop.id,
             startDate: w.startDate,
             endDate: w.endDate,
@@ -886,7 +912,9 @@ publicPageRouter.post("/:slug/waitlist", waitlistLimiter, async (req, res) => {
       firstName: d.firstName,
       shopName: shop.name,
       serviceLabel: null,
-      windows,
+      // What was STORED, not what was typed: an Any-Date join reads back as
+      // its real eligibility window, so the customer knows when it ends.
+      windows: storedWindows,
       cancelToken: token,
     });
   }
