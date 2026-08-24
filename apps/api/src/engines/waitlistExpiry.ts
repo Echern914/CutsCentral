@@ -51,6 +51,19 @@ const BUDGET_MS = 60_000;
 /** Exposed for the benchmark: pages walked and rows evaluated on the last run. */
 export let __lastSweepStatsForTests = { scanned: 0, pages: 0 };
 
+/** Aggregates for one shop. Counts only - never a row, a name or an id. */
+export interface ExpiryShopCounts {
+  shopId: string;
+  name: string;
+  slug: string | null;
+  scanned: number;
+  actionable: number;
+  heldBack: number;
+  legacySkipped: number;
+  zeroWindowSkipped: number;
+  errors: number;
+}
+
 export interface ExpirySweepResult {
   /** Entries moved to EXPIRED (0 when the flag is off or in preview mode). */
   expired: number;
@@ -60,8 +73,22 @@ export interface ExpirySweepResult {
   eligible: number;
   /** Live-hold skips: eligible, but their claim link is still valid. */
   heldBack: number;
+  /**
+   * Entries that reached the write point: eligible, and not held back. In a
+   * preview this is exactly what enabling the flag would retire. In a live run
+   * `expired` can be lower, because a CAS may lose to a concurrent claim.
+   */
+  actionable: number;
+  /** Kept alive by a grandfathered NULL-date window - F3's population. */
+  legacySkipped: number;
+  /** Kept alive by having no window rows at all. */
+  zeroWindowSkipped: number;
+  /** Rows whose evaluation threw and were skipped. */
+  errors: number;
   /** True when the tick stopped on BUDGET_MS rather than exhausting the list. */
   budgetExhausted: boolean;
+  /** The same numbers, per shop. Ordered by shop id for a stable response. */
+  byShop: ExpiryShopCounts[];
 }
 
 interface Candidate {
@@ -77,7 +104,10 @@ interface Candidate {
     startMin: number | null;
     endMin: number | null;
   }[];
-  shop: { timezone: string };
+  // name/slug are carried so the per-shop breakdown can identify a shop
+  // without the caller doing a second lookup. Shop identity only - the
+  // breakdown never descends to a customer.
+  shop: { timezone: string; name: string; slug: string | null };
   _count: { offers: number };
 }
 
@@ -101,8 +131,34 @@ export async function expireDeadWaitlistEntries(
   let expired = 0;
   let eligible = 0;
   let heldBack = 0;
+  let actionable = 0;
+  let legacySkipped = 0;
+  let zeroWindowSkipped = 0;
+  let errors = 0;
   let budgetExhausted = false;
   let cursor: { createdAt: Date; id: string } | null = null;
+
+  // Per-shop tallies, accumulated as the same walk proceeds. Keyed by shop id
+  // so the preview and the hourly run cannot disagree: there is one scan.
+  const shops = new Map<string, ExpiryShopCounts>();
+  const tally = (e: Candidate, field: keyof ExpiryShopCounts): void => {
+    let row = shops.get(e.shopId);
+    if (!row) {
+      row = {
+        shopId: e.shopId,
+        name: e.shop.name,
+        slug: e.shop.slug,
+        scanned: 0,
+        actionable: 0,
+        heldBack: 0,
+        legacySkipped: 0,
+        zeroWindowSkipped: 0,
+        errors: 0,
+      };
+      shops.set(e.shopId, row);
+    }
+    (row[field] as number) += 1;
+  };
 
   for (;;) {
     if (Date.now() - startedAt > budgetMs) {
@@ -139,9 +195,10 @@ export async function expireDeadWaitlistEntries(
         windows: {
           select: { startDate: true, endDate: true, startMin: true, endMin: true },
         },
-        // The shop's zone is the fallback when the entry carries none. Joined
-        // here rather than fetched per row - one query per page, no N+1.
-        shop: { select: { timezone: true } },
+        // The shop's zone is the fallback when the entry carries none; name
+        // and slug label the per-shop breakdown. Joined here rather than
+        // fetched per row - one query per page, no N+1.
+        shop: { select: { timezone: true, name: true, slug: true } },
         // A live hold means a claim link is still valid. Counted in the same
         // query for the same reason.
         _count: {
@@ -155,18 +212,40 @@ export async function expireDeadWaitlistEntries(
 
     for (const entry of batch) {
       scanned += 1;
+      tally(entry, "scanned");
       try {
-        if (!entryIsExpired(entry, { shopTimezone: entry.shop.timezone, now })) continue;
+        if (!entryIsExpired(entry, { shopTimezone: entry.shop.timezone, now })) {
+          // WHY it survived, for the two reasons that are permanent rather
+          // than "their window has not come round yet". Both are counted from
+          // the same row the rule just judged, so the breakdown cannot drift
+          // from the decision.
+          if (entry.windows.length === 0) {
+            zeroWindowSkipped += 1;
+            tally(entry, "zeroWindowSkipped");
+          } else if (entry.windows.some((w) => w.endDate === null)) {
+            // A grandfathered NULL-date window can never be past - this is
+            // F3's population, sized without touching a single row.
+            legacySkipped += 1;
+            tally(entry, "legacySkipped");
+          }
+          continue;
+        }
         eligible += 1;
 
         if (entry._count.offers > 0) {
           heldBack += 1;
+          tally(entry, "heldBack");
           logger.info(
             { shopId: entry.shopId, entryId: entry.id, code: "live_offer_hold" },
             "waitlist expiry: skipped, hold still live",
           );
           continue;
         }
+
+        // Past every skip: this is what enabling the flag would retire.
+        actionable += 1;
+        tally(entry, "actionable");
+
         if (dryRun) {
           logger.info(
             { shopId: entry.shopId, entryId: entry.id, code: "would_expire" },
@@ -214,6 +293,8 @@ export async function expireDeadWaitlistEntries(
       } catch (err) {
         // One entry's bad data (a corrupt zone, a mangled window) costs THEM
         // the evaluation, never the sweep. Same discipline as pickCandidate.
+        errors += 1;
+        tally(entry, "errors");
         logger.error(
           { err, shopId: entry.shopId, entryId: entry.id, code: "expiry_error" },
           "waitlist expiry: entry evaluation failed; skipping",
@@ -243,5 +324,17 @@ export async function expireDeadWaitlistEntries(
     );
   }
 
-  return { expired, scanned, eligible, heldBack, budgetExhausted };
+  return {
+    expired,
+    scanned,
+    eligible,
+    heldBack,
+    actionable,
+    legacySkipped,
+    zeroWindowSkipped,
+    errors,
+    budgetExhausted,
+    // Stable order so two previews of the same data read the same.
+    byShop: [...shops.values()].sort((a, b) => (a.shopId < b.shopId ? -1 : 1)),
+  };
 }
