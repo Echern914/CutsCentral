@@ -117,6 +117,82 @@ body {
   background: rgb(var(--cb-s600) / 0.8);
 }
 
+/* ---------------------------------------------------------------------------
+   NO FOCUS ZOOM ON iOS.
+
+   Safari on iPhone - and every installed web app / WKWebView, which is what the
+   ChairBack iOS shell is - AUTOMATICALLY ZOOMS THE PAGE when a form control it
+   is focusing computes to a font-size below 16px. It then leaves the viewport
+   scaled, so the next field is off-screen, the layout appears to drift, and
+   dismissing the keyboard does not restore the original position. Every one of
+   those reads as "the app is broken", not "the text is small".
+
+   The app was uniformly 14px: all 22 shared `field` class constants are
+   `text-sm`, plus scattered `text-xs` controls and the shared UnitField /
+   Segmented parts. So this was app-wide - signup, booking, waitlist, agenda,
+   settings, payments, search - not a page-level bug.
+
+   FIXED HERE, ONCE, rather than in 22 files: there is no shared <Input>
+   component to correct (174 raw <input> elements carry their own class
+   strings), so a global rule is the only place the invariant can actually hold
+   for code that has not been written yet.
+
+   The two rules are BOTH required and are not redundant:
+     1. the element selector catches controls with no font-size class - Tailwind
+        preflight sets `font-size: 100%` on form elements, so they INHERIT a
+        `text-sm` ancestor and are 14px without ever saying so;
+     2. the class-qualified selector (0,1,1) outranks the `text-sm` utility
+        (0,1,0), which would otherwise win over rule 1. Only the too-small
+        utilities are listed, so a deliberately larger control keeps its size
+        and nothing needs !important.
+
+   `max(16px, 1rem)` is a FLOOR, not a fixed size: 16px is the iOS threshold in
+   CSS pixels, and the 1rem arm lets a reader who has enlarged their root font
+   keep the larger text. Never write a bare 16px here.
+
+   Scoped to `pointer: coarse` (every touch device, which is exactly where the
+   behavior exists) OR a narrow viewport (so a resized desktop window matches
+   what it is previewing). A mouse-driven desktop is untouched.
+
+   🔴 DO NOT "fix" this instead by adding maximum-scale / user-scalable=no to
+   the viewport. That disables pinch-to-zoom, which is a WCAG 1.4.4 failure and
+   removes the only way to reach content that overflows. See the same decision,
+   made and documented for the native shell, in apps/mobile/src/AppWebView.tsx.
+   Do not force-reset the viewport from JS on focus/blur either.
+
+   Checkbox, radio, range and file inputs are excluded: they render no text, so
+   the zoom rule does not apply to them and forcing a size only disturbs layout.
+   --------------------------------------------------------------------------- */
+@media (pointer: coarse), (max-width: 767px) {
+  /* Rule 1 - specificity (0,0,1). `:where()` is load-bearing: a bare
+     `input:not([type=...])` x5 computes to (0,5,1), which outranks EVERY single
+     class and would crush a deliberately-large control (the $ amount field in
+     CheckoutSheet is text-5xl). `:where()` contributes zero, so this rule only
+     ever beats an INHERITED size - which is exactly the case it exists for. */
+  input:where(:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="hidden"])),
+  textarea,
+  select,
+  [contenteditable]:where(:not([contenteditable="false"])) {
+    font-size: max(16px, 1rem);
+  }
+
+  /* Rule 2 - specificity (0,1,1), so it outranks the utility it targets.
+     ONLY the sizes below the threshold are listed, which is what makes this a
+     FLOOR rather than a reset: text-base / text-lg / text-5xl are untouched. A
+     new too-small utility would need adding here, which the audit script in the
+     PR description catches. */
+  input.text-xs,
+  input.text-sm,
+  textarea.text-xs,
+  textarea.text-sm,
+  select.text-xs,
+  select.text-sm,
+  [contenteditable].text-xs,
+  [contenteditable].text-sm {
+    font-size: max(16px, 1rem);
+  }
+}
+
 @layer components {
   /* Glass surface: translucent surface + blur + top sheen. The workhorse card.
      Fully token-driven so it reads as smoked glass on charcoal and frosted
