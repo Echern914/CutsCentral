@@ -221,6 +221,92 @@ export function windowFits(
  * filters live in the database query (pickCandidate) - by the time an entry
  * reaches here those are already true.
  */
+/**
+ * Has this window's last usable moment already passed? (Phase F2.)
+ *
+ * `deadline` is the entry's OWN wall clock at `now + minHoursNotice`, so the
+ * comparison happens entirely in the space the windows are written in. Nothing
+ * here converts a wall time back to an instant - which is exactly why it is
+ * DST-safe: spring-forward's missing hour and fall-back's repeated hour are
+ * problems for CONSTRUCTING a local time, and this only ever reads one.
+ *
+ * 🔴 A null endDate is a grandfathered legacy row and can NEVER be past. Those
+ * entries stay live until phase F3's deliberate policy converts them; the
+ * sweeper must not decide it by accident.
+ *
+ * `endMin ?? 1440` is "to the stroke of local midnight", matching both the
+ * validator (which caps endMin at 1440) and slotWallView, where a slot ending
+ * exactly at midnight reads 1440.
+ */
+export function windowIsPast(
+  w: MatchWindow,
+  deadline: { date: string; minutes: number },
+): boolean {
+  if (w.endDate === null) return false; // legacy Any Date - never expires here
+  if (deadline.date > w.endDate) return true;
+  if (deadline.date < w.endDate) return false;
+  return deadline.minutes >= (w.endMin ?? 1440);
+}
+
+/**
+ * Can this entry never match anything again?
+ *
+ * WHY IT CANNOT EXPIRE SOMEONE STILL MATCHABLE. entryPrefsMatchSlot only says
+ * yes for a slot that starts at or after `now + notice` AND whose wall-clock
+ * END is inside a window. Since endsAt > startsAt, any matchable slot must
+ * START strictly before its window's closing instant. So once the deadline has
+ * reached that instant, no future slot can satisfy the window - and if that is
+ * true of every window, the entry is finished.
+ *
+ * The converse is deliberately NOT claimed: an entry whose only service is too
+ * long to fit its remaining window is still reported live. This under-expires,
+ * which is the safe direction - a person waiting one day too long costs
+ * nothing, a person dropped a day early loses their place.
+ *
+ * An entry with no window rows is treated the way the matcher treats it: as
+ * grandfathered Any/Any, i.e. never expiring.
+ */
+export function entryIsExpired(
+  entry: MatchEntryShape,
+  opts: { shopTimezone: string; now: Date },
+): boolean {
+  if (entry.windows.length === 0) return false;
+  const tz = resolveMatchTimezone(entry.timezone, opts.shopTimezone);
+  const leadMs = Math.max(0, entry.minHoursNotice ?? 0) * 3_600_000;
+  const at = new Date(opts.now.getTime() + leadMs);
+
+  // 🔴 THE FALL-BACK FOLD. A wall clock is monotonic except when it is set
+  // BACK, and then the same wall time happens twice. On 2026-11-01 in New
+  // York, 01:30 occurs at 05:30 UTC and again at 06:30 UTC - so a window
+  // ending 01:30 looks finished at the first pass while an hour of instants
+  // still inside it is yet to come. Expiring there would be the one thing
+  // this rule promises never to do.
+  //
+  // Detect only the direction that can un-expire (the offset moving
+  // backwards) and defer to the next tick; hourly, that costs at most an
+  // hour, once or twice a year. A spring-forward moves the offset the other
+  // way and cannot resurrect a passed window, so the exact boundary is kept
+  // in every other case - including the transition itself.
+  if (zoneOffsetMinutes(new Date(at.getTime() + FOLD_GUARD_MS), tz) < zoneOffsetMinutes(at, tz)) {
+    return false;
+  }
+
+  const deadline = wallParts(at, tz);
+  return entry.windows.every((w) => windowIsPast(w, deadline));
+}
+
+/** How far ahead to look for a clock about to be set back. Comfortably past
+ *  the largest shift any IANA zone uses (1h; Lord Howe's is 30m). */
+const FOLD_GUARD_MS = 2 * 3_600_000;
+
+/** The zone's UTC offset at an instant, in minutes, from wall parts alone. */
+function zoneOffsetMinutes(at: Date, tz: string): number {
+  const { date, minutes } = wallParts(at, tz);
+  const [y, m, d] = date.split("-").map(Number) as [number, number, number];
+  const wallEpochMin = Math.floor(Date.UTC(y, m - 1, d) / 60_000) + minutes;
+  return wallEpochMin - Math.floor(at.getTime() / 60_000);
+}
+
 export function entryPrefsMatchSlot(
   entry: MatchEntryShape,
   slot: MatchSlotShape,

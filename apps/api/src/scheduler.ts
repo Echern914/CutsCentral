@@ -22,6 +22,7 @@ import { runAiTrialReminders } from "./engines/aiTrialReminder.js";
 import { autoCloseIdleConversations } from "./receptionist/conversation.js";
 import { sweepExpiredHolds } from "./engines/holdSweep.js";
 import { expireDueOffers } from "./engines/waitlistOffer.js";
+import { expireDeadWaitlistEntries } from "./engines/waitlistExpiry.js";
 import { sweepExpiredRateCounters } from "./middleware/pgRateStore.js";
 import { runDemoReset } from "./engines/demoReset.js";
 
@@ -264,6 +265,19 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
     ttlMs: 4 * MINUTE,
     run: () => expireDueOffers(),
     failMsg: "waitlist offer expiry sweep failed",
+  },
+  // Waitlist: retire entries whose every preference window has passed, hourly
+  // at :17 (off the top-of-hour rush). Expiry is a day-boundary event - an
+  // entry lingering under an hour past its deadline already matches nothing,
+  // it only DISPLAYS late - so a tighter cadence would buy nothing and cost a
+  // scan. Writes nothing unless WAITLIST_ENTRY_EXPIRY_ENABLED is on; sends
+  // nothing ever. See engines/waitlistExpiry.ts.
+  {
+    cronExpr: "17 * * * *",
+    name: "waitlist-entry-expiry",
+    ttlMs: 2 * 60 * MINUTE,
+    run: () => expireDeadWaitlistEntries(),
+    failMsg: "waitlist entry expiry sweep failed",
   },
   // AI receptionist: sweep expired slot holds every 5 minutes. Hygiene only -
   // the slot engine + overlap guards already ignore expired holds, so the slot
