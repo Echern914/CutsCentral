@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import {
+  __lastScanStatsForTests,
   __setConnectEnabledForTests,
   claimOffer,
   expireDueOffers,
@@ -1267,6 +1268,161 @@ describe("phase D: the windows decide, in ranked order", () => {
     });
     expect(grid.some((s) => s.startsAt.getTime() === slot.startsAt.getTime())).toBe(true);
   });
+
+  it("🔴 no correctness cap: 750 ineligible candidates, number 751 still wins", async () => {
+    const slot = freshSlot();
+    const slotDate = wallParts(slot.startsAt, TZ).date;
+    const wrongDate = addDaysToDateKey(slotDate, 3);
+    const ids = Array.from({ length: 750 }, (_, i) => `d-cap-${slotSeq}-${i}`);
+    await prisma.waitlistEntry.createMany({
+      data: ids.map((id, i) => ({
+        id,
+        shopId,
+        firstName: `Cap${i}`,
+        email: `cap-${i}@test.local`,
+        createdAt: new Date(Date.now() - 2 * 86_400_000 + i * 1000),
+      })),
+    });
+    await prisma.waitlistWindow.createMany({
+      data: ids.map((id) => ({
+        shopId, entryId: id, startDate: wrongDate, endDate: wrongDate,
+        startMin: null, endMin: null,
+      })),
+    });
+    const fit = await makeEntry(); // youngest = candidate #751
+    await addWindow(fit.id, { startDate: slotDate, endDate: slotDate });
+
+    const res = await offerTo(slot);
+    expect(res.entryId).toBe(fit.id);
+    expect(__lastScanStatsForTests.scanned).toBe(751);
+    expect(__lastScanStatsForTests.pages).toBe(Math.ceil(751 / 50));
+
+    // And when the winner is gone, the scan EXHAUSTS the list across many
+    // pages and reports no candidate - it does not stop at some depth.
+    await prisma.waitlistOffer.updateMany({
+      where: { shopId, status: "OFFERED" },
+      data: { status: "RELEASED" },
+    });
+    await prisma.waitlistEntry.update({
+      where: { id: fit.id },
+      data: { status: "REMOVED" },
+    });
+    const none = await offerFreedSlot(freshSlot(), new Date());
+    expect(none.outcome).toBe("no_candidates");
+    expect(__lastScanStatsForTests.scanned).toBe(750);
+  });
+
+  it("identical createdAt across page boundaries: the id cursor neither loops nor skips", async () => {
+    const slot = freshSlot();
+    const slotDate = wallParts(slot.startsAt, TZ).date;
+    const wrongDate = addDaysToDateKey(slotDate, 4);
+    const instant = new Date(Date.now() - 86_400_000);
+    // 120 same-instant, ineligible entries - the cursor must advance through
+    // three pages purely on the (createdAt =, id >) branch.
+    const ids = Array.from({ length: 120 }, (_, i) => `d-tie-${slotSeq}-${String(i).padStart(3, "0")}`);
+    await prisma.waitlistEntry.createMany({
+      data: ids.map((id, i) => ({
+        id, shopId, firstName: `Tie${i}`, email: `tie-${i}@test.local`, createdAt: instant,
+      })),
+    });
+    await prisma.waitlistWindow.createMany({
+      data: ids.map((id) => ({
+        shopId, entryId: id, startDate: wrongDate, endDate: wrongDate,
+        startMin: null, endMin: null,
+      })),
+    });
+    const fit = await makeEntry();
+    await addWindow(fit.id, { startDate: slotDate, endDate: slotDate });
+
+    const res = await offerTo(slot);
+    expect(res.entryId).toBe(fit.id);
+    expect(__lastScanStatsForTests.scanned).toBe(121); // every tie visited exactly once
+  });
+
+  it("an entry inserted WHILE the scan runs never breaks it: one offer, and the next scan sees them", async () => {
+    const slot = freshSlot();
+    const slotDate = wallParts(slot.startsAt, TZ).date;
+    const existing = await makeEntry();
+    await addWindow(existing.id, { startDate: slotDate, endDate: slotDate });
+
+    // Race a fitting insert (backdated to rank FIRST) against the scan.
+    const insertRacer = (async () => {
+      const e = await prisma.waitlistEntry.create({
+        data: {
+          shopId,
+          firstName: "MidScan",
+          email: `mid-${randomToken(4)}@test.local`,
+          createdAt: new Date(Date.now() - 3 * 86_400_000),
+        },
+        select: { id: true },
+      });
+      await addWindow(e.id, { startDate: slotDate, endDate: slotDate });
+      return e;
+    })();
+    const [offered, inserted] = await Promise.all([
+      offerFreedSlot(slot, new Date()),
+      insertRacer,
+    ]);
+    expect(offered.outcome).toBe("offered");
+    // Exactly ONE hold exists regardless of interleaving.
+    const holds = await prisma.waitlistOffer.count({
+      where: { shopId, staffId, startsAt: slot.startsAt, status: "OFFERED" },
+    });
+    expect(holds).toBe(1);
+
+    // A later slot's scan ranks the backdated newcomer first - nothing lost.
+    const winner =
+      offered.outcome === "offered" && offered.entryId === inserted.id
+        ? existing.id
+        : inserted.id;
+    const next = await offerTo(freshSlot());
+    expect(next.entryId).toBe(winner);
+  });
+
+  it("🔴 5,000-entry benchmark: exhaustive, bounded memory, reported numbers", async () => {
+    const slot = freshSlot();
+    const slotDate = wallParts(slot.startsAt, TZ).date;
+    const wrongDate = addDaysToDateKey(slotDate, 5);
+    const ids = Array.from({ length: 5000 }, (_, i) => `d-bench-${slotSeq}-${String(i).padStart(4, "0")}`);
+    await prisma.waitlistEntry.createMany({
+      data: ids.map((id, i) => ({
+        id, shopId, firstName: `B${i}`, email: `bench-${i}@test.local`,
+        createdAt: new Date(Date.now() - 3 * 86_400_000 + i * 100),
+      })),
+    });
+    await prisma.waitlistWindow.createMany({
+      data: ids.map((id) => ({
+        shopId, entryId: id, startDate: wrongDate, endDate: wrongDate,
+        startMin: null, endMin: null,
+      })),
+    });
+    const fit = await makeEntry();
+    await addWindow(fit.id, { startDate: slotDate, endDate: slotDate });
+
+    // Two concurrent freed-slot events over the huge list: still exactly one hold.
+    const t0 = Date.now();
+    const [a, b] = await Promise.all([
+      offerFreedSlot(slot, new Date()),
+      offerFreedSlot(slot, new Date()),
+    ]);
+    const elapsed = Date.now() - t0;
+    expect([a.outcome, b.outcome].sort()).toEqual(["offered", "unavailable"]);
+    const holds = await prisma.waitlistOffer.count({
+      where: { shopId, staffId, startsAt: slot.startsAt, status: "OFFERED" },
+    });
+    expect(holds).toBe(1);
+
+    const { scanned, pages } = __lastScanStatsForTests;
+    expect(scanned).toBe(5001);
+    expect(pages).toBe(Math.ceil(5001 / 50)); // 101 keyset pages, one in memory at a time
+    // ~2 queries per page (page + windows include); all-email fixtures, so no
+    // client-batch queries. Reported for the PR:
+    // eslint-disable-next-line no-console
+    console.log(
+      `[bench] 5,001 candidates scanned in ${elapsed}ms across ${pages} pages (~${pages * 2} queries)`,
+    );
+    expect(elapsed).toBeLessThan(30_000);
+  }, 120_000);
 
   it("a large waitlist: 300 non-fitting entries are scanned past, the one fit wins, fast", async () => {
     const slot = freshSlot();

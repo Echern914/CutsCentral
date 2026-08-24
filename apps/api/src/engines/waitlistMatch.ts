@@ -1,4 +1,4 @@
-import { ANY_DATE_HORIZON_DAYS, isValidTimezone } from "./waitlistWindows.js";
+import { isValidTimezone } from "./waitlistWindows.js";
 
 /**
  * Waitlist phase D: preference-aware matching. PURE - no database, no clock
@@ -12,12 +12,19 @@ import { ANY_DATE_HORIZON_DAYS, isValidTimezone } from "./waitlistWindows.js";
  *   - The slot's start/end INSTANTS are converted into the ENTRY's validated
  *     IANA timezone (bad/missing zone -> the shop's). "Saturday morning"
  *     means the customer's Saturday morning, not the server's.
- *   - Date half of a window: NULL = Any Date, which respects the SAME 14-day
- *     horizon the join UI sold ("in the next 14 days") - evaluated ROLLING
- *     from the offer moment, in the entry's zone. Anchoring it at join time
- *     would silently kill every long-standing entry, including the 118
- *     migrated ones whose whole meaning was "standing, until I say stop".
- *     A specific date matches exactly; a range is inclusive on both ends.
+ *   - Date half of a window: dates are stored CONCRETE. "Any Date" is
+ *     materialized AT JOIN into an explicit [join date .. join date + 14]
+ *     window in the entry's zone (Acuity's "any opening in the next 14
+ *     days"), so matching only ever range-checks what was stored - it never
+ *     recomputes eligibility from the offer moment. Past the stored end
+ *     date the entry simply stops matching; phase F will mark it EXPIRED.
+ *   - 🔑 GRANDFATHERED LEGACY: a window with NULL dates predates the fixed
+ *     materialization - the 118 backfilled entries (plus any joined before
+ *     this change). Their stored NULL is the deliberate marker: they match
+ *     ANY date, unlimited, until phase F applies an explicit legacy-
+ *     expiration policy. New joins can never mint one (the join route
+ *     materializes), so NULL dates <=> legacy, by construction.
+ *   - A specific date matches exactly; a range is inclusive on both ends.
  *   - Time half: NULL = Any Time. A concrete range demands the WHOLE
  *     appointment inside it - start at/after the preferred start AND end
  *     at/before the preferred end. A 5:30 cut never matches "until 6" if it
@@ -31,12 +38,17 @@ import { ANY_DATE_HORIZON_DAYS, isValidTimezone } from "./waitlistWindows.js";
  * slot are compared as WALL times. An appointment that crosses local midnight
  * can only satisfy Any Time - no stored window (endMin <= 1440) can contain
  * it, and "matches Friday evening" would be a lie about half of it.
+ *
+ * 🔴 LOG HYGIENE: every verdict carries BOTH a machine `code` and a human
+ * `reason`. Production logs record the code and ids ONLY - the reason string
+ * names dates and time windows (a customer's preferences) and is for tests
+ * and the isolated evidence trace, never for log lines.
  */
 
 export interface MatchWindow {
-  startDate: string | null; // YYYY-MM-DD, entry-local
+  startDate: string | null; // YYYY-MM-DD entry-local; NULL = grandfathered legacy
   endDate: string | null;
-  startMin: number | null; // minutes from local midnight
+  startMin: number | null; // minutes from local midnight; NULL = any time
   endMin: number | null;
 }
 
@@ -51,7 +63,17 @@ export interface MatchSlotShape {
   endsAt: Date;
 }
 
-export type MatchVerdict = { ok: true; detail: string } | { ok: false; reason: string };
+/** Machine-readable skip reasons - the ONLY matcher output that may be logged. */
+export type MatchSkipCode =
+  | "past_slot"
+  | "min_notice"
+  | "date_out_of_range"
+  | "time_does_not_fit"
+  | "no_window_fits";
+
+export type MatchVerdict =
+  | { ok: true; detail: string }
+  | { ok: false; code: MatchSkipCode; reason: string };
 
 // One formatter per zone for the whole process - building Intl.DateTimeFormat
 // is the expensive part, and a large-waitlist scan calls this per candidate.
@@ -124,7 +146,7 @@ export function slotWallView(
 export function describeMatchWindow(w: MatchWindow): string {
   const date =
     w.startDate === null || w.endDate === null
-      ? "Any date"
+      ? "Any date (legacy)"
       : w.startDate === w.endDate
         ? w.startDate
         : `${w.startDate}..${w.endDate}`;
@@ -140,28 +162,29 @@ function clock(min: number): string {
 }
 
 /**
- * Does the slot fit ONE window? Returns a reason either way - the trace and
- * the tests read them, so say exactly which half failed.
+ * Does the slot fit ONE window? Returns a coded reason either way - the
+ * trace and the tests read the words, production logs read only the code.
  */
 export function windowFits(
   w: MatchWindow,
   view: { date: string; startMinutes: number; endMinutes: number },
-  todayInTz: string,
 ): MatchVerdict {
   const label = describeMatchWindow(w);
 
   // ---- date half ----
-  if (w.startDate === null || w.endDate === null) {
-    // Any Date = the same "next 14 days" the join UI sold, rolling from now.
-    const horizonEnd = addDaysToDateKey(todayInTz, ANY_DATE_HORIZON_DAYS);
-    if (view.date < todayInTz || view.date > horizonEnd) {
+  // NULL dates = grandfathered legacy (see the header): any date matches,
+  // deliberately, until phase F's explicit legacy-expiration policy. Every
+  // OTHER window is a stored concrete range - including materialized
+  // "Any Date" joins - and is range-checked exactly as stored. Nothing here
+  // looks at "today": eligibility was fixed at join time.
+  if (w.startDate !== null && w.endDate !== null) {
+    if (view.date < w.startDate || view.date > w.endDate) {
       return {
         ok: false,
-        reason: `[${label}] slot date ${view.date} outside the rolling ${ANY_DATE_HORIZON_DAYS}-day Any-Date horizon (${todayInTz}..${horizonEnd})`,
+        code: "date_out_of_range",
+        reason: `[${label}] slot date ${view.date} not in range`,
       };
     }
-  } else if (view.date < w.startDate || view.date > w.endDate) {
-    return { ok: false, reason: `[${label}] slot date ${view.date} not in range` };
   }
 
   // ---- time half: the WHOLE appointment must fit ----
@@ -169,12 +192,14 @@ export function windowFits(
     if (view.startMinutes < w.startMin) {
       return {
         ok: false,
+        code: "time_does_not_fit",
         reason: `[${label}] slot starts ${clock(view.startMinutes)}, before the preferred start`,
       };
     }
     if (view.endMinutes > w.endMin) {
       return {
         ok: false,
+        code: "time_does_not_fit",
         reason: `[${label}] slot ends ${
           view.endMinutes > 1440 ? "past midnight" : clock(view.endMinutes)
         }, after the preferred end - a fitting start is not enough`,
@@ -205,22 +230,23 @@ export function entryPrefsMatchSlot(
   // demands a strictly-future slot.)
   const leadMs = Math.max(0, entry.minHoursNotice ?? 0) * 3_600_000;
   const earliest = opts.now.getTime() + leadMs;
-  if (slot.startsAt.getTime() < earliest || slot.startsAt.getTime() <= opts.now.getTime()) {
+  if (slot.startsAt.getTime() <= opts.now.getTime()) {
+    return { ok: false, code: "past_slot", reason: "slot is not in the future" };
+  }
+  if (slot.startsAt.getTime() < earliest) {
     return {
       ok: false,
-      reason:
-        entry.minHoursNotice != null
-          ? `needs ${entry.minHoursNotice}h notice; slot starts too soon`
-          : "slot is not in the future",
+      code: "min_notice",
+      reason: `needs ${entry.minHoursNotice}h notice; slot starts too soon`,
     };
   }
 
   const tz = resolveMatchTimezone(entry.timezone, opts.shopTimezone);
   const view = slotWallView(slot, tz);
-  const today = wallParts(opts.now, tz).date;
 
-  // Defensive: an entry with no window rows (nothing pre-dates the phase-A
-  // backfill, but a raw insert could) means what the backfill meant - Any/Any.
+  // Defensive: an entry with no window rows (nothing post-dates the phase-A
+  // backfill without one, but a raw insert could) means what the backfill
+  // meant - grandfathered Any/Any.
   const windows: MatchWindow[] =
     entry.windows.length > 0
       ? entry.windows
@@ -228,9 +254,13 @@ export function entryPrefsMatchSlot(
 
   const reasons: string[] = [];
   for (const w of windows) {
-    const v = windowFits(w, view, today);
+    const v = windowFits(w, view);
     if (v.ok) return { ok: true, detail: `${v.detail} (tz ${tz})` };
     reasons.push(v.reason);
   }
-  return { ok: false, reason: `no window fits: ${reasons.join("; ")} (tz ${tz})` };
+  return {
+    ok: false,
+    code: "no_window_fits",
+    reason: `no window fits: ${reasons.join("; ")} (tz ${tz})`,
+  };
 }

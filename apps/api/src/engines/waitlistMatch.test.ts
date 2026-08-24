@@ -89,22 +89,47 @@ describe("dates, in the entry's wall calendar", () => {
     expect(matches(range, slot("2026-08-27T14:00:00Z", 30)).ok).toBe(false); // day before
   });
 
-  it("🔴 Any Date honors the rolling 14-day horizon: day 14 in, day 15 out", () => {
-    const now = new Date("2026-08-24T16:00:00Z"); // Aug 24, noon EDT
-    // today+14 = 2026-09-07.
-    expect(matches([w()], slot("2026-09-07T14:00:00Z", 30), { now }).ok).toBe(true);
-    const out = matches([w()], slot("2026-09-08T14:00:00Z", 30), { now });
+  it("🔴 a materialized Any-Date window is FIXED: join day in, day 14 in, day 15 out", () => {
+    // Exactly what the join route stores for "Any date" on 2026-08-24:
+    const joined = "2026-08-24";
+    const win = [w({ startDate: joined, endDate: addDaysToDateKey(joined, 14) })];
+    // The join day itself (17:00 EDT that same day).
+    expect(matches(win, slot("2026-08-24T21:00:00Z", 30)).ok).toBe(true);
+    // The final eligible day - the inclusive boundary.
+    expect(matches(win, slot("2026-09-07T14:00:00Z", 30)).ok).toBe(true);
+    // The first ineligible day.
+    const out = matches(win, slot("2026-09-08T14:00:00Z", 30));
     expect(out.ok).toBe(false);
-    if (!out.ok) expect(out.reason).toMatch(/14-day/);
+    if (!out.ok) expect(out.code).toBe("no_window_fits");
+    // And the stored boundary NEVER moves: evaluating much later changes
+    // nothing, because nothing here reads the offer moment.
+    expect(
+      matches(win, slot("2026-09-08T14:00:00Z", 30), {
+        now: new Date("2026-08-25T00:00:00Z"),
+      }).ok,
+    ).toBe(false);
   });
 
-  it("windowFits refuses a slot date BEFORE 'today' under Any Date", () => {
-    const v = windowFits(
-      w(),
-      { date: "2026-08-20", startMinutes: 600, endMinutes: 630 },
-      "2026-08-24",
-    );
-    expect(v.ok).toBe(false);
+  it("🔑 GRANDFATHERED legacy (NULL dates) still matches ANY date, far future included", () => {
+    // The 118 backfilled entries and anything joined before materialization:
+    // their stored NULL is the deliberate marker, and they stay eligible
+    // until phase F retires them under an explicit policy.
+    expect(matches([w()], slot("2027-06-15T14:00:00Z", 30)).ok).toBe(true);
+  });
+
+  it("new fixed windows and legacy rows are distinguishable by storage alone", () => {
+    const far = slot("2027-06-15T14:00:00Z", 30); // ~10 months out
+    expect(matches([w()], far).ok).toBe(true); // legacy: eligible
+    expect(
+      matches([w({ startDate: "2026-08-24", endDate: "2026-09-07" })], far).ok,
+    ).toBe(false); // materialized Any-Date of the same era: long expired
+  });
+
+  it("a fixed window spanning the fall-back DST change keeps its boundary dates", () => {
+    // Joined Oct 25, window runs through Nov 8 - across the Nov 1 fall-back.
+    const win = [w({ startDate: "2026-10-25", endDate: "2026-11-08" })];
+    expect(matches(win, slot("2026-11-08T15:00:00Z", 30)).ok).toBe(true); // 10:00 EST, last day
+    expect(matches(win, slot("2026-11-09T15:00:00Z", 30)).ok).toBe(false); // first ineligible
   });
 });
 
