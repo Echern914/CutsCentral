@@ -1451,7 +1451,15 @@ model Staff {
   imageUrl  String? // http(s) only (same boundary guard as shop branding)
   active    Boolean  @default(true)
   sortOrder Int      @default(0)
-  userId    String? // optional link to the owning User (single-barber shops)
+  // WHO GETS THIS CHAIR'S ALERTS. Every barber-facing notification resolves its
+  // recipient as `staff.userId ?? shop.ownerId` (services/barberNotify.ts
+  // recipientForAppointment, appointmentNotify, booking.public's cancel/reschedule,
+  // engines/barberReminders). A denormalized MIRROR of ShopMember.staffId (unique:
+  // one person per chair), maintained on write by services/staffUserLink.ts so the
+  // send paths never need a join. Never set by hand - link the SEAT to the chair.
+  // NULL = no seat holds this chair, and alerts fall back to the owner (correct
+  // for a solo shop whose single chair has no separate login).
+  userId    String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

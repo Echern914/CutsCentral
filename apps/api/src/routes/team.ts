@@ -7,6 +7,7 @@ import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager, requireOwner } from "../auth/roles.js";
 import { accountLimiter, dashboardLimiter } from "../middleware/rateLimit.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
+import { applyChairLink, releaseChairLink } from "../services/staffUserLink.js";
 import { logger } from "../logger.js";
 
 import { requireActiveAccess } from "../middleware/billing.js";
@@ -253,7 +254,8 @@ teamRouter.patch("/members/:id", requireOwner, async (req, res) => {
   const shopId = req.shop!.id;
   const member = await prisma.shopMember.findFirst({
     where: { id: req.params.id, shopId },
-    select: { id: true, userId: true, role: true },
+    // staffId: the chair they hold NOW, needed to release it when the link moves.
+    select: { id: true, userId: true, role: true, staffId: true },
   });
   if (!member) {
     res.status(404).json({ error: "not_found" });
@@ -287,12 +289,26 @@ teamRouter.patch("/members/:id", requireOwner, async (req, res) => {
     }
   }
 
-  await prisma.shopMember.update({
-    where: { id: member.id },
-    data: {
-      ...(parsed.data.role ? { role: parsed.data.role } : {}),
-      ...(staffId !== undefined ? { staffId } : {}),
-    },
+  await prisma.$transaction(async (tx) => {
+    await tx.shopMember.update({
+      where: { id: member.id },
+      data: {
+        ...(parsed.data.role ? { role: parsed.data.role } : {}),
+        ...(staffId !== undefined ? { staffId } : {}),
+      },
+    });
+    // Re-point Staff.userId whenever the chair link moves, so this seat's
+    // bookings alert THIS person instead of falling back to the owner. Skipped
+    // when the request didn't touch staffId (a role-only edit). Same
+    // transaction as the seat write: the two must never disagree.
+    if (staffId !== undefined) {
+      await applyChairLink(tx, {
+        shopId,
+        userId: member.userId,
+        previousStaffId: member.staffId,
+        nextStaffId: staffId,
+      });
+    }
   });
   res.json({ ok: true });
 });
@@ -308,7 +324,7 @@ teamRouter.delete("/members/:id", requireOwner, async (req, res) => {
   const shopId = req.shop!.id;
   const member = await prisma.shopMember.findFirst({
     where: { id: req.params.id, shopId },
-    select: { id: true, userId: true },
+    select: { id: true, userId: true, staffId: true },
   });
   if (!member) {
     res.status(404).json({ error: "not_found" });
@@ -318,6 +334,16 @@ teamRouter.delete("/members/:id", requireOwner, async (req, res) => {
     res.status(409).json({ error: "cannot_remove_owner" });
     return;
   }
-  await prisma.shopMember.delete({ where: { id: member.id } });
+  await prisma.$transaction(async (tx) => {
+    await tx.shopMember.delete({ where: { id: member.id } });
+    // Their chair, hours and history stay exactly as they are (see above) -
+    // but the LOGIN link goes with the seat, so alerts for that chair fall
+    // back to the owner rather than pinging someone who no longer has access.
+    await releaseChairLink(tx, {
+      shopId,
+      userId: member.userId,
+      staffId: member.staffId,
+    });
+  });
   res.json({ ok: true });
 });
