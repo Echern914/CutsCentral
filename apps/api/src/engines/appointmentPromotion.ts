@@ -9,6 +9,7 @@ import { recomputeCadence } from "./cadence.js";
 import { notifyPunchEarned } from "../services/loyaltyNotify.js";
 import { refundForCancellation } from "../billing/payments.js";
 import { notifySlotOpened } from "./slotOpened.js";
+import { releaseForAppointment } from "./acuityMirror.js";
 
 /**
  * Turn a fulfilled native Appointment into a COMPLETED Visit that earns loyalty
@@ -274,6 +275,21 @@ export async function cancelAppointment(
   if (outcome === "CANCELED" && !opts.suppressSlotOpened) {
     void notifySlotOpened({ shopId, appointmentId, now });
   }
+
+  // Release the Acuity block this appointment was holding. ChairBack is
+  // updated first (above) and Acuity second: the chair is already free here,
+  // and a delete that fails leaves a RELEASING row the reconciler retries -
+  // whereas deleting first and failing to cancel would free the time in Acuity
+  // for a booking that still stands. Fire-and-forget for the same reason every
+  // notify above is: a cancel must never fail because Acuity is unreachable.
+  //
+  // Runs for NO_SHOW too. A no-show inside its own span still frees the chair,
+  // and a block left behind would keep the barber's Acuity calendar dark for
+  // time he could still sell.
+  void releaseForAppointment(shopId, appointmentId).catch(() => {
+    // releaseForAppointment logs its own transitions; swallowing here keeps a
+    // background rejection from taking the process down.
+  });
   return true;
 }
 

@@ -5,6 +5,12 @@ import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { computeOpenSlots, isSlotBookable, type Slot } from "../engines/slots.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
+import {
+  completeReschedule,
+  dispatchAfterCommit,
+  recordMirrorIntent,
+  swapForReschedule,
+} from "../engines/acuityMirror.js";
 import { ServiceDayFullError } from "../engines/serviceDailyLimit.js";
 import { cancelAppointment } from "../engines/appointmentPromotion.js";
 import { effectiveDurationAt, effectivePriceAt } from "../engines/pricing.js";
@@ -835,6 +841,7 @@ async function bookAppointment(
     }
   }
 
+  let bookOutboxId: string | null = null;
   try {
     const bookedId = await prisma.$transaction(async (tx) => {
       // Our own live-or-expired hold on this exact slot, if any.
@@ -901,6 +908,22 @@ async function bookAppointment(
             confirmationSentAt: ctx.now,
           },
         });
+        // The HOLD was never mirrored (ephemeral, self-lapsing). Now that it
+        // is a real booking that owns the chair indefinitely, it is.
+        bookOutboxId = await recordMirrorIntent(tx, {
+          shopId: ctx.shopId,
+          appointmentId: hold.id,
+          staffId: slot.staffId,
+          startsAt: slot.startsAt,
+          endsAt: slot.endsAt,
+          occupancy: {
+            status: "BOOKED",
+            startsAt: slot.startsAt,
+            endsAt: slot.endsAt,
+            holdExpiresAt: null, // cleared just above - no longer a hold
+            visitId: null,
+          },
+        });
         return hold.id;
       }
 
@@ -936,7 +959,31 @@ async function bookAppointment(
         },
         select: { id: true },
       });
+      bookOutboxId = await recordMirrorIntent(tx, {
+        shopId: ctx.shopId,
+        appointmentId: appt.id,
+        staffId: slot.staffId,
+        startsAt: slot.startsAt,
+        endsAt: slot.endsAt,
+        occupancy: {
+          status: "BOOKED",
+          startsAt: slot.startsAt,
+          endsAt: slot.endsAt,
+          holdExpiresAt: null,
+          visitId: null,
+        },
+      });
       return appt.id;
+    });
+
+    // Hold the chair in Acuity now the booking is durable. Best-effort: the
+    // caller is mid-conversation and the agent has already said it is booked,
+    // so tearing it down over an Acuity blip would be worse than a block the
+    // reconciler places a minute later.
+    await dispatchAfterCommit(bookOutboxId, {
+      shopId: ctx.shopId,
+      appointmentId: bookedId,
+      via: "receptionist_book",
     });
 
     // Backfill the walk-in's name onto the Client row (outside the booking tx;
@@ -1048,6 +1095,7 @@ async function rescheduleTool(
   });
   if (!bookable) return fail("that new time is outside the shop's bookable hours");
 
+  let reschedOutboxId: string | null = null;
   try {
     await prisma.$transaction(async (tx) => {
       // Consume the client's live holds first. The normal flow holds the
@@ -1097,6 +1145,20 @@ async function rescheduleTool(
           runningLate: false,
         },
       });
+      reschedOutboxId = await swapForReschedule(tx, {
+        shopId: ctx.shopId,
+        appointmentId: appt.id,
+        staffId: slot.staffId,
+        startsAt: slot.startsAt,
+        endsAt: slot.endsAt,
+        occupancy: {
+          status: "BOOKED",
+          startsAt: slot.startsAt,
+          endsAt: slot.endsAt,
+          holdExpiresAt: null,
+          visitId: null,
+        },
+      });
     });
   } catch (err) {
     if (err instanceof ServiceDayFullError) return fail(DAY_FULL);
@@ -1106,6 +1168,9 @@ async function rescheduleTool(
     }
     throw err;
   }
+
+  // New block first, then release the old - never the reverse.
+  await completeReschedule(ctx.shopId, appt.id, reschedOutboxId);
 
   return ok({
     rescheduled: true,

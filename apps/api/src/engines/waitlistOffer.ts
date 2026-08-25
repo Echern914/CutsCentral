@@ -9,6 +9,7 @@ import {
   recordWaitlistEventBestEffort,
   SYSTEM_ACTOR,
 } from "./waitlistAudit.js";
+import { dispatchAfterCommit, recordMirrorIntent } from "./acuityMirror.js";
 import {
   lockStaffAndAssertSlotFree,
   SlotTakenError,
@@ -672,9 +673,12 @@ export async function claimOffer(params: {
 }): Promise<ClaimResult> {
   const now = params.now ?? new Date();
   const hash = sha256Hex(params.token);
+  // Captured inside the transaction, dispatched after it commits.
+  let claimOutboxId: string | null = null;
+  let claimedApptId: string | null = null;
 
   try {
-    return await prisma.$transaction(async (tx) => {
+    const claimResult = await prisma.$transaction(async (tx) => {
       // Row lock FIRST: whoever holds it decides this offer's fate.
       const locked = await tx.$queryRaw<{ id: string }[]>(
         Prisma.sql`SELECT id FROM "WaitlistOffer" WHERE "tokenHash" = ${hash} FOR UPDATE`,
@@ -855,6 +859,25 @@ export async function claimOffer(params: {
         select: { id: true, manageToken: true },
       });
 
+      // The claim is customer-driven, so the shop's approval policy decides
+      // whether this occupies as a BOOKED row or an indefinite PENDING
+      // request - both hold the chair, so both mirror.
+      claimedApptId = appt.id;
+      claimOutboxId = await recordMirrorIntent(tx, {
+        shopId: offer.shopId,
+        appointmentId: appt.id,
+        staffId: offer.staffId,
+        startsAt: offer.startsAt,
+        endsAt: offer.endsAt,
+        occupancy: {
+          status: shop.requireBookingApproval ? "PENDING" : "BOOKED",
+          startsAt: offer.startsAt,
+          endsAt: offer.endsAt,
+          holdExpiresAt: null, // a claimed offer is not an ephemeral hold
+          visitId: null,
+        },
+      });
+
       // We hold the row lock, so this cannot lose a race - the WHERE status
       // guard is pure hygiene.
       await tx.waitlistOffer.update({
@@ -898,6 +921,19 @@ export async function claimOffer(params: {
         pending: shop.requireBookingApproval,
       };
     });
+
+    // Block the chair in Acuity after the claim is durable. Best-effort: the
+    // customer is mid-conversation on a link they were sent, and tearing the
+    // claim down because Acuity was briefly unreachable would be worse than a
+    // block the reconciler places a minute later.
+    if (claimOutboxId && claimedApptId) {
+      await dispatchAfterCommit(claimOutboxId, {
+        shopId: claimResult && "shopId" in claimResult ? String(claimResult.shopId) : "",
+        appointmentId: claimedApptId,
+        via: "waitlist_claim",
+      });
+    }
+    return claimResult;
   } catch (err) {
     if (err instanceof ServiceDayFullError) return { outcome: "day_full" };
     if (err instanceof SlotTakenError) {

@@ -8,6 +8,7 @@ import { randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
 import { isSlotBookable } from "./slots.js";
 import { lockStaffAndAssertSlotFree } from "./bookingWrite.js";
+import { dispatchAfterCommit, recordMirrorIntent } from "./acuityMirror.js";
 import { effectiveDurationAt, effectivePriceAt } from "./pricing.js";
 
 /**
@@ -146,6 +147,8 @@ export async function materializeSeries(
 ): Promise<SeriesResult> {
   const now = input.now ?? new Date();
   const occurrences = computeOccurrences(input.pattern, input.anchor, input.timezone);
+  // Collected per occurrence, dispatched after the whole series commits.
+  const mirrorIntents: { outboxId: string; appointmentId: string }[] = [];
 
   // Create the series row first (owner-scoped inside runWithShop so RLS + the
   // shopId stamp are correct). manageToken enables a login-less "cancel all".
@@ -239,7 +242,7 @@ export async function materializeSeries(
           bufferMin: input.bookingBufferMin,
           now,
         });
-        return tx.appointment.create({
+        const created = await tx.appointment.create({
           data: {
             shopId: input.shopId,
             staffId: input.staffId,
@@ -259,6 +262,27 @@ export async function materializeSeries(
           },
           select: { id: true },
         });
+        // One mirror intent PER OCCURRENCE, each in the same transaction as
+        // its own row. Recorded here, dispatched after the series commits, so
+        // a 26-week series does not hold a transaction open across 26 HTTP
+        // calls. A partial dispatch failure is contained to the occurrences
+        // that failed - the reconciler finishes those individually.
+        const outboxId = await recordMirrorIntent(tx, {
+          shopId: input.shopId,
+          appointmentId: created.id,
+          staffId: input.staffId,
+          startsAt,
+          endsAt,
+          occupancy: {
+            status: "BOOKED",
+            startsAt,
+            endsAt,
+            holdExpiresAt: null,
+            visitId: null,
+          },
+        });
+        if (outboxId) mirrorIntents.push({ outboxId, appointmentId: created.id });
+        return created;
       });
       booked.push({ index: occ.index, startsAt, appointmentId: appt.id });
     } catch (err) {
@@ -289,6 +313,18 @@ export async function materializeSeries(
         data: { status: "ENDED" },
       }),
     ).catch(() => {});
+  }
+
+  // Place one block per occurrence, after every row is durable. Sequential
+  // and best-effort: a barber's standing appointment must not fail to exist
+  // because Acuity rate-limited the eleventh week. Whatever does not land
+  // stays in the outbox for the reconciler.
+  for (const intent of mirrorIntents) {
+    await dispatchAfterCommit(intent.outboxId, {
+      shopId: input.shopId,
+      appointmentId: intent.appointmentId,
+      via: "recurring_series",
+    });
   }
 
   return { seriesId: series.id, booked, skipped };
