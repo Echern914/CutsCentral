@@ -28,6 +28,12 @@ import {
   releaseForAppointment,
   swapForReschedule,
 } from "../engines/acuityMirror.js";
+import {
+  auditCoverage,
+  backfillShop,
+  BACKFILL_MAX_LIMIT,
+  BackfillRefusedError,
+} from "../engines/acuityBackfill.js";
 import { toCents } from "../billing/payments.js";
 import { createTerminalPaymentIntent, terminalEnabled } from "../billing/terminal.js";
 import {
@@ -1462,6 +1468,57 @@ bookingDashboardRouter.post("/acuity/release-all", async (req, res) => {
     res.json({ ok: true, released });
   } catch (err) {
     logger.error({ err, shopId }, "acuity release-all failed");
+    res.status(502).json({ error: "acuity_unavailable" });
+  }
+});
+
+/**
+ * COVERAGE AUDIT (dry run). What is on the books that the mirror is NOT holding.
+ *
+ * Read-only and Acuity-free: staleness is derived from stored timestamps, so
+ * this answers even while Acuity is down, and costs an owner nothing to check.
+ * Enabling ENFORCE only protects bookings made from that moment on, so without
+ * this a shop can sit "protected" with a week of already-sold chairs still on
+ * offer in Acuity - which is the incident, not a hypothetical.
+ */
+bookingDashboardRouter.get("/acuity/backfill", async (req, res) => {
+  res.json(await auditCoverage([req.shop!.id]));
+});
+
+const backfillSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(BACKFILL_MAX_LIMIT).optional(),
+  cursor: z.object({ startsAt: z.string(), id: z.string() }).nullish(),
+  runId: z.string().max(64).optional(),
+});
+
+/**
+ * Protect one bounded batch. Idempotent, resumable, and refused unless the shop
+ * is genuinely enforcing - OBSERVE writing anything would make the rehearsal a
+ * lie, so it is turned away here exactly as it is inside the engine.
+ */
+bookingDashboardRouter.post("/acuity/backfill", async (req, res) => {
+  const shopId = req.shop!.id;
+  const parsed = backfillSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  try {
+    res.json(
+      await backfillShop(shopId, {
+        limit: parsed.data.limit,
+        cursor: parsed.data.cursor ?? null,
+        runId: parsed.data.runId,
+      }),
+    );
+  } catch (err) {
+    if (err instanceof BackfillRefusedError) {
+      // 409, not 403: the shop is configured a way that forbids this, and the
+      // reason is the fix instruction.
+      res.status(409).json({ error: err.reason });
+      return;
+    }
+    logger.error({ err, shopId }, "acuity backfill failed");
     res.status(502).json({ error: "acuity_unavailable" });
   }
 });
