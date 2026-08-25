@@ -44,6 +44,7 @@ import { paymentsDashboardRouter } from "./routes/payments.dashboard.js";
 import { adminPortalRouter } from "./routes/adminPortal.js";
 import { demoRouter } from "./routes/demo.js";
 import { captureError } from "./sentry.js";
+import { redactedReqSerializer, redactUrl, requestUrl } from "./logRedaction.js";
 import { corsMiddleware } from "./middleware/cors.js";
 import { requireAdminIp } from "./middleware/adminIp.js";
 import {
@@ -185,14 +186,21 @@ export function createApp(): Express {
   app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
     const bodyErrorType = (err as { type?: string } | null)?.type;
     if (bodyErrorType === "entity.parse.failed" || bodyErrorType === "entity.too.large") {
-      logger.warn({ path: req.path, method: req.method, bodyErrorType }, "unreadable request body");
+      logger.warn(
+        { path: redactUrl(requestUrl(req)), method: req.method, bodyErrorType },
+        "unreadable request body",
+      );
       if (res.headersSent) return;
       if (bodyErrorType === "entity.parse.failed") res.status(400).json({ error: "bad_json" });
       else res.status(413).json({ error: "payload_too_large" });
       return;
     }
-    logger.error({ err, path: req.path, method: req.method }, "request failed");
-    captureError(err, { path: req.path, method: req.method });
+    // 🔴 REDACTED, and via originalUrl rather than req.path. Half the routes
+    // that can throw here carry their credential IN THE PATH, and this line is
+    // the one that gets forwarded out of the log stream to wherever alerts go.
+    const path = redactUrl(requestUrl(req));
+    logger.error({ err, path, method: req.method }, "request failed");
+    captureError(err, { path, method: req.method });
     if (res.headersSent) return;
     res.status(500).json({ error: "internal" });
   });
@@ -212,38 +220,4 @@ function securityHeaders(_req: Request, res: Response, next: NextFunction): void
     );
   }
   next();
-}
-
-/**
- * Query parameters whose VALUE is an authenticator. A request URL is logged on
- * every hit, shipped to whatever aggregates our logs, and kept far longer than
- * the credential lives - so these are masked before any of that.
- *
- *  - `token`   the team-invitation token (its own bearer: whoever holds it can
- *              accept the invitation as the invited address)
- *  - `code`    OAuth handoff codes and the mobile return code
- *  - `state`   binds a mobile handoff to one attempt; logging it weakens that
- */
-const SENSITIVE_QUERY_PARAMS = ["token", "code", "state"];
-
-/**
- * pino-http req serializer. Masks the Acuity webhook path secret - the URL is
- * that route's only authenticator - and the sensitive query values above.
- */
-export function redactedReqSerializer(req: {
-  method?: string;
-  url?: string;
-  [k: string]: unknown;
-}) {
-  let url = req.url;
-  if (typeof url === "string") {
-    url = url.replace(/(\/webhooks\/acuity\/)[^/?]+/, "$1[redacted]");
-    for (const param of SENSITIVE_QUERY_PARAMS) {
-      url = url.replace(
-        new RegExp(`([?&]${param}=)[^&#]*`, "gi"),
-        "$1[redacted]",
-      );
-    }
-  }
-  return { method: req.method, url };
 }
