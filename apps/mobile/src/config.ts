@@ -62,8 +62,13 @@ export const STORAGE = {
   mode: "cb.mode", // "barber" | "manager" | "customer"
   lastToken: "cb.customerToken", // last magic token seen, for cold launches
   // The barber/manager cb_session JWT from native sign-in. The WebView's httpOnly
-  // cookie can't be read by native, so we keep a copy here to forward as the push
+  // cookie can't be read by native, so we keep a copy to forward as the push
   // registration bearer.
+  //
+  // 🔴 NO LONGER READ THROUGH AsyncStorage. The token lives in the KEYCHAIN now
+  // (src/session.ts), under this same key name, and is migrated out of
+  // AsyncStorage on first read. This entry stays so the migration has something
+  // to point at - go through loadSession()/saveSession(), never directly.
   session: "cb.session",
 } as const;
 

@@ -610,3 +610,30 @@ export interface GalleryItem {
   url: string;
   caption?: string;
 }
+
+/**
+ * The native app, as the web has to refer to it.
+ *
+ * The web owns two things the app cannot: the verified-domain files that make
+ * https links open the app (apple-app-site-association, assetlinks.json), and
+ * the fallback page someone lands on when the app ISN'T installed. Both need
+ * these identifiers, so they live here rather than being typed twice.
+ *
+ * `scheme` is deliberately the SECOND choice. An https universal link is
+ * verified against a domain we control; a custom scheme is claimed by whoever
+ * registers it, so any app on the device could answer chairback://. It stays in
+ * the design for one job only - closing the system authentication browser,
+ * which matches on a custom scheme and nothing else - and it never carries
+ * anything that is dangerous to hand a stranger (see the code exchange).
+ */
+export const MOBILE_APP = {
+  scheme: "chairback",
+  /** Verified https path a browser flow uses to hand control back to the app. */
+  authCallbackPath: "/auth/mobile/callback",
+  /** The invitation link, which the app also claims so a tap can open it. */
+  teamJoinPath: "/team/join",
+  iosBundleId: "com.getchairback.rewards",
+  androidPackage: "com.getchairback.rewards",
+  /** App Store listing; the id is `ascAppId` in apps/mobile/eas.json. */
+  appStoreUrl: "https://apps.apple.com/app/id6783995804",
+} as const;

@@ -126,6 +126,8 @@ model User {
 
   passwordResetTokens PasswordResetToken[]
   emailChangeTokens   EmailChangeToken[]
+  // Short-lived codes that return a web-authenticated barber to the native app.
+  mobileAuthCodes     MobileAuthCode[]
   // Shops this user can sign in to as staff (separate from `shops` above,
   // which is shops they OWN).
   shopMemberships     ShopMember[]
@@ -175,6 +177,41 @@ model EmailChangeToken {
   createdAt DateTime  @default(now())
 
   @@index([userId])
+}
+
+// One-shot authorization code that hands a browser-established session back to
+// the native app (the "Join your shop" flow: an invited barber creates their
+// account on the web, in the system authentication browser, then returns).
+//
+// The code is NOT a session. It is a two-minute, single-use bearer of the right
+// to ASK for one, and it only pays out to the app instance that started the
+// flow: the exchange must present the PKCE verifier matching codeChallenge AND
+// the same state the app generated. That is what stops a code observed in a
+// redirect (or a malicious app registering our custom scheme) from being
+// redeemed by anyone else.
+//
+// Same at-rest posture as PasswordResetToken: sha256 only, never the raw value.
+model MobileAuthCode {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // sha256 hex of the code that travels in the callback URL.
+  codeHash String @unique
+  // PKCE S256 challenge, base64url. The app keeps the verifier; only it can
+  // produce a preimage of this.
+  codeChallenge String
+  // sha256 hex of the app-generated state. Binds the code to THIS attempt, so a
+  // replayed or cross-flow callback cannot be exchanged.
+  stateHash String
+  // Why the code was minted, for auditing. "team_join" today.
+  purpose   String   @default("team_join")
+  expiresAt DateTime
+  // Stamped by a compare-and-set on redeem; non-null = spent, never replayable.
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
 }
 
 model Shop {

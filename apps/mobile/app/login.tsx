@@ -18,8 +18,8 @@ import {
   GoogleSignin,
   statusCodes,
 } from "@react-native-google-signin/google-signin";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { API_ORIGIN, GOOGLE_IOS_CLIENT_ID, STORAGE, WEB_ORIGIN } from "@/src/config";
+import { API_ORIGIN, GOOGLE_IOS_CLIENT_ID, WEB_ORIGIN } from "@/src/config";
+import { loadSession, saveSession } from "@/src/session";
 
 /**
  * Barber/manager native sign-in. Google blocks its OAuth inside an embedded
@@ -33,6 +33,14 @@ import { API_ORIGIN, GOOGLE_IOS_CLIENT_ID, STORAGE, WEB_ORIGIN } from "@/src/con
  * registration, so sign-up lives on the web. The email+password form exists for
  * accounts created there without Apple/Google - including the App Review demo
  * account, which is the only way a reviewer can enter the barber side.
+ *
+ * TWO DOORS. Everything above is SIGN IN, for someone who already has an
+ * account. "Join your shop" is the other one: an employee who was invited by a
+ * barbershop and has no account yet. That path can't live on this screen (an
+ * account has to be created, which means the web), so it opens the system
+ * authentication browser and comes back with a session - see app/join.tsx. It
+ * is free, it is not a purchase, and it requires an invitation that already
+ * exists; nothing about it is business registration.
  *
  * Apple is rendered first per iOS HIG, and UNCONDITIONALLY on iOS: build 31 was
  * rejected under Guideline 4.8 ("no equivalent login service") and the prime
@@ -132,7 +140,8 @@ export default function LoginScreen() {
     (async () => {
       let token: string | null = null;
       try {
-        token = await AsyncStorage.getItem(STORAGE.session);
+        // Keychain first, migrating an older AsyncStorage token on the way.
+        token = await loadSession();
       } catch {
         token = null;
       }
@@ -147,7 +156,7 @@ export default function LoginScreen() {
   async function completeSignIn(token: string) {
     if (handing.current) return;
     handing.current = true;
-    await AsyncStorage.setItem(STORAGE.session, token).catch(() => {});
+    await saveSession(token).catch(() => {});
     router.replace("/barber");
   }
 
@@ -450,6 +459,31 @@ export default function LoginScreen() {
 
             {error && <Text style={styles.error}>{error}</Text>}
 
+            {/* THE SECOND DOOR. Everything above signs in an account that
+                already exists; this is for the barber who was invited to a shop
+                and has none yet. Deliberately below the sign-in block and
+                styled as a secondary action: most people opening this screen
+                are returning, and only an invited employee needs it. */}
+            <View style={styles.joinBlock}>
+              <View style={styles.divider}>
+                <View style={styles.line} />
+                <Text style={styles.dividerText}>invited by a shop?</Text>
+                <View style={styles.line} />
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Join your shop with an invitation"
+                disabled={busy !== null}
+                onPress={() => router.push("/join")}
+                style={[styles.joinButton, busy !== null && styles.disabled]}
+              >
+                <Text style={styles.joinText}>Join your shop</Text>
+              </Pressable>
+              <Text style={styles.joinHint}>
+                Use the invitation your shop emailed you.
+              </Text>
+            </View>
+
             {/* Demonstration mode: the read-only demo dashboard, no account
                 needed (App Review Guideline 2.1a; also a prospect's test drive). */}
             <Pressable
@@ -485,6 +519,24 @@ export default function LoginScreen() {
 }
 
 const styles = StyleSheet.create({
+  joinBlock: { marginTop: 4 },
+  joinButton: {
+    minHeight: 52,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(212,175,55,0.55)",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 16,
+  },
+  joinText: { color: "#D4AF37", fontSize: 16, fontWeight: "600" },
+  joinHint: {
+    color: "#A1A1AA",
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: "center",
+    marginTop: 10,
+  },
   root: { flex: 1, backgroundColor: "#0A0A0B" },
   flex: { flex: 1 },
   center: { alignItems: "center", justifyContent: "center" },

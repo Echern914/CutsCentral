@@ -40,6 +40,8 @@ export function AuthForm({
   action,
   googleAvailable,
   googleStartUrl,
+  appleAvailable = false,
+  appleStartUrl,
   forgotPasswordAvailable = false,
   initialError,
   next,
@@ -51,6 +53,12 @@ export function AuthForm({
   ) => Promise<{ error?: string }>;
   googleAvailable: boolean;
   googleStartUrl: string;
+  /**
+   * Sign in with Apple on the web. Dark until the Apple credentials are set on
+   * the API, so this is false in every environment that hasn't configured them.
+   */
+  appleAvailable?: boolean;
+  appleStartUrl?: string;
   /**
    * Shows the "Forgot password?" link (login only). Discovered the same way as
    * googleAvailable - the API says whether email is configured - so the link
@@ -75,6 +83,17 @@ export function AuthForm({
   // in-app check is unresolved; on the web that's one frame - imperceptible).
   const inApp = useIsNativeApp();
   const signupGateUnknown = isSignup && inApp === null;
+
+  /**
+   * Carry the destination onto a provider link. Google and Apple leave our
+   * origin, so unlike the password form there is no hidden field to hold it -
+   * the start route parks it in a cookie for the trip. Without this an invited
+   * barber who taps Google loses the invitation the password path keeps.
+   */
+  const withNext = (url: string): string =>
+    next ? `${url}?next=${encodeURIComponent(next)}` : url;
+  /** Same idea for the plain link between /login and /signup. */
+  const crossLink = (path: string): string => withNext(path);
 
   return (
     <main className="relative mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center px-5">
@@ -135,16 +154,30 @@ export function AuthForm({
               there (Google blocks OAuth in embedded WebViews), and a web page
               offering ONLY Google + our own account fails App Store Guideline
               4.8 — the native screen is where Sign in with Apple lives. */}
-          {googleAvailable && (
+          {(googleAvailable || (appleAvailable && appleStartUrl)) && (
             <HideInNativeApp>
-              <a
-                href={signupGateUnknown ? undefined : googleStartUrl}
-                onClick={signupGateUnknown ? (e) => e.preventDefault() : undefined}
-                className="flex w-full items-center justify-center gap-2 rounded-xl border border-subtle bg-charcoal-700 px-4 py-3 text-sm font-medium text-offwhite transition-colors duration-200 ease-out hover:bg-charcoal-800"
-              >
-                <GoogleGlyph />
-                Continue with Google
-              </a>
+              <div className="flex flex-col gap-2.5">
+                {appleAvailable && appleStartUrl && (
+                  <a
+                    href={signupGateUnknown ? undefined : withNext(appleStartUrl)}
+                    onClick={signupGateUnknown ? (e) => e.preventDefault() : undefined}
+                    className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-offwhite px-4 py-3 text-sm font-medium text-charcoal transition-opacity duration-200 ease-out hover:opacity-90"
+                  >
+                    <AppleGlyph />
+                    Continue with Apple
+                  </a>
+                )}
+                {googleAvailable && (
+                  <a
+                    href={signupGateUnknown ? undefined : withNext(googleStartUrl)}
+                    onClick={signupGateUnknown ? (e) => e.preventDefault() : undefined}
+                    className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl border border-subtle bg-charcoal-700 px-4 py-3 text-sm font-medium text-offwhite transition-colors duration-200 ease-out hover:bg-charcoal-800"
+                  >
+                    <GoogleGlyph />
+                    Continue with Google
+                  </a>
+                )}
+              </div>
               <div className="my-4 flex items-center gap-3 text-xs text-muted">
                 <span className="h-px flex-1 bg-subtle" />
                 or
@@ -247,7 +280,7 @@ export function AuthForm({
           {isSignup ? (
             <>
               Already have an account?{" "}
-              <Link href="/login" className="text-gold hover:underline">
+              <Link href={crossLink("/login")} className="text-gold hover:underline">
                 Sign in
               </Link>
             </>
@@ -256,7 +289,7 @@ export function AuthForm({
             // created there, so the invitation would only dead-end.
             <HideInNativeApp>
               New here?{" "}
-              <Link href="/signup" className="text-gold hover:underline">
+              <Link href={crossLink("/signup")} className="text-gold hover:underline">
                 Create an account
               </Link>
             </HideInNativeApp>
@@ -264,6 +297,15 @@ export function AuthForm({
         </p>
       </motion.div>
     </main>
+  );
+}
+
+/** Apple's mark, drawn rather than imported so nothing loads off-origin. */
+function AppleGlyph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden fill="currentColor">
+      <path d="M11.03 8.49c-.02-1.77 1.45-2.62 1.51-2.66-.82-1.2-2.1-1.37-2.56-1.39-1.09-.11-2.13.64-2.68.64-.55 0-1.4-.63-2.31-.61-1.19.02-2.28.69-2.89 1.75-1.23 2.14-.31 5.3.88 7.03.59.85 1.28 1.8 2.2 1.76.88-.03 1.21-.57 2.28-.57s1.37.57 2.31.55c.95-.02 1.55-.86 2.13-1.71.67-.98.95-1.93.96-1.98-.02-.01-1.84-.71-1.86-2.81zM9.28 3.3c.48-.59.81-1.4.72-2.21-.7.03-1.55.47-2.05 1.05-.45.52-.84 1.35-.74 2.14.78.06 1.58-.4 2.07-.98z" />
+    </svg>
   );
 }
 
