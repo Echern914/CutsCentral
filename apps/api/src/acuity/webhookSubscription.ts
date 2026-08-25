@@ -21,6 +21,19 @@ export interface SubscribeResult {
  * instead of silently swallowing it (the previous best-effort-only version hid
  * the bare-vs-dotted bug for weeks).
  */
+
+/**
+ * Blank an exact secret wherever it appears in free text.
+ *
+ * Exact-value replacement, not a pattern: the caller already holds the secret,
+ * so there is nothing to infer and no way to match the wrong thing. Also
+ * covers the URL-encoded form, since an echoed request body may have escaped it.
+ */
+export function redactSecret(text: string, secret: string): string {
+  if (!text || !secret) return text;
+  return text.split(secret).join("[redacted]").split(encodeURIComponent(secret)).join("[redacted]");
+}
+
 export async function subscribeShopWebhooks(params: {
   accessToken: string;
   webhookSecret: string;
@@ -40,7 +53,18 @@ export async function subscribeShopWebhooks(params: {
         body: JSON.stringify({ event, target }),
       });
       if (!res.ok) {
-        const body = (await res.text().catch(() => "")).slice(0, 200);
+        //  🔴 THE ERROR BODY ECHOES THE REQUEST.
+        //
+        // We POST `{ event, target }`, and `target` ends in the per-shop
+        // webhook secret - which is that route's ONLY authenticator. Acuity's
+        // 4xx bodies routinely quote the request back, so logging the response
+        // verbatim published the secret to stdout, and from there to whatever
+        // reads it. Redacted against the exact value we hold rather than by
+        // guessing at a shape, so it cannot over- or under-match.
+        const body = redactSecret(
+          (await res.text().catch(() => "")).slice(0, 200),
+          params.webhookSecret,
+        );
         logger.warn({ event, status: res.status, body }, "acuity webhook subscription failed");
         failures.push({ event, status: res.status, body });
         continue;
@@ -55,3 +79,6 @@ export async function subscribeShopWebhooks(params: {
   }
   return { ids, failures };
 }
+
+/** Test seam: the redaction above is security-relevant, so it is asserted directly. */
+export const __redactSecretForTests = redactSecret;

@@ -44,6 +44,7 @@ import { paymentsDashboardRouter } from "./routes/payments.dashboard.js";
 import { adminPortalRouter } from "./routes/adminPortal.js";
 import { demoRouter } from "./routes/demo.js";
 import { captureError } from "./sentry.js";
+import { maskUrl } from "./logRedaction.js";
 import { corsMiddleware } from "./middleware/cors.js";
 import { requireAdminIp } from "./middleware/adminIp.js";
 import {
@@ -185,14 +186,21 @@ export function createApp(): Express {
   app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
     const bodyErrorType = (err as { type?: string } | null)?.type;
     if (bodyErrorType === "entity.parse.failed" || bodyErrorType === "entity.too.large") {
-      logger.warn({ path: req.path, method: req.method, bodyErrorType }, "unreadable request body");
+      // No route matched - the body parser aborted first - so this falls back
+      // to prefix masking. A malformed body posted to a tokenized URL is
+      // exactly the case that leaves req.route undefined.
+      logger.warn(
+        { path: maskUrl(req.path, req.route?.path), method: req.method, bodyErrorType },
+        "unreadable request body",
+      );
       if (res.headersSent) return;
       if (bodyErrorType === "entity.parse.failed") res.status(400).json({ error: "bad_json" });
       else res.status(413).json({ error: "payload_too_large" });
       return;
     }
-    logger.error({ err, path: req.path, method: req.method }, "request failed");
-    captureError(err, { path: req.path, method: req.method });
+    const safePath = maskUrl(req.path, req.route?.path);
+    logger.error({ err, path: safePath, method: req.method }, "request failed");
+    captureError(err, { path: safePath, method: req.method });
     if (res.headersSent) return;
     res.status(500).json({ error: "internal" });
   });
@@ -215,35 +223,22 @@ function securityHeaders(_req: Request, res: Response, next: NextFunction): void
 }
 
 /**
- * Query parameters whose VALUE is an authenticator. A request URL is logged on
- * every hit, shipped to whatever aggregates our logs, and kept far longer than
- * the credential lives - so these are masked before any of that.
+ * pino-http req serializer.
  *
- *  - `token`   the team-invitation token (its own bearer: whoever holds it can
- *              accept the invitation as the invited address)
- *  - `code`    OAuth handoff codes and the mobile return code
- *  - `state`   binds a mobile handoff to one attempt; logging it weakens that
- */
-const SENSITIVE_QUERY_PARAMS = ["token", "code", "state"];
-
-/**
- * pino-http req serializer. Masks the Acuity webhook path secret - the URL is
- * that route's only authenticator - and the sensitive query values above.
+ * 🔴 This runs on EVERY request, not just failures, so it is the largest
+ * single source of secrets on stdout: a SUCCESSFUL waitlist claim used to log
+ * its own live token. Masking is delegated to logRedaction so the request log
+ * and the error log cannot drift apart.
+ *
+ * `req.route` is set by Express during dispatch and still present when the
+ * response completes, which is what makes route-pattern masking possible here.
  */
 export function redactedReqSerializer(req: {
   method?: string;
   url?: string;
+  route?: { path?: string };
   [k: string]: unknown;
 }) {
-  let url = req.url;
-  if (typeof url === "string") {
-    url = url.replace(/(\/webhooks\/acuity\/)[^/?]+/, "$1[redacted]");
-    for (const param of SENSITIVE_QUERY_PARAMS) {
-      url = url.replace(
-        new RegExp(`([?&]${param}=)[^&#]*`, "gi"),
-        "$1[redacted]",
-      );
-    }
-  }
+  const url = typeof req.url === "string" ? maskUrl(req.url, req.route?.path) : req.url;
   return { method: req.method, url };
 }
