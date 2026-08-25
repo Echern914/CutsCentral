@@ -11,9 +11,12 @@ import {
 } from "../engines/blockedTime.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import {
+  completeReschedule,
   dispatchCreate,
+  staffMirrorBlocked,
   MirrorNotConfiguredError,
   recordMirrorIntent,
+  swapForReschedule,
 } from "../engines/acuityMirror.js";
 import { ServiceDayFullError } from "../engines/serviceDailyLimit.js";
 import { destinationsFor } from "../engines/serviceUpgradeRules.js";
@@ -1530,6 +1533,20 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {
     lastName: d.lastName,
   });
 
+  // ENFORCE with THIS chair unmapped (or its mapping stale after a reconnect)
+  // means Acuity still shows the time free. Close this barber only - the other
+  // correctly mapped chairs keep taking bookings, because one config slip must
+  // not take the whole shop offline, and a silent fallback would put the block
+  // on a colleague's calendar.
+  if (await staffMirrorBlocked(shop.id, d.staffId)) {
+    logger.error(
+      { shopId: shop.id, staffId: d.staffId },
+      "acuity mirror: ENFORCE with unmapped/stale chair - refusing this barber's bookings",
+    );
+    res.status(409).json({ error: "slot_unavailable_external" });
+    return;
+  }
+
   let appointmentId: string;
   let manageToken: string;
   let mirrorOutboxId: string | null = null;
@@ -2339,6 +2356,7 @@ bookingPublicRouter.post(
       return;
     }
 
+    let publicReschedOutboxId: string | null = null;
     try {
       await prisma.$transaction(async (tx) => {
         // Same shared guard as create, EXCLUDING this appt's own row.
@@ -2378,6 +2396,20 @@ bookingPublicRouter.post(
             runningLate: false,
           },
         });
+        publicReschedOutboxId = await swapForReschedule(tx, {
+          shopId: appt.shopId,
+          appointmentId: appt.id,
+          staffId: appt.staffId,
+          startsAt,
+          endsAt,
+          occupancy: {
+            status: "BOOKED",
+            startsAt,
+            endsAt,
+            holdExpiresAt: null,
+            visitId: null,
+          },
+        });
       });
     } catch (err) {
       if (err instanceof ServiceDayFullError) {
@@ -2396,6 +2428,10 @@ bookingPublicRouter.post(
       res.status(500).json({ error: "reschedule_failed" });
       return;
     }
+
+    // New block first, then release the old. Delete-first would leave the new
+    // time briefly bookable in Acuity - the exact window this engine closes.
+    await completeReschedule(appt.shopId, appt.id, publicReschedOutboxId);
 
     void notifyAppointmentConfirmation({
       shopId: appt.shopId,

@@ -1,6 +1,7 @@
 import { Prisma, prisma, runWithShop } from "@chairback/db";
 import { AcuityError, getAcuityClientForShop, NotConnectedError } from "../acuity/client.js";
 import { logger } from "../logger.js";
+import { isMappingStale } from "./acuityCalendarMap.js";
 import {
   appointmentOccupiesTime,
   blockReference,
@@ -239,6 +240,42 @@ export async function dispatchCreate(outboxId: string): Promise<DispatchOutcome>
       kind === "ambiguous" ? "warn" : "error",
     );
     return kind === "ambiguous" ? "unknown" : "failed";
+  }
+}
+
+/**
+ * Post-commit dispatch for BARBER-DRIVEN and conversational paths.
+ *
+ * Never throws and never unwinds the appointment. The public customer path
+ * fails CLOSED (compensate, or 202 on ambiguity) because a customer is being
+ * told "you're booked" - but a barber adding a client to their own calendar,
+ * a walk-in already in the chair, or a waitlist claim mid-text-conversation
+ * must not be torn down because Acuity was briefly unreachable. Those rows
+ * stay in the outbox and the reconciler either completes them or releases
+ * them, which converges on the same end state a few minutes later.
+ */
+export async function dispatchAfterCommit(
+  outboxId: string | null,
+  context: { shopId: string; appointmentId: string; via: string },
+): Promise<DispatchOutcome> {
+  if (!outboxId) return "skipped";
+  try {
+    const outcome = await dispatchCreate(outboxId);
+    if (outcome === "failed" || outcome === "unknown") {
+      logTransition(
+        `dispatch ${outcome} on ${context.via} - reconciler owns it`,
+        { ...context, outboxId },
+        outcome === "failed" ? "error" : "warn",
+      );
+    }
+    return outcome;
+  } catch (err) {
+    logTransition(
+      "dispatch threw - reconciler owns it",
+      { ...context, outboxId, detail: safeError(err).detail },
+      "error",
+    );
+    return "unknown";
   }
 }
 
@@ -585,4 +622,112 @@ export async function runAcuityOutboundReconcile(now = new Date()): Promise<{
     });
   }
   return { shops: conns.length, adopted, retried, released };
+}
+
+//  Mode controls (operator surface)
+
+/**
+ * Is THIS chair safe to enforce against right now?
+ *
+ * Per-barber, deliberately. When a barber is added (or a calendar deleted)
+ * after ENFORCE is on, the shop must not be taken offline wholesale - the
+ * correctly mapped chairs keep taking bookings, and only the affected barber
+ * is closed. A shop-wide refusal would turn one config slip into an outage;
+ * a silent fallback would send that barber's block to a colleague's calendar,
+ * which is the original bug wearing a different hat.
+ */
+export async function staffMirrorBlocked(
+  shopId: string,
+  staffId: string,
+): Promise<boolean> {
+  const shop = await loadShopSlice(shopId);
+  if (!shop || !isMirrorEligible(shop, "create")) return false; // not enforcing
+  const [staff, conn] = await Promise.all([
+    prisma.staff.findFirst({
+      where: { id: staffId, shopId },
+      select: { acuityCalendarId: true, acuityCalendarMappedAt: true },
+    }),
+    prisma.acuityConnection.findUnique({
+      where: { shopId },
+      select: { connectedAt: true },
+    }),
+  ]);
+  if (!staff?.acuityCalendarId) return true;
+  return isMappingStale(staff.acuityCalendarMappedAt, conn?.connectedAt ?? null);
+}
+
+/**
+ * The OBSERVE report: exactly what ENFORCE would have done, computed from real
+ * future bookings, with ZERO outbound writes. This is the rehearsal an owner
+ * reads before switching a shop on.
+ */
+export interface ObserveReport {
+  shopId: string;
+  mode: string;
+  wouldCreate: {
+    appointmentId: string;
+    staffId: string;
+    calendarId: string | null;
+    startsAt: string;
+    endsAt: string;
+    blocked: boolean;
+    reason: string | null;
+  }[];
+  unmappedStaff: { staffId: string; staffName: string }[];
+}
+
+export async function buildObserveReport(
+  shopId: string,
+  now = new Date(),
+  horizonDays = 60,
+): Promise<ObserveReport> {
+  const shop = await loadShopSlice(shopId);
+  const until = new Date(now.getTime() + horizonDays * 24 * 60 * 60 * 1000);
+  const appts = await prisma.appointment.findMany({
+    where: {
+      shopId,
+      startsAt: { gte: now, lte: until },
+      status: { in: ["BOOKED", "PENDING"] },
+    },
+    orderBy: { startsAt: "asc" },
+    take: 1000,
+    select: {
+      id: true,
+      staffId: true,
+      status: true,
+      startsAt: true,
+      endsAt: true,
+      holdExpiresAt: true,
+      visitId: true,
+      staff: { select: { name: true, acuityCalendarId: true, acuityCalendarMappedAt: true } },
+    },
+  });
+  const conn = await prisma.acuityConnection.findUnique({
+    where: { shopId },
+    select: { connectedAt: true },
+  });
+  const unmapped = new Map<string, string>();
+  const wouldCreate: ObserveReport["wouldCreate"] = [];
+  for (const a of appts) {
+    if (!shouldMirrorOnCreate(a as unknown as OccupancySlice, now)) continue;
+    const cal = a.staff?.acuityCalendarId ?? null;
+    const stale = isMappingStale(a.staff?.acuityCalendarMappedAt ?? null, conn?.connectedAt ?? null);
+    const reason = !cal ? "unmapped" : stale ? "stale_mapping" : null;
+    if (reason && a.staff) unmapped.set(a.staffId, a.staff.name);
+    wouldCreate.push({
+      appointmentId: a.id,
+      staffId: a.staffId,
+      calendarId: cal,
+      startsAt: a.startsAt.toISOString(),
+      endsAt: a.endsAt.toISOString(),
+      blocked: reason !== null,
+      reason,
+    });
+  }
+  return {
+    shopId,
+    mode: shop?.acuityOutboundMode ?? "OFF",
+    wouldCreate,
+    unmappedStaff: [...unmapped].map(([staffId, staffName]) => ({ staffId, staffName })),
+  };
 }

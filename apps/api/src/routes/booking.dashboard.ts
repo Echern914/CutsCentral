@@ -16,6 +16,15 @@ import { notifyAppointmentConfirmation } from "../services/appointmentNotify.js"
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
+import {
+  buildObserveReport,
+  completeReschedule,
+  dispatchAfterCommit,
+  releaseAllForShop,
+  recordMirrorIntent,
+  releaseForAppointment,
+  swapForReschedule,
+} from "../engines/acuityMirror.js";
 import { toCents } from "../billing/payments.js";
 import { createTerminalPaymentIntent, terminalEnabled } from "../billing/terminal.js";
 import {
@@ -1375,6 +1384,85 @@ bookingDashboardRouter.put("/staff/:id/acuity-calendar", async (req, res) => {
   res.json({ ok: true, ready: snap.readiness.ready });
 });
 
+const setModeSchema = z
+  .object({ mode: z.enum(["OFF", "OBSERVE", "ENFORCE"]) })
+  .strict();
+
+/**
+ * Switch the outbound mode.
+ *
+ * ENFORCE is REFUSED until every currently bookable barber has a fresh, valid
+ * mapping. Half-mirrored is worse than unmirrored: it looks protected and
+ * isn't, and an unmapped chair under ENFORCE would either send a block to a
+ * colleague's calendar or start refusing that barber's bookings without
+ * anyone having chosen that.
+ *
+ * OFF and OBSERVE are always allowed - and turning a shop OFF never touches
+ * blocks ChairBack already owns (release and reconcile run in every mode), so
+ * stepping back is always safe.
+ */
+bookingDashboardRouter.put("/acuity/outbound-mode", async (req, res) => {
+  const shopId = req.shop!.id;
+  const parsed = setModeSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  if (parsed.data.mode === "ENFORCE") {
+    try {
+      const snap = await getMappingSnapshot(shopId);
+      if (!snap.readiness.ready) {
+        res.status(409).json({
+          error: "mapping_incomplete",
+          blocking: snap.readiness.blocking.map((b) => ({
+            staffId: b.id,
+            staffName: b.name,
+            problem: b.problem,
+          })),
+        });
+        return;
+      }
+    } catch (err) {
+      if (err instanceof NotConnectedError) {
+        res.status(409).json({ error: "acuity_not_connected" });
+        return;
+      }
+      logger.error({ err, shopId }, "enforce gate check failed");
+      res.status(502).json({ error: "acuity_unavailable" });
+      return;
+    }
+  }
+  await prisma.shop.update({
+    where: { id: shopId },
+    data: { acuityOutboundMode: parsed.data.mode },
+  });
+  logger.warn({ shopId, mode: parsed.data.mode }, "acuity outbound mode changed");
+  res.json({ ok: true, mode: parsed.data.mode });
+});
+
+/** The rehearsal: exactly what ENFORCE would do, with zero outbound writes. */
+bookingDashboardRouter.get("/acuity/outbound-report", async (req, res) => {
+  res.json(await buildObserveReport(req.shop!.id));
+});
+
+/**
+ * ROLLBACK. Deletes every Acuity block ChairBack created for this shop.
+ *
+ * The escape hatch behind the flag: switching to OFF stops NEW blocks, this
+ * removes the ones already out there, so a bad rollout is fully undoable
+ * without anyone editing Acuity by hand.
+ */
+bookingDashboardRouter.post("/acuity/release-all", async (req, res) => {
+  const shopId = req.shop!.id;
+  try {
+    const released = await releaseAllForShop(shopId);
+    res.json({ ok: true, released });
+  } catch (err) {
+    logger.error({ err, shopId }, "acuity release-all failed");
+    res.status(502).json({ error: "acuity_unavailable" });
+  }
+});
+
 //  Appointments (the barber's calendar / inbox)
 
 const listQuerySchema = z.object({
@@ -2316,6 +2404,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
     return;
   }
 
+  let mirrorOutboxId: string | null = null;
   try {
     // RECURRING: build the whole series (occurrence 0 included). The client is
     // upserted once, then materializeSeries generates each occurrence in its own
@@ -2462,6 +2551,25 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         select: { id: true },
       });
 
+      // Outbound Acuity mirror intent, in the SAME transaction as the row.
+      // Barber-driven, so dispatch after commit is best-effort (see below):
+      // refusing a barber's own booking because Acuity blinked would be worse
+      // than a block the reconciler places a minute later.
+      mirrorOutboxId = await recordMirrorIntent(tx, {
+        shopId,
+        appointmentId: appt.id,
+        staffId: d.staffId,
+        startsAt,
+        endsAt,
+        occupancy: {
+          status: "BOOKED",
+          startsAt,
+          endsAt,
+          holdExpiresAt: null,
+          visitId: null,
+        },
+      });
+
       // Waitlist -> appointment, atomically. Guarded on the ACTIVE statuses so
       // an entry already satisfied by a phase-C offer claim can never be
       // clobbered, and scoped by shopId so another tenant's id matches
@@ -2503,6 +2611,14 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         });
       }
       return appt;
+    });
+    // After commit: place the block. Best-effort by design - the barber is
+    // looking at their own calendar, and the reconciler owns any row that
+    // does not land now.
+    await dispatchAfterCommit(mirrorOutboxId, {
+      shopId,
+      appointmentId: result.id,
+      via: "dashboard_create",
     });
     res.status(201).json({ ok: true, id: result.id });
   } catch (err) {
@@ -2702,6 +2818,7 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
     return;
   }
 
+  let rescheduleOutboxId: string | null = null;
   try {
     await prisma.$transaction(async (tx) => {
       await lockStaffAndAssertSlotFree(tx, {
@@ -2737,6 +2854,23 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
           runningLate: false,
         },
       });
+      // Retire the old mirror row and record the new time's intent in the SAME
+      // transaction. The HTTP swap (create new, THEN delete old) happens after
+      // commit - see completeReschedule for why that order is load-bearing.
+      rescheduleOutboxId = await swapForReschedule(tx, {
+        shopId,
+        appointmentId: appt.id,
+        staffId: appt.staffId,
+        startsAt,
+        endsAt,
+        occupancy: {
+          status: "BOOKED",
+          startsAt,
+          endsAt,
+          holdExpiresAt: null,
+          visitId: null,
+        },
+      });
     });
   } catch (err) {
     if (
@@ -2750,6 +2884,11 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
     res.status(500).json({ error: "reschedule_failed" });
     return;
   }
+
+  // Create the block at the NEW time, then delete the old one. Never the
+  // reverse: delete-first would expose the new slot in Acuity for the length
+  // of the create, which is the exact window this whole engine closes.
+  await completeReschedule(shopId, appt.id, rescheduleOutboxId);
 
   // The customer is told their time moved. No barber alert here, unlike the
   // customer-initiated path - the barber is the one who just did it.
@@ -4035,6 +4174,13 @@ bookingDashboardRouter.post("/appointments/:id/decline", async (req, res) => {
       where: { bookedAppointmentId: req.params.id! },
       data: { bookedAppointmentId: null },
     });
+    // A pending approval REQUEST is mirrored (it holds the chair
+    // indefinitely), so declining must hand the time back on the Acuity side
+    // too. This route does NOT go through cancelAppointment - it flips the row
+    // directly - so the release is explicit here. Fire-and-forget: declining
+    // must never fail because Acuity is unreachable, and the reconciler
+    // retries any release that does not confirm.
+    void releaseForAppointment(shopId, req.params.id!).catch(() => {});
   }
   res.status(updated.count > 0 ? 200 : 404).json({ ok: updated.count > 0 });
 });
@@ -4464,6 +4610,7 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
     }
 
     const service = await ensureWalkInService(tx, shopId);
+    const walkInEnd = new Date(now.getTime() + service.durationMin * 60_000);
     const appt = await tx.appointment.create({
       data: {
         shopId,
@@ -4486,7 +4633,25 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
       },
       select: { id: true },
     });
-    return { kind: "ok" as const, id: appt.id, staffId };
+    // A walk-in is stored COMPLETED because the money is already in the till -
+    // but the client is IN THE CHAIR until walkInEnd, so the time is genuinely
+    // occupied and must not be offered in Acuity mid-cut. appointmentOccupies
+    // Time reads the SPAN, not the status, which is what makes this work.
+    const outboxId = await recordMirrorIntent(tx, {
+      shopId,
+      appointmentId: appt.id,
+      staffId,
+      startsAt: now,
+      endsAt: walkInEnd,
+      occupancy: {
+        status: "COMPLETED",
+        startsAt: now,
+        endsAt: walkInEnd,
+        holdExpiresAt: null,
+        visitId: null,
+      },
+    });
+    return { kind: "ok" as const, id: appt.id, staffId, outboxId };
   });
 
   if (result.kind === "bad_staff") {
@@ -4499,6 +4664,14 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
     res.status(400).json({ error: "staff_required", staff: result.staff });
     return;
   }
+  // BEST-EFFORT, always. The customer is physically in the chair - a walk-in
+  // can never be refused because Acuity was unreachable, so this dispatches
+  // and the reconciler owns anything that does not land.
+  await dispatchAfterCommit(result.outboxId, {
+    shopId,
+    appointmentId: result.id,
+    via: "walk_in",
+  });
   logger.info(
     { shopId, appointmentId: result.id, amount: parsed.data.amount },
     "walk-in recorded",
