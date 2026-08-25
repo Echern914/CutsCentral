@@ -183,6 +183,92 @@ describe("findHelp — questions asked cold", () => {
     expect(res.answer?.a).toMatch(/not voice calls/i);
   });
 
+  /**
+   * The second coverage pass, pinned.
+   *
+   * These are questions barbers were texting Eric instead of asking the bot,
+   * measured rather than imagined: 70 real phrasings run through findHelp(),
+   * of which 22 got a shrug and a dozen got a CONFIDENT WRONG ANSWER. Every
+   * line below was one of those failures.
+   *
+   * They are tests and not just corpus entries because the failure mode is
+   * REGRESSION: adding an answer changes what every other question matches.
+   * Writing these cost two self-inflicted examples - a new refund entry stole
+   * "when do i get my money" from payouts, and a new pricing entry stole
+   * "how do i add a barber" from add-staff. Both are pinned here now.
+   */
+  it("answers what people were asking a human instead", () => {
+    // Day to day
+    expectAnswer("how do i add a walk in", "walk-in");
+    expectAnswer("how do i mark someone as paid", "record-payment");
+    expectAnswer("a client didnt show up what do i do", "mark-no-show");
+    expectAnswer("how do i close early today", "close-early");
+    expectAnswer("can i stop people booking last minute", "lead-time");
+    expectAnswer("how do i see tomorrows appointments", "see-the-day");
+    expectAnswer("how do i edit an appointment", "cancel-reschedule");
+    expectAnswer("can i move an appointment to another barber", "move-appointment");
+
+    // Clients
+    expectAnswer("how do i add a client", "add-client-manually");
+    expectAnswer("how do i text all my clients", "text-everyone");
+    expectAnswer("can i see who hasnt been in a while", "who-is-overdue");
+    expectAnswer("how do i give someone a free cut", "comp-a-cut");
+    expectAnswer("can i send a photo in a text", "picture-message");
+
+    // Money
+    expectAnswer("how do i charge a deposit", "take-a-deposit");
+    expectAnswer("how do i give a client a refund", "refund-a-client");
+    expectAnswer("why is my payout late", "payout-timing");
+    expectAnswer("what if i get a chargeback", "chargeback");
+    expectAnswer("is there a setup fee", "setup-cost");
+    expectAnswer("do you charge per barber", "price-per-barber");
+    expectAnswer("can i pause my account for a month", "pause-account");
+
+    // Team + account
+    expectAnswer("how do i remove someone from my team", "remove-team-member");
+    expectAnswer("my barber cant log in", "barber-cant-sign-in");
+    expectAnswer("i cant log in", "i-cant-log-in");
+    expectAnswer("the app keeps logging me out", "i-cant-log-in");
+    expectAnswer("how do i report a bug", "report-a-problem");
+    expectAnswer("the booking page wont load", "page-not-loading");
+    expectAnswer("are you gdpr compliant", "data-protection");
+    expectAnswer("how long does setup take", "how-long-setup");
+  });
+
+  /**
+   * Routes a new entry is most likely to steal. Each of these WAS answered
+   * wrongly at some point in this pass, so they are the canary: if one of them
+   * moves, whatever you just added is too greedy with its keywords.
+   */
+  it("keeps the routes that new entries tend to steal", () => {
+    // "cut" is a barber's job; asking what WE take is about commission.
+    expectAnswer("do you take a cut of my haircuts", "commission");
+    // "money" alone is a payout question, not a refund question.
+    expectAnswer("when do i get my money", "payout-timing");
+    // Adding a barber is staffing, not billing.
+    expectAnswer("how do i add a barber to my shop", "add-staff");
+    // A phone number to CALL means us, not the AI that answers their clients.
+    expectAnswer("is there a phone number i can call", "contact-human");
+    // Deleting a CLIENT must never route to deleting the ACCOUNT.
+    expectAnswer("how do i delete a client", "delete-client");
+    expectAnswer("how do i remove a client", "delete-client");
+  });
+
+  /**
+   * The corpus contradicted itself about money: "trial" promised a free plan
+   * to drop onto, "whats-free" said bookings stop. The code is unambiguous -
+   * hasActiveAccess() is subscription-or-trial, and the public payload carries
+   * bookingPaused - so the trial answer had to change, and must not drift back.
+   */
+  it("tells the truth about what happens when the trial ends", () => {
+    const trial = helpAnswerById("trial");
+    expect(trial).toBeDefined();
+    expect(trial!.a).not.toMatch(/free plan/i);
+    expect(trial!.a).toMatch(/stops taking new bookings/i);
+    // And it still says the reassuring, true part.
+    expect(trial!.a).toMatch(/don't need a card/i);
+  });
+
   // The inverse property, and the more important one: when we genuinely have no
   // answer, the bot must NOT invent confidence. Suggestions are the honest
   // outcome — a confidently wrong answer is the one thing worse than a shrug.
