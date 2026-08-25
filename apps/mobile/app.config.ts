@@ -69,9 +69,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // iPhone-only for v1: the dashboard WebView isn't iPad-optimized, and
     // supporting tablet would require iPad screenshots + iPad review coverage.
     supportsTablet: false,
-    // Universal links: tapping https://getchairback.com/r/<token> opens the app
-    // when installed (requires the matching apple-app-site-association file on
-    // the web host - see the runbook).
+    // Universal links: tapping an https://getchairback.com link opens the app
+    // when installed. This entry claims the DOMAIN; WHICH PATHS are claimed is
+    // decided entirely by the apple-app-site-association file the web host
+    // serves (/r/*, /team/join*, /auth/mobile/callback*) - so adding a path
+    // means editing that route, not this line.
     associatedDomains: [`applinks:${WEB_HOST}`],
     infoPlist: {
       // Allow the WebView to load the (https) site; ATS stays on for the rest.
@@ -98,11 +100,21 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       foregroundImage: "./assets/adaptive-icon.png",
       backgroundColor: "#0A0A0B",
     },
+    // One verified filter per https path the app claims, mirroring the AASA
+    // (apps/web/.well-known/apple-app-site-association) and the assetlinks
+    // route. autoVerify only takes effect once assetlinks.json serves this
+    // build's signing fingerprint - until then Android falls back to the
+    // chooser, which is the correct degraded behavior, not a broken one.
     intentFilters: [
       {
         action: "VIEW",
         autoVerify: true,
-        data: [{ scheme: "https", host: WEB_HOST, pathPrefix: "/r" }],
+        data: [
+          { scheme: "https", host: WEB_HOST, pathPrefix: "/r" },
+          // The invitation link, and the return leg of "Join your shop".
+          { scheme: "https", host: WEB_HOST, pathPrefix: "/team/join" },
+          { scheme: "https", host: WEB_HOST, pathPrefix: "/auth/mobile/callback" },
+        ],
         category: ["BROWSABLE", "DEFAULT"],
       },
     ],
@@ -117,6 +129,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         color: "#0A0A0B",
       },
     ],
+    // The invited-barber flow. expo-web-browser configures the native
+    // authentication-session APIs (ASWebAuthenticationSession / Custom Tabs);
+    // expo-secure-store adds the keychain entitlement the session token now
+    // lives behind. Both are config plugins, so BOTH need a new native build -
+    // they do nothing in an OTA update.
+    "expo-web-browser",
+    "expo-secure-store",
     // Native Sign in with Apple. Bare string; the plugin auto-adds the
     // com.apple.developer.applesignin entitlement (["Default"]) to the generated
     // iOS project - no hand-edited .entitlements file.

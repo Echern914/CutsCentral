@@ -93,6 +93,16 @@ const apiSchema = z.object({
   //    sign-in (token) flow - only the bundle id to check the audience.
   GOOGLE_OAUTH_IOS_CLIENT_ID: z.string().optional(),
   APPLE_BUNDLE_ID: z.string().optional(),
+  // Sign in with Apple on the WEB. A DIFFERENT credential set from the native
+  // one above: the audience is a Services ID (not the bundle id), and the
+  // client secret is an ES256 JWT we sign per request with a .p8 key - hence
+  // the team/key/private-key trio. All optional; with any of them unset the
+  // web Apple button never renders and /api/auth/apple/* answers 503.
+  APPLE_OAUTH_SERVICES_ID: z.string().optional(),
+  APPLE_OAUTH_TEAM_ID: z.string().optional(),
+  APPLE_OAUTH_KEY_ID: z.string().optional(),
+  APPLE_OAUTH_PRIVATE_KEY: z.string().optional(),
+  APPLE_OAUTH_REDIRECT_URI: cleanUrl().optional(),
 
   TWILIO_ACCOUNT_SID: z.string().min(1),
   TWILIO_AUTH_TOKEN: z.string().min(1),

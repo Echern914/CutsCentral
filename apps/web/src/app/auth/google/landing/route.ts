@@ -1,7 +1,5 @@
-import { NextResponse, type NextRequest } from "next/server";
-import { SESSION_COOKIE_NAME } from "@chairback/config/constants";
-import { API_BASE, clientIpHeaders } from "@/lib/api";
-import { sessionCookieDomain } from "@/lib/sessionCookieDomain";
+import { type NextRequest, NextResponse } from "next/server";
+import { completeOauthLanding } from "@/lib/oauthLanding";
 
 export const dynamic = "force-dynamic";
 
@@ -10,45 +8,16 @@ export const dynamic = "force-dynamic";
  * cookie, so its callback redirects here with a 60-second signed handoff code.
  * We exchange it server-to-server for a real session token and set the cookie
  * on THIS origin - the long-lived token never appears in any URL.
+ *
+ * The mechanics moved to lib/oauthLanding.ts when Apple became a second
+ * provider that needs exactly the same round trip. Behavior is unchanged except
+ * that the destination is now read from the auth-next cookie (falling back to
+ * /dashboard, which is where this always went), so a barber who signed in with
+ * Google to accept an invitation returns to the invitation.
  */
 export async function GET(req: NextRequest): Promise<NextResponse> {
-  const code = req.nextUrl.searchParams.get("code");
-  if (!code) {
-    return NextResponse.redirect(new URL("/login?error=google_failed", req.url));
-  }
-
-  const res = await fetch(`${API_BASE}/api/auth/google/exchange`, {
-    method: "POST",
-    // Forward the visitor IP: this hop is server-to-server, so without it every
-    // Google sign-in platform-wide shares one bucket in the API's auth limiter.
-    headers: { "Content-Type": "application/json", ...clientIpHeaders() },
-    body: JSON.stringify({ code }),
-    cache: "no-store",
+  return completeOauthLanding(req, {
+    exchangePath: "/api/auth/google/exchange",
+    failureError: "google_failed",
   });
-  if (!res.ok) {
-    return NextResponse.redirect(new URL("/login?error=google_failed", req.url));
-  }
-
-  const { token } = (await res.json()) as { token?: string };
-  if (!token) {
-    return NextResponse.redirect(new URL("/login?error=google_failed", req.url));
-  }
-
-  // New users (no shop yet) get bounced from /dashboard to /onboarding.
-  const redirect = NextResponse.redirect(new URL("/dashboard", req.url));
-  const opts = {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 30,
-  } as const;
-  redirect.cookies.set(SESSION_COOKIE_NAME, token, opts);
-  // Domain-wide copy so browser navigations to api.<apex> (Acuity OAuth start)
-  // are authenticated too.
-  const domain = sessionCookieDomain(req.headers.get("host"));
-  if (domain) {
-    redirect.cookies.set(SESSION_COOKIE_NAME, token, { ...opts, domain });
-  }
-  return redirect;
 }

@@ -73,6 +73,13 @@ export default function RootLayout() {
         <Stack.Screen name="customer" />
         <Stack.Screen name="login" />
         <Stack.Screen name="barber" />
+        {/* The invited-barber flow: the screen itself, the two callback routes
+            it can return through, and the universal-link landing for a tapped
+            invitation email. */}
+        <Stack.Screen name="join" />
+        <Stack.Screen name="auth/callback" />
+        <Stack.Screen name="auth/mobile/callback" />
+        <Stack.Screen name="team/join" />
       </Stack>
     </SafeAreaProvider>
   );

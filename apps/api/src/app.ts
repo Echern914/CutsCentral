@@ -11,6 +11,8 @@ import { apiEnv } from "@chairback/config";
 import { logger } from "./logger.js";
 import { authRouter } from "./routes/auth.js";
 import { passwordResetRouter } from "./routes/passwordReset.js";
+import { authMobileRouter } from "./routes/authMobile.js";
+import { authAppleRouter } from "./routes/authApple.js";
 import { emailChangeRouter } from "./routes/emailChange.js";
 import { healthRouter } from "./routes/health.js";
 import { publicPageRouter, shopsRouter } from "./routes/shops.js";
@@ -98,6 +100,11 @@ export function createApp(): Express {
   // Forgot/reset password lives in its own router (composes with authRouter on
   // the same mount; sensitive POSTs use authLimiter inside, like signup/login).
   app.use("/api/auth", passwordResetRouter);
+  // Browser-to-app session handoff for the invited-barber "Join your shop"
+  // flow. Same mount, own router; limits are applied per route inside.
+  app.use("/api/auth", authMobileRouter);
+  // Sign in with Apple on the web. Dark until the Apple env vars are set.
+  app.use("/api/auth", authAppleRouter);
   // Change-login-email: same composition pattern (verify-the-new-inbox flow).
   app.use("/api/auth", emailChangeRouter);
   app.use("/api/shops", shopsRouter);
@@ -200,17 +207,35 @@ function securityHeaders(_req: Request, res: Response, next: NextFunction): void
 }
 
 /**
- * pino-http req serializer that masks the Acuity webhook path secret - the URL
- * is that route's only authenticator, so it must never land in logs verbatim.
+ * Query parameters whose VALUE is an authenticator. A request URL is logged on
+ * every hit, shipped to whatever aggregates our logs, and kept far longer than
+ * the credential lives - so these are masked before any of that.
+ *
+ *  - `token`   the team-invitation token (its own bearer: whoever holds it can
+ *              accept the invitation as the invited address)
+ *  - `code`    OAuth handoff codes and the mobile return code
+ *  - `state`   binds a mobile handoff to one attempt; logging it weakens that
  */
-function redactedReqSerializer(req: {
+const SENSITIVE_QUERY_PARAMS = ["token", "code", "state"];
+
+/**
+ * pino-http req serializer. Masks the Acuity webhook path secret - the URL is
+ * that route's only authenticator - and the sensitive query values above.
+ */
+export function redactedReqSerializer(req: {
   method?: string;
   url?: string;
   [k: string]: unknown;
 }) {
-  const url =
-    typeof req.url === "string"
-      ? req.url.replace(/(\/webhooks\/acuity\/)[^/?]+/, "$1[redacted]")
-      : req.url;
+  let url = req.url;
+  if (typeof url === "string") {
+    url = url.replace(/(\/webhooks\/acuity\/)[^/?]+/, "$1[redacted]");
+    for (const param of SENSITIVE_QUERY_PARAMS) {
+      url = url.replace(
+        new RegExp(`([?&]${param}=)[^&#]*`, "gi"),
+        "$1[redacted]",
+      );
+    }
+  }
   return { method: req.method, url };
 }
