@@ -21,6 +21,20 @@ export interface SubscribeResult {
  * instead of silently swallowing it (the previous best-effort-only version hid
  * the bare-vs-dotted bug for weeks).
  */
+
+/**
+ * Blank one EXACT secret wherever it appears in free text.
+ *
+ * Exact-value replacement rather than a pattern: the caller is already holding
+ * the secret, so there is nothing to infer and no way to match the wrong
+ * thing. The URL-encoded form is covered too, because an echoed request body
+ * may have escaped it.
+ */
+export function redactSecret(text: string, secret: string): string {
+  if (!text || !secret) return text;
+  return text.split(secret).join("[redacted]").split(encodeURIComponent(secret)).join("[redacted]");
+}
+
 export async function subscribeShopWebhooks(params: {
   accessToken: string;
   webhookSecret: string;
@@ -40,7 +54,18 @@ export async function subscribeShopWebhooks(params: {
         body: JSON.stringify({ event, target }),
       });
       if (!res.ok) {
-        const body = (await res.text().catch(() => "")).slice(0, 200);
+        //  🔴 ACUITY'S ERROR BODY ECHOES OUR REQUEST BACK.
+        //
+        // We POST `{ event, target }`, and `target` ends in the per-shop
+        // webhook secret - the URL that is that route's ONLY authenticator.
+        // Acuity's 4xx bodies routinely quote the offending request, so
+        // logging the response verbatim published the secret to stdout, and
+        // from there to wherever logs are forwarded. logRedaction covers the
+        // request URL; nothing covered a secret arriving back inside a body.
+        const body = redactSecret(
+          (await res.text().catch(() => "")).slice(0, 200),
+          params.webhookSecret,
+        );
         logger.warn({ event, status: res.status, body }, "acuity webhook subscription failed");
         failures.push({ event, status: res.status, body });
         continue;
