@@ -56,6 +56,8 @@ let shopId: string;
 let staffId: string;
 let serviceId: string;
 let clientId: string;
+/** Derived from the connection's connectedAt - see the comment in beforeAll. */
+let mappedAt: Date;
 /** A second tenant, used only to prove nothing crosses the boundary. */
 let otherShopId: string;
 let otherStaffId: string;
@@ -135,16 +137,24 @@ beforeAll(async () => {
     },
   });
   shopId = shop.id;
-  await prisma.acuityConnection.create({
+  // 🔴 mappedAt is DERIVED from the connection's own connectedAt, never from
+  // `new Date()`. connectedAt is Postgres' now() at microsecond precision;
+  // Node's Date is millisecond-truncated, so the two straddle a millisecond
+  // boundary about half the time and isMappingStale (a strict `<`) then calls
+  // this fresh mapping STALE. Measured: 114 of 200 fixture builds produced a
+  // -1ms delta, which is what made this file fail ~3 runs in 10.
+  const conn = await prisma.acuityConnection.create({
     data: {
       shopId,
       acuityAccountId: "acct_bf",
       accessToken: "enc",
       tokenExpiresAt: new Date("2099-01-01T00:00:00Z"),
     },
+    select: { connectedAt: true },
   });
+  mappedAt = new Date(conn.connectedAt.getTime() + 1000);
   const staff = await prisma.staff.create({
-    data: { shopId, name: "Dre", acuityCalendarId: CAL, acuityCalendarMappedAt: new Date() },
+    data: { shopId, name: "Dre", acuityCalendarId: CAL, acuityCalendarMappedAt: mappedAt },
   });
   staffId = staff.id;
   const service = await prisma.service.create({
@@ -175,20 +185,22 @@ beforeAll(async () => {
     },
   });
   otherShopId = other.id;
-  await prisma.acuityConnection.create({
+  const otherConn = await prisma.acuityConnection.create({
     data: {
       shopId: otherShopId,
       acuityAccountId: "acct_bf2",
       accessToken: "enc",
       tokenExpiresAt: new Date("2099-01-01T00:00:00Z"),
     },
+    select: { connectedAt: true },
   });
   const otherStaff = await prisma.staff.create({
     data: {
       shopId: otherShopId,
       name: "Ana",
       acuityCalendarId: OTHER_CAL,
-      acuityCalendarMappedAt: new Date(),
+      // Same rule as above - derived, never Node's clock.
+      acuityCalendarMappedAt: new Date(otherConn.connectedAt.getTime() + 1000),
     },
   });
   otherStaffId = otherStaff.id;
@@ -225,7 +237,7 @@ afterEach(async () => {
   });
   await prisma.staff.updateMany({
     where: { id: staffId },
-    data: { acuityCalendarId: CAL, acuityCalendarMappedAt: new Date() },
+    data: { acuityCalendarId: CAL, acuityCalendarMappedAt: mappedAt },
   });
 });
 
