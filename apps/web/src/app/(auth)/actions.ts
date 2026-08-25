@@ -3,6 +3,11 @@
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@chairback/config/constants";
+import {
+  LOGIN_NEXT_ALLOWLIST,
+  SIGNUP_NEXT_ALLOWLIST,
+  safeNextPath,
+} from "@chairback/config/nextPath";
 import { API_BASE, clientIpHeaders } from "@/lib/api";
 import { sessionCookieDomain } from "@/lib/sessionCookieDomain";
 
@@ -122,7 +127,18 @@ export async function signupAction(
     return { error };
   }
   applySessionCookie(result.setCookie);
-  redirect("/onboarding");
+  // WHERE A BRAND-NEW ACCOUNT GOES. /onboarding is the shop-CREATION wizard,
+  // which is right for the owner who came here to set up a shop and wrong for
+  // the barber who was INVITED to one that already exists. That barber arrives
+  // at /login?next=/team/join?token=..., taps "Create an account", and used to
+  // be dropped into onboarding with their invitation abandoned - the only way
+  // back was to find the email again.
+  //
+  // `next` is honored through an allowlist that admits ONLY /team/join (see
+  // @chairback/config/nextPath): a redirect target chosen by whoever wrote the
+  // link is a capability, and resuming an invitation is the entire set of
+  // things signup needs to be able to do with it.
+  redirect(safeNextPath(formData.get("next"), SIGNUP_NEXT_ALLOWLIST, "/onboarding"));
 }
 
 export async function loginAction(
@@ -146,12 +162,12 @@ export async function loginAction(
     return { error: "Invalid email or password." };
   }
   applySessionCookie(result.setCookie);
-  // Honor the deep link the middleware preserved (?next=), but only same-origin
-  // relative paths - never an absolute/protocol-relative URL (open redirect).
-  const next = String(formData.get("next") ?? "");
-  const safeNext =
-    next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
-  redirect(safeNext);
+  // Honor the deep link the middleware preserved (?next=). The old check here
+  // was startsWith("/") && !startsWith("//"), which a browser walks straight
+  // past: "/\evil.example" and "/%2f%2fevil.example" are both relative to
+  // that test and protocol-relative to Chrome and Safari. Same allowlist as
+  // signup, widened to the gated surfaces the middleware actually bounces.
+  redirect(safeNextPath(formData.get("next"), LOGIN_NEXT_ALLOWLIST, "/dashboard"));
 }
 
 export async function logoutAction(): Promise<void> {
