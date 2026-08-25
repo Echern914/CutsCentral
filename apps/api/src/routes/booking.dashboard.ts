@@ -17,6 +17,8 @@ import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import { registerAppointmentEdit } from "./booking.appointmentEdit.js";
+import { registerAppointmentDetail } from "./booking.appointmentDetail.js";
+import { stripeCollectedCents } from "../engines/appointmentPayment.js";
 import {
   buildObserveReport,
   completeReschedule,
@@ -2073,8 +2075,10 @@ function chairPaid(a: { paidAmount: Prisma.Decimal | null }): number | null {
  * a hold was taken, else the intent amount, minus refunds. Only statuses that
  * represent real money count - a `requires_capture` hold is NOT collected yet,
  * so it stays owed at the chair and the barber can still take cash for it.
+ *
+ * Delegates to the shared payment engine so this card and the appointment
+ * sheet can never form two different opinions about whether a cut is paid.
  */
-const STRIPE_COLLECTED = new Set(["succeeded", "partially_refunded", "refunded"]);
 function stripeCollected(a: {
   payment: {
     status: string;
@@ -2083,10 +2087,7 @@ function stripeCollected(a: {
     refundedAmount: number;
   } | null;
 }): number {
-  const p = a.payment;
-  if (!p || !STRIPE_COLLECTED.has(p.status)) return 0;
-  const cents = (p.capturedAmount ?? p.amount) - p.refundedAmount;
-  return Math.max(0, cents) / 100;
+  return stripeCollectedCents(a.payment) / 100;
 }
 type VisitAgendaRow = {
   id: string;
@@ -3273,6 +3274,10 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
 // Edit an appointment (its own module - see booking.appointmentEdit.ts for the
 // reuse-the-same-engine rules and the Acuity-safe move ordering).
 registerAppointmentEdit(bookingDashboardRouter, invalidateShopAvailabilityCaches);
+
+// Read ONE booking in full, for the appointment sheet: contact, payment truth
+// and what may be edited (booking.appointmentDetail.ts).
+registerAppointmentDetail(bookingDashboardRouter);
 
 bookingDashboardRouter.post("/appointments/:id/no-show", async (req, res) => {
   const shopId = req.shop!.id;

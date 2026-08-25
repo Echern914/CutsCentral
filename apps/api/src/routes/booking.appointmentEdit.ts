@@ -5,6 +5,8 @@ import { logger } from "../logger.js";
 import { isSlotBookable } from "../engines/slots.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import { completeReschedule, swapForReschedule } from "../engines/acuityMirror.js";
+import { toE164 } from "../acuity/clientKey.js";
+import { editClient } from "../services/client.js";
 
 /**
  * EDIT AN APPOINTMENT. One endpoint, every editable field.
@@ -33,6 +35,13 @@ import { completeReschedule, swapForReschedule } from "../engines/acuityMirror.j
  *  4. MONEY NEVER MOVES HERE. A price change on an already-paid booking is
  *     refused, not reconciled. Refunding or collecting a difference is a
  *     separate, deliberate action by a human.
+ *
+ *  5. FIXING A PHONE NUMBER GRANTS NO CONSENT. A corrected number reaches the
+ *     CLIENT record too (that is the SMS channel of record - see below), and
+ *     it does so through `editClient`, whose entire contract is "contact
+ *     fields only, never `smsConsentAt` / `smsConsentSource` / `optedOut` and
+ *     never `acuityClientKey`". A barber typing a number must never be able to
+ *     manufacture permission to text it.
  *
  * Imported bookings are refused outright: a Visit-linked row is owned by
  * Acuity, and editing it here would desynchronize the two systems with no
@@ -133,6 +142,7 @@ export function registerAppointmentEdit(
         startsAt: true,
         endsAt: true,
         visitId: true,
+        clientId: true,
       },
     });
     if (!appt) {
@@ -184,6 +194,28 @@ export function registerAppointmentEdit(
         return;
       }
     }
+
+    // A supplied phone must parse to E.164 or the edit is REFUSED - the same
+    // rule the client profile editor uses. Silently storing an unparseable
+    // number would leave the barber looking at a Call button that can never
+    // dial, which is worse than telling them the number is wrong. An explicit
+    // empty string / null still clears the field.
+    let normalizedPhone: string | null | undefined = d.phone;
+    if (d.phone !== undefined) {
+      const raw = (d.phone ?? "").trim();
+      if (raw === "") {
+        normalizedPhone = null;
+      } else {
+        const e164 = toE164(raw);
+        if (!e164) {
+          res.status(400).json({ error: "invalid_phone" });
+          return;
+        }
+        normalizedPhone = e164;
+      }
+    }
+    const normalizedEmail =
+      d.email === undefined ? undefined : ((d.email ?? "").trim().toLowerCase() || null);
 
     const startsAt = d.startsAt ? new Date(d.startsAt) : appt.startsAt;
     if (Number.isNaN(startsAt.getTime())) {
@@ -274,8 +306,8 @@ export function registerAppointmentEdit(
             ...(d.clientId !== undefined ? { clientId: d.clientId } : {}),
             ...(d.firstName !== undefined ? { firstName: d.firstName } : {}),
             ...(d.lastName !== undefined ? { lastName: d.lastName } : {}),
-            ...(d.phone !== undefined ? { phone: d.phone } : {}),
-            ...(d.email !== undefined ? { email: d.email } : {}),
+            ...(normalizedPhone !== undefined ? { phone: normalizedPhone } : {}),
+            ...(normalizedEmail !== undefined ? { email: normalizedEmail } : {}),
             ...(d.price !== undefined
               ? {
                   priceAtBooking:
@@ -329,6 +361,41 @@ export function registerAppointmentEdit(
       return;
     }
 
+    // 🔴 CARRY THE CORRECTED CONTACT ONTO THE CLIENT RECORD.
+    //
+    // The appointment's own phone/email are a snapshot of what the booker
+    // typed. The CLIENT row is the channel of record: `appointmentNotify` texts
+    // `client.phone`, and the rewards page, nudges and every marketing send
+    // read the client too. Writing only the appointment would leave a barber
+    // who just fixed a typo'd number watching reminders keep going to the old
+    // one - the correction would look applied and do nothing.
+    //
+    // Routed through `editClient` rather than a direct update precisely BECAUSE
+    // of what that function refuses to touch: SMS consent (`smsConsentAt` /
+    // `smsConsentSource` / `optedOut`) and `acuityClientKey`, the sync anchor.
+    // Typing a phone number can never manufacture permission to text it, and it
+    // can never fork a synced client into a duplicate.
+    //
+    // After commit: the values were validated above, so the only reachable
+    // outcome here is success, and the schedule change is already durable.
+    const contactClientId = d.clientId !== undefined ? d.clientId : appt.clientId;
+    let contactSynced = false;
+    if (contactClientId && (normalizedPhone !== undefined || normalizedEmail !== undefined)) {
+      const synced = await editClient(shopId, contactClientId, {
+        ...(normalizedPhone !== undefined ? { phone: normalizedPhone } : {}),
+        ...(normalizedEmail !== undefined ? { email: normalizedEmail } : {}),
+      });
+      contactSynced = synced.ok;
+      if (!synced.ok) {
+        // Never fatal - the booking edit already committed. Logged by REASON
+        // only; the offending value never reaches a log line.
+        logger.warn(
+          { shopId, appointmentId: appt.id, reason: synced.reason },
+          "appointment contact not carried to client record",
+        );
+      }
+    }
+
     // Replacement block first; the old one is released only on confirmation.
     // The outcome is reported so the UI can be honest when Acuity did not
     // confirm, rather than showing a clean success over an unresolved move.
@@ -348,6 +415,7 @@ export function registerAppointmentEdit(
         changed: Object.keys(d).filter((k) => k !== "customTime"),
         timeMoved,
         staffChanged: staffId !== appt.staffId,
+        contactSynced,
         from: timeMoved ? appt.startsAt.toISOString() : undefined,
         to: timeMoved ? startsAt.toISOString() : undefined,
         mirror,

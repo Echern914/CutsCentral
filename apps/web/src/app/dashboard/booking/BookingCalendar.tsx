@@ -10,10 +10,10 @@ import { fmtDuration } from "@/lib/duration";
 import {
   BTN_BASE,
   NAME_WRAP_CLS,
+  appointmentStatusPill,
   initialsOf,
 } from "../_components/appointmentCardStyles";
 import { serviceColorHex } from "@chairback/config/constants";
-import { AppointmentEditSheet } from "./AppointmentEditSheet";
 import { zonedWallTimeToUtc } from "@chairback/config/time";
 import type {
   AgendaCategory,
@@ -43,7 +43,7 @@ import {
   WAITLIST_BOOK_EVENT,
   type WaitlistBookDetail,
 } from "./WaitlistBoard";
-import { CheckoutSheet } from "./CheckoutSheet";
+import { AppointmentSheet, type SheetView } from "./AppointmentSheet";
 import { BlockOffForm } from "./BlockOffForm";
 import { useRouter } from "next/navigation";
 
@@ -1428,29 +1428,6 @@ function PencilIcon() {
 // Shared card language (name wrapping + initials) - see appointmentCardStyles.
 // The card is PRESENTATION-only work: statuses, permissions and every action
 // handler below are exactly as they were.
-/**
- * THE BOOKING STATE, said plainly.
- *
- * "Upcoming" answered the wrong question: it described WHEN, so a barber
- * reading a card could not tell an accepted booking from a request still
- * waiting on them - both were amber-ish chips that said the appointment was
- * ahead of them. Requested and Booked are different commitments and now read
- * differently.
- *
- * This is SOURCE-BLIND on purpose. Where the booking came from (ChairBack vs
- * Acuity) is a separate fact carried by its own badge, because a synced
- * booking is just as booked as a native one - collapsing the two into a single
- * chip is what made "Synced" read like a status in the first place.
- */
-const STATUS_PILL: Record<AgendaRow["status"], { label: string; cls: string }> = {
-  pending: { label: "Requested", cls: "bg-amber-400/15 text-amber-300" },
-  upcoming: { label: "Booked", cls: "bg-gold/15 text-gold" },
-  completed: { label: "Completed", cls: "bg-emerald-soft/15 text-emerald-soft" },
-  canceled: { label: "Canceled", cls: "bg-charcoal-700 text-muted" },
-  no_show: { label: "No-show", cls: "bg-danger-soft/15 text-danger-soft" },
-  blocked: { label: "Blocked", cls: "bg-charcoal-700 text-muted" },
-};
-
 function AppointmentBlock({
   row,
   timeLabel,
@@ -1465,28 +1442,20 @@ function AppointmentBlock({
   const [pending, start] = useTransition();
   const [seriesMenu, setSeriesMenu] = useState(false);
   const [nudgeMenu, setNudgeMenu] = useState(false);
-  // Appointment detail + chair-side checkout, opened from this row.
-  const [checkoutOpen, setCheckoutOpen] = useState(false);
-  const [editOpen, setEditOpen] = useState(false);
+  // ONE sheet for this row. The value is which view it opens on; null = closed.
+  const [sheet, setSheet] = useState<SheetView | null>(null);
   const [customNudge, setCustomNudge] = useState("");
   // Skip = dismiss for THIS render only; the reward stays ready and the prompt
   // returns on reload (deliberate - skipping never consumes anything).
   const [rewardSkipped, setRewardSkipped] = useState(false);
-  // Check-in overrides the plain "Upcoming" pill: the live client status
-  // (Booked -> En route (~eta) -> Arrived) polled in from the agenda.
-  const pill =
-    row.status === "upcoming" && row.checkInStatus === "arrived"
-      ? { label: "Arrived", cls: "bg-emerald-soft/15 text-emerald-soft" }
-      : row.status === "upcoming" && row.checkInStatus === "en_route"
-        ? {
-            label: row.runningLate
-              ? "En route · late"
-              : row.etaMinutes
-                ? `En route ~${row.etaMinutes}m`
-                : "En route",
-            cls: "bg-amber-400/15 text-amber-300",
-          }
-        : STATUS_PILL[row.status];
+  // One shared table (appointmentCardStyles) so this card and the appointment
+  // sheet can never describe the same booking two different ways.
+  const pill = appointmentStatusPill({
+    status: row.status,
+    checkInStatus: row.checkInStatus,
+    etaMinutes: row.etaMinutes,
+    runningLate: row.runningLate,
+  });
   const canAct = row.source === "appointment" && row.status === "upcoming";
   // A PENDING request (request-before-booking) gets Approve / Decline instead.
   const canApprove = row.source === "appointment" && row.status === "pending";
@@ -1640,18 +1609,28 @@ function AppointmentBlock({
       </div>
 
       {/* WHO. The one fact this card exists to show: full width, wraps
-          naturally, never truncates - "Ab…" is how double-books happen. */}
-      <div className="mt-2 flex items-start gap-2.5">
+          naturally, never truncates - "Ab…" is how double-books happen.
+          It is also the way IN: tapping the person opens their appointment
+          sheet. Every row gets that, not just the actionable ones - a synced
+          booking, a completed cut and a cancelation all have a client whose
+          number the barber may need, and a third button on the card would
+          crowd exactly the row this redesign spent its budget uncrowding. */}
+      <button
+        type="button"
+        onClick={() => setSheet("detail")}
+        aria-label={`Open appointment details for ${row.clientName || "this client"}`}
+        className="mt-2 flex w-full items-start gap-2.5 rounded-lg py-0.5 text-left transition-colors duration-150 ease-out hover:bg-charcoal-700/40"
+      >
         <span
           aria-hidden
           className="mt-px flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-charcoal-700 text-[11px] font-semibold text-offwhite/80 ring-1 ring-white/10"
         >
           {initialsOf(row.clientName || "Client")}
         </span>
-        <p className={cn(NAME_WRAP_CLS, "flex-1 text-[17px]")}>
+        <span className={cn(NAME_WRAP_CLS, "flex-1 text-[17px]")}>
           {row.clientName || "Client"}
-        </p>
-      </div>
+        </span>
+      </button>
 
       {/* The service line: what, how long, how much - plus the origin chips,
           which used to crowd the name row. */}
@@ -1853,7 +1832,7 @@ function AppointmentBlock({
               out already completes the cut — a barber who taps this never needs
               Done, and one who works for free still has Done next to it. */}
           <button
-            onClick={() => setCheckoutOpen(true)}
+            onClick={() => setSheet("charges")}
             disabled={pending}
             className={cn(
               BTN_BASE,
@@ -1923,7 +1902,7 @@ function AppointmentBlock({
               Checkout is the card's one primary action and a second bright
               button would compete with the money moment. */}
           <button
-            onClick={() => setEditOpen(true)}
+            onClick={() => setSheet("edit")}
             disabled={pending}
             aria-label={`Edit appointment for ${row.clientName}`}
             className={cn(BTN_BASE, "gap-1.5 border border-subtle text-muted hover:text-offwhite")}
@@ -1934,30 +1913,17 @@ function AppointmentBlock({
         </div>
       )}
 
-      {editOpen && (
-        <AppointmentEditSheet
-          row={row}
-          toast={toast}
-          onClose={() => setEditOpen(false)}
-          onSaved={() => {
-            setEditOpen(false);
-            onChanged();
-          }}
-        />
-      )}
-
-      {/* Appointment detail -> charges -> payment. Mounted from the row so it
-          always carries THAT booking's live figures; onDone refreshes the
+      {/* The appointment sheet: contact, payment truth, editing and the
+          chair-side checkout, all behind one dialog. Mounted from the row so it
+          always carries THAT booking's live figures; onChanged refreshes the
           agenda, which is what flips the button to "Paid ✓". */}
-      {checkoutOpen && (
-        <CheckoutSheet
+      {sheet && (
+        <AppointmentSheet
           row={row}
           toast={toast}
-          onClose={() => setCheckoutOpen(false)}
-          onDone={() => {
-            setCheckoutOpen(false);
-            onChanged();
-          }}
+          initialView={sheet}
+          onClose={() => setSheet(null)}
+          onChanged={onChanged}
         />
       )}
     </div>

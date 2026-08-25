@@ -872,6 +872,90 @@ export async function deleteUpgradeRuleAction(id: string): Promise<Result> {
   return done(await apiSend("DELETE", `/api/booking/upgrade-rules/${id}`));
 }
 
+//  Appointment detail (the sheet's own read)
+
+/** The contact channels the sheet can act on. null = the action disappears. */
+export interface DetailContact {
+  /** E.164, ready for `tel:` / `sms:`. */
+  phone: string | null;
+  /** The same number formatted for a human to read. */
+  phoneDisplay: string | null;
+  email: string | null;
+}
+
+/**
+ * ONLY what ChairBack can verify about this booking's money. `external` means
+ * another system took it (or didn't) and we refuse to guess - see the API's
+ * engines/appointmentPayment.ts for the whole honesty rule.
+ */
+export interface DetailPayment {
+  state: "external" | "unpaid" | "deposit" | "paid" | "refunded";
+  totalCents: number | null;
+  collectedCents: number;
+  onlineCents: number;
+  inPersonCents: number;
+  refundedCents: number;
+  /** An UNCAPTURED card hold: not collected, and it does not reduce the balance. */
+  authorizedCents: number;
+  remainingCents: number | null;
+  method: string | null;
+  /** Always null - ChairBack persists no card data. Rendered only if it ever isn't. */
+  card: { brand: string; last4: string } | null;
+  receiptUrl: string | null;
+}
+
+export interface AppointmentDetail {
+  id: string;
+  source: "appointment" | "visit";
+  /** WHERE it came from - a separate fact from its status. */
+  origin: "chairback" | "external";
+  originLabel: string;
+  status: "pending" | "upcoming" | "completed" | "canceled" | "no_show";
+  checkInStatus: "en_route" | "arrived" | null;
+  clientId: string | null;
+  clientName: string;
+  serviceName: string | null;
+  staffName: string | null;
+  startsAt: string;
+  endsAt: string | null;
+  durationMin: number | null;
+  timezone: string;
+  price: number | null;
+  notes: string | null;
+  addOns: { id: string; name: string }[];
+  contact: DetailContact;
+  payment: DetailPayment;
+  /**
+   * When the barber closed the chair moment. Null = never checked out, which
+   * is the ONLY state in which "Start checkout" is a real action - the endpoint
+   * is idempotent and 409s a second attempt.
+   */
+  checkedOutAt: string | null;
+  editable: boolean;
+  readOnlyReason: "external" | "not_editable" | null;
+  externalManageUrl: string | null;
+}
+
+/**
+ * Load ONE booking in full for the appointment sheet.
+ *
+ * Deliberately its own round trip rather than fattening the agenda: contact
+ * details are the most sensitive thing on a barber's calendar, and a month
+ * view pulls up to 2000 rows. They travel only when a sheet is actually
+ * opened, for the one booking that was opened.
+ */
+export async function getAppointmentDetailAction(
+  id: string,
+  source: "appointment" | "visit",
+): Promise<{ ok: boolean; data?: AppointmentDetail; error?: string }> {
+  const base = source === "visit" ? "visits" : "appointments";
+  const res = await apiGet<AppointmentDetail>(
+    `/api/booking/${base}/${encodeURIComponent(id)}/detail`,
+  );
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, data: res.data };
+}
+
 //  Appointment editing
 
 export interface EditContext {
