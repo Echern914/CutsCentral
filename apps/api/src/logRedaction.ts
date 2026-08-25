@@ -102,3 +102,52 @@ export function redactedReqSerializer(req: {
 }) {
   return { method: req.method, url: redactUrl(requestUrl(req)) };
 }
+
+/**
+ * 🔴 RESPONSE HEADERS THAT ARE THEMSELVES CREDENTIALS.
+ *
+ * pino-http's DEFAULT res serializer emits `res.getHeaders()` - every response
+ * header - and #297's request-side redaction never touched it. Two of those
+ * headers are worse than anything the request side ever leaked:
+ *
+ *  - `set-cookie`  the live session cookie, written on every signup, login,
+ *                  Google/Apple callback and password reset
+ *                  (auth/session.ts). A session cookie is not a scoped token
+ *                  with a TTL - it is the account.
+ *  - `location`    OAuth redirect targets carry the signed handoff code that
+ *                  EXCHANGES for a session (auth.ts, authApple.ts) - and a
+ *                  redirect target is a URL, which is exactly the shape the
+ *                  request side already learned not to trust.
+ *
+ * 🔑 Redacted BY HEADER NAME, not by matching known values. A cookie added
+ * next year, or a redirect to somewhere new, is covered the day it ships
+ * instead of the day somebody remembers this file. The cost is losing
+ * redirect targets from the request log; the 3xx status and the (redacted)
+ * request URL still identify the redirect, and the target's shape lives in
+ * the code.
+ */
+const SECRET_RESPONSE_HEADERS = ["set-cookie", "location"];
+
+/**
+ * pino-http res serializer. Status code plus headers, with the credential
+ * headers above masked. Response BODIES are never serialized by pino-http at
+ * all - this is not what keeps them out of the log, nothing puts them in.
+ */
+export function redactedResSerializer(res: {
+  statusCode?: number | null;
+  headers?: Record<string, unknown>;
+  getHeaders?: () => Record<string, unknown>;
+  [k: string]: unknown;
+}) {
+  // pino-http hands the custom serializer the DEFAULT serializer's output
+  // (statusCode + headers); the getHeaders fallback keeps this correct if it
+  // is ever handed a raw ServerResponse instead.
+  const raw = res.headers ?? res.getHeaders?.() ?? {};
+  const headers: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(raw)) {
+    headers[name] = SECRET_RESPONSE_HEADERS.includes(name.toLowerCase())
+      ? "[redacted]"
+      : value;
+  }
+  return { statusCode: res.statusCode ?? null, headers };
+}

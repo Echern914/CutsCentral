@@ -5,7 +5,11 @@ import request from "supertest";
 import { pino } from "pino";
 import { pinoHttp } from "pino-http";
 import { describe, expect, it } from "vitest";
-import { redactedReqSerializer, redactUrl } from "./logRedaction.js";
+import {
+  redactedReqSerializer,
+  redactedResSerializer,
+  redactUrl,
+} from "./logRedaction.js";
 
 /**
  * WHAT A REQUEST URL IS ALLOWED TO SAY IN A LOG.
@@ -143,5 +147,123 @@ describe("🔴 every route whose path IS a credential is covered", () => {
       "rewards.ts/",
       "shops.ts/waitlist/cancel/",
     ]);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 🔴 The RESPONSE side: headers that are themselves credentials        */
+/* ------------------------------------------------------------------ */
+
+describe("🔴 the response side, through a real express + pinoHttp capture", () => {
+  /**
+   * The proof runs the way the leak was found: a real express app, the SAME
+   * serializer config app.ts uses, and an assertion over every byte pino
+   * actually emits. With the res serializer removed (main's config until this
+   * change), these fail - the session cookie and the handoff code both land
+   * in the log verbatim.
+   */
+  async function capture(drive: (app: express.Express) => Promise<void>): Promise<string> {
+    const lines: string[] = [];
+    const app = express();
+    app.use(
+      pinoHttp({
+        logger: pino({ level: "info" }, { write: (l: string) => void lines.push(l) }),
+        serializers: { req: redactedReqSerializer, res: redactedResSerializer },
+      }),
+    );
+    await drive(app);
+    return lines.join("\n");
+  }
+
+  it("set-cookie never reaches the log - the session cookie is the account", async () => {
+    const out = await capture(async (app) => {
+      app.get("/login", (_req, res) => {
+        // Two cookies, because Set-Cookie is an ARRAY once there is more than
+        // one - the session plus an OAuth state cookie is the real shape of
+        // the Google/Apple callbacks, and a redaction that handled only the
+        // single-string case would pass the array through untouched.
+        res.cookie("cb_session", "LIVE_SESSION_TOKEN_VALUE", { httpOnly: true });
+        res.cookie("cb_google_state", "OAUTH_STATE_VALUE", { httpOnly: true });
+        res.json({ ok: true });
+      });
+      await request(app).get("/login").expect(200);
+    });
+    expect(out).not.toContain("LIVE_SESSION_TOKEN_VALUE");
+    expect(out).not.toContain("OAUTH_STATE_VALUE");
+    expect(out).toContain("[redacted]");
+    // And the line is still a request log, not a hole where one used to be.
+    expect(out).toContain('"statusCode":200');
+  });
+
+  it("location never reaches the log - the redirect target carries the handoff code", async () => {
+    const out = await capture(async (app) => {
+      app.get("/oauth/cb", (_req, res) => {
+        // The exact shape of auth.ts / authApple.ts: a signed code that
+        // exchanges for a session, riding in the redirect target.
+        res.redirect("https://app.example.com/auth/google/landing?code=HANDOFF_CODE_VALUE");
+      });
+      await request(app).get("/oauth/cb").expect(302);
+    });
+    expect(out).not.toContain("HANDOFF_CODE_VALUE");
+    expect(out).not.toContain("app.example.com"); // the whole target, not just the query
+    expect(out).toContain('"statusCode":302');
+  });
+
+  it("ordinary response headers survive - over-redaction is its own failure", async () => {
+    const out = await capture(async (app) => {
+      app.get("/data", (_req, res) => {
+        res.json({ ok: true });
+      });
+      await request(app).get("/data").expect(200);
+    });
+    expect(out).toContain("application/json");
+  });
+});
+
+describe("redactedResSerializer", () => {
+  it("masks by header NAME, case-insensitively, arrays included", () => {
+    const out = redactedResSerializer({
+      statusCode: 302,
+      headers: {
+        "Set-Cookie": ["cb_session=SECRET_A; HttpOnly", "cb_state=SECRET_B"],
+        Location: "/auth/apple/landing?code=SECRET_C",
+        "content-type": "application/json",
+      },
+    });
+    const flat = JSON.stringify(out);
+    expect(flat).not.toContain("SECRET_A");
+    expect(flat).not.toContain("SECRET_B");
+    expect(flat).not.toContain("SECRET_C");
+    expect(out.headers["Set-Cookie"]).toBe("[redacted]");
+    expect(out.headers["Location"]).toBe("[redacted]");
+    expect(out.headers["content-type"]).toBe("application/json");
+    expect(out.statusCode).toBe(302);
+  });
+
+  it("falls back to getHeaders() when handed a raw ServerResponse shape", () => {
+    const out = redactedResSerializer({
+      statusCode: 200,
+      getHeaders: () => ({ "set-cookie": "cb_session=SECRET_D" }),
+    });
+    expect(JSON.stringify(out)).not.toContain("SECRET_D");
+    expect(out.headers["set-cookie"]).toBe("[redacted]");
+  });
+
+  it("a response with no headers yet serializes without throwing", () => {
+    expect(redactedResSerializer({ statusCode: null })).toEqual({
+      statusCode: null,
+      headers: {},
+    });
+  });
+});
+
+describe("🔴 app.ts actually wires BOTH serializers", () => {
+  it("the pinoHttp call names req and res - a correct serializer nobody passes is the #297 bug again", () => {
+    // #297's whole failure mode was a redaction that existed but was not
+    // wired at every sink. The serializer being right is worthless if app.ts
+    // quietly reverts to the default res serializer, so pin the wiring.
+    const src = readFileSync(new URL("./app.ts", import.meta.url), "utf8");
+    expect(src).toMatch(/req: redactedReqSerializer/);
+    expect(src).toMatch(/res: redactedResSerializer/);
   });
 });

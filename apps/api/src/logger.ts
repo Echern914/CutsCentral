@@ -20,6 +20,11 @@ export const logger = pino({
       "refreshToken",
       "TOKEN_ENCRYPTION_KEY",
       "SESSION_SECRET",
+      // Belt and braces behind logRedaction.ts's res serializer: if a response
+      // object is ever hand-logged instead of going through pino-http, the
+      // session cookie and the redirect target still never reach stdout.
+      'res.headers["set-cookie"]',
+      "res.headers.location",
     ],
     censor: "[redacted]",
   },
