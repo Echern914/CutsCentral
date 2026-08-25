@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { apiEnv } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { logger } from "./logger.js";
+import { captureError } from "./sentry.js";
 import { withLease } from "./scheduler/lease.js";
 import { promoteCompletedVisits } from "./engines/statusPromotion.js";
 import { runNudgeSweep } from "./engines/nudge.js";
@@ -365,9 +366,12 @@ export function startScheduler(): void {
 
   for (const job of SCHEDULED_JOBS) {
     cron.schedule(job.cronExpr, () => {
-      void withLease(job.name, job.ttlMs, job.run).catch((err) =>
-        logger.error({ err }, job.failMsg),
-      );
+      void withLease(job.name, job.ttlMs, job.run).catch((err) => {
+        // A failed cron job has no request, no 500 and no user to complain -
+        // this catch is its entire visibility, so it reports as well as logs.
+        logger.error({ err }, job.failMsg);
+        captureError(err, { job: job.name });
+      });
     });
   }
 

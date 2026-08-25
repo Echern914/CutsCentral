@@ -298,6 +298,8 @@ export function AppointmentSheet({
       onClose={closeTopmost}
       title={title}
       titleAlign="center"
+      // Each view is its own page and starts at its own top.
+      scrollResetKey={view}
       leading={
         back ? (
           <button

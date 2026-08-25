@@ -1407,6 +1407,15 @@ function ClockIcon() {
   );
 }
 
+function ChevronDownIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width={16} height={16} fill="none" stroke="currentColor"
+         strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
+
 function PencilIcon() {
   return (
     <svg
@@ -1444,6 +1453,15 @@ function AppointmentBlock({
   const [nudgeMenu, setNudgeMenu] = useState(false);
   // ONE sheet for this row. The value is which view it opens on; null = closed.
   const [sheet, setSheet] = useState<SheetView | null>(null);
+  /**
+   * COLLAPSED BY DEFAULT. A day with eight cuts used to be eight full cards of
+   * service lines and button rows, which is a lot of scrolling to answer "who
+   * is in at 2". Collapsed, a row is the three things that make a schedule
+   * readable — when, who, and what state it is in — and everything else is one
+   * tap away. A REQUEST is the exception: it is asking the barber for
+   * something, so it opens already expanded with Approve/Decline in reach.
+   */
+  const [expanded, setExpanded] = useState(row.status === "pending");
   const [customNudge, setCustomNudge] = useState("");
   // Skip = dismiss for THIS render only; the reward stays ready and the prompt
   // returns on reload (deliberate - skipping never consumes anything).
@@ -1608,17 +1626,15 @@ function AppointmentBlock({
         </span>
       </div>
 
-      {/* WHO. The one fact this card exists to show: full width, wraps
-          naturally, never truncates - "Ab…" is how double-books happen.
-          It is also the way IN: tapping the person opens their appointment
-          sheet. Every row gets that, not just the actionable ones - a synced
-          booking, a completed cut and a cancelation all have a client whose
-          number the barber may need, and a third button on the card would
-          crowd exactly the row this redesign spent its budget uncrowding. */}
+      {/* WHO, and the toggle. The one fact this card exists to show: full
+          width, wraps naturally, never truncates - "Ab…" is how double-books
+          happen. Tapping it opens the rest of the card in place; the sheet
+          (contact, payment, history) is one more tap from inside. */}
       <button
         type="button"
-        onClick={() => setSheet("detail")}
-        aria-label={`Open appointment details for ${row.clientName || "this client"}`}
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        aria-label={`${expanded ? "Collapse" : "Expand"} appointment for ${row.clientName || "this client"}`}
         className="mt-2 flex w-full items-start gap-2.5 rounded-lg py-0.5 text-left transition-colors duration-150 ease-out hover:bg-charcoal-700/40"
       >
         <span
@@ -1630,7 +1646,22 @@ function AppointmentBlock({
         <span className={cn(NAME_WRAP_CLS, "flex-1 text-[17px]")}>
           {row.clientName || "Client"}
         </span>
+        <span
+          aria-hidden
+          className={cn(
+            "mt-1 shrink-0 text-muted transition-transform duration-150 ease-out",
+            expanded && "rotate-180",
+          )}
+        >
+          <ChevronDownIcon />
+        </span>
       </button>
+
+      {/* Collapsed, the row stops here. What a barber scanning the day needs is
+          when, who and what state — the service, the price and six buttons are
+          what made eight cuts an unscrollable wall. */}
+      {expanded && (
+      <>
 
       {/* The service line: what, how long, how much - plus the origin chips,
           which used to crowd the name row. */}
@@ -1911,6 +1942,20 @@ function AppointmentBlock({
             Edit
           </button>
         </div>
+      )}
+
+      {/* The way through to everything the card does not carry: contact,
+          the payment story, the client's other visits. Quiet, because the
+          card's own actions are the common case and this is the deep one. */}
+      <button
+        type="button"
+        onClick={() => setSheet("detail")}
+        aria-label={`Open appointment details for ${row.clientName || "this client"}`}
+        className="mt-2 flex h-11 w-full items-center justify-center gap-1.5 rounded-lg border border-subtle text-xs font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite sm:h-9"
+      >
+        Full details
+      </button>
+      </>
       )}
 
       {/* The appointment sheet: contact, payment truth, editing and the
