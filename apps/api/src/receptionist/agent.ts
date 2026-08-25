@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { apiEnv } from "@chairback/config";
 import { logger } from "../logger.js";
+import { captureError } from "../sentry.js";
 
 /**
  * The receptionist's Anthropic tool-use loop. A MANUAL loop (not the SDK tool
@@ -131,7 +132,13 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnOutc
         } catch (err) {
           // tools.ts already catches its own errors; this is the belt-and-
           // suspenders so a bug there reads as a tool failure, not a crash.
+          //
+          // 🔴 AND it reports. This catch is the one place a booking-path bug
+          // can die without a 500 - the texter just never gets booked - so a
+          // log line nobody tails was the whole visibility story. The
+          // unmapped-chair outage sat exactly here.
           logger.error({ err, tool: call.name }, "receptionist tool threw");
+          captureError(err, { tool: call.name });
           executed = { result: "internal error running this tool", isError: true };
         }
         toolCalls.push({
