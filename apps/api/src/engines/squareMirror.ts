@@ -8,6 +8,7 @@ import {
   interpretBookingStatus,
   isSquareMirrorEligible,
   shouldSquareObserve,
+  squareReleaseActor,
   squareSellerNote,
   squareSellerNoteOutboxId,
   type SquareMirrorShopSlice,
@@ -870,18 +871,47 @@ export async function reconcileOwnedBookingFromWebhook(
     },
   });
   if (hold === "released" && row.state === "ACTIVE") {
-    // The barber cancelled OUR mirrored booking inside Square. That is a real
-    // signal about a real appointment - surface it loudly. It is deliberately
-    // NOT auto-cancelled here: a barber tidying their Square calendar must not
+    // OUR mirrored booking was released inside Square. Always a real signal
+    // about a real appointment, so it is surfaced loudly - and deliberately
+    // NEVER auto-cancelled: a barber tidying their Square calendar must not
     // silently cancel a customer who was told they were booked.
+    //
+    // WHO released it is recorded separately, because the cases are not
+    // equally plausible and must not share a reason code.
+    const actor = squareReleaseActor(status);
+    const anomalous = actor === "customer";
     logTransition(
-      "the seller cancelled a mirrored booking inside Square - the ChairBack appointment is now UNPROTECTED",
-      { shopId, appointmentId: row.appointmentId, outboxId: row.id, squareBookingId },
+      anomalous
+        ? "ANOMALY: a CUSTOMER cancelled a mirrored booking inside Square. A mirror is filed " +
+          "under a name-only customer with no email or phone, so there should be no channel " +
+          "by which anyone could cancel it - check whether contact details were added to a " +
+          "ChairBack-created customer record. The ChairBack appointment is now UNPROTECTED."
+        : "a mirrored booking was released inside Square - the ChairBack appointment is now UNPROTECTED",
+      {
+        shopId,
+        appointmentId: row.appointmentId,
+        outboxId: row.id,
+        squareBookingId,
+        squareStatus: status ?? null,
+        releasedBy: actor,
+        squareMirrorAnomaly: anomalous || undefined,
+      },
       "error",
     );
     await prisma.squareOutboundBooking.update({
       where: { id: row.id },
-      data: { state: "FAILED", lastError: "cancelled_in_square" },
+      data: {
+        state: "FAILED",
+        // A distinct code, so the eventual conflict UI and any log search can
+        // separate "the barber did this" from "something we believe impossible
+        // happened".
+        lastError:
+          actor === "customer"
+            ? "cancelled_by_customer_in_square"
+            : actor === "no_show"
+              ? "no_show_in_square"
+              : "cancelled_in_square",
+      },
     });
   }
 }

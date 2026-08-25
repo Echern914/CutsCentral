@@ -99,7 +99,7 @@ async function ownedRowAt(version: number, status: string) {
 }
 
 /** Deliver one captured event exactly as the route would. */
-async function deliver(e: (typeof CAPTURED)[number]) {
+async function deliver(e: { dataId: string; type: string; status: string }) {
   const ref = parseSquareEventRef(e.dataId);
   squareMock.getBooking.mockResolvedValue({
     id: BOOKING_ID,
@@ -381,5 +381,61 @@ describe("the handler switches on STATUS, never on event type", () => {
     expect(code).not.toMatch(/["'`]booking\.updated["'`]/);
     // The one type comparison that IS legitimate stays.
     expect(code).toMatch(/oauth\.authorization\.revoked/);
+  });
+});
+
+describe("who released a mirrored booking", () => {
+  /**
+   * Direction, confirmed: SURFACE, never auto-cancel. The ChairBack
+   * appointment is left completely alone in every case below - a barber
+   * tidying their Square calendar must not silently cancel a customer who was
+   * told they were booked.
+   *
+   * What changes is how it is FILED. Square gives actor class and nothing
+   * finer, but that split is decisive on a mirror booking: a seller cancel is
+   * expected, a CUSTOMER cancel should be close to impossible, because a
+   * mirror is filed under a name-only customer with no email and no phone.
+   */
+  it("files a SELLER cancel as ordinary, and leaves the appointment alone", async () => {
+    const row = await ownedRowAt(0, "ACCEPTED");
+    const before = await prisma.appointment.findFirstOrThrow({ where: { shopId } });
+
+    await deliver({ dataId: `${BOOKING_ID}:1`, type: "booking.updated", status: "CANCELLED_BY_SELLER" });
+
+    const after = await prisma.squareOutboundBooking.findUnique({ where: { id: row.id } });
+    expect(after!.state).toBe("FAILED");
+    expect(after!.lastError).toBe("cancelled_in_square");
+
+    const appt = await prisma.appointment.findUniqueOrThrow({ where: { id: before.id } });
+    expect(appt.status).toBe("BOOKED");
+    expect(appt.canceledAt).toBeNull();
+  });
+
+  it("files a CUSTOMER cancel under its OWN code - it is anomalous", async () => {
+    // A name-only Square customer has no channel by which anyone could have
+    // been handed a cancel link. If this fires, an assumption the design rests
+    // on is wrong, and it must not disappear into the same bucket as a barber
+    // tidying up.
+    const row = await ownedRowAt(0, "ACCEPTED");
+    const before = await prisma.appointment.findFirstOrThrow({ where: { shopId } });
+
+    await deliver({ dataId: `${BOOKING_ID}:1`, type: "booking.updated", status: "CANCELLED_BY_CUSTOMER" });
+
+    const after = await prisma.squareOutboundBooking.findUnique({ where: { id: row.id } });
+    expect(after!.state).toBe("FAILED");
+    expect(after!.lastError).toBe("cancelled_by_customer_in_square");
+    expect(after!.lastError).not.toBe("cancelled_in_square");
+
+    // Still surfaced, still never destructive.
+    const appt = await prisma.appointment.findUniqueOrThrow({ where: { id: before.id } });
+    expect(appt.status).toBe("BOOKED");
+    expect(appt.canceledAt).toBeNull();
+  });
+
+  it("files a NO_SHOW as its own thing rather than as a cancellation", async () => {
+    const row = await ownedRowAt(0, "ACCEPTED");
+    await deliver({ dataId: `${BOOKING_ID}:1`, type: "booking.updated", status: "NO_SHOW" });
+    const after = await prisma.squareOutboundBooking.findUnique({ where: { id: row.id } });
+    expect(after!.lastError).toBe("no_show_in_square");
   });
 });

@@ -146,6 +146,41 @@ export function holdsTheChair(status: string | null | undefined): boolean {
   return interpretBookingStatus(status) === "held";
 }
 
+/** WHO freed the chair. Only meaningful once interpretBookingStatus says "released". */
+export type SquareReleaseActor = "seller" | "customer" | "no_show" | "unknown";
+
+/**
+ * Square gives the actor CLASS of a cancellation, and nothing finer.
+ *
+ * `CANCELLED_BY_SELLER` versus `CANCELLED_BY_CUSTOMER` is the whole of it -
+ * there is no cancellation-actor field, and `creator_details` describes who
+ * CREATED the booking, not who cancelled it (confirmed against a live sandbox
+ * delivery: an API cancel left `creator_type: TEAM_MEMBER, source: API`
+ * untouched from the create). So we cannot tell WHICH person on the seller
+ * side acted, and never will.
+ *
+ * 🔴 But the customer/seller split matters enormously on a MIRROR booking,
+ * because the two are not equally plausible:
+ *
+ *   - a SELLER cancel is a barber tidying their own Square calendar. Expected,
+ *     even if unwanted.
+ *   - a CUSTOMER cancel should be close to IMPOSSIBLE. A mirror is filed under
+ *     a name-only Square customer with no email and no phone (see
+ *     ensureCustomerFor), so there is no channel by which a human could have
+ *     been handed a cancel link. If one arrives anyway, an assumption this
+ *     system rests on is wrong - most likely a seller has added contact
+ *     details to a ChairBack-created customer record, which is exactly the C14
+ *     hazard - and it must not be filed under the same reason code as a barber
+ *     tidying up, or it disappears into the noise.
+ */
+export function squareReleaseActor(status: string | null | undefined): SquareReleaseActor {
+  const s = (status ?? "").trim().toUpperCase();
+  if (s === "CANCELLED_BY_CUSTOMER") return "customer";
+  if (s === "CANCELLED_BY_SELLER" || s === "DECLINED") return "seller";
+  if (s === "NO_SHOW") return "no_show";
+  return "unknown";
+}
+
 //  4. The opaque reference
 
 /** Prefix kept narrow so a human scanning Square can tell what made a booking. */
