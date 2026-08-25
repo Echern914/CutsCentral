@@ -7,6 +7,16 @@ import { notifyPunchEarned } from "../services/loyaltyNotify.js";
 import { logger } from "../logger.js";
 import { getSquareClientForShop, type SquareClient } from "./client.js";
 import { resolveSquareStatus } from "./mapping.js";
+import { totalOccupiedMinutes } from "../engines/squareMirrorRules.js";
+
+/**
+ * How long to treat a Square booking as occupying the chair when Square did
+ * not tell us. Deliberately LONGER than any ordinary service: the error has to
+ * point at over-blocking, because the other direction sells a chair that is
+ * still in use. Paired with a `squareSyncHealth` log line so it is visible
+ * rather than silently absorbed.
+ */
+const CONSERVATIVE_UNKNOWN_DURATION_MIN = 120;
 import type { SquareBooking, SquareCustomer } from "./types.js";
 
 /**
@@ -108,14 +118,35 @@ export async function ingestSquareBooking(
     );
     return;
   }
-  // Square bookings don't inline an end time or price; derive end from the first
-  // segment's duration when present. Service name needs a Catalog lookup we skip
-  // in v1 (null is fine — punches earn on the shop's default punchesPerVisit).
+  // THE COMPLETE OCCUPIED SPAN, across EVERY segment.
+  //
+  // This used to read `appointment_segments[0]` and default a missing duration
+  // to 30 minutes. Both errors point the same way - they under-state how long
+  // the chair is busy - and the consequence is ChairBack offering a slot the
+  // barber is still working through. A cut-plus-colour booking is two segments
+  // with an intermission between them, and the chair is occupied for all of it.
+  //
   // Never null: a null endAt is invisible to the slot engine's `endAt: { gt }`
-  // busy-join (Prisma gt excludes NULL) and the visit would block nothing.
-  // Missing duration falls back to the same half hour utilization assumes.
-  const durationMin = booking.appointment_segments[0]?.duration_minutes ?? null;
-  const endAt = new Date(scheduledAt.getTime() + (durationMin ?? 30) * 60_000);
+  // busy-join (Prisma's gt excludes NULL) and the visit would block nothing.
+  const durationMin = totalOccupiedMinutes(booking.appointment_segments);
+  if (durationMin === null) {
+    // No AUTHORITATIVE duration. The old code guessed half an hour here, which
+    // is the one thing that must not happen: a guess that is too short puts a
+    // customer in a chair that is still busy. Block conservatively instead and
+    // say so loudly - over-blocking costs the barber a slot they can reopen by
+    // hand, and the sync-health line is what tells them to.
+    logger.error(
+      {
+        shopId: shop.id,
+        bookingId,
+        segments: booking.appointment_segments.length,
+        squareSyncHealth: "missing_duration",
+      },
+      "square booking has no authoritative duration - blocking conservatively until repaired",
+    );
+  }
+  const effectiveMinutes = durationMin ?? CONSERVATIVE_UNKNOWN_DURATION_MIN;
+  const endAt = new Date(scheduledAt.getTime() + effectiveMinutes * 60_000);
   const sourceId = `square:${booking.id}`;
 
   const { clientId, clawedBack, earn } = await runWithShop(shop.id, async (tx) => {

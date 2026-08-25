@@ -12,6 +12,10 @@ import {
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import { checkSquareBookingAllowed } from "../engines/squareOutboundMap.js";
 import {
+  dispatchSquareAfterCommit,
+  releaseSquareForAppointment,
+} from "../engines/squareMirror.js";
+import {
   completeReschedule,
   dispatchCreate,
   staffMirrorBlocked,
@@ -1332,6 +1336,21 @@ async function compensateUnmirroredBooking(
       "acuity mirror: compensation FAILED - appointment survives unmirrored, reconciler owns it",
     );
   }
+
+  // 🔴 AND CANCEL ANY SQUARE BOOKING WE ALREADY MADE.
+  //
+  // Square is dispatched BEFORE Acuity on this path, so "Square held the chair,
+  // then Acuity definitively refused" is reachable - and without this the
+  // appointment would be compensated away while a live booking stayed on the
+  // seller's Square calendar, for a customer who no longer has an appointment.
+  // Safe when there is nothing to release: the row is already terminal after a
+  // definitive failure or a conflict, and this is a no-op.
+  await releaseSquareForAppointment(shopId, appointmentId).catch((err) => {
+    logger.error(
+      { err, shopId, appointmentId },
+      "square mirror: compensation release FAILED - reconciler owns it",
+    );
+  });
 }
 
 bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {
@@ -1735,6 +1754,44 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {
   // created - otherwise "You're booked!" is a claim we cannot back, which is
   // precisely how a ChairBack booking that had held 6:10pm for eleven days got
   // sold over from the Acuity side.
+  // SQUARE, on the same terms and for the same reason. Ordered before Acuity's
+  // leg because a Square failure is the one that can be a genuine CONFLICT -
+  // somebody else already has that chair on the seller's calendar - and there
+  // is no point placing an Acuity block for a booking we are about to undo.
+  //
+  // 6 of the brief: in ENFORCE, nothing confirmatory is said and no payment is
+  // created until Square confirms. "held" is the only outcome that clears that
+  // gate; "awaiting_seller" does NOT, because a PENDING Square booking leaves
+  // the chair sellable and the customer would be promised a slot Square has
+  // not taken off the market.
+  const squareOutcome = await dispatchSquareAfterCommit({
+    shopId: shop.id,
+    appointmentId,
+    via: "public_booking",
+  });
+  if (squareOutcome === "failed" || squareOutcome === "conflict") {
+    // DEFINITIVE - Square looked at it and declined, or already has someone in
+    // that chair. No booking exists on their side. Undo ours and give the
+    // customer the same clean answer as any other lost slot; nothing has been
+    // sent and no PaymentIntent exists yet, so this costs them nothing.
+    await compensateUnmirroredBooking(shop.id, appointmentId, targeted?.id ?? null);
+    invalidateShopAvailabilityCaches(shop.id);
+    res.status(409).json({ error: "slot_unavailable_external" });
+    return;
+  }
+  if (squareOutcome === "unknown" || squareOutcome === "awaiting_seller") {
+    // AMBIGUOUS, or accepted-but-not-held. Cancelling would kill a real
+    // appointment over a lost response AND possibly strand a live Square
+    // booking. Keep it, promise nothing, and let the reconciler settle it.
+    logger.warn(
+      { shopId: shop.id, appointmentId, outcome: squareOutcome },
+      "square mirror: chair not confirmed held - holding booking, suppressing confirmations",
+    );
+    invalidateShopAvailabilityCaches(shop.id);
+    res.status(202).json({ status: "processing", appointmentId, manageToken });
+    return;
+  }
+
   if (mirrorOutboxId) {
     const outcome = await dispatchCreate(mirrorOutboxId);
     if (outcome === "failed") {

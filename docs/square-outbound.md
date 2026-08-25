@@ -120,6 +120,71 @@ script.
 
 ---
 
+## What S2 shipped — and how it survives the contract being unrun
+
+The sandbox contract still has not been run (no sandbox token was available).
+S2 is therefore written to be **correct under either answer to C8 and C10**,
+which is a better engineering position than branching on them anyway:
+
+| Contract question | How S2 handles it without the answer |
+|---|---|
+| **C8** ACCEPTED or PENDING? | Read from Square's **actual response** on every write. `interpretBookingStatus` treats **only `ACCEPTED`** as protection; `PENDING` becomes `awaiting_seller`, the public booking answers **202 processing** rather than "you're booked", and the row records what Square said. An unrecognised status is *not held* — under-claiming costs a line on a report, over-claiming costs a double booking. |
+| **C9** does the idempotency key hold? | The key is minted once at intent time and **never regenerated**. Every retry and every reconcile replays it. If Square honours it, a lost response costs nothing; if it does not, the `UNKNOWN` state and the reconciler still bound the damage. |
+| **C10** are overlaps rejected? | Assume they are **not**. Before every create the engine asks Square what is already on that team member's calendar for that span and **refuses rather than write over a human being**. This narrows the race to one round trip. **It does not close it** — another booking can land between the check and the create — and nothing in the code or the UI claims otherwise. |
+| **C11/C12** versioned update? | Reschedule uses **`UpdateBooking` with the current version**, re-read immediately before the call. Not Acuity's create-then-delete swap: Square offers an atomic operation and using the weaker pattern would invent a window where the chair is blocked twice or not at all. A definitive refusal leaves the row at the **old** span, which keeps the old time held. |
+| **C13** versioned cancel? | Cancel re-reads the booking for its current version first — a seller who edited it in Square moved the version, and a stale one is rejected. A failed cancel leaves the row `RELEASING`, so the time stays blocked until we can prove it is gone. |
+
+**The conflict check uses `ListBookings`, not `SearchAvailability`,** for the
+blocking decision. Availability is shaped by the seller's own booking rules
+(business hours, lead time, cutoffs), so "not available" routinely means
+"outside your Square hours" for a shop whose ChairBack hours are wider — which
+would fail every early appointment for something that is not a conflict. An
+overlapping `ACCEPTED`/`PENDING` booking is unambiguous. The availability probe
+still runs immediately before the write, logged rather than blocking.
+
+### Wiring: every appointment path, no call-site changes
+
+The Square legs live **inside** `recordMirrorIntent`, `dispatchAfterCommit`,
+`releaseForAppointment` and `completeReschedule`. Every path that already
+mirrors to Acuity — public booking, dashboard create, approval requests,
+recurring series, waitlist claim, receptionist, gap-fill, walk-in, reschedule,
+cancel, decline, no-show — therefore mirrors to Square without an edit of its
+own. Wiring eight call sites twice is eight chances to wire one of them once.
+
+Two deliberate exceptions:
+
+- `swapForReschedule` records an **Acuity-only** intent, because Square moves in
+  place. Recording a second live Square row there would also collide with the
+  one-live-mirror-per-appointment index and take the booking transaction down.
+- `booking.public.ts` calls the Square dispatch **explicitly and first**, because
+  that path is fail-closed: it must be able to compensate the appointment before
+  anything is promised, and a Square conflict is the one failure that means
+  somebody else already has the chair.
+
+### 🔴 SquareConnection and FORCE RLS — measured, not assumed
+
+`squareConnectionRls.test.ts` runs the experiment inside rolled-back
+transactions (Postgres makes DDL transactional) and establishes:
+
+1. A non-superuser role **already sees zero rows** — `ENABLE` with no policy is
+   default-deny, so the Supabase data-API hole is closed. FORCE adds nothing.
+2. The app reads the table only because it connects as a **superuser**, which
+   bypasses RLS with or without FORCE. On this deployment FORCE is a **no-op**.
+3. FORCE with **no policy** makes the table unreadable by any non-superuser — so
+   the day the app stops connecting as one, every token lookup returns nothing
+   and Square goes dark with no error that mentions RLS. FORCE alone is a latent
+   outage, not a hardening.
+4. FORCE **+ a shopId policy** works for shop-scoped reads…
+5. …but **breaks the webhook**, which resolves merchant → shop with no shop
+   context to scope by. Measured: zero rows, meaning every inbound Square event
+   would be dropped as "unknown merchant" while returning 200.
+
+**Conclusion:** FORCE is safe only together with a policy *and* moving the
+merchant → shop resolution outside RLS. Until S3 does that, `ENABLE`-only is
+correct — and now that is a test rather than a comment. `SquareOutboundBooking`,
+which is genuinely per-shop with no merchant lookup, takes the full
+`ENABLE + FORCE + policy` posture.
+
 ## What S1 shipped
 
 **Schema.** `SquareOutboundMode` (OFF/OBSERVE/ENFORCE, default OFF) ·

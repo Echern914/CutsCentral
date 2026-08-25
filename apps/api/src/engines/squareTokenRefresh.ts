@@ -28,7 +28,11 @@ export async function refreshExpiringSquareTokens(now = new Date()): Promise<num
   for (const conn of due) {
     try {
       const refreshToken = decrypt(conn.refreshToken, env.TOKEN_ENCRYPTION_KEY);
-      await refreshAccessToken(conn.shopId, refreshToken);
+      // The stored ciphertext is the compare-and-set guard: this sweep and a
+      // reactive 401 refresh can fire on the same connection at the same
+      // moment, and without it whichever UPDATE lands last wins - which can
+      // persist a refresh token Square has already rotated away.
+      await refreshAccessToken(conn.shopId, refreshToken, conn.refreshToken);
       refreshed++;
     } catch (err) {
       logger.error({ err, shopId: conn.shopId }, "square proactive token refresh failed");

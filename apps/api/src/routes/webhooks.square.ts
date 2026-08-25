@@ -2,7 +2,7 @@ import express, { Router } from "express";
 import { apiEnv } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
-import { ingestSquareBooking } from "../square/ingest.js";
+import { admitEvent, processBookingEvent, settleEvent } from "../square/inbox.js";
 import { verifySquareSignature } from "../square/signature.js";
 import { squareWebhookEnvelopeSchema } from "../square/types.js";
 import { squareEnabled } from "../square/client.js";
@@ -76,6 +76,26 @@ squareWebhookRouter.post("/", express.raw({ type: "*/*" }), async (req, res) => 
     return;
   }
 
+  // PERSIST BEFORE PROCESSING. Square's event_id is the idempotency key for the
+  // WORK, which the Visit upsert never was: a redelivery used to re-fetch the
+  // booking, re-fetch the customer and re-run the punch pipeline, all of which
+  // the upsert happily absorbed while doing every bit of it again.
+  const admission = await admitEvent({
+    eventId: envelope.event_id,
+    merchantId: envelope.merchant_id,
+    type: envelope.type,
+    bookingId: booking.id,
+  });
+  if (admission.kind === "duplicate") {
+    logger.info({ eventId: envelope.event_id }, "square webhook: duplicate event - no work done");
+    res.sendStatus(200);
+    return;
+  }
+  if (admission.kind === "ignored") {
+    res.sendStatus(200);
+    return;
+  }
+
   const conn = await prisma.squareConnection.findFirst({
     where: { squareMerchantId: envelope.merchant_id, revokedAt: null },
     // Deterministic pick if a legacy collision exists (the OAuth callback now
@@ -86,22 +106,39 @@ squareWebhookRouter.post("/", express.raw({ type: "*/*" }), async (req, res) => 
   });
   if (!conn) {
     logger.warn({ merchantId: envelope.merchant_id }, "square webhook for unknown/revoked merchant");
+    await settleEvent(admission.rowId, "IGNORED", { lastError: "unknown_merchant" });
     res.sendStatus(200); // ack: nothing to do for a merchant we don't track
     return;
   }
   const shop = await prisma.shop.findUnique({ where: { id: conn.shopId } });
   if (!shop) {
+    await settleEvent(admission.rowId, "IGNORED", { lastError: "shop_missing" });
     res.sendStatus(200);
     return;
   }
 
   try {
-    // Pass the webhook's booking through; ingest re-fetches the authoritative
-    // record (the webhook payload can be partial). Idempotent.
-    await ingestSquareBooking(shop, booking.id);
+    // Self-echo is decided inside processBookingEvent: a booking ChairBack
+    // created must reconcile its own outbound row, never import as a second
+    // Visit on a chair that is already booked.
+    const outcome = await processBookingEvent(shop, booking.id, booking.status);
+    await settleEvent(admission.rowId, "PROCESSED", { shopId: shop.id });
+    logger.info(
+      { shopId: shop.id, eventId: envelope.event_id, outcome },
+      "square webhook processed",
+    );
     res.sendStatus(200);
   } catch (err) {
+    // The ledger row is the retry queue now, so a 500 is no longer the only
+    // thing standing between a transient failure and a lost booking. Still
+    // returned, because Square retrying costs nothing and arrives sooner than
+    // the sweep - and the duplicate that follows a successful retry is now
+    // free.
+    await settleEvent(admission.rowId, "FAILED", {
+      shopId: shop.id,
+      lastError: err instanceof Error ? err.name : "unknown",
+    });
     logger.error({ err, shopId: shop.id, bookingId: booking.id }, "square webhook ingest failed");
-    res.sendStatus(500); // Square retries; idempotent ingest absorbs it
+    res.sendStatus(500);
   }
 });

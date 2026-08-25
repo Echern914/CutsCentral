@@ -573,6 +573,7 @@ model Shop {
   serviceGoals           ServiceGoal[]
   externalBlocks         ExternalBlock[]
   acuityOutboundBlocks   AcuityOutboundBlock[]
+  squareOutboundBookings SquareOutboundBooking[]
   notifyPrefs            BarberNotifyPref[]
   targetedSlots          TargetedSlot[]
   targetedSlotRules      TargetedSlotRule[]
@@ -1641,6 +1642,7 @@ model Staff {
 
   services          ServiceStaff[]
   outboundBlocks    AcuityOutboundBlock[]
+  squareOutbound    SquareOutboundBooking[]
   availabilityRules AvailabilityRule[]
   recurringBlocks   RecurringBlock[]
   exceptions        AvailabilityException[]
@@ -1805,6 +1807,7 @@ model Service {
   upgradeRulesTo  ServiceUpgradeRule[]       @relation("UpgradeDestination")
   upgradeRuleUses ServiceUpgradeRuleSource[] @relation("UpgradeSource")
   serviceGoals    ServiceGoal[]
+  squareOutbound  SquareOutboundBooking[]
   serviceGroup    ServiceGroup? @relation(fields: [serviceGroupId], references: [id], onDelete: SetNull)
 
   @@index([shopId, active])
@@ -2101,6 +2104,123 @@ model AcuityOutboundBlock {
   @@index([appointmentId])
 }
 
+// The lifecycle of ONE mirrored Square booking. The same six states as
+// AcuityOutboundBlock, for the same reasons - the hard-won one being UNKNOWN,
+// which exists so an ambiguous response is never compensated.
+enum SquareOutboundState {
+  PENDING
+  ACTIVE
+  UNKNOWN
+  FAILED
+  RELEASING
+  RELEASED
+}
+
+// MIRROR ONE CHAIRBACK APPOINTMENT AS A REAL SQUARE BOOKING.
+//
+// Square has no blocked-time concept - no BLOCKED status, no block entity, and
+// `customer_id` is not optional - so this cannot be Acuity's block. It is a
+// genuine Booking on the seller's calendar, which is why this row carries
+// three ids and a version where AcuityOutboundBlock carries one calendar.
+model SquareOutboundBooking {
+  id            String @id @default(cuid())
+  shopId        String
+  shop          Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  // Cascade for the same belt-and-braces reason as the Acuity row: a
+  // hard-deleted appointment must not leave a mirror row that blocks
+  // reconciliation forever.
+  appointmentId String
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  staffId       String
+  staff         Staff       @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  serviceId     String
+  service       Service     @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+
+  // Square's id for the booking we created. Null until ACTIVE.
+  squareBookingId      String?
+  // REQUIRED by Square for update and cancel, and it moves on every write, so
+  // it is refreshed from every response. A stale version is rejected, which is
+  // the optimistic-concurrency guard the reschedule path relies on.
+  squareBookingVersion Int?
+  // What Square says the booking IS. ACCEPTED means the time is genuinely
+  // held. PENDING means it is NOT - Square is waiting for a human to accept,
+  // the chair stays sellable, and calling that "protected" would be a lie the
+  // whole feature exists to avoid. Stored so the distinction survives into the
+  // coverage report rather than living in one branch of one function.
+  squareBookingStatus  String?
+
+  // SNAPSHOTS taken at write time, never joined. A later remap must not strand
+  // the cancel on the wrong team member, and Square needs the exact service
+  // variation VERSION the booking was created at.
+  squareLocationId              String
+  squareTeamMemberId            String
+  squareServiceVariationId      String
+  squareServiceVariationVersion String?
+  // The Square customer the booking is filed under. A Booking cannot exist
+  // without one - that requirement is the entire reason this is a Booking and
+  // not a block.
+  squareCustomerId              String?
+
+  // The mirrored span. Copied, not joined, exactly as the Acuity row: a
+  // reschedule that cannot be done in place creates a NEW row and releases
+  // this one, so the cancel always knows which physical time it owns.
+  startsAt DateTime
+  endsAt   DateTime
+
+  // Minted ONCE, inside the booking transaction, and never regenerated.
+  // Replaying it is how a lost create response is recovered without a second
+  // booking - Square's answer to the problem Acuity solved with an opaque note.
+  idempotencyKey String @unique
+
+  state     SquareOutboundState @default(PENDING)
+  attempts  Int      @default(0)
+  lastError String?  // sanitized: status + code only, never a payload echo
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // A given Square booking belongs to exactly one row (idempotent re-dispatch).
+  @@unique([shopId, squareBookingId])
+  // The reconciler's work queue: non-terminal rows per shop.
+  @@index([shopId, state])
+  @@index([appointmentId])
+}
+
+// THE WEBHOOK INBOX.
+//
+// Square retries, reorders and re-delivers. The existing handler leaned on the
+// Visit upsert being idempotent, which dedupes ROWS but not WORK: a redelivered
+// booking.updated still re-fetched the booking, re-fetched the customer,
+// re-ran the punch pipeline and could re-send a notification.
+//
+// The ledger makes `event_id` the primary key of the work itself. Verify the
+// HMAC, INSERT here, acknowledge, then process - so a duplicate collides on the
+// unique index and costs one failed insert instead of a full replay.
+//
+// Deliberately NOT a tenant table: the row must be persisted BEFORE the
+// merchant is resolved to a shop (and an event for an unknown merchant has no
+// shop at all), so it carries the same RLS posture as SquareConnection -
+// ENABLE, no FORCE, no policy.
+model SquareWebhookEvent {
+  id         String  @id @default(cuid())
+  eventId    String  @unique // Square's event_id - the idempotency key
+  merchantId String?
+  type       String?
+  // Resolved after insert; null for an unknown or revoked merchant.
+  shopId     String?
+  // Square ids only. There is deliberately no payload column: a stored envelope
+  // is customer PII sitting in a table nobody remembers to purge.
+  bookingId  String?
+  status     String  @default("RECEIVED") // RECEIVED | PROCESSED | IGNORED | FAILED
+  attempts   Int     @default(0)
+  lastError  String? // sanitized
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+
+  // The retry queue: anything not yet PROCESSED, oldest first.
+  @@index([status, receivedAt])
+  @@index([merchantId])
+}
+
 // A one-off override on a staff member's calendar. isBlock=true subtracts time
 // (vacation, a day off, a lunch break on a specific date); isBlock=false adds a
 // one-off open window (e.g. an extra Saturday). Stored as concrete UTC instants.
@@ -2376,6 +2496,7 @@ model Appointment {
   // Outbound Acuity mirror rows (engines/acuityMirror.ts). Plural because a
   // reschedule retires one row and creates another; at most ONE is live.
   outboundBlocks     AcuityOutboundBlock[]
+  squareOutbound     SquareOutboundBooking[]
   confirmationSentAt DateTime? // SMS confirmation stamp (at-most-once)
   reminderSentAt     DateTime? // SMS reminder stamp (at-most-once)
   // Email is a SEPARATE channel from SMS with its own idempotency: a customer can
