@@ -72,14 +72,23 @@ export type AppointmentCardStatus =
  * "Arrived" looks like, on the one surface where a barber compares them.
  *
  * `railCls` tints the sheet's thin status rail from the same source, so the
- * rail and the pill can never describe two different states.
+ * rail and the pill can never describe two different states. `ringCls` is the
+ * same signal as a ring around the sheet's avatar - a small deliberate accent
+ * rather than a block of color that would fight the client's name for the eye.
  */
+export interface StatusPill {
+  label: string;
+  cls: string;
+  railCls: string;
+  ringCls: string;
+}
+
 export function appointmentStatusPill(input: {
   status: AppointmentCardStatus;
   checkInStatus?: "en_route" | "arrived" | null;
   etaMinutes?: number | null;
   runningLate?: boolean;
-}): { label: string; cls: string; railCls: string } {
+}): StatusPill {
   // Check-in refines a BOOKED appointment into the live pill the barber
   // watches on the day (Booked -> En route -> Arrived).
   if (input.status === "upcoming" && input.checkInStatus === "arrived") {
@@ -87,6 +96,7 @@ export function appointmentStatusPill(input: {
       label: "Arrived",
       cls: "bg-emerald-soft/15 text-emerald-soft",
       railCls: "bg-emerald-soft/70",
+      ringCls: "ring-emerald-soft/50",
     };
   }
   if (input.status === "upcoming" && input.checkInStatus === "en_route") {
@@ -98,39 +108,47 @@ export function appointmentStatusPill(input: {
           : "En route",
       cls: "bg-amber-400/15 text-amber-300",
       railCls: "bg-amber-400/70",
+      ringCls: "ring-amber-400/50",
     };
   }
   return STATUS_PILL[input.status];
 }
 
-const STATUS_PILL: Record<
-  AppointmentCardStatus,
-  { label: string; cls: string; railCls: string }
-> = {
+const STATUS_PILL: Record<AppointmentCardStatus, StatusPill> = {
   pending: {
     label: "Requested",
     cls: "bg-amber-400/15 text-amber-300",
     railCls: "bg-amber-400/70",
+    ringCls: "ring-amber-400/50",
   },
-  upcoming: { label: "Booked", cls: "bg-gold/15 text-gold", railCls: "bg-gold/70" },
+  upcoming: {
+    label: "Booked",
+    cls: "bg-gold/15 text-gold",
+    railCls: "bg-gold/70",
+    ringCls: "ring-gold/55",
+  },
   completed: {
     label: "Completed",
     cls: "bg-emerald-soft/15 text-emerald-soft",
     railCls: "bg-emerald-soft/70",
+    ringCls: "ring-emerald-soft/50",
   },
   canceled: {
     label: "Canceled",
     cls: "bg-danger-soft/15 text-danger-soft",
     railCls: "bg-danger-soft/60",
+    ringCls: "ring-danger-soft/45",
   },
   no_show: {
     label: "No-show",
     cls: "bg-danger-soft/15 text-danger-soft",
     railCls: "bg-danger-soft/60",
+    ringCls: "ring-danger-soft/45",
   },
   blocked: {
     label: "Blocked",
     cls: "bg-charcoal-700 text-muted",
     railCls: "bg-charcoal-600",
+    ringCls: "ring-charcoal-600",
   },
 };

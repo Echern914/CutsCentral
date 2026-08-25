@@ -44,6 +44,57 @@ interface DetailContact {
   email: string | null;
 }
 
+/**
+ * MAY THIS SHOP TEXT THIS CLIENT — and if not, why not.
+ *
+ * The same two gates the nudge engine enforces (`engines/eligibility.ts` R5-R7),
+ * surfaced so the sheet can DISABLE its Text action with a true reason instead
+ * of offering a tap that would either do nothing or break TCPA. The two "no"s
+ * are genuinely different and the barber's next move differs:
+ *
+ *   opted_out  — they consented once and then texted STOP. Only the CLIENT can
+ *                undo that (START, or their rewards page); the dashboard may
+ *                not, so the sheet must not imply the barber can fix it.
+ *   no_consent — nobody ever captured an opt-in (every Acuity-synced client
+ *                starts here). That IS fixable, by asking them.
+ *
+ * `tel:` is unaffected — consent governs SMS, not a phone call.
+ */
+export type SmsReach = "ok" | "no_phone" | "no_consent" | "opted_out" | "no_client";
+
+interface DetailSms {
+  state: SmsReach;
+  /** When the opt-in was captured. Null unless `state === "ok"`. */
+  consentAt: string | null;
+}
+
+/** One line of the client's history with this shop. Never carries contact. */
+export interface DetailHistoryItem {
+  id: string;
+  source: "appointment" | "visit";
+  startsAt: string;
+  serviceName: string | null;
+  /** Same vocabulary as the sheet's own status: upcoming | completed | … */
+  status: string;
+  price: number | null;
+}
+
+export function smsReach(client: {
+  phone: string | null;
+  optedOut: boolean;
+  smsConsentAt: Date | null;
+} | null): DetailSms {
+  // A walk-in with no client row has no consent record to consult — and no
+  // number of ours to text either.
+  if (!client) return { state: "no_client", consentAt: null };
+  if (!client.phone) return { state: "no_phone", consentAt: null };
+  // optedOut is checked BEFORE consent: a client who consented and then texted
+  // STOP is opted out, and that is the more specific (and less fixable) truth.
+  if (client.optedOut) return { state: "opted_out", consentAt: null };
+  if (client.smsConsentAt === null) return { state: "no_consent", consentAt: null };
+  return { state: "ok", consentAt: client.smsConsentAt.toISOString() };
+}
+
 export interface AppointmentDetail {
   id: string;
   source: "appointment" | "visit";
@@ -72,6 +123,16 @@ export interface AppointmentDetail {
   notes: string | null;
   addOns: { id: string; name: string }[];
   contact: DetailContact;
+  /** Whether Text is a real action here, and why not when it isn't. */
+  sms: DetailSms;
+  /**
+   * The rest of this client's book with this shop — the 3 most recent past
+   * bookings and the 3 next ones, excluding this one. A barber deciding
+   * anything about a booking is usually asking "have they no-showed before?"
+   * or "are they already coming back Thursday?", and both answers used to mean
+   * leaving the sheet for the client page.
+   */
+  history: { previous: DetailHistoryItem[]; upcoming: DetailHistoryItem[] };
   payment: AppointmentPaymentSnapshot;
   /**
    * When the barber closed the chair moment (`Appointment.paidAt`). Null = the
@@ -193,6 +254,126 @@ async function externalSource(
   return { label: "your booking platform", manageUrl: null };
 }
 
+/** How many past and future bookings the sheet shows. Three is a glance. */
+const HISTORY_LIMIT = 3;
+
+/**
+ * THE REST OF THIS CLIENT'S BOOK — past and future, native and synced.
+ *
+ * Shop-scoped and client-scoped like everything else here, and it carries no
+ * contact detail at all: a history line is a date, a service and a status.
+ *
+ * 🔴 `appointment: null` ON THE VISIT SIDE IS THE DEDUPE, and it is the same
+ * predicate the agenda uses. A native booking that Acuity later took over
+ * exists as BOTH an Appointment and a Visit; the Appointment row is the one
+ * that represents it, so only visits with no appointment behind them are
+ * added. Filtering BOTH sides looks symmetrical and makes a promoted booking
+ * vanish from its own client's history — which is how this was first written,
+ * and what the dedupe test now pins down.
+ */
+async function clientHistory(
+  shopId: string,
+  clientId: string | null,
+  exclude: { id: string; source: "appointment" | "visit" },
+  now: Date,
+): Promise<{ previous: DetailHistoryItem[]; upcoming: DetailHistoryItem[] }> {
+  if (!clientId) return { previous: [], upcoming: [] };
+
+  const apptSelect = {
+    id: true,
+    status: true,
+    startsAt: true,
+    priceAtBooking: true,
+    service: { select: { name: true } },
+  };
+  const visitSelect = {
+    id: true,
+    status: true,
+    scheduledAt: true,
+    price: true,
+    serviceName: true,
+  };
+  type ApptRow = {
+    id: string;
+    status: string;
+    startsAt: Date;
+    priceAtBooking: Prisma.Decimal | null;
+    service: { name: string } | null;
+  };
+  type VisitRow = {
+    id: string;
+    status: string;
+    scheduledAt: Date;
+    price: Prisma.Decimal | null;
+    serviceName: string | null;
+  };
+
+  const db = forShop(shopId);
+  const apptWhere = { shopId, clientId, id: { not: exclude.id } };
+  const visitWhere = { shopId, clientId, appointment: null, id: { not: exclude.id } };
+  // Only a booking that is still ON the schedule counts as upcoming; a future
+  // row that was canceled is history, and belongs in neither list.
+  // `as const` because Prisma types these as enum unions, not string — vitest
+  // transpiles without checking, so a bare string[] here compiles locally and
+  // fails the Railway build.
+  const APPT_LIVE = ["BOOKED", "PENDING"] as const;
+  const VISIT_LIVE = ["SCHEDULED", "RESCHEDULED"] as const;
+
+  const [pastAppts, pastVisits, nextAppts, nextVisits] = (await Promise.all([
+    db.appointment.findMany({
+      where: { ...apptWhere, startsAt: { lt: now } },
+      select: apptSelect,
+      orderBy: { startsAt: "desc" },
+      take: HISTORY_LIMIT,
+    }),
+    db.visit.findMany({
+      where: { ...visitWhere, scheduledAt: { lt: now } },
+      select: visitSelect,
+      orderBy: { scheduledAt: "desc" },
+      take: HISTORY_LIMIT,
+    }),
+    db.appointment.findMany({
+      where: { ...apptWhere, startsAt: { gte: now }, status: { in: [...APPT_LIVE] } },
+      select: apptSelect,
+      orderBy: { startsAt: "asc" },
+      take: HISTORY_LIMIT,
+    }),
+    db.visit.findMany({
+      where: { ...visitWhere, scheduledAt: { gte: now }, status: { in: [...VISIT_LIVE] } },
+      select: visitSelect,
+      orderBy: { scheduledAt: "asc" },
+      take: HISTORY_LIMIT,
+    }),
+  ])) as unknown as [ApptRow[], VisitRow[], ApptRow[], VisitRow[]];
+
+  const fromAppt = (a: ApptRow): DetailHistoryItem => ({
+    id: a.id,
+    source: "appointment",
+    startsAt: a.startsAt.toISOString(),
+    serviceName: a.service?.name ?? null,
+    status: APPT_STATUS[a.status] ?? "upcoming",
+    price: a.priceAtBooking == null ? null : Number(a.priceAtBooking),
+  });
+  const fromVisit = (v: VisitRow): DetailHistoryItem => ({
+    id: v.id,
+    source: "visit",
+    startsAt: v.scheduledAt.toISOString(),
+    serviceName: v.serviceName,
+    status: VISIT_STATUS[v.status] ?? "upcoming",
+    price: v.price == null ? null : Number(v.price),
+  });
+
+  // Each side was taken separately, so the merged list is re-sorted and
+  // re-trimmed: three natives and three synced must still yield three lines.
+  const previous = [...pastAppts.map(fromAppt), ...pastVisits.map(fromVisit)]
+    .sort((a, b) => b.startsAt.localeCompare(a.startsAt))
+    .slice(0, HISTORY_LIMIT);
+  const upcoming = [...nextAppts.map(fromAppt), ...nextVisits.map(fromVisit)]
+    .sort((a, b) => a.startsAt.localeCompare(b.startsAt))
+    .slice(0, HISTORY_LIMIT);
+  return { previous, upcoming };
+}
+
 export function registerAppointmentDetail(router: Router): void {
   router.get("/appointments/:id/detail", async (req, res) => {
     const shopId = req.shop!.id;
@@ -226,7 +407,14 @@ export function registerAppointmentDetail(router: Router): void {
         paidAt: true,
         service: { select: { name: true } },
         staff: { select: { name: true } },
-        client: { select: { phone: true, email: true } },
+        client: {
+          select: {
+            phone: true,
+            email: true,
+            optedOut: true,
+            smsConsentAt: true,
+          },
+        },
       },
     })) as unknown as {
       id: string;
@@ -248,7 +436,12 @@ export function registerAppointmentDetail(router: Router): void {
       paidAt: Date | null;
       service: { name: string } | null;
       staff: { name: string } | null;
-      client: { phone: string | null; email: string | null } | null;
+      client: {
+        phone: string | null;
+        email: string | null;
+        optedOut: boolean;
+        smsConsentAt: Date | null;
+      } | null;
     } | null;
 
     if (!appt) {
@@ -277,6 +470,12 @@ export function registerAppointmentDetail(router: Router): void {
     const source = external
       ? await externalSource(shopId)
       : { label: "ChairBack", manageUrl: null };
+    const history = await clientHistory(
+      shopId,
+      appt.clientId,
+      { id: appt.id, source: "appointment" },
+      new Date(),
+    );
 
     const detail: AppointmentDetail = {
       id: appt.id,
@@ -302,6 +501,8 @@ export function registerAppointmentDetail(router: Router): void {
         clientPhone: appt.client?.phone,
         clientEmail: appt.client?.email,
       }),
+      sms: smsReach(appt.client ?? null),
+      history,
       payment: appointmentPaymentSnapshot({
         price,
         payment,
@@ -341,7 +542,14 @@ export function registerAppointmentDetail(router: Router): void {
         serviceName: true,
         clientId: true,
         client: {
-          select: { firstName: true, lastName: true, phone: true, email: true },
+          select: {
+            firstName: true,
+            lastName: true,
+            phone: true,
+            email: true,
+            optedOut: true,
+            smsConsentAt: true,
+          },
         },
       },
     })) as unknown as {
@@ -357,6 +565,8 @@ export function registerAppointmentDetail(router: Router): void {
         lastName: string | null;
         phone: string | null;
         email: string | null;
+        optedOut: boolean;
+        smsConsentAt: Date | null;
       } | null;
     } | null;
 
@@ -367,6 +577,12 @@ export function registerAppointmentDetail(router: Router): void {
 
     const price = visit.price == null ? null : Number(visit.price);
     const source = await externalSource(shopId);
+    const history = await clientHistory(
+      shopId,
+      visit.clientId,
+      { id: visit.id, source: "visit" },
+      new Date(),
+    );
     const detail: AppointmentDetail = {
       id: visit.id,
       source: "visit",
@@ -393,6 +609,12 @@ export function registerAppointmentDetail(router: Router): void {
         clientPhone: visit.client?.phone,
         clientEmail: visit.client?.email,
       }),
+      // A synced client's consent is a REAL ChairBack fact even though the
+      // booking isn't ours: the ingest never captures an opt-in, so this is
+      // almost always `no_consent` — which is exactly why the sheet must not
+      // offer Text as though it were live.
+      sms: smsReach(visit.client ?? null),
+      history,
       // `external: true` — ChairBack has no payment record for a booking it did
       // not take money for, and will not invent one.
       payment: appointmentPaymentSnapshot({

@@ -884,6 +884,29 @@ export interface DetailContact {
 }
 
 /**
+ * MAY this shop TEXT this client - the same TCPA gate the nudge engine
+ * enforces, surfaced so the sheet can disable Text with a true reason rather
+ * than offer a tap that would either do nothing or break the rule.
+ * `opted_out` and `no_consent` are genuinely different: only the CLIENT can
+ * undo a STOP, while a missing opt-in is something the barber can go and ask
+ * for.
+ */
+export interface DetailSms {
+  state: "ok" | "no_phone" | "no_consent" | "opted_out" | "no_client";
+  consentAt: string | null;
+}
+
+/** One line of the client's history. Deliberately carries no contact detail. */
+export interface DetailHistoryItem {
+  id: string;
+  source: "appointment" | "visit";
+  startsAt: string;
+  serviceName: string | null;
+  status: string;
+  price: number | null;
+}
+
+/**
  * ONLY what ChairBack can verify about this booking's money. `external` means
  * another system took it (or didn't) and we refuse to guess - see the API's
  * engines/appointmentPayment.ts for the whole honesty rule.
@@ -924,6 +947,10 @@ export interface AppointmentDetail {
   notes: string | null;
   addOns: { id: string; name: string }[];
   contact: DetailContact;
+  /** Whether Text is a real action here, and why not when it isn't. */
+  sms: DetailSms;
+  /** The client's other bookings with this shop - 3 back, 3 forward. */
+  history: { previous: DetailHistoryItem[]; upcoming: DetailHistoryItem[] };
   payment: DetailPayment;
   /**
    * When the barber closed the chair moment. Null = never checked out, which
