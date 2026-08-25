@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
 import {
@@ -87,7 +88,8 @@ async function availableSlug(name: string): Promise<string> {
     const candidate = `${base}-${n}`;
     if (!taken.has(candidate)) return candidate;
   }
-  // 🔴 LOWERCASE. randomToken() is base64url, so it can contain UPPERCASE - and
+  // 🔴 The slug minted here MUST be legal and lowercase. This branch used to
+  // call randomToken(), which is base64url and can contain UPPERCASE - and
   // every public resolver looks the slug up as `req.params.slug.toLowerCase()`
   // (routes/shops.ts x4, routes/booking.public.ts). A slug carrying a capital
   // therefore matches NOTHING: the mini-site, booking page, lead form and
@@ -99,7 +101,37 @@ async function availableSlug(name: string): Promise<string> {
   // - but the API suite reaches it routinely (it was the real cause of 16
   // failures across three unrelated files), and a popular real name would get
   // there eventually. See routes/shopSlugFallback.test.ts.
-  return `${base}-${randomToken(4).toLowerCase()}`;
+  return `${base}-${slugToken(6)}`;
+}
+
+/**
+ * The random suffix for that fallback slug: strictly [a-z0-9], by construction.
+ *
+ * Lowercasing randomToken() is NOT enough. It is base64url, and that alphabet
+ * also carries "-" and "_". "_" is illegal in a slug outright, and a "-" that
+ * happens to land last fails SLUG_REGEX's final-character rule - so either one
+ * mints exactly the unreachable page this fix exists to prevent, just less
+ * often than uppercase did. Drawing from base36 makes an illegal slug
+ * unrepresentable instead of unlikely.
+ *
+ * Rejecting bytes at or above 252 (36 x 7) keeps every character equally
+ * likely; a plain modulo would quietly favour the first four letters.
+ *
+ * Exported ONLY so routes/shopSlugFallback.test.ts can assert the property
+ * directly. The integration test mints one slug per run, so it can only catch
+ * an illegal character when chance hands it one.
+ */
+export function slugToken(len: number): string {
+  const ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz";
+  let out = "";
+  while (out.length < len) {
+    for (const b of randomBytes(len * 2)) {
+      if (b >= 252) continue;
+      out += ALPHABET[b % ALPHABET.length];
+      if (out.length === len) break;
+    }
+  }
+  return out;
 }
 
 // http(s) only: these URLs are rendered as <a href>/<img src> on the PUBLIC
