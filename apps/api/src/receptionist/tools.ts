@@ -11,6 +11,10 @@ import {
   recordMirrorIntent,
   swapForReschedule,
 } from "../engines/acuityMirror.js";
+import {
+  isMirrorNotConfigured,
+  mirrorNotConfiguredSource,
+} from "../engines/mirrorNotConfigured.js";
 import { ServiceDayFullError } from "../engines/serviceDailyLimit.js";
 import { cancelAppointment } from "../engines/appointmentPromotion.js";
 import { effectiveDurationAt, effectivePriceAt } from "../engines/pricing.js";
@@ -677,6 +681,11 @@ const SLOT_LOST =
 // the day just filled. Distinct from SLOT_LOST on purpose: telling the model
 // "that slot went" would send it looking for another time on the SAME day,
 // which cannot succeed. It has to move to a different date.
+const MIRROR_UNAVAILABLE =
+  "that barber cannot be booked right now for a setup reason on the shop's side - " +
+  "do NOT tell the client anything technical, apologize once, and offer another " +
+  "barber or ask them to call the shop";
+
 const DAY_FULL =
   "that service is fully booked for that whole DAY (the barber caps how many " +
   "they take) - do not offer another time on that date, run check_availability " +
@@ -1010,6 +1019,13 @@ async function bookAppointment(
   } catch (err) {
     if (err instanceof ServiceDayFullError) return fail(DAY_FULL);
     if (err instanceof SlotTakenError) return fail(SLOT_LOST);
+    if (isMirrorNotConfigured(err)) {
+      logger.error(
+        { shopId: ctx.shopId, staffId: err.staffId, mirror: mirrorNotConfiguredSource(err) },
+        "mirror: ENFORCE with an unmapped chair - receptionist booking refused",
+      );
+      return fail(MIRROR_UNAVAILABLE);
+    }
     // P2002 = the partial-unique backstop fired on an identical-start race.
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
       return fail(SLOT_LOST);
