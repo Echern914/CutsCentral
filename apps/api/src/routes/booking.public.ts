@@ -268,6 +268,12 @@ bookingPublicRouter.post(
         // entry is still on the waitlist. Never an unpaid appointment.
         res.status(409).json({ error: "deposit_required" });
         return;
+      case "unavailable_external":
+        // Enforcing a mirror that cannot protect this chair. The same code the
+        // booking page gives, so the customer sees one consistent answer
+        // rather than a 500 from one entry point and a refusal from another.
+        res.status(409).json({ error: "slot_unavailable_external" });
+        return;
     }
   },
 );

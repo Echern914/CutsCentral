@@ -9,7 +9,11 @@ import {
   recordWaitlistEventBestEffort,
   SYSTEM_ACTOR,
 } from "./waitlistAudit.js";
-import { dispatchAfterCommit, recordMirrorIntent } from "./acuityMirror.js";
+import {
+  dispatchAfterCommit,
+  MirrorNotConfiguredError,
+  recordMirrorIntent,
+} from "./acuityMirror.js";
 import {
   lockStaffAndAssertSlotFree,
   SlotTakenError,
@@ -648,7 +652,14 @@ export type ClaimResult =
    * appointment that normally costs money, so the claim refuses and the
    * offer is RELEASED. The entry stays on the waitlist.
    */
-  | { outcome: "deposit_required" };
+  | { outcome: "deposit_required" }
+  /**
+   * The shop is ENFORCING an outbound mirror and the chair cannot be
+   * protected, so redeeming would confirm a slot Acuity still shows as free.
+   * The offer is left alone: this is a shop-configuration problem, and burning
+   * the customer's hold over it would be unfair to them.
+   */
+  | { outcome: "unavailable_external" };
 
 /**
  * Redeem a claim token: revalidate and book ATOMICALLY.
@@ -936,6 +947,13 @@ export async function claimOffer(params: {
     return claimResult;
   } catch (err) {
     if (err instanceof ServiceDayFullError) return { outcome: "day_full" };
+    if (err instanceof MirrorNotConfiguredError) {
+      logger.error(
+        { staffId: err.staffId },
+        "acuity mirror: ENFORCE with an unmapped chair - waitlist claim refused",
+      );
+      return { outcome: "unavailable_external" };
+    }
     if (err instanceof SlotTakenError) {
       // The physical time is gone (admin override, block, or a ghost). The
       // hold can never be redeemed now - release it so the row's state says
