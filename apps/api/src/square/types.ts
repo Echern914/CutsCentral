@@ -93,7 +93,6 @@ export const squareWebhookEnvelopeSchema = z
   })
   .passthrough();
 
-export type SquareWebhookEnvelope = z.infer<typeof squareWebhookEnvelopeSchema>;
 
 //  OUTBOUND SETUP (S1) - all read-only responses
 //
@@ -248,7 +247,3 @@ export const squareAvailabilitySchema = z
 
 export type SquareAvailability = z.infer<typeof squareAvailabilitySchema>;
 
-/** A Square customer - a Booking cannot exist without one. */
-export const squareCustomerCreateResultSchema = z
-  .object({ customer: squareCustomerSchema.nullish() })
-  .passthrough();

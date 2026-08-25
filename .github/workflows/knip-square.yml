@@ -1,0 +1,60 @@
+name: Unused Square exports
+
+# WHY THIS EXISTS.
+#
+# `isSquareSellerNote` was written, unit-tested, exported - and called from
+# nowhere in production. It was also exactly the helper needed to stop the
+# outbound mirror importing its own booking as a duplicate appointment. A manual
+# sweep found it. A manual sweep is not a control.
+#
+# This is the repo's FIRST pull-request check that is not a Vercel build. It is
+# deliberately narrow: only the Square path, and only the one failure mode that
+# has actually bitten - an export with no call site anywhere, not even inside its
+# own file. Exports used only within their own module are REPORTED, never
+# failed, so the number is visible without turning CI red on day one.
+
+on:
+  pull_request:
+    paths:
+      - "apps/api/src/square/**"
+      - "apps/api/src/engines/square*"
+      - "apps/api/src/engines/mirrorNotConfigured.ts"
+      - "apps/api/src/routes/square.oauth.ts"
+      - "apps/api/src/routes/webhooks.square.ts"
+      - "knip.json"
+      - "scripts/knip-square.mjs"
+      - ".github/workflows/knip-square.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: knip-square-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  knip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      # knip resolves imports through the TypeScript project, so the workspace
+      # has to be installed - but nothing is built and nothing is run.
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # The Prisma client is imported across the API surface; without it knip
+      # cannot resolve @chairback/db and would report noise as findings.
+      - name: Generate Prisma client
+        run: pnpm --filter @chairback/db exec prisma generate
+
+      - name: Check for unreferenced Square exports
+        run: node scripts/knip-square.mjs

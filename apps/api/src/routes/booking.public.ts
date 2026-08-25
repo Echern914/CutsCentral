@@ -54,6 +54,10 @@ import {
 import { sendPushToUser } from "../messaging/push.js";
 import { cancelAppointment } from "../engines/appointmentPromotion.js";
 import { claimOffer } from "../engines/waitlistOffer.js";
+import {
+  isMirrorNotConfigured,
+  mirrorNotConfiguredSource,
+} from "../engines/mirrorNotConfigured.js";
 import { sha256Hex } from "../engines/waitlistJoin.js";
 import {
   rewardsLimiter,
@@ -272,6 +276,12 @@ bookingPublicRouter.post(
         // The shop turned deposits on mid-hold. The offer was RELEASED; the
         // entry is still on the waitlist. Never an unpaid appointment.
         res.status(409).json({ error: "deposit_required" });
+        return;
+      case "unavailable_external":
+        // Enforcing a mirror that cannot protect this chair. Same code the
+        // booking page gives, so the customer sees one consistent answer
+        // rather than a 500 from one entry point and a refusal from another.
+        res.status(409).json({ error: "slot_unavailable_external" });
         return;
     }
   },
@@ -1728,10 +1738,14 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {
     // every bookable chair is mapped); it covers the window where a barber is
     // added or a calendar is deleted afterwards. Generic code to the customer,
     // real cause in the log.
-    if (err instanceof MirrorNotConfiguredError) {
+    if (isMirrorNotConfigured(err)) {
+      // Square as well as Acuity. checkSquareBookingAllowed pre-checks the
+      // Square side before the transaction opens, but a barber added between
+      // that check and this write lands HERE - and without this branch it was
+      // a 500 rather than a refusal.
       logger.error(
-        { shopId: shop.id, staffId: err.staffId },
-        "acuity mirror: ENFORCE with an unmapped chair - booking refused",
+        { shopId: shop.id, staffId: err.staffId, mirror: mirrorNotConfiguredSource(err) },
+        "mirror: ENFORCE with an unmapped chair - booking refused",
       );
       res.status(409).json({ error: "slot_unavailable_external" });
       return;

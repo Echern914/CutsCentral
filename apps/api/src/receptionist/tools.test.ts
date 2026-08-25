@@ -409,3 +409,79 @@ describe("expired holds release + sweep", () => {
     expect(untouched!.status).toBe("PENDING");
   });
 });
+
+describe("book_appointment when the shop is ENFORCING an unmapped chair", () => {
+  /**
+   * The receptionist is mid-conversation over SMS. An uncaught throw here is
+   * not a 500 a barber can read - it is a texter who gets silence from a shop
+   * that looks like it is ignoring them.
+   *
+   * The staff member in this fixture has no acuityCalendarId, so ENFORCE
+   * cannot protect the chair. Before this was handled, recordMirrorIntent
+   * threw straight out of bookAppointment.
+   *
+   * 🔴 REAL time, not the fixture's June 2026. The mirror decides whether to
+   * record an intent with `new Date()`, not with the caller's injected now, so
+   * a fixture-dated slot is simply in the past and never mirrors at all - the
+   * test would pass while exercising nothing.
+   */
+  const realNow = new Date();
+  const future = new Date(realNow.getTime() + 7 * 24 * 60 * 60_000);
+  future.setUTCHours(15, 0, 0, 0);
+  const laterFuture = new Date(future.getTime() + 60 * 60_000);
+
+  function liveCtx(): ToolContext {
+    return {
+      shopId,
+      conversationId: `convo-enforce-${clientId}`,
+      phone: "+15551230001",
+      clientId,
+      now: realNow,
+    };
+  }
+
+  beforeAll(async () => {
+    await prisma.acuityConnection.create({
+      data: {
+        shopId,
+        acuityAccountId: `ACC_${randomToken(6)}`,
+        accessToken: "enc",
+        refreshToken: "enc",
+      },
+    });
+    await prisma.shop.update({
+      where: { id: shopId },
+      data: { acuityOutboundMode: "ENFORCE" },
+    });
+  });
+
+  afterAll(async () => {
+    await prisma.shop.update({ where: { id: shopId }, data: { acuityOutboundMode: "OFF" } });
+    await prisma.acuityConnection.deleteMany({ where: { shopId } });
+    await prisma.appointment.deleteMany({ where: { shopId, startsAt: { gte: realNow } } });
+  });
+
+  it("fails gracefully with guidance instead of throwing", async () => {
+    const exec = makeToolExecutor(liveCtx());
+    const res = await exec("book_appointment", {
+      slot_id: encodeSlotId(staffId, serviceId, future),
+    });
+
+    expect(res.isError).toBe(true);
+    // Guidance for the model, deliberately non-technical: the client must
+    // never be told about calendar mappings.
+    expect(res.result).toMatch(/setup reason/i);
+    expect(res.result).not.toMatch(/acuity|square|mirror|calendar/i);
+  });
+
+  it("books nothing at all when it refuses", async () => {
+    const exec = makeToolExecutor(liveCtx());
+    await exec("book_appointment", {
+      slot_id: encodeSlotId(staffId, serviceId, laterFuture),
+    });
+    const booked = await prisma.appointment.findFirst({
+      where: { shopId, startsAt: laterFuture, holdExpiresAt: null },
+    });
+    expect(booked).toBeNull();
+  });
+});

@@ -326,11 +326,31 @@ async function ensureCustomerFor(
     select: { clientId: true, firstName: true, lastName: true },
   });
   const client = await getSquareClientForShop(shopId);
-  // Name only. The appointment also carries a phone and an email, and neither
-  // is sent: this mirror exists to hold a slot, not to replicate a shop's
-  // contact book into a third party. The reference id is ChairBack's own, so a
-  // repeat customer resolves to one Square record without us pushing anything
-  // that identifies them beyond what the barber already sees on the calendar.
+  //  🔴 NAME ONLY. DO NOT ADD emailAddress OR phoneNumber HERE.
+  //
+  // This started as a privacy decision - the mirror holds a slot, it does not
+  // replicate a shop's contact book into a third party - and it has since
+  // become load-bearing for something else.
+  //
+  // C14: whether Square emails or texts the CUSTOMER about a booking is a
+  // per-seller dashboard toggle (Appointments > Settings > Communications)
+  // that the API cannot read, cannot verify, and that applies to bookings an
+  // app creates exactly as it does to ones a customer makes. We therefore
+  // cannot know whether a given seller will notify. What we CAN control is
+  // whether there is anywhere to notify.
+  //
+  // A mirrored booking is a hold, not an appointment the customer made in
+  // Square. Attaching their email or phone here would let a seller's settings
+  // send a stranger "your appointment is confirmed" for something they never
+  // booked - and, if that message carries Square's own cancel link, let them
+  // cancel a chair ChairBack believes is protected.
+  //
+  // squareMirrorCustomer.test.ts asserts this. See
+  // docs/square-c14-customer-notification.md.
+  //
+  // The reference id is ChairBack's own, so a repeat customer resolves to one
+  // Square record without us pushing anything that identifies them beyond what
+  // the barber already sees on the calendar.
   const reference = `chairback:${shopId}:${appt?.clientId ?? appointmentId}`;
   const customer = await client.ensureCustomer({
     referenceId: reference,
