@@ -4,6 +4,7 @@ import { timingSafeEqual } from "node:crypto";
 import { SESSION_COOKIE_NAME } from "@chairback/config";
 import { PgRateStore } from "./pgRateStore.js";
 import { logger } from "../logger.js";
+import { redactUrl, requestUrl } from "../logRedaction.js";
 
 /**
  * Reusable rate limiters. Default key is the client IP; some limiters key on the
@@ -32,7 +33,11 @@ const TEST = process.env.VITEST === "true";
 export function rateLimitedHandler(name: string) {
   return (req: Request, res: Response): void => {
     logger.warn(
-      { limiter: name, path: req.path, ip: req.ip },
+      // 🔴 REDACTED. rewardsLimiter, bookingWriteLimiter and
+      // waitlistLimiter all guard routes whose PATH IS THE CREDENTIAL,
+      // and a 429 warning is exactly the sort of line that gets
+      // forwarded out of the log stream to an alerts channel.
+      { limiter: name, path: redactUrl(requestUrl(req)), ip: req.ip },
       "rate limit exceeded",
     );
     res.status(429).json({ error: "rate_limited" });

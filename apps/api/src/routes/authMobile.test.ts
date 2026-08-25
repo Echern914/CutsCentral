@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
-import { redactedReqSerializer } from "../app.js";
+import { redactedReqSerializer } from "../logRedaction.js";
 
 /**
  * The browser-to-app handoff that ends "Join your shop".

@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { apiEnv } from "@chairback/config";
 import { logger } from "../logger.js";
+import { redactUrl, requestUrl } from "../logRedaction.js";
 
 /**
  * Optional IP allowlist for the whole operator surface (/admin token routes +
@@ -53,6 +54,9 @@ export function requireAdminIp(
   }
   // Existence-hiding 404 (same shape as the non-admin response), and log the
   // blocked IP so the operator can add it to the allowlist if it's their own.
-  logger.warn({ blockedIp: clientIp, path: req.path }, "admin IP not allowlisted");
+  logger.warn(
+    { blockedIp: clientIp, path: redactUrl(requestUrl(req)) },
+    "admin IP not allowlisted",
+  );
   res.status(404).json({ error: "not_found" });
 }
