@@ -386,7 +386,29 @@ export async function swapForReschedule(
   return recordMirrorIntent(tx, input);
 }
 
-/** After a reschedule commits: place the new block, then drop the old ones. */
+/**
+ * After a reschedule commits: place the new block, and ONLY THEN drop the old.
+ *
+ * The old block is released strictly on confirmation. Releasing it any earlier
+ * is the one move that can actively cause the bug this engine exists to
+ * prevent: the customer's old time goes back on sale in Acuity while the new
+ * time was never blocked, so the barber is exposed at BOTH ends of the move.
+ *
+ *   active   the replacement is confirmed live -> release the old block.
+ *   failed   the replacement definitively did not happen -> the old block is
+ *            still live in Acuity, so restore it to ACTIVE. That is simply
+ *            the truth about the world, and it keeps the old time held. The
+ *            appointment moved in ChairBack and is now over-blocked in Acuity
+ *            until an operator or a retry fixes it - over-blocking is the safe
+ *            direction, double-booking is not.
+ *   unknown  we cannot tell whether the replacement exists. Leave the old row
+ *            RELEASING (it stays blocked) and let the reconciler resolve the
+ *            replacement first; it will not release a row whose replacement is
+ *            still in flight.
+ *   skipped  nothing was mirrored (OFF/OBSERVE, or nothing to mirror). The
+ *            appointment genuinely moved, so the old time should free up -
+ *            release is never gated on the mode.
+ */
 export async function completeReschedule(
   shopId: string,
   appointmentId: string,
@@ -397,8 +419,50 @@ export async function completeReschedule(
     where: { shopId, appointmentId, state: "RELEASING" },
     select: { id: true },
   });
+  if (stale.length === 0) return outcome;
+
+  if (outcome === "unknown") {
+    logTransition(
+      "reschedule replacement UNKNOWN - old block RETAINED until reconciled",
+      { shopId, appointmentId, outboxId: newOutboxId },
+      "warn",
+    );
+    return outcome;
+  }
+
+  if (outcome === "failed") {
+    // The replacement is terminal-failed, so it no longer occupies the partial
+    // unique (PENDING/ACTIVE/UNKNOWN) and the old rows can legitimately go back
+    // to ACTIVE - which is what they still are on Acuity's side.
+    for (const row of stale) await restoreReleasingRow(row.id);
+    logTransition(
+      "reschedule replacement FAILED - old block RETAINED (still live in Acuity)",
+      { shopId, appointmentId, outboxId: newOutboxId },
+      "error",
+    );
+    return outcome;
+  }
+
   for (const s of stale) await releaseRow(s.id);
   return outcome;
+}
+
+/**
+ * Put a RELEASING row back to the state it never actually left. Used when a
+ * reschedule's replacement failed: the block is still on the barber's Acuity
+ * calendar, so ACTIVE is the honest record. Rows that were never confirmed
+ * (no acuityBlockId) go back to PENDING for a clean retry instead.
+ */
+async function restoreReleasingRow(id: string): Promise<void> {
+  const row = await prisma.acuityOutboundBlock.findUnique({
+    where: { id },
+    select: { acuityBlockId: true },
+  });
+  if (!row) return;
+  await prisma.acuityOutboundBlock.updateMany({
+    where: { id, state: "RELEASING" },
+    data: { state: row.acuityBlockId ? "ACTIVE" : "PENDING" },
+  });
 }
 
 /**
@@ -430,6 +494,25 @@ export async function reconcileShop(shopId: string, now = new Date()): Promise<{
 
   for (const row of rows) {
     if (row.state === "RELEASING") {
+      // A RELEASING row is the OLD half of a reschedule. Releasing it while
+      // its replacement is still in flight would free the customer's old time
+      // in Acuity with nothing holding the new one - the exact exposure
+      // completeReschedule refuses to create. Resolve the replacement first.
+      const replacement = await prisma.acuityOutboundBlock.findFirst({
+        where: {
+          shopId,
+          appointmentId: row.appointmentId,
+          id: { not: row.id },
+          state: { in: ["PENDING", "UNKNOWN", "FAILED"] },
+        },
+        select: { state: true },
+      });
+      if (replacement && replacement.state !== "FAILED") continue; // still in flight
+      if (replacement?.state === "FAILED") {
+        // The move never landed on Acuity's side; the old block is still live.
+        await restoreReleasingRow(row.id);
+        continue;
+      }
       await releaseRow(row.id);
       released++;
       continue;

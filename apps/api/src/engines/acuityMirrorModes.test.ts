@@ -3,10 +3,14 @@ import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import {
   buildObserveReport,
+  completeReschedule,
   dispatchAfterCommit,
+  reconcileShop,
   recordMirrorIntent,
   staffMirrorBlocked,
+  swapForReschedule,
 } from "./acuityMirror.js";
+import { AcuityError } from "../acuity/client.js";
 
 /**
  * MODE BEHAVIOUR AND OPERATOR SAFETY.
@@ -303,5 +307,99 @@ describe("what gets mirrored", () => {
     );
     expect(id).toBeNull();
     expect(acuityMock.createBlock).not.toHaveBeenCalled();
+  });
+});
+
+describe("reschedule NEVER releases the old block before the new one is live", () => {
+  async function stageSwap() {
+    await setMode("ENFORCE");
+    const a = await makeAppt(mapped);
+    // Old block, live on Acuity.
+    acuityMock.createBlock.mockResolvedValueOnce({ id: "blk_old" });
+    const oldId = await intent(a.id, mapped);
+    await dispatchAfterCommit(oldId, { shopId, appointmentId: a.id, via: "t" });
+    expect(
+      await prisma.acuityOutboundBlock.count({ where: { shopId, state: "ACTIVE" } }),
+    ).toBe(1);
+    acuityMock.createBlock.mockReset();
+    acuityMock.deleteBlock.mockReset();
+    // Now move it: swap retires the old row and records the replacement.
+    const newStart = new Date(FUTURE.getTime() + 60 * 60_000);
+    const newEnd = new Date(newStart.getTime() + 20 * 60_000);
+    const newId = await prisma.$transaction((tx) =>
+      swapForReschedule(tx, {
+        shopId,
+        appointmentId: a.id,
+        staffId: mapped,
+        startsAt: newStart,
+        endsAt: newEnd,
+        occupancy: {
+          status: "BOOKED",
+          startsAt: newStart,
+          endsAt: newEnd,
+          holdExpiresAt: null,
+          visitId: null,
+        },
+      }),
+    );
+    return { apptId: a.id, newId };
+  }
+
+  it("new block ACTIVE -> the old one is released", async () => {
+    const { apptId, newId } = await stageSwap();
+    acuityMock.createBlock.mockResolvedValueOnce({ id: "blk_new" });
+    acuityMock.deleteBlock.mockResolvedValueOnce(undefined);
+    expect(await completeReschedule(shopId, apptId, newId)).toBe("active");
+    expect(acuityMock.deleteBlock).toHaveBeenCalledWith("blk_old");
+    const states = await prisma.acuityOutboundBlock.findMany({
+      where: { shopId },
+      select: { state: true, acuityBlockId: true },
+    });
+    expect(states.find((s) => s.acuityBlockId === "blk_new")!.state).toBe("ACTIVE");
+    expect(states.find((s) => s.acuityBlockId === "blk_old")!.state).toBe("RELEASED");
+  });
+
+  it("create FAILS -> the old block is RETAINED, never deleted", async () => {
+    const { apptId, newId } = await stageSwap();
+    // 422 = a definitive rejection, so the replacement is terminal-failed.
+    acuityMock.createBlock.mockRejectedValueOnce(new AcuityError(422, "nope"));
+    expect(await completeReschedule(shopId, apptId, newId)).toBe("failed");
+    // THE POINT: the old block was never deleted from Acuity.
+    expect(acuityMock.deleteBlock).not.toHaveBeenCalled();
+    const old = await prisma.acuityOutboundBlock.findFirst({
+      where: { shopId, acuityBlockId: "blk_old" },
+      select: { state: true },
+    });
+    // ...and its record is honest about it still being live.
+    expect(old!.state).toBe("ACTIVE");
+  });
+
+  it("create is UNKNOWN -> the old block is RETAINED pending reconciliation", async () => {
+    const { apptId, newId } = await stageSwap();
+    acuityMock.createBlock.mockRejectedValueOnce(new AcuityError(504, "timeout"));
+    expect(await completeReschedule(shopId, apptId, newId)).toBe("unknown");
+    expect(acuityMock.deleteBlock).not.toHaveBeenCalled();
+    const old = await prisma.acuityOutboundBlock.findFirst({
+      where: { shopId, acuityBlockId: "blk_old" },
+      select: { state: true },
+    });
+    expect(old!.state).toBe("RELEASING"); // held, not freed
+  });
+
+  it("the reconciler will not free the old block while the replacement is in flight", async () => {
+    const { apptId, newId } = await stageSwap();
+    acuityMock.createBlock.mockRejectedValueOnce(new AcuityError(504, "timeout"));
+    await completeReschedule(shopId, apptId, newId);
+    acuityMock.deleteBlock.mockReset();
+    // Reconciler runs while the replacement is still UNKNOWN.
+    acuityMock.listBlocks.mockResolvedValue([]); // replacement genuinely absent
+    await reconcileShop(shopId);
+    // The old block must still not have been deleted in the same pass that
+    // was still deciding the replacement's fate.
+    const old = await prisma.acuityOutboundBlock.findFirst({
+      where: { shopId, acuityBlockId: "blk_old" },
+      select: { state: true },
+    });
+    expect(old!.state).not.toBe("RELEASED");
   });
 });
