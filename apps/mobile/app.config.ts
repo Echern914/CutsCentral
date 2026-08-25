@@ -52,7 +52,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   //
   // Bump it anyway, every release, so the store listing and release notes line
   // up with something. 1.0.5 = build 35, the first release after 34 (6c9d03d).
-  version: "1.0.5",
+  // 1.0.6 = the invited-barber "Join your shop" flow (#274). It needs a NATIVE
+  // build, not an OTA: expo-web-browser and expo-secure-store are config
+  // plugins, so the entitlement and the authentication-session APIs only exist
+  // in a freshly compiled binary.
+  version: "1.0.6",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
