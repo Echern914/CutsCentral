@@ -49,6 +49,18 @@ export interface StaffMappingStatus extends StaffMappingRow {
   calendarName: string | null;
 }
 
+export interface MappingSnapshot {
+  readiness: MappingReadiness;
+  /** The SAME live list readiness was computed from - never re-fetched. */
+  calendars: AcuityCalendar[];
+  /**
+   * The connection generation this snapshot was taken against. A save must
+   * carry it back so we can refuse to stamp an old account's mapping as fresh
+   * (see setStaffCalendar).
+   */
+  connectedAt: Date | null;
+}
+
 export interface MappingReadiness {
   /** True only when EVERY bookable chair has a fresh, valid mapping. */
   ready: boolean;
@@ -151,7 +163,7 @@ export async function loadStaffMappingRows(shopId: string): Promise<StaffMapping
  * different problems with different fixes, and collapsing them would send an
  * owner hunting for a mapping bug when the token needs reconnecting.
  */
-export async function getMappingReadiness(shopId: string): Promise<MappingReadiness> {
+export async function getMappingSnapshot(shopId: string): Promise<MappingSnapshot> {
   const [staff, conn, acuity] = await Promise.all([
     loadStaffMappingRows(shopId),
     // AcuityConnection is a secrets table with no RLS policy - plain prisma.
@@ -161,18 +173,43 @@ export async function getMappingReadiness(shopId: string): Promise<MappingReadin
     }),
     getAcuityClientForShop(shopId),
   ]);
+  // ONE live fetch. Readiness and the API response are computed from the same
+  // array: two fetches could disagree (a calendar deleted between them) and
+  // would show the owner a "ready" badge above a list that no longer matches.
   const calendars = await acuity.listCalendars();
-  return computeMappingReadiness({
-    staff,
+  const connectedAt = conn?.connectedAt ?? null;
+  return {
+    readiness: computeMappingReadiness({ staff, calendars, connectedAt }),
     calendars,
-    connectedAt: conn?.connectedAt ?? null,
-  });
+    connectedAt,
+  };
 }
 
 export class CalendarNotOnAccountError extends Error {
   constructor() {
     super("calendar_not_on_account");
     this.name = "CalendarNotOnAccountError";
+  }
+}
+
+/** Another chair in this shop already owns that calendar. */
+export class CalendarTakenError extends Error {
+  constructor() {
+    super("calendar_already_mapped");
+    this.name = "CalendarTakenError";
+  }
+}
+
+/**
+ * The Acuity connection changed (reconnect or disconnect) between the moment
+ * we listed calendars and the moment we tried to save. The id we validated may
+ * belong to a different account now, so the save is refused rather than
+ * stamped fresh against the wrong barber.
+ */
+export class ConnectionChangedError extends Error {
+  constructor() {
+    super("acuity_connection_changed");
+    this.name = "ConnectionChangedError";
   }
 }
 
@@ -192,6 +229,11 @@ export async function setStaffCalendar(
   shopId: string,
   staffId: string,
   calendarId: string | null,
+  /**
+   * The connection generation the caller validated against (from
+   * getMappingSnapshot). Required whenever a calendar is being SET.
+   */
+  expectedConnectedAt: Date | null,
 ): Promise<void> {
   if (calendarId !== null) {
     const acuity = await getAcuityClientForShop(shopId);
@@ -200,7 +242,35 @@ export async function setStaffCalendar(
       throw new CalendarNotOnAccountError();
     }
   }
-  await runWithShop(shopId, async (tx) => {
+
+  // Everything below is ONE transaction so the connection generation cannot
+  // move between the recheck and the write. Plain prisma, not runWithShop:
+  // AcuityConnection has no RLS policy and reads NULL inside a shop context.
+  await prisma.$transaction(async (tx) => {
+    if (calendarId !== null) {
+      const conn = await tx.acuityConnection.findUnique({
+        where: { shopId },
+        select: { connectedAt: true },
+      });
+      // Disconnected mid-flight: there is no account to validate against, so
+      // the id we checked a moment ago means nothing now.
+      if (!conn) throw new ConnectionChangedError();
+      const now = conn.connectedAt?.getTime() ?? null;
+      const then = expectedConnectedAt?.getTime() ?? null;
+      // Reconnect mid-flight: possibly a DIFFERENT Acuity account, where this
+      // calendar id is someone else's chair. Refuse rather than stamp it fresh.
+      if (now !== then) throw new ConnectionChangedError();
+
+      // One calendar, one chair. The partial unique index is the real
+      // guarantee (it holds under concurrency); this pre-check exists only to
+      // return a clean 409 instead of surfacing a P2002 as a 500.
+      const taken = await tx.staff.findFirst({
+        where: { shopId, acuityCalendarId: calendarId, id: { not: staffId } },
+        select: { id: true },
+      });
+      if (taken) throw new CalendarTakenError();
+    }
+
     await tx.staff.updateMany({
       where: { id: staffId, shopId },
       data: {
