@@ -44,3 +44,93 @@ export function initialsOf(name: string): string {
  */
 export const BTN_BASE =
   "flex h-11 w-full items-center justify-center rounded-lg px-3 text-xs font-medium transition-colors disabled:opacity-50 sm:h-9";
+
+/** The booking states a card or sheet can show. `blocked` is not a booking. */
+export type AppointmentCardStatus =
+  | "pending"
+  | "upcoming"
+  | "completed"
+  | "canceled"
+  | "no_show"
+  | "blocked";
+
+/**
+ * THE BOOKING STATE, SAID PLAINLY - and said the SAME WAY everywhere.
+ *
+ * "Upcoming" answered the wrong question: it described WHEN, so a barber
+ * reading a card could not tell an accepted booking from a request still
+ * waiting on them. Requested and Booked are different commitments and read
+ * differently.
+ *
+ * This is SOURCE-BLIND on purpose. Where a booking came from (ChairBack vs
+ * Acuity) is a separate fact with its own badge, because a synced booking is
+ * just as booked as a native one - collapsing the two into one chip is what
+ * made "Synced" read like a status in the first place.
+ *
+ * Lives here rather than in the calendar because the appointment SHEET shows
+ * the same pill: two copies of this table would eventually disagree about what
+ * "Arrived" looks like, on the one surface where a barber compares them.
+ *
+ * `railCls` tints the sheet's thin status rail from the same source, so the
+ * rail and the pill can never describe two different states.
+ */
+export function appointmentStatusPill(input: {
+  status: AppointmentCardStatus;
+  checkInStatus?: "en_route" | "arrived" | null;
+  etaMinutes?: number | null;
+  runningLate?: boolean;
+}): { label: string; cls: string; railCls: string } {
+  // Check-in refines a BOOKED appointment into the live pill the barber
+  // watches on the day (Booked -> En route -> Arrived).
+  if (input.status === "upcoming" && input.checkInStatus === "arrived") {
+    return {
+      label: "Arrived",
+      cls: "bg-emerald-soft/15 text-emerald-soft",
+      railCls: "bg-emerald-soft/70",
+    };
+  }
+  if (input.status === "upcoming" && input.checkInStatus === "en_route") {
+    return {
+      label: input.runningLate
+        ? "En route · late"
+        : input.etaMinutes
+          ? `En route ~${input.etaMinutes}m`
+          : "En route",
+      cls: "bg-amber-400/15 text-amber-300",
+      railCls: "bg-amber-400/70",
+    };
+  }
+  return STATUS_PILL[input.status];
+}
+
+const STATUS_PILL: Record<
+  AppointmentCardStatus,
+  { label: string; cls: string; railCls: string }
+> = {
+  pending: {
+    label: "Requested",
+    cls: "bg-amber-400/15 text-amber-300",
+    railCls: "bg-amber-400/70",
+  },
+  upcoming: { label: "Booked", cls: "bg-gold/15 text-gold", railCls: "bg-gold/70" },
+  completed: {
+    label: "Completed",
+    cls: "bg-emerald-soft/15 text-emerald-soft",
+    railCls: "bg-emerald-soft/70",
+  },
+  canceled: {
+    label: "Canceled",
+    cls: "bg-danger-soft/15 text-danger-soft",
+    railCls: "bg-danger-soft/60",
+  },
+  no_show: {
+    label: "No-show",
+    cls: "bg-danger-soft/15 text-danger-soft",
+    railCls: "bg-danger-soft/60",
+  },
+  blocked: {
+    label: "Blocked",
+    cls: "bg-charcoal-700 text-muted",
+    railCls: "bg-charcoal-600",
+  },
+};

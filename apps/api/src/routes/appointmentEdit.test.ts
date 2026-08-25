@@ -377,3 +377,178 @@ describe("fields and side effects", () => {
     expect(res.body.mirror).toBe("skipped");
   });
 });
+
+describe("contact", () => {
+  beforeEach(async () => {
+    await prisma.client.update({
+      where: { id: clientId },
+      data: {
+        phone: null,
+        email: null,
+        smsConsentAt: null,
+        smsConsentSource: null,
+        optedOut: false,
+      },
+    });
+  });
+
+  it("normalizes a typed phone to E.164 on BOTH the booking and the client", async () => {
+    const a = await makeAppt();
+    const res = await patch(a.id, { phone: "(201) 555-0134", email: "Sam@Example.TEST" });
+    expect(res.status).toBe(200);
+
+    const row = await prisma.appointment.findUnique({ where: { id: a.id } });
+    expect(row!.phone).toBe("+12015550134");
+    expect(row!.email).toBe("sam@example.test");
+
+    // The CLIENT row is the SMS/email channel of record - a correction that
+    // stopped at the appointment would leave reminders on the old number.
+    const client = await prisma.client.findUnique({ where: { id: clientId } });
+    expect(client!.phone).toBe("+12015550134");
+    expect(client!.email).toBe("sam@example.test");
+  });
+
+  it("🔴 editing a phone number creates NO SMS consent", async () => {
+    const a = await makeAppt();
+    expect((await patch(a.id, { phone: "+12015550134" })).status).toBe(200);
+    const client = await prisma.client.findUnique({ where: { id: clientId } });
+    expect(client!.smsConsentAt).toBeNull();
+    expect(client!.smsConsentSource).toBeNull();
+    // And it does not quietly un-opt-out anyone either.
+    expect(client!.optedOut).toBe(false);
+  });
+
+  it("🔴 a contact edit never DISTURBS consent that is already on file", async () => {
+    const at = new Date("2026-01-02T03:04:05.000Z");
+    await prisma.client.update({
+      where: { id: clientId },
+      data: { smsConsentAt: at, smsConsentSource: "barber_attest", optedOut: true },
+    });
+    const a = await makeAppt();
+    expect((await patch(a.id, { phone: "+12015550199" })).status).toBe(200);
+    const client = await prisma.client.findUnique({ where: { id: clientId } });
+    expect(client!.smsConsentAt!.toISOString()).toBe(at.toISOString());
+    expect(client!.smsConsentSource).toBe("barber_attest");
+    // A STOP is only ever undone by the client. Correcting a typo is not that.
+    expect(client!.optedOut).toBe(true);
+  });
+
+  it("a contact edit never repoints acuityClientKey (the sync anchor)", async () => {
+    const before = await prisma.client.findUnique({ where: { id: clientId } });
+    const a = await makeAppt();
+    expect((await patch(a.id, { phone: "+12015550177" })).status).toBe(200);
+    const after = await prisma.client.findUnique({ where: { id: clientId } });
+    expect(after!.acuityClientKey).toBe(before!.acuityClientKey);
+  });
+
+  it("an unusable phone is REFUSED, not silently stored as nothing", async () => {
+    const a = await makeAppt();
+    const res = await patch(a.id, { phone: "call me!!" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_phone");
+    const row = await prisma.appointment.findUnique({ where: { id: a.id } });
+    expect(row!.phone).toBeNull();
+  });
+
+  it("an empty string clears the number on both records", async () => {
+    await prisma.client.update({
+      where: { id: clientId },
+      data: { phone: "+12015550134" },
+    });
+    const a = await makeAppt();
+    expect((await patch(a.id, { phone: "" })).status).toBe(200);
+    expect((await prisma.appointment.findUnique({ where: { id: a.id } }))!.phone).toBeNull();
+    expect((await prisma.client.findUnique({ where: { id: clientId } }))!.phone).toBeNull();
+  });
+
+  it("a clientless walk-in still saves its own contact", async () => {
+    const a = await prisma.appointment.create({
+      data: {
+        shopId,
+        staffId: staffA,
+        serviceId: svcShort,
+        clientId: null,
+        firstName: "Walkin",
+        status: "BOOKED",
+        startsAt: slotAt(15),
+        endsAt: new Date(slotAt(15).getTime() + 30 * 60_000),
+        manageToken: randomToken(),
+      },
+      select: { id: true },
+    });
+    expect((await patch(a.id, { phone: "+12015550188" })).status).toBe(200);
+    const row = await prisma.appointment.findUnique({ where: { id: a.id } });
+    expect(row!.phone).toBe("+12015550188");
+  });
+
+  it("contact lands on the client the booking is attached to AFTER a swap", async () => {
+    const other = await prisma.client.create({
+      data: {
+        shopId,
+        acuityClientKey: randomToken(8),
+        magicToken: randomToken(),
+        firstName: "Swapped",
+      },
+      select: { id: true },
+    });
+    const a = await makeAppt();
+    expect(
+      (await patch(a.id, { clientId: other.id, phone: "+12015550166" })).status,
+    ).toBe(200);
+    expect((await prisma.client.findUnique({ where: { id: other.id } }))!.phone).toBe(
+      "+12015550166",
+    );
+    // The client who was detached keeps the number they had (none).
+    expect((await prisma.client.findUnique({ where: { id: clientId } }))!.phone).toBeNull();
+  });
+});
+
+describe("money never moves as a side effect", () => {
+  async function payFor(appointmentId: string, status: string, amount = 3000) {
+    return prisma.payment.create({
+      data: {
+        shopId,
+        appointmentId,
+        stripePaymentIntentId: `pi_${randomToken(10)}`,
+        stripeConnectAccountId: "acct_test",
+        mode: "ahead",
+        amount,
+        status,
+      },
+    });
+  }
+
+  it("🔴 the price of an ALREADY-PAID booking cannot be changed", async () => {
+    const a = await makeAppt();
+    await payFor(a.id, "succeeded", 3000);
+    const res = await patch(a.id, { price: 45 });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("price_change_on_paid");
+    // And the row is untouched - no partial write behind the refusal.
+    const row = await prisma.appointment.findUnique({ where: { id: a.id } });
+    expect(row!.priceAtBooking).toBeNull();
+  });
+
+  it("a paid booking can still have everything ELSE edited", async () => {
+    const a = await makeAppt();
+    await payFor(a.id, "succeeded", 3000);
+    const res = await patch(a.id, { notes: "moved from Saturday", phone: "+12015550134" });
+    expect(res.status).toBe(200);
+    expect((await prisma.appointment.findUnique({ where: { id: a.id } }))!.notes).toBe(
+      "moved from Saturday",
+    );
+  });
+
+  it("re-sending the SAME price on a paid booking is allowed (a no-op is not a change)", async () => {
+    const a = await makeAppt();
+    await prisma.appointment.update({ where: { id: a.id }, data: { priceAtBooking: 30 } });
+    await payFor(a.id, "succeeded", 3000);
+    expect((await patch(a.id, { price: 30, notes: "x" })).status).toBe(200);
+  });
+
+  it("an UNPAID intent does not lock the price", async () => {
+    const a = await makeAppt();
+    await payFor(a.id, "requires_payment_method", 3000);
+    expect((await patch(a.id, { price: 45 })).status).toBe(200);
+  });
+});
