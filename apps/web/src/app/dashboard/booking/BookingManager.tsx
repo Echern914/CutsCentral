@@ -32,6 +32,7 @@ import { BookingCalendar } from "./BookingCalendar";
 import { ShopQrCard } from "./ShopQrCard";
 import { HolidayPricing } from "./HolidayPricing";
 import { ConnectPlatforms } from "./ConnectPlatforms";
+import { AcuityCalendarMap } from "./AcuityCalendarMap";
 import { Sheet } from "./AppointmentForm";
 import { TimeSelect } from "@/components/ui/TimeSelect";
 import { ImageField } from "../site/ImageField";
@@ -458,6 +459,13 @@ function SettingsTab({
   return (
     <div className="flex flex-col gap-5">
       <ConnectPlatforms mode={mode} onPick={pickMode} connect={connect} apiBase={apiBase} />
+
+      {/* Mixed mode only: ChairBack owns the bookings AND Acuity is still
+          connected. That is the shape that double-books a chair, and mapping
+          each chair to its Acuity calendar is the prerequisite for holding the
+          time on both sides. Hidden everywhere else - a shop on Acuity-only or
+          with no connection has nothing to map. */}
+      {mode === "native" && connect.acuityConnected && <AcuityCalendarMap />}
 
       {mode !== "native" && (
         <Card className="p-5">

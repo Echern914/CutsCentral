@@ -229,6 +229,56 @@ export async function disconnectSquareAction(): Promise<Result> {
   return done(await apiSend("POST", "/api/square/oauth/disconnect"));
 }
 
+//  Acuity calendar mapping (which Acuity calendar is which chair)
+
+export interface AcuityCalendarOption {
+  id: string;
+  name: string | null;
+}
+export interface AcuityStaffMapping {
+  id: string;
+  name: string;
+  active: boolean;
+  bookable: boolean;
+  calendarId: string | null;
+  calendarName: string | null;
+  /** null = fine. "unmapped" | "stale" | "invalid". */
+  problem: string | null;
+}
+export interface AcuityMappingData {
+  mode: "OFF" | "OBSERVE" | "ENFORCE";
+  bookingMode: string;
+  ready: boolean;
+  preselectCalendarId: string | null;
+  calendars: AcuityCalendarOption[];
+  staff: AcuityStaffMapping[];
+}
+
+/** Live calendars + current per-chair mapping + enforcement readiness. */
+export async function getAcuityMappingAction(): Promise<{
+  ok: boolean;
+  data?: AcuityMappingData;
+  error?: string;
+}> {
+  const res = await apiGet<AcuityMappingData>("/api/booking/acuity/calendars");
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, data: res.data };
+}
+
+/** Point one chair at one Acuity calendar (null clears it). */
+export async function setStaffAcuityCalendarAction(
+  staffId: string,
+  calendarId: string | null,
+): Promise<Result> {
+  const res = await apiSend(
+    "PUT",
+    `/api/booking/staff/${encodeURIComponent(staffId)}/acuity-calendar`,
+    { calendarId },
+  );
+  revalidatePath("/dashboard/booking");
+  return done(res);
+}
+
 //  New Appointment (barber-side) + Block Off Time (native booking)
 
 export interface DashSlot {

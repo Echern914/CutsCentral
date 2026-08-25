@@ -42,6 +42,12 @@ import { zonedDateParts, zonedWallTimeToUtc, localMinutesOfDay } from "@chairbac
 import { invalidateShopAvailabilityCaches } from "./booking.public.js";
 import { logger } from "../logger.js";
 import { recordWaitlistEvent } from "../engines/waitlistAudit.js";
+import { getAcuityClientForShop, NotConnectedError } from "../acuity/client.js";
+import {
+  CalendarNotOnAccountError,
+  getMappingReadiness,
+  setStaffCalendar,
+} from "../engines/acuityCalendarMap.js";
 
 import { requireActiveAccess } from "../middleware/billing.js";
 /**
@@ -1233,6 +1239,99 @@ bookingDashboardRouter.delete("/exceptions/:id", async (req, res) => {
   // invalidates this shop's availability caches on any non-GET that finishes
   // under 400, so the 404 path deliberately skips it (nothing changed).
   res.json({ ok: true });
+});
+
+//  Acuity calendar mapping (which Acuity calendar is which chair)
+
+/**
+ * Read-only mapping status: the account's live calendars, what each chair is
+ * mapped to, and whether the shop is ready for outbound enforcement.
+ *
+ * NOT collapsed into a bare boolean on failure. "Acuity would not answer"
+ * (expired token, outage) and "a chair is unmapped" need different fixes, and
+ * merging them sends an owner hunting a mapping bug when the real answer is
+ * "reconnect Acuity" - so a client error surfaces as its own code.
+ */
+bookingDashboardRouter.get("/acuity/calendars", async (req, res) => {
+  const shopId = req.shop!.id;
+  const shop = await prisma.shop.findUnique({
+    where: { id: shopId },
+    select: { acuityOutboundMode: true, bookingMode: true },
+  });
+  try {
+    const readiness = await getMappingReadiness(shopId);
+    const acuity = await getAcuityClientForShop(shopId);
+    const calendars = await acuity.listCalendars();
+    res.json({
+      mode: shop?.acuityOutboundMode ?? "OFF",
+      bookingMode: shop?.bookingMode ?? "link",
+      ready: readiness.ready,
+      preselectCalendarId: readiness.preselectCalendarId,
+      // Business data only: the chair label the owner typed into Acuity.
+      calendars: calendars.map((c) => ({ id: c.id, name: c.name ?? null })),
+      staff: readiness.staff.map((s) => ({
+        id: s.id,
+        name: s.name,
+        active: s.active,
+        bookable: s.bookable,
+        calendarId: s.acuityCalendarId,
+        calendarName: s.calendarName,
+        problem: s.problem,
+      })),
+    });
+  } catch (err) {
+    if (err instanceof NotConnectedError) {
+      res.status(409).json({ error: "acuity_not_connected" });
+      return;
+    }
+    logger.error({ err, shopId }, "acuity calendar list failed");
+    res.status(502).json({ error: "acuity_unavailable" });
+  }
+});
+
+const setCalendarSchema = z
+  .object({ calendarId: z.string().min(1).nullable() })
+  .strict();
+
+/**
+ * Map one chair to one Acuity calendar (null clears it).
+ *
+ * The id is re-validated against the live account inside setStaffCalendar -
+ * this is the pointer that aims an outbound block at a human being's working
+ * day, so an id from a stale tab or another account must not be storable.
+ */
+bookingDashboardRouter.put("/staff/:id/acuity-calendar", async (req, res) => {
+  const shopId = req.shop!.id;
+  const parsed = setCalendarSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const staff = await forShop(shopId).staff.findFirst({
+    where: { id: req.params.id },
+    select: { id: true },
+  });
+  if (!staff) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  try {
+    await setStaffCalendar(shopId, staff.id, parsed.data.calendarId);
+  } catch (err) {
+    if (err instanceof CalendarNotOnAccountError) {
+      res.status(409).json({ error: "calendar_not_on_account" });
+      return;
+    }
+    if (err instanceof NotConnectedError) {
+      res.status(409).json({ error: "acuity_not_connected" });
+      return;
+    }
+    logger.error({ err, shopId, staffId: staff.id }, "acuity calendar map failed");
+    res.status(502).json({ error: "acuity_unavailable" });
+    return;
+  }
+  const readiness = await getMappingReadiness(shopId);
+  res.json({ ok: true, ready: readiness.ready });
 });
 
 //  Appointments (the barber's calendar / inbox)

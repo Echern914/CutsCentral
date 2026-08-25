@@ -44,6 +44,13 @@ enum BookingMode {
 // Lifecycle of a NATIVE Appointment (separate from VisitStatus on purpose - a
 // booking is a future hold, not yet a loyalty event). No RESCHEDULED state: a
 // reschedule mutates startsAt/endsAt in place and stays BOOKED.
+// See Shop.acuityOutboundMode.
+enum AcuityOutboundMode {
+  OFF
+  OBSERVE
+  ENFORCE
+}
+
 enum AppointmentStatus {
   // PENDING = a public request awaiting barber approval (request-before-booking).
   // Holds the slot like BOOKED, but is NOT reminded/promoted/earns-loyalty; the
@@ -377,6 +384,26 @@ model Shop {
   // per-shop webhook routing (the body has no account id, so the URL path routes)
   webhookSecret    String   @unique // 32-byte random, used in the webhook URL path
   acuityWebhookIds String[] @default([]) // subscription ids returned by Acuity (teardown)
+  // MIRROR NATIVE OCCUPANCY BACK OUT TO ACUITY - the 2026-08-25 incident fix.
+  //
+  // Acuity sync has only ever run INBOUND. A shop on native booking whose
+  // Acuity page is still live has two front doors onto one chair, and Acuity
+  // cannot see ChairBack's bookings: a ChairBack appointment held 6:10pm for
+  // ELEVEN DAYS and Acuity sold 5:40-6:20pm over it. The inbound guard was
+  // never at fault - the occupancy was never sent out.
+  //
+  // Three modes, not a boolean, because "rehearse first" is part of the
+  // contract (engines/acuityMirror.ts):
+  //   OFF      not one outbound CREATE. Every shop's default, forever, until
+  //            deliberately switched.
+  //   OBSERVE  evaluate every booking as if mirroring, log exactly what WOULD
+  //            be created (calendar, span, reference) - zero Acuity writes.
+  //   ENFORCE  real blocks. Refused while any bookable barber lacks a valid
+  //            calendar mapping.
+  // The mode gates CREATION only: releasing or reconciling blocks ChairBack
+  // ALREADY created keeps running in every mode, so switching a shop OFF can
+  // never strand live blocks on the barber's Acuity calendar.
+  acuityOutboundMode AcuityOutboundMode @default(OFF)
 
   // Native booking engine. bookingMode picks the ONE active source (see enum);
   // default `link` so every existing shop keeps its bookingUrl behavior until the
@@ -467,6 +494,7 @@ model Shop {
   goals                  ShopGoal[]
   serviceGoals           ServiceGoal[]
   externalBlocks         ExternalBlock[]
+  acuityOutboundBlocks   AcuityOutboundBlock[]
   notifyPrefs            BarberNotifyPref[]
   targetedSlots          TargetedSlot[]
   targetedSlotRules      TargetedSlotRule[]
@@ -1460,10 +1488,25 @@ model Staff {
   // NULL = no seat holds this chair, and alerts fall back to the owner (correct
   // for a solo shop whose single chair has no separate login).
   userId    String?
+  // WHICH ACUITY CALENDAR IS THIS CHAIR. The first staff->external mapping in
+  // the codebase, and the prerequisite for mirroring ChairBack occupancy back
+  // OUT to Acuity: `POST /blocks` is calendar-scoped, so without this a block
+  // lands on whatever calendar Acuity defaults to - which on a multi-barber
+  // account blocks the WRONG barber. NULL = unmapped; the mirror refuses to
+  // guess and reports the appointment as unmirrorable rather than blocking a
+  // colleague's chair. Populated from Acuity's GET /calendars (acuity/
+  // outbound.ts) and assigned per chair from the booking dashboard.
+  acuityCalendarId String?
+  // When the mapping was last saved/validated. Staleness is DERIVED, never
+  // swept: a mapping is stale when mappedAt predates the connection's
+  // connectedAt (an OAuth reconnect may be a different Acuity account, whose
+  // calendar ids mean someone else's chair). Stale mappings block ENFORCE.
+  acuityCalendarMappedAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   services          ServiceStaff[]
+  outboundBlocks    AcuityOutboundBlock[]
   availabilityRules AvailabilityRule[]
   recurringBlocks   RecurringBlock[]
   exceptions        AvailabilityException[]
@@ -1839,6 +1882,75 @@ model ExternalBlock {
   @@index([shopId, startsAt])
 }
 
+// Lifecycle of an OUTBOUND mirror block (ChairBack -> Acuity). Forward-only:
+//   PENDING   intent recorded in the booking tx; no HTTP attempted yet
+//   ACTIVE    Acuity acknowledged the block; acuityBlockId is set
+//   UNKNOWN   the create TIMED OUT - it may or may not exist in Acuity. Never
+//             compensated automatically: cancelling the booking on a timeout
+//             could kill a real appointment AND orphan a live block. Only the
+//             reconciler (which can list Acuity's blocks and match our
+//             reference) may resolve UNKNOWN.
+//   FAILED    Acuity rejected the create; the booking was compensated
+//   RELEASING marked for deletion (cancel/reschedule); HTTP not yet confirmed
+//   RELEASED  deleted in Acuity (or confirmed never created)
+enum OutboundBlockState {
+  PENDING
+  ACTIVE
+  UNKNOWN
+  FAILED
+  RELEASING
+  RELEASED
+}
+
+// The durable link between a ChairBack appointment and the Acuity block that
+// mirrors its time - the OUTBOUND half of the sync, and the incident fix for
+// 2026-08-25 (Acuity sold 5:40-6:20 over a ChairBack 6:10 booking it had no
+// way to see). Written as an OUTBOX ROW in the same transaction as the
+// appointment, then dispatched after commit by engines/acuityMirror.ts; the
+// reconciler sweep drains rows the dispatch never finished.
+//
+// NOT ExternalBlock. That table is INBOUND state owned by Acuity and
+// reconciled by absence (a row Acuity stops listing is deleted). These rows
+// are owned by ChairBack for the appointment's lifetime; letting the inbound
+// sweep arbitrate them would delete our own bookkeeping. The inbound sync
+// instead EXCLUDES blocks whose Acuity id appears here (see syncAcuityBlocks),
+// or every native booking would boomerang back as a phantom ExternalBlock.
+model AcuityOutboundBlock {
+  id            String   @id @default(cuid())
+  shopId        String
+  shop          Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  // Cascade: if the appointment row is ever hard-deleted the orphaned mirror
+  // row must not survive to block reconciliation forever. (Normal lifecycle
+  // never deletes appointments - they cancel - so this is belt-and-braces.)
+  appointmentId String
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  staffId       String
+  staff         Staff    @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  // Acuity's id for the created block. Null until ACTIVE. The inbound sweep
+  // matches on "acuity:{this}" to keep the mirror from echoing home.
+  acuityBlockId    String?
+  // The calendar the block was (or will be) created on - denormalized from
+  // Staff.acuityCalendarId AT WRITE TIME, so a later remap doesn't strand the
+  // delete on the wrong calendar.
+  acuityCalendarId String
+  // The mirrored span. Copied, not joined: a reschedule creates a NEW row for
+  // the new time and releases this one, so the delete always knows exactly
+  // which physical time it owns even after the appointment has moved twice.
+  startsAt      DateTime
+  endsAt        DateTime
+  state         OutboundBlockState @default(PENDING)
+  attempts      Int      @default(0)
+  lastError     String? // sanitized (status + code only, never a payload echo)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // A given Acuity block belongs to exactly one row (idempotent re-dispatch).
+  @@unique([shopId, acuityBlockId])
+  // The reconciler's work queue: non-terminal rows per shop.
+  @@index([shopId, state])
+  @@index([appointmentId])
+}
+
 // A one-off override on a staff member's calendar. isBlock=true subtracts time
 // (vacation, a day off, a lunch break on a specific date); isBlock=false adds a
 // one-off open window (e.g. an extra Saturday). Stored as concrete UTC instants.
@@ -2106,6 +2218,9 @@ model Appointment {
   paidAt             DateTime?
   visitId            String?           @unique // the Visit promoted from this appointment
   visit              Visit?            @relation(fields: [visitId], references: [id], onDelete: SetNull)
+  // Outbound Acuity mirror rows (engines/acuityMirror.ts). Plural because a
+  // reschedule retires one row and creates another; at most ONE is live.
+  outboundBlocks     AcuityOutboundBlock[]
   confirmationSentAt DateTime? // SMS confirmation stamp (at-most-once)
   reminderSentAt     DateTime? // SMS reminder stamp (at-most-once)
   // Email is a SEPARATE channel from SMS with its own idempotency: a customer can

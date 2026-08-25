@@ -4,10 +4,12 @@ import { logger } from "../logger.js";
 import {
   acuityAppointmentSchema,
   acuityBlockSchema,
+  acuityCalendarSchema,
   acuityMeSchema,
   acuityTokenSchema,
   type AcuityAppointment,
   type AcuityBlock,
+  type AcuityCalendar,
   type AcuityMe,
 } from "./types.js";
 
@@ -33,6 +35,8 @@ export interface AcuityClient {
   getAppointment(id: string): Promise<AcuityAppointment>;
   listAppointments(params: ListParams): Promise<AcuityAppointment[]>;
   listBlocks(params: ListParams): Promise<AcuityBlock[]>;
+  /** The account's bookable calendars - the Staff.acuityCalendarId source. */
+  listCalendars(): Promise<AcuityCalendar[]>;
 }
 
 export interface ListParams {
@@ -89,6 +93,21 @@ export async function getAcuityClientForShop(
       return acuityAppointmentSchema.parse(
         await call(`/appointments/${id}?pastFormAnswers=true`),
       );
+    },
+    /**
+     * The account's calendars - one per bookable chair. Read-only, and the
+     * ONLY thing standing between an outbound block and the wrong barber's
+     * day: blocks are calendar-scoped, so Staff.acuityCalendarId has to be
+     * chosen from THIS list and re-validated against it (a reconnect can point
+     * at a different Acuity account where the same id is someone else).
+     *
+     * Non-array body -> [] rather than a throw, matching listBlocks: a shop
+     * that cannot read calendars must fail to MAP, not fail to load settings.
+     */
+    async listCalendars() {
+      const data = await call("/calendars");
+      if (!Array.isArray(data)) return [];
+      return acuityCalendarSchema.array().parse(data);
     },
     async listAppointments(params: ListParams) {
       const q = new URLSearchParams();
