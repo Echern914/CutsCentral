@@ -87,7 +87,19 @@ async function availableSlug(name: string): Promise<string> {
     const candidate = `${base}-${n}`;
     if (!taken.has(candidate)) return candidate;
   }
-  return `${base}-${randomToken(4)}`;
+  // 🔴 LOWERCASE. randomToken() is base64url, so it can contain UPPERCASE - and
+  // every public resolver looks the slug up as `req.params.slug.toLowerCase()`
+  // (routes/shops.ts x4, routes/booking.public.ts). A slug carrying a capital
+  // therefore matches NOTHING: the mini-site, booking page, lead form and
+  // waitlist all 404 forever, silently, and the barber cannot fix it by hand
+  // either because SLUG_REGEX (`^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$`) rejects
+  // what we minted.
+  //
+  // Only reachable once 98 shops share a name, which is why it hid for so long
+  // - but the API suite reaches it routinely (it was the real cause of 16
+  // failures across three unrelated files), and a popular real name would get
+  // there eventually. See routes/shopSlugFallback.test.ts.
+  return `${base}-${randomToken(4).toLowerCase()}`;
 }
 
 // http(s) only: these URLs are rendered as <a href>/<img src> on the PUBLIC
