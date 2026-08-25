@@ -892,3 +892,198 @@ describe("honest alert delivery (defect 2)", () => {
     expect(ev).not.toContain("3");
   });
 });
+
+describe("shop.bookable_chair catches ONLY the cross-chair gap", () => {
+  const item = (over: Partial<ReadinessFacts>, caps = CAPS) =>
+    find(build(over, caps), "shop.bookable_chair")!;
+
+  /**
+   * Each case below breaks ONE atomic requirement. Every one of them has its own
+   * item that says exactly what is wrong, so the cross-chair rule must stand
+   * down - otherwise one missing row reads as two problems and the barber has to
+   * work out which is the real one.
+   */
+  const atomicFailures: Array<[string, Partial<ReadinessFacts>, string]> = [
+    ["no active barber", { staff: [], activeOfferingPairs: 0 }, "shop.staff.active"],
+    ["no active service", { services: [], activeOfferingPairs: 0 }, "shop.service.active"],
+    [
+      "no pairing anywhere",
+      {
+        activeOfferingPairs: 0,
+        staff: [{ ...ready().staff[0]!, activeServiceLinkCount: 0, bookableServiceLinkCount: 0 }],
+        services: [{ ...ready().services[0]!, activeStaffLinkCount: 0 }],
+      },
+      "shop.offering.pair",
+    ],
+    [
+      "no hours anywhere",
+      { staff: [{ ...ready().staff[0]!, availabilityRuleCount: 0 }] },
+      "shop.availability.rule",
+    ],
+    [
+      "no service long enough",
+      { services: [{ ...ready().services[0]!, durationMin: 2 }] },
+      "shop.service.duration",
+    ],
+    [
+      "every service closed all week",
+      { services: [{ ...ready().services[0]!, closedEveryWeekday: true }] },
+      "shop.service.hours_open",
+    ],
+  ];
+
+  for (const [label, over, ownerItem] of atomicFailures) {
+    it(`stands down for an atomic failure: ${label}`, () => {
+      const r = build(over);
+      // The atomic item is the blocker...
+      expect(find(r, ownerItem)!.blocksLaunch).toBe(true);
+      // ...and the cross-chair rule does not pile on.
+      expect(item(over).applicable).toBe(false);
+      expect(item(over).blocksLaunch).toBe(false);
+      // Exactly one actionable blocker (preflight is the roll-up, not a task).
+      expect(blockingIds(r).filter((x) => x !== "shop.preflight")).toEqual([ownerItem]);
+    });
+  }
+
+  it("stands down when NOBODY is reachable", () => {
+    const over: Partial<ReadinessFacts> = {
+      shopNotifyPhone: false,
+      recipients: [
+        {
+          userId: "user_owner",
+          pushEnabled: true,
+          smsEnabled: true,
+          emailEnabled: false,
+          newBookingEnabled: true,
+          webDeviceCount: 0,
+          expoDeviceCount: 0,
+          hasPhone: false,
+          hasEmail: false,
+        },
+      ],
+    };
+    const r = build(over);
+    expect(find(r, "shop.alerts.reachable")!.blocksLaunch).toBe(true);
+    expect(item(over).applicable).toBe(false);
+    expect(blockingIds(r).filter((x) => x !== "shop.preflight")).toEqual([
+      "shop.alerts.reachable",
+    ]);
+  });
+
+  it("stands down when DRY_RUN is what makes alerts undeliverable", () => {
+    // The atomic alert item already reports this; the split rule must not too.
+    const caps = { ...CAPS, dryRun: true };
+    expect(item({}, caps).applicable).toBe(false);
+  });
+
+  it("IS the blocker when every atomic check passes but the setup is split", () => {
+    const r = build({
+      staff: [
+        // hours, no service
+        {
+          ...ready().staff[0]!,
+          id: "staff_a",
+          name: "Dre",
+          availabilityRuleCount: 5,
+          activeServiceLinkCount: 0,
+          bookableServiceLinkCount: 0,
+        },
+        // service, no hours
+        {
+          ...ready().staff[0]!,
+          id: "staff_b",
+          name: "Marcus",
+          availabilityRuleCount: 0,
+          activeServiceLinkCount: 1,
+          bookableServiceLinkCount: 1,
+        },
+      ],
+      activeOfferingPairs: 1,
+    });
+    // Every atomic check genuinely passes...
+    for (const id of [
+      "shop.staff.active",
+      "shop.service.active",
+      "shop.service.duration",
+      "shop.service.hours_open",
+      "shop.offering.pair",
+      "shop.availability.rule",
+      "shop.alerts.reachable",
+    ]) {
+      expect(find(r, id)!.done, `${id} should pass`).toBe(true);
+    }
+    // ...and this is the single thing left.
+    expect(find(r, "shop.bookable_chair")!.applicable).toBe(true);
+    expect(blockingIds(r).filter((x) => x !== "shop.preflight")).toEqual([
+      "shop.bookable_chair",
+    ]);
+  });
+});
+
+describe("shop.bookable_chair names the closest chair, not the first", () => {
+  /** hours + reachable, only missing a service - 2 of 3. */
+  const almost = {
+    ...ready().staff[0]!,
+    id: "staff_almost",
+    name: "Marcus",
+    availabilityRuleCount: 5,
+    activeServiceLinkCount: 0,
+    bookableServiceLinkCount: 0,
+  };
+  /** nothing but a chair - 0 of 3, and deliberately FIRST in the list. */
+  const barelyStarted = {
+    ...ready().staff[0]!,
+    id: "staff_barely",
+    name: "Dre",
+    availabilityRuleCount: 0,
+    activeServiceLinkCount: 0,
+    bookableServiceLinkCount: 0,
+  };
+  /** the chair that satisfies the shop-wide atomics on its own bits. */
+  const supplier = {
+    ...ready().staff[0]!,
+    id: "staff_supplier",
+    name: "Ana",
+    availabilityRuleCount: 0,
+    activeServiceLinkCount: 1,
+    bookableServiceLinkCount: 1,
+  };
+
+  it("picks the chair with the fewest things left, not activeStaff[0]", () => {
+    const r = build({
+      // `barelyStarted` sorts FIRST - the old code would have named it.
+      staff: [barelyStarted, almost, supplier],
+      activeOfferingPairs: 1,
+    });
+    const ev = find(r, "shop.bookable_chair")!.evidence;
+    expect(ev).toContain("Marcus"); // 2 of 3 - genuinely closest
+    expect(ev).not.toContain("Dre"); // 0 of 3 - first, but furthest away
+    expect(ev).toContain("a service");
+  });
+
+  it("is deterministic when two chairs are equally close", () => {
+    const twin = { ...almost, id: "staff_twin", name: "Zoe" };
+    const facts = { staff: [almost, twin, supplier], activeOfferingPairs: 1 };
+    const first = find(build(facts), "shop.bookable_chair")!.evidence;
+    // Stable sort â‡’ the configured order breaks the tie, every time.
+    expect(first).toContain("Marcus");
+    expect(find(build(facts), "shop.bookable_chair")!.evidence).toBe(first);
+  });
+
+  it("lists what that chair still needs, and nothing it already has", () => {
+    const r = build({
+      staff: [almost, supplier],
+      activeOfferingPairs: 1,
+    });
+    const ev = find(r, "shop.bookable_chair")!.evidence;
+    expect(ev).toContain("split across barbers");
+    expect(ev).toContain("Marcus is closest");
+    expect(ev).not.toContain("weekly hours"); // it HAS hours
+    expect(ev).not.toContain("a working alert"); // it IS reachable
+  });
+
+  it("says which chairs are ready once one is", () => {
+    const ev = find(build(), "shop.bookable_chair")!.evidence;
+    expect(ev).toContain("Dre is ready to take bookings");
+  });
+});

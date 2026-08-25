@@ -612,11 +612,43 @@ function shopItems(
   // with no chairs yet still has the owner here - which is correct: the owner is
   // who a booking would alert.
   const reachableRecipients = facts.recipients.filter((r) => reachable(r, caps));
+  /**
+   * How many of a chair's three requirements it already meets. Used only to
+   * pick which chair to NAME - never to decide anything.
+   */
+  const chairProgress = (st: StaffFacts) =>
+    (st.availabilityRuleCount > 0 ? 1 : 0) +
+    (st.bookableServiceLinkCount > 0 ? 1 : 0) +
+    (reachable(recipientOf(facts, st), caps) ? 1 : 0);
+  /**
+   * The chair a barber is CLOSEST to finishing, so the message points at one
+   * real fix instead of whichever chair happens to sort first.
+   * `Array.prototype.sort` is stable, so equally-close chairs keep their
+   * configured order and the wording cannot flip between two reads.
+   */
+  const closestChair =
+    activeStaff.length > 0
+      ? [...activeStaff].sort((a, b) => chairProgress(b) - chairProgress(a))[0]!
+      : null;
   // Which channels would really carry an alert to ANY of them - used for the
   // evidence line, so it names transports rather than a device tally.
   const shopChannels = [
     ...new Set(reachableRecipients.flatMap((r) => deliverableChannels(r, caps))),
   ];
+
+  /**
+   * Every atomic requirement `shop.bookable_chair` is layered on top of, each of
+   * which has its OWN item. While one of these is false, that item is the
+   * actionable one and the cross-chair rule stands down.
+   */
+  const atomicPrerequisitesMet =
+    activeStaff.length > 0 &&
+    activeServices.length > 0 &&
+    validDuration.length > 0 &&
+    closedAllWeek.length < activeServices.length &&
+    facts.activeOfferingPairs > 0 &&
+    activeStaff.some((st) => st.availabilityRuleCount > 0) &&
+    reachableRecipients.length > 0;
 
   const items: ReadinessItem[] = [
     // ----- Milestone 1: your shop (all silent while passing) -----
@@ -756,33 +788,44 @@ function shopItems(
     item({
       id: "shop.bookable_chair",
       milestone: "services_and_barber",
-      // Only once there is a barber AND a service; before that the gap is
-      // already named by its own item.
-      applicable: native && activeStaff.length > 0 && activeServices.length > 0,
+      /**
+       * 🔴 THIS RULE EXISTS FOR EXACTLY ONE FAILURE: the shop has everything,
+       * spread across DIFFERENT chairs, and no single chair combines it.
+       *
+       * So it is applicable only once every atomic prerequisite it sits on top
+       * of ALREADY PASSES. If the shop simply has no barber, no service, no
+       * hours anywhere, no pairing anywhere, or no working alert anywhere, that
+       * gap has its own item saying so - and a second, vaguer item repeating it
+       * turns one fix into a puzzle. Standing down here is what keeps every
+       * root cause reported exactly once.
+       */
+      applicable: native && atomicPrerequisitesMet,
       title: "One barber is completely ready",
-      why: "Every other check can be satisfied by a DIFFERENT barber - one has hours, another has a service - and still leave nothing a customer can actually book. This is the one that says a single chair works end to end.",
+      why: "Your barbers, services, hours and alerts can each be fine on their own and still be spread across different chairs - one has hours, another has the service - leaving nothing a customer can actually book. This is the check that says a single chair works end to end.",
       klass: "required",
       done: bookableChairs.length > 0,
       evidence:
         bookableChairs.length > 0
           ? `${bookableChairs.map((c) => c.name).join(", ")} ${bookableChairs.length === 1 ? "is" : "are"} ready to take bookings`
-          : activeStaff.length === 0
-            ? "No active barbers"
-            : // Name the nearest chair and what it is missing, so this is one
-              // fix rather than a puzzle.
-              (() => {
-                const nearest = activeStaff[0]!;
-                const missing = [
-                  nearest.availabilityRuleCount === 0 ? "weekly hours" : null,
-                  nearest.bookableServiceLinkCount === 0
-                    ? nearest.activeServiceLinkCount > 0
+          : closestChair
+            ? // Every atomic check passes here, so this is purely the split:
+              // name the chair nearest the finish line and what it still needs.
+              `Your setup is split across barbers - no single one is complete. ${closestChair.name} is closest, and still needs ${
+                [
+                  closestChair.availabilityRuleCount === 0 ? "weekly hours" : null,
+                  closestChair.bookableServiceLinkCount === 0
+                    ? closestChair.activeServiceLinkCount > 0
                       ? "a service that is open on some day"
                       : "a service"
                     : null,
-                  reachable(recipientOf(facts, nearest), caps) ? null : "a working alert",
-                ].filter(Boolean);
-                return `No single barber is fully set up - ${nearest.name} still needs ${missing.join(" and ")}`;
-              })(),
+                  reachable(recipientOf(facts, closestChair), caps)
+                    ? null
+                    : "a working alert",
+                ]
+                  .filter(Boolean)
+                  .join(" and ")
+              }`
+            : "No single barber is fully set up",
       cta: { label: "Open Staff", href: "/dashboard/booking?tab=Staff" },
     }),
 
