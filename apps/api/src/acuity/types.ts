@@ -91,6 +91,27 @@ export const acuityBlockSchema = z
 
 export type AcuityBlock = z.infer<typeof acuityBlockSchema>;
 
+/**
+ * A calendar on the connected Acuity account (GET /calendars). One calendar is
+ * one bookable resource - for a barbershop, one chair. This is the mapping
+ * target for Staff.acuityCalendarId: blocks are calendar-scoped, so without a
+ * per-chair id an outbound block would land on whatever calendar Acuity picks
+ * by default and take the WRONG barber off the board.
+ *
+ * `name` is business data (the chair/barber label the owner typed into Acuity),
+ * not customer data - it is shown in the mapping UI so the owner can match
+ * chairs by eye. Nothing else from the payload is surfaced.
+ */
+export const acuityCalendarSchema = z
+  .object({
+    id: z.union([z.number(), z.string()]).transform(String),
+    name: z.string().nullish(),
+    timezone: z.string().nullish(),
+  })
+  .passthrough();
+
+export type AcuityCalendar = z.infer<typeof acuityCalendarSchema>;
+
 export const acuityMeSchema = z
   .object({
     id: z.union([z.number(), z.string()]).transform(String),

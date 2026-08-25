@@ -42,6 +42,14 @@ import { zonedDateParts, zonedWallTimeToUtc, localMinutesOfDay } from "@chairbac
 import { invalidateShopAvailabilityCaches } from "./booking.public.js";
 import { logger } from "../logger.js";
 import { recordWaitlistEvent } from "../engines/waitlistAudit.js";
+import { getAcuityClientForShop, NotConnectedError } from "../acuity/client.js";
+import {
+  CalendarNotOnAccountError,
+  CalendarTakenError,
+  ConnectionChangedError,
+  getMappingSnapshot,
+  setStaffCalendar,
+} from "../engines/acuityCalendarMap.js";
 
 import { requireActiveAccess } from "../middleware/billing.js";
 /**
@@ -1233,6 +1241,138 @@ bookingDashboardRouter.delete("/exceptions/:id", async (req, res) => {
   // invalidates this shop's availability caches on any non-GET that finishes
   // under 400, so the 404 path deliberately skips it (nothing changed).
   res.json({ ok: true });
+});
+
+//  Acuity calendar mapping (which Acuity calendar is which chair)
+
+/**
+ * Read-only mapping status: the account's live calendars, what each chair is
+ * mapped to, and whether the shop is ready for outbound enforcement.
+ *
+ * NOT collapsed into a bare boolean on failure. "Acuity would not answer"
+ * (expired token, outage) and "a chair is unmapped" need different fixes, and
+ * merging them sends an owner hunting a mapping bug when the real answer is
+ * "reconnect Acuity" - so a client error surfaces as its own code.
+ */
+bookingDashboardRouter.get("/acuity/calendars", async (req, res) => {
+  const shopId = req.shop!.id;
+  const shop = await prisma.shop.findUnique({
+    where: { id: shopId },
+    select: { acuityOutboundMode: true, bookingMode: true },
+  });
+  try {
+    // ONE snapshot: readiness and the calendar list come from the same live
+    // fetch, so the badge can never disagree with the list under it.
+    const snap = await getMappingSnapshot(shopId);
+    const assigned = new Map(
+      snap.readiness.staff
+        .filter((s) => s.acuityCalendarId)
+        .map((s) => [s.acuityCalendarId!, { staffId: s.id, staffName: s.name }]),
+    );
+    res.json({
+      mode: shop?.acuityOutboundMode ?? "OFF",
+      bookingMode: shop?.bookingMode ?? "link",
+      ready: snap.readiness.ready,
+      preselectCalendarId: snap.readiness.preselectCalendarId,
+      // Echoed so a save can prove it validated against THIS connection.
+      connectedAt: snap.connectedAt?.toISOString() ?? null,
+      // Business data only: the chair label the owner typed into Acuity.
+      // `takenBy` lets the picker disable a calendar another chair already
+      // owns, so the 409 below is a backstop rather than the normal path.
+      calendars: snap.calendars.map((c) => ({
+        id: c.id,
+        name: c.name ?? null,
+        takenByStaffId: assigned.get(c.id)?.staffId ?? null,
+      })),
+      staff: snap.readiness.staff.map((s) => ({
+        id: s.id,
+        name: s.name,
+        active: s.active,
+        bookable: s.bookable,
+        calendarId: s.acuityCalendarId,
+        calendarName: s.calendarName,
+        problem: s.problem,
+      })),
+    });
+  } catch (err) {
+    if (err instanceof NotConnectedError) {
+      res.status(409).json({ error: "acuity_not_connected" });
+      return;
+    }
+    logger.error({ err, shopId }, "acuity calendar list failed");
+    res.status(502).json({ error: "acuity_unavailable" });
+  }
+});
+
+const setCalendarSchema = z
+  .object({
+    calendarId: z.string().min(1).nullable(),
+    /**
+     * The connection generation the client validated against (echoed by the
+     * GET above). Absent = an old client; treated as "unknown generation",
+     * which fails closed for a SET.
+     */
+    connectedAt: z.string().nullable().optional(),
+  })
+  .strict();
+
+/**
+ * Map one chair to one Acuity calendar (null clears it).
+ *
+ * The id is re-validated against the live account inside setStaffCalendar -
+ * this is the pointer that aims an outbound block at a human being's working
+ * day, so an id from a stale tab or another account must not be storable.
+ */
+bookingDashboardRouter.put("/staff/:id/acuity-calendar", async (req, res) => {
+  const shopId = req.shop!.id;
+  const parsed = setCalendarSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const staff = await forShop(shopId).staff.findFirst({
+    where: { id: req.params.id },
+    select: { id: true },
+  });
+  if (!staff) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const expectedConnectedAt =
+    parsed.data.connectedAt === undefined || parsed.data.connectedAt === null
+      ? null
+      : new Date(parsed.data.connectedAt);
+  try {
+    await setStaffCalendar(shopId, staff.id, parsed.data.calendarId, expectedConnectedAt);
+  } catch (err) {
+    if (err instanceof CalendarNotOnAccountError) {
+      res.status(409).json({ error: "calendar_not_on_account" });
+      return;
+    }
+    if (err instanceof CalendarTakenError) {
+      res.status(409).json({ error: "calendar_already_mapped" });
+      return;
+    }
+    if (err instanceof ConnectionChangedError) {
+      res.status(409).json({ error: "acuity_connection_changed" });
+      return;
+    }
+    // The partial unique index fired under a concurrent save. Same clean 409
+    // as the pre-check - never a 500.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      res.status(409).json({ error: "calendar_already_mapped" });
+      return;
+    }
+    if (err instanceof NotConnectedError) {
+      res.status(409).json({ error: "acuity_not_connected" });
+      return;
+    }
+    logger.error({ err, shopId, staffId: staff.id }, "acuity calendar map failed");
+    res.status(502).json({ error: "acuity_unavailable" });
+    return;
+  }
+  const snap = await getMappingSnapshot(shopId);
+  res.json({ ok: true, ready: snap.readiness.ready });
 });
 
 //  Appointments (the barber's calendar / inbox)
