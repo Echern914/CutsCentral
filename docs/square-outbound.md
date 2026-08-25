@@ -120,13 +120,61 @@ script.
 
 ---
 
-## What S2 shipped — and how it survives the contract being unrun
+## The contract has been RUN — 2026-08-25, sandbox seller `MLY5ZM1D2VHS0`
 
-The sandbox contract still has not been run (no sandbox token was available).
-S2 is therefore written to be **correct under either answer to C8 and C10**,
-which is a better engineering position than branching on them anyway:
+**12 pass · 1 fail · 1 manual.** The single FAIL is a finding *about Square*,
+not a defect in ChairBack — and it is precisely the one S2 was written to
+survive.
 
-| Contract question | How S2 handles it without the answer |
+| | Question | Measured answer |
+|---|---|---|
+| C1 | `support_seller_level_writes` reported? | ✅ `true` — **but only on Appointments Plus.** On Free, *every* Bookings write returns `403 FORBIDDEN — "Merchant subscription does not support write operations."`, buyer-level included. |
+| C2 | Locations enumerable | ✅ `LQ19RJFJQV7FR` |
+| C3 | Bookable team-member profiles | ✅ 1 bookable; `bookable_only` filters |
+| C4 | Variations carry a version | ✅ `4EOXYIVG6JKGRGHWKATDBL7I` v`1787679374841` |
+| C5 | Customer can be minted | ✅ |
+| C6 | Slot confirmable before writing | ✅ 16 slots — **but only once the team member was assigned to the variation.** Unassigned, it returned `400 BAD_REQUEST: Search did not find a team member who performs the selected service variation`. |
+| C7 | Seller-level write lands | ✅ `201` + booking id |
+| **C8** | **`ACCEPTED` or `PENDING`?** | ✅ **`ACCEPTED`, version 0, immediately.** `creator_type: TEAM_MEMBER`, `source: API`. No human acceptance step — the time is held on write. |
+| C9 | Idempotency-key replay | ✅ the **same** booking id comes back |
+| **C10** | **Is an overlap rejected?** | ❌ **NO.** Square created a *second* booking on the same team member at the same minute and answered `201`. There is no atomic collision rejection at seller level. |
+| C11 | Versioned `UpdateBooking` | ✅ `200`, version 0 → 1, moved in place |
+| C12 | **Stale** version | ✅ `400 VERSION_MISMATCH: Stale version` |
+| C13 | Versioned cancel | ✅ `200 CANCELLED_BY_SELLER` |
+| C14 | Is the customer notified? | ⏸ manual — Square does not report it in the response |
+
+What proves these are *seller-level* answers: a booking placed at **04:00 UTC —
+midnight local** was accepted. A buyer-level write is bound by the seller's
+availability rules and cannot do that.
+
+### 🔴 C6 is the argument for `ListBookings`, made by Square itself
+
+C6 failed on the first run for a reason that has nothing to do with the chair
+being busy: the barber simply was not attached to the service in the catalog.
+`SearchAvailability` reports "nothing available" for a **configuration** gap in
+exactly the same shape as it reports a genuine conflict. Blocking a mirror on
+that signal would refuse to protect a chair that is completely free. This is why
+the blocking decision below reads `ListBookings` and treats availability as a
+logged, non-blocking probe.
+
+### 🔴 The first run reported C10 backwards
+
+`CreateBooking` answers **`201`**, not `200`, and the script's predicate was
+`overlap.status !== 200 → PASS`. So a successfully created double-booking was
+recorded as "rejected" — the exact opposite of the truth, on the one question
+that decides the design. C7 and C9 were called failures by the same mistake.
+The predicates now test for a returned booking id rather than an exact status
+code. The production client was never affected: `client.ts` branches on
+`!res.ok`, which spans 200–299.
+
+### What the answers mean for S2 — every one already encoded
+
+C8, C11, C12 and C13 came back the way S2 assumed. C10 came back the way S2
+*defended against*: Square will happily double-book, so the pre-create conflict
+check and the honestly-documented race are load-bearing, not belt-and-braces.
+Nothing below required changing.
+
+| Contract question | How S2 handles it |
 |---|---|
 | **C8** ACCEPTED or PENDING? | Read from Square's **actual response** on every write. `interpretBookingStatus` treats **only `ACCEPTED`** as protection; `PENDING` becomes `awaiting_seller`, the public booking answers **202 processing** rather than "you're booked", and the row records what Square said. An unrecognised status is *not held* — under-claiming costs a line on a report, over-claiming costs a double booking. |
 | **C9** does the idempotency key hold? | The key is minted once at intent time and **never regenerated**. Every retry and every reconcile replays it. If Square honours it, a lost response costs nothing; if it does not, the `UNKNOWN` state and the reconciler still bound the damage. |

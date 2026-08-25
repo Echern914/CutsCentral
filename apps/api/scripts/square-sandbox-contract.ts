@@ -47,6 +47,14 @@ interface Finding {
 const findings: Finding[] = [];
 const created: string[] = [];
 
+/**
+ * Square answers CreateBooking with 201, not 200. Every write assertion here
+ * originally tested `=== 200` and so read three real answers backwards.
+ */
+function wrote(status: number): boolean {
+  return status === 200 || status === 201;
+}
+
 function record(id: string, question: string, status: Finding["status"], answer: string) {
   findings.push({ id, question, status, answer });
   const mark = status === "PASS" ? "PASS" : status === "FAIL" ? "FAIL" : "SKIP";
@@ -208,6 +216,25 @@ async function main(): Promise<void> {
     `status=${customer.status} customer=${customerId} ${errorsOf(customer.body)}`,
   );
 
+  // 🔴 STOP BEFORE C7 IF THE PLAN CANNOT DO SELLER-LEVEL WRITES.
+  //
+  // On a Free seller, C7-C13 would exercise a code path S2 cannot use and every
+  // answer they produced would be about the wrong account - green results that
+  // mean nothing. Recording them would be worse than recording nothing.
+  if (!sellerWrites) {
+    record(
+      "C6-C14",
+      "The booking legs",
+      "SKIP",
+      "support_seller_level_writes is not true on this sandbox seller. " +
+        "Upgrade the test account to Square Appointments Plus or Premium and re-run - " +
+        "answers gathered from a Free plan would not be about the code path S2 uses.",
+    );
+    await cleanup(customerId);
+    summarize();
+    return;
+  }
+
   if (!locationId || !teamMemberId || !variation?.id || !customerId) {
     record(
       "C6-C14",
@@ -215,6 +242,7 @@ async function main(): Promise<void> {
       "SKIP",
       "Missing a prerequisite above - fix the seller's setup and re-run.",
     );
+    await cleanup(customerId);
     summarize();
     return;
   }
@@ -268,7 +296,7 @@ async function main(): Promise<void> {
     record(
       "C7",
       "CreateBooking: does a seller-level write land?",
-      create.status === 200 && booking.id ? "PASS" : "FAIL",
+      wrote(create.status) && booking.id ? "PASS" : "FAIL",
       `status=${create.status} id=${booking.id ?? "none"} bookingStatus=${booking.status} ` +
         `version=${String(booking.version)} ${errorsOf(create.body)}`,
     );
@@ -309,7 +337,7 @@ async function main(): Promise<void> {
     record(
       "C9",
       "Replaying the SAME idempotency key: one booking, or two?",
-      repeat.status === 200 && repeatId === booking.id ? "PASS" : "FAIL",
+      wrote(repeat.status) && repeatId === booking.id ? "PASS" : "FAIL",
       `status=${repeat.status} id=${repeatId ?? "none"} ` +
         (repeatId === booking.id
           ? "same booking returned - a lost response is recoverable by replay."
@@ -342,10 +370,15 @@ async function main(): Promise<void> {
     record(
       "C10",
       "Does a seller-level write REJECT an overlapping booking?",
-      overlap.status !== 200 ? "PASS" : "FAIL",
-      overlap.status === 200
-        ? `ACCEPTED an overlap (id=${overlapId}). Square gives NO atomic collision rejection at ` +
-          "seller level: S2 must re-verify availability immediately before writing and document the race."
+      // PASS only if NO second booking exists. Judging this by status code was
+      // wrong twice over: CreateBooking answers 201, not 200, so `status !== 200`
+      // called a successfully created double-book a rejection - the exact
+      // opposite of the truth, on the one question that decides the design.
+      !overlapId ? "PASS" : "FAIL",
+      overlapId
+        ? `ACCEPTED an overlap (status=${overlap.status} id=${overlapId}). Square gives NO atomic ` +
+          "collision rejection at seller level: S2 must re-verify availability immediately before " +
+          "writing and document the race."
         : `rejected: status=${overlap.status} ${errorsOf(overlap.body)}`,
     );
 
@@ -418,21 +451,7 @@ async function main(): Promise<void> {
         `created above (${booking.id ?? "n/a"}). Square does not report this in the API response.`,
     );
   } finally {
-    // Clean up whatever survived, and print the ids either way so a failed run
-    // never leaves an unexplained booking on the sandbox seller.
-    for (const id of created) {
-      const latest = await call("GET", `/v2/bookings/${id}`);
-      const version = ((latest.body.booking ?? {}) as { version?: number }).version;
-      const res = await call("POST", `/v2/bookings/${id}/cancel`, {
-        booking_version: version,
-        idempotency_key: `cleanup-${id}`,
-      });
-      console.log(`cleanup: booking ${id} -> ${res.status === 200 ? "cancelled" : `LEFT (status ${res.status})`}`);
-    }
-    if (customerId) {
-      const res = await call("DELETE", `/v2/customers/${customerId}`);
-      console.log(`cleanup: customer ${customerId} -> ${res.status === 200 ? "deleted" : `LEFT (status ${res.status})`}`);
-    }
+    await cleanup(customerId);
   }
 
   summarize();
@@ -455,6 +474,35 @@ async function main(): Promise<void> {
       "any of the answers above.",
     ].join("\n"),
   );
+}
+
+/**
+ * Undo everything this run created.
+ *
+ * Called from the finally block AND from every early return - an early exit is
+ * exactly when a stray customer record is most likely to be left behind and
+ * least likely to be noticed. Ids are printed either way so a failed cleanup is
+ * a line to act on rather than a mystery row on the seller's account.
+ */
+async function cleanup(customerId: string): Promise<void> {
+  for (const id of created) {
+    const latest = await call("GET", `/v2/bookings/${id}`);
+    const version = ((latest.body.booking ?? {}) as { version?: number }).version;
+    const res = await call("POST", `/v2/bookings/${id}/cancel`, {
+      booking_version: version,
+      idempotency_key: `cleanup-${id}`,
+    });
+    console.log(
+      `cleanup: booking ${id} -> ${res.status === 200 ? "cancelled" : `LEFT (status ${res.status})`}`,
+    );
+  }
+  created.length = 0;
+  if (customerId) {
+    const res = await call("DELETE", `/v2/customers/${customerId}`);
+    console.log(
+      `cleanup: customer ${customerId} -> ${res.status === 200 ? "deleted" : `LEFT (status ${res.status})`}`,
+    );
+  }
 }
 
 function summarize(): void {
