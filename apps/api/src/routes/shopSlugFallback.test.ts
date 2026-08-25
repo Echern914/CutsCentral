@@ -24,7 +24,22 @@ import { createApp } from "../app.js";
  * suite to drift into it again.
  */
 const app = createApp();
-const BASE = `slugfall-${randomToken(4).toLowerCase()}`;
+
+/**
+ * A suffix that is safe to build a SLUG out of.
+ *
+ * randomToken() is base64url, so lowercasing it still leaves "-" and "_". Both
+ * survive into BASE, and slugify() then rewrites them - so the seeded shops and
+ * the slug the API actually computes stop agreeing and this test fails for a
+ * reason that has nothing to do with what it is testing. Roughly one run in six.
+ */
+function alnum(len: number): string {
+  let out = "";
+  while (out.length < len) out += randomToken(len).toLowerCase().replace(/[^a-z0-9]/g, "");
+  return out.slice(0, len);
+}
+
+const BASE = `slugfall-${alnum(6)}`;
 const NAME = BASE.replace(/-/g, " ");
 const emails: string[] = [];
 let seedOwnerId: string;
