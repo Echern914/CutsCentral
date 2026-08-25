@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from "vitest";
 import request from "supertest";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
@@ -412,5 +420,241 @@ describe("tenant isolation", () => {
   it("an unknown id is not found", async () => {
     expect((await getAppt("appt_nope")).status).toBe(404);
     expect((await getVisit("visit_nope")).status).toBe(404);
+  });
+});
+
+/**
+ * WHETHER THIS SHOP MAY TEXT THIS CLIENT. The sheet disables its Text action
+ * from this field, so a wrong answer here is either a dead button or a TCPA
+ * violation. Both "no"s are asserted separately because only one of them is
+ * the barber's to fix.
+ */
+describe("sms reachability", () => {
+  async function setConsent(over: {
+    phone?: string | null;
+    optedOut?: boolean;
+    smsConsentAt?: Date | null;
+  }) {
+    await prisma.client.update({
+      where: { id: clientId },
+      data: {
+        ...(over.phone !== undefined ? { phone: over.phone } : {}),
+        ...(over.optedOut !== undefined ? { optedOut: over.optedOut } : {}),
+        ...(over.smsConsentAt !== undefined ? { smsConsentAt: over.smsConsentAt } : {}),
+      },
+    });
+  }
+
+  afterEach(async () => {
+    await setConsent({ phone: "+12015550134", optedOut: false, smsConsentAt: null });
+  });
+
+  it("says ok, with the date the opt-in was captured", async () => {
+    const when = new Date("2026-06-03T12:00:00.000Z");
+    await setConsent({ optedOut: false, smsConsentAt: when });
+    const res = await getAppt((await makeAppt()).id);
+    expect(res.body.sms.state).toBe("ok");
+    expect(res.body.sms.consentAt).toBe(when.toISOString());
+  });
+
+  it("a client who never opted in is no_consent, not ok", async () => {
+    await setConsent({ optedOut: false, smsConsentAt: null });
+    const res = await getAppt((await makeAppt()).id);
+    expect(res.body.sms.state).toBe("no_consent");
+    expect(res.body.sms.consentAt).toBeNull();
+  });
+
+  it("a STOP outranks a consent that was once given", async () => {
+    // The specific truth matters: opted_out is the one the barber CANNOT undo,
+    // so it must not be reported as the softer, fixable no_consent.
+    await setConsent({ optedOut: true, smsConsentAt: new Date("2026-01-01T00:00:00.000Z") });
+    const res = await getAppt((await makeAppt()).id);
+    expect(res.body.sms.state).toBe("opted_out");
+    expect(res.body.sms.consentAt).toBeNull();
+  });
+
+  it("no number on file is no_phone, whatever the consent says", async () => {
+    await setConsent({ phone: null, smsConsentAt: new Date() });
+    const res = await getAppt((await makeAppt()).id);
+    expect(res.body.sms.state).toBe("no_phone");
+  });
+
+  it("a clientless walk-in has no consent record at all", async () => {
+    const a = await makeAppt({ clientId: null, phone: "+12015550199" });
+    const res = await getAppt(a.id);
+    expect(res.body.sms.state).toBe("no_client");
+    // The appointment's own number is still dialable - a CALL needs no consent.
+    expect(res.body.contact.phone).toBe("+12015550199");
+  });
+
+  it("an Acuity-synced booking is not textable by default", async () => {
+    // The ingest matches a client and normalizes the phone, but never captures
+    // an opt-in. A synced client therefore looks reachable and is not.
+    const v = await prisma.visit.create({
+      data: {
+        shopId,
+        clientId,
+        acuityAppointmentId: randomToken(8),
+        status: "SCHEDULED",
+        scheduledAt: slotAt(15),
+        endAt: slotAt(16),
+      },
+      select: { id: true },
+    });
+    const res = await getVisit(v.id);
+    expect(res.body.sms.state).toBe("no_consent");
+  });
+});
+
+/**
+ * THE REST OF THEIR BOOK. Three back, three forward, and nothing that would
+ * mislead: no cancelled row in "upcoming", no booking counted twice, and never
+ * a byte of contact detail riding along.
+ */
+describe("client history", () => {
+  async function pastAppt(
+    daysAgo: number,
+    over: { status?: "COMPLETED" | "NO_SHOW" | "CANCELED"; visitId?: string | null } = {},
+  ) {
+    const startsAt = slotAt(15, -daysAgo);
+    return prisma.appointment.create({
+      data: {
+        shopId,
+        staffId,
+        serviceId,
+        clientId,
+        firstName: "Marcus",
+        lastName: "Dean",
+        status: over.status ?? "COMPLETED",
+        startsAt,
+        endsAt: new Date(startsAt.getTime() + 45 * 60_000),
+        priceAtBooking: 40,
+        visitId: over.visitId ?? null,
+        manageToken: randomToken(),
+      },
+      select: { id: true },
+    });
+  }
+  async function futureAppt(daysAhead: number, status: "BOOKED" | "CANCELED" = "BOOKED") {
+    const startsAt = slotAt(15, daysAhead);
+    return prisma.appointment.create({
+      data: {
+        shopId,
+        staffId,
+        serviceId,
+        clientId,
+        firstName: "Marcus",
+        lastName: "Dean",
+        status,
+        startsAt,
+        endsAt: new Date(startsAt.getTime() + 45 * 60_000),
+        priceAtBooking: 40,
+        manageToken: randomToken(),
+      },
+      select: { id: true },
+    });
+  }
+
+  it("returns the most recent three, newest first", async () => {
+    for (const d of [2, 9, 30, 60]) await pastAppt(d);
+    const res = await getAppt((await makeAppt()).id);
+    const prev = res.body.history.previous;
+    expect(prev).toHaveLength(3);
+    expect(prev[0].startsAt > prev[1].startsAt).toBe(true);
+    expect(prev[1].startsAt > prev[2].startsAt).toBe(true);
+    // The 60-day-old one fell off the end, not the 2-day-old one.
+    expect(new Date(prev[2].startsAt).getTime()).toBeGreaterThan(slotAt(15, -31).getTime());
+  });
+
+  it("returns the next three, soonest first, and never the booking being viewed", async () => {
+    const viewing = await futureAppt(7);
+    for (const d of [10, 14, 21, 28]) await futureAppt(d);
+    const res = await getAppt(viewing.id);
+    const up = res.body.history.upcoming;
+    expect(up).toHaveLength(3);
+    expect(up.map((u: { id: string }) => u.id)).not.toContain(viewing.id);
+    expect(up[0].startsAt < up[1].startsAt).toBe(true);
+  });
+
+  it("a cancelled future booking is in neither list", async () => {
+    await futureAppt(10, "CANCELED");
+    const res = await getAppt((await makeAppt({ status: "BOOKED" })).id);
+    expect(res.body.history.upcoming).toHaveLength(0);
+    expect(res.body.history.previous).toHaveLength(0);
+  });
+
+  it("carries the service, the status and the price - and no contact detail", async () => {
+    await pastAppt(3);
+    const res = await getAppt((await makeAppt()).id);
+    const [line] = res.body.history.previous;
+    expect(line.serviceName).toBe("Skin fade");
+    expect(line.status).toBe("completed");
+    expect(line.price).toBe(40);
+    // A history line is a date, a service and a status. Nothing else.
+    const raw = JSON.stringify(res.body.history);
+    expect(raw).not.toContain("+12015550134");
+    expect(raw).not.toContain("marcus@example.test");
+    expect(raw).not.toContain("Marcus");
+  });
+
+  it("a booking promoted to a Visit is counted once, not twice", async () => {
+    // The same dedupe predicate the agenda uses: a native row that Acuity has
+    // taken over exists as BOTH an Appointment and a Visit.
+    const v = await prisma.visit.create({
+      data: {
+        shopId,
+        clientId,
+        acuityAppointmentId: randomToken(8),
+        status: "COMPLETED",
+        scheduledAt: slotAt(15, -5),
+        endAt: slotAt(16, -5),
+      },
+      select: { id: true },
+    });
+    await pastAppt(5, { visitId: v.id });
+    const res = await getAppt((await makeAppt()).id);
+    expect(res.body.history.previous).toHaveLength(1);
+  });
+
+  it("never reaches into another shop's book", async () => {
+    const foreignClient = await prisma.client.create({
+      data: {
+        shopId: otherShopId,
+        acuityClientKey: "tel:+12015550777",
+        magicToken: randomToken(),
+        firstName: "Marcus",
+        lastName: "Dean",
+        phone: "+12015550777",
+      },
+    });
+    const foreignStaff = await prisma.staff.create({
+      data: { shopId: otherShopId, name: "Other" },
+    });
+    const foreignService = await prisma.service.create({
+      data: { shopId: otherShopId, name: "Other fade", durationMin: 30, price: 30 },
+    });
+    await prisma.appointment.create({
+      data: {
+        shopId: otherShopId,
+        staffId: foreignStaff.id,
+        serviceId: foreignService.id,
+        clientId: foreignClient.id,
+        firstName: "Marcus",
+        lastName: "Dean",
+        status: "COMPLETED",
+        startsAt: slotAt(15, -4),
+        endsAt: slotAt(16, -4),
+        manageToken: randomToken(),
+      },
+    });
+    const res = await getAppt((await makeAppt()).id);
+    expect(res.body.history.previous).toHaveLength(0);
+    expect(JSON.stringify(res.body)).not.toContain("+12015550777");
+  });
+
+  it("a walk-in with no client has an empty book, not an error", async () => {
+    const res = await getAppt((await makeAppt({ clientId: null })).id);
+    expect(res.status).toBe(200);
+    expect(res.body.history).toEqual({ previous: [], upcoming: [] });
   });
 });
