@@ -180,6 +180,14 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     q: "How do I add another barber?",
     a: "Add them under Staff. Each barber gets their own services and their own hours, and clients pick who they want when they book.\n\nStaff is about who takes appointments. If you also want them to sign in and see the dashboard, that's Team logins — a separate thing.",
     keywords: ["staff", "barber", "add barber", "another barber", "provider", "chairs", "stylist", "employee"],
+    // "barber" on its own is the most ambiguous word in the corpus - it is in
+    // move-appointment, remove-team-member, barber-cant-sign-in and the
+    // per-barber pricing answer. Settle it here: a question that reduces to
+    // just "barber" is about having barbers at all. This matters most INSIDE
+    // the app, where the pricing answer is filtered out by 3.1.1 and a query
+    // like "do you charge per barber" would otherwise fall to whichever entry
+    // happened to list the word.
+    primaryFor: ["barber"],
     category: "booking",
     action: { label: "Open staff", href: "/dashboard/booking?tab=Staff" },
   },
@@ -251,7 +259,11 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     id: "cancel-reschedule",
     q: "How does a client cancel or reschedule?",
     a: "Their confirmation carries a manage link — they cancel or move the appointment there themselves, and the freed slot goes straight back into the picker (and pings the waitlist).\n\nYou can also cancel or move anything yourself from the agenda.",
-    keywords: ["cancel appointment", "reschedule", "move appointment", "change time", "client cancel"],
+    keywords: [
+      "cancel appointment", "reschedule", "move appointment", "change time", "client cancel",
+      "edit an appointment", "edit appointment", "change an appointment", "amend booking",
+      "change a booking", "edit booking",
+    ],
     category: "booking",
     action: { label: "Open agenda", href: "/dashboard/booking" },
   },
@@ -290,14 +302,29 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     id: "commission",
     q: "Do you take a cut of my bookings?",
     a: "Zero. 0% commission, no per-booking fee, no cut of tips. What you charge is what you get.\n\nWe make money on the flat monthly plan and nothing else — and your client list stays yours to export whenever you want.",
-    keywords: ["commission", "cut", "percentage", "per booking fee", "take a cut", "fees", "0%", "royalty"],
+    keywords: [
+      "commission", "cut", "percentage", "per booking fee", "take a cut", "fees", "0%",
+      "royalty", "cut of my haircuts", "cut of my cuts", "take a percentage", "your cut",
+    ],
+    // "cut" is the most overloaded word a barber can type - it is their JOB.
+    // Editorially: someone asking what WE take is asking about commission;
+    // someone asking about a haircut says so with other words.
+    primaryFor: ["commission", "take a cut"],
     category: "money",
   },
   {
     id: "trial",
     q: "Is there a free trial?",
-    a: `Yes — every new shop gets ${BILLING.trialDays} days of full Premium, and you don't need a card to start.\n\nWhen it ends, you drop to the free plan automatically. Nothing gets charged unless you choose a paid plan yourself.`,
-    keywords: ["trial", "free trial", "try", "test", "30 days", "demo period", "trial end"],
+    // 🔴 This used to say "you drop to the free plan automatically", which
+    // is not what the code does: hasActiveAccess() is subscription-or-trial,
+    // so an expired trial with no subscription sets bookingPaused on the
+    // public page and walls the dashboard. Two entries disagreeing about
+    // money is the worst failure this file can have - whats-free had it right.
+    a: `Yes — every new shop gets ${BILLING.trialDays} days of full Premium, and you don't need a card to start.\n\nNothing is ever charged unless you subscribe yourself. But the trial ending is not a downgrade: your booking page stops taking new bookings until you do. Your clients, history and loyalty data stay exactly where they are, and you can read or export your client book at any time.`,
+    keywords: [
+      "trial", "free trial", "try", "test", "30 days", "demo period", "trial end",
+      "try it first", "try before", "before paying", "before i pay", "test drive", "try it out",
+    ],
     category: "money",
     hidesInApp: true,
   },
@@ -521,7 +548,10 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     id: "branding",
     q: "Can I change the colors and logo?",
     a: "Yes — themes, fonts, accent colour, and your logo, so your page and your clients' rewards hub look like your shop and not like a template.",
-    keywords: ["theme", "colors", "colours", "logo", "font", "branding", "customize", "look", "design", "style"],
+    keywords: [
+      "theme", "colors", "colours", "logo", "font", "branding", "customize", "look",
+      "design", "style", "add my logo", "upload logo", "my logo", "change logo", "picture of my shop",
+    ],
     category: "brand",
     action: { label: "Open Shop page", href: "/dashboard/site" },
   },
@@ -618,7 +648,14 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     id: "contact-human",
     q: "How do I talk to a real person?",
     a: "Email support@getchairback.com — one channel for everything, and a real person reads every message. We typically reply within 1–2 business days.\n\nInclude your shop name so we can find your account quickly.",
-    keywords: ["support", "contact", "human", "help", "email", "talk to someone", "phone number", "reach you", "someone"],
+    keywords: [
+      "support", "contact", "human", "help", "email", "talk to someone", "phone number",
+      "reach you", "someone", "call you", "speak to", "customer service", "get hold of you",
+    ],
+    // Someone asking for a number to CALL wants us, not the AI receptionist
+    // (which answers THEIR clients). The receptionist entry owns "receptionist"
+    // and "ai"; this one owns being contacted.
+    primaryFor: ["phone number", "call you", "support"],
     category: "account",
     action: { label: "Open support", href: "/support" },
   },
@@ -696,11 +733,338 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     keywords: [
       "didnt get", "not received", "no text", "text didnt send", "missing text",
       "never got", "delivery", "not delivered", "failed", "wasnt sent",
+      "never got the reminder", "didnt get the reminder", "no reminder", "reminder didnt",
     ],
     category: "texting",
     action: { label: "Open inbox", href: "/dashboard/inbox" },
   },
+  /* ========================= Asked, but unanswered ========================
+   * A second pass driven by measurement rather than imagination: 70 questions
+   * phrased the way a barber texts them, run through findHelp(). 22 got a
+   * shrug and about a dozen more got a CONFIDENT WRONG ANSWER, which this file
+   * rates as the worse failure. The entries below close both, and a few of
+   * them exist mainly to out-score a bad match ("delete a client" was landing
+   * on delete-account, which is a very expensive place to send someone).
+   * ====================================================================== */
+  {
+    id: "walk-in",
+    q: "How do I add a walk-in?",
+    a: "On the calendar, add a walk-in on the chair and time they sat down. No name, no phone number, no signup — it exists so the money and the chair time get recorded without making someone stand there while you type their details.\n\nIt counts in Insights and Chair time like any other cut. If they want the loyalty punch, add them as a client instead.",
+    keywords: ["walk in", "walkin", "walk-in", "off the street", "no appointment", "someone walked in", "add walk"],
+    category: "booking",
+    action: { label: "Open calendar", href: "/dashboard/booking" },
+  },
+  {
+    id: "record-payment",
+    q: "How do I record what someone paid?",
+    a: "Open the appointment on the calendar and check them out. You record what they actually handed over — cash, card, whatever — plus a tip if there was one, and that's what feeds Insights.\n\nIt's deliberately what you TOOK, not what the service is priced at, so a discount or a friend rate doesn't quietly inflate your numbers.",
+    keywords: [
+      "mark as paid", "record payment", "checkout", "check out", "cash", "took payment",
+      "paid me", "how much they paid", "close out", "ring up", "settle up",
+    ],
+    category: "money",
+    action: { label: "Open calendar", href: "/dashboard/booking" },
+  },
+  {
+    id: "mark-no-show",
+    q: "A client didn't show up — what do I do?",
+    a: "Mark the appointment as a no-show. It frees the chair, records the miss on that client's history, earns them no punch, and counts as $0 rather than a sale you never made.\n\nIf no-shows are a pattern, taking card or a deposit at booking is the thing that actually changes it.",
+    keywords: [
+      "no show", "didnt show", "didn't show up", "never showed", "ghosted",
+      "stood me up", "missed their appointment", "didnt turn up", "no showed",
+    ],
+    category: "booking",
+    action: { label: "Open calendar", href: "/dashboard/booking" },
+  },
+  {
+    id: "close-early",
+    q: "How do I close early today?",
+    a: "Block the rest of the day on your calendar. Blocked time beats everything else — it pulls those slots off your booking page immediately, so nobody can take a time you've already left for.\n\nUse it for a one-off. If you're changing the day you work every week, change your hours instead.",
+    keywords: [
+      "close early", "leave early", "shut early", "finish early", "going home",
+      "rest of the day", "closing today", "cancel the rest",
+    ],
+    category: "booking",
+    action: { label: "Open calendar", href: "/dashboard/booking" },
+  },
+  {
+    id: "lead-time",
+    q: "Can I stop people booking last minute?",
+    a: "Yes — set how much notice you need, and anything inside that window stops being offered. A two-hour notice means the 10am slot disappears at 8am.\n\nIt's the setting worth getting right early: too long and you turn away the walk-past trade, too short and someone books while you're mid-fade.",
+    keywords: [
+      "last minute", "notice", "lead time", "too soon", "same day", "book right now",
+      "minimum notice", "advance notice", "how much notice", "stop booking",
+    ],
+    category: "booking",
+    action: { label: "Open booking settings", href: "/dashboard/booking?tab=Settings" },
+  },
+  {
+    id: "see-the-day",
+    q: "How do I see tomorrow's appointments?",
+    a: "The calendar has a Day view beside the month — pick the date and you get that day as a single column, chair by chair, in order.\n\nThe dashboard home also opens on today's agenda, so the first thing you see each morning is who's coming in.",
+    keywords: [
+      "tomorrow", "todays appointments", "today's list", "day view", "whats my day",
+      "schedule for", "who's coming in", "whos coming", "my day", "agenda", "next day",
+    ],
+    category: "booking",
+    action: { label: "Open calendar", href: "/dashboard/booking" },
+  },
+  {
+    id: "delete-client",
+    q: "How do I delete a client?",
+    a: "You can't remove a client outright, and that's deliberate — their visits, punches and payment history are your books, so deleting one would quietly rewrite your own numbers.\n\nWhat you can do: merge them if they're a duplicate of another client, and stop texting them (their profile has the opt-out). If you need a client's data erased for a privacy request, email support@getchairback.com and we'll handle it properly.\n\nThis is a different thing from closing your OWN account — that's in Account, and it removes everything.",
+    keywords: [
+      "delete a client", "remove a client", "delete client", "remove client",
+      "get rid of a client", "duplicate client", "merge client", "wrong client",
+      "clean up my list", "delete customer", "remove customer",
+    ],
+    category: "clients",
+    action: { label: "Open clients", href: "/dashboard/clients" },
+  },
+  {
+    id: "add-client-manually",
+    q: "How do I add a client myself?",
+    a: "Add them in your client book with a name and a mobile number — that's all it takes, and they're immediately eligible for punches, reminders and rebooking nudges.\n\nIf you're moving a whole book across, import the list in one go rather than typing them in one at a time.",
+    keywords: [
+      "add a client", "new client", "add customer", "enter a client", "put a client in",
+      "add someone", "create client", "add them manually",
+    ],
+    category: "clients",
+    action: { label: "Open clients", href: "/dashboard/clients" },
+  },
+  {
+    id: "text-everyone",
+    q: "How do I text all my clients at once?",
+    a: "Write it as a promotion and send it out — that's the blast. It only goes to clients who haven't opted out, and it counts against your monthly text allowance.\n\nOne piece of advice worth more than the feature: a blast to everyone converts worse than a rebooking nudge to the twenty people who are actually overdue. Use it for genuine news, not for filling a Tuesday.",
+    keywords: [
+      "text everyone", "text all", "blast", "mass text", "bulk text", "send to everyone",
+      "message all clients", "text my list", "announcement", "broadcast", "everyone at once",
+    ],
+    category: "texting",
+    action: { label: "Open promotions", href: "/dashboard/promotions" },
+  },
+  {
+    id: "who-is-overdue",
+    q: "Can I see who hasn't been in for a while?",
+    a: "Your client book shows each client's last visit and roughly how often they come, so the drift is visible at a glance.\n\nBut you shouldn't have to go looking: rebooking nudges watch every client's own rhythm and text the ones who are overdue, automatically. That's the feature built for this question.",
+    keywords: [
+      "havent been in", "hasnt been", "overdue", "lapsed", "stopped coming",
+      "not been back", "long time", "who is due", "due back", "missing clients",
+      "lost clients", "havent seen",
+    ],
+    category: "clients",
+    action: { label: "Open clients", href: "/dashboard/clients" },
+  },
+  {
+    id: "comp-a-cut",
+    q: "How do I give someone a free cut?",
+    a: "Two different situations, two different answers:\n\nThey earned it — redeem their reward when you check them out, and the punch card resets on its own.\n\nYou're just being generous — check them out for what you actually took, which may be nothing. Recording a $0 cut keeps your Insights honest and still counts as a visit for their loyalty.",
+    keywords: [
+      "free cut", "comp", "on the house", "free haircut", "no charge", "gift",
+      "discount", "friend rate", "give away", "redeem reward",
+    ],
+    category: "clients",
+    action: { label: "Open calendar", href: "/dashboard/booking" },
+  },
+  {
+    id: "take-a-deposit",
+    q: "How do I charge a deposit?",
+    a: "Turn on deposit mode in Payments and set the amount. Clients pay that when they book and the rest in the chair, so a no-show has already left something behind.\n\nThe money goes into your own Stripe account, not ours. You can also take the full price up front instead, if that suits your shop better.",
+    keywords: [
+      "deposit", "deposits", "upfront", "up front", "partial payment", "hold a slot",
+      "secure the booking", "booking fee", "pay to book",
+    ],
+    category: "money",
+    action: { label: "Open payments", href: "/dashboard/payments" },
+  },
+  {
+    id: "refund-a-client",
+    q: "How do I refund a client?",
+    a: "If they paid by card through ChairBack, refund it from that appointment's payment — it goes back to the card they used.\n\nIf they paid you cash, or direct by Zelle, Venmo or Cash App, the money never touched us: hand it back and adjust what you recorded so your numbers match reality.",
+    keywords: [
+      "refund", "refund a client", "refunded", "pay them back", "reverse a charge",
+      "return payment", "cancel a payment", "refund a customer", "money back",
+    ],
+    category: "money",
+    action: { label: "Open payments", href: "/dashboard/payments" },
+  },
+  {
+    id: "payout-timing",
+    q: "Why hasn't my money landed yet?",
+    a: "Card payments go to YOUR Stripe account, and Stripe pays out to your bank on its own schedule — usually a couple of business days, longer for the first payout while they verify a new account.\n\nSo if a payment shows here but not in your bank, the answer is in your Stripe dashboard: check the payout schedule and whether Stripe is still waiting on any verification details.",
+    keywords: [
+      "payout", "payout late", "not in my bank", "where is my money", "when do i get paid",
+      "when do i get my money", "havent been paid", "money hasnt arrived", "stripe payout",
+      "bank transfer", "delayed", "hasnt landed",
+    ],
+    category: "money",
+    action: { label: "Open payments", href: "/dashboard/payments" },
+  },
+  {
+    id: "chargeback",
+    q: "What happens if a client disputes a payment?",
+    a: "It's between you and Stripe — the payment was made into your own Stripe account, so the dispute, the evidence and the decision all live there. We don't hold your money and we don't take a cut of it.\n\nYour best evidence is the record you already have: the booking, the reminders that went out, and the check-in.",
+    keywords: [
+      "chargeback", "charge back", "dispute", "disputed", "claimed it back",
+      "reversed", "fraud", "bank claim",
+    ],
+    category: "money",
+  },
+  {
+    id: "setup-cost",
+    q: "Is there a setup fee?",
+    a: "No. No setup fee, no onboarding fee, no per-booking fee, and no cut of what you charge.\n\nThe monthly plan is the whole cost, and the trial runs before any of it.",
+    keywords: [
+      "setup fee", "set up fee", "onboarding fee", "hidden fees", "hidden cost",
+      "extra charges", "any other fees", "installation", "upfront cost", "catch",
+    ],
+    category: "money",
+    hidesInApp: true,
+  },
+  {
+    id: "price-per-barber",
+    q: "Do you charge per barber?",
+    a: "No — the plan is per shop, not per chair. Add your whole team without the bill moving.\n\nWhat scales with a bigger shop is texting: more clients means more reminders and nudges out of the same monthly allowance.",
+    keywords: [
+      // Every keyword here is scoped to "per <someone>". Deliberately NOT
+      // "charge per", "cost per" or anything carrying a bare "charge"/"more":
+      // those tokens belong to a barber pricing their OWN services (day
+      // pricing), and lending them to a billing answer sent "can i charge more
+      // on saturday" here instead.
+      "per barber", "per chair", "per seat", "per person", "per user",
+      "per stylist", "per employee", "per head",
+    ],
+    category: "money",
+    hidesInApp: true,
+  },
+  {
+    id: "pause-account",
+    q: "Can I pause my account for a month?",
+    a: "There's no pause button — you cancel, and you come back when you're ready. Nothing is deleted in between: your clients, visit history, punches and settings are all waiting when you resubscribe.\n\nWhile it's cancelled your booking page stops taking new bookings, so if you're going away rather than closing, blocking the dates on your calendar is usually what you actually want.",
+    keywords: [
+      "pause", "freeze", "on hold", "suspend", "take a break", "closed for a month",
+      "holiday", "vacation", "temporarily", "stop for a while", "seasonal",
+    ],
+    category: "money",
+    hidesInApp: true,
+  },
+  {
+    id: "remove-team-member",
+    q: "How do I remove someone from my team?",
+    a: "Remove their access on the Team page. It takes away their sign-in and nothing else — their chair, their hours and every appointment they ever cut stay exactly where they are, so your history and your numbers don't move.\n\nOnly the owner can do this, and the owner's own seat can't be removed.",
+    keywords: [
+      "remove", "remove barber", "fire", "let go", "take away access", "revoke",
+      "someone left", "quit", "no longer works", "remove access", "kick out",
+      "delete barber", "remove employee",
+    ],
+    category: "account",
+    action: { label: "Open team", href: "/dashboard/team" },
+  },
+  {
+    id: "barber-cant-sign-in",
+    q: "My barber can't sign in",
+    a: "Two things to check, and it's nearly always the first:\n\n1. They have to sign in with the EXACT email address you invited. An invitation is tied to that address on purpose, so forwarding it to a different one grants nothing.\n2. The invitation may have expired — they last seven days — or been used already. Send a fresh one from the Team page and it takes seconds.\n\nIf they've never had a ChairBack account, they make one as part of accepting: in the app that's \"Join your shop\" on the sign-in screen, which opens a secure browser page and brings them back signed in.",
+    keywords: [
+      // Full phrases, not the bare pair "barber cant": "cant" is one edit from
+      // "can", so "barber cant" fuzzy-matched any question shaped
+      // "can i ... barber ...".
+      "cant sign in", "cant log in", "barber cant sign in", "barber cant log in",
+      "employee cant sign in", "invite not working",
+      "invitation expired", "didnt get invite", "wrong email", "join your shop",
+      "staff login", "team login", "they cant get in",
+    ],
+    category: "account",
+    action: { label: "Open team", href: "/dashboard/team" },
+  },
+  {
+    id: "i-cant-log-in",
+    q: "I can't log in",
+    a: "Use Forgot password on the sign-in page — it works even if you originally signed up with Google or Apple, because it doubles as a way to SET a password for an account that never had one.\n\nIf you made your account with Google or Apple, the buttons are the faster route. And if the app keeps signing you out, sign in once more on the sign-in screen: that stores a fresh session on the device.",
+    keywords: [
+      "cant log in", "cant login", "cant sign in", "locked out", "forgot password",
+      "reset password", "wrong password", "logged out", "keeps logging me out",
+      "signed out", "password not working", "cant get in",
+    ],
+    category: "account",
+  },
+  {
+    id: "report-a-problem",
+    q: "Something's broken — how do I report it?",
+    a: "Email support@getchairback.com with what you were doing, what you expected, and what happened instead. A screenshot and the rough time it happened make it far quicker to track down.\n\nInclude your shop name. A real person reads every message.",
+    keywords: [
+      "bug", "broken", "report", "not working", "glitch", "error", "problem",
+      "issue", "crash", "froze", "stuck", "wrong",
+    ],
+    category: "account",
+    action: { label: "Open support", href: "/support" },
+  },
+  {
+    id: "page-not-loading",
+    q: "My booking page won't load",
+    a: "Check these in order:\n\n1. The address — your page lives at your ChairBack handle, and changing your handle changes the link, which breaks any old one you've shared.\n2. If you've pointed a custom domain at it, the DNS can take a few hours to settle after you set it up.\n3. If your trial has ended and there's no subscription, the page stops taking bookings on purpose.\n\nStill stuck, send us the link at support@getchairback.com and we'll look at it directly.",
+    keywords: [
+      "page wont load", "booking page down", "link doesnt work", "site is down",
+      "404", "not found", "broken link", "page not working", "cant open my page",
+    ],
+    category: "brand",
+    action: { label: "Open your page", href: "/dashboard/site" },
+  },
+  {
+    id: "data-protection",
+    q: "How do you handle client data and privacy?",
+    a: "Your client list is yours: we don't sell it, we don't market to it, and you can export it whenever you like.\n\nEach shop's data is isolated from every other shop's at the database level, not just in the app. Texts only go to clients who consented, and STOP opts someone out permanently and immediately.\n\nFor a specific erasure or access request from one of your clients, email support@getchairback.com and we'll handle it — that's a request we act on rather than a setting you toggle.",
+    keywords: [
+      "gdpr", "ccpa", "privacy", "data protection", "personal data", "compliance",
+      "compliant", "right to be forgotten", "erasure", "data request", "secure",
+      "where is my data", "who can see",
+    ],
+    category: "account",
+    action: { label: "Read the privacy policy", href: "/privacy" },
+  },
+  {
+    id: "picture-message",
+    q: "Can I text a photo to a client?",
+    a: "Not today — outgoing messages are text only.\n\nIf you want to show work, put it in your gallery and share your page link: the photos live there, it costs nothing to send, and it doubles as the thing that books the next client.",
+    keywords: [
+      "photo", "picture", "image", "mms", "send a photo", "attach", "picture message",
+      "send pictures", "media",
+    ],
+    category: "texting",
+    action: { label: "Open your page", href: "/dashboard/site" },
+  },
+  {
+    id: "how-long-setup",
+    q: "How long does it take to set up?",
+    a: "About fifteen minutes to be taking bookings: your hours, your services and prices, and your booking link. Everything else — loyalty, promos, your page, your team — can wait until you feel like it.\n\nIf you're coming from Acuity or Square, connect it instead and your existing appointments and calendar come across on their own.",
+    keywords: [
+      "how long", "set up", "setup time", "get going", "quick", "take long",
+      "how much work", "time to set up", "onboarding", "start using",
+    ],
+    category: "start",
+    action: { label: "Get started", href: "/signup" },
+  },
+  {
+    id: "move-appointment",
+    q: "Can I move an appointment to another barber?",
+    a: "Open the appointment on the calendar — the chair and the time are both editable there, and the client gets the updated details.\n\nIf the new time doesn't appear as available, that chair's hours or an existing booking are in the way rather than anything being broken.",
+    keywords: [
+      // NOT "change barber": Damerau counts "charge" as one edit from "change",
+      // so that keyword fuzzy-matched "do you charge per barber" and answered a
+      // PRICING question with appointment mechanics - and did it worst inside
+      // the app, where the real pricing answer is filtered out by 3.1.1.
+      // "barber on a booking" carries the BOOKING token as well as the barber
+      // one, which is what lets "can i change the barber on a booking" reach
+      // 2-of-3 coverage without lending this entry a bare "change".
+      "move appointment", "another barber", "different barber", "switch barber",
+      "barber on a booking", "barber on an appointment",
+      "swap", "reassign", "give it to", "move to", "transfer appointment",
+      "someone else cut",
+    ],
+    category: "booking",
+    action: { label: "Open calendar", href: "/dashboard/booking" },
+  },
 ];
+
 
 /**
  * What the bot offers before the barber types anything. Ordered by what gets
