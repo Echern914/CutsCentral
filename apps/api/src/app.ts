@@ -44,7 +44,12 @@ import { paymentsDashboardRouter } from "./routes/payments.dashboard.js";
 import { adminPortalRouter } from "./routes/adminPortal.js";
 import { demoRouter } from "./routes/demo.js";
 import { captureError } from "./sentry.js";
-import { redactedReqSerializer, redactUrl, requestUrl } from "./logRedaction.js";
+import {
+  redactedReqSerializer,
+  redactedResSerializer,
+  redactUrl,
+  requestUrl,
+} from "./logRedaction.js";
 import { corsMiddleware } from "./middleware/cors.js";
 import { requireAdminIp } from "./middleware/adminIp.js";
 import {
@@ -76,7 +81,16 @@ export function createApp(): Express {
   // every request and all per-IP rate limits collapse into one shared bucket.
   app.set("trust proxy", 1);
 
-  app.use(pinoHttp({ logger, serializers: { req: redactedReqSerializer } }));
+  // 🔴 BOTH serializers, on purpose. Overriding only `req` leaves pino-http's
+  // default `res` serializer emitting every response header - which is how
+  // the session cookie spent months on stdout while the request side was
+  // being carefully redacted.
+  app.use(
+    pinoHttp({
+      logger,
+      serializers: { req: redactedReqSerializer, res: redactedResSerializer },
+    }),
+  );
   app.disable("x-powered-by");
   app.use(securityHeaders);
   app.use(corsMiddleware);
