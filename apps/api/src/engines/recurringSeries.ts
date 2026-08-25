@@ -9,6 +9,7 @@ import { logger } from "../logger.js";
 import { isSlotBookable } from "./slots.js";
 import { lockStaffAndAssertSlotFree } from "./bookingWrite.js";
 import { dispatchAfterCommit, recordMirrorIntent } from "./acuityMirror.js";
+import { isMirrorNotConfigured, mirrorNotConfiguredSource } from "./mirrorNotConfigured.js";
 import { effectiveDurationAt, effectivePriceAt } from "./pricing.js";
 
 /**
@@ -95,6 +96,13 @@ export type SkipReason =
   | "slot_taken"
   | "not_bookable"
   | "outside_horizon"
+  /**
+   * The shop is ENFORCING an outbound mirror and this chair cannot be
+   * protected. Reported per occurrence rather than failing the series: the
+   * caller gets a full booked/skipped picture instead of a 500, and every
+   * occurrence will carry the same reason, which reads as the real diagnosis.
+   */
+  | "unavailable_external"
   | "error";
 
 export interface SeriesResult {
@@ -294,6 +302,18 @@ export async function materializeSeries(
         (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002")
       ) {
         skipped.push({ index: occ.index, startsAt, reason: "slot_taken" });
+      } else if (isMirrorNotConfigured(err)) {
+        logger.error(
+          {
+            shopId: input.shopId,
+            seriesId: series.id,
+            index: occ.index,
+            staffId: err.staffId,
+            mirror: mirrorNotConfiguredSource(err),
+          },
+          "mirror: ENFORCE with an unmapped chair - recurring occurrence skipped",
+        );
+        skipped.push({ index: occ.index, startsAt, reason: "unavailable_external" });
       } else {
         logger.error(
           { err, shopId: input.shopId, seriesId: series.id, index: occ.index },

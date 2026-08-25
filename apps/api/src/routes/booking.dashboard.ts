@@ -59,6 +59,10 @@ import {
 import { zonedDateParts, zonedWallTimeToUtc, localMinutesOfDay } from "@chairback/config";
 import { invalidateShopAvailabilityCaches } from "./booking.public.js";
 import { logger } from "../logger.js";
+import {
+  isMirrorNotConfigured,
+  mirrorNotConfiguredSource,
+} from "../engines/mirrorNotConfigured.js";
 import { recordWaitlistEvent } from "../engines/waitlistAudit.js";
 import { getAcuityClientForShop, NotConnectedError } from "../acuity/client.js";
 import {
@@ -2710,6 +2714,19 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
       res.status(409).json({ error: "slot_taken" });
       return;
     }
+    // ENFORCING with a chair the mirror cannot protect. Same refusal the
+    // public booking page gives, for the same reason: confirming a booking
+    // the external calendar still shows as free is precisely what the mirror
+    // exists to prevent. Previously this fell through to a 500, which told
+    // the barber nothing and read as the product being broken.
+    if (isMirrorNotConfigured(err)) {
+      logger.error(
+        { shopId, staffId: err.staffId, mirror: mirrorNotConfiguredSource(err) },
+        "mirror: ENFORCE with an unmapped chair - dashboard create refused",
+      );
+      res.status(409).json({ error: "slot_unavailable_external" });
+      return;
+    }
     logger.error({ err, shopId }, "dashboard appointment create failed");
     res.status(500).json({ error: "create_failed" });
   }
@@ -4717,20 +4734,41 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
     // but the client is IN THE CHAIR until walkInEnd, so the time is genuinely
     // occupied and must not be offered in Acuity mid-cut. appointmentOccupies
     // Time reads the SPAN, not the status, which is what makes this work.
-    const outboxId = await recordMirrorIntent(tx, {
-      shopId,
-      appointmentId: appt.id,
-      staffId,
-      startsAt: now,
-      endsAt: walkInEnd,
-      occupancy: {
-        status: "COMPLETED",
+    //  DELIBERATELY NOT A REFUSAL.
+    //
+    // Every other booking path answers 409 when an enforcing shop cannot
+    // mirror the chair, because there is still time to say no. A walk-in is
+    // different in kind: the money is already in the till and the client is
+    // already in the chair. Refusing here would roll the whole transaction
+    // back - payment included - to protect a calendar slot that is being
+    // physically occupied whether or not Acuity agrees.
+    //
+    // So the walk-in is recorded and the mirror is skipped, loudly. The chair
+    // is genuinely double-bookable in the external calendar until someone maps
+    // the barber, and that is a worse-of-two-evils we take on purpose.
+    let outboxId: string | null = null;
+    try {
+      outboxId = await recordMirrorIntent(tx, {
+        shopId,
+        appointmentId: appt.id,
+        staffId,
         startsAt: now,
         endsAt: walkInEnd,
-        holdExpiresAt: null,
-        visitId: null,
-      },
-    });
+        occupancy: {
+          status: "COMPLETED",
+          startsAt: now,
+          endsAt: walkInEnd,
+          holdExpiresAt: null,
+          visitId: null,
+        },
+      });
+    } catch (err) {
+      if (!isMirrorNotConfigured(err)) throw err;
+      logger.error(
+        { shopId, staffId, appointmentId: appt.id, mirror: mirrorNotConfiguredSource(err) },
+        "mirror: ENFORCE with an unmapped chair - walk-in RECORDED ANYWAY and NOT mirrored",
+      );
+    }
     return { kind: "ok" as const, id: appt.id, staffId, outboxId };
   });
 
