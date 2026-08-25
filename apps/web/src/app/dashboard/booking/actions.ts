@@ -926,3 +926,135 @@ export async function editAppointmentAction(
     mirror: res.data?.mirror,
   };
 }
+
+//  Square calendar protection (S1 setup)
+
+export type SquareMappingProblem = "unmapped" | "stale" | "invalid" | "version_stale";
+
+export type SquareConnectionProblem =
+  | "not_connected"
+  | "revoked"
+  | "scopes_unverified"
+  | "reauth_required"
+  | "capability_unknown"
+  | "seller_writes_unsupported"
+  | "booking_disabled"
+  | "location_unset"
+  | "location_stale"
+  | "location_invalid";
+
+export interface SquareSetupData {
+  mode: "OFF" | "OBSERVE" | "ENFORCE";
+  bookingMode: string;
+  ready: boolean;
+  connectionProblems: SquareConnectionProblem[];
+  /** Echoed back on every save so a stale tab cannot stamp a fresh mapping. */
+  generation: number;
+  connection: {
+    connected: boolean;
+    revoked: boolean;
+    grantedScopes: string[];
+    scopesCheckedAt: string | null;
+    sellerLevelWrites: boolean | null;
+    bookingEnabled: boolean | null;
+    capabilityCheckedAt: string | null;
+    outboundLocationId: string | null;
+    outboundLocationName: string | null;
+  };
+  preselectLocationId: string | null;
+  locations: { id: string; name: string | null; status: string | null }[];
+  teamMembers: { id: string; name: string | null; takenByStaffId: string | null }[];
+  variations: { id: string; label: string; durationMin: number | null }[];
+  staff: {
+    id: string;
+    name: string;
+    active: boolean;
+    bookable: boolean;
+    teamMemberId: string | null;
+    teamMemberName: string | null;
+    problem: SquareMappingProblem | null;
+  }[];
+  services: {
+    id: string;
+    name: string;
+    active: boolean;
+    bookable: boolean;
+    variationId: string | null;
+    variationName: string | null;
+    problem: SquareMappingProblem | null;
+  }[];
+  blockingPairs: {
+    staffId: string;
+    staffName: string;
+    serviceId: string;
+    serviceName: string;
+    staffProblem: SquareMappingProblem | null;
+    serviceProblem: SquareMappingProblem | null;
+  }[];
+}
+
+/**
+ * One live snapshot of everything the setup screen shows.
+ *
+ * The failure is returned rather than thrown so the card can say "Square would
+ * not answer" - a different problem, with a different fix, from "a chair is
+ * unmapped".
+ */
+export async function getSquareSetupAction(): Promise<{
+  ok: boolean;
+  data?: SquareSetupData;
+  error?: string;
+}> {
+  const res = await apiGet<SquareSetupData>("/api/booking/square/setup");
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, data: res.data };
+}
+
+export async function setSquareLocationAction(
+  locationId: string | null,
+  generation: number,
+): Promise<Result> {
+  return done(await apiSend("PUT", "/api/booking/square/location", { locationId, generation }));
+}
+
+export async function setSquareTeamMemberAction(
+  staffId: string,
+  teamMemberId: string | null,
+  generation: number,
+): Promise<Result> {
+  return done(
+    await apiSend("PUT", `/api/booking/staff/${staffId}/square-team-member`, {
+      teamMemberId,
+      generation,
+    }),
+  );
+}
+
+export async function setSquareVariationAction(
+  serviceId: string,
+  variationId: string | null,
+  generation: number,
+): Promise<Result> {
+  return done(
+    await apiSend("PUT", `/api/booking/services/${serviceId}/square-variation`, {
+      variationId,
+      generation,
+    }),
+  );
+}
+
+/** Re-read the granted scopes + the seller's plan capability. */
+export async function refreshSquareCapabilityAction(): Promise<Result> {
+  return done(await apiSend("POST", "/api/booking/square/capability", {}));
+}
+
+/**
+ * Switch the outbound mode. A refused ENFORCE comes back as `mapping_incomplete`
+ * - the caller re-fetches the snapshot for the reasons, because the shared
+ * `toResult` keeps only the error CODE from a non-2xx body.
+ */
+export async function setSquareModeAction(
+  mode: "OFF" | "OBSERVE" | "ENFORCE",
+): Promise<Result> {
+  return done(await apiSend("PUT", "/api/booking/square/outbound-mode", { mode }));
+}

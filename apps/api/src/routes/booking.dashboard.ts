@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { z } from "zod";
 import { randomToken, SERVICE_COLOR_KEYS } from "@chairback/config";
 import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
@@ -59,6 +59,23 @@ import { invalidateShopAvailabilityCaches } from "./booking.public.js";
 import { logger } from "../logger.js";
 import { recordWaitlistEvent } from "../engines/waitlistAudit.js";
 import { getAcuityClientForShop, NotConnectedError } from "../acuity/client.js";
+// Aliased: the Acuity client exports a NotConnectedError of the same name, and
+// two identically named errors in one file is how a catch block silently starts
+// answering for the wrong integration.
+import { NotConnectedError as SquareNotConnectedError } from "../square/client.js";
+import {
+  getSquareSetupSnapshot,
+  loadSquareConnectionRow,
+  refreshSquareCapability,
+  setOutboundLocation,
+  setServiceVariation,
+  setStaffTeamMember,
+  LocationNotOnAccountError,
+  SquareConnectionChangedError,
+  TeamMemberNotOnAccountError,
+  TeamMemberTakenError,
+  VariationNotOnAccountError,
+} from "../engines/squareOutboundMap.js";
 import {
   CalendarNotOnAccountError,
   CalendarTakenError,
@@ -1519,6 +1536,291 @@ bookingDashboardRouter.post("/acuity/backfill", async (req, res) => {
     logger.error({ err, shopId }, "acuity backfill failed");
     res.status(502).json({ error: "acuity_unavailable" });
   }
+});
+
+//  Square outbound setup (S1)
+//
+// Manager-gated by the router (requireUser + requireShop + requireManager +
+// requireActiveAccess, applied at the top of this file). Every route here is
+// read-only against Square: the setup screen and the three mapping setters make
+// GETs and store ids. Nothing in this section can create, change or cancel a
+// booking on a seller's calendar - that is PR S2, behind these gates.
+
+/**
+ * Everything the Square setup screen needs, from ONE set of live reads.
+ *
+ * NOT collapsed into a bare boolean on failure. "Square would not answer"
+ * (expired token, outage, a seller who revoked us) and "a chair is unmapped"
+ * need different fixes, and merging them sends an owner hunting a mapping bug
+ * when the real answer is "reconnect Square" - so a client error surfaces as
+ * its own code.
+ */
+bookingDashboardRouter.get("/square/setup", async (req, res) => {
+  const shopId = req.shop!.id;
+  const shop = await prisma.shop.findUnique({
+    where: { id: shopId },
+    select: { squareOutboundMode: true, bookingMode: true },
+  });
+  try {
+    const snap = await getSquareSetupSnapshot(shopId);
+    const takenBy = new Map(
+      snap.readiness.staff
+        .filter((s) => s.squareTeamMemberId)
+        .map((s) => [s.squareTeamMemberId!, s.id]),
+    );
+    res.json({
+      mode: shop?.squareOutboundMode ?? "OFF",
+      bookingMode: shop?.bookingMode ?? "link",
+      ready: snap.readiness.ready,
+      connectionProblems: snap.readiness.connectionProblems,
+      // Echoed so a save can prove it validated against THIS authorization.
+      generation: snap.connection.generation,
+      connection: {
+        connected: snap.connection.connected,
+        revoked: snap.connection.revoked,
+        grantedScopes: snap.connection.grantedScopes,
+        scopesCheckedAt: snap.connection.scopesCheckedAt?.toISOString() ?? null,
+        sellerLevelWrites: snap.connection.sellerLevelWrites,
+        bookingEnabled: snap.connection.bookingEnabled,
+        capabilityCheckedAt: snap.connection.capabilityCheckedAt?.toISOString() ?? null,
+        outboundLocationId: snap.connection.outboundLocationId,
+        outboundLocationName: snap.connection.outboundLocationName,
+      },
+      preselectLocationId: snap.readiness.preselectLocationId,
+      // Business data only - the names the owner typed into Square. No tokens,
+      // no merchant id, no customer anything.
+      locations: snap.locations.map((l) => ({
+        id: l.id,
+        name: l.name ?? null,
+        status: l.status ?? null,
+      })),
+      teamMembers: snap.teamProfiles.map((p) => ({
+        id: p.team_member_id,
+        name: p.display_name ?? null,
+        takenByStaffId: takenBy.get(p.team_member_id) ?? null,
+      })),
+      variations: snap.variations.map((v) => ({
+        id: v.id,
+        label: v.label,
+        durationMin: v.serviceDurationMin,
+      })),
+      staff: snap.readiness.staff.map((s) => ({
+        id: s.id,
+        name: s.name,
+        active: s.active,
+        bookable: s.bookable,
+        teamMemberId: s.squareTeamMemberId,
+        teamMemberName: s.teamMemberName,
+        problem: s.problem,
+      })),
+      services: snap.readiness.services.map((s) => ({
+        id: s.id,
+        name: s.name,
+        active: s.active,
+        bookable: s.bookable,
+        variationId: s.squareServiceVariationId,
+        variationName: s.variationName,
+        problem: s.problem,
+      })),
+      blockingPairs: snap.readiness.blockingPairs,
+    });
+  } catch (err) {
+    if (err instanceof SquareNotConnectedError) {
+      res.status(409).json({ error: "square_not_connected" });
+      return;
+    }
+    logger.error({ err, shopId }, "square setup snapshot failed");
+    res.status(502).json({ error: "square_unavailable" });
+  }
+});
+
+/**
+ * The generation the client validated against (echoed by the GET above).
+ * Absent = an old client; treated as "unknown generation", which fails closed
+ * for a SET - see assertGeneration.
+ */
+const squareGenerationField = z.number().int().nullable().optional();
+
+const setSquareLocationSchema = z
+  .object({ locationId: z.string().min(1).nullable(), generation: squareGenerationField })
+  .strict();
+
+const setTeamMemberSchema = z
+  .object({ teamMemberId: z.string().min(1).nullable(), generation: squareGenerationField })
+  .strict();
+
+const setVariationSchema = z
+  .object({ variationId: z.string().min(1).nullable(), generation: squareGenerationField })
+  .strict();
+
+/** Translate an engine refusal into the 409 whose code IS the fix instruction. */
+function squareMappingError(err: unknown, res: Response, shopId: string, what: string): boolean {
+  if (
+    err instanceof TeamMemberNotOnAccountError ||
+    err instanceof TeamMemberTakenError ||
+    err instanceof VariationNotOnAccountError ||
+    err instanceof LocationNotOnAccountError ||
+    err instanceof SquareConnectionChangedError
+  ) {
+    res.status(409).json({ error: err.message });
+    return true;
+  }
+  // The partial unique index fired under a concurrent save. Same clean 409 as
+  // the pre-check - never a 500.
+  if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+    res.status(409).json({ error: "team_member_already_mapped" });
+    return true;
+  }
+  if (err instanceof SquareNotConnectedError) {
+    res.status(409).json({ error: "square_not_connected" });
+    return true;
+  }
+  logger.error({ err, shopId }, `square ${what} map failed`);
+  res.status(502).json({ error: "square_unavailable" });
+  return true;
+}
+
+/**
+ * Choose the location outbound bookings are written to (null clears it).
+ *
+ * Deliberately a separate decision from the location the inbound connect picked
+ * by "first ACTIVE" - a fine default for READING a single-location seller, and
+ * an unacceptable one for writing into a multi-location seller's calendar.
+ */
+bookingDashboardRouter.put("/square/location", async (req, res) => {
+  const shopId = req.shop!.id;
+  const parsed = setSquareLocationSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  try {
+    await setOutboundLocation(shopId, parsed.data.locationId, parsed.data.generation ?? null);
+  } catch (err) {
+    squareMappingError(err, res, shopId, "location");
+    return;
+  }
+  res.json({ ok: true });
+});
+
+/**
+ * Map one chair to one Square team member (null clears it).
+ *
+ * The id is re-validated against the live account inside setStaffTeamMember -
+ * this is the pointer that aims a REAL booking at a human being's working day,
+ * so an id from a stale tab or another merchant must not be storable.
+ */
+bookingDashboardRouter.put("/staff/:id/square-team-member", async (req, res) => {
+  const shopId = req.shop!.id;
+  const parsed = setTeamMemberSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const staff = await forShop(shopId).staff.findFirst({
+    where: { id: req.params.id },
+    select: { id: true },
+  });
+  if (!staff) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  try {
+    await setStaffTeamMember(shopId, staff.id, parsed.data.teamMemberId, parsed.data.generation ?? null);
+  } catch (err) {
+    squareMappingError(err, res, shopId, "team member");
+    return;
+  }
+  res.json({ ok: true });
+});
+
+/**
+ * Map one service to one Square service variation (null clears it).
+ *
+ * The VERSION is captured server-side from the same live read that validated
+ * the id, never taken from the request: Square rejects a booking whose
+ * service_variation_version is behind the catalog, so a version supplied by a
+ * stale browser tab would store a mapping that is already broken.
+ */
+bookingDashboardRouter.put("/services/:id/square-variation", async (req, res) => {
+  const shopId = req.shop!.id;
+  const parsed = setVariationSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const service = await forShop(shopId).service.findFirst({
+    where: { id: req.params.id },
+    select: { id: true },
+  });
+  if (!service) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  try {
+    await setServiceVariation(shopId, service.id, parsed.data.variationId, parsed.data.generation ?? null);
+  } catch (err) {
+    squareMappingError(err, res, shopId, "service variation");
+    return;
+  }
+  res.json({ ok: true });
+});
+
+/** Re-read the granted scopes and the seller's plan capability, on demand. */
+bookingDashboardRouter.post("/square/capability", async (req, res) => {
+  const shopId = req.shop!.id;
+  await refreshSquareCapability(shopId);
+  res.json({ ok: true, connection: await loadSquareConnectionRow(shopId) });
+});
+
+const setSquareModeSchema = z.object({ mode: z.enum(["OFF", "OBSERVE", "ENFORCE"]) }).strict();
+
+/**
+ * Switch the Square outbound mode.
+ *
+ * ENFORCE is REFUSED until every bookable barber x service PAIR carries a fresh,
+ * valid mapping AND the connection can actually write (scopes granted, seller
+ * plan supports seller-level writes, a location chosen). Half-mirrored is worse
+ * than unmirrored: it looks protected and isn't.
+ *
+ * OFF and OBSERVE are always allowed. Stepping back is safe by construction -
+ * the mode gates CREATION only, so anything ChairBack already owns in Square
+ * stays cancellable in every mode.
+ */
+bookingDashboardRouter.put("/square/outbound-mode", async (req, res) => {
+  const shopId = req.shop!.id;
+  const parsed = setSquareModeSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  if (parsed.data.mode === "ENFORCE") {
+    try {
+      const snap = await getSquareSetupSnapshot(shopId);
+      if (!snap.readiness.ready) {
+        res.status(409).json({
+          error: "mapping_incomplete",
+          connectionProblems: snap.readiness.connectionProblems,
+          blockingPairs: snap.readiness.blockingPairs,
+        });
+        return;
+      }
+    } catch (err) {
+      if (err instanceof SquareNotConnectedError) {
+        res.status(409).json({ error: "square_not_connected" });
+        return;
+      }
+      logger.error({ err, shopId }, "square enforce gate check failed");
+      res.status(502).json({ error: "square_unavailable" });
+      return;
+    }
+  }
+  await prisma.shop.update({
+    where: { id: shopId },
+    data: { squareOutboundMode: parsed.data.mode },
+  });
+  logger.warn({ shopId, mode: parsed.data.mode }, "square outbound mode changed");
+  res.json({ ok: true, mode: parsed.data.mode });
 });
 
 //  Appointments (the barber's calendar / inbox)

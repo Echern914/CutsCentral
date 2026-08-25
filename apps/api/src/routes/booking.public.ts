@@ -10,6 +10,7 @@ import {
   staffSpanBlocked,
 } from "../engines/blockedTime.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
+import { checkSquareBookingAllowed } from "../engines/squareOutboundMap.js";
 import {
   completeReschedule,
   dispatchCreate,
@@ -1542,6 +1543,28 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {
     logger.error(
       { shopId: shop.id, staffId: d.staffId },
       "acuity mirror: ENFORCE with unmapped/stale chair - refusing this barber's bookings",
+    );
+    res.status(409).json({ error: "slot_unavailable_external" });
+    return;
+  }
+
+  // The same rule for Square, and it needs the SERVICE too: a Square Booking
+  // names a service_variation_id as well as a team_member_id, so a perfectly
+  // mapped barber still cannot be protected for a service that is not in the
+  // seller's catalog.
+  //
+  // This is the case ENFORCE's setup gate cannot cover: arming requires every
+  // bookable pair to be mapped, but a barber hired (or a service added) next
+  // Tuesday arrives into an already-armed shop. Refusing that ONE pair is the
+  // only honest answer - taking the booking would sell time Square is still
+  // offering, and disarming the shop would strip protection from every barber
+  // who IS mapped. Database-only, no Square call: the public booking path must
+  // not start failing because Square is down.
+  const squareRefusal = await checkSquareBookingAllowed(shop.id, d.staffId, d.serviceId);
+  if (squareRefusal) {
+    logger.error(
+      { shopId: shop.id, staffId: d.staffId, serviceId: d.serviceId, reason: squareRefusal },
+      "square mirror: ENFORCE with an unmapped/stale pair - refusing this barber's bookings",
     );
     res.status(409).json({ error: "slot_unavailable_external" });
     return;

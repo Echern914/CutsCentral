@@ -3,10 +3,20 @@ import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import {
   squareBookingSchema,
+  squareBusinessBookingProfileSchema,
+  squareCatalogItemSchema,
   squareCustomerSchema,
+  squareLocationSchema,
+  squareTeamMemberBookingProfileSchema,
   squareTokenSchema,
+  squareTokenStatusSchema,
   type SquareBooking,
+  type SquareBusinessBookingProfile,
+  type SquareCatalogItem,
   type SquareCustomer,
+  type SquareLocation,
+  type SquareTeamMemberBookingProfile,
+  type SquareTokenStatus,
 } from "./types.js";
 
 const env = apiEnv();
@@ -43,6 +53,27 @@ export interface SquareClient {
   getBooking(id: string): Promise<SquareBooking>;
   listBookings(params: ListParams): Promise<{ bookings: SquareBooking[]; cursor: string | null }>;
   getCustomer(id: string): Promise<SquareCustomer>;
+
+  //  OUTBOUND SETUP (S1). Read-only, every one of them.
+  //
+  // Calendar protection needs to know four things before it may write anything:
+  // which locations exist, whether the seller's plan even permits seller-level
+  // writes, which team members are bookable, and which catalog variations are
+  // services. All four are GETs. The single POST below (token status) is OAuth
+  // introspection - it reads the scopes a token was granted and mutates
+  // nothing. There is deliberately no create/update/cancel here: PR S1 cannot
+  // touch a seller's calendar even if every gate above it were wrong.
+
+  /** Every location on the merchant - the outbound one is CHOSEN from these. */
+  listLocations(): Promise<SquareLocation[]>;
+  /** The plan capability gate: support_seller_level_writes / booking_enabled. */
+  getBusinessBookingProfile(): Promise<SquareBusinessBookingProfile>;
+  /** Bookable team-member profiles (paged internally to exhaustion). */
+  listTeamMemberBookingProfiles(): Promise<SquareTeamMemberBookingProfile[]>;
+  /** APPOINTMENTS_SERVICE catalog items with their variations (paged). */
+  listServiceCatalogItems(): Promise<SquareCatalogItem[]>;
+  /** What this token was actually GRANTED - never what we asked for. */
+  getTokenStatus(): Promise<SquareTokenStatus>;
 }
 
 export interface ListParams {
@@ -115,7 +146,103 @@ export async function getSquareClientForShop(shopId: string): Promise<SquareClie
       const data = (await call("GET", `/v2/customers/${id}`)) as { customer?: unknown };
       return squareCustomerSchema.parse(data.customer);
     },
+
+    //  Outbound setup reads
+
+    async listLocations() {
+      const data = (await call("GET", SQUARE.paths.locations)) as { locations?: unknown[] };
+      return squareLocationSchema.array().parse(data.locations ?? []);
+    },
+
+    async getBusinessBookingProfile() {
+      const data = (await call("GET", SQUARE.paths.businessBookingProfile)) as {
+        business_booking_profile?: unknown;
+      };
+      // A seller with booking never configured can answer 200 with no profile.
+      // Parsing `{}` yields all-null, which the readiness math reads as
+      // "unknown capability" and refuses - the correct answer, and a much
+      // better one than a 500 on the setup screen.
+      return squareBusinessBookingProfileSchema.parse(data.business_booking_profile ?? {});
+    },
+
+    async listTeamMemberBookingProfiles() {
+      return pageThrough(
+        (cursor) => {
+          const q = new URLSearchParams({ limit: "100" });
+          // Only profiles that can actually receive a booking. A chair mapped
+          // to a non-bookable team member would store a mapping that reads
+          // valid on the setup screen and fails at write time.
+          q.set("bookable_only", "true");
+          if (cursor) q.set("cursor", cursor);
+          return `${SQUARE.paths.teamMemberBookingProfiles}?${q.toString()}`;
+        },
+        (data) =>
+          squareTeamMemberBookingProfileSchema
+            .array()
+            .parse((data as { team_member_booking_profiles?: unknown[] })
+              .team_member_booking_profiles ?? []),
+      );
+    },
+
+    async listServiceCatalogItems() {
+      const items = await pageThrough(
+        (cursor) => {
+          const q = new URLSearchParams({ types: "ITEM" });
+          if (cursor) q.set("cursor", cursor);
+          return `${SQUARE.paths.catalogList}?${q.toString()}`;
+        },
+        (data) =>
+          squareCatalogItemSchema
+            .array()
+            .parse((data as { objects?: unknown[] }).objects ?? []),
+      );
+      // A bookable service in Square is an ITEM whose product_type is
+      // APPOINTMENTS_SERVICE; a shop's retail catalog (pomade, t-shirts) lives
+      // in the same list and must never be offered as a mapping target.
+      return items.filter(
+        (i) => !i.is_deleted && i.item_data?.product_type === "APPOINTMENTS_SERVICE",
+      );
+    },
+
+    async getTokenStatus() {
+      // The one non-GET in this file, and it mutates nothing: OAuth token
+      // INTROSPECTION, which is the only way to learn the scopes a token was
+      // actually granted (ObtainToken's response does not echo them). Without
+      // it the stored `scope` is a record of what we asked for, which is
+      // worthless as a permission check.
+      const data = await call("POST", SQUARE.paths.tokenStatus);
+      return squareTokenStatusSchema.parse(data ?? {});
+    },
   };
+
+  /**
+   * Walk a Square cursor endpoint to exhaustion.
+   *
+   * Stops when the cursor stops ADVANCING, not merely when a page cap is hit -
+   * a cap alone turns a server-side cursor bug into a silent fixed number of
+   * pointless round trips per call, which is exactly the trap square/walk.ts
+   * was written to avoid. The cap is the backstop, the advance check is the
+   * contract.
+   */
+  async function pageThrough<T>(
+    buildPath: (cursor: string | null) => string,
+    parsePage: (data: unknown) => T[],
+  ): Promise<T[]> {
+    const out: T[] = [];
+    let cursor: string | null = null;
+    const seen = new Set<string>();
+    for (let page = 0; page < 20; page += 1) {
+      const data = (await call("GET", buildPath(cursor))) as {
+        cursor?: string;
+      };
+      out.push(...parsePage(data));
+      const next = data.cursor ?? null;
+      if (!next || next === cursor || seen.has(next)) break;
+      seen.add(next);
+      cursor = next;
+    }
+    return out;
+  }
 }
 
 /**
