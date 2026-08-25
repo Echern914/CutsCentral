@@ -56,6 +56,40 @@ function useMounted(): boolean {
   return mounted;
 }
 
+/**
+ * THE ON-SCREEN KEYBOARD, WHICH `dvh` CANNOT SEE.
+ *
+ * `100dvh` tracks the browser's LAYOUT viewport — it follows the iOS URL bar,
+ * but not the virtual keyboard, which overlays the page rather than resizing
+ * it. Focus an input near the bottom of a tall sheet and the panel keeps its
+ * full height while the keyboard covers its last third, taking the sticky
+ * footer's Save down with it. `visualViewport.height` is the only number that
+ * knows the keyboard is there.
+ *
+ * Returns the overlap in px, and only once it is big enough to BE a keyboard:
+ * a few pixels of rubber-band scroll must never resize the sheet.
+ */
+function useKeyboardInset(open: boolean): number {
+  const [inset, setInset] = useState(0);
+  useEffect(() => {
+    if (!open) return;
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const read = () => {
+      const overlap = window.innerHeight - vv.height - vv.offsetTop;
+      setInset(overlap > 80 ? Math.round(overlap) : 0);
+    };
+    read();
+    vv.addEventListener("resize", read);
+    vv.addEventListener("scroll", read);
+    return () => {
+      vv.removeEventListener("resize", read);
+      vv.removeEventListener("scroll", read);
+    };
+  }, [open]);
+  return inset;
+}
+
 export function Dialog({
   open,
   onClose,
@@ -66,6 +100,8 @@ export function Dialog({
   labelId,
   className,
   closeLabel = "Close",
+  titleAlign = "start",
+  leading,
 }: {
   open: boolean;
   onClose: () => void;
@@ -80,8 +116,17 @@ export function Dialog({
   /** Extra classes for the panel (max-width lives here). */
   className?: string;
   closeLabel?: string;
+  /**
+   * "center" gives the app-sheet header: an optional leading control, the
+   * title centered between the two edges, Close on the right. Default stays
+   * "start", so every dialog already in the app is untouched.
+   */
+  titleAlign?: "start" | "center";
+  /** A Back control, rendered at the header's leading edge. */
+  leading?: React.ReactNode;
 }) {
   const mounted = useMounted();
+  const keyboardInset = useKeyboardInset(open);
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const generatedId = useId();
@@ -147,8 +192,17 @@ export function Dialog({
   }, [open]);
 
   // Move focus in on open; put it back where it came from on close.
+  //
+  // 🔴 `mounted` IS LOAD-BEARING IN THIS DEPENDENCY LIST. The first commit
+  // renders nothing (useMounted is false until its own effect runs), so on that
+  // pass `closeRef.current` is still null and the focus call silently does
+  // nothing. Without re-running once the portal exists, focus never entered the
+  // dialog at all: it stayed on the trigger behind the scrim, the first Tab
+  // went to page content, and a screen reader never announced the dialog.
+  // Caught by asserting where focus actually IS after opening, which is the
+  // only way this shows up — the trap and the restore both still "worked".
   useEffect(() => {
-    if (!open) return;
+    if (!open || !mounted) return;
     const restoreTo = document.activeElement as HTMLElement | null;
     closeRef.current?.focus();
     return () => {
@@ -156,7 +210,7 @@ export function Dialog({
       // restore to something still in the document.
       if (restoreTo && document.contains(restoreTo)) restoreTo.focus();
     };
-  }, [open]);
+  }, [open, mounted]);
 
   const onBackdrop = useCallback(() => closeRefFn.current(), []);
 
@@ -200,18 +254,36 @@ export function Dialog({
         style={{
           // The gutter is smaller on phones (the sheet is meant to sit close to
           // the edges) and roomier once the dialog floats. `dvh` follows the
-          // iOS URL bar, so the panel never hides behind it.
-          maxHeight: "calc(100dvh - 1.5rem)",
+          // iOS URL bar, so the panel never hides behind it — and the keyboard
+          // inset takes back what the on-screen keyboard covers, which `dvh`
+          // does not see (see useKeyboardInset).
+          maxHeight: `calc(100dvh - 1.5rem - ${keyboardInset}px)`,
         }}
       >
         <div
           data-qa="dialog-header"
-          className="flex flex-none items-start justify-between gap-3 border-b border-subtle px-4 py-3 sm:px-6 sm:py-4"
+          className={cn(
+            "flex flex-none gap-3 border-b border-subtle px-4 py-3 sm:px-6 sm:py-4",
+            titleAlign === "center"
+              ? "items-center justify-between"
+              : "items-start justify-between",
+          )}
         >
-          <div className="min-w-0">
+          {/* The leading slot reserves its width even when empty, so a centered
+              title is centered on the PANEL rather than on whatever is left
+              over next to Close. */}
+          {titleAlign === "center" && (
+            <div className="flex min-w-[2.75rem] flex-none justify-start">{leading}</div>
+          )}
+          <div className={cn("min-w-0", titleAlign === "center" && "flex-1 text-center")}>
             <h2
               id={titleId}
-              className="font-display text-base leading-tight text-offwhite sm:text-lg"
+              className={cn(
+                "text-offwhite",
+                titleAlign === "center"
+                  ? "text-sm font-medium uppercase tracking-[0.16em]"
+                  : "font-display text-base leading-tight sm:text-lg",
+              )}
             >
               {title}
             </h2>
@@ -224,7 +296,10 @@ export function Dialog({
             type="button"
             onClick={onClose}
             // 44px touch target; the visible pill is centered inside it.
-            className="-mr-1 flex h-11 min-w-[2.75rem] flex-none items-center justify-center rounded-full border border-subtle px-3 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite sm:h-9"
+            className={cn(
+              "-mr-1 flex h-11 min-w-[2.75rem] flex-none items-center justify-center rounded-full border border-subtle px-3 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite",
+              titleAlign === "center" ? "sm:h-11" : "sm:h-9",
+            )}
           >
             {closeLabel}
           </button>

@@ -275,7 +275,7 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
   }
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex min-w-0 flex-col gap-5">
       {row.status === "pending" && (
         <p className="rounded-xl border border-amber-400/40 bg-amber-400/10 px-3.5 py-2.5 text-xs leading-relaxed text-amber-300">
           This is still a <strong>request</strong>. Editing it keeps it a request — approve
@@ -406,7 +406,23 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
           </select>
         </Field>
 
-        <div className="grid grid-cols-1 gap-4 min-[380px]:grid-cols-2">
+        {/* 🔴 DATE + START: THE PAIR THAT USED TO OVERLAP.
+            A native `input[type=date]` has a wide intrinsic min-content width
+            (the mm/dd/yyyy text plus the picker button). Tailwind's
+            `grid-cols-2` already gives `minmax(0,1fr)` TRACKS, so the tracks
+            shrank correctly — but each grid ITEM kept `min-width: auto`, which
+            resolves to that intrinsic width. The items therefore overflowed
+            their own tracks, ran into each other, and Start spilled past the
+            card's right edge.
+            `min-w-0` on the Field (below, on the label itself) is the fix.
+            The breakpoint is MEASURED, not guessed: a native date control in
+            Chromium wants 175px at a 16px font, and the two-up track is 121px
+            at 320, 156px at 390 and 171px at 420 — every one of them a
+            squeeze. It only stops being one past ~480px, where the track is
+            ~200px, so that is where two columns start. The old 380px
+            breakpoint compressed the control by up to 54px, which Chromium
+            happens to absorb and other engines do not. */}
+        <div className="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2">
           <Field label="Date">
             <input
               type="date"
@@ -425,7 +441,7 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
           </Field>
         </div>
 
-        <Field label="Minutes">
+        <Field label="Duration" hint="Minutes in the chair.">
           <input
             type="number"
             min={5}
@@ -483,21 +499,37 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
   );
 }
 
-/** 16px floor on inputs - anything smaller makes iOS zoom the whole page. */
+/**
+ * 16px floor on inputs — anything smaller makes iOS zoom the whole page.
+ *
+ * `min-w-0` alongside `w-full` so a control with a wide intrinsic size (a
+ * native date or time picker, a 60-character email) can never push its
+ * container past the card. A long value scrolls INSIDE the input, which is
+ * what an input is for; the sheet's width is not negotiable.
+ */
 const INPUT =
-  "h-11 w-full rounded-lg border border-subtle bg-charcoal-900 px-3 text-base text-offwhite transition-colors duration-150 ease-out placeholder:text-muted/60 focus-visible:border-gold/50";
+  "h-11 w-full min-w-0 rounded-lg border border-subtle bg-charcoal-900 px-3 text-base text-offwhite transition-colors duration-150 ease-out placeholder:text-muted/60 focus-visible:border-gold/50";
 
 function Group({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-2xl border border-subtle bg-charcoal-800/40 p-3.5 sm:p-4">
+    <section className="min-w-0 rounded-2xl border border-subtle bg-charcoal-800/40 p-3.5 sm:p-4">
       <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-gold/80">
         {title}
       </h3>
-      <div className="flex flex-col gap-4">{children}</div>
+      <div className="flex min-w-0 flex-col gap-4">{children}</div>
     </section>
   );
 }
 
+/**
+ * 🔴 `min-w-0` IS THE WHOLE FIX for the overlapping Date/Start pair. As a grid
+ * item this label defaults to `min-width: auto`, which resolves to the
+ * min-content width of the widest control inside it — for a native date input,
+ * wider than half a phone. The item then overflows its own `minmax(0,1fr)`
+ * track instead of shrinking, which is what put Start on top of Date and past
+ * the card's edge. Every field carries it, not just the pair, so the next
+ * two-up grid someone adds here inherits the fix.
+ */
 function Field({
   label,
   hint,
@@ -508,12 +540,16 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <label className="flex flex-col gap-1.5">
+    <label className="flex min-w-0 flex-col gap-1.5">
       <span className="text-[11px] font-medium uppercase tracking-wide text-muted">
         {label}
       </span>
       {children}
-      {hint && <span className="text-[11px] leading-snug text-muted/80">{hint}</span>}
+      {hint && (
+        <span className="[overflow-wrap:anywhere] text-[11px] leading-snug text-muted/80">
+          {hint}
+        </span>
+      )}
     </label>
   );
 }

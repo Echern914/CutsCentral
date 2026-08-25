@@ -8,15 +8,21 @@ import {
   NAME_WRAP_CLS,
   appointmentStatusPill,
   initialsOf,
+  type AppointmentCardStatus,
 } from "../_components/appointmentCardStyles";
 import {
   AppointmentEditFields,
   useAppointmentEdit,
 } from "./AppointmentEditForm";
 import {
+  cancelAppointmentAction,
   checkoutAppointmentAction,
+  completeAppointmentAction,
   getAppointmentDetailAction,
+  markArrivedAction,
+  noShowAppointmentAction,
   type AppointmentDetail,
+  type DetailHistoryItem,
 } from "./actions";
 import type { AgendaRow } from "./page";
 
@@ -29,7 +35,7 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
  *
  * Four views behind one dialog, in the order a barber actually needs them:
  *
- *   detail  → who it is, how to reach them, and what is owed
+ *   detail  → who it is, what the booking is, what is owed, what to do next
  *   edit    → the same booking, editable (native bookings only)
  *   charges → the ticket, itemised            ┐ the EXISTING chair-checkout
  *   pay     → amount + how it was paid        ┘ flow, unchanged
@@ -50,11 +56,15 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
  *
  * 🔴 CONTACT NEVER LEAVES THE DEVICE ACTION. `tel:` / `sms:` / `mailto:` and
  * the clipboard are the only places a number or address goes. No toast, log,
- * analytics event or URL ever carries one — "Number copied" says nothing about
- * WHICH number, deliberately.
+ * analytics event or URL ever carries one — "Phone number copied" says nothing
+ * about WHICH number, deliberately. And Text is only a live action where the
+ * shop may actually text: consent is a gate, not a formality.
  */
 
 export type SheetView = "detail" | "edit" | "charges" | "pay";
+
+/** Which action surface is open over the sheet, if any. */
+type MenuKind = "contact" | "more" | null;
 
 const METHODS = [
   { key: "cash" as const, label: "Cash", hint: "You keep 100%" },
@@ -87,6 +97,7 @@ export function AppointmentSheet({
   initialView?: SheetView;
 }) {
   const [view, setView] = useState<SheetView>(initialView);
+  const [menu, setMenu] = useState<MenuKind>(null);
   const [detail, setDetail] = useState<AppointmentDetail | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [pending, start] = useTransition();
@@ -134,7 +145,7 @@ export function AppointmentSheet({
       return null;
     }
   }, []);
-  const showZone = Boolean(zone && browserZone && zone !== browserZone);
+  const zoneDiffers = Boolean(zone && browserZone && zone !== browserZone);
 
   const dateLabel = useMemo(() => fmtDate(row.start, zone), [row.start, zone]);
   const timeLabel = useMemo(
@@ -193,6 +204,30 @@ export function AppointmentSheet({
     });
   }
 
+  /**
+   * A status transition from the More menu. Every one of these is the SAME
+   * endpoint the appointment card already calls — the sheet is a second door
+   * onto them, never a second set of rules.
+   */
+  function act(
+    fn: (id: string) => Promise<{ ok: boolean }>,
+    label: string,
+    closeAfter = false,
+  ) {
+    setMenu(null);
+    start(async () => {
+      const res = await fn(row.id);
+      if (!res.ok) {
+        toast("That didn't go through", "error");
+        return;
+      }
+      toast(label, "success");
+      onChanged();
+      if (closeAfter) onClose();
+      else load();
+    });
+  }
+
   //  ── chrome ──────────────────────────────────────────────────────────────
   const title =
     view === "edit"
@@ -202,6 +237,30 @@ export function AppointmentSheet({
       : view === "detail"
         ? "Appointment"
         : "Checkout";
+
+  const back =
+    view === "detail"
+      ? null
+      : {
+          detail: () => setView("detail"),
+          edit: () => setView("detail"),
+          charges: () => setView("detail"),
+          pay: () => setView("charges"),
+        }[view];
+
+  /**
+   * ESCAPE AND THE BACKDROP CLOSE THE TOPMOST THING, not always the sheet.
+   * Dialog owns both, so the menus can only get their turn by intercepting
+   * here — otherwise hitting Escape over an open Contact menu would throw away
+   * the whole booking sheet underneath it.
+   */
+  function closeTopmost() {
+    if (menu) {
+      setMenu(null);
+      return;
+    }
+    onClose();
+  }
 
   const footer =
     view === "edit" ? (
@@ -236,10 +295,24 @@ export function AppointmentSheet({
   return (
     <Dialog
       open
-      onClose={onClose}
+      onClose={closeTopmost}
       title={title}
+      titleAlign="center"
+      leading={
+        back ? (
+          <button
+            type="button"
+            onClick={back}
+            data-qa="sheet-back"
+            className="-ml-1 flex h-11 min-w-[2.75rem] items-center justify-center rounded-full border border-subtle px-3 text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
+            aria-label="Back"
+          >
+            <ArrowLeftIcon />
+          </button>
+        ) : null
+      }
       footer={footer}
-      className="sm:max-w-xl lg:max-w-3xl xl:max-w-4xl"
+      className="sm:max-w-lg lg:max-w-3xl"
     >
       {view === "edit" ? (
         <AppointmentEditFields state={edit} />
@@ -276,9 +349,15 @@ export function AppointmentSheet({
           dateLabel={dateLabel}
           timeLabel={timeLabel}
           durMin={durMin}
-          showZone={showZone}
+          zoneDiffers={zoneDiffers}
+          browserZone={browserZone}
           canCheckout={canCheckout}
+          busy={pending}
+          menu={menu}
+          setMenu={setMenu}
+          onEdit={() => setView("edit")}
           onCheckout={() => setView("charges")}
+          onAct={act}
         />
       )}
     </Dialog>
@@ -296,9 +375,15 @@ function DetailView({
   dateLabel,
   timeLabel,
   durMin,
-  showZone,
+  zoneDiffers,
+  browserZone,
   canCheckout,
+  busy,
+  menu,
+  setMenu,
+  onEdit,
   onCheckout,
+  onAct,
 }: {
   row: AgendaRow;
   detail: AppointmentDetail | null;
@@ -308,13 +393,37 @@ function DetailView({
   dateLabel: string;
   timeLabel: string;
   durMin: number | null;
-  showZone: boolean;
+  zoneDiffers: boolean;
+  browserZone: string | null;
   canCheckout: boolean;
+  busy: boolean;
+  menu: MenuKind;
+  setMenu: (m: MenuKind) => void;
+  onEdit: () => void;
   onCheckout: () => void;
+  onAct: (
+    fn: (id: string) => Promise<{ ok: boolean }>,
+    label: string,
+    closeAfter?: boolean,
+  ) => void;
 }) {
   return (
-    <div className="flex flex-col gap-4">
-      <Hero row={row} detail={detail} timeLabel={timeLabel} dateLabel={dateLabel} />
+    <div className="flex flex-col gap-3">
+      <Hero
+        row={row}
+        detail={detail}
+        dateLabel={dateLabel}
+        timeLabel={timeLabel}
+        durMin={durMin}
+      />
+
+      <ActionRow
+        detail={detail}
+        busy={busy}
+        onContact={() => setMenu("contact")}
+        onReschedule={onEdit}
+        onMore={() => setMenu("more")}
+      />
 
       {loadError && (
         <p
@@ -332,22 +441,12 @@ function DetailView({
         </p>
       )}
 
-      {/* Two columns once there is room: reaching the client on the left, the
-          booking's own facts on the right, and PAYMENT spanning both underneath
-          so the money reads as its own moment rather than as the tail of a
-          column. Below `lg` it is one clean stack in the same order — who, how
-          to reach them, what the booking is, what is owed. */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <ContactCard detail={detail} loadError={loadError} toast={toast} />
-        <DetailsCard
-          row={row}
-          detail={detail}
-          dateLabel={dateLabel}
-          timeLabel={timeLabel}
-          durMin={durMin}
-          showZone={showZone}
-        />
-        <div className="lg:col-span-2">
+      {/* Two balanced columns once there is room: the money on the left, the
+          things a barber reads ABOUT the client on the right. Below `lg` it is
+          one stack in the same order. `items-start` so a short column does not
+          stretch its cards to match a tall one. */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 lg:items-start">
+        <div className="flex min-w-0 flex-col gap-3">
           <PaymentCard
             detail={detail}
             loadError={loadError}
@@ -355,27 +454,66 @@ function DetailView({
             onCheckout={onCheckout}
           />
         </div>
+        <div className="flex min-w-0 flex-col gap-3">
+          <ClientCard
+            detail={detail}
+            loadError={loadError}
+            zoneDiffers={zoneDiffers}
+            browserZone={browserZone}
+          />
+          {detail?.notes && (
+            <Panel title="Note">
+              <p className="[overflow-wrap:anywhere] whitespace-pre-wrap text-sm leading-relaxed text-offwhite/85">
+                {detail.notes}
+              </p>
+            </Panel>
+          )}
+          <HistoryCard detail={detail} />
+        </div>
       </div>
+
+      {menu === "contact" && detail && (
+        <ContactMenu detail={detail} toast={toast} onClose={() => setMenu(null)} />
+      )}
+      {menu === "more" && detail && (
+        <MoreMenu
+          row={row}
+          detail={detail}
+          onClose={() => setMenu(null)}
+          onEdit={() => {
+            setMenu(null);
+            onEdit();
+          }}
+          onAct={onAct}
+        />
+      )}
     </div>
   );
 }
 
 /**
- * THE HERO. The client's name is the strongest thing on the screen, on its own
- * full-width line, wrapping rather than truncating — "Ab…" is the one failure
- * this whole surface exists to prevent. A thin status rail runs the left edge,
- * tinted from the SAME table as the pill so the two can never disagree.
+ * THE HERO. A centered identity block — avatar, then the client's full name as
+ * the strongest thing on the screen, wrapping rather than truncating ("Ab…" is
+ * the one failure this whole surface exists to prevent), then the two badges
+ * that answer different questions: what STATE the booking is in, and WHO owns
+ * it. Under a hairline, the booking's own facts.
+ *
+ * The status accent is a tinted ring on the avatar rather than a colored card:
+ * one small deliberate signal instead of a block of color that would fight the
+ * name for the eye.
  */
 function Hero({
   row,
   detail,
-  timeLabel,
   dateLabel,
+  timeLabel,
+  durMin,
 }: {
   row: AgendaRow;
   detail: AppointmentDetail | null;
-  timeLabel: string;
   dateLabel: string;
+  timeLabel: string;
+  durMin: number | null;
 }) {
   const pill = appointmentStatusPill({
     status: row.status,
@@ -387,300 +525,253 @@ function Hero({
   const sourceLabel = detail?.originLabel ?? (row.syncedExternal ? "Acuity" : "ChairBack");
   const barber = detail?.staffName ?? null;
   const service = detail?.serviceName ?? row.serviceName;
+  const price = detail?.price ?? row.price;
+  const name = row.clientName || "Client";
 
   return (
-    <section className="relative overflow-hidden rounded-2xl border border-subtle bg-charcoal-800/60 pl-4 pr-3.5 py-4 sm:pl-5 sm:pr-5 sm:py-5">
-      {/* The status rail. Thin, brass-weight, and the first thing read. */}
+    <section className="relative overflow-hidden rounded-2xl border border-subtle bg-charcoal-800/60">
+      {/* A barber's straight razor line: one brass hairline across the top,
+          fading out at both ends so it reads as a finish, not a border. */}
       <span
         aria-hidden
-        className={cn("absolute inset-y-0 left-0 w-[3px] rounded-r-full", pill.railCls)}
+        className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-gold/45 to-transparent"
       />
-      {/* A barber's fine parallel lines, at a weight you notice only as texture.
-          Masked to fade out toward the name so it never competes with it, and
-          so the pattern has no hard edge mid-card. */}
+      {/* Fine parallel lines at a weight you notice only as texture, masked so
+          the pattern never has a hard edge and never competes with the name. */}
       <span
         aria-hidden
-        className="pointer-events-none absolute inset-y-0 right-0 w-3/5 text-offwhite opacity-[0.03]"
+        className="pointer-events-none absolute inset-x-0 top-0 h-28 text-offwhite opacity-[0.035]"
         style={{
           backgroundImage:
             "repeating-linear-gradient(112deg, currentColor 0 1px, transparent 1px 11px)",
-          maskImage: "linear-gradient(to right, transparent, black 65%)",
-          WebkitMaskImage: "linear-gradient(to right, transparent, black 65%)",
+          maskImage: "linear-gradient(to bottom, black, transparent)",
+          WebkitMaskImage: "linear-gradient(to bottom, black, transparent)",
         }}
       />
 
-      <div className="relative flex items-start gap-3">
+      <div className="relative px-4 pb-3.5 pt-4 text-center sm:px-6">
         <span
           aria-hidden
-          className="mt-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-charcoal-700 font-display text-base text-offwhite/85 ring-1 ring-white/10"
+          className={cn(
+            "mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-charcoal-700 font-display text-base text-offwhite/85 ring-2 ring-offset-2 ring-offset-charcoal-800",
+            pill.ringCls,
+          )}
         >
-          {initialsOf(row.clientName || "Client")}
+          {initialsOf(name)}
         </span>
-        <div className="min-w-0 flex-1">
-          {detail?.clientId ? (
+
+        {detail?.clientId ? (
+          // The name is also the way through to the client's page, so it has to
+          // BE a real touch target: one line of 22px type is 28px tall, and 12px
+          // of padding takes the hit box to 52. The WRAPPER owns the spacing and
+          // cancels that padding, so the hero looks identical either way — and
+          // putting the padding AND a negative margin on the link itself sets
+          // margin-top twice, where the winner is Tailwind's output order rather
+          // than the order written here.
+          <div className="-mb-3 mt-0.5">
             <Link
               href={`/dashboard/clients/${detail.clientId}`}
               className={cn(
                 NAME_WRAP_CLS,
-                // The name is also the way through to the client's page, so it
-                // is a real touch target: a single-line name is only 26px tall,
-                // and the padding takes its hit box past 44 while the negative
-                // margin keeps the hero's spacing exactly as designed.
-                "-my-2.5 block py-2.5 font-display text-[21px] font-normal leading-tight transition-colors duration-150 ease-out hover:text-gold sm:-my-0 sm:py-0 sm:text-2xl",
+                "block py-3 font-display text-[22px] font-normal leading-tight transition-colors duration-150 ease-out hover:text-gold sm:text-[26px]",
               )}
             >
-              {row.clientName || "Client"}
+              {name}
             </Link>
-          ) : (
-            <h3
-              className={cn(
-                NAME_WRAP_CLS,
-                "font-display text-[21px] font-normal leading-tight sm:text-2xl",
-              )}
-            >
-              {row.clientName || "Client"}
-            </h3>
-          )}
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            <span
-              className={cn(
-                "rounded-full px-2.5 py-0.5 text-[10px] font-semibold",
-                pill.cls,
-              )}
-            >
-              {pill.label}
-            </span>
-            {/* SOURCE, not status. A synced booking is just as booked as a
-                native one; what differs is who owns it. */}
-            <span
-              className={cn(
-                "rounded-full px-2.5 py-0.5 text-[10px] font-medium",
-                external
-                  ? "bg-sky-400/15 text-sky-300"
-                  : "bg-charcoal-700 text-muted",
-              )}
-            >
-              {sourceLabel}
-            </span>
-            {row.seriesId && (
-              <span className="rounded-full bg-gold/15 px-2.5 py-0.5 text-[10px] font-medium text-gold">
-                ↻ Weekly
-              </span>
-            )}
           </div>
+        ) : (
+          <h3
+            className={cn(
+              NAME_WRAP_CLS,
+              "mt-3.5 font-display text-[22px] font-normal leading-tight sm:text-[26px]",
+            )}
+          >
+            {name}
+          </h3>
+        )}
+
+        <div className="mt-2.5 flex flex-wrap items-center justify-center gap-1.5">
+          <span
+            className={cn("rounded-full px-2.5 py-1 text-[10px] font-semibold", pill.cls)}
+          >
+            {pill.label}
+          </span>
+          {/* SOURCE, not status. A synced booking is just as booked as a native
+              one; what differs is who owns it. */}
+          <span
+            className={cn(
+              "rounded-full px-2.5 py-1 text-[10px] font-medium",
+              external ? "bg-sky-400/15 text-sky-300" : "bg-charcoal-700 text-muted",
+            )}
+          >
+            {sourceLabel}
+          </span>
+          {row.seriesId && (
+            <span className="rounded-full bg-gold/15 px-2.5 py-1 text-[10px] font-medium text-gold">
+              ↻ Weekly
+            </span>
+          )}
         </div>
       </div>
 
-      {/* TWO deterministic lines rather than one wrapping run of separators.
-          A single flex row of "a · b · c · d" puts a "·" at the end of a line
-          at one width and at the START of the next line at another; both read
-          as a glitch. What it is goes on one line, when it is on the other,
-          and the only separator left sits between two items that fit together
-          at 320px. */}
-      <div className="relative mt-3.5 flex flex-col gap-1 text-xs leading-relaxed">
-        <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-          <span className="[overflow-wrap:anywhere] text-offwhite/85">
-            {service ?? "Appointment"}
+      {/* The booking's own facts. Label left, value right, wrapping to its own
+          line before anything compresses — a 40-character service name pushes
+          the price down, it never squeezes it. */}
+      <dl className="relative border-t border-subtle px-4 py-2.5 text-sm sm:px-6">
+        <Fact icon={<TagIcon />} label="Service">
+          <span className="[overflow-wrap:anywhere]">{service ?? "Appointment"}</span>
+        </Fact>
+        {barber && (
+          <Fact icon={<ScissorsIcon />} label="Barber">
+            <span className="[overflow-wrap:anywhere]">{barber}</span>
+          </Fact>
+        )}
+        <Fact icon={<CalendarIcon />} label="Date">
+          <span className="tabular-nums">{dateLabel}</span>
+        </Fact>
+        <Fact icon={<ClockIcon />} label="Time">
+          <span className="tabular-nums">{timeLabel}</span>
+          {durMin && <span className="text-muted"> · {durMin} min</span>}
+        </Fact>
+        <Fact icon={<CashIcon />} label="Price">
+          <span className="tabular-nums">
+            {price != null ? `$${price.toFixed(2)}` : "Not priced"}
           </span>
-          {barber && (
-            <span className="[overflow-wrap:anywhere] text-muted">with {barber}</span>
-          )}
-        </p>
-        <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-muted">
-          <span className="whitespace-nowrap tabular-nums">{dateLabel}</span>
-          <span className="whitespace-nowrap tabular-nums">
-            <span aria-hidden className="mr-2 text-muted/50">
-              ·
-            </span>
-            {timeLabel}
-          </span>
-        </p>
-      </div>
+        </Fact>
+      </dl>
     </section>
   );
 }
 
 /**
- * REACH YOUR CLIENT. Every action here is a device handoff — a `tel:`, an
- * `sms:`, a `mailto:` or the clipboard — so a channel with nothing behind it
- * simply is not rendered. An action that disappears is better than one that
- * fails in the barber's hand, and far better than a row of dead grey boxes.
+ * One fact: a small brass icon, a muted label, and the value hard against the
+ * right. `min-w-0` on the value plus `flex-wrap` means a long value wraps under
+ * its own label instead of squashing it — the failure the old edit grid had.
  */
-function ContactCard({
-  detail,
-  loadError,
-  toast,
+function Fact({
+  icon,
+  label,
+  children,
 }: {
-  detail: AppointmentDetail | null;
-  loadError: boolean;
-  toast: Toast;
+  icon: React.ReactNode;
+  label: string;
+  children: React.ReactNode;
 }) {
-  const [copied, setCopied] = useState<"phone" | "email" | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current);
-    },
-    [],
-  );
-
-  const copy = useCallback(
-    async (kind: "phone" | "email", value: string) => {
-      try {
-        await navigator.clipboard.writeText(value);
-        setCopied(kind);
-        if (timer.current) clearTimeout(timer.current);
-        timer.current = setTimeout(() => setCopied(null), 1800);
-        // Deliberately says nothing about WHICH number: a contact detail must
-        // never ride in a toast, a log line or an analytics event.
-        toast(kind === "phone" ? "Number copied" : "Email copied", "success");
-      } catch {
-        toast("Couldn't copy — press and hold to select it instead", "error");
-      }
-    },
-    [toast],
-  );
-
-  if (loadError) return null;
-  if (!detail) return <CardSkeleton title="Reach your client" rows={2} />;
-
-  const { phone, phoneDisplay, email } = detail.contact;
-  const nothing = !phone && !email;
-
   return (
-    // `h-full` + a column layout so that when this card shares a desktop row
-    // with the taller details card, the numbers settle against its bottom edge
-    // instead of leaving a hole under a short card.
-    <Panel title="Reach your client" className="flex h-full flex-col">
-      {nothing ? (
-        <p className="text-xs leading-relaxed text-muted">
-          No phone or email on file for this booking. Add one from Edit and every
-          action here turns on.
-        </p>
-      ) : (
-        <>
-          {/* A compact wrapping grid: two up at 320, three from 420 and in the
-              desktop column, so five actions never leave a lonely orphan row. */}
-          <div className="grid grid-cols-2 gap-2 min-[420px]:grid-cols-3">
-            {phone && (
-              <>
-                <ContactAction as="a" href={`tel:${phone}`} icon={<PhoneIcon />} label="Call" />
-                <ContactAction as="a" href={`sms:${phone}`} icon={<ChatIcon />} label="Text" />
-              </>
-            )}
-            {email && (
-              <ContactAction
-                as="a"
-                href={`mailto:${email}`}
-                icon={<MailIcon />}
-                label="Email"
-              />
-            )}
-            {phone && (
-              <ContactAction
-                onClick={() => void copy("phone", phone)}
-                icon={copied === "phone" ? <CheckIcon /> : <CopyIcon />}
-                label={copied === "phone" ? "Copied" : "Copy number"}
-                active={copied === "phone"}
-              />
-            )}
-            {email && (
-              <ContactAction
-                onClick={() => void copy("email", email)}
-                icon={copied === "email" ? <CheckIcon /> : <CopyIcon />}
-                label={copied === "email" ? "Copied" : "Copy email"}
-                active={copied === "email"}
-              />
-            )}
-          </div>
-
-          <dl className="mt-3 flex flex-col gap-1 border-t border-subtle pt-3 text-xs lg:mt-auto">
-            {phone && (
-              <div className="flex flex-wrap items-baseline gap-x-2">
-                <dt className="text-muted">Phone</dt>
-                <dd className="min-w-0 [overflow-wrap:anywhere] tabular-nums text-offwhite/85">
-                  {phoneDisplay ?? phone}
-                </dd>
-              </div>
-            )}
-            {email && (
-              <div className="flex flex-wrap items-baseline gap-x-2">
-                <dt className="text-muted">Email</dt>
-                <dd className="min-w-0 [overflow-wrap:anywhere] text-offwhite/85">{email}</dd>
-              </div>
-            )}
-          </dl>
-
-          {/* Announced for screen readers without moving focus off the button. */}
-          <span role="status" aria-live="polite" className="sr-only">
-            {copied === "phone"
-              ? "Phone number copied to clipboard"
-              : copied === "email"
-                ? "Email address copied to clipboard"
-                : ""}
-          </span>
-        </>
-      )}
-    </Panel>
+    <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5 border-b border-subtle/50 py-1.5 first:pt-0 last:border-b-0 last:pb-0">
+      <dt className="flex flex-none items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-muted">
+        <span className="flex h-4 w-4 items-center justify-center text-gold/70">{icon}</span>
+        {label}
+      </dt>
+      <dd className="ml-auto min-w-0 text-right text-sm leading-snug text-offwhite">
+        {children}
+      </dd>
+    </div>
   );
 }
 
-/** APPOINTMENT DETAILS — scannable icon rows, one fact each. */
-function DetailsCard({
-  row,
+/**
+ * THE ACTION ROW. Three equal, compact targets under the hero — the three
+ * things a barber does with an open booking. Contact and More each open the
+ * same styled action surface; Reschedule goes straight to the editor, or to
+ * whoever owns the schedule when it is not ours.
+ */
+function ActionRow({
   detail,
-  dateLabel,
-  timeLabel,
-  durMin,
-  showZone,
+  busy,
+  onContact,
+  onReschedule,
+  onMore,
 }: {
-  row: AgendaRow;
   detail: AppointmentDetail | null;
-  dateLabel: string;
-  timeLabel: string;
-  durMin: number | null;
-  showZone: boolean;
+  busy: boolean;
+  onContact: () => void;
+  onReschedule: () => void;
+  onMore: () => void;
 }) {
-  const addOns = detail?.addOns ?? row.addOns ?? [];
-  const price = detail?.price ?? row.price;
+  const hasContact = Boolean(detail && (detail.contact.phone || detail.contact.email));
+  const external = detail?.origin === "external";
+  const manageUrl = detail?.externalManageUrl ?? null;
+
   return (
-    <Panel title="Appointment details" className="h-full">
-      <dl className="flex flex-col">
-        <Row icon={<CalendarIcon />} label="Date" value={dateLabel} />
-        <Row
-          icon={<ClockIcon />}
-          label="Time"
-          value={durMin ? `${timeLabel} · ${durMin} min` : timeLabel}
+    <div className="grid grid-cols-3 gap-2" data-qa="sheet-actions">
+      <ActionButton
+        icon={<PhoneIcon />}
+        label="Contact"
+        onClick={onContact}
+        disabled={!detail || !hasContact}
+        title={
+          detail && !hasContact ? "No phone or email on file for this booking" : undefined
+        }
+      />
+      {external && manageUrl ? (
+        <ActionButton
+          icon={<ExternalIcon />}
+          label="Reschedule"
+          href={manageUrl}
+          title={`Opens ${detail?.originLabel ?? "the other system"}, which owns this booking`}
         />
-        {detail?.staffName && (
-          <Row icon={<ScissorsIcon />} label="Barber" value={detail.staffName} />
-        )}
-        <Row
-          icon={<TagIcon />}
-          label="Service"
-          value={detail?.serviceName ?? row.serviceName ?? "Appointment"}
-        >
-          {addOns.length > 0 && (
-            <span className="mt-0.5 block text-[11px] text-muted">
-              {addOns.map((a) => `+ ${a.name}`).join(" · ")}
-            </span>
-          )}
-        </Row>
-        <Row
-          icon={<CashIcon />}
-          label="Price"
-          value={price != null ? `$${price.toFixed(2)}` : "Not priced"}
+      ) : (
+        <ActionButton
+          icon={<CalendarIcon />}
+          label="Reschedule"
+          onClick={onReschedule}
+          disabled={!detail?.editable || busy}
+          title={
+            detail && !detail.editable
+              ? detail.readOnlyReason === "external"
+                ? `Booked in ${detail.originLabel} — change it there`
+                : "This booking is closed and can no longer be moved"
+              : undefined
+          }
         />
-        {/* Only when it would change what the barber reads above: a shop whose
-            timezone matches the browser's needs no extra line. */}
-        {showZone && detail && (
-          <Row icon={<GlobeIcon />} label="Timezone" value={detail.timezone} />
-        )}
-        {detail?.notes && (
-          <Row icon={<NoteIcon />} label="Note" value={detail.notes} muted />
-        )}
-      </dl>
-    </Panel>
+      )}
+      <ActionButton
+        icon={<DotsIcon />}
+        label="More"
+        onClick={onMore}
+        disabled={!detail || busy}
+      />
+    </div>
+  );
+}
+
+function ActionButton({
+  icon,
+  label,
+  onClick,
+  href,
+  disabled,
+  title,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick?: () => void;
+  href?: string;
+  disabled?: boolean;
+  title?: string;
+}) {
+  const cls =
+    "flex min-h-[3.25rem] min-w-0 flex-col items-center justify-center gap-1 rounded-xl border border-subtle bg-charcoal-800/40 px-1.5 py-2 text-[11px] font-medium leading-tight text-offwhite/85 transition-colors duration-150 ease-out hover:border-gold/40 hover:text-gold disabled:pointer-events-none disabled:opacity-40";
+  if (href) {
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={title}
+        className={cls}
+      >
+        <span className="text-gold/80">{icon}</span>
+        <span className="[overflow-wrap:anywhere] text-center">{label}</span>
+      </a>
+    );
+  }
+  return (
+    <button type="button" onClick={onClick} disabled={disabled} title={title} className={cls}>
+      <span className={cn(disabled ? "text-muted" : "text-gold/80")}>{icon}</span>
+      <span className="[overflow-wrap:anywhere] text-center">{label}</span>
+    </button>
   );
 }
 
@@ -733,38 +824,37 @@ function PaymentCard({
 
   return (
     <Panel title="Payment">
-      <div className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] sm:items-start">
-        <div className="min-w-0">
-          <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
-            {eyebrow}
-          </p>
-          <p
-            className={cn(
-              "mt-1 font-display leading-tight [overflow-wrap:anywhere]",
-              numeric ? "text-3xl tabular-nums" : "text-xl",
-              external
-                ? "text-muted"
-                : settled
-                  ? "text-emerald-soft"
-                  : p.state === "refunded"
-                    ? "text-danger-soft"
-                    : "text-offwhite",
-            )}
-          >
-            {headline}
-          </p>
-          {!external && !settled && p.remainingCents !== null && p.remainingCents > 0 && (
-            <p className="mt-1 text-[11px] text-muted">still to collect</p>
+      <div className="min-w-0">
+        <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
+          {eyebrow}
+        </p>
+        <p
+          className={cn(
+            "mt-1 font-display leading-tight [overflow-wrap:anywhere]",
+            numeric ? "text-3xl tabular-nums" : "text-xl",
+            external
+              ? "text-muted"
+              : settled
+                ? "text-emerald-soft"
+                : p.state === "refunded"
+                  ? "text-danger-soft"
+                  : "text-offwhite",
           )}
-        </div>
+        >
+          {headline}
+        </p>
+        {!external && !settled && p.remainingCents !== null && p.remainingCents > 0 && (
+          <p className="mt-0.5 text-[11px] text-muted">still to collect</p>
+        )}
+      </div>
 
       {external ? (
-        <p className="rounded-xl border border-subtle bg-charcoal-900/50 px-3 py-2.5 text-xs leading-relaxed text-muted">
+        <p className="mt-3 border-t border-subtle pt-3 text-xs leading-relaxed text-muted">
           No ChairBack payment recorded. {detail.originLabel} took this booking, so
           whether a deposit or the full ticket was paid is only visible there.
         </p>
       ) : (
-        <dl className="flex flex-col gap-1.5 border-t border-subtle pt-3 text-xs sm:border-t-0 sm:pt-0">
+        <dl className="mt-3 flex flex-col gap-1.5 border-t border-subtle pt-3 text-xs">
           <Line
             label="Ticket total"
             value={p.totalCents === null ? "—" : money(p.totalCents)}
@@ -798,23 +888,19 @@ function PaymentCard({
           )}
           {/* ChairBack persists no card data, so this renders only if a
               verified brand/last-four ever reaches the payload. */}
-          {p.card && (
-            <Line
-              label="Card"
-              value={`${p.card.brand} ···· ${p.card.last4}`}
-            />
-          )}
+          {p.card && <Line label="Card" value={`${p.card.brand} ···· ${p.card.last4}`} />}
         </dl>
       )}
-      </div>
 
       {(canCheckout || p.receiptUrl) && (
-        <div className="mt-3.5 flex flex-col gap-2 border-t border-subtle pt-3.5 sm:flex-row sm:items-center">
+        <div className="mt-3.5 flex flex-col gap-2 border-t border-subtle pt-3.5">
+          {/* The sheet's ONE solid-brass action, next to the number it acts on. */}
           {canCheckout && (
             <button
               type="button"
               onClick={onCheckout}
-              className="flex h-11 flex-none items-center justify-center rounded-xl bg-gold px-5 text-sm font-semibold text-charcoal-900 transition-colors duration-150 ease-out hover:bg-gold-muted sm:min-w-[12rem]"
+              data-qa="start-checkout"
+              className="flex h-11 w-full items-center justify-center rounded-xl bg-gold px-5 text-sm font-semibold text-charcoal-900 transition-colors duration-150 ease-out hover:bg-gold-muted"
             >
               {p.collectedCents > 0 ? "Collect the rest" : "Start checkout"}
             </button>
@@ -824,7 +910,7 @@ function PaymentCard({
               href={p.receiptUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex h-11 flex-none items-center justify-center rounded-xl border border-subtle px-5 text-xs font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite"
+              className="flex h-11 w-full items-center justify-center rounded-xl border border-subtle px-5 text-xs font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite"
             >
               View receipt
             </a>
@@ -833,6 +919,547 @@ function PaymentCard({
       )}
     </Panel>
   );
+}
+
+/**
+ * THE CLIENT, as ChairBack knows them: whether this shop may text them, and
+ * which clock the times above are on.
+ *
+ * 🔴 The messaging line is the TCPA gate said out loud. A client synced from
+ * Acuity has a phone and no consent, which looks identical to a textable
+ * client from the outside — so the sheet states it rather than leaving the
+ * barber to find out when a nudge silently never sends.
+ */
+function ClientCard({
+  detail,
+  loadError,
+  zoneDiffers,
+  browserZone,
+}: {
+  detail: AppointmentDetail | null;
+  loadError: boolean;
+  zoneDiffers: boolean;
+  browserZone: string | null;
+}) {
+  if (loadError) return null;
+  if (!detail) return <CardSkeleton title="Client" rows={2} />;
+
+  const sms = SMS_COPY[detail.sms.state];
+  const consent =
+    detail.sms.state === "ok" && detail.sms.consentAt
+      ? `Consented ${fmtDay(detail.sms.consentAt, detail.timezone)}`
+      : null;
+
+  return (
+    <Panel title="Client">
+      <dl className="flex flex-col gap-2.5 text-sm">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+          <dt className="flex flex-none items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-muted">
+            <span className={cn("flex h-4 w-4 items-center justify-center", sms.tone)}>
+              {sms.ok ? <CheckIcon /> : <BanIcon />}
+            </span>
+            Messaging
+          </dt>
+          <dd className="ml-auto min-w-0 text-right">
+            <span className={cn("text-sm leading-snug", sms.tone)}>{sms.label}</span>
+            <span className="mt-0.5 block text-[11px] leading-snug text-muted">
+              {consent ?? sms.detail}
+            </span>
+          </dd>
+        </div>
+
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-t border-subtle/50 pt-2.5">
+          <dt className="flex flex-none items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-muted">
+            <span className="flex h-4 w-4 items-center justify-center text-gold/70">
+              <GlobeIcon />
+            </span>
+            Timezone
+          </dt>
+          <dd className="ml-auto min-w-0 text-right">
+            <span className="[overflow-wrap:anywhere] text-sm leading-snug text-offwhite">
+              {detail.timezone.replace(/_/g, " ")}
+            </span>
+            {/* Only worth a second line when it would change what the barber
+                just read: on the same clock, saying so is noise. */}
+            {zoneDiffers && browserZone && (
+              <span className="mt-0.5 block text-[11px] leading-snug text-amber-300/90">
+                Your device is on {browserZone.replace(/_/g, " ")}
+              </span>
+            )}
+          </dd>
+        </div>
+      </dl>
+    </Panel>
+  );
+}
+
+/**
+ * What ChairBack can say about texting this client. Every "no" names the fix,
+ * or names why there isn't one — a STOP can only be undone by the client.
+ */
+const SMS_COPY: Record<
+  AppointmentDetail["sms"]["state"],
+  { label: string; detail: string; tone: string; ok: boolean }
+> = {
+  ok: {
+    label: "Can text",
+    detail: "Reminders and nudges will send",
+    tone: "text-emerald-soft",
+    ok: true,
+  },
+  no_consent: {
+    label: "No SMS consent",
+    detail: "Ask them to opt in — texts won't send until they do",
+    tone: "text-amber-300",
+    ok: false,
+  },
+  opted_out: {
+    label: "Opted out",
+    detail: "They texted STOP. Only they can undo it, with START",
+    tone: "text-danger-soft",
+    ok: false,
+  },
+  no_phone: {
+    label: "No number on file",
+    detail: "Add one from Edit appointment",
+    tone: "text-muted",
+    ok: false,
+  },
+  no_client: {
+    label: "No client record",
+    detail: "A walk-in with no profile to text",
+    tone: "text-muted",
+    ok: false,
+  },
+};
+
+/**
+ * THE REST OF THEIR BOOK — three back, three forward. A barber deciding
+ * anything about a booking is usually asking "have they no-showed before?" or
+ * "are they already coming back Thursday?", and both used to mean leaving the
+ * sheet for the client page.
+ */
+function HistoryCard({ detail }: { detail: AppointmentDetail | null }) {
+  if (!detail) return null;
+  const { previous, upcoming } = detail.history;
+  if (previous.length === 0 && upcoming.length === 0) {
+    return (
+      <Panel title="Their other visits">
+        <p className="text-xs leading-relaxed text-muted">
+          {detail.clientId
+            ? "Nothing else on the books — this is the only appointment for them."
+            : "A walk-in with no client record, so there is no history to show."}
+        </p>
+      </Panel>
+    );
+  }
+  return (
+    <Panel title="Their other visits">
+      {upcoming.length > 0 && (
+        <HistoryGroup label="Upcoming" items={upcoming} timezone={detail.timezone} />
+      )}
+      {previous.length > 0 && (
+        <HistoryGroup
+          label="Previous"
+          items={previous}
+          timezone={detail.timezone}
+          className={upcoming.length > 0 ? "mt-3 border-t border-subtle pt-3" : undefined}
+        />
+      )}
+    </Panel>
+  );
+}
+
+function HistoryGroup({
+  label,
+  items,
+  timezone,
+  className,
+}: {
+  label: string;
+  items: DetailHistoryItem[];
+  timezone: string;
+  className?: string;
+}) {
+  return (
+    <div className={className}>
+      <p className="text-[10px] font-medium uppercase tracking-wide text-muted">{label}</p>
+      <ul className="mt-1.5 flex flex-col gap-1.5">
+        {items.map((it) => {
+          const pill = appointmentStatusPill({
+            status: (it.status as AppointmentCardStatus) ?? "upcoming",
+          });
+          return (
+            <li
+              key={`${it.source}-${it.id}`}
+              className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs"
+            >
+              <span className="flex-none tabular-nums text-offwhite/85">
+                {fmtDay(it.startsAt, timezone)}
+              </span>
+              <span className="min-w-0 flex-1 [overflow-wrap:anywhere] text-muted">
+                {it.serviceName ?? "Appointment"}
+              </span>
+              <span
+                className={cn(
+                  "flex-none rounded-full px-2 py-0.5 text-[10px] font-medium",
+                  pill.cls,
+                )}
+              >
+                {pill.label}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+//  ── the action surfaces ───────────────────────────────────────────────────
+
+interface MenuItem {
+  key: string;
+  label: string;
+  icon: React.ReactNode;
+  href?: string;
+  external?: boolean;
+  onClick?: () => void;
+  disabled?: boolean;
+  /** Why it cannot run. Rendered under the label — never a browser alert. */
+  reason?: string;
+  tone?: "danger";
+  /** A rule above this item, to set a destructive action apart from the rest. */
+  divided?: boolean;
+}
+
+/**
+ * ONE ACTION SURFACE, two placements: a bottom sheet on a phone, the same card
+ * centered once the dialog floats.
+ *
+ * 🔴 IT IS `fixed` INSIDE THE DIALOG PANEL, AND THAT IS DELIBERATE. The panel
+ * carries `.glass` → `backdrop-filter`, which makes it the containing block for
+ * fixed descendants. So `fixed inset-0` here means "fill the panel", which is
+ * exactly what a sheet over a sheet should do — and it keeps the menu INSIDE
+ * Dialog's focus trap, which a portal to document.body would break (Tab would
+ * be yanked back into the panel on the first press).
+ *
+ * Closing: Escape and the dialog backdrop are intercepted by the sheet (see
+ * closeTopmost), the scrim below closes on click, activating an item closes,
+ * and moving focus out of the menu closes it — standard popover behavior, and
+ * the reason tabbing behind an open menu is not a trap.
+ */
+function ActionMenu({
+  title,
+  items,
+  onClose,
+}: {
+  title: string;
+  items: MenuItem[];
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Focus the first thing that can actually be used, so a keyboard lands
+  // inside the menu rather than wherever the trigger left it.
+  useEffect(() => {
+    const first = ref.current?.querySelector<HTMLElement>(
+      "a[href], button:not([disabled])",
+    );
+    first?.focus();
+  }, []);
+
+  return (
+    <div
+      className="fixed inset-0 z-10 flex items-end justify-center sm:items-center sm:p-6"
+      data-qa="action-menu"
+    >
+      <button
+        type="button"
+        aria-label="Dismiss"
+        tabIndex={-1}
+        onClick={onClose}
+        className="absolute inset-0 h-full w-full cursor-default bg-black/50"
+      />
+      <div
+        ref={ref}
+        role="menu"
+        aria-label={title}
+        onBlur={(e) => {
+          // Only when focus left the menu entirely — moving between items
+          // fires blur too, with relatedTarget still inside.
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) onClose();
+        }}
+        className="relative w-full max-w-md rounded-t-2xl border border-subtle bg-charcoal-900 p-2 shadow-ambient-lg sm:max-w-xs sm:rounded-2xl"
+        style={{ paddingBottom: "calc(0.5rem + env(safe-area-inset-bottom, 0px))" }}
+      >
+        <p className="px-3 pb-1.5 pt-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-gold/80">
+          {title}
+        </p>
+        <ul className="flex flex-col">
+          {items.map((it) => (
+            <li
+              key={it.key}
+              className={it.divided ? "mt-1 border-t border-subtle pt-1" : undefined}
+            >
+              <MenuRow item={it} onDone={onClose} />
+            </li>
+          ))}
+        </ul>
+        <button
+          type="button"
+          onClick={onClose}
+          className="mt-2 flex h-11 w-full items-center justify-center rounded-xl border border-subtle-strong text-sm font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite"
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MenuRow({ item, onDone }: { item: MenuItem; onDone: () => void }) {
+  const cls = cn(
+    // 44px floor, and the label wraps rather than clipping at 320px.
+    "flex min-h-[2.75rem] w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm transition-colors duration-150 ease-out",
+    item.disabled
+      ? "cursor-not-allowed text-muted"
+      : item.tone === "danger"
+        ? "text-danger-soft hover:bg-danger-soft/10"
+        : "text-offwhite hover:bg-charcoal-700",
+  );
+  const body = (
+    <>
+      <span
+        className={cn(
+          "flex h-5 w-5 flex-none items-center justify-center",
+          item.disabled ? "text-muted/70" : item.tone === "danger" ? "" : "text-gold/80",
+        )}
+      >
+        {item.icon}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block [overflow-wrap:anywhere] leading-snug">{item.label}</span>
+        {item.reason && (
+          <span className="mt-0.5 block text-[11px] leading-snug text-muted">
+            {item.reason}
+          </span>
+        )}
+      </span>
+      {item.external && <span className="flex-none text-muted"><ExternalIcon /></span>}
+    </>
+  );
+
+  if (item.disabled) {
+    return (
+      <span role="menuitem" aria-disabled className={cls}>
+        {body}
+      </span>
+    );
+  }
+  if (item.href) {
+    return (
+      <a
+        role="menuitem"
+        href={item.href}
+        {...(item.external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+        onClick={onDone}
+        className={cls}
+      >
+        {body}
+      </a>
+    );
+  }
+  return (
+    <button
+      role="menuitem"
+      type="button"
+      onClick={() => {
+        item.onClick?.();
+        onDone();
+      }}
+      className={cls}
+    >
+      {body}
+    </button>
+  );
+}
+
+/**
+ * REACHING THE CLIENT. Every entry is a device handoff — `tel:`, `sms:`,
+ * `mailto:` or the clipboard — so a channel with nothing behind it is not
+ * rendered at all.
+ *
+ * 🔴 TEXT IS THE ONE EXCEPTION and it stays VISIBLE while disabled: a number
+ * we may not text looks identical to one we may, and silently hiding Text
+ * would leave the barber wondering. It says which of the two "no"s it is,
+ * because only one of them is theirs to fix.
+ *
+ * 🔴 A copy toast never names the value. "Phone number copied" is the whole
+ * message on purpose — a contact detail must not ride in a toast, a log line
+ * or an analytics event.
+ */
+function ContactMenu({
+  detail,
+  toast,
+  onClose,
+}: {
+  detail: AppointmentDetail;
+  toast: Toast;
+  onClose: () => void;
+}) {
+  const { phone, phoneDisplay, email } = detail.contact;
+  const canText = detail.sms.state === "ok";
+
+  const copy = useCallback(
+    async (kind: "phone" | "email", value: string) => {
+      try {
+        await navigator.clipboard.writeText(value);
+        toast(kind === "phone" ? "Phone number copied" : "Email copied", "success");
+      } catch {
+        toast("Couldn't copy — press and hold to select it instead", "error");
+      }
+    },
+    [toast],
+  );
+
+  const items: MenuItem[] = [];
+  if (phone) {
+    items.push({
+      key: "call",
+      label: "Call",
+      icon: <PhoneIcon />,
+      href: `tel:${phone}`,
+    });
+    items.push({
+      key: "text",
+      label: "Text",
+      icon: <ChatIcon />,
+      // A phone CALL needs no consent; an SMS does. Same number, two rules.
+      ...(canText
+        ? { href: `sms:${phone}` }
+        : { disabled: true, reason: SMS_COPY[detail.sms.state].detail }),
+    });
+  }
+  if (email) {
+    items.push({
+      key: "email",
+      label: "Email",
+      icon: <MailIcon />,
+      href: `mailto:${email}`,
+    });
+  }
+  if (phone) {
+    items.push({
+      key: "copy-phone",
+      label: "Copy phone number",
+      icon: <CopyIcon />,
+      onClick: () => void copy("phone", phoneDisplay ?? phone),
+    });
+  }
+  if (email) {
+    items.push({
+      key: "copy-email",
+      label: "Copy email",
+      icon: <CopyIcon />,
+      onClick: () => void copy("email", email),
+    });
+  }
+
+  return <ActionMenu title="Reach your client" items={items} onClose={onClose} />;
+}
+
+/**
+ * EVERYTHING ELSE. Each entry calls exactly the endpoint the appointment card
+ * already calls — the sheet is a second door onto the same actions, never a
+ * second set of rules.
+ */
+function MoreMenu({
+  row,
+  detail,
+  onClose,
+  onEdit,
+  onAct,
+}: {
+  row: AgendaRow;
+  detail: AppointmentDetail;
+  onClose: () => void;
+  onEdit: () => void;
+  onAct: (
+    fn: (id: string) => Promise<{ ok: boolean }>,
+    label: string,
+    closeAfter?: boolean,
+  ) => void;
+}) {
+  const items: MenuItem[] = [];
+  const native = detail.source === "appointment" && detail.origin === "chairback";
+  const live = detail.status === "upcoming" || detail.status === "pending";
+
+  if (detail.clientId) {
+    items.push({
+      key: "client",
+      label: "View client",
+      icon: <UserIcon />,
+      href: `/dashboard/clients/${detail.clientId}`,
+    });
+  }
+  if (detail.editable) {
+    items.push({ key: "edit", label: "Edit appointment", icon: <PencilIcon />, onClick: onEdit });
+  }
+  if (native && detail.status === "upcoming" && detail.checkInStatus !== "arrived") {
+    items.push({
+      key: "arrived",
+      label: "Mark arrived",
+      icon: <CheckIcon />,
+      onClick: () => onAct(markArrivedAction, "Marked arrived"),
+    });
+  }
+  if (native && live) {
+    items.push({
+      key: "done",
+      label: "Mark done",
+      icon: <CheckIcon />,
+      onClick: () => onAct(completeAppointmentAction, "Marked done"),
+    });
+    items.push({
+      key: "no-show",
+      label: "Mark no-show",
+      icon: <EmptyChairIcon />,
+      onClick: () => onAct(noShowAppointmentAction, "Marked no-show"),
+    });
+    // Cancelling closes the sheet: the booking it was describing is gone, and
+    // leaving it open on a cancelled row invites a second, confusing action.
+    // A recurring series keeps its scope menu on the CARD — this cancels the
+    // one occurrence, which is the only scope a single booking can speak for.
+    items.push({
+      key: "cancel",
+      divided: true,
+      label: row.seriesId ? "Cancel this occurrence" : "Cancel appointment",
+      icon: <BanIcon />,
+      tone: "danger",
+      onClick: () => onAct(cancelAppointmentAction, "Canceled", true),
+    });
+  }
+  if (detail.externalManageUrl) {
+    items.push({
+      key: "manage",
+      label: `Edit in ${detail.originLabel}`,
+      icon: <ExternalIcon />,
+      href: detail.externalManageUrl,
+      external: true,
+    });
+  }
+  if (items.length === 0) {
+    items.push({
+      key: "none",
+      label: "Nothing else to do here",
+      icon: <BanIcon />,
+      disabled: true,
+      reason: "This booking is closed.",
+    });
+  }
+
+  return <ActionMenu title="More" items={items} onClose={onClose} />;
 }
 
 //  ── checkout steps (the existing flow, unchanged in behavior) ─────────────
@@ -947,7 +1574,7 @@ function PayView({
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
             aria-invalid={!amountValid || undefined}
-            className="w-40 bg-transparent text-center font-display text-5xl tabular-nums text-offwhite outline-none focus-visible:ring-2 focus-visible:ring-gold/50"
+            className="w-40 min-w-0 bg-transparent text-center font-display text-5xl tabular-nums text-offwhite outline-none focus-visible:ring-2 focus-visible:ring-gold/50"
           />
         </div>
         {!amountValid ? (
@@ -1005,7 +1632,7 @@ function PayView({
 //  ── footers ───────────────────────────────────────────────────────────────
 
 /**
- * The detail view's footer is deliberately QUIET: the sheet's one solid-gold
+ * The detail view's footer is deliberately QUIET: the sheet's one solid-brass
  * action is Start checkout, and it lives in the payment card next to the
  * number it acts on. A second bright button here would compete with it.
  */
@@ -1022,6 +1649,7 @@ function DetailFooter({
       <button
         type="button"
         onClick={onEdit}
+        data-qa="edit-appointment"
         className="flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-subtle px-4 text-sm font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite sm:w-auto sm:px-6"
       >
         <PencilIcon />
@@ -1076,7 +1704,7 @@ function EditFooter({
 }
 
 /**
- * A quiet secondary and ONE solid-gold primary.
+ * A quiet secondary and ONE solid-brass primary.
  *
  * Stacked only where it has to be: two full-height buttons eat ~150px of a
  * phone screen, so they sit side by side from 380px up and 320 gets the stack.
@@ -1155,80 +1783,6 @@ function CardSkeleton({ title, rows }: { title: string; rows: number }) {
   );
 }
 
-function ContactAction({
-  as,
-  href,
-  onClick,
-  icon,
-  label,
-  active,
-}: {
-  as?: "a";
-  href?: string;
-  onClick?: () => void;
-  icon: React.ReactNode;
-  label: string;
-  active?: boolean;
-}) {
-  const cls = cn(
-    // 44px target, and the label wraps rather than clipping at 320px.
-    "flex min-h-[2.75rem] min-w-0 flex-col items-center justify-center gap-1 rounded-xl border px-2 py-2 text-center text-[11px] font-medium leading-tight transition-colors duration-150 ease-out",
-    active
-      ? "border-emerald-soft/45 bg-emerald-soft/10 text-emerald-soft"
-      : "border-subtle text-offwhite/85 hover:border-gold/40 hover:text-gold",
-  );
-  if (as === "a" && href) {
-    return (
-      <a href={href} className={cls}>
-        {icon}
-        <span className="[overflow-wrap:anywhere]">{label}</span>
-      </a>
-    );
-  }
-  return (
-    <button type="button" onClick={onClick} className={cls}>
-      {icon}
-      <span className="[overflow-wrap:anywhere]">{label}</span>
-    </button>
-  );
-}
-
-function Row({
-  icon,
-  label,
-  value,
-  muted,
-  children,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  muted?: boolean;
-  children?: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-start gap-3 border-b border-subtle/60 py-2.5 last:border-b-0 last:pb-0 first:pt-0">
-      <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center text-gold/70">
-        {icon}
-      </span>
-      <div className="min-w-0 flex-1">
-        <dt className="text-[10px] font-medium uppercase tracking-wide text-muted">
-          {label}
-        </dt>
-        <dd
-          className={cn(
-            "mt-0.5 [overflow-wrap:anywhere] text-sm leading-snug",
-            muted ? "text-offwhite/75" : "text-offwhite",
-          )}
-        >
-          {value}
-          {children}
-        </dd>
-      </div>
-    </div>
-  );
-}
-
 function Line({
   label,
   value,
@@ -1265,6 +1819,15 @@ function fmtDate(iso: string, timeZone?: string): string {
     month: "short",
     day: "numeric",
     year: "numeric",
+    ...(timeZone ? { timeZone } : {}),
+  }).format(new Date(iso));
+}
+
+/** Short form for history lines: "Aug 4". */
+function fmtDay(iso: string, timeZone?: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
     ...(timeZone ? { timeZone } : {}),
   }).format(new Date(iso));
 }
@@ -1324,7 +1887,7 @@ const CopyIcon = () => (
   </Svg>
 );
 const CheckIcon = () => (
-  <Svg size={18}>
+  <Svg size={16}>
     <path d="m4 12.5 5 5L20 6.5" />
   </Svg>
 );
@@ -1366,15 +1929,45 @@ const GlobeIcon = () => (
     <path d="M3 12h18M12 3c2.5 2.6 2.5 15.4 0 18M12 3c-2.5 2.6-2.5 15.4 0 18" />
   </Svg>
 );
-const NoteIcon = () => (
-  <Svg>
-    <path d="M5 3h9l5 5v13H5z" />
-    <path d="M14 3v5h5M8.5 13h7M8.5 17h4" />
-  </Svg>
-);
 const PencilIcon = () => (
   <Svg size={14}>
     <path d="M12 20h9" />
     <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+  </Svg>
+);
+const UserIcon = () => (
+  <Svg size={18}>
+    <circle cx="12" cy="8" r="3.5" />
+    <path d="M4.5 20a7.5 7.5 0 0 1 15 0" />
+  </Svg>
+);
+const BanIcon = () => (
+  <Svg size={16}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="m5.6 5.6 12.8 12.8" />
+  </Svg>
+);
+/** An empty chair: the no-show, said as a picture rather than a second ban. */
+const EmptyChairIcon = () => (
+  <Svg size={16}>
+    <path d="M7 4v7h10V4M5 11h14M8 11v9M16 11v9" />
+  </Svg>
+);
+const DotsIcon = () => (
+  <Svg size={18}>
+    <circle cx="5" cy="12" r="1.2" fill="currentColor" />
+    <circle cx="12" cy="12" r="1.2" fill="currentColor" />
+    <circle cx="19" cy="12" r="1.2" fill="currentColor" />
+  </Svg>
+);
+const ExternalIcon = () => (
+  <Svg size={16}>
+    <path d="M14 4h6v6M20 4l-8 8" />
+    <path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" />
+  </Svg>
+);
+const ArrowLeftIcon = () => (
+  <Svg size={18}>
+    <path d="M15 5l-7 7 7 7" />
   </Svg>
 );
