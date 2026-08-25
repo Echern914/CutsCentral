@@ -80,35 +80,83 @@ function useMounted(): boolean {
  * detected either way — the earlier version used `innerHeight` alone, which
  * silently measured a 0px keyboard in the wrapped app and did nothing at all.
  */
-function useViewportRect(open: boolean): { top: number; height: number } | null {
-  const [rect, setRect] = useState<{ top: number; height: number } | null>(null);
+interface ViewportRead {
+  rect: { top: number; height: number } | null;
+  /** The raw numbers, for the on-device readout. */
+  debug: {
+    vv: number;
+    offsetTop: number;
+    innerHeight: number;
+    clientHeight: number;
+    covered: number;
+    active: boolean;
+  } | null;
+}
+
+function useViewportRect(open: boolean): ViewportRead {
+  const [read, setRead] = useState<ViewportRead>({ rect: null, debug: null });
   useEffect(() => {
     if (!open) return;
     const vv = window.visualViewport;
-    if (!vv) return;
-    const read = () => {
-      const layout = Math.max(
-        window.innerHeight,
-        document.documentElement.clientHeight,
-      );
+    if (!vv) {
+      setRead({ rect: null, debug: null });
+      return;
+    }
+    const measure = () => {
+      const innerHeight = window.innerHeight;
+      const clientHeight = document.documentElement.clientHeight;
+      const layout = Math.max(innerHeight, clientHeight);
       const covered = layout - vv.height - vv.offsetTop;
       // 80px is comfortably below any keyboard and comfortably above the
       // few pixels a rubber-band scroll produces.
-      setRect(
-        covered > 80
+      const active = covered > 80;
+      setRead({
+        rect: active
           ? { top: Math.round(vv.offsetTop), height: Math.round(vv.height) }
           : null,
-      );
+        debug: {
+          vv: Math.round(vv.height),
+          offsetTop: Math.round(vv.offsetTop),
+          innerHeight,
+          clientHeight,
+          covered: Math.round(covered),
+          active,
+        },
+      });
     };
-    read();
-    vv.addEventListener("resize", read);
-    vv.addEventListener("scroll", read);
+    measure();
+    vv.addEventListener("resize", measure);
+    vv.addEventListener("scroll", measure);
     return () => {
-      vv.removeEventListener("resize", read);
-      vv.removeEventListener("scroll", read);
+      vv.removeEventListener("resize", measure);
+      vv.removeEventListener("scroll", measure);
     };
   }, [open]);
-  return rect;
+  return read;
+}
+
+/**
+ * ON-DEVICE READOUT for the keyboard fix, off unless `?vpdebug=1` is on the
+ * URL. It instruments the REAL dialog rather than a standalone test page, so
+ * what it prints is exactly what `useViewportRect` decided — the whole point
+ * being to find out whether `visualViewport` reports a keyboard inside a
+ * WKWebView, which cannot be measured from a desktop browser.
+ *
+ * Read it with the keyboard UP: `covered` is the keyboard's height and
+ * `active` must be true. `active=false` with a keyboard on screen means this
+ * WebView does not shrink `visualViewport`, and the fix needs a different
+ * signal entirely.
+ */
+function useVpDebug(): boolean {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    try {
+      setOn(new URLSearchParams(window.location.search).get("vpdebug") === "1");
+    } catch {
+      setOn(false);
+    }
+  }, []);
+  return on;
 }
 
 export function Dialog({
@@ -157,7 +205,8 @@ export function Dialog({
   scrollResetKey?: string | number;
 }) {
   const mounted = useMounted();
-  const viewport = useViewportRect(open);
+  const { rect: viewport, debug: vpDebug } = useViewportRect(open);
+  const showVpDebug = useVpDebug();
   const panelRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -356,6 +405,21 @@ export function Dialog({
           </button>
         </div>
 
+        {showVpDebug && (
+          <pre
+            data-qa="vp-debug"
+            className="flex-none overflow-x-auto border-b border-gold/40 bg-black px-3 py-2 text-[11px] leading-tight text-gold"
+          >
+            {vpDebug
+              ? `visualViewport.height ${vpDebug.vv}
+offsetTop            ${vpDebug.offsetTop}
+window.innerHeight    ${vpDebug.innerHeight}
+docEl.clientHeight    ${vpDebug.clientHeight}
+covered (keyboard)    ${vpDebug.covered}
+ACTIVE                ${vpDebug.active ? "YES" : "no"}`
+              : "window.visualViewport is UNAVAILABLE in this WebView"}
+          </pre>
+        )}
         <div
           ref={bodyRef}
           data-qa="dialog-body"
