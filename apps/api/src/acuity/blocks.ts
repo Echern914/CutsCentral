@@ -50,7 +50,7 @@ export async function syncAcuityBlocks(
   from: Date,
   to: Date,
 ): Promise<BlockSyncResult> {
-  const rows: {
+  let rows: {
     externalId: string;
     startsAt: Date;
     endsAt: Date;
@@ -77,6 +77,32 @@ export async function syncAcuityBlocks(
   }
 
   return runWithShop(shopId, async (tx) => {
+    // SELF-ECHO GUARD. Blocks ChairBack itself created (engines/acuityMirror)
+    // come straight back through GET /blocks, and without this they would be
+    // imported as ExternalBlock rows - a phantom SECOND block laid over
+    // ChairBack's own appointment. Harmless while the booking stands, but on
+    // cancel the appointment disappears and the echo does not, so the chair
+    // stays blocked until the next sweep: cancelling would fail to free the
+    // slot for up to half an hour. Matched by ID, not by note text, so a
+    // barber who edits or clears the note cannot resurrect the loop.
+    const owned = await tx.acuityOutboundBlock.findMany({
+      where: { shopId, acuityBlockId: { not: null } },
+      select: { acuityBlockId: true },
+    });
+    const ownedExternalIds = new Set(
+      owned.map((o) => `acuity:${o.acuityBlockId}`),
+    );
+    rows = rows.filter((r) => !ownedExternalIds.has(r.externalId));
+    // Self-healing, not just preventive: any echo imported before this guard
+    // existed (or before we learned the block id, as when an ambiguous create
+    // is later recovered) is deleted here rather than left to block a chair
+    // nobody can explain.
+    if (ownedExternalIds.size > 0) {
+      await tx.externalBlock.deleteMany({
+        where: { shopId, externalId: { in: [...ownedExternalIds] } },
+      });
+    }
+
     for (const r of rows) {
       await tx.externalBlock.upsert({
         where: { shopId_externalId: { shopId, externalId: r.externalId } },

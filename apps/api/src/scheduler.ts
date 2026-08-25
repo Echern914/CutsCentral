@@ -17,6 +17,7 @@ import { refreshExpiringSquareTokens } from "./engines/squareTokenRefresh.js";
 import { runSquareResync } from "./engines/squareResync.js";
 import { rollForwardTargetedRules } from "./engines/targetedSlotRules.js";
 import { runAcuityResync } from "./engines/acuityResync.js";
+import { runAcuityOutboundReconcile } from "./engines/acuityMirror.js";
 import { runTrialReminders } from "./engines/trialReminder.js";
 import { runAiTrialReminders } from "./engines/aiTrialReminder.js";
 import { autoCloseIdleConversations } from "./receptionist/conversation.js";
@@ -208,6 +209,24 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
   // native slots — this resync is what keeps that mirror honest. Idempotent
   // (Visit unique key), bounded recent window, no-op when no Acuity shops are
   // connected. Generous TTL - a multi-shop account ingests sequentially.
+  // Outbound mirror reconciler: drains bookings whose Acuity block never
+  // finished (process died after commit), ambiguous creates that need
+  // recovering by reference, and deletes that did not confirm. Every 5
+  // minutes rather than 30 - an unmirrored booking is a chair Acuity will
+  // happily sell twice, so the window matters. Hard no-op with no Acuity
+  // shops connected; its job_lease row is seeded by the migration.
+  {
+    cronExpr: "*/5 * * * *",
+    name: "acuity-outbound-reconcile",
+    ttlMs: 4 * MINUTE,
+    run: async () => {
+      const r = await runAcuityOutboundReconcile();
+      if (r.adopted > 0 || r.retried > 0 || r.released > 0) {
+        logger.info(r, "acuity outbound reconcile");
+      }
+    },
+    failMsg: "acuity outbound reconcile failed",
+  },
   {
     cronExpr: "*/30 * * * *",
     name: "acuity-resync",

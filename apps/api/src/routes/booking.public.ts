@@ -10,6 +10,11 @@ import {
   staffSpanBlocked,
 } from "../engines/blockedTime.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
+import {
+  dispatchCreate,
+  MirrorNotConfiguredError,
+  recordMirrorIntent,
+} from "../engines/acuityMirror.js";
 import { ServiceDayFullError } from "../engines/serviceDailyLimit.js";
 import { destinationsFor } from "../engines/serviceUpgradeRules.js";
 import {
@@ -1282,6 +1287,49 @@ const createSchema = z
     path: ["email"],
   });
 
+/**
+ * Undo a booking Acuity DEFINITIVELY refused to hold.
+ *
+ * Only ever called on a proven rejection - never on a timeout, reset, 429 or
+ * 5xx, any of which may have created the block. Compensating on ambiguity
+ * would cancel a real appointment because we lost a response and leave a live
+ * block behind with nothing pointing at it.
+ *
+ * Runs before any confirmation is sent and before a PaymentIntent exists, so
+ * the customer sees a clean "that time just went" and no money has moved. The
+ * targeted-slot claim is released in the same transaction, or that slot would
+ * stay marked sold for a booking that no longer exists.
+ *
+ * If THIS write fails the appointment survives unmirrored - no worse than
+ * before the mirror existed, and the outbox row (still PENDING/FAILED) is what
+ * the reconciler picks up.
+ */
+async function compensateUnmirroredBooking(
+  shopId: string,
+  appointmentId: string,
+  targetedSlotId: string | null,
+): Promise<void> {
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.appointment.updateMany({
+        where: { id: appointmentId, shopId },
+        data: { status: "CANCELED", canceledAt: new Date() },
+      });
+      if (targetedSlotId) {
+        await tx.targetedSlot.updateMany({
+          where: { id: targetedSlotId, bookedAppointmentId: appointmentId },
+          data: { bookedAppointmentId: null },
+        });
+      }
+    });
+  } catch (err) {
+    logger.error(
+      { err, shopId, appointmentId },
+      "acuity mirror: compensation FAILED - appointment survives unmirrored, reconciler owns it",
+    );
+  }
+}
+
 bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {
   const parsed = createSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
@@ -1484,6 +1532,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {
 
   let appointmentId: string;
   let manageToken: string;
+  let mirrorOutboxId: string | null = null;
   try {
     // One transaction as the connection owner (NO runWithShop - the public route
     // has no shop context). Availability was validated above; here the advisory
@@ -1576,10 +1625,30 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {
         });
         if (claimed.count === 0) throw new SlotTakenError();
       }
-      return appt;
+      // Outbound Acuity mirror: the INTENT is written in this same
+      // transaction, so an appointment can never exist without one. The HTTP
+      // call happens after commit - doing it here would hold a pooled
+      // connection and the staff advisory lock across 200-800ms of Acuity
+      // latency and serialize every booking for this barber behind it.
+      const outboxId = await recordMirrorIntent(tx, {
+        shopId: shop.id,
+        appointmentId: appt.id,
+        staffId: d.staffId,
+        startsAt,
+        endsAt,
+        occupancy: {
+          status: shop.requireBookingApproval ? "PENDING" : "BOOKED",
+          startsAt,
+          endsAt,
+          holdExpiresAt: null, // a public booking is never an ephemeral hold
+          visitId: null,
+        },
+      });
+      return { ...appt, outboxId };
     });
     appointmentId = result.id;
     manageToken = result.manageToken;
+    mirrorOutboxId = result.outboxId;
   } catch (err) {
     // The barber's cap for that weekday filled while this customer was on the
     // page. Its own code, not slot_taken: the time itself may well still be
@@ -1593,6 +1662,21 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {
       res.status(409).json({ error: "slot_taken" });
       return;
     }
+    // ENFORCING with an unmapped chair: Acuity would still show this time
+    // free, which is the exact state the mirror exists to prevent, so we
+    // refuse rather than confirm a booking we cannot protect. The readiness
+    // gate makes this near-unreachable (ENFORCE cannot be switched on until
+    // every bookable chair is mapped); it covers the window where a barber is
+    // added or a calendar is deleted afterwards. Generic code to the customer,
+    // real cause in the log.
+    if (err instanceof MirrorNotConfiguredError) {
+      logger.error(
+        { shopId: shop.id, staffId: err.staffId },
+        "acuity mirror: ENFORCE with an unmapped chair - booking refused",
+      );
+      res.status(409).json({ error: "slot_unavailable_external" });
+      return;
+    }
     // P2002 = the partial-unique backstop fired on an identical-start race.
     if (
       err instanceof Prisma.PrismaClientKnownRequestError &&
@@ -1604,6 +1688,42 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {
     logger.error({ err, shopId: shop.id }, "native booking create failed");
     res.status(500).json({ error: "create_failed" });
     return;
+  }
+
+  // MIRROR BEFORE WE PROMISE ANYTHING. Acuity has to be holding this time
+  // before the customer is told they are booked and before a PaymentIntent is
+  // created - otherwise "You're booked!" is a claim we cannot back, which is
+  // precisely how a ChairBack booking that had held 6:10pm for eleven days got
+  // sold over from the Acuity side.
+  if (mirrorOutboxId) {
+    const outcome = await dispatchCreate(mirrorOutboxId);
+    if (outcome === "failed") {
+      // DEFINITIVE rejection - Acuity looked at it and declined, so no block
+      // exists. Undo the booking and give the customer the same clean answer
+      // as any other lost slot. Nothing has been sent and no PaymentIntent
+      // exists yet, so this costs the customer nothing.
+      await compensateUnmirroredBooking(shop.id, appointmentId, targeted?.id ?? null);
+      invalidateShopAvailabilityCaches(shop.id);
+      res.status(409).json({ error: "slot_unavailable_external" });
+      return;
+    }
+    if (outcome === "unknown") {
+      // AMBIGUOUS - the block may well exist; we simply never heard back.
+      // Cancelling here would kill a real appointment over a lost response AND
+      // strand a live block. Keep the booking, say nothing confirmatory, and
+      // let the reconciler settle it by reference.
+      logger.warn(
+        { shopId: shop.id, appointmentId, outboxId: mirrorOutboxId },
+        "acuity mirror: ambiguous create - holding booking, suppressing confirmations",
+      );
+      invalidateShopAvailabilityCaches(shop.id);
+      res.status(202).json({
+        status: "processing",
+        appointmentId,
+        manageToken,
+      });
+      return;
+    }
   }
 
   // Confirmation SMS after commit (gated by consent/quiet-hours/billing inside
