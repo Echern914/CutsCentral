@@ -1,4 +1,9 @@
+"use client";
+
 import Link from "next/link";
+import { useState } from "react";
+import { useToast } from "@/components/ui/Toast";
+import { ShareBookingDialog } from "./ShareBookingDialog";
 
 /**
  * The home screen's action block: ONE primary button, then three secondary
@@ -10,9 +15,26 @@ import Link from "next/link";
  * gold button is the only thing on the page that looks like that, so it reads
  * as *the* thing to do.
  */
-export function QuickActions({ rewardsEnabled }: { rewardsEnabled: boolean }) {
+export function QuickActions({
+  rewardsEnabled,
+  bookUrl,
+  shopName,
+}: {
+  rewardsEnabled: boolean;
+  /** Absolute public booking URL; null until the shop picks a slug. */
+  bookUrl: string | null;
+  shopName: string;
+}) {
+  const { toast } = useToast();
+  const [sharing, setSharing] = useState(false);
+
   return (
-    <div className="mt-6">
+    // 🔴 `mb-6` is the fix, not decoration. Every block below this one
+    // (SyncHealthBanner, GettingStarted, ConsentSetup) carries `mb-6` and NO
+    // top margin, so with nothing on this side the tiles sat flush against
+    // whatever came next - reading as one cramped, overlapping slab. This puts
+    // the row back on the same 24px rhythm the rest of the page already uses.
+    <div className="mb-6 mt-6">
       <Link
         href="/dashboard/booking?tab=Appointments"
         className="flex w-full items-center justify-center gap-2 rounded-full bg-gold px-6 py-3.5 text-sm font-semibold text-charcoal shadow-glow-sm transition-colors duration-200 ease-out hover:bg-gold-muted"
@@ -21,7 +43,7 @@ export function QuickActions({ rewardsEnabled }: { rewardsEnabled: boolean }) {
         Book appointment
       </Link>
 
-      <div className="mt-2.5 grid grid-cols-3 gap-2.5">
+      <div className="mt-2.5 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
         <Action href="/dashboard/clients" label="Clients">
           <ClientsMark />
         </Action>
@@ -40,28 +62,81 @@ export function QuickActions({ rewardsEnabled }: { rewardsEnabled: boolean }) {
         <Action href="/dashboard/site" label="Your page">
           <PageMark />
         </Action>
+        {/* No slug yet means no public URL to encode, so the tile points at
+            where they pick one instead of opening a dialog with a dead code. */}
+        {bookUrl ? (
+          <Action onClick={() => setSharing(true)} label="QR code">
+            <QrMark />
+          </Action>
+        ) : (
+          <Action href="/dashboard/site" label="QR code">
+            <QrMark />
+          </Action>
+        )}
       </div>
+
+      {bookUrl && (
+        <ShareBookingDialog
+          open={sharing}
+          onClose={() => setSharing(false)}
+          bookUrl={bookUrl}
+          shopName={shopName}
+          toast={toast}
+        />
+      )}
     </div>
   );
 }
 
+/**
+ * One shortcut tile. Navigates when given `href`, opens a dialog when given
+ * `onClick` - `min-h-16` keeps every tile well past the 44px touch floor and
+ * keeps the 2x2 phone grid on an even baseline.
+ */
+const TILE =
+  "flex min-h-16 flex-col items-center justify-center gap-1.5 rounded-2xl " +
+  "border border-subtle bg-charcoal-800 py-3 text-xs font-medium " +
+  "text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700";
+
 function Action({
   href,
+  onClick,
   label,
   children,
 }: {
-  href: string;
+  href?: string;
+  onClick?: () => void;
   label: string;
   children: React.ReactNode;
 }) {
-  return (
-    <Link
-      href={href}
-      className="flex flex-col items-center justify-center gap-1.5 rounded-2xl border border-subtle bg-charcoal-800 py-3 text-xs font-medium text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
-    >
+  const inner = (
+    <>
       <span className="text-muted">{children}</span>
       {label}
-    </Link>
+    </>
+  );
+  if (href) {
+    return (
+      <Link href={href} className={TILE}>
+        {inner}
+      </Link>
+    );
+  }
+  return (
+    <button type="button" onClick={onClick} className={TILE}>
+      {inner}
+    </button>
+  );
+}
+
+function QrMark() {
+  return (
+    <svg className="h-5 w-5" viewBox="0 0 24 24" aria-hidden {...stroke}>
+      <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" />
+      <rect x="13.5" y="3.5" width="7" height="7" rx="1.5" />
+      <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" />
+      <path d="M13.5 13.5h3v3h-3zM19 13.5h1.5V15M17.5 20.5h3v-3" />
+    </svg>
   );
 }
 

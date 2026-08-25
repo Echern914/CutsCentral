@@ -149,7 +149,13 @@ export function DashboardNavInline({
 
   return (
     <>
-      <div className="hidden items-center gap-1 sm:flex">
+      {/* 🔴 `min-w-0` is the fix, not tidying. The bar is three groups in a
+          `justify-between` row and the other two are `shrink-0`, so with a
+          default `min-width: auto` here nothing could give and the whole PAGE
+          overflowed at 768px (774>768). This group yields instead, and scrolls
+          its own tabs in the last resort - the page never widens again however
+          many tabs or however long their labels get. */}
+      <div className="hidden min-w-0 items-center gap-1 overflow-x-auto sm:flex [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {tabs.map((t) => {
           const active = isActive(pathname, t.href);
           return (
@@ -158,7 +164,10 @@ export function DashboardNavInline({
               href={t.href}
               aria-current={active ? "page" : undefined}
               className={cn(
-                "rounded-full px-4 py-1.5 text-sm font-medium transition-colors duration-150 ease-out",
+                // px-3 until there is real room: at 768 the five tabs plus the
+                // logo and the account/sign-out cluster were 6px too wide for
+                // the viewport. Full padding returns at lg.
+                "shrink-0 rounded-full px-3 py-1.5 text-sm font-medium transition-colors duration-150 ease-out lg:px-4",
                 active
                   ? "bg-gold/15 text-gold"
                   : "text-muted hover:bg-charcoal-700 hover:text-offwhite",
@@ -174,7 +183,8 @@ export function DashboardNavInline({
           aria-haspopup="dialog"
           aria-expanded={moreOpen}
           className={cn(
-            "rounded-full px-4 py-1.5 text-sm font-medium transition-colors duration-150 ease-out",
+            // Matches the tabs beside it - see the padding note above.
+            "shrink-0 rounded-full px-3 py-1.5 text-sm font-medium transition-colors duration-150 ease-out lg:px-4",
             moreActive
               ? "bg-gold/15 text-gold"
               : "text-muted hover:bg-charcoal-700 hover:text-offwhite",

@@ -31,6 +31,7 @@ import {
   completeAppointmentAction,
   declineAppointmentAction,
   getAgendaAction,
+  getWaitlistAction,
   markArrivedAction,
   noShowAppointmentAction,
   nudgeAppointmentAction,
@@ -115,6 +116,21 @@ export function BookingCalendar({
     null,
   );
   const [blockDay, setBlockDay] = useState<{ dayKey: string; hour: number } | null>(null);
+
+  // Live count for the waitlist shortcut. Seeded from the server prop so the
+  // badge is right on the first frame, then reconciled against the API's own
+  // per-status tally - which is computed with no status filter, so it counts
+  // WAITING only and can never drift as the board's filters change.
+  const [waitingCount, setWaitingCount] = useState(
+    () => initialWaitlist.filter((w) => w.status === "WAITING").length,
+  );
+
+  const refreshWaitingCount = useCallback(() => {
+    // limit:1 - the rows are thrown away; only `counts` is wanted.
+    void getWaitlistAction({ status: "WAITING", limit: 1 }).then((res) => {
+      if (res.ok) setWaitingCount(res.counts.WAITING);
+    });
+  }, []);
 
   // ---- Shop-tz formatters (a day/hour always means the barber's local one) ----
   const partsFmt = useMemo(
@@ -243,6 +259,9 @@ export function BookingCalendar({
   }, []);
 
   const refreshAgenda = useCallback(() => {
+    // A cancelled or declined booking can free a slot the waitlist wants, so
+    // the badge moves with the agenda rather than lagging a poll behind it.
+    refreshWaitingCount();
     const start = new Date(viewYear, viewMonth - 1, 1);
     const end = new Date(viewYear, viewMonth, 0);
     const from = new Date(start.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
@@ -259,7 +278,14 @@ export function BookingCalendar({
         return merged;
       });
     });
-  }, [viewYear, viewMonth]);
+  }, [viewYear, viewMonth, refreshWaitingCount]);
+
+  // The waitlist board lives on another tab, and this component unmounts while
+  // that tab is open - so mounting IS the moment to re-read a count the board
+  // may have changed (added, contacted, booked or removed someone).
+  useEffect(() => {
+    refreshWaitingCount();
+  }, [refreshWaitingCount]);
 
   // Live check-in updates: a light poll while the tab is showing. This is what
   // flips the Booked -> En route -> Arrived pill without a manual refresh when
@@ -268,9 +294,12 @@ export function BookingCalendar({
     const iv = setInterval(() => {
       if (document.visibilityState !== "visible") return;
       refreshAgenda();
+      // Entries expire on a server cron - nothing client-side would ever tell
+      // us, so the poll is the only thing that retires a stale badge.
+      refreshWaitingCount();
     }, 20_000);
     return () => clearInterval(iv);
-  }, [refreshAgenda]);
+  }, [refreshAgenda, refreshWaitingCount]);
 
   function gotoMonth(delta: number) {
     let y = viewYear;
@@ -426,6 +455,8 @@ export function BookingCalendar({
             onAddAt={(hour) => setAddAt(isoForDayHour(shownDay, hour, tz))}
             onBlock={() => setBlockDay({ dayKey: shownDay, hour: 12 })}
             onChanged={refreshAgenda}
+            waitingCount={waitingCount}
+            onOpenWaitlist={onOpenWaitlist}
           />
         </div>
       ) : (
@@ -516,6 +547,8 @@ export function BookingCalendar({
               onAddAt={(hour) => setAddAt(isoForDayHour(selectedDay, hour, tz))}
               onBlock={() => setBlockDay({ dayKey: selectedDay, hour: 12 })}
               onChanged={refreshAgenda}
+            waitingCount={waitingCount}
+            onOpenWaitlist={onOpenWaitlist}
             />
           </motion.div>
         )}
@@ -818,7 +851,7 @@ function WalkInBar({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="rounded-lg border border-subtle px-3 py-1.5 text-xs font-medium text-muted transition-colors hover:border-gold/50 hover:text-gold"
+        className={cn(ROW_BTN, "border border-subtle text-muted hover:border-gold/50 hover:text-gold")}
       >
         Walk-in
       </button>
@@ -898,6 +931,8 @@ function DayPlanner({
   onAddAt,
   onBlock,
   onChanged,
+  waitingCount,
+  onOpenWaitlist,
   standalone = false,
 }: {
   rows: AgendaRow[];
@@ -916,6 +951,10 @@ function DayPlanner({
   onBlock: () => void;
   /** Refetch the agenda so a row mutation shows without waiting for the poll. */
   onChanged: () => void;
+  /** How many people are WAITING right now - the shortcut's badge. */
+  waitingCount: number;
+  /** Switch to the Waitlist tab (its board already opens on Waiting). */
+  onOpenWaitlist: () => void;
   /** DAY view: the planner owns the card, so it drops the repeated date
    *  heading and the divider that separated it from the month grid. */
   standalone?: boolean;
@@ -1086,7 +1125,7 @@ function DayPlanner({
           <button
             type="button"
             onClick={() => onAddAt(DEFAULT_START_HOUR)}
-            className="rounded-lg bg-gold/15 px-3 py-1.5 text-xs font-medium text-gold transition-colors hover:bg-gold/25"
+            className={cn(ROW_BTN, "bg-gold/15 text-gold hover:bg-gold/25")}
           >
             + New appointment
           </button>
@@ -1094,10 +1133,14 @@ function DayPlanner({
           <button
             type="button"
             onClick={onBlock}
-            className="rounded-lg border border-subtle px-3 py-1.5 text-xs font-medium text-muted transition-colors hover:text-offwhite"
+            className={cn(
+              ROW_BTN,
+              "border border-subtle text-muted hover:text-offwhite",
+            )}
           >
             Block off time
           </button>
+          <WaitlistShortcut count={waitingCount} onOpen={onOpenWaitlist} />
         </div>
       )}
 
@@ -1277,6 +1320,93 @@ const NUDGE_PRESETS = [
 const NUDGE_MAX_LEN = 140;
 
 /** Pencil. Inherits currentColor so it matches whatever button hosts it. */
+/**
+ * Shared sizing for the barber action row.
+ *
+ * 44px on phones is the touch-target floor the rest of the app already keeps;
+ * these four controls sit in one row and read as one group, so they take it
+ * together - a lone 44px control beside three 28px ones looks like a mistake.
+ * The floor holds through TABLET too - 768px is a touch device, so relaxing at
+ * `sm` would drop the target exactly where fingers still use it. Only real
+ * pointer widths (`lg` and up) step down to the dashboard's usual 36px.
+ */
+const ROW_BTN =
+  "inline-flex h-11 items-center justify-center rounded-lg px-3 text-xs " +
+  "font-medium transition-colors lg:h-9";
+
+/**
+ * WAITLIST SHORTCUT.
+ *
+ * A barber looking at a thin day wants the waitlist NOW - it was two taps away
+ * behind a tab, and the panel that advertised it is hidden entirely when the
+ * list is empty. This puts it in the action row where the day is being worked.
+ *
+ * The badge counts WAITING only. CONTACTED people have already been reached,
+ * and BOOKED/REMOVED/EXPIRED are done - counting any of them would send the
+ * barber to a board with fewer people on it than the badge promised.
+ */
+function WaitlistShortcut({ count, onOpen }: { count: number; onOpen: () => void }) {
+  // Past 99 the exact number stops being actionable and starts breaking the
+  // row's width at 320px, so it caps.
+  const shown = count > 99 ? "99+" : String(count);
+  // Em dash, like every other user-facing string in the app (code comments
+  // keep ASCII). Reads as one sentence to a screen reader.
+  const label =
+    count === 0
+      ? "Open waitlist — nobody waiting."
+      : `Open waitlist — ${count} waiting.`;
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-label={label}
+      title={label}
+      className={cn(
+        ROW_BTN,
+        "group relative w-11 shrink-0 gap-1.5 border px-0 lg:w-auto lg:px-3",
+        count > 0
+          ? "border-gold/40 bg-gold/10 text-gold hover:bg-gold/20"
+          : "border-subtle text-muted hover:border-gold/50 hover:text-gold",
+      )}
+    >
+      <ClockIcon />
+      {/* Phones show the count as a corner badge over a square icon button;
+          from `sm` up the row has room to spell it out inline. */}
+      {count > 0 && (
+        <span
+          aria-hidden
+          className="absolute -right-1 -top-1 min-w-[1.15rem] rounded-full bg-gold px-1 text-[10px] font-bold leading-[1.15rem] text-charcoal-900 lg:hidden"
+        >
+          {shown}
+        </span>
+      )}
+      <span aria-hidden className="hidden lg:inline">
+        Waitlist{count > 0 ? ` · ${shown}` : ""}
+      </span>
+    </button>
+  );
+}
+
+/** Clock face - "people waiting on time to open up". */
+function ClockIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className="h-4 w-4 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
+    </svg>
+  );
+}
+
 function PencilIcon() {
   return (
     <svg
