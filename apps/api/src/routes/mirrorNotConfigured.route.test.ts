@@ -1,5 +1,5 @@
 import request from "supertest";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
@@ -10,14 +10,14 @@ import { sha256Hex } from "../engines/waitlistJoin.js";
 /**
  * ENFORCING WITH AN UNMAPPED CHAIR, ON EVERY PATH THAT BOOKS ONE.
  *
- * The Acuity mirror throws from inside the booking transaction when a shop is
- * ENFORCING a chair it cannot protect. That is correct - confirming a booking
- * the external calendar still shows as free is the exact state the mirror
- * exists to prevent.
+ * Both outbound mirrors throw from inside the booking transaction when a shop
+ * is ENFORCING a chair they cannot protect. That is correct - confirming a
+ * booking the external calendar still shows as free is the exact state the
+ * mirror exists to prevent.
  *
- * 🔴 But exactly ONE of the six paths that record a mirror intent caught it:
- * the public booking page. Dashboard create, walk-in, waitlist claim,
- * recurring series and the receptionist all answered a 500.
+ * 🔴 But exactly ONE of the seven paths that record a mirror intent caught it:
+ * the public booking page, and only for Acuity. Dashboard create, walk-in,
+ * waitlist claim, recurring series and the receptionist all answered a 500.
  *
  * That was never theoretical. Acuity runs in ENFORCE on a live shop, so adding
  * a barber without mapping their calendar broke booking on five paths at once,
@@ -26,6 +26,30 @@ import { sha256Hex } from "../engines/waitlistJoin.js";
  * Each case below fails against the old handling with a 500 or an unhandled
  * rejection; none passes by accident.
  */
+
+const squareMock = vi.hoisted(() => ({
+  getBooking: vi.fn(),
+  listBookings: vi.fn(async () => ({ bookings: [], cursor: null })),
+  getCustomer: vi.fn(),
+  listLocations: vi.fn(async () => [{ id: "L1", name: "Main", status: "ACTIVE" }]),
+  getBusinessBookingProfile: vi.fn(async () => ({
+    booking_enabled: true,
+    support_seller_level_writes: true,
+  })),
+  listTeamMemberBookingProfiles: vi.fn(async () => []),
+  listServiceCatalogItems: vi.fn(async () => []),
+  getTokenStatus: vi.fn(async () => ({ scopes: [] })),
+  ensureCustomer: vi.fn(async () => ({ id: "CUST_1" })),
+  searchAvailability: vi.fn(async () => []),
+  createBooking: vi.fn(),
+  updateBooking: vi.fn(),
+  cancelBooking: vi.fn(),
+}));
+
+vi.mock("../square/client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../square/client.js")>();
+  return { ...actual, getSquareClientForShop: vi.fn(async () => squareMock) };
+});
 
 const app = createApp();
 const password = "Sup3rSecret!pass";
@@ -125,6 +149,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
+  vi.clearAllMocks();
   await prisma.appointment.deleteMany({ where: { shopId } });
 });
 

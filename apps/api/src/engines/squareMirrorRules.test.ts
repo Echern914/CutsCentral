@@ -4,6 +4,7 @@ import {
   holdsTheChair,
   interpretBookingStatus,
   isSelfEcho,
+  squareReleaseActor,
   isSquareMirrorEligible,
   isSquareSellerNote,
   squareSellerNoteOutboxId,
@@ -159,6 +160,34 @@ describe("the seller note", () => {
 
   it("tolerates the whitespace a dashboard paste adds", () => {
     expect(squareSellerNoteOutboxId("  ChairBack ref cmt123  ")).toBe("cmt123");
+  });
+});
+
+describe("squareReleaseActor - WHO freed the chair", () => {
+  it("separates a customer cancellation from a seller one", () => {
+    expect(squareReleaseActor("CANCELLED_BY_CUSTOMER")).toBe("customer");
+    expect(squareReleaseActor("CANCELLED_BY_SELLER")).toBe("seller");
+  });
+
+  it("counts DECLINED as a seller action", () => {
+    // The seller refused a booking request. Same actor class as cancelling.
+    expect(squareReleaseActor("DECLINED")).toBe("seller");
+  });
+
+  it("keeps NO_SHOW distinct from any cancellation", () => {
+    // Nobody cancelled - the client did not turn up. Filing it as a seller
+    // cancel would put a customer-behaviour fact in a calendar-hygiene bucket.
+    expect(squareReleaseActor("NO_SHOW")).toBe("no_show");
+  });
+
+  it("does not guess at an unrecognised status", () => {
+    expect(squareReleaseActor("SOMETHING_NEW")).toBe("unknown");
+    expect(squareReleaseActor(null)).toBe("unknown");
+    expect(squareReleaseActor(undefined)).toBe("unknown");
+  });
+
+  it("is case- and whitespace-insensitive, like the status reader", () => {
+    expect(squareReleaseActor("  cancelled_by_customer ")).toBe("customer");
   });
 });
 

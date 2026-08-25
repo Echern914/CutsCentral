@@ -5043,7 +5043,7 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
     // different in kind: the money is already in the till and the client is
     // already in the chair. Refusing here would roll the whole transaction
     // back - payment included - to protect a calendar slot that is being
-    // physically occupied whether or not Acuity agrees.
+    // physically occupied whether or not the external calendar agrees.
     //
     // So the walk-in is recorded and the mirror is skipped, loudly. The chair
     // is genuinely double-bookable in the external calendar until someone maps

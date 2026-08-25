@@ -8,6 +8,7 @@ import {
   interpretBookingStatus,
   isSquareMirrorEligible,
   shouldSquareObserve,
+  squareReleaseActor,
   squareSellerNote,
   squareSellerNoteOutboxId,
   type SquareMirrorShopSlice,
@@ -326,11 +327,31 @@ async function ensureCustomerFor(
     select: { clientId: true, firstName: true, lastName: true },
   });
   const client = await getSquareClientForShop(shopId);
-  // Name only. The appointment also carries a phone and an email, and neither
-  // is sent: this mirror exists to hold a slot, not to replicate a shop's
-  // contact book into a third party. The reference id is ChairBack's own, so a
-  // repeat customer resolves to one Square record without us pushing anything
-  // that identifies them beyond what the barber already sees on the calendar.
+  //  🔴 NAME ONLY. DO NOT ADD emailAddress OR phoneNumber HERE.
+  //
+  // This started as a privacy decision - the mirror holds a slot, it does not
+  // replicate a shop's contact book into a third party - and it has since
+  // become load-bearing for something else.
+  //
+  // C14: whether Square emails or texts the CUSTOMER about a booking is a
+  // per-seller dashboard toggle (Appointments > Settings > Communications)
+  // that the API cannot read, cannot verify, and that applies to bookings an
+  // app creates exactly as it does to ones a customer makes. We therefore
+  // cannot know whether a given seller will notify. What we CAN control is
+  // whether there is anywhere to notify.
+  //
+  // A mirrored booking is a hold, not an appointment the customer made in
+  // Square. Attaching their email or phone here would let a seller's settings
+  // send a stranger "your appointment is confirmed" for something they never
+  // booked - and, if that message carries Square's own cancel link, let them
+  // cancel a chair ChairBack believes is protected.
+  //
+  // squareMirrorCustomer.test.ts asserts this. See
+  // docs/square-c14-customer-notification.md.
+  //
+  // The reference id is ChairBack's own, so a repeat customer resolves to one
+  // Square record without us pushing anything that identifies them beyond what
+  // the barber already sees on the calendar.
   const reference = `chairback:${shopId}:${appt?.clientId ?? appointmentId}`;
   const customer = await client.ensureCustomer({
     referenceId: reference,
@@ -850,18 +871,47 @@ export async function reconcileOwnedBookingFromWebhook(
     },
   });
   if (hold === "released" && row.state === "ACTIVE") {
-    // The barber cancelled OUR mirrored booking inside Square. That is a real
-    // signal about a real appointment - surface it loudly. It is deliberately
-    // NOT auto-cancelled here: a barber tidying their Square calendar must not
+    // OUR mirrored booking was released inside Square. Always a real signal
+    // about a real appointment, so it is surfaced loudly - and deliberately
+    // NEVER auto-cancelled: a barber tidying their Square calendar must not
     // silently cancel a customer who was told they were booked.
+    //
+    // WHO released it is recorded separately, because the cases are not
+    // equally plausible and must not share a reason code.
+    const actor = squareReleaseActor(status);
+    const anomalous = actor === "customer";
     logTransition(
-      "the seller cancelled a mirrored booking inside Square - the ChairBack appointment is now UNPROTECTED",
-      { shopId, appointmentId: row.appointmentId, outboxId: row.id, squareBookingId },
+      anomalous
+        ? "ANOMALY: a CUSTOMER cancelled a mirrored booking inside Square. A mirror is filed " +
+          "under a name-only customer with no email or phone, so there should be no channel " +
+          "by which anyone could cancel it - check whether contact details were added to a " +
+          "ChairBack-created customer record. The ChairBack appointment is now UNPROTECTED."
+        : "a mirrored booking was released inside Square - the ChairBack appointment is now UNPROTECTED",
+      {
+        shopId,
+        appointmentId: row.appointmentId,
+        outboxId: row.id,
+        squareBookingId,
+        squareStatus: status ?? null,
+        releasedBy: actor,
+        squareMirrorAnomaly: anomalous || undefined,
+      },
       "error",
     );
     await prisma.squareOutboundBooking.update({
       where: { id: row.id },
-      data: { state: "FAILED", lastError: "cancelled_in_square" },
+      data: {
+        state: "FAILED",
+        // A distinct code, so the eventual conflict UI and any log search can
+        // separate "the barber did this" from "something we believe impossible
+        // happened".
+        lastError:
+          actor === "customer"
+            ? "cancelled_by_customer_in_square"
+            : actor === "no_show"
+              ? "no_show_in_square"
+              : "cancelled_in_square",
+      },
     });
   }
 }
