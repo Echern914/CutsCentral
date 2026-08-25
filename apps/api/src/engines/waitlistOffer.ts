@@ -4,6 +4,12 @@ import { logger } from "../logger.js";
 import { sha256Hex } from "./waitlistJoin.js";
 import { entryPrefsMatchSlot } from "./waitlistMatch.js";
 import {
+  keysetAfter,
+  scanCursorFrom,
+  scanOrderBy,
+  type ScanKeyPart,
+} from "./waitlistScanOrder.js";
+import {
   CUSTOMER_ACTOR,
   recordWaitlistEvent,
   recordWaitlistEventBestEffort,
@@ -95,6 +101,22 @@ export let __lastScanStatsForTests: { scanned: number; pages: number } = {
   scanned: 0,
   pages: 0,
 };
+
+/**
+ * Test-only: the id of every candidate the scan VISITS, in visit order.
+ *
+ * `scanned` above is a COUNT, and a count cannot tell a correct walk from one
+ * that skipped a row and visited another twice - the two cancel out exactly.
+ * Proving a keyset cursor right needs identities, so the trace records them,
+ * and only when a test asks: null in production, allocating nothing.
+ */
+let scanTrace: string[] | null = null;
+
+/** Start (or stop) recording visited ids. Returns the live array. */
+export function __setScanTraceForTests(on: boolean): readonly string[] {
+  scanTrace = on ? [] : null;
+  return scanTrace ?? [];
+}
 
 // Test seam for the deposit gate: connectEnabled() reads STRIPE_* env, which
 // the suite deliberately runs without. Mirrors __setSendEmailForTests.
@@ -365,7 +387,7 @@ async function pickCandidate(
   // in production logs.
   let scanned = 0;
   let pages = 0;
-  let cursor: { createdAt: Date; id: string } | null = null;
+  let cursor: ScanKeyPart[] | null = null;
 
   for (;;) {
     const and: Prisma.WaitlistEntryWhereInput[] = [
@@ -383,14 +405,12 @@ async function pickCandidate(
     // KEYSET, not OFFSET: strictly after the last row we saw, in the exact
     // scan order. Stable under concurrent inserts and never re-reads or
     // skips a page the way a shifting OFFSET would.
-    if (cursor) {
-      and.push({
-        OR: [
-          { createdAt: { gt: cursor.createdAt } },
-          { createdAt: cursor.createdAt, id: { gt: cursor.id } },
-        ],
-      });
-    }
+    //
+    // 🔴 The predicate is GENERATED from the same list as the orderBy below
+    // (engines/waitlistScanOrder.ts) rather than written out here a second
+    // time. Hand-writing both is how a resume predicate and a sort order
+    // drift apart, and when they drift the walk silently skips rows.
+    if (cursor) and.push(keysetAfter(cursor));
     const batch = await tx.waitlistEntry.findMany({
       where: {
         shopId: slot.shopId,
@@ -398,8 +418,9 @@ async function pickCandidate(
         AND: and,
       },
       // Deterministic ranking: earliest joiner first, id as the stable
-      // tie-breaker for same-instant joins (and the cursor anchor).
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      // tie-breaker for same-instant joins (and the cursor anchor). Same
+      // source as the keyset predicate above - see waitlistScanOrder.ts.
+      orderBy: scanOrderBy(),
       take: CANDIDATE_BATCH,
       select: {
         id: true,
@@ -407,6 +428,7 @@ async function pickCandidate(
         firstName: true,
         email: true,
         phone: true,
+        clientId: true,
         timezone: true,
         minHoursNotice: true,
         windows: {
@@ -416,11 +438,42 @@ async function pickCandidate(
     });
     if (batch.length === 0) break;
     pages += 1;
-    cursor = { createdAt: batch[batch.length - 1]!.createdAt, id: batch[batch.length - 1]!.id };
+    cursor = scanCursorFrom(batch[batch.length - 1]!);
 
-    // ONE client lookup per page for its phone-only candidates (no N+1):
-    // fetched up front so the walk below never queries per candidate.
+    // Which candidates on this page need a Client, and how we find it.
+    //
+    // Only the ones with NO email: an address is the first reachable channel
+    // the walk below checks, so an emailed candidate never consults a client
+    // record at all. That is today's behaviour and it does not move here.
+    //
+    // 🔑 THE LINK IS A PREFERENCE, NOT A REPLACEMENT. clientId holds the same
+    // answer this phone lookup produces, computed once and stored
+    // (engines/waitlistClientLink.ts) - but the phone query still runs over
+    // every email-less candidate exactly as it does today, and the link is
+    // only used when it resolves to a LIVE client.
+    //
+    // That is deliberate, and it is what makes this change a no-op. Narrowing
+    // the phone query to unlinked rows would look tidier and would lose a
+    // real case: archive a duplicate client and re-add the same person, and
+    // the entry's link now points at the archived row while the phone points
+    // at the live one. Today that entry is reachable. It stays reachable.
+    //
+    // Both halves keep archivedAt: null - an archived client was never
+    // pushable and a link must not quietly change that. Two queries per page
+    // at most, both bounded by the page (no N+1), and the id lookup is a
+    // primary-key hit that does not fire at all until rows have links.
+    const linkIds = batch.filter((c) => !c.email && c.clientId).map((c) => c.clientId!);
     const phoneOnly = batch.filter((c) => !c.email && c.phone).map((c) => c.phone!);
+
+    const liveLinks = new Set<string>();
+    if (linkIds.length > 0) {
+      const linked = await tx.client.findMany({
+        where: { shopId: slot.shopId, id: { in: linkIds }, archivedAt: null },
+        select: { id: true },
+      });
+      for (const cl of linked) liveLinks.add(cl.id);
+    }
+
     const pushable = new Map<string, string>();
     if (phoneOnly.length > 0) {
       const clients = await tx.client.findMany({
@@ -432,6 +485,7 @@ async function pickCandidate(
 
     for (const c of batch) {
       scanned += 1;
+      scanTrace?.push(c.id);
       try {
         const verdict = entryPrefsMatchSlot(c, slot, {
           shopTimezone: slot.timezone,
@@ -452,7 +506,12 @@ async function pickCandidate(
           );
           return { id: c.id, firstName: c.firstName, email: c.email, clientId: null };
         }
-        const clientId = c.phone ? pushable.get(c.phone) : undefined;
+        const clientId =
+          c.clientId && liveLinks.has(c.clientId)
+            ? c.clientId
+            : c.phone
+              ? pushable.get(c.phone)
+              : undefined;
         if (clientId) {
           __lastScanStatsForTests = { scanned, pages };
           logger.info(

@@ -14,6 +14,7 @@
     "migrate:dev": "prisma migrate dev",
     "migrate:deploy": "prisma migrate deploy",
     "seed": "tsx prisma/seed.ts",
+    "report:waitlist-links": "tsx prisma/report-waitlist-links.ts",
     "studio": "prisma studio",
     "build": "prisma generate",
     "typecheck": "tsc -p tsconfig.json --noEmit",

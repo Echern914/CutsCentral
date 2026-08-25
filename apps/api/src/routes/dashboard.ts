@@ -59,6 +59,7 @@ import {
 } from "../engines/waitlistWindows.js";
 import { addDaysToDateKey } from "../engines/waitlistMatch.js";
 import { joinFingerprint, mintCancelToken } from "../engines/waitlistJoin.js";
+import { resolveWaitlistClientId } from "../engines/waitlistClientLink.js";
 import { recordWaitlistEvent } from "../engines/waitlistAudit.js";
 import { sendReceptionistSms } from "../receptionist/outbound.js";
 import { appendMessage } from "../receptionist/conversation.js";
@@ -2269,6 +2270,13 @@ dashboardRouter.post("/waitlist", async (req, res) => {
     // have to be ONE transaction (phase F1), and each forShop() accessor opens
     // its own. Same tenant session, same RLS, just held open across both writes.
     const entry = await runWithShop(shop.id, async (tx) => {
+      // Who is this, if we can tell? One rule, stated once
+      // (engines/waitlistClientLink.ts): the single non-archived client in
+      // this shop with this exact number. Null when there is no number, no
+      // match, or more than one - a guess here would attribute one person's
+      // standing to another, and null costs nothing because the offer scan
+      // still falls back to the same phone lookup.
+      const clientId = await resolveWaitlistClientId(tx, shop.id, phone);
       const created = await tx.waitlistEntry.create({
         data: {
           shopId: shop.id,
@@ -2276,6 +2284,7 @@ dashboardRouter.post("/waitlist", async (req, res) => {
           lastName: d.lastName || null,
           phone,
           email,
+          clientId,
           serviceId,
           staffId,
           note: d.note || null,
