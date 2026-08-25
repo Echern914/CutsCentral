@@ -37,9 +37,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # No `version:` here on purpose - pnpm/action-setup errors out when it is
+      # given one AND package.json has "packageManager", which is the repo's
+      # source of truth.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9.15.9
 
       - uses: actions/setup-node@v4
         with:
