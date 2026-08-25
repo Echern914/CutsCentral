@@ -50,6 +50,10 @@ export const squareBookingSchema = z
     location_id: z.string().nullish(),
     customer_id: z.string().nullish(),
     customer_note: z.string().nullish(),
+    // Present in the real webhook payload (verified against a live sandbox
+    // delivery, 2026-08-25) and load-bearing: it carries the outbox row id that
+    // identifies a booking as ChairBack's own before squareBookingId is stored.
+    seller_note: z.string().nullish(),
     appointment_segments: z.array(squareAppointmentSegmentSchema).default([]),
   })
   .passthrough();

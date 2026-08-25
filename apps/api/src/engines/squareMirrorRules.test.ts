@@ -6,6 +6,7 @@ import {
   isSelfEcho,
   isSquareMirrorEligible,
   isSquareSellerNote,
+  squareSellerNoteOutboxId,
   shouldSquareObserve,
   squareSellerNote,
   totalOccupiedMinutes,
@@ -134,6 +135,30 @@ describe("the seller note", () => {
     expect(isSquareSellerNote(note)).toBe(true);
     expect(isSquareSellerNote("Walk-in, cash")).toBe(false);
     expect(isSquareSellerNote(null)).toBe(false);
+  });
+
+  it("round-trips the outbox id back out of the note", () => {
+    // This is the identifier that closes the create-to-webhook race: the note
+    // exists before Square has ever seen the booking, and a live sandbox
+    // delivery confirmed it comes back in the payload.
+    expect(squareSellerNoteOutboxId(squareSellerNote("cmt123"))).toBe("cmt123");
+  });
+
+  it("returns null for anything that is not one of ours", () => {
+    expect(squareSellerNoteOutboxId("Walk-in, cash")).toBeNull();
+    expect(squareSellerNoteOutboxId(null)).toBeNull();
+    expect(squareSellerNoteOutboxId(undefined)).toBeNull();
+  });
+
+  it("returns null for the prefix with no id after it", () => {
+    // A barber typing the prefix alone must not resolve to a row, and an empty
+    // string would otherwise sail into a findFirst as a wildcard-ish lookup.
+    expect(squareSellerNoteOutboxId("ChairBack ref ")).toBeNull();
+    expect(squareSellerNoteOutboxId("ChairBack ref    ")).toBeNull();
+  });
+
+  it("tolerates the whitespace a dashboard paste adds", () => {
+    expect(squareSellerNoteOutboxId("  ChairBack ref cmt123  ")).toBe("cmt123");
   });
 });
 

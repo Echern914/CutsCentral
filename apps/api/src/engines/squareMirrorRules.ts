@@ -169,6 +169,21 @@ export function isSquareSellerNote(note: string | null | undefined): boolean {
   return typeof note === "string" && note.trim().startsWith(REFERENCE_PREFIX);
 }
 
+/**
+ * The outbox row id a seller note names, or null.
+ *
+ * This is the ONLY identifier available during the window between Square
+ * accepting a create and ChairBack storing the returned booking id - a window
+ * Square's own webhook routinely beats. It is a CLAIM, not proof: the caller
+ * must confirm the id names a real row belonging to the shop the event was
+ * routed to, because a note is free text a seller can copy from anywhere.
+ */
+export function squareSellerNoteOutboxId(note: string | null | undefined): string | null {
+  if (!isSquareSellerNote(note)) return null;
+  const id = note!.trim().slice(REFERENCE_PREFIX.length).trim();
+  return id.length > 0 ? id : null;
+}
+
 //  5. Self-echo
 
 /**

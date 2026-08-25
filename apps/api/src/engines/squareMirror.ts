@@ -9,6 +9,7 @@ import {
   isSquareMirrorEligible,
   shouldSquareObserve,
   squareSellerNote,
+  squareSellerNoteOutboxId,
   type SquareMirrorShopSlice,
 } from "./squareMirrorRules.js";
 import { shouldMirrorOnCreate, type OccupancySlice } from "./acuityMirrorRules.js";
@@ -730,6 +731,59 @@ export async function ownedSquareBookingIds(shopId: string): Promise<Set<string>
     select: { squareBookingId: true },
   });
   return new Set(rows.map((r) => r.squareBookingId!));
+}
+
+/**
+ * Claim an inbound booking as ours using the seller note, for the window in
+ * which `squareBookingId` has not been stored yet.
+ *
+ * MEASURED, not assumed: a live sandbox delivery on 2026-08-25 confirmed the
+ * webhook payload carries the full booking object including `seller_note`, and
+ * that Square fires booking.created fast enough to beat our own write-back.
+ *
+ * Two guards make a free-text field safe to trust here:
+ *
+ *   - the note must name a row that EXISTS, and
+ *   - that row must belong to the SHOP this event was routed to - otherwise a
+ *     seller pasting another shop's note could make real bookings vanish from
+ *     a calendar they do not own.
+ *
+ * Adopting the id is what stops the note from being load-bearing twice: every
+ * later booking.updated for this booking is recognised by the id instead. The
+ * adoption is guarded on `squareBookingId: null` so it can never overwrite an
+ * id the create path has already settled on.
+ */
+export async function claimSquareBookingByNote(
+  shopId: string,
+  sellerNote: string | null | undefined,
+  squareBookingId: string,
+): Promise<boolean> {
+  const outboxId = squareSellerNoteOutboxId(sellerNote);
+  if (!outboxId) return false;
+
+  const row = await prisma.squareOutboundBooking.findFirst({
+    where: { id: outboxId, shopId },
+    select: { id: true, squareBookingId: true },
+  });
+  if (!row) return false;
+  if (row.squareBookingId && row.squareBookingId !== squareBookingId) {
+    // The note names one of ours, but that row already owns a DIFFERENT
+    // booking. Suppressing would hide a real booking, so let it import and say
+    // so - this is a mapping fault, not an echo.
+    logTransition(
+      "seller note names an outbox row that already owns a different Square booking - importing",
+      { shopId, outboxId, squareBookingId, ownedBookingId: row.squareBookingId },
+      "warn",
+    );
+    return false;
+  }
+  if (!row.squareBookingId) {
+    await prisma.squareOutboundBooking.updateMany({
+      where: { id: outboxId, shopId, squareBookingId: null },
+      data: { squareBookingId },
+    });
+  }
+  return true;
 }
 
 /**

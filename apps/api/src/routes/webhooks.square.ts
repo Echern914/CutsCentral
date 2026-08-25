@@ -121,7 +121,7 @@ squareWebhookRouter.post("/", express.raw({ type: "*/*" }), async (req, res) => 
     // Self-echo is decided inside processBookingEvent: a booking ChairBack
     // created must reconcile its own outbound row, never import as a second
     // Visit on a chair that is already booked.
-    const outcome = await processBookingEvent(shop, booking.id, booking.status);
+    const outcome = await processBookingEvent(shop, booking.id, booking.status, booking.seller_note);
     await settleEvent(admission.rowId, "PROCESSED", { shopId: shop.id });
     logger.info(
       { shopId: shop.id, eventId: envelope.event_id, outcome },

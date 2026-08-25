@@ -2,6 +2,7 @@ import { Prisma, prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import { ingestSquareBooking } from "./ingest.js";
 import {
+  claimSquareBookingByNote,
   ownedSquareBookingIds,
   reconcileOwnedBookingFromWebhook,
 } from "../engines/squareMirror.js";
@@ -97,12 +98,25 @@ export async function settleEvent(
 /**
  * Handle one booking event for a resolved shop.
  *
- * SELF-ECHO IS CHECKED FIRST, and against the outbound table rather than
- * against the seller note. A booking ChairBack created comes straight back as
- * booking.created; importing it as a Visit would give the shop a phantom second
- * appointment on a chair that is already booked - the mirror double-booking the
- * very chair it was protecting. The note is not the authority because a barber
- * can edit it, and a booking whose note was cleared is still ours.
+ * SELF-ECHO IS CHECKED FIRST. A booking ChairBack created comes straight back
+ * as booking.created; importing it as a Visit would give the shop a phantom
+ * second appointment on a chair that is already booked - the mirror
+ * double-booking the very chair it was protecting.
+ *
+ * It is checked TWICE, against two different identifiers, because neither alone
+ * covers the whole life of a mirrored booking:
+ *
+ *   1. THE OUTBOUND TABLE, which is the durable authority. A barber can edit
+ *      or clear the seller note and the booking is still ours, so membership
+ *      here is what survives.
+ *   2. THE SELLER NOTE, which covers the window the table cannot: between
+ *      Square accepting the create and ChairBack storing the returned id,
+ *      there IS no id to match on, and Square's webhook routinely arrives
+ *      first. The note is written before Square ever sees the booking, and a
+ *      live sandbox delivery confirmed it comes back in the payload.
+ *
+ * The note is a claim, never proof - claimSquareBookingByNote only honours one
+ * that names a real outbox row belonging to THIS shop.
  *
  * When the barber later edits or cancels one of OUR bookings inside Square,
  * that is reconciled against the linked ChairBack appointment - never turned
@@ -112,6 +126,7 @@ export async function processBookingEvent(
   shop: { id: string } & Record<string, unknown>,
   bookingId: string,
   status: string | null | undefined,
+  sellerNote?: string | null,
 ): Promise<"self_echo" | "ingested"> {
   const owned = await ownedSquareBookingIds(shop.id);
   if (isSelfEcho(bookingId, owned)) {
@@ -122,6 +137,25 @@ export async function processBookingEvent(
     );
     return "self_echo";
   }
+
+  // THE RACE. Square fires booking.created the instant it accepts the write,
+  // which routinely beats dispatchSquareCreate storing the returned id - and
+  // ownedSquareBookingIds only sees rows that HAVE an id. Inside that window
+  // the sole evidence the booking is ours is the note we wrote before Square
+  // ever saw it. Verified against a live sandbox delivery: the payload does
+  // carry seller_note.
+  //
+  // Without this, the mirror imports its own booking as a Visit - a phantom
+  // second appointment on the chair it was protecting.
+  if (await claimSquareBookingByNote(shop.id, sellerNote, bookingId)) {
+    await reconcileOwnedBookingFromWebhook(shop.id, bookingId, status);
+    logger.info(
+      { shopId: shop.id, squareBookingId: bookingId },
+      "square webhook: our own booking, claimed by seller note before the id was stored",
+    );
+    return "self_echo";
+  }
+
   await ingestSquareBooking(shop as never, bookingId);
   return "ingested";
 }
