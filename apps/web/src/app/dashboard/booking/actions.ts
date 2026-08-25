@@ -871,3 +871,58 @@ export async function updateUpgradeRuleAction(
 export async function deleteUpgradeRuleAction(id: string): Promise<Result> {
   return done(await apiSend("DELETE", `/api/booking/upgrade-rules/${id}`));
 }
+
+//  Appointment editing
+
+export interface EditContext {
+  timezone: string;
+  services: { id: string; name: string; durationMin: number }[];
+  staff: { id: string; name: string }[];
+  clients: { id: string; name: string; phone: string | null }[];
+}
+
+/**
+ * Everything the edit sheet needs to prefill, in one round trip: the shop's
+ * timezone (wall-clock edits are meaningless without it), the active service
+ * and staff lists, and the client book for the explicit change-client search.
+ */
+export async function getEditContextAction(): Promise<{
+  ok: boolean;
+  data?: EditContext;
+  error?: string;
+}> {
+  const res = await apiGet<EditContext>("/api/booking/appointments/edit-context");
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, data: res.data };
+}
+
+export interface EditResult {
+  ok: boolean;
+  error?: string;
+  status?: string;
+  /** Acuity mirror outcome: active | failed | unknown | skipped | observed. */
+  mirror?: string;
+}
+
+/**
+ * Save an appointment edit. Sends ONLY the changed fields, so an untouched
+ * price or note is never rewritten. The mirror outcome comes straight back so
+ * the sheet can be honest when Acuity did not confirm a move.
+ */
+export async function editAppointmentAction(
+  id: string,
+  patch: Record<string, unknown>,
+): Promise<EditResult> {
+  const res = await apiSend<{ status?: string; mirror?: string }>(
+    "PATCH",
+    `/api/booking/appointments/${encodeURIComponent(id)}`,
+    patch,
+  );
+  if (res.ok) revalidatePath("/dashboard/booking");
+  return {
+    ok: res.ok,
+    error: res.ok ? undefined : (res.error ?? "failed"),
+    status: res.data?.status,
+    mirror: res.data?.mirror,
+  };
+}

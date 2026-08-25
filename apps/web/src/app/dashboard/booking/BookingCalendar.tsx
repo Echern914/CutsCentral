@@ -13,6 +13,7 @@ import {
   initialsOf,
 } from "../_components/appointmentCardStyles";
 import { serviceColorHex } from "@chairback/config/constants";
+import { AppointmentEditSheet } from "./AppointmentEditSheet";
 import { zonedWallTimeToUtc } from "@chairback/config/time";
 import type {
   AgendaCategory,
@@ -1275,13 +1276,46 @@ const NUDGE_PRESETS = [
 ];
 const NUDGE_MAX_LEN = 140;
 
+/** Pencil. Inherits currentColor so it matches whatever button hosts it. */
+function PencilIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className="h-3.5 w-3.5 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+  );
+}
+
 // Shared card language (name wrapping + initials) - see appointmentCardStyles.
 // The card is PRESENTATION-only work: statuses, permissions and every action
 // handler below are exactly as they were.
+/**
+ * THE BOOKING STATE, said plainly.
+ *
+ * "Upcoming" answered the wrong question: it described WHEN, so a barber
+ * reading a card could not tell an accepted booking from a request still
+ * waiting on them - both were amber-ish chips that said the appointment was
+ * ahead of them. Requested and Booked are different commitments and now read
+ * differently.
+ *
+ * This is SOURCE-BLIND on purpose. Where the booking came from (ChairBack vs
+ * Acuity) is a separate fact carried by its own badge, because a synced
+ * booking is just as booked as a native one - collapsing the two into a single
+ * chip is what made "Synced" read like a status in the first place.
+ */
 const STATUS_PILL: Record<AgendaRow["status"], { label: string; cls: string }> = {
   pending: { label: "Requested", cls: "bg-amber-400/15 text-amber-300" },
-  upcoming: { label: "Upcoming", cls: "bg-gold/15 text-gold" },
-  completed: { label: "Done", cls: "bg-emerald-soft/15 text-emerald-soft" },
+  upcoming: { label: "Booked", cls: "bg-gold/15 text-gold" },
+  completed: { label: "Completed", cls: "bg-emerald-soft/15 text-emerald-soft" },
   canceled: { label: "Canceled", cls: "bg-charcoal-700 text-muted" },
   no_show: { label: "No-show", cls: "bg-danger-soft/15 text-danger-soft" },
   blocked: { label: "Blocked", cls: "bg-charcoal-700 text-muted" },
@@ -1303,6 +1337,7 @@ function AppointmentBlock({
   const [nudgeMenu, setNudgeMenu] = useState(false);
   // Appointment detail + chair-side checkout, opened from this row.
   const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
   const [customNudge, setCustomNudge] = useState("");
   // Skip = dismiss for THIS render only; the reward stays ready and the prompt
   // returns on reload (deliberate - skipping never consumes anything).
@@ -1516,12 +1551,37 @@ function AppointmentBlock({
         {row.syncedExternal && (
           <span
             title="Booked on your other platform (Acuity/Square). It blocks this time for online booking — change or cancel it there."
+            data-testid="source-badge"
             className="shrink-0 rounded-full bg-sky-400/15 px-1.5 py-0.5 text-[10px] font-medium text-sky-300"
           >
             Synced
           </span>
         )}
       </p>
+
+      {/* SOURCE, not status. A synced booking is just as booked as a native
+          one; what differs is who OWNS it. ChairBack has no outbound
+          appointment API, so editing it here would desynchronize the two
+          systems - the barber is sent to the system that actually owns it. */}
+      {row.syncedExternal && (
+        <div className="mt-3 rounded-lg border border-sky-400/30 bg-sky-400/5 px-3 py-2">
+          <p className="text-[11px] text-sky-300">
+            Booked in Acuity. Change or cancel it there — this card mirrors it so the
+            time stays blocked here.
+          </p>
+          <a
+            href="https://secure.acuityscheduling.com/appointments.php"
+            target="_blank"
+            rel="noopener noreferrer"
+            className={cn(
+              BTN_BASE,
+              "mt-2 border border-sky-400/40 text-sky-300 hover:bg-sky-400/10",
+            )}
+          >
+            Edit in Acuity
+          </a>
+        </div>
+      )}
 
       {canApprove && (
         <div className="mt-3 grid grid-cols-2 gap-2">
@@ -1545,8 +1605,11 @@ function AppointmentBlock({
       {/* Reward ready - the manual-mode prompt. Apply redeems via the existing
           endpoint; Skip just hides it here (the reward stays available). */}
       {canAct && row.rewardReady && row.clientId && !rewardSkipped && (
-        <div className="mt-2 flex items-center justify-between gap-2 rounded-md border border-gold/30 bg-gold/10 px-2.5 py-1.5">
-          <span className="min-w-0 truncate text-[11px] text-gold">
+        <div className="mt-2 flex flex-col gap-2 rounded-md border border-gold/30 bg-gold/10 px-2.5 py-2 sm:flex-row sm:items-center sm:justify-between">
+          {/* Wraps rather than truncating: at 320px "Reward ready - apply Fre…"
+              hid the reward's NAME, which is the one fact the prompt exists to
+              convey. */}
+          <span className="min-w-0 [overflow-wrap:anywhere] text-[11px] leading-snug text-gold">
             Reward ready — apply {row.rewardReady.rewardName} to this visit?
           </span>
           <span className="flex shrink-0 gap-1.5">
@@ -1581,19 +1644,19 @@ function AppointmentBlock({
       )}
 
       {canAct && (
-        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+        <div data-qa="appt-actions" className="mt-3 grid grid-cols-2 gap-2">
           {row.hasPush === false ? (
             <span
               title="This client hasn't allowed notifications, so a nudge won't reach them."
               className={cn(
                 BTN_BASE,
-                "col-span-2 cursor-default border border-subtle text-muted/60 sm:col-span-1",
+                "col-span-2 cursor-default border border-subtle text-muted/60",
               )}
             >
               Notifications off
             </span>
           ) : (row.nudgesSent ?? 0) < (row.nudgeLimit ?? 2) ? (
-            <div className="relative">
+            <div className="relative col-span-2">
               <button
                 onClick={() => setNudgeMenu((v) => !v)}
                 disabled={pending}
@@ -1640,7 +1703,7 @@ function AppointmentBlock({
             <span
               className={cn(
                 BTN_BASE,
-                "col-span-2 cursor-default border border-subtle text-muted/60 sm:col-span-1",
+                "col-span-2 cursor-default border border-subtle text-muted/60",
               )}
             >
               Nudged ×2
@@ -1726,7 +1789,31 @@ function AppointmentBlock({
               Cancel
             </button>
           )}
+          {/* EDIT fills the slot beside Cancel. Neutral outline, not gold:
+              Checkout is the card's one primary action and a second bright
+              button would compete with the money moment. */}
+          <button
+            onClick={() => setEditOpen(true)}
+            disabled={pending}
+            aria-label={`Edit appointment for ${row.clientName}`}
+            className={cn(BTN_BASE, "gap-1.5 border border-subtle text-muted hover:text-offwhite")}
+          >
+            <PencilIcon />
+            Edit
+          </button>
         </div>
+      )}
+
+      {editOpen && (
+        <AppointmentEditSheet
+          row={row}
+          toast={toast}
+          onClose={() => setEditOpen(false)}
+          onSaved={() => {
+            setEditOpen(false);
+            onChanged();
+          }}
+        />
       )}
 
       {/* Appointment detail -> charges -> payment. Mounted from the row so it

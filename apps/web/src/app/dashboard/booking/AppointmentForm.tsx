@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
 import { zonedWallTimeToUtc } from "@chairback/config/time";
 import type { ServiceRow, StaffRow } from "./page";
@@ -538,6 +539,22 @@ export function AppointmentForm({
 }
 
 /** Simple bottom-sheet-style modal shell in the app's dark chrome. */
+/**
+ * The overlay every booking form rides in: a bottom sheet on phones, a centred
+ * dialog from `sm` up.
+ *
+ * PORTALLED TO document.body, and that is load-bearing rather than tidiness.
+ * ChairBack cards use `.glass`, which sets `backdrop-filter` - and any
+ * non-`none` filter/backdrop-filter makes that element a CONTAINING BLOCK for
+ * `position: fixed` descendants. Rendered in place, `fixed inset-0` would size
+ * itself to the CARD instead of the viewport and its z-index would be trapped
+ * in the card's stacking context: a sheet the width of an appointment row,
+ * painted underneath the row below it. Portalling escapes both.
+ *
+ * Also handles the dialog basics the old inline version skipped: Escape to
+ * close, focus moved in on open and restored on close, background scroll
+ * locked, and proper dialog semantics for screen readers.
+ */
 export function Sheet({
   title,
   onClose,
@@ -547,22 +564,59 @@ export function Sheet({
   onClose: () => void;
   children: React.ReactNode;
 }) {
-  return (
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => setMounted(true), []);
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    // Background must not scroll under an open sheet on iOS.
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    // Focus the panel so a keyboard/screen-reader user lands inside the dialog
+    // rather than continuing from wherever the trigger was.
+    panelRef.current?.focus();
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+      previouslyFocused?.focus?.();
+    };
+  }, [onClose]);
+
+  if (!mounted) return null;
+
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
       <div className="absolute inset-0 bg-black/60" onClick={onClose} aria-hidden />
-      <div className="relative z-10 max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-t-2xl border border-subtle bg-charcoal-900 p-5 sm:rounded-2xl">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="font-display text-lg text-offwhite">{title}</h2>
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+        className="relative z-10 max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-t-2xl border border-subtle bg-charcoal-900 p-5 outline-none sm:rounded-2xl"
+      >
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="min-w-0 [overflow-wrap:anywhere] font-display text-lg text-offwhite">
+            {title}
+          </h2>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full border border-subtle px-3 py-1 text-xs text-muted hover:text-offwhite"
+            aria-label="Close"
+            className="flex h-11 shrink-0 items-center rounded-full border border-subtle px-3 text-xs text-muted hover:text-offwhite sm:h-9"
           >
             Close
           </button>
         </div>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

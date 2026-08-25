@@ -2208,6 +2208,11 @@ model Appointment {
   // add-on is later edited/deleted. [] = no add-ons (every pre-feature row).
   addOns             Json              @default("[]")
   manageToken        String            @unique // cancel/reschedule auth (no login)
+  // Barber's note about THIS booking. Deliberately separate from Client.notes:
+  // that one is who the person is and follows them forever, this one is about
+  // this appointment only ("moved from Saturday, comping the beard") and must
+  // never leak into the client's permanent record.
+  notes              String?
   // Chair-side checkout (the barber's "Start checkout" at the end of the cut).
   // What was COLLECTED IN PERSON, on top of any Stripe pre-payment (which lives
   // in the Payment row) - the two never overlap, so revenue = Payment + this.
