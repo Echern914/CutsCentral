@@ -471,16 +471,31 @@ function Hero({
         </div>
       </div>
 
-      {/* Each separator is bound to the item that FOLLOWS it, so a wrap can
-          never leave a dangling "·" hanging at the end of a line. */}
-      <p className="relative mt-3.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-relaxed text-muted">
-        <span className="[overflow-wrap:anywhere] text-offwhite/85">
-          {service ?? "Appointment"}
-        </span>
-        {barber && <Led className="[overflow-wrap:anywhere]">with {barber}</Led>}
-        <Led className="whitespace-nowrap tabular-nums">{dateLabel}</Led>
-        <Led className="whitespace-nowrap tabular-nums">{timeLabel}</Led>
-      </p>
+      {/* TWO deterministic lines rather than one wrapping run of separators.
+          A single flex row of "a · b · c · d" puts a "·" at the end of a line
+          at one width and at the START of the next line at another; both read
+          as a glitch. What it is goes on one line, when it is on the other,
+          and the only separator left sits between two items that fit together
+          at 320px. */}
+      <div className="relative mt-3.5 flex flex-col gap-1 text-xs leading-relaxed">
+        <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+          <span className="[overflow-wrap:anywhere] text-offwhite/85">
+            {service ?? "Appointment"}
+          </span>
+          {barber && (
+            <span className="[overflow-wrap:anywhere] text-muted">with {barber}</span>
+          )}
+        </p>
+        <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-muted">
+          <span className="whitespace-nowrap tabular-nums">{dateLabel}</span>
+          <span className="whitespace-nowrap tabular-nums">
+            <span aria-hidden className="mr-2 text-muted/50">
+              ·
+            </span>
+            {timeLabel}
+          </span>
+        </p>
+      </div>
     </section>
   );
 }
@@ -1239,21 +1254,6 @@ function Line({
         {value}
       </dd>
     </div>
-  );
-}
-
-/**
- * A "· thing" pair that wraps as ONE unit. A bare separator between flex items
- * can land at the end of a line, leaving a dot with nothing after it.
- */
-function Led({ className, children }: { className?: string; children: React.ReactNode }) {
-  return (
-    <span className={cn("inline-flex min-w-0 items-center gap-2", className)}>
-      <span aria-hidden className="text-muted/50">
-        ·
-      </span>
-      {children}
-    </span>
   );
 }
 
