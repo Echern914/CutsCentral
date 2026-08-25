@@ -181,7 +181,11 @@ export default async function DashboardPage({
           publicUrl={shop.slug ? `${appBase}/book/${shop.slug}` : null}
           connected={shop.connected}
         />
-        <QuickActions rewardsEnabled={shop.rewardsEnabled} />
+        <QuickActions
+          rewardsEnabled={shop.rewardsEnabled}
+          bookUrl={shop.slug ? `${appBase}/book/${shop.slug}` : null}
+          shopName={shop.name}
+        />
       </div>
 
       <SyncHealthBanner needsRepair={Boolean(sync.data?.needsRepair)} />
