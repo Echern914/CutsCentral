@@ -11,7 +11,10 @@ import {
   type EditContext,
 } from "./actions";
 import type { AgendaRow } from "./page";
-import type { Toast } from "@/components/ui/Toast";
+
+/** Same local alias the sibling booking forms use - the provider's own
+ * `Toast` interface is a toast OBJECT and is not exported. */
+type Toast = (msg: string, kind?: "success" | "error") => void;
 
 /**
  * EDIT AN APPOINTMENT.
