@@ -132,6 +132,12 @@ export interface AgendaRow {
   end: string | null; // ISO
   clientName: string; // for a block: the reason (or "Blocked")
   serviceName: string | null;
+  // Ids the edit sheet prefills from. Absent on visit/block rows, which are
+  // never editable here.
+  serviceId?: string | null;
+  staffId?: string | null;
+  /** Barber's private note on THIS booking (never the client's profile note). */
+  notes?: string | null;
   serviceColor: string | null; // SERVICE_COLORS key for the calendar accent
   price: number | null;
   status: "pending" | "upcoming" | "completed" | "canceled" | "no_show" | "blocked";

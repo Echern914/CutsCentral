@@ -16,6 +16,7 @@ import { notifyAppointmentConfirmation } from "../services/appointmentNotify.js"
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
+import { registerAppointmentEdit } from "./booking.appointmentEdit.js";
 import {
   buildObserveReport,
   completeReschedule,
@@ -1549,6 +1550,12 @@ interface AgendaRow {
   end: string | null; // ISO
   clientName: string; // for a block: the reason (or "Blocked")
   serviceName: string | null;
+  // Ids the barber-side edit sheet prefills from. Native appointment rows
+  // only - a visit or block is never editable here.
+  serviceId?: string | null;
+  staffId?: string | null;
+  /** Barber's private note on THIS booking (never the client's profile note). */
+  notes?: string | null;
   // Palette key for calendar color-coding; null when the service has no color
   // (or the row is a synced visit / block). See SERVICE_COLORS.
   serviceColor: string | null;
@@ -1680,6 +1687,8 @@ type ApptAgendaRow = {
   checkInStatus: string | null;
   etaMinutes: number | null;
   runningLate: boolean;
+  staffId: string;
+  notes: string | null;
   service: { id: string; name: string; color: string | null } | null;
   // Frozen AddOnSnapshotItem[] (see engines/addOns.ts) - JSON on the row.
   addOns: Prisma.JsonValue | null;
@@ -1882,6 +1891,8 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         checkInStatus: true,
         etaMinutes: true,
         runningLate: true,
+        staffId: true,
+        notes: true,
         service: { select: { id: true, name: true, color: true } },
         addOns: true,
         // Chair-side checkout state + any Stripe pre-payment, so the row can
@@ -1976,6 +1987,9 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       end: a.endsAt.toISOString(),
       clientName: fullName(a.firstName, a.lastName),
       serviceName: a.service?.name ?? null,
+      serviceId: a.service?.id ?? null,
+      staffId: a.staffId,
+      notes: a.notes,
       serviceColor: a.service?.color ?? null,
       price: a.priceAtBooking == null ? null : Number(a.priceAtBooking),
       status: APPT_STATUS[a.status] ?? "upcoming",
@@ -2896,6 +2910,10 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
   invalidateShopAvailabilityCaches(shopId);
   res.json({ ok: true, startsAt: startsAt.toISOString() });
 });
+
+// Edit an appointment (its own module - see booking.appointmentEdit.ts for the
+// reuse-the-same-engine rules and the Acuity-safe move ordering).
+registerAppointmentEdit(bookingDashboardRouter, invalidateShopAvailabilityCaches);
 
 bookingDashboardRouter.post("/appointments/:id/no-show", async (req, res) => {
   const shopId = req.shop!.id;
