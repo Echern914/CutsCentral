@@ -116,8 +116,12 @@ async function availableSlug(name: string): Promise<string> {
  *
  * Rejecting bytes at or above 252 (36 x 7) keeps every character equally
  * likely; a plain modulo would quietly favour the first four letters.
+ *
+ * Exported ONLY so routes/shopSlugFallback.test.ts can assert the property
+ * directly. The integration test mints one slug per run, so it can only catch
+ * an illegal character when chance hands it one.
  */
-function slugToken(len: number): string {
+export function slugToken(len: number): string {
   const ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz";
   let out = "";
   while (out.length < len) {

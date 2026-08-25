@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken, SLUG_REGEX } from "@chairback/config";
 import { createApp } from "../app.js";
+import { slugToken } from "./shops.js";
 
 /**
  * The slug a shop gets when its name is ALREADY TAKEN 98 TIMES.
@@ -129,5 +130,81 @@ describe("the 99th same-named shop", () => {
 
     expect((await request(app).get(`/api/page/${slug.toUpperCase()}`)).status).toBe(200);
     expect((await request(app).get(`/api/page/${slug}`)).status).toBe(200);
+  });
+});
+
+/**
+ * THE GENERATOR, ASSERTED DIRECTLY.
+ *
+ * The integration tests above drive the real signup path, which is the honest
+ * end-to-end check - but each run mints exactly ONE slug, so they only catch an
+ * illegal character on the runs where chance hands them one. That is precisely
+ * how the pre-fix suffix survived review: it was wrong on roughly one draw in
+ * six, and green the rest of the time.
+ *
+ * None of this can self-flake. slugToken selects from a CLOSED [a-z0-9]
+ * alphabet, so an illegal character is not unlikely, it is not a member of the
+ * set the generator can choose from - the loops below are exhaustive over
+ * behaviour, not a sampling gamble.
+ */
+describe("slugToken - the fallback suffix", () => {
+  const DRAWS = 5_000;
+
+  it("emits lowercase base36 and nothing else", () => {
+    for (let i = 0; i < DRAWS; i++) expect(slugToken(6)).toMatch(/^[a-z0-9]{6}$/);
+  });
+
+  it("can never emit an underscore, and can never end in a hyphen", () => {
+    for (let i = 0; i < DRAWS; i++) {
+      const t = slugToken(6);
+      expect(t).not.toContain("_");
+      expect(t).not.toContain("-");
+    }
+  });
+
+  it("always composes a slug that satisfies SLUG_REGEX", () => {
+    for (let i = 0; i < DRAWS; i++) expect(`shop-${slugToken(6)}`).toMatch(SLUG_REGEX);
+  });
+
+  it("honours the requested length", () => {
+    for (const n of [1, 2, 4, 6, 12, 32]) expect(slugToken(n)).toHaveLength(n);
+  });
+
+  it("reaches the whole alphabet - a modulo bias would show up here", () => {
+    const seen = new Set<string>();
+    for (let i = 0; i < DRAWS; i++) for (const c of slugToken(6)) seen.add(c);
+    expect(seen.size).toBe(36);
+  });
+});
+
+/**
+ * THE PRE-FIX SUFFIX, FAILING THE SAME BAR - deterministically.
+ *
+ * Fixed byte vectors, zero randomness. These are the two shapes base64url can
+ * produce that a slug cannot survive, and lowercasing (what #281 did) fixes
+ * neither of them.
+ */
+describe("the pre-fix base64url suffix", () => {
+  const legacy = (bytes: number[]) => Buffer.from(bytes).toString("base64url").toLowerCase();
+
+  it("can produce an underscore, which SLUG_REGEX rejects outright", () => {
+    expect(legacy([0xff, 0xff, 0xff])).toBe("____");
+    expect(`shop-${legacy([0xff, 0xff, 0xff])}`).not.toMatch(SLUG_REGEX);
+  });
+
+  it("can produce a TRAILING hyphen, which SLUG_REGEX rejects too", () => {
+    // The subtler half: a hyphen is legal mid-slug, so this one reads fine
+    // right up until the final-character rule refuses it.
+    expect(legacy([0x00, 0x00, 0x3e])).toBe("aaa-");
+    expect(`shop-${legacy([0x00, 0x00, 0x3e])}`).not.toMatch(SLUG_REGEX);
+  });
+
+  it("and the replacement is immune to both", () => {
+    for (let i = 0; i < 1_000; i++) {
+      const slug = `shop-${slugToken(6)}`;
+      expect(slug).toMatch(SLUG_REGEX);
+      expect(slug).not.toContain("_");
+      expect(slug.endsWith("-")).toBe(false);
+    }
   });
 });
