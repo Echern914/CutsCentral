@@ -45,7 +45,9 @@ import { recordWaitlistEvent } from "../engines/waitlistAudit.js";
 import { getAcuityClientForShop, NotConnectedError } from "../acuity/client.js";
 import {
   CalendarNotOnAccountError,
-  getMappingReadiness,
+  CalendarTakenError,
+  ConnectionChangedError,
+  getMappingSnapshot,
   setStaffCalendar,
 } from "../engines/acuityCalendarMap.js";
 
@@ -1259,17 +1261,30 @@ bookingDashboardRouter.get("/acuity/calendars", async (req, res) => {
     select: { acuityOutboundMode: true, bookingMode: true },
   });
   try {
-    const readiness = await getMappingReadiness(shopId);
-    const acuity = await getAcuityClientForShop(shopId);
-    const calendars = await acuity.listCalendars();
+    // ONE snapshot: readiness and the calendar list come from the same live
+    // fetch, so the badge can never disagree with the list under it.
+    const snap = await getMappingSnapshot(shopId);
+    const assigned = new Map(
+      snap.readiness.staff
+        .filter((s) => s.acuityCalendarId)
+        .map((s) => [s.acuityCalendarId!, { staffId: s.id, staffName: s.name }]),
+    );
     res.json({
       mode: shop?.acuityOutboundMode ?? "OFF",
       bookingMode: shop?.bookingMode ?? "link",
-      ready: readiness.ready,
-      preselectCalendarId: readiness.preselectCalendarId,
+      ready: snap.readiness.ready,
+      preselectCalendarId: snap.readiness.preselectCalendarId,
+      // Echoed so a save can prove it validated against THIS connection.
+      connectedAt: snap.connectedAt?.toISOString() ?? null,
       // Business data only: the chair label the owner typed into Acuity.
-      calendars: calendars.map((c) => ({ id: c.id, name: c.name ?? null })),
-      staff: readiness.staff.map((s) => ({
+      // `takenBy` lets the picker disable a calendar another chair already
+      // owns, so the 409 below is a backstop rather than the normal path.
+      calendars: snap.calendars.map((c) => ({
+        id: c.id,
+        name: c.name ?? null,
+        takenByStaffId: assigned.get(c.id)?.staffId ?? null,
+      })),
+      staff: snap.readiness.staff.map((s) => ({
         id: s.id,
         name: s.name,
         active: s.active,
@@ -1290,7 +1305,15 @@ bookingDashboardRouter.get("/acuity/calendars", async (req, res) => {
 });
 
 const setCalendarSchema = z
-  .object({ calendarId: z.string().min(1).nullable() })
+  .object({
+    calendarId: z.string().min(1).nullable(),
+    /**
+     * The connection generation the client validated against (echoed by the
+     * GET above). Absent = an old client; treated as "unknown generation",
+     * which fails closed for a SET.
+     */
+    connectedAt: z.string().nullable().optional(),
+  })
   .strict();
 
 /**
@@ -1315,11 +1338,29 @@ bookingDashboardRouter.put("/staff/:id/acuity-calendar", async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
+  const expectedConnectedAt =
+    parsed.data.connectedAt === undefined || parsed.data.connectedAt === null
+      ? null
+      : new Date(parsed.data.connectedAt);
   try {
-    await setStaffCalendar(shopId, staff.id, parsed.data.calendarId);
+    await setStaffCalendar(shopId, staff.id, parsed.data.calendarId, expectedConnectedAt);
   } catch (err) {
     if (err instanceof CalendarNotOnAccountError) {
       res.status(409).json({ error: "calendar_not_on_account" });
+      return;
+    }
+    if (err instanceof CalendarTakenError) {
+      res.status(409).json({ error: "calendar_already_mapped" });
+      return;
+    }
+    if (err instanceof ConnectionChangedError) {
+      res.status(409).json({ error: "acuity_connection_changed" });
+      return;
+    }
+    // The partial unique index fired under a concurrent save. Same clean 409
+    // as the pre-check - never a 500.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      res.status(409).json({ error: "calendar_already_mapped" });
       return;
     }
     if (err instanceof NotConnectedError) {
@@ -1330,8 +1371,8 @@ bookingDashboardRouter.put("/staff/:id/acuity-calendar", async (req, res) => {
     res.status(502).json({ error: "acuity_unavailable" });
     return;
   }
-  const readiness = await getMappingReadiness(shopId);
-  res.json({ ok: true, ready: readiness.ready });
+  const snap = await getMappingSnapshot(shopId);
+  res.json({ ok: true, ready: snap.readiness.ready });
 });
 
 //  Appointments (the barber's calendar / inbox)

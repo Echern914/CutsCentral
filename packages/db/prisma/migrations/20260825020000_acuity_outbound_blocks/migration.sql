@@ -9,21 +9,25 @@
 -- guess rather than block a colleague's calendar. mappedAt lets staleness be
 -- DERIVED against AcuityConnection.connectedAt - a reconnect may be a whole
 -- different Acuity account, where the same calendar id is someone else.
-ALTER TABLE "Staff" ADD COLUMN "acuityCalendarId" TEXT;
-ALTER TABLE "Staff" ADD COLUMN "acuityCalendarMappedAt" TIMESTAMP(3);
+ALTER TABLE "Staff" ADD COLUMN IF NOT EXISTS "acuityCalendarId" TEXT;
+ALTER TABLE "Staff" ADD COLUMN IF NOT EXISTS "acuityCalendarMappedAt" TIMESTAMP(3);
 
 -- Per-shop rollout mode. A boolean could not express "rehearse first", and it
 -- conflated CREATE with RELEASE: switching a shop off must never strand live
 -- Acuity blocks, so the mode gates creation only - release and reconcile run
 -- in every mode, OFF included.
-CREATE TYPE "AcuityOutboundMode" AS ENUM ('OFF', 'OBSERVE', 'ENFORCE');
-ALTER TABLE "Shop" ADD COLUMN "acuityOutboundMode" "AcuityOutboundMode" NOT NULL DEFAULT 'OFF';
+DO $$ BEGIN
+  CREATE TYPE "AcuityOutboundMode" AS ENUM ('OFF', 'OBSERVE', 'ENFORCE');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+ALTER TABLE "Shop" ADD COLUMN IF NOT EXISTS "acuityOutboundMode" "AcuityOutboundMode" NOT NULL DEFAULT 'OFF';
 
-CREATE TYPE "OutboundBlockState" AS ENUM (
-  'PENDING', 'ACTIVE', 'UNKNOWN', 'FAILED', 'RELEASING', 'RELEASED'
-);
+DO $$ BEGIN
+  CREATE TYPE "OutboundBlockState" AS ENUM (
+    'PENDING', 'ACTIVE', 'UNKNOWN', 'FAILED', 'RELEASING', 'RELEASED'
+  );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
-CREATE TABLE "AcuityOutboundBlock" (
+CREATE TABLE IF NOT EXISTS "AcuityOutboundBlock" (
     "id" TEXT NOT NULL,
     "shopId" TEXT NOT NULL,
     "appointmentId" TEXT NOT NULL,
@@ -41,11 +45,11 @@ CREATE TABLE "AcuityOutboundBlock" (
     CONSTRAINT "AcuityOutboundBlock_pkey" PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX "AcuityOutboundBlock_shopId_acuityBlockId_key"
+CREATE UNIQUE INDEX IF NOT EXISTS "AcuityOutboundBlock_shopId_acuityBlockId_key"
   ON "AcuityOutboundBlock"("shopId", "acuityBlockId");
-CREATE INDEX "AcuityOutboundBlock_shopId_state_idx"
+CREATE INDEX IF NOT EXISTS "AcuityOutboundBlock_shopId_state_idx"
   ON "AcuityOutboundBlock"("shopId", "state");
-CREATE INDEX "AcuityOutboundBlock_appointmentId_idx"
+CREATE INDEX IF NOT EXISTS "AcuityOutboundBlock_appointmentId_idx"
   ON "AcuityOutboundBlock"("appointmentId");
 
 -- THE idempotency backstop (requirement: at most one live block per
@@ -53,16 +57,22 @@ CREATE INDEX "AcuityOutboundBlock_appointmentId_idx"
 -- FAILED rows fall outside it, which is exactly what lets a reschedule hold
 -- the old block in RELEASING while the replacement goes PENDING - the swap is
 -- overlap-safe by construction, enforced in the database, not in code.
-CREATE UNIQUE INDEX "AcuityOutboundBlock_live_per_appointment"
+CREATE UNIQUE INDEX IF NOT EXISTS "AcuityOutboundBlock_live_per_appointment"
   ON "AcuityOutboundBlock"("appointmentId")
   WHERE "state" IN ('PENDING', 'ACTIVE', 'UNKNOWN');
 
-ALTER TABLE "AcuityOutboundBlock" ADD CONSTRAINT "AcuityOutboundBlock_shopId_fkey"
+DO $$ BEGIN
+  ALTER TABLE "AcuityOutboundBlock" ADD CONSTRAINT "AcuityOutboundBlock_shopId_fkey"
   FOREIGN KEY ("shopId") REFERENCES "Shop"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "AcuityOutboundBlock" ADD CONSTRAINT "AcuityOutboundBlock_appointmentId_fkey"
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  ALTER TABLE "AcuityOutboundBlock" ADD CONSTRAINT "AcuityOutboundBlock_appointmentId_fkey"
   FOREIGN KEY ("appointmentId") REFERENCES "Appointment"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "AcuityOutboundBlock" ADD CONSTRAINT "AcuityOutboundBlock_staffId_fkey"
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  ALTER TABLE "AcuityOutboundBlock" ADD CONSTRAINT "AcuityOutboundBlock_staffId_fkey"
   FOREIGN KEY ("staffId") REFERENCES "Staff"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- RLS defense-in-depth: same tenant-isolation pattern as ExternalBlock.
 GRANT SELECT, INSERT, UPDATE, DELETE ON "AcuityOutboundBlock" TO chairback_app;

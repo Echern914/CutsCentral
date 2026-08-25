@@ -234,6 +234,8 @@ export async function disconnectSquareAction(): Promise<Result> {
 export interface AcuityCalendarOption {
   id: string;
   name: string | null;
+  /** Another chair already owns this calendar - one calendar, one chair. */
+  takenByStaffId: string | null;
 }
 export interface AcuityStaffMapping {
   id: string;
@@ -250,6 +252,8 @@ export interface AcuityMappingData {
   bookingMode: string;
   ready: boolean;
   preselectCalendarId: string | null;
+  /** Connection generation this snapshot was taken against; echoed on save. */
+  connectedAt: string | null;
   calendars: AcuityCalendarOption[];
   staff: AcuityStaffMapping[];
 }
@@ -269,11 +273,12 @@ export async function getAcuityMappingAction(): Promise<{
 export async function setStaffAcuityCalendarAction(
   staffId: string,
   calendarId: string | null,
+  connectedAt: string | null,
 ): Promise<Result> {
   const res = await apiSend(
     "PUT",
     `/api/booking/staff/${encodeURIComponent(staffId)}/acuity-calendar`,
-    { calendarId },
+    { calendarId, connectedAt },
   );
   revalidatePath("/dashboard/booking");
   return done(res);

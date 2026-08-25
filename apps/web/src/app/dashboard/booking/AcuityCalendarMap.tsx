@@ -48,10 +48,10 @@ export function AcuityCalendarMap() {
     void load();
   }, [load]);
 
-  function save(staffId: string, calendarId: string | null) {
+  function save(staffId: string, calendarId: string | null, connectedAt: string | null) {
     setSavingId(staffId);
     start(async () => {
-      const res = await setStaffAcuityCalendarAction(staffId, calendarId);
+      const res = await setStaffAcuityCalendarAction(staffId, calendarId, connectedAt);
       setSavingId(null);
       if (!res.ok) {
         // The id was rejected against the live account — almost always a stale
@@ -59,7 +59,11 @@ export function AcuityCalendarMap() {
         toast(
           res.error === "calendar_not_on_account"
             ? "That calendar isn't on your Acuity account anymore — refreshed the list."
-            : "Couldn't save that mapping",
+            : res.error === "calendar_already_mapped"
+              ? "Another chair already uses that calendar. One calendar per chair."
+              : res.error === "acuity_connection_changed"
+                ? "Your Acuity connection changed while you were choosing — refreshed the list, please pick again."
+                : "Couldn't save that mapping",
           "error",
         );
         void load();
@@ -166,15 +170,21 @@ export function AcuityCalendarMap() {
                 <select
                   value={value || (suggested ?? "")}
                   disabled={savingId === s.id}
-                  onChange={(e) => save(s.id, e.target.value || null)}
+                  onChange={(e) => save(s.id, e.target.value || null, data.connectedAt)}
                   className="h-11 min-w-[12rem] rounded-lg border border-subtle bg-charcoal-900 px-3 text-sm text-offwhite disabled:opacity-50 sm:h-9"
                 >
                   <option value="">Not mapped</option>
-                  {data.calendars.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name ?? `Calendar ${c.id}`}
-                    </option>
-                  ))}
+                  {data.calendars.map((c) => {
+                    // One calendar, one chair: a calendar another chair owns is
+                    // shown but unselectable, so the owner can see WHY it is
+                    // unavailable instead of hitting a conflict on save.
+                    const taken = c.takenByStaffId !== null && c.takenByStaffId !== s.id;
+                    return (
+                      <option key={c.id} value={c.id} disabled={taken}>
+                        {(c.name ?? `Calendar ${c.id}`) + (taken ? " — already mapped" : "")}
+                      </option>
+                    );
+                  })}
                   {/* A stored id that vanished from Acuity still needs to be
                       visible, or the row would silently read "Not mapped". */}
                   {s.calendarId && !data.calendars.some((c) => c.id === s.calendarId) && (
