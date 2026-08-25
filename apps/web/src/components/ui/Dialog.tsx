@@ -60,24 +60,45 @@ function useMounted(): boolean {
  * THE ON-SCREEN KEYBOARD, WHICH `dvh` CANNOT SEE.
  *
  * `100dvh` tracks the browser's LAYOUT viewport — it follows the iOS URL bar,
- * but not the virtual keyboard, which overlays the page rather than resizing
- * it. Focus an input near the bottom of a tall sheet and the panel keeps its
- * full height while the keyboard covers its last third, taking the sticky
- * footer's Save down with it. `visualViewport.height` is the only number that
- * knows the keyboard is there.
+ * but not the virtual keyboard, which OVERLAYS the page rather than resizing
+ * it. `visualViewport` is the only thing that knows the keyboard is there.
  *
- * Returns the overlap in px, and only once it is big enough to BE a keyboard:
- * a few pixels of rubber-band scroll must never resize the sheet.
+ * 🔴 CAPPING THE PANEL'S HEIGHT IS NOT ENOUGH, and that was the first attempt.
+ * The sheet is bottom-anchored on a phone (`items-end`), so shortening it just
+ * makes a shorter sheet still pinned to the bottom of the LAYOUT viewport —
+ * i.e. still underneath the keyboard, now with less of the form showing. The
+ * overlay itself has to move onto the visible rectangle; then `items-end`
+ * means "above the keyboard" and the panel gets the whole of what is left.
+ *
+ * Returns that rectangle, and only while something is actually covering the
+ * page. Nothing about the ordinary case depends on this: with no keyboard (or
+ * no `visualViewport` at all) it returns null and the overlay stays `inset-0`.
+ *
+ * The layout height is `max(innerHeight, documentElement.clientHeight)` on
+ * purpose. Which of the two stays put when the keyboard opens differs between
+ * iOS Safari and a WKWebView, and taking the larger means the keyboard is
+ * detected either way — the earlier version used `innerHeight` alone, which
+ * silently measured a 0px keyboard in the wrapped app and did nothing at all.
  */
-function useKeyboardInset(open: boolean): number {
-  const [inset, setInset] = useState(0);
+function useViewportRect(open: boolean): { top: number; height: number } | null {
+  const [rect, setRect] = useState<{ top: number; height: number } | null>(null);
   useEffect(() => {
     if (!open) return;
     const vv = window.visualViewport;
     if (!vv) return;
     const read = () => {
-      const overlap = window.innerHeight - vv.height - vv.offsetTop;
-      setInset(overlap > 80 ? Math.round(overlap) : 0);
+      const layout = Math.max(
+        window.innerHeight,
+        document.documentElement.clientHeight,
+      );
+      const covered = layout - vv.height - vv.offsetTop;
+      // 80px is comfortably below any keyboard and comfortably above the
+      // few pixels a rubber-band scroll produces.
+      setRect(
+        covered > 80
+          ? { top: Math.round(vv.offsetTop), height: Math.round(vv.height) }
+          : null,
+      );
     };
     read();
     vv.addEventListener("resize", read);
@@ -87,7 +108,7 @@ function useKeyboardInset(open: boolean): number {
       vv.removeEventListener("scroll", read);
     };
   }, [open]);
-  return inset;
+  return rect;
 }
 
 export function Dialog({
@@ -102,6 +123,7 @@ export function Dialog({
   closeLabel = "Close",
   titleAlign = "start",
   leading,
+  scrollResetKey,
 }: {
   open: boolean;
   onClose: () => void;
@@ -124,10 +146,20 @@ export function Dialog({
   titleAlign?: "start" | "center";
   /** A Back control, rendered at the header's leading edge. */
   leading?: React.ReactNode;
+  /**
+   * Change this whenever the dialog swaps to a different PAGE (detail -> edit
+   * -> checkout). The body is one scroll container shared by every page, so
+   * without this the new page inherits the old one's scroll position: tapping
+   * "Edit appointment" from halfway down the detail view drops you into the
+   * middle of the form, which reads as a different, broken screen rather than
+   * as the top of the editor.
+   */
+  scrollResetKey?: string | number;
 }) {
   const mounted = useMounted();
-  const keyboardInset = useKeyboardInset(open);
+  const viewport = useViewportRect(open);
   const panelRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const generatedId = useId();
   const titleId = labelId ?? `dlg-${generatedId}`;
@@ -212,6 +244,14 @@ export function Dialog({
     };
   }, [open, mounted]);
 
+  // Every page starts at its own top. Runs on CHANGE, not just on mount —
+  // the container outlives the page swap, so a mount-only reset would fire
+  // once and never again.
+  useEffect(() => {
+    if (!open) return;
+    bodyRef.current?.scrollTo({ top: 0, behavior: "auto" });
+  }, [open, scrollResetKey]);
+
   const onBackdrop = useCallback(() => closeRefFn.current(), []);
 
   if (!mounted || !open) return null;
@@ -222,6 +262,14 @@ export function Dialog({
         "fixed inset-0 flex items-end justify-center sm:items-center sm:p-4",
         DIALOG_Z,
       )}
+      // With a keyboard up, the overlay sits on the VISIBLE rectangle rather
+      // than the layout viewport, so `items-end` lands the sheet above the
+      // keyboard instead of behind it. `bottom: auto` lets the height win.
+      style={
+        viewport
+          ? { top: viewport.height ? viewport.top : 0, height: viewport.height, bottom: "auto" }
+          : undefined
+      }
       data-qa="dialog-overlay"
     >
       {/* Full-viewport scrim. `fixed`, not `absolute`, so it covers the header,
@@ -254,10 +302,13 @@ export function Dialog({
         style={{
           // The gutter is smaller on phones (the sheet is meant to sit close to
           // the edges) and roomier once the dialog floats. `dvh` follows the
-          // iOS URL bar, so the panel never hides behind it — and the keyboard
-          // inset takes back what the on-screen keyboard covers, which `dvh`
-          // does not see (see useKeyboardInset).
-          maxHeight: `calc(100dvh - 1.5rem - ${keyboardInset}px)`,
+          // iOS URL bar, so the panel never hides behind it. With a keyboard
+          // up the overlay is already the visible rectangle, so the panel just
+          // fills it — which is the whole point: the form gets every pixel the
+          // keyboard left, instead of a strip at the bottom of the screen.
+          maxHeight: viewport
+            ? `${Math.max(viewport.height - 24, 200)}px`
+            : "calc(100dvh - 1.5rem)",
         }}
       >
         <div
@@ -306,6 +357,7 @@ export function Dialog({
         </div>
 
         <div
+          ref={bodyRef}
           data-qa="dialog-body"
           // 🔴 min-h-0: without it this item will not shrink below its content
           // and the footer is pushed off the bottom of the panel.
