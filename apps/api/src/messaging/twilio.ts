@@ -57,6 +57,23 @@ export function getMessageProvider(): MessageProvider {
   return provider;
 }
 
+/**
+ * Whether a REAL SMS transport exists, INDEPENDENT of DRY_RUN.
+ *
+ * Mirrors emailEnabled() / pushEnabled(): "is this channel configured at all?",
+ * which is a different question from "would a send go out right now" (that also
+ * needs DRY_RUN off). Readiness needs the two separated so it can say WHICH of
+ * the two is missing instead of collapsing both into "unreachable".
+ *
+ * Reads apiEnv() fresh rather than the module-load `env` above, so a test that
+ * flips the vars and calls __resetEnvCacheForTests() is reflected here.
+ */
+export function smsConfigured(): boolean {
+  if (testProvider) return true;
+  const e = apiEnv();
+  return Boolean(e.TWILIO_ACCOUNT_SID && e.TWILIO_AUTH_TOKEN && e.TWILIO_FROM_NUMBER);
+}
+
 /** Test seam: inject a fake provider (takes precedence over DRY_RUN). */
 export function __setMessageProviderForTests(p: MessageProvider | undefined): void {
   testProvider = p;
