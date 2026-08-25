@@ -54,26 +54,47 @@ teamJoinRouter.get("/preview", accountLimiter, requireUser, async (req, res) => 
       shop: { select: { name: true } },
     },
   });
+  const user = await prisma.user.findUnique({
+    where: { id: req.userId! },
+    select: { email: true },
+  });
+  const emailMatches =
+    invite !== null &&
+    (user?.email ?? "").toLowerCase() === invite.email.toLowerCase();
+
   if (
     !invite ||
     invite.acceptedAt !== null ||
     invite.revokedAt !== null ||
     invite.expiresAt <= new Date()
   ) {
-    res.status(410).json({ error: "invite_invalid" });
+    // WHY A REASON IS SAFE TO GIVE HERE, when the original blanket 410 gave
+    // none. The concern was a stranger probing which invitations exist. That
+    // stranger would now need BOTH the 32-byte token AND to be signed in as the
+    // address it was sent to - at which point they are the invitee and learn
+    // nothing they didn't already have. Everyone else still gets the same
+    // opaque answer. The payoff is a screen that says "this expired, ask for a
+    // new one" instead of a shrug, which is the difference between a barber
+    // texting their boss and a barber giving up.
+    const reason = !invite
+      ? undefined
+      : !emailMatches
+        ? undefined
+        : invite.revokedAt !== null
+          ? "revoked"
+          : invite.acceptedAt !== null
+            ? "used"
+            : "expired";
+    res.status(410).json({ error: "invite_invalid", ...(reason ? { reason } : {}) });
     return;
   }
-  const user = await prisma.user.findUnique({
-    where: { id: req.userId! },
-    select: { email: true },
-  });
   res.json({
     shopName: invite.shop.name,
     role: invite.role,
     email: invite.email,
     // The join page uses this to say "you're signed in as X, but this invite
     // is for Y" rather than letting them press a button that will 403.
-    emailMatches: (user?.email ?? "").toLowerCase() === invite.email.toLowerCase(),
+    emailMatches,
   });
 });
 

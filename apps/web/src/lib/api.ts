@@ -24,6 +24,14 @@ export interface ApiResult<T> {
    * offending field instead of one generic "could not save" line.
    */
   issues?: ApiIssue[];
+  /**
+   * Extra machine-readable detail an endpoint attaches to a FAILURE, when the
+   * specific cause is safe to show. The invitation preview uses it to separate
+   * "expired" from "revoked" from "already used" - three states that call for
+   * three different sentences, where a single "not valid" leaves the reader
+   * with nothing to do next.
+   */
+  reason?: string;
 }
 
 function authHeader(): Record<string, string> {
@@ -168,11 +176,14 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
   let data: T | null = null;
   let error: string | undefined;
   let issues: ApiIssue[] | undefined;
+  let reason: string | undefined;
   try {
     const json = (await res.json()) as T & { error?: string; issues?: unknown };
     if (res.ok) data = json;
     else {
       error = (json as { error?: string }).error ?? `http_${res.status}`;
+      const why = (json as { reason?: unknown }).reason;
+      if (typeof why === "string") reason = why;
       const raw = (json as { issues?: unknown }).issues;
       if (Array.isArray(raw)) {
         const valid = raw.filter(
@@ -188,7 +199,14 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
   } catch {
     error = `http_${res.status}`;
   }
-  return { ok: res.ok, status: res.status, data, error, ...(issues ? { issues } : {}) };
+  return {
+    ok: res.ok,
+    status: res.status,
+    data,
+    error,
+    ...(issues ? { issues } : {}),
+    ...(reason ? { reason } : {}),
+  };
 }
 
 export { API_BASE };

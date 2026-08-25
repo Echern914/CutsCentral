@@ -16,7 +16,8 @@
     "./demoTour": "./src/demoTour.ts",
     "./features": "./src/features.ts",
     "./help": "./src/help.ts",
-    "./helpMatch": "./src/helpMatch.ts"
+    "./helpMatch": "./src/helpMatch.ts",
+    "./nextPath": "./src/nextPath.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

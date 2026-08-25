@@ -18,7 +18,9 @@ const env = apiEnv();
  */
 
 // Provider JWKS, fetched + cached by jose. Apple and Google both publish here.
-const appleJwks = createRemoteJWKSet(new URL("https://appleid.apple.com/auth/keys"));
+// Exported so the WEB Sign in with Apple flow (auth/appleWeb.ts) verifies
+// against the same cached key set rather than opening a second one.
+export const appleJwks = createRemoteJWKSet(new URL("https://appleid.apple.com/auth/keys"));
 const googleJwks = createRemoteJWKSet(new URL("https://www.googleapis.com/oauth2/v3/certs"));
 
 export interface NativeProfile {

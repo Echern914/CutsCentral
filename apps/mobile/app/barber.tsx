@@ -6,15 +6,14 @@ import {
   type WebViewNavigation,
 } from "react-native-webview";
 import { router, useLocalSearchParams } from "expo-router";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { AppWebView } from "@/src/AppWebView";
 import {
   appAuthUrl,
   dashboardUrl,
   demoDashboardUrl,
-  STORAGE,
   WEB_ORIGIN,
 } from "@/src/config";
+import { clearSession, loadSession } from "@/src/session";
 import { registerBarberPush } from "@/src/push";
 import { ModeSwitchBar } from "@/src/ModeSwitchBar";
 
@@ -57,7 +56,7 @@ export default function BarberScreen() {
       }
       let token: string | null = null;
       try {
-        token = await AsyncStorage.getItem(STORAGE.session);
+        token = await loadSession();
       } catch {
         token = null;
       }
@@ -99,7 +98,7 @@ export default function BarberScreen() {
   // shows its buttons and doesn't auto-skip straight back here.
   function onShouldStartLoad(req: WebViewNavigation): boolean {
     if (req.url.startsWith(`${WEB_ORIGIN}/login`)) {
-      AsyncStorage.removeItem(STORAGE.session).catch(() => {});
+      clearSession().catch(() => {});
       router.replace("/login");
       return false;
     }

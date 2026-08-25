@@ -45,6 +45,32 @@ const securityHeaders = [
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
 ];
 
+/**
+ * Pages whose URL is itself a credential or points at one: the invitation link
+ * carries the token that accepts a seat, and the auth routes carry one-time
+ * codes. `strict-origin-when-cross-origin` would still send our ORIGIN to
+ * whatever gets tapped next; more to the point, a same-origin navigation would
+ * carry the full path AND QUERY in the Referer, which is exactly the string we
+ * don't want travelling. no-referrer sends nothing at all.
+ *
+ * The client-side scrub in JoinClient/ReturnToApp handles the same exposure
+ * from the other direction (history, analytics). Both, because either alone
+ * leaves a window: the header covers the pre-hydration moment, the scrub covers
+ * everything that reads location afterwards.
+ */
+const SENSITIVE_PATHS = [
+  "/team/join",
+  "/auth/:path*",
+  "/login",
+  "/signup",
+  "/forgot-password",
+  "/reset-password",
+];
+
+const noReferrerHeaders = securityHeaders.map((h) =>
+  h.key === "Referrer-Policy" ? { key: h.key, value: "no-referrer" } : h,
+);
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
@@ -53,6 +79,8 @@ const nextConfig = {
   async headers() {
     return [
       { source: "/(.*)", headers: securityHeaders },
+      // AFTER the catch-all, so the tighter Referrer-Policy wins on these.
+      ...SENSITIVE_PATHS.map((source) => ({ source, headers: noReferrerHeaders })),
       // Never let a stale service worker stick around behind a CDN: the SW is the
       // update mechanism for the PWA, so it must always revalidate.
       {
