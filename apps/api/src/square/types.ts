@@ -50,6 +50,10 @@ export const squareBookingSchema = z
     location_id: z.string().nullish(),
     customer_id: z.string().nullish(),
     customer_note: z.string().nullish(),
+    // Present in the real webhook payload (verified against a live sandbox
+    // delivery, 2026-08-25) and load-bearing: it carries the outbox row id that
+    // identifies a booking as ChairBack's own before squareBookingId is stored.
+    seller_note: z.string().nullish(),
     appointment_segments: z.array(squareAppointmentSegmentSchema).default([]),
   })
   .passthrough();
@@ -222,3 +226,29 @@ export const squareTokenStatusSchema = z
   .passthrough();
 
 export type SquareTokenStatus = z.infer<typeof squareTokenStatusSchema>;
+
+//  OUTBOUND MIRRORING (S2) - the write half
+
+/**
+ * One availability slot from SearchAvailability.
+ *
+ * The mitigation for Square's documented behaviour that a SELLER-LEVEL write
+ * can create a double booking where a buyer-level one cannot: if Square will
+ * not reject the collision for us, the only thing left is to ask, immediately
+ * before writing, whether the slot is still free. That narrows the race to the
+ * round trip; it does not close it, and nothing in this codebase claims it does.
+ */
+export const squareAvailabilitySchema = z
+  .object({
+    start_at: z.string(),
+    location_id: z.string().nullish(),
+    appointment_segments: z.array(squareAppointmentSegmentSchema).nullish(),
+  })
+  .passthrough();
+
+export type SquareAvailability = z.infer<typeof squareAvailabilitySchema>;
+
+/** A Square customer - a Booking cannot exist without one. */
+export const squareCustomerCreateResultSchema = z
+  .object({ customer: squareCustomerSchema.nullish() })
+  .passthrough();

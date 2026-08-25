@@ -13,6 +13,19 @@ import {
   type MirrorShopSlice,
   type OccupancySlice,
 } from "./acuityMirrorRules.js";
+// The Square leg rides inside these three functions rather than at the call
+// sites. Every path that already mirrors to Acuity - public booking, dashboard
+// create, approval, recurring series, waitlist claim, receptionist, gap-fill,
+// walk-in, reschedule, cancel, decline, no-show - therefore mirrors to Square
+// with no change of its own. Wiring eight call sites twice is eight chances to
+// wire one of them once.
+import {
+  dispatchSquareAfterCommit,
+  recordSquareIntent,
+  reconcileSquareShop,
+  releaseSquareForAppointment,
+  rescheduleSquareForAppointment,
+} from "./squareMirror.js";
 
 /**
  * MIRROR CHAIRBACK OCCUPANCY ONTO THE BARBER'S ACUITY CALENDAR.
@@ -116,7 +129,7 @@ export interface MirrorIntentInput {
  * (ENFORCE cannot be switched on until every bookable chair is mapped) - this
  * covers the window where a barber is added or a calendar deleted afterwards.
  */
-export async function recordMirrorIntent(
+async function recordAcuityIntent(
   tx: Prisma.TransactionClient,
   input: MirrorIntentInput,
 ): Promise<string | null> {
@@ -178,6 +191,37 @@ export async function recordMirrorIntent(
   });
   return row.id;
 }
+
+/**
+ * Record the mirror intent for EVERY connected calendar, in the caller's
+ * transaction. Returns the Acuity outbox id (the Square rows are addressed by
+ * appointment, so nothing has to be threaded back).
+ *
+ * The two are recorded INDEPENDENTLY and neither can short-circuit the other:
+ * a shop can be on Square outbound with no Acuity connection at all, and an
+ * Acuity-unmapped chair must not silently skip the Square mirror. Keeping the
+ * public name means the eight existing call sites - public booking, dashboard
+ * create, approval, recurring series, waitlist claim, receptionist, gap-fill,
+ * walk-in - pick Square up without a single edit. Wiring eight call sites twice
+ * is eight chances to wire one of them once.
+ */
+export async function recordMirrorIntent(
+  tx: Prisma.TransactionClient,
+  input: MirrorIntentInput,
+): Promise<string | null> {
+  const acuityOutboxId = await recordAcuityIntent(tx, input);
+  await recordSquareIntent(tx, {
+    shopId: input.shopId,
+    appointmentId: input.appointmentId,
+    staffId: input.staffId,
+    startsAt: input.startsAt,
+    endsAt: input.endsAt,
+    occupancy: input.occupancy,
+    now: input.now,
+  });
+  return acuityOutboxId;
+}
+
 
 /**
  * Dispatch a PENDING row: create the block in Acuity.
@@ -258,6 +302,13 @@ export async function dispatchAfterCommit(
   outboxId: string | null,
   context: { shopId: string; appointmentId: string; via: string },
 ): Promise<DispatchOutcome> {
+  // FIRST, and unconditionally. A null outboxId means "nothing to send to
+  // Acuity" - which is the normal state of a Square-only shop, and returning
+  // early on it would have left every one of those shops silently unmirrored.
+  await dispatchSquareAfterCommit(context).catch(() => {
+    /* dispatchSquareAfterCommit already logged; the reconciler owns it. */
+  });
+
   if (!outboxId) return "skipped";
   try {
     const outcome = await dispatchCreate(outboxId);
@@ -291,6 +342,17 @@ export async function releaseForAppointment(
   shopId: string,
   appointmentId: string,
 ): Promise<void> {
+  // Square first, and never gated on the mode: a booking ChairBack created is
+  // ChairBack's to cancel even after the feature is switched off. Leaving one
+  // behind would fill a barber's Square day with customers who do not exist.
+  await releaseSquareForAppointment(shopId, appointmentId).catch((err) => {
+    logTransition(
+      "square release threw - reconciler owns it",
+      { shopId, appointmentId, detail: safeError(err).detail },
+      "error",
+    );
+  });
+
   const rows = await prisma.acuityOutboundBlock.findMany({
     where: { shopId, appointmentId, state: { in: ["PENDING", "ACTIVE", "UNKNOWN"] } },
   });
@@ -383,7 +445,13 @@ export async function swapForReschedule(
     },
     data: { state: "RELEASING" },
   });
-  return recordMirrorIntent(tx, input);
+  // ACUITY ONLY, deliberately. Square is not swapped: it has an atomic,
+  // versioned UpdateBooking, so the mirrored booking MOVES rather than being
+  // replaced (see rescheduleSquareForAppointment, driven from
+  // completeReschedule below). Recording a second live Square row here would
+  // also collide with the one-live-mirror-per-appointment index and take the
+  // whole booking transaction down with it.
+  return recordAcuityIntent(tx, input);
 }
 
 /**
@@ -415,6 +483,20 @@ export async function completeReschedule(
   newOutboxId: string | null,
 ): Promise<DispatchOutcome> {
   const outcome = newOutboxId ? await dispatchCreate(newOutboxId) : "skipped";
+
+  // Square moves in place. Nothing about the Acuity swap above applies to it -
+  // there is no old row to retain and no window in which the chair is blocked
+  // twice or not at all - so it is driven independently and its failures are
+  // its own (the row stays ACTIVE at the OLD span until the move confirms,
+  // which keeps the old time held rather than freeing a slot we have sold).
+  const newSpan = await prisma.appointment.findUnique({
+    where: { id: appointmentId },
+    select: { startsAt: true, endsAt: true },
+  });
+  if (newSpan) {
+    await rescheduleSquareForAppointment(shopId, appointmentId, newSpan.startsAt, newSpan.endsAt);
+  }
+
   const stale = await prisma.acuityOutboundBlock.findMany({
     where: { shopId, appointmentId, state: "RELEASING" },
     select: { id: true },
@@ -678,7 +760,37 @@ export async function runAcuityOutboundReconcile(now = new Date()): Promise<{
   adopted: number;
   retried: number;
   released: number;
+  squareShops: number;
+  squareRetried: number;
+  squareReleased: number;
 }> {
+  // 🔴 SQUARE RIDES THIS JOB rather than getting its own.
+  //
+  // A new scheduler entry needs a `job_lease` SEED or withLease() matches zero
+  // rows and the worker is SILENTLY DEAD - which is exactly how acuity-resync
+  // shipped in #99 and went unnoticed. Reusing an already-seeded job removes
+  // that failure mode entirely, and the two sweeps want the same cadence
+  // anyway: drain whatever the synchronous dispatch could not finish.
+  //
+  // Iterated SEPARATELY because the shop sets differ. A Square-only shop has no
+  // AcuityConnection row, so folding it into the loop below would leave its
+  // UNKNOWN rows unresolved forever.
+  let squareRetried = 0;
+  let squareReleased = 0;
+  const squareConns = await prisma.squareConnection.findMany({
+    where: { revokedAt: null },
+    select: { shopId: true },
+  });
+  for (const conn of squareConns) {
+    try {
+      const r = await reconcileSquareShop(conn.shopId);
+      squareRetried += r.retried;
+      squareReleased += r.released;
+    } catch (err) {
+      logger.error({ err, shopId: conn.shopId }, "square outbound reconcile failed for shop");
+    }
+  }
+
   const conns = await prisma.acuityConnection.findMany({ select: { shopId: true } });
   let adopted = 0;
   let retried = 0;
@@ -704,7 +816,15 @@ export async function runAcuityOutboundReconcile(now = new Date()): Promise<{
       released,
     });
   }
-  return { shops: conns.length, adopted, retried, released };
+  return {
+    shops: conns.length,
+    adopted,
+    retried,
+    released,
+    squareShops: squareConns.length,
+    squareRetried,
+    squareReleased,
+  };
 }
 
 //  Mode controls (operator surface)

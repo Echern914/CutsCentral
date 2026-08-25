@@ -4,6 +4,7 @@ import { prisma } from "@chairback/db";
 import { randomToken, SQUARE } from "@chairback/config";
 import { createApp } from "../app.js";
 import { buildAuthorizeUrl, createOAuthState, verifyOAuthState } from "../square/oauth.js";
+import { SquareError } from "../square/client.js";
 
 /**
  * WHAT A CUSTOMER EXPERIENCES when a shop is armed and one chair is not mapped.
@@ -23,7 +24,12 @@ import { buildAuthorizeUrl, createOAuthState, verifyOAuthState } from "../square
  */
 const squareMock = vi.hoisted(() => ({
   getBooking: vi.fn(),
-  listBookings: vi.fn(),
+  listBookings: vi.fn(
+    async (): Promise<{ bookings: Record<string, unknown>[]; cursor: string | null }> => ({
+      bookings: [],
+      cursor: null,
+    }),
+  ),
   getCustomer: vi.fn(),
   listLocations: vi.fn(async () => [{ id: "L1", name: "Main", status: "ACTIVE" }]),
   getBusinessBookingProfile: vi.fn(async () => ({
@@ -46,6 +52,19 @@ const squareMock = vi.hoisted(() => ({
   getTokenStatus: vi.fn(async () => ({
     scopes: ["APPOINTMENTS_WRITE", "APPOINTMENTS_ALL_WRITE"],
   })),
+  // S2: the write half. The default seller has an empty calendar and accepts
+  // every booking, so a correctly mapped pair reaches "you're booked".
+  ensureCustomer: vi.fn(async () => ({ id: "CUST_1" })),
+  searchAvailability: vi.fn(async () => []),
+  createBooking: vi.fn(async (input: { startAt: string }) => ({
+    id: `BK_${input.startAt}`,
+    version: 1,
+    status: "ACCEPTED",
+    start_at: input.startAt,
+    appointment_segments: [],
+  })),
+  updateBooking: vi.fn(),
+  cancelBooking: vi.fn(),
 }));
 
 vi.mock("../square/client.js", async (importOriginal) => {
@@ -181,6 +200,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  await prisma.squareOutboundBooking.deleteMany({ where: { shopId } });
   await prisma.appointment.deleteMany({ where: { shopId } });
 });
 
@@ -218,6 +238,8 @@ describe("public booking under Square ENFORCE", () => {
     expect(refused.status).toBe(409);
     expect(refused.body.error).toBe("slot_unavailable_external");
 
+    // 201 only because Square answered ACCEPTED. Under ENFORCE the customer is
+    // not told they are booked until the chair is genuinely held there.
     const served = await book(mappedStaffId, futureAtHour(5, 16));
     expect(served.status).toBe(201);
 
@@ -262,6 +284,71 @@ describe("public booking under Square ENFORCE", () => {
       where: { shopId },
       data: { connectionGeneration: 1 },
     });
+  });
+
+  it("does NOT promise the customer a booking Square only marked PENDING", async () => {
+    // A PENDING Square booking is not protection: the seller has to accept it
+    // and the chair stays sellable until they do. Answering 201 here would tell
+    // a customer they have a slot that is still on the market.
+    await setMode("ENFORCE");
+    squareMock.createBooking.mockResolvedValueOnce({
+      id: "BK_PENDING",
+      version: 1,
+      status: "PENDING",
+      start_at: futureAtHour(9, 14).toISOString(),
+      appointment_segments: [],
+    });
+    const res = await book(mappedStaffId, futureAtHour(9, 14));
+    expect(res.status).toBe(202);
+    expect(res.body.status).toBe("processing");
+    // The appointment is KEPT - it is real, it is just not confirmed yet.
+    expect(await prisma.appointment.count({ where: { shopId } })).toBe(1);
+  });
+
+  it("undoes the booking when Square DEFINITIVELY refuses", async () => {
+    await setMode("ENFORCE");
+    squareMock.createBooking.mockRejectedValueOnce(
+      new SquareError(400, "bad", "BAD_REQUEST"),
+    );
+    const res = await book(mappedStaffId, futureAtHour(10, 14));
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("slot_unavailable_external");
+    // Nothing half-written: no appointment, and nothing was promised.
+    expect(await prisma.appointment.count({ where: { shopId, status: "BOOKED" } })).toBe(0);
+  });
+
+  it("KEEPS the booking when Square is ambiguous, and says nothing confirmatory", async () => {
+    // A 502 can follow a request Square actually processed. Cancelling here
+    // would kill a real appointment over a lost response AND strand a live
+    // booking on the seller's calendar.
+    await setMode("ENFORCE");
+    squareMock.createBooking.mockRejectedValueOnce(new SquareError(502, "gateway"));
+    const res = await book(mappedStaffId, futureAtHour(11, 14));
+    expect(res.status).toBe(202);
+    expect(await prisma.appointment.count({ where: { shopId } })).toBe(1);
+    const row = await prisma.squareOutboundBooking.findFirst({ where: { shopId } });
+    expect(row?.state).toBe("UNKNOWN");
+  });
+
+  it("REFUSES rather than write over someone already in that chair", async () => {
+    // Square's docs say a seller-level write can create a double booking. If we
+    // can see the conflict, we must not add to it.
+    await setMode("ENFORCE");
+    const start = futureAtHour(12, 14);
+    squareMock.listBookings.mockResolvedValueOnce({
+      bookings: [
+        {
+          id: "SOMEONE_ELSE",
+          status: "ACCEPTED",
+          start_at: start.toISOString(),
+          appointment_segments: [{ team_member_id: "TM1", duration_minutes: 30 }],
+        },
+      ],
+      cursor: null,
+    });
+    const res = await book(mappedStaffId, start);
+    expect(res.status).toBe(409);
+    expect(squareMock.createBooking).not.toHaveBeenCalled();
   });
 
   it("makes no Square call while refusing - the booking page survives an outage", async () => {
