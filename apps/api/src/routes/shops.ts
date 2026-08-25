@@ -55,7 +55,7 @@ import {
   mintCancelToken,
   sha256Hex,
 } from "../engines/waitlistJoin.js";
-import { resolveWaitlistClientId } from "../engines/waitlistClientLink.js";
+import { resolveWaitlistClient } from "../engines/waitlistClientLink.js";
 import { sendWaitlistConfirmation } from "../messaging/waitlistEmail.js";
 import {
   CUSTOMER_ACTOR,
@@ -883,13 +883,16 @@ publicPageRouter.post("/:slug/waitlist", waitlistLimiter, async (req, res) => {
     // constraints to violate, so the only thing that fails it is a database
     // outage - which was failing the join anyway.
     await prisma.$transaction(async (tx) => {
-      // Who is this, if we can tell? One rule, stated once
-      // (engines/waitlistClientLink.ts): the single non-archived client in
-      // this shop with this exact number. Null when there is no number, no
-      // match, or more than one - a guess here would attribute one person's
-      // standing to another, and null costs nothing because the offer scan
-      // still falls back to the same phone lookup.
-      const clientId = await resolveWaitlistClientId(tx, shop.id, phone);
+      // Who is this, if we can tell, and where do they sit in the queue?
+      // One rule, stated once (engines/waitlistClientLink.ts): the single
+      // non-archived client in this shop with this exact number. No link when
+      // there is no number, no match, or more than one - a guess would
+      // attribute one person's standing to another, and no link costs nothing
+      // because the offer scan still falls back to the same phone lookup.
+      //
+      // 🔴 tierRank is READ HERE AND FROZEN. Reaching Gold tomorrow does not
+      // move this row up today's queue; it counts the next time they join.
+      const { clientId, tierRank } = await resolveWaitlistClient(tx, shop.id, phone);
       const entry = await tx.waitlistEntry.create({
         data: {
           shopId: shop.id,
@@ -898,6 +901,7 @@ publicPageRouter.post("/:slug/waitlist", waitlistLimiter, async (req, res) => {
           phone,
           email,
           clientId,
+          tierRank,
           serviceId,
           staffId,
           preferredTime: d.preferredTime || null,

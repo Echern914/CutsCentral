@@ -18,6 +18,7 @@ import {
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "./bookingWrite.js";
 import { addDaysToDateKey, wallParts } from "./waitlistMatch.js";
 import { computeOpenSlots } from "./slots.js";
+import { RANK_GOLD, RANK_NONE, RANK_SILVER } from "./waitlistTierRank.js";
 import { sha256Hex } from "./waitlistJoin.js";
 import {
   __setSendEmailForTests,
@@ -1502,21 +1503,29 @@ describe("reachability is explicit, never pretended", () => {
 /* ------------------------------------------------------------------ */
 
 describe("🔴 the scan visits every waiting entry exactly ONCE", () => {
-  it("213 entries, ties straddling every page boundary: the trace IS the ranked list", async () => {
+  it("213 entries, ties on BOTH ranked columns straddling every page boundary: the trace IS the ranked list", async () => {
     const slot = freshSlot();
     const slotDate = wallParts(slot.startsAt, TZ).date;
     const wrongDate = addDaysToDateKey(slotDate, 5);
     const instant = Date.now() - 5 * 86_400_000;
     const seq = slotSeq; // fixed for the rest of this test
 
-    // 213 = four full pages of fifty and a short fifth.
+    // 213 = four full pages of fifty and a short fifth, and 213 = 3 x 71, so
+    // each of the three ranks holds exactly 71 rows.
     //
-    // Ties come in groups of SEVEN, and 7 does not divide 50, so no tie group
-    // lines up with a page boundary: every page from the first to the fourth
-    // ends in the MIDDLE of a group of same-instant entries. That is the only
-    // place the (createdAt =, id >) arm of the predicate does any work, and
-    // it is exactly where a hand-written cursor loses rows.
+    // TIES ON BOTH RANKED COLUMNS, neither aligned with the page size:
+    //
+    //   - rank blocks are 71 long, so the Gold->Silver boundary (71) and the
+    //     Silver->rest boundary (142) both land in the MIDDLE of a page;
+    //   - inside a rank, entries share an instant in groups of SEVEN, and 7
+    //     does not divide 50, so pages one to four each end in the middle of
+    //     a same-instant group.
+    //
+    // Those two are where the middle and last arms of the three-component
+    // predicate do their work - and exactly where a hand-written cursor
+    // loses rows.
     const N = 213;
+    const RANKS = [RANK_GOLD, RANK_SILVER, RANK_NONE];
     const seeded = Array.from({ length: N }, (_, i) => ({
       // Ids are NOT in insertion order: (i * 97) mod 213 is a permutation (97
       // is coprime with 213), so ranking by createdAt alone would produce a
@@ -1524,7 +1533,11 @@ describe("🔴 the scan visits every waiting entry exactly ONCE", () => {
       // prefix + fixed-width digits, so Postgres's collation and JavaScript's
       // string compare cannot disagree about the answer.
       id: `dwalk${seq}x${String((i * 97) % N).padStart(3, "0")}`,
-      createdAt: new Date(instant + Math.floor(i / 7) * 1000),
+      // Rank cycles row by row while the instant changes every 21 rows, so
+      // each (rank, instant) pair holds seven entries and neither column's
+      // ties line up with the other's.
+      tierRank: RANKS[i % 3]!,
+      createdAt: new Date(instant + Math.floor(i / 21) * 1000),
     }));
     await prisma.waitlistEntry.createMany({
       data: seeded.map((s, i) => ({
@@ -1532,6 +1545,7 @@ describe("🔴 the scan visits every waiting entry exactly ONCE", () => {
         shopId,
         firstName: `Walk${i}`,
         email: `walk-${seq}-${i}@test.local`,
+        tierRank: s.tierRank,
         createdAt: s.createdAt,
       })),
     });
@@ -1558,13 +1572,25 @@ describe("🔴 the scan visits every waiting entry exactly ONCE", () => {
     }
 
     // The ranking, derived independently of the query.
-    const expected = [...seeded]
+    const byRank = (a: (typeof seeded)[number], b: (typeof seeded)[number]): number =>
+      a.tierRank - b.tierRank ||
+      a.createdAt.getTime() - b.createdAt.getTime() ||
+      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    const expected = [...seeded].sort(byRank).map((s) => s.id);
+
+    // The rank has to be DOING something, or the rest of this proves only
+    // that (createdAt, id) still works.
+    const byJoinTime = [...seeded]
       .sort(
         (a, b) =>
           a.createdAt.getTime() - b.createdAt.getTime() ||
           (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
       )
       .map((s) => s.id);
+    expect(expected).not.toEqual(byJoinTime);
+    expect(expected.slice(0, 71)).toEqual(
+      [...seeded].filter((x) => x.tierRank === RANK_GOLD).sort(byRank).map((x) => x.id),
+    );
 
     // No repeats, no skips …
     expect(trace.length).toBe(N);
@@ -1664,5 +1690,146 @@ describe("clientId is a shortcut to the same client, never a different answer", 
     // And they were skipped, not dropped.
     const still = await prisma.waitlistEntry.findUnique({ where: { id: unreachable.id } });
     expect(still!.status).toBe("WAITING");
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Gold sorts to the front of the SAME queue                           */
+/* ------------------------------------------------------------------ */
+
+describe("🔴 loyalty rank reorders the queue without changing what the queue is", () => {
+  it("Gold goes first, and inside Gold it is still the earliest joiner, one at a time", async () => {
+    const now = new Date();
+    const day = 86_400_000;
+    // Join order and rank order disagree on purpose: the person who has been
+    // waiting longest is the one with no standing.
+    const stranger = await makeEntry({ createdAt: new Date(now.getTime() - 5 * day) });
+    const silver = await makeEntry({
+      tierRank: RANK_SILVER,
+      createdAt: new Date(now.getTime() - 4 * day),
+    });
+    const goldLate = await makeEntry({
+      tierRank: RANK_GOLD,
+      createdAt: new Date(now.getTime() - 1 * day),
+    });
+    const goldEarly = await makeEntry({
+      tierRank: RANK_GOLD,
+      createdAt: new Date(now.getTime() - 2 * day),
+    });
+
+    // 🔑 ONE OFFER AT A TIME, still. Three freed slots drain the queue in
+    // rank order; there is no simultaneous blast to "all the Gold members",
+    // and each slot is held for exactly one person.
+    const a = await offerTo(freshSlot(), now);
+    expect(a.entryId).toBe(goldEarly.id); // Gold first, earliest Gold of the two
+    const b = await offerTo(freshSlot(), now);
+    expect(b.entryId).toBe(goldLate.id); // the other Gold, not the older Silver
+    const c = await offerTo(freshSlot(), now);
+    expect(c.entryId).toBe(silver.id); // then Silver
+    const d = await offerTo(freshSlot(), now);
+    expect(d.entryId).toBe(stranger.id); // and the longest wait comes last
+
+    // Nobody was offered twice, and every hold is a hold on one person.
+    const holds = await prisma.waitlistOffer.findMany({
+      where: { shopId, status: "OFFERED" },
+      select: { entryId: true },
+    });
+    expect(new Set(holds.map((h) => h.entryId)).size).toBe(4);
+  });
+
+  it("a lapsed Gold hold advances down the RANKED list, not the join-order one", async () => {
+    const slot = freshSlot();
+    const now = new Date();
+    const day = 86_400_000;
+    const stranger = await makeEntry({ createdAt: new Date(now.getTime() - 9 * day) });
+    const gold = await makeEntry({
+      tierRank: RANK_GOLD,
+      createdAt: new Date(now.getTime() - 1 * day),
+    });
+    const silver = await makeEntry({
+      tierRank: RANK_SILVER,
+      createdAt: new Date(now.getTime() - 8 * day),
+    });
+
+    const first = await offerTo(slot, now);
+    expect(first.entryId).toBe(gold.id);
+
+    // Ignored until the hold lapses. The expiry worker is unchanged: it flips
+    // the offer and offers the slot to the next ELIGIBLE entry - which is now
+    // read in rank order, so Silver beats the much older stranger.
+    const r = await expireDueOffers(new Date(first.expiresAt.getTime()), {
+      forceAdvance: true,
+    });
+    expect(r.expired).toBe(1);
+    expect(r.advanced).toBe(1);
+    const next = await prisma.waitlistOffer.findFirst({
+      where: { shopId, staffId, startsAt: slot.startsAt, status: "OFFERED" },
+      select: { entryId: true },
+    });
+    expect(next!.entryId).toBe(silver.id);
+    expect(next!.entryId).not.toBe(stranger.id);
+  });
+
+  it("🔴 with nothing linked, the order is byte-for-byte the order it was before ranks existed", async () => {
+    // The inert case, and the one that matters most on the day this ships: a
+    // shop whose entries carry no tier - every row at the DEFAULT rank -
+    // must scan in exactly the (createdAt, id) order it always did. Which is
+    // simply what (rank, createdAt, id) degenerates to when every rank is
+    // equal, and is why this change can land before WaitlistEntry.clientId
+    // coverage is any good.
+    const slot = freshSlot();
+    const slotDate = wallParts(slot.startsAt, TZ).date;
+    const wrongDate = addDaysToDateKey(slotDate, 6);
+    const instant = Date.now() - 7 * 86_400_000;
+    const seq = slotSeq;
+    const N = 60;
+    const seeded = Array.from({ length: N }, (_, i) => ({
+      id: `dflat${seq}x${String((i * 37) % N).padStart(3, "0")}`,
+      createdAt: new Date(instant + Math.floor(i / 5) * 1000),
+    }));
+    await prisma.waitlistEntry.createMany({
+      // No tierRank in the payload at all: these rows take the column DEFAULT,
+      // exactly as every row that existed before the migration did.
+      data: seeded.map((s, i) => ({
+        id: s.id,
+        shopId,
+        firstName: `Flat${i}`,
+        email: `flat-${seq}-${i}@test.local`,
+        createdAt: s.createdAt,
+      })),
+    });
+    await prisma.waitlistWindow.createMany({
+      data: seeded.map((s) => ({
+        shopId,
+        entryId: s.id,
+        startDate: wrongDate,
+        endDate: wrongDate,
+        startMin: null,
+        endMin: null,
+      })),
+    });
+
+    const ranks = await prisma.waitlistEntry.findMany({
+      where: { id: { in: seeded.map((s) => s.id) } },
+      select: { tierRank: true },
+    });
+    expect(new Set(ranks.map((r) => r.tierRank))).toEqual(new Set([RANK_NONE]));
+
+    const trace = __setScanTraceForTests(true);
+    try {
+      const res = await offerFreedSlot(slot, new Date());
+      expect(res.outcome).toBe("no_candidates");
+    } finally {
+      __setScanTraceForTests(false);
+    }
+
+    const byJoinTime = [...seeded]
+      .sort(
+        (a, b) =>
+          a.createdAt.getTime() - b.createdAt.getTime() ||
+          (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+      )
+      .map((s) => s.id);
+    expect([...trace]).toEqual(byJoinTime);
   });
 });

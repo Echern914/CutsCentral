@@ -426,6 +426,10 @@ async function pickCandidate(
       select: {
         id: true,
         createdAt: true,
+        // The ranking key. Selected because the CURSOR is read off the last
+        // row of each page (scanCursorFrom), not because the walk below looks
+        // at it - the ordering lives entirely in waitlistScanOrder.ts.
+        tierRank: true,
         firstName: true,
         email: true,
         phone: true,
