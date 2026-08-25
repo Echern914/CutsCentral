@@ -6,6 +6,7 @@ import { admitEvent, processBookingEvent, settleEvent } from "../square/inbox.js
 import { verifySquareSignature } from "../square/signature.js";
 import { squareWebhookEnvelopeSchema } from "../square/types.js";
 import { squareEnabled } from "../square/client.js";
+import { parseSquareEventRef } from "../engines/squareMirrorRules.js";
 
 const env = apiEnv();
 
@@ -76,6 +77,15 @@ squareWebhookRouter.post("/", express.raw({ type: "*/*" }), async (req, res) => 
     return;
   }
 
+  // THE VERSION lives in `data.id`, which Square formats as
+  // "<bookingId>:<version>" - the bare booking id is inside the booking object,
+  // and reading data.id as an id would look right and never match. The version
+  // is what makes out-of-order delivery detectable, since Square guarantees no
+  // ordering. A mismatched id means the envelope is not self-consistent, so the
+  // version is not trusted for it.
+  const ref = parseSquareEventRef(envelope.data?.id);
+  const eventVersion = ref.bookingId === booking.id ? ref.version : null;
+
   // PERSIST BEFORE PROCESSING. Square's event_id is the idempotency key for the
   // WORK, which the Visit upsert never was: a redelivery used to re-fetch the
   // booking, re-fetch the customer and re-run the punch pipeline, all of which
@@ -85,6 +95,7 @@ squareWebhookRouter.post("/", express.raw({ type: "*/*" }), async (req, res) => 
     merchantId: envelope.merchant_id,
     type: envelope.type,
     bookingId: booking.id,
+    bookingVersion: eventVersion,
   });
   if (admission.kind === "duplicate") {
     logger.info({ eventId: envelope.event_id }, "square webhook: duplicate event - no work done");
@@ -121,8 +132,21 @@ squareWebhookRouter.post("/", express.raw({ type: "*/*" }), async (req, res) => 
     // Self-echo is decided inside processBookingEvent: a booking ChairBack
     // created must reconcile its own outbound row, never import as a second
     // Visit on a chair that is already booked.
-    const outcome = await processBookingEvent(shop, booking.id, booking.status, booking.seller_note);
-    await settleEvent(admission.rowId, "PROCESSED", { shopId: shop.id });
+    const outcome = await processBookingEvent(
+      shop,
+      booking.id,
+      booking.status,
+      booking.seller_note,
+      eventVersion,
+    );
+    // A stale event was deliberately not applied, so recording it as PROCESSED
+    // would both overstate what happened and put a version into the applied
+    // high water mark that we never acted on.
+    await settleEvent(
+      admission.rowId,
+      outcome === "stale" ? "IGNORED" : "PROCESSED",
+      { shopId: shop.id, ...(outcome === "stale" ? { lastError: "stale_version" } : {}) },
+    );
     logger.info(
       { shopId: shop.id, eventId: envelope.event_id, outcome },
       "square webhook processed",

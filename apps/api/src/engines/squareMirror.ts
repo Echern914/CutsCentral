@@ -734,6 +734,41 @@ export async function ownedSquareBookingIds(shopId: string): Promise<Set<string>
 }
 
 /**
+ * The newest version of this booking we have already applied, or null.
+ *
+ * Two sources, most authoritative first:
+ *
+ *   1. the outbound row, when we own the booking - it is updated by both the
+ *      create path and the reconcile path, so it is the true high water mark;
+ *   2. otherwise the webhook ledger, which records the version of every event
+ *      that reached PROCESSED for that booking.
+ *
+ * Null means "nothing to compare with", and the caller must fail OPEN on it.
+ */
+export async function lastAppliedSquareBookingVersion(
+  shopId: string,
+  squareBookingId: string,
+): Promise<number | null> {
+  const owned = await prisma.squareOutboundBooking.findFirst({
+    where: { shopId, squareBookingId },
+    select: { squareBookingVersion: true },
+  });
+  if (owned?.squareBookingVersion != null) return owned.squareBookingVersion;
+
+  const applied = await prisma.squareWebhookEvent.findFirst({
+    where: {
+      shopId,
+      bookingId: squareBookingId,
+      status: "PROCESSED",
+      bookingVersion: { not: null },
+    },
+    orderBy: { bookingVersion: "desc" },
+    select: { bookingVersion: true },
+  });
+  return applied?.bookingVersion ?? null;
+}
+
+/**
  * Claim an inbound booking as ours using the seller note, for the window in
  * which `squareBookingId` has not been stored yet.
  *
@@ -795,6 +830,7 @@ export async function reconcileOwnedBookingFromWebhook(
   shopId: string,
   squareBookingId: string,
   status: string | null | undefined,
+  version: number | null = null,
 ): Promise<void> {
   const row = await prisma.squareOutboundBooking.findFirst({
     where: { shopId, squareBookingId },
@@ -803,7 +839,15 @@ export async function reconcileOwnedBookingFromWebhook(
   const hold = interpretBookingStatus(status);
   await prisma.squareOutboundBooking.update({
     where: { id: row.id },
-    data: { squareBookingStatus: status ?? null },
+    data: {
+      squareBookingStatus: status ?? null,
+      // Advance the stored version so the ordering guard has a durable high
+      // water mark. This path is exactly where order matters: the status is
+      // taken from the ENVELOPE rather than re-read, so a stale ACCEPTED
+      // arriving after a cancellation would otherwise repaint an unprotected
+      // chair as protected.
+      ...(version !== null ? { squareBookingVersion: version } : {}),
+    },
   });
   if (hold === "released" && row.state === "ACTIVE") {
     // The barber cancelled OUR mirrored booking inside Square. That is a real

@@ -2210,6 +2210,12 @@ model SquareWebhookEvent {
   // Square ids only. There is deliberately no payload column: a stored envelope
   // is customer PII sitting in a table nobody remembers to purge.
   bookingId  String?
+  // Parsed out of the envelope's `data.id`, which Square formats as
+  // "<bookingId>:<version>" - NOT the bare booking id. Square does not
+  // guarantee delivery order, so this is what lets a late arrival be
+  // recognised as describing an older state of the booking than one already
+  // applied, and dropped instead of overwriting it.
+  bookingVersion Int?
   status     String  @default("RECEIVED") // RECEIVED | PROCESSED | IGNORED | FAILED
   attempts   Int     @default(0)
   lastError  String? // sanitized
@@ -2219,6 +2225,8 @@ model SquareWebhookEvent {
   // The retry queue: anything not yet PROCESSED, oldest first.
   @@index([status, receivedAt])
   @@index([merchantId])
+  // "what is the newest version of this booking we have already applied?"
+  @@index([shopId, bookingId, bookingVersion])
 }
 
 // A one-off override on a staff member's calendar. isBlock=true subtracts time

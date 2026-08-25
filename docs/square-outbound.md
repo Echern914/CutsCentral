@@ -51,10 +51,9 @@ documentation.
 
 ---
 
-## 🔴 The blocker: no sandbox credentials exist
+## Running the contract (it has since been RUN — see the results below)
 
-The contract cannot be run yet. Railway holds only **production** Square
-credentials:
+Railway holds only **production** Square credentials:
 
 ```
 SQUARE_ENV = production
@@ -80,14 +79,24 @@ to `connect.squareupsandbox.com`, and a token that is not a sandbox token is
 rejected before the first request. It cleans up every booking and customer it
 creates, and prints their ids either way.
 
-**Sandbox seller prerequisites** — without these the contract skips its most
-important half:
+**Sandbox seller prerequisites** — each one was a real dead end hit in order,
+so the list is the shortest path rather than a checklist:
 
-1. an **Appointments Plus or Premium** sandbox seller (otherwise
-   `support_seller_level_writes` is `false` and C7–C13 exercise a plan that
-   cannot do what S2 needs);
-2. at least one team member with online booking enabled;
-3. at least one catalog item whose `product_type` is `APPOINTMENTS_SERVICE`.
+1. **Appointments enabled on the test account.** Without it every Bookings call
+   returns `401 UNAUTHORIZED: Merchant not onboarded to Appointments`, and no
+   amount of API work clears it — it is a dashboard action (sandbox Seller
+   Dashboard → left nav **"Add more"** → Appointments).
+2. **An Appointments Plus or Premium subscription.** On the Free plan
+   `support_seller_level_writes` is `false` and *every* write — buyer-level
+   included — returns `403 FORBIDDEN: Merchant subscription does not support
+   write operations`. Sandbox billing is simulated and only accepts Square's
+   test cards, so this costs nothing.
+3. **A catalog item whose `product_type` is `APPOINTMENTS_SERVICE`.**
+4. **The team member assigned to that service variation**
+   (`item_variation_data.team_member_ids`). Without it `SearchAvailability`
+   fails with `400 BAD_REQUEST: Search did not find a team member who performs
+   the selected service variation` — which looks exactly like "no availability"
+   and is not.
 
 ---
 
@@ -110,13 +119,14 @@ Twelve automated, two manual, plus three webhook legs that need a tunnel.
 | C11 | Does a versioned `UpdateBooking` reschedule in place? | If yes, S2 uses it — **do not copy Acuity's create-then-delete swap** when Square offers a stronger atomic operation. |
 | C12 | Is a **stale** version rejected? | If not, the version is not an optimistic-concurrency guard and cannot be relied on. |
 | C13 | Does cancel with the correct version release the time? | The rollback leg. |
-| C14 | Does Square email/SMS the **customer** for a seller-level API booking? | **Manual.** A mirror that texts a stranger "your appointment is confirmed" for a hold they never made is a worse bug than the double-booking. |
+| C14 | Does Square email/SMS the **customer** for a seller-level API booking? | **Manual, and NOT answerable in sandbox** — it is a per-seller dashboard toggle the API cannot even read. See [`square-c14-customer-notification.md`](square-c14-customer-notification.md). |
 | W1 | `booking.created` payload shape + a stable `event_id` | The inbox ledger's primary key. |
 | W2 | `booking.updated` on reschedule **and** on cancel | Square has no separate cancel event. |
 | W3 | Does an **app-origin** booking import as a second Visit? | Self-echo. It must confirm the outbound row, never create a Visit. |
 
 W1–W3 need the sandbox webhook pointed at a tunnel; they cannot be driven from a
-script.
+script. **They have since been run** — results and the cold-start recipe are in
+[`square-webhook-sandbox.md`](square-webhook-sandbox.md).
 
 ---
 
@@ -287,3 +297,46 @@ Found while auditing against `origin/main`, all still true at `9a48971`:
 | `ingest.ts` reads only `appointment_segments[0]` | A multi-segment booking's true span is under-counted. **S2.** |
 | `ingest.ts` defaults a missing duration to 30 minutes | A silent guess that decides whether a slot is offered. **S2 must record a sync-health error and conservatively withhold availability instead.** |
 | Concurrent 401s can overwrite a rotated refresh token | Two refreshes race and the loser persists a dead token. **S2 (compare-and-set or a lease).** |
+
+---
+
+## Dead-export audit of the Square path
+
+`isSquareSellerNote` turned out to be shipped dead — real logic, unit-tested,
+called from nowhere in production — and it was the exact helper needed to close
+the self-echo race. So the whole Square surface was swept for the same shape:
+every `export`ed function, const and class across the 17 Square files, checked
+for a call site outside its own module *and* inside it.
+
+**It was a one-off.** Exactly one other export has no reference anywhere at all:
+
+| Symbol | File | Status |
+|---|---|---|
+| `squareCustomerCreateResultSchema` | `square/types.ts` | 🔴 **Genuinely dead** — declared, referenced nowhere, not even by a test. Inert (an unused zod schema), so nothing silently fails to run. Safe to delete. |
+| `isSquareSellerNote` | `engines/squareMirrorRules.ts` | ✅ **Was dead, now alive** — called by `squareSellerNoteOutboxId`. |
+
+Twelve more are exported but used **only inside their own module**:
+`loadSquareShopContext`, `loadSquareStaffRows`, `loadSquareServiceRows`,
+`computeSquareReadiness`, `hasOutboundScopes`, `indexServiceVariations`,
+`squareRefusalForBooking`, `SquareTokenExchangeError`,
+`squareAppointmentSegmentSchema`, `squareCatalogItemVariationSchema`,
+`SQUARE_PAGE_SIZE`, `SquareMirrorNotConfiguredError`.
+
+None of those is broken. But they are why the one real case was invisible: when
+almost everything is exported, "exported and never called" stops being a signal.
+Narrowing them to module-private would make the next `isSquareSellerNote` show
+up as an unused-symbol warning instead of needing an audit.
+
+### 🔴 One genuine gap the sweep turned up
+
+`SquareMirrorNotConfiguredError` is **thrown and never caught**. Its Acuity twin
+is (`acuityBackfill.ts:504`). `recordSquareIntent` throws it inside the booking
+transaction when a shop is ENFORCE with an unmapped barber-service pair.
+
+The public booking path is covered — S1's `checkSquareBookingAllowed` returns a
+clean `409 slot_unavailable_external` before the transaction opens. Every other
+path that records an intent (dashboard create, waitlist claim, recurring series,
+receptionist, walk-in) has no such pre-check, so the throw would surface as a
+**500 rather than a usable error**.
+
+Latent, not live: no shop can be anything but `OFF`. It belongs with S3.

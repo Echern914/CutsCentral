@@ -184,6 +184,63 @@ export function squareSellerNoteOutboxId(note: string | null | undefined): strin
   return id.length > 0 ? id : null;
 }
 
+//  4b. Delivery order
+
+export interface SquareEventRef {
+  bookingId: string | null;
+  /** null when Square sent no version, which must NOT be read as version 0. */
+  version: number | null;
+}
+
+/**
+ * Split a webhook envelope's `data.id` into the booking id and its version.
+ *
+ * 🔴 `data.id` is `"<bookingId>:<version>"`, NOT the bare booking id - measured
+ * against a live sandbox delivery on 2026-08-25, where a create/reschedule/
+ * cancel sequence produced `f7i4eiij0bdkm3:0`, `:1` and `:2`. Using `data.id`
+ * as a booking id looks correct and silently never matches anything.
+ *
+ * The version is what makes out-of-order delivery detectable. Square does not
+ * guarantee ordering, and the owned-mirror path trusts the envelope's status
+ * rather than re-reading it, so a late ACCEPTED arriving after a cancellation
+ * would otherwise repaint an unprotected chair as protected.
+ *
+ * Split on the LAST colon: the version is the suffix, and this stays correct if
+ * Square ever issues an id containing one.
+ *
+ * A missing or unparseable version yields null, and null means "do not apply
+ * the ordering guard". Fail OPEN - dropping an event we cannot order is worse
+ * than processing one twice, which the event_id ledger already absorbs.
+ */
+export function parseSquareEventRef(dataId: string | null | undefined): SquareEventRef {
+  if (typeof dataId !== "string" || dataId.trim() === "") {
+    return { bookingId: null, version: null };
+  }
+  const raw = dataId.trim();
+  const at = raw.lastIndexOf(":");
+  if (at <= 0 || at === raw.length - 1) return { bookingId: raw, version: null };
+  const suffix = raw.slice(at + 1);
+  if (!/^\d+$/.test(suffix)) return { bookingId: raw, version: null };
+  const version = Number(suffix);
+  if (!Number.isSafeInteger(version)) return { bookingId: raw.slice(0, at), version: null };
+  return { bookingId: raw.slice(0, at), version };
+}
+
+/**
+ * Does this event describe a state NEWER than the one already applied?
+ *
+ * Unknown-either-side means yes: with nothing to compare, refusing would drop
+ * real work. Equal means NO - the same version carries the same state, and the
+ * event_id ledger already covers honest redelivery.
+ */
+export function squareEventAdvances(
+  incomingVersion: number | null,
+  appliedVersion: number | null,
+): boolean {
+  if (incomingVersion === null || appliedVersion === null) return true;
+  return incomingVersion > appliedVersion;
+}
+
 //  5. Self-echo
 
 /**

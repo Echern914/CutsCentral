@@ -3,10 +3,11 @@ import { logger } from "../logger.js";
 import { ingestSquareBooking } from "./ingest.js";
 import {
   claimSquareBookingByNote,
+  lastAppliedSquareBookingVersion,
   ownedSquareBookingIds,
   reconcileOwnedBookingFromWebhook,
 } from "../engines/squareMirror.js";
-import { isSelfEcho } from "../engines/squareMirrorRules.js";
+import { isSelfEcho, squareEventAdvances } from "../engines/squareMirrorRules.js";
 
 /**
  * THE WEBHOOK INBOX.
@@ -50,6 +51,7 @@ export async function admitEvent(input: {
   merchantId: string | null | undefined;
   type: string | null | undefined;
   bookingId: string | null | undefined;
+  bookingVersion?: number | null;
 }): Promise<InboxAdmission> {
   if (!input.eventId) {
     // No event id means no idempotency key. Handling it would reintroduce the
@@ -65,6 +67,7 @@ export async function admitEvent(input: {
         merchantId: input.merchantId ?? null,
         type: input.type ?? null,
         bookingId: input.bookingId ?? null,
+        bookingVersion: input.bookingVersion ?? null,
       },
       select: { id: true },
     });
@@ -127,10 +130,28 @@ export async function processBookingEvent(
   bookingId: string,
   status: string | null | undefined,
   sellerNote?: string | null,
-): Promise<"self_echo" | "ingested"> {
+  version: number | null = null,
+): Promise<"self_echo" | "ingested" | "stale"> {
+  // ORDER. Square does not guarantee delivery order, and this handler acts on
+  // the envelope's status rather than re-reading the booking, so a late arrival
+  // describing an older state would overwrite a newer one - a stale ACCEPTED
+  // landing after a cancellation repaints an unprotected chair as protected.
+  //
+  // Fails OPEN: an unknown version on either side processes normally, because
+  // dropping an event we cannot order is worse than processing one twice, which
+  // the event_id ledger already absorbs.
+  const applied = await lastAppliedSquareBookingVersion(shop.id, bookingId);
+  if (!squareEventAdvances(version, applied)) {
+    logger.info(
+      { shopId: shop.id, squareBookingId: bookingId, version, applied },
+      "square webhook: event describes an older state than one already applied - dropped",
+    );
+    return "stale";
+  }
+
   const owned = await ownedSquareBookingIds(shop.id);
   if (isSelfEcho(bookingId, owned)) {
-    await reconcileOwnedBookingFromWebhook(shop.id, bookingId, status);
+    await reconcileOwnedBookingFromWebhook(shop.id, bookingId, status, version);
     logger.info(
       { shopId: shop.id, squareBookingId: bookingId },
       "square webhook: our own mirrored booking - reconciled, not imported",
@@ -148,7 +169,7 @@ export async function processBookingEvent(
   // Without this, the mirror imports its own booking as a Visit - a phantom
   // second appointment on the chair it was protecting.
   if (await claimSquareBookingByNote(shop.id, sellerNote, bookingId)) {
-    await reconcileOwnedBookingFromWebhook(shop.id, bookingId, status);
+    await reconcileOwnedBookingFromWebhook(shop.id, bookingId, status, version);
     logger.info(
       { shopId: shop.id, squareBookingId: bookingId },
       "square webhook: our own booking, claimed by seller note before the id was stored",
