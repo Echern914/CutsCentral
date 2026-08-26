@@ -118,6 +118,9 @@ async function connect(opts: { cookie?: string; scope?: string } = {}): Promise<
   access_token: string;
   refresh_token: string;
   scope?: string;
+  /** The code and verifier that produced these tokens, for replay tests. */
+  code: string;
+  verifier: string;
 }> {
   const verifier = makeVerifier();
   const a = await authorize({ ...opts, challenge: challengeFor(verifier) });
@@ -130,7 +133,7 @@ async function connect(opts: { cookie?: string; scope?: string } = {}): Promise<
     client_id: clientId,
   });
   expect(t.status).toBe(200);
-  return t.body;
+  return { ...t.body, code: a.code!, verifier };
 }
 
 /** Call the MCP endpoint with a bearer token. */
@@ -678,6 +681,152 @@ describe("authorization code + PKCE", () => {
 });
 
 /* ═══════════════════════════ audience binding ═══════════════════════════ */
+
+/**
+ * 🔴 STALE AUTHORIZATION CODES CANNOT REVOKE A RE-CONSENTED CONNECTION.
+ *
+ * `McpConnection` is UNIQUE on (userId, shopId, clientId) and is REUSED on every
+ * re-consent, so "the connection this code minted" and "the connection that
+ * exists now" are the same row. As merged in #315, an OLD code - already
+ * consumed, and never swept - stayed replayable forever: presenting it with its
+ * verifier took the replay branch and revoked whatever grant currently occupied
+ * the slot. Anyone who had ever held one historical code+verifier pair could log
+ * a barber's assistant out at will, repeatedly, indefinitely.
+ *
+ * The fix deletes every prior code for the tuple in the same transaction that
+ * mints the replacement. Same-grant replay detection is deliberately unchanged.
+ */
+describe("🔴 stale authorization codes", () => {
+  it("an old code cannot revoke the connection a later consent created", async () => {
+    // 1. Redeem code A.
+    const first = await connect();
+    expect((await mcp(first.access_token)).status).toBe(200);
+
+    // 2. Re-consent and redeem code B.
+    const second = await connect();
+    expect((await mcp(second.access_token)).status).toBe(200);
+
+    // 3. Replay code A with its CORRECT verifier.
+    const replay = await request(app).post("/mcp/oauth/token").send({
+      grant_type: "authorization_code",
+      code: first.code,
+      code_verifier: first.verifier,
+      redirect_uri: REDIRECT,
+      client_id: clientId,
+    });
+
+    // 4. Generic invalid_grant - the same body any unknown code gets.
+    expect(replay.status).toBe(400);
+    expect(replay.body).toEqual({
+      error: "invalid_grant",
+      error_description: "authorization code is not valid",
+    });
+
+    // 5. 🔴 THE FIX: code B's live token is untouched.
+    expect((await mcp(second.access_token)).status).toBe(200);
+  });
+
+  it("replaying the CURRENT code still revokes its own grant", async () => {
+    const t = await connect();
+    expect((await mcp(t.access_token)).status).toBe(200);
+    // 6. Same-grant replay detection must NOT have been weakened.
+    const replay = await request(app).post("/mcp/oauth/token").send({
+      grant_type: "authorization_code",
+      code: t.code,
+      code_verifier: t.verifier,
+      redirect_uri: REDIRECT,
+      client_id: clientId,
+    });
+    expect(replay.status).toBe(400);
+    expect((await mcp(t.access_token)).status).toBe(401);
+    const conn = await prisma.mcpConnection.findFirstOrThrow({
+      where: { shopId, client: { clientId } },
+      select: { revokedReason: true },
+    });
+    expect(conn.revokedReason).toBe("replay");
+  });
+
+  it("7. a sibling assistant for the same user and shop survives all of it", async () => {
+    const siblingClient = await registerClient("Test Assistant Sibling");
+    const sibVerifier = makeVerifier();
+    const sibAuth = await authorize({
+      challenge: challengeFor(sibVerifier),
+      clientId: siblingClient,
+    });
+    const sibling = await request(app).post("/mcp/oauth/token").send({
+      grant_type: "authorization_code",
+      code: sibAuth.code,
+      code_verifier: sibVerifier,
+      redirect_uri: REDIRECT,
+      client_id: siblingClient,
+    });
+    expect(sibling.status).toBe(200);
+
+    const victim = await connect();
+    await request(app).post("/mcp/oauth/token").send({
+      grant_type: "authorization_code",
+      code: victim.code,
+      code_verifier: victim.verifier,
+      redirect_uri: REDIRECT,
+      client_id: clientId,
+    });
+    // The victim's grant died; the sibling's did not.
+    expect((await mcp(victim.access_token)).status).toBe(401);
+    expect((await mcp(sibling.body.access_token)).status).toBe(200);
+  });
+
+  it("8. re-consent invalidates an older UNCONSUMED code without revoking anything", async () => {
+    // A code that was minted and never redeemed - the harmless case, which must
+    // still stop working, and must still not take the revocation path.
+    const staleVerifier = makeVerifier();
+    const stale = await authorize({ challenge: challengeFor(staleVerifier) });
+
+    const live = await connect();
+    expect((await mcp(live.access_token)).status).toBe(200);
+
+    const res = await request(app).post("/mcp/oauth/token").send({
+      grant_type: "authorization_code",
+      code: stale.code,
+      code_verifier: staleVerifier,
+      redirect_uri: REDIRECT,
+      client_id: clientId,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_grant");
+    // Nothing was revoked.
+    expect((await mcp(live.access_token)).status).toBe(200);
+  });
+
+  it("9. repeated re-consent does not accumulate historical code rows", async () => {
+    const before = await prisma.mcpAuthCode.count({
+      where: { shopId, client: { clientId } },
+    });
+    for (let i = 0; i < 5; i++) await connect();
+    const after = await prisma.mcpAuthCode.count({
+      where: { shopId, client: { clientId } },
+    });
+    // 🔴 Exactly one row survives per (user, shop, client): the current one.
+    // Unbounded growth was the other half of the stale-code problem - there is
+    // no sweep job yet, so rows that are never deleted are never removed at all.
+    expect(after).toBe(1);
+    expect(after).toBeLessThanOrEqual(Math.max(before, 1));
+  });
+
+  it("10. concurrent valid redemption still yields exactly one 200", async () => {
+    const verifier = makeVerifier();
+    const a = await authorize({ challenge: challengeFor(verifier) });
+    const send = () =>
+      request(app).post("/mcp/oauth/token").send({
+        grant_type: "authorization_code",
+        code: a.code,
+        code_verifier: verifier,
+        redirect_uri: REDIRECT,
+        client_id: clientId,
+      });
+    const [x, y] = await Promise.all([send(), send()]);
+    expect([x.status, y.status].sort()).toEqual([200, 400]);
+  });
+});
 
 describe("resource / audience binding (RFC 8707)", () => {
   it("refuses to mint a token for somebody else's resource", async () => {

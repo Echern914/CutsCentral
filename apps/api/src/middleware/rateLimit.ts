@@ -1,7 +1,7 @@
 import rateLimit, { type RateLimitRequestHandler } from "express-rate-limit";
 import type { Request, Response } from "express";
-import { timingSafeEqual } from "node:crypto";
-import { SESSION_COOKIE_NAME } from "@chairback/config";
+import { createHash, timingSafeEqual } from "node:crypto";
+import { apiEnv, SESSION_COOKIE_NAME } from "@chairback/config";
 import { PgRateStore } from "./pgRateStore.js";
 import { logger } from "../logger.js";
 import { redactUrl, requestUrl } from "../logRedaction.js";
@@ -96,8 +96,26 @@ export function publicIpKey(req: Request): string {
   return req.ip ?? "anon";
 }
 
+/**
+ * Key a limiter by the CALLER'S CREDENTIAL, hashed.
+ *
+ * 🔴 THE HASH IS NOT COSMETIC. The raw key is held in the limiter's store (a
+ * Postgres table in real environments) and appears in any store inspection or
+ * dump. Keying on the raw `Authorization` header therefore PERSISTED live
+ * bearer tokens outside the tables that are supposed to hold only hashes -
+ * `McpAccessToken` stores sha256 precisely so a database copy contains no
+ * usable credential, and the rate-limit store was quietly undoing that.
+ *
+ * 🔴 AND IT IS NOT AN OUTER BOUND. The value is chosen by the caller, so a new
+ * header is a new bucket: an attacker rotating it gets unlimited requests from
+ * one host. Measured on the merged #315: 300 requests, one IP, rotating header
+ * -> 0 rate-limited, 300 served, each performing a database token lookup. This
+ * key is for FAIR-SHARING between authenticated callers and nothing else; the
+ * bound comes from an IP-keyed limiter mounted in front of it.
+ */
 function bearerKey(req: Request): string {
-  return (req.header("Authorization") ?? req.ip ?? "anon").slice(0, 64);
+  const raw = req.header("Authorization") ?? req.ip ?? "anon";
+  return createHash("sha256").update(raw).digest("hex").slice(0, 32);
 }
 
 /**
@@ -230,6 +248,29 @@ export const mcpLimiter = make({
   windowMs: 60 * 1000,
   limit: 120,
   keyGenerator: bearerKey,
+});
+
+/**
+ * 🔴 THE OUTER BOUND on the MCP endpoint, and the one that actually stops an
+ * attacker. Mounted BEFORE `mcpLimiter` and before any authentication, so a
+ * rejected request never reaches bearer hashing or the database token lookup.
+ *
+ * Keyed with `publicIpKey`, the same proxy-aware keying every other public
+ * surface uses: a forwarded client IP is honoured ONLY when accompanied by a
+ * matching `x-cb-proxy-secret`, so a caller cannot mint fresh buckets by
+ * inventing a header. Without the secret it falls back to `req.ip`, which
+ * Express derives under `trust proxy: 1` from the platform's own hop.
+ *
+ * Set deliberately HIGHER than the per-connection limit: a shop may legitimately
+ * run several assistants, and hosted providers egress from shared addresses, so
+ * this is a ceiling on abuse rather than a fair-share rule. `mcpLimiter` does
+ * the fair-sharing underneath it.
+ */
+export const mcpIpLimiter = make({
+  name: "mcp-ip",
+  windowMs: 60 * 1000,
+  limit: apiEnv().MCP_IP_RATE_LIMIT,
+  keyGenerator: publicIpKey,
 });
 
 /** Admin endpoints: per-token, tight (expensive ops; contain a leaked token). */

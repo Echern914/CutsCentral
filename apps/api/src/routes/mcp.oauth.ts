@@ -416,28 +416,53 @@ mcpOAuthRouter.post("/authorize/approve", oauthLimiter, requireUser, async (req,
     select: { id: true },
   });
 
+  const code = mintSecret();
+
+  /* 🔴 THE PRIOR CODES FOR THIS TUPLE DIE HERE, IN THE SAME TRANSACTION AS THE
+   * REPLACEMENT.
+   *
+   * `McpConnection` is UNIQUE on (userId, shopId, clientId) and is REUSED on
+   * every re-consent, so "the connection this code minted" and "the connection
+   * that exists now" are the same row. Without this delete, an OLD code -
+   * already consumed, and never swept - stayed replayable forever: presenting it
+   * with its verifier took the replay branch and revoked whatever grant
+   * currently occupied the slot. Anyone who had ever held one historical
+   * code+verifier pair could log a barber's assistant out at will, repeatedly.
+   *
+   * CONSUMED ROWS ARE DELETED TOO, not just `consumedAt: null` ones. The
+   * unconsumed rows are the harmless case; the CONSUMED ones are the entire
+   * attack, because those are the pairs that have already been through a client
+   * and could have leaked.
+   *
+   * Same-grant replay detection is untouched: the code minted below is the only
+   * one that resolves, so presenting it twice still hits `code.consumedAt` and
+   * still revokes. A stale code now simply fails to load and gets the same
+   * generic `invalid_grant` as any other unknown code - it can no longer revoke
+   * anything.
+   */
   await prisma.$transaction([
     prisma.mcpToolGrant.deleteMany({ where: { connectionId: connection.id } }),
     prisma.mcpToolGrant.createMany({
       data: scopes.scopes.map((scope) => ({ connectionId: connection.id, scope })),
     }),
+    prisma.mcpAuthCode.deleteMany({
+      where: { userId, shopId: access.shop.id, clientId: client.id },
+    }),
+    prisma.mcpAuthCode.create({
+      data: {
+        codeHash: hashToken(code),
+        clientId: client.id,
+        userId,
+        shopId: access.shop.id,
+        codeChallenge: q.code_challenge,
+        redirectUri: q.redirect_uri,
+        resource,
+        scopes: scopes.scopes,
+        accessLevel: "READ_ONLY",
+        expiresAt: new Date(Date.now() + AUTH_CODE_TTL_MS),
+      },
+    }),
   ]);
-
-  const code = mintSecret();
-  await prisma.mcpAuthCode.create({
-    data: {
-      codeHash: hashToken(code),
-      clientId: client.id,
-      userId,
-      shopId: access.shop.id,
-      codeChallenge: q.code_challenge,
-      redirectUri: q.redirect_uri,
-      resource,
-      scopes: scopes.scopes,
-      accessLevel: "READ_ONLY",
-      expiresAt: new Date(Date.now() + AUTH_CODE_TTL_MS),
-    },
-  });
 
   await logMcpAuth({
     shopId: access.shop.id,

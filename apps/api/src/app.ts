@@ -57,6 +57,7 @@ import { requireAdminIp } from "./middleware/adminIp.js";
 import {
   adminLimiter,
   dashboardLimiter,
+  mcpIpLimiter,
   oauthLimiter,
   rewardsLimiter,
   webhookLimiter,
@@ -148,7 +149,11 @@ export function createApp(): Express {
   // The OAuth sub-router carries its own per-route limits; the MCP endpoint
   // keys its limiter on the bearer token rather than the IP (see mcpLimiter).
   app.use("/mcp/oauth", mcpOAuthRouter);
-  app.use("/mcp", mcpRouter);
+  // 🔴 ORDER IS THE FIX. The IP limiter is mounted on the path, ahead of the
+  // router, so a rejected request is answered before anything hashes a bearer
+  // or touches the database. Inside the router each route then applies
+  // `mcpLimiter` (per-connection fair-sharing) and only then `requireMcpAuth`.
+  app.use("/mcp", mcpIpLimiter, mcpRouter);
 
   app.use("/api/acuity/oauth", oauthLimiter, acuityOAuthRouter);
   app.use("/api/square/oauth", oauthLimiter, squareOAuthRouter);
