@@ -10,6 +10,7 @@ import {
   type EditContext,
 } from "./actions";
 import type { AgendaRow } from "./page";
+import { Field, Group, INPUT } from "./formkit";
 
 /** Same local alias the sibling booking forms use - the provider's own
  * `Toast` interface is a toast OBJECT and is not exported. */
@@ -496,61 +497,6 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
         </Field>
       </Group>
     </div>
-  );
-}
-
-/**
- * 16px floor on inputs — anything smaller makes iOS zoom the whole page.
- *
- * `min-w-0` alongside `w-full` so a control with a wide intrinsic size (a
- * native date or time picker, a 60-character email) can never push its
- * container past the card. A long value scrolls INSIDE the input, which is
- * what an input is for; the sheet's width is not negotiable.
- */
-const INPUT =
-  "h-11 w-full min-w-0 rounded-lg border border-subtle bg-charcoal-900 px-3 text-base text-offwhite transition-colors duration-150 ease-out placeholder:text-muted/60 focus-visible:border-gold/50";
-
-function Group({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="min-w-0 rounded-2xl border border-subtle bg-charcoal-800/40 p-3.5 sm:p-4">
-      <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-gold/80">
-        {title}
-      </h3>
-      <div className="flex min-w-0 flex-col gap-4">{children}</div>
-    </section>
-  );
-}
-
-/**
- * 🔴 `min-w-0` IS THE WHOLE FIX for the overlapping Date/Start pair. As a grid
- * item this label defaults to `min-width: auto`, which resolves to the
- * min-content width of the widest control inside it — for a native date input,
- * wider than half a phone. The item then overflows its own `minmax(0,1fr)`
- * track instead of shrinking, which is what put Start on top of Date and past
- * the card's edge. Every field carries it, not just the pair, so the next
- * two-up grid someone adds here inherits the fix.
- */
-function Field({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className="flex min-w-0 flex-col gap-1.5">
-      <span className="text-[11px] font-medium uppercase tracking-wide text-muted">
-        {label}
-      </span>
-      {children}
-      {hint && (
-        <span className="[overflow-wrap:anywhere] text-[11px] leading-snug text-muted/80">
-          {hint}
-        </span>
-      )}
-    </label>
   );
 }
 
