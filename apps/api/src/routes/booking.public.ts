@@ -268,6 +268,35 @@ bookingPublicRouter.post(
         // entry is still on the waitlist. Never an unpaid appointment.
         res.status(409).json({ error: "deposit_required" });
         return;
+      case "unavailable_external":
+        // Enforcing a mirror that cannot protect this chair. The same code the
+        // booking page gives, so a customer gets one consistent answer rather
+        // than a refusal from one entry point and silence from another.
+        res.status(409).json({ error: "slot_unavailable_external" });
+        return;
+      default: {
+        //  🔴 EXHAUSTIVENESS, AND WHY IT IS HERE.
+        //
+        // `unavailable_external` was added to ClaimResult without a case here.
+        // This switch had no default, so the handler simply ENDED - no
+        // response, no error, no log. The request hung until the client or a
+        // proxy gave up, which is worse than the 500 that change was fixing:
+        // a 500 fails fast, a hang holds a connection and shows the customer a
+        // spinner forever. Nothing caught it, because the test called
+        // claimOffer() directly and asserted the OUTCOME rather than driving
+        // the route.
+        //
+        // `never` makes the next outcome a BUILD failure instead. The runtime
+        // arm still answers, because a type assertion protects the next commit
+        // and not the one already running in production.
+        const unhandled: never = result;
+        logger.error(
+          { outcome: (unhandled as { outcome?: string })?.outcome ?? "unknown" },
+          "waitlist claim: unhandled ClaimResult outcome",
+        );
+        res.status(500).json({ error: "internal" });
+        return;
+      }
     }
   },
 );

@@ -235,6 +235,43 @@ describe("waitlist claim", () => {
     const result = await claimOffer({ token });
     expect(result.outcome).toBe("unavailable_external");
   });
+
+  it("ANSWERS on the HTTP route - it does not hang", async () => {
+    // 🔴 The test above asserts the engine's OUTCOME and stops there, which is
+    // how the route shipped with no case for it: no response was sent at all
+    // and the request hung until something timed out. Drive the real route.
+    const entry = await prisma.waitlistEntry.create({
+      data: {
+        shopId,
+        staffId: unmappedStaffId,
+        serviceId,
+        firstName: "Route",
+        lastName: "Lister",
+        phone: "+15555550115",
+        status: "CONTACTED",
+      },
+      select: { id: true },
+    });
+    const token = randomToken();
+    const startsAt = soon(300);
+    await prisma.waitlistOffer.create({
+      data: {
+        entryId: entry.id,
+        shopId,
+        staffId: unmappedStaffId,
+        serviceId,
+        tokenHash: sha256Hex(token),
+        startsAt,
+        endsAt: new Date(startsAt.getTime() + 30 * 60_000),
+        status: "OFFERED",
+        expiresAt: soon(360),
+      },
+    });
+
+    const res = await request(app).post(`/api/book/offer/${token}/claim`).send({});
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("slot_unavailable_external");
+  });
 });
 
 describe("recurring series", () => {
