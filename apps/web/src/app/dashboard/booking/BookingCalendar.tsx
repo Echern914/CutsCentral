@@ -38,6 +38,7 @@ import {
   recordWalkInAction,
   removeBlockAction,
 } from "./actions";
+import { agendaWindowOf, mergeAgendaWindow } from "./agendaMerge";
 import { AppointmentForm } from "./AppointmentForm";
 import {
   WAITLIST_BOOK_EVENT,
@@ -234,13 +235,10 @@ export function BookingCalendar({
         toast("Couldn't load that month", "error");
         return;
       }
-      // Merge new rows in (de-dupe by id, since padding weeks overlap months).
-      setAgenda((prev) => {
-        const seen = new Set(prev.map((r) => r.id));
-        const merged = [...prev];
-        for (const r of res.data!.agenda) if (!seen.has(r.id)) merged.push(r);
-        return merged;
-      });
+      // Reconcile the fetched window (padding weeks overlap months, so this
+      // both de-dupes by id and refreshes rows the previous month already had).
+      const win = agendaWindowOf(res.data, from, to);
+      setAgenda((prev) => mergeAgendaWindow(prev, res.data!.agenda, win));
       if (res.data.categories) setCategories(res.data.categories);
       setLoadedMonths((prev) => new Set(prev).add(tag));
     });
@@ -268,17 +266,31 @@ export function BookingCalendar({
     const to = new Date(end.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
     void getAgendaAction(from, to).then((res) => {
       if (!res.ok || !res.data) return;
-      const rows = res.data.agenda;
       if (res.data.categories) setCategories(res.data.categories);
-      setAgenda((prev) => {
-        const fresh = new Map(rows.map((r) => [r.id, r]));
-        const merged = prev.map((r) => fresh.get(r.id) ?? r);
-        const seen = new Set(prev.map((r) => r.id));
-        for (const r of rows) if (!seen.has(r.id)) merged.push(r);
-        return merged;
-      });
+      const win = agendaWindowOf(res.data, from, to);
+      setAgenda((prev) => mergeAgendaWindow(prev, res.data!.agenda, win));
     });
   }, [viewYear, viewMonth, refreshWaitingCount]);
+
+  /**
+   * Adopt a server re-render.
+   *
+   * `agenda` is seeded from `initial.agenda` ONCE, so before this every
+   * `router.refresh()` was thrown away: the server recomputed the whole page,
+   * handed down fresh rows, and the calendar kept showing the old ones until
+   * the 20-second poll happened to fire. That is why a block-off, a new
+   * appointment or a cancel looked like it hadn't worked for ~10 seconds on
+   * average - the toast said one thing and the calendar said another.
+   *
+   * Reconciled through the same window merge rather than replacing state
+   * outright: `initial` only covers the CURRENT month, and blowing away the
+   * other months the barber has paged to would leave them blank forever
+   * (`loadedMonths` already counts them as loaded, so nothing would refetch).
+   */
+  useEffect(() => {
+    setAgenda((prev) => mergeAgendaWindow(prev, initial.agenda, agendaWindowOf(initial)));
+    if (initial.categories) setCategories(initial.categories);
+  }, [initial]);
 
   // The waitlist board lives on another tab, and this component unmounts while
   // that tab is open - so mounting IS the moment to re-read a count the board
@@ -567,6 +579,12 @@ export function BookingCalendar({
           onClose={() => setAddAt(null)}
           onCreated={() => {
             setAddAt(null);
+            // Both, and both earn their place: `refreshAgenda` is one request
+            // and puts the new row on the calendar immediately, while
+            // `router.refresh()` re-reads the siblings this write also touches
+            // (the waitlist board, the day's server-rendered summary). The
+            // effect above is what finally lets the second one land at all.
+            refreshAgenda();
             router.refresh();
           }}
           toast={toast}
@@ -590,6 +608,7 @@ export function BookingCalendar({
           onClose={() => setWaitlistBooking(null)}
           onCreated={() => {
             setWaitlistBooking(null);
+            refreshAgenda();
             router.refresh();
           }}
           toast={toast}
@@ -604,6 +623,7 @@ export function BookingCalendar({
           onClose={() => setBlockDay(null)}
           onCreated={() => {
             setBlockDay(null);
+            refreshAgenda();
             router.refresh();
           }}
           toast={toast}

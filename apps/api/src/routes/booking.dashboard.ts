@@ -1801,6 +1801,15 @@ type VisitAgendaRow = {
   client: { firstName: string | null; lastName: string | null } | null;
 };
 
+/**
+ * Row caps for one agenda window. Named (rather than inline) because the client
+ * now RETRACTS rows this endpoint stops listing, so "did we truncate?" became a
+ * correctness question rather than a performance note: a capped answer looks
+ * identical to "those bookings are gone".
+ */
+const BOOKING_CAP = 2000;
+const BLOCK_CAP = 1000;
+
 bookingDashboardRouter.get("/agenda", async (req, res) => {
   const parsed = agendaQuerySchema.safeParse(req.query);
   if (!parsed.success) {
@@ -1829,6 +1838,10 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
   }
 
   const shopId = req.shop!.id;
+  // Set by any read below that comes back full. Reported to the client, which
+  // falls back to an additive merge when it's true - a truncated window cannot
+  // distinguish "cancelled" from "past the cap", and guessing deletes real rows.
+  let truncated = false;
   // ONE shop-scoped transaction for the whole request. The agenda used to make
   // up to nine forShop calls, and every forShop call is its own transaction -
   // BEGIN + SET ROLE + set_config + query + COMMIT, each a real DB round trip.
@@ -1896,9 +1909,10 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
   const externalBlockRows = await tx.externalBlock.findMany({
     where: { shopId, startsAt: { lte: to }, endsAt: { gte: from } },
     orderBy: { startsAt: "asc" },
-    take: 1000,
+    take: BLOCK_CAP,
     select: { id: true, startsAt: true, endsAt: true, reason: true },
   });
+  if (externalBlockRows.length >= BLOCK_CAP) truncated = true;
   const externalBlockAgenda: AgendaRow[] = externalBlockRows.map((b) => ({
     id: b.id,
     source: "block" as const,
@@ -1939,7 +1953,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       // for ~59 days) can never truncate: ascending order + a tight cap used
       // to silently eat the BACK of the window - later days rendered empty
       // and read as "sync stops partway through the month".
-      take: 2000,
+      take: BOOKING_CAP,
       select: {
         id: true,
         status: true,
@@ -1965,6 +1979,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         payment: { select: { status: true, amount: true, capturedAmount: true, refundedAmount: true } },
       },
     })) as unknown as ApptAgendaRow[];
+    if (rows.length >= BOOKING_CAP) truncated = true;
 
     // Nudge affordances, batched: which clients have a push device at all, and
     // how many nudges each appointment already used (max 2, server-enforced).
@@ -2086,9 +2101,10 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         ...(staffId ? { staffId } : {}),
       },
       orderBy: { startsAt: "asc" },
-      take: 1000,
+      take: BLOCK_CAP,
       select: { id: true, startsAt: true, endsAt: true, reason: true },
     });
+    if (blocks.length >= BLOCK_CAP) truncated = true;
     for (const b of blocks) {
       agenda.push({
         id: b.id,
@@ -2145,7 +2161,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         status: { not: "CANCELED" },
       },
       orderBy: { scheduledAt: "asc" },
-      take: 2000,
+      take: BOOKING_CAP,
       select: {
         id: true,
         status: true,
@@ -2156,6 +2172,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         client: { select: { firstName: true, lastName: true } },
       },
     })) as unknown as VisitAgendaRow[];
+    if (externalVisits.length >= BOOKING_CAP) truncated = true;
     for (const v of externalVisits) {
       agenda.push({
         id: v.id,
@@ -2207,7 +2224,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         status: { not: "CANCELED" },
       },
       orderBy: { scheduledAt: "asc" },
-      take: 2000,
+      take: BOOKING_CAP,
       select: {
         id: true,
         status: true,
@@ -2218,6 +2235,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         client: { select: { firstName: true, lastName: true } },
       },
     })) as unknown as VisitAgendaRow[];
+    if (rows.length >= BOOKING_CAP) truncated = true;
     agenda = rows.map((v) => ({
       id: v.id,
       source: "visit" as const,
@@ -2256,6 +2274,17 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
     source: shop.bookingMode === "native" ? "appointment" : "visit",
     timezone: shop.timezone,
     categories,
+    // The window this answer actually covers, AFTER the MAX_AGENDA_MS clamp
+    // above. The client reconciles a response against what it already holds,
+    // and retracting a row means "the server was asked about this slot and
+    // didn't list it" - so it has to know the real range, not the one it
+    // requested. A clamped `to` that the client assumed was honoured would
+    // silently delete every row past the clamp.
+    from: from.toISOString(),
+    to: to.toISOString(),
+    // True = this answer hit a row cap, so absence proves nothing. The client
+    // merges additively instead of retracting.
+    truncated,
   });
 });
 
