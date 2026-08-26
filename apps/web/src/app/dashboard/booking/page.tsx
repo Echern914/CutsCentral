@@ -191,6 +191,20 @@ export interface AgendaResponse {
   // Absent on a cached/older payload - the calendar treats that as "no
   // categories", falling back to the plain appointment count.
   categories?: AgendaCategory[];
+  /**
+   * The window this payload covers (ISO instants), as the API resolved it.
+   * Optional because an older cached payload predates it: without a window the
+   * calendar merges additively and never retracts, which is exactly how it
+   * behaved before - stale, but never wrongly blank.
+   */
+  from?: string;
+  to?: string;
+  /**
+   * The answer hit a server row cap, so a row's absence proves nothing. The
+   * calendar merges additively when this is set rather than retracting rows it
+   * would otherwise conclude were cancelled.
+   */
+  truncated?: boolean;
 }
 
 /** One person waiting for a spot (barber-facing). */
