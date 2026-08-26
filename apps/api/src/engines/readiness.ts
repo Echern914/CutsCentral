@@ -218,6 +218,17 @@ export interface StaffFacts {
   recipientUserId: string;
   /** True when the recipient is the owner only because no seat holds the chair. */
   recipientIsOwnerFallback: boolean;
+  /**
+   * Why this chair's Acuity calendar mapping cannot be trusted, if it cannot.
+   *
+   * DERIVED IN THE COLLECTOR, not here, because the staleness rule
+   * (`isMappingStale`) lives beside the mapping code and that module imports
+   * Prisma - this engine is deliberately pure. Passing the ANSWER keeps one
+   * implementation of the rule and this file free of a database import.
+   *
+   * null when there is nothing wrong, or when the shop is not mirroring at all.
+   */
+  acuityMappingProblem: "unmapped" | "stale" | null;
 }
 
 /**
@@ -307,6 +318,27 @@ export interface ReadinessFacts {
   receptionistEntitled: boolean;
   /** The OAuth row for the shop's chosen external booking source exists. */
   integrationConnected: boolean;
+  /**
+   * An AcuityConnection row exists.
+   *
+   * 🔑 NOT the same question as `integrationConnected`, which asks whether the
+   * shop's CHOSEN booking source is connected. A shop on ChairBack's own booking
+   * can still have Acuity connected - that is exactly the outbound-mirror case,
+   * where ChairBack owns the bookings and pushes blocks OUT to Acuity so the two
+   * calendars cannot sell the same chair twice.
+   */
+  acuityConnected: boolean;
+  /**
+   * How many live Acuity webhook subscriptions the shop holds.
+   *
+   * Zero while connected means inbound sync is DEAD: Acuity bookings never reach
+   * ChairBack, so the calendar quietly drifts and both sides can sell the same
+   * slot. This is the exact state the dotted-event bug produced, and it already
+   * had a one-click repair - it just had no way to tell anyone it was happening.
+   */
+  acuityWebhookCount: number;
+  /** OFF disables outbound mirroring entirely; OBSERVE rehearses; ENFORCE writes. */
+  acuityOutboundMode: "OFF" | "OBSERVE" | "ENFORCE";
 }
 
 /**
@@ -1096,6 +1128,78 @@ function shopItems(
         : `Booking is set to ${facts.bookingMode} but no connection is active`,
       role: "owner",
       cta: { label: "Connect booking", featureId: "integrations" },
+    }),
+
+    /* ── Acuity health ───────────────────────────────────────────────────────
+     *
+     * Both of these are about a shop whose Acuity connection EXISTS but is not
+     * doing its job. Neither could be seen from any screen before: the shop
+     * looks connected, and the damage - a chair sold twice - shows up as an
+     * angry customer rather than as an error.
+     *
+     * Both are `conditional`, not `required`: they cannot block a launch,
+     * because a shop with no Acuity at all is perfectly ready to take bookings.
+     * -----------------------------------------------------------------------*/
+
+    item({
+      id: "integration.live_sync",
+      milestone: "shop",
+      // Only meaningful for a shop whose bookings LIVE in Acuity. A native shop
+      // with Acuity connected for outbound mirroring does not depend on inbound
+      // webhooks to know its own calendar.
+      applicable: facts.bookingMode === "acuity" && facts.acuityConnected,
+      title: "Acuity changes reach ChairBack",
+      why: "Without live updates, a booking made in Acuity never arrives here - so ChairBack keeps offering a time that is already taken.",
+      klass: "conditional",
+      done: facts.acuityWebhookCount > 0,
+      evidence:
+        facts.acuityWebhookCount > 0
+          ? `${plural(facts.acuityWebhookCount, "live update")} subscribed`
+          : "Connected, but no live updates are subscribed - new Acuity bookings are not arriving",
+      role: "owner",
+      cta: { label: "Repair sync", featureId: "integrations" },
+    }),
+
+    item({
+      id: "integration.chair_mapping",
+      milestone: "shop",
+      // Outbound mirroring only. OFF means we never write to Acuity, so an
+      // unmapped chair costs nothing; OBSERVE rehearses the write and ENFORCE
+      // performs it, and both need to know which calendar a chair is.
+      // 🔴 ACTIVE chairs, not BOOKABLE ones. `chairBookable` additionally
+      // requires that a new-booking alert would really be delivered - which is
+      // the right rule for "can a customer book this chair" and the WRONG one
+      // here: the outbound mirror blocks time on Acuity for every active chair
+      // regardless of whether anybody gets a text about it. Gating on
+      // bookability would also silence this item entirely on a deployment with
+      // messaging switched off, which is exactly where an unmatched chair goes
+      // unnoticed longest.
+      applicable:
+        facts.acuityConnected &&
+        facts.bookingMode === "native" &&
+        facts.acuityOutboundMode !== "OFF" &&
+        activeStaff.length > 0,
+      title: "Every chair is matched to its Acuity calendar",
+      why: "ChairBack holds the time on the matching Acuity calendar so the same chair cannot be sold twice. A chair it cannot match is left unprotected rather than blocked on somebody else's calendar.",
+      klass: "conditional",
+      done: activeStaff.every((s) => s.acuityMappingProblem === null),
+      evidence: (() => {
+        const unmapped = activeStaff.filter((s) => s.acuityMappingProblem === "unmapped");
+        const stale = activeStaff.filter((s) => s.acuityMappingProblem === "stale");
+        if (unmapped.length === 0 && stale.length === 0) {
+          return `${plural(activeStaff.length, "chair")} matched`;
+        }
+        const parts: string[] = [];
+        if (unmapped.length > 0) parts.push(`${plural(unmapped.length, "chair")} not matched yet`);
+        // Stale means the mapping predates the CURRENT connection - a reconnect
+        // may be a different Acuity account where that calendar is someone else.
+        if (stale.length > 0) {
+          parts.push(`${plural(stale.length, "chair")} matched before the latest reconnect`);
+        }
+        return parts.join(", ");
+      })(),
+      role: "owner",
+      cta: { label: "Match chairs", featureId: "integrations" },
     }),
 
     // ----- Informational: true things a barber cannot action -----

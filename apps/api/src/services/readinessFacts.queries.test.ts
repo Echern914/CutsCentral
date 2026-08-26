@@ -110,6 +110,21 @@ describe("collectReadinessFacts round trips", () => {
     // stray forShop() call, which would push this straight past it.
     expect(transactions).toBeLessThanOrEqual(3);
     expect(selects).toBeLessThanOrEqual(16);
+
+    // 🔴 PINNED EXACTLY, not just bounded.
+    //
+    // The Acuity health items were added by WIDENING existing selects - two more
+    // columns on the Shop row, two more on each Staff row - and widening a
+    // select must never change the number of round trips. A ceiling would not
+    // have caught the mistake this guards against: reaching for
+    // `prisma.acuityConnection.findUnique()` or a per-chair mapping lookup,
+    // either of which reads correctly, passes every other test, and quietly adds
+    // a round trip to every dashboard render and every header-bell poll.
+    //
+    // If this number moves, the question is not "raise it" - it is "which query
+    // did I just add, and can it be a column instead?".
+    expect(transactions).toBe(2);
+    expect(selects).toBe(14);
   });
 
   it("does not scale its round trips with shop size", async () => {
