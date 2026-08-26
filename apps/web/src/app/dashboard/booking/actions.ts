@@ -608,6 +608,27 @@ export async function cancelAppointmentAction(id: string): Promise<Result> {
   return done(await apiSend("POST", `/api/booking/appointments/${id}/cancel`));
 }
 
+/**
+ * Undo a cancel.
+ *
+ * Narrow by design (see the route): the server refuses anything already
+ * refunded, already promoted to a Visit, outside the window, or whose slot has
+ * since been taken. So this returns the REASON rather than a bare boolean - the
+ * caller has to be able to say which of those happened, and "couldn't undo" is
+ * a useless thing to tell a barber whose slot was just claimed.
+ */
+export async function restoreAppointmentAction(
+  id: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiSend("POST", `/api/booking/appointments/${id}/restore`);
+  return { ok: res.ok, error: res.error };
+}
+
+/** Clear a cancelled / no-show row off the day view. Never a delete. */
+export async function dismissAppointmentAction(id: string): Promise<Result> {
+  return done(await apiSend("POST", `/api/booking/appointments/${id}/dismiss`));
+}
+
 export async function noShowAppointmentAction(id: string): Promise<Result> {
   return done(await apiSend("POST", `/api/booking/appointments/${id}/no-show`));
 }
