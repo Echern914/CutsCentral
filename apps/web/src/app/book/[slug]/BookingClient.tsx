@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import {
+  type MutableRefObject,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import Link from "next/link";
 import { DEMO } from "@chairback/config/demo";
 import { serviceColorHex } from "@chairback/config/constants";
@@ -28,6 +35,7 @@ import {
 import { PaymentStep } from "./PaymentStep";
 import { WaitlistForm } from "./WaitlistForm";
 import { groupsToAutoExpand } from "./autoExpand";
+import { revealElement } from "./reveal";
 
 /** One selectable time in the calendar grid, with who can serve it. */
 interface DaySlot {
@@ -341,13 +349,22 @@ export function BookingClient({ data }: { data: BookShopData }) {
   // open) and a customer's opened cards STAY open across day switches so they
   // can compare a service's times between days without re-opening it.
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  const toggleDayGroup = (id: string) =>
+  /** The "Choose a service" step, so picking a day can scroll down to it. */
+  const servicesSectionRef = useRef<HTMLElement | null>(null);
+  const toggleDayGroup = (id: string, el?: HTMLElement | null) => {
+    const opening = !expandedGroups.has(id);
     setExpandedGroups((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
+    // Opening a card pushes its times below the fold on a phone, especially for
+    // the last card in a long menu. Reveal the CARD (not the times) so its own
+    // header stays visible as the label for what just appeared. After paint:
+    // the rows don't exist yet at the moment of the tap.
+    if (opening && el) requestAnimationFrame(() => revealElement(el));
+  };
 
   // Days the calendar offers, first pass: within the booking window, on a
   // weekday anyone works at all (cheap heuristic, available instantly from the
@@ -1650,6 +1667,12 @@ export function BookingClient({ data }: { data: BookShopData }) {
               autoPickedDay.current = null;
               pendingSoonest.current = null;
               pickDay(d);
+              // Scroll to the services, which is where the answer to the tap
+              // appears. Deliberately HERE and not inside pickDay: the page
+              // auto-picks the soonest open day on load, and scrolling the
+              // customer down the page before they've touched anything would
+              // be worse than the problem this fixes.
+              requestAnimationFrame(() => revealElement(servicesSectionRef.current));
             }}
           />
         </Section>
@@ -1662,7 +1685,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
           auto-selected on load, so an opened card shows real times instantly.
           Tapping a service's time chip books it. */}
       {dayFirst && (
-        <Section title="2 · Choose a service" tour="services">
+        <Section title="2 · Choose a service" tour="services" innerRef={servicesSectionRef}>
           {(dayLoading ||
             (!dayData && !dayError && calendarDays.size > 0) ||
             // Availability still in flight. /day answers in ~1s while the
@@ -1706,7 +1729,9 @@ export function BookingClient({ data }: { data: BookShopData }) {
                   >
                     <button
                       type="button"
-                      onClick={() => toggleDayGroup(b.id)}
+                      onClick={(e) =>
+                        toggleDayGroup(b.id, e.currentTarget.parentElement)
+                      }
                       aria-expanded={open}
                       className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-white/[0.03]"
                     >
@@ -2232,6 +2257,11 @@ export function BookingClient({ data }: { data: BookShopData }) {
           title={`${detailsStepNo} · Your details`}
           back={<BackStep onClick={backToTime} />}
           focusOnMount={!demoTour}
+          // The step that mounts furthest down the page: without this, tapping
+          // a time looked like nothing happened at all. Not left to the focus
+          // move alone - that scrolls only to "nearest", which parks the
+          // heading on the bottom edge with the form still off-screen.
+          revealOnMount={!demoTour}
         >
           {/* Optional add-ons for the chosen service (a targeted slot's
               length/price are fixed, so add-ons don't apply there). */}
@@ -2431,6 +2461,8 @@ function Section({
   back,
   tour,
   focusOnMount,
+  revealOnMount,
+  innerRef,
 }: {
   title: string;
   children: React.ReactNode;
@@ -2443,15 +2475,37 @@ function Section({
    * the new step is invisible to keyboard/screen-reader users (WCAG 2.4.3).
    */
   focusOnMount?: boolean;
+  /**
+   * Scroll this step into view when it mounts.
+   *
+   * Related to focusOnMount but not the same thing, and neither replaces the
+   * other: `.focus()` happens to scroll, but only far enough to make the
+   * element visible ("nearest"), which on a step that mounts just below the
+   * fold leaves its heading pinned to the very bottom edge with the content
+   * still off-screen. This puts the top of the step at the top of the viewport,
+   * and honours reduced-motion the way the demo tour does.
+   */
+  revealOnMount?: boolean;
+  /** Lets a caller reveal this section later, when its CONTENT changes. */
+  innerRef?: MutableRefObject<HTMLElement | null>;
 }) {
   const headingRef = useRef<HTMLHeadingElement | null>(null);
+  const sectionRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (focusOnMount) headingRef.current?.focus();
+    if (revealOnMount) revealElement(sectionRef.current);
     // Mount-only: refocusing on re-render would steal focus from the form.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return (
-    <section className="mb-5" data-tour={tour}>
+    <section
+      ref={(el) => {
+        sectionRef.current = el;
+        if (innerRef) innerRef.current = el;
+      }}
+      className="mb-5"
+      data-tour={tour}
+    >
       <div className="mb-2 flex items-center justify-between gap-3">
         <h2
           ref={headingRef}
@@ -2466,6 +2520,7 @@ function Section({
     </section>
   );
 }
+
 
 /** A small "← Back" affordance for stepping back a stage in the booking wizard. */
 function BackStep({ onClick }: { onClick: () => void }) {
