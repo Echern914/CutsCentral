@@ -12,13 +12,15 @@ import { DEFAULT_SCOPES, SCOPE_LABELS, isReadOnly, parseScopes } from "@chairbac
 import {
   AUTH_CODE_TTL_MS,
   ACCESS_TOKEN_TTL_MS,
-  consumeAuthCode,
+  claimAuthCode,
   hashToken,
   isValidVerifier,
+  loadAuthCode,
   mintSecret,
   mintTokenPair,
   pkceS256,
   revokeConnection,
+  revokeForAuthCodeReplay,
   rotateRefreshToken,
   safeEqual,
 } from "../mcp/tokens.js";
@@ -53,6 +55,20 @@ import {
  * and the PKCE challenge. The token endpoint compares against THOSE, never
  * against what the client re-sends, so a client cannot widen its own grant
  * between the two calls.
+ *
+ * ── VALIDATE, THEN CLAIM ─────────────────────────────────────────────────────
+ *
+ * 🔴 The exchange checks EVERYTHING before it mutates anything. A bare
+ * authorization code is not a credential - it leaks through redirect chains,
+ * browser history and referrer headers - so consuming one on presentation would
+ * let anybody who saw it destroy a barber's in-flight authorization, and
+ * declaring replay on it would let them kill a live connection, all without ever
+ * holding the PKCE verifier. Validation first closes both.
+ *
+ * The single-use guarantee is unaffected, because it never came from the
+ * ordering: it comes from a compare-and-set on `consumedAt: null`. Exactly one
+ * concurrent redemption wins that CAS; a loser is a genuine replay and takes the
+ * revocation path, identical to a code presented twice in sequence.
  */
 export const mcpOAuthRouter: Router = Router();
 
@@ -493,48 +509,76 @@ async function handleCodeGrant(
   }
   const b = parsed.data;
 
-  // Shape-check the verifier BEFORE consuming the code, so a malformed request
-  // does not burn a legitimate code.
+  /* ── VALIDATE FIRST. NOTHING IS MUTATED IN THIS BLOCK. ────────────────────
+   *
+   * 🔴 Every refusal below returns the SAME generic `invalid_grant` and leaves
+   * the code untouched: not consumed, not marked replayed, and with no
+   * connection revoked. That matters because a bare authorization code is not a
+   * credential - it leaks through redirect chains, browser history and referrer
+   * headers - and PKCE is what proves the caller is the party that started the
+   * flow. If an unvalidated presentation could consume or revoke, anyone who
+   * merely SAW a code could destroy a barber's in-flight authorization, or kill
+   * a live connection, without ever holding the verifier.
+   *
+   * The responses are also deliberately identical to each other, so a caller
+   * cannot use the error to learn WHICH of the client, redirect_uri, resource or
+   * verifier was wrong. Rate limiting and audit still apply on the way in.
+   * -------------------------------------------------------------------------*/
+
+  // Shape check first: it is the only one that needs no database read.
   if (!isValidVerifier(b.code_verifier)) {
-    oauthError(res, 400, "invalid_grant", "code_verifier does not meet RFC 7636 requirements");
+    oauthError(res, 400, "invalid_grant", "authorization code is not valid");
     return;
   }
 
-  // Single-use claim. Reuse revokes the connection inside here.
-  const consumed = await consumeAuthCode(b.code);
-  if (!consumed.ok) {
-    oauthError(
-      res,
-      400,
-      "invalid_grant",
-      consumed.failure === "expired_grant" ? "authorization code has expired" : "authorization code is not valid",
-    );
+  const code = await loadAuthCode(b.code);
+  if (!code) {
+    oauthError(res, 400, "invalid_grant", "authorization code is not valid");
     return;
   }
-  const code = consumed.code;
+  if (code.expiresAt.getTime() <= Date.now()) {
+    // An expired code cannot be a replay - nothing can be minted from it - so
+    // this is the one refusal that says something specific. It is also useless
+    // to an attacker, who can read a clock.
+    oauthError(res, 400, "invalid_grant", "authorization code has expired");
+    return;
+  }
 
   const client = await prisma.mcpClient.findUnique({
     where: { id: code.clientId },
     select: { id: true, clientId: true, disabledAt: true },
   });
-  // The code is already spent at this point, which is correct: a mismatched
-  // client is an attack, not a retryable mistake.
-  if (!client || client.disabledAt || client.clientId !== b.client_id) {
+  if (
+    !client ||
+    client.disabledAt ||
+    client.clientId !== b.client_id ||
+    b.redirect_uri !== code.redirectUri ||
+    (b.resource !== undefined && b.resource !== code.resource) ||
+    // PKCE last, and constant-time, against the challenge frozen at consent.
+    !safeEqual(pkceS256(b.code_verifier), code.codeChallenge)
+  ) {
     oauthError(res, 400, "invalid_grant", "authorization code is not valid");
     return;
   }
-  if (b.redirect_uri !== code.redirectUri) {
-    oauthError(res, 400, "invalid_grant", "redirect_uri does not match the authorization request");
-    return;
-  }
-  if (b.resource !== undefined && b.resource !== code.resource) {
-    oauthError(res, 400, "invalid_target", "resource does not match the authorization request");
+
+  /* ── The request is now PROVEN AUTHENTIC. Only past this line may the code be
+   * consumed, or a replay declared. ----------------------------------------*/
+
+  // 🔴 Already spent, by a request that also held the verifier. Two parties have
+  // the same verifier, and the one served first may have been the attacker, so
+  // everything this grant produced dies.
+  if (code.consumedAt) {
+    await revokeForAuthCodeReplay(code);
+    oauthError(res, 400, "invalid_grant", "authorization code is not valid");
     return;
   }
 
-  // PKCE. Constant-time, against the challenge frozen at consent.
-  if (!safeEqual(pkceS256(b.code_verifier), code.codeChallenge)) {
-    oauthError(res, 400, "invalid_grant", "code_verifier does not match the code_challenge");
+  // Single-use, enforced by the database. Exactly one concurrent redemption can
+  // win; a loser is indistinguishable from a second presentation and takes the
+  // same replay path.
+  if (!(await claimAuthCode(code.id))) {
+    await revokeForAuthCodeReplay(code);
+    oauthError(res, 400, "invalid_grant", "authorization code is not valid");
     return;
   }
 

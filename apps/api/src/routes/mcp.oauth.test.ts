@@ -72,6 +72,11 @@ function challengeFor(verifier: string): string {
   return createHash("sha256").update(verifier, "ascii").digest("base64url");
 }
 
+/** A well-formed value that is not any code we ever issued. */
+function mintLikeCode(): string {
+  return randomBytes(32).toString("base64url");
+}
+
 async function registerClient(name = "Test Assistant", uris = [REDIRECT]): Promise<string> {
   const res = await request(app)
     .post("/mcp/oauth/register")
@@ -314,7 +319,7 @@ describe("authorization code + PKCE", () => {
     expect(ok.body.result.tools).toEqual([]);
   });
 
-  it("🔴 a WRONG verifier is refused, and the code is already spent", async () => {
+  it("🔴 a WRONG verifier is refused and does NOT burn the code", async () => {
     const verifier = makeVerifier();
     const a = await authorize({ challenge: challengeFor(verifier) });
     const bad = await request(app).post("/mcp/oauth/token").send({
@@ -327,16 +332,136 @@ describe("authorization code + PKCE", () => {
     expect(bad.status).toBe(400);
     expect(bad.body.error).toBe("invalid_grant");
 
-    // And the code cannot then be retried with the RIGHT verifier: it was
-    // claimed on first presentation.
-    const retry = await request(app).post("/mcp/oauth/token").send({
+    // 🔴 Nothing was mutated. A bare code leaks through redirect chains and
+    // browser history; if merely presenting one could spend it, anybody who saw
+    // it could deny a barber their authorization without holding the verifier.
+    const row = await prisma.mcpAuthCode.findUniqueOrThrow({
+      where: { codeHash: hashToken(a.code!) },
+      select: { consumedAt: true, replayDetectedAt: true },
+    });
+    expect(row.consumedAt).toBeNull();
+    expect(row.replayDetectedAt).toBeNull();
+  });
+
+  it("🔴 the legitimate client still succeeds after a wrong-verifier attempt", async () => {
+    const verifier = makeVerifier();
+    const a = await authorize({ challenge: challengeFor(verifier) });
+    const bad = await request(app).post("/mcp/oauth/token").send({
+      grant_type: "authorization_code",
+      code: a.code,
+      code_verifier: makeVerifier(),
+      redirect_uri: REDIRECT,
+      client_id: clientId,
+    });
+    expect(bad.status).toBe(400);
+
+    const good = await request(app).post("/mcp/oauth/token").send({
       grant_type: "authorization_code",
       code: a.code,
       code_verifier: verifier,
       redirect_uri: REDIRECT,
       client_id: clientId,
     });
-    expect(retry.status).toBe(400);
+    expect(good.status).toBe(200);
+    expect((await mcp(good.body.access_token)).status).toBe(200);
+  });
+
+  it("🔴 a wrong client_id, redirect_uri or resource does not consume the code", async () => {
+    const cases: { name: string; body: Record<string, unknown> }[] = [];
+    const thief = await registerClient("Test Assistant Thief");
+
+    for (const [name, override] of [
+      ["client_id", { client_id: thief }],
+      ["redirect_uri", { redirect_uri: "https://client.example/cb/callback2" }],
+      ["resource", { resource: "https://mcp.evil.example/mcp" }],
+    ] as const) {
+      cases.push({ name, body: override });
+    }
+
+    for (const c of cases) {
+      const verifier = makeVerifier();
+      const a = await authorize({ challenge: challengeFor(verifier) });
+      const res = await request(app)
+        .post("/mcp/oauth/token")
+        .send({
+          grant_type: "authorization_code",
+          code: a.code,
+          code_verifier: verifier,
+          redirect_uri: REDIRECT,
+          client_id: clientId,
+          ...c.body,
+        });
+      expect(res.status, c.name).toBe(400);
+
+      const row = await prisma.mcpAuthCode.findUniqueOrThrow({
+        where: { codeHash: hashToken(a.code!) },
+        select: { consumedAt: true, replayDetectedAt: true },
+      });
+      expect(row.consumedAt, `${c.name} consumed the code`).toBeNull();
+      expect(row.replayDetectedAt, `${c.name} declared a replay`).toBeNull();
+
+      // And the legitimate exchange still works afterwards.
+      const good = await request(app).post("/mcp/oauth/token").send({
+        grant_type: "authorization_code",
+        code: a.code,
+        code_verifier: verifier,
+        redirect_uri: REDIRECT,
+        client_id: clientId,
+      });
+      expect(good.status, `${c.name} left the code unusable`).toBe(200);
+    }
+  });
+
+  it("🔴 an invalid redemption never reveals WHICH check failed", async () => {
+    const verifier = makeVerifier();
+    const thief = await registerClient("Test Assistant Probe");
+    const bodies: Record<string, unknown>[] = [
+      { code_verifier: makeVerifier() },
+      { client_id: thief },
+      { redirect_uri: "https://client.example/cb/callback2" },
+      { code: mintLikeCode() },
+    ];
+    const seen = new Set<string>();
+    for (const override of bodies) {
+      const a = await authorize({ challenge: challengeFor(verifier) });
+      const res = await request(app).post("/mcp/oauth/token").send({
+        grant_type: "authorization_code",
+        code: a.code,
+        code_verifier: verifier,
+        redirect_uri: REDIRECT,
+        client_id: clientId,
+        ...override,
+      });
+      expect(res.status).toBe(400);
+      seen.add(JSON.stringify(res.body));
+    }
+    // One body, four causes. An attacker probing cannot tell them apart.
+    expect(seen.size, `distinguishable errors: ${[...seen].join(" | ")}`).toBe(1);
+  });
+
+  it("🔴 two concurrent VALID redemptions yield exactly one token response", async () => {
+    const verifier = makeVerifier();
+    const a = await authorize({ challenge: challengeFor(verifier) });
+    const send = () =>
+      request(app).post("/mcp/oauth/token").send({
+        grant_type: "authorization_code",
+        code: a.code,
+        code_verifier: verifier,
+        redirect_uri: REDIRECT,
+        client_id: clientId,
+      });
+
+    // Both requests validate successfully; the database CAS on `consumedAt`
+    // decides which one is real.
+    const [x, y] = await Promise.all([send(), send()]);
+    const statuses = [x.status, y.status].sort();
+    expect(statuses).toEqual([200, 400]);
+
+    const winner = x.status === 200 ? x : y;
+    expect(winner.body.access_token).toBeTruthy();
+    // The CAS loser is a genuine replay and takes the revocation path, so the
+    // winner's token is dead too - the same outcome as a sequential replay.
+    expect((await mcp(winner.body.access_token)).status).toBe(401);
   });
 
   it("🔴 REUSING a code is treated as theft: the connection dies with it", async () => {
@@ -372,6 +497,13 @@ describe("authorization code + PKCE", () => {
       select: { revokedAt: true },
     });
     expect(conn?.revokedAt).toBeTruthy();
+
+    // 🔴 And every token that grant produced is gone - not just the one we
+    // happened to hold.
+    const live = await prisma.mcpAccessToken.count({
+      where: { connection: { shopId, client: { clientId } }, revokedAt: null },
+    });
+    expect(live).toBe(0);
   });
 
   it("an EXPIRED code is refused", async () => {
@@ -615,6 +747,78 @@ describe("refresh rotation and replay", () => {
       select: { replayDetectedAt: true },
     });
     expect(replayed?.replayDetectedAt).toBeTruthy();
+  });
+
+  it("🔴 refresh replay revokes ONLY the affected connection", async () => {
+    // Same barber, same shop, two different assistants. A thief who captures
+    // one assistant's refresh token must not be able to log the other out.
+    const victimClient = clientId;
+    const bystanderClient = await registerClient("Test Assistant Bystander");
+
+    const victim = await connect();
+    const bystanderVerifier = makeVerifier();
+    const bAuth = await authorize({
+      challenge: challengeFor(bystanderVerifier),
+      clientId: bystanderClient,
+    });
+    const bystander = await request(app).post("/mcp/oauth/token").send({
+      grant_type: "authorization_code",
+      code: bAuth.code,
+      code_verifier: bystanderVerifier,
+      redirect_uri: REDIRECT,
+      client_id: bystanderClient,
+    });
+    expect(bystander.status).toBe(200);
+
+    // Rotate the victim, then replay the token it rotated away.
+    const rotated = await request(app)
+      .post("/mcp/oauth/token")
+      .send({ grant_type: "refresh_token", refresh_token: victim.refresh_token });
+    expect(rotated.status).toBe(200);
+    const replay = await request(app)
+      .post("/mcp/oauth/token")
+      .send({ grant_type: "refresh_token", refresh_token: victim.refresh_token });
+    expect(replay.status).toBe(400);
+
+    // The victim's connection is dead...
+    expect((await mcp(rotated.body.access_token)).status).toBe(401);
+    // ...and the bystander's is untouched, on the same shop and the same user.
+    expect((await mcp(bystander.body.access_token)).status).toBe(200);
+
+    const [v, b] = await Promise.all([
+      prisma.mcpConnection.findFirstOrThrow({
+        where: { shopId, client: { clientId: victimClient } },
+        select: { revokedAt: true, revokedReason: true },
+      }),
+      prisma.mcpConnection.findFirstOrThrow({
+        where: { shopId, client: { clientId: bystanderClient } },
+        select: { revokedAt: true },
+      }),
+    ]);
+    expect(v.revokedReason).toBe("replay");
+    expect(b.revokedAt).toBeNull();
+  });
+
+  it("🔴 a replay never reaches another SHOP's connection", async () => {
+    const mine = await connect();
+    const theirs = await connect({ cookie: otherCookie });
+
+    const rotated = await request(app)
+      .post("/mcp/oauth/token")
+      .send({ grant_type: "refresh_token", refresh_token: mine.refresh_token });
+    expect(rotated.status).toBe(200);
+    await request(app)
+      .post("/mcp/oauth/token")
+      .send({ grant_type: "refresh_token", refresh_token: mine.refresh_token });
+
+    expect((await mcp(rotated.body.access_token)).status).toBe(401);
+    // A different tenant entirely, same registered client.
+    expect((await mcp(theirs.access_token)).status).toBe(200);
+    const other = await prisma.mcpConnection.findFirstOrThrow({
+      where: { shopId: otherShopId, client: { clientId } },
+      select: { revokedAt: true },
+    });
+    expect(other.revokedAt).toBeNull();
   });
 
   it("the successor refresh token is also dead after a replay", async () => {

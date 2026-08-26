@@ -13,9 +13,19 @@ import { prisma, type McpAccessLevel } from "@chairback/db";
  *     minted it, and the client's memory. It is never stored, never logged and
  *     never returned again. The database holds `sha256(token)`.
  *
- *  2. An authorization code is single-use. A SECOND presentation is treated as
- *     theft (the OAuth 2.1 rule), not as a retry: the code's connection is
- *     revoked and every token descended from it dies.
+ *  2. An authorization code is single-use. A second VALIDATED presentation is
+ *     treated as theft (the OAuth 2.1 rule), not as a retry: the code's
+ *     connection is revoked and every token descended from it dies.
+ *
+ *     🔴 VALIDATED is load-bearing. The code is only consumed - and replay is
+ *     only declared - AFTER the client, redirect_uri, resource and PKCE verifier
+ *     have all checked out. Consuming first would let anyone who merely SAW the
+ *     code destroy a barber's in-flight authorization without ever proving
+ *     possession of the verifier, which is a denial-of-service handed out for
+ *     free. The single-use guarantee still comes from the database (a
+ *     compare-and-set on `consumedAt: null`), so validating first costs nothing:
+ *     a concurrent second redemption loses the CAS and is treated as the replay
+ *     it is.
  *
  *  3. A refresh token is single-use too, and rotation is mandatory. Every token
  *     descended from one authorization shares a `tokenFamily`; presenting an
@@ -436,45 +446,38 @@ export async function rotateRefreshToken(
 
 /* ─────────────────────────── authorization codes ─────────────────────────── */
 
-export type CodeResult =
-  | {
-      ok: true;
-      code: {
-        id: string;
-        clientId: string;
-        userId: string;
-        shopId: string;
-        codeChallenge: string;
-        redirectUri: string;
-        resource: string;
-        scopes: string[];
-        accessLevel: McpAccessLevel;
-      };
-    }
-  | { ok: false; failure: "invalid_grant" | "expired_grant" | "replay_detected" };
-
 /**
- * Consume an authorization code exactly once.
+ * An authorization code, read WITHOUT mutating it.
  *
- * 🔴 REUSE IS THEFT, not a retry (OAuth 2.1 §4.1.3). A code that has been
- * exchanged is revoked along with every token it produced, because the only way
- * a second party can present it is if the redirect leaked. The claim uses
- * `consumedAt: null` in the WHERE so the single-use guarantee is enforced by the
- * database rather than by a read-then-write race.
+ * 🔴 READ-ONLY BY DESIGN. The caller has to be able to check the client, the
+ * redirect_uri, the resource and PKCE *before* anything is consumed, because
+ * those checks are what separate "a legitimate client redeeming its own code"
+ * from "somebody holding a stolen code". Consuming first would let anyone who
+ * merely SAW the code (a redirect chain, a browser history entry, a referrer)
+ * destroy a barber's in-flight authorization without ever proving possession of
+ * the verifier - a denial-of-service handed out for free.
  *
- * PKCE is verified by the CALLER after this returns, against the frozen
- * `codeChallenge` - the code has to be claimed first so that a wrong verifier
- * cannot be used to probe codes repeatedly.
+ * `consumedAt` comes back so the caller can tell a first redemption from a
+ * second one, but acting on it is the caller's decision, made only after the
+ * request has been proven authentic.
  */
-export async function consumeAuthCode(
-  rawCode: string,
-  now = new Date(),
-): Promise<CodeResult> {
-  if (!rawCode || rawCode.length < 20 || rawCode.length > 512) {
-    return { ok: false, failure: "invalid_grant" };
-  }
+export interface LoadedAuthCode {
+  id: string;
+  clientId: string;
+  userId: string;
+  shopId: string;
+  codeChallenge: string;
+  redirectUri: string;
+  resource: string;
+  scopes: string[];
+  accessLevel: McpAccessLevel;
+  expiresAt: Date;
+  consumedAt: Date | null;
+}
 
-  const row = await prisma.mcpAuthCode.findUnique({
+export async function loadAuthCode(rawCode: string): Promise<LoadedAuthCode | null> {
+  if (!rawCode || rawCode.length < 20 || rawCode.length > 512) return null;
+  return prisma.mcpAuthCode.findUnique({
     where: { codeHash: hashToken(rawCode) },
     select: {
       id: true,
@@ -490,46 +493,56 @@ export async function consumeAuthCode(
       consumedAt: true,
     },
   });
-  if (!row) return { ok: false, failure: "invalid_grant" };
+}
 
-  if (row.consumedAt) {
-    await prisma.mcpAuthCode.updateMany({
-      where: { id: row.id, replayDetectedAt: null },
-      data: { replayDetectedAt: now },
-    });
-    // Kill whatever this code already minted.
-    const conn = await prisma.mcpConnection.findFirst({
-      where: { userId: row.userId, shopId: row.shopId, client: { id: row.clientId } },
-      select: { id: true },
-    });
-    if (conn) await revokeConnection(conn.id, "replay", now);
-    return { ok: false, failure: "replay_detected" };
-  }
-
-  if (row.expiresAt.getTime() <= now.getTime()) {
-    return { ok: false, failure: "expired_grant" };
-  }
-
+/**
+ * Claim a code, exactly once, via a database compare-and-set.
+ *
+ * `consumedAt: null` in the WHERE is the whole mechanism: the single-use
+ * guarantee is enforced by Postgres, not by a read-then-write in application
+ * code that two concurrent requests could interleave. Exactly one caller sees
+ * `count === 1`; every other caller sees `0` and is a genuine replay.
+ *
+ * Called ONLY after the redemption has been fully validated - see the note on
+ * `loadAuthCode`.
+ */
+export async function claimAuthCode(id: string, now = new Date()): Promise<boolean> {
   const claimed = await prisma.mcpAuthCode.updateMany({
-    where: { id: row.id, consumedAt: null },
+    where: { id, consumedAt: null },
     data: { consumedAt: now },
   });
-  if (claimed.count !== 1) {
-    return { ok: false, failure: "replay_detected" };
-  }
+  return claimed.count === 1;
+}
 
-  return {
-    ok: true,
-    code: {
-      id: row.id,
-      clientId: row.clientId,
-      userId: row.userId,
-      shopId: row.shopId,
-      codeChallenge: row.codeChallenge,
-      redirectUri: row.redirectUri,
-      resource: row.resource,
-      scopes: row.scopes,
-      accessLevel: row.accessLevel,
+/**
+ * A VALIDATED redemption arrived for a code that was already spent.
+ *
+ * 🔴 THIS IS THEFT, NOT A RETRY (OAuth 2.1 §4.1.3). Reaching here means the
+ * caller proved possession of the PKCE verifier and still presented a code that
+ * had already been exchanged - so two parties hold the same verifier, and the
+ * one we served first may well have been the attacker. Everything that code
+ * produced dies, which is the only way to be sure the thief's tokens do.
+ *
+ * Only reachable after validation, so a caller holding a bare stolen code (no
+ * verifier) can never trigger it.
+ */
+export async function revokeForAuthCodeReplay(
+  code: Pick<LoadedAuthCode, "id" | "userId" | "shopId" | "clientId">,
+  now = new Date(),
+): Promise<void> {
+  await prisma.mcpAuthCode.updateMany({
+    where: { id: code.id, replayDetectedAt: null },
+    data: { replayDetectedAt: now },
+  });
+  const conn = await prisma.mcpConnection.findUnique({
+    where: {
+      userId_shopId_clientId: {
+        userId: code.userId,
+        shopId: code.shopId,
+        clientId: code.clientId,
+      },
     },
-  };
+    select: { id: true },
+  });
+  if (conn) await revokeConnection(conn.id, "replay", now);
 }
