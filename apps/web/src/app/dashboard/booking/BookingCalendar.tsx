@@ -1766,6 +1766,7 @@ function AppointmentBlock({
     // separate chips (11h / Blocked / Unblock) crowded the right edge of every
     // band, and "how long" is a property of the block, not a second fact.
     const durSuffix = durMin !== null ? ` · ${fmtDuration(durMin)}` : "";
+    const dupeCount = row.duplicateCount ?? 1;
     return (
       <div
         className={cn(
@@ -1776,6 +1777,19 @@ function AppointmentBlock({
         <div className="flex items-center gap-2.5">
           <span className="min-w-0 truncate tabular-nums text-muted">{timeLabel}</span>
           <span className="ml-auto flex shrink-0 items-center gap-1.5">
+            {/* The external calendar holds several identical blocks for this
+                span. One band with a count, rather than N bands nobody can tell
+                apart - and it has to be VISIBLE, not silent, because the count
+                is the only sign there is more than one thing to delete over
+                there. */}
+            {dupeCount > 1 && (
+              <span
+                title={`${dupeCount} identical blocks in the connected calendar`}
+                className="rounded-full bg-charcoal-700 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-muted"
+              >
+                ×{dupeCount}
+              </span>
+            )}
             {row.syncedExternal ? (
               <span className="rounded-full bg-sky-400/15 px-2 py-0.5 text-[10px] font-medium tabular-nums text-sky-300">
                 Acuity{durSuffix}
@@ -1811,7 +1825,13 @@ function AppointmentBlock({
         {/* Say WHY there's no button here, instead of leaving a dead band that
             looks identical to a removable one. */}
         {row.syncedExternal && (
-          <p className="text-[10px] text-muted">Remove this in Acuity — it syncs back.</p>
+          <p className="text-[10px] text-muted">
+            {dupeCount > 1
+              ? // Say it plainly: the band is one row now, but deleting one
+                // block over there still leaves the others behind.
+                `${dupeCount} identical blocks in Acuity — removing one leaves the rest.`
+              : "Remove this in Acuity — it syncs back."}
+          </p>
         )}
       </div>
     );
