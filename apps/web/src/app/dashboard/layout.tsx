@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { APP_NAME } from "@chairback/config/constants";
 import { getMe } from "@/lib/me";
 import { featureLocks, getBillingSummary } from "@/lib/billing";
+import { collectNotificationSignals } from "@/lib/notificationSignals";
 import { PullToRefresh } from "@/components/PullToRefresh";
 import { ThemeSync } from "@/components/ThemeSync";
 import { PREPAINT_SCRIPT } from "@/lib/theme";
@@ -10,6 +11,7 @@ import { logoutAction } from "../(auth)/actions";
 import { DashboardNavInline, DashboardTabBar } from "./_components/DashboardNav";
 import { DemoBanner } from "./_components/DemoBanner";
 import { FeatureSearch } from "./_components/FeatureSearch";
+import { NotificationBell } from "./_components/NotificationBell";
 import { ShopSwitcher } from "./_components/ShopSwitcher";
 import { TrialBanner } from "./_components/TrialBanner";
 
@@ -51,6 +53,13 @@ export default async function DashboardLayout({
   // seats (403 on /api/billing) — see lib/billing.ts. Employee seats skip the
   // fetch entirely: it can only 403 for them.
   const locks = barberOnly ? undefined : featureLocks(await getBillingSummary());
+  // What the header bell shows. Derived per render from counts that already
+  // exist — nothing is stored, and every source fails silently, so an employee
+  // seat or a lapsed shop gets a quiet bell rather than a broken header.
+  const bellSignals = await collectNotificationSignals({
+    barberOnly,
+    premiumAiLocked: locks?.premiumAi ?? false,
+  });
   return (
     <div className="min-h-dvh">
       {/* Apply the stored theme BEFORE first paint (a light-mode barber must
@@ -72,6 +81,10 @@ export default async function DashboardLayout({
           <DashboardNavInline isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} barberOnly={barberOnly} locks={locks} />
           <div className="flex shrink-0 items-center gap-2">
             {!barberOnly && <FeatureSearch locks={locks} />}
+            {/* Shown for EVERY seat, unlike search: readiness answers for an
+                employee too, and "what needs me" is the one thing a barber-only
+                dashboard should still surface. */}
+            <NotificationBell signals={bellSignals} />
             {shops.length > 1 && (
               <ShopSwitcher shops={shops} activeShopId={activeShopId} />
             )}
