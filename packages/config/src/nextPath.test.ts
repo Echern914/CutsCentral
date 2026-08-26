@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   LOGIN_NEXT_ALLOWLIST,
+  MOBILE_HANDOFF_NEXT_ALLOWLIST,
   SIGNUP_NEXT_ALLOWLIST,
   safeNextPath,
 } from "./nextPath.js";
@@ -96,5 +97,54 @@ describe("junk input", () => {
   it("keeps an undecodable-but-relative value rather than erroring", () => {
     const next = "/team/join?token=100%";
     expect(safeNextPath(next, SIGNUP_NEXT_ALLOWLIST, FALLBACK)).toBe(next);
+  });
+});
+
+/**
+ * The native app's hand-off list. It is a CAPABILITY: whatever is on it can end
+ * a browser flow by minting a session back into the app, so these assert the
+ * boundary in both directions.
+ */
+describe("MOBILE_HANDOFF_NEXT_ALLOWLIST", () => {
+  const FB = "";
+
+  it("admits the invitation flow, token and all", () => {
+    const next = "/team/join?token=abc123";
+    expect(safeNextPath(next, MOBILE_HANDOFF_NEXT_ALLOWLIST, FB)).toBe(next);
+  });
+
+  it("admits shop creation", () => {
+    expect(safeNextPath("/onboarding", MOBILE_HANDOFF_NEXT_ALLOWLIST, FB)).toBe(
+      "/onboarding",
+    );
+  });
+
+  it("REFUSES /dashboard", () => {
+    // A code is minted at the END of a flow, once the thing the app needs
+    // exists. Allowing the dashboard would let a half-finished signup hand back
+    // a session for an account with no shop.
+    expect(safeNextPath("/dashboard", MOBILE_HANDOFF_NEXT_ALLOWLIST, FB)).toBe(FB);
+  });
+
+  it("REFUSES /admin", () => {
+    expect(safeNextPath("/admin", MOBILE_HANDOFF_NEXT_ALLOWLIST, FB)).toBe(FB);
+  });
+
+  it("refuses an absolute URL wearing an allowed path", () => {
+    expect(
+      safeNextPath("https://evil.example/onboarding", MOBILE_HANDOFF_NEXT_ALLOWLIST, FB),
+    ).toBe(FB);
+  });
+
+  it("refuses a lookalike prefix", () => {
+    expect(
+      safeNextPath("/onboarding-evil", MOBILE_HANDOFF_NEXT_ALLOWLIST, FB),
+    ).toBe(FB);
+  });
+
+  it("stays NARROWER than the login list, which admits the dashboard", () => {
+    // If these ever converge, the hand-off has quietly gained reach it was
+    // never meant to have.
+    expect([...MOBILE_HANDOFF_NEXT_ALLOWLIST]).not.toContain("/dashboard");
   });
 });

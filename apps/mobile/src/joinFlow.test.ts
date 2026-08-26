@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   base64ToBase64Url,
   buildJoinStartUrl,
+  buildSignupStartUrl,
   bytesToBase64Url,
   callbackIsForThisAttempt,
   inviteTokenFrom,
@@ -138,5 +139,44 @@ describe("base64url conversion", () => {
     const encoded = bytesToBase64Url(new Uint8Array([251, 255, 190, 0, 1, 2]));
     expect(encoded).not.toMatch(/[+/=]/);
     expect(encoded.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The NEW-OWNER door. Same three-legged PKCE flow as an invitation, aimed at
+ * shop creation instead - so these assert the two things that differ, plus the
+ * two security properties that must NOT differ.
+ */
+describe("the URL that opens the browser for a new owner", () => {
+  const url = buildSignupStartUrl({
+    webOrigin: "https://getchairback.com",
+    state: "STATE123",
+    codeChallenge: "CHALLENGE456",
+  });
+
+  it("aims at /onboarding, so the browser keeps going until a SHOP exists", () => {
+    // Handing a session back at signup would land the owner in the
+    // shop-creation wizard inside the app shell - the business registration
+    // Guideline 3.1.1 keeps out of it.
+    const params = new URLSearchParams(url.slice(url.indexOf("?") + 1));
+    expect(params.get("next")).toBe("/onboarding");
+  });
+
+  it("carries no invitation token - there is no invitation", () => {
+    expect(url).not.toContain("token=");
+  });
+
+  it("declares S256 - the plain PKCE method must never be offered", () => {
+    expect(url).toContain("code_challenge_method=S256");
+  });
+
+  it("sends the challenge and never the verifier", () => {
+    const params = new URLSearchParams(url.slice(url.indexOf("?") + 1));
+    expect(params.get("code_challenge")).toBe("CHALLENGE456");
+    expect(url).not.toContain("verifier");
+  });
+
+  it("starts at the same web entry point as the invitation flow", () => {
+    expect(url.startsWith("https://getchairback.com/auth/mobile/start?")).toBe(true);
   });
 });

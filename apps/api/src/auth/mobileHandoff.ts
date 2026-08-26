@@ -36,8 +36,20 @@ import { mintSessionToken } from "./session.js";
 /** Long enough to cross a browser dismissal, short enough to bound exposure. */
 export const MOBILE_CODE_TTL_MS = 2 * 60 * 1000;
 
-/** What a code may be minted for. Only one flow today. */
-export type MobileCodePurpose = "team_join";
+/**
+ * What a code may be minted for.
+ *
+ * Two flows, differing only in WHEN the code is minted - both hand back the
+ * same two-minute single-use ticket:
+ *   - team_join: after an invited barber's seat exists;
+ *   - new_shop:  after a new owner has signed up AND created their shop.
+ *
+ * `new_shop` waits for the shop deliberately. Handing the app a session for an
+ * account with no shop would drop that owner into the shop-creation wizard
+ * INSIDE the app shell - the business registration Guideline 3.1.1 keeps out of
+ * it, and the reason this whole hand-off exists.
+ */
+export type MobileCodePurpose = "team_join" | "new_shop";
 
 export class MobileHandoffError extends Error {
   constructor(
