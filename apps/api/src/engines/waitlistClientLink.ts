@@ -1,4 +1,5 @@
 import type { Prisma } from "@chairback/db";
+import { RANK_NONE, waitlistTierRank } from "./waitlistTierRank.js";
 
 /**
  * WaitlistEntry.clientId: the ONE rule that decides whether a waitlist entry
@@ -38,19 +39,45 @@ import type { Prisma } from "@chairback/db";
  * 🔑 NOT identity, and never treated as such. This is a best-effort join for
  * ranking and reachability. It grants nothing: it is not consent, not
  * authentication, and not permission to show one person another's history.
+ *
+ * 🔑 The link is also where the queue RANK comes from, and it is read exactly
+ * once - here, at enqueue - then stored on the row and never consulted again
+ * while the entry waits. See engines/waitlistTierRank.ts for why that is a
+ * rule rather than an oversight.
  */
-export async function resolveWaitlistClientId(
+
+/** What an enqueue needs to know about the person joining. */
+export interface WaitlistClientLink {
+  /** null when there is no number, no match, or more than one. */
+  clientId: string | null;
+  /**
+   * The queue rank to STAMP ON THE ROW, read now and never recomputed while
+   * the entry waits (engines/waitlistTierRank.ts). RANK_NONE whenever there is
+   * no link to read a tier from, which is the same rank Bronze gets.
+   */
+  tierRank: number;
+}
+
+export async function resolveWaitlistClient(
   tx: Prisma.TransactionClient,
   shopId: string,
   phone: string | null | undefined,
-): Promise<string | null> {
-  if (!phone) return null;
+): Promise<WaitlistClientLink> {
+  if (!phone) return { clientId: null, tierRank: RANK_NONE };
   const matches = await tx.client.findMany({
     where: { shopId, phone, archivedAt: null },
-    select: { id: true },
+    // The tier comes back on the SAME query, so an enqueue is still one
+    // lookup. Reading it HERE rather than at offer time is the snapshot: this
+    // is the only moment this entry ever consults a tier.
+    select: { id: true, loyaltyTier: true },
     // One is a link. Two is an ambiguity, and a third would not make it any
-    // more ambiguous — there is nothing to learn past the second row.
+    // more ambiguous - there is nothing to learn past the second row.
     take: 2,
   });
-  return matches.length === 1 ? matches[0]!.id : null;
+  const only = matches.length === 1 ? matches[0]! : null;
+  // An ambiguous number gets no link and therefore no tier, which is the right
+  // direction to be wrong in: guessing which of two live records is "the"
+  // client would hand one person the other's standing in the queue.
+  if (!only) return { clientId: null, tierRank: RANK_NONE };
+  return { clientId: only.id, tierRank: waitlistTierRank(only.loyaltyTier) };
 }

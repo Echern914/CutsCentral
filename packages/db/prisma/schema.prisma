@@ -1056,6 +1056,26 @@ model WaitlistEntry {
   clientId      String?
   client        Client?  @relation(fields: [clientId], references: [id], onDelete: SetNull)
 
+  // Where this entry sits in the offer queue. Gold first, then Silver, then
+  // everyone else; inside a rank the queue is unchanged (earliest joiner
+  // first). engines/waitlistTierRank.ts owns the numbers.
+  //
+  // 🔴 A SNAPSHOT, TAKEN ONCE, AT ENQUEUE - never recomputed while the entry
+  // waits. Reach Gold on Thursday and you keep the place you joined at on
+  // Tuesday; it counts the next time you join. This looks like staleness and
+  // is not: a rank that moved underneath a waiting queue would reorder people
+  // between one cancellation and the next for reasons nobody can see, and the
+  // same cancellation replayed an hour later would pick a different person.
+  //
+  // 🔴 NOT NULL, and that is load-bearing. The scan resumes by keyset, and
+  // `column > NULL` is NULL rather than true - one nullable ranking column
+  // and the cursor stops visiting the tail of the queue entirely, silently.
+  //
+  // The default is the no-standing rank, so every row that existed before
+  // this column ranks there and the ORDER BY degenerates to the (createdAt,
+  // id) it has always been until new joins start carrying tiers.
+  tierRank      Int      @default(30)
+
   serviceId     String? // set when joined from a full day; null for a standing join
   staffId       String? // "" / null = any provider
   preferredTime String? // freeform ("Sat morning") for standing joins
@@ -1129,8 +1149,13 @@ model WaitlistEntry {
   // The matcher asks "who is still waiting and not yet expired".
   @@index([shopId, status, expiresAt])
   // "Which entries belong to this client" - the backfill's own verification
-  // query, and the join the tier ranking will need.
+  // query, and anything that later asks what one person is waiting on.
   @@index([shopId, clientId])
+  // The offer scan, exactly: one shop's WAITING entries in (tierRank,
+  // createdAt, id) order. Prepending the rank made
+  // (shopId, status, createdAt) useless for the sort, so the scan gets its
+  // own covering index rather than a sort of every waiting entry per page.
+  @@index([shopId, status, tierRank, createdAt, id])
 }
 
 // One date/time preference on a waitlist entry. Up to five per entry (enforced

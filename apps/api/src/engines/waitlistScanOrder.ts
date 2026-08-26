@@ -40,20 +40,32 @@ import { Prisma } from "@chairback/db";
  * A column the scan ranks by. Extending this union without extending the
  * switches below is a compile error, which is the point of the union.
  */
-export type ScanField = "createdAt" | "id";
+export type ScanField = "tierRank" | "createdAt" | "id";
 
 /**
  * The ranking, first ORDER BY key first.
  *
- * Today: earliest joiner first, id breaking same-instant ties. That is the
- * order the waitlist has always used and this module changes nothing about
- * it — it only stops the resume predicate being written out by hand a second
- * time, four hundred lines away from the ORDER BY it has to match.
+ * Loyalty rank, then the queue the waitlist has always been: earliest joiner
+ * first, id breaking same-instant ties. Gold sorts to the front because Gold
+ * carries the SMALLEST number (engines/waitlistTierRank.ts) - every component
+ * here is ascending, per the rules above.
+ *
+ * 🔑 Adding `tierRank` to this line IS the ordering change. The ORDER BY, the
+ * resume predicate and the cursor all followed from it, and the walk in
+ * waitlistOffer.ts did not move at all - which is what this module was built
+ * for.
  */
-export const SCAN_ORDER: readonly ScanField[] = ["createdAt", "id"];
+export const SCAN_ORDER: readonly ScanField[] = ["tierRank", "createdAt", "id"];
 
-/** The minimum a scanned row must select for the cursor to be readable. */
+/**
+ * The minimum a scanned row must select for the cursor to be readable.
+ *
+ * 🔴 `tierRank` is NOT NULL in the database on purpose - a nullable ranking
+ * column would make the cursor drop the tail of the queue (see the NOT NULL
+ * rule above), so the type here is `number`, never `number | null`.
+ */
 export interface ScanRow {
+  tierRank: number;
   createdAt: Date;
   id: string;
 }
@@ -77,6 +89,8 @@ export interface ScanKeyPart {
 export function scanOrderBy(): Prisma.WaitlistEntryOrderByWithRelationInput[] {
   return SCAN_ORDER.map((field): Prisma.WaitlistEntryOrderByWithRelationInput => {
     switch (field) {
+      case "tierRank":
+        return { tierRank: "asc" };
       case "createdAt":
         return { createdAt: "asc" };
       case "id":
@@ -89,6 +103,8 @@ export function scanOrderBy(): Prisma.WaitlistEntryOrderByWithRelationInput[] {
 export function scanCursorFrom(row: ScanRow): ScanKeyPart[] {
   return SCAN_ORDER.map((field): ScanKeyPart => {
     switch (field) {
+      case "tierRank":
+        return { field, value: row.tierRank };
       case "createdAt":
         return { field, value: row.createdAt };
       case "id":
@@ -105,8 +121,10 @@ export function scanCursorFrom(row: ScanRow): ScanKeyPart[] {
  * is SOME position i where it equals the cursor on k1 … k(i-1) and is strictly
  * greater on ki. That is one OR arm per position:
  *
- *   (createdAt, id)  ->  createdAt > X
- *                    OR (createdAt = X AND id > Y)
+ *   (tierRank, createdAt, id)
+ *     ->  tierRank > R
+ *     OR (tierRank = R AND createdAt > X)
+ *     OR (tierRank = R AND createdAt = X AND id > Y)
  *
  * which is byte-for-byte the predicate this scan has always used. Prepending
  * a component adds an arm and lengthens the rest; nothing else moves.

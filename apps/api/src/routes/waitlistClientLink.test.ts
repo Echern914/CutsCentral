@@ -4,7 +4,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
-import { resolveWaitlistClientId } from "../engines/waitlistClientLink.js";
+import { resolveWaitlistClient } from "../engines/waitlistClientLink.js";
+import { RANK_GOLD, RANK_NONE, RANK_SILVER } from "../engines/waitlistTierRank.js";
 import { toE164 } from "../acuity/clientKey.js";
 
 /**
@@ -52,7 +53,11 @@ async function signupAndShop(name: string) {
 }
 
 /** A client in `shop` holding exactly this (already normalized) number. */
-async function makeClient(shop: string, phone: string | null, over: { archivedAt?: Date } = {}) {
+async function makeClient(
+  shop: string,
+  phone: string | null,
+  over: { archivedAt?: Date; loyaltyTier?: "BRONZE" | "SILVER" | "GOLD" } = {},
+) {
   return prisma.client.create({
     data: {
       shopId: shop,
@@ -78,6 +83,10 @@ function freshPhone(): { raw: string; stored: string } {
   return { raw, stored: toE164(raw) ?? raw };
 }
 
+/** The link half of the rule, which is all the cases below care about. */
+const linkOf = async (phone: string | null | undefined): Promise<string | null> =>
+  (await resolveWaitlistClient(prisma, shopId, phone)).clientId;
+
 beforeAll(async () => {
   const a = await signupAndShop("Link Cuts");
   cookie = a.cookie;
@@ -102,48 +111,48 @@ afterAll(async () => {
 /* The rule                                                            */
 /* ------------------------------------------------------------------ */
 
-describe("resolveWaitlistClientId", () => {
+describe("resolveWaitlistClient: the link", () => {
   it("links one unambiguous, non-archived client in the same shop", async () => {
     const { stored } = freshPhone();
     const c = await makeClient(shopId, stored);
-    await expect(resolveWaitlistClientId(prisma, shopId, stored)).resolves.toBe(c.id);
+    await expect(linkOf(stored)).resolves.toBe(c.id);
   });
 
   it("🔴 refuses when TWO live clients hold the number - a household is not a person", async () => {
     const { stored } = freshPhone();
     await makeClient(shopId, stored);
     await makeClient(shopId, stored);
-    await expect(resolveWaitlistClientId(prisma, shopId, stored)).resolves.toBeNull();
+    await expect(linkOf(stored)).resolves.toBeNull();
   });
 
   it("ignores archived clients, and links again once only one live match remains", async () => {
     const { stored } = freshPhone();
     const gone = await makeClient(shopId, stored, { archivedAt: new Date() });
     // Archived-only: nothing to link to.
-    await expect(resolveWaitlistClientId(prisma, shopId, stored)).resolves.toBeNull();
+    await expect(linkOf(stored)).resolves.toBeNull();
     // The re-added record is the one live match, and the archived duplicate
     // does not make it ambiguous.
     const live = await makeClient(shopId, stored);
-    await expect(resolveWaitlistClientId(prisma, shopId, stored)).resolves.toBe(live.id);
+    await expect(linkOf(stored)).resolves.toBe(live.id);
     expect(live.id).not.toBe(gone.id);
   });
 
   it("🔴 never crosses shops, even on an identical number", async () => {
     const { stored } = freshPhone();
     await makeClient(otherShopId, stored);
-    await expect(resolveWaitlistClientId(prisma, shopId, stored)).resolves.toBeNull();
+    await expect(linkOf(stored)).resolves.toBeNull();
   });
 
   it("no number, no link - null, empty and undefined all resolve to null", async () => {
-    await expect(resolveWaitlistClientId(prisma, shopId, null)).resolves.toBeNull();
-    await expect(resolveWaitlistClientId(prisma, shopId, "")).resolves.toBeNull();
-    await expect(resolveWaitlistClientId(prisma, shopId, undefined)).resolves.toBeNull();
+    await expect(linkOf(null)).resolves.toBeNull();
+    await expect(linkOf("")).resolves.toBeNull();
+    await expect(linkOf(undefined)).resolves.toBeNull();
   });
 
   it("does not match a client whose phone is null", async () => {
     const { stored } = freshPhone();
     await makeClient(shopId, null);
-    await expect(resolveWaitlistClientId(prisma, shopId, stored)).resolves.toBeNull();
+    await expect(linkOf(stored)).resolves.toBeNull();
   });
 });
 
@@ -285,7 +294,7 @@ describe("🔴 the migration's backfill and the runtime rule are one rule", () =
         where: { id },
         select: { phone: true, clientId: true },
       });
-      await expect(resolveWaitlistClientId(prisma, shopId, row.phone)).resolves.toBe(
+      await expect(linkOf(row.phone)).resolves.toBe(
         row.clientId,
       );
     }
@@ -297,5 +306,175 @@ describe("🔴 the migration's backfill and the runtime rule are one rule", () =
       select: { clientId: true },
     });
     expect(linked?.clientId).toBe(liveOne.id);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* The rank                                                            */
+/* ------------------------------------------------------------------ */
+
+describe("resolveWaitlistClient: the rank", () => {
+  const rankOf = async (phone: string | null | undefined): Promise<number> =>
+    (await resolveWaitlistClient(prisma, shopId, phone)).tierRank;
+
+  it("reads the linked client's tier", async () => {
+    const g = freshPhone();
+    await makeClient(shopId, g.stored, { loyaltyTier: "GOLD" });
+    await expect(rankOf(g.stored)).resolves.toBe(RANK_GOLD);
+
+    const s = freshPhone();
+    await makeClient(shopId, s.stored, { loyaltyTier: "SILVER" });
+    await expect(rankOf(s.stored)).resolves.toBe(RANK_SILVER);
+
+    const b = freshPhone();
+    await makeClient(shopId, b.stored, { loyaltyTier: "BRONZE" });
+    await expect(rankOf(b.stored)).resolves.toBe(RANK_NONE);
+  });
+
+  it("🔴 no link means no tier, whatever the reason", async () => {
+    // Every way the link can refuse ends at the same rank, because a rank
+    // taken from a client we are not sure about is worse than no rank.
+    const none = freshPhone();
+    await expect(rankOf(none.stored)).resolves.toBe(RANK_NONE); // nobody
+    await expect(rankOf(null)).resolves.toBe(RANK_NONE); // no number
+
+    const dup = freshPhone();
+    await makeClient(shopId, dup.stored, { loyaltyTier: "GOLD" });
+    await makeClient(shopId, dup.stored, { loyaltyTier: "GOLD" });
+    // Two live Gold clients on one number: still no link, so still no rank.
+    // Guessing which record is "the" client would hand one person the
+    // other's standing in the queue.
+    await expect(rankOf(dup.stored)).resolves.toBe(RANK_NONE);
+
+    const arch = freshPhone();
+    await makeClient(shopId, arch.stored, { loyaltyTier: "GOLD", archivedAt: new Date() });
+    await expect(rankOf(arch.stored)).resolves.toBe(RANK_NONE);
+
+    const cross = freshPhone();
+    await makeClient(otherShopId, cross.stored, { loyaltyTier: "GOLD" });
+    await expect(rankOf(cross.stored)).resolves.toBe(RANK_NONE);
+  });
+
+  it("a linked client the loyalty engine has not tiered yet ranks with everyone else", async () => {
+    const p = freshPhone();
+    const c = await makeClient(shopId, p.stored); // loyaltyTier null
+    const res = await resolveWaitlistClient(prisma, shopId, p.stored);
+    expect(res.clientId).toBe(c.id); // linked …
+    expect(res.tierRank).toBe(RANK_NONE); // … but no standing to rank by
+  });
+});
+
+describe("joining stamps the rank", () => {
+  it("🔴 the column DEFAULT is the no-standing rank", async () => {
+    // The migration's DEFAULT and RANK_NONE are two copies of one number, in
+    // two languages. This is the only thing that notices if they drift.
+    const e = await prisma.waitlistEntry.create({
+      data: { shopId, firstName: "Defaulted" },
+      select: { tierRank: true },
+    });
+    expect(e.tierRank).toBe(RANK_NONE);
+  });
+
+  it("public join: a Gold client's entry is stamped Gold", async () => {
+    const hit = freshPhone();
+    await makeClient(shopId, hit.stored, { loyaltyTier: "GOLD" });
+    const res = await request(app)
+      .post(`/api/page/${slug}/waitlist`)
+      .send({ firstName: "GoldJoin", phone: hit.raw });
+    expect(res.status).toBe(201);
+    const e = await prisma.waitlistEntry.findFirst({
+      where: { shopId, firstName: "GoldJoin" },
+      select: { tierRank: true },
+    });
+    expect(e?.tierRank).toBe(RANK_GOLD);
+  });
+
+  it("dashboard join: the barber entering a Silver client's number stamps Silver", async () => {
+    const hit = freshPhone();
+    await makeClient(shopId, hit.stored, { loyaltyTier: "SILVER" });
+    const res = await request(app)
+      .post("/api/dashboard/waitlist")
+      .set("Cookie", cookie)
+      .send({ firstName: "SilverCounter", phone: hit.raw });
+    expect(res.status).toBe(201);
+    const e = await prisma.waitlistEntry.findFirst({
+      where: { shopId, firstName: "SilverCounter" },
+      select: { tierRank: true },
+    });
+    expect(e?.tierRank).toBe(RANK_SILVER);
+  });
+
+  it("an unlinked join gets the no-standing rank, not a missing one", async () => {
+    const res = await request(app)
+      .post(`/api/page/${slug}/waitlist`)
+      .send({ firstName: "Stranger", email: `st-${randomToken(5)}@test.local` });
+    expect(res.status).toBe(201);
+    const e = await prisma.waitlistEntry.findFirst({
+      where: { shopId, firstName: "Stranger" },
+      select: { tierRank: true, clientId: true },
+    });
+    expect(e?.clientId).toBeNull();
+    expect(e?.tierRank).toBe(RANK_NONE);
+  });
+
+  it("🔴 THE RANK IS A SNAPSHOT: reaching Gold mid-wait does not restamp the entry", async () => {
+    // ⚠️ THIS IS NOT A STALENESS BUG. Please do not "fix" it by recomputing
+    // the rank on read or adding a sweep that refreshes it.
+    //
+    // They joined on Tuesday as a Bronze member. On Thursday their twelfth cut
+    // lands and the loyalty engine stamps them Gold. They keep the Tuesday
+    // place. Becoming Gold counts the NEXT time they join.
+    //
+    // A live join would mean the queue silently reorders itself between one
+    // freed slot and the next - the person ahead of you on Tuesday is behind
+    // you on Friday for reasons neither of you can see - and the same
+    // cancellation replayed an hour later would pick a different person.
+    const hit = freshPhone();
+    const client = await makeClient(shopId, hit.stored, { loyaltyTier: "BRONZE" });
+
+    const res = await request(app)
+      .post(`/api/page/${slug}/waitlist`)
+      .send({ firstName: "Promoted", phone: hit.raw });
+    expect(res.status).toBe(201);
+    const joined = await prisma.waitlistEntry.findFirstOrThrow({
+      where: { shopId, firstName: "Promoted" },
+      select: { id: true, tierRank: true, clientId: true },
+    });
+    expect(joined.clientId).toBe(client.id);
+    expect(joined.tierRank).toBe(RANK_NONE); // Bronze ranks with everyone else
+
+    // The loyalty engine promotes them while they are still waiting.
+    await prisma.client.update({
+      where: { id: client.id },
+      data: { loyaltyTier: "GOLD" },
+    });
+
+    // The client is Gold now …
+    await expect(
+      resolveWaitlistClient(prisma, shopId, hit.stored),
+    ).resolves.toMatchObject({ tierRank: RANK_GOLD });
+    // … and the row they are waiting on has not moved.
+    const after = await prisma.waitlistEntry.findUniqueOrThrow({
+      where: { id: joined.id },
+      select: { tierRank: true },
+    });
+    expect(after.tierRank).toBe(RANK_NONE);
+
+    // Their NEXT join is where being Gold counts. (They leave the queue first
+    // - the join fingerprint's partial unique index covers the ACTIVE
+    // statuses, so the same person cannot hold two live places at once.)
+    await prisma.waitlistEntry.update({
+      where: { id: joined.id },
+      data: { status: "REMOVED" },
+    });
+    const again = await request(app)
+      .post(`/api/page/${slug}/waitlist`)
+      .send({ firstName: "PromotedAgain", phone: hit.raw });
+    expect(again.status).toBe(201);
+    const next = await prisma.waitlistEntry.findFirstOrThrow({
+      where: { shopId, firstName: "PromotedAgain" },
+      select: { tierRank: true },
+    });
+    expect(next.tierRank).toBe(RANK_GOLD);
   });
 });
