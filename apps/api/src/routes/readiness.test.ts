@@ -548,6 +548,151 @@ describe("CTA destinations come from the registry", () => {
 
 });
 
+/**
+ * The Acuity health items, through a REAL collector against a REAL schema.
+ *
+ * The engine's rules are exercised exhaustively without a database in
+ * engines/readiness.test.ts. What is proven HERE is the part only a real row can
+ * prove: that the collector reads the columns it claims to, and that the
+ * staleness comparison is made against the CONNECTION's timestamp rather than
+ * against a clock.
+ */
+describe("Acuity health, end to end", () => {
+  let acuityShopCookie: string;
+  let acuityShopId: string;
+  let acuityStaffId: string;
+
+  beforeAll(async () => {
+    const email = `rdy-acu-${randomToken(6).toLowerCase()}@test.chairback`;
+    acuityShopCookie = await signup(email, "Acuity Owner");
+    expect(
+      (
+        await request(app)
+          .post("/api/shops")
+          .set("Cookie", acuityShopCookie)
+          .send({ name: "Acuity Cuts", smsAttested: true })
+      ).status,
+    ).toBe(201);
+    const me = await request(app).get("/api/shops/me").set("Cookie", acuityShopCookie);
+    acuityShopId = me.body.id;
+
+    const staff = await request(app)
+      .post("/api/booking/staff")
+      .set("Cookie", acuityShopCookie)
+      .send({ name: "Dre" });
+    acuityStaffId = staff.body.id;
+    const service = await request(app)
+      .post("/api/booking/services")
+      .set("Cookie", acuityShopCookie)
+      .send({ name: "Cut", durationMin: 30, price: 30, staffIds: [acuityStaffId] });
+    expect(service.status).toBe(201);
+    await request(app)
+      .put(`/api/booking/staff/${acuityStaffId}/availability`)
+      .set("Cookie", acuityShopCookie)
+      .send({ rules: [{ weekday: 1, startMin: 540, endMin: 1020 }] });
+  });
+
+  async function itemsFor(cookie: string) {
+    const res = await request(app).get("/api/readiness").set("Cookie", cookie);
+    expect(res.status).toBe(200);
+    return res.body.items as { id: string; applicable: boolean; done: boolean; evidence: string }[];
+  }
+  const pick = (items: Awaited<ReturnType<typeof itemsFor>>, id: string) =>
+    items.find((i) => i.id === id)!;
+
+  it("both items are silent for a shop with no Acuity", async () => {
+    const items = await itemsFor(acuityShopCookie);
+    expect(pick(items, "integration.live_sync").applicable).toBe(false);
+    expect(pick(items, "integration.chair_mapping").applicable).toBe(false);
+  });
+
+  it("🔴 a connected Acuity shop with no webhooks is reported as broken", async () => {
+    await prisma.acuityConnection.create({
+      data: {
+        shopId: acuityShopId,
+        acuityAccountId: "acct_rdy",
+        accessToken: "enc",
+        tokenExpiresAt: new Date("2099-01-01T00:00:00Z"),
+      },
+    });
+    await prisma.shop.update({
+      where: { id: acuityShopId },
+      data: { bookingMode: "acuity", bookingUrl: "https://x.as.me", acuityWebhookIds: [] },
+    });
+
+    const broken = pick(await itemsFor(acuityShopCookie), "integration.live_sync");
+    expect(broken.applicable).toBe(true);
+    expect(broken.done).toBe(false);
+    expect(broken.evidence).toContain("not arriving");
+
+    await prisma.shop.update({
+      where: { id: acuityShopId },
+      data: { acuityWebhookIds: ["hook_1", "hook_2"] },
+    });
+    const fixed = pick(await itemsFor(acuityShopCookie), "integration.live_sync");
+    expect(fixed.done).toBe(true);
+    expect(fixed.evidence).toContain("2 live updates");
+  });
+
+  it("🔴 an unmatched chair is reported once the shop mirrors outbound", async () => {
+    await prisma.shop.update({
+      where: { id: acuityShopId },
+      data: { bookingMode: "native", acuityOutboundMode: "ENFORCE" },
+    });
+    const unmapped = pick(await itemsFor(acuityShopCookie), "integration.chair_mapping");
+    expect(unmapped.applicable).toBe(true);
+    expect(unmapped.done).toBe(false);
+    expect(unmapped.evidence).toContain("not matched yet");
+  });
+
+  it("🔴 a mapping made BEFORE the current connection reads as stale", async () => {
+    // 🔴 Derived from `connectedAt`, never from a fresh `new Date()`. The two
+    // timestamps come from different clocks - Postgres microseconds versus a
+    // coarser JS tick - so a mapping written after the connection can still read
+    // as a millisecond before it. (That exact race is what made the acuity
+    // backfill suite fail a different test on every run.)
+    const conn = await prisma.acuityConnection.findUniqueOrThrow({
+      where: { shopId: acuityShopId },
+      select: { connectedAt: true },
+    });
+
+    await prisma.staff.update({
+      where: { id: acuityStaffId },
+      data: {
+        acuityCalendarId: "cal_1",
+        acuityCalendarMappedAt: new Date(conn.connectedAt.getTime() - 1_000),
+      },
+    });
+    const stale = pick(await itemsFor(acuityShopCookie), "integration.chair_mapping");
+    expect(stale.done).toBe(false);
+    expect(stale.evidence).toContain("before the latest reconnect");
+
+    await prisma.staff.update({
+      where: { id: acuityStaffId },
+      data: { acuityCalendarMappedAt: new Date(conn.connectedAt.getTime() + 1_000) },
+    });
+    const ok = pick(await itemsFor(acuityShopCookie), "integration.chair_mapping");
+    expect(ok.done).toBe(true);
+    expect(ok.evidence).toContain("1 chair matched");
+  });
+
+  it("neither item can block a launch", async () => {
+    const items = await itemsFor(acuityShopCookie);
+    for (const id of ["integration.live_sync", "integration.chair_mapping"]) {
+      const i = items.find((x) => x.id === id) as unknown as { blocksLaunch: boolean };
+      expect(i.blocksLaunch, id).toBe(false);
+    }
+  });
+
+  it("🔴 no Square mapping item was invented", async () => {
+    // Staff has no squareTeamMemberId - there is no per-chair Square mapping in
+    // the schema at all, so there is nothing that could be stale. This lands
+    // when #288/#289 define what a Square chair mapping IS.
+    const ids = (await itemsFor(acuityShopCookie)).map((i) => i.id);
+    expect(ids.filter((id) => /square/i.test(id))).toEqual([]);
+  });
+});
+
 describe("tenant isolation", () => {
   it("never reports another shop's data", async () => {
     const mine = await readiness(ownerCookie);

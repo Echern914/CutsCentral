@@ -57,6 +57,9 @@ function ready(over: Partial<ReadinessFacts> = {}): ReadinessFacts {
         seatLinked: false,
         recipientUserId: "user_owner",
         recipientIsOwnerFallback: true,
+        // No Acuity in these fixtures; the mapping items are exercised in
+        // their own describe block below.
+        acuityMappingProblem: null,
       },
     ],
     services: [
@@ -103,6 +106,11 @@ function ready(over: Partial<ReadinessFacts> = {}): ReadinessFacts {
     receptionistTermsAccepted: false,
     receptionistEntitled: false,
     integrationConnected: false,
+    // A shop with no Acuity at all: both Acuity health items are inapplicable
+    // and silent, which is the default every existing case below assumes.
+    acuityConnected: false,
+    acuityWebhookCount: 0,
+    acuityOutboundMode: "OFF",
     ...over,
   };
 }
@@ -123,6 +131,16 @@ const find = (r: ReadinessReport, id: string) => r.items.find((i) => i.id === id
 const EVERY_SHAPE: Partial<ReadinessFacts>[] = [
   {},
   { bookingMode: "acuity", bookingUrl: "https://x.as.me", integrationConnected: true },
+  // The two Acuity-health shapes, so the manifest below stays exhaustive rather
+  // than quietly covering fewer CTAs than it claims.
+  {
+    bookingMode: "acuity",
+    bookingUrl: "https://x.as.me",
+    integrationConnected: true,
+    acuityConnected: true,
+    acuityWebhookCount: 0,
+  },
+  { bookingMode: "native", acuityConnected: true, acuityOutboundMode: "ENFORCE" },
   { paymentsMode: "deposit", hasConnectAccount: true, depositAmountCents: null },
   { paymentsMode: "ahead", hasConnectAccount: false },
   { payDirectEnabled: true, payDirectHandleCount: 0 },
@@ -169,6 +187,8 @@ describe("readiness CTA destinations", () => {
     "improve.service_prices": "/dashboard/booking?tab=Services",
     "info.billing_access": "/dashboard/billing",
     "integration.connected": "/dashboard/booking?tab=Settings",
+    "integration.live_sync": "/dashboard/booking?tab=Settings",
+    "integration.chair_mapping": "/dashboard/booking?tab=Settings",
     "payments.connect_ready": "/dashboard/payments",
     "payments.deposit_amount": "/dashboard/payments",
     "payments.pay_direct_handle": "/dashboard/payments",
@@ -445,6 +465,146 @@ describe("external booking modes", () => {
   });
 });
 
+/**
+ * 🔴 ACUITY HEALTH — a connection that exists but is not doing its job.
+ *
+ * Neither of these could be seen from any screen before. The shop LOOKS
+ * connected; the damage shows up as a chair sold twice and an angry customer,
+ * days later. Both are conditional rather than required: a shop with no Acuity
+ * is perfectly ready to take bookings, so neither can block a launch.
+ */
+describe("Acuity live sync", () => {
+  const onAcuity = {
+    bookingMode: "acuity" as const,
+    bookingUrl: "https://x.as.me",
+    integrationConnected: true,
+    acuityConnected: true,
+  };
+
+  it("is silent for a shop that is not on Acuity", () => {
+    expect(find(build(), "integration.live_sync")!.applicable).toBe(false);
+  });
+
+  it("passes when live updates are subscribed", () => {
+    const i = find(build({ ...onAcuity, acuityWebhookCount: 3 }), "integration.live_sync")!;
+    expect(i.applicable).toBe(true);
+    expect(i.done).toBe(true);
+    expect(i.evidence).toContain("3 live updates");
+  });
+
+  it("🔴 flags a CONNECTED shop with zero webhooks — the state the dotted-event bug produced", () => {
+    const i = find(build({ ...onAcuity, acuityWebhookCount: 0 }), "integration.live_sync")!;
+    expect(i.applicable).toBe(true);
+    expect(i.done).toBe(false);
+    expect(i.evidence).toContain("not arriving");
+    // Conditional, so it never blocks a launch.
+    expect(i.blocksLaunch).toBe(false);
+  });
+
+  it("is silent when Acuity is the mode but nothing is connected", () => {
+    // That gap is `integration.connected`'s job; two items reporting the same
+    // problem twice is exactly what the one-broken-thing-one-item rule forbids.
+    const i = find(
+      build({ bookingMode: "acuity", bookingUrl: "https://x.as.me", acuityConnected: false }),
+      "integration.live_sync",
+    )!;
+    expect(i.applicable).toBe(false);
+  });
+});
+
+describe("Acuity chair mapping", () => {
+  /** A native shop mirroring OUT to Acuity - the only shape this item applies to. */
+  const mirroring = (mode: "OBSERVE" | "ENFORCE", problem: "unmapped" | "stale" | null) => ({
+    bookingMode: "native" as const,
+    acuityConnected: true,
+    acuityOutboundMode: mode,
+    staff: [
+      {
+        id: "staff_a",
+        name: "Dre",
+        active: true,
+        availabilityRuleCount: 5,
+        activeServiceLinkCount: 1,
+        bookableServiceLinkCount: 1,
+        hasPhoto: true,
+        hasBio: true,
+        seatLinked: false,
+        recipientUserId: "user_owner",
+        recipientIsOwnerFallback: true,
+        acuityMappingProblem: problem,
+      },
+    ],
+  });
+
+  it("is silent when outbound mirroring is OFF", () => {
+    // Nothing is ever written to Acuity, so an unmatched chair costs nothing.
+    const i = find(
+      build({ bookingMode: "native", acuityConnected: true, acuityOutboundMode: "OFF" }),
+      "integration.chair_mapping",
+    )!;
+    expect(i.applicable).toBe(false);
+  });
+
+  it("is silent for a shop with no Acuity at all", () => {
+    expect(find(build(), "integration.chair_mapping")!.applicable).toBe(false);
+  });
+
+  it("applies in BOTH observe and enforce", () => {
+    // OBSERVE rehearses the write and logs what it WOULD have done; a chair it
+    // cannot match makes that rehearsal a lie.
+    for (const mode of ["OBSERVE", "ENFORCE"] as const) {
+      const i = find(build(mirroring(mode, null)), "integration.chair_mapping")!;
+      expect(i.applicable, mode).toBe(true);
+      expect(i.done, mode).toBe(true);
+    }
+  });
+
+  it("🔴 flags an UNMATCHED chair", () => {
+    const i = find(build(mirroring("ENFORCE", "unmapped")), "integration.chair_mapping")!;
+    expect(i.done).toBe(false);
+    expect(i.evidence).toContain("not matched yet");
+    expect(i.blocksLaunch).toBe(false);
+  });
+
+  it("🔴 flags a STALE mapping — matched before the latest reconnect", () => {
+    // A reconnect may be a different Acuity account entirely, where the same
+    // calendar id belongs to somebody else.
+    const i = find(build(mirroring("ENFORCE", "stale")), "integration.chair_mapping")!;
+    expect(i.done).toBe(false);
+    expect(i.evidence).toContain("before the latest reconnect");
+  });
+
+  it("counts unmatched and stale chairs separately", () => {
+    const base = mirroring("ENFORCE", null);
+    const r = build({
+      ...base,
+      staff: [
+        { ...base.staff[0]!, id: "a", acuityMappingProblem: "unmapped" as const },
+        { ...base.staff[0]!, id: "b", name: "Marcus", acuityMappingProblem: "stale" as const },
+        { ...base.staff[0]!, id: "c", name: "Ana", acuityMappingProblem: null },
+      ],
+    });
+    const i = find(r, "integration.chair_mapping")!;
+    expect(i.done).toBe(false);
+    expect(i.evidence).toContain("1 chair not matched yet");
+    expect(i.evidence).toContain("1 chair matched before the latest reconnect");
+  });
+
+  it("is silent when the shop has no active chair yet", () => {
+    // A shop with no chairs has a different, louder problem already.
+    const i = find(
+      build({
+        bookingMode: "native",
+        acuityConnected: true,
+        acuityOutboundMode: "ENFORCE",
+        staff: [],
+      }),
+      "integration.chair_mapping",
+    )!;
+    expect(i.applicable).toBe(false);
+  });
+});
+
 describe("conditional features", () => {
   it("waitlist off is invisible and changes no count", () => {
     const off = build({ waitlistEnabled: false });
@@ -572,6 +732,9 @@ describe("multiple chairs", () => {
     seatLinked: false,
     recipientUserId: "user_owner",
     recipientIsOwnerFallback: true,
+    // No Acuity in these fixtures; the mapping items are exercised in
+    // their own describe block below.
+    acuityMappingProblem: null,
   };
 
   it("one complete chair is enough to launch; the other is a recommendation", () => {
@@ -677,6 +840,9 @@ describe("milestones", () => {
           seatLinked: false,
           recipientUserId: "user_owner",
           recipientIsOwnerFallback: true,
+          // No Acuity in these fixtures; the mapping items are exercised in
+          // their own describe block below.
+          acuityMappingProblem: null,
         },
       ],
     });
@@ -820,6 +986,9 @@ describe("one genuinely bookable chair (defect 1)", () => {
     seatLinked: false,
     recipientUserId: "user_owner",
     recipientIsOwnerFallback: true,
+    // No Acuity in these fixtures; the mapping items are exercised in
+    // their own describe block below.
+    acuityMappingProblem: null,
   };
   const chairBServiceNoHours = {
     ...chairAHoursNoService,

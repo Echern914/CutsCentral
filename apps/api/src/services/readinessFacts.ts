@@ -7,6 +7,7 @@ import { smsConfigured } from "../messaging/twilio.js";
 import { hasReceptionistEntitlement, receptionistConfigured } from "../receptionist/config.js";
 import { countMessagingServices } from "../ops/preflight.js";
 import { parseServiceHours } from "../engines/pricing.js";
+import { isMappingStale } from "../engines/acuityCalendarMap.js";
 import { NOTIFY_DEFAULTS } from "./barberNotify.js";
 import {
   MIN_SERVICE_MINUTES,
@@ -129,8 +130,14 @@ export async function collectReadinessFacts(
       receptionistSubscriptionStatus: true,
       aiTrialEndsAt: true,
       // integration presence, without pulling any token
-      acuity: { select: { id: true } },
+      // 🔴 WIDER SELECT, SAME QUERY. `connectedAt` is what mapping staleness is
+      // measured against, and `acuityWebhookIds` is how we know inbound sync is
+      // alive. Neither adds a round trip - they are columns on rows this
+      // collector was already reading.
+      acuity: { select: { id: true, connectedAt: true } },
       square: { select: { id: true } },
+      acuityWebhookIds: true,
+      acuityOutboundMode: true,
     },
   });
   if (!shop) return null;
@@ -143,7 +150,17 @@ export async function collectReadinessFacts(
           where: { shopId },
           orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
           // Chair identity only. No personal contact data belongs in a report.
-          select: { id: true, name: true, active: true, imageUrl: true, bio: true, userId: true },
+          // Two more columns on the same row - see the note on the shop select.
+          select: {
+            id: true,
+            name: true,
+            active: true,
+            imageUrl: true,
+            bio: true,
+            userId: true,
+            acuityCalendarId: true,
+            acuityCalendarMappedAt: true,
+          },
         }),
         tx.service.findMany({
           where: { shopId },
@@ -186,6 +203,10 @@ export async function collectReadinessFacts(
       ]);
     return { staff, services, offerings, availability, members, prefs, rewardCount, anyAppt };
   });
+
+  // Read once, used by every chair below.
+  const acuityConnected = shop.acuity !== null;
+  const acuityConnectedAt = shop.acuity?.connectedAt ?? null;
 
   const activeStaffIds = new Set(
     tenant.staff.filter((s) => s.active).map((s) => s.id),
@@ -232,6 +253,17 @@ export async function collectReadinessFacts(
       seatLinked: seatByStaffId.has(s.id),
       recipientUserId: s.userId ?? shop.ownerId,
       recipientIsOwnerFallback: s.userId === null,
+      // The ONE staleness rule (engines/acuityCalendarMap.ts), applied here
+      // rather than in the engine, which is deliberately Prisma-free. Only
+      // meaningful while the shop actually mirrors outbound; a shop with no
+      // Acuity has nothing to be stale.
+      acuityMappingProblem: !acuityConnected
+        ? null
+        : !s.acuityCalendarId
+          ? ("unmapped" as const)
+          : isMappingStale(s.acuityCalendarMappedAt, acuityConnectedAt)
+            ? ("stale" as const)
+            : null,
     };
   });
 
@@ -353,5 +385,8 @@ export async function collectReadinessFacts(
         : shop.bookingMode === "square"
           ? shop.square !== null
           : false,
+    acuityConnected,
+    acuityWebhookCount: shop.acuityWebhookIds.length,
+    acuityOutboundMode: shop.acuityOutboundMode,
   };
 }
