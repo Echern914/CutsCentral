@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveFeature } from "@chairback/config/features";
 import {
   buildBarberReadiness,
   buildReadiness,
@@ -111,6 +112,128 @@ const build = (over: Partial<ReadinessFacts> = {}, caps = CAPS) =>
 
 const blockingIds = (r: ReadinessReport) => r.blocking.map((i) => i.id).sort();
 const find = (r: ReadinessReport, id: string) => r.items.find((i) => i.id === id);
+
+/**
+ * Every item that carries a CTA, gathered across enough shop shapes that the
+ * conditional rules (external booking, payments, waitlist, requests, rewards,
+ * receptionist, lapsed billing) all turn up. A single `ready()` shop would miss
+ * half of them, and a manifest that silently covers 18 of 35 buttons is worse
+ * than none.
+ */
+const EVERY_SHAPE: Partial<ReadinessFacts>[] = [
+  {},
+  { bookingMode: "acuity", bookingUrl: "https://x.as.me", integrationConnected: true },
+  { paymentsMode: "deposit", hasConnectAccount: true, depositAmountCents: null },
+  { paymentsMode: "ahead", hasConnectAccount: false },
+  { payDirectEnabled: true, payDirectHandleCount: 0 },
+  { waitlistEnabled: true },
+  { takesRequests: true },
+  { rewardsEnabled: true },
+  { receptionistEnabled: true },
+  { hasActiveAccess: false },
+  { requireBookingApproval: true },
+  { staff: [], services: [] },
+];
+
+const ALL_ITEMS_BY_ID: Record<string, ReadinessReport["items"][number]> = {};
+for (const shape of EVERY_SHAPE) {
+  const r = build(shape);
+  for (const i of [...r.items, ...r.improve, ...r.staff.flatMap((s) => s.items)]) {
+    ALL_ITEMS_BY_ID[i.id] ??= i;
+  }
+}
+const ALL_CTA_ITEMS: Record<string, { label: string; featureId: string }> =
+  Object.fromEntries(
+    Object.entries(ALL_ITEMS_BY_ID)
+      .filter(([, i]) => i.cta)
+      .map(([id, i]) => [id, i.cta!]),
+  );
+
+/**
+ * 🔴 THE CTA DESTINATION MANIFEST.
+ *
+ * These 35 buttons stopped being hand-written routes and became registry
+ * feature ids. That migration is exactly the kind of change that moves a
+ * destination by one tab and is never noticed: six of them silently moved the
+ * first time it was attempted, including a barber's own "turn on alerts" link,
+ * which landed on a manager-only settings tab and rendered as a dead end.
+ *
+ * Every route below is the one the item pointed at BEFORE the migration, except
+ * the two marked as deliberate. Changing a line here should mean you decided to
+ * move that button - never that a mapping table drifted.
+ */
+describe("readiness CTA destinations", () => {
+  const EXPECTED: Record<string, string> = {
+    "approval.watched": "/dashboard/account",
+    "improve.other_chairs": "/dashboard/booking?tab=Staff",
+    "improve.service_prices": "/dashboard/booking?tab=Services",
+    "info.billing_access": "/dashboard/billing",
+    "integration.connected": "/dashboard/booking?tab=Settings",
+    "payments.connect_ready": "/dashboard/payments",
+    "payments.deposit_amount": "/dashboard/payments",
+    "payments.pay_direct_handle": "/dashboard/payments",
+    "payments.priced_services": "/dashboard/booking?tab=Services",
+    "policy.cancel_fee_inert": "/dashboard/payments",
+    "receptionist.ready": "/dashboard/billing",
+    "requests.alert_phone": "/dashboard/site",
+    "rewards.active_reward": "/dashboard/rewards",
+    "shop.alerts.reachable": "/dashboard/account",
+    "shop.availability.rule": "/dashboard/booking?tab=Staff",
+    "shop.bookable_chair": "/dashboard/booking?tab=Staff",
+    "shop.booking.window": "/dashboard/booking?tab=Settings",
+    "shop.booking_source": "/dashboard/booking?tab=Settings",
+    "shop.name": "/dashboard",
+    "shop.offering.pair": "/dashboard/booking?tab=Services",
+    "shop.service.active": "/dashboard/booking?tab=Services",
+    "shop.service.duration": "/dashboard/booking?tab=Services",
+    "shop.service.hours_open": "/dashboard/booking?tab=Services",
+    "shop.slug": "/dashboard/site",
+    "shop.staff.active": "/dashboard/booking?tab=Staff",
+    "shop.test_booking": "/dashboard/booking?tab=Appointments",
+    "staff.active": "/dashboard/booking?tab=Staff",
+    "staff.alerts_reachable": "/dashboard/account",
+    "staff.hours": "/dashboard/booking?tab=Staff",
+    "staff.photo_bio": "/dashboard/booking?tab=Staff",
+    "staff.seat_linked": "/dashboard/team",
+    "staff.services": "/dashboard/booking?tab=Services",
+    "waitlist.alert_phone": "/dashboard/booking?tab=Settings",
+    // Deliberate moves, both away from a stale /dashboard link:
+    "shop.preflight": "/dashboard/assistant",
+    "shop.timezone": "/dashboard/account",
+  };
+
+  it("every CTA still points where it pointed before the registry migration", () => {
+    for (const [itemId, href] of Object.entries(EXPECTED)) {
+      const entry = ALL_CTA_ITEMS[itemId];
+      expect(entry, `${itemId} no longer has a CTA`).toBeDefined();
+      const resolved = resolveFeature(entry!.featureId, { role: "OWNER" });
+      expect(resolved.ok, `${itemId} -> unresolvable "${entry!.featureId}"`).toBe(true);
+      expect(resolved.ok && resolved.href, `${itemId} moved`).toBe(href);
+    }
+  });
+
+  // The manifest has to stay exhaustive, or it quietly stops being a manifest:
+  // a CTA added later would go unpinned and could move freely.
+  it("pins every CTA the engine can emit — no new one slips in unpinned", () => {
+    const emitted = Object.keys(ALL_CTA_ITEMS).sort();
+    const pinned = Object.keys(EXPECTED).sort();
+    expect(emitted).toEqual(pinned);
+  });
+
+  // 🔴 The one that actually broke: an item a BARBER owns must send them
+  // somewhere a BARBER can go, or their own task is impossible to act on.
+  it("a barber-owned item never points at a manager-only page", () => {
+    for (const [itemId, entry] of Object.entries(ALL_CTA_ITEMS)) {
+      const item = ALL_ITEMS_BY_ID[itemId];
+      if (item?.role !== "barber") continue;
+      const asBarber = resolveFeature(entry.featureId, { role: "BARBER" });
+      expect(
+        asBarber.ok,
+        `${itemId} is the barber's own task but "${entry.featureId}" is out of their reach`,
+      ).toBe(true);
+    }
+  });
+});
 
 describe("a fully configured shop", () => {
   it("passes everything and reports 4 of 4", () => {

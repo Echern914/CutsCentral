@@ -4,9 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import {
-  FEATURE_INDEX,
-  isBillingHref,
+  visibleFeatures,
   type FeatureIndexEntry,
+  type SeatRole,
 } from "@chairback/config/features";
 import { searchFeatures } from "@chairback/config/helpMatch";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
@@ -24,18 +24,32 @@ import { PlanBadge } from "./PlanBadge";
  * synonym substring beats description substring. The index's synonyms carry
  * the vocabulary load.
  */
-export function FeatureSearch({ locks }: { locks?: FeatureLocks } = {}) {
+export function FeatureSearch({
+  locks,
+  role,
+  rewardsEnabled = true,
+}: {
+  locks?: FeatureLocks;
+  /** The seat browsing. Manager-only entries drop out for an employee. */
+  role?: SeatRole;
+  rewardsEnabled?: boolean;
+} = {}) {
   const router = useRouter();
-  // Inside the iOS app, drop the plan/billing entries ("Plan & billing", "AI
-  // receptionist") — both deep-link to /dashboard/billing, and this palette
-  // navigates with router.push (an SPA nav the native shell can't intercept),
-  // so an unfiltered entry is a back-door onto the subscription page the App
-  // Store forbids in-app (Guideline 3.1.1). `null` (pre-hydration) shows all,
-  // but the palette only opens on a tap, by which point the check has resolved.
+  // The registry decides what this seat can reach — including the 3.1.1 rule
+  // that drops every billing destination inside the native shell ("Plan &
+  // billing" and "AI receptionist" both deep-link there, and this palette
+  // navigates with router.push, an SPA nav the shell cannot intercept).
+  // `null` (pre-hydration) reads as the browser, but the palette only opens on
+  // a tap, by which point the check has resolved.
   const inApp = useIsNativeApp();
   const index = useMemo(
-    () => (inApp ? FEATURE_INDEX.filter((f) => !isBillingHref(f.href)) : FEATURE_INDEX),
-    [inApp],
+    () =>
+      visibleFeatures({
+        role,
+        inApp: inApp === true,
+        flagsOff: rewardsEnabled ? [] : ["rewardsEnabled"],
+      }),
+    [inApp, role, rewardsEnabled],
   );
   const [open, setOpen] = useState(false);
   // Portals need a DOM to target, which SSR has none of — same mounted gate the

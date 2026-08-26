@@ -11,11 +11,19 @@ describe("FEATURE_INDEX", () => {
   });
 
   it("only links to the dashboard or the demo tour", () => {
-    for (const f of FEATURE_INDEX) {
+    // Unlisted entries are the PUBLIC pages (/support, /privacy, /pricing).
+    // They exist so the help corpus can name a feature instead of typing a
+    // route, and they are deliberately absent from the palette and the More
+    // sheet - so the dashboard-only rule applies to the listed ones.
+    for (const f of FEATURE_INDEX.filter((e) => e.listed !== false)) {
       expect(
         f.href.startsWith("/dashboard") || f.href.startsWith("/demo"),
         `${f.id} href ${f.href}`,
       ).toBe(true);
+    }
+    for (const f of FEATURE_INDEX.filter((e) => e.listed === false)) {
+      expect(f.href.startsWith("/"), `${f.id} href ${f.href}`).toBe(true);
+      expect(f.href.startsWith("/dashboard"), `${f.id} is unlisted but internal`).toBe(false);
     }
   });
 
@@ -53,6 +61,10 @@ describe("FEATURE_INDEX", () => {
   it("covers every non-tab dashboard page (the More sheet is their only nav)", () => {
     const REQUIRED_HREFS = [
       "/dashboard/account",
+      // Insights left the tab bar when Assistant took the fifth slot, so the
+      // More sheet is now its ONLY nav. This line is what stops that move from
+      // quietly orphaning the page - the exact failure Inbox and Team hit.
+      "/dashboard/insights",
       "/dashboard/activity",
       "/dashboard/billing",
       "/dashboard/inbox",

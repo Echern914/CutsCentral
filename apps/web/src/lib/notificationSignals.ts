@@ -1,3 +1,4 @@
+import { resolveHref } from "@chairback/config/features";
 import { apiGet } from "./api";
 
 /**
@@ -12,7 +13,22 @@ export interface BellSignal {
   /** One line, already pluralised. Written as a thing to DO, not a category. */
   label: string;
   count: number;
+  /** Resolved from the feature registry — never a route typed here. */
   href: string;
+}
+
+/**
+ * Where a signal sends you. The bell used to point every waitlist alert at the
+ * bare calendar route, which lands on the APPOINTMENTS tab - the queue it was
+ * telling you about is one tab over. The registry knows which tab each feature
+ * lives on; this stops the bell having its own opinion.
+ *
+ * No fallback route: a signal whose destination the registry withholds is
+ * dropped instead, on the same principle as a zero count. A badge you cannot
+ * act on is worse than no badge.
+ */
+function hrefFor(featureId: string): string | null {
+  return resolveHref(featureId);
 }
 
 /**
@@ -64,22 +80,24 @@ export async function collectNotificationSignals(opts: {
   if (setup) out.push(setup);
 
   const waiting = waitlist?.ok ? (waitlist.data?.counts?.WAITING ?? 0) : 0;
-  if (waiting > 0) {
+  const waitlistHref = hrefFor("waitlist");
+  if (waiting > 0 && waitlistHref) {
     out.push({
       key: "waitlist",
       label: `${waiting} ${waiting === 1 ? "person" : "people"} waiting`,
       count: waiting,
-      href: "/dashboard/booking",
+      href: waitlistHref,
     });
   }
 
   const escalated = inbox?.ok ? (inbox.data?.escalatedCount ?? 0) : 0;
-  if (escalated > 0) {
+  const inboxHref = hrefFor("inbox");
+  if (escalated > 0 && inboxHref) {
     out.push({
       key: "inbox",
       label: `${escalated} ${escalated === 1 ? "conversation needs" : "conversations need"} a reply`,
       count: escalated,
-      href: "/dashboard/inbox",
+      href: inboxHref,
     });
   }
 
@@ -107,6 +125,8 @@ function readinessCount(data: ReadinessSummary | null): BellSignal | null {
       ? (data.incompletePersonal ?? 0)
       : (data.milestonesBlocking ?? 0);
   if (n <= 0) return null;
+  const href = hrefFor("assistant");
+  if (!href) return null;
   return {
     key: "readiness",
     label:
@@ -114,6 +134,8 @@ function readinessCount(data: ReadinessSummary | null): BellSignal | null {
         ? `${n} thing${n === 1 ? "" : "s"} left to set up`
         : `${n} step${n === 1 ? "" : "s"} before you can go live`,
     count: n,
-    href: "/dashboard",
+    // Setup now has a home of its own: the Assistant's Continue-setup card,
+    // which shows the next milestone rather than the whole eleven-item list.
+    href,
   };
 }

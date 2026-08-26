@@ -80,7 +80,13 @@ export default async function DashboardLayout({
           </Link>
           <DashboardNavInline isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} barberOnly={barberOnly} locks={locks} />
           <div className="flex shrink-0 items-center gap-2">
-            {!barberOnly && <FeatureSearch locks={locks} />}
+            {!barberOnly && (
+              <FeatureSearch
+                locks={locks}
+                role={barberOnly ? "BARBER" : "MANAGER"}
+                rewardsEnabled={rewardsEnabled}
+              />
+            )}
             {/* Shown for EVERY seat, unlike search: readiness answers for an
                 employee too, and "what needs me" is the one thing a barber-only
                 dashboard should still surface. */}
@@ -135,14 +141,14 @@ export default async function DashboardLayout({
       {/* Phones scroll under the floating tab pill, so the last card needs
           clearance or it sits permanently behind it. The pill is ~3.6rem tall
           and floats 0.625rem above the home-indicator inset, so budget a little
-          over the sum; from `sm` up the pill is hidden and no padding applies. */}
+          over the sum; from `sm` up the pill is hidden and no padding applies.
+
+          Applies to EVERY seat now. An employee used to get no tab bar and so
+          no padding; they get Home + Assistant, so without this their last card
+          would sit behind the pill. */}
       <div
         className="sm:!pb-0"
-        style={{
-          paddingBottom: barberOnly
-            ? undefined
-            : "calc(5.5rem + env(safe-area-inset-bottom))",
-        }}
+        style={{ paddingBottom: "calc(5.5rem + env(safe-area-inset-bottom))" }}
       >
         {children}
       </div>

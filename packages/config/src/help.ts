@@ -73,8 +73,18 @@ export interface HelpAnswer {
    */
   primaryFor?: string[];
   category: HelpCategoryId;
-  /** Optional deep link rendered as a button under the answer. */
-  action?: { label: string; href: string };
+  /**
+   * Optional destination rendered as a button under the answer.
+   *
+   * 🔴 A FEATURE ID, never a route. The corpus used to carry 72 hand-written
+   * hrefs, and they drifted from the feature index they were duplicating -
+   * "how do I connect Acuity" and the index disagreed about which booking tab
+   * the connect card lives on, and only one of them was right. Naming the
+   * feature also makes the button role-aware for free: `resolveFeature` simply
+   * refuses for a seat that cannot open it, instead of rendering a link that
+   * 403s.
+   */
+  action?: { label: string; featureId: string };
   /**
    * Quotes a plan price or steers to the subscription flow — filtered out of
    * the corpus inside the native app (App Store Guideline 3.1.1), the same way
@@ -103,7 +113,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     a: "Four things, about fifteen minutes:\n\n1. Add your services with prices and durations.\n2. Set the hours you take appointments.\n3. Add any other barbers in the shop.\n4. Share your booking link.\n\nEverything else — punch cards, reminders, your public page — is already on and working the moment your first appointment lands.",
     keywords: ["set up", "setup", "start", "begin", "onboard", "new", "first steps", "getting started"],
     category: "start",
-    action: { label: "Open booking setup", href: "/dashboard/booking" },
+    action: { label: "Open booking setup", featureId: "online-booking" },
   },
   {
     id: "clients-need-app",
@@ -118,7 +128,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     a: "Your public page is your booking link — it's on your Shop page settings, ready to copy.\n\nPut it in your Instagram bio, your Google listing, and your text signature. It's the one link that does everything: services, prices, live openings, and booking.",
     keywords: ["link", "url", "share", "instagram bio", "my page", "booking link", "where do clients book"],
     category: "start",
-    action: { label: "Open Shop page", href: "/dashboard/site" },
+    action: { label: "Open Shop page", featureId: "mini-site" },
   },
   {
     id: "no-acuity",
@@ -133,7 +143,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     a: "Yes. If you connect Acuity or Square, your past appointments backfill automatically and those clients land in your client book with their history intact.\n\nIf you're coming from paper or a phone, add them from the client book — name and number is enough to start.",
     keywords: ["import", "existing clients", "migrate", "bring over", "transfer", "upload", "csv", "backfill"],
     category: "start",
-    action: { label: "Open client book", href: "/dashboard/clients" },
+    action: { label: "Open client book", featureId: "clients" },
   },
   {
     id: "which-industries",
@@ -150,7 +160,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     a: "Clients open your page, pick a service, pick a barber, and pick from the times you're actually free. The slot is held the moment they confirm, and it disappears for everyone else immediately — no double bookings.\n\nThey get a confirmation right away, then automatic reminders before the appointment.",
     keywords: ["online booking", "how does booking work", "book online", "appointments", "schedule"],
     category: "booking",
-    action: { label: "Open booking", href: "/dashboard/booking" },
+    action: { label: "Open booking", featureId: "online-booking" },
   },
   {
     id: "set-hours",
@@ -162,7 +172,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
       "set availability", "days off", "opening times",
     ],
     category: "booking",
-    action: { label: "Open services", href: "/dashboard/booking?tab=Services" },
+    action: { label: "Open services", featureId: "services" },
   },
   {
     id: "add-services",
@@ -173,7 +183,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
       "cost of cut", "how long", "haircut", "takes", "minutes", "length",
     ],
     category: "booking",
-    action: { label: "Open services", href: "/dashboard/booking?tab=Services" },
+    action: { label: "Open services", featureId: "services" },
   },
   {
     id: "add-staff",
@@ -189,7 +199,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     // happened to list the word.
     primaryFor: ["barber"],
     category: "booking",
-    action: { label: "Open staff", href: "/dashboard/booking?tab=Staff" },
+    action: { label: "Open staff", featureId: "staff" },
   },
   {
     id: "time-off",
@@ -197,7 +207,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     a: "Block the time on your agenda and it stops being bookable — it shows as a blocked span on the day so you can see exactly what's held.\n\nIf your Acuity calendar has blocked time on it, that syncs across too, so you only have to block it in one place.",
     keywords: ["block", "time off", "vacation", "day off", "holiday", "lunch", "break", "unavailable", "close"],
     category: "booking",
-    action: { label: "Open agenda", href: "/dashboard/booking" },
+    action: { label: "Open agenda", featureId: "online-booking" },
   },
   {
     id: "approval-mode",
@@ -205,7 +215,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     a: "Yes. Turn on request-before-booking and a new booking holds the slot as pending until you approve it — so nobody lands in your chair without you saying yes first.\n\nThe slot stays reserved while it's pending, so you're not racing anyone to it.",
     keywords: ["approve", "approval", "pending", "screen clients", "confirm first", "request before booking", "vet"],
     category: "booking",
-    action: { label: "Open booking settings", href: "/dashboard/booking?tab=Settings" },
+    action: { label: "Open booking settings", featureId: "booking-approval" },
   },
   {
     id: "recurring",
@@ -213,7 +223,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     a: "Yes. Book a client's every-N-weeks slot once and the whole series goes on the calendar in one shot.\n\nYou can edit the series later, or change a single date in it without touching the rest.",
     keywords: ["recurring", "repeat", "every 2 weeks", "standing", "regular", "series", "weekly", "biweekly"],
     category: "booking",
-    action: { label: "Open booking", href: "/dashboard/booking" },
+    action: { label: "Open booking", featureId: "online-booking" },
   },
   {
     id: "waitlist",
@@ -221,7 +231,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     a: "Full days feed a waitlist instead of turning people away. When a slot frees up — a cancellation, a moved appointment — the queue gets pinged automatically.\n\nThat's usually where a cancelled Saturday gets refilled before you've even noticed it opened.",
     keywords: ["waitlist", "wait list", "fully booked", "full", "cancellation", "standby", "sold out", "no slots"],
     category: "booking",
-    action: { label: "Open booking settings", href: "/dashboard/booking?tab=Settings" },
+    action: { label: "Open booking settings", featureId: "waitlist" },
   },
   {
     id: "addons",
@@ -229,7 +239,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     a: "Yes. Set up add-ons — a hot towel, a beard trim, a wash — and clients tack them on while booking. The extra time and the extra money both land on the appointment.\n\nWhen the schedule has room for it, the add-on is offered; when it doesn't, it isn't.",
     keywords: ["add on", "addon", "extras", "upsell", "hot towel", "beard", "wash", "upgrade"],
     category: "booking",
-    action: { label: "Open services", href: "/dashboard/booking?tab=Services" },
+    action: { label: "Open services", featureId: "addons" },
   },
   {
     id: "targeted-slots",
@@ -237,7 +247,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     a: "Yes — special-priced slots. Publish a specific time at its own price (a late-night cut, a model rate, a quiet-Tuesday special) and it shows up badged in the picker.\n\nYou can set them as a weekly schedule with start and end times, or as one-off dates, and edit either later.",
     keywords: ["special price", "targeted slot", "flash", "late night", "model rate", "discount slot", "one off", "deal slot"],
     category: "booking",
-    action: { label: "Open services", href: "/dashboard/booking?tab=Services" },
+    action: { label: "Open services", featureId: "targeted-slots" },
   },
   {
     id: "reminders",
@@ -245,7 +255,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     a: "Automatically. A confirmation when they book, then reminders 24 hours and 2 hours before the appointment. You don't do anything.\n\nThat pair is the single biggest thing you can do about no-shows.",
     keywords: ["reminder", "no show", "noshow", "confirmation", "notify", "forget", "24 hour", "text before"],
     category: "booking",
-    action: { label: "Open booking settings", href: "/dashboard/booking?tab=Settings" },
+    action: { label: "Open booking settings", featureId: "reminders" },
   },
   {
     id: "check-in",
@@ -253,7 +263,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     a: "Yes. They tap \"on my way\" once before the cut and you see their live status right on the agenda — so you know who's en route, who's arrived, and who's running late before they walk in.",
     keywords: ["check in", "on my way", "eta", "running late", "arrived", "en route", "status"],
     category: "booking",
-    action: { label: "Open agenda", href: "/dashboard/booking" },
+    action: { label: "Open agenda", featureId: "online-booking" },
   },
   {
     id: "cancel-reschedule",
@@ -265,7 +275,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
       "change a booking", "edit booking",
     ],
     category: "booking",
-    action: { label: "Open agenda", href: "/dashboard/booking" },
+    action: { label: "Open agenda", featureId: "online-booking" },
   },
   {
     id: "double-booking",
@@ -286,7 +296,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     primaryFor: ["price", "cost", "pricing"],
     category: "money",
     hidesInApp: true,
-    action: { label: "See plans", href: "/pricing" },
+    action: { label: "See plans", featureId: "pricing" },
   },
   {
     id: "whats-free",
@@ -334,7 +344,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     a: "Two ways, and you can run both:\n\nCard and Apple Pay at booking — money goes straight into your own Stripe account, so payouts land in your bank on Stripe's normal schedule. Good for deposits and for cutting no-shows.\n\nOr show your Zelle, Venmo, or Cash App handle on the confirmation and get paid direct, with no processing fees at all.",
     keywords: ["payment", "get paid", "stripe", "apple pay", "card", "deposit", "prepay", "payout", "zelle", "venmo", "cash app", "money"],
     category: "money",
-    action: { label: "Open payments", href: "/dashboard/payments" },
+    action: { label: "Open payments", featureId: "pay-ahead" },
   },
   {
     id: "when-paid-out",
@@ -342,7 +352,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     a: "Card payments go into your own Stripe account, not ours — we never hold your money — so payouts follow Stripe's schedule for your account, typically a couple of business days.\n\nZelle, Venmo, and Cash App are direct between you and the client, so that's instant and fee-free.",
     keywords: ["payout", "when do i get paid", "bank", "deposit time", "settlement", "transfer", "hold my money"],
     category: "money",
-    action: { label: "Open payments", href: "/dashboard/payments" },
+    action: { label: "Open payments", featureId: "pay-ahead" },
   },
   {
     id: "cancel-subscription",
@@ -351,7 +361,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     keywords: ["cancel", "unsubscribe", "stop paying", "downgrade", "end subscription", "quit", "cancel plan"],
     category: "money",
     hidesInApp: true,
-    action: { label: "Open billing", href: "/dashboard/billing" },
+    action: { label: "Open billing", featureId: "billing" },
   },
   {
     id: "change-card",
@@ -360,7 +370,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     keywords: ["card", "update card", "payment method", "credit card", "expired", "invoice", "receipt", "billing"],
     category: "money",
     hidesInApp: true,
-    action: { label: "Open billing", href: "/dashboard/billing" },
+    action: { label: "Open billing", featureId: "billing" },
   },
   {
     id: "billing-problem",
@@ -378,7 +388,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     a: "Automatically. Every completed visit punches the client's card — you don't hand out anything, and they don't carry anything.\n\nThey see their card on a private rewards page you text them, and when they hit the threshold the reward redeems right at the chair.",
     keywords: ["punch card", "loyalty", "stamps", "punches", "rewards", "free cut", "card"],
     category: "clients",
-    action: { label: "Open rewards", href: "/dashboard/rewards" },
+    action: { label: "Open rewards", featureId: "punch-cards" },
   },
   {
     id: "what-counts-punch",
@@ -386,7 +396,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     a: "Completed appointments — nothing else. Cancellations and no-shows never earn punches, so the cards stay honest.\n\nIf you ever need to correct one, you can adjust a client's balance from their profile in the client book.",
     keywords: ["counts", "what earns", "punch rules", "no show punch", "cancellation", "adjust balance", "fix punches"],
     category: "clients",
-    action: { label: "Open client book", href: "/dashboard/clients" },
+    action: { label: "Open client book", featureId: "clients" },
   },
   {
     id: "reward-threshold",
@@ -394,7 +404,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     a: `Yes — the threshold and what the reward actually is are both yours to set. New shops start at ${DEFAULTS.rewardThreshold} visits for a ${DEFAULTS.rewardLabel.toLowerCase()}, and you can change either any time.\n\nYou can also run more than one card type, including invite-only VIP cards for your best clients.`,
     keywords: ["threshold", "how many visits", "change reward", "10 visits", "reward menu", "free cut after"],
     category: "clients",
-    action: { label: "Open rewards", href: "/dashboard/rewards" },
+    action: { label: "Open rewards", featureId: "punch-cards" },
   },
   {
     id: "vip-cards",
@@ -402,7 +412,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     a: "Extra card types on top of your standard punch card — including invite-only VIP cards you hand to your best clients only.\n\nThere are also status tiers: clients climb Bronze → Silver → Gold on lifetime visits, automatically.",
     keywords: ["vip", "exclusive", "invite only", "tiers", "bronze", "silver", "gold", "status", "member"],
     category: "clients",
-    action: { label: "Open rewards", href: "/dashboard/rewards" },
+    action: { label: "Open rewards", featureId: "vip-cards" },
   },
   {
     id: "nudges",
@@ -410,7 +420,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     a: "ChairBack watches how often each client normally comes in. When someone goes quiet past their own rhythm, they get an automatic \"time to rebook\" text or push — with a link straight to your booking page.\n\nIt's per-client, not a blanket blast, which is why it reads as your shop noticing rather than marketing.",
     keywords: ["nudge", "win back", "winback", "lapsed", "overdue", "come back", "retention", "drifting", "automatic text"],
     category: "clients",
-    action: { label: "Open nudges", href: "/dashboard/nudges" },
+    action: { label: "Open nudges", featureId: "rebook-nudges" },
   },
   {
     id: "promotions",
@@ -418,7 +428,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     a: "Set up a promo and it shows on your public page — and you can text it out to the clients you choose.\n\nGood for filling a specific dead window: a slow Tuesday, a new barber's first month, a holiday push.",
     keywords: ["promo", "promotion", "deal", "special", "discount", "sale", "offer", "blast", "campaign"],
     category: "clients",
-    action: { label: "Open promotions", href: "/dashboard/promotions" },
+    action: { label: "Open promotions", featureId: "promotions" },
   },
   {
     id: "reviews",
@@ -426,7 +436,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     a: "Clients leave reviews on your public page, and you approve what shows. Nothing goes live without you.",
     keywords: ["review", "rating", "stars", "testimonial", "feedback", "google review"],
     category: "clients",
-    action: { label: "Open reviews", href: "/dashboard/reviews" },
+    action: { label: "Open reviews", featureId: "reviews" },
   },
   {
     id: "referrals",
@@ -435,7 +445,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     keywords: ["referral", "refer", "refer a friend", "affiliate", "free month", "invite barber", "share link"],
     category: "clients",
     hidesInApp: true,
-    action: { label: "Open referrals", href: "/dashboard/referrals" },
+    action: { label: "Open referrals", featureId: "referrals" },
   },
   {
     id: "own-my-list",
@@ -443,7 +453,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     a: "Completely. It's your list, and you can export it whenever you want — no lock-in, no holding your contacts hostage if you leave.\n\nThat's deliberate: the whole point is that the relationship is yours, not ours.",
     keywords: ["own", "export", "my clients", "download list", "csv", "leave", "lock in", "take my data"],
     category: "clients",
-    action: { label: "Open client book", href: "/dashboard/clients" },
+    action: { label: "Open client book", featureId: "clients" },
   },
   {
     id: "insights",
@@ -455,7 +465,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "last month", "profit", "much did i make", "busy", "utilization",
     ],
     category: "clients",
-    action: { label: "Open insights", href: "/dashboard/insights" },
+    action: { label: "Open insights", featureId: "insights" },
   },
 
   /* =================== Texting & the AI receptionist ===================== */
@@ -487,7 +497,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     a: "Your Inbox. Every text conversation with a client lands there, including the ones the AI receptionist handled — so you can read the whole thread and jump in whenever you want.",
     keywords: ["reply", "replies", "inbox", "conversation", "respond", "messages", "thread", "they texted back"],
     category: "texting",
-    action: { label: "Open inbox", href: "/dashboard/inbox" },
+    action: { label: "Open inbox", featureId: "inbox" },
   },
   {
     id: "receptionist",
@@ -500,7 +510,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     primaryFor: ["receptionist", "ai"],
     category: "texting",
     hidesInApp: true,
-    action: { label: "Open billing", href: "/dashboard/billing" },
+    action: { label: "Open billing", featureId: "billing" },
   },
 
   /* ============================ Acuity & Square ========================== */
@@ -510,7 +520,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     a: "Yes. Connect Acuity once with one click. Past appointments backfill automatically, and new ones flow in as they happen.\n\nBlocked time on your Acuity calendar syncs too, so your ChairBack availability matches reality without you maintaining two calendars.",
     keywords: ["acuity", "acuity scheduling", "connect acuity", "squarespace scheduling", "sync"],
     category: "integrations",
-    action: { label: "Connect a calendar", href: "/dashboard/booking?tab=Settings" },
+    action: { label: "Connect a calendar", featureId: "integrations" },
   },
   {
     id: "square",
@@ -518,7 +528,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     a: "Yes — connect Square the same way, with one click, and your appointments sync across automatically.",
     keywords: ["square", "square appointments", "connect square", "pos", "point of sale"],
     category: "integrations",
-    action: { label: "Connect a calendar", href: "/dashboard/booking?tab=Settings" },
+    action: { label: "Connect a calendar", featureId: "integrations" },
   },
   {
     id: "what-syncs",
@@ -542,7 +552,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     a: "Your own booking mini-site — services, prices, photos, reviews, promos, and a book button. It's the link you put in your Instagram bio.\n\nIt's free on every plan, and it's live the moment you add your first service.",
     keywords: ["public page", "mini site", "website", "landing page", "my site", "shop page", "profile"],
     category: "brand",
-    action: { label: "Open Shop page", href: "/dashboard/site" },
+    action: { label: "Open Shop page", featureId: "mini-site" },
   },
   {
     id: "branding",
@@ -553,7 +563,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "design", "style", "add my logo", "upload logo", "my logo", "change logo", "picture of my shop",
     ],
     category: "brand",
-    action: { label: "Open Shop page", href: "/dashboard/site" },
+    action: { label: "Open Shop page", featureId: "themes" },
   },
   {
     id: "gallery",
@@ -561,7 +571,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     a: "Yes — the photo gallery on your public page. It's the thing new clients actually scroll before they book, so it's worth keeping fresh.",
     keywords: ["photos", "gallery", "pictures", "portfolio", "images", "my work", "before after"],
     category: "brand",
-    action: { label: "Open Shop page", href: "/dashboard/site" },
+    action: { label: "Open Shop page", featureId: "gallery" },
   },
 
   /* ======================= Account, team & data ========================== */
@@ -571,7 +581,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     a: "Both live in your Account settings, along with your name and profile photo.",
     keywords: ["password", "change password", "email", "change email", "login", "forgot", "reset", "profile", "photo"],
     category: "account",
-    action: { label: "Open account", href: "/dashboard/account" },
+    action: { label: "Open account", featureId: "account" },
   },
   {
     id: "team-logins",
@@ -579,7 +589,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     a: "Yes. Invite them under Team logins and each one signs in to their own view — an employee sees their own chair and their own clients, not the whole shop's numbers.\n\nThat's separate from Staff, which is just who takes appointments.",
     keywords: ["team", "logins", "invite", "seats", "roles", "permissions", "employee login", "manager", "access"],
     category: "account",
-    action: { label: "Open team", href: "/dashboard/team" },
+    action: { label: "Open team", featureId: "team" },
   },
   {
     id: "delete-account",
@@ -587,7 +597,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     a: "From your Account settings — choose Delete account. It permanently removes your login, every shop you own, and all of its clients, visits, punches, and nudges, and cancels any active subscription.\n\nIt can't be undone. If you'd rather we handled it, email support@getchairback.com from the address on your account.",
     keywords: ["delete", "delete account", "remove data", "close account", "erase", "gdpr", "wipe", "shut down"],
     category: "account",
-    action: { label: "Open account", href: "/dashboard/account" },
+    action: { label: "Open account", featureId: "account" },
   },
   {
     id: "privacy",
@@ -595,7 +605,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     a: "Your shop's data is yours and is isolated from every other shop on ChairBack — nobody else's dashboard can reach it.\n\nWe never sell client data, and we never text your clients on our own behalf. The Privacy Policy lists exactly what we store and how long we keep it.",
     keywords: ["privacy", "safe", "secure", "security", "who sees", "sell data", "gdpr", "encrypted", "confidential"],
     category: "account",
-    action: { label: "Read the privacy policy", href: "/privacy" },
+    action: { label: "Read the privacy policy", featureId: "privacy" },
   },
   {
     id: "ios-app",
@@ -618,7 +628,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     ],
     primaryFor: ["domain", "dns"],
     category: "brand",
-    action: { label: "Open Shop page", href: "/dashboard/site" },
+    action: { label: "Open Shop page", featureId: "custom-domain" },
   },
   {
     id: "show-up-on-google",
@@ -632,7 +642,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     ],
     primaryFor: ["google", "seo", "address"],
     category: "brand",
-    action: { label: "Open Shop page", href: "/dashboard/site" },
+    action: { label: "Open Shop page", featureId: "mini-site" },
   },
   {
     id: "shop-name",
@@ -642,7 +652,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     // the Shop page (it feeds Google), and show-up-on-google owns that word.
     keywords: ["shop name", "rename", "business name", "change name", "shop details"],
     category: "account",
-    action: { label: "Open account", href: "/dashboard/account" },
+    action: { label: "Open account", featureId: "account" },
   },
   {
     id: "contact-human",
@@ -657,7 +667,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     // and "ai"; this one owns being contacted.
     primaryFor: ["phone number", "call you", "support"],
     category: "account",
-    action: { label: "Open support", href: "/support" },
+    action: { label: "Open support", featureId: "support" },
   },
 
   /* =============================== The rest ==============================
@@ -686,7 +696,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     a: "Yes — take card at booking. Once you're collecting payment up front, a no-show has already paid, which is the only thing that reliably changes the behaviour.\n\nOn top of that, the automatic 24-hour and 2-hour reminders do most of the work, and a no-show never earns a punch.",
     keywords: ["no show", "noshow", "no show fee", "charge for missing", "flake", "didnt turn up", "missed appointment", "penalty"],
     category: "money",
-    action: { label: "Open payments", href: "/dashboard/payments" },
+    action: { label: "Open payments", featureId: "pay-ahead" },
   },
   {
     id: "texts-run-out",
@@ -712,7 +722,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     a: "Yes — loyalty is a switch in your Rewards settings, and everything else (booking, reminders, your public page) works exactly the same with it off.\n\nTurning it back on later keeps the visit history, so nobody loses credit for cuts they already had.",
     keywords: ["turn off", "disable", "switch off", "dont want", "hide rewards", "no loyalty", "remove punch"],
     category: "clients",
-    action: { label: "Open rewards", href: "/dashboard/rewards" },
+    action: { label: "Open rewards", featureId: "punch-cards" },
   },
   {
     id: "slot-not-showing",
@@ -724,7 +734,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "disappeared", "not bookable",
     ],
     category: "booking",
-    action: { label: "Open services", href: "/dashboard/booking?tab=Services" },
+    action: { label: "Open services", featureId: "services" },
   },
   {
     id: "client-didnt-get-text",
@@ -736,7 +746,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "never got the reminder", "didnt get the reminder", "no reminder", "reminder didnt",
     ],
     category: "texting",
-    action: { label: "Open inbox", href: "/dashboard/inbox" },
+    action: { label: "Open inbox", featureId: "inbox" },
   },
   /* ========================= Asked, but unanswered ========================
    * A second pass driven by measurement rather than imagination: 70 questions
@@ -752,7 +762,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     a: "On the calendar, add a walk-in on the chair and time they sat down. No name, no phone number, no signup — it exists so the money and the chair time get recorded without making someone stand there while you type their details.\n\nIt counts in Insights and Chair time like any other cut. If they want the loyalty punch, add them as a client instead.",
     keywords: ["walk in", "walkin", "walk-in", "off the street", "no appointment", "someone walked in", "add walk"],
     category: "booking",
-    action: { label: "Open calendar", href: "/dashboard/booking" },
+    action: { label: "Open calendar", featureId: "online-booking" },
   },
   {
     id: "record-payment",
@@ -763,7 +773,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "paid me", "how much they paid", "close out", "ring up", "settle up",
     ],
     category: "money",
-    action: { label: "Open calendar", href: "/dashboard/booking" },
+    action: { label: "Open calendar", featureId: "online-booking" },
   },
   {
     id: "mark-no-show",
@@ -774,7 +784,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "stood me up", "missed their appointment", "didnt turn up", "no showed",
     ],
     category: "booking",
-    action: { label: "Open calendar", href: "/dashboard/booking" },
+    action: { label: "Open calendar", featureId: "online-booking" },
   },
   {
     id: "close-early",
@@ -785,7 +795,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "rest of the day", "closing today", "cancel the rest",
     ],
     category: "booking",
-    action: { label: "Open calendar", href: "/dashboard/booking" },
+    action: { label: "Open calendar", featureId: "online-booking" },
   },
   {
     id: "lead-time",
@@ -796,7 +806,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "minimum notice", "advance notice", "how much notice", "stop booking",
     ],
     category: "booking",
-    action: { label: "Open booking settings", href: "/dashboard/booking?tab=Settings" },
+    action: { label: "Open booking settings", featureId: "booking-rules" },
   },
   {
     id: "see-the-day",
@@ -807,7 +817,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "schedule for", "who's coming in", "whos coming", "my day", "agenda", "next day",
     ],
     category: "booking",
-    action: { label: "Open calendar", href: "/dashboard/booking" },
+    action: { label: "Open calendar", featureId: "online-booking" },
   },
   {
     id: "delete-client",
@@ -819,7 +829,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "clean up my list", "delete customer", "remove customer",
     ],
     category: "clients",
-    action: { label: "Open clients", href: "/dashboard/clients" },
+    action: { label: "Open clients", featureId: "clients" },
   },
   {
     id: "add-client-manually",
@@ -830,7 +840,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "add someone", "create client", "add them manually",
     ],
     category: "clients",
-    action: { label: "Open clients", href: "/dashboard/clients" },
+    action: { label: "Open clients", featureId: "clients" },
   },
   {
     id: "text-everyone",
@@ -841,7 +851,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "message all clients", "text my list", "announcement", "broadcast", "everyone at once",
     ],
     category: "texting",
-    action: { label: "Open promotions", href: "/dashboard/promotions" },
+    action: { label: "Open promotions", featureId: "promotions" },
   },
   {
     id: "who-is-overdue",
@@ -853,7 +863,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "lost clients", "havent seen",
     ],
     category: "clients",
-    action: { label: "Open clients", href: "/dashboard/clients" },
+    action: { label: "Open clients", featureId: "clients" },
   },
   {
     id: "comp-a-cut",
@@ -864,7 +874,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "discount", "friend rate", "give away", "redeem reward",
     ],
     category: "clients",
-    action: { label: "Open calendar", href: "/dashboard/booking" },
+    action: { label: "Open calendar", featureId: "online-booking" },
   },
   {
     id: "take-a-deposit",
@@ -875,7 +885,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "secure the booking", "booking fee", "pay to book",
     ],
     category: "money",
-    action: { label: "Open payments", href: "/dashboard/payments" },
+    action: { label: "Open payments", featureId: "pay-ahead" },
   },
   {
     id: "refund-a-client",
@@ -886,7 +896,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "return payment", "cancel a payment", "refund a customer", "money back",
     ],
     category: "money",
-    action: { label: "Open payments", href: "/dashboard/payments" },
+    action: { label: "Open payments", featureId: "pay-ahead" },
   },
   {
     id: "payout-timing",
@@ -898,7 +908,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "bank transfer", "delayed", "hasnt landed",
     ],
     category: "money",
-    action: { label: "Open payments", href: "/dashboard/payments" },
+    action: { label: "Open payments", featureId: "pay-ahead" },
   },
   {
     id: "chargeback",
@@ -958,7 +968,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "delete barber", "remove employee",
     ],
     category: "account",
-    action: { label: "Open team", href: "/dashboard/team" },
+    action: { label: "Open team", featureId: "team" },
   },
   {
     id: "barber-cant-sign-in",
@@ -974,7 +984,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "staff login", "team login", "they cant get in",
     ],
     category: "account",
-    action: { label: "Open team", href: "/dashboard/team" },
+    action: { label: "Open team", featureId: "team" },
   },
   {
     id: "i-cant-log-in",
@@ -996,7 +1006,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "issue", "crash", "froze", "stuck", "wrong",
     ],
     category: "account",
-    action: { label: "Open support", href: "/support" },
+    action: { label: "Open support", featureId: "support" },
   },
   {
     id: "page-not-loading",
@@ -1007,7 +1017,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "404", "not found", "broken link", "page not working", "cant open my page",
     ],
     category: "brand",
-    action: { label: "Open your page", href: "/dashboard/site" },
+    action: { label: "Open your page", featureId: "mini-site" },
   },
   {
     id: "data-protection",
@@ -1019,7 +1029,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "where is my data", "who can see",
     ],
     category: "account",
-    action: { label: "Read the privacy policy", href: "/privacy" },
+    action: { label: "Read the privacy policy", featureId: "privacy" },
   },
   {
     id: "picture-message",
@@ -1030,7 +1040,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "send pictures", "media",
     ],
     category: "texting",
-    action: { label: "Open your page", href: "/dashboard/site" },
+    action: { label: "Open your page", featureId: "mini-site" },
   },
   {
     id: "how-long-setup",
@@ -1041,7 +1051,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "how much work", "time to set up", "onboarding", "start using",
     ],
     category: "start",
-    action: { label: "Get started", href: "/signup" },
+    action: { label: "Get started", featureId: "signup" },
   },
   {
     id: "move-appointment",
@@ -1061,7 +1071,7 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
       "someone else cut",
     ],
     category: "booking",
-    action: { label: "Open calendar", href: "/dashboard/booking" },
+    action: { label: "Open calendar", featureId: "online-booking" },
   },
 ];
 

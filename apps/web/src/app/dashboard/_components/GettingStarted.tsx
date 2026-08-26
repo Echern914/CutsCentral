@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { resolveHref } from "@chairback/config/features";
 import { Card } from "@/components/ui/Card";
 
 /**
@@ -18,6 +19,14 @@ export function GettingStarted({
 }) {
   if (hasClients) return null;
 
+  // Destinations come from the registry, so this card cannot drift from the
+  // readiness engine's CTAs or the More sheet the way it used to.
+  const connectHref = resolveHref("onboarding-connect", { role: "OWNER" });
+  const clientsHref = resolveHref("clients");
+  const rewardsHref = resolveHref("punch-cards", {
+    flagsOff: rewardsEnabled ? [] : ["rewardsEnabled"],
+  });
+
   const steps = [
     {
       done: connected,
@@ -25,7 +34,7 @@ export function GettingStarted({
       body: connected
         ? "Your appointments will sync automatically as clients book."
         : "Link Acuity or Square so clients and visits import automatically - or set up ChairBack's own booking page.",
-      href: connected ? undefined : "/onboarding/connect",
+      href: connected ? undefined : (connectHref ?? undefined),
       cta: "Connect booking",
     },
     {
@@ -34,17 +43,19 @@ export function GettingStarted({
       body: connected
         ? "No appointments yet? Add a walk-in by hand to start a punch card."
         : "Import your client list (CSV from Booksy, Fresha, Vagaro…) or add a walk-in by hand now.",
-      href: "/dashboard/clients",
+      href: clientsHref ?? undefined,
       cta: "Go to Clients",
     },
-    // Rewards are opt-in - a booking-only shop has no rewards step to do.
-    ...(rewardsEnabled
+    // Rewards are opt-in - a booking-only shop has no rewards step to do, and
+    // the registry is what knows that (the `rewardsEnabled` flag on the entry),
+    // rather than this card testing the prop for itself.
+    ...(rewardsHref
       ? [
           {
             done: false,
             title: "Set up your rewards",
             body: "Decide how many visits earn a reward, and clients see it on their card.",
-            href: "/dashboard/rewards",
+            href: rewardsHref,
             cta: "Build rewards",
           },
         ]

@@ -5,9 +5,10 @@ import Link from "next/link";
 import { createPortal } from "react-dom";
 import {
   FEATURE_CATEGORIES,
-  FEATURE_INDEX,
-  isBillingHref,
+  resolveHref,
+  visibleFeatures,
   type FeatureIndexEntry,
+  type SeatRole,
 } from "@chairback/config/features";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { lockedTier, type FeatureLocks } from "@/lib/featureLocks";
@@ -29,12 +30,15 @@ export function MoreSheet({
   onClose,
   isAdmin = false,
   rewardsEnabled = true,
+  role,
   locks,
 }: {
   open: boolean;
   onClose: () => void;
   isAdmin?: boolean;
   rewardsEnabled?: boolean;
+  /** The seat browsing. Manager-only entries drop out for an employee. */
+  role?: SeatRole;
   /** Premium lock flags — tier-tagged rows get a diamond when locked. */
   locks?: FeatureLocks;
 }) {
@@ -51,13 +55,17 @@ export function MoreSheet({
   // sync. `null` (pre-hydration) shows everything, but the sheet only opens on
   // a tap, long after the check resolves.
   const inApp = useIsNativeApp();
-  const visible = FEATURE_INDEX.filter(
-    (f) =>
-      !(inApp && isBillingHref(f.href)) &&
-      // A rewards-off shop has no Rewards pages (they redirect), so don't
-      // advertise the loyalty features that land there.
-      (rewardsEnabled || !f.href.startsWith("/dashboard/rewards")),
-  );
+  // One question to the registry replaces three local rules: the 3.1.1 billing
+  // filter, the rewards-off route-prefix test (now a declared `flag` on the
+  // entries themselves, not a guess from the href), and the role gate.
+  // Unlisted entry, so it never appears in the directory above — but still
+  // resolved rather than hard-coded.
+  const supportHref = resolveHref("support") ?? "/support";
+  const visible = visibleFeatures({
+    role,
+    inApp: inApp === true,
+    flagsOff: rewardsEnabled ? [] : ["rewardsEnabled"],
+  });
 
   // Esc closes; focus moves into the sheet on open and back to the page after.
   useEffect(() => {
@@ -134,12 +142,16 @@ export function MoreSheet({
           );
         })}
 
-        {/* Support sits outside FEATURE_INDEX: /support is a PUBLIC page (no
-            shop context), and the index only holds /dashboard and /demo hrefs.
-            It has to stay reachable from inside the iOS app — App Store
-            Guideline 1.5 wants support one tap away — and this sheet is now the
-            only nav that could carry it, so it is hard-coded here rather than
-            inherited from the index. */}
+        {/* Support is an UNLISTED registry entry: /support is a PUBLIC page, so
+            it has no business in the browsable directory above, but it must stay
+            reachable from inside the iOS app (App Store Guideline 1.5 wants
+            support one tap away) and this sheet is the only nav that can carry
+            it. Unlisted-but-resolvable is exactly that case — the route still
+            comes from the registry rather than being typed here.
+
+            /admin is NOT a registry entry and must not become one: it is a
+            cross-shop operator tool, and the registry's whole contract is that
+            everything in it is scoped to the shop the caller is acting on. */}
         <section className="mb-2">
           <h3 className="px-1 text-xs uppercase tracking-[0.16em] text-muted">
             Support
@@ -147,7 +159,7 @@ export function MoreSheet({
           <ul className="mt-2 grid gap-1.5 sm:grid-cols-2">
             <li>
               <Link
-                href="/support"
+                href={supportHref}
                 onClick={onClose}
                 className="block rounded-2xl border border-subtle px-3.5 py-3 transition-colors duration-150 ease-out hover:bg-charcoal-700"
               >

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { resolveHref } from "@chairback/config/features";
 import { useToast } from "@/components/ui/Toast";
 import { ShareBookingDialog } from "./ShareBookingDialog";
 
@@ -28,6 +29,24 @@ export function QuickActions({
   const { toast } = useToast();
   const [sharing, setSharing] = useState(false);
 
+  // Registry, not literals. These four tiles pointed at routes typed by hand,
+  // which is how the rewards tile learned its own rewards-off rule instead of
+  // reading the `rewardsEnabled` flag the entries already declare.
+  // 🔴 No `?? "/dashboard/..."` fallbacks. A fallback route here would be a
+  // second copy of the registry's answer, and a silent one - it would paper
+  // over exactly the drift this change exists to remove. A tile the registry
+  // withholds is simply not drawn.
+  const flagsOff = rewardsEnabled ? [] : (["rewardsEnabled"] as const);
+  const ctx = { flagsOff: [...flagsOff] };
+  const bookHref = resolveHref("appointments", ctx);
+  const clientsHref = resolveHref("clients", ctx);
+  const siteHref = resolveHref("mini-site", ctx);
+  // A rewards-off shop has no rewards page (it redirects), so the registry
+  // withholds it and the slot shows Promos instead - the nearest "bring people
+  // back" tool every shop has.
+  const rewardsHref = resolveHref("punch-cards", ctx);
+  const promosHref = resolveHref("promotions", ctx);
+
   return (
     // 🔴 `mb-6` is the fix, not decoration. Every block below this one
     // (SyncHealthBanner, GettingStarted, ConsentSetup) carries `mb-6` and NO
@@ -35,33 +54,38 @@ export function QuickActions({
     // whatever came next - reading as one cramped, overlapping slab. This puts
     // the row back on the same 24px rhythm the rest of the page already uses.
     <div className="mb-6 mt-6">
+      {bookHref && (
       <Link
-        href="/dashboard/booking?tab=Appointments"
+        href={bookHref}
         className="flex w-full items-center justify-center gap-2 rounded-full bg-gold px-6 py-3.5 text-sm font-semibold text-charcoal shadow-glow-sm transition-colors duration-200 ease-out hover:bg-gold-muted"
       >
         <CalendarPlusMark />
         Book appointment
       </Link>
+      )}
 
       <div className="mt-2.5 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-        <Action href="/dashboard/clients" label="Clients">
-          <ClientsMark />
-        </Action>
-        {/* A rewards-off shop has no /dashboard/rewards page (it redirects), so
-            that slot shows Promos instead — the nearest "bring people back"
-            tool that every shop has. */}
-        {rewardsEnabled ? (
-          <Action href="/dashboard/rewards" label="Rewards">
+        {clientsHref && (
+          <Action href={clientsHref} label="Clients">
+            <ClientsMark />
+          </Action>
+        )}
+        {rewardsHref ? (
+          <Action href={rewardsHref} label="Rewards">
             <RewardsMark />
           </Action>
         ) : (
-          <Action href="/dashboard/promotions" label="Promos">
-            <PromoMark />
+          promosHref && (
+            <Action href={promosHref} label="Promos">
+              <PromoMark />
+            </Action>
+          )
+        )}
+        {siteHref && (
+          <Action href={siteHref} label="Your page">
+            <PageMark />
           </Action>
         )}
-        <Action href="/dashboard/site" label="Your page">
-          <PageMark />
-        </Action>
         {/* No slug yet means no public URL to encode, so the tile points at
             where they pick one instead of opening a dialog with a dead code. */}
         {bookUrl ? (
@@ -69,9 +93,11 @@ export function QuickActions({
             <QrMark />
           </Action>
         ) : (
-          <Action href="/dashboard/site" label="QR code">
-            <QrMark />
-          </Action>
+          siteHref && (
+            <Action href={siteHref} label="QR code">
+              <QrMark />
+            </Action>
+          )
         )}
       </div>
 

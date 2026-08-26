@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { featureById, isBillingHref, resolveFeature } from "./features.js";
 import { HELP_ANSWERS, HELP_CATEGORIES, HELP_STARTERS } from "./help.js";
 import { HELP_CORPUS, findHelp, helpAnswerById } from "./helpMatch.js";
 
@@ -32,10 +33,15 @@ describe("help knowledge base", () => {
     }
   });
 
-  it("every action href is an in-app path", () => {
+  // 🔴 The whole point of the corpus naming FEATURES instead of routes: an
+  // unknown id renders no button at all, silently. Nothing else would catch a
+  // typo'd or deleted id, because `resolveFeature` is deliberately quiet.
+  it("every action names a feature that actually resolves", () => {
     for (const e of HELP_CORPUS) {
       if (!e.action) continue;
-      expect(e.action.href.startsWith("/"), `${e.id} -> ${e.action.href}`).toBe(true);
+      const r = resolveFeature(e.action.featureId);
+      expect(r.ok, `${e.id} -> unknown feature "${e.action.featureId}"`).toBe(true);
+      expect(r.ok && r.href.startsWith("/"), `${e.id} -> ${e.action.featureId}`).toBe(true);
       expect(e.action.label.trim().length, `${e.id} action label`).toBeGreaterThan(0);
     }
   });
@@ -44,9 +50,25 @@ describe("help knowledge base", () => {
   // back door, exactly like the FeatureSearch entries we already filter.
   it("anything steering to billing is marked hidesInApp", () => {
     for (const e of HELP_CORPUS) {
-      if (e.action?.href.startsWith("/dashboard/billing") || e.action?.href === "/pricing") {
+      if (!e.action) continue;
+      const href = featureById(e.action.featureId)?.href ?? "";
+      if (isBillingHref(href) || href === "/pricing") {
         expect(e.hidesInApp, `${e.id} links billing but is not hidesInApp`).toBe(true);
       }
+    }
+  });
+
+  // Belt and braces on top of hidesInApp: even if an answer slipped through the
+  // corpus filter, the REGISTRY refuses a billing destination inside the shell,
+  // so the button cannot render. Two independent gates, because 3.1.1 is the
+  // one rule that costs a release when it is wrong.
+  it("the registry itself withholds billing destinations in-app", () => {
+    for (const e of HELP_CORPUS) {
+      if (!e.action) continue;
+      const href = featureById(e.action.featureId)?.href ?? "";
+      if (!isBillingHref(href)) continue;
+      const r = resolveFeature(e.action.featureId, { inApp: true });
+      expect(r.ok, `${e.id} resolved a billing href inside the app`).toBe(false);
     }
   });
 
@@ -59,7 +81,7 @@ describe("help knowledge base", () => {
     // Every feature is askable even though help.ts doesn't restate them.
     expect(HELP_CORPUS.length).toBeGreaterThan(HELP_ANSWERS.length);
     expect(helpAnswerById("feature-waitlist")).toBeDefined();
-    expect(helpAnswerById("feature-inbox")?.action?.href).toBe("/dashboard/inbox");
+    expect(helpAnswerById("feature-inbox")?.action?.featureId).toBe("inbox");
   });
 });
 
@@ -143,7 +165,7 @@ describe("findHelp — real phrasings", () => {
     for (const q of ["where is the waitlist", "where do i find the inbox"]) {
       const res = findHelp(q);
       expect(res.answer, `"${q}" was not answered`).not.toBeNull();
-      expect(res.answer?.action?.href, `"${q}"`).toBeTruthy();
+      expect(res.answer?.action?.featureId, `"${q}"`).toBeTruthy();
     }
   });
 });
@@ -305,7 +327,8 @@ describe("findHelp — App Store 3.1.1", () => {
       );
       for (const e of surfaced) {
         expect(e.hidesInApp, `"${q}" surfaced ${e.id} in-app`).not.toBe(true);
-        expect(e.action?.href.startsWith("/dashboard/billing")).not.toBe(true);
+        const href = e.action ? (featureById(e.action.featureId)?.href ?? "") : "";
+        expect(isBillingHref(href)).not.toBe(true);
       }
     }
   });
