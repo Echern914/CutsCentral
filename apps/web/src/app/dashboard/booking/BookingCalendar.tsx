@@ -1,6 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+// TouchEvent is aliased because the DOM global of the same name is NOT the
+// React synthetic one, and the `React.` namespace is off-limits in this repo
+// (two @types/react copies resolve, so React.X picks the wrong one).
+import {
+  type TouchEvent as ReactTouchEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Card } from "@/components/ui/Card";
 import { Segmented } from "@/components/ui/Segmented";
@@ -39,6 +50,7 @@ import {
   removeBlockAction,
 } from "./actions";
 import { agendaWindowOf, mergeAgendaWindow } from "./agendaMerge";
+import { swipeAllowedFrom, swipeIntent } from "./daySwipe";
 import { AppointmentForm } from "./AppointmentForm";
 import {
   WAITLIST_BOOK_EVENT,
@@ -76,6 +88,17 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
  */
 
 const WEEKDAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
+
+/**
+ * Spoken label for a week-strip cell ("Wednesday, Aug 26"). Built from a LOCAL
+ * noon Date like every other key formatter here, so there is no zone conversion
+ * in either direction - the key already IS a shop wall-clock day.
+ */
+const WEEKDAY_FULL_FMT = new Intl.DateTimeFormat("en-US", {
+  weekday: "long",
+  month: "short",
+  day: "numeric",
+});
 const VIEWS = [
   { key: "month", label: "Month" },
   { key: "day", label: "Day" },
@@ -336,7 +359,11 @@ export function BookingCalendar({
    * August - and the new day's rows would never arrive.
    */
   function gotoDay(delta: number) {
-    const next = shiftDayKey(shownDay, delta);
+    gotoDayKey(shiftDayKey(shownDay, delta));
+  }
+
+  /** Jump straight to a day (the week strip taps this; gotoDay routes through it). */
+  function gotoDayKey(next: string) {
     const [y, m] = next.split("-").map(Number);
     setSelectedDay(next);
     if (y !== viewYear || m !== viewMonth) {
@@ -390,6 +417,54 @@ export function BookingCalendar({
   // selected - `shownDay` always names a day.
   const shownDayRows = byDay.get(shownDay) ?? [];
   const dayTitle = labelFromKey(shownDay, dayTitleFmt);
+
+  /**
+   * The Sun-Sat week `shownDay` sits in, each day with its booking count.
+   *
+   * Counted the same way the day gauge counts (`countByCategory`): blocked time
+   * isn't a booking and a cancellation isn't one either, so neither inflates the
+   * number the barber is reading to decide where the room is.
+   *
+   * Every day in this strip is guaranteed to have its rows loaded: each month
+   * fetch pads by ±7 days, and a week never reaches further than 6 days from
+   * the day it contains — so an end-of-month week can't show a phantom 0.
+   */
+  const weekDays = useMemo(() => {
+    const sunday = shiftDayKey(shownDay, -weekdayOfKey(shownDay));
+    return Array.from({ length: 7 }, (_, i) => {
+      const key = shiftDayKey(sunday, i);
+      const rows = byDay.get(key) ?? [];
+      let count = 0;
+      for (const r of rows) {
+        if (r.source === "block" || r.status === "canceled") continue;
+        count++;
+      }
+      return { key, count, day: Number(key.slice(8)) };
+    });
+  }, [shownDay, byDay]);
+
+  // Swipe between days. `touchAction: pan-y` on the container tells the browser
+  // we handle horizontal ourselves, which stops the day flipping AND the page
+  // scrolling on one diagonal drag.
+  const swipeStart = useRef<{ x: number; y: number } | null>(null);
+  const daySwipeHandlers = {
+    onTouchStart: (e: ReactTouchEvent<HTMLDivElement>) => {
+      const t = e.touches[0];
+      swipeStart.current =
+        e.touches.length === 1 && t && swipeAllowedFrom(e.target)
+          ? { x: t.clientX, y: t.clientY }
+          : null;
+    },
+    onTouchEnd: (e: ReactTouchEvent<HTMLDivElement>) => {
+      const start = swipeStart.current;
+      swipeStart.current = null;
+      const t = e.changedTouches[0];
+      if (!start || !t) return;
+      const intent = swipeIntent(t.clientX - start.x, t.clientY - start.y);
+      if (intent) gotoDay(intent === "prev" ? -1 : 1);
+    },
+  };
+
   const navBtn =
     "rounded-lg border border-subtle px-2.5 py-1.5 text-sm text-muted transition-colors hover:text-offwhite";
 
@@ -448,7 +523,13 @@ export function BookingCalendar({
         /* DAY VIEW: the planner gets the whole card. Keyed on the day so it
            remounts as you page - which is what resets DayPlanner's category
            filter, exactly as tapping a different month cell does. */
-        <div className="mt-4">
+        <div className="mt-4" style={{ touchAction: "pan-y" }} {...daySwipeHandlers}>
+          <WeekStrip
+            days={weekDays}
+            shownDay={shownDay}
+            todayKey={todayKey}
+            onPick={gotoDayKey}
+          />
           <DayPlanner
             key={shownDay}
             standalone
@@ -686,6 +767,87 @@ function WaitlistPanel({
         <span className="shrink-0 text-xs font-medium text-muted">Open →</span>
       </button>
     </Card>
+  );
+}
+
+/**
+ * The week the shown day belongs to, pinned above the planner.
+ *
+ * Paging a day at a time through ‹ › told the barber nothing about the days
+ * either side, so "where's my room this week?" meant seven taps or a trip back
+ * to the month grid. The strip answers it in place: the count under each date
+ * is that day's bookings, so a light day is visible without leaving the one
+ * you're on.
+ *
+ * Sticky below the dashboard header (which is `sticky top-0 z-20`), at a lower
+ * z so it slides under rather than over it. It stays put while the day scrolls,
+ * because the whole point is to keep the week reachable from the bottom of a
+ * long day.
+ */
+function WeekStrip({
+  days,
+  shownDay,
+  todayKey,
+  onPick,
+}: {
+  days: { key: string; count: number; day: number }[];
+  shownDay: string;
+  todayKey: string;
+  onPick: (key: string) => void;
+}) {
+  return (
+    <div className="sticky top-16 z-10 -mx-1 mb-3 rounded-xl bg-charcoal-800/80 px-1 py-1.5 backdrop-blur">
+      <div className="grid grid-cols-7 gap-1">
+        {days.map((d, i) => {
+          const selected = d.key === shownDay;
+          const isToday = d.key === todayKey;
+          return (
+            <button
+              key={d.key}
+              type="button"
+              onClick={() => onPick(d.key)}
+              aria-current={selected ? "date" : undefined}
+              // The visible content is three terse glyphs; the full sentence
+              // lives here so it isn't "S 14 3" to a screen reader.
+              aria-label={`${labelFromKey(d.key, WEEKDAY_FULL_FMT)}${
+                isToday ? " (today)" : ""
+              } — ${d.count === 0 ? "nothing booked" : `${d.count} booked`}`}
+              className={cn(
+                // min-h keeps the 44px touch target the rest of the app uses;
+                // min-w-0 keeps a 7-col grid from being widened by its content
+                // at 320px (a grid item's default min-width is auto).
+                "flex min-h-[2.75rem] min-w-0 flex-col items-center justify-center gap-0.5 rounded-lg px-0.5 py-1 transition-colors duration-150 ease-out",
+                selected
+                  ? "bg-gold text-charcoal-900"
+                  : "text-muted hover:bg-charcoal-700 hover:text-offwhite",
+              )}
+            >
+              <span className="text-[10px] font-medium leading-none">
+                {WEEKDAY_LABELS[i]}
+              </span>
+              <span
+                className={cn(
+                  "text-sm font-semibold leading-none tabular-nums",
+                  selected ? "" : isToday ? "text-gold" : "text-offwhite",
+                )}
+              >
+                {d.day}
+              </span>
+              {/* A dot rather than "0": an empty day should read as empty at a
+                  glance, not as a number to compare against the others. */}
+              <span
+                className={cn(
+                  "text-[10px] leading-none tabular-nums",
+                  selected ? "text-charcoal-900/70" : "text-muted",
+                )}
+              >
+                {d.count === 0 ? "·" : d.count}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -1113,6 +1275,9 @@ function DayPlanner({
           retwists" shows him the retwist bookings, not only their count. */}
       {showChips && (
         <div
+          // Opt this strip out of the day swipe: it scrolls horizontally
+          // itself, so a sideways drag here already means something.
+          data-noswipe
           className="mb-3 flex gap-1.5 overflow-x-auto pb-1"
           role="group"
           aria-label="Filter this day by service"
@@ -2043,6 +2208,12 @@ function keyOf(y: number, m: number, d: number): string {
  * happens in either direction. Noon (not midnight) so a DST jump can't land the
  * result on the previous day.
  */
+/** 0-6 (Sun-Sat) for a YYYY-MM-DD key. Local noon, same reasoning as shiftDayKey. */
+function weekdayOfKey(key: string): number {
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(y!, m! - 1, d!, 12).getDay();
+}
+
 function shiftDayKey(key: string, delta: number): string {
   const [y, m, d] = key.split("-").map(Number);
   const shifted = new Date(y!, m! - 1, d! + delta, 12);
