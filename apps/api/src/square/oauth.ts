@@ -17,6 +17,17 @@ export interface OAuthState {
   shopId: string;
   nonce: string;
   exp: number; // epoch seconds
+  /**
+   * True when this authorization was started for CALENDAR PROTECTION, i.e. with
+   * SQUARE.outboundScope rather than the read-only default.
+   *
+   * Carried in the signed state rather than re-derived at the callback because
+   * the callback has no other way to know which consent screen the seller
+   * actually saw - and recording "we asked for write scopes" when we did not
+   * would make the stored `scope` a lie. Optional so a state minted by the
+   * previous deploy still verifies (absent = the narrow, read-only flow).
+   */
+  outbound?: boolean;
 }
 
 const STATE_TTL_SECONDS = 10 * 60;
@@ -27,11 +38,16 @@ function signState(payloadB64: string): string {
     .digest("base64url");
 }
 
-export function createOAuthState(shopId: string, nowSeconds: number): string {
+export function createOAuthState(
+  shopId: string,
+  nowSeconds: number,
+  outbound = false,
+): string {
   const payload: OAuthState = {
     shopId,
     nonce: randomBytes(16).toString("base64url"),
     exp: nowSeconds + STATE_TTL_SECONDS,
+    ...(outbound ? { outbound: true } : {}),
   };
   const b64 = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
   return `${b64}.${signState(b64)}`;
@@ -67,11 +83,23 @@ export function verifyOAuthState(
   }
 }
 
-/** Build the Square authorize URL for a given signed state. */
-export function buildAuthorizeUrl(state: string): string {
+/**
+ * Build the Square authorize URL for a given signed state.
+ *
+ * `scope` defaults to the READ-ONLY set every ordinary connect has always
+ * asked for. The wider outbound set (SQUARE.outboundScope, which includes
+ * APPOINTMENTS_WRITE / APPOINTMENTS_ALL_WRITE) is requested ONLY when a manager
+ * explicitly opts the shop into calendar protection.
+ *
+ * Kept opt-in rather than folded into the default because widening the default
+ * changes the consent screen every seller sees at connect time - for a
+ * capability most of them are not on a Square plan to use - and a connect flow
+ * that fails is a worse regression than a feature nobody armed.
+ */
+export function buildAuthorizeUrl(state: string, scope: string = SQUARE.scope): string {
   const q = new URLSearchParams({
     client_id: env.SQUARE_OAUTH_CLIENT_ID ?? "",
-    scope: SQUARE.scope,
+    scope,
     session: "false", // force the seller to explicitly authorize
     state,
   });

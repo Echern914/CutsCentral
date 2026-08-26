@@ -90,3 +90,135 @@ export const squareWebhookEnvelopeSchema = z
   .passthrough();
 
 export type SquareWebhookEnvelope = z.infer<typeof squareWebhookEnvelopeSchema>;
+
+//  OUTBOUND SETUP (S1) - all read-only responses
+//
+// Every schema below backs a GET the SETUP screen makes. None of them describes
+// a write: PR S1 adds no Square mutation of any kind, which is why the seller's
+// calendar cannot be touched no matter what a manager clicks.
+
+// A seller location. Bookings are location-scoped, so outbound writes need ONE
+// chosen deliberately (see SquareConnection.outboundLocationId).
+export const squareLocationSchema = z
+  .object({
+    id: z.string(),
+    name: z.string().nullish(),
+    status: z.string().nullish(), // ACTIVE | INACTIVE
+    timezone: z.string().nullish(),
+    type: z.string().nullish(),
+  })
+  .passthrough();
+
+export type SquareLocation = z.infer<typeof squareLocationSchema>;
+
+/**
+ * RetrieveBusinessBookingProfile.
+ *
+ * `support_seller_level_writes` is THE capability gate for calendar protection:
+ * Square refuses seller-level booking writes on plans below Appointments Plus,
+ * and a shop that arms enforcement without it would fail on the first real
+ * customer instead of on the setup screen. `booking_enabled` is the seller's own
+ * on/off switch for online booking.
+ *
+ * [VERIFY IN SANDBOX] the exact field names at the pinned API version, and
+ * whether a Free-plan seller returns `false` or omits the field entirely - the
+ * schema treats a MISSING field as unknown (null), never as `true`.
+ */
+export const squareBusinessBookingProfileSchema = z
+  .object({
+    seller_id: z.string().nullish(),
+    booking_enabled: z.boolean().nullish(),
+    support_seller_level_writes: z.boolean().nullish(),
+    customer_timezone_choice: z.string().nullish(),
+    booking_policy: z.string().nullish(),
+  })
+  .passthrough();
+
+export type SquareBusinessBookingProfile = z.infer<
+  typeof squareBusinessBookingProfileSchema
+>;
+
+/**
+ * A team member's BOOKING profile - not the same thing as a team member. Only a
+ * profile with `is_bookable` can receive a booking, so the setup screen offers
+ * exactly these and no more: mapping a chair to a non-bookable team member would
+ * store a mapping that reads valid and fails at write time.
+ */
+export const squareTeamMemberBookingProfileSchema = z
+  .object({
+    team_member_id: z.string(),
+    display_name: z.string().nullish(),
+    is_bookable: z.boolean().nullish(),
+    description: z.string().nullish(),
+  })
+  .passthrough();
+
+export type SquareTeamMemberBookingProfile = z.infer<
+  typeof squareTeamMemberBookingProfileSchema
+>;
+
+/**
+ * A catalog ITEM with its variations, as returned by ListCatalog.
+ *
+ * Square models a bookable service as an ITEM whose `product_type` is
+ * APPOINTMENTS_SERVICE; the thing a booking actually references is one of its
+ * ITEM_VARIATIONs. The variation's `version` matters as much as its id - Square
+ * rejects a booking whose service_variation_version is behind the catalog - so
+ * both are carried through to the mapping.
+ */
+export const squareCatalogItemVariationSchema = z
+  .object({
+    id: z.string(),
+    version: z.union([z.number(), z.string()]).nullish(),
+    is_deleted: z.boolean().nullish(),
+    item_variation_data: z
+      .object({
+        name: z.string().nullish(),
+        service_duration: z.union([z.number(), z.string()]).nullish(), // milliseconds
+        price_money: z
+          .object({ amount: z.union([z.number(), z.string()]).nullish(), currency: z.string().nullish() })
+          .passthrough()
+          .nullish(),
+      })
+      .passthrough()
+      .nullish(),
+  })
+  .passthrough();
+
+export const squareCatalogItemSchema = z
+  .object({
+    id: z.string(),
+    type: z.string().nullish(),
+    is_deleted: z.boolean().nullish(),
+    item_data: z
+      .object({
+        name: z.string().nullish(),
+        product_type: z.string().nullish(), // APPOINTMENTS_SERVICE for bookable services
+        variations: z.array(squareCatalogItemVariationSchema).nullish(),
+      })
+      .passthrough()
+      .nullish(),
+  })
+  .passthrough();
+
+export type SquareCatalogItem = z.infer<typeof squareCatalogItemSchema>;
+
+/**
+ * RetrieveTokenStatus - the ONLY way to learn what a token was actually granted.
+ * ObtainToken's response does not echo the scopes, so without this call the
+ * stored `scope` is a record of what we ASKED for, which is worthless as a
+ * permission check.
+ *
+ * [VERIFY IN SANDBOX] method + path (`POST /oauth2/token/status` with the seller
+ * token as the bearer) and the exact casing of the returned scope strings.
+ */
+export const squareTokenStatusSchema = z
+  .object({
+    scopes: z.array(z.string()).nullish(),
+    expires_at: z.string().nullish(),
+    client_id: z.string().nullish(),
+    merchant_id: z.string().nullish(),
+  })
+  .passthrough();
+
+export type SquareTokenStatus = z.infer<typeof squareTokenStatusSchema>;

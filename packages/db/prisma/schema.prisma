@@ -51,6 +51,17 @@ enum AcuityOutboundMode {
   ENFORCE
 }
 
+// See Shop.squareOutboundMode. Deliberately a SEPARATE enum from
+// AcuityOutboundMode rather than a shared one: the two integrations gate on
+// different capabilities (Acuity needs a calendar per chair; Square needs a
+// location, a team member, a service variation, write scopes AND a seller plan
+// that permits seller-level writes), and a shared enum invites a shared gate.
+enum SquareOutboundMode {
+  OFF
+  OBSERVE
+  ENFORCE
+}
+
 enum AppointmentStatus {
   // PENDING = a public request awaiting barber approval (request-before-booking).
   // Holds the slot like BOOKED, but is NOT reminded/promoted/earns-loyalty; the
@@ -441,6 +452,36 @@ model Shop {
   // ALREADY created keeps running in every mode, so switching a shop OFF can
   // never strand live blocks on the barber's Acuity calendar.
   acuityOutboundMode AcuityOutboundMode @default(OFF)
+
+  // MIRROR NATIVE OCCUPANCY BACK OUT TO SQUARE - the same hole, a harder API.
+  //
+  // Square has NO blocked-time concept: no BLOCKED status, no block entity, and
+  // `customer_id` is not optional on a Booking. So protection cannot be a block
+  // the way Acuity's is - an eligible ChairBack appointment has to be mirrored
+  // as a real Square BOOKING through the Bookings API. That difference is why
+  // this mode has strictly more prerequisites than acuityOutboundMode:
+  //
+  //   - an EXPLICITLY chosen location (bookings are location-scoped, and the
+  //     inbound connect picked "first active" - fine for reading, never good
+  //     enough to write into someone's calendar)
+  //   - a Square team member per bookable chair
+  //   - a Square service variation per bookable service
+  //   - APPOINTMENTS_WRITE + APPOINTMENTS_ALL_WRITE actually GRANTED (the
+  //     original connect asked for read scopes only)
+  //   - a seller plan whose business booking profile reports
+  //     support_seller_level_writes (Square refuses seller-level writes below
+  //     Appointments Plus)
+  //
+  // Same three modes and the same reason for them:
+  //   OFF      not one outbound write. Every shop's default, forever.
+  //   OBSERVE  evaluate and report exactly what WOULD be mirrored - zero writes.
+  //   ENFORCE  real Square bookings. Refused until every bookable barber AND
+  //            every bookable service they offer carries a fresh mapping.
+  // The mode gates CREATION only, for the same reason as Acuity's: cancelling
+  // or reconciling a Square booking ChairBack already owns must keep working in
+  // every mode, or switching a shop OFF would strand it on the seller's
+  // calendar with no way to clear it.
+  squareOutboundMode SquareOutboundMode @default(OFF)
 
   // Native booking engine. bookingMode picks the ONE active source (see enum);
   // default `link` so every existing shop keeps its bookingUrl behavior until the
@@ -899,6 +940,47 @@ model SquareConnection {
   revokedAt        DateTime? // set on oauth.authorization.revoked (seller disconnect)
   connectedAt      DateTime @default(now())
   updatedAt        DateTime @updatedAt
+
+  //  OUTBOUND (calendar protection) - everything below is unused by inbound sync
+
+  // THE AUTHORIZATION GENERATION. Bumped on every completed OAuth callback,
+  // including a re-authorization of the SAME merchant.
+  //
+  // Why a counter and not connectedAt: the inbound callback has always been an
+  // upsert whose UPDATE branch never touched connectedAt, so a reconnected row
+  // still carries its original timestamp - a timestamp comparison would call a
+  // mapping fresh that was made against a different merchant. An integer that
+  // only ever increments cannot be wrong about that, and it survives clock skew
+  // and a restored backup alike. A mapping stamped with a generation that is
+  // not the current one is STALE and blocks ENFORCE.
+  connectionGeneration Int @default(1)
+
+  // The scopes Square actually GRANTED, read back from RetrieveTokenStatus -
+  // never the scope string we asked for. `scope` above is the request; a seller
+  // can decline, and a token minted before outbound existed carries read scopes
+  // only. Empty + scopesCheckedAt null = we have not been able to ask, which is
+  // reported as unverified rather than assumed either way.
+  grantedScopes    String[]  @default([])
+  scopesCheckedAt  DateTime?
+
+  // Business booking profile capability (RetrieveBusinessBookingProfile).
+  // support_seller_level_writes is false below Appointments Plus, and a
+  // seller-level write on such an account fails at call time - so it is a
+  // PREREQUISITE, checked and shown before anyone can arm enforcement, not a
+  // surprise discovered on a customer's booking.
+  sellerLevelWrites   Boolean?
+  bookingEnabled      Boolean?
+  capabilityCheckedAt DateTime?
+
+  // The location outbound bookings are written to. SEPARATE from
+  // squareLocationId on purpose: that one was chosen for the shop by
+  // "first ACTIVE location" at connect time, which is an acceptable default for
+  // READING a single-location seller and an unacceptable one for writing into a
+  // multi-location seller's calendar. Null = not chosen; outbound refuses.
+  outboundLocationId         String?
+  outboundLocationName       String?
+  outboundLocationGeneration Int?
+  outboundLocationSelectedAt DateTime?
 
   @@index([squareMerchantId])
 }
@@ -1585,6 +1667,21 @@ model Staff {
   // connectedAt (an OAuth reconnect may be a different Acuity account, whose
   // calendar ids mean someone else's chair). Stale mappings block ENFORCE.
   acuityCalendarMappedAt DateTime?
+  // WHICH SQUARE TEAM MEMBER IS THIS CHAIR. The Square counterpart of
+  // acuityCalendarId, and load-bearing for the same reason: a Square Booking
+  // names a team_member_id, so an unmapped or wrongly mapped chair puts the
+  // appointment on a COLLEAGUE'S day - taking the wrong barber off the board
+  // while leaving the real conflict bookable. NULL = unmapped; outbound refuses
+  // to guess. Populated from ListTeamMemberBookingProfiles (bookable profiles
+  // only - a team member who cannot be booked in Square cannot receive a
+  // mirrored booking).
+  squareTeamMemberId String?
+  // When the mapping was saved, and the SquareConnection.connectionGeneration it
+  // was saved against. The generation is what decides staleness (a reconnect can
+  // be a different merchant, where this id is a stranger); the timestamp is for
+  // display and for explaining WHY something went stale.
+  squareTeamMemberMappedAt         DateTime?
+  squareTeamMemberMappedGeneration Int?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1720,6 +1817,22 @@ model Service {
   // across all sibling members. Deleting the group SETs this back to null (the
   // services survive). See model ServiceGroup and engines/slots.ts.
   serviceGroupId String?
+  // WHICH SQUARE SERVICE VARIATION IS THIS SERVICE. A Square Booking's
+  // appointment_segment names a service_variation_id AND the
+  // service_variation_version it was priced/timed at; Square rejects a create
+  // whose version is behind the catalog. So the version is stored WITH the id
+  // and refreshed whenever the mapping is (re)saved.
+  //
+  // Kept as a String rather than BigInt: Square catalog versions are int64, and
+  // a BigInt on an Express response is a `JSON.stringify` throw waiting for the
+  // one shop whose version is large - the value is only ever echoed back to
+  // Square, never arithmetic.
+  squareServiceVariationId      String?
+  squareServiceVariationVersion String?
+  // Mapping freshness, same contract as Staff.squareTeamMemberMapped*: the
+  // generation decides, the timestamp explains.
+  squareServiceVariationMappedAt         DateTime?
+  squareServiceVariationMappedGeneration Int?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

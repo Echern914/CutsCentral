@@ -344,9 +344,42 @@ export const SQUARE = {
   // bookings OUR app created — APPOINTMENTS_ALL_READ is what delivers a seller's
   // EXISTING bookings via ListBookings + webhooks. CUSTOMERS_READ for contacts.
   scope: "APPOINTMENTS_READ APPOINTMENTS_ALL_READ CUSTOMERS_READ MERCHANT_PROFILE_READ",
+  // CALENDAR PROTECTION scope. Requested ONLY when a manager explicitly opts a
+  // shop into outbound mirroring (/api/square/oauth/start?outbound=1), never on
+  // the ordinary connect.
+  //
+  // Kept as a second constant rather than widening `scope` because widening it
+  // would change the consent screen every seller sees at connect time, for a
+  // capability almost none of them have asked for - and a seller on a Square
+  // plan without Appointments Plus being shown write permissions they cannot
+  // use is a connect flow that fails for a feature they never wanted. The
+  // narrow scope stays the default; the wide one is opt-in and reversible.
+  //
+  // CUSTOMERS_WRITE is in here because Square has no blocked-time concept: an
+  // outbound mirror must be a real Booking, a Booking requires a customer_id,
+  // and creating that customer record is therefore part of protecting the
+  // chair. See SquareOutboundMode in the schema.
+  outboundScope:
+    "APPOINTMENTS_READ APPOINTMENTS_ALL_READ APPOINTMENTS_WRITE APPOINTMENTS_ALL_WRITE CUSTOMERS_READ CUSTOMERS_WRITE MERCHANT_PROFILE_READ ITEMS_READ",
+  // The two scopes that must be GRANTED (not merely requested) before any
+  // outbound write is possible. APPOINTMENTS_WRITE alone only lets us manage
+  // bookings OUR app created; ALL_WRITE is what permits a seller-level write
+  // into the seller's own calendar - exactly the READ/ALL_READ split that
+  // already bit the inbound sync.
+  outboundRequiredScopes: ["APPOINTMENTS_WRITE", "APPOINTMENTS_ALL_WRITE"] as const,
   // Booking webhook events. booking.updated carries cancellations (status flips
   // to a CANCELLED_* value); there is no separate booking.canceled event.
   webhookEvents: ["booking.created", "booking.updated"] as const,
+  // Read-only endpoints the outbound SETUP needs. Listed here so the one place
+  // that decides "which Square URLs does ChairBack touch" is greppable - and so
+  // it is visible at a glance that S1 adds no write path.
+  paths: {
+    locations: "/v2/locations",
+    businessBookingProfile: "/v2/bookings/business-booking-profile",
+    teamMemberBookingProfiles: "/v2/bookings/team-member-booking-profiles",
+    catalogList: "/v2/catalog/list",
+    tokenStatus: "/oauth2/token/status",
+  },
 } as const;
 
 export type SquareEnv = "sandbox" | "production";

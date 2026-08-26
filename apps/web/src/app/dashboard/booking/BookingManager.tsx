@@ -33,6 +33,7 @@ import { ShopQrCard } from "./ShopQrCard";
 import { HolidayPricing } from "./HolidayPricing";
 import { ConnectPlatforms } from "./ConnectPlatforms";
 import { AcuityCalendarMap } from "./AcuityCalendarMap";
+import { SquareSetup } from "./SquareSetup";
 import { Sheet } from "./AppointmentForm";
 import { TimeSelect } from "@/components/ui/TimeSelect";
 import { ImageField } from "../site/ImageField";
@@ -466,6 +467,13 @@ function SettingsTab({
           time on both sides. Hidden everywhere else - a shop on Acuity-only or
           with no connection has nothing to map. */}
       {mode === "native" && connect.acuityConnected && <AcuityCalendarMap />}
+
+      {/* Same shape, same reason, harder API: ChairBack owns the bookings AND
+          Square is still connected, so a Square customer can buy a chair
+          ChairBack already sold. Square has no blocked-time concept, so the
+          protection is a real Square Booking - which needs a location, a team
+          member and a service variation before it can be armed. */}
+      {mode === "native" && connect.squareConnected && <SquareSetup apiBase={apiBase} />}
 
       {mode !== "native" && (
         <Card className="p-5">

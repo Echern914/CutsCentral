@@ -9,6 +9,7 @@ import {
   verifyOAuthState,
 } from "../square/oauth.js";
 import { squareEnabled } from "../square/client.js";
+import { refreshSquareCapability } from "../engines/squareOutboundMap.js";
 import { backfillSquareShop } from "../square/backfill.js";
 import { logger } from "../logger.js";
 import { requireShop, requireUser } from "../middleware/auth.js";
@@ -40,12 +41,24 @@ async function fetchPrimaryLocationId(accessToken: string): Promise<string | nul
 }
 
 // Start: redirect the barber to Square's consent screen with a CSRF state.
+//
+// `?outbound=1` asks for the WIDER scope set that calendar protection needs
+// (APPOINTMENTS_WRITE + APPOINTMENTS_ALL_WRITE + CUSTOMERS_WRITE + ITEMS_READ).
+// It is opt-in so that the ordinary "connect Square" flow every seller uses
+// keeps asking for exactly what it always asked for - a seller who only wants
+// their bookings synced is never shown write permissions, and the connect flow
+// they use cannot regress behind a feature they never armed.
 squareOAuthRouter.get("/start", requireUser, requireShop, (req, res) => {
   if (!squareEnabled()) {
     res.status(503).json({ error: "square_disabled" });
     return;
   }
-  const state = createOAuthState(req.shop!.id, nowSeconds());
+  const outbound = req.query.outbound === "1" || req.query.outbound === "true";
+  // The flag rides in the SIGNED state, not just in the redirect: the callback
+  // has no other way to know which consent screen the seller was actually
+  // shown, and recording "we asked for write scopes" when we did not would make
+  // the stored `scope` a lie.
+  const state = createOAuthState(req.shop!.id, nowSeconds(), outbound);
   res.cookie(OAUTH_STATE_COOKIE, state, {
     httpOnly: true,
     secure: env.NODE_ENV === "production",
@@ -53,7 +66,7 @@ squareOAuthRouter.get("/start", requireUser, requireShop, (req, res) => {
     maxAge: 10 * 60 * 1000,
     path: "/",
   });
-  res.redirect(buildAuthorizeUrl(state));
+  res.redirect(buildAuthorizeUrl(state, outbound ? SQUARE.outboundScope : SQUARE.scope));
 });
 
 // Callback: validate state -> exchange code -> pick location -> store -> backfill.
@@ -82,6 +95,9 @@ squareOAuthRouter.get("/callback", async (req, res) => {
     res.status(404).json({ error: "shop_not_found" });
     return;
   }
+
+  // Which consent screen the seller actually saw, per the signed state.
+  const requestedScope = state.outbound ? SQUARE.outboundScope : SQUARE.scope;
 
   try {
     const token = await exchangeCodeForToken(code);
@@ -119,7 +135,7 @@ squareOAuthRouter.get("/callback", async (req, res) => {
         squareLocationId: locationId,
         accessToken: encrypt(token.access_token, env.TOKEN_ENCRYPTION_KEY),
         refreshToken: encrypt(token.refresh_token, env.TOKEN_ENCRYPTION_KEY),
-        scope: SQUARE.scope,
+        scope: requestedScope,
         tokenExpiresAt: new Date(token.expires_at),
         revokedAt: null,
       },
@@ -128,14 +144,46 @@ squareOAuthRouter.get("/callback", async (req, res) => {
         squareLocationId: locationId,
         accessToken: encrypt(token.access_token, env.TOKEN_ENCRYPTION_KEY),
         refreshToken: encrypt(token.refresh_token, env.TOKEN_ENCRYPTION_KEY),
+        scope: requestedScope,
         tokenExpiresAt: new Date(token.expires_at),
+        // Refreshed so "connected since" means the CURRENT authorization. The
+        // update branch never used to touch this, which is exactly why
+        // staleness is decided by the counter below and not by this timestamp.
+        connectedAt: new Date(),
         revokedAt: null,
+
+        // A NEW AUTHORIZATION INVALIDATES EVERY MAPPING.
+        //
+        // This callback cannot tell whether the seller re-authorized the same
+        // merchant or connected a different one - the merchant guard above only
+        // proves no OTHER shop holds a live claim. A team member id that meant
+        // "Eric" under the old authorization can mean a stranger under the new
+        // one, so every mapping stamped against the previous generation goes
+        // stale at once and has to be re-attested. Bumping is cheap; getting
+        // this wrong writes a real customer's booking into a stranger's day.
+        connectionGeneration: { increment: 1 },
+        // What the PREVIOUS token was granted says nothing about this one.
+        // Cleared rather than kept so the gate reads "unverified" until the
+        // read-back below succeeds - the safe direction is the default.
+        grantedScopes: [],
+        scopesCheckedAt: null,
+        sellerLevelWrites: null,
+        bookingEnabled: null,
+        capabilityCheckedAt: null,
       },
     });
 
     // NOTE: Square webhooks are configured at the APP level in the Developer
     // Console (one endpoint + signature key for all merchants), routed inbound by
     // merchant_id — so there is no per-shop subscribe call here (unlike Acuity).
+
+    // Read back what Square ACTUALLY granted, plus the seller's plan
+    // capability. Awaited (unlike the backfill) because the manager is about to
+    // land on the setup screen and "we do not know your scopes yet" is a
+    // confusing first impression of a connect that just succeeded. It swallows
+    // its own failures into the unverified state, so it cannot fail this
+    // redirect.
+    await refreshSquareCapability(shop.id);
 
     void backfillSquareShop(shop.id).catch((err) =>
       logger.error({ err, shopId: shop.id }, "square backfill failed"),
