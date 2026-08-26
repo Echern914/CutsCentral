@@ -3,16 +3,18 @@
 import { useState, useTransition } from "react";
 import { cn } from "@/lib/cn";
 import { zonedWallTimeToUtc } from "@chairback/config/time";
-import { Sheet } from "./AppointmentForm";
+import { Dialog } from "@/components/ui/Dialog";
+import { chip, Field, FormFooter, Group, INPUT } from "./formkit";
 import type { StaffRow } from "./page";
 import { addBlockAction } from "./actions";
 
 type Toast = (msg: string, kind?: "success" | "error") => void;
 
 /**
- * ChairBack-styled "Block Off Time" sheet (native). Blocks a time range on a
- * provider's calendar so no one can book it. Reuses the existing staff-exceptions
- * endpoint. `dayKey` (YYYY-MM-DD, shop tz) is the day tapped in the calendar.
+ * "Block off time" (native), in the SAME chrome as the appointment sheet:
+ * ui/Dialog shell, formkit cards. Blocks a time range on a provider's calendar
+ * so no one can book it. Reuses the existing staff-exceptions endpoint.
+ * `dayKey` (YYYY-MM-DD, shop tz) is the day tapped in the calendar.
  */
 export function BlockOffForm({
   staff,
@@ -80,45 +82,54 @@ export function BlockOffForm({
     });
   }
 
-  const label = "text-[11px] font-medium uppercase tracking-wide text-muted";
-  const input =
-    "rounded-lg border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite";
-
   return (
-    <Sheet title="Block off time" onClose={onClose}>
-      <div className="flex flex-col gap-4">
+    <Dialog
+      open
+      onClose={onClose}
+      title="Block off time"
+      titleAlign="center"
+      className="sm:max-w-lg"
+      footer={
+        <FormFooter
+          error={error}
+          label="Add block"
+          pendingLabel="Blocking…"
+          pending={pending}
+          onSubmit={submit}
+          // Deliberately NOT brass: blocking time is upkeep, not the money
+          // path, and the two forms open from the same calendar.
+          tone="quiet"
+        />
+      }
+    >
+      <div data-qa="block-off-form" className="flex min-w-0 flex-col gap-5">
         {activeStaff.length > 1 && (
-          <div>
-            <p className={label}>Provider</p>
-            <div className="mt-1.5 flex flex-wrap gap-1.5">
+          <Group title="Provider">
+            <div className="flex flex-wrap gap-1.5">
               {activeStaff.map((s) => (
                 <button
                   key={s.id}
                   type="button"
                   onClick={() => setStaffId(s.id)}
-                  className={cn(
-                    "rounded-lg border px-3 py-1.5 text-sm transition-colors",
-                    staffId === s.id
-                      ? "border-gold/50 bg-gold/10 text-gold"
-                      : "border-subtle text-muted hover:text-offwhite",
-                  )}
+                  className={chip(staffId === s.id, "px-4")}
                 >
                   {s.name}
                 </button>
               ))}
             </div>
-          </div>
+          </Group>
         )}
 
-        <div>
-          <div className="flex items-center justify-between">
-            <p className={label}>Time</p>
+        <Group
+          title="Time"
+          action={
             <button
               type="button"
               onClick={() => setAllDay((v) => !v)}
               aria-pressed={allDay}
               className={cn(
-                "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                // 44px hit area, pill look, header stays tight.
+                "-my-2 flex h-11 items-center rounded-full border px-3.5 text-xs font-medium transition-colors duration-150 ease-out",
                 allDay
                   ? "border-gold/50 bg-gold/10 text-gold"
                   : "border-subtle text-muted hover:text-offwhite",
@@ -126,52 +137,46 @@ export function BlockOffForm({
             >
               All day
             </button>
-          </div>
+          }
+        >
           {!allDay && (
-            <div className="mt-1.5 flex items-center gap-3">
-              <input
-                type="time"
-                className={input}
-                value={fromTime}
-                onChange={(e) => setFromTime(e.target.value)}
-              />
-              <span className="text-sm text-muted">to</span>
-              <input
-                type="time"
-                className={input}
-                value={toTime}
-                onChange={(e) => setToTime(e.target.value)}
-              />
+            <div className="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2">
+              <Field label="From">
+                <input
+                  type="time"
+                  className={INPUT}
+                  value={fromTime}
+                  onChange={(e) => setFromTime(e.target.value)}
+                />
+              </Field>
+              <Field label="To">
+                <input
+                  type="time"
+                  className={INPUT}
+                  value={toTime}
+                  onChange={(e) => setToTime(e.target.value)}
+                />
+              </Field>
             </div>
           )}
-          <p className="mt-1.5 text-[11px] text-muted">
+          <p className="text-[11px] text-muted">
             {allDay ? `All of ${dayKey} — nothing bookable` : dayKey}
           </p>
-        </div>
+        </Group>
 
-        <div>
-          <p className={label}>Note</p>
-          <input
-            className={cn(input, "mt-1.5 w-full")}
-            placeholder="Lunch, day off, etc. (optional)"
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            maxLength={200}
-          />
-        </div>
-
-        {error && <p className="text-sm text-danger-soft">{error}</p>}
-
-        <button
-          type="button"
-          onClick={submit}
-          disabled={pending}
-          className="w-full rounded-xl bg-offwhite py-3 text-center text-sm font-semibold text-charcoal transition-colors hover:bg-white disabled:opacity-50"
-        >
-          {pending ? "Blocking…" : "Add block"}
-        </button>
+        <Group title="Note">
+          <Field label="Only you see this">
+            <input
+              className={INPUT}
+              placeholder="Lunch, day off, etc. (optional)"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              maxLength={200}
+            />
+          </Field>
+        </Group>
       </div>
-    </Sheet>
+    </Dialog>
   );
 }
 
