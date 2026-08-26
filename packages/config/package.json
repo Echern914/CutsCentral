@@ -17,7 +17,8 @@
     "./features": "./src/features.ts",
     "./help": "./src/help.ts",
     "./helpMatch": "./src/helpMatch.ts",
-    "./nextPath": "./src/nextPath.ts"
+    "./nextPath": "./src/nextPath.ts",
+    "./mcpScopes": "./src/mcpScopes.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

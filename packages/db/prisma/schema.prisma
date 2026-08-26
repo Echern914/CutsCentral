@@ -134,6 +134,8 @@ model User {
   notifyPrefs         BarberNotifyPref[]
   // Barber/manager devices registered for native push (dashboard app).
   pushSubscriptions   PushSubscription[]
+  // Assistants (ChatGPT/Claude) this person connected to one of their shops.
+  mcpConnections      McpConnection[]
 
   // Affiliate/referral reporting: "how many signups did code X drive?"
   @@index([referralCode])
@@ -555,6 +557,9 @@ model Shop {
   // shop was itself referred.
   referralsGiven    Referral[] @relation("ReferralsGiven")
   referralReceived  Referral?  @relation("ReferralsReceived")
+  // Assistants authorized against this shop, and what they did.
+  mcpConnections    McpConnection[]
+  mcpAuditEvents    McpAuditEvent[]
 
   @@index([ownerId])
 }
@@ -2589,4 +2594,235 @@ model ReceptionistMessage {
 
   @@index([conversationId, createdAt])
   @@index([shopId, createdAt])
+}
+
+// ============================================================================
+//  Remote MCP server: authorization, tokens and audit
+// ============================================================================
+//
+//  THE SHAPE, in one place, because the rest of this block only makes sense
+//  against it:
+//
+//    McpClient        an AI client that registered itself (RFC 7591). PUBLIC -
+//                     no secret; PKCE is what proves the caller.
+//    McpAuthCode      one single-use authorization code, alive for seconds.
+//    McpConnection    "this USER authorized this CLIENT against this SHOP".
+//                     The durable grant. Revoking it kills every token at once.
+//    McpAccessToken   short-lived bearer, HASHED. Opaque on purpose (see below).
+//    McpRefreshToken  long-lived, rotating, hashed, in a family.
+//    McpToolGrant     which scopes this connection actually holds.
+//    McpAuditEvent    what a connection did, with no customer data in it.
+//
+//  🔴 WHY OPAQUE TOKENS AND NOT JWTs. A JWT is self-validating, which means it
+//  stays valid until it expires no matter what the database says. Two of this
+//  feature's hard requirements are "revocation takes effect immediately" and
+//  "if a user loses their seat, access stops immediately" - neither is
+//  expressible with a stateless token unless you add a denylist, at which point
+//  you are doing a database read anyway and have gained nothing but a second
+//  code path. So: 256 bits of CSPRNG, stored as SHA-256, resolved on every
+//  request, membership re-checked every time.
+//
+//  🔴 WHY SHA-256 AND NOT ARGON2 (which User.passwordHash uses). These are
+//  high-entropy random tokens, not human-chosen passwords: there is no
+//  dictionary to attack and no work factor worth paying on every API call. A
+//  slow KDF here would be a self-inflicted rate limit. Passwords stay on
+//  argon2id precisely because they are low-entropy.
+
+/// An AI client that registered itself via RFC 7591 dynamic client registration.
+/// Public client: no secret is issued and none is accepted - PKCE is the proof.
+model McpClient {
+  id           String          @id @default(cuid())
+  /// The `client_id` handed to the client. Random, not guessable, not a row id.
+  clientId     String          @unique
+  /// Self-declared, UNTRUSTED, shown to the human only as a label. Never used
+  /// to make an authorization decision.
+  clientName   String
+  /// Exact-match allowlist. A redirect_uri that is not byte-identical to one of
+  /// these is refused - no prefix matching, no wildcards, no normalisation.
+  redirectUris String[]
+  /// Which provider this looks like, for UI copy only. Never authorization.
+  providerHint McpProviderHint @default(OTHER)
+  createdAt    DateTime        @default(now())
+  disabledAt   DateTime?
+
+  authCodes   McpAuthCode[]
+  connections McpConnection[]
+
+  @@index([createdAt])
+}
+
+enum McpProviderHint {
+  CHATGPT
+  CLAUDE
+  OTHER
+}
+
+/// READ_ONLY is the only level this PR can mint. MANAGEMENT exists in the type
+/// so the column never has to change later, and is refused at every entry point
+/// until the write-proposal PR builds the confirmation flow behind it.
+enum McpAccessLevel {
+  READ_ONLY
+  MANAGEMENT
+}
+
+/// A single-use authorization code. Everything the token exchange must check is
+/// FROZEN here at authorize time, so the exchange compares against what the
+/// human actually approved rather than against whatever the client re-sends.
+model McpAuthCode {
+  id               String         @id @default(cuid())
+  /// SHA-256 of the code. The code itself rides in the redirect and is never stored.
+  codeHash         String         @unique
+  clientId         String
+  client           McpClient      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  userId           String
+  shopId           String
+  /// PKCE challenge. S256 only - `plain` is refused at the authorize endpoint.
+  codeChallenge    String
+  /// Byte-identical to the value sent to /authorize, re-checked at /token.
+  redirectUri      String
+  /// RFC 8707 audience. The token minted from this code is bound to it, so a
+  /// token for one resource cannot be replayed at another.
+  resource         String
+  scopes           String[]
+  accessLevel      McpAccessLevel @default(READ_ONLY)
+  expiresAt        DateTime
+  /// Set on first use. A SECOND use is treated as theft, not as a retry.
+  consumedAt       DateTime?
+  /// Set when a reuse was detected, which also revokes the connection it minted.
+  replayDetectedAt DateTime?
+  createdAt        DateTime       @default(now())
+
+  @@index([expiresAt])
+  @@index([userId])
+}
+
+/// The durable grant: this user authorized this client against this shop.
+/// Every token points at one of these, so revoking it is one write.
+model McpConnection {
+  id            String         @id @default(cuid())
+  userId        String
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  shopId        String
+  shop          Shop           @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  clientId      String
+  client        McpClient      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  accessLevel   McpAccessLevel @default(READ_ONLY)
+  createdAt     DateTime       @default(now())
+  /// Bumped on every authenticated call. Drives "last used" in the UI and is
+  /// the only mutable field on the hot path.
+  lastUsedAt    DateTime?
+  revokedAt     DateTime?
+  /// Why it was revoked, for the activity list: "user", "replay", "membership".
+  revokedReason String?
+
+  accessTokens  McpAccessToken[]
+  refreshTokens McpRefreshToken[]
+  grants        McpToolGrant[]
+  auditEvents   McpAuditEvent[]
+
+  /// One live connection per (user, shop, client). Re-authorizing reuses the
+  /// row rather than accumulating duplicates the human cannot tell apart.
+  @@unique([userId, shopId, clientId])
+  @@index([shopId])
+  @@index([revokedAt])
+}
+
+/// Short-lived bearer. Hashed at rest; the plaintext exists only in the token
+/// response and in the client's memory.
+model McpAccessToken {
+  id           String        @id @default(cuid())
+  tokenHash    String        @unique
+  connectionId String
+  connection   McpConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  /// RFC 8707 audience, copied from the auth code. Checked on every request: a
+  /// token minted for a different resource is rejected even if it is valid.
+  resource     String
+  scopes       String[]
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  createdAt    DateTime      @default(now())
+
+  @@index([connectionId])
+  @@index([expiresAt])
+}
+
+/// Rotating refresh token. `tokenFamily` is what makes replay detectable: every
+/// token descended from one authorization shares a family id, so presenting an
+/// already-rotated token proves a copy leaked and the WHOLE family dies.
+model McpRefreshToken {
+  id               String        @id @default(cuid())
+  tokenHash        String        @unique
+  connectionId     String
+  connection       McpConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  tokenFamily      String
+  resource         String
+  scopes           String[]
+  expiresAt        DateTime
+  /// Set when this token was exchanged for its successor. A rotated token is
+  /// spent, not merely old.
+  rotatedAt        DateTime?
+  revokedAt        DateTime?
+  /// Set when a rotated-or-revoked token was presented again.
+  replayDetectedAt DateTime?
+  createdAt        DateTime      @default(now())
+
+  @@index([connectionId])
+  @@index([tokenFamily])
+  @@index([expiresAt])
+}
+
+/// Which scopes a connection holds. Separate from the token so a human can
+/// withdraw one capability without forcing a full re-authorization.
+model McpToolGrant {
+  id           String        @id @default(cuid())
+  connectionId String
+  connection   McpConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  scope        String
+  enabled      Boolean       @default(true)
+  grantedAt    DateTime      @default(now())
+  revokedAt    DateTime?
+
+  @@unique([connectionId, scope])
+  @@index([connectionId])
+}
+
+/// What a connection did.
+///
+/// 🔴 DELIBERATELY CONTENT-FREE. No client names, no phone numbers, no emails,
+/// no notes, no prompts, no tool arguments and no response bodies. A resource is
+/// referenced by TYPE and ID only, so this table can be read by support, shown
+/// in the dashboard, and shipped to logs without becoming a second copy of the
+/// customer database.
+model McpAuditEvent {
+  id            String           @id @default(cuid())
+  shopId        String
+  shop          Shop             @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  /// Null for an event that failed BEFORE a token resolved to anybody.
+  userId        String?
+  connectionId  String?
+  connection    McpConnection?   @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  toolName      String
+  operationType McpOperationType
+  resourceType  String?
+  resourceId    String?
+  result        McpAuditResult
+  /// A short machine code ("expired_token", "wrong_audience"). Never a message,
+  /// never a stack, never anything derived from the request body.
+  failureCode   String?
+  createdAt     DateTime         @default(now())
+
+  @@index([shopId, createdAt])
+  @@index([connectionId, createdAt])
+}
+
+enum McpOperationType {
+  READ
+  WRITE
+  AUTH
+}
+
+enum McpAuditResult {
+  OK
+  DENIED
+  ERROR
 }

@@ -22,6 +22,8 @@ import { acuityWebhookRouter } from "./routes/webhooks.acuity.js";
 import { squareWebhookRouter } from "./routes/webhooks.square.js";
 import { twilioWebhookRouter } from "./routes/webhooks.twilio.js";
 import { acuityOAuthRouter } from "./routes/acuity.oauth.js";
+import { mcpRouter, mcpWellKnownRouter } from "./routes/mcp.js";
+import { mcpOAuthRouter } from "./routes/mcp.oauth.js";
 import { squareOAuthRouter } from "./routes/square.oauth.js";
 import { adminRouter } from "./routes/admin.js";
 import { rewardsRouter } from "./routes/rewards.js";
@@ -98,6 +100,12 @@ export function createApp(): Express {
   // Health check (no body needed).
   app.use(healthRouter);
 
+  // MCP DISCOVERY. Public, unauthenticated, and mounted at the ORIGIN root
+  // because RFC 8414 and RFC 9728 both specify /.well-known/... there - a
+  // client will not look anywhere else. Registered before the body parsers
+  // because these are GETs with no body.
+  app.use(mcpWellKnownRouter);
+
   // (1) Webhooks - each mounts its own body parser internally. Rate-limited per
   // IP (generous; legit bursts happen) to bound DoS if a secret leaks.
   app.use("/webhooks/acuity", webhookLimiter, acuityWebhookRouter);
@@ -130,6 +138,18 @@ export function createApp(): Express {
   // Photo upload proxy. Uses a per-route express.raw() parser (image/*), so the
   // global express.json() above leaves its body untouched. Limited per-user.
   app.use("/api", uploadRouter);
+  // REMOTE MCP SERVER.
+  //
+  // 🔴 NOT under /api, and deliberately so: `resource` in every token is
+  // `<API_BASE_URL>/mcp`, and that string is what an MCP client stores and what
+  // the audience check compares against. Moving the mount later would invalidate
+  // every issued token, so it is fixed here and asserted in the tests.
+  //
+  // The OAuth sub-router carries its own per-route limits; the MCP endpoint
+  // keys its limiter on the bearer token rather than the IP (see mcpLimiter).
+  app.use("/mcp/oauth", mcpOAuthRouter);
+  app.use("/mcp", mcpRouter);
+
   app.use("/api/acuity/oauth", oauthLimiter, acuityOAuthRouter);
   app.use("/api/square/oauth", oauthLimiter, squareOAuthRouter);
   app.use("/api/rewards", rewardsLimiter, rewardsRouter);
