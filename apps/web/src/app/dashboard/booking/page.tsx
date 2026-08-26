@@ -128,6 +128,13 @@ export interface AgendaRow {
    * knows where it came from — and why that time is blocked for native booking.
    */
   syncedExternal?: boolean;
+  /**
+   * Block rows only: how many IDENTICAL external blocks this row stands for.
+   * 1 (or absent) is the normal case. Higher means the external calendar holds
+   * several byte-identical blocks for the same span — shown as a "×N" chip
+   * rather than N indistinguishable bands down the day.
+   */
+  duplicateCount?: number;
   start: string; // ISO
   end: string | null; // ISO
   clientName: string; // for a block: the reason (or "Blocked")

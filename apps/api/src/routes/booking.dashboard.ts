@@ -11,6 +11,7 @@ import {
   type CancelSeriesScope,
 } from "../engines/appointmentPromotion.js";
 import { recomputeCadence } from "../engines/cadence.js";
+import { collapseExternalBlocks } from "../engines/externalBlockCollapse.js";
 import { notifyPunchEarned } from "../services/loyaltyNotify.js";
 import { notifyAppointmentConfirmation } from "../services/appointmentNotify.js";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
@@ -1609,6 +1610,13 @@ interface AgendaRow {
   // Absent on synced-mode shops, where every row is a visit and a badge on all
   // of them would be noise.
   syncedExternal?: boolean;
+  /**
+   * Block rows only: how many IDENTICAL external blocks this one row stands
+   * for. 1 (or absent) is the normal case. Higher means the external calendar
+   * holds several byte-identical blocks for the same span, which the day view
+   * shows as a "×N" chip instead of N indistinguishable bands.
+   */
+  duplicateCount?: number;
   start: string; // ISO
   end: string | null; // ISO
   clientName: string; // for a block: the reason (or "Blocked")
@@ -1910,13 +1918,29 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
     where: { shopId, startsAt: { lte: to }, endsAt: { gte: from } },
     orderBy: { startsAt: "asc" },
     take: BLOCK_CAP,
-    select: { id: true, startsAt: true, endsAt: true, reason: true },
+    select: {
+      id: true,
+      startsAt: true,
+      endsAt: true,
+      reason: true,
+      // Both only for the duplicate collapse below: the calendar is part of
+      // what makes two blocks the SAME block, and createdAt picks the survivor.
+      externalCalendarId: true,
+      createdAt: true,
+    },
   });
   if (externalBlockRows.length >= BLOCK_CAP) truncated = true;
-  const externalBlockAgenda: AgendaRow[] = externalBlockRows.map((b) => ({
+  // Acuity stores duplicate blocks happily, so one evening could arrive here as
+  // four byte-identical rows and render as four identical unactionable bands.
+  // Collapsed on EXACT equality only - see the engine for why overlapping, a
+  // different note or a different calendar must all stay separate.
+  const externalBlockAgenda: AgendaRow[] = collapseExternalBlocks(
+    externalBlockRows,
+  ).map(({ block: b, duplicateCount }) => ({
     id: b.id,
     source: "block" as const,
     syncedExternal: true,
+    duplicateCount,
     start: b.startsAt.toISOString(),
     end: b.endsAt.toISOString(),
     clientName: b.reason || "Blocked in Acuity",
