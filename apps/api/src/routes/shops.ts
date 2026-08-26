@@ -55,6 +55,7 @@ import {
   mintCancelToken,
   sha256Hex,
 } from "../engines/waitlistJoin.js";
+import { resolveWaitlistClientId } from "../engines/waitlistClientLink.js";
 import { sendWaitlistConfirmation } from "../messaging/waitlistEmail.js";
 import {
   CUSTOMER_ACTOR,
@@ -882,6 +883,13 @@ publicPageRouter.post("/:slug/waitlist", waitlistLimiter, async (req, res) => {
     // constraints to violate, so the only thing that fails it is a database
     // outage - which was failing the join anyway.
     await prisma.$transaction(async (tx) => {
+      // Who is this, if we can tell? One rule, stated once
+      // (engines/waitlistClientLink.ts): the single non-archived client in
+      // this shop with this exact number. Null when there is no number, no
+      // match, or more than one - a guess here would attribute one person's
+      // standing to another, and null costs nothing because the offer scan
+      // still falls back to the same phone lookup.
+      const clientId = await resolveWaitlistClientId(tx, shop.id, phone);
       const entry = await tx.waitlistEntry.create({
         data: {
           shopId: shop.id,
@@ -889,6 +897,7 @@ publicPageRouter.post("/:slug/waitlist", waitlistLimiter, async (req, res) => {
           lastName: d.lastName || null,
           phone,
           email,
+          clientId,
           serviceId,
           staffId,
           preferredTime: d.preferredTime || null,

@@ -982,6 +982,7 @@ model Client {
   updatedAt DateTime @updatedAt
 
   visits              Visit[]
+  waitlistEntries     WaitlistEntry[]
   ledger              PunchLedger[]
   nudges              Nudge[]
   promoUses           PromotionRedemption[]
@@ -1038,6 +1039,23 @@ model WaitlistEntry {
   lastName      String?
   phone         String? // E.164 when parseable, else raw input
   email         String?
+
+  // The client record this entry belongs to, when we can tell. NULLABLE ON
+  // PURPOSE and forever: a waitlist join is a public form, and the person
+  // filling it in may not be in the book at all.
+  //
+  // 🔑 Set from exactly ONE rule, in exactly three places that all mean the
+  // same thing (engines/waitlistClientLink.ts): an UNAMBIGUOUS, non-archived
+  // client in this shop with this exact phone. Ambiguous (two live clients,
+  // one number) stays null rather than guessing, because a wrong link here
+  // would attribute one person's history to another.
+  //
+  // Nothing about matching or ranking reads this yet - reachability prefers
+  // it and falls back to the same phone lookup it has always done, which is
+  // why a null costs nothing today.
+  clientId      String?
+  client        Client?  @relation(fields: [clientId], references: [id], onDelete: SetNull)
+
   serviceId     String? // set when joined from a full day; null for a standing join
   staffId       String? // "" / null = any provider
   preferredTime String? // freeform ("Sat morning") for standing joins
@@ -1110,6 +1128,9 @@ model WaitlistEntry {
   @@index([shopId, status, createdAt])
   // The matcher asks "who is still waiting and not yet expired".
   @@index([shopId, status, expiresAt])
+  // "Which entries belong to this client" - the backfill's own verification
+  // query, and the join the tier ranking will need.
+  @@index([shopId, clientId])
 }
 
 // One date/time preference on a waitlist entry. Up to five per entry (enforced

@@ -4,6 +4,7 @@ import { randomToken } from "@chairback/config";
 import {
   __lastScanStatsForTests,
   __setConnectEnabledForTests,
+  __setScanTraceForTests,
   claimOffer,
   expireDueOffers,
   HOLD_MINUTES,
@@ -1493,5 +1494,175 @@ describe("reachability is explicit, never pretended", () => {
     // And they stayed WAITING the whole time before that - never dropped.
     const e = await prisma.waitlistEntry.findUnique({ where: { id: phoneOnly.id } });
     expect(["WAITING"]).toContain(e!.status);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* The keyset walk                                                     */
+/* ------------------------------------------------------------------ */
+
+describe("🔴 the scan visits every waiting entry exactly ONCE", () => {
+  it("213 entries, ties straddling every page boundary: the trace IS the ranked list", async () => {
+    const slot = freshSlot();
+    const slotDate = wallParts(slot.startsAt, TZ).date;
+    const wrongDate = addDaysToDateKey(slotDate, 5);
+    const instant = Date.now() - 5 * 86_400_000;
+    const seq = slotSeq; // fixed for the rest of this test
+
+    // 213 = four full pages of fifty and a short fifth.
+    //
+    // Ties come in groups of SEVEN, and 7 does not divide 50, so no tie group
+    // lines up with a page boundary: every page from the first to the fourth
+    // ends in the MIDDLE of a group of same-instant entries. That is the only
+    // place the (createdAt =, id >) arm of the predicate does any work, and
+    // it is exactly where a hand-written cursor loses rows.
+    const N = 213;
+    const seeded = Array.from({ length: N }, (_, i) => ({
+      // Ids are NOT in insertion order: (i * 97) mod 213 is a permutation (97
+      // is coprime with 213), so ranking by createdAt alone would produce a
+      // different list and the id tie-break has real work to do. Constant
+      // prefix + fixed-width digits, so Postgres's collation and JavaScript's
+      // string compare cannot disagree about the answer.
+      id: `dwalk${seq}x${String((i * 97) % N).padStart(3, "0")}`,
+      createdAt: new Date(instant + Math.floor(i / 7) * 1000),
+    }));
+    await prisma.waitlistEntry.createMany({
+      data: seeded.map((s, i) => ({
+        id: s.id,
+        shopId,
+        firstName: `Walk${i}`,
+        email: `walk-${seq}-${i}@test.local`,
+        createdAt: s.createdAt,
+      })),
+    });
+    // Every one of them wants a different day, so none is ever SELECTED and
+    // the scan has to walk the whole list to exhaustion rather than stopping
+    // at the first fit.
+    await prisma.waitlistWindow.createMany({
+      data: seeded.map((s) => ({
+        shopId,
+        entryId: s.id,
+        startDate: wrongDate,
+        endDate: wrongDate,
+        startMin: null,
+        endMin: null,
+      })),
+    });
+
+    const trace = __setScanTraceForTests(true);
+    try {
+      const res = await offerFreedSlot(slot, new Date());
+      expect(res.outcome).toBe("no_candidates");
+    } finally {
+      __setScanTraceForTests(false);
+    }
+
+    // The ranking, derived independently of the query.
+    const expected = [...seeded]
+      .sort(
+        (a, b) =>
+          a.createdAt.getTime() - b.createdAt.getTime() ||
+          (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+      )
+      .map((s) => s.id);
+
+    // No repeats, no skips …
+    expect(trace.length).toBe(N);
+    expect(new Set(trace).size).toBe(N);
+    // … and in exactly the ranked order. The count alone cannot tell a correct
+    // walk from one that skipped a row and visited another twice - the two
+    // errors cancel. Comparing identities is what makes this a proof.
+    expect([...trace]).toEqual(expected);
+    expect(__lastScanStatsForTests.scanned).toBe(N);
+    expect(__lastScanStatsForTests.pages).toBe(Math.ceil(N / 50));
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* The client link                                                     */
+/* ------------------------------------------------------------------ */
+
+describe("clientId is a shortcut to the same client, never a different answer", () => {
+  it("a live link reaches, even when the number matches nobody", async () => {
+    const linked = await prisma.client.create({
+      data: {
+        shopId,
+        firstName: "Linked",
+        phone: `+1555100${String(1000 + slotSeq).slice(-4)}`,
+        acuityClientKey: `link-${randomToken(6)}`,
+        magicToken: randomToken(),
+      },
+      select: { id: true },
+    });
+    // The entry's own number matches no client at all, so the phone map is
+    // empty and only the link can carry this.
+    const entry = await makeEntry({
+      email: null,
+      phone: "+15550000404",
+      clientId: linked.id,
+    });
+
+    const res = await offerTo(freshSlot());
+    expect(res.entryId).toBe(entry.id);
+    expect(res.entry.clientId).toBe(linked.id);
+  });
+
+  it("🔴 an ARCHIVED link falls back to the phone match - archive a duplicate, re-add the person, they stay reachable", async () => {
+    const phone = "+15550000505";
+    const archived = await prisma.client.create({
+      data: {
+        shopId,
+        firstName: "Dup",
+        phone,
+        archivedAt: new Date(),
+        acuityClientKey: `dup-${randomToken(6)}`,
+        magicToken: randomToken(),
+      },
+      select: { id: true },
+    });
+    const live = await prisma.client.create({
+      data: {
+        shopId,
+        firstName: "ReAdded",
+        phone,
+        acuityClientKey: `re-${randomToken(6)}`,
+        magicToken: randomToken(),
+      },
+      select: { id: true },
+    });
+    const entry = await makeEntry({ email: null, phone, clientId: archived.id });
+
+    const res = await offerTo(freshSlot());
+    expect(res.entryId).toBe(entry.id);
+    // The LIVE record, not the archived one the link points at.
+    expect(res.entry.clientId).toBe(live.id);
+  });
+
+  it("an archived link with nothing behind it is still unreachable - a link is not a channel", async () => {
+    const archived = await prisma.client.create({
+      data: {
+        shopId,
+        firstName: "Gone",
+        phone: "+15550000606",
+        archivedAt: new Date(),
+        acuityClientKey: `gone-${randomToken(6)}`,
+        magicToken: randomToken(),
+      },
+      select: { id: true },
+    });
+    // Oldest, so it would win on rank if it were reachable at all.
+    const unreachable = await makeEntry({
+      email: null,
+      phone: "+15550000606",
+      clientId: archived.id,
+      createdAt: new Date(Date.now() - 4 * 86_400_000),
+    });
+    const emailed = await makeEntry();
+
+    const res = await offerTo(freshSlot());
+    expect(res.entryId).toBe(emailed.id);
+    // And they were skipped, not dropped.
+    const still = await prisma.waitlistEntry.findUnique({ where: { id: unreachable.id } });
+    expect(still!.status).toBe("WAITING");
   });
 });
