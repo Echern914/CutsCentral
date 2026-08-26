@@ -2330,6 +2330,12 @@ model Appointment {
   barberNextUpSentAt    DateTime?
   canceledAt         DateTime?
   completedAt        DateTime?
+  // The barber cleared this row off their day view. Presentation only: the row
+  // is NEVER deleted, so cancellation history, loyalty and reporting are all
+  // untouched - it simply stops taking up space on a schedule it no longer
+  // belongs to. Only ever set on a CANCELED/NO_SHOW row (the API refuses
+  // anything else), and cleared again if the cancel is undone.
+  dismissedAt        DateTime?
   // Recurring series link. null = a one-off appointment (every row before this
   // feature). Each occurrence of a "every N weeks" booking is a normal
   // Appointment row so reminders/promotion/loyalty/slot-opened work unchanged;

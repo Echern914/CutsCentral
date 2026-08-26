@@ -1947,6 +1947,10 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         ...(staffId ? { staffId } : {}),
         // Keep AI-receptionist holds off the calendar (see the list above).
         holdExpiresAt: null,
+        // Rows the barber cleared off their day. A POSITIVE `is null` test, not
+        // `not: null` - a negative Prisma filter silently drops NULL rows, so
+        // the "wrong" spelling here would hide every appointment ever made.
+        dismissedAt: null,
       },
       orderBy: { startsAt: "asc" },
       // High enough that a busy multi-chair shop's full month (the web asks
@@ -2805,6 +2809,188 @@ bookingDashboardRouter.get("/slots", async (req, res) => {
 bookingDashboardRouter.post("/appointments/:id/cancel", async (req, res) => {
   const ok = await cancelAppointment(req.shop!.id, req.params.id!, "CANCELED");
   res.status(ok ? 200 : 404).json({ ok });
+});
+
+/**
+ * How long after a cancel the barber may still take it back.
+ *
+ * Generous next to the ~10s the UI offers, on purpose: the button is the
+ * product, this is only the backstop that stops "undo" being a way to
+ * resurrect last week's bookings. A slightly wide server window costs nothing
+ * (every real guard below is about STATE, not time) and saves the barber from
+ * losing the action to a slow network or a locked phone.
+ */
+const RESTORE_WINDOW_MS = 10 * 60 * 1000;
+
+/**
+ * POST /appointments/:id/restore - undo a cancel.
+ *
+ * A cancel does a lot more than flip a status: it can claw back loyalty from a
+ * promoted Visit, refund a payment through Stripe, tell the waitlist a slot
+ * opened, and release the Acuity block. Most of that CANNOT be un-done from
+ * here - a refund is gone, and re-granting clawed-back punches would be
+ * inventing loyalty. So this deliberately restores only the case that is
+ * genuinely reversible, and refuses the rest with a reason the UI can explain:
+ *
+ *   - it must still be CANCELED (nothing else is an "undo");
+ *   - it must never have been promoted to a Visit (`visitId`), or loyalty was
+ *     already clawed back;
+ *   - it must carry no Payment, or a refund has already been issued;
+ *   - it must be inside RESTORE_WINDOW_MS.
+ *
+ * And then the one that actually bites: THE SLOT MUST STILL BE FREE. Cancelling
+ * tells the waitlist a slot opened, so by the time the barber taps undo someone
+ * may legitimately hold it. `lockStaffAndAssertSlotFree` is the same single
+ * overlap guard every other booking write uses - there is deliberately no
+ * second definition of "is this chair free" in this codebase.
+ *
+ * The Acuity block is re-placed through `recordMirrorIntent` +
+ * `dispatchAfterCommit`, exactly like the create path, so the restored booking
+ * inherits every mirror invariant rather than a hand-rolled second copy.
+ */
+bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
+  const shopId = req.shop!.id;
+  const appointmentId = req.params.id!;
+  const now = new Date();
+
+  const shop = await prisma.shop.findUnique({
+    where: { id: shopId },
+    select: { bookingBufferMin: true },
+  });
+  if (!shop) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+
+  // Plain prisma with shopId in the WHERE, exactly like the reschedule read
+  // below: forShop() erases nested-relation types from a select, and the
+  // payment relation is one of the guards here.
+  const appt = await prisma.appointment.findFirst({
+    where: { id: appointmentId, shopId },
+    select: {
+      id: true,
+      staffId: true,
+      status: true,
+      canceledAt: true,
+      visitId: true,
+      startsAt: true,
+      endsAt: true,
+      payment: { select: { id: true } },
+    },
+  });
+  if (!appt) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if (appt.status !== "CANCELED") {
+    res.status(409).json({ error: "not_canceled" });
+    return;
+  }
+  if (!appt.canceledAt || now.getTime() - appt.canceledAt.getTime() > RESTORE_WINDOW_MS) {
+    res.status(409).json({ error: "too_late" });
+    return;
+  }
+  if (appt.visitId || appt.payment) {
+    // Loyalty clawed back, or money already sent back. Re-booking is the
+    // honest path from here, and the UI says so.
+    res.status(409).json({ error: "not_restorable" });
+    return;
+  }
+
+  let mirrorOutboxId: string | null = null;
+  try {
+    await prisma.$transaction(async (tx) => {
+      await lockStaffAndAssertSlotFree(tx, {
+        staffId: appt.staffId,
+        shopId,
+        startsAt: appt.startsAt,
+        endsAt: appt.endsAt,
+        bufferMin: shop.bookingBufferMin,
+        // Its own row is CANCELED and so blocks nothing, but excluding it keeps
+        // this identical to every other re-check and immune to that changing.
+        excludeAppointmentId: appt.id,
+        // Barber-driven, same as the dashboard create and reschedule.
+        serviceDayLimit: null,
+        overrideWaitlistHolds: true,
+      });
+      await tx.appointment.update({
+        where: { id: appt.id },
+        data: {
+          status: "BOOKED",
+          canceledAt: null,
+          // Undoing the cancel also un-hides the row: leaving it dismissed
+          // would restore a booking the barber then couldn't see.
+          dismissedAt: null,
+        },
+      });
+      mirrorOutboxId = await recordMirrorIntent(tx, {
+        shopId,
+        appointmentId: appt.id,
+        staffId: appt.staffId,
+        startsAt: appt.startsAt,
+        endsAt: appt.endsAt,
+        occupancy: {
+          status: "BOOKED",
+          startsAt: appt.startsAt,
+          endsAt: appt.endsAt,
+          holdExpiresAt: null,
+          visitId: null,
+        },
+      });
+    });
+  } catch (err) {
+    if (
+      err instanceof SlotTakenError ||
+      (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002")
+    ) {
+      // The most likely real failure: cancelling told the waitlist, and
+      // somebody took the time while the undo was on screen.
+      res.status(409).json({ error: "slot_taken" });
+      return;
+    }
+    if (isMirrorNotConfigured(err)) {
+      res.status(409).json({ error: "slot_unavailable_external" });
+      return;
+    }
+    logger.error({ err, shopId, appointmentId }, "appointment restore failed");
+    res.status(500).json({ error: "restore_failed" });
+    return;
+  }
+
+  await dispatchAfterCommit(mirrorOutboxId, {
+    shopId,
+    appointmentId: appt.id,
+    via: "dashboard_restore",
+  });
+  invalidateShopAvailabilityCaches(shopId);
+  res.json({ ok: true });
+});
+
+/**
+ * POST /appointments/:id/dismiss - clear a dead row off the day view.
+ *
+ * A cancelled booking keeps rendering on the barber's day, which is right for
+ * the first few minutes (it explains a gap, and it's what undo acts on) and
+ * wrong forever after - a day with three cancellations reads as busier than it
+ * is. This hides it.
+ *
+ * Presentation only: the row is NEVER deleted, so cancellation history,
+ * reporting and any loyalty trail stay exactly as they were. Restricted to
+ * terminal rows - dismissing a live booking would be a way to lose one.
+ */
+bookingDashboardRouter.post("/appointments/:id/dismiss", async (req, res) => {
+  const shopId = req.shop!.id;
+  // updateMany (not update) so the shop scope is part of the WHERE rather than
+  // a find-then-write race, and so a wrong id is a clean 404 instead of a throw.
+  const { count } = await forShop(shopId).appointment.updateMany({
+    where: { id: req.params.id!, status: { in: ["CANCELED", "NO_SHOW"] } },
+    data: { dismissedAt: new Date() },
+  });
+  if (count === 0) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.json({ ok: true });
 });
 
 /**

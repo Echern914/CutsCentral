@@ -41,6 +41,7 @@ import {
   cancelSeriesAction,
   completeAppointmentAction,
   declineAppointmentAction,
+  dismissAppointmentAction,
   getAgendaAction,
   getWaitlistAction,
   markArrivedAction,
@@ -48,6 +49,7 @@ import {
   nudgeAppointmentAction,
   recordWalkInAction,
   removeBlockAction,
+  restoreAppointmentAction,
 } from "./actions";
 import { agendaWindowOf, mergeAgendaWindow } from "./agendaMerge";
 import { swipeAllowedFrom, swipeIntent } from "./daySwipe";
@@ -89,6 +91,43 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
  */
 
 const WEEKDAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
+
+/**
+ * How long the Undo button stays on a row the barber just cancelled.
+ *
+ * Long enough to notice and reach, short enough that the card settles into
+ * being cancelled rather than looking half-decided. The server allows longer
+ * (see RESTORE_WINDOW_MS) so a slow network never eats the action.
+ */
+const UNDO_WINDOW_MS = 10_000;
+
+/** Why a restore was refused, in words a barber can act on. */
+const UNDO_FAILURES: Record<string, string> = {
+  slot_taken: "That time was taken while this was on screen — book it again to keep it.",
+  too_late: "Too long ago to undo — book it again.",
+  not_restorable: "Already refunded or checked out, so book it again instead.",
+  not_canceled: "That booking isn't cancelled.",
+  slot_unavailable_external: "The connected calendar won't hold that time.",
+};
+
+/**
+ * True while `until` is in the future, flipping itself false when it passes.
+ *
+ * Nothing else re-renders this card once the cancel settles, so without the
+ * timer the Undo button would sit there looking live long after the server had
+ * stopped accepting it.
+ */
+function useUndoWindow(until: number | null): boolean {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (until === null) return;
+    const remaining = until - Date.now();
+    if (remaining <= 0) return;
+    const t = setTimeout(() => setNow(Date.now()), remaining);
+    return () => clearTimeout(t);
+  }, [until]);
+  return until !== null && until > now;
+}
 
 /**
  * Spoken label for a week-strip cell ("Wednesday, Aug 26"). Built from a LOCAL
@@ -1693,6 +1732,10 @@ function AppointmentBlock({
   // Skip = dismiss for THIS render only; the reward stays ready and the prompt
   // returns on reload (deliberate - skipping never consumes anything).
   const [rewardSkipped, setRewardSkipped] = useState(false);
+  // Non-null = this row was cancelled in THIS session and the way back is still
+  // on offer. A timestamp rather than a boolean so a re-render can't extend it.
+  const [undoUntil, setUndoUntil] = useState<number | null>(null);
+  const undoLive = useUndoWindow(undoUntil);
   // One shared table (appointmentCardStyles) so this card and the appointment
   // sheet can never describe the same booking two different ways.
   const pill = appointmentStatusPill({
@@ -1779,6 +1822,48 @@ function AppointmentBlock({
       const res = await fn(row.id);
       toast(res.ok ? label : "Couldn't update", res.ok ? "success" : "error");
       if (res.ok) onChanged();
+    });
+  }
+
+  /**
+   * Cancel, with a way back.
+   *
+   * The undo is offered on the ROW rather than in a toast: a toast is gone in
+   * three seconds and takes the only way back with it, while the cancelled card
+   * is still sitting right there being the thing the barber is looking at. It's
+   * deliberately scoped to a cancel THEY just did in this session - an old
+   * cancelled row gets Remove, not Undo, because "undo" on something you did
+   * last Tuesday isn't an undo.
+   */
+  function cancelWithUndo() {
+    start(async () => {
+      const res = await cancelAppointmentAction(row.id);
+      if (!res.ok) {
+        toast("Couldn't cancel", "error");
+        return;
+      }
+      toast("Canceled", "success");
+      setUndoUntil(Date.now() + UNDO_WINDOW_MS);
+      onChanged();
+    });
+  }
+
+  function undoCancel() {
+    start(async () => {
+      const res = await restoreAppointmentAction(row.id);
+      if (res.ok) {
+        setUndoUntil(null);
+        toast("Booking restored", "success");
+        onChanged();
+        return;
+      }
+      // Say WHICH no. "Couldn't undo" tells a barber whose slot was just
+      // claimed nothing about what to do next.
+      toast(UNDO_FAILURES[res.error ?? ""] ?? "Couldn't undo that", "error");
+      // The slot is gone or the row moved on: stop offering a button that
+      // cannot work, and re-read so the calendar shows whatever is true now.
+      setUndoUntil(null);
+      onChanged();
     });
   }
 
@@ -2010,6 +2095,40 @@ function AppointmentBlock({
         </div>
       )}
 
+      {/* A cancelled row: the way back, and the way out. Native only - a synced
+          Acuity/Square row is managed where it was made. */}
+      {row.source === "appointment" && row.status === "canceled" && (
+        <div data-qa="canceled-actions" className="mt-3 flex items-center gap-2">
+          {undoLive && (
+            <button
+              type="button"
+              onClick={undoCancel}
+              disabled={pending}
+              className={cn(
+                BTN_BASE,
+                "flex-1 border border-gold/40 bg-gold/10 text-gold hover:bg-gold/20 disabled:opacity-50",
+              )}
+            >
+              {pending ? "…" : "Undo"}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => act(dismissAppointmentAction, "Removed from the day")}
+            disabled={pending}
+            // "Remove" reads like a delete, so say what it actually does. The
+            // booking stays in the client's history and in reporting either way.
+            title="Hide this from the day. The booking stays in the client's history."
+            className={cn(
+              BTN_BASE,
+              "flex-1 border border-subtle text-muted hover:text-offwhite disabled:opacity-50",
+            )}
+          >
+            {pending ? "…" : "Remove"}
+          </button>
+        </div>
+      )}
+
       {canAct && (
         <div data-qa="appt-actions" className="mt-3 grid grid-cols-2 gap-2">
           {row.hasPush === false ? (
@@ -2149,7 +2268,7 @@ function AppointmentBlock({
             </div>
           ) : (
             <button
-              onClick={() => act(cancelAppointmentAction, "Canceled")}
+              onClick={cancelWithUndo}
               disabled={pending}
               className={cn(BTN_BASE, "border border-danger-soft/40 text-danger-soft hover:bg-danger-soft/10")}
             >
