@@ -20,6 +20,14 @@ import {
 } from "@react-native-google-signin/google-signin";
 import { API_ORIGIN, GOOGLE_IOS_CLIENT_ID, WEB_ORIGIN } from "@/src/config";
 import { loadSession, saveSession } from "@/src/session";
+import {
+  completeFromUrl,
+  createAttempt,
+  forgetAttempt,
+  openJoinSession,
+  rememberAttempt,
+} from "@/src/joinAuth";
+import { buildSignupStartUrl } from "@/src/joinFlow";
 
 /**
  * Barber/manager native sign-in. Google blocks its OAuth inside an embedded
@@ -61,7 +69,7 @@ GoogleSignin.configure({
   scopes: ["email", "profile"],
 });
 
-type Provider = "apple" | "google" | "email";
+type Provider = "apple" | "google" | "email" | "signup";
 
 /**
  * An Apple/Google token we verified but couldn't sign in with, because the
@@ -342,6 +350,60 @@ export default function LoginScreen() {
     }
   }
 
+  /**
+   * Create an account: hand off to the system browser, come back signed in.
+   *
+   * Identical machinery to "Join your shop" (PKCE + a one-time code), aimed at
+   * signup + shop creation instead of an invitation. Nothing is collected here
+   * first, so there is no screen in between - the tap IS the flow.
+   *
+   * The browser keeps going until the SHOP exists; only then does the web mint
+   * the return code. So arriving back here means there is a real dashboard to
+   * land on, and the shop-creation wizard never has to run inside the app.
+   */
+  async function onCreateAccount() {
+    setError(null);
+    setBusy("signup");
+    try {
+      const attempt = await createAttempt();
+      await rememberAttempt(attempt);
+      const result = await openJoinSession(
+        buildSignupStartUrl({
+          webOrigin: WEB_ORIGIN,
+          state: attempt.state,
+          codeChallenge: attempt.challenge,
+        }),
+      );
+
+      if (result.kind === "canceled") {
+        // They closed the sheet. Not a failure and nothing was lost, so say
+        // nothing - an error over a deliberate dismissal reads as a bug.
+        await forgetAttempt();
+        return;
+      }
+      if (result.kind === "failed") {
+        await forgetAttempt();
+        setError("Couldn't open the sign-up page. Check your connection and try again.");
+        return;
+      }
+
+      const completed = await completeFromUrl(result.url);
+      if (completed === "joined") {
+        router.replace("/barber");
+        return;
+      }
+      // The account may well have been created - the trip HOME is what failed.
+      // So this says "sign in", not "try again": signing in is the move that
+      // works either way, and re-running signup on an existing email would
+      // just fail.
+      setError("Your account is ready, but we couldn't finish here. Sign in above.");
+    } catch {
+      setError("Couldn't open the sign-up page. Check your connection and try again.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   if (checking) {
     return (
       <View style={[styles.root, styles.center]}>
@@ -459,11 +521,40 @@ export default function LoginScreen() {
 
             {error && <Text style={styles.error}>{error}</Text>}
 
-            {/* THE SECOND DOOR. Everything above signs in an account that
-                already exists; this is for the barber who was invited to a shop
-                and has none yet. Deliberately below the sign-in block and
-                styled as a secondary action: most people opening this screen
-                are returning, and only an invited employee needs it. */}
+            {/* NO ACCOUNT YET. Everything above signs in one that already
+                exists. Creating an account happens on the web, in the system
+                browser, and comes back with a session - Google refuses OAuth in
+                an embedded WebView, and Guideline 3.1.1 keeps business
+                registration out of the app shell.
+
+                Above "Join your shop" because it is the broader door: anyone
+                can start a shop, only an invited employee has an invitation. */}
+            <View style={styles.joinBlock}>
+              <View style={styles.divider}>
+                <View style={styles.line} />
+                <Text style={styles.dividerText}>new to ChairBack?</Text>
+                <View style={styles.line} />
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Create an account"
+                accessibilityHint="Opens a secure browser to create your account and shop, then returns you here."
+                disabled={busy !== null}
+                onPress={onCreateAccount}
+                style={[styles.joinButton, busy !== null && styles.disabled]}
+              >
+                <Text style={styles.joinText}>
+                  {busy === "signup" ? "Opening…" : "Create an account"}
+                </Text>
+              </Pressable>
+              <Text style={styles.joinHint}>
+                Opens a secure browser, then brings you back signed in.
+              </Text>
+            </View>
+
+            {/* THE SECOND DOOR. For the barber who was invited to a shop that
+                already exists - they must NOT be walked through creating one.
+                Styled the same, kept separate: the two are different people. */}
             <View style={styles.joinBlock}>
               <View style={styles.divider}>
                 <View style={styles.line} />

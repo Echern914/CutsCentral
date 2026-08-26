@@ -30,7 +30,10 @@ const issueSchema = z
     // ours can - accepting it would let a code thief who also saw the challenge
     // redeem, so it is refused rather than supported.
     codeChallengeMethod: z.literal("S256").default("S256"),
-    purpose: z.literal("team_join").default("team_join"),
+    // Both hand-off flows mint the same kind of ticket; the purpose is recorded
+    // so a code can be traced back to the flow that made it. Defaulting to
+    // team_join keeps every existing caller unchanged.
+    purpose: z.enum(["team_join", "new_shop"]).default("team_join"),
   })
   .strict();
 

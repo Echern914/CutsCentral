@@ -46,6 +46,25 @@ export const LOGIN_NEXT_ALLOWLIST = [
  */
 export const SIGNUP_NEXT_ALLOWLIST = ["/team/join"] as const;
 
+/**
+ * Where the NATIVE APP's browser hand-off may be sent.
+ *
+ * Its own list, deliberately NOT `SIGNUP_NEXT_ALLOWLIST`. That one answers
+ * "where may a web signup form resume?", and widening it would let an ordinary
+ * browser signup be steered somewhere it has no business resuming. This answers
+ * a narrower question — "which flows may hand a session back to the app?" — and
+ * there are exactly two:
+ *
+ *   /team/join   an invited barber accepting their invitation;
+ *   /onboarding  a new owner signing up and creating their shop.
+ *
+ * `/dashboard` is deliberately ABSENT. A code is minted at the END of a flow,
+ * once the thing the app needs actually exists; allowing the dashboard as a
+ * destination would let a half-finished signup hand back a session for an
+ * account with no shop.
+ */
+export const MOBILE_HANDOFF_NEXT_ALLOWLIST = ["/team/join", "/onboarding"] as const;
+
 /** Longest `next` we will even look at. */
 const MAX_LENGTH = 512;
 

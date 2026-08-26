@@ -257,3 +257,71 @@ describe("what reaches the logs", () => {
     expect(serialized.url).toContain("[redacted]");
   });
 });
+
+/**
+ * The second hand-off flow: a new owner who signed up and created a shop in the
+ * browser. It mints the SAME kind of ticket as an invitation - these pin that
+ * the purpose is accepted and changes nothing about the security properties.
+ */
+describe("the new-shop purpose", () => {
+  it("mints and redeems exactly like team_join", async () => {
+    const state = randomToken();
+    const { verifier, challenge } = pkce();
+
+    const minted = await request(app)
+      .post("/api/auth/mobile/code")
+      .set("Cookie", cookie)
+      .send({
+        state,
+        codeChallenge: challenge,
+        codeChallengeMethod: "S256",
+        purpose: "new_shop",
+      });
+    expect(minted.status).toBe(201);
+    expect(minted.body.code).toBeTruthy();
+
+    const redeemed = await request(app)
+      .post("/api/auth/mobile/exchange")
+      .send({ code: minted.body.code, codeVerifier: verifier, state });
+    expect(redeemed.status).toBe(200);
+    expect(redeemed.body.token).toBeTruthy();
+  });
+
+  it("still refuses a purpose that is not a hand-off flow", async () => {
+    const { challenge } = pkce();
+    const res = await request(app)
+      .post("/api/auth/mobile/code")
+      .set("Cookie", cookie)
+      .send({
+        state: randomToken(),
+        codeChallenge: challenge,
+        codeChallengeMethod: "S256",
+        purpose: "admin_takeover",
+      });
+    expect(res.status).toBe(400);
+  });
+
+  it("is still single-use - the purpose buys no second redemption", async () => {
+    const state = randomToken();
+    const { verifier, challenge } = pkce();
+    const minted = await request(app)
+      .post("/api/auth/mobile/code")
+      .set("Cookie", cookie)
+      .send({
+        state,
+        codeChallenge: challenge,
+        codeChallengeMethod: "S256",
+        purpose: "new_shop",
+      });
+
+    const first = await request(app)
+      .post("/api/auth/mobile/exchange")
+      .send({ code: minted.body.code, codeVerifier: verifier, state });
+    expect(first.status).toBe(200);
+
+    const second = await request(app)
+      .post("/api/auth/mobile/exchange")
+      .send({ code: minted.body.code, codeVerifier: verifier, state });
+    expect(second.status).not.toBe(200);
+  });
+});

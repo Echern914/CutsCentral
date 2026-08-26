@@ -1,15 +1,7 @@
 "use server";
 
-import { cookies } from "next/headers";
-import { MOBILE_APP } from "@chairback/config/constants";
 import { apiSend } from "@/lib/api";
-import {
-  AUTH_COOKIE_OPTIONS,
-  AUTH_NEXT_COOKIE,
-  MOBILE_CHALLENGE_COOKIE,
-  MOBILE_STATE_COOKIE,
-  readMobileHandoff,
-} from "@/lib/authNext";
+import { mintAppReturnUrl } from "@/lib/mobileReturn";
 
 /**
  * Redeem a team invitation for the signed-in user, then - if the native app is
@@ -30,39 +22,6 @@ export async function joinTeamAction(
     return { ok: false, error: res.error };
   }
 
-  const returnUrl = await mintAppReturnUrl();
+  const returnUrl = await mintAppReturnUrl("team_join");
   return { ok: true, ...(returnUrl ? { returnUrl } : {}) };
-}
-
-/**
- * Mint the one-time code that takes the barber back to the app, and return the
- * https callback to send the browser to. Null for an ordinary web visit.
- *
- * Best-effort by design: this runs AFTER the seat exists, so if the API is
- * having a bad second the honest outcome is "you joined, continue on the web",
- * not an error over a completed action.
- */
-async function mintAppReturnUrl(): Promise<string | null> {
-  const handoff = readMobileHandoff();
-  if (!handoff) return null;
-
-  const minted = await apiSend<{ code: string }>("POST", "/api/auth/mobile/code", {
-    state: handoff.state,
-    codeChallenge: handoff.codeChallenge,
-    codeChallengeMethod: "S256",
-    purpose: "team_join",
-  });
-
-  // Spend the flow either way: these cookies mark "an app is waiting", and a
-  // stale pair would try to bounce a later, unrelated sign-in into the app.
-  const jar = cookies();
-  for (const name of [MOBILE_STATE_COOKIE, MOBILE_CHALLENGE_COOKIE, AUTH_NEXT_COOKIE]) {
-    jar.set(name, "", { ...AUTH_COOKIE_OPTIONS, maxAge: 0 });
-  }
-
-  if (!minted.ok || !minted.data?.code) return null;
-  return (
-    `${MOBILE_APP.authCallbackPath}?code=${encodeURIComponent(minted.data.code)}` +
-    `&state=${encodeURIComponent(handoff.state)}`
-  );
 }

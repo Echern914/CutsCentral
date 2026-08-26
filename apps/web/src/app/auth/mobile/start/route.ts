@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { SIGNUP_NEXT_ALLOWLIST, safeNextPath } from "@chairback/config/nextPath";
+import { MOBILE_HANDOFF_NEXT_ALLOWLIST, safeNextPath } from "@chairback/config/nextPath";
 import {
   AUTH_COOKIE_OPTIONS,
   AUTH_NEXT_COOKIE,
@@ -39,9 +39,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const state = params.get("state") ?? "";
   const codeChallenge = params.get("code_challenge") ?? "";
   const method = params.get("code_challenge_method") ?? "S256";
-  // This flow exists to accept an invitation, so /team/join is the only
-  // destination it may carry - the signup allowlist, not the wider login one.
-  const next = safeNextPath(params.get("next"), SIGNUP_NEXT_ALLOWLIST, "");
+  // Two flows may hand a session back to the app - accepting an invitation and
+  // creating a new shop - and this list is exactly those two. Deliberately not
+  // the signup or login allowlists, which answer different questions.
+  const next = safeNextPath(params.get("next"), MOBILE_HANDOFF_NEXT_ALLOWLIST, "");
 
   if (
     !STATE_SHAPE.test(state) ||
@@ -54,7 +55,18 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.redirect(new URL("/auth/mobile/callback?status=bad_request", req.url));
   }
 
-  const res = NextResponse.redirect(new URL(next, req.url));
+  // A NEW OWNER has no account yet, so send them to the signup FORM rather than
+  // to /onboarding itself - the middleware guards that route and would bounce
+  // them to /login, which is the one door a person with no account cannot use.
+  // Signup's own default destination is already /onboarding, so nothing has to
+  // carry a `next` through the form.
+  //
+  // An invited barber goes straight to their invitation: /team/join resolves
+  // the token first and sends them to signup or login as appropriate, keeping
+  // the invitation attached either way.
+  const entry = next.startsWith("/onboarding") ? "/signup" : next;
+
+  const res = NextResponse.redirect(new URL(entry, req.url));
   res.cookies.set(MOBILE_STATE_COOKIE, state, AUTH_COOKIE_OPTIONS);
   res.cookies.set(MOBILE_CHALLENGE_COOKIE, codeChallenge, AUTH_COOKIE_OPTIONS);
   // Also park the destination in the ordinary auth-next cookie, so a Google or

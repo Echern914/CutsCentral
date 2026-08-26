@@ -71,12 +71,46 @@ export function buildJoinStartUrl(input: {
   state: string;
   codeChallenge: string;
 }): string {
-  const next = `/team/join?token=${encodeURIComponent(input.token)}`;
+  return buildStartUrl({
+    webOrigin: input.webOrigin,
+    state: input.state,
+    codeChallenge: input.codeChallenge,
+    next: `/team/join?token=${encodeURIComponent(input.token)}`,
+  });
+}
+
+/**
+ * The URL for a NEW OWNER creating an account and a shop.
+ *
+ * Same three-legged flow as an invitation, aimed at `/onboarding` instead: the
+ * web start route sends someone with no account to the signup form, whose own
+ * default destination is already the shop-creation wizard, and parks
+ * `/onboarding` so a Google or Apple round trip in the middle comes back to it.
+ *
+ * The code is minted only once the SHOP exists, not at signup. A session handed
+ * back before then would drop the owner into shop creation inside the app
+ * shell, which is the business registration Guideline 3.1.1 keeps out of it -
+ * and the reason account creation happens in this browser at all.
+ */
+export function buildSignupStartUrl(input: {
+  webOrigin: string;
+  state: string;
+  codeChallenge: string;
+}): string {
+  return buildStartUrl({ ...input, next: "/onboarding" });
+}
+
+function buildStartUrl(input: {
+  webOrigin: string;
+  state: string;
+  codeChallenge: string;
+  next: string;
+}): string {
   const q = new URLSearchParams({
     state: input.state,
     code_challenge: input.codeChallenge,
     code_challenge_method: "S256",
-    next,
+    next: input.next,
   });
   return `${input.webOrigin}/auth/mobile/start?${q.toString()}`;
 }

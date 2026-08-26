@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { apiSend } from "@/lib/api";
+import { mintAppReturnUrl } from "@/lib/mobileReturn";
 
 interface ShopState {
   error?: string;
@@ -29,5 +30,16 @@ export async function createShopAction(
   if (!res.ok && res.status !== 409) {
     return { error: "Could not create your shop. Check the booking URL." };
   }
-  redirect("/onboarding/connect");
+  // If the native app started this in the system browser, the shop now EXISTS
+  // and this is the moment to hand the session back. Same ordering rule as the
+  // team invitation: what they came to do is done and committed before any of
+  // this runs, so a failed trip home costs them a tap, never their shop.
+  //
+  // It waits until here and not a step earlier because a session handed back
+  // before the shop existed would drop the owner into the shop-creation wizard
+  // inside the app shell - the business registration Guideline 3.1.1 keeps out
+  // of it. What remains of onboarding (connect a calendar, and so on) is
+  // optional polish they can finish in the app on a real dashboard.
+  const returnUrl = await mintAppReturnUrl("new_shop");
+  redirect(returnUrl ?? "/onboarding/connect");
 }
