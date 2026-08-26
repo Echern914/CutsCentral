@@ -51,6 +51,7 @@ import {
 } from "./actions";
 import { agendaWindowOf, mergeAgendaWindow } from "./agendaMerge";
 import { swipeAllowedFrom, swipeIntent } from "./daySwipe";
+import { dayTotals, type DayTotals } from "./dayTotals";
 import { AppointmentForm } from "./AppointmentForm";
 import {
   WAITLIST_BOOK_EVENT,
@@ -417,6 +418,9 @@ export function BookingCalendar({
   // selected - `shownDay` always names a day.
   const shownDayRows = byDay.get(shownDay) ?? [];
   const dayTitle = labelFromKey(shownDay, dayTitleFmt);
+  // Same computation the footer inside DayPlanner uses, so the pinned headline
+  // and the detail below it can never quote different numbers for one day.
+  const shownDayTotals = useMemo(() => dayTotals(shownDayRows), [shownDayRows]);
 
   /**
    * The Sun-Sat week `shownDay` sits in, each day with its booking count.
@@ -524,11 +528,12 @@ export function BookingCalendar({
            remounts as you page - which is what resets DayPlanner's category
            filter, exactly as tapping a different month cell does. */
         <div className="mt-4" style={{ touchAction: "pan-y" }} {...daySwipeHandlers}>
-          <WeekStrip
+          <DayHeader
             days={weekDays}
             shownDay={shownDay}
             todayKey={todayKey}
             onPick={gotoDayKey}
+            totals={shownDayTotals}
           />
           <DayPlanner
             key={shownDay}
@@ -779,10 +784,8 @@ function WaitlistPanel({
  * is that day's bookings, so a light day is visible without leaving the one
  * you're on.
  *
- * Sticky below the dashboard header (which is `sticky top-0 z-20`), at a lower
- * z so it slides under rather than over it. It stays put while the day scrolls,
- * because the whole point is to keep the week reachable from the bottom of a
- * long day.
+ * Rendered inside the pinned day header (see DayHeader), so it stays reachable
+ * from the bottom of a long day.
  */
 function WeekStrip({
   days,
@@ -796,7 +799,6 @@ function WeekStrip({
   onPick: (key: string) => void;
 }) {
   return (
-    <div className="sticky top-16 z-10 -mx-1 mb-3 rounded-xl bg-charcoal-800/80 px-1 py-1.5 backdrop-blur">
       <div className="grid grid-cols-7 gap-1">
         {days.map((d, i) => {
           const selected = d.key === shownDay;
@@ -847,6 +849,60 @@ function WeekStrip({
           );
         })}
       </div>
+  );
+}
+
+/**
+ * The pinned head of the day view: the week, then the day's money.
+ *
+ * ONE sticky container rather than two stacked ones - the week strip and the
+ * total have to stay glued together, and stacking two `sticky` elements means
+ * hand-maintaining a pixel offset that silently breaks the moment either one
+ * changes height.
+ *
+ * Sits below the dashboard header (which is `sticky top-0 z-20`) at a lower z,
+ * so it slides under rather than over it.
+ *
+ * The total here is deliberately the headline only. The full breakdown - done
+ * vs to come, unpriced, awaiting approval, no-shows, and the to-fill chips -
+ * stays in the footer at the bottom of the day, because pinning all of it would
+ * cost about a third of a phone screen before any appointment was visible. Both
+ * read from the same `dayTotals`, so they can never disagree.
+ */
+function DayHeader({
+  days,
+  shownDay,
+  todayKey,
+  onPick,
+  totals,
+}: {
+  days: { key: string; count: number; day: number }[];
+  shownDay: string;
+  todayKey: string;
+  onPick: (key: string) => void;
+  totals: DayTotals;
+}) {
+  const showTotal =
+    totals.count > 0 || totals.revenue > 0 || totals.blockedMin > 0;
+  return (
+    <div className="sticky top-16 z-10 -mx-1 mb-3 rounded-xl bg-charcoal-800/80 px-1 py-1.5 backdrop-blur">
+      <WeekStrip days={days} shownDay={shownDay} todayKey={todayKey} onPick={onPick} />
+      {showTotal && (
+        <div className="mt-1.5 flex items-center justify-between gap-3 border-t border-subtle/60 px-1.5 pt-1.5">
+          <p className="flex min-w-0 items-baseline gap-1.5">
+            <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted">
+              On the books
+            </span>
+            <span className="truncate font-display text-base tabular-nums text-gold">
+              ${Math.round(totals.revenue).toLocaleString()}
+            </span>
+          </p>
+          <p className="shrink-0 text-[11px] tabular-nums text-muted">
+            {totals.count} {totals.count === 1 ? "appointment" : "appointments"}
+            {totals.blockedMin > 0 && ` · ${fmtDuration(totals.blockedMin)} off`}
+          </p>
+        </div>
+      )}
     </div>
   );
 }
@@ -1219,32 +1275,18 @@ function DayPlanner({
   }
 
   // ---- Day summary (the totals footer) ----
-  // Always the WHOLE day, never the category-filtered slice - it says "Day
-  // total" and must keep meaning that while a chip filter narrows the list.
-  // Money follows the app's revenue rules: upcoming + completed tickets count,
-  // canceled and pending never do, and a no-show earns nothing (the chair sat
-  // empty) - it's surfaced as its own count instead of inflating the total.
-  let dayRevenue = 0;
-  let doneRevenue = 0;
-  let unpricedCount = 0;
-  let pendingRevenue = 0;
-  let noShowCount = 0;
-  let blockedMin = 0;
-  for (const r of rows) {
-    if (r.source === "block") {
-      if (r.end && r.end > r.start) {
-        blockedMin += Math.round((Date.parse(r.end) - Date.parse(r.start)) / 60_000);
-      }
-      continue;
-    }
-    if (r.status === "no_show") noShowCount++;
-    if (r.status === "pending") pendingRevenue += r.price ?? 0;
-    if (r.status !== "upcoming" && r.status !== "completed") continue;
-    if (r.price === null) unpricedCount++;
-    dayRevenue += r.price ?? 0;
-    if (r.status === "completed") doneRevenue += r.price ?? 0;
-  }
-  const toComeRevenue = dayRevenue - doneRevenue;
+  // Shared with the pinned header above the planner (see DayHeader): two copies
+  // of this arithmetic would eventually disagree, and a calendar quoting two
+  // different totals for one day is worse than either being wrong.
+  const {
+    revenue: dayRevenue,
+    doneRevenue,
+    toComeRevenue,
+    pendingRevenue,
+    unpricedCount,
+    noShowCount,
+    blockedMin,
+  } = dayTotals(rows);
   // "N to fill" per bucket, from the same display-only targets the gauge uses.
   const fillables = categories
     .filter((c) => c.target !== null)
