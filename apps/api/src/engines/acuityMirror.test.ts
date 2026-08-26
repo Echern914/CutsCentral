@@ -67,16 +67,27 @@ beforeAll(async () => {
   shopId = shop.id;
   // A connection must EXIST for the shop to be eligible (the token itself is
   // never used - the client is mocked).
-  await prisma.acuityConnection.create({
+  const conn = await prisma.acuityConnection.create({
     data: {
       shopId,
       acuityAccountId: "acct_1",
       accessToken: "enc",
       tokenExpiresAt: new Date("2099-01-01T00:00:00Z"),
     },
+    select: { connectedAt: true },
   });
+  // 🔴 Derived from `connectedAt`, never from a fresh `new Date()`. A mapping is
+  // stale when `mappedAt < connectedAt` (strict, no tolerance) and those two
+  // timestamps come from different clocks - Postgres microseconds versus a
+  // coarser JS tick - so a mapping written after the connection can still read
+  // as a millisecond before it and silently blank the chair.
   const staff = await prisma.staff.create({
-    data: { shopId, name: "Drick", acuityCalendarId: CAL, acuityCalendarMappedAt: new Date() },
+    data: {
+      shopId,
+      name: "Drick",
+      acuityCalendarId: CAL,
+      acuityCalendarMappedAt: new Date(conn.connectedAt.getTime() + 1_000),
+    },
   });
   staffId = staff.id;
   const service = await prisma.service.create({

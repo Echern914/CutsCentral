@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { resolveHref, type SeatRole } from "@chairback/config/features";
 import { cn } from "@/lib/cn";
 import { MoreSheet } from "./MoreSheet";
 
@@ -30,6 +31,8 @@ import { MoreSheet } from "./MoreSheet";
  */
 
 interface Tab {
+  /** Registry id. The route is RESOLVED, never written here. */
+  featureId: string;
   href: string;
   label: string;
   Icon: (props: { className?: string }) => JSX.Element;
@@ -40,12 +43,42 @@ interface Tab {
 // only navigation) the centre two slots are the easiest thumb reach, so the
 // screens opened most often live there. "More" is appended by the renderers,
 // always last.
-const TABS: Tab[] = [
-  { href: "/dashboard/booking", label: "Calendar", Icon: CalendarIcon },
-  { href: "/dashboard/clients", label: "Clients", Icon: ClientsIcon },
-  { href: "/dashboard", label: "Home", Icon: HomeIcon },
-  { href: "/dashboard/insights", label: "Insights", Icon: InsightsIcon },
+//
+// 🔴 FIVE SLOTS, and Assistant takes the fourth. Insights moves into the More
+// sheet rather than becoming a sixth tab: a six-item bar does not fit a 320px
+// phone at a 44px touch target, and the sheet is a real destination, not a
+// demotion — every non-tab page has lived there since the 5-tab nav landed.
+// Assistant earns the slot because it is the only tab that answers "what do I
+// do now", which is the question a half-set-up shop opens the app with.
+//
+// The routes come from the registry so this list cannot drift from the palette,
+// the More sheet or the help corpus — the whole reason those three disagreed.
+const TAB_SPECS: { featureId: string; label: string; Icon: Tab["Icon"] }[] = [
+  { featureId: "online-booking", label: "Calendar", Icon: CalendarIcon },
+  { featureId: "clients", label: "Clients", Icon: ClientsIcon },
+  { featureId: "home", label: "Home", Icon: HomeIcon },
+  { featureId: "assistant", label: "Assistant", Icon: AssistantIcon },
 ];
+
+/**
+ * The tabs a given seat can actually reach, with their routes resolved.
+ *
+ * An employee seat keeps Home AND Assistant: Assistant is the one place their
+ * personal setup tasks and the whole offline help corpus live, and both are
+ * things they can act on without a manager. Everything else is manager-gated
+ * and would 403, and a nav full of doors that refuse to open reads as a broken
+ * app rather than a limited one.
+ */
+function tabsFor(role: SeatRole): Tab[] {
+  const out: Tab[] = [];
+  for (const spec of TAB_SPECS) {
+    const href = resolveHref(spec.featureId, { role });
+    // A tab whose destination the registry withholds is simply not rendered.
+    if (href === null) continue;
+    out.push({ ...spec, href });
+  }
+  return out;
+}
 
 /** True when the current path belongs to `href`'s section. */
 function isActive(pathname: string, href: string): boolean {
@@ -57,18 +90,14 @@ interface NavProps {
   isAdmin?: boolean;
   rewardsEnabled?: boolean;
   /**
-   * True for an employee seat. Their whole surface is Home (their own chair):
-   * every other tab is manager-gated and would 403, and a nav full of doors
-   * that refuse to open reads as a broken app rather than a limited one.
+   * True for an employee seat. They used to get NO nav at all, because Home was
+   * their only reachable tab. Assistant is the second one — their personal
+   * setup tasks and the offline help corpus both live there — so a two-tab bar
+   * is now worth rendering.
    */
   barberOnly?: boolean;
   /** Premium lock flags for the More sheet's diamond badges (lib/featureLocks). */
   locks?: import("@/lib/featureLocks").FeatureLocks;
-}
-
-/** The tabs a given role can actually reach. */
-function tabsFor(barberOnly: boolean): Tab[] {
-  return barberOnly ? TABS.filter((t) => t.href === "/dashboard") : TABS;
 }
 
 /**
@@ -83,13 +112,9 @@ export function DashboardTabBar({
 }: NavProps) {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
-  const tabs = tabsFor(barberOnly);
+  const role: SeatRole = barberOnly ? "BARBER" : "MANAGER";
+  const tabs = tabsFor(role);
   const moreActive = !tabs.some((t) => isActive(pathname, t.href));
-
-  // An employee's entire app is one screen. A tab bar with a single tab is
-  // noise, and a More sheet listing pages that all 403 is worse than no sheet.
-  // Account, sign-out and Help stay reachable from the top bar and the page.
-  if (barberOnly) return null;
 
   return (
     <>
@@ -124,6 +149,7 @@ export function DashboardTabBar({
         onClose={() => setMoreOpen(false)}
         isAdmin={isAdmin}
         rewardsEnabled={rewardsEnabled}
+        role={role}
         locks={locks}
       />
     </>
@@ -139,13 +165,11 @@ export function DashboardNavInline({
 }: NavProps) {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
-  const tabs = tabsFor(barberOnly);
-  // Any page that isn't one of the four tabs was reached THROUGH More, so
-  // More carries the active state — the nav never looks like nothing is on.
+  const role: SeatRole = barberOnly ? "BARBER" : "MANAGER";
+  const tabs = tabsFor(role);
+  // Any page that isn't one of the tabs was reached THROUGH More, so More
+  // carries the active state — the nav never looks like nothing is on.
   const moreActive = !tabs.some((t) => isActive(pathname, t.href));
-
-  // See DashboardTabBar: an employee has one destination, so no nav at all.
-  if (barberOnly) return null;
 
   return (
     <>
@@ -199,6 +223,7 @@ export function DashboardNavInline({
         onClose={() => setMoreOpen(false)}
         isAdmin={isAdmin}
         rewardsEnabled={rewardsEnabled}
+        role={role}
         locks={locks}
       />
     </>
@@ -284,6 +309,16 @@ function InsightsIcon({ className }: { className?: string }) {
       <path d="M4 20V4" />
       <path d="M4 20h16" />
       <path d="M8 20v-6M13 20V9M18 20v-9" />
+    </svg>
+  );
+}
+
+/** A speech bubble with a spark: help that answers, not a generic robot. */
+function AssistantIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden {...strokeProps}>
+      <path d="M20.5 12.2c0 3.9-3.8 7-8.5 7a9.8 9.8 0 0 1-2.6-.35L4.5 20.5l1.3-3.3A6.7 6.7 0 0 1 3.5 12.2c0-3.9 3.8-7 8.5-7s8.5 3.1 8.5 7Z" />
+      <path d="m12 8.6 1 2.3 2.3 1-2.3 1-1 2.3-1-2.3-2.3-1 2.3-1z" />
     </svg>
   );
 }

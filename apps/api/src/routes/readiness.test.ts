@@ -4,6 +4,11 @@ import { prisma } from "@chairback/db";
 import { randomToken, __resetEnvCacheForTests } from "@chairback/config";
 import { createApp } from "../app.js";
 import { __setSendEmailForTests } from "../messaging/email.js";
+import {
+  FEATURE_INDEX,
+  availableToBarberSeat,
+  featureById,
+} from "@chairback/config/features";
 import { MILESTONE_IDS } from "../engines/readiness.js";
 
 /**
@@ -454,6 +459,35 @@ describe("role scoping", () => {
     expect(JSON.stringify(res.body)).not.toContain(staffId);
   });
 
+  it("🔴 a BARBER is never handed a manager-only destination", async () => {
+    const res = await request(app).get("/api/readiness").set("Cookie", barberCookie);
+    expect(res.status).toBe(200);
+    const items = [...res.body.personal, ...res.body.managerOwned];
+    expect(items.length).toBeGreaterThan(0);
+    for (const i of items) {
+      if (!i.cta) continue;
+      const entry = featureById(i.cta.featureId);
+      expect(entry, `${i.id} -> ${i.cta.featureId}`).toBeDefined();
+      // An employee seat may only ever be given a BARBER-reachable feature.
+      // Anything else 403s the moment they tap it.
+      expect(
+        availableToBarberSeat(entry!),
+        `${i.id} offered a barber "${i.cta.featureId}" (${entry!.href})`,
+      ).toBe(true);
+    }
+  });
+
+  it("a manager-owned item keeps its explanation after losing its button", async () => {
+    const res = await request(app).get("/api/readiness").set("Cookie", barberCookie);
+    const owned = res.body.managerOwned as { why: string; title: string; cta?: unknown }[];
+    // The point of dropping the CTA rather than the item: the barber still
+    // learns what is wrong and who fixes it.
+    for (const i of owned) {
+      expect(i.title.trim().length).toBeGreaterThan(0);
+      expect(i.why.trim().length).toBeGreaterThan(0);
+    }
+  });
+
   it("gives a BARBER a personal-only summary", async () => {
     const res = await request(app)
       .get("/api/readiness/summary")
@@ -482,6 +516,36 @@ describe("role scoping", () => {
     expect(body.milestones).toHaveLength(4);
     expect(body.staff.length).toBeGreaterThan(1);
   });
+});
+
+/**
+ * The CTAs stopped being hand-written routes and became registry feature ids
+ * that the router resolves against the caller's seat. Two things must hold: the
+ * link a client renders is still a real route, and an employee never receives a
+ * manager-only one.
+ */
+describe("CTA destinations come from the registry", () => {
+  it("every CTA on the owner report resolves to a real registry route", async () => {
+    const body = await readiness(ownerCookie);
+    const known = new Set(FEATURE_INDEX.map((f) => f.href));
+    const items = [...body.items, ...body.blocking, ...body.improve];
+    expect(items.length).toBeGreaterThan(0);
+
+    let withCta = 0;
+    for (const i of items) {
+      if (!i.cta) continue;
+      withCta++;
+      // Both halves on the wire: the id (so a client can re-resolve with
+      // context the API lacks, chiefly the native shell) and the resolved href
+      // (so every existing consumer keeps working unchanged).
+      expect(typeof i.cta.featureId, i.id).toBe("string");
+      expect(featureById(i.cta.featureId), `${i.id} -> ${i.cta.featureId}`).toBeDefined();
+      expect(known.has(i.cta.href), `${i.id} -> ${i.cta.href}`).toBe(true);
+      expect(i.cta.label.trim().length).toBeGreaterThan(0);
+    }
+    expect(withCta).toBeGreaterThan(0);
+  });
+
 });
 
 describe("tenant isolation", () => {

@@ -21,11 +21,18 @@ const top = (q: string) => searchFeatures(q, FEATURE_INDEX)[0]?.entry.name ?? nu
 
 /** query -> the entry that should rank FIRST. Verified against the live index. */
 const EXPECTED: [string, string][] = [
-  // Booking rules that live behind the Settings tab.
-  ["buffer", "Online booking"],
-  ["minimum notice", "Online booking"],
-  ["days ahead", "Online booking"],
-  ["walk in", "Online booking"],
+  // Booking rules that live behind the Settings tab. These used to answer
+  // "Online booking", whose href is the BARE route - i.e. the appointment book,
+  // three taps from the setting the barber typed the name of. The rules now
+  // have their own entry pointing at ?tab=Settings, which is what this block's
+  // heading always claimed.
+  ["buffer", "Booking rules"],
+  ["minimum notice", "Booking rules"],
+  ["days ahead", "Booking rules"],
+  ["lead time", "Booking rules"],
+  ["pause bookings", "Booking rules"],
+  // Adding a walk-in is something you do IN the book, not in booking settings.
+  ["walk in", "Appointments"],
   // Hours, breaks and time away - all on the Staff tab.
   ["staff hours", "Staff & providers"],
   ["lunch break", "Staff & providers"],
@@ -63,7 +70,9 @@ const EXPECTED: [string, string][] = [
   ["domain", "Your own domain"],
   ["timezone", "Time zone"],
   ["qr code", "Themes, fonts & branding"],
-  ["no show", "Automatic reminders"],
+  // Marking a no-show is an action in the book. Reminders REDUCE no-shows,
+  // which is a claim for their description to make, not a word to win on.
+  ["no show", "Appointments"],
   ["reminder", "Automatic reminders"],
   ["card punch", "Punch cards & rewards"],
   ["waitlst", "Waitlist"], // typo, on purpose

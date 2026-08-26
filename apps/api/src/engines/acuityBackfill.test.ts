@@ -60,9 +60,34 @@ let clientId: string;
 let otherShopId: string;
 let otherStaffId: string;
 let otherServiceId: string;
+/**
+ * 🔴 A chair's mapping is STALE when `acuityCalendarMappedAt < connectedAt`, a
+ * strict comparison with no tolerance - and the two timestamps come from
+ * DIFFERENT CLOCKS. `connectedAt` defaults to Postgres `now()` (microsecond
+ * resolution), while a JS `new Date()` is quantised to the platform's coarser
+ * tick. So a mapping written a few microseconds AFTER the connection could
+ * still read as a millisecond BEFORE it, flipping every chair in the fixture to
+ * "stale" - the appointments then land in `blocked` instead of `missing` and a
+ * different assertion fails on each run depending on which shop lost the race.
+ *
+ * Both mapping times are therefore derived from the connection row the mapping
+ * is attested against, which is also the real-world ordering: you connect the
+ * account first, then you map the chairs.
+ */
+let mappedAt: Date;
+let otherMappedAt: Date;
 
 /** Far enough out that nothing collides with the "already started" cases. */
 const soon = (minutesFromNow: number) => new Date(Date.now() + minutesFromNow * 60_000);
+
+/**
+ * A mapping timestamp that is unambiguously after `connectedAt`, whichever
+ * clock produced it. One second is far below any real staleness window and far
+ * above the sub-millisecond skew this is defending against.
+ */
+function afterConnecting(connectedAt: Date): Date {
+  return new Date(connectedAt.getTime() + 1_000);
+}
 
 let blockSeq = 0;
 function stubCreateOk() {
@@ -135,16 +160,18 @@ beforeAll(async () => {
     },
   });
   shopId = shop.id;
-  await prisma.acuityConnection.create({
+  const conn = await prisma.acuityConnection.create({
     data: {
       shopId,
       acuityAccountId: "acct_bf",
       accessToken: "enc",
       tokenExpiresAt: new Date("2099-01-01T00:00:00Z"),
     },
+    select: { connectedAt: true },
   });
+  mappedAt = afterConnecting(conn.connectedAt);
   const staff = await prisma.staff.create({
-    data: { shopId, name: "Dre", acuityCalendarId: CAL, acuityCalendarMappedAt: new Date() },
+    data: { shopId, name: "Dre", acuityCalendarId: CAL, acuityCalendarMappedAt: mappedAt },
   });
   staffId = staff.id;
   const service = await prisma.service.create({
@@ -175,20 +202,22 @@ beforeAll(async () => {
     },
   });
   otherShopId = other.id;
-  await prisma.acuityConnection.create({
+  const otherConn = await prisma.acuityConnection.create({
     data: {
       shopId: otherShopId,
       acuityAccountId: "acct_bf2",
       accessToken: "enc",
       tokenExpiresAt: new Date("2099-01-01T00:00:00Z"),
     },
+    select: { connectedAt: true },
   });
+  otherMappedAt = afterConnecting(otherConn.connectedAt);
   const otherStaff = await prisma.staff.create({
     data: {
       shopId: otherShopId,
       name: "Ana",
       acuityCalendarId: OTHER_CAL,
-      acuityCalendarMappedAt: new Date(),
+      acuityCalendarMappedAt: otherMappedAt,
     },
   });
   otherStaffId = otherStaff.id;
@@ -225,7 +254,7 @@ afterEach(async () => {
   });
   await prisma.staff.updateMany({
     where: { id: staffId },
-    data: { acuityCalendarId: CAL, acuityCalendarMappedAt: new Date() },
+    data: { acuityCalendarId: CAL, acuityCalendarMappedAt: mappedAt },
   });
 });
 
@@ -626,7 +655,13 @@ describe("tenant isolation", () => {
     const run = await backfillShop(shopId);
     expect(run.created).toBe(1);
 
-    const rows = await prisma.acuityOutboundBlock.findMany();
+    // Scoped to the two shops this file owns. An unscoped findMany() reads the
+    // whole shared test database, so a row left behind by ANY other file would
+    // fail this assertion and point at tenant isolation, which is not what
+    // broke.
+    const rows = await prisma.acuityOutboundBlock.findMany({
+      where: { shopId: { in: [shopId, otherShopId] } },
+    });
     expect(rows).toHaveLength(1);
     expect(rows[0]!.appointmentId).toBe(mine.id);
     expect(rows[0]!.shopId).toBe(shopId);

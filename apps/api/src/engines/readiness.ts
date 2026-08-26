@@ -74,8 +74,20 @@ export type ReadinessRole = "owner" | "manager" | "barber";
 export interface ReadinessCta {
   /** Plain-language button text. */
   label: string;
-  /** Dashboard path, deep-linked (?tab=/#anchor) where the surface supports it. */
-  href: string;
+  /**
+   * Registry feature id — NOT a path.
+   *
+   * 🔴 These 35 CTAs were the biggest hand-written route list in the product
+   * and they had already drifted from the feature index they duplicated (this
+   * file was right about which booking tab connects Acuity; the index was
+   * wrong). Naming the feature also makes the button role-aware for free: the
+   * route resolves against the seat asking, so a readiness item an employee
+   * can see never renders a manager-only link.
+   *
+   * The wire still carries a resolved `href` alongside it (see routes/
+   * readiness.ts) so existing clients keep working.
+   */
+  featureId: string;
 }
 
 export interface ReadinessItem {
@@ -498,7 +510,7 @@ function staffItems(
       done: s.active,
       evidence: s.active ? "Active" : "Deactivated - customers cannot see this chair",
       role: "manager",
-      cta: { label: "Open Staff", href: "/dashboard/booking?tab=Staff" },
+      cta: { label: "Open Staff", featureId: "staff" },
     }),
     item({
       id: "staff.hours",
@@ -514,7 +526,7 @@ function staffItems(
           ? `${plural(s.availabilityRuleCount, "weekly time block")} saved`
           : "No weekly hours saved",
       role: "manager",
-      cta: { label: "Set hours", href: "/dashboard/booking?tab=Staff" },
+      cta: { label: "Set hours", featureId: "staff" },
     }),
     item({
       id: "staff.services",
@@ -530,7 +542,7 @@ function staffItems(
           ? `Offers ${plural(s.activeServiceLinkCount, "service")}`
           : "No services assigned to this chair",
       role: "manager",
-      cta: { label: "Assign services", href: "/dashboard/booking?tab=Services" },
+      cta: { label: "Assign services", featureId: "services" },
     }),
     item({
       id: "staff.alerts_reachable",
@@ -546,7 +558,7 @@ function staffItems(
           ? `Delivered by ${channels.join(", ")}`
           : unreachableReason(r, caps),
       role: "barber",
-      cta: { label: "Turn on alerts", href: "/dashboard/account" },
+      cta: { label: "Turn on alerts", featureId: "account" },
     }),
     item({
       id: "staff.seat_linked",
@@ -564,7 +576,7 @@ function staffItems(
         ? "Linked to a team member"
         : "Not linked - this chair's alerts go to the shop owner",
       role: "owner",
-      cta: { label: "Link a login", href: "/dashboard/team" },
+      cta: { label: "Link a login", featureId: "team" },
     }),
     item({
       id: "staff.photo_bio",
@@ -584,7 +596,7 @@ function staffItems(
               ? "Bio added, no photo yet"
               : "No photo or bio yet",
       role: "manager",
-      cta: { label: "Edit chair", href: "/dashboard/booking?tab=Staff" },
+      cta: { label: "Edit chair", featureId: "staff" },
     }),
   ];
 }
@@ -661,7 +673,7 @@ function shopItems(
       done: facts.name.trim().length > 0,
       silentWhenDone: true,
       evidence: facts.name.trim() ? `Set to "${facts.name.trim()}"` : "Not set",
-      cta: { label: "Open settings", href: "/dashboard" },
+      cta: { label: "Open settings", featureId: "home" },
     }),
     item({
       id: "shop.timezone",
@@ -674,7 +686,7 @@ function shopItems(
       evidence: facts.timezoneValid
         ? `Set to ${facts.timezone}`
         : `"${facts.timezone}" is not a time zone this system recognises`,
-      cta: { label: "Open settings", href: "/dashboard" },
+      cta: { label: "Open settings", featureId: "shop-timezone" },
     }),
     item({
       id: "shop.slug",
@@ -685,7 +697,7 @@ function shopItems(
       done: Boolean(facts.slug),
       silentWhenDone: true,
       evidence: facts.slug ? `getchairback.com/book/${facts.slug}` : "No link yet",
-      cta: { label: "Open your page", href: "/dashboard/site" },
+      cta: { label: "Open your page", featureId: "mini-site" },
     }),
     item({
       id: "shop.booking_source",
@@ -700,7 +712,7 @@ function shopItems(
         : facts.bookingUrl?.trim()
           ? `Sending customers to your ${facts.bookingMode} link`
           : `Set to ${facts.bookingMode}, but no booking link is saved - your page has no way to book`,
-      cta: { label: "Booking settings", href: "/dashboard/booking?tab=Settings" },
+      cta: { label: "Booking settings", featureId: "integrations" },
     }),
 
     // ----- Milestone 2: services and barber -----
@@ -715,7 +727,7 @@ function shopItems(
         activeStaff.length > 0
           ? `${plural(activeStaff.length, "active barber")}`
           : "No active barbers yet",
-      cta: { label: "Add a barber", href: "/dashboard/booking?tab=Staff" },
+      cta: { label: "Add a barber", featureId: "staff" },
     }),
     item({
       id: "shop.service.active",
@@ -728,7 +740,7 @@ function shopItems(
         activeServices.length > 0
           ? `${plural(activeServices.length, "active service")}`
           : "No active services yet",
-      cta: { label: "Add a service", href: "/dashboard/booking?tab=Services" },
+      cta: { label: "Add a service", featureId: "services" },
     }),
     item({
       id: "shop.service.duration",
@@ -745,7 +757,7 @@ function shopItems(
         validDuration.length > 0
           ? `${plural(validDuration.length, "service")} with a valid length`
           : `No active service is at least ${MIN_SERVICE_MINUTES} minutes long`,
-      cta: { label: "Edit services", href: "/dashboard/booking?tab=Services" },
+      cta: { label: "Edit services", featureId: "services" },
     }),
     item({
       id: "shop.offering.pair",
@@ -765,7 +777,7 @@ function shopItems(
           : activeStaff.length > 0 && activeServices.length > 0
             ? "You have barbers and services, but none are assigned to each other"
             : "Nothing assigned yet",
-      cta: { label: "Assign services", href: "/dashboard/booking?tab=Services" },
+      cta: { label: "Assign services", featureId: "services" },
     }),
     item({
       id: "shop.service.hours_open",
@@ -782,7 +794,7 @@ function shopItems(
           : closedAllWeek.length < activeServices.length
             ? `${plural(closedAllWeek.length, "service is", "services are")} closed every day of the week`
             : "Every active service is closed on every day of the week",
-      cta: { label: "Edit services", href: "/dashboard/booking?tab=Services" },
+      cta: { label: "Edit services", featureId: "services" },
     }),
 
     item({
@@ -826,7 +838,7 @@ function shopItems(
                   .join(" and ")
               }`
             : "No single barber is fully set up",
-      cta: { label: "Open Staff", href: "/dashboard/booking?tab=Staff" },
+      cta: { label: "Open Staff", featureId: "staff" },
     }),
 
     // ----- Milestone 3: hours and alerts -----
@@ -843,7 +855,7 @@ function shopItems(
       evidence: activeStaff.some((s) => s.availabilityRuleCount > 0)
         ? `${plural(activeStaff.filter((s) => s.availabilityRuleCount > 0).length, "barber has", "barbers have")} hours set`
         : "No barber has any weekly hours",
-      cta: { label: "Set hours", href: "/dashboard/booking?tab=Staff" },
+      cta: { label: "Set hours", featureId: "staff" },
     }),
     item({
       id: "shop.booking.window",
@@ -857,7 +869,7 @@ function shopItems(
       evidence: windowOk
         ? `Bookable from ${facts.bookingLeadHours}h ahead, up to ${facts.bookingMaxDays} days out`
         : `Earliest booking is ${facts.bookingLeadHours}h away but the furthest is ${facts.bookingMaxDays} day${facts.bookingMaxDays === 1 ? "" : "s"} - nothing can be booked`,
-      cta: { label: "Booking settings", href: "/dashboard/booking?tab=Settings" },
+      cta: { label: "Booking settings", featureId: "booking-rules" },
     }),
     item({
       id: "shop.alerts.reachable",
@@ -875,7 +887,7 @@ function shopItems(
           ? `A new booking would reach you by ${shopChannels.join(", ")}`
           : unreachableReason(facts.recipients[0], caps),
       role: "barber",
-      cta: { label: "Turn on alerts", href: "/dashboard/account" },
+      cta: { label: "Turn on alerts", featureId: "account" },
     }),
     item({
       id: "platform.email",
@@ -911,7 +923,7 @@ function shopItems(
       evidence: facts.hasAnyAppointment
         ? "A booking has come through"
         : "No bookings yet",
-      cta: { label: "Try a test booking", href: "/dashboard/booking?tab=Appointments" },
+      cta: { label: "Try a test booking", featureId: "appointments" },
     }),
   ];
 
@@ -933,7 +945,7 @@ function shopItems(
             ? "Connected and able to take payments"
             : "Connected, but Stripe has not enabled charges yet",
       role: "owner",
-      cta: { label: "Open payments", href: "/dashboard/payments" },
+      cta: { label: "Open payments", featureId: "pay-ahead" },
     }),
     item({
       id: "payments.deposit_amount",
@@ -948,7 +960,7 @@ function shopItems(
           ? `Taking $${((facts.depositAmountCents ?? 0) / 100).toFixed(2)} at booking`
           : "Deposit mode is on but no amount is set - nothing would be charged",
       role: "owner",
-      cta: { label: "Open payments", href: "/dashboard/payments" },
+      cta: { label: "Open payments", featureId: "pay-ahead" },
     }),
     item({
       id: "payments.priced_services",
@@ -962,7 +974,7 @@ function shopItems(
         pricedServices.length === activeServices.length
           ? "Every active service has a price"
           : `${plural(activeServices.length - pricedServices.length, "active service has", "active services have")} no price`,
-      cta: { label: "Edit services", href: "/dashboard/booking?tab=Services" },
+      cta: { label: "Edit services", featureId: "services" },
     }),
     item({
       id: "payments.pay_direct_handle",
@@ -977,7 +989,7 @@ function shopItems(
           ? `${plural(facts.payDirectHandleCount, "payment handle")} saved`
           : "Pay-direct is on but no Zelle, Venmo or Cash App handle is saved",
       role: "owner",
-      cta: { label: "Open payments", href: "/dashboard/payments" },
+      cta: { label: "Open payments", featureId: "pay-ahead" },
     }),
     item({
       id: "policy.cancel_fee_inert",
@@ -990,7 +1002,7 @@ function shopItems(
       done: true,
       evidence: `A ${facts.cancelFeeBps / 100}% fee inside ${facts.cancelWindowHours}h is configured, but payments are off`,
       role: "owner",
-      cta: { label: "Open payments", href: "/dashboard/payments" },
+      cta: { label: "Open payments", featureId: "pay-ahead" },
     }),
     item({
       id: "approval.watched",
@@ -1005,7 +1017,7 @@ function shopItems(
           ? "Requests will alert you"
           : "Approval is required but nothing would alert you to a new request",
       role: "barber",
-      cta: { label: "Turn on alerts", href: "/dashboard/account" },
+      cta: { label: "Turn on alerts", featureId: "account" },
     }),
     item({
       id: "waitlist.alert_phone",
@@ -1018,7 +1030,7 @@ function shopItems(
       evidence: facts.shopNotifyPhone
         ? "An alert number is saved"
         : "No shop alert number - waitlist joins land in the dashboard only",
-      cta: { label: "Booking settings", href: "/dashboard/booking?tab=Settings" },
+      cta: { label: "Booking settings", featureId: "booking-rules" },
     }),
     item({
       id: "requests.alert_phone",
@@ -1031,7 +1043,7 @@ function shopItems(
       evidence: facts.shopNotifyPhone
         ? "An alert number is saved"
         : "No shop alert number - requests land in the inbox only",
-      cta: { label: "Open your page", href: "/dashboard/site" },
+      cta: { label: "Open your page", featureId: "mini-site" },
     }),
     item({
       id: "rewards.active_reward",
@@ -1045,7 +1057,7 @@ function shopItems(
         facts.activeRewardCount > 0
           ? `${plural(facts.activeRewardCount, "reward")} available`
           : "Punch cards are on but there is nothing to redeem",
-      cta: { label: "Open rewards", href: "/dashboard/rewards" },
+      cta: { label: "Open rewards", featureId: "punch-cards" },
     }),
     item({
       id: "receptionist.ready",
@@ -1069,7 +1081,7 @@ function shopItems(
               ? "Ready to answer"
               : "Waiting on your acknowledgement",
       role: "owner",
-      cta: { label: "Open billing", href: "/dashboard/billing" },
+      cta: { label: "Open billing", featureId: "billing" },
     }),
     item({
       id: "integration.connected",
@@ -1083,7 +1095,7 @@ function shopItems(
         ? `${facts.bookingMode} is connected and syncing`
         : `Booking is set to ${facts.bookingMode} but no connection is active`,
       role: "owner",
-      cta: { label: "Connect booking", href: "/dashboard/booking?tab=Settings" },
+      cta: { label: "Connect booking", featureId: "integrations" },
     }),
 
     // ----- Informational: true things a barber cannot action -----
@@ -1097,7 +1109,7 @@ function shopItems(
       done: false,
       evidence: "Customers see a 'booking paused' notice instead of your times",
       role: "owner",
-      cta: { label: "See plans", href: "/dashboard/billing" },
+      cta: { label: "See plans", featureId: "billing" },
     }),
     item({
       id: "info.customer_sms",
@@ -1133,7 +1145,7 @@ function shopItems(
       klass: "recommended",
       done: false,
       evidence: `${plural(otherIncompleteChairs.length, "other chair is", "other chairs are")} not fully set up`,
-      cta: { label: "Open Staff", href: "/dashboard/booking?tab=Staff" },
+      cta: { label: "Open Staff", featureId: "staff" },
     }),
     item({
       id: "improve.service_prices",
@@ -1147,7 +1159,7 @@ function shopItems(
         pricedServices.length === activeServices.length
           ? "Every active service shows a price"
           : `${plural(activeServices.length - pricedServices.length, "service has", "services have")} no price`,
-      cta: { label: "Edit services", href: "/dashboard/booking?tab=Services" },
+      cta: { label: "Edit services", featureId: "services" },
     }),
   );
 
@@ -1183,7 +1195,12 @@ export function buildReadiness(
       preLaunchBlockers.length === 0
         ? "All checks pass - you're ready to go live"
         : `${plural(preLaunchBlockers.length, "thing")} still to do before customers can book`,
-    cta: { label: "See what's left", href: "/dashboard" },
+    // 🔴 One of only TWO destinations this migration deliberately moved (the
+    // other is shop.timezone, whose old /dashboard link predated the setting
+    // moving to Account). The remaining checks are listed on the Assistant now,
+    // so that is where "see what's left" goes. The Assistant drops this CTA on
+    // its own page rather than offering a link back to itself.
+    cta: { label: "See what's left", featureId: "assistant" },
   });
 
   const allShopItems = [...shopScoped, preflight];

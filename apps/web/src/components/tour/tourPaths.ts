@@ -1,4 +1,5 @@
 import { DEMO } from "@chairback/config/demo";
+import { resolveHref } from "@chairback/config/features";
 import {
   DASHBOARD_TOUR_STEPS,
   DEMO_TOUR_STEPS,
@@ -24,27 +25,33 @@ export function pathForTourRoute(route: ClientTourRoute): string {
   }
 }
 
+/**
+ * Each dashboard tour stop, as a REGISTRY FEATURE rather than a route.
+ *
+ * This was the last hand-written route table in the web app, and it had the
+ * same failure mode as the others: a page could move and the tour would keep
+ * walking to where it used to be, with nothing failing. Naming features means
+ * the tour and the nav cannot disagree about where anything lives.
+ */
+const DASHBOARD_TOUR_FEATURE: Record<DashboardTourRoute, string> = {
+  overview: "home",
+  agenda: "online-booking",
+  clients: "clients",
+  "rewards-manager": "punch-cards",
+  nudges: "rebook-nudges",
+  site: "mini-site",
+  payments: "pay-ahead",
+  insights: "insights",
+  billing: "billing",
+};
+
 export function pathForDashboardTourRoute(route: DashboardTourRoute): string {
-  switch (route) {
-    case "overview":
-      return "/dashboard";
-    case "agenda":
-      return "/dashboard/booking";
-    case "clients":
-      return "/dashboard/clients";
-    case "rewards-manager":
-      return "/dashboard/rewards";
-    case "nudges":
-      return "/dashboard/nudges";
-    case "site":
-      return "/dashboard/site";
-    case "payments":
-      return "/dashboard/payments";
-    case "insights":
-      return "/dashboard/insights";
-    case "billing":
-      return "/dashboard/billing";
-  }
+  const id = DASHBOARD_TOUR_FEATURE[route];
+  // The tour is a guided walk for the shop OWNER on the web, so it resolves
+  // with that context: a prospect on the read-only demo session sees the same
+  // stops. A withheld destination falls back to the dashboard root rather than
+  // stranding the walk mid-step.
+  return resolveHref(id, { role: "OWNER" }) ?? "/dashboard";
 }
 
 /**

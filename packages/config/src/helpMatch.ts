@@ -240,7 +240,7 @@ function featureAnswer(f: FeatureIndexEntry): HelpAnswer {
     category: FEATURE_TO_HELP_CATEGORY[f.category],
     // Matches the shared 3.1.1 rule: anything landing on the subscription page
     // is a back door onto a purchase flow Apple forbids in-app.
-    action: { label: `Open ${f.name}`, href: f.href },
+    action: { label: `Open ${f.name}`, featureId: f.id },
     hidesInApp: isBillingHref(f.href),
   };
 }
@@ -251,7 +251,9 @@ function featureAnswer(f: FeatureIndexEntry): HelpAnswer {
  */
 export const HELP_CORPUS: HelpAnswer[] = [
   ...HELP_ANSWERS,
-  ...FEATURE_INDEX.map(featureAnswer),
+  // Unlisted entries (the public marketing pages) are resolvable destinations,
+  // not shop features, so they get no generated "where do I find X" answer.
+  ...FEATURE_INDEX.filter((f) => f.listed !== false).map(featureAnswer),
 ];
 
 interface Indexed {

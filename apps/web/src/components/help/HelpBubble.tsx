@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { usePathname, useRouter } from "next/navigation";
 import { HELP_STARTERS, type HelpAnswer } from "@chairback/config/help";
+import { resolveFeature } from "@chairback/config/features";
 import { findHelp, helpAnswerById, type HelpResponse } from "@chairback/config/helpMatch";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
 
@@ -244,6 +245,7 @@ export function HelpBubble() {
                     key={m.id}
                     text={m.text}
                     response={m.response}
+                    inApp={inApp === true}
                     onPick={openAnswer}
                     onNavigate={(href) => {
                       setOpen(false);
@@ -314,17 +316,24 @@ function UserBubble({ text }: { text: string }) {
 function BotBubble({
   text,
   response,
+  inApp,
   onPick,
   onNavigate,
 }: {
   text?: string;
   response?: HelpResponse;
+  /** Inside the native shell — the registry withholds billing destinations. */
+  inApp: boolean;
   onPick: (a: HelpAnswer) => void;
   onNavigate: (href: string) => void;
 }) {
   const answer = response?.answer ?? null;
   const suggestions = response?.suggestions ?? [];
   const body = answer?.a ?? text ?? "";
+  // The corpus names a feature id; the registry turns it into a route this
+  // reader is actually allowed to open, or into nothing at all.
+  const resolved = answer?.action ? resolveFeature(answer.action.featureId, { inApp }) : null;
+  const action = resolved?.ok ? resolved : null;
 
   return (
     <div className="flex flex-col items-start gap-2">
@@ -338,13 +347,17 @@ function BotBubble({
         </div>
       )}
 
-      {answer?.action && (
+      {/* The answer names a FEATURE, and the registry decides whether this
+          reader may go there. A refusal (billing inside the shell, a page this
+          seat cannot open) renders no button rather than a link that dead-ends
+          — the answer itself still stands on its own. */}
+      {action && (
         <button
           type="button"
-          onClick={() => onNavigate(answer.action!.href)}
+          onClick={() => onNavigate(action.href)}
           className="rounded-full border border-gold/40 px-3 py-1 text-xs font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
         >
-          {answer.action.label} →
+          {answer!.action!.label} →
         </button>
       )}
 

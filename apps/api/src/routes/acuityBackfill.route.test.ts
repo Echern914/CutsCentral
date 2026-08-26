@@ -71,17 +71,26 @@ beforeAll(async () => {
     .send({ name: "Haircut", durationMin: 30, price: 35, staffIds: [staffId] });
   serviceId = service.body.id;
 
-  await prisma.acuityConnection.create({
+  const conn = await prisma.acuityConnection.create({
     data: {
       shopId,
       acuityAccountId: "acct_route",
       accessToken: "enc",
       tokenExpiresAt: new Date("2099-01-01T00:00:00Z"),
     },
+    select: { connectedAt: true },
   });
+  // 🔴 Derived from `connectedAt`, never from a fresh `new Date()`. A mapping is
+  // stale when `mappedAt < connectedAt` (strict, no tolerance) and those two
+  // timestamps come from different clocks - Postgres microseconds versus a
+  // coarser JS tick - so a mapping written after the connection can still read
+  // as a millisecond before it and silently blank the chair.
   await prisma.staff.update({
     where: { id: staffId },
-    data: { acuityCalendarId: "cal_route", acuityCalendarMappedAt: new Date() },
+    data: {
+      acuityCalendarId: "cal_route",
+      acuityCalendarMappedAt: new Date(conn.connectedAt.getTime() + 1_000),
+    },
   });
 });
 

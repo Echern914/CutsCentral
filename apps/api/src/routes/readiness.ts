@@ -6,6 +6,7 @@ import {
   buildReadiness,
   type ReadinessItem,
 } from "../engines/readiness.js";
+import { resolveFeature, type SeatRole } from "@chairback/config/features";
 import { collectCapabilities, collectReadinessFacts } from "../services/readinessFacts.js";
 
 /**
@@ -34,8 +35,28 @@ import { collectCapabilities, collectReadinessFacts } from "../services/readines
 export const readinessRouter: Router = Router();
 readinessRouter.use(requireUser, requireShop, dashboardLimiter);
 
+/**
+ * Resolve an item's CTA for the seat that asked.
+ *
+ * The engine names a FEATURE; the registry owns the route. Both go on the wire:
+ * `featureId` so a client can re-resolve with context the API does not have
+ * (chiefly whether it is rendering inside the native shell, where billing
+ * destinations must not exist), and `href` so every existing consumer keeps
+ * working unchanged.
+ *
+ * A CTA the registry withholds for this seat is dropped rather than downgraded.
+ * A readiness item whose fix belongs to someone else still says so in its
+ * `role` and `why`; what it must not do is offer a button that 403s.
+ */
+function wireCta(cta: ReadinessItem["cta"], role: SeatRole) {
+  if (!cta) return undefined;
+  const r = resolveFeature(cta.featureId, { role });
+  if (!r.ok) return undefined;
+  return { label: cta.label, featureId: cta.featureId, href: r.href };
+}
+
 /** Serialize an item for the wire. Shape is stable; future UI keys off `id`. */
-function wireItem(i: ReadinessItem) {
+function wireItem(i: ReadinessItem, role: SeatRole) {
   return {
     id: i.id,
     scope: i.scope,
@@ -50,7 +71,7 @@ function wireItem(i: ReadinessItem) {
     blocksLaunch: i.blocksLaunch,
     deferrable: i.deferrable,
     role: i.role,
-    cta: i.cta,
+    cta: wireCta(i.cta, role),
     ...(i.staffId ? { staffId: i.staffId } : {}),
   };
 }
@@ -58,6 +79,10 @@ function wireItem(i: ReadinessItem) {
 /** GET /api/readiness - the full report, scoped to the caller's role. */
 readinessRouter.get("/", async (req, res) => {
   const shopId = req.shop!.id;
+  // The seat asking. Every CTA below resolves against it, so an employee is
+  // never handed a manager-only destination - `managerOwned` items keep their
+  // explanation and lose only their button.
+  const role = (req.shopRole ?? "OWNER") as SeatRole;
   const facts = await collectReadinessFacts(shopId);
   if (!facts) {
     res.status(404).json({ error: "not_found" });
@@ -85,8 +110,8 @@ readinessRouter.get("/", async (req, res) => {
             completeCount: barber.chair.completeCount,
           }
         : null,
-      personal: barber.personal.map(wireItem),
-      managerOwned: barber.managerOwned.map(wireItem),
+      personal: barber.personal.map((i) => wireItem(i, role)),
+      managerOwned: barber.managerOwned.map((i) => wireItem(i, role)),
       complete: barber.complete,
       applicable: barber.applicable,
     });
@@ -103,15 +128,15 @@ readinessRouter.get("/", async (req, res) => {
       id: m.id,
       title: m.title,
       done: m.done,
-      blocking: m.blocking.map(wireItem),
+      blocking: m.blocking.map((i) => wireItem(i, role)),
       applicableCount: m.applicableCount,
       completeCount: m.completeCount,
     })),
     milestonesComplete: report.milestonesComplete,
     milestonesBlocking: report.milestonesBlocking,
-    blocking: report.blocking.map(wireItem),
-    items: report.items.map(wireItem),
-    improve: report.improve.map(wireItem),
+    blocking: report.blocking.map((i) => wireItem(i, role)),
+    items: report.items.map((i) => wireItem(i, role)),
+    improve: report.improve.map((i) => wireItem(i, role)),
     applicableRequiredCount: report.applicableRequiredCount,
     completeRequiredCount: report.completeRequiredCount,
     staff: report.staff.map((s) => ({
@@ -121,8 +146,8 @@ readinessRouter.get("/", async (req, res) => {
       bookable: s.bookable,
       applicableCount: s.applicableCount,
       completeCount: s.completeCount,
-      items: s.items.map(wireItem),
-      blocking: s.blocking.map(wireItem),
+      items: s.items.map((i) => wireItem(i, role)),
+      blocking: s.blocking.map((i) => wireItem(i, role)),
     })),
   });
 });
