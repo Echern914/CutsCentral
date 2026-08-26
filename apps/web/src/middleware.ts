@@ -31,7 +31,12 @@ const ATTRIBUTION_PARAMS = [
 ] as const;
 
 export const ATTRIBUTION_COOKIE = "cb_attn";
-const GATED_PREFIXES = ["/dashboard", "/onboarding", "/admin"];
+// /mcp is the assistant CONSENT screen. Gated for the same reason as the
+// dashboard: granting an AI client access to a shop is an authenticated,
+// first-party act, and an unauthenticated visitor must land on the normal login
+// page (with `next` back here) rather than on a consent form for a shop they
+// are not signed in to.
+const GATED_PREFIXES = ["/dashboard", "/onboarding", "/admin", "/mcp"];
 
 /**
  * Hosts that ARE this app. Anything else is a shop's custom domain (attached

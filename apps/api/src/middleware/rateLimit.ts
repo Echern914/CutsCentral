@@ -212,6 +212,26 @@ export const dashboardLimiter = make({
   keyGenerator: sessionKey,
 });
 
+/**
+ * The MCP endpoint: per-BEARER, so one connected assistant cannot spend another
+ * shop's budget.
+ *
+ * 🔴 Keyed on the Authorization header rather than the IP, because every request
+ * from a hosted assistant (ChatGPT, Claude) arrives from that provider's egress
+ * range - an IP key would make one busy shop rate-limit every other ChairBack
+ * customer using the same provider. This is the same lesson the auth limiter
+ * learned when one Vercel egress IP became a platform-wide login budget.
+ *
+ * 120/min matches the dashboard: an assistant is a person asking questions, not
+ * a crawler, and a tool call is roughly as expensive as a dashboard read.
+ */
+export const mcpLimiter = make({
+  name: "mcp",
+  windowMs: 60 * 1000,
+  limit: 120,
+  keyGenerator: bearerKey,
+});
+
 /** Admin endpoints: per-token, tight (expensive ops; contain a leaked token). */
 export const adminLimiter = make({
   name: "admin",
