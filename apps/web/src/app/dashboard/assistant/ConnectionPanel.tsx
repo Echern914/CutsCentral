@@ -34,6 +34,8 @@ export function ConnectionPanel({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  const [confirmSweep, setConfirmSweep] = useState(false);
 
   if (data === null) {
     return (
@@ -47,6 +49,22 @@ export function ConnectionPanel({
   }
 
   const connected = data.connections.length > 0;
+  /**
+   * How many rows before a list stops being a list and becomes a wall.
+   *
+   * 🔴 THIS IS NOT COSMETIC. Every failed connect attempt registers a NEW
+   * client with the provider, which is a new connection here - four dead
+   * entries filled a screen and pushed the thing people came for below the
+   * fold. The list has to stay short whatever the history behind it.
+   */
+  const VISIBLE = 3;
+  const shown = showAll ? data.connections : data.connections.slice(0, VISIBLE);
+  const hidden = data.connections.length - shown.length;
+  /**
+   * Never used = almost certainly a failed attempt. Safe to offer as a batch,
+   * because an assistant that has never made a call cannot be in use by anyone.
+   */
+  const unused = data.connections.filter((c) => c.lastUsedAt === null);
 
   async function disconnect(id: string) {
     setBusyId(id);
@@ -61,6 +79,22 @@ export function ConnectionPanel({
     // Re-read from the server rather than dropping the row locally: the list is
     // the truth about what can still reach the shop, and a stale "disconnected"
     // row is exactly the wrong thing to be confident about.
+    router.refresh();
+  }
+
+  async function disconnectMany(ids: string[]) {
+    setBusyId("sweep");
+    setError(null);
+    // Sequential, not parallel: this is a revocation, and a half-applied batch
+    // is harder to reason about than a slightly slower one.
+    let failed = 0;
+    for (const id of ids) {
+      const res = await disconnectAssistant(id);
+      if (!res.ok) failed += 1;
+    }
+    setBusyId(null);
+    setConfirmSweep(false);
+    if (failed > 0) setError(`Couldn't disconnect ${failed}. Try again.`);
     router.refresh();
   }
 
@@ -92,52 +126,129 @@ export function ConnectionPanel({
       </div>
 
       {connected && (
-        <ul className="mt-3 divide-y divide-subtle border-y border-subtle">
-          {data.connections.map((c) => (
-            <li key={c.id} className="flex flex-wrap items-start gap-3 py-3">
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-offwhite">{c.clientName}</p>
-                <p className="mt-0.5 text-xs text-muted">
-                  {c.connectedBy} · added {since(c.connectedAt)}
-                  {c.lastUsedAt ? ` · last used ${since(c.lastUsedAt)}` : " · not used yet"}
-                </p>
-                {c.permissions.length > 0 && (
-                  <p className="mt-1 text-xs leading-relaxed text-muted">
-                    Can read: {c.permissions.join(" · ")}
+        <>
+          <ul className="mt-3 divide-y divide-subtle border-y border-subtle">
+            {shown.map((c) => (
+              <li key={c.id} className="flex flex-wrap items-start gap-3 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-offwhite">{c.clientName}</p>
+                  <p className="mt-0.5 text-xs text-muted">
+                    {c.connectedBy} · added {since(c.connectedAt)}
+                    {c.lastUsedAt ? ` · last used ${since(c.lastUsedAt)}` : " · not used yet"}
                   </p>
-                )}
-              </div>
+                  {/* 🔴 COLLAPSED. Seven near-identical phrases, repeated per
+                      row, were the bulk of the panel's height and the least-read
+                      thing on it. One tap away instead of always on. */}
+                  {c.permissions.length > 0 && (
+                    <details className="group mt-1">
+                      <summary className="cursor-pointer list-none text-xs text-muted transition-colors duration-150 ease-out hover:text-offwhite">
+                        Can read {c.permissions.length} thing
+                        {c.permissions.length === 1 ? "" : "s"}
+                        <span aria-hidden className="ml-1 group-open:hidden">
+                          — show
+                        </span>
+                        <span aria-hidden className="ml-1 hidden group-open:inline">
+                          — hide
+                        </span>
+                      </summary>
+                      <ul className="mt-1 space-y-0.5">
+                        {c.permissions.map((p) => (
+                          <li key={p} className="text-xs leading-relaxed text-muted">
+                            · {p}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                </div>
 
-              {confirmId === c.id ? (
-                <div className="flex shrink-0 items-center gap-2">
+                {confirmId === c.id ? (
+                  <div className="flex shrink-0 items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void disconnect(c.id)}
+                      disabled={busyId === c.id}
+                      className="rounded-full bg-danger px-3 py-1.5 text-xs font-semibold text-offwhite transition-colors duration-150 ease-out disabled:opacity-60"
+                    >
+                      {busyId === c.id ? "Disconnecting…" : "Yes, disconnect"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmId(null)}
+                      className="rounded-full border border-subtle px-3 py-1.5 text-xs font-medium text-muted"
+                    >
+                      Keep
+                    </button>
+                  </div>
+                ) : (
                   <button
                     type="button"
-                    onClick={() => void disconnect(c.id)}
-                    disabled={busyId === c.id}
+                    onClick={() => setConfirmId(c.id)}
+                    className="shrink-0 rounded-full border border-subtle px-3 py-1.5 text-xs font-medium text-offwhite transition-colors duration-150 ease-out hover:border-strong"
+                  >
+                    Disconnect
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+
+          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+            {hidden > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowAll(true)}
+                className="text-xs font-semibold text-gold transition-colors duration-150 ease-out hover:text-gold-muted"
+              >
+                Show {hidden} more
+              </button>
+            )}
+            {showAll && data.connections.length > VISIBLE && (
+              <button
+                type="button"
+                onClick={() => setShowAll(false)}
+                className="text-xs font-semibold text-gold transition-colors duration-150 ease-out hover:text-gold-muted"
+              >
+                Show fewer
+              </button>
+            )}
+
+            {/* 🔴 The escape hatch for the mess a failed connect flow leaves.
+                Clearing four dead entries one at a time is the kind of chore
+                people simply do not do, so they live there forever looking like
+                real access. */}
+            {unused.length > 1 &&
+              (confirmSweep ? (
+                <span className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void disconnectMany(unused.map((c) => c.id))}
+                    disabled={busyId === "sweep"}
                     className="rounded-full bg-danger px-3 py-1.5 text-xs font-semibold text-offwhite transition-colors duration-150 ease-out disabled:opacity-60"
                   >
-                    {busyId === c.id ? "Disconnecting…" : "Yes, disconnect"}
+                    {busyId === "sweep"
+                      ? "Disconnecting…"
+                      : `Yes, disconnect ${unused.length}`}
                   </button>
                   <button
                     type="button"
-                    onClick={() => setConfirmId(null)}
+                    onClick={() => setConfirmSweep(false)}
                     className="rounded-full border border-subtle px-3 py-1.5 text-xs font-medium text-muted"
                   >
-                    Keep
+                    Keep them
                   </button>
-                </div>
+                </span>
               ) : (
                 <button
                   type="button"
-                  onClick={() => setConfirmId(c.id)}
-                  className="shrink-0 rounded-full border border-subtle px-3 py-1.5 text-xs font-medium text-offwhite transition-colors duration-150 ease-out hover:border-strong"
+                  onClick={() => setConfirmSweep(true)}
+                  className="text-xs font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite"
                 >
-                  Disconnect
+                  Tidy up {unused.length} never used
                 </button>
-              )}
-            </li>
-          ))}
-        </ul>
+              ))}
+          </div>
+        </>
       )}
 
       {error && <p className="mt-2 text-xs text-danger">{error}</p>}

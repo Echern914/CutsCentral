@@ -44,12 +44,20 @@ interface Tab {
 // screens opened most often live there. "More" is appended by the renderers,
 // always last.
 //
-// 🔴 FIVE SLOTS, and Assistant takes the fourth. Insights moves into the More
-// sheet rather than becoming a sixth tab: a six-item bar does not fit a 320px
-// phone at a 44px touch target, and the sheet is a real destination, not a
-// demotion — every non-tab page has lived there since the 5-tab nav landed.
-// Assistant earns the slot because it is the only tab that answers "what do I
-// do now", which is the question a half-set-up shop opens the app with.
+// 🔴 FIVE SLOTS, and Insights holds the fourth. It briefly lost that slot to
+// Assistant and went into the More sheet; this puts it back, because the two
+// are not comparable as tabs. Insights is a DESTINATION you go and read — a
+// screen with a shape you scan, several times a week. Assistant answers a
+// question you happen to have, which is not a place at all.
+//
+// So Assistant lives in the corner bubble instead (components/help/HelpBubble),
+// which is strictly better for it: reachable from EVERY page rather than one,
+// including the pages where the question actually occurs to you, and it opens
+// as a chat you can ask straight away instead of a tab you navigate to and then
+// have to find your way around. The bubble also links through to the full page.
+//
+// A six-item bar was never an option: it does not fit a 320px phone at a 44px
+// touch target, which is the floor the whole nav is built to.
 //
 // The routes come from the registry so this list cannot drift from the palette,
 // the More sheet or the help corpus — the whole reason those three disagreed.
@@ -57,25 +65,38 @@ const TAB_SPECS: { featureId: string; label: string; Icon: Tab["Icon"] }[] = [
   { featureId: "online-booking", label: "Calendar", Icon: CalendarIcon },
   { featureId: "clients", label: "Clients", Icon: ClientsIcon },
   { featureId: "home", label: "Home", Icon: HomeIcon },
-  { featureId: "assistant", label: "Assistant", Icon: AssistantIcon },
+  { featureId: "insights", label: "Insights", Icon: InsightsIcon },
 ];
 
 /**
  * The tabs a given seat can actually reach, with their routes resolved.
  *
- * An employee seat keeps Home AND Assistant: Assistant is the one place their
- * personal setup tasks and the whole offline help corpus live, and both are
- * things they can act on without a manager. Everything else is manager-gated
- * and would 403, and a nav full of doors that refuse to open reads as a broken
- * app rather than a limited one.
+ * An employee seat keeps Home and, where the registry allows it, Assistant.
+ * Insights is manager-gated, so `resolveHref` returns null for a BARBER and the
+ * tab is simply not drawn — a nav full of doors that refuse to open reads as a
+ * broken app rather than a limited one.
+ *
+ * 🔴 THE BARBER FALLBACK IS LOAD-BEARING. Assistant is where an employee's own
+ * setup tasks and the whole offline help corpus live, and it is the only other
+ * thing they can reach. Without it their bar is a single Home tab, so when
+ * Insights is withheld the Assistant tab takes that slot back.
  */
-function tabsFor(role: SeatRole): Tab[] {
+export function tabsFor(role: SeatRole): Tab[] {
   const out: Tab[] = [];
   for (const spec of TAB_SPECS) {
     const href = resolveHref(spec.featureId, { role });
     // A tab whose destination the registry withholds is simply not rendered.
     if (href === null) continue;
     out.push({ ...spec, href });
+  }
+
+  // A seat that cannot reach Insights gets Assistant in that slot instead of an
+  // empty one. For an owner or manager this branch never runs.
+  if (!out.some((t) => t.featureId === "insights")) {
+    const href = resolveHref("assistant", { role });
+    if (href !== null) {
+      out.push({ featureId: "assistant", label: "Assistant", Icon: AssistantIcon, href });
+    }
   }
   return out;
 }

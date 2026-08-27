@@ -9,7 +9,7 @@ import { findHelp, helpAnswerById, type HelpResponse } from "@chairback/config/h
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
 
 /**
- * The help bubble: a corner launcher that answers product questions instantly.
+ * The Assistant, in the corner of every page.
  *
  * Answers come from the curated corpus in @chairback/config/help, matched
  * locally — no network call, no API cost, and nothing that can invent a price
@@ -19,6 +19,18 @@ import { useIsNativeApp } from "@/lib/useIsNativeApp";
  * DELIBERATELY NO TYPING INDICATOR. Matching takes about a millisecond, and
  * faking a pause to seem more human would be spending the one advantage this
  * approach has. The answer is simply there.
+ *
+ * 🔴 THIS IS THE ASSISTANT'S FRONT DOOR, not a support widget bolted on beside
+ * it. It used to be branded "Help" while a separate Assistant tab held the same
+ * corpus, which meant two names for one thing and a tab spent on something that
+ * is not a place. The corner is the better home: the question occurs to you ON
+ * a page, and this is reachable from all of them — so the tab went back to
+ * Insights, which genuinely is a destination.
+ *
+ * Everything it answers is still computed locally, so it costs nothing to run
+ * and cannot invent a price or a policy we do not ship. The link through to
+ * /dashboard/assistant is for the things a chat bubble cannot hold: what is
+ * blocking the shop right now, and connecting your own AI account.
  *
  * It is scoped to the OWNER's surfaces (marketing + dashboard). The public
  * client pages are excluded — see HIDDEN_PREFIXES.
@@ -51,6 +63,18 @@ export function HelpBubble() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [query, setQuery] = useState("");
   const nextId = useRef(0);
+
+  /**
+   * Where the full Assistant lives for this visitor, or null if nowhere.
+   *
+   * Resolved through the registry rather than hardcoded, so this cannot drift
+   * from the nav, the palette or the help corpus - the exact disagreement the
+   * registry was built to end.
+   */
+  const assistantHref = useMemo(() => {
+    const r = resolveFeature("assistant", {});
+    return r.ok ? r.href : null;
+  }, []);
 
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -187,9 +211,9 @@ export function HelpBubble() {
         ref={launcherRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
-        aria-label={open ? "Close help" : "Open help"}
+        aria-label={open ? "Close the assistant" : "Open the assistant"}
         aria-expanded={open}
-        title="Help"
+        title="Assistant"
         className={`fixed right-4 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-gold text-charcoal shadow-ambient-lg transition-transform duration-150 ease-out hover:scale-105 focus-visible:ring-2 focus-visible:ring-offwhite focus-visible:ring-offset-2 focus-visible:ring-offset-charcoal ${launcherOffset}`}
       >
         {open ? <CloseIcon /> : <ChatIcon />}
@@ -205,7 +229,7 @@ export function HelpBubble() {
             ref={panelRef}
             role="dialog"
             aria-modal="true"
-            aria-label="Help"
+            aria-label="Assistant"
             onKeyDown={trapTab}
             /* Phones: a near-fullscreen sheet. From `sm` up: a corner panel
                parked ABOVE the launcher (3.5rem tall + gap) rather than on top
@@ -214,13 +238,13 @@ export function HelpBubble() {
           >
             <header className="flex items-start justify-between gap-3 border-b border-subtle px-4 py-3">
               <div>
-                <p className="text-sm font-semibold text-offwhite">Help</p>
+                <p className="text-sm font-semibold text-offwhite">Assistant</p>
                 <p className="text-xs text-muted">Instant answers — no waiting</p>
               </div>
               <button
                 type="button"
                 onClick={() => setOpen(false)}
-                aria-label="Close help"
+                aria-label="Close the assistant"
                 className="shrink-0 rounded-full border border-subtle p-1.5 text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
               >
                 <CloseIcon className="h-3.5 w-3.5" />
@@ -293,6 +317,26 @@ export function HelpBubble() {
                 <SendIcon />
               </button>
             </form>
+
+            {/* 🔴 The one thing a chat bubble cannot hold: what is blocking the
+                shop RIGHT NOW, and connecting your own AI account. Rendered
+                only on dashboard surfaces - on marketing pages there is no shop
+                to have a status, and the link would 401. */}
+            {onDashboard && assistantHref && (
+              <div className="border-t border-subtle px-3 py-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpen(false);
+                    router.push(assistantHref);
+                  }}
+                  className="w-full rounded-lg px-2 py-1.5 text-left text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-charcoal-700/50"
+                >
+                  Open the full Assistant — setup status, problems and AI
+                  connections →
+                </button>
+              </div>
+            )}
           </div>,
           document.body,
         )}
