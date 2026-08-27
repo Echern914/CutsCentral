@@ -1291,8 +1291,8 @@ describe("🔴 the connector is Premium and Premium AI only", () => {
     expect(r.isError).toBe(false);
   });
 
-  it("🔴 a free shop is refused with 403 and copy naming the plan", async () => {
-    await setPlan("free", { subscriptionStatus: "none" });
+  it("🔴 a free shop with no trial is refused with 403 and copy naming the plan", async () => {
+    await setPlan("free", { subscriptionStatus: "none", trialEndsAt: null });
     const res = await rpc(ownerToken, "tools/call", {
       name: "readiness_report",
       arguments: {},
@@ -1302,16 +1302,29 @@ describe("🔴 the connector is Premium and Premium AI only", () => {
     expect(res.status).toBe(403);
     expect(res.body.error).toBe("plan_required");
     expect(res.body.error_description).toMatch(/Premium or Premium AI/);
+    expect(res.body.error_description).toMatch(/active trial/);
     expect(res.headers["www-authenticate"]).toBeUndefined();
   });
 
-  it("🔴 a shop still on TRIAL is refused - a trial is plan-free with access", async () => {
-    // The distinction the entitlement module exists to make. hasActiveAccess is
-    // TRUE here (unexpired trial); the plan is still "free", so the connector
-    // is not included. Everything else in ChairBack keeps working.
+  it("🔴 a shop inside its TRIAL is allowed, though its plan is still free", async () => {
+    // Trials are in deliberately: the plan column only moves when Stripe says
+    // so, so a plan-only reading would lock out precisely the shops deciding
+    // whether to buy Premium.
     await setPlan("free", {
       subscriptionStatus: "none",
       trialEndsAt: new Date(Date.now() + 14 * 86_400_000),
+    });
+    const r = await call(ownerToken, "readiness_report");
+    expect(r.isError).toBe(false);
+  });
+
+  it("🔴 an EXPIRED trial is refused - the boundary trials created", async () => {
+    // The failure mode admitting trials could have introduced: `trialEndsAt`
+    // set forever means access forever. It is compared against now, not merely
+    // checked for being non-null.
+    await setPlan("free", {
+      subscriptionStatus: "none",
+      trialEndsAt: new Date(Date.now() - 86_400_000),
     });
     const res = await rpc(ownerToken, "tools/call", {
       name: "readiness_report",

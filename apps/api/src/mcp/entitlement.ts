@@ -44,13 +44,32 @@ export function hasMcpEntitlement(
   // `enabled: true` explicitly.
   if (!(opts.enabled ?? billingEnabled())) return true;
 
-  // 🔴 THE PLAN, AND THEN WHETHER IT IS STILL LIVE. Both halves are load-bearing:
-  // `plan` alone would keep a lapsed Premium shop connected (the column is only
-  // reset when Stripe tells us), and `hasActiveAccess` alone would let a FREE
-  // shop on trial connect - a trial is plan-free WITH access, which is exactly
-  // the distinction this file exists to make.
-  if (!ENTITLED_PLANS.has(shop.plan)) return false;
-  return hasActiveAccess(shop, opts);
+  // 🔴 THE PLAN, AND THEN WHETHER IT IS STILL LIVE. `plan` alone would keep a
+  // LAPSED Premium shop connected, because Stripe leaves the column set until a
+  // webhook resets it. Both halves are required.
+  if (ENTITLED_PLANS.has(shop.plan)) return hasActiveAccess(shop, opts);
+
+  // 🔴 AND TRIALS ARE IN. A shop inside its trial is still `plan: "free"` -
+  // the column only moves when Stripe says so - so a plan-only reading would
+  // lock out precisely the people evaluating whether to buy Premium. Trialing
+  // shops get the connector; shops whose trial has EXPIRED do not, because
+  // `trialEndsAt` is in the past and this returns false.
+  //
+  // Written as its own branch rather than collapsing the whole function to
+  // `hasActiveAccess`. Today the two are equivalent, because the only way a
+  // free-plan shop has access is a trial or a comp - but if a cheaper paid tier
+  // is ever added, that collapse would silently hand it the connector. The plan
+  // list stays the thing that decides.
+  return isTrialing(shop, opts);
+}
+
+/** Inside an unexpired trial. Distinct from "has access", which is broader. */
+function isTrialing(
+  shop: Pick<McpEntitlementShop, "trialEndsAt">,
+  opts: { now?: Date } = {},
+): boolean {
+  if (shop.trialEndsAt === null) return false;
+  return shop.trialEndsAt.getTime() > (opts.now ?? new Date()).getTime();
 }
 
 /**
@@ -61,5 +80,5 @@ export const MCP_REQUIRED_PLAN_LABEL = `${PLANS.pro.name} or ${PLANS.pro_ai.name
 /** What an ineligible caller is told. Fixed text, one place. */
 export const MCP_PLAN_REQUIRED = {
   error: "plan_required",
-  error_description: `Connecting an AI assistant needs ${MCP_REQUIRED_PLAN_LABEL}. The rest of ChairBack is unaffected.`,
+  error_description: `Connecting an AI assistant needs ${MCP_REQUIRED_PLAN_LABEL}, or an active trial. The rest of ChairBack is unaffected.`,
 } as const;
