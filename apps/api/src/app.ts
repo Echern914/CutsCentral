@@ -30,6 +30,8 @@ import { rewardsRouter } from "./routes/rewards.js";
 import { walletRouter } from "./routes/wallet.js";
 import { dashboardRouter } from "./routes/dashboard.js";
 import { barberRouter } from "./routes/barber.js";
+import { walkInBarberRouter } from "./routes/walkIn.barber.js";
+import { walkInDashboardRouter } from "./routes/walkIn.dashboard.js";
 import { insightsRouter } from "./routes/insights.js";
 import { notificationsRouter } from "./routes/notifications.js";
 import { mcpConnectionsRouter } from "./routes/mcp.connections.js";
@@ -197,6 +199,9 @@ export function createApp(): Express {
   app.use("/api/dashboard", dashboardLimiter, dashboardRouter);
   // Own-chair surface for employees. Deliberately NOT part of dashboardRouter:
   // that router is manager-gated so new routes inherit the restriction.
+  // The walk-in claim surface mounts FIRST (more specific path) so the barber
+  // router can never shadow it. Both dark behind WALK_IN_MODE_ENABLED.
+  app.use("/api/barber/walk-ins", dashboardLimiter, walkInBarberRouter);
   app.use("/api/barber", dashboardLimiter, barberRouter);
   app.use("/api/insights", dashboardLimiter, insightsRouter); // barber analytics page
   app.use("/api/notifications", dashboardLimiter, notificationsRouter); // the barber's own alert settings
@@ -210,6 +215,10 @@ export function createApp(): Express {
   // still be able to SEE and REVOKE what it connected while it was paying.
   app.use("/api/mcp", mcpConnectionsRouter);
   app.use("/api/booking", dashboardLimiter, bookingDashboardRouter); // barber booking config
+  // Walk-In Mode manager surface (the Live Queue board). Its own router, NOT
+  // part of bookingDashboardRouter (the Square stack edits that file, and a
+  // queue is not booking config). Dark behind WALK_IN_MODE_ENABLED.
+  app.use("/api/walk-ins", dashboardLimiter, walkInDashboardRouter);
   app.use("/api/payments", dashboardLimiter, paymentsDashboardRouter); // barber payment settings
   app.use("/api/loyalty", dashboardLimiter, loyaltyRouter);
   app.use("/api/promos", dashboardLimiter, promotionsRouter);

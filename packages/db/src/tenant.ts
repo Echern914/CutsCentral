@@ -611,6 +611,99 @@ export function forShop(shopId: string) {
         runWithShop(shopId, (tx) => tx.waitlistEvent.create(args)),
     },
 
+    // Walk-in queue (NOT the waitlist - "I am here now", not "call me when a
+    // future slot opens"). Staff create/read/work entries here; the PUBLIC
+    // kiosk check-in (PR 2) writes with plain prisma like every other
+    // unauthenticated route. Multi-step flows (transitions, estimates,
+    // reorders) live in engines/walkInQueue.ts on runWithShop directly - one
+    // transaction per operation, with the audit row inside it.
+    walkInEntry: {
+      findMany: (args: Prisma.WalkInEntryFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.walkInEntry.findMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      findFirst: (args: Prisma.WalkInEntryFindFirstArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.walkInEntry.findFirst({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      count: (args: Prisma.WalkInEntryCountArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.walkInEntry.count({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      update: (args: Prisma.WalkInEntryUpdateArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.walkInEntry.update({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      // The lifecycle's compare-and-set shape: the status (and, for a barber,
+      // the own-chair assignedStaffId) rides in the where, so a stale or
+      // repeated transition is a 0-count no-op rather than a partial write.
+      updateMany: (args: Prisma.WalkInEntryUpdateManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.walkInEntry.updateMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      create: (args: Prisma.WalkInEntryCreateArgs) =>
+        runWithShop(shopId, (tx) => tx.walkInEntry.create(args)),
+    },
+
+    // The selected-services join. Snapshots are written at join time and only
+    // ever replaced wholesale (delete + recreate inside the entry's edit tx).
+    walkInEntryService: {
+      findMany: (args: Prisma.WalkInEntryServiceFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.walkInEntryService.findMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      createMany: (args: Prisma.WalkInEntryServiceCreateManyArgs) =>
+        runWithShop(shopId, (tx) => tx.walkInEntryService.createMany(args)),
+      deleteMany: (args: Prisma.WalkInEntryServiceDeleteManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.walkInEntryService.deleteMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+    },
+
+    // Walk-in audit trail. APPEND-ONLY, and the shape of this accessor is part
+    // of that: deliberately no `update` and no `delete`, same as
+    // waitlistEvent - and the database's BEFORE UPDATE trigger is what
+    // actually binds (engines write as the connection owner).
+    walkInEvent: {
+      findMany: (args: Prisma.WalkInEventFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.walkInEvent.findMany({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      count: (args: Prisma.WalkInEventCountArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.walkInEvent.count({
+            ...args,
+            where: scopeWhere(args.where, shopId),
+          }),
+        ),
+      create: (args: Prisma.WalkInEventCreateArgs) =>
+        runWithShop(shopId, (tx) => tx.walkInEvent.create(args)),
+    },
+
     // AI receptionist threads: created on the Twilio-webhook path (plain prisma,
     // no shop context - same trust model as the waitlist join), then read back
     // here for the dashboard transcript view (RLS).
