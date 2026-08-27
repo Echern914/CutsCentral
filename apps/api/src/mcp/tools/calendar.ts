@@ -37,6 +37,31 @@ import { initialOnly, shopClock, windowFor, ymdSchema } from "./shopTime.js";
  * NO staffId argument on these tools. An employee asking about the calendar gets
  * their own chair because the policy decided so before the handler ran; there is
  * no parameter for them to change.
+ *
+ * ── 🔴 THE DIARY IS TWO TABLES, NOT ONE ──────────────────────────────────────
+ *
+ * A booking reaches ChairBack either as a native `Appointment` or as a `Visit`
+ * synced from Acuity or Square. Reading only the first - which is what this
+ * tool did originally - makes an Acuity-first shop's day look EMPTY, which is
+ * the worst possible failure for a calendar: the assistant cheerfully reports a
+ * free afternoon that is fully booked.
+ *
+ * Two rules keep the merged view honest:
+ *
+ *   1. `appointment: null` on the Visit read. A Visit promoted FROM a native
+ *      booking is the same hour as the Appointment row, so without this filter
+ *      every ChairBack booking on a synced shop appears twice and the day reads
+ *      as double-booked. This is the same filter `readChairEvents` uses.
+ *   2. `truncated` is computed across BOTH sources, before slicing - a cap hit
+ *      by either read means the merged answer is incomplete.
+ *
+ * ── 🔴 AND A CHAIR-SCOPED DIARY IS ONE TABLE ─────────────────────────────────
+ *
+ * `Visit` carries no staffId. There is no honest way to decide whether an
+ * imported booking belongs to the barber who asked, so a chair-scoped agenda
+ * returns native rows only and sets `syncedExcluded: true` with fixed copy
+ * saying so. Silence would be worse than the omission: the barber would read a
+ * short day as a free one.
  */
 
 /** A day either side, so a query is never quietly empty at the boundary. */
@@ -86,10 +111,17 @@ async function agenda(inv: ToolInvocation): Promise<ToolResult> {
   // back untyped and the whole point of selecting narrow fields is lost.
   const staffFilter = inv.chairFilterStaffId ?? undefined;
 
-  // ONE shop-scoped transaction, not two. Every forShop() call is its own
+  // 🔴 A CHAIR-SCOPED AGENDA CANNOT INCLUDE SYNCED WORK. `Visit` has no
+  // staffId, so there is no honest way to decide whether an Acuity booking
+  // belongs to THIS barber. Attributing it would invent work he may not have
+  // done; showing it unattributed on his own chair's agenda would read as his.
+  // So a barber gets native rows only, and the response says so.
+  const syncedExcluded = inv.chairFilterStaffId !== null;
+
+  // ONE shop-scoped transaction, not three. Every forShop() call is its own
   // BEGIN + SET ROLE + query + COMMIT, and the agenda handler learned the hard
   // way that stacking those is what "the calendar is slow" is made of.
-  const { appointments, chairs } = await runWithShop(inv.shopId, async (tx) => {
+  const { appointments, visits, chairs } = await runWithShop(inv.shopId, async (tx) => {
     const [appointments, chairs] = await Promise.all([
       tx.appointment.findMany({
         where: {
@@ -118,11 +150,71 @@ async function agenda(inv: ToolInvocation): Promise<ToolResult> {
         select: { id: true, name: true, active: true },
       }),
     ]);
-    return { appointments, chairs };
+
+    const visits = syncedExcluded
+      ? []
+      : await tx.visit.findMany({
+          where: {
+            shopId: inv.shopId,
+            // 🔴 THE DEDUPLICATION. A Visit promoted from a native booking is
+            // the SAME hour as the Appointment row above; the engine uses this
+            // exact filter for the same reason. Without it the assistant reads
+            // every ChairBack booking twice on a synced shop and reports a day
+            // as double-booked.
+            appointment: null,
+            scheduledAt: { lt: window.to },
+            OR: [{ endAt: { gt: window.from } }, { endAt: null }],
+          },
+          orderBy: { scheduledAt: "asc" },
+          take: MAX_APPOINTMENTS + 1,
+          select: {
+            id: true,
+            scheduledAt: true,
+            endAt: true,
+            status: true,
+            serviceName: true,
+            // Minimized identity only - the same first-name-plus-initial floor
+            // the native rows get. No phone, no email, no notes.
+            client: { select: { firstName: true, lastName: true } },
+          },
+        });
+
+    return { appointments, visits, chairs };
   });
 
-  const truncated = appointments.length > MAX_APPOINTMENTS;
-  const rows = truncated ? appointments.slice(0, MAX_APPOINTMENTS) : appointments;
+  // Either source hitting its own cap means the merged view is incomplete, and
+  // so does the merged length. Computed BEFORE the slice, across BOTH.
+  const sourceCapped =
+    appointments.length > MAX_APPOINTMENTS || visits.length > MAX_APPOINTMENTS;
+
+  const merged = [
+    ...appointments.map((a) => ({
+      id: a.id,
+      startsAt: a.startsAt,
+      endsAt: a.endsAt,
+      status: a.status as string,
+      client: initialOnly(a.firstName, a.lastName),
+      service: a.service?.name ?? null,
+      chair: a.staff?.name ?? null,
+      staffId: a.staffId as string | null,
+      source: "native" as const,
+    })),
+    ...visits.map((v) => ({
+      id: v.id,
+      startsAt: v.scheduledAt,
+      endsAt: v.endAt,
+      status: v.status as string,
+      client: initialOnly(v.client?.firstName ?? null, v.client?.lastName ?? null),
+      service: v.serviceName,
+      chair: null,
+      // Not "unknown" - Visit has no such column. Null is the truthful answer.
+      staffId: null as string | null,
+      source: "synced" as const,
+    })),
+  ].sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime() || a.id.localeCompare(b.id));
+
+  const truncated = sourceCapped || merged.length > MAX_APPOINTMENTS;
+  const rows = merged.slice(0, MAX_APPOINTMENTS);
 
   // Blocked time comes from the one engine that already reconciles all three
   // sources (one-off exceptions, standing weekly blocks, and time blocked in
@@ -147,16 +239,29 @@ async function agenda(inv: ToolInvocation): Promise<ToolResult> {
       // 🔴 Reported, never hidden. A truncated calendar that looks complete is
       // how an assistant confidently tells a barber their afternoon is free.
       truncated,
+      // 🔴 True means: bookings synced from Acuity or Square are NOT in this
+      // answer. Stated so the assistant can say "this is your ChairBack diary,
+      // your Acuity bookings aren't shown" instead of implying a free afternoon.
+      syncedExcluded,
+      ...(syncedExcluded
+        ? {
+            syncedExcludedReason:
+              "Bookings synced from Acuity or Square do not record which chair worked them, so they cannot be shown on one barber's agenda. Ask a manager for the shop-wide view.",
+          }
+        : {}),
       appointments: rows.map((a) => ({
         id: a.id,
         startsAt: a.startsAt.toISOString(),
-        endsAt: a.endsAt.toISOString(),
+        // A synced booking may carry no end instant; null is the truthful
+        // answer rather than a guessed duration.
+        endsAt: a.endsAt ? a.endsAt.toISOString() : null,
         status: a.status,
         occupiesChair: !CLOSED.has(a.status),
-        client: initialOnly(a.firstName, a.lastName),
-        service: a.service?.name ?? null,
-        chair: a.staff?.name ?? null,
+        client: a.client,
+        service: a.service,
+        chair: a.chair,
         staffId: a.staffId,
+        source: a.source,
       })),
       blockedTime: chairs.flatMap((c) =>
         (blocks.get(c.id) ?? []).map((b) => ({
