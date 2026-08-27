@@ -81,7 +81,7 @@ const TAB_SPECS: { featureId: string; label: string; Icon: Tab["Icon"] }[] = [
  * thing they can reach. Without it their bar is a single Home tab, so when
  * Insights is withheld the Assistant tab takes that slot back.
  */
-function tabsFor(role: SeatRole): Tab[] {
+export function tabsFor(role: SeatRole): Tab[] {
   const out: Tab[] = [];
   for (const spec of TAB_SPECS) {
     const href = resolveHref(spec.featureId, { role });
