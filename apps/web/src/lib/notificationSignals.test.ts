@@ -79,8 +79,17 @@ describe("collectNotificationSignals", () => {
       premiumAiLocked: false,
     });
     const asked = apiGet.mock.calls.map(([p]) => p as string);
-    expect(asked).toHaveLength(1);
-    expect(asked[0]).toContain("/api/readiness/summary");
+    // Exactly the two barber-reachable surfaces: readiness and THEIR OWN
+    // walk-in line. Neither manager-only endpoint is ever requested.
+    expect(asked).toHaveLength(2);
+    expect(asked).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("/api/readiness/summary"),
+        expect.stringContaining("/api/barber/walk-ins"),
+      ]),
+    );
+    expect(asked.join(" ")).not.toContain("/api/dashboard/");
+    expect(asked.join(" ")).not.toContain("/api/walk-ins/queue");
     expect(out[0]!.label).toBe("2 things left to set up");
   });
 
@@ -140,6 +149,56 @@ describe("collectNotificationSignals", () => {
       readiness: ok({ scope: "shop" }),
       waitlist: ok({}),
       conversations: ok({}),
+    });
+    expect(await collectNotificationSignals(MANAGER)).toEqual([]);
+  });
+});
+
+describe("the walk-in line signal (PR 4)", () => {
+  it("a manager's bell counts the WAITING line and points at the board", async () => {
+    routes({
+      readiness: ok({ scope: "shop", milestonesBlocking: 0 }),
+      waitlist: ok({ counts: { WAITING: 0 } }),
+      conversations: ok({ escalatedCount: 0 }),
+      "walk-ins/queue": ok({
+        entries: [{ status: "WAITING" }, { status: "WAITING" }, { status: "IN_SERVICE" }],
+      }),
+    });
+    const out = await collectNotificationSignals(MANAGER);
+    expect(out).toEqual([
+      {
+        key: "walk-ins",
+        label: "2 walk-ins in the line",
+        count: 2,
+        href: "/dashboard/booking?tab=Walk-ins",
+      },
+    ]);
+  });
+
+  it("an employee seat reads its OWN surface and is sent HOME (the board would 403)", async () => {
+    routes({
+      readiness: ok({ scope: "barber", incompletePersonal: 0 }),
+      "barber/walk-ins": ok({ entries: [{ status: "WAITING" }] }),
+    });
+    const out = await collectNotificationSignals({
+      barberOnly: true,
+      premiumAiLocked: true,
+    });
+    expect(out).toEqual([
+      { key: "walk-ins", label: "1 walk-in in the line", count: 1, href: "/dashboard" },
+    ]);
+    // And the manager-only endpoints were never asked for.
+    expect(apiGet).not.toHaveBeenCalledWith(
+      expect.stringContaining("walk-ins/queue"),
+    );
+  });
+
+  it("a dark or disabled feature stays silent (404/409 are normal answers)", async () => {
+    routes({
+      readiness: ok({ scope: "shop", milestonesBlocking: 0 }),
+      waitlist: ok({ counts: { WAITING: 0 } }),
+      conversations: ok({ escalatedCount: 0 }),
+      "walk-ins/queue": denied(409),
     });
     expect(await collectNotificationSignals(MANAGER)).toEqual([]);
   });

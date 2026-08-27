@@ -39,6 +39,7 @@ import { ImageField } from "../site/ImageField";
 import { Segmented } from "@/components/ui/Segmented";
 import { WaitlistBoard } from "./WaitlistBoard";
 import { WalkInQueueBoard } from "./WalkInQueueBoard";
+import { WalkInSettingsCard } from "./WalkInSettingsCard";
 import {
   bulkDeleteTargetedSlotsAction,
   createAddOnAction,
@@ -690,6 +691,12 @@ function SettingsTab({
           </div>
         </Card>
       )}
+
+      <WalkInSettingsCard
+        initialEnabled={shop.walkInEnabled}
+        initialAccepting={shop.walkInAcceptingNow}
+        toast={toast}
+      />
 
       {mode === "native" && (
         <Card className="p-5">

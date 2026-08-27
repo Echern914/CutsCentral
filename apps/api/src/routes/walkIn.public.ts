@@ -39,6 +39,7 @@ import {
   WalkInStaffError,
 } from "../engines/walkInQueue.js";
 import { resolveWaitlistClient } from "../engines/waitlistClientLink.js";
+import { notifyBarberWalkInJoined } from "../services/walkInNotify.js";
 
 /**
  * Walk-In Mode: the PUBLIC surface - the kiosk tablet and the customer's
@@ -412,6 +413,11 @@ walkInPublicRouter.post("/kiosk/check-in", kioskWriteLimiter, async (req, res) =
         logger.error({ err, shopId: shop.id }, "walk-in link: SMS send failed");
       }
     }
+
+    // The requested chair (else the owner) gets a heads-up for a FRESH
+    // join only - a dedupe changed nothing about the line. Fire-and-forget;
+    // the response below is identical either way.
+    if (!result.deduped) void notifyBarberWalkInJoined(shop.id, result.entryId);
 
     // Constant body for fresh AND deduped joins.
     res.json({ ok: true });

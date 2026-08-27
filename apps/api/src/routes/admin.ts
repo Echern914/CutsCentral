@@ -6,6 +6,7 @@ import { promoteCompletedVisits } from "../engines/statusPromotion.js";
 import { runNudgeSweep } from "../engines/nudge.js";
 import { linkBookingsToNudges } from "../engines/attribution.js";
 import { expireDeadWaitlistEntries } from "../engines/waitlistExpiry.js";
+import { expireStaleWalkIns } from "../engines/walkInExpiry.js";
 
 const env = apiEnv();
 export const adminRouter: Router = Router();
@@ -74,6 +75,37 @@ adminRouter.post("/attribution", async (_req, res) => {
  * feature flag (dryRun is passed explicitly, so the flag's value cannot make
  * this write).
  */
+/**
+ * Walk-in expiry sweep preview: the same scan the hourly job runs, forced
+ * dry. Counts only - never a customer. Same no-parameters contract as the
+ * waitlist preview above it.
+ */
+adminRouter.post("/walk-in-expiry-preview", async (req, res) => {
+  const extras = [
+    ...Object.keys((req.body ?? {}) as Record<string, unknown>),
+    ...Object.keys(req.query ?? {}),
+  ];
+  if (extras.length > 0) {
+    res.status(400).json({
+      error: "no_parameters_accepted",
+      detail: "Preview-only; there is no write mode to request.",
+      rejected: extras.slice(0, 10),
+    });
+    return;
+  }
+  const evaluatedAt = new Date();
+  const r = await expireStaleWalkIns(evaluatedAt, { dryRun: true });
+  res.json({
+    evaluatedAt: evaluatedAt.toISOString(),
+    dryRun: true,
+    scanned: r.scanned,
+    wouldExpire: r.actionable,
+    evaluationErrors: r.errors,
+    partial: r.budgetExhausted,
+    shops: r.byShop,
+  });
+});
+
 adminRouter.post("/waitlist-expiry-preview", async (req, res) => {
   // Refuse, never ignore. An operator who typed dryRun:false must be told it
   // meant nothing, not handed a 200 that looks like it was honored.

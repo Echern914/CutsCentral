@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
-import { prisma } from "@chairback/db";
+import { forShop, prisma } from "@chairback/db";
 import { apiEnv } from "@chairback/config";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
@@ -30,6 +30,11 @@ import {
 import { estimateQueue } from "../engines/walkInEstimate.js";
 import { shopLocalDayWindow } from "../engines/serviceDailyLimit.js";
 import { completeEntry, startEntry } from "../engines/walkInStart.js";
+import {
+  notifyQueueHead,
+  notifyWalkInReady,
+  notifyWalkInRemoved,
+} from "../services/walkInNotify.js";
 import { SlotTakenError } from "../engines/bookingWrite.js";
 
 /**
@@ -307,6 +312,7 @@ walkInDashboardRouter.post("/:id/assign", async (req, res) => {
       actor: actorOf(req),
       now: new Date(),
     });
+    void notifyQueueHead(shop.id);
     res.json({ entry });
   } catch (err) {
     if (!answerError(res, err)) throw err;
@@ -322,6 +328,8 @@ function transitionRoute(
     actor: QueueActor;
     now: Date;
   }) => Promise<WalkInEntryView>,
+  /** Post-success, best-effort, never awaited into the response. */
+  after?: (shopId: string, entryId: string) => void,
 ): void {
   walkInDashboardRouter.post(`/:id/${path}`, async (req, res) => {
     const shop = await loadShop(req.shop!.id);
@@ -338,6 +346,7 @@ function transitionRoute(
         actor: actorOf(req),
         now: new Date(),
       });
+      after?.(shop.id, req.params.id);
       res.json({ entry });
     } catch (err) {
       if (!answerError(res, err)) throw err;
@@ -345,11 +354,24 @@ function transitionRoute(
   });
 }
 
-transitionRoute("ready", markReady);
+// Post-success pings, all fire-and-forget: READY summons its customer once
+// per summon; anything that shrinks the line ahead may crown a new head; a
+// staff cancel tells the customer their spot was released. A notify can never
+// affect the transition that already committed.
+transitionRoute("ready", markReady, (shopId, entryId) => {
+  void notifyWalkInReady(shopId, entryId);
+});
 transitionRoute("return", returnToLine);
-transitionRoute("leave", markLeft);
-transitionRoute("no-show", markNoShow);
-transitionRoute("cancel", cancelEntry);
+transitionRoute("leave", markLeft, (shopId) => {
+  void notifyQueueHead(shopId);
+});
+transitionRoute("no-show", markNoShow, (shopId) => {
+  void notifyQueueHead(shopId);
+});
+transitionRoute("cancel", cancelEntry, (shopId, entryId) => {
+  void notifyWalkInRemoved(shopId, entryId);
+  void notifyQueueHead(shopId);
+});
 
 const startSchema = z
   .object({ staffId: z.string().min(1).max(64).optional() })
@@ -382,6 +404,7 @@ walkInDashboardRouter.post("/:id/start", async (req, res) => {
       staffId: parsed.data.staffId ?? null,
       now: new Date(),
     });
+    void notifyQueueHead(shop.id);
     res.json({ entry: result.entry, appointmentId: result.appointmentId });
   } catch (err) {
     if (err instanceof SlotTakenError) {
@@ -449,4 +472,49 @@ walkInDashboardRouter.post("/:id/reorder", async (req, res) => {
   } catch (err) {
     if (!answerError(res, err)) throw err;
   }
+});
+
+/**
+ * The entry's audit TIMELINE - every lifecycle mutation, who did it, when.
+ * Codes/ids/counts only by construction (the walkInAudit allowlist is what
+ * wrote these rows), so this endpoint can never leak what the table never
+ * held. forShop scoping makes a foreign entry read as empty -> 404.
+ */
+walkInDashboardRouter.get("/:id/events", async (req, res) => {
+  const shop = await loadShop(req.shop!.id);
+  if (!shop || !shop.walkInEnabled) {
+    res
+      .status(shop ? 409 : 404)
+      .json({ error: shop ? "walk_in_disabled" : "not_found" });
+    return;
+  }
+  const entry = await forShop(shop.id).walkInEntry.findFirst({
+    where: { id: req.params.id },
+    select: { id: true },
+  });
+  if (!entry) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const events = await forShop(shop.id).walkInEvent.findMany({
+    where: { entryId: entry.id },
+    // 🔴 createdAt alone is NOT a total order here. The column is TIMESTAMP(3)
+    // and a queue moves fast - assign then start then complete inside the same
+    // millisecond is ordinary - so ties are common and Postgres breaks them
+    // however it likes, which showed up as a timeline that reordered itself
+    // between refreshes. `id` (cuid, monotonic within a writer) makes it total
+    // and, above all, STABLE: the same ladder every time it is read.
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    take: 200,
+  });
+  res.json({
+    events: events.map((e) => ({
+      type: e.type,
+      actorType: e.actorType,
+      actorStaffId: e.actorStaffId,
+      appointmentId: e.appointmentId,
+      metadata: e.metadata,
+      at: e.createdAt.toISOString(),
+    })),
+  });
 });

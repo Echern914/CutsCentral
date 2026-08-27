@@ -1162,3 +1162,29 @@ export async function walkInReorderAction(
   });
   return done(res);
 }
+
+/** Walk-In Mode settings (manager-gated field-level on the API). */
+export async function saveWalkInSettingsAction(input: {
+  walkInEnabled?: boolean;
+  walkInAcceptingNow?: boolean;
+}): Promise<Result> {
+  return done(await apiSend("PATCH", "/api/shops/me", input));
+}
+
+/**
+ * Mint (or ROTATE) the kiosk URL. The raw credential appears exactly once -
+ * in this response - because only its hash is stored; rotating kills every
+ * tablet holding the old URL at once.
+ */
+export async function mintWalkInKioskUrlAction(): Promise<{
+  ok: boolean;
+  url?: string;
+  error?: string;
+}> {
+  const res = await apiSend<{ ok: true; url: string }>(
+    "POST",
+    "/api/shops/me/walk-in-kiosk-token",
+  );
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, url: res.data.url };
+}

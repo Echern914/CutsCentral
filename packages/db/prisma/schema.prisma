@@ -2962,6 +2962,14 @@ model WalkInEntry {
   smsConsentVersion String?
   smsConsentPhone   String?
 
+  // Notification idempotency stamps (the Appointment convention: one column
+  // per send, claimed by CAS so a raced retry cannot double-text).
+  // readyNotifiedAt is CLEARED by return-to-line, so a re-summon re-notifies;
+  // nextNotifiedAt is once per entry lifetime - "you're next" must never
+  // flap as the head of the line churns.
+  readyNotifiedAt DateTime?
+  nextNotifiedAt  DateTime?
+
   // The timestamp ladder: one stamp per lifecycle transition, written by the
   // transition's CAS and never touched again. joinedAt is SEPARATE from
   // createdAt on purpose - it is the queue-fairness anchor (return-to-line

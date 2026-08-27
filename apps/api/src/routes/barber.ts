@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { forShop, prisma } from "@chairback/db";
+import { forShop, prisma, runAsOwner } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireRole } from "../auth/roles.js";
 
@@ -180,3 +180,50 @@ function dayKeyIn(timeZone: string, at: Date): string {
     day: "2-digit",
   }).format(at);
 }
+
+/**
+ * Native push-device registration for the SEAT ITSELF - the twin of the
+ * manager-gated /api/dashboard/push/native, mounted here because that gate
+ * made a BARBER seat structurally unable to register a device (the one
+ * personal readiness task that was impossible). Same handler contract:
+ * userId/shopId come from the session, upsert by token, runAsOwner because
+ * a re-registering user's row may carry another of their shops' shopId.
+ * The manager route stays exactly as it was - never open that gate.
+ */
+const barberPushSchema = z
+  .object({
+    expoPushToken: z.string().min(10).max(4096),
+    platform: z.string().max(40).optional(),
+  })
+  .strict();
+
+barberRouter.post("/push/native", async (req, res) => {
+  const parsed = barberPushSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const { expoPushToken, platform } = parsed.data;
+  await runAsOwner((tx) =>
+    tx.pushSubscription.upsert({
+      where: { expoPushToken },
+      create: {
+        shopId: req.shop!.id,
+        userId: req.userId!,
+        kind: "expo",
+        expoPushToken,
+        userAgent: platform ?? null,
+      },
+      update: {
+        shopId: req.shop!.id,
+        userId: req.userId!,
+        clientId: null,
+        kind: "expo",
+        userAgent: platform ?? null,
+        failureCount: 0,
+        lastSeenAt: new Date(),
+      },
+    }),
+  );
+  res.json({ ok: true });
+});

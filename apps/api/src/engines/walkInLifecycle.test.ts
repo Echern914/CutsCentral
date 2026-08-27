@@ -145,7 +145,7 @@ describe("transitionPatch stamps", () => {
     }
   });
 
-  it("the return move clears exactly the assignment trio and nothing else", () => {
+  it("the return move clears exactly the assignment trio + the ready-notify stamp, and nothing else", () => {
     for (const from of ["ASSIGNED", "READY"] as const) {
       const patch = transitionPatch(from, "WAITING", now);
       expect(patch.data).toEqual({
@@ -153,6 +153,8 @@ describe("transitionPatch stamps", () => {
         assignedStaffId: null,
         assignedAt: null,
         readyAt: null,
+        // The next summon re-notifies; the stamp belongs to the summon.
+        readyNotifiedAt: null,
       });
       // position and joinedAt are untouched - the customer keeps their place.
       expect("position" in patch.data).toBe(false);

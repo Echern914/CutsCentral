@@ -239,6 +239,11 @@ const apiSchema = z.object({
   // (Shop.walkInEnabled) sits behind this and is ALSO default-off - the env
   // flag is the platform's switch, the column is the barber's.
   WALK_IN_MODE_ENABLED: boolish.default("false"),
+  // The walk-in end-of-day sweep, same contract as the waitlist one: OFF
+  // flips the hourly job to DRY-RUN (it still scans and reports what it
+  // WOULD expire, writing nothing), so the counts watched before enabling
+  // are the counts you get. Sends nothing either way.
+  WALK_IN_EXPIRY_ENABLED: boolish.default("false"),
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace"])
     .default("info"),

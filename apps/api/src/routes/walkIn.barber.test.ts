@@ -258,3 +258,28 @@ describe("start + complete on the barber's own chair (PR 3)", () => {
     expect(complete.status).toBe(409);
   });
 });
+
+describe("barber device registration (PR 4)", () => {
+  it("a BARBER seat can finally register a push device - on the own-chair router", async () => {
+    const res = await request(app)
+      .post("/api/barber/push/native")
+      .set("Cookie", barberACookie)
+      .send({ expoPushToken: `ExponentPushToken[qa-${Date.now()}]`, platform: "ios" });
+    expect(res.status).toBe(200);
+    const sub = await prisma.pushSubscription.findFirst({
+      where: { shopId, kind: "expo", userAgent: "ios" },
+      orderBy: { createdAt: "desc" },
+      select: { userId: true, clientId: true },
+    });
+    expect(sub!.userId).not.toBeNull();
+    expect(sub!.clientId).toBeNull();
+  });
+
+  it("the manager-gated dashboard route is UNCHANGED: a barber seat still cannot use it", async () => {
+    const res = await request(app)
+      .post("/api/dashboard/push/native")
+      .set("Cookie", barberACookie)
+      .send({ expoPushToken: `ExponentPushToken[qa2-${Date.now()}]` });
+    expect(res.status).toBe(403);
+  });
+});

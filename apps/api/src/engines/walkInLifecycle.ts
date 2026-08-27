@@ -209,6 +209,9 @@ export function transitionPatch(
     data.assignedStaffId = null;
     data.assignedAt = null;
     data.readyAt = null;
+    // A returned customer summoned AGAIN later deserves a fresh "your barber
+    // is ready" - the stamp travels with the summon, not the entry.
+    data.readyNotifiedAt = null;
   }
   return { where: { status: from }, data };
 }
