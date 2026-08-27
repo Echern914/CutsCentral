@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { disconnectAssistant } from "./actions";
+import { ConnectSteps } from "./ConnectSteps";
 import { since, type McpConnectionsWire } from "./connections";
 
 /**
@@ -163,6 +164,11 @@ export function ConnectionPanel({
               {copied ? "Copied" : "Copy"}
             </button>
           </div>
+
+          {/* Collapsed by default: someone who has done this before does not
+              need nine steps in their face, and someone who hasn't needs all
+              of them. */}
+          <ConnectSteps connectUrl={data.connectUrl} />
         </div>
       ) : (
         <p className="mt-3 text-xs leading-relaxed text-muted">
