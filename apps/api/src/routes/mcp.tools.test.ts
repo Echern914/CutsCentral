@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken, READ_SCOPES } from "@chairback/config";
 import { UNTRUSTED_NOTICE } from "../mcp/dispatch.js";
@@ -23,9 +23,26 @@ import { TOOL_DEFINITIONS } from "../mcp/tools/index.js";
  */
 
 const billing = vi.hoisted(() => ({ active: true }));
+/** Pretend Stripe IS configured, so the real plan gate runs. Off by default. */
+const billingOn = vi.hoisted(() => ({ value: false }));
+
 vi.mock("../billing/stripe.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../billing/stripe.js")>();
-  return { ...actual, hasActiveAccess: () => billing.active };
+  return {
+    ...actual,
+    billingEnabled: () => billingOn.value,
+    // Two modes on purpose. With billing "off" this is the simple switch the
+    // lapsed-wall tests drive. With billing "on" it runs the REAL arithmetic,
+    // because the plan tests need a canceled subscription to genuinely read as
+    // no-access rather than as whatever a flag was last set to.
+    hasActiveAccess: (
+      shop: Parameters<typeof actual.hasActiveAccess>[0],
+      opts?: Parameters<typeof actual.hasActiveAccess>[1],
+    ) =>
+      billingOn.value
+        ? actual.hasActiveAccess(shop, { ...opts, enabled: true })
+        : billing.active,
+  };
 });
 
 const { createApp } = await import("../app.js");
@@ -45,6 +62,7 @@ let externalVisit: { id: string };
 let promotedVisitId: string;
 let promotedApptId: string;
 
+let ownerCookie: string;
 let ownerToken: string;
 let managerToken: string;
 let barberToken: string;
@@ -185,6 +203,7 @@ const todayAtUtc = (hour: number) => {
 
 beforeAll(async () => {
   const owner = await signup("owner");
+  ownerCookie = owner.cookie;
   const shop = await request(app)
     .post("/api/shops")
     .set("Cookie", owner.cookie)
@@ -1213,6 +1232,187 @@ describe("🔴 the wall, per tool", () => {
   });
 });
 
+
+/**
+ * 🔴 THE PLAN GATE. Premium and Premium AI only.
+ *
+ * Billing is unconfigured in the test environment, so `billingEnabled()` is
+ * false and every entitlement check passes by design - which is how the other
+ * 59 tests in this file run at all. These tests therefore drive the REAL gate
+ * by mocking `billingEnabled` on, and then move the shop's plan around.
+ *
+ * The property that matters most is the last one: entitlement is re-read from
+ * the shop on every single call, never carried in the grant, so a downgrade
+ * bites on the NEXT request rather than at token expiry.
+ */
+describe("🔴 the connector is Premium and Premium AI only", () => {
+  const today = ymd(new Date());
+
+  /** Put the fixture shop on a plan for the duration of one test. */
+  async function setPlan(plan: string, extra: Record<string, unknown> = {}) {
+    await prisma.shop.update({
+      where: { id: shopId },
+      data: { plan, compAccess: false, ...extra },
+    });
+  }
+
+  beforeEach(() => {
+    billingOn.value = true;
+  });
+
+  afterEach(async () => {
+    billingOn.value = false;
+    await prisma.shop.update({
+      where: { id: shopId },
+      data: {
+        plan: "free",
+        compAccess: false,
+        subscriptionStatus: "none",
+        trialEndsAt: null,
+      },
+    });
+  });
+
+  it("a Premium shop connects and can call tools", async () => {
+    await setPlan("pro", { subscriptionStatus: "active" });
+    const r = await call(ownerToken, "readiness_report");
+    expect(r.isError).toBe(false);
+  });
+
+  it("a Premium AI shop connects and can call tools", async () => {
+    await setPlan("pro_ai", { subscriptionStatus: "active" });
+    const r = await call(ownerToken, "readiness_report");
+    expect(r.isError).toBe(false);
+  });
+
+  it("a comped shop is treated as Premium", async () => {
+    await setPlan("free", { compAccess: true, subscriptionStatus: "none" });
+    const r = await call(ownerToken, "readiness_report");
+    expect(r.isError).toBe(false);
+  });
+
+  it("🔴 a free shop is refused with 403 and copy naming the plan", async () => {
+    await setPlan("free", { subscriptionStatus: "none" });
+    const res = await rpc(ownerToken, "tools/call", {
+      name: "readiness_report",
+      arguments: {},
+    });
+    // 403, not 401: re-running OAuth would not change the answer, so a
+    // challenge header would send the client round a loop it cannot win.
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("plan_required");
+    expect(res.body.error_description).toMatch(/Premium or Premium AI/);
+    expect(res.headers["www-authenticate"]).toBeUndefined();
+  });
+
+  it("🔴 a shop still on TRIAL is refused - a trial is plan-free with access", async () => {
+    // The distinction the entitlement module exists to make. hasActiveAccess is
+    // TRUE here (unexpired trial); the plan is still "free", so the connector
+    // is not included. Everything else in ChairBack keeps working.
+    await setPlan("free", {
+      subscriptionStatus: "none",
+      trialEndsAt: new Date(Date.now() + 14 * 86_400_000),
+    });
+    const res = await rpc(ownerToken, "tools/call", {
+      name: "readiness_report",
+      arguments: {},
+    });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("plan_required");
+  });
+
+  it("🔴 a LAPSED Premium shop is refused - the plan column alone is not enough", async () => {
+    // Stripe leaves `plan` set until a webhook resets it, so plan-only would
+    // keep a shop that stopped paying connected.
+    await setPlan("pro", { subscriptionStatus: "canceled", trialEndsAt: null });
+    const res = await rpc(ownerToken, "tools/call", {
+      name: "readiness_report",
+      arguments: {},
+    });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("plan_required");
+  });
+
+  it("🔴 a mid-session DOWNGRADE blocks the very next call - no grace", async () => {
+    await setPlan("pro", { subscriptionStatus: "active" });
+
+    // Working, on a live token.
+    const before = await call(ownerToken, "readiness_report");
+    expect(before.isError).toBe(false);
+
+    // The shop downgrades. The token is untouched and still unexpired.
+    await setPlan("free", { subscriptionStatus: "canceled", trialEndsAt: null });
+
+    // 🔴 The SAME token, the next call. Blocked immediately - which is only
+    // true because entitlement is re-read from the shop rather than carried as
+    // a claim minted at consent time.
+    const after = await rpc(ownerToken, "tools/call", {
+      name: "readiness_report",
+      arguments: {},
+    });
+    expect(after.status).toBe(403);
+    expect(after.body.error).toBe("plan_required");
+
+    // And it comes back the moment the plan does, on the same token - no
+    // reconnect needed.
+    await setPlan("pro", { subscriptionStatus: "active" });
+    const restored = await call(ownerToken, "readiness_report");
+    expect(restored.isError).toBe(false);
+  });
+
+  it("an ineligible shop cannot even list tools", async () => {
+    await setPlan("free", { subscriptionStatus: "none" });
+    const res = await rpc(ownerToken, "tools/list");
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("plan_required");
+  });
+
+  it("🔴 an ineligible shop cannot mint a new grant either", async () => {
+    await setPlan("free", { subscriptionStatus: "none" });
+    const verifier = randomBytes(32).toString("base64url");
+    const challenge = createHash("sha256").update(verifier, "ascii").digest("base64url");
+    const reg = await request(app)
+      .post("/mcp/oauth/register")
+      .send({ client_name: "Tools Test Client", redirect_uris: [REDIRECT] });
+    const approve = await request(app)
+      .post("/mcp/oauth/authorize/approve")
+      .set("Cookie", ownerCookie)
+      .send({
+        client_id: reg.body.client_id,
+        redirect_uri: REDIRECT,
+        code_challenge: challenge,
+        scope: "chairback:readiness:read",
+      });
+    // Refused at the door rather than failing on first use.
+    expect(approve.status).toBe(403);
+    expect(approve.body.error).toBe("plan_required");
+  });
+
+  it("🔴 the REST of ChairBack is unaffected by an ineligible plan", async () => {
+    await setPlan("free", { subscriptionStatus: "none", trialEndsAt: null });
+    // The readiness API - the thing the Assistant tab renders locally - keeps
+    // answering. Only the MCP connection is gated, not the product.
+    const readiness = await request(app).get("/api/readiness").set("Cookie", ownerCookie);
+    expect(readiness.status).toBe(200);
+    expect(readiness.body.scope).toBe("shop");
+    // And the shop itself still resolves.
+    const me = await request(app).get("/api/shops/me").set("Cookie", ownerCookie);
+    expect(me.status).toBe(200);
+    expect(today).toBeTruthy();
+  });
+
+  it("the refusal is audited with a reason and no invented tool name", async () => {
+    await setPlan("free", { subscriptionStatus: "none" });
+    await rpc(ownerToken, "tools/call", { name: "readiness_report", arguments: {} });
+    const row = await prisma.mcpAuditEvent.findFirst({
+      where: { shopId, failureCode: "plan_required", toolName: "auth.entitlement" },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(row).not.toBeNull();
+    expect(row!.operationType).toBe("AUTH");
+    expect(row!.result).toBe("DENIED");
+  });
+});
 describe("the audit trail", () => {
   it("records a successful call by tool name, with no arguments", async () => {
     await call(ownerToken, "waitlist_list");

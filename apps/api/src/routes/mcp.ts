@@ -72,6 +72,7 @@ function session(ctx: NonNullable<Express.Request["mcp"]>): McpRequestContext {
     staffId: ctx.staffId,
     accessLevel: ctx.accessLevel,
     scopes: ctx.scopes,
+    billing: ctx.billing,
   };
 }
 
@@ -122,7 +123,7 @@ mcpRouter.post("/", mcpLimiter, requireMcpAuth, async (req, res) => {
       // 🔴 FILTERED, NOT ANNOTATED. A model shown a tool it cannot call will
       // call it, be refused, rephrase and call it again - and the presence of a
       // denied entry would itself say something about the shop.
-      const toolCtx = await toolContextFor(session(ctx));
+      const toolCtx = toolContextFor(session(ctx));
       res.json({ jsonrpc: "2.0", id, result: { tools: listTools(toolCtx) } });
       return;
     }

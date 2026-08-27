@@ -26,6 +26,20 @@ export interface McpRequestContext {
   staffId: string | null;
   accessLevel: "READ_ONLY" | "MANAGEMENT";
   scopes: string[];
+  /**
+   * The shop's billing slice as `requireMcpAuth` read it ON THIS REQUEST.
+   *
+   * 🔴 PASSED IN, NOT RE-READ. Reading the row twice in one call invites the
+   * two reads to straddle a webhook and disagree - the entitlement gate saying
+   * "still Premium" while the per-tool wall says "lapsed", or the reverse.
+   * One read, one answer, for the whole request.
+   */
+  billing: {
+    plan: string;
+    subscriptionStatus: string;
+    trialEndsAt: Date | null;
+    compAccess: boolean;
+  };
 }
 
 /**
@@ -37,21 +51,11 @@ export interface McpRequestContext {
  * transaction comes back NULL and the shop would look permanently lapsed —
  * failing closed, but wrongly, and only in production.
  */
-export async function toolContextFor(
-  mcp: McpRequestContext,
-  now: Date = new Date(),
-): Promise<ToolContext> {
-  const shop = await prisma.shop.findUnique({
-    where: { id: mcp.shopId },
-    select: { subscriptionStatus: true, trialEndsAt: true, compAccess: true },
-  });
-
+export function toolContextFor(mcp: McpRequestContext, now: Date = new Date()): ToolContext {
   return {
     role: mcp.role,
     staffId: mcp.staffId,
-    // A shop that has vanished between authentication and now is treated as
-    // lapsed rather than as unlimited.
-    hasAccess: shop ? hasActiveAccess(shop, { now }) : false,
+    hasAccess: hasActiveAccess(mcp.billing, { now }),
     accessLevel: mcp.accessLevel,
     scopes: mcp.scopes,
   };
@@ -172,7 +176,7 @@ export async function callTool(
   // A name that is not a string never reaches the policy table.
   const toolName = typeof name === "string" ? name : "";
 
-  const ctx = await toolContextFor(mcp, now);
+  const ctx = toolContextFor(mcp, now);
   const decision = decideTool(toolName, ctx);
 
   if (!decision.ok) {

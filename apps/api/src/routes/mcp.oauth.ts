@@ -6,6 +6,7 @@ import { requireUser } from "../middleware/auth.js";
 import { resolveShopAccess } from "../middleware/auth.js";
 import { oauthLimiter } from "../middleware/rateLimit.js";
 import { logMcpAuth } from "../mcp/audit.js";
+import { hasMcpEntitlement, MCP_PLAN_REQUIRED } from "../mcp/entitlement.js";
 import { hasShopAccess } from "../mcp/seat.js";
 import { mcpIssuer, mcpResourceUrl } from "../mcp/metadata.js";
 import { DEFAULT_SCOPES, SCOPE_LABELS, isReadOnly, parseScopes } from "@chairback/config/mcpScopes";
@@ -387,6 +388,32 @@ mcpOAuthRouter.post("/authorize/approve", oauthLimiter, requireUser, async (req,
   const access = await resolveShopAccess(userId, req.cookies?.cb_active_shop);
   if (!access) {
     oauthError(res, 403, "access_denied", "this account does not belong to a shop");
+    return;
+  }
+
+  // 🔴 THE PLAN GATE, AT THE DOOR. The connector is Premium / Premium AI, so an
+  // ineligible shop cannot mint a grant at all - not merely fail on first use.
+  // Every REQUEST re-checks this too (middleware/mcpAuth.ts): the check here
+  // stops a pointless connection being created, the one there is what makes a
+  // later downgrade bite immediately.
+  const planShop = await prisma.shop.findUnique({
+    where: { id: access.shop.id },
+    select: {
+      plan: true,
+      subscriptionStatus: true,
+      trialEndsAt: true,
+      compAccess: true,
+    },
+  });
+  if (!planShop || !hasMcpEntitlement(planShop)) {
+    await logMcpAuth({
+      shopId: access.shop.id,
+      userId,
+      toolName: "oauth.approve",
+      result: "DENIED",
+      failureCode: "plan_required",
+    });
+    oauthError(res, 403, MCP_PLAN_REQUIRED.error, MCP_PLAN_REQUIRED.error_description);
     return;
   }
 

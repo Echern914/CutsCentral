@@ -3,6 +3,7 @@ import { prisma, type McpAccessLevel } from "@chairback/db";
 import type { ShopRole } from "../auth/roles.js";
 import { logMcpEvent } from "../mcp/audit.js";
 import { bearerToken } from "../mcp/bearer.js";
+import { hasMcpEntitlement, MCP_PLAN_REQUIRED } from "../mcp/entitlement.js";
 import { resolveMcpSeat } from "../mcp/seat.js";
 import { mcpResourceUrl, protectedResourceMetadataUrl } from "../mcp/metadata.js";
 import { resolveAccessToken, revokeConnection, type TokenFailure } from "../mcp/tokens.js";
@@ -52,6 +53,19 @@ declare global {
         accessLevel: McpAccessLevel;
         /** Re-read from live membership on this request, not from the token. */
         role: ShopRole;
+        /**
+         * The shop's billing slice, read on THIS request.
+         *
+         * Passed forward so the tool layer does not read the same row again -
+         * and so it is impossible for the two layers to disagree about whether
+         * the shop is paid up within one call.
+         */
+        billing: {
+          plan: string;
+          subscriptionStatus: string;
+          trialEndsAt: Date | null;
+          compAccess: boolean;
+        };
         staffId: string | null;
         scopes: string[];
       };
@@ -160,6 +174,42 @@ export async function requireMcpAuth(
     return;
   }
 
+  // 🔴 STEP 5. THE PLAN, RE-READ NOW. The connector is a Premium / Premium AI
+  // feature, and the entitlement is deliberately NOT carried in the grant: a
+  // shop that downgrades or lapses loses the assistant on its NEXT call rather
+  // than whenever its access token happens to expire. There is no grace period
+  // because a grace period on a read-only connection to a customer database is
+  // just a slower version of not enforcing it.
+  //
+  // Read on the OWNER connection - Shop is RLS default-deny for the app role.
+  const shop = await prisma.shop.findUnique({
+    where: { id: t.shopId },
+    select: {
+      plan: true,
+      subscriptionStatus: true,
+      trialEndsAt: true,
+      compAccess: true,
+    },
+  });
+
+  if (!shop || !hasMcpEntitlement(shop)) {
+    await logMcpEvent({
+      shopId: t.shopId,
+      userId: t.userId,
+      connectionId: t.connectionId,
+      toolName: "auth.entitlement",
+      operationType: "AUTH",
+      result: "DENIED",
+      failureCode: "plan_required",
+    });
+    // 403, not 401: the caller IS authenticated and re-running the OAuth flow
+    // would not change the answer. Only changing plan would. No challenge
+    // header for the same reason - it would send the client round a loop that
+    // cannot succeed.
+    res.status(403).json(MCP_PLAN_REQUIRED);
+    return;
+  }
+
   req.mcp = {
     connectionId: t.connectionId,
     userId: t.userId,
@@ -170,6 +220,7 @@ export async function requireMcpAuth(
     role: seat.role,
     staffId: seat.staffId,
     scopes: t.scopes,
+    billing: shop,
   };
 
   // "Last used" is a UI nicety, so it must not be able to fail the request or
