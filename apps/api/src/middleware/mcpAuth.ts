@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import { prisma, type McpAccessLevel } from "@chairback/db";
 import type { ShopRole } from "../auth/roles.js";
 import { logMcpEvent } from "../mcp/audit.js";
+import { bearerToken } from "../mcp/bearer.js";
 import { resolveMcpSeat } from "../mcp/seat.js";
 import { mcpResourceUrl, protectedResourceMetadataUrl } from "../mcp/metadata.js";
 import { resolveAccessToken, revokeConnection, type TokenFailure } from "../mcp/tokens.js";
@@ -104,12 +105,14 @@ function deny(res: Response, failure: TokenFailure): void {
  * and Referer headers, so `?access_token=` is not read here even though some
  * clients still send it - and the protected-resource metadata advertises
  * `bearer_methods_supported: ["header"]` to say so.
+ *
+ * 🔴 THE SAME FUNCTION THE RATE LIMITER KEYS ON (`mcp/bearer.ts`). While these
+ * were separate, they disagreed about whitespace: this path trimmed the captured
+ * token while the limiter hashed the raw header, so one credential could occupy
+ * several fair-share buckets just by re-spacing the word after `Bearer`.
  */
 function bearerFrom(req: Request): string | null {
-  const h = req.headers.authorization;
-  if (typeof h !== "string") return null;
-  const m = /^Bearer (.+)$/.exec(h.trim());
-  return m ? m[1]!.trim() : null;
+  return bearerToken(req.headers.authorization);
 }
 
 export async function requireMcpAuth(

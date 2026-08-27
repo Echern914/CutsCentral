@@ -40,6 +40,18 @@ const apiSchema = z.object({
       message:
         "must decode to 32 bytes (base64). Generate with: openssl rand -base64 32",
     }),
+  /**
+   * Requests per minute per IP allowed at the remote MCP endpoint, before any
+   * authentication runs.
+   *
+   * This is the OUTER bound - a ceiling on abuse, not a fair-share rule, so it
+   * sits well above the 120/min per-connection limit: one shop may legitimately
+   * run several assistants, and hosted AI providers egress from shared
+   * addresses. Configurable so it can be tightened without a deploy if the
+   * endpoint is ever abused.
+   */
+  MCP_IP_RATE_LIMIT: z.coerce.number().int().positive().max(100000).default(600),
+
   // Platform-operator token guarding /admin/* (backfill, sweeps, promotion).
   ADMIN_TOKEN: z.string().min(8).optional(),
   // Optional IP allowlist for the operator surface (/admin + /api/admin-portal).

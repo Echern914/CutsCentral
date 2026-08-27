@@ -1,7 +1,8 @@
 import rateLimit, { type RateLimitRequestHandler } from "express-rate-limit";
 import type { Request, Response } from "express";
 import { timingSafeEqual } from "node:crypto";
-import { SESSION_COOKIE_NAME } from "@chairback/config";
+import { apiEnv, SESSION_COOKIE_NAME } from "@chairback/config";
+import { credentialKey } from "../mcp/bearer.js";
 import { PgRateStore } from "./pgRateStore.js";
 import { logger } from "../logger.js";
 import { redactUrl, requestUrl } from "../logRedaction.js";
@@ -96,8 +97,15 @@ export function publicIpKey(req: Request): string {
   return req.ip ?? "anon";
 }
 
+/**
+ * Key a limiter by the caller's credential.
+ *
+ * Delegates to `mcp/bearer.ts`, which is also what `requireMcpAuth` uses to read
+ * the token - see the note there for why sharing it is load-bearing rather than
+ * tidy, and why the value is hashed before it reaches the persisted store.
+ */
 function bearerKey(req: Request): string {
-  return (req.header("Authorization") ?? req.ip ?? "anon").slice(0, 64);
+  return credentialKey(req.header("Authorization"), req.ip ?? "anon");
 }
 
 /**
@@ -230,6 +238,29 @@ export const mcpLimiter = make({
   windowMs: 60 * 1000,
   limit: 120,
   keyGenerator: bearerKey,
+});
+
+/**
+ * 🔴 THE OUTER BOUND on the MCP endpoint, and the one that actually stops an
+ * attacker. Mounted BEFORE `mcpLimiter` and before any authentication, so a
+ * rejected request never reaches bearer hashing or the database token lookup.
+ *
+ * Keyed with `publicIpKey`, the same proxy-aware keying every other public
+ * surface uses: a forwarded client IP is honoured ONLY when accompanied by a
+ * matching `x-cb-proxy-secret`, so a caller cannot mint fresh buckets by
+ * inventing a header. Without the secret it falls back to `req.ip`, which
+ * Express derives under `trust proxy: 1` from the platform's own hop.
+ *
+ * Set deliberately HIGHER than the per-connection limit: a shop may legitimately
+ * run several assistants, and hosted providers egress from shared addresses, so
+ * this is a ceiling on abuse rather than a fair-share rule. `mcpLimiter` does
+ * the fair-sharing underneath it.
+ */
+export const mcpIpLimiter = make({
+  name: "mcp-ip",
+  windowMs: 60 * 1000,
+  limit: apiEnv().MCP_IP_RATE_LIMIT,
+  keyGenerator: publicIpKey,
 });
 
 /** Admin endpoints: per-token, tight (expensive ops; contain a leaked token). */

@@ -390,59 +390,94 @@ mcpOAuthRouter.post("/authorize/approve", oauthLimiter, requireUser, async (req,
     return;
   }
 
-  // One connection per (user, shop, client): re-authorizing REPLACES the grant
-  // rather than stacking a second one the human cannot tell apart. Any tokens
-  // from the previous grant are killed, so an old client instance cannot keep
-  // reading after a re-consent it was not part of.
-  const existing = await prisma.mcpConnection.findUnique({
-    where: {
-      userId_shopId_clientId: { userId, shopId: access.shop.id, clientId: client.id },
-    },
-    select: { id: true },
-  });
-  if (existing) await revokeConnection(existing.id, "user");
-
-  const connection = await prisma.mcpConnection.upsert({
-    where: {
-      userId_shopId_clientId: { userId, shopId: access.shop.id, clientId: client.id },
-    },
-    create: {
-      userId,
-      shopId: access.shop.id,
-      clientId: client.id,
-      accessLevel: "READ_ONLY",
-    },
-    update: { revokedAt: null, revokedReason: null, accessLevel: "READ_ONLY" },
-    select: { id: true },
-  });
-
-  await prisma.$transaction([
-    prisma.mcpToolGrant.deleteMany({ where: { connectionId: connection.id } }),
-    prisma.mcpToolGrant.createMany({
-      data: scopes.scopes.map((scope) => ({ connectionId: connection.id, scope })),
-    }),
-  ]);
-
   const code = mintSecret();
-  await prisma.mcpAuthCode.create({
-    data: {
-      codeHash: hashToken(code),
-      clientId: client.id,
-      userId,
-      shopId: access.shop.id,
-      codeChallenge: q.code_challenge,
-      redirectUri: q.redirect_uri,
-      resource,
-      scopes: scopes.scopes,
-      accessLevel: "READ_ONLY",
-      expiresAt: new Date(Date.now() + AUTH_CODE_TTL_MS),
-    },
+
+  /* ── ONE TRANSACTION, CODES BEFORE CONNECTION ──────────────────────────────
+   *
+   * One connection per (user, shop, client): re-authorizing REPLACES the grant
+   * rather than stacking a second one the human cannot tell apart, and the
+   * previous grant's tokens are killed so an old client instance cannot keep
+   * reading after a re-consent it was not part of.
+   *
+   * 🔴 THE ORDER INSIDE IS THE INTERLOCK, not housekeeping. Prior codes for this
+   * tuple are deleted FIRST, before the connection is reactivated. An in-flight
+   * replay of one of those codes re-checks the code row inside its own
+   * transaction (see `revokeForAuthCodeReplay`), so:
+   *
+   *   - if the replay gets there first, it revokes the OLD grant and this
+   *     consent then reactivates it with a fresh one - correct;
+   *   - if this consent gets there first, the replay's conditional mark matches
+   *     zero rows and it revokes nothing - correct.
+   *
+   * There is no interleaving in which a stale replay revokes the replacement.
+   * Deleting the codes AFTER the upsert would reopen exactly that window.
+   *
+   * LOCK ORDER: authorization code, then connection. `revokeForAuthCodeReplay`
+   * takes the same order, so the two can never deadlock against each other.
+   *
+   * CONSUMED CODE ROWS ARE DELETED TOO, not just `consumedAt: null` ones. The
+   * unconsumed rows are the harmless case; the CONSUMED ones are the entire
+   * attack, because those are the pairs that have already been through a client
+   * and could have leaked.
+   */
+  const connectionId = await prisma.$transaction(async (tx) => {
+    await tx.mcpAuthCode.deleteMany({
+      where: { userId, shopId: access.shop.id, clientId: client.id },
+    });
+
+    const conn = await tx.mcpConnection.upsert({
+      where: {
+        userId_shopId_clientId: { userId, shopId: access.shop.id, clientId: client.id },
+      },
+      create: {
+        userId,
+        shopId: access.shop.id,
+        clientId: client.id,
+        accessLevel: "READ_ONLY",
+      },
+      update: { revokedAt: null, revokedReason: null, accessLevel: "READ_ONLY" },
+      select: { id: true },
+    });
+
+    // The previous grant's credentials die here. The connection row itself is
+    // reactivated above; only its tokens are retired.
+    const now = new Date();
+    await tx.mcpAccessToken.updateMany({
+      where: { connectionId: conn.id, revokedAt: null },
+      data: { revokedAt: now },
+    });
+    await tx.mcpRefreshToken.updateMany({
+      where: { connectionId: conn.id, revokedAt: null },
+      data: { revokedAt: now },
+    });
+
+    await tx.mcpToolGrant.deleteMany({ where: { connectionId: conn.id } });
+    await tx.mcpToolGrant.createMany({
+      data: scopes.scopes.map((scope) => ({ connectionId: conn.id, scope })),
+    });
+
+    await tx.mcpAuthCode.create({
+      data: {
+        codeHash: hashToken(code),
+        clientId: client.id,
+        userId,
+        shopId: access.shop.id,
+        codeChallenge: q.code_challenge,
+        redirectUri: q.redirect_uri,
+        resource,
+        scopes: scopes.scopes,
+        accessLevel: "READ_ONLY",
+        expiresAt: new Date(Date.now() + AUTH_CODE_TTL_MS),
+      },
+    });
+
+    return conn.id;
   });
 
   await logMcpAuth({
     shopId: access.shop.id,
     userId,
-    connectionId: connection.id,
+    connectionId,
     toolName: "oauth.authorize",
     result: "OK",
   });
