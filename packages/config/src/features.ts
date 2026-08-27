@@ -184,6 +184,7 @@ export function isBillingHref(href: string): boolean {
 export const BOOKING_TABS = [
   "Appointments",
   "Waitlist",
+  "Walk-ins",
   "Staff",
   "Services",
   "Settings",
@@ -425,6 +426,23 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     tourStepId: "book-waitlist",
     tier: "pro",
     questions: ["how do I use the waitlist", "who is waiting"],
+  },
+  {
+    id: "walk-ins",
+    name: "Walk-in queue",
+    // "walk in" itself belongs to the `appointments` entry (the one-tap
+    // retroactive recorder lives on the book); this is the LIVE LINE.
+    // NOT the waitlist either: that queue is "call me when a future slot
+    // opens" - this one is "I am standing in the shop right now".
+    synonyms: ["live queue", "walk-in line", "kiosk", "check-in queue", "who is waiting now"],
+    description: "Today's live line — kiosk check-ins, claims, and service starts",
+    href: "/dashboard/booking?tab=Walk-ins",
+    category: "booking",
+    // No tier and no flag on purpose: pricing is undecided (the feature is
+    // dark behind WALK_IN_MODE_ENABLED + Shop.walkInEnabled), and the
+    // waitlist precedent gates the TAB's content, not the destination - a
+    // manager whose shop has it off sees the tab explain how to turn it on.
+    questions: ["who is in the walk-in line", "how do walk-in check-ins work"],
   },
   {
     id: "requests",

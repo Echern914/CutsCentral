@@ -212,3 +212,40 @@ describe("own-chair enforcement", () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe("start + complete on the barber's own chair (PR 3)", () => {
+  it("claim -> start -> complete, all scoped to the seat's chair", async () => {
+    const e = await makeEntry();
+    await request(app)
+      .post(`/api/barber/walk-ins/${e.id}/claim`)
+      .set("Cookie", barberACookie);
+    const started = await request(app)
+      .post(`/api/barber/walk-ins/${e.id}/start`)
+      .set("Cookie", barberACookie);
+    expect(started.status).toBe(200);
+    expect(started.body.entry.assignedStaffId).toBe(chairA);
+    const done = await request(app)
+      .post(`/api/barber/walk-ins/${e.id}/complete`)
+      .set("Cookie", barberACookie);
+    expect(done.status).toBe(200);
+    expect(done.body.entry.status).toBe("COMPLETED");
+  });
+
+  it("a barber can neither start nor complete another chair's customer", async () => {
+    const e = await makeEntry();
+    await request(app)
+      .post(`/api/barber/walk-ins/${e.id}/claim`)
+      .set("Cookie", barberACookie);
+    const start = await request(app)
+      .post(`/api/barber/walk-ins/${e.id}/start`)
+      .set("Cookie", barberBCookie);
+    expect(start.status).toBe(409);
+    await request(app)
+      .post(`/api/barber/walk-ins/${e.id}/start`)
+      .set("Cookie", barberACookie);
+    const complete = await request(app)
+      .post(`/api/barber/walk-ins/${e.id}/complete`)
+      .set("Cookie", barberBCookie);
+    expect(complete.status).toBe(409);
+  });
+});

@@ -245,6 +245,7 @@ export async function computeFreeRanges(
       bookingLeadHours: true,
       bookingMaxDays: true,
       bookingBufferMin: true,
+      walkInEnabled: true,
     },
   });
   if (!shop) return null;
@@ -509,6 +510,37 @@ export async function computeFreeRanges(
           select: { scheduledAt: true, endAt: true },
         });
 
+    // ASSIGNED/READY walk-ins on THIS chair: the customer is standing in the
+    // shop and about to occupy it, so the PUBLIC grid must not sell their
+    // projected span out from under them. A SOFT reservation on purpose:
+    //   - only when the shop runs Walk-In Mode (gate = zero extra queries for
+    //     every other shop),
+    //   - only in the service-grid mode (the walk-in estimate engine passes
+    //     serviceId: null and SIMULATES these same entries itself - counting
+    //     them here too would double-book the simulation),
+    //   - skipped under ignoreBooked like every other busy source, because
+    //     the write-path guard is deliberately appointment-based: a customer
+    //     who already finished the booking POST wins the race, and the
+    //     walk-in start then re-checks the guard and the queue re-estimates.
+    // Released the instant the entry leaves ASSIGNED/READY - every reader
+    // derives the span from status, nothing is stored.
+    const walkInReservations =
+      input.serviceId && !input.ignoreBooked && shop.walkInEnabled
+        ? await tx.walkInEntry.findMany({
+            where: {
+              shopId: input.shopId,
+              assignedStaffId: input.staffId,
+              status: { in: ["ASSIGNED", "READY"] },
+            },
+            // The queue's own total order (walkInLifecycle.QUEUE_ORDER),
+            // spelled inline: position, then the fairness anchor, then id.
+            orderBy: [{ position: "asc" }, { joinedAt: "asc" }, { id: "asc" }],
+            select: {
+              services: { select: { durationMinAtJoin: true } },
+            },
+          })
+        : [];
+
     // Time the barber blocked off in Acuity. Like external visits it carries no
     // staff, so it blocks every chair for its span - offering a time he blocked
     // in the system he actually manages is the same double-book bug.
@@ -534,6 +566,7 @@ export async function computeFreeRanges(
       group,
       groupCapAppts,
       serviceFullDays,
+      walkInReservations,
     };
   });
   if (!data) return null;
@@ -550,6 +583,7 @@ export async function computeFreeRanges(
     group,
     groupCapAppts,
     serviceFullDays,
+    walkInReservations,
   } = data;
 
   const buffer = Math.max(0, shop.bookingBufferMin);
@@ -711,6 +745,20 @@ export async function computeFreeRanges(
       start: t.startsAt.getTime(),
       end: t.startsAt.getTime() + (t.durationMin + buffer) * MS_PER_MIN,
     });
+  }
+  // Assigned/ready walk-ins STACK sequentially from now, in queue order, each
+  // holding its snapshot duration + the turnover buffer - two 30-minute
+  // customers reserve an hour of the chair, not one overlapping half-hour.
+  // (Same buffer treatment as the appointment each is about to become.)
+  {
+    let cursor = now.getTime();
+    for (const r of walkInReservations) {
+      const durMin = r.services.reduce((s, x) => s + x.durationMinAtJoin, 0);
+      if (durMin <= 0) continue;
+      const end = cursor + (durMin + buffer) * MS_PER_MIN;
+      blocks.push({ start: cursor, end });
+      cursor = end;
+    }
   }
 
   // The lower bound every candidate slot must clear: now + lead, and never

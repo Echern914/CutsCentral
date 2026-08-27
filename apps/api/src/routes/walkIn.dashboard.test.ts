@@ -307,3 +307,62 @@ describe("create + queue + transitions over HTTP", () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe("start + complete over HTTP (PR 3)", () => {
+  it("assign -> start creates the appointment; complete lands it on the books; repeats are safe", async () => {
+    const created = await request(app)
+      .post("/api/walk-ins")
+      .set("Cookie", ownerCookie)
+      .send(createBody());
+    const id = created.body.entry.id;
+    await request(app)
+      .post(`/api/walk-ins/${id}/assign`)
+      .set("Cookie", ownerCookie)
+      .send({ staffId: chairA });
+
+    const started = await request(app)
+      .post(`/api/walk-ins/${id}/start`)
+      .set("Cookie", ownerCookie)
+      .send({});
+    expect(started.status).toBe(200);
+    expect(started.body.entry.status).toBe("IN_SERVICE");
+    expect(typeof started.body.appointmentId).toBe("string");
+    const appt = await prisma.appointment.findUnique({
+      where: { id: started.body.appointmentId },
+      select: { status: true, bookedVia: true, staffId: true },
+    });
+    expect(appt).toMatchObject({
+      status: "BOOKED",
+      bookedVia: "walk_in_queue",
+      staffId: chairA,
+    });
+
+    const done = await request(app)
+      .post(`/api/walk-ins/${id}/complete`)
+      .set("Cookie", ownerCookie);
+    expect(done.status).toBe(200);
+    expect(done.body.entry.status).toBe("COMPLETED");
+    const again = await request(app)
+      .post(`/api/walk-ins/${id}/complete`)
+      .set("Cookie", ownerCookie);
+    expect(again.status).toBe(200);
+    expect(again.body.entry.status).toBe("COMPLETED");
+  });
+
+  it("starting a WAITING entry without naming a chair is refused, with one it isn't", async () => {
+    const created = await request(app)
+      .post("/api/walk-ins")
+      .set("Cookie", ownerCookie)
+      .send(createBody());
+    const bare = await request(app)
+      .post(`/api/walk-ins/${created.body.entry.id}/start`)
+      .set("Cookie", ownerCookie)
+      .send({});
+    expect(bare.status).toBe(404); // staff_not_found: no chair resolvable
+    const named = await request(app)
+      .post(`/api/walk-ins/${created.body.entry.id}/start`)
+      .set("Cookie", ownerCookie)
+      .send({ staffId: chairA });
+    expect(named.status).toBe(200);
+  });
+});

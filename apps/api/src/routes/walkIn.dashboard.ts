@@ -29,6 +29,8 @@ import {
 } from "../engines/walkInQueue.js";
 import { estimateQueue } from "../engines/walkInEstimate.js";
 import { shopLocalDayWindow } from "../engines/serviceDailyLimit.js";
+import { completeEntry, startEntry } from "../engines/walkInStart.js";
+import { SlotTakenError } from "../engines/bookingWrite.js";
 
 /**
  * Walk-In Mode: the MANAGER surface (the Live Queue board's API). Its own
@@ -348,8 +350,71 @@ transitionRoute("return", returnToLine);
 transitionRoute("leave", markLeft);
 transitionRoute("no-show", markNoShow);
 transitionRoute("cancel", cancelEntry);
-// POST /:id/start is deliberately NOT here yet: starting service creates a
-// real Appointment through the overlap guard and lands in PR 3.
+
+const startSchema = z
+  .object({ staffId: z.string().min(1).max(64).optional() })
+  .strict();
+
+/**
+ * START SERVICE: creates the one real Appointment through the overlap guard
+ * (barber-driven convention) and flips the entry IN_SERVICE in the same
+ * transaction. A WAITING entry needs a chair named here; an assigned entry's
+ * own chair wins.
+ */
+walkInDashboardRouter.post("/:id/start", async (req, res) => {
+  const parsed = startSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const shop = await loadShop(req.shop!.id);
+  if (!shop || !shop.walkInEnabled) {
+    res
+      .status(shop ? 409 : 404)
+      .json({ error: shop ? "walk_in_disabled" : "not_found" });
+    return;
+  }
+  try {
+    const result = await startEntry({
+      shopId: shop.id,
+      entryId: req.params.id,
+      actor: actorOf(req),
+      staffId: parsed.data.staffId ?? null,
+      now: new Date(),
+    });
+    res.json({ entry: result.entry, appointmentId: result.appointmentId });
+  } catch (err) {
+    if (err instanceof SlotTakenError) {
+      // The chair genuinely has a conflict at this instant (an online
+      // booking landed first). The queue re-estimates; nothing was written.
+      res.status(409).json({ error: "slot_taken" });
+      return;
+    }
+    if (!answerError(res, err)) throw err;
+  }
+});
+
+/** COMPLETE: history/revenue/loyalty exactly once, repeats idempotent. */
+walkInDashboardRouter.post("/:id/complete", async (req, res) => {
+  const shop = await loadShop(req.shop!.id);
+  if (!shop || !shop.walkInEnabled) {
+    res
+      .status(shop ? 409 : 404)
+      .json({ error: shop ? "walk_in_disabled" : "not_found" });
+    return;
+  }
+  try {
+    const entry = await completeEntry({
+      shopId: shop.id,
+      entryId: req.params.id,
+      actor: actorOf(req),
+      now: new Date(),
+    });
+    res.json({ entry });
+  } catch (err) {
+    if (!answerError(res, err)) throw err;
+  }
+});
 
 const reorderSchema = z
   .object({
