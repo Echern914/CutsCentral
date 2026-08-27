@@ -121,6 +121,33 @@ export default async function McpAuthorizePage({
     );
   }
 
+  // 🔴 CHECK THE PLAN BEFORE RENDERING A BUTTON THAT CANNOT WORK. The approve
+  // endpoint refuses an ineligible shop anyway, but discovering that only after
+  // pressing "Connect assistant" is how a barber ends up staring at a generic
+  // failure with no idea a plan is involved. Reuses the same entitlement the
+  // panel reads, so the two can never disagree.
+  const conn = await apiGet<{ entitled: boolean; requiredPlan: string }>(
+    "/api/mcp/connections",
+  );
+  if (conn.ok && conn.data && !conn.data.entitled) {
+    return (
+      <Shell>
+        <h1 className="font-display text-2xl tracking-tight">
+          This shop&apos;s plan doesn&apos;t include assistants
+        </h1>
+        <p className="mt-2 text-sm leading-relaxed text-muted">
+          Connecting an AI assistant needs {conn.data.requiredPlan}, or an active
+          trial. Nothing has been shared, and the rest of ChairBack is
+          unaffected — this only stops the connection.
+        </p>
+        <p className="mt-3 text-sm leading-relaxed text-muted">
+          Your setup status, guides and everything else on the Assistant tab keep
+          working on any plan.
+        </p>
+      </Shell>
+    );
+  }
+
   const scopes = (scope ?? "").split(/\s+/).filter(Boolean);
   const shopName = me.data.activeShopName ?? me.data.shops?.[0]?.name ?? "your shop";
   const roleLabel =

@@ -45,6 +45,13 @@ export async function approveMcpAuthorization(input: {
           ? "That assistant asked for something ChairBack doesn't offer yet."
           : code === "access_denied"
             ? "This account isn't part of a shop yet, so there's nothing to connect."
-            : "Couldn't connect that assistant. Try starting the connection again.";
+            : // 🔴 The plan refusal needs its OWN sentence. It fell through to
+              // the generic "try again" line, which is the worst possible copy
+              // for it: nothing about trying again changes a plan, so the
+              // barber loops, and the assistant just reports "authorization
+              // failed" with no reason a human can act on.
+              code === "plan_required"
+              ? "Connecting an AI assistant needs ChairBack Premium or Premium AI, or an active trial. Everything else in ChairBack is unaffected — this only stops the connection."
+              : "Couldn't connect that assistant. Try starting the connection again.";
   return { ok: false, message };
 }
