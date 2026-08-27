@@ -88,12 +88,30 @@ describe("the Assistant never spends ChairBack's money on a model", () => {
   // The tab has to be worth opening with nothing connected — otherwise the AI
   // is load-bearing, which is the arrangement this whole design avoids.
   it("says plainly that the barber's own provider bills them, not ChairBack", () => {
-    // JSX wraps this copy across lines, so compare against the FLATTENED text
-    // rather than the source layout - otherwise reformatting breaks the test
-    // and teaches the next person to delete it.
-    const page = readFileSync(join(HERE, "page.tsx"), "utf8").replace(/\s+/g, " ");
-    expect(page).toMatch(/ChairBack never charges you for AI/i);
-    expect(page).toMatch(/does not sell or provide AI model credits/i);
-    expect(page).toMatch(/work without a connection/i);
+    // 🔴 Checked across the WHOLE surface, not one file. The copy started in
+    // page.tsx and moved into ConnectionPanel.tsx when the panel became real;
+    // pinning it to a single filename would have made a refactor look like a
+    // removed disclosure, and the obvious "fix" is to delete the assertion.
+    // What matters is that the surface says it somewhere, so that is what is
+    // asserted. JSX wraps the copy across lines, so the text is FLATTENED
+    // first - otherwise reformatting breaks the test and teaches the next
+    // person to delete it.
+    const surface = sources()
+      .map((s) => s.text)
+      .join(" ")
+      .replace(/\s+/g, " ");
+    expect(surface).toMatch(/ChairBack never charges you for AI/i);
+    expect(surface).toMatch(/does not sell or provide AI model credits/i);
+    // The tab has to be worth opening with nothing connected.
+    expect(surface).toMatch(/keeps working on any plan|work without a connection/i);
+  });
+
+  it("🔴 the connector panel promises READ-ONLY, and management is not offered", () => {
+    // Management access is a separate opt-in that does not ship in this
+    // release. The panel must not imply otherwise to a barber deciding whether
+    // to connect their account.
+    const panel = readFileSync(join(HERE, "ConnectionPanel.tsx"), "utf8").replace(/\s+/g, " ");
+    expect(panel).toMatch(/read-only/i);
+    expect(panel).toMatch(/never change or cancel anything/i);
   });
 });
