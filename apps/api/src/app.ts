@@ -32,6 +32,7 @@ import { dashboardRouter } from "./routes/dashboard.js";
 import { barberRouter } from "./routes/barber.js";
 import { insightsRouter } from "./routes/insights.js";
 import { notificationsRouter } from "./routes/notifications.js";
+import { mcpConnectionsRouter } from "./routes/mcp.connections.js";
 import { readinessRouter } from "./routes/readiness.js";
 import { teamRouter } from "./routes/team.js";
 import { teamJoinRouter } from "./routes/teamJoin.js";
@@ -204,6 +205,10 @@ export function createApp(): Express {
   // "your subscription lapsed" is one of the answers it reports. It carries
   // its own dashboardLimiter, auth and shop scoping.
   app.use("/api/readiness", readinessRouter);
+  // The barber's own list of connected assistants, and the disconnect button.
+  // NEVER WALLED and never plan-gated: a shop that lapsed or downgraded must
+  // still be able to SEE and REVOKE what it connected while it was paying.
+  app.use("/api/mcp", mcpConnectionsRouter);
   app.use("/api/booking", dashboardLimiter, bookingDashboardRouter); // barber booking config
   app.use("/api/payments", dashboardLimiter, paymentsDashboardRouter); // barber payment settings
   app.use("/api/loyalty", dashboardLimiter, loyaltyRouter);

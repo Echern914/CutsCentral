@@ -4,6 +4,8 @@ import { getMe } from "@/lib/me";
 import { featureLocks, getBillingSummary } from "@/lib/billing";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { AskField } from "./AskField";
+import { ConnectionPanel } from "./ConnectionPanel";
+import { getConnections } from "./connections.server";
 import {
   ctaAwayFrom,
   getReadiness,
@@ -43,7 +45,10 @@ export default async function AssistantPage() {
   // Employee seats 403 on /api/billing, so they never ask (see lib/billing).
   const locks = barberOnly ? undefined : featureLocks(await getBillingSummary());
 
-  const readiness = await getReadiness();
+  // 🔴 Fetched in parallel and independently. If the MCP surface is down,
+  // getConnections resolves to null and only the panel degrades - readiness,
+  // help and navigation are untouched.
+  const [readiness, connections] = await Promise.all([getReadiness(), getConnections()]);
   const step = nextStep(readiness);
   // Continue-setup already leads with the next item, so it is dropped from the
   // problem list rather than printed twice.
@@ -62,29 +67,15 @@ export default async function AssistantPage() {
           Answers about {shopName}, and the fastest way to whatever you need.
         </p>
 
-        {/* Connection status. Honest about BOTH halves: what works right now,
-            and who pays for the part that doesn't exist yet. */}
-        <div className="mt-4 rounded-2xl border border-subtle bg-charcoal-800/60 px-4 py-3.5">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-            <span
-              className="inline-block h-2 w-2 shrink-0 rounded-full bg-muted"
-              aria-hidden
-            />
-            <span className="font-medium text-offwhite">No assistant connected</span>
-            <span className="text-muted">·</span>
-            <span className="text-muted">
-              {shopName} · {roleLabel(role)} · read-only
-            </span>
-          </div>
-          <p className="mt-2 text-xs leading-relaxed text-muted">
-            ChairBack help, setup guides and everything on this page work without
-            a connection. Connecting your own ChatGPT or Claude account is what
-            adds personalised answers — your AI provider handles the conversation
-            and the usage under your own plan, and ChairBack never charges you
-            for AI. Availability depends on your provider&apos;s plan; ChairBack
-            does not sell or provide AI model credits.
-          </p>
-        </div>
+        {/* The connector panel. Data is fetched server-side and may be null;
+            the panel renders an honest "couldn't check" line rather than
+            taking the page down with it. */}
+        <ConnectionPanel
+          data={connections}
+          shopName={shopName}
+          roleLabel={roleLabel(role)}
+        />
+
       </header>
 
       <AskField role={role} rewardsEnabled={rewardsEnabled} />
