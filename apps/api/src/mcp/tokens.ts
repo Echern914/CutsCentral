@@ -1,5 +1,12 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { prisma, type McpAccessLevel } from "@chairback/db";
+import { prisma, type McpAccessLevel, type Prisma } from "@chairback/db";
+
+/**
+ * The prisma client OR an interactive-transaction client. Every write helper
+ * below takes one, so a caller that needs several writes to be atomic can hand
+ * its transaction down instead of the helper opening a second one.
+ */
+type TxClient = Omit<typeof prisma, "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends">;
 
 /**
  * The MCP token store: mint, resolve, rotate, revoke.
@@ -206,21 +213,29 @@ export async function revokeConnection(
   connectionId: string,
   reason: "user" | "replay" | "membership" | "client_disabled",
   now = new Date(),
+  /**
+   * Run inside an existing transaction. The replay path needs this: marking the
+   * code and revoking what it produced have to be one atomic step, or a replay
+   * that lost the race can still revoke a grant it never belonged to.
+   */
+  tx?: TxClient,
 ): Promise<void> {
-  await prisma.$transaction([
-    prisma.mcpConnection.updateMany({
+  const run = async (c: TxClient) => {
+    await c.mcpConnection.updateMany({
       where: { id: connectionId, revokedAt: null },
       data: { revokedAt: now, revokedReason: reason },
-    }),
-    prisma.mcpAccessToken.updateMany({
+    });
+    await c.mcpAccessToken.updateMany({
       where: { connectionId, revokedAt: null },
       data: { revokedAt: now },
-    }),
-    prisma.mcpRefreshToken.updateMany({
+    });
+    await c.mcpRefreshToken.updateMany({
       where: { connectionId, revokedAt: null },
       data: { revokedAt: now },
-    }),
-  ]);
+    });
+  };
+  if (tx) return run(tx);
+  await prisma.$transaction((inner) => run(inner));
 }
 
 /** Kill one refresh-token family without touching siblings from a later grant. */
@@ -523,26 +538,51 @@ export async function claimAuthCode(id: string, now = new Date()): Promise<boole
  * one we served first may well have been the attacker. Everything that code
  * produced dies, which is the only way to be sure the thief's tokens do.
  *
- * Only reachable after validation, so a caller holding a bare stolen code (no
- * verifier) can never trigger it.
+ * 🔴 THE CODE ROW IS THE INTERLOCK, AND IT IS RE-CHECKED HERE, IN THIS
+ * TRANSACTION. Deleting stale codes at re-consent stops a stale code being
+ * LOADED, but it cannot stop one that was loaded a moment earlier and is still
+ * in flight:
+ *
+ *     1. a replay loads consumed code A
+ *     2. re-consent deletes code A and reactivates the reused connection
+ *     3. the in-flight replay resumes
+ *     4. it revokes the connection - the REPLACEMENT grant, which it was never
+ *        part of
+ *
+ * So the conditional mark and the revocation are one atomic step, and a mark
+ * that touches ZERO rows aborts the whole thing. Zero rows means the code was
+ * deleted by a re-consent, or another replay already handled it; either way this
+ * replay is stale and has no grant of its own left to revoke.
+ *
+ * LOCK ORDER: authorization code, then connection - the same order
+ * `/authorize/approve` takes, so the two can never deadlock against each other.
+ *
+ * Returns true only when this call actually revoked something.
  */
 export async function revokeForAuthCodeReplay(
   code: Pick<LoadedAuthCode, "id" | "userId" | "shopId" | "clientId">,
   now = new Date(),
-): Promise<void> {
-  await prisma.mcpAuthCode.updateMany({
-    where: { id: code.id, replayDetectedAt: null },
-    data: { replayDetectedAt: now },
-  });
-  const conn = await prisma.mcpConnection.findUnique({
-    where: {
-      userId_shopId_clientId: {
-        userId: code.userId,
-        shopId: code.shopId,
-        clientId: code.clientId,
+): Promise<boolean> {
+  return prisma.$transaction(async (tx) => {
+    const marked = await tx.mcpAuthCode.updateMany({
+      where: { id: code.id, replayDetectedAt: null },
+      data: { replayDetectedAt: now },
+    });
+    // 🔴 The abort. Never revoke on the strength of a row we did not win.
+    if (marked.count !== 1) return false;
+
+    const conn = await tx.mcpConnection.findUnique({
+      where: {
+        userId_shopId_clientId: {
+          userId: code.userId,
+          shopId: code.shopId,
+          clientId: code.clientId,
+        },
       },
-    },
-    select: { id: true },
+      select: { id: true },
+    });
+    if (!conn) return false;
+    await revokeConnection(conn.id, "replay", now, tx);
+    return true;
   });
-  if (conn) await revokeConnection(conn.id, "replay", now);
 }

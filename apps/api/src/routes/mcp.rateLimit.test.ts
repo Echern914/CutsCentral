@@ -1,6 +1,7 @@
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
+import { bearerToken, credentialKey } from "../mcp/bearer.js";
 import { logger } from "../logger.js";
 
 /**
@@ -55,6 +56,30 @@ async function appWithOuterLimit(limit: number) {
 
 /** Inferred rather than annotated: the Prisma delegate's signature is generic. */
 const spyOnTokenLookup = () => vi.spyOn(prisma.mcpAccessToken, "findUnique");
+/**
+ * An app whose limiter uses the PRODUCTION credential key.
+ *
+ * 🔴 `credentialKey` is imported, never reimplemented. An earlier version of
+ * this file hashed locally, which meant the tests would have stayed green if
+ * production reverted to keying on the plaintext header - the exact regression
+ * they exist to catch.
+ */
+async function appWithCredentialLimit(limit: number) {
+  const { default: express } = await import("express");
+  const { requireMcpAuth } = await import("../middleware/mcpAuth.js");
+  const app = express();
+  app.set("trust proxy", 1);
+  app.use(express.json());
+  app.use(
+    "/mcp",
+    await limiterWithLimit(limit, ((req: { header: (n: string) => string | undefined; ip?: string }) =>
+      credentialKey(req.header("Authorization"), req.ip ?? "anon")) as never),
+    requireMcpAuth,
+    (_req, res) => res.json({ ok: true }),
+  );
+  return app;
+}
+
 let lookups: ReturnType<typeof spyOnTokenLookup>;
 
 beforeAll(() => {
@@ -111,18 +136,7 @@ describe("🔴 the outer IP limit actually bounds /mcp", () => {
   });
 
   it("the per-connection limiter still bounds a FIXED credential", async () => {
-    const { default: express } = await import("express");
-    const { requireMcpAuth } = await import("../middleware/mcpAuth.js");
-    const { createHash } = await import("node:crypto");
-    // The same hashed-credential key the app uses for fair-sharing.
-    const key = (req: { header: (n: string) => string | undefined; ip?: string }) =>
-      createHash("sha256").update(req.header("Authorization") ?? req.ip ?? "anon").digest("hex").slice(0, 32);
-    const app = express();
-    app.set("trust proxy", 1);
-    app.use(express.json());
-    app.use("/mcp", await limiterWithLimit(5, key as never), requireMcpAuth, (_req, res) =>
-      res.json({ ok: true }),
-    );
+    const app = await appWithCredentialLimit(5);
 
     const codes: number[] = [];
     for (let i = 0; i < 12; i++) {
@@ -199,16 +213,55 @@ describe("🔴 the outer IP limit actually bounds /mcp", () => {
 });
 
 describe("🔴 no bearer value is ever kept or emitted", () => {
-  it("the limiter key is a hash, not the credential", async () => {
-    const { createHash } = await import("node:crypto");
-    const raw = "Bearer super-secret-token-value-do-not-store";
-    const key = createHash("sha256").update(raw).digest("hex").slice(0, 32);
-    expect(key).not.toContain("super-secret");
-    expect(raw).not.toContain(key);
-    // 🔴 The key is PERSISTED in the Postgres limiter store outside tests, so a
-    // raw key put live bearer tokens in a table that is meant to hold none -
-    // undoing the reason McpAccessToken stores sha256 in the first place.
+  it("the PRODUCTION key is a hash, and never contains the credential", () => {
+    const token = "super-secret-token-value-do-not-store";
+    const key = credentialKey(`Bearer ${token}`, "1.2.3.4");
     expect(key).toMatch(/^[0-9a-f]{32}$/);
+    expect(key).not.toContain(token);
+    expect(key).not.toContain("super-secret");
+    // 🔴 The key is PERSISTED (PgRateStore writes it to rate_limit_counter), so
+    // a plaintext key put live bearer tokens in a table meant to hold none -
+    // undoing the reason McpAccessToken stores sha256 in the first place.
+    expect(key).not.toContain("Bearer");
+  });
+
+  it("🔴 equivalent valid header forms map to ONE bucket", () => {
+    // Authentication trims the captured token, so all of these authenticate as
+    // the SAME credential. While the limiter hashed the raw header they landed
+    // in different buckets, and the 120/min per-connection limit was bypassable
+    // by re-spacing the header.
+    const token = "tok-".padEnd(43, "x");
+    const forms = [
+      `Bearer ${token}`,
+      `Bearer  ${token}`,
+      `Bearer   ${token}   `,
+      `bearer ${token}`,
+      `BEARER ${token}`,
+      ` Bearer ${token}`,
+      `Bearer	${token}`,
+    ];
+    const keys = new Set(forms.map((h) => credentialKey(h, "1.2.3.4")));
+    expect(keys.size, `forms produced ${keys.size} buckets: ${[...keys].join(", ")}`).toBe(1);
+  });
+
+  it("a malformed credential falls back to an ADDRESS-scoped key", () => {
+    // Not to a per-request one: a flood of junk headers from one host must share
+    // a bucket and stay bounded by the outer IP limiter.
+    const bad = ["", "Basic abc", "Bearer", "Bearer   ", "token abc", undefined];
+    const keys = new Set(bad.map((h) => credentialKey(h, "9.9.9.9")));
+    expect(keys.size).toBe(1);
+    expect([...keys][0]).toBe("ip:9.9.9.9");
+  });
+
+  it("🔴 the shared extractor is what authentication uses, byte for byte", () => {
+    // One function, so "what we authenticate as" and "what we count as" cannot
+    // drift apart again.
+    const token = "abc-".padEnd(43, "y");
+    expect(bearerToken(`Bearer  ${token}  `)).toBe(token);
+    expect(bearerToken(`bearer ${token}`)).toBe(token);
+    expect(bearerToken("Bearer")).toBeNull();
+    expect(bearerToken("Basic xyz")).toBeNull();
+    expect(bearerToken(undefined)).toBeNull();
   });
 
   it("a 429 log line carries no credential", async () => {

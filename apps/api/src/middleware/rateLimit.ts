@@ -1,7 +1,8 @@
 import rateLimit, { type RateLimitRequestHandler } from "express-rate-limit";
 import type { Request, Response } from "express";
-import { createHash, timingSafeEqual } from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
 import { apiEnv, SESSION_COOKIE_NAME } from "@chairback/config";
+import { credentialKey } from "../mcp/bearer.js";
 import { PgRateStore } from "./pgRateStore.js";
 import { logger } from "../logger.js";
 import { redactUrl, requestUrl } from "../logRedaction.js";
@@ -97,25 +98,14 @@ export function publicIpKey(req: Request): string {
 }
 
 /**
- * Key a limiter by the CALLER'S CREDENTIAL, hashed.
+ * Key a limiter by the caller's credential.
  *
- * 🔴 THE HASH IS NOT COSMETIC. The raw key is held in the limiter's store (a
- * Postgres table in real environments) and appears in any store inspection or
- * dump. Keying on the raw `Authorization` header therefore PERSISTED live
- * bearer tokens outside the tables that are supposed to hold only hashes -
- * `McpAccessToken` stores sha256 precisely so a database copy contains no
- * usable credential, and the rate-limit store was quietly undoing that.
- *
- * 🔴 AND IT IS NOT AN OUTER BOUND. The value is chosen by the caller, so a new
- * header is a new bucket: an attacker rotating it gets unlimited requests from
- * one host. Measured on the merged #315: 300 requests, one IP, rotating header
- * -> 0 rate-limited, 300 served, each performing a database token lookup. This
- * key is for FAIR-SHARING between authenticated callers and nothing else; the
- * bound comes from an IP-keyed limiter mounted in front of it.
+ * Delegates to `mcp/bearer.ts`, which is also what `requireMcpAuth` uses to read
+ * the token - see the note there for why sharing it is load-bearing rather than
+ * tidy, and why the value is hashed before it reaches the persisted store.
  */
 function bearerKey(req: Request): string {
-  const raw = req.header("Authorization") ?? req.ip ?? "anon";
-  return createHash("sha256").update(raw).digest("hex").slice(0, 32);
+  return credentialKey(req.header("Authorization"), req.ip ?? "anon");
 }
 
 /**
