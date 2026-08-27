@@ -244,27 +244,90 @@ describe("🔴 an in-flight replay cannot revoke a grant created after it starte
   });
 
   it("a parked replay of an UNCONSUMED code also revokes nothing", async () => {
-    // The harmless variant of the same interleaving: a code that was minted and
-    // never redeemed. It must stop working, and must not take the revocation
+    // The harmless variant of the same interleaving: a code minted and never
+    // redeemed, which is then overtaken by a re-consent while its redemption is
+    // parked mid-flight. It must stop working, and must not take the revocation
     // path on the way out.
-    const stale = await consent(clientId);
-    const live = await connect(clientId);
-    expect((await mcp(live.access_token)).status).toBe(200);
+    //
+    // 🔴 THE ORDER HERE IS THE TEST. An earlier version redeemed a second code
+    // BEFORE parking, which deleted the stale code first - so `loadAuthCode`
+    // parked on a null read and the unconsumed branch was never entered at all.
+    // Code A must still exist, and still be unconsumed, at the moment the
+    // barrier trips.
 
+    // A sibling assistant on a different client, same user and same shop, that
+    // must come through untouched. Established BEFORE the barrier so its own
+    // code load cannot consume the one-shot gate.
+    const siblingClient = await registerClient("Race Client Sibling Unconsumed");
+    const sibling = await connect(siblingClient);
+    expect((await mcp(sibling.access_token)).status).toBe(200);
+
+    // 1. Mint code A and leave it unredeemed.
+    const stale = await consent(clientId);
+
+    // 2. Install the barrier.
     const gate: Gate = { reached: deferred(), release: deferred() };
     parkNext = gate;
-    // .then() is what DISPATCHES a supertest request - without it the request
-    // never leaves the test and the barrier never trips.
+
+    // 3. Start redeeming A. .then() is what DISPATCHES a supertest request -
+    //    without it the request never leaves the test and the barrier never
+    //    trips.
     const inFlight = redeem(clientId, stale.code, stale.verifier).then((r) => r);
     await gate.reached.promise;
 
+    // The load that parked read a REAL, still-unconsumed row. Without this the
+    // test would pass just as happily against a null read, proving nothing.
+    expect(
+      await prisma.mcpAuthCode.count({
+        where: { shopId, client: { clientId }, consumedAt: null },
+      }),
+    ).toBe(1);
+
+    // 4. Re-consent and redeem code B while A is parked.
     const b = await connect(clientId);
+    expect((await mcp(b.access_token)).status).toBe(200);
+
+    // 5. Release A.
     gate.release.resolve();
     const res = await inFlight;
 
+    // 6. Byte-identical generic invalid_grant - a stale code is indistinguishable
+    //    from one that never existed.
     expect(res.status).toBe(400);
     expect(res.body).toEqual(GENERIC);
+
+    // 7. 🔴 THE INVARIANT: the replacement grant survived the losing replay.
     expect((await mcp(b.access_token)).status).toBe(200);
+
+    // 8. No replay marker was left on the new grant's code. The marker is what
+    //    the revocation branch keys off, so a stray one turns a later legitimate
+    //    action into apparent theft.
+    const rows = await prisma.mcpAuthCode.findMany({
+      where: { shopId, client: { clientId } },
+      select: { replayDetectedAt: true, consumedAt: true },
+    });
+    expect(rows.length).toBe(1); // code A deleted by the re-consent; only B remains
+    expect(rows[0]!.consumedAt).not.toBeNull();
+    expect(rows[0]!.replayDetectedAt).toBeNull();
+
+    // 9. Neither this connection nor the sibling was revoked.
+    expect(
+      (
+        await prisma.mcpConnection.findFirstOrThrow({
+          where: { shopId, client: { clientId } },
+          select: { revokedAt: true, revokedReason: true },
+        })
+      ).revokedAt,
+    ).toBeNull();
+    expect(
+      (
+        await prisma.mcpConnection.findFirstOrThrow({
+          where: { shopId, client: { clientId: siblingClient } },
+          select: { revokedAt: true },
+        })
+      ).revokedAt,
+    ).toBeNull();
+    expect((await mcp(sibling.access_token)).status).toBe(200);
   });
 
   it("the parked-replay path leaves no replay marker on a code it did not win", async () => {
