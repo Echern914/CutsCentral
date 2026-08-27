@@ -33,14 +33,36 @@ export default async function McpAuthorizePage({
   searchParams: Record<string, string | string[] | undefined>;
 }) {
   const me = await getMe();
-  // The middleware gates /mcp/* on the session cookie existing; this catches a
-  // stale or revoked one, which the cookie's presence cannot rule out.
-  if (me.status === 401 || !me.data) redirect("/login?next=/mcp/authorize");
 
   const str = (k: string): string | null => {
     const v = searchParams[k];
     return typeof v === "string" && v.length > 0 ? v : null;
   };
+
+  // The middleware gates /mcp/* on the session cookie existing; this catches a
+  // stale or revoked one, which the cookie's presence cannot rule out.
+  //
+  // 🔴 The authorization request is REBUILT into `next`. The old form hardcoded
+  // "/login?next=/mcp/authorize", which threw away the client, the PKCE
+  // challenge and the state - so a barber with an expired cookie signed in and
+  // arrived at a consent screen that had nothing to consent to.
+  if (me.status === 401 || !me.data) {
+    const resume = new URLSearchParams();
+    for (const key of [
+      "client_id",
+      "redirect_uri",
+      "code_challenge",
+      "code_challenge_method",
+      "resource",
+      "scope",
+      "state",
+    ]) {
+      const v = str(key);
+      if (v) resume.set(key, v);
+    }
+    const qs = resume.toString();
+    redirect(`/login?next=${encodeURIComponent(`/mcp/authorize${qs ? `?${qs}` : ""}`)}`);
+  }
 
   const clientId = str("client_id");
   const redirectUri = str("redirect_uri");

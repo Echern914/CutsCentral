@@ -34,6 +34,12 @@ export const LOGIN_NEXT_ALLOWLIST = [
   "/onboarding",
   "/admin",
   "/team/join",
+  // The MCP consent screen. An assistant sends a barber here to approve access;
+  // if they are not signed in the middleware bounces them to /login, and losing
+  // this destination means they land on the dashboard with the authorization
+  // request silently dropped - which the assistant reports as "authorization
+  // failed" with nothing to act on.
+  "/mcp",
 ] as const;
 
 /**
@@ -65,8 +71,17 @@ export const SIGNUP_NEXT_ALLOWLIST = ["/team/join"] as const;
  */
 export const MOBILE_HANDOFF_NEXT_ALLOWLIST = ["/team/join", "/onboarding"] as const;
 
-/** Longest `next` we will even look at. */
-const MAX_LENGTH = 512;
+/**
+ * Longest `next` we will even look at.
+ *
+ * Raised from 512 for the MCP consent flow: an OAuth authorization request
+ * carries a client id, an encoded redirect_uri, a PKCE challenge, a resource,
+ * a scope list and the client's own `state`, which together run past 512 easily.
+ * Length was never the security control here - the shape and allowlist checks
+ * below are - so a larger ceiling costs nothing and a smaller one silently
+ * truncated a legitimate flow.
+ */
+const MAX_LENGTH = 2048;
 
 /** Control characters and whitespace a browser may strip before navigating. */
 // eslint-disable-next-line no-control-regex
@@ -79,12 +94,34 @@ const DECODE_ROUNDS = 3;
  * A shape that is relative TO OUR ORIGIN. Rejects absolute URLs, scheme-ish
  * values, protocol-relative "//host", and the "/\host" form Chrome and Safari
  * both treat as protocol-relative.
+ *
+ * 🔴 THE `://` TEST LOOKS AT THE PATH ONLY, AND THAT IS DELIBERATE. It used to
+ * scan the whole value, which is wrong for any destination whose QUERY
+ * legitimately contains a URL - the MCP consent screen carries
+ * `?redirect_uri=https%3A%2F%2Fclaude.ai%2F...`, and one decode round turned
+ * that into "://" and rejected a perfectly safe relative path. The barber then
+ * landed on the dashboard and the assistant reported "authorization failed".
+ *
+ * Nothing is weakened by the narrowing. What makes a value dangerous is where
+ * the BROWSER navigates, which is decided by the leading characters, and every
+ * one of those forms is still caught on the FULL value:
+ *
+ *   "https://evil.example"   does not start with "/"
+ *   "//evil.example"         starts with "//"
+ *   "/\evil.example"         backslash is in FORBIDDEN_CHARS
+ *   "/%2f%2fevil.example"    decodes to "//evil.example" on a later round
+ *
+ * A "https://..." sitting in a query VALUE is inert: the browser still
+ * navigates to our origin, and the page that receives it decides what the
+ * parameter means. Here the API re-validates that redirect_uri byte-for-byte
+ * against the client's registered list before it is ever used.
  */
 function isRelativeShape(value: string): boolean {
   if (!value.startsWith("/")) return false;
   if (value.startsWith("//")) return false;
   if (FORBIDDEN_CHARS.test(value)) return false;
-  if (value.includes("://")) return false;
+  const path = value.replace(/[?#].*$/, "");
+  if (path.includes("://")) return false;
   return true;
 }
 

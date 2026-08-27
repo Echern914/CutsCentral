@@ -105,7 +105,13 @@ function gateResponse(req: NextRequest, pathname: string): NextResponse {
   if (gated && !req.cookies.get(SESSION_COOKIE_NAME)?.value) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
-    url.searchParams.set("next", pathname);
+    // 🔴 PATH **AND** QUERY. `pathname` alone silently dropped every parameter
+    // of whatever the visitor was trying to reach. For /dashboard that was
+    // merely untidy; for the MCP consent screen it was fatal - the whole
+    // authorization request lives in the query, so signing in landed the barber
+    // on a consent page with no client, no PKCE challenge and no state, and the
+    // assistant reported "authorization failed" with nothing to act on.
+    url.searchParams.set("next", `${pathname}${req.nextUrl.search}`);
     return NextResponse.redirect(url);
   }
   return NextResponse.next();
