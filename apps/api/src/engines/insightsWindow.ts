@@ -454,6 +454,18 @@ export interface ChairEvent {
   serviceName: string | null;
   /** Null for a walk-in booked without a client record. */
   clientId: string | null;
+  /**
+   * The chair that worked it, or NULL when nothing can truthfully say.
+   *
+   * 🔴 ALWAYS null for a synced event. `Visit` carries no staffId at all, so an
+   * external booking cannot be attributed to a barber without inventing work he
+   * may not have done - the same reason a staff-filtered read returns native
+   * rows only and sets `syncedExcluded`. Callers grouping by chair must put
+   * these in an explicit unassigned bucket rather than dropping them (which
+   * would make the per-chair figures fail to sum to the shop total) or
+   * distributing them (which would be a guess presented as a fact).
+   */
+  staffId: string | null;
   source: "native" | "synced";
 }
 
@@ -530,6 +542,7 @@ export async function readChairEvents(
         status: true,
         clientId: true,
         serviceId: true,
+        staffId: true,
         // What the barber actually collected at the chair. Overrides the
         // ticket when set - see `earned` below.
         paidAmount: true,
@@ -599,6 +612,7 @@ export async function readChairEvents(
       serviceId: a.serviceId,
       serviceName: a.service?.name ?? null,
       clientId: a.clientId,
+      staffId: a.staffId,
       source: "native",
     });
   }
@@ -615,6 +629,8 @@ export async function readChairEvents(
       serviceId: null,
       serviceName: v.serviceName,
       clientId: v.clientId,
+      // Not "unknown chair" - there is no such column on Visit. See the field.
+      staffId: null,
       source: "synced",
     });
   }

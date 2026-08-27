@@ -2,6 +2,7 @@ import { Router } from "express";
 import { requireMcpAuth } from "../middleware/mcpAuth.js";
 import { mcpLimiter } from "../middleware/rateLimit.js";
 import { logMcpEvent } from "../mcp/audit.js";
+import { callTool, listTools, toolContextFor, type McpRequestContext } from "../mcp/dispatch.js";
 import {
   authorizationServerMetadata,
   protectedResourceMetadata,
@@ -10,17 +11,16 @@ import {
 /**
  * The MCP surface.
  *
- * THIS PR SHIPS THE DOOR, NOT THE ROOMS. `tools/list` returns an empty list and
- * there is nothing to call. That is deliberate: the authorization story is the
- * part that is dangerous to get wrong, so it lands, gets reviewed and gets a
- * security pass on its own - before a single tool can read a customer's name.
+ * PR B shipped the door; this is the first set of rooms, and every one of them
+ * is read-only. The authorization story landed, was reviewed cold and was
+ * hardened by a hotfix BEFORE any tool could read a customer's name - which is
+ * why the interesting code here is short: it asks `decideTool` whether this
+ * caller may run this tool, and does as it is told.
  *
- * What IS live here:
- *   - the two discovery documents;
- *   - an authenticated JSON-RPC endpoint that proves the whole token lifecycle
- *     end to end (initialize, tools/list, ping);
- *   - a 401 that carries the RFC 9728 challenge, which is how a client that has
- *     never seen ChairBack finds the authorization server.
+ * 🔴 THE ROUTER MAKES NO PERMISSION DECISIONS OF ITS OWN. Not one `if (role
+ * === ...)` lives in this file. Everything is in `mcp/toolPolicy.ts`, where the
+ * whole matrix can be read at once and is asserted cell by cell - the
+ * alternative, a check per handler, is ten chances to forget the lapsed case.
  */
 
 /**
@@ -53,6 +53,28 @@ export const mcpRouter: Router = Router();
  */
 const RPC_METHOD_NOT_FOUND = -32601;
 const RPC_INVALID_REQUEST = -32600;
+const RPC_INVALID_PARAMS = -32602;
+
+/**
+ * Narrow the authenticated request context to what the dispatcher needs.
+ *
+ * 🔴 THE POINT IS WHAT IS *NOT* PASSED. The dispatcher gets identity and grant
+ * only - no Request, no headers, no body. It cannot reach anything the client
+ * sent even by accident, which is what makes "a staffId is never read from the
+ * request" checkable by reading one function rather than ten.
+ */
+function session(ctx: NonNullable<Express.Request["mcp"]>): McpRequestContext {
+  return {
+    connectionId: ctx.connectionId,
+    userId: ctx.userId,
+    shopId: ctx.shopId,
+    role: ctx.role,
+    staffId: ctx.staffId,
+    accessLevel: ctx.accessLevel,
+    scopes: ctx.scopes,
+    billing: ctx.billing,
+  };
+}
 
 /** MCP protocol revision this server implements. */
 const PROTOCOL_VERSION = "2025-06-18";
@@ -88,40 +110,45 @@ mcpRouter.post("/", mcpLimiter, requireMcpAuth, async (req, res) => {
         id,
         result: {
           protocolVersion: PROTOCOL_VERSION,
-          // No capabilities are advertised yet - a client must not be told it
-          // can call tools that do not exist.
-          capabilities: { tools: {} },
+          // `listChanged` is false: the set of tools a caller may run changes
+          // only when the human re-consents or their seat changes, and both of
+          // those already invalidate the connection rather than mutate it.
+          capabilities: { tools: { listChanged: false } },
           serverInfo: { name: "chairback", version: "1.0.0" },
         },
       });
       return;
 
-    case "tools/list":
-      // Empty, on purpose. The read-only tools land in the next PR, each behind
-      // its own scope gate.
-      res.json({ jsonrpc: "2.0", id, result: { tools: [] } });
+    case "tools/list": {
+      // 🔴 FILTERED, NOT ANNOTATED. A model shown a tool it cannot call will
+      // call it, be refused, rephrase and call it again - and the presence of a
+      // denied entry would itself say something about the shop.
+      const toolCtx = toolContextFor(session(ctx));
+      res.json({ jsonrpc: "2.0", id, result: { tools: listTools(toolCtx) } });
       return;
+    }
 
     case "ping":
       res.json({ jsonrpc: "2.0", id, result: {} });
       return;
 
-    case "tools/call":
-      await logMcpEvent({
-        shopId: ctx.shopId,
-        userId: ctx.userId,
-        connectionId: ctx.connectionId,
-        toolName: "tools/call",
-        operationType: "READ",
-        result: "DENIED",
-        failureCode: "no_tools_yet",
-      });
-      res.status(404).json({
-        jsonrpc: "2.0",
-        id,
-        error: { code: RPC_METHOD_NOT_FOUND, message: "this server exposes no tools yet" },
-      });
+    case "tools/call": {
+      const params = (body as { params?: { name?: unknown; arguments?: unknown } }).params;
+      if (!params || typeof params !== "object") {
+        res.status(400).json({
+          jsonrpc: "2.0",
+          id,
+          error: { code: RPC_INVALID_PARAMS, message: "params.name is required" },
+        });
+        return;
+      }
+      // A permission failure comes back as an MCP tool RESULT with isError, not
+      // a JSON-RPC error: the model is meant to read "you can't do that, here's
+      // why" and stop, which a transport-level error does not let it do.
+      const outcome = await callTool(session(ctx), params.name, params.arguments);
+      res.json({ jsonrpc: "2.0", id, result: outcome });
       return;
+    }
 
     default:
       res.status(404).json({
