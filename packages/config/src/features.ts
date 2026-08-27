@@ -792,6 +792,19 @@ export function featureById(id: string): FeatureIndexEntry | undefined {
 const ROLE_RANK: Record<SeatRole, number> = { BARBER: 0, MANAGER: 1, OWNER: 2 };
 
 /**
+ * "Does this seat rank at or above the one required?"
+ *
+ * 🔴 EXPORTED SO THERE IS ONE ORDERING. The MCP tool-policy matrix asks the same
+ * question this file's `resolveFeature` does, and a second copy of
+ * `{ BARBER: 0, MANAGER: 1, OWNER: 2 }` living somewhere else is precisely how a
+ * role check drifts: someone adds a role, updates one table, and an employee
+ * quietly outranks a manager on one surface only.
+ */
+export function roleMeets(role: SeatRole, required: SeatRole): boolean {
+  return ROLE_RANK[role] >= ROLE_RANK[required];
+}
+
+/**
  * Everything the registry needs to know about WHO is asking. Every field has a
  * permissive default so a caller that knows nothing still gets the owner-on-web
  * behaviour the product had before this file existed.
@@ -838,7 +851,7 @@ export function resolveFeature(id: string, ctx: NavContext = {}): NavResolution 
   if (!entry) return { ok: false, reason: "unknown_feature" };
 
   const role = ctx.role ?? "OWNER";
-  if (ROLE_RANK[role] < ROLE_RANK[entry.minRole ?? "MANAGER"]) {
+  if (!roleMeets(role, entry.minRole ?? "MANAGER")) {
     return { ok: false, reason: "role", entry };
   }
 

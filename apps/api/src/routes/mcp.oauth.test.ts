@@ -319,7 +319,13 @@ describe("authorization code + PKCE", () => {
     expect(tokens.refresh_token).toBeTruthy();
     const ok = await mcp(tokens.access_token);
     expect(ok.status).toBe(200);
-    expect(ok.body.result.tools).toEqual([]);
+    // Default consent is help + readiness (DEFAULT_SCOPES), so the listing is
+    // those two families and nothing that carries customer data.
+    expect((ok.body.result.tools as { name: string }[]).map((t) => t.name).sort()).toEqual([
+      "help_find_feature",
+      "help_list_features",
+      "readiness_report",
+    ]);
   });
 
   it("🔴 a WRONG verifier is refused and does NOT burn the code", async () => {
@@ -1451,21 +1457,30 @@ describe("🔴 what is stored, and what is never said", () => {
 
 /* ═══════════════════════════ the endpoint itself ═══════════════════════════ */
 
-describe("the MCP endpoint ships no tools yet", () => {
-  it("tools/list is empty and tools/call is refused", async () => {
+describe("the MCP endpoint itself", () => {
+  it("tools/list reflects what was consented to, and tools/call needs a name", async () => {
     const t = await connect();
     const list = await mcp(t.access_token, "tools/list");
-    expect(list.body.result.tools).toEqual([]);
+    // Was `toEqual([])` while PR B shipped the door with no rooms. The tools
+    // landed in PR C, each behind the policy matrix; the listing is filtered to
+    // the consented scopes rather than empty.
+    const names = (list.body.result.tools as { name: string }[]).map((t2) => t2.name);
+    expect(names).toContain("readiness_report");
+    expect(names).not.toContain("clients_search"); // not consented to here
+
+    // A tools/call with no params is still a transport-level error.
     const call = await mcp(t.access_token, "tools/call");
-    expect(call.status).toBe(404);
+    expect(call.status).toBe(400);
+    expect(call.body.error.code).toBe(-32602);
   });
 
-  it("initialize does not advertise a capability that does not exist", async () => {
+  it("initialize advertises the tools capability", async () => {
     const t = await connect();
     const res = await mcp(t.access_token, "initialize");
     expect(res.status).toBe(200);
     expect(res.body.result.protocolVersion).toBeTruthy();
-    expect(res.body.result.capabilities.tools).toEqual({});
+    // `{}` while there were no tools; `listChanged: false` now that there are.
+    expect(res.body.result.capabilities.tools).toEqual({ listChanged: false });
   });
 
   it("a non-JSON-RPC body is refused", async () => {
