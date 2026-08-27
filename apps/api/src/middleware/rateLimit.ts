@@ -176,6 +176,35 @@ export const waitlistLimiter = make({
   keyGenerator: publicIpKey,
 });
 
+/**
+ * Walk-In Mode kiosk, three buckets by cost. The OUTER per-IP ceiling every
+ * kiosk request passes; finer per-shop / per-phone / per-challenge controls
+ * live in engines/walkInVerify.ts against the challenge table itself, so no
+ * phone number (raw or otherwise) ever becomes a rate-limit key here.
+ * publicIpKey already refuses a spoofed x-cb-client-ip without the proxy
+ * secret, so rotating headers does not rotate buckets.
+ */
+export const kioskReadLimiter = make({
+  name: "kioskRead",
+  windowMs: 60 * 1000,
+  limit: 60,
+  keyGenerator: publicIpKey,
+});
+/** Challenge + verify: each may cost an SMS or a guess. Tight. */
+export const kioskSmsLimiter = make({
+  name: "kioskSms",
+  windowMs: 60 * 1000,
+  limit: 6,
+  keyGenerator: publicIpKey,
+});
+/** Check-in / leave: state writes, one SMS each at most. */
+export const kioskWriteLimiter = make({
+  name: "kioskWrite",
+  windowMs: 60 * 1000,
+  limit: 10,
+  keyGenerator: publicIpKey,
+});
+
 /** Acuity OAuth callback: blunt code-exchange replay. Per IP. */
 export const oauthLimiter = make({ name: "oauth", windowMs: 60 * 1000, limit: 15 });
 
