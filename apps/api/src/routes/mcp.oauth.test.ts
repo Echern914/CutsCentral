@@ -1510,3 +1510,182 @@ describe("the MCP endpoint itself", () => {
     }
   });
 });
+
+/**
+ * 🔴 REAL OAUTH CLIENTS POST FORMS, NOT JSON.
+ *
+ * RFC 6749 §4.1.3 REQUIRES the token endpoint to accept
+ * `application/x-www-form-urlencoded`, and RFC 7009 requires the same of
+ * revocation. Every standards-compliant client therefore posts a form. Claude
+ * does.
+ *
+ * This whole file exists because the API only mounted `express.json()`. A real
+ * connection got as far as consent — which is OUR web app posting JSON, so it
+ * worked — created a connection row, and then died at the exchange with
+ * `unsupported_grant_type`, because the body never parsed and `grant_type` was
+ * undefined. The barber saw "Authorization failed" and a growing list of
+ * connected assistants that had never made a single call.
+ *
+ * 🔴 AND THE ENTIRE MCP SUITE MISSED IT, because supertest's `.send(object)`
+ * defaults to JSON. Eighty-eight passing tests shared exactly the same wrong
+ * assumption as the code they were testing. Every test below uses `.type("form")`
+ * on purpose; a JSON-only test here would be worthless.
+ */
+describe("🔴 the OAuth endpoints accept form-encoded bodies", () => {
+  it("the token endpoint parses a form body at all", async () => {
+    // The exact symptom: a form body that did not parse produced
+    // `unsupported_grant_type`, because grant_type was undefined.
+    const res = await request(app)
+      .post("/mcp/oauth/token")
+      .type("form")
+      .send({
+        grant_type: "authorization_code",
+        code: "not-a-real-code",
+        code_verifier: "a".repeat(43),
+        redirect_uri: REDIRECT,
+        client_id: "cb_mcp_nope",
+      });
+    expect(res.status).toBe(400);
+    // Reaching invalid_grant means the body WAS read. unsupported_grant_type
+    // would mean it wasn't.
+    expect(res.body.error).toBe("invalid_grant");
+    expect(res.body.error).not.toBe("unsupported_grant_type");
+  });
+
+  it("🔴 a full authorization code exchange works form-encoded, end to end", async () => {
+    const verifier = randomBytes(32).toString("base64url");
+    const challenge = createHash("sha256").update(verifier, "ascii").digest("base64url");
+    const reg = await request(app)
+      .post("/mcp/oauth/register")
+      .send({ client_name: "Form Client", redirect_uris: [REDIRECT] });
+    const approve = await request(app)
+      .post("/mcp/oauth/authorize/approve")
+      .set("Cookie", ownerCookie)
+      .send({
+        client_id: reg.body.client_id,
+        redirect_uri: REDIRECT,
+        code_challenge: challenge,
+        scope: "chairback:readiness:read",
+      });
+    const code = new URL(approve.body.redirect_to).searchParams.get("code")!;
+
+    // The step that was broken in production.
+    const tok = await request(app).post("/mcp/oauth/token").type("form").send({
+      grant_type: "authorization_code",
+      code,
+      code_verifier: verifier,
+      redirect_uri: REDIRECT,
+      client_id: reg.body.client_id,
+    });
+    expect(tok.status).toBe(200);
+    expect(tok.body.access_token).toBeTruthy();
+    expect(tok.body.token_type).toBe("Bearer");
+
+    // And the token it returned actually works, so this proves the whole chain
+    // a real client walks - not merely that a 200 came back.
+    const call = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${tok.body.access_token}`)
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+    expect(call.status).toBe(200);
+    expect(Array.isArray(call.body.result.tools)).toBe(true);
+  });
+
+  it("a refresh exchange works form-encoded too", async () => {
+    // The other half a live client uses, every fifteen minutes. Broken here
+    // would mean connections silently dying an hour after they worked.
+    const verifier = randomBytes(32).toString("base64url");
+    const challenge = createHash("sha256").update(verifier, "ascii").digest("base64url");
+    const reg = await request(app)
+      .post("/mcp/oauth/register")
+      .send({ client_name: "Form Client Refresh", redirect_uris: [REDIRECT] });
+    const approve = await request(app)
+      .post("/mcp/oauth/authorize/approve")
+      .set("Cookie", ownerCookie)
+      .send({
+        client_id: reg.body.client_id,
+        redirect_uri: REDIRECT,
+        code_challenge: challenge,
+        scope: "chairback:readiness:read",
+      });
+    const code = new URL(approve.body.redirect_to).searchParams.get("code")!;
+    const first = await request(app).post("/mcp/oauth/token").type("form").send({
+      grant_type: "authorization_code",
+      code,
+      code_verifier: verifier,
+      redirect_uri: REDIRECT,
+      client_id: reg.body.client_id,
+    });
+
+    const refreshed = await request(app).post("/mcp/oauth/token").type("form").send({
+      grant_type: "refresh_token",
+      refresh_token: first.body.refresh_token,
+      client_id: reg.body.client_id,
+    });
+    expect(refreshed.status).toBe(200);
+    expect(refreshed.body.access_token).toBeTruthy();
+    // Rotation still applies - the form encoding changes the transport, not the
+    // security properties.
+    expect(refreshed.body.refresh_token).not.toBe(first.body.refresh_token);
+  });
+
+  it("revocation works form-encoded, as RFC 7009 requires", async () => {
+    const verifier = randomBytes(32).toString("base64url");
+    const challenge = createHash("sha256").update(verifier, "ascii").digest("base64url");
+    const reg = await request(app)
+      .post("/mcp/oauth/register")
+      .send({ client_name: "Form Client Revoke", redirect_uris: [REDIRECT] });
+    const approve = await request(app)
+      .post("/mcp/oauth/authorize/approve")
+      .set("Cookie", ownerCookie)
+      .send({
+        client_id: reg.body.client_id,
+        redirect_uri: REDIRECT,
+        code_challenge: challenge,
+        scope: "chairback:readiness:read",
+      });
+    const code = new URL(approve.body.redirect_to).searchParams.get("code")!;
+    const tok = await request(app).post("/mcp/oauth/token").type("form").send({
+      grant_type: "authorization_code",
+      code,
+      code_verifier: verifier,
+      redirect_uri: REDIRECT,
+      client_id: reg.body.client_id,
+    });
+
+    const revoked = await request(app).post("/mcp/oauth/revoke").type("form").send({
+      token: tok.body.access_token,
+      client_id: reg.body.client_id,
+    });
+    // RFC 7009: always 200, even for an unknown token.
+    expect(revoked.status).toBe(200);
+
+    const after = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${tok.body.access_token}`)
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+    expect(after.status).toBe(401);
+  });
+
+  it("JSON still works, so nothing that already worked was traded away", async () => {
+    const res = await request(app)
+      .post("/mcp/oauth/token")
+      .send({
+        grant_type: "authorization_code",
+        code: "not-a-real-code",
+        code_verifier: "a".repeat(43),
+        redirect_uri: REDIRECT,
+        client_id: "cb_mcp_nope",
+      });
+    expect(res.body.error).toBe("invalid_grant");
+  });
+
+  it("an unparseable body is still refused rather than treated as empty", async () => {
+    const res = await request(app)
+      .post("/mcp/oauth/token")
+      .type("form")
+      .send("grant_type=something_else");
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("unsupported_grant_type");
+  });
+});

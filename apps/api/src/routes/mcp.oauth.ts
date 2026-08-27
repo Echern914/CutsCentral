@@ -1,4 +1,4 @@
-import { Router } from "express";
+import express, { Router } from "express";
 import { z } from "zod";
 import { apiEnv } from "@chairback/config";
 import { prisma, type McpProviderHint } from "@chairback/db";
@@ -542,7 +542,40 @@ const refreshGrantSchema = z.object({
  * Token endpoint. Two grants, one shared rule: everything is compared against
  * what was frozen at consent, never against what the client asserts now.
  */
-mcpOAuthRouter.post("/token", oauthLimiter, async (req, res) => {
+
+/**
+ * Form bodies, for the two endpoints the OAuth RFCs say MUST accept them.
+ *
+ * 🔴 PER-ROUTE, NEVER GLOBAL, AND THAT IS A SECURITY DECISION.
+ *
+ * RFC 6749 §4.1.3 requires the token endpoint to accept
+ * `application/x-www-form-urlencoded`, and RFC 7009 requires the same of
+ * revocation. Every standards-compliant client posts forms - Claude does - and
+ * without this the body arrived EMPTY, `grant_type` was undefined, and the
+ * exchange answered `unsupported_grant_type`. Consent had already succeeded (a
+ * JSON post from our own web app), so each attempt left another "connected"
+ * assistant that had never made a single call.
+ *
+ * 🔴 BUT `/authorize/approve` MUST STAY JSON-ONLY. Its JSON-only parsing is the
+ * FIRST of the two defences against CSRF on consent: a cross-origin HTML form
+ * can send urlencoded without triggering a preflight, whereas JSON cannot. An
+ * attacker's page could otherwise make a signed-in barber's browser silently
+ * mint an authorization code for the ATTACKER's client. SameSite=Lax is the
+ * second defence, and neither is allowed to be the only one.
+ *
+ * Mounting this globally broke exactly that, and the existing test
+ * "a cross-site form POST cannot drive consent" caught it immediately.
+ *
+ * These two routes are safe to widen because NEITHER USES A COOKIE: the token
+ * endpoint authenticates with an authorization code plus its PKCE verifier, or
+ * a refresh token; revocation authenticates with the token being revoked. A
+ * cross-site form can carry none of those, so there is nothing for CSRF to ride.
+ *
+ * `extended: false` keeps values as plain strings - no nested objects.
+ */
+const oauthForm = express.urlencoded({ extended: false, limit: "100kb" });
+
+mcpOAuthRouter.post("/token", oauthLimiter, oauthForm, async (req, res) => {
   // No caching, ever - these responses contain bearer tokens.
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Pragma", "no-cache");
@@ -762,7 +795,7 @@ async function handleRefreshGrant(
  * Revoking ANY token kills the whole connection. A caller asking us to forget
  * one credential has, by definition, decided the client should stop working.
  */
-mcpOAuthRouter.post("/revoke", oauthLimiter, async (req, res) => {
+mcpOAuthRouter.post("/revoke", oauthLimiter, oauthForm, async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   const raw = typeof req.body?.token === "string" ? req.body.token : "";
   if (!raw || raw.length > 512) {
