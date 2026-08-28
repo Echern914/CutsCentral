@@ -205,9 +205,16 @@ export async function buildPassForClient(clientId: string): Promise<Buffer | nul
  * EMPTY APNs push on the pass-type topic, authenticated with the pass
  * certificate over HTTP/2. Called after punch changes (earn/redeem/bonus).
  * Best-effort like every send path: never throws, prunes 410-Unregistered.
+ *
+ * Returns whether the poke can be considered DELIVERED: true when every
+ * registered device took the push (or there was trivially nothing to do -
+ * wallet disabled, no registrations, DRY_RUN), false on any transport error,
+ * rejection or timeout. Retrying a false is always safe - the poke is an
+ * empty idempotent "re-fetch your pass" signal. The rotation worker uses
+ * this to track pass-refresh state without ever re-rotating a token.
  */
-export async function pokeWalletPass(clientId: string): Promise<void> {
-  if (!walletEnabled()) return;
+export async function pokeWalletPass(clientId: string): Promise<boolean> {
+  if (!walletEnabled()) return true;
   let regs: Array<{ id: string; pushToken: string }>;
   try {
     regs = await runAsOwner((tx) =>
@@ -218,16 +225,17 @@ export async function pokeWalletPass(clientId: string): Promise<void> {
     );
   } catch (err) {
     logger.error({ err, clientId }, "wallet poke registration lookup failed");
-    return;
+    return false;
   }
-  if (regs.length === 0) return;
+  if (regs.length === 0) return true;
   if (env.DRY_RUN) {
     logger.info({ clientId, devices: regs.length }, "[dry-run] suppressed wallet pass poke");
-    return;
+    return true;
   }
 
   const { signerCert, signerKey, signerKeyPassphrase } = loadCerts();
-  await new Promise<void>((resolve) => {
+  return new Promise<boolean>((resolve) => {
+    let ok = true;
     const session = http2Connect("https://api.push.apple.com", {
       cert: signerCert,
       key: signerKey,
@@ -237,12 +245,12 @@ export async function pokeWalletPass(clientId: string): Promise<void> {
     // must never hold up the punch flow that triggered us.
     const timer = setTimeout(() => {
       session.destroy();
-      resolve();
+      resolve(false); // ambiguous - retry is safe and honest
     }, 5000);
     session.on("error", (err) => {
       logger.warn({ err, clientId }, "wallet poke APNs session error");
       clearTimeout(timer);
-      resolve();
+      resolve(false);
     });
 
     let pending = regs.length;
@@ -250,7 +258,7 @@ export async function pokeWalletPass(clientId: string): Promise<void> {
       if (--pending === 0) {
         clearTimeout(timer);
         session.close();
-        resolve();
+        resolve(ok);
       }
     };
     for (const reg of regs) {
@@ -272,10 +280,14 @@ export async function pokeWalletPass(clientId: string): Promise<void> {
           ).catch(() => {});
         } else if (status !== 200) {
           logger.warn({ status, clientId }, "wallet pass poke rejected");
+          ok = false;
         }
         done();
       });
-      req.on("error", () => done());
+      req.on("error", () => {
+        ok = false;
+        done();
+      });
       // Pass-update pushes carry an EMPTY payload; the push itself is the signal.
       req.end("{}");
     }

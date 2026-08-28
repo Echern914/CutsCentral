@@ -5,11 +5,18 @@
  * The Nudge ledger stores what we sent for history, caps and attribution -
  * but nearly every customer SMS carries a bearer URL (/r/<magicToken> is a
  * permanent rewards credential, /book/manage/<token> cancels and reschedules
- * a booking, waitlist and walk-in links act without login). Storing those
- * bodies verbatim made the ledger a credential corpus: whoever can read the
- * table - a backup, a dump, a future admin surface - holds every customer's
- * links. The provider gets the real body in memory; history gets the words
- * with the links struck out.
+ * a booking, /waitlist/offer/<token> claims a slot, /line#t=<token> tracks a
+ * walk-in). Storing those bodies verbatim made the ledger a credential
+ * corpus: whoever can read the table - a backup, a dump, a future admin
+ * surface - holds every customer's links. The provider gets the real body in
+ * memory; history gets the words with the links struck out.
+ *
+ * 🔴 SCHEME-AGNOSTIC ON PURPOSE. An earlier cut matched only http/https/www,
+ * which would have let a deep link (chairback://r/<token> - the app's own
+ * scheme, registered and already used by the mobile handoff) sail into
+ * storage the day someone templated one. The matcher below takes ANY
+ * `scheme://…` plus bare `www.` hosts, so a new scheme is covered before it
+ * is invented rather than after it leaks.
  *
  * Deliberately NO exceptions, including the barber-typed check-in nudge that
  * the manage page renders back to the customer: a rule with a carve-out is a
@@ -22,7 +29,13 @@
  * once, which no scrubber can promise.
  */
 
-const URL_SHAPE = /(?:https?:\/\/|www\.)\S+/gi;
+/**
+ * Any absolute URI (`scheme://rest`, per RFC 3986 scheme syntax: a letter
+ * followed by letters/digits/`+`/`-`/`.`) or a bare `www.` host. Both run to
+ * the next whitespace, which is where an SMS URL always ends. Fragments are
+ * included - `/line#t=<token>` carries its credential there.
+ */
+const URL_SHAPE = /(?:[a-z][a-z0-9+.-]*:\/\/|www\.)\S+/gi;
 
 export function redactForAudit(body: string): string;
 export function redactForAudit(body: string | null): string | null;

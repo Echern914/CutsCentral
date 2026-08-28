@@ -2,6 +2,7 @@ import webpush from "web-push";
 import { apiEnv } from "@chairback/config";
 import { forShop, runAsOwner, type Prisma } from "@chairback/db";
 import { logger } from "../logger.js";
+import { redactForAudit } from "./auditBody.js";
 
 const env = apiEnv();
 
@@ -335,7 +336,7 @@ export async function sendPushToClient(params: {
           channel: "WEB_PUSH",
           status: "SENT",
           kind: params.kind ?? "loyalty",
-          body: params.payload.body,
+          body: redactForAudit(params.payload.body),
           sentAt: new Date(),
         },
       })

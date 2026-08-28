@@ -4,7 +4,11 @@ import { apiEnv, BILLING } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { requireUser } from "../middleware/auth.js";
 import { requireAdmin } from "../middleware/admin.js";
-import { rotateAllMagicTokens } from "../services/rewardsRotation.js";
+import {
+  readLatestRotationRun,
+  rotateAllEnabled,
+  startOrGetRotationRun,
+} from "../services/rewardsRotation.js";
 import {
   ACTIVE_STATUSES,
   billingEnabled,
@@ -283,19 +287,50 @@ adminPortalRouter.post("/shops/:shopId/comp", async (req, res) => {
  * including copies no cleanup script can reach. Wallet passes are poked so
  * their QRs re-bake; every dead link lands on the recovery door.
  *
- * Guarded by an exact confirm phrase because there is no undo - every
- * customer's saved link stops working the moment this returns.
+ * 🔴 THIS ENDPOINT DOES NOT DO THE WORK. It creates (or resumes) ONE durable
+ * PlatformOperation run and answers 202 with its id; the lease-guarded
+ * `rewards-rotation` scheduler job traverses the customer table in bounded,
+ * atomic, resumable batches. An HTTP request must never hold open across an
+ * unbounded table - a timeout or deploy mid-loop would strand a half-rotated
+ * corpus with no resume point.
+ *
+ * THREE independent gates, all required:
+ *   1. isAdmin (the router's own middleware),
+ *   2. REWARDS_ROTATE_ALL_ENABLED=true - default FALSE, fail-closed;
+ *      enabling it starts NOTHING on its own,
+ *   3. the exact confirm phrase, because there is no undo.
+ *
+ * Concurrency-safe by construction: exclusivity is a partial unique INDEX on
+ * the run table, so two simultaneous valid confirmations produce exactly one
+ * run - the loser reads the winner's and never starts a second traversal.
  */
 const rotateAllSchema = z
   .object({ confirm: z.literal("ROTATE ALL REWARDS LINKS") })
   .strict();
 
 adminPortalRouter.post("/rotate-all-rewards-links", async (req, res) => {
+  if (!rotateAllEnabled()) {
+    res.status(403).json({ error: "rotation_disabled" });
+    return;
+  }
   const parsed = rotateAllSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "confirm_phrase_required" });
     return;
   }
-  const result = await rotateAllMagicTokens();
-  res.json({ ok: true, ...result });
+  const run = await startOrGetRotationRun({ adminUserId: req.userId! });
+  // 202 either way: the caller's intent ("retire the corpus") is now durable,
+  // whether this request created the run or joined the one already going.
+  res.status(202).json({ ok: true, runId: run.runId, status: run.status, created: run.created });
+});
+
+/** Run state for the admin: counts and status ONLY - the record holds no
+ * token, URL, phone, name or body to leak. */
+adminPortalRouter.get("/rotate-all-rewards-links", async (_req, res) => {
+  const run = await readLatestRotationRun();
+  if (!run) {
+    res.json({ run: null, enabled: rotateAllEnabled() });
+    return;
+  }
+  res.json({ run, enabled: rotateAllEnabled() });
 });

@@ -29,6 +29,7 @@ import { expireDueOffers } from "./engines/waitlistOffer.js";
 import { expireDeadWaitlistEntries } from "./engines/waitlistExpiry.js";
 import { sweepExpiredRateCounters } from "./middleware/pgRateStore.js";
 import { runDemoReset } from "./engines/demoReset.js";
+import { processRotationRun } from "./services/rewardsRotation.js";
 
 const env = apiEnv();
 
@@ -350,6 +351,28 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
       if (deleted > 0) logger.debug({ deleted }, "rate-limit counters swept");
     },
     failMsg: "rate-limit sweep failed",
+  },
+  // The rewards-link corpus retirement worker. Every 2 minutes it looks for an
+  // active PlatformOperation run and moves it forward by bounded, atomic,
+  // resumable batches; with no active run (the permanent steady state) it is
+  // a single indexed read and returns. An admin POST is what creates a run -
+  // this job never starts one, so the cadence costs nothing until the day
+  // someone deliberately pulls the trigger. TTL comfortably exceeds the
+  // worker's own 60s budget so the lease cannot expire mid-batch.
+  {
+    cronExpr: "*/2 * * * *",
+    name: "rewards-rotation",
+    ttlMs: 5 * MINUTE,
+    run: async () => {
+      const r = await processRotationRun();
+      if (r && (r.rotated > 0 || r.passHandled > 0)) {
+        logger.info(
+          { runId: r.runId, rotated: r.rotated, passHandled: r.passHandled, done: r.done },
+          "rewards rotation progressed",
+        );
+      }
+    },
+    failMsg: "rewards rotation worker failed",
   },
   // Live-demo shop: nightly restore to canonical state at 04:00 (quietest
   // hour). Clears viewer-submitted junk and re-rolls the seeded dates so the
