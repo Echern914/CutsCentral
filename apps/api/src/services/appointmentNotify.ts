@@ -1,6 +1,7 @@
 import { apiEnv } from "@chairback/config";
 import { forShop, prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
+import { redactForAudit } from "../messaging/auditBody.js";
 import {
   buildAppointmentConfirmationBody,
   buildAppointmentConfirmationEmail,
@@ -140,7 +141,7 @@ async function sendAppointmentSms(
         channel: "SMS",
         status: "PENDING",
         kind: "appointment",
-        body,
+        body: redactForAudit(body),
       },
     });
     nudgeId = nudge.id;

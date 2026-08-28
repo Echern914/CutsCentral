@@ -4,6 +4,7 @@ import { apiEnv, BILLING } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { requireUser } from "../middleware/auth.js";
 import { requireAdmin } from "../middleware/admin.js";
+import { rotateAllMagicTokens } from "../services/rewardsRotation.js";
 import {
   ACTIVE_STATUSES,
   billingEnabled,
@@ -271,4 +272,30 @@ adminPortalRouter.post("/shops/:shopId/comp", async (req, res) => {
   } catch {
     res.status(404).json({ error: "not_found" });
   }
+});
+
+/**
+ * THE CORPUS RETIREMENT: rotate every client's magicToken, platform-wide.
+ *
+ * Run ONCE, deliberately, after the phone-recovery doors are live (#340,
+ * #342): it kills every /r/ link ever texted, stored, forwarded or
+ * screenshotted - the entire historical Nudge-body corpus in one move,
+ * including copies no cleanup script can reach. Wallet passes are poked so
+ * their QRs re-bake; every dead link lands on the recovery door.
+ *
+ * Guarded by an exact confirm phrase because there is no undo - every
+ * customer's saved link stops working the moment this returns.
+ */
+const rotateAllSchema = z
+  .object({ confirm: z.literal("ROTATE ALL REWARDS LINKS") })
+  .strict();
+
+adminPortalRouter.post("/rotate-all-rewards-links", async (req, res) => {
+  const parsed = rotateAllSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "confirm_phrase_required" });
+    return;
+  }
+  const result = await rotateAllMagicTokens();
+  res.json({ ok: true, ...result });
 });

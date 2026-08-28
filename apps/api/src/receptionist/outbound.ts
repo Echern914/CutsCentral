@@ -1,5 +1,6 @@
 import { forShop, prisma } from "@chairback/db";
 import { logger } from "../logger.js";
+import { redactForAudit } from "../messaging/auditBody.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 
 /**
@@ -47,7 +48,7 @@ export async function sendReceptionistSms(params: {
         channel: "SMS",
         status: "PENDING",
         kind: params.kind,
-        body: params.body,
+        body: redactForAudit(params.body),
       },
     });
     nudgeId = nudge.id;

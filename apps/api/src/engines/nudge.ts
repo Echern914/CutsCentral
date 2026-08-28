@@ -2,6 +2,7 @@ import { NUDGE, apiEnv } from "@chairback/config";
 import { forShop, prisma, runWithShop, type Shop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { buildNudgeBody, buildNudgePush } from "../messaging/templates.js";
+import { redactForAudit } from "../messaging/auditBody.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 import { sendPushToClient } from "../messaging/push.js";
 import { isNudgeEligible, isNudgeDueByCadence } from "./eligibility.js";
@@ -305,7 +306,7 @@ async function doSweepShop(
     // double-send. R4 counts PENDING within 21d, so a crashed send won't be
     // retried same-window; FAILED is retryable next sweep.
     const nudge = await db.nudge.create({
-      data: { clientId: client.id, channel: "SMS", status: "PENDING", body },
+      data: { clientId: client.id, channel: "SMS", status: "PENDING", body: redactForAudit(body) },
     });
 
     if (dryRun) {

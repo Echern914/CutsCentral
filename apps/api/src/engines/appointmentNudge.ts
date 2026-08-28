@@ -1,6 +1,7 @@
 import { apiEnv } from "@chairback/config";
 import { Prisma, forShop, prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
+import { redactForAudit } from "../messaging/auditBody.js";
 import { sendPushToClient } from "../messaging/push.js";
 
 /**
@@ -90,7 +91,7 @@ export async function sendAppointmentNudge(params: {
         channel: "WEB_PUSH",
         kind: APPOINTMENT_NUDGE_KIND,
         status: "PENDING",
-        body: params.body,
+        body: redactForAudit(params.body),
       },
       select: { id: true },
     });

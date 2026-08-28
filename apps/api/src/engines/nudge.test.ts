@@ -98,7 +98,12 @@ describe("sweepShop", () => {
     const nudge = await prisma.nudge.findFirst({ where: { shopId: shop.id } });
     expect(nudge?.status).toBe("SKIPPED");
     expect(nudge?.body).toContain("Nudge Shop");
-    expect(nudge?.body).toContain("/r/");
+    // 🔴 The STORED body is credential-free: the rewards link the customer
+    // receives is struck to [link] at rest (messaging/auditBody.ts) - the
+    // Nudge table must never be a corpus of live bearer URLs again.
+    expect(nudge?.body).toContain("[link]");
+    expect(nudge?.body).not.toContain("/r/");
+    expect(nudge?.body).not.toMatch(/https?:\/\//);
   });
 
   it("real run writes PENDING->SENT and sends via the provider", async () => {
@@ -110,6 +115,9 @@ describe("sweepShop", () => {
     });
     expect(sentNudges.length).toBe(summary.sent);
     expect(sentNudges[0]?.messageSid).toMatch(/^SM/);
+    // The CUSTOMER still gets the real link - only the stored copy is struck.
+    expect(sent[0]!.body).toContain("/r/");
+    expect(sentNudges[0]?.body).not.toContain("/r/");
     // No twilioNumber on this shop -> from is undefined (shared platform line).
     expect(sent[0]!.from).toBeUndefined();
   });

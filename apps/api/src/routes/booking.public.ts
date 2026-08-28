@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { redactForAudit } from "../messaging/auditBody.js";
 import { apiEnv, randomToken, zonedWallTimeToUtc } from "@chairback/config";
 import { prisma, Prisma } from "@chairback/db";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
@@ -2138,7 +2139,7 @@ bookingPublicRouter.post(
         channel: "WEB_PUSH",
         kind: "checkin_nudge_reply",
         status: "SENT",
-        body,
+        body: redactForAudit(body),
         sentAt: new Date(),
       },
     });

@@ -1,6 +1,7 @@
 import { WINBACK, apiEnv } from "@chairback/config";
 import { forShop, prisma, runWithShop, type Shop } from "@chairback/db";
 import { logger } from "../logger.js";
+import { redactForAudit } from "../messaging/auditBody.js";
 import { buildWinbackBody, buildWinbackPush } from "../messaging/templates.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 import { sendPushToClient } from "../messaging/push.js";
@@ -304,7 +305,7 @@ async function doSweepShopWinback(
     // crash can't double-send. W4 counts PENDING within the window, so a crashed
     // send won't be retried same-window; FAILED is retryable next sweep.
     const nudge = await db.nudge.create({
-      data: { clientId: client.id, channel: "SMS", status: "PENDING", kind: "winback", body },
+      data: { clientId: client.id, channel: "SMS", status: "PENDING", kind: "winback", body: redactForAudit(body) },
     });
 
     if (dryRun) {
