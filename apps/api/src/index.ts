@@ -4,6 +4,13 @@ import { prisma } from "@chairback/db";
 import { createApp } from "./app.js";
 import { logger } from "./logger.js";
 import { startScheduler } from "./scheduler.js";
+import { logIntegrationStatusAtBoot } from "./ops/bootReport.js";
+import { billingEnabled, connectEnabled } from "./billing/stripe.js";
+import { emailEnabled } from "./messaging/email.js";
+import { pushEnabled } from "./messaging/push.js";
+import { walletEnabled } from "./wallet/pass.js";
+import { squareEnabled } from "./square/client.js";
+import { receptionistConfigured } from "./receptionist/config.js";
 import { captureError, initSentry } from "./sentry.js";
 
 const env = apiEnv();
@@ -23,6 +30,19 @@ const server = app.listen(PORT, "0.0.0.0", () => {
 });
 
 startScheduler();
+
+// Name any dark integration in the deploy log. See ops/bootReport.ts: the
+// admin preflight was correct for months while four integrations were off,
+// because nobody had reason to open it.
+logIntegrationStatusAtBoot({
+  billing: billingEnabled(),
+  connect: connectEnabled(),
+  email: emailEnabled(),
+  push: pushEnabled(),
+  wallet: walletEnabled(),
+  square: squareEnabled(),
+  receptionist: receptionistConfigured(),
+});
 
 /**
  * Boot-time scalability guard. The API is one long-lived process and every

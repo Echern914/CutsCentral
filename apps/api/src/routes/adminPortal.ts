@@ -16,6 +16,7 @@ import { squareEnabled } from "../square/client.js";
 import { walletEnabled } from "../wallet/pass.js";
 import { receptionistConfigured } from "../receptionist/config.js";
 import { buildPreflight } from "../ops/preflight.js";
+import { fetchWebConfig } from "../ops/webConfig.js";
 
 /**
  * Operator portal API (the founder's own admin surface). Session-gated to
@@ -227,7 +228,11 @@ adminPortalRouter.get("/analytics", async (req, res) => {
  * gate that actually runs. Returns booleans, counts and non-secret scalars
  * only - never a key or secret value.
  */
-adminPortalRouter.get("/preflight", (_req, res) => {
+adminPortalRouter.get("/preflight", async (_req, res) => {
+  // The web half is fetched, not read: it lives in another deployment's
+  // environment. Null when unreachable, which the report states plainly rather
+  // than quietly omitting.
+  const web = await fetchWebConfig();
   res.json(
     buildPreflight(
       apiEnv(),
@@ -241,6 +246,7 @@ adminPortalRouter.get("/preflight", (_req, res) => {
         receptionist: receptionistConfigured(),
       },
       Boolean(process.env.WEB_PROXY_SECRET),
+      web,
     ),
   );
 });

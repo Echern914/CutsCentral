@@ -48,6 +48,23 @@ export interface PreflightReport {
  * The capability booleans, injected rather than imported, so this stays pure.
  * Each maps 1:1 to the subsystem helper of the same name.
  */
+/**
+ * What the WEB deployment reports about itself, or null when we could not ask.
+ *
+ * 🔴 This is injected rather than read, because it CANNOT be read here. These
+ * settings live in Vercel's environment and the NEXT_PUBLIC_* ones are inlined
+ * at build time; this function runs in the API process on Railway. That gap is
+ * exactly why analytics, web-push opt-in and the app banner sat dark in
+ * production for months while this very report came back healthy - it could
+ * only ever see half the deployment.
+ */
+export interface WebConfigReport {
+  posthog: boolean;
+  metaPixel: boolean;
+  pushPublicKey: boolean;
+  androidAppLinks: boolean;
+}
+
 export interface PreflightCapabilities {
   billing: boolean;
   connect: boolean;
@@ -71,6 +88,15 @@ export function buildPreflight(
   caps: PreflightCapabilities,
   /** WEB_PROXY_SECRET lives on both apps and is read via process.env, not ApiEnv. */
   webProxySecret: boolean,
+  /**
+   * The web deployment's self-report.
+   *
+   * Three states, deliberately: the object when we asked and got an answer,
+   * `null` when we asked and could NOT (reported as a warning - an unreachable
+   * half is not a healthy one), and `undefined` when this caller does not cover
+   * the web at all, which omits the section rather than inventing a gap.
+   */
+  web?: WebConfigReport | null,
 ): PreflightReport {
   const campaigns = countMessagingServices(env.TWILIO_MESSAGING_SERVICE_SID);
   const numberCapacity = campaigns * env.TWILIO_CAMPAIGN_NUMBER_CAP;
@@ -286,6 +312,69 @@ export function buildPreflight(
       detail: env.SENTRY_DSN ? "Sentry DSN set" : "No Sentry DSN - errors only reach the logs",
     },
   ];
+
+  // ---- The WEB half of the deployment -------------------------------------
+  if (web === undefined) {
+    // Caller did not probe the web app. Say nothing about it; a section
+    // invented from no evidence is exactly the kind of false comfort this
+    // report exists to remove.
+  } else if (web === null) {
+    checks.push({
+      key: "web.reachable",
+      label: "Web app configuration",
+      ok: false,
+      severity: "warn",
+      detail: "Could not read the web deployment's config",
+      impact:
+        "Analytics, push opt-in and App Links cannot be verified from here - they may be silently off",
+      fix: "Check APP_BASE_URL and that WEB_PROXY_SECRET matches on both apps",
+    });
+  } else {
+    checks.push(
+      {
+        key: "web.analytics",
+        label: "Product analytics",
+        ok: web.posthog || web.metaPixel,
+        severity: "warn",
+        detail: [
+          web.posthog ? "PostHog on" : "PostHog OFF",
+          web.metaPixel ? "Meta Pixel on" : "Meta Pixel OFF",
+        ].join(", "),
+        // The failure is silent by design - track() no-ops when a sink is
+        // absent - so an unset key does not look like a problem, it looks
+        // like nobody converted.
+        impact: "Conversion events are dropped: every funnel number reads zero by omission",
+        fix: "Set NEXT_PUBLIC_POSTHOG_KEY / NEXT_PUBLIC_META_PIXEL_ID in Vercel, then REDEPLOY (NEXT_PUBLIC_* are inlined at build time)",
+      },
+      {
+        key: "web.push_public_key",
+        label: "Web push opt-in (browser half)",
+        // Both halves must exist: the API signs with the private key, the web
+        // page cannot even show the opt-in without the public one.
+        ok: web.pushPublicKey && caps.push,
+        severity: "info",
+        detail: web.pushPublicKey
+          ? caps.push
+            ? "Public and private keys both set"
+            : "Public key set on the web, but the API has no VAPID pair"
+          : "No public key on the web - the opt-in never appears",
+        impact: "Customers are never offered push and everything falls back to SMS",
+        fix: "Set PUSH_VAPID_PUBLIC_KEY in Vercel (same pair as the API), then redeploy",
+      },
+      {
+        key: "web.android_app_links",
+        label: "Android App Links",
+        ok: web.androidAppLinks,
+        // INFO, not a warning: there is no published Android build, and
+        // serving a wrong fingerprint is worse than serving none because
+        // Android caches the failed verification.
+        severity: "info",
+        detail: web.androidAppLinks
+          ? "Signing fingerprint published in assetlinks.json"
+          : "No fingerprint - correct until an Android build exists",
+      },
+    );
+  }
 
   return {
     dryRun: env.DRY_RUN,
