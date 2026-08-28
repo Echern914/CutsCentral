@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
@@ -308,10 +309,23 @@ describe("anti-enumeration before verification", () => {
     await request(app)
       .patch("/api/shops/me")
       .set("Cookie", other.cookie)
-      .send({ walkInEnabled: true });
+      .send({ bookingMode: "native", walkInEnabled: true });
+    // A real shop, because minting is gated on readiness: a chair and a
+    // service are what make a kiosk able to take anyone.
+    const otherChair = (
+      await request(app)
+        .post("/api/booking/staff")
+        .set("Cookie", other.cookie)
+        .send({ name: "Bo" })
+    ).body.id;
+    await request(app)
+      .post("/api/booking/services")
+      .set("Cookie", other.cookie)
+      .send({ name: "Trim", durationMin: 20, price: 25, staffIds: [otherChair] });
     const mint = await request(app)
       .post("/api/shops/me/walk-in-kiosk-token")
       .set("Cookie", other.cookie);
+    expect(mint.status).toBe(200);
     const otherToken = /#k=([A-Za-z0-9_-]+)/.exec(mint.body.url)![1]!;
 
     const phone = freshPhone();
@@ -488,5 +502,102 @@ describe("tracking over HTTP", () => {
       expect(r.status).toBe(404);
       expect(r.body).toEqual({ error: "not_found" });
     }
+  });
+});
+
+/**
+ * The kiosk URL is only useful if the shop can actually serve someone. The
+ * mint asks the readiness engine rather than counting rows itself, so this
+ * gate and the launch checklist can never disagree about what "set up" means.
+ */
+describe("minting the kiosk URL is gated on readiness", () => {
+  const mint = () =>
+    request(app).post("/api/shops/me/walk-in-kiosk-token").set("Cookie", ownerCookie);
+
+  afterEach(async () => {
+    // Put the shop back, INCLUDING the credential: a rotate inside these tests
+    // would otherwise invalidate the `kioskToken` every other suite here uses.
+    await prisma.service.updateMany({ where: { shopId }, data: { active: true } });
+    await prisma.staff.updateMany({ where: { shopId }, data: { active: true } });
+    await prisma.shop.update({
+      where: { id: shopId },
+      data: {
+        walkInKioskTokenHash: createHash("sha256").update(kioskToken, "utf8").digest("hex"),
+      },
+    });
+  });
+
+  it("🔴 a FIRST mint is refused when nothing is bookable, and names what to add", async () => {
+    await prisma.shop.update({ where: { id: shopId }, data: { walkInKioskTokenHash: null } });
+    await prisma.service.updateMany({ where: { shopId }, data: { active: false } });
+
+    const res = await mint();
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("shop_not_ready");
+    expect(res.body.blockers.map((b: { id: string }) => b.id)).toEqual([
+      "shop.service.active",
+    ]);
+    // The barber is told the thing to ADD, not the check that failed...
+    expect(res.body.message).toMatch(/at least one active service/i);
+    // ...and handed somewhere to go and do it.
+    expect(res.body.blockers[0].action).toBeTruthy();
+    expect(res.body.blockers[0].featureId).toBeTruthy();
+
+    // And no credential was minted on the way out.
+    const after = await prisma.shop.findUnique({
+      where: { id: shopId },
+      select: { walkInKioskTokenHash: true },
+    });
+    expect(after!.walkInKioskTokenHash).toBeNull();
+  });
+
+  it("names the barber gap too, and both together when both are missing", async () => {
+    await prisma.shop.update({ where: { id: shopId }, data: { walkInKioskTokenHash: null } });
+    await prisma.staff.updateMany({ where: { shopId }, data: { active: false } });
+    const one = await mint();
+    expect(one.status).toBe(409);
+    expect(one.body.blockers.map((b: { id: string }) => b.id)).toEqual(["shop.staff.active"]);
+
+    await prisma.service.updateMany({ where: { shopId }, data: { active: false } });
+    const both = await mint();
+    expect(both.body.blockers.map((b: { id: string }) => b.id).sort()).toEqual([
+      "shop.service.active",
+      "shop.staff.active",
+    ]);
+    expect(both.body.message).toMatch(/service.+and.+barber|barber.+and.+service/i);
+  });
+
+  it("🔴 a ROTATE still succeeds while unready - it is how a leaked URL is revoked", async () => {
+    // The shop already holds a credential (minted in beforeAll). Locking a
+    // manager out of rotating because their catalog is momentarily empty would
+    // mean a leaked kiosk URL could not be killed - the opposite of safe.
+    await prisma.service.updateMany({ where: { shopId }, data: { active: false } });
+    const res = await mint();
+    expect(res.status).toBe(200);
+    expect(res.body.url).toMatch(/#k=/);
+    // Honest about it rather than handing back a URL that looks healthy.
+    expect(res.body.warning).toBe("shop_not_ready");
+    expect(res.body.blockers.map((b: { id: string }) => b.id)).toEqual([
+      "shop.service.active",
+    ]);
+  });
+
+  it("a ready shop mints cleanly, with no warning attached", async () => {
+    const res = await mint();
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeUndefined();
+    expect(res.body.blockers).toBeUndefined();
+  });
+
+  it("does NOT gate on the service-to-barber pairing", async () => {
+    // Both sides exist but nothing is assigned: readiness flags
+    // `shop.offering.pair`, and the kiosk still mints - walkInEstimate falls
+    // back to every active barber for a combination nobody formally offers,
+    // so this shop is degraded, not broken.
+    await prisma.shop.update({ where: { id: shopId }, data: { walkInKioskTokenHash: null } });
+    await prisma.serviceStaff.deleteMany({ where: { shopId } });
+    const res = await mint();
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeUndefined();
   });
 });

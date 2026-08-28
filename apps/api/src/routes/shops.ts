@@ -28,6 +28,8 @@ import { Prisma, prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 import { linkReferralOnShopCreate } from "../services/referral.js";
+import { collectCapabilities, collectReadinessFacts } from "../services/readinessFacts.js";
+import { buildReadiness } from "../engines/readiness.js";
 import { previewNudgeBody } from "../messaging/templates.js";
 import { toE164 } from "../acuity/clientKey.js";
 import { getMessageProvider } from "../messaging/twilio.js";
@@ -426,6 +428,24 @@ shopsRouter.get("/me", requireUser, requireShop, async (req, res) => {
 });
 
 /**
+ * The readiness items a kiosk genuinely cannot open without. Deliberately the
+ * two that make a check-in possible at all - not the whole launch checklist,
+ * which covers a public booking page this surface does not use.
+ */
+const KIOSK_REQUIRED_ITEMS = new Set(["shop.staff.active", "shop.service.active"]);
+
+/** "a service" / "a service and a barber" - a list a person would say aloud. */
+function sentenceList(parts: string[]): string {
+  if (parts.length <= 1) return parts[0] ?? "";
+  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]!}`;
+}
+
+/** What's missing, phrased as the thing to add rather than the check that failed. */
+function needOf(b: { id: string }): string {
+  return b.id === "shop.service.active" ? "at least one active service" : "at least one active barber";
+}
+
+/**
  * Mint (or ROTATE) the shop's kiosk URL credential. Manager-only, and the raw
  * token appears exactly once - in this response - because only its hash is
  * stored. Rotation overwrites the hash, which kills every tablet holding the
@@ -446,6 +466,49 @@ shopsRouter.post(
       res.status(404).json({ error: "not_found" });
       return;
     }
+
+    // Is this shop able to serve a walk-in at all? Asked of the readiness
+    // engine rather than re-counted here, so the kiosk and the launch
+    // checklist can never disagree about what "set up" means.
+    //
+    // Only these two. NOT shop.offering.pair: walkInEstimate deliberately
+    // falls back to every active barber for a combination nobody formally
+    // offers, so an unpaired shop is degraded, not broken - refusing it here
+    // would be stricter than the engine that serves it.
+    const existing = await prisma.shop.findUnique({
+      where: { id: req.shop!.id },
+      select: { walkInKioskTokenHash: true },
+    });
+    const facts = await collectReadinessFacts(req.shop!.id);
+    const blockers = facts
+      ? buildReadiness(facts, collectCapabilities())
+          .items.filter((i) => KIOSK_REQUIRED_ITEMS.has(i.id) && !i.done)
+          .map((i) => ({
+            id: i.id,
+            title: i.title,
+            // Safe by contract: evidence "NEVER contains customer data".
+            evidence: i.evidence,
+            ...(i.cta ? { action: i.cta.label, featureId: i.cta.featureId } : {}),
+          }))
+      : [];
+
+    // 🔴 A ROTATE is still allowed while unready, on purpose. This endpoint is
+    // also the "the tablet walked out the door" lever: rotating is how a leaked
+    // kiosk URL gets revoked, and a shop that has just deactivated its last
+    // service must not be locked out of revoking a live credential. Blocking
+    // the FIRST mint is what stops a barber handing out a dead kiosk; the
+    // kiosk's own "not set up yet" screen covers the shop that breaks later.
+    if (blockers.length > 0 && !existing?.walkInKioskTokenHash) {
+      res.status(409).json({
+        error: "shop_not_ready",
+        message: `Walk-in check-in needs ${sentenceList(
+          blockers.map(needOf),
+        )} before the kiosk can take anyone.`,
+        blockers,
+      });
+      return;
+    }
+
     const token = randomToken(32);
     const hash = createHash("sha256").update(token, "utf8").digest("hex");
     await prisma.shop.update({
@@ -453,7 +516,13 @@ shopsRouter.post(
       data: { walkInKioskTokenHash: hash },
     });
     const base = apiEnv().APP_BASE_URL.replace(/\/$/, "");
-    res.json({ ok: true, url: `${base}/kiosk#k=${token}` });
+    res.json({
+      ok: true,
+      url: `${base}/kiosk#k=${token}`,
+      // A rotate that went through while the shop cannot serve says so, rather
+      // than handing back a URL that looks healthy.
+      ...(blockers.length > 0 ? { warning: "shop_not_ready", blockers } : {}),
+    });
   },
 );
 
