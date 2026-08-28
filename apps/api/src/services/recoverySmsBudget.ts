@@ -3,7 +3,48 @@ import { logger } from "../logger.js";
 import { captureError } from "../sentry.js";
 
 /**
- * The platform circuit breaker on recovery-SMS spend, plus its cost metrics.
+ * GSM-7 basic character set (3GPP TS 23.038) plus the extension characters,
+ * which cost TWO septets each. Anything outside both forces UCS-2 for the
+ * whole message. This is what Twilio actually bills by, which is why the
+ * budget below is denominated in SEGMENTS, not messages.
+ */
+const GSM7_BASIC =
+  "@\u00a3$\u00a5\u00e8\u00e9\u00f9\u00ec\u00f2\u00c7\n\u00d8\u00f8\r\u00c5\u00e5\u0394_\u03a6\u0393\u039b\u03a9\u03a0\u03a8\u03a3\u0398\u039e\u00c6\u00e6\u00df\u00c9 !\"#\u00a4%&'()*+,-./0123456789:;<=>?" +
+  "\u00a1ABCDEFGHIJKLMNOPQRSTUVWXYZ\u00c4\u00d6\u00d1\u00dc\u00a7\u00bfabcdefghijklmnopqrstuvwxyz\u00e4\u00f6\u00f1\u00fc\u00e0";
+const GSM7_EXTENSION = "^{}\\[~]|\u20ac";
+
+/**
+ * Billable segments for one SMS body - the unit every reservation below uses.
+ *
+ * GSM-7: 160 septets in one segment, 153 per segment when concatenated
+ * (extension characters count twice). UCS-2 (any character outside GSM-7):
+ * 70 / 67. Mirrors Twilio's own arithmetic; a production-string test pins the
+ * real recovery body to exactly one segment.
+ */
+export function billableSegments(body: string): number {
+  let septets = 0;
+  let ucs2 = false;
+  for (const ch of body) {
+    if (GSM7_BASIC.includes(ch)) septets += 1;
+    else if (GSM7_EXTENSION.includes(ch)) septets += 2;
+    else {
+      ucs2 = true;
+      break;
+    }
+  }
+  if (ucs2) {
+    const units = [...body].reduce((n, ch) => n + (ch.codePointAt(0)! > 0xffff ? 2 : 1), 0);
+    return units <= 70 ? 1 : Math.ceil(units / 67);
+  }
+  return septets <= 160 ? 1 : Math.ceil(septets / 153);
+}
+
+/**
+ * The platform circuit breaker on REWARDS-ACCESS SMS spend, plus its cost
+ * metrics. "Rewards-access" on purpose: this ledger covers the self-service
+ * recovery challenge (both entry points) and the manager rewards-link resend,
+ * and nothing else - waitlist, receptionist, booking-alert and campaign SMS
+ * have their own budgets elsewhere.
  *
  * Everything here rides `rate_limit_counter` - the EXISTING atomic Postgres
  * rate infrastructure (#197) - because in-memory counters fragment across
@@ -67,15 +108,19 @@ const METRIC_RETENTION_MS = 31 * DAY_MS;
 async function takeCapped(
   tx: Prisma.TransactionClient,
   key: string,
+  units: number,
   cap: number,
   expiresAt: Date,
 ): Promise<number | null> {
+  // All-or-nothing: either the WHOLE reservation fits under the cap or none
+  // of it is taken - a request can never partially fit past the line.
+  if (units > cap) return null;
   const rows = await tx.$queryRaw<{ hits: number }[]>(Prisma.sql`
     INSERT INTO "rate_limit_counter" ("key", "hits", "expiresAt", "updatedAt")
-    VALUES (${key}, 1, ${expiresAt.toISOString()}::timestamp, now())
+    VALUES (${key}, ${units}, ${expiresAt.toISOString()}::timestamp, now())
     ON CONFLICT ("key") DO UPDATE
-      SET "hits" = "rate_limit_counter"."hits" + 1, "updatedAt" = now()
-      WHERE "rate_limit_counter"."hits" < ${cap}
+      SET "hits" = "rate_limit_counter"."hits" + ${units}, "updatedAt" = now()
+      WHERE "rate_limit_counter"."hits" + ${units} <= ${cap}
     RETURNING "hits"`);
   return rows[0]?.hits ?? null;
 }
@@ -86,9 +131,18 @@ async function takeCapped(
  * only one of them equals each threshold. Counts and scope only; there is
  * nothing person-shaped to include.
  */
-function alertOnThreshold(scope: "hourly" | "daily", hits: number, cap: number): void {
+function alertOnThreshold(
+  scope: "hourly" | "daily",
+  hits: number,
+  units: number,
+  cap: number,
+): void {
+  // A multi-segment reservation can JUMP a threshold rather than land on it,
+  // so fire for every threshold the jump crossed: prev < t <= hits.
+  const prev = hits - units;
   for (const pct of [50, 80, 100]) {
-    if (hits === Math.ceil((cap * pct) / 100)) {
+    const t = Math.ceil((cap * pct) / 100);
+    if (prev < t && hits >= t) {
       logger.error(
         { scope, hits, cap, pct },
         `recovery SMS budget at ${pct}% of the ${scope} ceiling`,
@@ -110,25 +164,29 @@ function alertOnThreshold(scope: "hourly" | "daily", hits: number, cap: number):
 export async function takeRecoverySmsBudget(
   tx: Prisma.TransactionClient,
   now: Date,
+  /** BILLABLE SEGMENTS the exact final body will cost - never a guess of 1. */
+  segments: number,
 ): Promise<boolean> {
   const hCap = hourlyCap();
   const dCap = dailyCap();
   const h = await takeCapped(
     tx,
     `recSms:budget:h:${hourStamp(now)}`,
+    segments,
     hCap,
     new Date(now.getTime() + 2 * HOUR_MS),
   );
   if (h === null) return false;
-  alertOnThreshold("hourly", h, hCap);
+  alertOnThreshold("hourly", h, segments, hCap);
   const d = await takeCapped(
     tx,
     `recSms:budget:d:${dayStamp(now)}`,
+    segments,
     dCap,
     new Date(now.getTime() + 2 * DAY_MS),
   );
-  if (d === null) return false; // the hourly unit stays consumed - see header
-  alertOnThreshold("daily", d, dCap);
+  if (d === null) return false; // the hourly units stay consumed - see header
+  alertOnThreshold("daily", d, segments, dCap);
   return true;
 }
 
@@ -146,7 +204,11 @@ export type RecoverySmsMetric =
  * Fire-and-forget metric bump (hourly + daily rows). Never throws into a
  * request path; a lost metric is noise, a failed send is not.
  */
-export function bumpRecoverySmsMetric(metric: RecoverySmsMetric, now: Date): void {
+export function bumpRecoverySmsMetric(
+  metric: RecoverySmsMetric,
+  now: Date,
+  units = 1,
+): void {
   void (async () => {
     for (const [suffix, ttl] of [
       [`h:${hourStamp(now)}`, 2 * HOUR_MS],
@@ -154,10 +216,10 @@ export function bumpRecoverySmsMetric(metric: RecoverySmsMetric, now: Date): voi
     ] as const) {
       await prisma.$executeRaw(Prisma.sql`
         INSERT INTO "rate_limit_counter" ("key", "hits", "expiresAt", "updatedAt")
-        VALUES (${`recSms:m:${metric}:${suffix}`}, 1,
+        VALUES (${`recSms:m:${metric}:${suffix}`}, ${units},
                 ${new Date(now.getTime() + ttl).toISOString()}::timestamp, now())
         ON CONFLICT ("key") DO UPDATE
-          SET "hits" = "rate_limit_counter"."hits" + 1, "updatedAt" = now()`);
+          SET "hits" = "rate_limit_counter"."hits" + ${units}, "updatedAt" = now()`);
     }
   })().catch(() => {});
 }
@@ -169,7 +231,9 @@ export interface RecoverySmsCostSummary {
   trailing30Days: Record<string, number>;
 }
 
-/** The admin read: counters only, nothing customer-shaped exists to expose. */
+/** The admin read: rewards-access SMS counters only (self-service recovery +
+ * manager resend), in billable segments where the metric is spend-shaped.
+ * Nothing customer-shaped exists in the store this reads. */
 export async function readRecoverySmsCosts(now: Date): Promise<RecoverySmsCostSummary> {
   const metrics: RecoverySmsMetric[] = [
     "attempt", "accepted", "failed", "sup_phone", "sup_ip", "sup_budget", "segments",

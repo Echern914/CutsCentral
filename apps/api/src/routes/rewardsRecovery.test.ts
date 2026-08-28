@@ -6,7 +6,17 @@ import { createApp } from "../app.js";
 import { __setMessageProviderForTests } from "../messaging/twilio.js";
 import type { SendMessageInput } from "../messaging/provider.js";
 import { logger } from "../logger.js";
-import { phoneDigest, recoverySmsBody, RECOVERY_PURPOSE } from "../services/rewardsRecovery.js";
+import {
+  phoneDigest,
+  recoverySmsBody,
+  RECOVERY_NUDGE_BODY,
+  RECOVERY_PURPOSE,
+} from "../services/rewardsRecovery.js";
+import {
+  billableSegments,
+  hourStamp,
+  readRecoverySmsCosts,
+} from "../services/recoverySmsBudget.js";
 
 /**
  * Rewards recovery from the OUTSIDE: constancy, the SMS cost boundary, and
@@ -103,6 +113,7 @@ afterEach(async () => {
   await prisma.client.deleteMany({ where: { shopId: { in: [shopA, shopB] } } });
   // The platform budget windows would otherwise accumulate across tests.
   await prisma.rateLimitCounter.deleteMany({ where: { key: { startsWith: "recSms:" } } });
+  delete process.env.RECOVERY_SMS_HOURLY_CAP;
 });
 
 afterAll(async () => {
@@ -435,6 +446,155 @@ describe("provider failure discipline", () => {
         },
       });
     }
+  });
+});
+
+describe("segments are the budget unit", () => {
+  it("🔴 both production bodies are exactly ONE billable GSM-7 segment", () => {
+    expect(billableSegments(recoverySmsBody("123456"))).toBe(1);
+    const managerBody = `Your ChairBack rewards link: https://getchairback.com/r/${"x".repeat(43)}/rewards Reply STOP to opt out.`;
+    expect(billableSegments(managerBody)).toBe(1);
+  });
+
+  it("a two-segment message counts as two units, and UCS-2 shrinks the segment", () => {
+    expect(billableSegments("a".repeat(160))).toBe(1);
+    expect(billableSegments("a".repeat(161))).toBe(2); // concatenated GSM-7
+    expect(billableSegments("😀" + "a".repeat(69))).toBe(2); // UCS-2, 71 units
+    expect(billableSegments("{}".repeat(41))).toBe(2); // extension chars cost 2 septets
+  });
+
+  it("🔴 SELF-SERVICE and the MANAGER RESEND draw the same platform segment budget", async () => {
+    process.env.RECOVERY_SMS_HOURLY_CAP = "2";
+    // Unit 1: self-service.
+    const phone = freshPhone();
+    await makeClient(shopA, phone);
+    await post("/api/rewards-recovery/challenge", { phone });
+    await settle(() => sent.some((s) => s.to === phone));
+    // Unit 2: manager resend for a DIFFERENT client.
+    const phone2 = freshPhone();
+    const client2 = await makeClient(shopA, phone2);
+    const resend = await request(app)
+      .post(`/api/dashboard/clients/${client2.id}/rewards-link`)
+      .set("Cookie", ownerCookieA);
+    expect(resend.status).toBe(200);
+    // The budget is now exhausted for BOTH doors.
+    const phone3 = freshPhone();
+    const client3 = await makeClient(shopA, phone3);
+    await post("/api/rewards-recovery/challenge", { phone: phone3 });
+    const managerRefused = await request(app)
+      .post(`/api/dashboard/clients/${client3.id}/rewards-link`)
+      .set("Cookie", ownerCookieA);
+    expect(managerRefused.status).toBe(502); // refused BEFORE dispatch
+    await new Promise((r) => setTimeout(r, 100));
+    expect(sent.filter((s) => s.to === phone3)).toHaveLength(0);
+  });
+
+  it("🔴 a reservation cannot PARTIALLY fit past the cap", async () => {
+    // Cap 3; take 2, then ask for 2 more: refused whole, counter stays at 2.
+    const { takeRecoverySmsBudget } = await import("../services/recoverySmsBudget.js");
+    const { runAsOwner } = await import("@chairback/db");
+    process.env.RECOVERY_SMS_HOURLY_CAP = "3";
+    const now = new Date();
+    expect(await runAsOwner((tx) => takeRecoverySmsBudget(tx, now, 2))).toBe(true);
+    expect(await runAsOwner((tx) => takeRecoverySmsBudget(tx, now, 2))).toBe(false);
+    const row = await prisma.rateLimitCounter.findUnique({
+      where: { key: `recSms:budget:h:${hourStamp(now)}` },
+    });
+    expect(row!.hits).toBe(2); // not 3, not 4 - nothing partial
+  });
+});
+
+describe("write-ahead is genuinely write-ahead", () => {
+  it("🔴 the redacted PENDING Nudge exists BEFORE the HTTP response completes", async () => {
+    const phone = freshPhone();
+    const client = await makeClient(shopA, phone);
+    await post("/api/rewards-recovery/challenge", { phone });
+    // No settle, no polling: the row committed with the challenge itself.
+    const nudge = await prisma.nudge.findFirst({ where: { clientId: client.id } });
+    expect(nudge).not.toBeNull();
+    expect(nudge!.body).toBe(RECOVERY_NUDGE_BODY);
+  });
+
+  it("🔴 a dispatch that never returns leaves PENDING + a consumed allowance", async () => {
+    const phone = freshPhone();
+    const client = await makeClient(shopA, phone);
+    __setMessageProviderForTests({
+      channel: "SMS",
+      // The process "dies mid-dispatch": the promise simply never settles.
+      send: () => new Promise(() => {}),
+    });
+    try {
+      await post("/api/rewards-recovery/challenge", { phone });
+      const nudge = await prisma.nudge.findFirst({ where: { clientId: client.id } });
+      expect(nudge!.status).toBe("PENDING"); // the honest record: we may have paid
+      const row = await prisma.phoneRecoveryCode.findFirst({
+        where: { phoneHash: phoneDigest(phone), purpose: RECOVERY_PURPOSE },
+      });
+      expect(row!.sendCount).toBe(1); // allowance consumed, never refunded
+      const budget = await prisma.rateLimitCounter.findFirst({
+        where: { key: { startsWith: "recSms:budget:h:" } },
+      });
+      expect(budget!.hits).toBeGreaterThanOrEqual(1);
+    } finally {
+      __setMessageProviderForTests({
+        channel: "SMS",
+        send: async (input) => {
+          sent.push(input);
+          return { sid: `TEST${sent.length}`, status: "sent" };
+        },
+      });
+    }
+  });
+});
+
+describe("no credential ever reaches an audit row", () => {
+  it("🔴 recovery and manager Nudges carry no OTP, magic token, phone or outbound body", async () => {
+    const phone = freshPhone();
+    const client = await makeClient(shopA, phone);
+    await post("/api/rewards-recovery/challenge", { phone });
+    await settle(() => sent.some((s) => s.to === phone));
+    const code = codeFor(phone);
+    // Manager resend for a second client (first is inside its cooldown).
+    const phone2 = freshPhone();
+    const client2 = await makeClient(shopA, phone2);
+    await request(app)
+      .post(`/api/dashboard/clients/${client2.id}/rewards-link`)
+      .set("Cookie", ownerCookieA);
+
+    const nudges = await prisma.nudge.findMany({
+      where: { clientId: { in: [client.id, client2.id] } },
+    });
+    expect(nudges.length).toBeGreaterThanOrEqual(2);
+    const flat = JSON.stringify(nudges.map((n) => [n.body, n.failedReason]));
+    expect(flat).not.toContain(code);
+    expect(flat).not.toContain(client.magicToken);
+    expect(flat).not.toContain(client2.magicToken);
+    expect(flat).not.toMatch(/\+1212555/);
+    for (const sms of sent) {
+      expect(flat).not.toContain(sms.body); // no stored outbound body, period
+    }
+  });
+});
+
+describe("admin cost summary", () => {
+  it("counts BOTH doors' rewards-access sends", async () => {
+    const phone = freshPhone();
+    await makeClient(shopA, phone);
+    await post("/api/rewards-recovery/challenge", { phone });
+    await settle(() => sent.some((s) => s.to === phone));
+    const phone2 = freshPhone();
+    const client2 = await makeClient(shopA, phone2);
+    await request(app)
+      .post(`/api/dashboard/clients/${client2.id}/rewards-link`)
+      .set("Cookie", ownerCookieA);
+    // Metrics are fire-and-forget: settle on the counter itself.
+    await settle(async () => {
+      const c = await readRecoverySmsCosts(new Date());
+      return c.currentHour.attempt! >= 2 && c.currentHour.segments! >= 2;
+    });
+    const costs = await readRecoverySmsCosts(new Date());
+    expect(costs.currentHour.attempt).toBeGreaterThanOrEqual(2);
+    expect(costs.caps.hourly).toBeGreaterThan(0);
   });
 });
 

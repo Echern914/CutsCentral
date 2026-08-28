@@ -17,6 +17,7 @@ import {
   sha256Hex,
 } from "../engines/otpPolicy.js";
 import {
+  billableSegments,
   bumpRecoverySmsMetric,
   takeRecoverySmsBudget,
 } from "./recoverySmsBudget.js";
@@ -46,6 +47,14 @@ import {
  */
 
 export const RECOVERY_PURPOSE = "rewards_recovery" as const;
+
+/**
+ * 🔴 What the audit row stores INSTEAD of the SMS body. The real body carries
+ * a live OTP, and an audit/history field is no place for a credential - the
+ * provider gets the body in memory and nothing else ever does. Same rule as
+ * the manager resend's "Rewards access link".
+ */
+export const RECOVERY_NUDGE_BODY = "Rewards verification message";
 
 /** Challenges one IP may mint across ALL phones per window - the platform
  * analogue of the kiosk's per-shop ceiling. A caller rotating phone numbers
@@ -84,7 +93,17 @@ export type RecoveryChallengeOutcome =
   /** `auditClient` = the OLDEST textable Client row, whose existing consent is
    * what authorizes the neutral SMS; it feeds the Nudge audit row and nothing
    * else. Deterministic on purpose - never activity-based. */
-  | { send: true; code: string; auditClient: { id: string; shopId: string } }
+  | {
+      send: true;
+      code: string;
+      /** The exact final body the provider must send - built, measured and
+       * reserved inside the winning transaction. */
+      body: string;
+      /** The PENDING audit row committed WITH the win - dispatch updates
+       * exactly this reservation. */
+      nudgeId: string;
+      auditClient: { id: string; shopId: string };
+    }
   /** 🔴 INTERNAL ONLY - `reason` (including "ineligible") must never reach a
    * response, a log line, analytics or audit free text. The routes answer the
    * same ok for every reason, and log nothing per-outcome. */
@@ -140,6 +159,15 @@ export async function issueRecoveryChallenge(opts: {
     const auditClient = candidates[0] ?? null;
     if (!auditClient) return { send: false, reason: "ineligible" };
 
+    // 🔴 The combined rewards-access ledger lock, SECOND after the IP lock -
+    // the same key the manager resend takes (its only lock), so the two doors
+    // can never interleave their reads of the client's loyalty Nudge trail.
+    // Lock order everywhere: rec:<ipHash> then nudge:<clientId>; the manager
+    // path takes only the second, so no cycle is possible.
+    await tx.$executeRaw(
+      Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`nudge:${auditClient.id}`}))`,
+    );
+
     // Platform-wide per-IP ceiling, counted on the table under the lock above
     // so it is atomic - and keyed on a digest, never an address. Only
     // ELIGIBLE challenges reach this count, because only they cost an SMS.
@@ -163,13 +191,15 @@ export async function issueRecoveryChallenge(opts: {
       if (inWindow && existing.sendCount >= RECOVERY_MAX_SENDS_PER_DAY) {
         return { send: false, reason: "phone_cap" };
       }
-      // 🔴 THE PLATFORM CIRCUIT BREAKER - the last gate before a unit of real
-      // spend is committed. Counted here, before dispatch, and never given
-      // back: an ambiguous provider outcome may still have cost money.
-      if (!(await takeRecoverySmsBudget(tx, now))) {
+      const code = mintCode();
+      const body = recoverySmsBody(code);
+      // 🔴 THE PLATFORM CIRCUIT BREAKER, in BILLABLE SEGMENTS of the exact
+      // final body - the last gate before real spend is committed. Reserved
+      // here, before dispatch, and never given back: an ambiguous provider
+      // outcome may still have cost money.
+      if (!(await takeRecoverySmsBudget(tx, now, billableSegments(body)))) {
         return { send: false, reason: "platform_budget" };
       }
-      const code = mintCode();
       await tx.phoneRecoveryCode.update({
         where: { id: existing.id },
         data: {
@@ -186,13 +216,29 @@ export async function issueRecoveryChallenge(opts: {
           sendCount: inWindow ? existing.sendCount + 1 : 1,
         },
       });
-      return { send: true, code, auditClient };
+      // GENUINELY write-ahead: the redacted PENDING audit row commits WITH the
+      // win, so a process that dies after responding still left the ledger
+      // entry - and an immediate manager resend sees this reservation before
+      // it evaluates its own cooldown or daily cap.
+      const nudge = await tx.nudge.create({
+        data: {
+          shopId: auditClient.shopId,
+          clientId: auditClient.id,
+          channel: "SMS",
+          status: "PENDING",
+          kind: "loyalty",
+          body: RECOVERY_NUDGE_BODY,
+        },
+        select: { id: true },
+      });
+      return { send: true, code, body, auditClient, nudgeId: nudge.id };
     }
 
-    if (!(await takeRecoverySmsBudget(tx, now))) {
+    const code = mintCode();
+    const body = recoverySmsBody(code);
+    if (!(await takeRecoverySmsBudget(tx, now, billableSegments(body)))) {
       return { send: false, reason: "platform_budget" };
     }
-    const code = mintCode();
     // A raced double-create collapses on @@unique([purpose, phoneHash]): the
     // loser's P2002 is caught and answered as a cooldown, which is literally
     // true - a challenge for this phone was just created.
@@ -214,7 +260,18 @@ export async function issueRecoveryChallenge(opts: {
       }
       throw err;
     }
-    return { send: true, code, auditClient };
+    const nudge = await tx.nudge.create({
+      data: {
+        shopId: auditClient.shopId,
+        clientId: auditClient.id,
+        channel: "SMS",
+        status: "PENDING",
+        kind: "loyalty",
+        body: RECOVERY_NUDGE_BODY,
+      },
+      select: { id: true },
+    });
+    return { send: true, code, body, auditClient, nudgeId: nudge.id };
   });
 }
 
@@ -272,50 +329,33 @@ export async function requestRecoveryChallenge(opts: {
     return;
   }
   bumpRecoverySmsMetric("attempt", now);
-  bumpRecoverySmsMetric("segments", now); // one segment by construction
-  const body = recoverySmsBody(outcome.code);
+  bumpRecoverySmsMetric("segments", now, billableSegments(outcome.body));
 
-  // Post-response, write-ahead: the Nudge exists before the provider call, so
-  // a send that succeeds while the process dies still left a record.
+  // ONLY dispatch and the SENT/FAILED update run after commit - the audit row,
+  // the allowances and the segment reservation are already durable. A process
+  // killed right here leaves a PENDING row and a consumed budget, which is the
+  // honest record of "we may have paid for this".
   void (async () => {
-    let nudgeId: string | null = null;
     try {
-      const nudge = await runAsOwner((tx) =>
-        tx.nudge.create({
-          data: {
-            shopId: outcome.auditClient.shopId,
-            clientId: outcome.auditClient.id,
-            channel: "SMS",
-            status: "PENDING",
-            kind: "loyalty",
-            body,
-          },
-          select: { id: true },
-        }),
-      );
-      nudgeId = nudge.id;
-      const result = await getMessageProvider().send({ to: phone, body });
+      const result = await getMessageProvider().send({ to: phone, body: outcome.body });
       bumpRecoverySmsMetric("accepted", now);
       await runAsOwner((tx) =>
         tx.nudge.update({
-          where: { id: nudge.id },
+          where: { id: outcome.nudgeId },
           data: { status: "SENT", sentAt: new Date(), messageSid: result.sid },
         }),
       );
     } catch {
-      // 🔴 Fixed classification only. The thrown value may carry the phone,
-      // the OTP, the SMS body, an Authorization header or a credential -
-      // none of that may reach a log, a Nudge row, a metric or monitoring.
+      // 🔴 Fixed classification only - the thrown value may carry the phone,
+      // the OTP, the SMS body, an Authorization header or a credential.
       bumpRecoverySmsMetric("failed", now);
-      logger.warn({ nudgeId }, "rewards recovery: challenge send failed");
-      if (nudgeId) {
-        await runAsOwner((tx) =>
-          tx.nudge.update({
-            where: { id: nudgeId! },
-            data: { status: "FAILED", failedReason: "send_failed" },
-          }),
-        ).catch(() => {});
-      }
+      logger.warn({ nudgeId: outcome.nudgeId }, "rewards recovery: challenge send failed");
+      await runAsOwner((tx) =>
+        tx.nudge.update({
+          where: { id: outcome.nudgeId },
+          data: { status: "FAILED", failedReason: "send_failed" },
+        }),
+      ).catch(() => {});
     }
   })();
 }

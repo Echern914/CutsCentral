@@ -78,8 +78,10 @@ beforeAll(async () => {
 
 afterEach(async () => {
   sent = [];
-  // The cooldown reads the Nudge trail, so clear it between cases.
+  // The cooldown reads the Nudge trail, so clear it between cases - and the
+  // platform segment windows, which this route now draws on.
   await prisma.nudge.deleteMany({ where: { client: { shopId } } });
+  await prisma.rateLimitCounter.deleteMany({ where: { key: { startsWith: "recSms:" } } });
 });
 
 afterAll(async () => {
@@ -103,12 +105,65 @@ describe("resending a rewards link", () => {
     // The link goes to the punch card, and carries THEIR token.
     const client = await prisma.client.findUnique({ where: { id } });
     expect(sent[0]!.body).toContain(`/r/${client!.magicToken}/rewards`);
-    expect(sent[0]!.body).toContain("Resend Cuts");
     expect(sent[0]!.body).toMatch(/STOP/);
-    // Audited as a real Nudge, not a fire-and-forget.
+    // 🔴 The body is FIXED ASCII - no customer or shop name, which could
+    // change the length or force UCS-2 and multiply the billable segments.
+    expect(sent[0]!.body).not.toContain("Resend Cuts");
+    expect(sent[0]!.body).not.toContain("Marcus");
+    // Audited as a real Nudge - and the audit is REDACTED: the bearer URL
+    // goes to the provider in memory, never into a history field.
     const nudge = await prisma.nudge.findFirst({ where: { clientId: id } });
     expect(nudge!.status).toBe("SENT");
     expect(nudge!.messageSid).toBeTruthy();
+    expect(nudge!.body).toBe("Rewards access link");
+    expect(nudge!.body).not.toContain(client!.magicToken);
+  });
+
+  it("🔴 parallel resends cannot exceed the client ceiling - the ledger lock serializes them", async () => {
+    const id = await textableClient();
+    // Eight at once, "different devices": the advisory lock on
+    // nudge:<clientId> serializes the read-check-create, so the 5-minute
+    // cooldown binds for everyone after the first winner. Exactly one send;
+    // every loser is refused BEFORE provider dispatch.
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () => resend(id)),
+    );
+    expect(results.filter((r) => r.status === 200)).toHaveLength(1);
+    expect(results.filter((r) => r.status === 429)).toHaveLength(7);
+    expect(sent).toHaveLength(1);
+    expect(await prisma.nudge.count({ where: { clientId: id } })).toBe(1);
+  });
+
+  it("🔴 a hostile provider error survives NOWHERE - log, Nudge, response", async () => {
+    const HOSTILE = "hostile +19995550000 otp=123456 Authorization: Bearer SK_x twilio_AC1";
+    __setMessageProviderForTests({
+      channel: "SMS",
+      send: async () => {
+        throw new Error(HOSTILE);
+      },
+    });
+    const { logger } = await import("../logger.js");
+    const warnSpy = (await import("vitest")).vi.spyOn(logger, "warn");
+    try {
+      const id = await textableClient();
+      const res = await resend(id);
+      expect(res.status).toBe(502);
+      expect(JSON.stringify(res.body)).not.toContain("hostile");
+      const nudge = await prisma.nudge.findFirst({ where: { clientId: id } });
+      expect(nudge!.status).toBe("FAILED");
+      expect(nudge!.failedReason).toBe("send_failed");
+      expect(JSON.stringify(warnSpy.mock.calls)).not.toContain("hostile");
+      expect(JSON.stringify(warnSpy.mock.calls)).not.toContain("+19995550000");
+    } finally {
+      warnSpy.mockRestore();
+      __setMessageProviderForTests({
+        channel: "SMS",
+        send: async (input) => {
+          sent.push(input);
+          return { sid: `TEST${sent.length}`, status: "sent" };
+        },
+      });
+    }
   });
 
   it("🔴 refuses a client who texted STOP, and says only THEY can undo it", async () => {
