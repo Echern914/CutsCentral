@@ -124,6 +124,7 @@ async function intent(appointmentId: string, staffId: string, status: "BOOKED" |
   return prisma.$transaction((tx) =>
     recordMirrorIntent(tx, {
       shopId,
+      now: new Date(),
       appointmentId,
       staffId,
       startsAt: FUTURE,
@@ -255,6 +256,7 @@ describe("what gets mirrored", () => {
     const id = await prisma.$transaction((tx) =>
       recordMirrorIntent(tx, {
         shopId,
+        now: new Date(),
         appointmentId: a.id,
         staffId: mapped,
         startsAt: FUTURE,
@@ -292,6 +294,7 @@ describe("what gets mirrored", () => {
     const id = await prisma.$transaction((tx) =>
       recordMirrorIntent(tx, {
         shopId,
+        now: new Date(),
         appointmentId: a.id,
         staffId: mapped,
         startsAt: FUTURE,
@@ -329,6 +332,7 @@ describe("reschedule NEVER releases the old block before the new one is live", (
     const newId = await prisma.$transaction((tx) =>
       swapForReschedule(tx, {
         shopId,
+        now: new Date(),
         appointmentId: a.id,
         staffId: mapped,
         startsAt: newStart,

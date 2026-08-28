@@ -46,8 +46,33 @@ let staffId: string;
 let serviceId: string;
 
 const CAL = "cal_77";
-const START = new Date("2026-09-10T22:10:00.000Z");
-const END = new Date("2026-09-10T22:30:00.000Z");
+
+/**
+ * 🔴 ONE CLOCK, CAPTURED ONCE, AND IT IS INJECTED (issue #302).
+ *
+ * This file used to run on hardcoded 2026-09-10 fixtures with no injected
+ * `now`. reconcileShop asks "which appointments should be holding a block
+ * RIGHT NOW", so on 2026-09-10 the seven reconcile tests below would have
+ * started deciding nothing: the presence assertions failing loudly, and -
+ * far worse - the absence assertions passing for entirely the wrong reason.
+ * A green that covers nothing is the failure mode this engine cannot afford.
+ *
+ * Every fixture instant is now derived from NOW, and NOW is threaded into
+ * every reconcileShop call, so these tests exercise the mirror on whatever
+ * day they happen to run and cannot rot.
+ */
+const NOW = new Date();
+const START = new Date(NOW.getTime() + 2 * 60 * 60 * 1000);
+const END = new Date(START.getTime() + 20 * 60 * 1000);
+/** A second appointment, the next day - the release-all rollback case. */
+const START_2 = new Date(START.getTime() + 24 * 60 * 60 * 1000);
+const END_2 = new Date(END.getTime() + 24 * 60 * 60 * 1000);
+/** The barber's OWN block: inside the sync window, clear of our span. */
+const LUNCH_START = new Date(NOW.getTime() + 5 * 60 * 60 * 1000);
+const LUNCH_END = new Date(LUNCH_START.getTime() + 60 * 60 * 1000);
+/** A window that comfortably brackets everything above. */
+const WINDOW_FROM = new Date(NOW.getTime() - 24 * 60 * 60 * 1000);
+const WINDOW_TO = new Date(NOW.getTime() + 30 * 24 * 60 * 60 * 1000);
 
 beforeAll(async () => {
   const user = await prisma.user.create({
@@ -248,7 +273,7 @@ describe("ACUITY CREATED IT, CHAIRBACK LOST THE RESPONSE", () => {
       { id: "blk_real", start: START.toISOString(), end: END.toISOString(), calendarID: CAL, notes: blockReference(outboxId) },
     ] as AcuityBlock[]);
 
-    const r = await reconcileShop(shopId);
+    const r = await reconcileShop(shopId, NOW);
     expect(r.adopted).toBe(1);
     const row = await state(outboxId);
     expect(row.state).toBe("ACTIVE");
@@ -264,7 +289,7 @@ describe("ACUITY CREATED IT, CHAIRBACK LOST THE RESPONSE", () => {
     await dispatchCreate(outboxId);
 
     acuityMock.listBlocks.mockResolvedValue([]);
-    await reconcileShop(shopId);
+    await reconcileShop(shopId, NOW);
     expect((await state(outboxId)).state).toBe("PENDING");
   });
 
@@ -282,7 +307,7 @@ describe("ACUITY CREATED IT, CHAIRBACK LOST THE RESPONSE", () => {
       { id: "blk_real", start: START.toISOString(), end: END.toISOString(), calendarID: CAL, notes: blockReference(outboxId) },
     ] as AcuityBlock[]);
 
-    await reconcileShop(shopId);
+    await reconcileShop(shopId, NOW);
     expect(await prisma.externalBlock.count({ where: { shopId } })).toBe(0);
   });
 });
@@ -298,10 +323,10 @@ describe("self-echo", () => {
       shopId,
       [
         { id: "blk_mine", start: START.toISOString(), end: END.toISOString(), calendarID: CAL, notes: blockReference(outboxId) },
-        { id: "blk_lunch", start: "2026-09-10T16:00:00.000Z", end: "2026-09-10T17:00:00.000Z", calendarID: CAL, notes: "lunch" },
+        { id: "blk_lunch", start: LUNCH_START.toISOString(), end: LUNCH_END.toISOString(), calendarID: CAL, notes: "lunch" },
       ] as AcuityBlock[],
-      new Date("2026-09-01T00:00:00Z"),
-      new Date("2026-09-30T00:00:00Z"),
+      WINDOW_FROM,
+      WINDOW_TO,
     );
 
     expect(res.upserted).toBe(1); // only the barber's own lunch
@@ -322,8 +347,8 @@ describe("self-echo", () => {
     await syncAcuityBlocks(
       shopId,
       [{ id: "blk_mine", start: START.toISOString(), end: END.toISOString(), calendarID: CAL }] as AcuityBlock[],
-      new Date("2026-09-01T00:00:00Z"),
-      new Date("2026-09-30T00:00:00Z"),
+      WINDOW_FROM,
+      WINDOW_TO,
     );
     expect(await prisma.externalBlock.count({ where: { shopId } })).toBe(0);
 
@@ -368,7 +393,7 @@ describe("release", () => {
     expect((await state(outboxId)).state).toBe("RELEASING");
 
     acuityMock.deleteBlock.mockResolvedValue(undefined);
-    const r = await reconcileShop(shopId);
+    const r = await reconcileShop(shopId, NOW);
     expect(r.released).toBe(1);
     expect((await state(outboxId)).state).toBe("RELEASED");
   });
@@ -390,8 +415,8 @@ describe("release", () => {
     acuityMock.deleteBlock.mockResolvedValue(undefined);
     const a = await seed();
     const b = await seed({
-      startsAt: new Date("2026-09-11T22:10:00.000Z"),
-      endsAt: new Date("2026-09-11T22:30:00.000Z"),
+      startsAt: START_2,
+      endsAt: END_2,
     });
     await dispatchCreate(a.outboxId);
     await dispatchCreate(b.outboxId);
@@ -413,7 +438,7 @@ describe("reconciler hygiene", () => {
       data: { status: "CANCELED", canceledAt: new Date() },
     });
 
-    const r = await reconcileShop(shopId);
+    const r = await reconcileShop(shopId, NOW);
     expect(acuityMock.createBlock).not.toHaveBeenCalled();
     expect(r.released).toBe(1);
     expect((await state(outboxId)).state).toBe("RELEASED");
@@ -424,7 +449,7 @@ describe("reconciler hygiene", () => {
       startsAt: new Date("2020-01-01T10:00:00Z"),
       endsAt: new Date("2020-01-01T10:20:00Z"),
     });
-    await reconcileShop(shopId);
+    await reconcileShop(shopId, NOW);
     expect(acuityMock.createBlock).not.toHaveBeenCalled();
     expect((await state(outboxId)).state).toBe("RELEASED");
   });
@@ -432,7 +457,7 @@ describe("reconciler hygiene", () => {
   it("finishes a PENDING row the process never dispatched", async () => {
     acuityMock.createBlock.mockResolvedValue({ id: "blk_late" });
     const { outboxId } = await seed();
-    const r = await reconcileShop(shopId);
+    const r = await reconcileShop(shopId, NOW);
     expect(r.retried).toBe(1);
     expect((await state(outboxId)).acuityBlockId).toBe("blk_late");
   });

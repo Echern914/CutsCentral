@@ -99,7 +99,24 @@ export interface MirrorIntentInput {
   startsAt: Date;
   endsAt: Date;
   occupancy: OccupancySlice;
-  now?: Date;
+  /**
+   * 🔴 REQUIRED, and that is the whole point.
+   *
+   * The mirror decides whether to act by asking "does this appointment still
+   * occupy the chair AT `now`" (shouldMirrorOnCreate -> appointmentOccupiesTime).
+   * A past-dated span answers no and the whole call returns null - correct in
+   * production (never re-block yesterday), and catastrophic in a test, where a
+   * fixture dated in the past sails through the entire booking path, records
+   * nothing, dispatches nothing, and passes while exercising no mirror code at
+   * all. Nothing throws. The green is fake.
+   *
+   * This was optional with a `?? new Date()` fallback, and NOT ONE of the nine
+   * production call sites passed it - so the fallback always won and no test
+   * could inject a clock. Making it required turns "I forgot to thread the
+   * clock" into a compile error at every present and future call site, which is
+   * the same trick EffectivePriceArgs.dateOverrides uses for holiday pricing.
+   */
+  now: Date;
 }
 
 /**
@@ -120,7 +137,7 @@ export async function recordMirrorIntent(
   tx: Prisma.TransactionClient,
   input: MirrorIntentInput,
 ): Promise<string | null> {
-  const now = input.now ?? new Date();
+  const now = input.now;
   const shop = await loadShopSlice(input.shopId);
   if (!shop) return null;
 
