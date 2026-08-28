@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import { GetTheApp } from "@/components/GetTheApp";
+import { appleItunesApp } from "@/lib/appBanner";
 import { LineClient } from "./LineClient";
 
 /**
@@ -14,8 +16,16 @@ export const metadata: Metadata = {
   title: "My place in line",
   robots: { index: false, follow: false },
   referrer: "no-referrer",
+  other: { ...appleItunesApp() },
 };
 
 export default function LinePage() {
-  return <LineClient />;
+  return (
+    <>
+      <LineClient />
+      <div className="mx-auto w-full max-w-2xl px-4 pb-8">
+        <GetTheApp surface="line" />
+      </div>
+    </>
+  );
 }

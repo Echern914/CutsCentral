@@ -1,3 +1,4 @@
+import { MOBILE_APP } from "@chairback/config/constants";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { APP_NAME, serviceNounForShop } from "@chairback/config/constants";
@@ -89,8 +90,8 @@ export default async function ClientLandingPage({
         data={data}
         magicToken={params.magicToken}
         vapidPublicKey={vapidPublicKey}
-        appStoreUrl={process.env.APP_STORE_URL ?? null}
-        playStoreUrl={process.env.PLAY_STORE_URL ?? null}
+        appStoreUrl={MOBILE_APP.appStoreUrl}
+        playStoreUrl={null}
       />
     );
   }

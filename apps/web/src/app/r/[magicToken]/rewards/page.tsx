@@ -1,3 +1,4 @@
+import { MOBILE_APP } from "@chairback/config/constants";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { APP_NAME, type CadenceKey } from "@chairback/config/constants";
@@ -174,10 +175,14 @@ export default async function RewardsPage({
   // so the push opt-in can subscribe. Absent => the push UI stays hidden and
   // everything falls back to SMS.
   const vapidPublicKey = process.env.PUSH_VAPID_PUBLIC_KEY ?? null;
-  // Store links for the "Get the app" banner. Absent => banner never shows, so
-  // this is safe to ship before the app is live (set APP_STORE_URL to turn on).
-  const appStoreUrl = process.env.APP_STORE_URL ?? null;
-  const playStoreUrl = process.env.PLAY_STORE_URL ?? null;
+  // 🔴 The App Store listing comes from CONFIG, not an env var. This used to
+  // read process.env.APP_STORE_URL and treat "unset" as "the app isn't live
+  // yet" - the variable was never added to Vercel, so this banner never
+  // rendered ONCE in production while the listing had been live for weeks.
+  // The id is stable and already in config; it cannot fail closed there.
+  // playStore stays null until an Android build exists (see GetTheApp).
+  const appStoreUrl = MOBILE_APP.appStoreUrl;
+  const playStoreUrl = null;
   return (
     <RewardsClient
       data={data}

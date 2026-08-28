@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { APP_NAME } from "@chairback/config/constants";
 import { apiPublicGet } from "@/lib/api";
+import { GetTheApp } from "@/components/GetTheApp";
+import { appleItunesApp } from "@/lib/appBanner";
 import { ManageClient } from "./ManageClient";
 
 export interface ManageData {
@@ -29,6 +31,7 @@ export interface ManageData {
 }
 
 export const metadata: Metadata = {
+  other: { ...appleItunesApp() },
   title: `Manage your appointment · ${APP_NAME}`,
   robots: { index: false },
 };
@@ -47,5 +50,12 @@ export default async function ManagePage({
 }) {
   const data = await getData(params.token);
   if (!data) notFound();
-  return <ManageClient token={params.token} data={data} />;
+  return (
+    <>
+      <ManageClient token={params.token} data={data} />
+      <div className="mx-auto w-full max-w-2xl px-4 pb-8">
+        <GetTheApp surface="manage" />
+      </div>
+    </>
+  );
 }
