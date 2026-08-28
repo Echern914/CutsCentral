@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
 import {
@@ -26,6 +26,7 @@ import {
 } from "@chairback/config";
 import { Prisma, prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
+import { requireManager } from "../auth/roles.js";
 import { linkReferralOnShopCreate } from "../services/referral.js";
 import { previewNudgeBody } from "../messaging/templates.js";
 import { toE164 } from "../acuity/clientKey.js";
@@ -423,6 +424,38 @@ shopsRouter.get("/me", requireUser, requireShop, async (req, res) => {
     clientCount,
   });
 });
+
+/**
+ * Mint (or ROTATE) the shop's kiosk URL credential. Manager-only, and the raw
+ * token appears exactly once - in this response - because only its hash is
+ * stored. Rotation overwrites the hash, which kills every tablet holding the
+ * old URL at once: that is the "the tablet walked out the door" lever, so a
+ * rotate deliberately needs no extra confirmation step server-side.
+ *
+ * The URL carries the credential in its FRAGMENT (#k=...), which browsers
+ * never send over the wire - it cannot land in access logs or referrers.
+ */
+shopsRouter.post(
+  "/me/walk-in-kiosk-token",
+  requireUser,
+  requireShop,
+  requireManager,
+  requireActiveAccess,
+  async (req, res) => {
+    if (!apiEnv().WALK_IN_MODE_ENABLED) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    const token = randomToken(32);
+    const hash = createHash("sha256").update(token, "utf8").digest("hex");
+    await prisma.shop.update({
+      where: { id: req.shop!.id },
+      data: { walkInKioskTokenHash: hash },
+    });
+    const base = apiEnv().APP_BASE_URL.replace(/\/$/, "");
+    res.json({ ok: true, url: `${base}/kiosk#k=${token}` });
+  },
+);
 
 shopsRouter.patch("/me", requireUser, requireShop, requireActiveAccess, async (req, res) => {
   const parsed = updateShopSchema.safeParse(req.body);

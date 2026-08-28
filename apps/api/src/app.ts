@@ -31,6 +31,7 @@ import { walletRouter } from "./routes/wallet.js";
 import { dashboardRouter } from "./routes/dashboard.js";
 import { barberRouter } from "./routes/barber.js";
 import { walkInBarberRouter } from "./routes/walkIn.barber.js";
+import { walkInPublicRouter } from "./routes/walkIn.public.js";
 import { walkInDashboardRouter } from "./routes/walkIn.dashboard.js";
 import { insightsRouter } from "./routes/insights.js";
 import { notificationsRouter } from "./routes/notifications.js";
@@ -164,6 +165,10 @@ export function createApp(): Express {
   app.use("/api/wallet", rewardsLimiter, walletRouter); // Apple Wallet pass web service (public, ApplePass-token auth)
   app.use("/api/page", rewardsLimiter, publicPageRouter); // public shop pages
   app.use("/api/book", bookingPublicRouter); // public native booking (per-route limits inside)
+  // Walk-In Mode public surface: the kiosk tablet + "My Place in Line".
+  // Per-route limits inside; every credential rides in a POST body, never a
+  // URL. Dark behind WALK_IN_MODE_ENABLED (the router 404s wholesale).
+  app.use("/api/walk-in", walkInPublicRouter);
   // Team seats + the join flow. teamJoinRouter is mounted FIRST and requires
   // only a session: accepting an invite happens before the user belongs to any
   // shop, so it must not sit behind requireShop.

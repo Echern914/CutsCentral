@@ -751,3 +751,35 @@ export function buildPromoBody(params: {
   if (params.bookingUrl?.trim()) parts.push(`Book: ${params.bookingUrl.trim()}`);
   return withStopNotice(parts.join(" "));
 }
+
+/**
+ * Walk-In Mode kiosk verification code. Transactional and terse: the person
+ * is standing at the tablet that asked for it. Deliberately NO link and no
+ * STOP notice - a verification text is not a conversation channel, and extra
+ * words push a six-digit code below the notification fold.
+ *
+ * 🔴 The code exists in this string and in the challenge row's HASH - callers
+ * must never log this body or store it on a Nudge row.
+ */
+export function buildWalkInVerificationBody(params: {
+  shopName: string;
+  code: string;
+}): string {
+  return `${params.code} is your ${params.shopName} check-in code. It expires in 5 minutes.`;
+}
+
+/**
+ * Walk-In Mode tracking link ("My Place in Line"). Transactional - it IS the
+ * thing the customer just asked the kiosk for. The URL carries the credential
+ * in its FRAGMENT, so this body must never be persisted either (Nudge rows
+ * for this kind store body: null).
+ */
+export function buildWalkInLinkBody(params: {
+  shopName: string;
+  url: string;
+}): string {
+  return (
+    `You're in line at ${params.shopName}. Watch your spot and get updates here: ` +
+    `${params.url} Reply STOP to opt out.`
+  );
+}

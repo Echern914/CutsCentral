@@ -323,7 +323,7 @@ export interface CreateEntryInput {
 
 /** Resolve + snapshot the selected services at `now` (weekday/time-of-day
  * duration and price overrides applied - the quote must match today). */
-async function snapshotServices(
+export async function snapshotServices(
   tx: Prisma.TransactionClient,
   shopId: string,
   timezone: string,
@@ -386,7 +386,7 @@ async function snapshotServices(
 /** Next append position: past the busiest live entry, with the gap. Two
  * concurrent creates can land the same position - harmless, the total order
  * tie-breaks on (joinedAt, id). */
-async function nextPosition(
+export async function nextPosition(
   tx: Prisma.TransactionClient,
   shopId: string,
 ): Promise<number> {

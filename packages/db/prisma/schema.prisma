@@ -580,6 +580,7 @@ model Shop {
   walkInEntries       WalkInEntry[]
   walkInEntryServices WalkInEntryService[]
   walkInEvents        WalkInEvent[]
+  walkInPhoneCodes    WalkInPhoneCode[]
 
   @@index([ownerId])
 }
@@ -2939,6 +2940,13 @@ model WalkInEntry {
   trackTokenHash      String?   @unique
   trackTokenExpiresAt DateTime?
   trackTokenRevokedAt DateTime?
+  // The bounded tracking SESSION behind the link. The SMS credential rides in
+  // the URL FRAGMENT (never sent to a server), is exchanged ONCE via POST for
+  // this session, and every later read carries the session in a request body -
+  // so neither credential can land in access logs or referrers. One live
+  // session per entry (a re-exchange overwrites); token rotation clears it.
+  trackSessionHash      String?   @unique
+  trackSessionExpiresAt DateTime?
 
   // Set when service actually starts, so IN_SERVICE is a LINK to real calendar
   // occupancy and not a status someone flipped by hand (the
@@ -3049,4 +3057,49 @@ model WalkInEvent {
 
   @@index([shopId, entryId, createdAt])
   @@index([shopId, createdAt])
+}
+
+// One kiosk phone-verification challenge per (shop, normalized phone). The
+// six-digit code exists ONLY in the SMS; the row stores its scope-bound hash
+// (sha256 of shopId:phone:walk_in_check_in:code, so a code minted for one
+// shop/phone/purpose proves nothing anywhere else). ONE row per shop+phone,
+// UPDATED in place per challenge - which is both "one active challenge" and
+// the bound on row accumulation (rows <= real phones seen; a cleanup sweep in
+// the challenge path deletes long-expired rows, no cron needed).
+//
+// Redemption is a two-step CAS: attempts are claimed with an increment guarded
+// by the cap, and consumption flips consumedAt exactly once - two concurrent
+// correct submissions produce exactly one winner. A successful verify mints a
+// single-use CHECK-IN PROOF (hash only), so the later check-in POST proves
+// possession of a verified phone without re-sending the code.
+model WalkInPhoneCode {
+  id     String @id @default(cuid())
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  // E.164 - tenant data under FORCE RLS, same as WalkInEntry.phone. The
+  // PLAINTEXT CODE is what must never be at rest, and is not.
+  phone String
+
+  codeHash     String
+  attemptCount Int      @default(0)
+  expiresAt    DateTime
+  consumedAt   DateTime?
+
+  // The single-use "this phone was just verified at this kiosk" credential.
+  proofHash       String?   @unique
+  proofExpiresAt  DateTime?
+  proofConsumedAt DateTime?
+
+  // Resend throttling for THIS phone: a cooldown off lastSentAt, and a
+  // per-window send cap tracked on the row itself.
+  lastSentAt DateTime
+  sendCount  Int      @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([shopId, phone])
+  @@index([shopId, expiresAt]) // the challenge path's cleanup sweep
+  @@index([shopId, lastSentAt]) // the per-shop challenge ceiling count
 }
