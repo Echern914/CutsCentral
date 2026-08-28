@@ -464,6 +464,21 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
       // unless this shop has a PENDING referral, and granting flips that row to
       // REWARDED under a compare-and-set. So renewals and Stripe's multi-day
       // replays cannot pay a second time.
+      //
+      // DECIDED, not accidental: an AI-receptionist add-on invoice qualifies a
+      // referral exactly like a base-plan one. The add-on is a separate
+      // subscription billed to the SAME Stripe customer, so it resolves to this
+      // shop and pays out. That is correct - the reward waits for cleared
+      // money, real money cleared, and $40 is well above the farming threshold
+      // this rule exists to defend. Nothing here needs to distinguish them.
+      //
+      // 🔴 What is NOT handled anywhere: a REFUND of this invoice. The reward
+      // is not reversed, because no refund event is subscribed on this endpoint
+      // (this switch handles four event types and charge.refunded is not one -
+      // the charge.refunded in billing/payments.ts is the CONNECT path, and
+      // matches on a Payment row a subscription invoice does not have). A
+      // refunded first invoice therefore leaves the referrer paid. Deliberate
+      // for now; revisit with the refund-handling work.
       await grantReferralReward(paidShop.id);
       return;
     }

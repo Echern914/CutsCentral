@@ -7,6 +7,7 @@ import { withLease } from "./scheduler/lease.js";
 import { promoteCompletedVisits } from "./engines/statusPromotion.js";
 import { runNudgeSweep } from "./engines/nudge.js";
 import { runWinbackSweep } from "./engines/winback.js";
+import { auditReferralGrants } from "./services/referral.js";
 import { linkBookingsToNudges } from "./engines/attribution.js";
 import { promoteFulfilledAppointments } from "./engines/appointmentPromotion.js";
 import { runAppointmentReminders } from "./engines/appointmentReminders.js";
@@ -98,6 +99,21 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
     ttlMs: 30 * MINUTE,
     run: () => runWinbackSweep(),
     failMsg: "winback sweep failed",
+  },
+  // Referral grants that committed but never paid. Hourly, off the top of the
+  // hour so it does not pile onto the :00 rush. Read-only: it counts and
+  // alerts, and a human decides what to credit.
+  //
+  // The catch inside grantReferralReward already reports a FAILED grant to
+  // Sentry. This exists for the ones it structurally cannot see: the CAS flips
+  // the row to REWARDED before granting, so a deploy or a crash in between
+  // strands it with no exception raised anywhere.
+  {
+    cronExpr: "37 * * * *",
+    name: "referral-grant-audit",
+    ttlMs: 5 * MINUTE,
+    run: () => auditReferralGrants(),
+    failMsg: "referral grant audit failed",
   },
   // Attribution hourly.
   {
