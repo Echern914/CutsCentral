@@ -81,6 +81,23 @@ let otherMappedAt: Date;
 const soon = (minutesFromNow: number) => new Date(Date.now() + minutesFromNow * 60_000);
 
 /**
+ * 🔴 Every DEFAULT-start appointment must land on its own instant.
+ *
+ * The partial unique on (staffId, startsAt) WHERE status IN ('BOOKED','PENDING')
+ * is real, `Date.now()` only resolves to the millisecond, and several tests
+ * create three or four BOOKED rows on the SAME chair back to back with no
+ * explicit start. When the round trips happen to land inside one millisecond
+ * they collide and the create throws - which is why this file failed roughly
+ * one full run in three while passing every time it was run alone.
+ *
+ * A one-second-apart lane keeps every default distinct, keeps them all "about
+ * an hour out" exactly as before, and starts at +1s so a default can never
+ * coincide with an explicit `soon(60)` either.
+ */
+let startSeq = 0;
+const defaultStart = () => new Date(soon(60).getTime() + ++startSeq * 1000);
+
+/**
  * A mapping timestamp that is unambiguously after `connectedAt`, whichever
  * clock produced it. One second is far below any real staleness window and far
  * above the sub-millisecond skew this is defending against.
@@ -104,7 +121,7 @@ async function makeAppointment(over: {
   holdExpiresAt?: Date | null;
   visitId?: string | null;
 } = {}) {
-  const startsAt = over.startsAt ?? soon(60);
+  const startsAt = over.startsAt ?? defaultStart();
   return prisma.appointment.create({
     data: {
       shopId: over.shop ?? shopId,
