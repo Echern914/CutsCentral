@@ -4,6 +4,7 @@ import { APP_NAME } from "@chairback/config/constants";
 import { apiPublicGet } from "@/lib/api";
 import { BookingClient } from "./BookingClient";
 import { GetTheApp } from "@/components/GetTheApp";
+import { RewardsDoor } from "@/components/RewardsDoor";
 import { appleItunesApp } from "@/lib/appBanner";
 
 export interface BookShopData {
@@ -147,6 +148,7 @@ export default async function BookPage({
       {/* Below the flow, never above it: the booking is what they came for. */}
       <div className="mx-auto w-full max-w-2xl px-4 pb-8">
         <GetTheApp surface="booking" />
+        <RewardsDoor />
       </div>
     </>
   );

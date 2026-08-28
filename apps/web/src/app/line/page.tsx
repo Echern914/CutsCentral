@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { GetTheApp } from "@/components/GetTheApp";
 import { appleItunesApp } from "@/lib/appBanner";
 import { LineClient } from "./LineClient";
+import { RewardsDoor } from "@/components/RewardsDoor";
 
 /**
  * Walk-In Mode: "My Place in Line" - the customer's private tracking page.
@@ -25,6 +26,7 @@ export default function LinePage() {
       <LineClient />
       <div className="mx-auto w-full max-w-2xl px-4 pb-8">
         <GetTheApp surface="line" />
+        <RewardsDoor />
       </div>
     </>
   );
