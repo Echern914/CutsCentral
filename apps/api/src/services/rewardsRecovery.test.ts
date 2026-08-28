@@ -3,6 +3,7 @@ import { prisma, runWithShop } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import {
   IP_CHALLENGE_CAP,
+  RECOVERY_MAX_SENDS_PER_DAY,
   RECOVERY_PURPOSE,
   issueRecoveryChallenge,
   listRecoveryShops,
@@ -10,10 +11,10 @@ import {
   selectRecoveryShop,
   verifyRecoveryChallenge,
 } from "./rewardsRecovery.js";
+import { hourlyCap, RECOVERY_SMS_HOURLY_CAP_DEFAULT } from "./recoverySmsBudget.js";
 import {
   CLEANUP_AFTER_MS,
   MAX_ATTEMPTS,
-  MAX_SENDS_PER_WINDOW,
   RESEND_COOLDOWN_MS,
 } from "../engines/otpPolicy.js";
 import { hashCode } from "../engines/walkInVerify.js";
@@ -47,10 +48,22 @@ async function makeClient(shopId: string, phone: string, over: Record<string, un
       firstName: "Rec",
       phone,
       magicToken: randomToken(),
+      // Textable by default: challenges are ELIGIBILITY-GATED now, so a phone
+      // with no consenting client row gets no code at all.
+      smsConsentAt: new Date(),
+      optedOut: false,
       ...over,
     },
     select: { id: true },
   });
+}
+
+/** A phone the platform is allowed to text - the precondition every
+ * challenge-issuing test now has to establish explicitly. */
+async function textablePhone(): Promise<string> {
+  const phone = freshPhone();
+  await makeClient(shopA, phone);
+  return phone;
 }
 
 beforeAll(async () => {
@@ -79,6 +92,8 @@ beforeAll(async () => {
 afterEach(async () => {
   await prisma.phoneRecoveryCode.deleteMany({});
   await prisma.client.deleteMany({ where: { shop: { ownerId: userId } } });
+  await prisma.rateLimitCounter.deleteMany({ where: { key: { startsWith: "recSms:" } } });
+  delete process.env.RECOVERY_SMS_HOURLY_CAP;
 });
 
 afterAll(async () => {
@@ -101,7 +116,7 @@ async function verifiedProof(phone: string, now = lane()): Promise<string> {
 
 describe("the challenge row", () => {
   it("🔴 stores no raw phone: the unique key is a keyed digest, the number is encrypted", async () => {
-    const phone = freshPhone();
+    const phone = await textablePhone();
     await issueRecoveryChallenge({ phone, ip: IP, now: lane() });
     const row = await prisma.phoneRecoveryCode.findFirst({
       where: { phoneHash: phoneDigest(phone) },
@@ -114,7 +129,7 @@ describe("the challenge row", () => {
   });
 
   it("🔴 two simultaneous challenge creations leave ONE active row", async () => {
-    const phone = freshPhone();
+    const phone = await textablePhone();
     const now = lane();
     const results = await Promise.all([
       issueRecoveryChallenge({ phone, ip: IP, now }),
@@ -129,8 +144,8 @@ describe("the challenge row", () => {
     expect(results.filter((r) => r.send)).toHaveLength(1);
   });
 
-  it("resend cooldown and the per-phone window cap both hold", async () => {
-    const phone = freshPhone();
+  it("🔴 60s cooldown, then a HARD 3-per-24h phone cap that holds ACROSS IPs", async () => {
+    const phone = await textablePhone();
     const t0 = lane();
     expect((await issueRecoveryChallenge({ phone, ip: IP, now: t0 })).send).toBe(true);
     // Inside the cooldown: suppressed.
@@ -140,44 +155,116 @@ describe("the challenge row", () => {
       now: new Date(t0.getTime() + RESEND_COOLDOWN_MS - 1000),
     });
     expect(tooSoon).toEqual({ send: false, reason: "cooldown" });
-    // Past the cooldown, up to the window cap...
+    // Past the cooldown, up to the daily cap - from DIFFERENT IPs, because the
+    // phone budget must not care where the requests come from.
     let t = t0;
-    for (let i = 1; i < MAX_SENDS_PER_WINDOW; i++) {
+    const ips = ["198.51.100.1", "198.51.100.2", "198.51.100.3"];
+    for (let i = 1; i < RECOVERY_MAX_SENDS_PER_DAY; i++) {
       t = new Date(t.getTime() + RESEND_COOLDOWN_MS + 1000);
-      expect((await issueRecoveryChallenge({ phone, ip: IP, now: t })).send).toBe(true);
+      expect((await issueRecoveryChallenge({ phone, ip: ips[i]!, now: t })).send).toBe(true);
     }
-    // ...and the one after that hits the ceiling: the DISTRIBUTED-caller brake,
-    // independent of any IP bucket.
+    // Send #4 within the rolling day: refused, whoever asks.
     t = new Date(t.getTime() + RESEND_COOLDOWN_MS + 1000);
     expect(await issueRecoveryChallenge({ phone, ip: "198.51.100.9", now: t })).toEqual({
       send: false,
       reason: "phone_cap",
     });
+    // A full day after the LAST send, the window resets.
+    t = new Date(t.getTime() + 24 * 60 * 60 * 1000 + 1000);
+    expect((await issueRecoveryChallenge({ phone, ip: IP, now: t })).send).toBe(true);
   });
 
   it("🔴 rotating phone numbers from one IP hits the IP ceiling", async () => {
     const now = lane();
     for (let i = 0; i < IP_CHALLENGE_CAP; i++) {
-      const r = await issueRecoveryChallenge({ phone: freshPhone(), ip: IP, now });
+      const r = await issueRecoveryChallenge({ phone: await textablePhone(), ip: IP, now });
       expect(r.send).toBe(true);
     }
-    const capped = await issueRecoveryChallenge({ phone: freshPhone(), ip: IP, now });
+    const capped = await issueRecoveryChallenge({ phone: await textablePhone(), ip: IP, now });
     expect(capped).toEqual({ send: false, reason: "ip_cap" });
     // A different address is not collateral damage.
     const other = await issueRecoveryChallenge({
-      phone: freshPhone(),
+      phone: await textablePhone(),
       ip: "198.51.100.10",
       now,
     });
     expect(other.send).toBe(true);
   });
 
+  it("🔴 the IP ceiling is ATOMIC: a simultaneous burst of distinct phones cannot exceed it", async () => {
+    // The classic count-then-insert race: without the per-IP advisory lock,
+    // all of these would observe count < cap before any row commits. The
+    // barrier is Promise.all - no sleeps, one instant.
+    const now = lane();
+    const phones: string[] = [];
+    for (let i = 0; i < IP_CHALLENGE_CAP + 3; i++) phones.push(await textablePhone());
+    const results = await Promise.all(
+      phones.map((phone) => issueRecoveryChallenge({ phone, ip: IP, now })),
+    );
+    expect(results.filter((r) => r.send)).toHaveLength(IP_CHALLENGE_CAP);
+    expect(
+      results.filter((r) => !r.send && r.reason === "ip_cap"),
+    ).toHaveLength(3);
+  });
+
+  it("🔴 unknown and non-consenting phones get NO code, NO row, NO spendable anything", async () => {
+    const unknown = freshPhone();
+    expect(await issueRecoveryChallenge({ phone: unknown, ip: IP, now: lane() })).toEqual({
+      send: false,
+      reason: "ineligible",
+    });
+    const stopped = freshPhone();
+    await makeClient(shopA, stopped, { optedOut: true, optOutSource: "sms_stop" });
+    expect(await issueRecoveryChallenge({ phone: stopped, ip: IP, now: lane() })).toEqual({
+      send: false,
+      reason: "ineligible",
+    });
+    const noConsent = freshPhone();
+    await makeClient(shopA, noConsent, { smsConsentAt: null });
+    expect(await issueRecoveryChallenge({ phone: noConsent, ip: IP, now: lane() })).toEqual({
+      send: false,
+      reason: "ineligible",
+    });
+    expect(await prisma.phoneRecoveryCode.count({})).toBe(0);
+  });
+
+  it("🔴 the platform circuit breaker is atomic under concurrency and cannot be exceeded", async () => {
+    // Shrink the hourly cap through the validated env override, then fire a
+    // parallel burst from DISTINCT IPs (so no advisory lock serializes them) -
+    // only the conditional-update statement itself stands between the burst
+    // and the budget.
+    process.env.RECOVERY_SMS_HOURLY_CAP = "5";
+    expect(hourlyCap()).toBe(5);
+    const now = lane();
+    const jobs: Promise<Awaited<ReturnType<typeof issueRecoveryChallenge>>>[] = [];
+    for (let i = 0; i < 8; i++) {
+      const phone = await textablePhone();
+      jobs.push(issueRecoveryChallenge({ phone, ip: `203.0.113.${20 + i}`, now }));
+    }
+    const results = await Promise.all(jobs);
+    expect(results.filter((r) => r.send)).toHaveLength(5);
+    expect(
+      results.filter((r) => !r.send && r.reason === "platform_budget"),
+    ).toHaveLength(3);
+  });
+
+  it("🔴 budget config FAILS CLOSED: garbage and non-positive values fall back to the default", async () => {
+    process.env.RECOVERY_SMS_HOURLY_CAP = "not a number";
+    expect(hourlyCap()).toBe(RECOVERY_SMS_HOURLY_CAP_DEFAULT);
+    process.env.RECOVERY_SMS_HOURLY_CAP = "-5";
+    expect(hourlyCap()).toBe(RECOVERY_SMS_HOURLY_CAP_DEFAULT);
+    process.env.RECOVERY_SMS_HOURLY_CAP = "0";
+    expect(hourlyCap()).toBe(RECOVERY_SMS_HOURLY_CAP_DEFAULT);
+    delete process.env.RECOVERY_SMS_HOURLY_CAP;
+    expect(hourlyCap()).toBe(RECOVERY_SMS_HOURLY_CAP_DEFAULT);
+  });
+
   it("🔴 expired rows are bounded by the INLINE cleanup - no phantom cron", async () => {
-    const phone = freshPhone();
+    const phone = await textablePhone();
     const old = new Date(Date.now() - CLEANUP_AFTER_MS - 24 * 60 * 60 * 1000);
     await issueRecoveryChallenge({ phone, ip: IP, now: old });
     // Long dead. The next challenge for ANY phone sweeps it.
-    await issueRecoveryChallenge({ phone: freshPhone(), ip: IP, now: lane() });
+    await issueRecoveryChallenge({ phone: await textablePhone(), ip: IP, now: lane() });
     expect(
       await prisma.phoneRecoveryCode.count({
         where: { phoneHash: phoneDigest(phone) },
@@ -188,7 +275,7 @@ describe("the challenge row", () => {
 
 describe("verification", () => {
   it("wrong, expired, replayed and never-issued are ONE refusal", async () => {
-    const phone = freshPhone();
+    const phone = await textablePhone();
     const now = lane();
     const ch = await issueRecoveryChallenge({ phone, ip: IP, now });
     const code = (ch as { code: string }).code;
@@ -206,7 +293,7 @@ describe("verification", () => {
   });
 
   it("locks after MAX_ATTEMPTS and stays locked for the right code too", async () => {
-    const phone = freshPhone();
+    const phone = await textablePhone();
     const now = lane();
     const ch = await issueRecoveryChallenge({ phone, ip: IP, now });
     const code = (ch as { code: string }).code;
@@ -218,7 +305,7 @@ describe("verification", () => {
   });
 
   it("🔴 two concurrent correct verifications produce EXACTLY one proof", async () => {
-    const phone = freshPhone();
+    const phone = await textablePhone();
     const now = lane();
     const ch = await issueRecoveryChallenge({ phone, ip: IP, now });
     const code = (ch as { code: string }).code;
@@ -230,7 +317,7 @@ describe("verification", () => {
   });
 
   it("🔴 a KIOSK code cannot redeem as recovery, nor recovery as kiosk - the purpose is in the digest", async () => {
-    const phone = freshPhone();
+    const phone = await textablePhone();
     const now = lane();
     // Same phone, same instant, both stores live.
     const rec = await issueRecoveryChallenge({ phone, ip: IP, now });

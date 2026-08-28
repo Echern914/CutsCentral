@@ -1037,6 +1037,9 @@ dashboardRouter.post("/clients/:clientId/opt", async (req, res) => {
  * on the router for the other half.
  */
 const RESEND_COOLDOWN_MS = 5 * 60 * 1000;
+/** Loyalty-kind texts one client row may receive per rolling day, all doors
+ * combined - the bound that keeps a phone's worst-case SMS count small. */
+const RESEND_DAILY_CAP = 5;
 
 dashboardRouter.post("/clients/:clientId/rewards-link", async (req, res) => {
   const shop = req.shop!;
@@ -1072,7 +1075,7 @@ dashboardRouter.post("/clients/:clientId/rewards-link", async (req, res) => {
   }
 
   const now = new Date();
-  // The Nudge row IS the audit trail, so the cooldown reads from it - one
+  // The Nudge row IS the audit trail, so both limits read from it - one
   // record, not a counter that can disagree with what was actually sent.
   const recent = await db.nudge.findFirst({
     where: {
@@ -1086,6 +1089,24 @@ dashboardRouter.post("/clients/:clientId/rewards-link", async (req, res) => {
     res.status(429).json({
       error: "too_soon",
       message: "That link was just sent. Give it a few minutes before resending.",
+    });
+    return;
+  }
+  // Daily ceiling so the authenticated door is bounded too. Counts EVERY
+  // loyalty-kind text to this client - self-serve recovery included, since
+  // those audit onto the same trail - so the worst case per client row per
+  // day is RESEND_DAILY_CAP however the doors are alternated.
+  const today = await db.nudge.count({
+    where: {
+      clientId: client.id,
+      kind: "loyalty",
+      createdAt: { gt: new Date(now.getTime() - 24 * 60 * 60 * 1000) },
+    },
+  });
+  if (today >= RESEND_DAILY_CAP) {
+    res.status(429).json({
+      error: "too_many_today",
+      message: "This client has hit today's text limit. Try again tomorrow.",
     });
     return;
   }

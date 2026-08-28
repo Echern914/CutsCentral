@@ -14,7 +14,7 @@ import {
 } from "@chairback/config";
 import { prisma, runAsOwner } from "@chairback/db";
 import { toE164 } from "../acuity/clientKey.js";
-import { phoneHasAnyClient } from "../services/rewardsRecovery.js";
+import { requestRecoveryChallenge } from "../services/rewardsRecovery.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 import { buildPassForClient, walletEnabled } from "../wallet/pass.js";
 import { receptionistEnabledForShop } from "../receptionist/config.js";
@@ -833,45 +833,20 @@ rewardsRouter.post("/resolve-by-phone", async (req, res) => {
     return;
   }
   const phone = toE164(parsed.data.phone);
-  // Uniform response regardless of validity/existence (no enumeration signal).
-  const ok = { ok: true };
-
+  // 🔴 One service, one budget. This endpoint used to do its own lookup and
+  // send, which meant a caller could alternate between here and the recovery
+  // route and draw TWO send allowances per phone while bypassing the
+  // challenge row entirely. Now both doors are the same door: same
+  // eligibility decision, same cooldown, same per-phone cap, same IP ceiling,
+  // same purpose binding, same audit discipline - and its ONE message carries
+  // the code AND the /my-rewards door, so the whole legacy journey (open the
+  // link, enter the number, enter THIS code, choose the business) costs
+  // exactly one SMS. The response stays byte-identical {ok:true} for every
+  // phone, and the send is fire-and-forget inside the service.
   if (phone) {
-    const { any, auditClient } = await phoneHasAnyClient(phone);
-    if (any && auditClient) {
-      const url = `${env.APP_BASE_URL.replace(/\/$/, "")}/my-rewards`;
-      const body =
-        `ChairBack: tap to verify your number and open your rewards: ${url} ` +
-        `Reply STOP to opt out.`;
-      try {
-        // Platform default line on purpose: naming no shop includes not
-        // texting from one shop's number.
-        const result = await getMessageProvider().send({ to: phone, body });
-        await runAsOwner((tx) =>
-          tx.nudge.create({
-            data: {
-              shopId: auditClient.shopId,
-              clientId: auditClient.id,
-              channel: "SMS",
-              status: "SENT",
-              kind: "loyalty",
-              body,
-              sentAt: new Date(),
-              messageSid: result.sid,
-            },
-          }),
-        );
-      } catch (err) {
-        // Never leak failure to the caller; ids only in the log.
-        logger.error(
-          { err, shopId: auditClient.shopId, clientId: auditClient.id },
-          "resolve-by-phone recovery send failed",
-        );
-      }
-    }
+    await requestRecoveryChallenge({ phone, ip: req.ip ?? "unknown", now: new Date() });
   }
-
-  res.json(ok);
+  res.json({ ok: true });
 });
 
 /**

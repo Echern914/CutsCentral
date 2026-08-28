@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
+import { readRecoverySmsCosts } from "../services/recoverySmsBudget.js";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { apiEnv } from "@chairback/config";
 import { backfillShop } from "../acuity/backfill.js";
@@ -80,6 +81,16 @@ adminRouter.post("/attribution", async (_req, res) => {
  * dry. Counts only - never a customer. Same no-parameters contract as the
  * waitlist preview above it.
  */
+/**
+ * Read-only recovery-SMS cost summary: attempts, accepted, failures and every
+ * suppression class for the current hour, today and the trailing 30 days,
+ * plus the live caps. Counters only - nothing customer-shaped exists in the
+ * store this reads.
+ */
+adminRouter.get("/recovery-sms-costs", async (_req, res) => {
+  res.json(await readRecoverySmsCosts(new Date()));
+});
+
 adminRouter.post("/walk-in-expiry-preview", async (req, res) => {
   const extras = [
     ...Object.keys((req.body ?? {}) as Record<string, unknown>),

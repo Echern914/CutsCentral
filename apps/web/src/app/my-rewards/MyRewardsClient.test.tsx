@@ -36,6 +36,36 @@ async function toCodeStep() {
 }
 
 describe("MyRewardsClient", () => {
+  it("🔴 mounting / refreshing the page sends NOTHING", () => {
+    render(<MyRewardsClient />);
+    expect(challenge).not.toHaveBeenCalled();
+    expect(verify).not.toHaveBeenCalled();
+    expect(shopsFn).not.toHaveBeenCalled();
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it("🔴 a double tap fires exactly ONE challenge", async () => {
+    challenge.mockResolvedValue(ok({ ok: true }) as never);
+    render(<MyRewardsClient />);
+    fireEvent.change(screen.getByPlaceholderText(/555/), {
+      target: { value: "212 555 0134" },
+    });
+    const btn = screen.getByText(/text me a code/i);
+    fireEvent.click(btn);
+    fireEvent.click(btn); // the second tap lands while the first is in flight
+    await screen.findByText(/if that number's on file/i);
+    expect(challenge).toHaveBeenCalledTimes(1);
+  });
+
+  it("the resend button shows a 60s countdown and stays disabled through it", async () => {
+    await toCodeStep();
+    const resend = screen.getByText(/send a fresh code \(60s\)/i);
+    expect((resend as HTMLButtonElement).disabled).toBe(true);
+    // And tapping it anyway fires nothing further.
+    fireEvent.click(resend);
+    expect(challenge).toHaveBeenCalledTimes(1);
+  });
+
   it("the code step never asserts the number exists - 'if on file' copy", async () => {
     await toCodeStep();
     expect(screen.getByText(/if that number's on file/i)).toBeTruthy();

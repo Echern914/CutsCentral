@@ -1,15 +1,14 @@
 import { createHmac } from "node:crypto";
-import { prisma, runAsOwner } from "@chairback/db";
+import { Prisma, prisma, runAsOwner } from "@chairback/db";
+import { getMessageProvider } from "../messaging/twilio.js";
 import { apiEnv, decrypt, encrypt, randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
 import {
   CLEANUP_AFTER_MS,
   CODE_TTL_MS,
   MAX_ATTEMPTS,
-  MAX_SENDS_PER_WINDOW,
   PROOF_TTL_MS,
   RESEND_COOLDOWN_MS,
-  SEND_WINDOW_MS,
   codeShapeOk,
   digestsMatch,
   hashOtp,
@@ -17,6 +16,10 @@ import {
   proofShapeOk,
   sha256Hex,
 } from "../engines/otpPolicy.js";
+import {
+  bumpRecoverySmsMetric,
+  takeRecoverySmsBudget,
+} from "./recoverySmsBudget.js";
 
 /**
  * Rewards recovery: prove you hold the phone, THEN learn what it unlocks.
@@ -51,6 +54,14 @@ export const RECOVERY_PURPOSE = "rewards_recovery" as const;
 export const IP_CHALLENGE_CAP = 10;
 export const IP_CHALLENGE_WINDOW_MS = 10 * 60 * 1000;
 
+/**
+ * Per-phone spend, tighter than the kiosk's shared policy on purpose: this is
+ * an unauthenticated public door and each send is real money. Three recovery
+ * texts per phone per rolling day; the 60s resend cooldown is the shared one.
+ */
+export const RECOVERY_MAX_SENDS_PER_DAY = 3;
+export const RECOVERY_SEND_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 /** The chooser never returns more rows than a human has shops. */
 export const MAX_CHOOSER_SHOPS = 12;
 
@@ -70,8 +81,17 @@ export function ipDigest(ip: string): string {
 }
 
 export type RecoveryChallengeOutcome =
-  | { send: true; code: string }
-  | { send: false; reason: "cooldown" | "phone_cap" | "ip_cap" };
+  /** `auditClient` = the OLDEST textable Client row, whose existing consent is
+   * what authorizes the neutral SMS; it feeds the Nudge audit row and nothing
+   * else. Deterministic on purpose - never activity-based. */
+  | { send: true; code: string; auditClient: { id: string; shopId: string } }
+  /** 🔴 INTERNAL ONLY - `reason` (including "ineligible") must never reach a
+   * response, a log line, analytics or audit free text. The routes answer the
+   * same ok for every reason, and log nothing per-outcome. */
+  | {
+      send: false;
+      reason: "cooldown" | "phone_cap" | "ip_cap" | "ineligible" | "platform_budget";
+    };
 
 /**
  * Mint (or refresh) the one recovery challenge for this phone. The caller has
@@ -87,14 +107,42 @@ export async function issueRecoveryChallenge(opts: {
   const ipHash = ipDigest(ip);
 
   return runAsOwner(async (tx) => {
+    // 🔴 Serialize per-IP FIRST. The ceiling below is count-then-insert, and
+    // without this lock N parallel distinct-phone challenges from one address
+    // could all observe count < cap before any of them commits - the classic
+    // read-modify race. pg_advisory_xact_lock is the house primitive (the
+    // booking guard's), releases at commit/rollback, and holds across
+    // replicas because it lives in Postgres, not the process.
+    await tx.$executeRaw(
+      Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`rec:${ipHash}`}))`,
+    );
+
     // Inline bounded cleanup - the same replace-a-cron pattern as the kiosk.
     // This is THE cleanup; there is no scheduled job to seed or to forget.
     await tx.phoneRecoveryCode.deleteMany({
       where: { expiresAt: { lt: new Date(now.getTime() - CLEANUP_AFTER_MS) } },
     });
 
-    // Platform-wide per-IP ceiling, counted on the table itself so it holds
-    // across replicas and restarts - and keyed on a digest, never an address.
+    // 🔴 ELIGIBILITY BEFORE ANY SEND OR ROW: a code goes only to a phone with
+    // at least one non-archived Client row that is textable under the shop's
+    // EXISTING consent rule (optedOut false AND smsConsentAt set). Without
+    // this, the route was a public "text any number on our Twilio bill"
+    // primitive - the caps bounded it but did not remove it. An ineligible
+    // phone gets no SMS, no row, and therefore no spendable anything; the
+    // decision is returned as an internal reason the routes never echo, and
+    // OLDEST-textable keeps the audit attribution deterministic.
+    const candidates = await tx.client.findMany({
+      where: { phone, archivedAt: null, optedOut: false, smsConsentAt: { not: null } },
+      select: { id: true, shopId: true },
+      orderBy: { createdAt: "asc" },
+      take: 1,
+    });
+    const auditClient = candidates[0] ?? null;
+    if (!auditClient) return { send: false, reason: "ineligible" };
+
+    // Platform-wide per-IP ceiling, counted on the table under the lock above
+    // so it is atomic - and keyed on a digest, never an address. Only
+    // ELIGIBLE challenges reach this count, because only they cost an SMS.
     const fromThisIp = await tx.phoneRecoveryCode.count({
       where: {
         ipHash,
@@ -110,9 +158,16 @@ export async function issueRecoveryChallenge(opts: {
       if (now.getTime() - existing.lastSentAt.getTime() < RESEND_COOLDOWN_MS) {
         return { send: false, reason: "cooldown" };
       }
-      const inWindow = now.getTime() - existing.lastSentAt.getTime() < SEND_WINDOW_MS;
-      if (inWindow && existing.sendCount >= MAX_SENDS_PER_WINDOW) {
+      const inWindow =
+        now.getTime() - existing.lastSentAt.getTime() < RECOVERY_SEND_WINDOW_MS;
+      if (inWindow && existing.sendCount >= RECOVERY_MAX_SENDS_PER_DAY) {
         return { send: false, reason: "phone_cap" };
+      }
+      // 🔴 THE PLATFORM CIRCUIT BREAKER - the last gate before a unit of real
+      // spend is committed. Counted here, before dispatch, and never given
+      // back: an ambiguous provider outcome may still have cost money.
+      if (!(await takeRecoverySmsBudget(tx, now))) {
+        return { send: false, reason: "platform_budget" };
       }
       const code = mintCode();
       await tx.phoneRecoveryCode.update({
@@ -131,9 +186,12 @@ export async function issueRecoveryChallenge(opts: {
           sendCount: inWindow ? existing.sendCount + 1 : 1,
         },
       });
-      return { send: true, code };
+      return { send: true, code, auditClient };
     }
 
+    if (!(await takeRecoverySmsBudget(tx, now))) {
+      return { send: false, reason: "platform_budget" };
+    }
     const code = mintCode();
     // A raced double-create collapses on @@unique([purpose, phoneHash]): the
     // loser's P2002 is caught and answered as a cooldown, which is literally
@@ -156,8 +214,110 @@ export async function issueRecoveryChallenge(opts: {
       }
       throw err;
     }
-    return { send: true, code };
+    return { send: true, code, auditClient };
   });
+}
+
+/**
+ * The ONE production recovery SMS, for both entry points. GSM-7 only and one
+ * segment by construction - no emoji, no curly punctuation, no Unicode - and
+ * it carries the code AND the door, so the ENTIRE legacy journey (tap the
+ * link, enter the number, enter THIS code, choose the business) costs exactly
+ * one message. Never a shop name, customer name, rewards token, phone or
+ * credential; never a code or proof in the URL. Pinned by a GSM-7 segment
+ * test - edit with that test open.
+ */
+export function recoverySmsBody(code: string): string {
+  const base = apiEnv().APP_BASE_URL.replace(/\/$/, "");
+  return `ChairBack code: ${code}. Open ${base}/my-rewards to choose your business. Expires in 5 minutes. Reply STOP to opt out.`;
+}
+
+/**
+ * THE one challenge entry - the new recovery route AND the legacy
+ * resolve-by-phone both come through here, so there is exactly one
+ * eligibility decision, one cooldown, one per-phone daily budget, one IP
+ * ceiling, one platform circuit breaker and one purpose binding. A caller
+ * alternating between the two endpoints draws on the SAME allowances.
+ *
+ * The SMS is FIRE-AND-FORGET: the caller's response goes out before any
+ * provider work on EVERY path, so "known" and "unknown" cannot be told apart
+ * by awaiting Twilio on one branch. Residual limitation, stated rather than
+ * papered over: an eligible challenge performs one indexed row write inside
+ * the transaction that an ineligible one does not - a sub-millisecond
+ * database-side difference, not a provider round-trip. Flattening that too
+ * would mean writing junk rows for arbitrary phones, which is the wrong trade.
+ *
+ * NO RETRY, EVER: one provider call per won challenge. A timeout or ambiguous
+ * response already consumed the budget (see issueRecoveryChallenge), and
+ * retrying an ambiguous send is how one customer gets three texts.
+ *
+ * Failure handling is CLASSIFICATION-ONLY: provider errors can embed the
+ * destination number, the message body or credential material, so neither the
+ * error object nor its message ever reaches a log line, a Nudge row, a metric
+ * key or monitoring from this path.
+ */
+export async function requestRecoveryChallenge(opts: {
+  phone: string;
+  ip: string;
+  now: Date;
+}): Promise<void> {
+  const { phone, ip, now } = opts;
+  const outcome = await issueRecoveryChallenge({ phone, ip, now });
+  if (!outcome.send) {
+    // Safe aggregate counters only - never for "ineligible", which would turn
+    // the metric stream into an existence oracle for whoever can read it.
+    if (outcome.reason === "phone_cap") bumpRecoverySmsMetric("sup_phone", now);
+    if (outcome.reason === "ip_cap") bumpRecoverySmsMetric("sup_ip", now);
+    if (outcome.reason === "platform_budget") bumpRecoverySmsMetric("sup_budget", now);
+    return;
+  }
+  bumpRecoverySmsMetric("attempt", now);
+  bumpRecoverySmsMetric("segments", now); // one segment by construction
+  const body = recoverySmsBody(outcome.code);
+
+  // Post-response, write-ahead: the Nudge exists before the provider call, so
+  // a send that succeeds while the process dies still left a record.
+  void (async () => {
+    let nudgeId: string | null = null;
+    try {
+      const nudge = await runAsOwner((tx) =>
+        tx.nudge.create({
+          data: {
+            shopId: outcome.auditClient.shopId,
+            clientId: outcome.auditClient.id,
+            channel: "SMS",
+            status: "PENDING",
+            kind: "loyalty",
+            body,
+          },
+          select: { id: true },
+        }),
+      );
+      nudgeId = nudge.id;
+      const result = await getMessageProvider().send({ to: phone, body });
+      bumpRecoverySmsMetric("accepted", now);
+      await runAsOwner((tx) =>
+        tx.nudge.update({
+          where: { id: nudge.id },
+          data: { status: "SENT", sentAt: new Date(), messageSid: result.sid },
+        }),
+      );
+    } catch {
+      // 🔴 Fixed classification only. The thrown value may carry the phone,
+      // the OTP, the SMS body, an Authorization header or a credential -
+      // none of that may reach a log, a Nudge row, a metric or monitoring.
+      bumpRecoverySmsMetric("failed", now);
+      logger.warn({ nudgeId }, "rewards recovery: challenge send failed");
+      if (nudgeId) {
+        await runAsOwner((tx) =>
+          tx.nudge.update({
+            where: { id: nudgeId! },
+            data: { status: "FAILED", failedReason: "send_failed" },
+          }),
+        ).catch(() => {});
+      }
+    }
+  })();
 }
 
 export type RecoveryVerifyOutcome =
@@ -391,29 +551,5 @@ export async function selectRecoveryShop(opts: {
     );
     const base = apiEnv().APP_BASE_URL.replace(/\/$/, "");
     return { ok: true, rewardsUrl: `${base}/r/${chosen.magicToken}/rewards` };
-  });
-}
-
-/**
- * Does ANY shop know this phone? Used only to decide whether the legacy
- * neutral SMS is worth a Twilio charge - the answer never reaches a response
- * body, and the route replies identically either way.
- */
-export async function phoneHasAnyClient(phone: string): Promise<{
-  any: boolean;
-  /** The row whose consent authorized the send, for the Nudge audit trail:
-   * the OLDEST textable match - deterministic and deliberately NOT
-   * activity-based, which is the selection rule this flow removed. */
-  auditClient: { id: string; shopId: string } | null;
-}> {
-  return runAsOwner(async (tx) => {
-    const rows = await tx.client.findMany({
-      where: { phone, archivedAt: null },
-      select: { id: true, shopId: true, createdAt: true, optedOut: true, smsConsentAt: true },
-      orderBy: { createdAt: "asc" },
-      take: 20,
-    });
-    const textable = rows.find((r) => !r.optedOut && r.smsConsentAt !== null);
-    return { any: rows.length > 0, auditClient: textable ? { id: textable.id, shopId: textable.shopId } : null };
   });
 }

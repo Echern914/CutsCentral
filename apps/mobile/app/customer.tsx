@@ -43,6 +43,16 @@ export default function CustomerScreen() {
     { selectionId: string; name: string; city: string | null; region: string | null; industry: string }[]
   >([]);
   const [recMsg, setRecMsg] = useState<string | null>(null);
+  const [recBusy, setRecBusy] = useState(false);
+  // Mirror of the server's 60s resend cooldown - the server suppresses early
+  // resends silently, so the button says why instead of lying.
+  const [recCooldown, setRecCooldown] = useState(0);
+
+  useEffect(() => {
+    if (recCooldown <= 0) return;
+    const t = setInterval(() => setRecCooldown((v) => Math.max(0, v - 1)), 1000);
+    return () => clearInterval(t);
+  }, [recCooldown > 0]);
   const [linkInput, setLinkInput] = useState("");
   const [linkErr, setLinkErr] = useState<string | null>(null);
   // Demonstration mode (App Review Guideline 2.1a): browse the seeded demo
@@ -136,15 +146,21 @@ export default function CustomerScreen() {
    * its owner proves it.
    */
   async function recoveryStart() {
+    // Double-tap + cooldown guards: sends happen only on an explicit tap and
+    // never twice for one tap. Nothing sends on mount or on step changes.
+    if (recBusy || recCooldown > 0) return;
     setRecMsg(null);
     const p = phone.trim();
     if (!p) { setRecMsg("Enter your mobile number."); return; }
+    setRecBusy(true);
     const res = await fetch(`${API_ORIGIN}/api/rewards-recovery/challenge`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ phone: p }),
     }).catch(() => null);
+    setRecBusy(false);
     if (!res || !res.ok) { setRecMsg("Something went wrong. Please try again."); return; }
+    setRecCooldown(60);
     setRecCode("");
     setRecStep("code");
   }
@@ -327,8 +343,14 @@ export default function CustomerScreen() {
               <Pressable style={[styles.button, styles.buttonSecondary]} onPress={recoveryVerify}>
                 <Text style={styles.buttonSecondaryText}>Verify</Text>
               </Pressable>
-              <Pressable style={styles.demoLink} onPress={recoveryStart}>
-                <Text style={styles.demoLinkText}>Send a fresh code</Text>
+              <Pressable
+                style={styles.demoLink}
+                disabled={recBusy || recCooldown > 0}
+                onPress={recoveryStart}
+              >
+                <Text style={styles.demoLinkText}>
+                  {recCooldown > 0 ? `Send a fresh code (${recCooldown}s)` : "Send a fresh code"}
+                </Text>
               </Pressable>
             </>
           )}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSignalNativeReady } from "@/lib/nativeReady";
 import {
   recoveryChallengeAction,
@@ -36,8 +36,23 @@ export function MyRewardsClient() {
   const [shops, setShops] = useState<RecoveryShop[]>([]);
   const [pending, setPending] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
+  // Client-side mirror of the server's 60s resend cooldown. The server is the
+  // authority (it silently suppresses early resends); this exists so a
+  // customer is never invited to tap a button that will quietly do nothing,
+  // and so a double tap cannot fire two requests.
+  const [cooldownLeft, setCooldownLeft] = useState(0);
+
+  useEffect(() => {
+    if (cooldownLeft <= 0) return;
+    const t = setInterval(() => setCooldownLeft((v) => Math.max(0, v - 1)), 1000);
+    return () => clearInterval(t);
+  }, [cooldownLeft > 0]);
 
   async function sendCode() {
+    // In-flight and cooldown guards: a double tap or an early resend fires
+    // exactly nothing. Sends happen ONLY here - never on mount, refresh or
+    // step navigation.
+    if (pending || cooldownLeft > 0) return;
     setPending(true);
     setFlash(null);
     const res = await recoveryChallengeAction(phone);
@@ -46,6 +61,7 @@ export function MyRewardsClient() {
       setFlash("Something went wrong. Please try again.");
       return;
     }
+    setCooldownLeft(60);
     setCode("");
     setStep("code");
   }
@@ -143,8 +159,13 @@ export function MyRewardsClient() {
           >
             {pending ? "Checking…" : "Verify"}
           </button>
-          <button type="button" className={GHOST} disabled={pending} onClick={() => void sendCode()}>
-            Send a fresh code
+          <button
+            type="button"
+            className={GHOST}
+            disabled={pending || cooldownLeft > 0}
+            onClick={() => void sendCode()}
+          >
+            {cooldownLeft > 0 ? `Send a fresh code (${cooldownLeft}s)` : "Send a fresh code"}
           </button>
         </>
       )}

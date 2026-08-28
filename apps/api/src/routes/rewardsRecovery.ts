@@ -1,12 +1,10 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
-import { getMessageProvider } from "../messaging/twilio.js";
 import { toE164 } from "../acuity/clientKey.js";
-import { logger } from "../logger.js";
 import { recoveryReadLimiter, recoverySmsLimiter } from "../middleware/rateLimit.js";
 import {
-  issueRecoveryChallenge,
   listRecoveryShops,
+  requestRecoveryChallenge,
   selectRecoveryShop,
   verifyRecoveryChallenge,
 } from "../services/rewardsRecovery.js";
@@ -59,23 +57,12 @@ rewardsRecoveryRouter.post("/challenge", recoverySmsLimiter, async (req, res) =>
     return;
   }
 
-  const outcome = await issueRecoveryChallenge({ phone, ip: callerIp(req), now: new Date() });
-  if (outcome.send) {
-    try {
-      await getMessageProvider().send({
-        to: phone,
-        // Platform-neutral on purpose: no shop name, no balance, nothing to
-        // learn from the message beyond the code itself.
-        body: `ChairBack code: ${outcome.code}. It expires in 5 minutes. Reply STOP to opt out.`,
-      });
-    } catch (err) {
-      // The caller still gets ok - a delivery hiccup must not become an
-      // existence signal. Key-free log line.
-      logger.warn({ err: (err as Error).message }, "rewards recovery: challenge SMS failed");
-    }
-  } else {
-    logger.info({ reason: outcome.reason }, "rewards recovery: challenge suppressed");
-  }
+  // Everything - eligibility, cooldown, budgets, the send itself - is the
+  // shared service's; this route only answers. The send is fire-and-forget
+  // inside the service, so the ok below leaves before any provider work on
+  // EVERY path, and no outcome (including "this phone is unknown to us") is
+  // logged or echoed from here.
+  await requestRecoveryChallenge({ phone, ip: callerIp(req), now: new Date() });
   ok(res);
 });
 
