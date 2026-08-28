@@ -6,6 +6,8 @@ import {
   type BookingModeKey,
 } from "@chairback/config/constants";
 import { apiPublicGet } from "@/lib/api";
+import { GetTheApp } from "@/components/GetTheApp";
+import { appleItunesApp } from "@/lib/appBanner";
 import { ShopPageClient } from "./ShopPageClient";
 
 export interface ShopPageData {
@@ -179,6 +181,9 @@ export default async function PublicShopPage({
         }}
       />
       <ShopPageClient data={data} />
+      <div className="mx-auto w-full max-w-2xl px-4 pb-8">
+        <GetTheApp surface="shop" />
+      </div>
     </>
   );
 }

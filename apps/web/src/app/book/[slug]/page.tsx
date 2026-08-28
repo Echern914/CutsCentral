@@ -3,6 +3,8 @@ import { notFound } from "next/navigation";
 import { APP_NAME } from "@chairback/config/constants";
 import { apiPublicGet } from "@/lib/api";
 import { BookingClient } from "./BookingClient";
+import { GetTheApp } from "@/components/GetTheApp";
+import { appleItunesApp } from "@/lib/appBanner";
 
 export interface BookShopData {
   shop: {
@@ -127,6 +129,8 @@ export async function generateMetadata({
     title: `Book at ${data.shop.name}`,
     description: `Book your appointment at ${data.shop.name}.`,
     robots: { index: false }, // booking funnel, not a landing page
+    // iOS Safari draws Apple's own install banner from this.
+    other: { ...appleItunesApp() },
   };
 }
 
@@ -137,5 +141,13 @@ export default async function BookPage({
 }) {
   const data = await getData(params.slug);
   if (!data) notFound();
-  return <BookingClient data={data} />;
+  return (
+    <>
+      <BookingClient data={data} />
+      {/* Below the flow, never above it: the booking is what they came for. */}
+      <div className="mx-auto w-full max-w-2xl px-4 pb-8">
+        <GetTheApp surface="booking" />
+      </div>
+    </>
+  );
 }

@@ -279,12 +279,13 @@ const webSchema = z.object({
   // for push. Public by design (it's the server's PUBLIC key). Optional: while
   // unset, the push opt-in UI stays hidden and everything falls back to SMS.
   PUSH_VAPID_PUBLIC_KEY: z.string().min(1).optional(),
-  // Native-app store links for the "Get the app" banner on the rewards page.
-  // Both optional: while APP_STORE_URL is unset the banner never renders (safe
-  // before the app is live). Set APP_STORE_URL the moment the iOS app is on the
-  // App Store; PLAY_STORE_URL only if/when an Android build ships.
-  APP_STORE_URL: cleanUrl().optional(),
-  PLAY_STORE_URL: cleanUrl().optional(),
+  // (APP_STORE_URL / PLAY_STORE_URL removed deliberately. They gated the
+  // "Get the app" banner, were never set in Vercel, and so switched a growth
+  // surface off for weeks with nothing to see. The App Store listing id is
+  // stable, so it lives in MOBILE_APP in constants.ts where an absence is
+  // impossible. Do not reintroduce them: a store link is not a secret and does
+  // not vary by environment, which is the whole test for whether something
+  // belongs in env at all.)
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),
