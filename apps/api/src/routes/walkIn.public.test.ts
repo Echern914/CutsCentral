@@ -201,6 +201,31 @@ describe("gates", () => {
     });
   });
 
+  it("🔴 resolve reports whether the shop can take a walk-in at all", async () => {
+    // A kiosk pointed at a shop with no active services renders a selection
+    // screen with nothing on it and a permanently disabled Next. The server
+    // says so rather than leaving the tablet to look broken.
+    const full = await post("/api/walk-in/kiosk/resolve", { token: kioskToken });
+    expect(full.body.setupComplete).toBe(true);
+
+    await prisma.service.updateMany({ where: { shopId }, data: { active: false } });
+    const noServices = await post("/api/walk-in/kiosk/resolve", { token: kioskToken });
+    expect(noServices.status).toBe(200); // still a normal answer, not an error
+    expect(noServices.body.setupComplete).toBe(false);
+    expect(noServices.body.services).toEqual([]);
+    await prisma.service.updateMany({ where: { shopId }, data: { active: true } });
+
+    // Staff is the other half, and the worse one: that flow COMPLETES and
+    // creates an entry nobody can ever be assigned to.
+    await prisma.staff.updateMany({ where: { shopId }, data: { active: false } });
+    const noStaff = await post("/api/walk-in/kiosk/resolve", { token: kioskToken });
+    expect(noStaff.body.setupComplete).toBe(false);
+    await prisma.staff.updateMany({ where: { shopId }, data: { active: true } });
+
+    const restored = await post("/api/walk-in/kiosk/resolve", { token: kioskToken });
+    expect(restored.body.setupComplete).toBe(true);
+  });
+
   it("rotating the kiosk token kills the old tablet URL", async () => {
     const old = kioskToken;
     const mint = await request(app)

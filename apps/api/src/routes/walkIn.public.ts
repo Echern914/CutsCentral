@@ -153,6 +153,23 @@ walkInPublicRouter.post("/kiosk/resolve", kioskReadLimiter, async (req, res) => 
       timezone: shop.timezone,
     },
     acceptingNow: accepting,
+    /**
+     * Can this shop actually take a walk-in at all?
+     *
+     * 🔴 A kiosk with no active SERVICES renders a selection screen with
+     * nothing on it and a permanently disabled Next - a customer standing at
+     * the tablet sees a broken app, not an unfinished setup. With no active
+     * STAFF the flow completes but creates an entry nobody can ever be
+     * assigned to, which is worse: it looks like it worked.
+     *
+     * Decided here rather than in the client because the shop's own state is
+     * the server's to describe - the same reason `acceptingNow` is computed
+     * here. Deliberately NOT gated on the service-to-barber pairing: the
+     * walk-in estimate falls back to all active staff for a combination
+     * nobody formally offers (see walkInEstimate), so an unpaired shop is
+     * degraded, not broken, and refusing it would be stricter than the engine.
+     */
+    setupComplete: services.length > 0 && staff.length > 0,
     // Display-only: the server re-snapshots duration/price at check-in.
     services: services.map((s) => ({
       id: s.id,

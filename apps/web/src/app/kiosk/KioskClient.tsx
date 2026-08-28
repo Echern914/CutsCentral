@@ -32,6 +32,7 @@ type Step =
   | "loading"
   | "bad_link"
   | "closed"
+  | "not_ready"
   | "welcome"
   | "phone"
   | "code"
@@ -127,9 +128,14 @@ export function KioskClient() {
     }
     setData(res.data);
     setStep((s) => {
+      // Checked BEFORE "paused": a shop with nothing to book was never open in
+      // the first place, and `walkInAcceptingNow` defaults to true, so an
+      // unfinished shop would otherwise read as deliberately closed.
+      if (!res.data!.setupComplete) return "not_ready";
       if (!res.data!.acceptingNow) return "closed";
-      // A reopened shop recovers from "closed"; mid-flow steps are preserved.
-      return s === "loading" || s === "closed" ? "welcome" : s;
+      // A reopened - or newly finished - shop recovers on the next load; mid-flow
+      // steps are preserved.
+      return s === "loading" || s === "closed" || s === "not_ready" ? "welcome" : s;
     });
   }, [kioskToken]);
 
@@ -351,6 +357,29 @@ export function KioskClient() {
       <p className="text-center text-2xl font-semibold">
         Walk-ins are paused right now - please check with the front desk.
       </p>,
+    );
+  }
+  if (step === "not_ready") {
+    // Two audiences, one screen. The customer needs to know not to stand there
+    // tapping; whoever set the tablet up needs to know WHICH thing is missing,
+    // in their own words. Naming it is the difference between "the app is
+    // broken" and a thirty-second fix.
+    const missing =
+      data && data.services.length === 0 && data.staff.length === 0
+        ? "no services or barbers"
+        : data && data.services.length === 0
+          ? "no services"
+          : "no barbers";
+    return shell(
+      <>
+        <p className="text-center text-2xl font-semibold">
+          This shop hasn&apos;t finished setting up - please check with the front desk.
+        </p>
+        <p className="text-center text-muted">
+          Staff: walk-in check-in needs at least one active service and one active
+          barber. This shop has {missing} set up yet.
+        </p>
+      </>,
     );
   }
   if (step === "welcome") {

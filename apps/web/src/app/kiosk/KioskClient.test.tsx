@@ -27,6 +27,7 @@ vi.mock("./actions", () => ({
 const shopData = {
   shop: { name: "Fade Lab", logoUrl: null, accentColor: null, timezone: "UTC" },
   acceptingNow: true,
+  setupComplete: true,
   services: [
     { id: "s1", name: "Fade", description: null, durationMin: 30, price: 40, color: null },
     { id: "s2", name: "Beard", description: null, durationMin: 15, price: 20, color: null },
@@ -164,6 +165,42 @@ describe("refusals stay honest and generic", () => {
     );
     render(<KioskClient />);
     expect(await screen.findByText(/paused right now/i)).toBeTruthy();
+  });
+
+  it("🔴 a shop with no services says so instead of a dead Next button", async () => {
+    // The defect this replaces: an empty catalog rendered the selection screen
+    // with nothing on it and Next permanently disabled, because Next is gated
+    // on `serviceIds.length === 0` and there was nothing selectable. A customer
+    // at the tablet saw a broken app.
+    resolveMock.mockResolvedValue(
+      ok({ ...shopData, setupComplete: false, services: [] }) as never,
+    );
+    render(<KioskClient />);
+    expect(await screen.findByText(/hasn't finished setting up/i)).toBeTruthy();
+    // And it names WHICH half is missing, for whoever set the tablet up.
+    expect(screen.getByText(/no services set up yet/i)).toBeTruthy();
+  });
+
+  it("🔴 a shop with no barbers says so too - that one completes but is unservable", async () => {
+    // Worse than the empty catalog, because it LOOKS like it worked: the flow
+    // finishes and creates an entry no one can ever be assigned to.
+    resolveMock.mockResolvedValue(
+      ok({ ...shopData, setupComplete: false, staff: [] }) as never,
+    );
+    render(<KioskClient />);
+    expect(await screen.findByText(/hasn't finished setting up/i)).toBeTruthy();
+    expect(screen.getByText(/no barbers set up yet/i)).toBeTruthy();
+  });
+
+  it("an unfinished shop reads as unfinished, NOT as deliberately paused", async () => {
+    // walkInAcceptingNow defaults to true, so ordering matters: were `closed`
+    // checked first a half-built shop would still land here, but if that
+    // default ever flips, the more specific screen must still win.
+    resolveMock.mockResolvedValue(
+      ok({ ...shopData, setupComplete: false, acceptingNow: false, services: [] }) as never,
+    );
+    render(<KioskClient />);
+    expect(await screen.findByText(/hasn't finished setting up/i)).toBeTruthy();
   });
 
   it("an API failure offers retry and never fakes a success", async () => {

@@ -21,6 +21,8 @@ export interface KioskShopData {
     timezone: string;
   };
   acceptingNow: boolean;
+  /** False when the shop has no active services or no active barbers. */
+  setupComplete: boolean;
   services: {
     id: string;
     name: string;
