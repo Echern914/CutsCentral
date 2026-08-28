@@ -1013,6 +1013,118 @@ dashboardRouter.post("/clients/:clientId/opt", async (req, res) => {
   res.json({ ok: true, optedOut });
 });
 
+/**
+ * Re-send a client their rewards link.
+ *
+ * The link is texted at signup and on nudges, and until now a customer who lost
+ * that SMS had no way back in - the token in the URL IS the credential, so
+ * losing the message meant losing the punch card. A real customer at the pilot
+ * shop hit exactly that. This is the two-tap answer for a barber standing next
+ * to them; phone-number self-recovery is the customer-side half.
+ *
+ * Shop-scoped through forShop, so a client id from another shop is a plain 404
+ * rather than a hint that it exists.
+ *
+ * 🔴 CONSENT IS THE REAL GATE, and it is the shop's own rule, not a new one:
+ * textable means optedOut === false AND smsConsentAt != null. A STOP is
+ * client-owned - the dashboard cannot text around it, which is the same reason
+ * POST /clients/:id/opt refuses to clear an sms_stop. Refusing here with a
+ * reason the barber can act on beats a silent no-op that looks like it worked.
+ *
+ * Rate limited PER CLIENT in the database rather than by IP: the thing worth
+ * bounding is "how many texts can one customer receive", and that must hold
+ * across barbers, devices and restarts. The dashboard IP limiter already sits
+ * on the router for the other half.
+ */
+const RESEND_COOLDOWN_MS = 5 * 60 * 1000;
+
+dashboardRouter.post("/clients/:clientId/rewards-link", async (req, res) => {
+  const shop = req.shop!;
+  const db = forShop(shop.id);
+  const client = await db.client.findFirst({ where: { id: req.params.clientId } });
+  if (!client) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if (!client.phone) {
+    res.status(409).json({
+      error: "no_phone",
+      message: "Add a mobile number to this client before sending their link.",
+    });
+    return;
+  }
+  if (client.optedOut) {
+    res.status(409).json({
+      error: "opted_out",
+      message:
+        client.optOutSource === "sms_stop"
+          ? "This client texted STOP. Only they can opt back in - by texting START."
+          : "This client is opted out of texts.",
+    });
+    return;
+  }
+  if (!client.smsConsentAt) {
+    res.status(409).json({
+      error: "no_consent",
+      message: "This client hasn't opted in to texts yet.",
+    });
+    return;
+  }
+
+  const now = new Date();
+  // The Nudge row IS the audit trail, so the cooldown reads from it - one
+  // record, not a counter that can disagree with what was actually sent.
+  const recent = await db.nudge.findFirst({
+    where: {
+      clientId: client.id,
+      kind: "loyalty",
+      createdAt: { gt: new Date(now.getTime() - RESEND_COOLDOWN_MS) },
+    },
+    select: { id: true },
+  });
+  if (recent) {
+    res.status(429).json({
+      error: "too_soon",
+      message: "That link was just sent. Give it a few minutes before resending.",
+    });
+    return;
+  }
+
+  const rewardsUrl = `${apiEnv().APP_BASE_URL.replace(/\/$/, "")}/r/${client.magicToken}/rewards`;
+  const body =
+    `Hi ${client.firstName ?? "there"}, here's your ${shop.name} rewards link: ` +
+    `${rewardsUrl} Reply STOP to opt out.`;
+
+  // Write-ahead: the row exists BEFORE the network call, so a send that
+  // succeeds while the response is lost still leaves a record, and the cooldown
+  // above counts it. The reverse order can text twice and remember once.
+  const nudge = await db.nudge.create({
+    data: { clientId: client.id, channel: "SMS", status: "PENDING", kind: "loyalty", body },
+  });
+  try {
+    const result = await getMessageProvider().send({
+      to: client.phone,
+      body,
+      from: shop.twilioNumber ?? undefined,
+    });
+    await db.nudge.update({
+      where: { id: nudge.id },
+      data: { status: "SENT", sentAt: now, messageSid: result.sid },
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    await db.nudge.update({
+      where: { id: nudge.id },
+      data: { status: "FAILED", failedReason: (err as Error).message },
+    });
+    logger.error({ err, shopId: shop.id, clientId: client.id }, "rewards link resend failed");
+    res.status(502).json({
+      error: "send_failed",
+      message: "Couldn't send that text just now. Try again in a moment.",
+    });
+  }
+});
+
 // Edit a client's profile (name / phone / email). Consent and the Acuity sync
 // key are deliberately left untouched (see services/client.ts). A non-empty but
 // unparseable phone is refused; an empty string clears a field.
