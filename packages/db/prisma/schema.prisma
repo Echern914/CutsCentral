@@ -493,6 +493,21 @@ model Shop {
   payDirectCashApp String? // Cash App $cashtag (without the leading $)
   payDirectNote    String? // freeform instruction, e.g. "Zelle or cash on arrival"
 
+  // Walk-In Mode (same-day kiosk queue - distinct from the waitlist, which is
+  // "tell me when a FUTURE slot opens"; a walk-in is "I am HERE, waiting").
+  // walkInEnabled is the master per-shop switch, default OFF so the feature
+  // arrives dark everywhere. walkInAcceptingNow is the barber's "pause the
+  // line" lever - it only means anything while walkInEnabled is on, and
+  // defaults TRUE so flipping the master switch is one action, not two.
+  walkInEnabled      Boolean @default(false)
+  walkInAcceptingNow Boolean @default(true)
+  // The kiosk URL credential, HASHED (sha256 hex of a 32-byte random token -
+  // the same bearer-secret rule as WaitlistOffer.tokenHash). One per shop on
+  // purpose: rotating it kills every signed-in tablet at once, which is
+  // exactly what "the tablet walked out the door" needs. Null = no kiosk URL
+  // has ever been minted.
+  walkInKioskTokenHash String? @unique
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -560,6 +575,11 @@ model Shop {
   // Assistants authorized against this shop, and what they did.
   mcpConnections    McpConnection[]
   mcpAuditEvents    McpAuditEvent[]
+
+  // Walk-In Mode (same-day kiosk queue).
+  walkInEntries       WalkInEntry[]
+  walkInEntryServices WalkInEntryService[]
+  walkInEvents        WalkInEvent[]
 
   @@index([ownerId])
 }
@@ -988,6 +1008,7 @@ model Client {
 
   visits              Visit[]
   waitlistEntries     WaitlistEntry[]
+  walkInEntries       WalkInEntry[]
   ledger              PunchLedger[]
   nudges              Nudge[]
   promoUses           PromotionRedemption[]
@@ -1605,6 +1626,10 @@ model Staff {
   // The team seat that works this chair, if any (see ShopMember.staffId).
   member            ShopMember?
   teamInvites       TeamInvite[]
+  // Walk-in queue: entries that ASKED for this chair vs entries a claim/assign
+  // actually PUT on it - two different questions, two named relations.
+  walkInPreferred   WalkInEntry[] @relation("WalkInPreferred")
+  walkInAssigned    WalkInEntry[] @relation("WalkInAssigned")
 
   @@index([shopId, active])
 }
@@ -1743,6 +1768,7 @@ model Service {
   upgradeRulesTo  ServiceUpgradeRule[]       @relation("UpgradeDestination")
   upgradeRuleUses ServiceUpgradeRuleSource[] @relation("UpgradeSource")
   serviceGoals    ServiceGoal[]
+  walkInSelections WalkInEntryService[]
   serviceGroup    ServiceGroup? @relation(fields: [serviceGroupId], references: [id], onDelete: SetNull)
 
   @@index([shopId, active])
@@ -2383,6 +2409,8 @@ model Appointment {
   // the claimed offer that produced it.
   waitlistEntry WaitlistEntry? @relation("WaitlistBooked")
   waitlistOffer WaitlistOffer? @relation("WaitlistOfferClaim")
+  // Set when this appointment was created by starting a walk-in queue entry.
+  walkInEntry   WalkInEntry?   @relation("WalkInStarted")
 
   // The double-booking guard (a partial unique on BOOKED rows) is added by hand
   // in the migration - Prisma can't express a WHERE-filtered unique index.
@@ -2825,4 +2853,200 @@ enum McpAuditResult {
   OK
   DENIED
   ERROR
+}
+
+// ---------------------------------------------------------------------------
+// WALK-IN MODE - the same-day kiosk queue.
+//
+// 🔴 THIS IS NOT THE WAITLIST. WaitlistEntry means "let me know when a FUTURE
+// appointment opens up"; a WalkInEntry means "I am standing in the shop RIGHT
+// NOW, waiting to be served." The two share conventions (CHECK-pinned status
+// string, nullable clientId with one linking rule, hashed bearer tokens, an
+// append-only event log) and deliberately share NO tables, statuses, or
+// lifecycle code.
+//
+// Lifecycle (engines/walkInLifecycle.ts owns the legal-transition matrix; every
+// transition is a status-CAS updateMany so a stale or repeated action is a
+// 0-count no-op, never a partial write):
+//   WAITING -> ASSIGNED -> READY -> IN_SERVICE -> COMPLETED
+// with LEFT / NO_SHOW / CANCELED / EXPIRED as the non-service terminals.
+// No Appointment row exists until service actually STARTS - the entry is a
+// person in a chair-side line, not calendar occupancy.
+// ---------------------------------------------------------------------------
+model WalkInEntry {
+  id     String @id @default(cuid())
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  // Same rule, same reasoning, and eventually the same engine as
+  // WaitlistEntry.clientId: link only an UNAMBIGUOUS, non-archived client in
+  // this shop with this exact phone; ambiguous stays null rather than guessing.
+  // The kiosk NEVER reveals whether a link happened - that would make the
+  // tablet a "who is a customer here" oracle.
+  clientId String?
+  client   Client? @relation(fields: [clientId], references: [id], onDelete: SetNull)
+
+  firstName String
+  lastName  String?
+  // E.164 when parseable. Nullable because a STAFF-created entry ("guy at the
+  // counter, no phone") is legal; the partial unique below only binds rows
+  // that have one.
+  phone     String?
+
+  // KIOSK = the customer checked themselves in on the tablet;
+  // STAFF = someone behind the counter added them. CHECK-pinned.
+  source String
+
+  // WAITING | ASSIGNED | READY | IN_SERVICE | COMPLETED | LEFT | NO_SHOW |
+  // CANCELED | EXPIRED. A String pinned by CHECK, not an enum, for the same
+  // reason as WaitlistEntry.status: an enum change rewrites the column type,
+  // a CHECK pins the same set additively.
+  status String @default("WAITING")
+
+  // Queue order among this shop's ACTIVE entries. Spaced by 1024 at append so
+  // a reorder is a single midpoint write; when a gap closes the whole active
+  // queue renumbers in one transaction. Total order everywhere is
+  // (position, joinedAt, id) - duplicates that appear mid-renumber are
+  // harmless under that tie-break, which is why there is deliberately NO
+  // unique index on it.
+  //
+  // 🔴 NOT NULL, and that is load-bearing (the WaitlistEntry.tierRank lesson):
+  // a nullable ordering column silently breaks keyset comparisons and the
+  // scan stops visiting the tail of the queue.
+  position Int
+
+  // The chair they ASKED for (null = "next available") vs the chair a claim or
+  // assignment actually put them on. preferredStaffId is a preference the
+  // estimate engine honors hard while the barber is active; assignedStaffId is
+  // operational state the CAS transitions own.
+  preferredStaffId String?
+  preferredStaff   Staff?  @relation("WalkInPreferred", fields: [preferredStaffId], references: [id], onDelete: SetNull)
+  assignedStaffId  String?
+  assignedStaff    Staff?  @relation("WalkInAssigned", fields: [assignedStaffId], references: [id], onDelete: SetNull)
+
+  // What the kiosk QUOTED at check-in - a snapshot for "quoted 25m, seated in
+  // 31m" ops health, never re-read as a live estimate (those are always
+  // recomputed from the real calendar).
+  quotedWaitMin Int?
+  quotedAt      DateTime?
+
+  note String?
+
+  // "My Place in Line" tracking link credential, HASHED (sha256 hex of a
+  // 32-byte random token; the raw token exists only in the SMS). Expires at
+  // the shop-local end of day and is revocable; a regenerate overwrites -
+  // exactly one live link per entry. Columns land with the domain; PR 2 mints.
+  trackTokenHash      String?   @unique
+  trackTokenExpiresAt DateTime?
+  trackTokenRevokedAt DateTime?
+
+  // Set when service actually starts, so IN_SERVICE is a LINK to real calendar
+  // occupancy and not a status someone flipped by hand (the
+  // WaitlistEntry.bookedAppointmentId shape).
+  appointmentId String?      @unique
+  appointment   Appointment? @relation("WalkInStarted", fields: [appointmentId], references: [id], onDelete: SetNull)
+
+  // Consent for the tracking/queue texts, captured at the kiosk. Mirrors the
+  // 4-column WaitlistEntry block: WHICH sentence (version), WHICH number
+  // (snapshot) - "they ticked a box" is worth nothing in a carrier complaint.
+  smsConsentAt      DateTime?
+  smsConsentSource  String?
+  smsConsentVersion String?
+  smsConsentPhone   String?
+
+  // The timestamp ladder: one stamp per lifecycle transition, written by the
+  // transition's CAS and never touched again. joinedAt is SEPARATE from
+  // createdAt on purpose - it is the queue-fairness anchor (return-to-line
+  // keeps it), while createdAt stays ordinary bookkeeping.
+  joinedAt    DateTime  @default(now())
+  assignedAt  DateTime?
+  readyAt     DateTime?
+  startedAt   DateTime?
+  completedAt DateTime?
+  leftAt      DateTime?
+  noShowAt    DateTime?
+  canceledAt  DateTime?
+  expiredAt   DateTime?
+
+  services WalkInEntryService[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // The board read: one shop's queue in display order.
+  @@index([shopId, status, position])
+  // The end-of-day expiry sweep's keyset scan (PR 4).
+  @@index([shopId, status, joinedAt, id])
+  // "What is this person waiting on" + the client-link backfill check.
+  @@index([shopId, clientId])
+  // A barber's own-chair reads ("my claimed customers").
+  @@index([shopId, assignedStaffId, status])
+}
+
+// One selected service on a walk-in entry. Name/duration/price are SNAPSHOTS
+// taken at join: services get edited while people wait, and the wait estimate a
+// customer was quoted - and the price the eventual appointment carries - must
+// not drift underneath them. sortOrder 0 is the PRIMARY service; at service
+// start it becomes Appointment.serviceId and every other row rides along in
+// Appointment.addOns ([{name, durationMin, price}]), which endsAt and
+// priceAtBooking already know how to absorb.
+model WalkInEntryService {
+  id      String      @id @default(cuid())
+  // Denormalized so RLS is uniform across every walk-in table (the
+  // ServiceStaff precedent).
+  shopId  String
+  shop    Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  entryId String
+  entry   WalkInEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  // Restrict, not SetNull: a service with live queue selections should refuse
+  // deletion the same way it refuses while appointments reference it.
+  serviceId String
+  service   Service @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+
+  nameAtJoin        String
+  durationMinAtJoin Int
+  priceAtJoin       Decimal? @db.Decimal(10, 2)
+  sortOrder         Int      @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@unique([entryId, serviceId])
+  @@index([shopId, entryId])
+}
+
+// APPEND-ONLY history of every walk-in lifecycle mutation - who did what to
+// which entry, and when. Same construction, same reasoning, and the same
+// no-personal-data rule as WaitlistEvent: immutable by BEFORE UPDATE trigger
+// (the GRANT alone binds nothing - public routes and engines run as the
+// connection owner), DELETE deliberately left to the Shop cascade, and the
+// metadata allowlist in engines/walkInAudit.ts keeps names/phones/notes out.
+model WalkInEvent {
+  id     String @id @default(cuid())
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  // 🔑 DELIBERATELY NOT A FOREIGN KEY - history must outlive a deleted entry
+  // (demo teardown deleteMany's them) while shop deletion still cascades via
+  // the shopId FK above.
+  entryId       String
+  appointmentId String?
+
+  // CHECK-constrained vocabularies (see the migration); the FULL set including
+  // PR 2-4's types is pinned up front so no later phase alters a constraint
+  // under live traffic.
+  type      String
+  actorType String // customer | staff | system
+
+  // Present only when a signed-in human did it; a customer acting on the
+  // tracking token has no user id by design.
+  actorUserId  String?
+  actorStaffId String?
+
+  // Codes, ids, enums and counts ONLY - engines/walkInAudit.ts enforces the
+  // allowlist, walkInAudit tests enforce the allowlist itself.
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([shopId, entryId, createdAt])
+  @@index([shopId, createdAt])
 }

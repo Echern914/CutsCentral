@@ -235,6 +235,13 @@ const updateShopSchema = createShopSchema
     takesRequests: z.boolean(),
     // Waitlist: when on, the public booking page offers "Join the waitlist".
     waitlistEnabled: z.boolean(),
+    // Walk-In Mode (same-day kiosk queue - NOT the waitlist). The master
+    // per-shop switch, and the "accepting walk-ins right now" pause lever.
+    // Both are role-gated to managers in the handler below: PATCH /me itself
+    // has no role gate (a barber seat may edit some settings), but turning a
+    // whole customer-facing intake surface on or off is a manager decision.
+    walkInEnabled: z.boolean(),
+    walkInAcceptingNow: z.boolean(),
     // "A slot just opened" auto-notify to matching waitlisters (push + email).
     // Off by default; the barber's own alert doesn't need this. See slotOpened.ts.
     slotOpenedTextsEnabled: z.boolean(),
@@ -421,6 +428,19 @@ shopsRouter.patch("/me", requireUser, requireShop, requireActiveAccess, async (r
   const parsed = updateShopSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  // Walk-In Mode toggles are manager-only, enforced FIELD-LEVEL on purpose:
+  // this route deliberately carries no router-level role gate (a barber seat
+  // edits some settings), and silently widening or narrowing that here would
+  // change unrelated fields' behavior. Turning a customer-facing intake
+  // surface on/off is a manager decision, so exactly these keys are walled.
+  if (
+    (parsed.data.walkInEnabled !== undefined ||
+      parsed.data.walkInAcceptingNow !== undefined) &&
+    req.shopRole === "BARBER"
+  ) {
+    res.status(403).json({ error: "forbidden_role", required: ["OWNER", "MANAGER"] });
     return;
   }
   // `gallery` (items-with-captions) isn't a Shop column - it maps to galleryItems
@@ -1197,6 +1217,8 @@ function serializeShop(shop: {
   rewardsSections: string[];
   takesRequests: boolean;
   waitlistEnabled: boolean;
+  walkInEnabled: boolean;
+  walkInAcceptingNow: boolean;
   slotOpenedTextsEnabled: boolean;
   requireBookingApproval: boolean;
   pushReminder24hEnabled: boolean;
@@ -1253,6 +1275,8 @@ function serializeShop(shop: {
     rewardsSections: readRewardsSections(shop.rewardsSections),
     takesRequests: shop.takesRequests,
     waitlistEnabled: shop.waitlistEnabled,
+    walkInEnabled: shop.walkInEnabled,
+    walkInAcceptingNow: shop.walkInAcceptingNow,
     slotOpenedTextsEnabled: shop.slotOpenedTextsEnabled,
     requireBookingApproval: shop.requireBookingApproval,
     pushReminder24hEnabled: shop.pushReminder24hEnabled,

@@ -169,14 +169,69 @@ export interface ComputeSlotsInput {
   extraDurationMin?: number;
 }
 
+/** The slice of Service the grid walk consumes (per-candidate resolution). */
+export interface FreeRangesService {
+  id: string;
+  durationMin: number;
+  durationOverrides: unknown;
+  timeOverrides: unknown;
+  hoursWindows: unknown;
+  serviceGroupId: string | null;
+  dailyLimits: unknown;
+}
+
+export interface FreeRangesInput {
+  shopId: string;
+  staffId: string;
+  /**
+   * null = "walk-in mode": no service lookup, no offering check, no
+   * service-hours restriction/widening, no duration overrides, no group or
+   * per-service day caps. The result is the staff member's RAW free time
+   * (hours minus breaks, block-offs, external blocks, and - unless
+   * ignoreBooked - appointments, holds, synced visits and targeted slots).
+   */
+  serviceId: string | null;
+  fromDate: Date;
+  toDate: Date;
+  now?: Date;
+  excludeAppointmentId?: string;
+  ignoreBooked?: boolean;
+  /**
+   * Skip the shop's bookingLeadHours when computing the lower bound. The lead
+   * time is a BOOKING rule (how far ahead a customer must book online), not a
+   * physics rule - a walk-in standing in the shop can be served now. Default
+   * false, so every existing caller keeps the online-booking behavior.
+   */
+  ignoreLeadTime?: boolean;
+}
+
+/** Everything computeOpenSlots' grid walk needs, plus the free ranges. */
+export interface FreeRangesResult {
+  free: TimeRange[];
+  timezone: string;
+  /** Raw Shop.bookingBufferMin (callers clamp to >= 0 as needed). */
+  bufferMin: number;
+  /** Earliest permissible start: max(now [+ lead], fromDate). Epoch ms. */
+  lowerBound: number;
+  rangeStart: number;
+  rangeEnd: number;
+  /** null iff the caller passed serviceId: null. */
+  service: FreeRangesService | null;
+  group: { id: string; maxPerDay: number | null; maxConcurrent: number | null } | null;
+  groupCapAppts: { startsAt: Date; endsAt: Date }[];
+  serviceFullDays: Set<string>;
+}
+
 /**
- * Compute bookable slots for one staff member + service over [fromDate, toDate].
- * Returns [] when the staff doesn't offer the service, the service is inactive,
- * or there's no open time. All reads run in one shop-scoped (RLS) transaction.
+ * The busy-set + free-interval half of computeOpenSlots, extracted MOVE-ONLY so
+ * a second consumer (the walk-in wait-estimate engine) reads the exact same
+ * calendar the public slot grid does - one read path, one busy set, no drift.
+ * computeOpenSlots below is this plus the unchanged grid walk; behavior with
+ * serviceId set and the knobs off is line-for-line the original.
  */
-export async function computeOpenSlots(
-  input: ComputeSlotsInput,
-): Promise<Slot[]> {
+export async function computeFreeRanges(
+  input: FreeRangesInput,
+): Promise<FreeRangesResult | null> {
   const now = input.now ?? new Date();
 
   // The shop row is read on the OWNER connection (plain prisma), never inside
@@ -192,16 +247,19 @@ export async function computeOpenSlots(
       bookingBufferMin: true,
     },
   });
-  if (!shop) return [];
+  if (!shop) return null;
 
   // Bounds: earliest = now + lead; latest = now + maxDays (and never past
   // toDate). Only shop fields are needed, so an out-of-range query exits
-  // before touching the tenant tables at all.
-  const earliest = now.getTime() + shop.bookingLeadHours * 60 * MS_PER_MIN;
+  // before touching the tenant tables at all. ignoreLeadTime drops the lead
+  // (a walk-in can start now); the horizon clamp stays either way.
+  const earliest =
+    now.getTime() +
+    (input.ignoreLeadTime ? 0 : shop.bookingLeadHours * 60 * MS_PER_MIN);
   const maxHorizon = addDays(now, shop.bookingMaxDays).getTime();
   const rangeStart = Math.max(input.fromDate.getTime(), now.getTime());
   const rangeEnd = Math.min(input.toDate.getTime(), maxHorizon);
-  if (rangeEnd <= earliest) return [];
+  if (rangeEnd <= earliest) return null;
 
   // ALL tenant reads share ONE shop-scoped transaction. This is the hottest
   // public path (every booking-page slot fetch, plus the write-path
@@ -214,19 +272,23 @@ export async function computeOpenSlots(
   // runWithShop. The pure interval math below runs OUTSIDE the transaction so
   // the connection is held only for the reads.
   const data = await runWithShop(input.shopId, async (tx) => {
-    const service = await tx.service.findFirst({
-      where: { id: input.serviceId, shopId: input.shopId, active: true },
-      select: {
-        id: true,
-        durationMin: true,
-        durationOverrides: true,
-        timeOverrides: true,
-        hoursWindows: true,
-        serviceGroupId: true,
-        dailyLimits: true,
-      },
-    });
-    if (!service || service.durationMin <= 0) return null;
+    // Walk-in mode (serviceId null) skips the service lookup entirely - there
+    // is no one service to restrict hours by or step a grid with.
+    const service = input.serviceId
+      ? await tx.service.findFirst({
+          where: { id: input.serviceId, shopId: input.shopId, active: true },
+          select: {
+            id: true,
+            durationMin: true,
+            durationOverrides: true,
+            timeOverrides: true,
+            hoursWindows: true,
+            serviceGroupId: true,
+            dailyLimits: true,
+          },
+        })
+      : null;
+    if (input.serviceId && (!service || service.durationMin <= 0)) return null;
 
     // SERVICE GROUP (Acuity-style bundle). A group carries the two shop-wide
     // caps - maxPerDay (bookings per shop-local day across all member services)
@@ -243,7 +305,7 @@ export async function computeOpenSlots(
     // Ungrouped services (serviceGroupId null - every existing service, every
     // new shop) skip this entirely and the rest of the engine is byte-for-byte
     // the pre-group behavior.
-    const group = service.serviceGroupId
+    const group = service?.serviceGroupId
       ? await tx.serviceGroup.findFirst({
           where: { id: service.serviceGroupId, shopId: input.shopId, active: true },
           select: { id: true, maxPerDay: true, maxConcurrent: true },
@@ -302,27 +364,34 @@ export async function computeOpenSlots(
     // write-path re-check (isSlotBookable, ignoreBooked=true) has to see it
     // too. The authoritative guard is still assertServiceDayHasRoom inside the
     // booking transaction - this is what stops the slot being OFFERED.
-    const serviceFullDays = await fullDaysForService(tx, {
-      shopId: input.shopId,
-      serviceId: input.serviceId,
-      dailyLimits: service.dailyLimits,
-      timezone: shop.timezone,
-      rangeStart: new Date(rangeStart),
-      rangeEnd: new Date(rangeEnd),
-      excludeAppointmentId: input.excludeAppointmentId,
-      now,
-    });
+    const serviceFullDays =
+      input.serviceId && service
+        ? await fullDaysForService(tx, {
+            shopId: input.shopId,
+            serviceId: input.serviceId,
+            dailyLimits: service.dailyLimits,
+            timezone: shop.timezone,
+            rangeStart: new Date(rangeStart),
+            rangeEnd: new Date(rangeEnd),
+            excludeAppointmentId: input.excludeAppointmentId,
+            now,
+          })
+        : new Set<string>();
 
     // The staff must exist, be active, and actually offer this service.
-    const offers = await tx.serviceStaff.findMany({
-      where: {
-        staffId: input.staffId,
-        serviceId: input.serviceId,
-        shopId: input.shopId,
-      },
-      select: { id: true },
-    });
-    if (offers.length === 0) return null;
+    // Walk-in mode skips the offering check - eligibility across a MULTI
+    // service selection is the estimate engine's job, not one join row's.
+    if (input.serviceId) {
+      const offers = await tx.serviceStaff.findMany({
+        where: {
+          staffId: input.staffId,
+          serviceId: input.serviceId,
+          shopId: input.shopId,
+        },
+        select: { id: true },
+      });
+      if (offers.length === 0) return null;
+    }
     const staff = await tx.staff.findFirst({
       where: { id: input.staffId, shopId: input.shopId, active: true },
       select: { id: true },
@@ -467,7 +536,7 @@ export async function computeOpenSlots(
       serviceFullDays,
     };
   });
-  if (!data) return [];
+  if (!data) return null;
   const {
     service,
     rules,
@@ -483,20 +552,6 @@ export async function computeOpenSlots(
     serviceFullDays,
   } = data;
 
-  // The slot GRID steps by the service length (the start times the picker
-  // offers); chosen add-ons extend how much room the appointment needs, NOT
-  // which start times exist. The customer picks a slot from the service grid
-  // FIRST and add-ons in the details step after - re-stepping the grid by the
-  // extended total would reject most already-offered starts (e.g. a 30-min
-  // service + 15-min add-on would only accept :00/:45 starts).
-  //
-  // The service length itself can vary by weekday (durationOverrides - "cuts
-  // are 30 min Mon-Thu but 20 min Friday"), so the step/span are resolved PER
-  // CANDIDATE SLOT from its own start instant's shop-local weekday (see the
-  // loop at the bottom). A free window that crosses shop-local midnight simply
-  // switches step size mid-window.
-  const baseDuration = service.durationMin;
-  const extraMin = Math.max(0, input.extraDurationMin ?? 0);
   const buffer = Math.max(0, shop.bookingBufferMin);
 
   // Optional per-service available-hours restriction (weekday -> allowed local
@@ -504,12 +559,15 @@ export async function computeOpenSlots(
   // PRESENT restricts the service to those windows that day (an intersection
   // with staff hours); present + empty means the service isn't offered that day.
   // Empty map (every existing service) => nothing is ever restricted.
+  // Walk-in mode has no service, so nothing restricts.
   //
   // THE SERVICE OWNS ITS HOURS, grouped or not. This used to consult the
   // service's active group first, so a grouped service's own windows were dead
   // config; the group's map is no longer read at all here (see the group query
   // above). Group membership now affects only the shared CAPS below.
-  const serviceByWeekday = parseServiceHours(service.hoursWindows);
+  const serviceByWeekday = service
+    ? parseServiceHours(service.hoursWindows)
+    : new Map<number, { startMin: number; endMin: number }[]>();
 
   // Time-of-day windows the barber explicitly ticked "also open these hours" on.
   // This is the ONE input that WIDENS availability: everything else here can
@@ -522,7 +580,7 @@ export async function computeOpenSlots(
   // outranks an implicit "only these hours". It stays subject to everything that
   // subtracts - breaks, block-offs, external blocks, existing bookings, lead
   // time and caps - so it adds candidate time and never overrides a conflict.
-  const opensAnyHours = hasOpeningWindows(service.timeOverrides);
+  const opensAnyHours = service ? hasOpeningWindows(service.timeOverrides) : false;
 
   // Build the recurring windows by walking each shop-local calendar date across
   // the range (plus a day of slack on each side so a window that straddles
@@ -544,7 +602,7 @@ export async function computeOpenSlots(
       const parts = zonedDateParts(cursor, shop.timezone);
       const dayRules = byWeekday.get(parts.weekday);
       const opened = opensAnyHours
-        ? openingSpansForWeekday(service.timeOverrides, parts.weekday)
+        ? openingSpansForWeekday(service!.timeOverrides, parts.weekday)
         : [];
       if (dayRules || opened.length > 0) {
         // Service-hours restriction for THIS weekday. `restricted` is true iff
@@ -675,6 +733,60 @@ export async function computeOpenSlots(
     Number.NEGATIVE_INFINITY,
     rangeEnd,
   );
+
+  return {
+    free,
+    timezone: shop.timezone,
+    bufferMin: shop.bookingBufferMin,
+    lowerBound,
+    rangeStart,
+    rangeEnd,
+    service,
+    group,
+    groupCapAppts,
+    serviceFullDays,
+  };
+}
+
+/**
+ * Compute bookable slots for one staff member + service over [fromDate, toDate].
+ * Returns [] when the staff doesn't offer the service, the service is inactive,
+ * or there's no open time. All reads run in one shop-scoped (RLS) transaction
+ * (inside computeFreeRanges); the pure grid walk below runs outside it.
+ */
+export async function computeOpenSlots(
+  input: ComputeSlotsInput,
+): Promise<Slot[]> {
+  const ctx = await computeFreeRanges({
+    shopId: input.shopId,
+    staffId: input.staffId,
+    serviceId: input.serviceId,
+    fromDate: input.fromDate,
+    toDate: input.toDate,
+    now: input.now,
+    excludeAppointmentId: input.excludeAppointmentId,
+    ignoreBooked: input.ignoreBooked,
+  });
+  if (!ctx || !ctx.service) return [];
+  const service = ctx.service;
+  const { free, group, groupCapAppts, serviceFullDays, lowerBound } = ctx;
+  const shop = { timezone: ctx.timezone, bookingBufferMin: ctx.bufferMin };
+
+  // The slot GRID steps by the service length (the start times the picker
+  // offers); chosen add-ons extend how much room the appointment needs, NOT
+  // which start times exist. The customer picks a slot from the service grid
+  // FIRST and add-ons in the details step after - re-stepping the grid by the
+  // extended total would reject most already-offered starts (e.g. a 30-min
+  // service + 15-min add-on would only accept :00/:45 starts).
+  //
+  // The service length itself can vary by weekday (durationOverrides - "cuts
+  // are 30 min Mon-Thu but 20 min Friday"), so the step/span are resolved PER
+  // CANDIDATE SLOT from its own start instant's shop-local weekday (see the
+  // loop at the bottom). A free window that crosses shop-local midnight simply
+  // switches step size mid-window.
+  const baseDuration = service.durationMin;
+  const extraMin = Math.max(0, input.extraDurationMin ?? 0);
+  const buffer = Math.max(0, shop.bookingBufferMin);
 
   // Slice each free window into SERVICE-duration steps (the grid the picker
   // shows); require the full extended span + buffer to also fit after the slot

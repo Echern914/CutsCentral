@@ -233,6 +233,12 @@ const apiSchema = z.object({
   // on deliberately. Not folded into DRY_RUN - that is the MESSAGING kill
   // switch, and this worker never sends anything.
   WAITLIST_ENTRY_EXPIRY_ENABLED: boolish.default("false"),
+  // Walk-In Mode (the same-day kiosk queue). OFF by default: while false the
+  // entire /api/walk-ins surface answers 404 as if it does not exist, so the
+  // domain can merge and sit dark in production. Per-shop enablement
+  // (Shop.walkInEnabled) sits behind this and is ALSO default-off - the env
+  // flag is the platform's switch, the column is the barber's.
+  WALK_IN_MODE_ENABLED: boolish.default("false"),
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace"])
     .default("info"),
