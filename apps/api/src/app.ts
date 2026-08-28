@@ -27,6 +27,7 @@ import { mcpOAuthRouter } from "./routes/mcp.oauth.js";
 import { squareOAuthRouter } from "./routes/square.oauth.js";
 import { adminRouter } from "./routes/admin.js";
 import { rewardsRouter } from "./routes/rewards.js";
+import { rewardsRecoveryRouter } from "./routes/rewardsRecovery.js";
 import { walletRouter } from "./routes/wallet.js";
 import { dashboardRouter } from "./routes/dashboard.js";
 import { barberRouter } from "./routes/barber.js";
@@ -161,6 +162,9 @@ export function createApp(): Express {
 
   app.use("/api/acuity/oauth", oauthLimiter, acuityOAuthRouter);
   app.use("/api/square/oauth", oauthLimiter, squareOAuthRouter);
+  // Phone-verified rewards recovery (per-route limiters inside). Mounted on
+  // its own prefix so /api/rewards' blanket limiter cannot starve it.
+  app.use("/api/rewards-recovery", rewardsRecoveryRouter);
   app.use("/api/rewards", rewardsLimiter, rewardsRouter);
   app.use("/api/wallet", rewardsLimiter, walletRouter); // Apple Wallet pass web service (public, ApplePass-token auth)
   app.use("/api/page", rewardsLimiter, publicPageRouter); // public shop pages
