@@ -1589,6 +1589,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {
       // Shared with every other Appointment write - see engines/bookingWrite.ts
       // for the full protocol (and the PR #70 timestamp rule it encapsulates).
       await lockStaffAndAssertSlotFree(tx, {
+        walkInCapacity: "enforce",
         staffId: d.staffId,
         shopId: shop.id,
         startsAt,
@@ -2391,6 +2392,7 @@ bookingPublicRouter.post(
       await prisma.$transaction(async (tx) => {
         // Same shared guard as create, EXCLUDING this appt's own row.
         await lockStaffAndAssertSlotFree(tx, {
+          walkInCapacity: "enforce",
           staffId: appt.staffId,
           shopId: appt.shopId,
           startsAt,

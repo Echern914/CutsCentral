@@ -366,3 +366,120 @@ describe("start + complete over HTTP (PR 3)", () => {
     expect(named.status).toBe(200);
   });
 });
+
+/**
+ * 🔴 The end-to-end version of the capacity invariant: a customer holding a
+ * slot the grid offered a moment ago cannot spend it once a walk-in is put on
+ * that chair. This is the "direct API submission" case - the POST never
+ * consults the grid, so only the write guard can refuse it.
+ */
+describe("a walk-in's capacity cannot be booked around over HTTP", () => {
+  it("the grid drops the slot AND the POST for it is refused", async () => {
+    // Open around the clock so this test never depends on the wall clock: a
+    // bookable slot in the next few hours exists whenever the suite runs.
+    await prisma.shop.update({
+      where: { id: shopId },
+      data: {
+        walkInEnabled: true,
+        bookingLeadHours: 0,
+        bookingBufferMin: 0,
+        slug: `wd-book-${randomToken(5)}`.toLowerCase(),
+      },
+    });
+    for (let weekday = 0; weekday < 7; weekday += 1) {
+      await prisma.availabilityRule.create({
+        data: { shopId, staffId: chairA, weekday, startMin: 0, endMin: 1439 },
+      });
+    }
+    const shop = await prisma.shop.findUnique({
+      where: { id: shopId },
+      select: { slug: true },
+    });
+    const slug = shop!.slug;
+
+    // A FIXED instant tomorrow, not one picked out of the live grid. The
+    // booking POST validates a start by rebuilding the grid anchored on
+    // `target - 24h`, which is a different origin from any listing window, so
+    // "take whatever the grid just offered" only agrees with it by luck and
+    // that luck changes with the minute the suite runs. 10:00 UTC tomorrow is
+    // inside a round-the-clock schedule on every weekday, always ahead of now,
+    // and always a clean half-hour.
+    const now = new Date();
+    const target = new Date(
+      Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate() + 1,
+        10,
+        0,
+        0,
+        0,
+      ),
+    ).toISOString();
+    const from = now.toISOString();
+    const to = new Date(new Date(target).getTime() + 60 * 60_000).toISOString();
+    const askSlots = () =>
+      request(app)
+        .get(`/api/book/${slug}/slots`)
+        .query({ staffId: chairA, serviceId, from, to });
+
+    // Someone walks in and is put on that chair. A long snapshot duration is
+    // what makes this deterministic - the reservation stacks from `now`, and
+    // a fifty-hour cut always reaches tomorrow morning.
+    const created = await request(app)
+      .post("/api/walk-ins")
+      .set("Cookie", ownerCookie)
+      .send(createBody());
+    expect(created.status).toBe(201);
+    const entryId = created.body.entry.id as string;
+    await prisma.walkInEntryService.updateMany({
+      where: { entryId },
+      data: { durationMinAtJoin: 3000 },
+    });
+    const assigned = await request(app)
+      .post(`/api/walk-ins/${entryId}/assign`)
+      .set("Cookie", ownerCookie)
+      .send({ staffId: chairA });
+    expect(assigned.status).toBe(200);
+
+    // 1. The grid stops offering it.
+    const after = await askSlots();
+    expect(
+      (after.body.slots as { startsAt: string }[]).some((s) => s.startsAt === target),
+    ).toBe(false);
+
+    // 2. And submitting it anyway - the stale page, or a hand-rolled POST that
+    //    never asked the grid at all - is refused by the guard, in the ordinary
+    //    words of a taken slot. Nothing about a queue leaks.
+    const booked = await request(app).post(`/api/book/${slug}`).send({
+      staffId: chairA,
+      serviceId,
+      startsAt: target,
+      firstName: "Bypass",
+      lastName: "Attempt",
+      phone: "(302) 555-0199",
+      email: "bypass0199@example.com",
+      smsConsent: true,
+    });
+    expect(booked.status).toBe(409);
+    expect(booked.body.error).toBe("slot_taken");
+    expect(JSON.stringify(booked.body)).not.toMatch(/walk|queue|entry/i);
+
+    // 3. Release the walk-in and the same POST succeeds - proving the refusal
+    //    was the capacity plan and not some unrelated availability rule.
+    await request(app)
+      .post(`/api/walk-ins/${entryId}/cancel`)
+      .set("Cookie", ownerCookie);
+    const retry = await request(app).post(`/api/book/${slug}`).send({
+      staffId: chairA,
+      serviceId,
+      startsAt: target,
+      firstName: "Bypass",
+      lastName: "Attempt",
+      phone: "(302) 555-0199",
+      email: "bypass0199@example.com",
+      smsConsent: true,
+    });
+    expect(retry.status).toBe(201);
+  });
+});

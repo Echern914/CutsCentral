@@ -378,6 +378,7 @@ describe("the offer lifecycle", () => {
     // acting for, it cannot know, so it must not claim to.
     await prisma.$transaction((tx) =>
       lockStaffAndAssertSlotFree(tx, {
+        walkInCapacity: "enforce",
         staffId,
         shopId,
         startsAt: slot.startsAt,

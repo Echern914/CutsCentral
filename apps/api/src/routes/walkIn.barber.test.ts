@@ -1,5 +1,5 @@
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken, __resetEnvCacheForTests } from "@chairback/config";
 import { createApp } from "../app.js";
@@ -102,6 +102,15 @@ beforeAll(async () => {
   await prisma.shopMember.create({
     data: { shopId, userId: nc.userId, role: "BARBER", staffId: null },
   });
+});
+
+afterEach(async () => {
+  // 🔴 Clear the queue between cases. A claim leaves the entry ASSIGNED, and an
+  // ASSIGNED entry holds its chair in the capacity plan from whatever `now` the
+  // next request uses - so two leftover claims are genuinely (and correctly)
+  // ahead of the third in line, and starting it out of order is refused. Right
+  // in production, fatal to test isolation.
+  await prisma.walkInEntry.deleteMany({ where: { shopId } });
 });
 
 afterAll(async () => {

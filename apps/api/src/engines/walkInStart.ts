@@ -130,7 +130,14 @@ export async function startEntry(opts: {
     // THE overlap guard - the same advisory lock + re-checks every other
     // appointment write runs. Barber-driven convention: no service-day cap,
     // waitlist holds overridden (released + audited inside the guard).
+    //
+    // The one barber-driven path that does NOT ignore walk-in capacity: the
+    // rest of the line is exactly who this chair is owed to. Only THIS entry
+    // is excluded, and only from the conflict test - it keeps its place in the
+    // stacking order, or everyone behind it would slide forward onto the very
+    // span we are claiming and refuse every start with a queue behind it.
     await lockStaffAndAssertSlotFree(tx, {
+      walkInCapacity: { excludeEntryId: entryId },
       staffId: chairId,
       shopId,
       startsAt,
@@ -207,6 +214,11 @@ export async function startEntry(opts: {
     try {
       outboxId = await recordMirrorIntent(tx, {
         shopId,
+        // The SAME instant that opened this transaction and became the
+        // appointment's startsAt - not a fresh read. The mirror decides
+        // "does this still occupy the chair" against `now`, so a second
+        // clock read here could disagree with the row we just wrote.
+        now,
         appointmentId: appt.id,
         staffId: chairId,
         startsAt,

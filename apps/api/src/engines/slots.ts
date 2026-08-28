@@ -15,6 +15,8 @@ import {
   fullDaysForService,
   shopLocalDayWindow,
 } from "./serviceDailyLimit.js";
+import { QUEUE_ORDER } from "./walkInLifecycle.js";
+import { planWalkInReservations } from "./walkInCapacity.js";
 
 /**
  * Open-slot computation for the native booking engine.
@@ -518,10 +520,10 @@ export async function computeFreeRanges(
     //   - only in the service-grid mode (the walk-in estimate engine passes
     //     serviceId: null and SIMULATES these same entries itself - counting
     //     them here too would double-book the simulation),
-    //   - skipped under ignoreBooked like every other busy source, because
-    //     the write-path guard is deliberately appointment-based: a customer
-    //     who already finished the booking POST wins the race, and the
-    //     walk-in start then re-checks the guard and the queue re-estimates.
+    //   - skipped under ignoreBooked like every other busy source.
+    // The WRITE guard enforces the same spans from the same plan
+    // (engines/walkInCapacity.ts), so a stale grid or a hand-rolled POST cannot
+    // take a time this grid is hiding.
     // Released the instant the entry leaves ASSIGNED/READY - every reader
     // derives the span from status, nothing is stored.
     const walkInReservations =
@@ -532,10 +534,9 @@ export async function computeFreeRanges(
               assignedStaffId: input.staffId,
               status: { in: ["ASSIGNED", "READY"] },
             },
-            // The queue's own total order (walkInLifecycle.QUEUE_ORDER),
-            // spelled inline: position, then the fairness anchor, then id.
-            orderBy: [{ position: "asc" }, { joinedAt: "asc" }, { id: "asc" }],
+            orderBy: [...QUEUE_ORDER],
             select: {
+              id: true,
               services: { select: { durationMinAtJoin: true } },
             },
           })
@@ -746,19 +747,12 @@ export async function computeFreeRanges(
       end: t.startsAt.getTime() + (t.durationMin + buffer) * MS_PER_MIN,
     });
   }
-  // Assigned/ready walk-ins STACK sequentially from now, in queue order, each
-  // holding its snapshot duration + the turnover buffer - two 30-minute
-  // customers reserve an hour of the chair, not one overlapping half-hour.
-  // (Same buffer treatment as the appointment each is about to become.)
-  {
-    let cursor = now.getTime();
-    for (const r of walkInReservations) {
-      const durMin = r.services.reduce((s, x) => s + x.durationMinAtJoin, 0);
-      if (durMin <= 0) continue;
-      const end = cursor + (durMin + buffer) * MS_PER_MIN;
-      blocks.push({ start: cursor, end });
-      cursor = end;
-    }
+  // Assigned/ready walk-ins, stacked by THE shared capacity plan - the same
+  // one the write guard enforces. The plan returns the cut only, so the
+  // turnover buffer is re-added here exactly as it is for every other block
+  // above (an appointment, a visit, a targeted slot).
+  for (const r of planWalkInReservations(walkInReservations, now, buffer)) {
+    blocks.push({ start: r.start, end: r.end + buffer * MS_PER_MIN });
   }
 
   // The lower bound every candidate slot must clear: now + lead, and never
