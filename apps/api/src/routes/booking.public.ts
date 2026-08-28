@@ -1678,6 +1678,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {
       // latency and serialize every booking for this barber behind it.
       const outboxId = await recordMirrorIntent(tx, {
         shopId: shop.id,
+        now,
         appointmentId: appt.id,
         staffId: d.staffId,
         startsAt,
@@ -2427,6 +2428,7 @@ bookingPublicRouter.post(
         });
         publicReschedOutboxId = await swapForReschedule(tx, {
           shopId: appt.shopId,
+          now,
           appointmentId: appt.id,
           staffId: appt.staffId,
           startsAt,

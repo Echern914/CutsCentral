@@ -277,6 +277,7 @@ export async function materializeSeries(
         // that failed - the reconciler finishes those individually.
         const outboxId = await recordMirrorIntent(tx, {
           shopId: input.shopId,
+          now,
           appointmentId: created.id,
           staffId: input.staffId,
           startsAt,

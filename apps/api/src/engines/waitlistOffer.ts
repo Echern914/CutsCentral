@@ -936,6 +936,7 @@ export async function claimOffer(params: {
       claimedApptId = appt.id;
       claimOutboxId = await recordMirrorIntent(tx, {
         shopId: offer.shopId,
+        now,
         appointmentId: appt.id,
         staffId: offer.staffId,
         startsAt: offer.startsAt,

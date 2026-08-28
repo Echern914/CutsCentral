@@ -115,6 +115,8 @@ export function registerAppointmentEdit(
   });
 
   router.patch("/appointments/:id", async (req, res) => {
+    // One clock for the whole request - see the note on MirrorIntentInput.now.
+    const now = new Date();
     const shopId = req.shop!.id;
     const parsed = editApptSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -334,6 +336,7 @@ export function registerAppointmentEdit(
         if (timeMoved) {
           mirrorOutboxId = await swapForReschedule(tx, {
             shopId,
+            now,
             appointmentId: appt.id,
             staffId,
             startsAt,

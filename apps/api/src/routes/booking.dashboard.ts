@@ -2434,6 +2434,10 @@ async function resolveSeriesClient(input: {
 }
 
 bookingDashboardRouter.post("/appointments", async (req, res) => {
+  // One clock for the whole request, named once: the outbound mirror decides
+  // "does this still occupy the chair" against it, and a handler that reads
+  // the wall clock in two places can decide two different things.
+  const now = new Date();
   const parsed = createApptSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
@@ -2690,6 +2694,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
       // than a block the reconciler places a minute later.
       mirrorOutboxId = await recordMirrorIntent(tx, {
         shopId,
+        now,
         appointmentId: appt.id,
         staffId: d.staffId,
         startsAt,
@@ -2949,6 +2954,7 @@ bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
       });
       mirrorOutboxId = await recordMirrorIntent(tx, {
         shopId,
+        now,
         appointmentId: appt.id,
         staffId: appt.staffId,
         startsAt: appt.startsAt,
@@ -3045,6 +3051,8 @@ const rescheduleApptSchema = z
   .strict();
 
 bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => {
+  // One clock for the whole request - see the note on MirrorIntentInput.now.
+  const now = new Date();
   const shopId = req.shop!.id;
   const parsed = rescheduleApptSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
@@ -3187,6 +3195,7 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
       // commit - see completeReschedule for why that order is load-bearing.
       rescheduleOutboxId = await swapForReschedule(tx, {
         shopId,
+        now,
         appointmentId: appt.id,
         staffId: appt.staffId,
         startsAt,
@@ -4989,6 +4998,7 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
     try {
       outboxId = await recordMirrorIntent(tx, {
         shopId,
+        now,
         appointmentId: appt.id,
         staffId,
         startsAt: now,

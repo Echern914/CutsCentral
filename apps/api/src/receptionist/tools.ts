@@ -921,6 +921,7 @@ async function bookAppointment(
         // is a real booking that owns the chair indefinitely, it is.
         bookOutboxId = await recordMirrorIntent(tx, {
           shopId: ctx.shopId,
+          now: ctx.now,
           appointmentId: hold.id,
           staffId: slot.staffId,
           startsAt: slot.startsAt,
@@ -970,6 +971,7 @@ async function bookAppointment(
       });
       bookOutboxId = await recordMirrorIntent(tx, {
         shopId: ctx.shopId,
+        now: ctx.now,
         appointmentId: appt.id,
         staffId: slot.staffId,
         startsAt: slot.startsAt,
@@ -1163,6 +1165,7 @@ async function rescheduleTool(
       });
       reschedOutboxId = await swapForReschedule(tx, {
         shopId: ctx.shopId,
+        now: ctx.now,
         appointmentId: appt.id,
         staffId: slot.staffId,
         startsAt: slot.startsAt,
