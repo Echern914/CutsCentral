@@ -272,6 +272,7 @@ export async function offerFreedSlot(
       // ANOTHER ACTIVE HOLD overlaps. Day cap asserted too - offering a slot
       // the cap would refuse at booking time is a dead offer.
       await lockStaffAndAssertSlotFree(tx, {
+        walkInCapacity: "enforce",
         staffId: slot.staffId,
         shopId: slot.shopId,
         startsAt: slot.startsAt,
@@ -850,6 +851,7 @@ export async function claimOffer(params: {
 
       // Same guard as every booking write; our own hold must not block us.
       await lockStaffAndAssertSlotFree(tx, {
+        walkInCapacity: "enforce",
         staffId: offer.staffId,
         shopId: offer.shopId,
         startsAt: offer.startsAt,

@@ -282,6 +282,7 @@ export function registerAppointmentEdit(
       await runWithShop(shopId, async (tx) => {
         if (timeMoved) {
           await lockStaffAndAssertSlotFree(tx, {
+            walkInCapacity: "ignore",
             staffId,
             shopId,
             startsAt,

@@ -22,6 +22,9 @@ export interface BookingShop {
   bookingGroupsFirst: boolean;
   pushReminder24hEnabled: boolean;
   pushReminder2hEnabled: boolean;
+  // Walk-In Mode (already on the wire from serializeShop since the domain
+  // PR): the Live line tab renders its enabled/off state from this.
+  walkInEnabled: boolean;
 }
 
 /** Live connect status for the branded platform cards. */

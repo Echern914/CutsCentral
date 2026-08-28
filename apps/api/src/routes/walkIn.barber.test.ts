@@ -1,5 +1,5 @@
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken, __resetEnvCacheForTests } from "@chairback/config";
 import { createApp } from "../app.js";
@@ -102,6 +102,15 @@ beforeAll(async () => {
   await prisma.shopMember.create({
     data: { shopId, userId: nc.userId, role: "BARBER", staffId: null },
   });
+});
+
+afterEach(async () => {
+  // 🔴 Clear the queue between cases. A claim leaves the entry ASSIGNED, and an
+  // ASSIGNED entry holds its chair in the capacity plan from whatever `now` the
+  // next request uses - so two leftover claims are genuinely (and correctly)
+  // ahead of the third in line, and starting it out of order is refused. Right
+  // in production, fatal to test isolation.
+  await prisma.walkInEntry.deleteMany({ where: { shopId } });
 });
 
 afterAll(async () => {
@@ -210,5 +219,42 @@ describe("own-chair enforcement", () => {
       .get("/api/barber/walk-ins")
       .set("Cookie", ownerCookie);
     expect(res.status).toBe(200);
+  });
+});
+
+describe("start + complete on the barber's own chair (PR 3)", () => {
+  it("claim -> start -> complete, all scoped to the seat's chair", async () => {
+    const e = await makeEntry();
+    await request(app)
+      .post(`/api/barber/walk-ins/${e.id}/claim`)
+      .set("Cookie", barberACookie);
+    const started = await request(app)
+      .post(`/api/barber/walk-ins/${e.id}/start`)
+      .set("Cookie", barberACookie);
+    expect(started.status).toBe(200);
+    expect(started.body.entry.assignedStaffId).toBe(chairA);
+    const done = await request(app)
+      .post(`/api/barber/walk-ins/${e.id}/complete`)
+      .set("Cookie", barberACookie);
+    expect(done.status).toBe(200);
+    expect(done.body.entry.status).toBe("COMPLETED");
+  });
+
+  it("a barber can neither start nor complete another chair's customer", async () => {
+    const e = await makeEntry();
+    await request(app)
+      .post(`/api/barber/walk-ins/${e.id}/claim`)
+      .set("Cookie", barberACookie);
+    const start = await request(app)
+      .post(`/api/barber/walk-ins/${e.id}/start`)
+      .set("Cookie", barberBCookie);
+    expect(start.status).toBe(409);
+    await request(app)
+      .post(`/api/barber/walk-ins/${e.id}/start`)
+      .set("Cookie", barberACookie);
+    const complete = await request(app)
+      .post(`/api/barber/walk-ins/${e.id}/complete`)
+      .set("Cookie", barberBCookie);
+    expect(complete.status).toBe(409);
   });
 });

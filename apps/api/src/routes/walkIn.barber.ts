@@ -20,6 +20,8 @@ import {
   type WalkInEntryView,
 } from "../engines/walkInQueue.js";
 import { estimateQueue } from "../engines/walkInEstimate.js";
+import { completeEntry, startEntry } from "../engines/walkInStart.js";
+import { SlotTakenError } from "../engines/bookingWrite.js";
 
 /**
  * Walk-In Mode: the BARBER surface. A barber seat never reaches
@@ -220,3 +222,58 @@ transitionRoute("ready", markReady);
 transitionRoute("return", returnToLine);
 transitionRoute("no-show", markNoShow);
 transitionRoute("leave", markLeft);
+
+/**
+ * START on the barber's OWN chair: from WAITING it is claim-and-start in one
+ * tap; from ASSIGNED/READY the CAS asserts the entry is theirs. The chair is
+ * ALWAYS req.shopStaffId - the body carries nothing.
+ */
+walkInBarberRouter.post("/:id/start", async (req, res) => {
+  const shop = await loadShop(req.shop!.id);
+  if (!shop || !shop.walkInEnabled) {
+    res
+      .status(shop ? 409 : 404)
+      .json({ error: shop ? "walk_in_disabled" : "not_found" });
+    return;
+  }
+  const actor = chairOf(req, res);
+  if (!actor) return;
+  try {
+    const result = await startEntry({
+      shopId: shop.id,
+      entryId: req.params.id,
+      actor,
+      now: new Date(),
+    });
+    res.json({ entry: result.entry, appointmentId: result.appointmentId });
+  } catch (err) {
+    if (err instanceof SlotTakenError) {
+      res.status(409).json({ error: "slot_taken" });
+      return;
+    }
+    if (!answerError(res, err)) throw err;
+  }
+});
+
+walkInBarberRouter.post("/:id/complete", async (req, res) => {
+  const shop = await loadShop(req.shop!.id);
+  if (!shop || !shop.walkInEnabled) {
+    res
+      .status(shop ? 409 : 404)
+      .json({ error: shop ? "walk_in_disabled" : "not_found" });
+    return;
+  }
+  const actor = chairOf(req, res);
+  if (!actor) return;
+  try {
+    const entry = await completeEntry({
+      shopId: shop.id,
+      entryId: req.params.id,
+      actor,
+      now: new Date(),
+    });
+    res.json({ entry });
+  } catch (err) {
+    if (!answerError(res, err)) throw err;
+  }
+});

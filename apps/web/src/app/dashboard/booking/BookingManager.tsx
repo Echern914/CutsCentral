@@ -38,6 +38,7 @@ import { TimeSelect } from "@/components/ui/TimeSelect";
 import { ImageField } from "../site/ImageField";
 import { Segmented } from "@/components/ui/Segmented";
 import { WaitlistBoard } from "./WaitlistBoard";
+import { WalkInQueueBoard } from "./WalkInQueueBoard";
 import {
   bulkDeleteTargetedSlotsAction,
   createAddOnAction,
@@ -92,7 +93,9 @@ const labelCls = "text-xs text-muted";
 // that shape it next, the one-time configuration last. Settings led for
 // historical reasons - it was the first tab that existed - so opening Booking
 // always landed on shop config instead of on today's appointments.
-const tabs = ["Appointments", "Waitlist", "Staff", "Services", "Settings"] as const;
+// Kept in step with BOOKING_TABS in @chairback/config (the registry pins the
+// ?tab= deep links against that list).
+const tabs = ["Appointments", "Waitlist", "Walk-ins", "Staff", "Services", "Settings"] as const;
 type Tab = (typeof tabs)[number];
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -323,6 +326,14 @@ export function BookingManager({
         <WaitlistBoard
           staff={initialStaff}
           services={initialServices}
+          timezone={initialAgenda.timezone}
+          toast={toast}
+        />
+      )}
+      {tab === "Walk-ins" && (
+        <WalkInQueueBoard
+          staff={initialStaff}
+          walkInEnabled={shop.walkInEnabled}
           timezone={initialAgenda.timezone}
           toast={toast}
         />

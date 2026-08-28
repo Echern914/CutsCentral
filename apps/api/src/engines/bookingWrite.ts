@@ -1,6 +1,7 @@
 import { Prisma } from "@chairback/db";
 import { assertServiceDayHasRoom } from "./serviceDailyLimit.js";
 import { recordWaitlistEvent, SYSTEM_ACTOR } from "./waitlistAudit.js";
+import { loadWalkInReservationPlan } from "./walkInCapacity.js";
 
 /**
  * THE double-booking guard for every Appointment write. One implementation of
@@ -16,7 +17,9 @@ import { recordWaitlistEvent, SYSTEM_ACTOR } from "./waitlistAudit.js";
  *     grabs on that calendar (a bare overlap SELECT locks nothing when the
  *     slot is free, so two overlapping-but-different-start bookings could both
  *     pass without it). Released automatically at commit/rollback.
- *  2. Overlap re-check, padding both sides by the shop's turnover buffer.
+ *  2. Overlap re-check against every source that can own a span - appointments,
+ *     targeted slots, live waitlist holds, active walk-ins, synced visits -
+ *     padding both sides by the shop's turnover buffer.
  *     Throws SlotTakenError on a conflict. The partial unique index on
  *     (staffId, startsAt) WHERE status IN ('BOOKED','PENDING') remains the
  *     final backstop - which is also why this guard clears expired holds at
@@ -104,6 +107,38 @@ export async function lockStaffAndAssertSlotFree(
      * time belongs to exactly one customer until it expires.
      */
     overrideWaitlistHolds?: boolean;
+    /**
+     * Active walk-in capacity: whether the people already standing in the shop
+     * hold this chair against THIS write.
+     *
+     * REQUIRED, with no default, for the same reason serviceDayLimit is - it
+     * makes the compiler list every Appointment write and forces each one to
+     * answer. The alternative is the exact defect this option was added to
+     * close: the slot grid hid a queued customer's time, the write path did
+     * not, and a stale grid or a hand-rolled POST booked straight over them.
+     *
+     *   "enforce"  - CUSTOMER-driven writes (public create/reschedule, the
+     *                receptionist, waitlist offers and gap-fill). A queued
+     *                customer's projected span is as real as an appointment.
+     *   "ignore"   - BARBER-driven writes (dashboard create/approve/edit,
+     *                recurring series). Same reasoning as overrideWaitlistHolds:
+     *                it is their calendar, and squeezing someone in over a
+     *                projection is a deliberate override, not a mistake.
+     *   {excludeEntryId} - Walk-In Start. Every OTHER queued customer still
+     *                holds the chair; this entry does not hold it against
+     *                itself. It stays in the stacking order (dropping it would
+     *                slide everyone behind it forward onto this very span and
+     *                refuse every start with a queue behind it) - only its own
+     *                span is dropped from the conflict test.
+     *
+     * Deliberately NOT gated on Shop.walkInEnabled here, though the slot grid
+     * is: a shop that never ran Walk-In Mode has no rows, so the query is an
+     * empty index scan and behavior is unchanged, while a shop that switched it
+     * OFF mid-queue still has people standing in it. Refusing to book over them
+     * is the fail-safe direction, and it is indistinguishable from any other
+     * stale-grid refusal.
+     */
+    walkInCapacity: "enforce" | "ignore" | { excludeEntryId: string };
     now?: Date;
   },
 ): Promise<void> {
@@ -228,6 +263,37 @@ export async function lockStaffAndAssertSlotFree(
         metadata: { code: "override", via: "booking_write" },
       });
     }
+  }
+
+  // Active walk-ins: someone is standing in the shop with this chair promised
+  // to them. Their projected span comes from THE shared capacity plan - the
+  // same function the slot grid subtracts - so what the grid hides and what
+  // this guard refuses can never drift apart.
+  //
+  // Runs under the SAME advisory lock as everything above, which is what makes
+  // "public booking versus Start Service" a race with exactly one winner: both
+  // serialize on the chair, the loser re-reads and finds the winner's row.
+  //
+  // A conflict raises the ordinary SlotTakenError. That is deliberate: the
+  // public error must not tell an anonymous caller that a queue exists, who is
+  // in it, or when they are expected - it looks exactly like any other taken
+  // slot, because from the customer's side that is precisely what it is.
+  if (opts.walkInCapacity !== "ignore") {
+    const excludeEntryId =
+      typeof opts.walkInCapacity === "object" ? opts.walkInCapacity.excludeEntryId : null;
+    const reserved = await loadWalkInReservationPlan(tx, {
+      shopId: opts.shopId,
+      staffId: opts.staffId,
+      from: now,
+      bufferMin: opts.bufferMin,
+    });
+    const clash = reserved.some(
+      (r) =>
+        r.entryId !== excludeEntryId &&
+        r.start < overlapEnd.getTime() &&
+        r.end > overlapStart.getTime(),
+    );
+    if (clash) throw new SlotTakenError();
   }
 
   // Synced EXTERNAL appointments (Acuity/Square Visits): a live future visit

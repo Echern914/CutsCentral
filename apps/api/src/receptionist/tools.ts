@@ -713,6 +713,7 @@ async function holdSlot(ctx: ToolContext, rawInput: unknown): Promise<ToolExecut
   try {
     const held = await prisma.$transaction(async (tx) => {
       await lockStaffAndAssertSlotFree(tx, {
+        walkInCapacity: "enforce",
         staffId: slot.staffId,
         shopId: ctx.shopId,
         startsAt: slot.startsAt,
@@ -894,6 +895,7 @@ async function bookAppointment(
         const active =
           hold.holdExpiresAt !== null && hold.holdExpiresAt.getTime() > ctx.now.getTime();
         await lockStaffAndAssertSlotFree(tx, {
+          walkInCapacity: "enforce",
           staffId: slot.staffId,
           shopId: ctx.shopId,
           startsAt: slot.startsAt,
@@ -939,6 +941,7 @@ async function bookAppointment(
 
       // No hold (the model skipped hold_slot): book directly under the guard.
       await lockStaffAndAssertSlotFree(tx, {
+        walkInCapacity: "enforce",
         staffId: slot.staffId,
         shopId: ctx.shopId,
         startsAt: slot.startsAt,
@@ -1132,6 +1135,7 @@ async function rescheduleTool(
         data: { status: "CANCELED", canceledAt: ctx.now },
       });
       await lockStaffAndAssertSlotFree(tx, {
+        walkInCapacity: "enforce",
         staffId: slot.staffId,
         shopId: ctx.shopId,
         startsAt: slot.startsAt,

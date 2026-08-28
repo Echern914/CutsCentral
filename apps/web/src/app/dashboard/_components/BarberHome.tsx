@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { Avatar } from "@/components/ui/Avatar";
+import { BarberWalkIns } from "./BarberWalkIns";
 
 export interface BarberRow {
   id: string;
@@ -84,6 +85,11 @@ export function BarberHome({
             <Stat label="This week" value={data.counts.week} />
             <Stat label="Last 30 days" value={data.counts.month} />
           </div>
+
+          {/* The live walk-in line (claim / ready / start / complete on their
+              own chair). Self-loading; renders NOTHING when Walk-In Mode is
+              off or dark, so every existing home screen is unchanged. */}
+          <BarberWalkIns />
 
           <Card className="mt-6 overflow-hidden">
             <div className="flex items-baseline justify-between gap-3 border-b border-subtle px-5 py-4">

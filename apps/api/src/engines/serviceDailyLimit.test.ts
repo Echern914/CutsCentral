@@ -393,6 +393,7 @@ describe("two people booking the last place at the same time", () => {
     const first = prisma.$transaction(
       async (tx) => {
         await lockStaffAndAssertSlotFree(tx, {
+          walkInCapacity: "enforce",
           staffId,
           shopId,
           startsAt: la(7, 10),
@@ -421,6 +422,7 @@ describe("two people booking the last place at the same time", () => {
     const second = prisma.$transaction(
       async (tx) => {
         await lockStaffAndAssertSlotFree(tx, {
+          walkInCapacity: "enforce",
           staffId: other.id, // a DIFFERENT barber: different staff lock
           shopId,
           startsAt: la(7, 14),

@@ -1058,3 +1058,107 @@ export async function editAppointmentAction(
     mirror: res.data?.mirror,
   };
 }
+
+//  Walk-In Mode: the Live Queue board (PR 3)
+
+export interface WalkInServiceView {
+  serviceId: string;
+  name: string;
+  durationMin: number;
+  price: number | null;
+  sortOrder: number;
+}
+
+export interface WalkInEntryRow {
+  id: string;
+  status: string;
+  source: string;
+  position: number;
+  firstName: string;
+  lastName: string | null;
+  phone: string | null;
+  clientId: string | null;
+  note: string | null;
+  preferredStaffId: string | null;
+  assignedStaffId: string | null;
+  appointmentId: string | null;
+  quotedWaitMin: number | null;
+  joinedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  services: WalkInServiceView[];
+  totalDurationMin: number;
+  estimate: {
+    projectedStaffId: string | null;
+    startsAt: string | null;
+    waitMin: number | null;
+  };
+}
+
+export interface WalkInQueueData {
+  acceptingNow: boolean;
+  now: string;
+  entries: WalkInEntryRow[];
+  done?: Omit<WalkInEntryRow, "estimate">[];
+}
+
+/** The live queue (plus today's finished entries for the Done section).
+ *  409 walk_in_disabled is a NORMAL answer - the board renders the
+ *  "turned off" state from it, so it is surfaced, not swallowed. */
+export async function getWalkInQueueAction(): Promise<{
+  ok: boolean;
+  data?: WalkInQueueData;
+  error?: string;
+}> {
+  const res = await apiGet<WalkInQueueData>("/api/walk-ins/queue?includeDone=1");
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, data: res.data };
+}
+
+export type WalkInSimpleAction =
+  | "ready"
+  | "return"
+  | "leave"
+  | "no-show"
+  | "cancel"
+  | "complete";
+
+export async function walkInTransitionAction(
+  id: string,
+  action: WalkInSimpleAction,
+): Promise<Result> {
+  const res = await apiSend("POST", `/api/walk-ins/${id}/${action}`);
+  return done(res);
+}
+
+export async function walkInAssignAction(
+  id: string,
+  staffId: string,
+): Promise<Result> {
+  const res = await apiSend("POST", `/api/walk-ins/${id}/assign`, { staffId });
+  return done(res);
+}
+
+export async function walkInStartAction(
+  id: string,
+  staffId?: string,
+): Promise<Result> {
+  const res = await apiSend(
+    "POST",
+    `/api/walk-ins/${id}/start`,
+    staffId ? { staffId } : {},
+  );
+  return done(res);
+}
+
+export async function walkInReorderAction(
+  id: string,
+  afterEntryId: string | null,
+  expectedPosition: number,
+): Promise<Result> {
+  const res = await apiSend("POST", `/api/walk-ins/${id}/reorder`, {
+    afterEntryId,
+    expectedPosition,
+  });
+  return done(res);
+}

@@ -15,6 +15,8 @@ import {
   fullDaysForService,
   shopLocalDayWindow,
 } from "./serviceDailyLimit.js";
+import { QUEUE_ORDER } from "./walkInLifecycle.js";
+import { planWalkInReservations } from "./walkInCapacity.js";
 
 /**
  * Open-slot computation for the native booking engine.
@@ -245,6 +247,7 @@ export async function computeFreeRanges(
       bookingLeadHours: true,
       bookingMaxDays: true,
       bookingBufferMin: true,
+      walkInEnabled: true,
     },
   });
   if (!shop) return null;
@@ -509,6 +512,36 @@ export async function computeFreeRanges(
           select: { scheduledAt: true, endAt: true },
         });
 
+    // ASSIGNED/READY walk-ins on THIS chair: the customer is standing in the
+    // shop and about to occupy it, so the PUBLIC grid must not sell their
+    // projected span out from under them. A SOFT reservation on purpose:
+    //   - only when the shop runs Walk-In Mode (gate = zero extra queries for
+    //     every other shop),
+    //   - only in the service-grid mode (the walk-in estimate engine passes
+    //     serviceId: null and SIMULATES these same entries itself - counting
+    //     them here too would double-book the simulation),
+    //   - skipped under ignoreBooked like every other busy source.
+    // The WRITE guard enforces the same spans from the same plan
+    // (engines/walkInCapacity.ts), so a stale grid or a hand-rolled POST cannot
+    // take a time this grid is hiding.
+    // Released the instant the entry leaves ASSIGNED/READY - every reader
+    // derives the span from status, nothing is stored.
+    const walkInReservations =
+      input.serviceId && !input.ignoreBooked && shop.walkInEnabled
+        ? await tx.walkInEntry.findMany({
+            where: {
+              shopId: input.shopId,
+              assignedStaffId: input.staffId,
+              status: { in: ["ASSIGNED", "READY"] },
+            },
+            orderBy: [...QUEUE_ORDER],
+            select: {
+              id: true,
+              services: { select: { durationMinAtJoin: true } },
+            },
+          })
+        : [];
+
     // Time the barber blocked off in Acuity. Like external visits it carries no
     // staff, so it blocks every chair for its span - offering a time he blocked
     // in the system he actually manages is the same double-book bug.
@@ -534,6 +567,7 @@ export async function computeFreeRanges(
       group,
       groupCapAppts,
       serviceFullDays,
+      walkInReservations,
     };
   });
   if (!data) return null;
@@ -550,6 +584,7 @@ export async function computeFreeRanges(
     group,
     groupCapAppts,
     serviceFullDays,
+    walkInReservations,
   } = data;
 
   const buffer = Math.max(0, shop.bookingBufferMin);
@@ -711,6 +746,13 @@ export async function computeFreeRanges(
       start: t.startsAt.getTime(),
       end: t.startsAt.getTime() + (t.durationMin + buffer) * MS_PER_MIN,
     });
+  }
+  // Assigned/ready walk-ins, stacked by THE shared capacity plan - the same
+  // one the write guard enforces. The plan returns the cut only, so the
+  // turnover buffer is re-added here exactly as it is for every other block
+  // above (an appointment, a visit, a targeted slot).
+  for (const r of planWalkInReservations(walkInReservations, now, buffer)) {
+    blocks.push({ start: r.start, end: r.end + buffer * MS_PER_MIN });
   }
 
   // The lower bound every candidate slot must clear: now + lead, and never

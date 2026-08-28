@@ -10,6 +10,7 @@ import { notifyPunchEarned } from "../services/loyaltyNotify.js";
 import { refundForCancellation } from "../billing/payments.js";
 import { notifySlotOpened } from "./slotOpened.js";
 import { releaseForAppointment } from "./acuityMirror.js";
+import { completeWalkInEntryForAppointmentInTx } from "./walkInComplete.js";
 
 /**
  * Turn a fulfilled native Appointment into a COMPLETED Visit that earns loyalty
@@ -49,6 +50,13 @@ export async function promoteOneAppointmentInTx(
   appt: PromoteAppt,
   now: Date,
 ): Promise<EarnResult> {
+  // A walk-in queue entry riding this appointment goes terminal in the SAME
+  // commit as the completion - and BEFORE the clientId guard, because the
+  // entry's lifecycle doesn't depend on whether there is loyalty to earn.
+  // CAS-idempotent inside (IN_SERVICE only), a no-op for every non-walk-in
+  // appointment.
+  await completeWalkInEntryForAppointmentInTx(tx, shop.id, appt.id, now);
+
   if (!appt.clientId) return null; // no client to credit (defensive)
 
   // Lock the client row like every other ledger write (serializes earns).
