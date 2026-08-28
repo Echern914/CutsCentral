@@ -1,6 +1,7 @@
 import { prisma } from "@chairback/db";
 import { REFERRAL, randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
+import { captureError } from "../sentry.js";
 
 /**
  * Referral program: "refer a barber, you both get a month free".
@@ -172,11 +173,20 @@ export async function grantReferralReward(referredShopId: string): Promise<void>
   } catch (err) {
     // The row is already REWARDED, so this will not retry on the next replay.
     // Loud because it needs manual repair: someone earned a month and didn't
-    // get it.
+    // get it, and no other code path will ever notice on its own.
     logger.error(
       { err, referralId: referral.id, shopId: referral.referrerShopId },
       "referral: MARKED REWARDED BUT GRANT FAILED - needs manual credit",
     );
+    // 🔴 Sentry, not just the log stream. This is money that a person earned
+    // and did not receive, the failure is silent by construction (the CAS
+    // already committed, so nothing retries), and the log line would otherwise
+    // wait for someone to go looking. No PII: ids only.
+    captureError(err, {
+      referralId: referral.id,
+      referrerShopId: referral.referrerShopId,
+      reason: "referral_grant_failed_after_cas",
+    });
   }
 }
 
@@ -230,6 +240,25 @@ async function monthlyPriceCents(subscriptionId: string): Promise<number> {
   const sub = await stripeClient().subscriptions.retrieve(subscriptionId);
   const unit = sub.items.data[0]?.price?.unit_amount;
   if (typeof unit !== "number" || unit <= 0) {
+    // 🔴 THE HAZARD TO KNOW ABOUT, and it is quiet.
+    //
+    // `unit_amount` is NULL for TIERED and METERED prices - Stripe puts the
+    // money in `tiers` / usage instead. Every ChairBack price is flat today, so
+    // this throw is unreachable; the day someone moves a plan to tiered
+    // pricing it starts firing, and because grantReferralReward has ALREADY
+    // flipped the row to REWARDED before calling us, the throw does not refuse
+    // the reward - it strands it. The referrer stays marked paid with a null
+    // rewardKind and never sees a cent.
+    //
+    // So if you are here because tiered pricing arrived: compute the amount
+    // from the price's tiers (or the upcoming invoice) rather than widening
+    // this check, and re-read the CAS ordering in grantReferralReward first.
+    //
+    // Reading item[0] is safe on purpose: the base subscription carries
+    // exactly one item (upgradeSubscriptionToPremiumAi REPLACES its price
+    // rather than adding), and the receptionist add-on is a SEPARATE
+    // subscription that both webhook handlers refuse to write to
+    // Shop.stripeSubscriptionId.
     throw new Error(`subscription ${subscriptionId} has no usable unit_amount`);
   }
   return unit;
@@ -252,4 +281,63 @@ async function extendTrial(shopId: string, ms: number): Promise<void> {
     where: { id: shopId },
     data: { trialEndsAt: new Date(base + ms) },
   });
+}
+
+/**
+ * The safety net under grantReferralReward: find referrals marked paid that
+ * never actually were.
+ *
+ * `status = REWARDED` with a NULL `rewardKind` is unambiguous. The CAS flips
+ * the row to REWARDED FIRST and only then grants, writing rewardKind on
+ * success - so that pair means "we committed to paying this person and then
+ * didn't". There is no other way to produce it.
+ *
+ * 🔴 Why this exists when the catch already reports to Sentry: the catch can
+ * only fire if the process survives to run it. The CAS commits before the
+ * grant, so a deploy, an OOM or a lost connection in between strands the row
+ * with NO exception raised anywhere. Those are exactly the ones nobody would
+ * ever hear about, and they are indistinguishable afterwards from a Stripe
+ * failure - which is fine, because the repair is the same either way.
+ *
+ * Read-only by construction. It reports; a human decides what to credit.
+ */
+export async function findStrandedReferralGrants(limit = 50): Promise<{
+  count: number;
+  referralIds: string[];
+}> {
+  const rows = await prisma.referral.findMany({
+    where: { status: "REWARDED", rewardKind: null },
+    orderBy: { rewardedAt: "asc" },
+    take: limit,
+    select: { id: true },
+  });
+  const count = await prisma.referral.count({
+    where: { status: "REWARDED", rewardKind: null },
+  });
+  return { count, referralIds: rows.map((r) => r.id) };
+}
+
+/**
+ * The scheduled half. Alerts and returns counts; writes nothing, ever.
+ *
+ * Fires on every tick while a stranded row exists rather than once: this is
+ * someone's unpaid month, and an alert that stops nagging before the money
+ * moves is an alert that gets forgotten.
+ */
+export async function auditReferralGrants(): Promise<{
+  stranded: number;
+  referralIds: string[];
+}> {
+  const { count, referralIds } = await findStrandedReferralGrants();
+  if (count > 0) {
+    logger.error(
+      { stranded: count, referralIds },
+      "referral: rewards marked REWARDED with no grant recorded - owed and unpaid",
+    );
+    captureError(
+      new Error(`${count} referral reward(s) marked REWARDED but never granted`),
+      { stranded: count, referralIds, reason: "referral_grant_stranded" },
+    );
+  }
+  return { stranded: count, referralIds };
 }
