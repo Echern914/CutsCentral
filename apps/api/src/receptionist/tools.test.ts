@@ -420,10 +420,22 @@ describe("book_appointment when the shop is ENFORCING an unmapped chair", () => 
    * cannot protect the chair. Before this was handled, recordMirrorIntent
    * threw straight out of bookAppointment.
    *
-   * 🔴 REAL time, not the fixture's June 2026. The mirror decides whether to
-   * record an intent with `new Date()`, not with the caller's injected now, so
-   * a fixture-dated slot is simply in the past and never mirrors at all - the
-   * test would pass while exercising nothing.
+   * 🔴 The clock and the slot must agree, or this test proves nothing.
+   *
+   * recordMirrorIntent only acts while the appointment still occupies the chair
+   * AT the instant it is given (shouldMirrorOnCreate -> appointmentOccupiesTime).
+   * So a slot on one side of `now` and the clock on the other means the mirror
+   * returns null on its way in, no throw is ever raised, and every assertion
+   * below passes having exercised nothing at all.
+   *
+   * Here both come from real time: `ctx.now` is realNow and the slot is a week
+   * ahead of it. Fixture time would work equally well as long as BOTH moved
+   * together - what must never happen is one of them being changed alone.
+   *
+   * (This used to read "the mirror decides with `new Date()`, not the caller's
+   * injected now". That was true, and was the #302 defect: `now` was optional
+   * and no production caller passed it. #329 made it REQUIRED, so the clock
+   * arrives from `ctx.now` and a forgotten one is a compile error.)
    */
   const realNow = new Date();
   const future = new Date(realNow.getTime() + 7 * 24 * 60 * 60_000);
