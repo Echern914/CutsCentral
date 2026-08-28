@@ -106,7 +106,24 @@ const MAX_VALUE_LEN = 64;
  * smuggle contact details. An `@` is an email; a run of 7+ digits is a phone
  * number. Both are dropped and the KEY is logged - never the value.
  */
+/**
+ * Our own record ids, which are emphatically NOT phone numbers.
+ *
+ * 🔴 Without this the bare "7+ digits" rule below silently ate them. A Prisma
+ * cuid carries a zero-padded counter block - `cmtd3inxb0004104f8hyd7w87` -
+ * and that block trips `\d{7,}` on a large share of real ids, so `staffId`
+ * and `fromStaffId` were dropped from roughly half of all audit rows. The
+ * only trace was a debug line naming the key, and the visible symptom was a
+ * chair movement recorded with no chair in it.
+ *
+ * Safe to exempt: a phone number cannot be 21+ characters of lowercase
+ * alphanumerics beginning with `c`, and every id-carrying key here is written
+ * by our own code, never by a customer.
+ */
+const RECORD_ID = /^c[a-z0-9]{20,31}$/;
+
 function looksPersonal(v: string): boolean {
+  if (RECORD_ID.test(v)) return false;
   return v.includes("@") || /\d{7,}/.test(v);
 }
 
