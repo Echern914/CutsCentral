@@ -56,7 +56,7 @@ export async function collectNotificationSignals(opts: {
   /** Premium AI locked: the receptionist inbox is permanently 0 for this shop. */
   premiumAiLocked: boolean;
 }): Promise<BellSignal[]> {
-  const [readiness, waitlist, inbox] = await Promise.all([
+  const [readiness, waitlist, inbox, walkIns] = await Promise.all([
     apiGet<ReadinessSummary>("/api/readiness/summary"),
     opts.barberOnly
       ? null
@@ -70,6 +70,12 @@ export async function collectNotificationSignals(opts: {
       : apiGet<{ escalatedCount?: number }>(
           "/api/dashboard/receptionist/conversations",
         ),
+    // The LIVE walk-in line. Role-aware endpoint: a barber seat reads its
+    // own surface, a manager the board's. 404 (feature dark) and 409 (shop
+    // off) are normal silent answers, like every other source here.
+    apiGet<{ entries?: { status: string }[] }>(
+      opts.barberOnly ? "/api/barber/walk-ins" : "/api/walk-ins/queue",
+    ),
   ]);
 
   const out: BellSignal[] = [];
@@ -87,6 +93,22 @@ export async function collectNotificationSignals(opts: {
       label: `${waiting} ${waiting === 1 ? "person" : "people"} waiting`,
       count: waiting,
       href: waitlistHref,
+    });
+  }
+
+  // People standing in the shop outrank every other queue. The employee
+  // seat's destination is their HOME (where their claim list lives) - the
+  // board itself is manager-only and the registry would rightly withhold it.
+  const inLine = walkIns?.ok
+    ? (walkIns.data?.entries ?? []).filter((e) => e.status === "WAITING").length
+    : 0;
+  const walkInHref = opts.barberOnly ? hrefFor("home") : hrefFor("walk-ins");
+  if (inLine > 0 && walkInHref) {
+    out.push({
+      key: "walk-ins",
+      label: `${inLine} walk-in${inLine === 1 ? "" : "s"} in the line`,
+      count: inLine,
+      href: walkInHref,
     });
   }
 

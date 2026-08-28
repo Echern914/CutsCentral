@@ -21,6 +21,10 @@ import {
 } from "../engines/walkInQueue.js";
 import { estimateQueue } from "../engines/walkInEstimate.js";
 import { completeEntry, startEntry } from "../engines/walkInStart.js";
+import {
+  notifyQueueHead,
+  notifyWalkInReady,
+} from "../services/walkInNotify.js";
 import { SlotTakenError } from "../engines/bookingWrite.js";
 
 /**
@@ -179,6 +183,7 @@ walkInBarberRouter.post("/:id/claim", async (req, res) => {
       actor,
       now: new Date(),
     });
+    void notifyQueueHead(shop.id);
     res.json({ entry });
   } catch (err) {
     if (!answerError(res, err)) throw err;
@@ -193,6 +198,8 @@ function transitionRoute(
     actor: QueueActor;
     now: Date;
   }) => Promise<WalkInEntryView>,
+  /** Post-success, best-effort. */
+  after?: (shopId: string, entryId: string) => void,
 ): void {
   walkInBarberRouter.post(`/:id/${path}`, async (req, res) => {
     const shop = await loadShop(req.shop!.id);
@@ -211,6 +218,7 @@ function transitionRoute(
         actor,
         now: new Date(),
       });
+      after?.(shop.id, req.params.id);
       res.json({ entry });
     } catch (err) {
       if (!answerError(res, err)) throw err;
@@ -218,10 +226,16 @@ function transitionRoute(
   });
 }
 
-transitionRoute("ready", markReady);
+transitionRoute("ready", markReady, (shopId, entryId) => {
+  void notifyWalkInReady(shopId, entryId);
+});
 transitionRoute("return", returnToLine);
-transitionRoute("no-show", markNoShow);
-transitionRoute("leave", markLeft);
+transitionRoute("no-show", markNoShow, (shopId) => {
+  void notifyQueueHead(shopId);
+});
+transitionRoute("leave", markLeft, (shopId) => {
+  void notifyQueueHead(shopId);
+});
 
 /**
  * START on the barber's OWN chair: from WAITING it is claim-and-start in one
@@ -245,6 +259,7 @@ walkInBarberRouter.post("/:id/start", async (req, res) => {
       actor,
       now: new Date(),
     });
+    void notifyQueueHead(shop.id);
     res.json({ entry: result.entry, appointmentId: result.appointmentId });
   } catch (err) {
     if (err instanceof SlotTakenError) {
@@ -272,6 +287,7 @@ walkInBarberRouter.post("/:id/complete", async (req, res) => {
       actor,
       now: new Date(),
     });
+    void notifyQueueHead(shop.id);
     res.json({ entry });
   } catch (err) {
     if (!answerError(res, err)) throw err;

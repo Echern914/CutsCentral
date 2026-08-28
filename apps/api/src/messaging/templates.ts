@@ -783,3 +783,31 @@ export function buildWalkInLinkBody(params: {
     `${params.url} Reply STOP to opt out.`
   );
 }
+
+/**
+ * Walk-In Mode queue texts. All TRANSACTIONAL - each one answers a check-in
+ * the customer made minutes ago. Terse on purpose (a queue ping read at a
+ * glance), STOP notice included because the entry's consent covers a short
+ * series of them.
+ */
+export function buildWalkInNextBody(params: { shopName: string }): string {
+  return (
+    `You're next in line at ${params.shopName}! Stay close - ` +
+    `your barber will call you up shortly. Reply STOP to opt out.`
+  );
+}
+
+export function buildWalkInReadyBody(params: {
+  shopName: string;
+  barberName: string | null;
+}): string {
+  const who = params.barberName ? `${params.barberName} is` : "Your barber is";
+  return `${who} ready for you at ${params.shopName} - head to the front! Reply STOP to opt out.`;
+}
+
+export function buildWalkInRemovedBody(params: { shopName: string }): string {
+  return (
+    `Your spot in line at ${params.shopName} was released. ` +
+    `If that's a surprise, check with the front desk - you can rejoin any time. Reply STOP to opt out.`
+  );
+}

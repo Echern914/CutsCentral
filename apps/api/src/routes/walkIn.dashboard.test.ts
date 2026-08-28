@@ -483,3 +483,65 @@ describe("a walk-in's capacity cannot be booked around over HTTP", () => {
     expect(retry.status).toBe(201);
   });
 });
+
+describe("the audit timeline (PR 4)", () => {
+  it("returns the entry's full event ladder - codes and ids, never the person", async () => {
+    const created = await request(app)
+      .post("/api/walk-ins")
+      .set("Cookie", ownerCookie)
+      .send(createBody());
+    const id = created.body.entry.id;
+    await request(app)
+      .post(`/api/walk-ins/${id}/assign`)
+      .set("Cookie", ownerCookie)
+      .send({ staffId: chairA });
+    await request(app)
+      .post(`/api/walk-ins/${id}/cancel`)
+      .set("Cookie", ownerCookie);
+
+    const res = await request(app)
+      .get(`/api/walk-ins/${id}/events`)
+      .set("Cookie", ownerCookie);
+    expect(res.status).toBe(200);
+    expect(res.body.events.map((e: { type: string }) => e.type)).toEqual([
+      "entry.created_by_staff",
+      "entry.assigned",
+      "entry.canceled",
+    ]);
+    const flat = JSON.stringify(res.body);
+    expect(flat).not.toMatch(/\+1212555/);
+    expect(flat).not.toContain("Walk"); // no first names
+
+    // 🔴 And the ladder is STABLE. These three events are written within
+    // milliseconds of each other and createdAt is only TIMESTAMP(3), so
+    // ordering on it alone leaves a tie that Postgres may break differently
+    // on each read - a timeline that reshuffles itself between refreshes.
+    // Re-reading must give byte-identical order.
+    const again = await request(app)
+      .get(`/api/walk-ins/${id}/events`)
+      .set("Cookie", ownerCookie);
+    expect(again.body.events.map((e: { type: string }) => e.type)).toEqual(
+      res.body.events.map((e: { type: string }) => e.type),
+    );
+  });
+
+  it("a foreign entry's timeline is a plain 404", async () => {
+    const other = await signup("wd-timeline-other");
+    await request(app)
+      .post("/api/shops")
+      .set("Cookie", other.cookie)
+      .send({ name: "Other TL", smsAttested: true });
+    await request(app)
+      .patch("/api/shops/me")
+      .set("Cookie", other.cookie)
+      .send({ walkInEnabled: true });
+    const created = await request(app)
+      .post("/api/walk-ins")
+      .set("Cookie", ownerCookie)
+      .send(createBody());
+    const res = await request(app)
+      .get(`/api/walk-ins/${created.body.entry.id}/events`)
+      .set("Cookie", other.cookie);
+    expect(res.status).toBe(404);
+  });
+});

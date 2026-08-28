@@ -22,6 +22,7 @@ import { runAcuityOutboundReconcile } from "./engines/acuityMirror.js";
 import { runTrialReminders } from "./engines/trialReminder.js";
 import { runAiTrialReminders } from "./engines/aiTrialReminder.js";
 import { autoCloseIdleConversations } from "./receptionist/conversation.js";
+import { expireStaleWalkIns } from "./engines/walkInExpiry.js";
 import { sweepExpiredHolds } from "./engines/holdSweep.js";
 import { expireDueOffers } from "./engines/waitlistOffer.js";
 import { expireDeadWaitlistEntries } from "./engines/waitlistExpiry.js";
@@ -308,6 +309,17 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
     ttlMs: 2 * MINUTE,
     run: () => sweepExpiredHolds(),
     failMsg: "receptionist hold sweep failed",
+  },
+  // Walk-in end-of-day expiry. Hourly at :23 (off the top-of-hour rush; the
+  // boundary is a day-level event, tighter cadence buys nothing). DARK by
+  // default: WALK_IN_EXPIRY_ENABLED=false makes every run a dry-run that
+  // reports what it WOULD retire. Sends nothing ever - see the engine header.
+  {
+    cronExpr: "23 * * * *",
+    name: "walk-in-expiry",
+    ttlMs: 2 * MINUTE,
+    run: () => expireStaleWalkIns().then(() => undefined),
+    failMsg: "walk-in expiry sweep failed",
   },
   // Rate-limit store hygiene: delete counter rows whose window expired >1h ago
   // every 30 min. The store is correct without this (an expired row resets on

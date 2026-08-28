@@ -83,7 +83,10 @@ export async function registerCustomerPush(magicToken: string): Promise<void> {
 export async function registerBarberPush(bearer: string): Promise<void> {
   const token = await getExpoPushToken();
   if (!token) return;
-  await fetch(`${API_ORIGIN}/api/dashboard/push/native`, {
+  await fetch(// The barber-reachable twin: the dashboard route is manager-gated, which
+    // silently made EMPLOYEE seats unregistrable. OWNER/MANAGER pass this
+    // gate too, so one path serves every seat.
+    `${API_ORIGIN}/api/barber/push/native`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
