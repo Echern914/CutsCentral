@@ -1,7 +1,17 @@
 import request from "supertest";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
+
+/** Wallet readiness is a narrow seam so the preflight is deterministic: the
+ * shared test database's registration rows come and go with other suites. */
+type Readiness = import("../wallet/pass.js").WalletDeliveryReadiness;
+const readiness = vi.hoisted(() => vi.fn((): Readiness => "ready"));
+vi.mock("../wallet/pass.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../wallet/pass.js")>();
+  return { ...real, walletDeliveryReadiness: readiness };
+});
+
 import { createApp } from "../app.js";
 import { ROTATE_ALL_KIND } from "../services/rewardsRotation.js";
 
@@ -36,10 +46,41 @@ const post = (cookie: string, body: object) =>
 
 const CONFIRM = { confirm: "ROTATE ALL REWARDS LINKS" };
 
+/** A shop with one client holding a Wallet pass - the situation the preflight
+ * exists to protect: rotating would kill the URL baked into that pass's QR. */
+async function shopWithWalletPass(): Promise<{ clientId: string; token: string }> {
+  const email = `rotr-pass-${randomToken(6)}@test.local`.toLowerCase();
+  emails.push(email);
+  const signup = await request(app)
+    .post("/api/auth/signup")
+    .send({ email, password, name: "rotr-pass", smsAttested: true });
+  const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
+  const shop = await request(app)
+    .post("/api/shops")
+    .set("Cookie", cookie)
+    .send({ name: "Pass Holder Cuts", smsAttested: true });
+  const created = await request(app)
+    .post("/api/dashboard/clients")
+    .set("Cookie", cookie)
+    .send({ firstName: "PassHolder" });
+  await prisma.walletPassRegistration.create({
+    data: {
+      shopId: shop.body.id,
+      clientId: created.body.id,
+      deviceLibraryIdentifier: `dev-${randomToken(6)}`,
+      pushToken: randomToken(8),
+    },
+  });
+  const row = await prisma.client.findUnique({ where: { id: created.body.id } });
+  return { clientId: created.body.id as string, token: row!.magicToken };
+}
+
 beforeEach(async () => {
   if (!adminCookie) adminCookie = await signup("rotr-admin", true);
   if (!plainCookie) plainCookie = await signup("rotr-plain", false);
   process.env.REWARDS_ROTATE_ALL_ENABLED = "true";
+  readiness.mockReset();
+  readiness.mockReturnValue("ready");
 });
 
 afterEach(async () => {
@@ -98,6 +139,42 @@ describe("the gates", () => {
     const res = await post(plainCookie, CONFIRM);
     expect(res.status).toBeGreaterThanOrEqual(403);
     expect(await prisma.platformOperation.count({ where: { kind: ROTATE_ALL_KIND } })).toBe(0);
+  });
+});
+
+describe("the wallet-refresh preflight", () => {
+  for (const state of ["unconfigured", "suppressed"] as const) {
+    it(`answers 409 when passes exist and wallet delivery is ${state}`, async () => {
+      const held = await shopWithWalletPass();
+      readiness.mockReturnValue(state);
+
+      const res = await post(adminCookie, CONFIRM);
+      expect(res.status).toBe(409);
+      expect(res.body).toEqual({ error: "wallet_refresh_unavailable" });
+      // Nothing created, nothing rotated, nothing enqueued.
+      expect(await prisma.platformOperation.count({ where: { kind: ROTATE_ALL_KIND } })).toBe(0);
+      expect(await prisma.platformOperationPassTask.count()).toBe(0);
+      const after = await prisma.client.findUnique({ where: { id: held.clientId } });
+      expect(after!.magicToken).toBe(held.token);
+    });
+  }
+
+  it("the refusal carries a FIXED classification - no provider or config detail", async () => {
+    await shopWithWalletPass();
+    readiness.mockReturnValue("unconfigured");
+    const res = await post(adminCookie, CONFIRM);
+    expect(Object.keys(res.body)).toEqual(["error"]);
+    const flat = JSON.stringify(res.body);
+    expect(flat).not.toMatch(/WALLET_|cert|APNs|apns|DRY_RUN/);
+  });
+
+  it("GET status stays available while delivery is unavailable", async () => {
+    readiness.mockReturnValue("unconfigured");
+    const res = await request(app)
+      .get("/api/admin-portal/rotate-all-rewards-links")
+      .set("Cookie", adminCookie);
+    expect(res.status).toBe(200);
+    expect(res.body.run).toBeNull();
   });
 });
 

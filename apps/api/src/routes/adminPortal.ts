@@ -294,6 +294,15 @@ adminPortalRouter.post("/shops/:shopId/comp", async (req, res) => {
  * unbounded table - a timeout or deploy mid-loop would strand a half-rotated
  * corpus with no resume point.
  *
+ * A START-TIME PREFLIGHT sits in front of a brand-new run: if any Wallet
+ * pass registration exists while wallet delivery is unavailable (certs
+ * unconfigured, or DRY_RUN suppressing dispatch), this answers 409
+ * `wallet_refresh_unavailable` and creates nothing - rotation would
+ * otherwise invalidate the rewards URL inside every pass QR with no way to
+ * push the refresh. With zero registrations there is nothing to refresh, so
+ * rotation proceeds regardless of configuration. Resuming an already-durable
+ * run is never refused: its pass tasks are waiting to be retried.
+ *
  * THREE independent gates, all required:
  *   1. isAdmin (the router's own middleware),
  *   2. REWARDS_ROTATE_ALL_ENABLED=true - default FALSE, fail-closed;
@@ -319,6 +328,13 @@ adminPortalRouter.post("/rotate-all-rewards-links", async (req, res) => {
     return;
   }
   const run = await startOrGetRotationRun({ adminUserId: req.userId! });
+  if (!run.ok) {
+    // Wallet passes exist but their QRs cannot be refreshed. Rotating now
+    // would strand real customers holding a silently dead QR, and the run
+    // would report itself complete. Fixed classification, nothing created.
+    res.status(409).json({ error: run.reason });
+    return;
+  }
   // 202 either way: the caller's intent ("retire the corpus") is now durable,
   // whether this request created the run or joined the one already going.
   res.status(202).json({ ok: true, runId: run.runId, status: run.status, created: run.created });

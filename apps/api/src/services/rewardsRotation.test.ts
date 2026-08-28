@@ -15,10 +15,16 @@ import { randomToken } from "@chairback/config";
  * rather than by whether APNs certs happen to be configured.
  */
 
-const poke = vi.hoisted(() => vi.fn(async (_clientId: string) => true));
+type PokeResult = import("../wallet/pass.js").WalletPokeResult;
+type Readiness = import("../wallet/pass.js").WalletDeliveryReadiness;
+
+const poke = vi.hoisted(() =>
+  vi.fn(async (_clientId: string): Promise<PokeResult> => "delivered"),
+);
+const readiness = vi.hoisted(() => vi.fn((): Readiness => "ready"));
 vi.mock("../wallet/pass.js", async (importOriginal) => {
   const real = await importOriginal<typeof import("../wallet/pass.js")>();
-  return { ...real, pokeWalletPass: poke };
+  return { ...real, pokeWalletPass: poke, walletDeliveryReadiness: readiness };
 });
 
 import { createApp } from "../app.js";
@@ -85,8 +91,18 @@ beforeAll(async () => {
 
 beforeEach(() => {
   poke.mockReset();
-  poke.mockResolvedValue(true);
+  poke.mockResolvedValue("delivered");
+  readiness.mockReset();
+  readiness.mockReturnValue("ready");
 });
+
+/** Start a run and assert it was not refused - most cases are about the
+ * traversal, not the preflight. */
+async function startRun(now?: Date) {
+  const r = await startOrGetRotationRun({ adminUserId, ...(now ? { now } : {}) });
+  if (!r.ok) throw new Error(`unexpected refusal: ${r.reason}`);
+  return r;
+}
 
 afterEach(async () => {
   // A leftover PENDING/RUNNING row would block the next test's run creation
@@ -114,9 +130,11 @@ describe("exclusivity", () => {
     const results = await Promise.all(
       Array.from({ length: 6 }, () => startOrGetRotationRun({ adminUserId })),
     );
-    const ids = new Set(results.map((r) => r.runId));
+    for (const r of results) expect(r.ok).toBe(true);
+    const handles = results.filter((r) => r.ok);
+    const ids = new Set(handles.map((r) => r.runId));
     expect(ids.size).toBe(1);
-    expect(results.filter((r) => r.created)).toHaveLength(1);
+    expect(handles.filter((r) => r.created)).toHaveLength(1);
     const rows = await prisma.platformOperation.findMany({
       where: { kind: ROTATE_ALL_KIND },
     });
@@ -124,19 +142,19 @@ describe("exclusivity", () => {
   });
 
   it("a second request while RUNNING joins the same run, never a new traversal", async () => {
-    const first = await startOrGetRotationRun({ adminUserId });
+    const first = await startRun();
     await prisma.platformOperation.update({
       where: { id: first.runId },
       data: { status: "RUNNING", startedAt: new Date() },
     });
-    const second = await startOrGetRotationRun({ adminUserId });
+    const second = await startRun();
     expect(second.runId).toBe(first.runId);
     expect(second.created).toBe(false);
     expect(await prisma.platformOperation.count({ where: { kind: ROTATE_ALL_KIND } })).toBe(1);
   });
 
   it("resumes a FAILED run rather than starting a fresh one", async () => {
-    const first = await startOrGetRotationRun({ adminUserId });
+    const first = await startRun();
     await prisma.platformOperation.update({
       where: { id: first.runId },
       data: {
@@ -147,7 +165,7 @@ describe("exclusivity", () => {
         rotatedCount: 7,
       },
     });
-    const resumed = await startOrGetRotationRun({ adminUserId });
+    const resumed = await startRun();
     expect(resumed.runId).toBe(first.runId);
     expect(resumed.status).toBe("PENDING");
     const row = await runRow();
@@ -174,7 +192,7 @@ describe("the corpus boundary and the traversal", () => {
     const before = new Map<string, string>();
     for (const id of [...inside, after]) before.set(id, await tokenOf(id));
 
-    const run = await startOrGetRotationRun({ adminUserId, now: cutoff });
+    const run = await startRun(cutoff);
     const tick = await processRotationRun({
       batchSize: 2,
       __testScope: { shopId },
@@ -200,7 +218,7 @@ describe("the corpus boundary and the traversal", () => {
     const original = new Map<string, string>();
     for (const id of ids) original.set(id, await tokenOf(id));
 
-    await startOrGetRotationRun({ adminUserId, now: cutoff });
+    await startRun(cutoff);
 
     // One committed batch, then the process "dies": maxBatches models exactly
     // the on-disk state a kill -9 after a committed batch leaves behind.
@@ -262,9 +280,9 @@ describe("wallet pass refresh, tracked independently", () => {
     const cutoff = new Date();
     const id = await clientWithPass(cutoff);
     const before = await tokenOf(id);
-    poke.mockResolvedValue(false); // APNs refusing, every attempt
+    poke.mockResolvedValue("attempted_failure"); // APNs refusing, every attempt
 
-    await startOrGetRotationRun({ adminUserId, now: cutoff });
+    await startRun(cutoff);
     await processRotationRun({ batchSize: 10, __testScope: { shopId } });
     const afterFirst = await tokenOf(id);
     expect(afterFirst).not.toBe(before); // rotated once...
@@ -287,9 +305,9 @@ describe("wallet pass refresh, tracked independently", () => {
   it("an interrupted push resumes on its own, without touching the token", async () => {
     const cutoff = new Date();
     const id = await clientWithPass(cutoff);
-    poke.mockResolvedValue(false);
+    poke.mockResolvedValue("attempted_failure");
 
-    await startOrGetRotationRun({ adminUserId, now: cutoff });
+    await startRun(cutoff);
     await processRotationRun({ batchSize: 10, maxBatches: 1, __testScope: { shopId } });
     const rotated = await tokenOf(id);
     const midTask = await prisma.platformOperationPassTask.findFirst({
@@ -303,7 +321,7 @@ describe("wallet pass refresh, tracked independently", () => {
     expect(midTask!.attempts).toBeLessThan(3);
 
     // The device comes back; the next tick finishes the refresh alone.
-    poke.mockResolvedValue(true);
+    poke.mockResolvedValue("delivered");
     await processRotationRun({ batchSize: 10, __testScope: { shopId } });
 
     const task = await prisma.platformOperationPassTask.findFirst({
@@ -320,8 +338,8 @@ describe("wallet pass refresh, tracked independently", () => {
   it("does not complete the run while a pass refresh is still pending", async () => {
     const cutoff = new Date();
     await clientWithPass(cutoff);
-    poke.mockResolvedValue(false);
-    await startOrGetRotationRun({ adminUserId, now: cutoff });
+    poke.mockResolvedValue("attempted_failure");
+    await startRun(cutoff);
     const tick = await processRotationRun({
       batchSize: 10,
       maxBatches: 1,
@@ -329,6 +347,118 @@ describe("wallet pass refresh, tracked independently", () => {
     });
     expect(tick!.done).toBe(false);
     expect((await runRow())!.status).toBe("RUNNING");
+  });
+});
+
+describe("wallet delivery unavailable", () => {
+  async function clientWithPass(cutoff: Date): Promise<string> {
+    const id = await clientAt(-3600_000, cutoff);
+    await prisma.walletPassRegistration.create({
+      data: {
+        shopId,
+        clientId: id,
+        deviceLibraryIdentifier: `dev-${randomToken(6)}`,
+        pushToken: randomToken(8),
+      },
+    });
+    return id;
+  }
+
+  for (const state of ["unconfigured", "suppressed"] as const) {
+    it(`REFUSES a brand-new run when passes exist and delivery is ${state}`, async () => {
+      const cutoff = new Date();
+      const id = await clientWithPass(cutoff);
+      const before = await tokenOf(id);
+      readiness.mockReturnValue(state);
+
+      const res = await startOrGetRotationRun({ adminUserId, now: cutoff });
+      expect(res).toEqual({ ok: false, reason: "wallet_refresh_unavailable" });
+      // Nothing created, nothing rotated, nothing enqueued.
+      expect(await prisma.platformOperation.count({ where: { kind: ROTATE_ALL_KIND } })).toBe(0);
+      expect(await prisma.platformOperationPassTask.count()).toBe(0);
+      expect(await tokenOf(id)).toBe(before);
+      expect(poke).not.toHaveBeenCalled();
+    });
+  }
+
+  it("STARTS normally with zero registrations, however wallet is configured", async () => {
+    const cutoff = new Date();
+    const id = await clientAt(-3600_000, cutoff); // no pass registration
+    const before = await tokenOf(id);
+    readiness.mockReturnValue("unconfigured");
+
+    const run = await startOrGetRotationRun({ adminUserId, now: cutoff });
+    expect(run.ok).toBe(true);
+    const tick = await processRotationRun({ batchSize: 10, __testScope: { shopId } });
+    expect(tick!.done).toBe(true);
+    expect(await tokenOf(id)).not.toBe(before); // there was no QR to strand
+    expect((await runRow())!.status).toBe("COMPLETED");
+  });
+
+  it("holds a task PENDING through an outage, spends NO attempt, and keeps the run RUNNING", async () => {
+    const cutoff = new Date();
+    const id = await clientWithPass(cutoff);
+    const before = await tokenOf(id);
+    await startRun(cutoff);
+
+    // The outage begins AFTER the run is durable: the worker meets it mid-run.
+    poke.mockResolvedValue("retryable_unavailable");
+    const tick = await processRotationRun({ batchSize: 10, __testScope: { shopId } });
+    expect(tick!.done).toBe(false);
+
+    const rotated = await tokenOf(id);
+    expect(rotated).not.toBe(before); // rotated exactly once, by the batch
+
+    for (let i = 0; i < 3; i++) {
+      await processRotationRun({ batchSize: 10, __testScope: { shopId } });
+    }
+    const stalled = await prisma.platformOperationPassTask.findFirst({
+      where: { clientId: id },
+    });
+    expect(stalled!.status).toBe("PENDING");
+    // 🔴 An outage is not an attempt: repeated ticks must not burn the cap.
+    expect(stalled!.attempts).toBe(0);
+    const midRow = await runRow();
+    expect(midRow!.status).toBe("RUNNING"); // a pending pass blocks completion
+    expect(midRow!.passPendingCount).toBe(1);
+    expect(midRow!.passSucceededCount).toBe(0);
+    expect(midRow!.passFailedCount).toBe(0);
+
+    // Delivery comes back: the very next tick finishes the refresh.
+    poke.mockResolvedValue("delivered");
+    const recovered = await processRotationRun({ batchSize: 10, __testScope: { shopId } });
+    expect(recovered!.done).toBe(true);
+
+    const task = await prisma.platformOperationPassTask.findFirst({
+      where: { clientId: id },
+    });
+    expect(task!.status).toBe("SUCCEEDED");
+    // 🔴 The token is IDENTICAL across the outage and the recovery: rotated
+    // exactly once, never re-rolled by a configuration problem.
+    expect(await tokenOf(id)).toBe(rotated);
+    const row = await runRow();
+    expect(row!.status).toBe("COMPLETED");
+    expect(row!.rotatedCount).toBe(1);
+    expect(row!.passSucceededCount).toBe(1);
+  });
+
+  it("treats an unregistered/deleted pass as nothing_to_do, not a failure", async () => {
+    const cutoff = new Date();
+    const id = await clientWithPass(cutoff);
+    poke.mockResolvedValue("nothing_to_do"); // every device pruned as 410
+
+    await startRun(cutoff);
+    const tick = await processRotationRun({ batchSize: 10, __testScope: { shopId } });
+    expect(tick!.done).toBe(true);
+
+    const task = await prisma.platformOperationPassTask.findFirst({
+      where: { clientId: id },
+    });
+    expect(task!.status).toBe("SUCCEEDED");
+    const row = await runRow();
+    expect(row!.passSucceededCount).toBe(1);
+    expect(row!.passFailedCount).toBe(0);
+    expect(row!.status).toBe("COMPLETED");
   });
 });
 
@@ -342,7 +472,7 @@ describe("the run record holds nothing person-shaped", () => {
     });
     const oldToken = await tokenOf(id);
 
-    await startOrGetRotationRun({ adminUserId, now: cutoff });
+    await startRun(cutoff);
     await processRotationRun({ batchSize: 10, __testScope: { shopId } });
     const newToken = await tokenOf(id);
 

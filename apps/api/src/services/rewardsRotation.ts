@@ -2,7 +2,11 @@ import { Prisma, forShop, prisma, runAsOwner } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
 import { captureError } from "../sentry.js";
-import { pokeWalletPass } from "../wallet/pass.js";
+import {
+  pokeWalletPass,
+  walletDeliveryReadiness,
+  type WalletPokeResult,
+} from "../wallet/pass.js";
 
 /**
  * magicToken rotation - the READ-side answer to the credential corpus.
@@ -107,6 +111,13 @@ export interface RotationRunHandle {
   created: boolean;
 }
 
+/** Fixed refusal vocabulary - never a provider or exception string. */
+export type RotationStartRefusal = "wallet_refresh_unavailable";
+
+export type RotationStartResult =
+  | ({ ok: true } & RotationRunHandle)
+  | { ok: false; reason: RotationStartRefusal };
+
 /**
  * Create the platform rotation run, or return/resume the existing one.
  * Idempotent under concurrency: the partial unique index is the authority,
@@ -117,7 +128,7 @@ export interface RotationRunHandle {
 export async function startOrGetRotationRun(params: {
   adminUserId: string;
   now?: Date;
-}): Promise<RotationRunHandle> {
+}): Promise<RotationStartResult> {
   const now = params.now ?? new Date();
 
   const active = await runAsOwner((tx) =>
@@ -125,7 +136,9 @@ export async function startOrGetRotationRun(params: {
       where: { kind: ROTATE_ALL_KIND, status: { in: ACTIVE } },
     }),
   );
-  if (active) return { runId: active.id, status: active.status, created: false };
+  if (active) {
+    return { ok: true, runId: active.id, status: active.status, created: false };
+  }
 
   // Resume the latest FAILED run if one exists - CAS so two resumers can't
   // both think they flipped it.
@@ -144,7 +157,32 @@ export async function startOrGetRotationRun(params: {
     );
     if (flipped.count === 1) {
       logger.warn({ runId: failed.id }, "platform rotation run resumed after failure");
-      return { runId: failed.id, status: "PENDING", created: false };
+      // No preflight on RESUME: the run is already durable, its tokens are
+      // already rotated, and its pass tasks are waiting precisely so they can
+      // be retried when delivery returns. Refusing here would strand them.
+      return { ok: true, runId: failed.id, status: "PENDING", created: false };
+    }
+  }
+
+  // 🔴 START-TIME PREFLIGHT, brand-new runs only. Rotation invalidates the
+  // rewards URL baked into every Wallet pass QR. If passes exist but we
+  // cannot push a refresh, starting would strand real customers holding a
+  // silently dead QR - and the run would report itself complete. Refuse
+  // instead, creating nothing and rotating nothing.
+  //
+  // With ZERO registrations the configuration is irrelevant: there is no QR
+  // to refresh, so rotation proceeds normally.
+  const readiness = walletDeliveryReadiness();
+  if (readiness !== "ready") {
+    const registrations = await runAsOwner((tx) =>
+      tx.walletPassRegistration.count(),
+    );
+    if (registrations > 0) {
+      logger.warn(
+        { reason: readiness, registrations },
+        "platform rotation refused: wallet refresh unavailable",
+      );
+      return { ok: false, reason: "wallet_refresh_unavailable" };
     }
   }
 
@@ -161,7 +199,7 @@ export async function startOrGetRotationRun(params: {
       }),
     );
     logger.warn({ runId: run.id }, "platform rotation run created");
-    return { runId: run.id, status: "PENDING", created: true };
+    return { ok: true, runId: run.id, status: "PENDING", created: true };
   } catch (err) {
     // Lost the creation race against the partial unique index - the winner's
     // run IS the run. Anything else is a real error.
@@ -175,7 +213,7 @@ export async function startOrGetRotationRun(params: {
       }),
     );
     if (!winner) throw err; // vanished between statements - genuinely odd, surface it
-    return { runId: winner.id, status: winner.status, created: false };
+    return { ok: true, runId: winner.id, status: winner.status, created: false };
   }
 }
 
@@ -290,9 +328,24 @@ async function rotateOneBatch(
 
 /**
  * Attempt up to `limit` PENDING pass tasks once each. NEVER throws, never
- * touches a token: a push failure increments attempts (FAILED past the cap),
- * an interrupted process leaves the task PENDING for the next tick. Returns
- * how many tasks reached a terminal state this pass.
+ * touches a token. Returns how many tasks reached a TERMINAL state.
+ *
+ * 🔴 THE MAPPING IS THE WHOLE POINT. "We had nothing to send" and "we could
+ * not send" are different answers, and an earlier cut collapsed both into
+ * success - which would have let a wallet outage (unconfigured certs,
+ * DRY_RUN) mark every pass SUCCEEDED and complete a run while every QR in
+ * every customer's phone stayed stale.
+ *
+ *   delivered | nothing_to_do  -> SUCCEEDED (the QR is current, or there is
+ *                                no QR left to refresh)
+ *   retryable_unavailable      -> stays PENDING, attempts UNCHANGED, and we
+ *                                stop this pass entirely: every remaining
+ *                                task faces the same outage, so burning the
+ *                                budget on them would only spend retries
+ *   attempted_failure          -> attempts+1, FAILED at the cap
+ *
+ * A pending task keeps the run RUNNING, which is exactly what should happen
+ * while a configuration outage is unresolved.
  */
 async function drainPassTasks(runId: string, limit: number): Promise<number> {
   const tasks = await runAsOwner((tx) =>
@@ -305,14 +358,28 @@ async function drainPassTasks(runId: string, limit: number): Promise<number> {
   );
   let handled = 0;
   for (const t of tasks) {
-    let ok = false;
+    let result: WalletPokeResult;
     try {
-      ok = await pokeWalletPass(t.clientId);
+      result = await pokeWalletPass(t.clientId);
     } catch {
-      ok = false; // pokeWalletPass shouldn't throw; belt anyway
+      // pokeWalletPass is contractually throw-free; treat a surprise as an
+      // outage rather than an attempt, so no retry is consumed.
+      result = "retryable_unavailable";
     }
+
+    if (result === "retryable_unavailable") {
+      // Leave it PENDING, untouched, and stop: the next tick retries once the
+      // outage clears. The run stays RUNNING in the meantime.
+      break;
+    }
+
     const attempts = t.attempts + 1;
-    const next = ok ? "SUCCEEDED" : attempts >= PASS_MAX_ATTEMPTS ? "FAILED" : "PENDING";
+    const next =
+      result === "attempted_failure"
+        ? attempts >= PASS_MAX_ATTEMPTS
+          ? "FAILED"
+          : "PENDING"
+        : "SUCCEEDED";
     try {
       await runAsOwner(async (tx) => {
         const upd = await tx.platformOperationPassTask.updateMany({

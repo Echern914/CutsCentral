@@ -84,6 +84,40 @@ describe("manager rotation", () => {
     expect((await request(app).get(`/api/rewards/${after!.magicToken}`)).status).toBe(200);
   });
 
+  it("stays best-effort: an unavailable wallet breaks neither a punch nor a rotation", async () => {
+    // The API test environment has no WALLET_* configuration, so every poke
+    // here resolves "retryable_unavailable" - the outage case. Ordinary
+    // customer-facing flows must not notice.
+    const { id } = await makeClient(ownerCookie);
+    const shop = await prisma.client.findUnique({
+      where: { id },
+      select: { shopId: true },
+    });
+    await prisma.walletPassRegistration.create({
+      data: {
+        shopId: shop!.shopId,
+        clientId: id,
+        deviceLibraryIdentifier: `dev-${randomToken(6)}`,
+        pushToken: randomToken(8),
+      },
+    });
+    // New shops ship with rewards OFF; the punch route gates on it.
+    await prisma.shop.update({
+      where: { id: shop!.shopId },
+      data: { rewardsEnabled: true },
+    });
+
+    // A punch (the everyday loyalty write that pokes the pass) still succeeds.
+    const punch = await request(app)
+      .post(`/api/dashboard/clients/${id}/bonus`)
+      .set("Cookie", ownerCookie)
+      .send({});
+    expect(punch.status).toBe(200);
+
+    // And so does the manager rotation, which pokes it too.
+    expect((await rotate(id, ownerCookie)).status).toBe(200);
+  });
+
   it("is shop-scoped: another shop's client is a plain 404, token untouched", async () => {
     const { id, token } = await makeClient(ownerCookie);
     const res = await rotate(id, otherCookie);
