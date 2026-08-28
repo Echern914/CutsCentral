@@ -14,10 +14,9 @@ import {
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 import {
-  billableSegments,
-  bumpRecoverySmsMetric,
-  takeRecoverySmsBudget,
-} from "../services/recoverySmsBudget.js";
+  RESEND_REFUSAL_HTTP,
+  resendRewardsLink,
+} from "../services/rewardsLinkResend.js";
 import { ensureReferralCode } from "../services/referral.js";
 import {
   requireActiveAccess,
@@ -1019,33 +1018,15 @@ dashboardRouter.post("/clients/:clientId/opt", async (req, res) => {
 });
 
 /**
- * Re-send a client their rewards link.
+ * Re-send a client their rewards link - the manager door. The whole engine
+ * (consent gate, shared per-client ledger, platform segment budget, redacted
+ * write-ahead Nudge, sanitized failures) lives in services/rewardsLinkResend
+ * so the barber's own-clients door is the SAME code path, not a sibling that
+ * could drift. This handler only resolves the client and speaks HTTP.
  *
- * The link is texted at signup and on nudges, and until now a customer who lost
- * that SMS had no way back in - the token in the URL IS the credential, so
- * losing the message meant losing the punch card. A real customer at the pilot
- * shop hit exactly that. This is the two-tap answer for a barber standing next
- * to them; phone-number self-recovery is the customer-side half.
- *
- * Shop-scoped through forShop, so a client id from another shop is a plain 404
- * rather than a hint that it exists.
- *
- * 🔴 CONSENT IS THE REAL GATE, and it is the shop's own rule, not a new one:
- * textable means optedOut === false AND smsConsentAt != null. A STOP is
- * client-owned - the dashboard cannot text around it, which is the same reason
- * POST /clients/:id/opt refuses to clear an sms_stop. Refusing here with a
- * reason the barber can act on beats a silent no-op that looks like it worked.
- *
- * Rate limited PER CLIENT in the database rather than by IP: the thing worth
- * bounding is "how many texts can one customer receive", and that must hold
- * across barbers, devices and restarts. The dashboard IP limiter already sits
- * on the router for the other half.
+ * Shop-scoped through forShop, so a client id from another shop is a plain
+ * 404 rather than a hint that it exists.
  */
-const RESEND_COOLDOWN_MS = 5 * 60 * 1000;
-/** Loyalty-kind texts one client row may receive per rolling day, all doors
- * combined - the bound that keeps a phone's worst-case SMS count small. */
-const RESEND_DAILY_CAP = 5;
-
 dashboardRouter.post("/clients/:clientId/rewards-link", async (req, res) => {
   const shop = req.shop!;
   const db = forShop(shop.id);
@@ -1054,153 +1035,17 @@ dashboardRouter.post("/clients/:clientId/rewards-link", async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  if (!client.phone) {
-    res.status(409).json({
-      error: "no_phone",
-      message: "Add a mobile number to this client before sending their link.",
-    });
-    return;
-  }
-  if (client.optedOut) {
-    res.status(409).json({
-      error: "opted_out",
-      message:
-        client.optOutSource === "sms_stop"
-          ? "This client texted STOP. Only they can opt back in - by texting START."
-          : "This client is opted out of texts.",
-    });
-    return;
-  }
-  if (!client.smsConsentAt) {
-    res.status(409).json({
-      error: "no_consent",
-      message: "This client hasn't opted in to texts yet.",
-    });
-    return;
-  }
-
-  const now = new Date();
-  // The exact final body, fixed ASCII/GSM-7 on purpose: no customer or shop
-  // name (either could change the length or force UCS-2), just the link and
-  // the opt-out. One segment for any base URL of sane length; the segment
-  // count is CALCULATED and reserved regardless, never assumed.
-  const rewardsUrl = `${apiEnv().APP_BASE_URL.replace(/\/$/, "")}/r/${client.magicToken}/rewards`;
-  const body = `Your ChairBack rewards link: ${rewardsUrl} Reply STOP to opt out.`;
-
-  // 🔴 One transaction under the client-ledger lock: cooldown read, daily-cap
-  // read, PLATFORM segment reservation and the redacted PENDING row all commit
-  // together or not at all. Without the lock, parallel resends from two
-  // manager devices could all pass the reads before any create commits; with
-  // it, they serialize on the same key the self-service path locks
-  // (nudge:<clientId>), so the two doors share one ledger in the strictest
-  // sense. Lock order everywhere: rec:<ipHash> (self-service only) then
-  // nudge:<clientId>; this route takes only the second - no cycle exists.
-  type Refusal = "too_soon" | "too_many_today" | "platform_budget";
-  const reserved = await runAsOwner(
-    async (tx): Promise<{ ok: true; nudgeId: string } | { ok: false; why: Refusal }> => {
-      await tx.$executeRaw(
-        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`nudge:${client.id}`}))`,
-      );
-      const recent = await tx.nudge.findFirst({
-        where: {
-          shopId: shop.id,
-          clientId: client.id,
-          kind: "loyalty",
-          createdAt: { gt: new Date(now.getTime() - RESEND_COOLDOWN_MS) },
-        },
-        select: { id: true },
-      });
-      if (recent) return { ok: false, why: "too_soon" };
-      // Daily ceiling so the authenticated door is bounded too. Counts EVERY
-      // loyalty-kind row on this client - self-service recovery included,
-      // since those commit onto the same trail - so the worst case per client
-      // row per day is RESEND_DAILY_CAP however the doors are alternated.
-      const today = await tx.nudge.count({
-        where: {
-          shopId: shop.id,
-          clientId: client.id,
-          kind: "loyalty",
-          createdAt: { gt: new Date(now.getTime() - 24 * 60 * 60 * 1000) },
-        },
-      });
-      if (today >= RESEND_DAILY_CAP) return { ok: false, why: "too_many_today" };
-      // The SAME platform breaker self-service uses, in billable segments of
-      // THIS exact body - the manager door is not a way around the spend cap.
-      if (!(await takeRecoverySmsBudget(tx, now, billableSegments(body)))) {
-        return { ok: false, why: "platform_budget" };
-      }
-      // Write-ahead and REDACTED: the audit row must not store a bearer URL.
-      // The provider gets the real body in memory; history gets a label.
-      const nudge = await tx.nudge.create({
-        data: {
-          shopId: shop.id,
-          clientId: client.id,
-          channel: "SMS",
-          status: "PENDING",
-          kind: "loyalty",
-          body: "Rewards access link",
-        },
-        select: { id: true },
-      });
-      return { ok: true, nudgeId: nudge.id };
-    },
-  );
-
-  if (!reserved.ok) {
-    if (reserved.why === "too_soon") {
-      res.status(429).json({
-        error: "too_soon",
-        message: "That link was just sent. Give it a few minutes before resending.",
-      });
-    } else if (reserved.why === "too_many_today") {
-      res.status(429).json({
-        error: "too_many_today",
-        message: "This client has hit today's text limit. Try again tomorrow.",
-      });
-    } else {
-      // The platform budget is exhausted. Same barber-facing copy as a
-      // delivery hiccup - which spend class refused is not theirs to see.
-      bumpRecoverySmsMetric("sup_budget", now);
-      res.status(502).json({
-        error: "send_failed",
-        message: "Couldn't send that text just now. Try again in a moment.",
-      });
-    }
-    return;
-  }
-
-  bumpRecoverySmsMetric("attempt", now);
-  bumpRecoverySmsMetric("segments", now, billableSegments(body));
-  try {
-    const result = await getMessageProvider().send({
-      to: client.phone,
-      body,
-      from: shop.twilioNumber ?? undefined,
-    });
-    bumpRecoverySmsMetric("accepted", now);
-    await db.nudge.update({
-      where: { id: reserved.nudgeId },
-      data: { status: "SENT", sentAt: now, messageSid: result.sid },
-    });
+  const result = await resendRewardsLink({
+    shopId: shop.id,
+    client,
+    twilioNumber: shop.twilioNumber,
+  });
+  if (result.ok) {
     res.json({ ok: true });
-  } catch {
-    // 🔴 Fixed classification only, same as self-service: a provider error can
-    // carry the phone, the URL token, the body or credential material, and
-    // none of that may reach the log, the Nudge, monitoring or the response.
-    bumpRecoverySmsMetric("failed", now);
-    await db.nudge.update({
-      where: { id: reserved.nudgeId },
-      data: { status: "FAILED", failedReason: "send_failed" },
-    });
-    logger.warn(
-      { shopId: shop.id, clientId: client.id },
-      "rewards link resend failed",
-    );
-    res.status(502).json({
-      error: "send_failed",
-      message: "Couldn't send that text just now. Try again in a moment.",
-    });
+    return;
   }
+  const answer = RESEND_REFUSAL_HTTP[result.refusal];
+  res.status(answer.status).json({ error: answer.error, message: answer.message });
 });
 
 // Edit a client's profile (name / phone / email). Consent and the Acuity sync

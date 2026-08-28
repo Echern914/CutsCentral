@@ -31,6 +31,7 @@ import { rewardsRecoveryRouter } from "./routes/rewardsRecovery.js";
 import { walletRouter } from "./routes/wallet.js";
 import { dashboardRouter } from "./routes/dashboard.js";
 import { barberRouter } from "./routes/barber.js";
+import { barberClientsRouter } from "./routes/barberClients.js";
 import { walkInBarberRouter } from "./routes/walkIn.barber.js";
 import { walkInPublicRouter } from "./routes/walkIn.public.js";
 import { walkInDashboardRouter } from "./routes/walkIn.dashboard.js";
@@ -211,6 +212,9 @@ export function createApp(): Express {
   // The walk-in claim surface mounts FIRST (more specific path) so the barber
   // router can never shadow it. Both dark behind WALK_IN_MODE_ENABLED.
   app.use("/api/barber/walk-ins", dashboardLimiter, walkInBarberRouter);
+  // The barber's own clientele (people their chair has served) - same
+  // more-specific-first mounting so barberRouter can never shadow it.
+  app.use("/api/barber/clients", dashboardLimiter, barberClientsRouter);
   app.use("/api/barber", dashboardLimiter, barberRouter);
   app.use("/api/insights", dashboardLimiter, insightsRouter); // barber analytics page
   app.use("/api/notifications", dashboardLimiter, notificationsRouter); // the barber's own alert settings

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { Avatar } from "@/components/ui/Avatar";
 import { BarberWalkIns } from "./BarberWalkIns";
+import { BarberClients } from "./BarberClients";
 
 export interface BarberRow {
   id: string;
@@ -29,11 +30,13 @@ export interface BarberHomeData {
 /**
  * The employee dashboard: one chair's day.
  *
- * A barber sees their own book and their own numbers, and nothing else - no
- * shop revenue, no colleagues' appointments, no client list beyond who is
- * sitting in their chair today. That boundary is enforced server-side by
- * /api/barber (which reads the seat's staffId and ignores any client-supplied
- * one); this component just renders what comes back.
+ * A barber sees their own book, their own numbers, and their OWN clients -
+ * no shop revenue, no colleagues' appointments, never the shop book. "Their
+ * clients" (the people their chair has served) was a deliberate widening of
+ * the original today-only boundary, decided with Eric for the rewards-access
+ * arc. Every boundary is enforced server-side by /api/barber and
+ * /api/barber/clients (which read the seat's staffId and ignore any
+ * client-supplied one); this component just renders what comes back.
  *
  * Deliberately NOT a cut-down copy of the owner dashboard. Most of that page
  * is about running a business - at-risk clients, revenue trends, texting caps -
@@ -90,6 +93,11 @@ export function BarberHome({
               own chair). Self-loading; renders NOTHING when Walk-In Mode is
               off or dark, so every existing home screen is unchanged. */}
           <BarberWalkIns />
+
+          {/* Their own clientele (served or booked on this chair), with the
+              one action a barber keeps asking for: re-text a lost rewards
+              link. Self-loading; renders nothing until they have clients. */}
+          <BarberClients />
 
           <Card className="mt-6 overflow-hidden">
             <div className="flex items-baseline justify-between gap-3 border-b border-subtle px-5 py-4">
