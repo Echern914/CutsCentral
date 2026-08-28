@@ -352,6 +352,22 @@ export function ShopPageClient({
               Book with {data.name}
             </a>
           )}
+          {/* The rewards-recovery door, only when this visitor DIDN'T arrive
+              through their rewards link (token-holders get "Your rewards"
+              above) and isn't inside the app (where their rewards session
+              already exists). Preview keeps it inert like every footer link.
+              /my-rewards is shop-agnostic - the link says nothing about who
+              this customer is anywhere else. */}
+          {!rewardsHref && !inApp && (
+            <a
+              href={preview ? undefined : "/my-rewards"}
+              onClick={preview ? (e) => e.preventDefault() : undefined}
+              className="text-[11px] underline-offset-2 hover:underline"
+              style={{ color: theme.muted }}
+            >
+              Lost your rewards link? Find my rewards
+            </a>
+          )}
           {/* Growth loop: every shop page quietly markets the platform. Inside
               the iOS app it must be INERT text - the marketing site it links to
               leads to business signup, which is forbidden in-app (3.1.1). The
