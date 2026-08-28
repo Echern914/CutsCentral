@@ -48,6 +48,25 @@ describe("sanitizeWalkInAuditMetadata", () => {
     ).toEqual({ source: "KIOSK" });
   });
 
+  it("🔴 keeps record ids whose counter block looks like a phone number", () => {
+    // These are REAL cuids taken from failing runs. A Prisma cuid embeds a
+    // zero-padded counter, so `\d{7,}` matches a large share of them - and
+    // treating that as a phone number silently dropped `staffId`/`fromStaffId`
+    // from about half of all audit rows, leaving chair movements with no
+    // chair recorded. The only symptom was a debug line nobody reads.
+    expect(
+      sanitizeWalkInAuditMetadata({
+        staffId: "cmtd3inxb0004104f8hyd7w87", // digit run "0004104"
+        fromStaffId: "cmtd34n68000411kq9grt6n53", // digit run "68000411"
+      }),
+    ).toEqual({
+      staffId: "cmtd3inxb0004104f8hyd7w87",
+      fromStaffId: "cmtd34n68000411kq9grt6n53",
+    });
+    // ...while a real phone on the very same key is still dropped.
+    expect(sanitizeWalkInAuditMetadata({ staffId: "+15551234567" })).toBeUndefined();
+  });
+
   it("drops long strings (codes and ids, not prose) and non-scalars", () => {
     expect(
       sanitizeWalkInAuditMetadata({
