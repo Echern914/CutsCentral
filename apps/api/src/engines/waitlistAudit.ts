@@ -123,7 +123,28 @@ const MAX_VALUE_LEN = 64;
  * be used to smuggle contact details. An `@` is an email; a run of 7+ digits
  * is a phone number. Both are dropped and the KEY is logged - never the value.
  */
+/**
+ * Our own record ids, which are emphatically NOT phone numbers.
+ *
+ * 🔴 Without this the bare "7+ digits" rule below silently ate them. A Prisma
+ * cuid carries a zero-padded counter block - `cmtd3inxb0004104f8hyd7w87` - and
+ * that block trips `\d{7,}` on a large share of real ids. The only allowlisted
+ * key here that holds one is `previousOfferId`, written on `offer.advanced`
+ * (engines/waitlistOffer.ts), so about half of those rows recorded that a hold
+ * succeeded a lapsed one WITHOUT saying which - breaking exactly the chain that
+ * key exists to preserve. Nothing errored; the drop is silent by design.
+ *
+ * Safe to exempt: a phone number cannot be 21+ characters of lowercase
+ * alphanumerics beginning with `c`, and every id-carrying key here is written
+ * by our own code, never by a customer.
+ *
+ * Same defect and same fix as the walk-in audit log (#330). These two scrubbers
+ * are the only copies of this heuristic in the codebase - both are now guarded.
+ */
+const RECORD_ID = /^c[a-z0-9]{20,31}$/;
+
 function looksPersonal(v: string): boolean {
+  if (RECORD_ID.test(v)) return false;
   return v.includes("@") || /\d{7,}/.test(v);
 }
 

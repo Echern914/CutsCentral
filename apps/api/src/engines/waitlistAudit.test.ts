@@ -46,6 +46,23 @@ describe("metadata allowlist", () => {
     expect(sanitize({ outcome: "2025550171" })).toBeUndefined();
   });
 
+  it("🔴 keeps a record id whose counter block looks like a phone number", () => {
+    // REAL cuids, taken from failing runs elsewhere. A Prisma cuid embeds a
+    // zero-padded counter, so `\d{7,}` matches a large share of them. Treating
+    // that as a phone number silently dropped `previousOfferId` from about half
+    // of all `offer.advanced` rows - the audit chain from a lapsed hold to the
+    // one that replaced it, broken by the guard meant to protect it.
+    expect(sanitize({ previousOfferId: "cmtd3inxb0004104f8hyd7w87" })).toEqual({
+      previousOfferId: "cmtd3inxb0004104f8hyd7w87",
+    });
+    expect(sanitize({ previousOfferId: "cmtd34n68000411kq9grt6n53" })).toEqual({
+      previousOfferId: "cmtd34n68000411kq9grt6n53",
+    });
+    // ...and a real phone on that very same key is still dropped.
+    expect(sanitize({ previousOfferId: "+12025550171" })).toBeUndefined();
+    expect(sanitize({ previousOfferId: "2025550171" })).toBeUndefined();
+  });
+
   it("🔴 drops prose - a matcher `reason` names a customer's schedule", () => {
     const reason =
       "no window fits: [2026-08-25..2026-08-25 @ 09:00-12:00] slot date 2026-08-29 not in range";
