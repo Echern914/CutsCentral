@@ -1,7 +1,21 @@
-import { createHash, randomInt, timingSafeEqual } from "node:crypto";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
+import {
+  CODE_TTL_MS,
+  CLEANUP_AFTER_MS,
+  MAX_ATTEMPTS,
+  MAX_SENDS_PER_WINDOW,
+  PROOF_TTL_MS,
+  RESEND_COOLDOWN_MS,
+  SEND_WINDOW_MS,
+  codeShapeOk,
+  digestsMatch,
+  hashOtp,
+  mintCode,
+  proofShapeOk,
+  sha256Hex,
+} from "./otpPolicy.js";
 
 /**
  * Walk-In Mode kiosk phone verification: the six-digit OTP lifecycle.
@@ -27,33 +41,27 @@ import { logger } from "../logger.js";
  * `now` is a parameter everywhere (the clock-tick rule).
  */
 
-export const CODE_TTL_MS = 5 * 60 * 1000;
-export const MAX_ATTEMPTS = 5;
-export const RESEND_COOLDOWN_MS = 60 * 1000;
-/** Sends allowed per phone per rolling window (tracked on the row). */
-export const MAX_SENDS_PER_WINDOW = 5;
-export const SEND_WINDOW_MS = 60 * 60 * 1000;
-export const PROOF_TTL_MS = 10 * 60 * 1000;
+// The policy - TTLs, caps, digest, code alphabet - is engines/otpPolicy.ts,
+// shared with rewards recovery so the two flows cannot drift apart one
+// constant at a time. Re-exported here so existing importers keep working.
+export {
+  CODE_TTL_MS,
+  MAX_ATTEMPTS,
+  MAX_SENDS_PER_WINDOW,
+  PROOF_TTL_MS,
+  RESEND_COOLDOWN_MS,
+  SEND_WINDOW_MS,
+  mintCode,
+} from "./otpPolicy.js";
 /** Challenges one shop may mint across all phones in CHALLENGE_WINDOW_MS -
  * the per-shop ceiling under the outer per-IP limiter. */
 export const SHOP_CHALLENGE_CAP = 30;
 export const CHALLENGE_WINDOW_MS = 10 * 60 * 1000;
-/** Rows whose challenge expired this long ago are swept on the next
- * challenge - the explicit cleanup that replaces a cron. */
-const CLEANUP_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 
-function sha256Hex(v: string): string {
-  return createHash("sha256").update(v, "utf8").digest("hex");
-}
-
-/** The scope binding: shop + phone + purpose are part of the digest. */
+/** The kiosk digest: hashOtp with this table's scope key (the shop) and this
+ * flow's purpose. Byte-identical to the digests already at rest. */
 export function hashCode(shopId: string, phone: string, code: string): string {
-  return sha256Hex(`${shopId}:${phone}:walk_in_check_in:${code}`);
-}
-
-/** Uniform six digits from the CSPRNG (never Math.random). */
-export function mintCode(): string {
-  return String(randomInt(0, 1_000_000)).padStart(6, "0");
+  return hashOtp(shopId, phone, "walk_in_check_in", code);
 }
 
 export type ChallengeOutcome =
@@ -148,7 +156,7 @@ export async function verifyChallenge(opts: {
 }): Promise<VerifyOutcome> {
   const { shopId, phone, code, now } = opts;
   // Shape first: a non-six-digit string costs a regex, not a query.
-  if (!/^\d{6}$/.test(code)) return REFUSED;
+  if (!codeShapeOk(code)) return REFUSED;
 
   const row = await prisma.walkInPhoneCode.findUnique({
     where: { shopId_phone: { shopId, phone } },
@@ -171,11 +179,8 @@ export async function verifyChallenge(opts: {
   });
   if (claimed.count === 0) return REFUSED;
 
-  // Constant-time compare of equal-length digests. (The hash lookup pattern
-  // makes timing moot for the DB read; this covers the comparison itself.)
-  const expected = Buffer.from(row.codeHash, "hex");
-  const actual = Buffer.from(hashCode(shopId, phone, code), "hex");
-  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+  // Constant-time compare via the shared policy.
+  if (!digestsMatch(row.codeHash, hashCode(shopId, phone, code))) {
     return REFUSED;
   }
 
@@ -207,7 +212,7 @@ export async function consumeCheckInProof(opts: {
   now: Date;
 }): Promise<boolean> {
   const { shopId, phone, proof, now } = opts;
-  if (proof.length < 20 || proof.length > 512) return false;
+  if (!proofShapeOk(proof)) return false;
   const spent = await prisma.walkInPhoneCode.updateMany({
     where: {
       shopId,

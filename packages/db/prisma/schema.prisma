@@ -3111,3 +3111,64 @@ model WalkInPhoneCode {
   @@index([shopId, expiresAt]) // the challenge path's cleanup sweep
   @@index([shopId, lastSentAt]) // the per-shop challenge ceiling count
 }
+
+// Platform-scoped phone-verification challenges for flows that have NO tenant
+// yet - today only rewards recovery ("which shops know this phone" is the
+// QUESTION, so a shopId cannot exist before the answer). The kiosk's
+// shop-scoped twin is WalkInPhoneCode; the shared policy both live by is
+// engines/otpPolicy.ts, and the reason this is a second table rather than a
+// nullable shopId over there is that Postgres treats NULLs as distinct - a
+// nullable column in @@unique([shopId, phone]) would stop collapsing recovery
+// rows for one phone, and the resend cooldown and attempt cap would silently
+// stop holding. 🔴 DEFAULT-DENY under RLS like the MCP token tables: enabled +
+// FORCED with NO policy and NO app-role grants, because no tenant policy could
+// truthfully apply. Every access goes through services/rewardsRecovery.ts
+// running as the owner.
+model PhoneRecoveryCode {
+  id String @id @default(cuid())
+
+  // The flow this challenge belongs to (folded into the code digest too, so a
+  // code minted for one purpose is arithmetic garbage to every other).
+  purpose String
+
+  // HMAC-SHA256 of the normalized E.164, keyed off TOKEN_ENCRYPTION_KEY. The
+  // lookup/uniqueness/ceiling key. A phone has ~10 digits of entropy, so a
+  // BARE sha256 is reversible by enumeration - the keyed hash is what makes
+  // this column safe to index and count on.
+  phoneHash String
+
+  // The normalized E.164 itself, encrypted with the SAME house pattern as the
+  // Acuity/Square OAuth tokens (packages/config crypto, TOKEN_ENCRYPTION_KEY).
+  // Retained ONLY because the verified step must look up Client rows by phone;
+  // rows are short-lived by TTL and swept by the inline cleanup. Deliberately
+  // NOT a new scheme - "do not invent reversible encryption casually".
+  phoneEnc String
+
+  // HMAC of the requester's IP at last send: the platform-wide ceiling key.
+  // A caller rotating PHONES from one address piles rows onto one ipHash and
+  // hits its windowed cap; a distributed caller targeting one PHONE hits the
+  // per-row sendCount cap. Two independent brakes.
+  ipHash String
+
+  codeHash     String
+  attemptCount Int       @default(0)
+  expiresAt    DateTime
+  consumedAt   DateTime?
+
+  // The bounded post-verification session: readable (shop chooser) until it
+  // expires, consumed EXACTLY once at shop selection.
+  proofHash       String?   @unique
+  proofExpiresAt  DateTime?
+  proofConsumedAt DateTime?
+
+  lastSentAt DateTime
+  sendCount  Int      @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // One active challenge per phone per flow - a database fact, not a habit.
+  @@unique([purpose, phoneHash])
+  @@index([expiresAt]) // the inline cleanup sweep
+  @@index([ipHash, lastSentAt]) // the per-IP windowed ceiling
+}

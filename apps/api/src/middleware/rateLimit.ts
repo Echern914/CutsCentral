@@ -206,6 +206,26 @@ export const kioskWriteLimiter = make({
 });
 
 /** Acuity OAuth callback: blunt code-exchange replay. Per IP. */
+/**
+ * Rewards recovery, two buckets by cost - the OUTER per-IP belt. The
+ * deterministic platform ceilings (per-phone sendCount/cooldown, per-ipHash
+ * windowed cap) live in services/rewardsRecovery.ts against the challenge
+ * table itself, so no phone number - raw or hashed - is ever a key HERE, and
+ * the brakes hold across replicas even where this store is memory.
+ */
+export const recoverySmsLimiter = make({
+  name: "recoverySms",
+  windowMs: 60 * 1000,
+  limit: 6,
+  keyGenerator: publicIpKey,
+});
+export const recoveryReadLimiter = make({
+  name: "recoveryRead",
+  windowMs: 60 * 1000,
+  limit: 30,
+  keyGenerator: publicIpKey,
+});
+
 export const oauthLimiter = make({ name: "oauth", windowMs: 60 * 1000, limit: 15 });
 
 /** Webhook receivers: generous (legit bursts happen) but bounded. Per IP. */

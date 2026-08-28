@@ -13,6 +13,11 @@ import {
 } from "@chairback/config";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
+import {
+  billableSegments,
+  bumpRecoverySmsMetric,
+  takeRecoverySmsBudget,
+} from "../services/recoverySmsBudget.js";
 import { ensureReferralCode } from "../services/referral.js";
 import {
   requireActiveAccess,
@@ -1037,6 +1042,9 @@ dashboardRouter.post("/clients/:clientId/opt", async (req, res) => {
  * on the router for the other half.
  */
 const RESEND_COOLDOWN_MS = 5 * 60 * 1000;
+/** Loyalty-kind texts one client row may receive per rolling day, all doors
+ * combined - the bound that keeps a phone's worst-case SMS count small. */
+const RESEND_DAILY_CAP = 5;
 
 dashboardRouter.post("/clients/:clientId/rewards-link", async (req, res) => {
   const shop = req.shop!;
@@ -1072,52 +1080,122 @@ dashboardRouter.post("/clients/:clientId/rewards-link", async (req, res) => {
   }
 
   const now = new Date();
-  // The Nudge row IS the audit trail, so the cooldown reads from it - one
-  // record, not a counter that can disagree with what was actually sent.
-  const recent = await db.nudge.findFirst({
-    where: {
-      clientId: client.id,
-      kind: "loyalty",
-      createdAt: { gt: new Date(now.getTime() - RESEND_COOLDOWN_MS) },
+  // The exact final body, fixed ASCII/GSM-7 on purpose: no customer or shop
+  // name (either could change the length or force UCS-2), just the link and
+  // the opt-out. One segment for any base URL of sane length; the segment
+  // count is CALCULATED and reserved regardless, never assumed.
+  const rewardsUrl = `${apiEnv().APP_BASE_URL.replace(/\/$/, "")}/r/${client.magicToken}/rewards`;
+  const body = `Your ChairBack rewards link: ${rewardsUrl} Reply STOP to opt out.`;
+
+  // 🔴 One transaction under the client-ledger lock: cooldown read, daily-cap
+  // read, PLATFORM segment reservation and the redacted PENDING row all commit
+  // together or not at all. Without the lock, parallel resends from two
+  // manager devices could all pass the reads before any create commits; with
+  // it, they serialize on the same key the self-service path locks
+  // (nudge:<clientId>), so the two doors share one ledger in the strictest
+  // sense. Lock order everywhere: rec:<ipHash> (self-service only) then
+  // nudge:<clientId>; this route takes only the second - no cycle exists.
+  type Refusal = "too_soon" | "too_many_today" | "platform_budget";
+  const reserved = await runAsOwner(
+    async (tx): Promise<{ ok: true; nudgeId: string } | { ok: false; why: Refusal }> => {
+      await tx.$executeRaw(
+        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`nudge:${client.id}`}))`,
+      );
+      const recent = await tx.nudge.findFirst({
+        where: {
+          shopId: shop.id,
+          clientId: client.id,
+          kind: "loyalty",
+          createdAt: { gt: new Date(now.getTime() - RESEND_COOLDOWN_MS) },
+        },
+        select: { id: true },
+      });
+      if (recent) return { ok: false, why: "too_soon" };
+      // Daily ceiling so the authenticated door is bounded too. Counts EVERY
+      // loyalty-kind row on this client - self-service recovery included,
+      // since those commit onto the same trail - so the worst case per client
+      // row per day is RESEND_DAILY_CAP however the doors are alternated.
+      const today = await tx.nudge.count({
+        where: {
+          shopId: shop.id,
+          clientId: client.id,
+          kind: "loyalty",
+          createdAt: { gt: new Date(now.getTime() - 24 * 60 * 60 * 1000) },
+        },
+      });
+      if (today >= RESEND_DAILY_CAP) return { ok: false, why: "too_many_today" };
+      // The SAME platform breaker self-service uses, in billable segments of
+      // THIS exact body - the manager door is not a way around the spend cap.
+      if (!(await takeRecoverySmsBudget(tx, now, billableSegments(body)))) {
+        return { ok: false, why: "platform_budget" };
+      }
+      // Write-ahead and REDACTED: the audit row must not store a bearer URL.
+      // The provider gets the real body in memory; history gets a label.
+      const nudge = await tx.nudge.create({
+        data: {
+          shopId: shop.id,
+          clientId: client.id,
+          channel: "SMS",
+          status: "PENDING",
+          kind: "loyalty",
+          body: "Rewards access link",
+        },
+        select: { id: true },
+      });
+      return { ok: true, nudgeId: nudge.id };
     },
-    select: { id: true },
-  });
-  if (recent) {
-    res.status(429).json({
-      error: "too_soon",
-      message: "That link was just sent. Give it a few minutes before resending.",
-    });
+  );
+
+  if (!reserved.ok) {
+    if (reserved.why === "too_soon") {
+      res.status(429).json({
+        error: "too_soon",
+        message: "That link was just sent. Give it a few minutes before resending.",
+      });
+    } else if (reserved.why === "too_many_today") {
+      res.status(429).json({
+        error: "too_many_today",
+        message: "This client has hit today's text limit. Try again tomorrow.",
+      });
+    } else {
+      // The platform budget is exhausted. Same barber-facing copy as a
+      // delivery hiccup - which spend class refused is not theirs to see.
+      bumpRecoverySmsMetric("sup_budget", now);
+      res.status(502).json({
+        error: "send_failed",
+        message: "Couldn't send that text just now. Try again in a moment.",
+      });
+    }
     return;
   }
 
-  const rewardsUrl = `${apiEnv().APP_BASE_URL.replace(/\/$/, "")}/r/${client.magicToken}/rewards`;
-  const body =
-    `Hi ${client.firstName ?? "there"}, here's your ${shop.name} rewards link: ` +
-    `${rewardsUrl} Reply STOP to opt out.`;
-
-  // Write-ahead: the row exists BEFORE the network call, so a send that
-  // succeeds while the response is lost still leaves a record, and the cooldown
-  // above counts it. The reverse order can text twice and remember once.
-  const nudge = await db.nudge.create({
-    data: { clientId: client.id, channel: "SMS", status: "PENDING", kind: "loyalty", body },
-  });
+  bumpRecoverySmsMetric("attempt", now);
+  bumpRecoverySmsMetric("segments", now, billableSegments(body));
   try {
     const result = await getMessageProvider().send({
       to: client.phone,
       body,
       from: shop.twilioNumber ?? undefined,
     });
+    bumpRecoverySmsMetric("accepted", now);
     await db.nudge.update({
-      where: { id: nudge.id },
+      where: { id: reserved.nudgeId },
       data: { status: "SENT", sentAt: now, messageSid: result.sid },
     });
     res.json({ ok: true });
-  } catch (err) {
+  } catch {
+    // 🔴 Fixed classification only, same as self-service: a provider error can
+    // carry the phone, the URL token, the body or credential material, and
+    // none of that may reach the log, the Nudge, monitoring or the response.
+    bumpRecoverySmsMetric("failed", now);
     await db.nudge.update({
-      where: { id: nudge.id },
-      data: { status: "FAILED", failedReason: (err as Error).message },
+      where: { id: reserved.nudgeId },
+      data: { status: "FAILED", failedReason: "send_failed" },
     });
-    logger.error({ err, shopId: shop.id, clientId: client.id }, "rewards link resend failed");
+    logger.warn(
+      { shopId: shop.id, clientId: client.id },
+      "rewards link resend failed",
+    );
     res.status(502).json({
       error: "send_failed",
       message: "Couldn't send that text just now. Try again in a moment.",

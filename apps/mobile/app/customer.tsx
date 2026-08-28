@@ -35,7 +35,24 @@ export default function CustomerScreen() {
   const [token, setToken] = useState<string | null>(null);
   const [resolving, setResolving] = useState(true);
   const [phone, setPhone] = useState("");
-  const [sentMsg, setSentMsg] = useState<string | null>(null);
+  // The in-app recovery machine: enter phone -> verify -> choose business.
+  const [recStep, setRecStep] = useState<"phone" | "code" | "choose">("phone");
+  const [recCode, setRecCode] = useState("");
+  const [recProof, setRecProof] = useState<string | null>(null);
+  const [recShops, setRecShops] = useState<
+    { selectionId: string; name: string; city: string | null; region: string | null; industry: string }[]
+  >([]);
+  const [recMsg, setRecMsg] = useState<string | null>(null);
+  const [recBusy, setRecBusy] = useState(false);
+  // Mirror of the server's 60s resend cooldown - the server suppresses early
+  // resends silently, so the button says why instead of lying.
+  const [recCooldown, setRecCooldown] = useState(0);
+
+  useEffect(() => {
+    if (recCooldown <= 0) return;
+    const t = setInterval(() => setRecCooldown((v) => Math.max(0, v - 1)), 1000);
+    return () => clearInterval(t);
+  }, [recCooldown > 0]);
   const [linkInput, setLinkInput] = useState("");
   const [linkErr, setLinkErr] = useState<string | null>(null);
   // Demonstration mode (App Review Guideline 2.1a): browse the seeded demo
@@ -117,23 +134,75 @@ export default function CustomerScreen() {
     await adopt(t);
   }
 
-  async function textMeMyLink() {
-    setSentMsg(null);
+  /**
+   * Verified recovery, in-app: prove the phone, then choose the business.
+   *
+   * This REPLACED "text me my link", which asked the API to pick a shop for a
+   * bare phone number - and the API picked "most recently active", which could
+   * be a different shop than the one whose card the customer wanted. Now no
+   * shop is ever chosen for them: they verify, see their own shops, and tap
+   * one. The copy on the code step is deliberately noncommittal ("if that
+   * number's on file...") - the app never learns whether a number exists until
+   * its owner proves it.
+   */
+  async function recoveryStart() {
+    // Double-tap + cooldown guards: sends happen only on an explicit tap and
+    // never twice for one tap. Nothing sends on mount or on step changes.
+    if (recBusy || recCooldown > 0) return;
+    setRecMsg(null);
     const p = phone.trim();
-    if (!p) { setSentMsg("Enter your mobile number."); return; }
-    // Public resolver on the API: looks the customer up by phone and texts their
-    // link. Privacy-safe - it returns ok regardless, so we show the same
-    // reassuring message either way (never reveal whether a number is on file).
-    const res = await fetch(`${API_ORIGIN}/api/rewards/resolve-by-phone`, {
+    if (!p) { setRecMsg("Enter your mobile number."); return; }
+    setRecBusy(true);
+    const res = await fetch(`${API_ORIGIN}/api/rewards-recovery/challenge`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ phone: p }),
     }).catch(() => null);
-    setSentMsg(
-      res && res.ok
-        ? "If that number's on file, we just texted your rewards link. Tap it to open here."
-        : "Something went wrong. Please try again.",
-    );
+    setRecBusy(false);
+    if (!res || !res.ok) { setRecMsg("Something went wrong. Please try again."); return; }
+    setRecCooldown(60);
+    setRecCode("");
+    setRecStep("code");
+  }
+
+  async function recoveryVerify() {
+    setRecMsg(null);
+    const res = await fetch(`${API_ORIGIN}/api/rewards-recovery/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phone: phone.trim(), code: recCode.trim() }),
+    }).catch(() => null);
+    const data = res && res.ok ? ((await res.json()) as { verified: boolean; proof?: string }) : null;
+    if (!data?.verified || !data.proof) {
+      setRecMsg("That code didn't work. Check it, or send a fresh one.");
+      return;
+    }
+    const list = await fetch(`${API_ORIGIN}/api/rewards-recovery/shops`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ proof: data.proof }),
+    }).catch(() => null);
+    const shops = list && list.ok ? ((await list.json()) as { shops: typeof recShops }).shops : null;
+    if (!shops) { setRecMsg("Something went wrong. Please try again."); return; }
+    setRecProof(data.proof);
+    setRecShops(shops);
+    setRecStep("choose");
+  }
+
+  async function recoveryChoose(selectionId: string) {
+    if (!recProof) return;
+    setRecMsg(null);
+    const res = await fetch(`${API_ORIGIN}/api/rewards-recovery/select`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ proof: recProof, selectionId }),
+    }).catch(() => null);
+    const data = res && res.ok ? ((await res.json()) as { ok: boolean; url?: string }) : null;
+    const t = data?.url ? parseToken(data.url) : null;
+    if (!t) { setRecMsg("Something went wrong. Please try again."); return; }
+    // The selected shop's rewards credential - adopted exactly like a pasted
+    // link, because it IS the same credential.
+    await adopt(t);
   }
 
   if (resolving) {
@@ -239,19 +308,77 @@ export default function CustomerScreen() {
             <View style={styles.line} />
           </View>
 
-          <Text style={styles.sub}>Don&apos;t have the link? Get it texted to you:</Text>
-          <TextInput
-            value={phone}
-            onChangeText={setPhone}
-            placeholder="Your mobile number"
-            placeholderTextColor="#6b6b70"
-            keyboardType="phone-pad"
-            style={styles.input}
-          />
-          {sentMsg && <Text style={styles.note}>{sentMsg}</Text>}
-          <Pressable style={[styles.button, styles.buttonSecondary]} onPress={textMeMyLink}>
-            <Text style={styles.buttonSecondaryText}>Text me my link</Text>
-          </Pressable>
+          {recStep === "phone" && (
+            <>
+              <Text style={styles.sub}>Don&apos;t have the link? Verify your number:</Text>
+              <TextInput
+                value={phone}
+                onChangeText={setPhone}
+                placeholder="Your mobile number"
+                placeholderTextColor="#6b6b70"
+                keyboardType="phone-pad"
+                style={styles.input}
+              />
+              {recMsg && <Text style={styles.note}>{recMsg}</Text>}
+              <Pressable style={[styles.button, styles.buttonSecondary]} onPress={recoveryStart}>
+                <Text style={styles.buttonSecondaryText}>Text me a code</Text>
+              </Pressable>
+            </>
+          )}
+          {recStep === "code" && (
+            <>
+              <Text style={styles.sub}>
+                If that number&apos;s on file, we just texted a 6-digit code.
+              </Text>
+              <TextInput
+                value={recCode}
+                onChangeText={(v) => setRecCode(v.replace(/\D/g, ""))}
+                placeholder="6-digit code"
+                placeholderTextColor="#6b6b70"
+                keyboardType="number-pad"
+                maxLength={6}
+                style={styles.input}
+              />
+              {recMsg && <Text style={styles.note}>{recMsg}</Text>}
+              <Pressable style={[styles.button, styles.buttonSecondary]} onPress={recoveryVerify}>
+                <Text style={styles.buttonSecondaryText}>Verify</Text>
+              </Pressable>
+              <Pressable
+                style={styles.demoLink}
+                disabled={recBusy || recCooldown > 0}
+                onPress={recoveryStart}
+              >
+                <Text style={styles.demoLinkText}>
+                  {recCooldown > 0 ? `Send a fresh code (${recCooldown}s)` : "Send a fresh code"}
+                </Text>
+              </Pressable>
+            </>
+          )}
+          {recStep === "choose" && (
+            <>
+              <Text style={styles.sub}>
+                {recShops.length === 0
+                  ? "We couldn't find rewards for this number. If your shop uses ChairBack, ask them to add it to your profile."
+                  : "Choose your business:"}
+              </Text>
+              {recShops.map((shop) => (
+                <Pressable
+                  key={shop.selectionId}
+                  style={[styles.button, styles.buttonSecondary]}
+                  onPress={() => recoveryChoose(shop.selectionId)}
+                >
+                  <Text style={styles.buttonSecondaryText}>
+                    {shop.name}
+                    {shop.city ? ` \u2014 ${shop.city}${shop.region ? ", " + shop.region : ""}` : ""}
+                  </Text>
+                </Pressable>
+              ))}
+              {recMsg && <Text style={styles.note}>{recMsg}</Text>}
+              <Pressable style={styles.demoLink} onPress={() => setRecStep("phone")}>
+                <Text style={styles.demoLinkText}>Different number</Text>
+              </Pressable>
+            </>
+          )}
 
           <Pressable
             accessibilityRole="button"

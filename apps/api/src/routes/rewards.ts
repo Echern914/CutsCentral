@@ -14,6 +14,7 @@ import {
 } from "@chairback/config";
 import { prisma, runAsOwner } from "@chairback/db";
 import { toE164 } from "../acuity/clientKey.js";
+import { requestRecoveryChallenge } from "../services/rewardsRecovery.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 import { buildPassForClient, walletEnabled } from "../wallet/pass.js";
 import { receptionistEnabledForShop } from "../receptionist/config.js";
@@ -792,17 +793,38 @@ const resolveByPhoneSchema = z
   .strict();
 
 /**
- * Cold-start entry for the mobile app: a customer who opens the app without a
- * magic link enters their phone number, and we text them their rewards link
- * (which then deep-links back into the app). Public + unauthenticated like the
- * rest of the rewards routes.
+ * LEGACY cold-start entry for already-installed mobile builds.
  *
- * PRIVACY: this must not become a phone-enumeration oracle, so the response is
- * ALWAYS the same `{ ok: true }` whether or not a matching, textable client
- * exists. We only actually send when there's a match that consented to SMS and
- * isn't opted out (texting the link is itself a transactional reply to their own
- * request, but we still respect a STOP). If the same phone maps to clients at
- * multiple shops, we text the most recently active one's link.
+ * 🔴 What this used to do, and must never do again: when one phone matched
+ * clients at multiple shops it texted "the most recently active one's link" -
+ * which meant a customer who visited a competitor last week was handed the
+ * competitor's rewards link by OUR product. Shipped builds still POST here, so
+ * the route stays; the behavior is now the neutral half of the verified
+ * recovery flow (routes/rewardsRecovery.ts):
+ *
+ *   - the response is the SAME `{ ok: true }` for every phone - known,
+ *     unknown, one shop, twenty shops;
+ *   - at most ONE SMS is sent, platform-neutral: no shop is named, no link to
+ *     any shop's rewards, no balance - just the door to verified recovery,
+ *     where the customer proves the phone and picks their shop themselves;
+ *   - no shop is ever selected on the customer's behalf, silently or
+ *     otherwise.
+ *
+ * OLD-BUILD COMPATIBILITY: the shipped screen shows "if that number's on
+ * file, we just texted your rewards link" and waits for an SMS - which still
+ * arrives. Its link now opens /my-rewards in the browser, the customer
+ * verifies and picks their shop there, and the final rewards URL deep-links
+ * back into the app exactly like every texted rewards link always has (the
+ * app claims /r/* paths). Recovery completes on shipped builds with zero app
+ * update.
+ *
+ * CONSENT: sent only when at least one matching client row is textable under
+ * the EXISTING rule (optedOut false AND smsConsentAt set) - the same gate the
+ * old implementation applied to its chosen row, kept rather than reinvented.
+ * The Nudge audit row rides the OLDEST textable match: deterministic
+ * bookkeeping for a message that names no shop, deliberately not
+ * activity-based - activity-based selection is the defect this rewrite
+ * removes.
  */
 rewardsRouter.post("/resolve-by-phone", async (req, res) => {
   const parsed = resolveByPhoneSchema.safeParse(req.body ?? {});
@@ -811,56 +833,20 @@ rewardsRouter.post("/resolve-by-phone", async (req, res) => {
     return;
   }
   const phone = toE164(parsed.data.phone);
-  // Uniform response regardless of validity/existence (no enumeration signal).
-  const ok = { ok: true };
-
+  // 🔴 One service, one budget. This endpoint used to do its own lookup and
+  // send, which meant a caller could alternate between here and the recovery
+  // route and draw TWO send allowances per phone while bypassing the
+  // challenge row entirely. Now both doors are the same door: same
+  // eligibility decision, same cooldown, same per-phone cap, same IP ceiling,
+  // same purpose binding, same audit discipline - and its ONE message carries
+  // the code AND the /my-rewards door, so the whole legacy journey (open the
+  // link, enter the number, enter THIS code, choose the business) costs
+  // exactly one SMS. The response stays byte-identical {ok:true} for every
+  // phone, and the send is fire-and-forget inside the service.
   if (phone) {
-    // Lookup via runAsOwner (FORCE RLS; no shop context). The SMS send happens
-    // OUTSIDE the transaction so we never hold a DB tx open across a network call.
-    const client = await runAsOwner((tx) =>
-      tx.client.findFirst({
-        where: { phone, optedOut: false, smsConsentAt: { not: null }, archivedAt: null },
-        orderBy: [{ lastVisitAt: { sort: "desc", nulls: "last" } }, { updatedAt: "desc" }],
-        include: { shop: { select: { id: true, name: true, twilioNumber: true } } },
-      }),
-    );
-    if (client) {
-      // The text promises "your rewards link", so it opens the punch card
-      // (/rewards) - not the shop-page landing the bare /r/ now renders.
-      const rewardsUrl = `${env.APP_BASE_URL}/r/${client.magicToken}/rewards`;
-      const who = client.firstName ?? "there";
-      const body =
-        `Hi ${who}, here's your ${client.shop.name} rewards link: ${rewardsUrl} ` +
-        `Reply STOP to opt out.`;
-      try {
-        const result = await getMessageProvider().send({
-          to: phone,
-          body,
-          from: client.shop.twilioNumber ?? undefined, // shop's own line when it has one
-        });
-        // Audit as a loyalty-kind Nudge (transactional, not a marketing blast).
-        await runAsOwner((tx) =>
-          tx.nudge.create({
-            data: {
-              shopId: client.shop.id,
-              clientId: client.id,
-              channel: "SMS",
-              status: "SENT",
-              kind: "loyalty",
-              body,
-              sentAt: new Date(),
-              messageSid: result.sid,
-            },
-          }),
-        );
-      } catch (err) {
-        // Never leak failure to the caller (still return ok); just log it.
-        logger.error({ err, shopId: client.shop.id, clientId: client.id }, "resolve-by-phone send failed");
-      }
-    }
+    await requestRecoveryChallenge({ phone, ip: req.ip ?? "unknown", now: new Date() });
   }
-
-  res.json(ok);
+  res.json({ ok: true });
 });
 
 /**
