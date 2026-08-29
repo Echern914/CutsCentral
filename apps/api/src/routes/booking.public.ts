@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { countBookingRefusals } from "../services/bookingRefusal.js";
 import { redactForAudit } from "../messaging/auditBody.js";
 import { apiEnv, randomToken, zonedWallTimeToUtc } from "@chairback/config";
 import { prisma, Prisma } from "@chairback/db";
@@ -1363,7 +1364,7 @@ async function compensateUnmirroredBooking(
   }
 }
 
-bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {
+bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, async (req, res) => {
   const parsed = createSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
@@ -1374,6 +1375,8 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
+  // Attribute any refusal below to THIS shop (see services/bookingRefusal).
+  res.locals.refusalShopId = shop.id;
   // SMS costs money - a shop without active access can't take native bookings.
   if (!hasActiveAccess(shop)) {
     res.status(403).json({ error: "no_active_access" });

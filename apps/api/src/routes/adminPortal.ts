@@ -4,6 +4,7 @@ import { apiEnv, BILLING } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { requireUser } from "../middleware/auth.js";
 import { requireAdmin } from "../middleware/admin.js";
+import { readBookingRefusals } from "../services/bookingRefusal.js";
 import {
   readLatestRotationRun,
   rotateAllEnabled,
@@ -349,4 +350,17 @@ adminPortalRouter.get("/rotate-all-rewards-links", async (_req, res) => {
     return;
   }
   res.json({ run, enabled: rotateAllEnabled() });
+});
+
+/**
+ * Booking refusals - the canary board.
+ *
+ * A refused booking leaves no row anywhere, which is why a read/write parity
+ * bug (#344) turned customers away for two months in silence. This is the
+ * place to look when a barber says "people can't book": counts by error code
+ * and shop, nothing customer-shaped.
+ */
+adminPortalRouter.get("/booking-refusals", async (req, res) => {
+  const days = Math.min(Math.max(Number.parseInt(String(req.query.days ?? "7"), 10) || 7, 1), 31);
+  res.json(await readBookingRefusals(new Date(), days));
 });
