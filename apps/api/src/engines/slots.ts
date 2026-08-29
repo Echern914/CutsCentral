@@ -980,10 +980,7 @@ export async function isSlotBookable(input: {
   const target = input.startsAt.getTime();
   // A tight window bracketing the requested start keeps the computation cheap
   // while still letting computeOpenSlots build that day's full set of slots.
-  // ignoreBooked: this validates HOURS/EXCEPTIONS/BOUNDS only; whether the slot
-  // is already taken is decided authoritatively by the tx overlap check (which
-  // returns 409 slot_taken), so a taken slot must still pass availability here.
-  const slots = await computeOpenSlots({
+  const window = {
     shopId: input.shopId,
     staffId: input.staffId,
     serviceId: input.serviceId,
@@ -992,7 +989,34 @@ export async function isSlotBookable(input: {
     now: input.now,
     excludeAppointmentId: input.excludeAppointmentId,
     extraDurationMin: input.extraDurationMin,
-    ignoreBooked: true,
-  });
-  return slots.some((s) => s.startsAt.getTime() === target);
+  };
+
+  // PASS 1 - ignoreBooked: validates HOURS/EXCEPTIONS/BOUNDS only. Whether the
+  // slot is already taken is decided authoritatively by the tx overlap check
+  // (which returns 409 slot_taken and tells the customer to pick again), so a
+  // TAKEN slot must still pass availability here - otherwise they'd get a
+  // meaningless "invalid time" for a slot that merely sold a second earlier.
+  const ignoringBooked = await computeOpenSlots({ ...window, ignoreBooked: true });
+  if (ignoringBooked.some((s) => s.startsAt.getTime() === target)) return true;
+
+  // PASS 2 - the REAL timeline. 🔴 THIS PASS IS LOAD-BEARING; its absence was a
+  // live booking outage on a busy shop.
+  //
+  // Slot times come from walking a grid FROM THE START OF EACH FREE RANGE.
+  // Erasing existing appointments (pass 1) merges the day into one long range,
+  // so the grid re-aligns to the opening time and yields only "round" starts.
+  // The picker subtracts real appointments, which SPLITS the day and offers the
+  // slot beginning the moment an appointment ends - a start that is off the
+  // round grid (opens 10:00, a cut finishes 15:40 => a 15:40 opening).
+  //
+  // With pass 1 alone the write rejected every slot the picker derived from a
+  // booked boundary: the customer tapped a time the page had just offered and
+  // got a nameless "Something went wrong", and the FULLER a barber's day got,
+  // the more of his real openings became unbookable.
+  //
+  // Union, not replacement: pass 1 is what keeps a taken slot answerable with
+  // slot_taken, and it short-circuits, so this second computation only runs for
+  // boundary-aligned starts.
+  const onLiveTimeline = await computeOpenSlots({ ...window, ignoreBooked: false });
+  return onLiveTimeline.some((s) => s.startsAt.getTime() === target);
 }
