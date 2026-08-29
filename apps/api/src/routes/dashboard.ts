@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { redactForAudit } from "../messaging/auditBody.js";
 import { forShop, prisma, runAsOwner, runWithShop, Prisma } from "@chairback/db"; // runWithShop: batch a page's tenant reads into one connection
 import {
   NUDGE,
@@ -17,6 +18,7 @@ import {
   RESEND_REFUSAL_HTTP,
   resendRewardsLink,
 } from "../services/rewardsLinkResend.js";
+import { rotateClientMagicToken } from "../services/rewardsRotation.js";
 import { ensureReferralCode } from "../services/referral.js";
 import {
   requireActiveAccess,
@@ -432,7 +434,7 @@ dashboardRouter.post("/nudge/:clientId", smsLimiter, requireActiveAccess, async 
     serviceNoun: shop.serviceNoun,
   });
   const nudge = await db.nudge.create({
-    data: { clientId: client.id, channel: "SMS", status: "PENDING", body },
+    data: { clientId: client.id, channel: "SMS", status: "PENDING", body: redactForAudit(body) },
   });
   try {
     const result = await getMessageProvider().send({
@@ -1048,6 +1050,24 @@ dashboardRouter.post("/clients/:clientId/rewards-link", async (req, res) => {
   res.status(answer.status).json({ error: answer.error, message: answer.message });
 });
 
+/**
+ * Rotate a client's rewards link: mint a fresh magicToken so every previously
+ * texted /r/ link for this client dies at once - the answer to "their link
+ * leaked" (a forwarded text, a shared screenshot, a stolen phone). Old links
+ * land on the dead-link page, which offers the phone-recovery door; the
+ * Wallet pass is poked so its QR re-bakes. Explicitly NOT part of resend -
+ * rotating must be its own deliberate tap, because it breaks every copy of
+ * the old link the client may still be using on purpose.
+ */
+dashboardRouter.post("/clients/:clientId/rotate-rewards-link", async (req, res) => {
+  const outcome = await rotateClientMagicToken(req.shop!.id, req.params.clientId);
+  if (outcome === "not_found") {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.json({ ok: true });
+});
+
 // Edit a client's profile (name / phone / email). Consent and the Acuity sync
 // key are deliberately left untouched (see services/client.ts). A non-empty but
 // unparseable phone is refused; an empty string clears a field.
@@ -1357,7 +1377,7 @@ dashboardRouter.post("/clients/bulk", smsLimiter, async (req, res) => {
       serviceNoun: shop.serviceNoun,
     });
     const nudge = await db.nudge.create({
-      data: { clientId: client.id, channel: "SMS", status: "PENDING", body },
+      data: { clientId: client.id, channel: "SMS", status: "PENDING", body: redactForAudit(body) },
     });
     try {
       const result = await provider.send({

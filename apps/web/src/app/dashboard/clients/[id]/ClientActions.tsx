@@ -6,6 +6,7 @@ import {
   bonusPunchAction,
   logVisitAction,
   redeemAction,
+  rotateRewardsLinkAction,
   toggleOptOutAction,
 } from "../../actions";
 import { recordPromoUseAction } from "../../promotions/actions";
@@ -141,6 +142,29 @@ export function ClientActions({
         className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
       >
         Copy rewards link
+      </button>
+
+      <button
+        disabled={pending}
+        onClick={() => {
+          // A real destroy-confirm: rotation kills every link this client was
+          // ever texted, including ones they may be using happily right now.
+          if (
+            !confirm(
+              "Replace this client's rewards link? Every link texted to them so far will stop working - they'd recover through the phone-verify page or a fresh text from you.",
+            )
+          )
+            return;
+          startTransition(async () => {
+            const r = await rotateRewardsLinkAction(clientId);
+            if (r.ok) toast("New link minted - old links are dead", "success");
+            else toast("Could not replace the link", "error");
+          });
+        }}
+        title="Mint a fresh rewards link and kill every previously texted one (use if a link leaked)"
+        className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+      >
+        New link
       </button>
 
       <button

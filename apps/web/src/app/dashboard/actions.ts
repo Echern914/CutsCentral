@@ -41,6 +41,17 @@ export async function nudgeNowAction(clientId: string): Promise<{ ok: boolean }>
   return { ok: res.ok };
 }
 
+/** Rotate a client's rewards link: every previously texted /r/ link dies at
+ * once (leaked text, shared screenshot). The old links land on the dead-link
+ * page, which offers the phone-recovery door. */
+export async function rotateRewardsLinkAction(
+  clientId: string,
+): Promise<{ ok: boolean }> {
+  const res = await apiSend("POST", `/api/dashboard/clients/${clientId}/rotate-rewards-link`);
+  revalidatePath(`/dashboard/clients/${clientId}`);
+  return { ok: res.ok };
+}
+
 export async function repairAcuitySyncAction(): Promise<{
   ok: boolean;
   subscribed?: number;

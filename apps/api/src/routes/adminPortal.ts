@@ -5,6 +5,11 @@ import { prisma } from "@chairback/db";
 import { requireUser } from "../middleware/auth.js";
 import { requireAdmin } from "../middleware/admin.js";
 import {
+  readLatestRotationRun,
+  rotateAllEnabled,
+  startOrGetRotationRun,
+} from "../services/rewardsRotation.js";
+import {
   ACTIVE_STATUSES,
   billingEnabled,
   connectEnabled,
@@ -271,4 +276,77 @@ adminPortalRouter.post("/shops/:shopId/comp", async (req, res) => {
   } catch {
     res.status(404).json({ error: "not_found" });
   }
+});
+
+/**
+ * THE CORPUS RETIREMENT: rotate every client's magicToken, platform-wide.
+ *
+ * Run ONCE, deliberately, after the phone-recovery doors are live (#340,
+ * #342): it kills every /r/ link ever texted, stored, forwarded or
+ * screenshotted - the entire historical Nudge-body corpus in one move,
+ * including copies no cleanup script can reach. Wallet passes are poked so
+ * their QRs re-bake; every dead link lands on the recovery door.
+ *
+ * 🔴 THIS ENDPOINT DOES NOT DO THE WORK. It creates (or resumes) ONE durable
+ * PlatformOperation run and answers 202 with its id; the lease-guarded
+ * `rewards-rotation` scheduler job traverses the customer table in bounded,
+ * atomic, resumable batches. An HTTP request must never hold open across an
+ * unbounded table - a timeout or deploy mid-loop would strand a half-rotated
+ * corpus with no resume point.
+ *
+ * A START-TIME PREFLIGHT sits in front of a brand-new run: if any Wallet
+ * pass registration exists while wallet delivery is unavailable (certs
+ * unconfigured, or DRY_RUN suppressing dispatch), this answers 409
+ * `wallet_refresh_unavailable` and creates nothing - rotation would
+ * otherwise invalidate the rewards URL inside every pass QR with no way to
+ * push the refresh. With zero registrations there is nothing to refresh, so
+ * rotation proceeds regardless of configuration. Resuming an already-durable
+ * run is never refused: its pass tasks are waiting to be retried.
+ *
+ * THREE independent gates, all required:
+ *   1. isAdmin (the router's own middleware),
+ *   2. REWARDS_ROTATE_ALL_ENABLED=true - default FALSE, fail-closed;
+ *      enabling it starts NOTHING on its own,
+ *   3. the exact confirm phrase, because there is no undo.
+ *
+ * Concurrency-safe by construction: exclusivity is a partial unique INDEX on
+ * the run table, so two simultaneous valid confirmations produce exactly one
+ * run - the loser reads the winner's and never starts a second traversal.
+ */
+const rotateAllSchema = z
+  .object({ confirm: z.literal("ROTATE ALL REWARDS LINKS") })
+  .strict();
+
+adminPortalRouter.post("/rotate-all-rewards-links", async (req, res) => {
+  if (!rotateAllEnabled()) {
+    res.status(403).json({ error: "rotation_disabled" });
+    return;
+  }
+  const parsed = rotateAllSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "confirm_phrase_required" });
+    return;
+  }
+  const run = await startOrGetRotationRun({ adminUserId: req.userId! });
+  if (!run.ok) {
+    // Wallet passes exist but their QRs cannot be refreshed. Rotating now
+    // would strand real customers holding a silently dead QR, and the run
+    // would report itself complete. Fixed classification, nothing created.
+    res.status(409).json({ error: run.reason });
+    return;
+  }
+  // 202 either way: the caller's intent ("retire the corpus") is now durable,
+  // whether this request created the run or joined the one already going.
+  res.status(202).json({ ok: true, runId: run.runId, status: run.status, created: run.created });
+});
+
+/** Run state for the admin: counts and status ONLY - the record holds no
+ * token, URL, phone, name or body to leak. */
+adminPortalRouter.get("/rotate-all-rewards-links", async (_req, res) => {
+  const run = await readLatestRotationRun();
+  if (!run) {
+    res.json({ run: null, enabled: rotateAllEnabled() });
+    return;
+  }
+  res.json({ run, enabled: rotateAllEnabled() });
 });

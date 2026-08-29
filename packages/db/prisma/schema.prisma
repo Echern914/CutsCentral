@@ -1019,6 +1019,7 @@ model Client {
   cardGrants          CardGrant[]
   walletRegistrations WalletPassRegistration[]
   receptionistConversations ReceptionistConversation[]
+  platformPassTasks   PlatformOperationPassTask[]
 
   @@unique([shopId, acuityClientKey]) // tenant-scoped identity + idempotent upsert
   @@index([shopId])
@@ -3171,4 +3172,70 @@ model PhoneRecoveryCode {
   @@unique([purpose, phoneHash])
   @@index([expiresAt]) // the inline cleanup sweep
   @@index([ipHash, lastSentAt]) // the per-IP windowed ceiling
+}
+
+// PLATFORM operations - durable, exclusive, resumable admin-initiated runs
+// (first consumer: the one-time rewards-link corpus retirement). NOT tenant
+// data: default-deny RLS like PhoneRecoveryCode - zero grants, zero policies,
+// every access through the owner-executed service. The record stores state,
+// counts and a cursor ONLY - never a token, URL, phone, name or body.
+model PlatformOperation {
+  id   String @id @default(cuid())
+  kind String // CHECK-pinned vocabulary; 'rewards_rotate_all'
+
+  // PENDING -> RUNNING -> COMPLETED | FAILED. A FAILED run resumes (back to
+  // PENDING) via the same admin POST that created it - the cutoff, checkpoint
+  // and counts survive, so no client ever rotates twice for one run. At most
+  // ONE PENDING/RUNNING row per kind (partial unique index in the migration).
+  status String @default("PENDING")
+
+  initiatedByUserId String
+
+  // The corpus boundary, fixed at creation: only clients with
+  // createdAt <= cutoffAt rotate. Clients created later are excluded BY
+  // DESIGN - their links postdate the write-side hygiene, so no stored body
+  // ever carried them.
+  cutoffAt DateTime
+
+  // Last client id whose batch COMMITTED. Batches are atomic (rotate +
+  // checkpoint in one transaction), so a crash resumes exactly here and
+  // completed clients keep their newly rotated token.
+  checkpoint String?
+
+  rotatedCount       Int @default(0)
+  passPendingCount   Int @default(0)
+  passSucceededCount Int @default(0)
+  passFailedCount    Int @default(0)
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  failedAt    DateTime?
+  errorCode   String? // fixed classification only (CHECK-pinned); never exception text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  passTasks PlatformOperationPassTask[]
+
+  @@index([kind, status])
+}
+
+// Wallet-pass refresh work items for a platform rotation: the pass QR embeds
+// the rewards URL, so every rotated client WITH a registered pass gets one
+// task. Tracked separately from rotation so a failed or interrupted push
+// retries WITHOUT ever touching the client's token again.
+model PlatformOperationPassTask {
+  id          String            @id @default(cuid())
+  operationId String
+  operation   PlatformOperation @relation(fields: [operationId], references: [id], onDelete: Cascade)
+  clientId    String
+  client      Client            @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  status      String            @default("PENDING") // PENDING | SUCCEEDED | FAILED
+  attempts    Int               @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([operationId, clientId])
+  @@index([operationId, status])
 }

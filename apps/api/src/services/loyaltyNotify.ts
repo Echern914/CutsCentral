@@ -1,6 +1,7 @@
 import { forShop, prisma } from "@chairback/db";
 import { apiEnv } from "@chairback/config";
 import { logger } from "../logger.js";
+import { redactForAudit } from "../messaging/auditBody.js";
 import {
   buildPunchEarnedBody,
   buildPunchEarnedPush,
@@ -182,7 +183,7 @@ async function sendLoyalty(
   let nudgeId: string | undefined;
   try {
     const nudge = await db.nudge.create({
-      data: { clientId, channel: "SMS", status: "PENDING", kind: "loyalty", body },
+      data: { clientId, channel: "SMS", status: "PENDING", kind: "loyalty", body: redactForAudit(body) },
     });
     nudgeId = nudge.id;
     const result = await getMessageProvider().send({

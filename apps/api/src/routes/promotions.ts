@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { redactForAudit } from "../messaging/auditBody.js";
 import { apiEnv } from "@chairback/config";
 import { forShop, prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
@@ -391,7 +392,7 @@ promotionsRouter.post("/:id/blast", smsLimiter, async (req, res) => {
         status: "PENDING",
         kind: "promo",
         promotionId: promo.id,
-        body,
+        body: redactForAudit(body),
       },
     });
     try {
