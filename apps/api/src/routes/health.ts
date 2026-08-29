@@ -13,13 +13,33 @@ export const healthRouter: Router = Router();
  * and getting them wrong is invisible: everything works, every query just pays
  * a cross-country round trip. Making it observable beats inferring it from
  * edge latency.
+ *
+ * 🔴 `commit` and `startedAt` exist because WHICH BUILD IS LIVE was
+ * unanswerable. During the Aug 29 booking outage the only way to tell whether
+ * a fix had rolled out was to keep attempting a real booking until the
+ * behaviour changed - on a live shop's calendar. Every /api/admin-portal path
+ * answers 401 whether or not the route exists, so probing a new endpoint
+ * proves nothing either. One short SHA turns "did it deploy?" into a curl.
+ *
+ * The short SHA of a private repo is not a secret worth protecting: it names a
+ * commit nobody outside the repo can resolve, and the alternative has a real
+ * cost measured in production write attempts.
  */
+const COMMIT =
+  process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) ??
+  process.env.GIT_COMMIT_SHA?.slice(0, 7) ??
+  null;
+/** Process start, so a redeploy is visible even when the SHA is unset. */
+const STARTED_AT = new Date().toISOString();
+
 healthRouter.get("/healthz", (_req, res) => {
   res.json({
     ok: true,
     service: "chairback-api",
     region:
       process.env.RAILWAY_REPLICA_REGION ?? process.env.RAILWAY_REGION ?? null,
+    commit: COMMIT,
+    startedAt: STARTED_AT,
   });
 });
 
