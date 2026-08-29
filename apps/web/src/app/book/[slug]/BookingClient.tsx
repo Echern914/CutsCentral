@@ -1241,6 +1241,26 @@ export function BookingClient({ data }: { data: BookShopData }) {
           setError(
             "With those add-ons this appointment runs longer than that slot. Try fewer add-ons or a different time.",
           );
+        } else if (res.error === "invalid_slot") {
+          // The offered time is no longer bookable - almost always because the
+          // day moved under them (someone booked, or the barber edited hours)
+          // while this page sat open. Say what to DO. This read as
+          // "Something went wrong" during the Sep boundary-slot outage, which
+          // is why a real customer concluded the product was broken instead of
+          // picking another time.
+          setError("That time isn't available anymore. Pick another slot.");
+          if (dayFirst && dayDate) pickDay(dayDate);
+          else if (serviceId && loadedPool.length) loadSlots(serviceId, loadedPool);
+          clearSlotPick();
+        } else if (res.error === "slot_unavailable_external") {
+          // The shop's external calendar (Acuity/Square) refused the mirror, so
+          // the booking was rolled back. Their calendar is the authority here.
+          setError(
+            "That time was just taken on the shop's calendar. Pick another slot.",
+          );
+          if (dayFirst && dayDate) pickDay(dayDate);
+          else if (serviceId && loadedPool.length) loadSlots(serviceId, loadedPool);
+          clearSlotPick();
         } else {
           setError("Something went wrong. Please try again.");
         }
