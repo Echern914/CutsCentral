@@ -258,10 +258,17 @@ export function ConnectionPanel({
           <p className="text-xs font-medium text-offwhite">
             {connected ? "Connect another assistant" : "Connect your own AI assistant"}
           </p>
+          {/* Claude is named first and on its own here on purpose: it is the
+              one a barber on a personal plan can actually connect. ChatGPT's
+              custom connectors are business-workspace-only and still in beta,
+              so presenting the two as interchangeable sent people down a road
+              that dead-ends at Settings → Connectors. The full rule is in the
+              step-by-step below. */}
           <p className="mt-1 text-xs leading-relaxed text-muted">
-            In Claude or ChatGPT, add a custom connector and paste this address.
-            You&apos;ll be asked to sign in to ChairBack and approve what it can
-            read.
+            In Claude, add a custom connector and paste this address. You&apos;ll
+            be asked to sign in to ChairBack and approve what it can read.
+            ChatGPT works too, but only on a Business, Enterprise or Edu
+            workspace — the steps below say what that needs.
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <code className="min-w-0 flex-1 truncate rounded-lg border border-subtle bg-charcoal-900/70 px-3 py-2 font-mono text-xs text-offwhite">
