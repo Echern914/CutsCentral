@@ -3383,13 +3383,20 @@ model EmailIntent {
   // window runs from that moment, not from when the row was created - an
   // intent can sit unconfigured for days without its safety window expiring.
   firstProviderAttemptAt DateTime?
-  // 🔴 WAS THE LAST REAL ATTEMPT AMBIGUOUS? This is what makes the expiry
-  // check possible BEFORE dispatching rather than after. An ambiguous attempt
-  // (transport died, or a 2xx with no message id) may already have been
-  // accepted, so once the provider's key window closes a retry can deliver a
-  // SECOND copy - and asking that question only after calling Resend again is
-  // asking it too late. A DEFINITIVE rejection clears the flag: Resend refused
-  // it, so retrying is safe however long has passed.
+  // 🔴 WRITE-AHEAD: set to true in the SAME atomic statement that reserves the
+  // attempt, which commits BEFORE the Resend request leaves - not afterwards
+  // when the outcome is known.
+  //
+  // Writing it after the fact leaves one window with no correct answer: a
+  // process that dies AFTER Resend accepts the message but BEFORE the response
+  // is handled runs none of the classification code, so the row would still
+  // read false - "safe to retry" - and a retry past the provider's 24h key
+  // window would deliver a SECOND copy. That crash cannot be observed later,
+  // so the fact is recorded before it can happen.
+  //
+  // Cleared ONLY by a definitive answer: confirmed acceptance, or an explicit
+  // provider rejection (which is safe to retry however long has passed,
+  // because nothing was accepted).
   lastAttemptAmbiguous Boolean @default(false)
   // Bounded backoff, so a 429 or a 5xx is not retried once a minute forever.
   nextAttemptAt DateTime?

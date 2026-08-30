@@ -259,14 +259,21 @@ export async function deliverCancellationIntent(params: {
     staffName: appt.staff?.name ?? null,
   });
 
-  // 🔴 RESERVE THE ATTEMPT ATOMICALLY - immediately before a real request.
+  // 🔴 RESERVE THE ATTEMPT ATOMICALLY, AND WRITE THE AMBIGUITY AHEAD OF IT.
+  //
   // The number comes back from the database's own increment, not from the
   // `attempts` we read moments ago: two workers reading 2 and both writing 3
   // is a lost increment, and a lost increment is an extra provider call the
   // budget never accounted for.
+  //
+  // This transaction COMMITS before the line below runs, so the row already
+  // says "an attempt may be in flight" when the request leaves. See
+  // reserveAttempt for why that ordering is the whole guarantee.
   const attemptNo = await reserveAttempt(params.intentId, params.claimToken, now);
   if (attemptNo === null) return await classifyRefusedReservation(params, now);
 
+  // ---- THE BOUNDARY. Everything above is durable; everything below may
+  // ---- never run, because the process can die at any point from here.
   try {
     const result = await sendEmail({
       to,
@@ -349,9 +356,33 @@ export async function deliverCancellationIntent(params: {
 /**
  * Take the next attempt number, or refuse.
  *
- * One statement does all three jobs: the compare-and-set on the claim token,
- * the ceiling, and the increment. Returns the number the DATABASE assigned, or
- * null when this worker may not attempt at all.
+ * 🔴 THIS IS A WRITE-AHEAD RECORD, NOT A COUNTER.
+ *
+ * One statement does four jobs - the compare-and-set on the claim token, the
+ * ceiling, the increment, and marking the attempt AMBIGUOUS BEFORE IT HAPPENS -
+ * and it runs in its own transaction, which commits when this function returns.
+ * `sendEmail` is called strictly afterwards, so the first byte of the Resend
+ * request cannot leave until "an attempt may be in flight" is durable.
+ *
+ * Writing the ambiguity only after a timeout or a caught error would leave a
+ * window with no correct outcome: a process that dies AFTER Resend accepts the
+ * message but BEFORE the response is processed runs none of that code, so the
+ * row would still read `lastAttemptAmbiguous = false` - "safe to retry" - and
+ * the retry past the 24h window would deliver a SECOND cancellation email.
+ * There is no way to observe that crash after the fact, so the fact has to be
+ * on disk before it can happen.
+ *
+ * The cost is deliberate and accepted: a crash between this commit and the
+ * request actually being made leaves a row that may eventually be ABANDONED
+ * unsent. An email that never arrives is a worse outcome than one that does,
+ * but a DUPLICATE cancellation - telling a customer twice that an appointment
+ * they may have already rebooked was canceled - is worse than both.
+ *
+ * The marker is cleared only by a DEFINITIVE answer: acceptance (settle SENT)
+ * or an explicit provider rejection (`definitiveFailure`).
+ *
+ * Returns the number the DATABASE assigned, or null when this worker may not
+ * attempt at all.
  */
 async function reserveAttempt(
   intentId: string,
@@ -366,6 +397,7 @@ async function reserveAttempt(
          SET "attempts" = "attempts" + 1,
              "firstProviderAttemptAt" =
                COALESCE("firstProviderAttemptAt", ${now.toISOString()}::timestamp),
+             "lastAttemptAmbiguous" = true,
              "updatedAt" = now()
        WHERE "id" = ${intentId}
          AND "status" = 'PENDING'
@@ -439,8 +471,10 @@ async function definitiveFailure(
  * still collapses repeats of this key - a window that opened at the FIRST
  * attempt, so it is read from the row rather than guessed.
  *
- * The marker is set here and the NEXT pass refuses to dispatch once the window
- * has closed. Deciding it only here would be one HTTP call too late.
+ * The marker is already true (reserveAttempt wrote it ahead of the request);
+ * this path LEAVES IT TRUE, which is the whole point. Writing it here would be
+ * too late for the crash-after-acceptance case, so this is a restatement, not
+ * the mechanism.
  */
 async function ambiguous(
   intentId: string,

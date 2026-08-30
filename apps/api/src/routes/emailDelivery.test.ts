@@ -53,6 +53,10 @@ async function seed(messageId: string, kind = "confirmation"): Promise<void> {
   });
 }
 
+/** Apply one event under a fresh svix delivery id. */
+const apply = (messageId: string, event: string) =>
+  applyEmailEvent({ messageId, event, svixId: `svix_${randomToken(8)}` });
+
 beforeAll(() => {
   process.env.RESEND_WEBHOOK_SECRET = SECRET;
 });
@@ -492,6 +496,53 @@ describe("the replay marker and the state change are ONE transaction", () => {
     expect(after!.status).toBe(first!.status);
   });
 
+  it("🔴 a replay SHORT-CIRCUITS: every column is byte-identical afterwards", async () => {
+    // Two rows, so the pin covers deferral information AND a terminal
+    // classification sitting on top of a delivery - the two shapes a
+    // re-applied transition would disturb differently.
+    for (const build of [
+      // A deferred row, carrying deferral information.
+      async (id: string) => {
+        const sv = `svix_${randomToken(8)}`;
+        await applyEmailEvent({ messageId: id, event: "email.delivery_delayed", svixId: sv });
+        return sv;
+      },
+      // A terminal classification sitting on top of a real delivery.
+      async (id: string) => {
+        await apply(id, "email.delivered");
+        const sv = `svix_${randomToken(8)}`;
+        await applyEmailEvent({ messageId: id, event: "email.bounced", svixId: sv });
+        return sv;
+      },
+    ]) {
+      const id = `em_${randomToken(8)}`;
+      emails.push(id);
+      await seed(id);
+      // Replayed under the marker of the LAST event applied - and replayed as
+      // a BOUNCE, which would certainly change the deferred row if the
+      // short-circuit were not there.
+      const target = await build(id);
+
+      const before = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
+      // A pause, so that ANY stray write would move updatedAt detectably.
+      await new Promise((r) => setTimeout(r, 40));
+
+      for (let i = 0; i < 3; i++) {
+        // 🔴 The marker insert reports whether it actually inserted; zero rows
+        // means seen-before, and the transition is never reached.
+        expect(
+          await applyEmailEvent({ messageId: id, event: "email.bounced", svixId: target }),
+        ).toBe("duplicate");
+      }
+
+      const after = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
+      // Every column: status, failureClass, deliveredAt, failedAt, eventCount,
+      // awaitingDispatchMeta - and updatedAt, which no-ops leave alone.
+      expect(after).toEqual(before);
+      expect(await prisma.emailWebhookEvent.count({ where: { svixId: target } })).toBe(1);
+    }
+  });
+
   it("a metadata write racing a webhook cannot walk the status backward", async () => {
     const id = `em_${randomToken(8)}`;
     emails.push(id);
@@ -521,9 +572,6 @@ describe("the replay marker and the state change are ONE transaction", () => {
  * `sent` + `delivered` left a delivered message reading "sent".
  */
 describe("status transitions are monotonic", () => {
-  const apply = (messageId: string, event: string) =>
-    applyEmailEvent({ messageId, event, svixId: `svix_${randomToken(8)}` });
-
   /**
    * FORCE the interleaving rather than hope for it.
    *
@@ -634,6 +682,48 @@ describe("status transitions are monotonic", () => {
     expect(row!.status).toBe("bounced"); // the first terminal outcome stands
     expect(row!.failureClass).toBe("hard_bounce");
     expect(row!.eventCount).toBe(2);
+  });
+
+  /**
+   * The precedence the ledger must obey, declared HERE independently of the
+   * implementation so this is a specification rather than a mirror of it.
+   */
+  const PRECEDENCE: Record<string, number> = {
+    sent: 0,
+    deferred: 1,
+    delivered: 2,
+    bounced: 3,
+    complained: 3,
+    failed: 3,
+  };
+  const EVENT_FOR: Record<string, string> = {
+    sent: "email.sent",
+    deferred: "email.delivery_delayed",
+    delivered: "email.delivered",
+    bounced: "email.bounced",
+    complained: "email.complained",
+    failed: "email.failed",
+  };
+
+  it("🔴 transition matrix: nothing can reverse a higher-precedence state", async () => {
+    const states = Object.keys(EVENT_FOR);
+    for (const from of states) {
+      for (const to of states) {
+        const id = `em_${randomToken(8)}`;
+        emails.push(id);
+        await prisma.emailDelivery.create({
+          data: { messageId: id, kind: "matrix", status: from },
+        });
+        await apply(id, EVENT_FOR[to]!);
+        const row = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
+        // A strictly higher rank advances; equal or lower leaves the state
+        // alone. Ties keep the INCUMBENT, so the first terminal outcome stands.
+        const expected = PRECEDENCE[to]! > PRECEDENCE[from]! ? to : from;
+        // Encoded into the assertion so a failure names the offending pair.
+        expect(`${from}+${to} -> ${row!.status}`).toBe(`${from}+${to} -> ${expected}`);
+        expect(row!.eventCount).toBe(1); // seen and counted either way
+      }
+    }
   });
 
   it("🔴 a delivery it could not record is NOT acknowledged, so the provider retries", async () => {

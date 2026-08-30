@@ -756,6 +756,131 @@ describe("the expired-ambiguous guard runs BEFORE dispatch", () => {
   });
 });
 
+describe("ambiguity is WRITE-AHEAD, so a crash cannot look safe", () => {
+  /** Poll a condition without sleeping a fixed guess. */
+  async function until(cond: () => boolean, label: string): Promise<void> {
+    for (let i = 0; i < 200; i++) {
+      if (cond()) return;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    throw new Error(`timed out waiting for ${label}`);
+  }
+
+  it("🔴 a worker that dies AFTER the provider took the request still ABANDONS later", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+
+    let calls = 0;
+    let atRequestTime: {
+      attempts: number;
+      ambiguous: boolean;
+      firstAt: Date | null;
+      status: string;
+    } | null = null;
+
+    __setSendEmailForTests(async () => {
+      calls++;
+      // 🔴 THE TRANSACTION BOUNDARY, observed from a SEPARATE connection at the
+      // exact moment the provider is being called. If the ambiguity write were
+      // not already committed here, this read would say otherwise.
+      const row = await prisma.emailIntent.findFirst({ where: { appointmentId: id } });
+      atRequestTime = {
+        attempts: row!.attempts,
+        ambiguous: row!.lastAttemptAmbiguous,
+        firstAt: row!.firstProviderAttemptAt,
+        status: row!.status,
+      };
+      // Resend has the request and will accept it. Now the worker dies: this
+      // promise NEVER settles, so every line after the await - the
+      // classification, the settle, the ambiguity write - never runs. That is
+      // exactly what a SIGKILL leaves behind, and it is the one crash that
+      // cannot be recorded after the fact.
+      return new Promise<never>(() => {});
+    });
+
+    const first = new Date();
+    void drain(first); // deliberately NOT awaited - this worker never returns
+    await until(() => calls === 1, "the provider request");
+    await until(() => atRequestTime !== null, "the in-request read");
+
+    // What was durable at the instant the request went out.
+    expect(atRequestTime!.attempts).toBe(1);
+    expect(atRequestTime!.firstAt).not.toBeNull();
+    expect(atRequestTime!.ambiguous).toBe(true); // 🔴 WRITE-AHEAD
+    expect(atRequestTime!.status).toBe("PENDING");
+
+    // And what a restart finds on disk, the dead worker having written nothing
+    // further: the ambiguity persisted automatically.
+    const crashed = (await intentsFor(id))[0]!;
+    expect(crashed.status).toBe("PENDING");
+    expect(crashed.attempts).toBe(1);
+    expect(crashed.lastAttemptAmbiguous).toBe(true);
+
+    // A fresh worker, after the claim has aged out and the provider's key
+    // window has closed. It would succeed if it tried - which is precisely why
+    // it must not try.
+    __setSendEmailForTests(async (input) => {
+      calls++;
+      emails.push(input);
+      return { id: `em${emails.length}`, status: "sent" };
+    });
+    await drain(new Date(first.getTime() + PROVIDER_IDEMPOTENCY_WINDOW_MS + 60_000));
+
+    const after = (await intentsFor(id))[0]!;
+    expect(after.status).toBe("ABANDONED");
+    expect(after.lastError).toBe("idempotency_window_expired");
+    expect(calls).toBe(1); // 🔴 the provider was called EXACTLY ONCE, ever
+    expect(emails).toHaveLength(0);
+    expect(
+      (await prisma.appointment.findUnique({ where: { id } }))!.cancellationEmailSentAt,
+    ).toBeNull();
+  });
+
+  it("every retry in the safe window carries the SAME key, whatever the attempt, claim or clock", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+
+    const keys: (string | undefined)[] = [];
+    const claimTokens: (string | null)[] = [];
+    __setSendEmailForTests(async (input) => {
+      keys.push(input.idempotencyKey);
+      throw new Error("socket hang up");
+    });
+
+    // Three attempts, half an hour apart, each under a FRESH claim token and a
+    // different attempt number - all well inside the 24h window.
+    let t = Date.now();
+    for (let i = 0; i < 3; i++) {
+      t += 30 * 60_000;
+      await drain(new Date(t));
+      claimTokens.push((await intentsFor(id))[0]!.claimToken);
+    }
+
+    expect(keys).toHaveLength(3);
+    // The inputs that DID vary, so the constant below means something.
+    expect(new Set(claimTokens).size).toBe(3);
+    expect((await intentsFor(id))[0]!.attempts).toBe(3);
+
+    // 🔴 One key, derived only from the durable intent identity and the
+    // cancellation revision. If it moved with the attempt number, the claim or
+    // the clock, the provider could not collapse the retries and every retry
+    // would be a fresh email.
+    expect(new Set(keys).size).toBe(1);
+    expect(keys[0]).toBe(cancellationIdempotencyKey(id, 1));
+    expect((await intentsFor(id))[0]!.idempotencyKey).toBe(keys[0]);
+  });
+
+  it("the key is a pure function of appointment and revision", () => {
+    // Same inputs, same key - twice, and across a revision bump.
+    expect(cancellationIdempotencyKey("appt_1", 2)).toBe(
+      cancellationIdempotencyKey("appt_1", 2),
+    );
+    expect(cancellationIdempotencyKey("appt_1", 2)).not.toBe(
+      cancellationIdempotencyKey("appt_1", 3),
+    );
+  });
+});
+
 describe("attempt reservation is atomic and claim-bound", () => {
   it("🔴 a worker whose claim was replaced cannot spend another attempt", async () => {
     const id = await makeAppointment({ status: "BOOKED" });
