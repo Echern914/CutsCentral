@@ -197,7 +197,7 @@ export default async function InsightsPage() {
       <header className="mb-6">
         <h1 className="font-display text-3xl tracking-tight">Insights</h1>
         <p className="mt-1 text-sm text-muted">
-          How your shop is doing: {pluralServiceNoun(me.data?.serviceNoun ?? "cut")} over
+          How your shop is doing: {pluralServiceNoun(me.data?.serviceNoun ?? "visit")} over
           time, what people book most, and where the money comes from. Counts
           every booking that took the {vocab.stationNoun} — native, Acuity and Square alike.
         </p>
@@ -207,7 +207,7 @@ export default async function InsightsPage() {
           initial={res.data}
           initialGoalData={goalRes.ok ? (goalRes.data ?? null) : null}
           rewardsEnabled={me.data?.rewardsEnabled ?? true}
-          serviceNoun={me.data?.serviceNoun ?? "cut"}
+          serviceNoun={me.data?.serviceNoun ?? "visit"}
         />
       </div>
     </main>

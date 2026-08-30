@@ -63,7 +63,7 @@ export function InsightsClient({
   initial,
   initialGoalData = null,
   rewardsEnabled = true,
-  serviceNoun = "cut",
+  serviceNoun = "visit",
 }: {
   initial: InsightsData;
   initialGoalData?: GoalResponse | null;

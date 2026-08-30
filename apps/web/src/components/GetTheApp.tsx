@@ -42,10 +42,14 @@ const DISMISS_KEY = "cb_get_app_dismissed";
 /** Which page is asking, so the pitch matches what they came here to do. */
 export type AppBannerSurface = "booking" | "shop" | "manage" | "line";
 
-const COPY: Record<AppBannerSurface, { headline: string; body: string }> = {
+const copyFor = (
+  /** The shop's word for a visit. Neutral default: this renders on public
+   *  pages that may not know the business type yet. */
+  serviceNoun: string,
+): Record<AppBannerSurface, { headline: string; body: string }> => ({
   booking: {
     headline: "Book faster next time",
-    body: "Save your details, rebook in two taps, and get a reminder before your cut.",
+    body: `Save your details, rebook in two taps, and get a reminder before your ${serviceNoun}.`,
   },
   shop: {
     headline: "Keep this shop in your pocket",
@@ -53,13 +57,13 @@ const COPY: Record<AppBannerSurface, { headline: string; body: string }> = {
   },
   manage: {
     headline: "Manage bookings in the app",
-    body: "Reschedule or cancel in a tap, and get a reminder before your cut.",
+    body: `Reschedule or cancel in a tap, and get a reminder before your ${serviceNoun}.`,
   },
   line: {
     headline: "Watch your place in line",
     body: "Get a push the moment they're ready, instead of watching this page.",
   },
-};
+});
 
 function isInNativeApp(): boolean {
   return (
@@ -88,7 +92,18 @@ function isIosSafari(): boolean {
   return /safari/i.test(ua) && !/crios|fxios|edgios|opt\//i.test(ua);
 }
 
-export function GetTheApp({ surface }: { surface: AppBannerSurface }) {
+export function GetTheApp({
+  surface,
+  serviceNoun = "visit",
+}: {
+  surface: AppBannerSurface;
+  /**
+   * The shop word for a visit. NEUTRAL default on purpose: this banner renders
+   * on public pages that may not know the business type, and "visit" is right
+   * for every vertical where a guess would be wrong for most.
+   */
+  serviceNoun?: string;
+}) {
   // Gated entirely on the client: userAgent, the RN bridge and localStorage are
   // browser-only, and rendering this on the server would hand the client a
   // banner it then removes - a hydration mismatch on a customer's first paint.
@@ -107,7 +122,7 @@ export function GetTheApp({ surface }: { surface: AppBannerSurface }) {
   }, []);
 
   if (!show) return null;
-  const copy = COPY[surface];
+  const copy = copyFor(serviceNoun)[surface];
 
   function dismiss() {
     setShow(false);

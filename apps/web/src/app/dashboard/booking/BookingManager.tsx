@@ -1469,7 +1469,7 @@ function ServiceEditForm({
         <div className="max-w-[220px]">
           <ImageField
             label="Photo (shown on the booking card)"
-            hint="A square photo of the cut/result. Optional."
+            hint={`A square photo of the ${vocab.serviceNoun}/result. Optional.`}
             value={imageUrl}
             onChange={setImageUrl}
             kind="service"
@@ -4803,6 +4803,7 @@ function VaryByTimeEditor({
   basePrice: string;
   baseDuration: number;
 }) {
+  const vocab = useVocab();
   // w-full + min-w-0: a <select> is a GRID ITEM here, and a grid item defaults
   // to min-width:auto - it refuses to shrink below its widest option
   // ("12:45 PM"). Two of them in `1fr` columns therefore pushed the row wider
@@ -4817,7 +4818,7 @@ function VaryByTimeEditor({
     <div>
       <span className={labelCls}>Vary by time of day? (optional — price and/or length)</span>
       <p className="mt-0.5 text-[11px] text-muted">
-        e.g. after 9 PM cuts run $60 and take 20 min. Pick the days it repeats on
+        e.g. after 9 PM {vocab.serviceNounPlural} run $60 and take 20 min. Pick the days it repeats on
         (or leave them all off for every day), on top of any per-day settings.
         Leave a field blank to keep the usual{" "}
         {basePrice.trim() ? `$${basePrice}` : "price"} / {baseDuration || "?"} min.

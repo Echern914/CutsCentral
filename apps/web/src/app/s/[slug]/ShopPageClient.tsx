@@ -4,6 +4,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { motion } from "framer-motion";
 import {
   APP_NAME,
+  serviceNounForShop,
   DEFAULT_LAYOUT_STYLE,
   DEFAULT_PAGE_FONT,
   DEFAULT_SECTION_ORDER,
@@ -510,10 +511,10 @@ function Rewards({
  *  a shop has no approved reviews yet, so the barber can see how the section will
  *  look. These are NEVER rendered on the live public page (guarded by `preview`),
  *  so real visitors never see fabricated reviews presented as real. */
-const EXAMPLE_REVIEWS = [
-  { id: "ex1", rating: 5, authorName: "Jordan M.", body: "Best fade I've gotten in years. In and out, super clean." },
+const exampleReviews = (serviceNoun: string) => [
+  { id: "ex1", rating: 5, authorName: "Jordan M.", body: `Best ${serviceNoun} I've had in years. In and out, super clean.` },
   { id: "ex2", rating: 5, authorName: "Sam R.", body: "Great with my kids and always on time. Highly recommend." },
-  { id: "ex3", rating: 4, authorName: "Alex P.", body: "Solid cut and good conversation. Will be back." },
+  { id: "ex3", rating: 4, authorName: "Alex P.", body: `Solid ${serviceNoun} and good conversation. Will be back.` },
 ];
 
 function Reviews({
@@ -536,7 +537,7 @@ function Reviews({
   // In the editor preview with no real reviews yet, show labeled examples so the
   // barber sees the layout. Live page with no reviews: just the form, no examples.
   const showExamples = preview && !hasReal;
-  const list = hasReal ? real : showExamples ? EXAMPLE_REVIEWS : [];
+  const list = hasReal ? real : showExamples ? exampleReviews(serviceNounForShop(data)) : [];
   const avg = data.reviewSummary.avgRating;
 
   return (

@@ -57,7 +57,7 @@ export function GoalPlanner({
   planner,
   onSaved,
   onClose,
-  serviceNoun = "cut",
+  serviceNoun = "visit",
 }: {
   goal: Goal;
   planner: PlannerData;

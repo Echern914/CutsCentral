@@ -1,5 +1,6 @@
 "use client";
 
+import { cap, useVocab } from "@/components/VocabProvider";
 import { useState, useTransition } from "react";
 import { Card } from "@/components/ui/Card";
 import { nudgeNowAction } from "../actions";
@@ -22,12 +23,14 @@ export function AtRiskTable({
   rows: AtRiskRow[];
   appBaseUrl: string;
 }) {
+  const vocab = useVocab();
   return (
     <Card className="overflow-hidden">
       <div className="border-b border-subtle px-5 py-4">
         <h2 className="font-display text-lg">At risk</h2>
         <p className="text-xs text-muted">
-          Overdue for a cut with no upcoming booking.
+          Overdue for {/^[aeiou]/i.test(vocab.serviceNoun) ? "an" : "a"}{" "}
+          {vocab.serviceNoun} with no upcoming booking.
         </p>
       </div>
       {rows.length === 0 ? (

@@ -510,7 +510,7 @@ export function PageEditor({
                 onChange={(e) => setBio(e.target.value)}
                 rows={2}
                 maxLength={500}
-                placeholder="Precision fades and beard work in downtown Wilmington. By appointment."
+                placeholder="What makes your place worth booking. Neighborhood, style, what you are known for."
                 aria-invalid={fieldErrors.bio ? true : undefined}
                 aria-describedby={fieldErrors.bio ? "err-bio" : undefined}
                 className={`mt-1 ${field} resize-none`}

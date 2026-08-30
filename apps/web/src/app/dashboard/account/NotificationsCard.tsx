@@ -196,7 +196,7 @@ export function NotificationsCard({
           )}
           <Row
             title="Tomorrow's schedule"
-            hint="An evening rundown: how many cuts, when they start, who's first."
+            hint={`An evening rundown: how many ${vocab.serviceNounPlural}, when they start, who's first.`}
           >
             <Toggle
               on={prefs.dayAheadEnabled}

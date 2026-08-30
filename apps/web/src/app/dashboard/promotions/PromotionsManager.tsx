@@ -311,6 +311,7 @@ function PromoForm({
   onCancel: () => void;
   pending: boolean;
 }) {
+  const vocab = useVocab();
   const [kind, setKind] = useState<Promo["kind"]>("PERCENT_OFF");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -396,7 +397,7 @@ function PromoForm({
         <input
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          placeholder="20% off any weekday cut"
+          placeholder={`20% off any weekday ${vocab.serviceNoun}`}
           maxLength={200}
           className={`mt-1 ${field}`}
         />

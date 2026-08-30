@@ -250,6 +250,7 @@ function RewardForm({
   onCancel: () => void;
   pending: boolean;
 }) {
+  const vocab = useVocab();
   const [name, setName] = useState(initial?.name ?? "");
   const [emoji, setEmoji] = useState(initial?.emoji ?? "");
   const [punchCost, setPunchCost] = useState(initial?.punchCost ?? 10);
@@ -274,7 +275,7 @@ function RewardForm({
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Free Cut"
+            placeholder={`Free ${cap(vocab.serviceNoun)}`}
             maxLength={80}
             className={`mt-1 ${field}`}
           />
@@ -362,6 +363,7 @@ function Earning({
   punchesPerVisit: number;
   rules: Rule[];
 }) {
+  const vocab = useVocab();
   const { toast } = useToast();
   const [pending, startTransition] = useTransition();
   const [rate, setRate] = useState(punchesPerVisit);
@@ -445,7 +447,7 @@ function Earning({
               <input
                 value={match}
                 onChange={(e) => setMatch(e.target.value)}
-                placeholder="Cut + Beard"
+                placeholder={`${cap(vocab.serviceNoun)} + Add-on`}
                 maxLength={80}
                 className={`mt-1 ${field}`}
               />

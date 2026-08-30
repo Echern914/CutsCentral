@@ -97,6 +97,7 @@ export function AppointmentSheet({
   onChanged: () => void;
   initialView?: SheetView;
 }) {
+  const vocab = useVocab();
   const [view, setView] = useState<SheetView>(initialView);
   const [menu, setMenu] = useState<MenuKind>(null);
   const [detail, setDetail] = useState<AppointmentDetail | null>(null);
@@ -193,7 +194,7 @@ export function AppointmentSheet({
         // DID land, so "try again" would be exactly the wrong advice.
         toast(
           res.error === "paid_already"
-            ? "This cut was already checked out"
+            ? `This ${vocab.serviceNoun} was already checked out`
             : "Couldn't save the checkout",
           "error",
         );
@@ -1557,6 +1558,7 @@ function PayView({
   method: string | null;
   setMethod: (m: (typeof METHODS)[number]["key"]) => void;
 }) {
+  const vocab = useVocab();
   return (
     <div className="flex flex-col gap-4">
       <div className="rounded-xl border border-subtle bg-charcoal-800/40 px-4 py-3 text-center text-xs text-muted">
@@ -1627,7 +1629,7 @@ function PayView({
       </div>
 
       <p className="text-center text-[11px] leading-relaxed text-muted">
-        Records the sale and marks the cut done. ChairBack never touches the money —
+        Records the sale and marks the {vocab.serviceNoun} done. ChairBack never touches the money —
         you keep 100%.
       </p>
     </div>
