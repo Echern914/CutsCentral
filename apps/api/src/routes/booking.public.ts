@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { countBookingRefusals } from "../services/bookingRefusal.js";
 import { redactForAudit } from "../messaging/auditBody.js";
-import { apiEnv, randomToken, zonedWallTimeToUtc } from "@chairback/config";
+import { apiEnv, randomToken, vocabularyForShop, zonedWallTimeToUtc } from "@chairback/config";
 import { prisma, Prisma } from "@chairback/db";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
@@ -398,6 +398,10 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
       name: shop.name,
       slug: shop.slug,
       timezone: shop.timezone,
+      // The words this business uses, resolved server-side so the booking page
+      // never re-derives them. NEUTRAL for a shop that has not chosen a type -
+      // a customer must never be asked to pick a "barber" at a nail studio.
+      vocabulary: vocabularyForShop(shop),
       logoUrl: shop.logoUrl,
       accentColor: shop.accentColor,
       // Stored without the "@" (stripped on save). The shop mini-site has shown

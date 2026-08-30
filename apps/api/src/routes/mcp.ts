@@ -2,7 +2,13 @@ import { Router } from "express";
 import { requireMcpAuth } from "../middleware/mcpAuth.js";
 import { mcpLimiter } from "../middleware/rateLimit.js";
 import { logMcpEvent } from "../mcp/audit.js";
-import { callTool, listTools, toolContextFor, type McpRequestContext } from "../mcp/dispatch.js";
+import {
+  buildInstructions,
+  callTool,
+  listTools,
+  toolContextFor,
+  type McpRequestContext,
+} from "../mcp/dispatch.js";
 import {
   authorizationServerMetadata,
   protectedResourceMetadata,
@@ -73,6 +79,7 @@ function session(ctx: NonNullable<Express.Request["mcp"]>): McpRequestContext {
     accessLevel: ctx.accessLevel,
     scopes: ctx.scopes,
     billing: ctx.billing,
+    vocabulary: ctx.vocabulary,
   };
 }
 
@@ -115,6 +122,19 @@ mcpRouter.post("/", mcpLimiter, requireMcpAuth, async (req, res) => {
           // those already invalidate the connection rather than mutate it.
           capabilities: { tools: { listChanged: false } },
           serverInfo: { name: "chairback", version: "1.0.0" },
+          // Safe connection context: what this business calls its people and
+          // visits, so the assistant asks "which nail tech?" rather than
+          // "which barber?".
+          //
+          // 🔴 SERVER-AUTHORED, and deliberately here rather than inside a
+          // tool's `data` envelope. Everything a tool returns is shop-supplied
+          // text wrapped as untrusted; this is the one channel the server
+          // itself speaks on. It interpolates ONLY fixed registry words - never
+          // a string the shop typed - which is what makes that safe.
+          //
+          // Presentation ONLY: it changes wording, never scopes, role, tenant
+          // isolation, entitlement or which tools are listed.
+          instructions: buildInstructions(ctx.vocabulary),
         },
       });
       return;

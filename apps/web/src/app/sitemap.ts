@@ -1,4 +1,5 @@
 import type { MetadataRoute } from "next";
+import { MARKETING_SLUGS } from "@chairback/config/businessTypes";
 import { apiPublicGet } from "@/lib/api";
 
 /**
@@ -27,12 +28,11 @@ const STATIC_PAGES = [
   "/privacy",
   "/sms",
   "/support",
-  "/for/barbers",
-  "/for/salons",
-  "/for/nails",
-  "/for/lashes",
-  "/for/spas",
-  "/for/tattoo",
+  // Derived from the business-type registry rather than hand-listed. The old
+  // copy duplicated the vertical list, so adding a landing page and forgetting
+  // this array left it uncrawlable - the same orphaning failure the feature
+  // registry's REQUIRED_HREFS test exists to prevent for dashboard routes.
+  ...MARKETING_SLUGS.map((slug) => `/for/${slug}`),
 ];
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {

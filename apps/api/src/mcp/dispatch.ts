@@ -1,5 +1,5 @@
 import { prisma } from "@chairback/db";
-import type { SeatRole } from "@chairback/config";
+import type { BusinessVocabulary, SeatRole } from "@chairback/config";
 import { hasActiveAccess } from "../billing/stripe.js";
 import { logger } from "../logger.js";
 import { captureError } from "../sentry.js";
@@ -40,6 +40,12 @@ export interface McpRequestContext {
     trialEndsAt: Date | null;
     compAccess: boolean;
   };
+  /**
+   * The shop's wording, resolved from the REGISTRY ONLY (no custom-noun
+   * overlay) - see `buildInstructions`. Presentation; never an input to any
+   * access decision.
+   */
+  vocabulary: BusinessVocabulary;
 }
 
 /**
@@ -159,6 +165,33 @@ function envelope(data: unknown): UntrustedEnvelope {
 
 /** Exported so tests assert against the real notice, never a copy of it. */
 export { UNTRUSTED_NOTICE };
+
+/**
+ * The `initialize` instructions: what this business calls things, so the model
+ * speaks the shop's language instead of the product's default.
+ *
+ * 🔴 THE OPPOSITE SIDE OF THE BOUNDARY FROM `envelope()`. Everything a tool
+ * returns is shop-authored and wrapped as untrusted; this string is authored by
+ * the SERVER and is the one place it speaks in its own voice. That only holds
+ * because every word interpolated here comes from the fixed business-type
+ * registry - never `Shop.serviceNoun` or any other free text a shop typed,
+ * which would let a shop write the model's instructions. `requireMcpAuth`
+ * enforces that by resolving this vocabulary WITHOUT the custom-noun overlay.
+ *
+ * Presentation only. It says nothing about role, plan, scopes or tenancy, and
+ * changing it cannot widen what a connection may call.
+ */
+export function buildInstructions(v: BusinessVocabulary): string {
+  return [
+    `This ChairBack business calls each of its service providers a "${v.providerNoun}"`,
+    `(plural "${v.providerNounPlural}"), each workspace a "${v.stationNoun}",`,
+    `each visit ${v.serviceNoun === "appointment" ? "an" : "a"} "${v.serviceNoun}",`,
+    `and each customer a "${v.clientNoun}".`,
+    "Use these words when you talk to the owner or their staff.",
+    "They affect wording only - they never change what you are allowed to do.",
+  ].join(" ");
+}
+
 
 export interface DispatchOutcome {
   /** The MCP `tools/call` result payload. */

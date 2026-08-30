@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
+import { vocabularyForShop, type BusinessVocabulary } from "@chairback/config";
 import { prisma, type McpAccessLevel } from "@chairback/db";
 import type { ShopRole } from "../auth/roles.js";
 import { logMcpEvent } from "../mcp/audit.js";
@@ -66,6 +67,12 @@ declare global {
           trialEndsAt: Date | null;
           compAccess: boolean;
         };
+        /**
+         * What this shop calls its people, workspaces and visits. Presentation
+         * only: it shapes the wording in `initialize.instructions`, never who
+         * may call what. NEUTRAL for a shop that has not chosen a type.
+         */
+        vocabulary: BusinessVocabulary;
         staffId: string | null;
         scopes: string[];
       };
@@ -189,6 +196,12 @@ export async function requireMcpAuth(
       subscriptionStatus: true,
       trialEndsAt: true,
       compAccess: true,
+      // Vocabulary inputs, read on the same OWNER connection for the same
+      // reason. Presentation only - business type never affects scopes, role,
+      // entitlement or which tools are listed.
+      industry: true,
+      serviceNoun: true,
+      businessTypeSelectedAt: true,
     },
   });
 
@@ -221,6 +234,20 @@ export async function requireMcpAuth(
     staffId: seat.staffId,
     scopes: t.scopes,
     billing: shop,
+    // Server-authored, so it belongs on the TRUSTED side of the boundary. It is
+    // never put inside the untrusted `data` envelope a tool returns.
+    //
+    // 🔴 `serviceNoun` IS DELIBERATELY NOT PASSED. That column is free text the
+    // owner typed, and this vocabulary is interpolated into the model's
+    // `initialize` instructions - the one string on this endpoint the SERVER
+    // speaks in its own voice. Feeding shop-authored text into it would hand
+    // any shop a channel for writing the model's instructions, which is exactly
+    // the boundary UNTRUSTED_NOTICE exists to hold. Registry words only.
+    // (The legacy rule still applies: unselected shops get NEUTRAL.)
+    vocabulary: vocabularyForShop({
+      industry: shop.industry,
+      businessTypeSelectedAt: shop.businessTypeSelectedAt,
+    }),
   };
 
   // "Last used" is a UI nicety, so it must not be able to fail the request or

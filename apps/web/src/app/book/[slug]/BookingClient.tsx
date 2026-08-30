@@ -11,6 +11,7 @@ import {
 import Link from "next/link";
 import { DEMO } from "@chairback/config/demo";
 import { serviceColorHex } from "@chairback/config/constants";
+import { NEUTRAL_VOCABULARY } from "@chairback/config/businessTypes";
 import { zonedMinutesOfDay } from "@chairback/config/time";
 import { BackToDashboard } from "@/components/BackToDashboard";
 import { CustomerBack } from "@/components/CustomerBack";
@@ -120,6 +121,10 @@ export function BookingClient({ data }: { data: BookShopData }) {
   // CTA inside the app; the shell may be waiting on this ready signal).
   useSignalNativeReady();
 
+  // What this business calls its people. NEUTRAL when the API is older than this
+  // deploy or the shop has never chosen a type — "provider" is right for
+  // everyone and wrong for nobody, which is what a fallback has to be.
+  const vocab = data.shop.vocabulary ?? NEUTRAL_VOCABULARY;
   const accent = data.shop.accentColor || "#D4AF37";
   // Text painted ON the accent must actually read against it — shops pick
   // arbitrary accents, so a hardcoded near-black fails WCAG on dark ones.
@@ -1994,7 +1999,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
           A single-barber service skips this and lands on the calendar. */}
       {!dayFirst && serviceId && isMultiBarber && (
         <Section
-          title="2 · Choose your provider"
+          title={`2 · Choose your ${vocab.providerNoun}`}
           back={<BackStep onClick={backToService} />}
           focusOnMount={!demoTour}
         >
