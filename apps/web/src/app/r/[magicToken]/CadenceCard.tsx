@@ -16,7 +16,7 @@ import { surfaceStyle, type RewardsTheme } from "./theme";
 const skipKey = (token: string) => `cb:cadence-skipped:${token}`;
 
 /**
- * One-tap cold-start prompt: "How often do you usually get a cut?". Shown once to
+ * One-tap cold-start prompt: "How often do you usually book?". Shown once to
  * a brand-new client (no stated cadence and not enough visit history to compute
  * one) so the rebook countdown + reminders can be timed to THEM from day one,
  * instead of the shop's flat default. A single tap writes the answer; "Skip"
@@ -87,7 +87,7 @@ export function CadenceCard({
           style={{ backgroundColor: theme.accent }}
           aria-hidden
         />
-        <p className="text-sm font-semibold">How often do you usually get a cut?</p>
+        <p className="text-sm font-semibold">How often do you usually book?</p>
         <p className="mt-1 text-xs leading-relaxed" style={{ color: theme.muted }}>
           We&apos;ll time your rebooking reminders to match — no guessing.
         </p>

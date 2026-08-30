@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { BUSINESS_TYPES } from "@chairback/config/businessTypes";
 import { ServiceCard, serviceSummary } from "./ServiceCard";
 
 /**
@@ -78,18 +79,39 @@ describe("serviceSummary", () => {
     ).toBe("Marcus, Dre +2");
   });
 
-  it("says 'All barbers' when the service is offered by everyone", () => {
+  it("says 'All <providers>' in the shop's own words when offered by everyone", () => {
     expect(
-      serviceSummary({ ...BASE, offeredByAll: true, staffNames: ["Marcus", "Dre"] })
-        .barbers,
+      serviceSummary({
+        ...BASE,
+        offeredByAll: true,
+        staffNames: ["Marcus", "Dre"],
+        vocab: BUSINESS_TYPES.barber.vocabulary,
+      }).barbers,
     ).toBe("All barbers");
+    expect(
+      serviceSummary({
+        ...BASE,
+        offeredByAll: true,
+        staffNames: ["Ada", "Kim"],
+        vocab: BUSINESS_TYPES.nails.vocabulary,
+      }).barbers,
+    ).toBe("All nail techs");
   });
 
   it("names the gap when nobody offers it", () => {
     // Silence here would hide a service that can never be booked.
-    expect(serviceSummary({ ...BASE, staffNames: [] }).barbers).toBe(
-      "No barber assigned",
-    );
+    expect(
+      serviceSummary({ ...BASE, staffNames: [], vocab: BUSINESS_TYPES.barber.vocabulary })
+        .barbers,
+    ).toBe("No barber assigned");
+  });
+
+  it("falls back to NEUTRAL words when no vocabulary is supplied", () => {
+    // 🔴 The fallback must be generic, never barbershop. An omitted vocabulary
+    // means "we do not know what this shop calls its people", and answering
+    // "barber" is exactly the silent classification this work exists to stop.
+    expect(serviceSummary({ ...BASE, offeredByAll: true }).barbers).toBe("All providers");
+    expect(serviceSummary({ ...BASE, staffNames: [] }).barbers).toBe("No provider assigned");
   });
 
   it("uses the custom-hours summary when the service is not on regular hours", () => {

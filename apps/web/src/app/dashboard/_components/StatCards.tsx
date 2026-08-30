@@ -1,5 +1,6 @@
 "use client";
 
+import { cap, useVocab } from "@/components/VocabProvider";
 import { motion } from "framer-motion";
 import { CountUp } from "@/components/motion/CountUp";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
@@ -17,6 +18,7 @@ export interface Stats {
 }
 
 export function StatCards({ stats }: { stats: Stats }) {
+  const vocab = useVocab();
   const secondary = [
     { label: "Active clients", value: stats.activeClients },
     { label: "At risk", value: stats.atRiskClients, accent: true },
@@ -104,7 +106,7 @@ export function StatCards({ stats }: { stats: Stats }) {
               )}
             </div>
             <p className="mt-3 text-xs text-muted">
-              Lapsed clients ChairBack automatically texted back to the chair.
+              Lapsed clients ChairBack automatically texted back to the {vocab.stationNoun}.
             </p>
           </Card>
         </motion.div>

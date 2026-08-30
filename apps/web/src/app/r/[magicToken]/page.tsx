@@ -55,7 +55,7 @@ export async function generateMetadata({
   const shopPage = data.shop.pageSlug ? await getShopPage(data.shop.pageSlug) : null;
   const description =
     shopPage?.bio ??
-    `Book your next ${serviceNounForShop(shopPage ?? { industry: "barber" })} at ${data.shop.name}.`;
+    `Book your next ${serviceNounForShop(shopPage ?? {})} at ${data.shop.name}.`;
   return {
     title: data.shop.name,
     description,

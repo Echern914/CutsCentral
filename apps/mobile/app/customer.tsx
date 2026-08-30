@@ -285,7 +285,7 @@ export default function CustomerScreen() {
         >
           <Text style={styles.title}>Your rewards</Text>
           <Text style={styles.sub}>
-            Paste the rewards link your barber texted you:
+            Paste the rewards link your shop texted you:
           </Text>
           <TextInput
             value={linkInput}

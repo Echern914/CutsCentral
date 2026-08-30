@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, useTransition } from "react";
+import { cap, useVocab } from "@/components/VocabProvider";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
@@ -26,6 +27,7 @@ import {
  * rather than half-protecting the shop.
  */
 export function AcuityCalendarMap() {
+  const vocab = useVocab();
   const [data, setData] = useState<AcuityMappingData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -60,7 +62,7 @@ export function AcuityCalendarMap() {
           res.error === "calendar_not_on_account"
             ? "That calendar isn't on your Acuity account anymore — refreshed the list."
             : res.error === "calendar_already_mapped"
-              ? "Another chair already uses that calendar. One calendar per chair."
+              ? `Another ${vocab.stationNoun} already uses that calendar. One calendar per ${vocab.stationNoun}.`
               : res.error === "acuity_connection_changed"
                 ? "Your Acuity connection changed while you were choosing — refreshed the list, please pick again."
                 : "Couldn't save that mapping",
@@ -69,7 +71,7 @@ export function AcuityCalendarMap() {
         void load();
         return;
       }
-      toast(calendarId ? "Chair mapped" : "Mapping cleared", "success");
+      toast(calendarId ? `${cap(vocab.stationNoun)} mapped` : "Mapping cleared", "success");
       void load();
     });
   }
@@ -88,7 +90,7 @@ export function AcuityCalendarMap() {
     return (
       <Card className="p-5">
         <CardHeader
-          title="Acuity chair mapping"
+          title={`Acuity ${vocab.stationNoun} mapping`}
           subtitle="Couldn't reach Acuity just now. Your bookings are unaffected — try again, or reconnect Acuity if this keeps happening."
         />
         <button
@@ -112,8 +114,8 @@ export function AcuityCalendarMap() {
   return (
     <Card className="p-5">
       <CardHeader
-        title="Acuity chair mapping"
-        subtitle="You take bookings in ChairBack, and your Acuity account is still connected. Match each chair to its Acuity calendar so ChairBack can hold the time on both."
+        title={`Acuity ${vocab.stationNoun} mapping`}
+        subtitle={`You take bookings in ChairBack, and your Acuity account is still connected. Match each ${vocab.stationNoun} to its Acuity calendar so ChairBack can hold the time on both.`}
       />
 
       <div
@@ -126,10 +128,10 @@ export function AcuityCalendarMap() {
         role="status"
       >
         {data.ready
-          ? "Every bookable chair is mapped."
+          ? `Every bookable ${vocab.stationNoun} is mapped.`
           : blocking.length === 0
-            ? "Add a bookable chair (an active barber offering an active service) to finish setup."
-            : `${blocking.length} ${blocking.length === 1 ? "chair still needs" : "chairs still need"} a calendar before ChairBack can hold time in Acuity.`}
+            ? `Add a bookable ${vocab.stationNoun} (an active ${vocab.providerNoun} offering an active service) to finish setup.`
+            : `${blocking.length} ${blocking.length === 1 ? `${vocab.stationNoun} still needs` : `${vocab.stationNounPlural} still need`} a calendar before ChairBack can hold time in Acuity.`}
       </div>
 
       <ul className="mt-4 flex flex-col gap-3">
@@ -159,7 +161,7 @@ export function AcuityCalendarMap() {
                     {s.problem === "unmapped"
                       ? "Not mapped yet"
                       : s.problem === "stale"
-                        ? "Mapped before you last reconnected Acuity — confirm it still points at the right chair"
+                        ? `Mapped before you last reconnected Acuity — confirm it still points at the right ${vocab.stationNoun}`
                         : "That calendar is no longer on your Acuity account"}
                   </p>
                 )}
@@ -198,8 +200,8 @@ export function AcuityCalendarMap() {
       </ul>
 
       <p className="mt-4 text-[11px] text-muted">
-        Holding time in Acuity is off until you turn it on. Mapping chairs here changes
-        nothing on its own.
+        Holding time in Acuity is off until you turn it on. Mapping{" "}
+        {vocab.stationNounPlural} here changes nothing on its own.
       </p>
     </Card>
   );

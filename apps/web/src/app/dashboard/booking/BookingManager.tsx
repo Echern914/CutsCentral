@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { SERVICE_COLORS, SERVICE_COLOR_KEYS } from "@chairback/config/constants";
+import { cap, useVocab } from "@/components/VocabProvider";
 import { zonedWallTimeToUtc } from "@chairback/config/time";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { FormError } from "@/components/ui/FormError";
@@ -833,6 +834,7 @@ function ServicesTab({
   // Registered by the open group editor; BookingManager's tab guard reads it.
   groupUnsavedRef: MutableRefObject<(() => EditorGuardState) | null>;
 }) {
+  const vocab = useVocab();
   const [name, setName] = useState("");
   const [duration, setDuration] = useState(30);
   const [price, setPrice] = useState("");
@@ -977,7 +979,7 @@ function ServicesTab({
           <span className={labelCls}>Service name</span>
           <input
             className={cn(field, "mt-1")}
-            placeholder="e.g. Haircut"
+            placeholder={`e.g. ${cap(vocab.serviceNoun)} - Classic`}
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
@@ -1063,6 +1065,7 @@ function ServicesTab({
               flagged={offHours}
               flagTitle="Not on regular hours"
               summary={serviceSummary({
+                vocab,
                 durationMin: s.durationMin,
                 price: s.price,
                 priceOverrides: s.priceOverrides,
@@ -1174,6 +1177,7 @@ function ServiceEditForm({
   toast: Toast;
   onClose: () => void;
 }) {
+  const vocab = useVocab();
   const activeStaff = staff.filter((s) => s.active);
   const [name, setName] = useState(service.name);
   // Public-card content: a multi-line description (supports an "INCLUDES:" list)
@@ -1383,7 +1387,7 @@ function ServiceEditForm({
     // If hand-picking, at least one barber must be selected (an empty pick that
     // isn't "all" would offer the service to nobody).
     if (!offeredByAll && staffIds.length === 0) {
-      toast("Pick at least one barber, or choose All", "error");
+      toast(`Pick at least one ${vocab.providerNoun}, or choose All`, "error");
       return;
     }
     start(async () => {
@@ -1431,7 +1435,7 @@ function ServiceEditForm({
             <span className={labelCls}>Service name</span>
             <input
               className={cn(field, "mt-1")}
-              placeholder="e.g. Haircut"
+              placeholder={`e.g. ${cap(vocab.serviceNoun)} - Classic`}
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
@@ -1452,7 +1456,7 @@ function ServiceEditForm({
           <span className={labelCls}>Description (shown on the booking page)</span>
           <textarea
             className={cn(field, "mt-1 min-h-[96px] resize-y leading-relaxed")}
-            placeholder={"What's included, e.g.\nThe VIP Package — most requested\nINCLUDES:\n• Haircut of choice\n• Hot towel + facial"}
+            placeholder={"What's included, e.g.\nThe VIP Package — most requested\nINCLUDES:\n• Your signature service\n• A finishing touch"}
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             maxLength={800}
@@ -1465,7 +1469,7 @@ function ServiceEditForm({
         <div className="max-w-[220px]">
           <ImageField
             label="Photo (shown on the booking card)"
-            hint="A square photo of the cut/result. Optional."
+            hint={`A square photo of the ${vocab.serviceNoun}/result. Optional.`}
             value={imageUrl}
             onChange={setImageUrl}
             kind="service"
@@ -1476,7 +1480,7 @@ function ServiceEditForm({
         {activeStaff.length > 0 && (
           <div>
             <span className={labelCls}>
-              Offered by {offeredByAll ? "(all barbers, including any added later)" : ""}
+              Offered by {offeredByAll ? `(all ${vocab.providerNounPlural}, including any added later)` : ""}
             </span>
             <div className="mt-1 flex flex-wrap gap-2">
               {/* "All" is a live intent: pick it and every barber - now or added
@@ -1490,7 +1494,7 @@ function ServiceEditForm({
                     : "border-subtle text-muted",
                 )}
               >
-                All barbers
+                All {vocab.providerNounPlural}
               </button>
               {activeStaff.map((s) => (
                 <button
@@ -1583,7 +1587,7 @@ function ServiceEditForm({
             </button>
           </div>
           <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
-            Open = whenever the barber works that day. Custom = only the windows
+            Open = whenever the {vocab.providerNoun} works that day. Custom = only the windows
             you set (add a second window for a split day). Not open = no
             bookings that day.{" "}
             <span className="text-offwhite">
@@ -1632,7 +1636,7 @@ function ServiceEditForm({
           />
           {isSoloShop && (
             <p className="mt-2 text-[11px] leading-relaxed text-muted/80">
-              You&rsquo;re the only barber here, so these are your hours —
+              You&rsquo;re the only {vocab.providerNoun} here, so these are your hours —
               saving opens your schedule to match, and you never have to retype
               them under Staff &rarr; Hours. To book less, shorten them here or
               trim your hours there.
@@ -1691,6 +1695,7 @@ function TargetedSlotsManager({
   timezone: string; // IANA shop tz - the datetime input is shop wall clock
   toast: Toast;
 }) {
+  const vocab = useVocab();
   const activeServices = services.filter((s) => s.active);
   const activeStaff = staff.filter((s) => s.active);
   const [slots, setSlots] = useState<TargetedSlotRow[] | null>(null);
@@ -1827,7 +1832,7 @@ function TargetedSlotsManager({
   function addWeekly() {
     const days = Object.entries(weekTimes).filter(([, t]) => t.length > 0);
     if (!serviceId || !staffId || !price.trim() || days.length === 0) {
-      toast("Pick a service, barber, price, and at least one day & time", "error");
+      toast(`Pick a service, ${vocab.providerNoun}, price, and at least one day & time`, "error");
       return;
     }
     // Each window's LENGTH is what the server stores, so an end that isn't
@@ -1910,7 +1915,7 @@ function TargetedSlotsManager({
       return;
     }
     if (!serviceId || !staffId || !when || !price.trim()) {
-      toast("Pick a service, barber, time, and price", "error");
+      toast(`Pick a service, ${vocab.providerNoun}, time, and price`, "error");
       return;
     }
     // datetime-local is naive wall clock; interpret in the SHOP's tz (the zone
@@ -2093,7 +2098,7 @@ function TargetedSlotsManager({
           onChange={(e) => setStaffId(e.target.value)}
           disabled={editingRule !== null}
         >
-          <option value="">Barber…</option>
+          <option value="">{cap(vocab.providerNoun)}…</option>
           {activeStaff.map((s) => (
             <option key={s.id} value={s.id}>
               {s.name}
@@ -3335,6 +3340,7 @@ function ServiceGroupEditor({
   // a re-opened editor from it while the post-save refetch is in flight.
   onSaved: (row: ServiceGroupRow) => void;
 }) {
+  const vocab = useVocab();
   const activeServices = services.filter((s) => s.active);
   const [name, setName] = useState(group.name);
   const [serviceIds, setServiceIds] = useState<string[]>(group.serviceIds);
@@ -3353,7 +3359,7 @@ function ServiceGroupEditor({
           offHours,
           summary: offHours
             ? hoursWindowsSummary(svc.hoursWindows)
-            : "Open whenever the barber works",
+            : `Open whenever the ${vocab.providerNoun} works`,
         };
       });
   // 0 = no cap (sent to the API as null). NumberField holds a number and settles
@@ -4797,6 +4803,7 @@ function VaryByTimeEditor({
   basePrice: string;
   baseDuration: number;
 }) {
+  const vocab = useVocab();
   // w-full + min-w-0: a <select> is a GRID ITEM here, and a grid item defaults
   // to min-width:auto - it refuses to shrink below its widest option
   // ("12:45 PM"). Two of them in `1fr` columns therefore pushed the row wider
@@ -4811,7 +4818,7 @@ function VaryByTimeEditor({
     <div>
       <span className={labelCls}>Vary by time of day? (optional — price and/or length)</span>
       <p className="mt-0.5 text-[11px] text-muted">
-        e.g. after 9 PM cuts run $60 and take 20 min. Pick the days it repeats on
+        e.g. after 9 PM {vocab.serviceNounPlural} run $60 and take 20 min. Pick the days it repeats on
         (or leave them all off for every day), on top of any per-day settings.
         Leave a field blank to keep the usual{" "}
         {basePrice.trim() ? `$${basePrice}` : "price"} / {baseDuration || "?"} min.

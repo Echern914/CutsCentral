@@ -1,5 +1,6 @@
 "use client";
 
+import { cap, useVocab } from "@/components/VocabProvider";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { cn } from "@/lib/cn";
@@ -96,6 +97,7 @@ export function AppointmentSheet({
   onChanged: () => void;
   initialView?: SheetView;
 }) {
+  const vocab = useVocab();
   const [view, setView] = useState<SheetView>(initialView);
   const [menu, setMenu] = useState<MenuKind>(null);
   const [detail, setDetail] = useState<AppointmentDetail | null>(null);
@@ -192,7 +194,7 @@ export function AppointmentSheet({
         // DID land, so "try again" would be exactly the wrong advice.
         toast(
           res.error === "paid_already"
-            ? "This cut was already checked out"
+            ? `This ${vocab.serviceNoun} was already checked out`
             : "Couldn't save the checkout",
           "error",
         );
@@ -517,6 +519,7 @@ function Hero({
   timeLabel: string;
   durMin: number | null;
 }) {
+  const vocab = useVocab();
   const pill = appointmentStatusPill({
     status: row.status,
     checkInStatus: row.checkInStatus,
@@ -624,7 +627,7 @@ function Hero({
           <span className="[overflow-wrap:anywhere]">{service ?? "Appointment"}</span>
         </Fact>
         {barber && (
-          <Fact icon={<ScissorsIcon />} label="Barber">
+          <Fact icon={<ScissorsIcon />} label={cap(vocab.providerNoun)}>
             <span className="[overflow-wrap:anywhere]">{barber}</span>
           </Fact>
         )}
@@ -793,6 +796,7 @@ function PaymentCard({
   canCheckout: boolean;
   onCheckout: () => void;
 }) {
+  const vocab = useVocab();
   if (loadError) return null;
   if (!detail) return <CardSkeleton title="Payment" rows={3} />;
 
@@ -867,7 +871,7 @@ function PaymentCard({
           {p.inPersonCents > 0 && (
             <Line
               label={
-                p.method ? `At the chair · ${METHOD_LABEL[p.method] ?? p.method}` : "At the chair"
+                p.method ? `At the ${vocab.stationNoun} · ${METHOD_LABEL[p.method] ?? p.method}` : `At the ${vocab.stationNoun}`
               }
               value={money(p.inPersonCents)}
               tone="good"
@@ -1554,6 +1558,7 @@ function PayView({
   method: string | null;
   setMethod: (m: (typeof METHODS)[number]["key"]) => void;
 }) {
+  const vocab = useVocab();
   return (
     <div className="flex flex-col gap-4">
       <div className="rounded-xl border border-subtle bg-charcoal-800/40 px-4 py-3 text-center text-xs text-muted">
@@ -1624,7 +1629,7 @@ function PayView({
       </div>
 
       <p className="text-center text-[11px] leading-relaxed text-muted">
-        Records the sale and marks the cut done. ChairBack never touches the money —
+        Records the sale and marks the {vocab.serviceNoun} done. ChairBack never touches the money —
         you keep 100%.
       </p>
     </div>

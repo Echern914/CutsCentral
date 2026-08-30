@@ -1,5 +1,6 @@
 "use client";
 
+import { cap, useVocab } from "@/components/VocabProvider";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Card } from "@/components/ui/Card";
 import {
@@ -35,6 +36,7 @@ type SendState =
   | { kind: "error"; copy: string };
 
 export function BarberClients() {
+  const vocab = useVocab();
   const [data, setData] = useState<BarberClientsData | null>(null);
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState(false);
@@ -95,7 +97,7 @@ export function BarberClients() {
       <div className="border-b border-subtle px-5 py-4">
         <h2 className="font-display text-lg">Your clients</h2>
         <p className="text-xs text-muted">
-          People your chair has served. Lost rewards link? Text it in one tap.
+          People your {vocab.stationNoun} has served. Lost rewards link? Text it in one tap.
         </p>
         <input
           type="search"

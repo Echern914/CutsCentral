@@ -1,5 +1,6 @@
 "use client";
 
+import { useVocab } from "@/components/VocabProvider";
 import { useState, useTransition } from "react";
 import { motion } from "framer-motion";
 import { Card } from "@/components/ui/Card";
@@ -22,6 +23,7 @@ export function WinbackPreview({
 }: {
   premiumLocked?: boolean;
 } = {}) {
+  const vocab = useVocab();
   const [pending, startTransition] = useTransition();
   const [preview, setPreview] = useState<WinbackPreview | null>(null);
   const [errored, setErrored] = useState(false);
@@ -51,7 +53,7 @@ export function WinbackPreview({
             <p className="text-xs text-muted">
               {premiumLocked
                 ? "These clients won't be texted while your plan is lapsed — win-back runs automatically once you subscribe."
-                : "Deeply lapsed clients ChairBack will automatically text back to the chair. Preview who's up next — no texts are sent here."}
+                : `Deeply lapsed clients ChairBack will automatically text back to the ${vocab.stationNoun}. Preview who's up next — no texts are sent here.`}
             </p>
           </div>
           <button

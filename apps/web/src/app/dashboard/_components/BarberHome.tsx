@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { cap, useVocab } from "@/components/VocabProvider";
 import { Card } from "@/components/ui/Card";
 import { Avatar } from "@/components/ui/Avatar";
 import { BarberWalkIns } from "./BarberWalkIns";
@@ -51,6 +52,7 @@ export function BarberHome({
   barberName: string;
   avatarUrl?: string | null;
 }) {
+  const vocab = useVocab();
   const timeFmt = new Intl.DateTimeFormat("en-US", {
     timeZone: data.shop.timezone,
     hour: "numeric",
@@ -73,9 +75,9 @@ export function BarberHome({
           fixes it, rather than rendering an empty day that reads as broken. */}
       {data.reason === "no_chair_linked" && (
         <Card className="mt-6 border-gold/30 px-5 py-4">
-          <p className="text-sm font-medium text-gold">Your chair isn&rsquo;t set up yet</p>
+          <p className="text-sm font-medium text-gold">Your {vocab.stationNoun} isn&rsquo;t set up yet</p>
           <p className="mt-1 text-xs text-muted">
-            Ask the shop owner to link your login to your chair on the Team page.
+            Ask the shop owner to link your login to your {vocab.stationNoun} on the Team page.
             Until then your appointments can&rsquo;t be shown here.
           </p>
         </Card>

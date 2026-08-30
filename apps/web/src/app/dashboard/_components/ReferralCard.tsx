@@ -1,3 +1,4 @@
+import { cap, useVocab } from "@/components/VocabProvider";
 import Link from "next/link";
 
 /**
@@ -23,11 +24,12 @@ export function ReferralCard({
   pendingCount: number;
   rewardDays: number;
 }) {
+  const vocab = useVocab();
   // Three states, in the order a barber actually passes through them.
   const headline =
     earnedMonths > 0
       ? `${earnedMonths} free ${earnedMonths === 1 ? "month" : "months"} earned`
-      : "Refer a barber, you both get a month";
+      : `Refer a ${vocab.providerNoun}, you both get a month`;
 
   const sub =
     earnedMonths > 0

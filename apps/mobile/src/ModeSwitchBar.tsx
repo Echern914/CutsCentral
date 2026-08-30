@@ -38,7 +38,7 @@ export function ModeSwitchBar({ label }: { label: string }) {
         onPress={() => router.replace({ pathname: "/", params: { switching: "1" } })}
         accessibilityRole="button"
         accessibilityLabel="Switch mode"
-        accessibilityHint="Opens the welcome screen to choose barbershop or customer. You can come straight back."
+        accessibilityHint="Opens the welcome screen to choose shop or customer. You can come straight back."
         // A generous tap target on a thin bar: the visible pill is small, the
         // pressable is not.
         hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}

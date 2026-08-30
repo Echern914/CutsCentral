@@ -236,10 +236,10 @@ type Role = {
 const ROLES: Role[] = [
   {
     mode: "barber",
-    title: "I own a barbershop",
-    sub: "Your chair, your clients, your dashboard.",
-    label: "Continue as a barbershop owner",
-    hint: "Opens the barbershop dashboard.",
+    title: "I own a shop",
+    sub: "Your bookings, your clients, your dashboard.",
+    label: "Continue as a shop owner",
+    hint: "Opens the shop dashboard.",
     Icon: ScissorsIcon,
   },
   {
@@ -357,7 +357,7 @@ function Picker({
                 style={styles.wordmarkUnderline}
               />
               <Text style={styles.tagline}>
-                One app for the chair, the chain, and the client.
+                One app for the shop, the chain, and the client.
               </Text>
             </Animated.View>
           </View>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useVocab } from "@/components/VocabProvider";
 import { useMemo, useRef, useState, useTransition } from "react";
 import {
   ACCENT_HEX_REGEX,
@@ -75,6 +76,7 @@ export function PageEditor({
   settings: ShopPageSettings;
   appBase: string;
 }) {
+  const vocab = useVocab();
   const { toast } = useToast();
   const [pending, startTransition] = useTransition();
   const [slug, setSlug] = useState(settings.slug ?? "");
@@ -484,7 +486,7 @@ export function PageEditor({
               <input
                 value={slug}
                 onChange={(e) => setSlug(e.target.value)}
-                placeholder="dricks-barbershop"
+                placeholder="your-shop-name"
                 maxLength={40}
                 aria-invalid={slugError ? true : undefined}
                 aria-describedby={slugError ? "err-slug" : undefined}
@@ -508,7 +510,7 @@ export function PageEditor({
                 onChange={(e) => setBio(e.target.value)}
                 rows={2}
                 maxLength={500}
-                placeholder="Precision fades and beard work in downtown Wilmington. By appointment."
+                placeholder="What makes your place worth booking. Neighborhood, style, what you are known for."
                 aria-invalid={fieldErrors.bio ? true : undefined}
                 aria-describedby={fieldErrors.bio ? "err-bio" : undefined}
                 className={`mt-1 ${field} resize-none`}
@@ -688,7 +690,7 @@ export function PageEditor({
                 onChange={(e) => setRewardsWelcome(e.target.value)}
                 rows={2}
                 maxLength={REWARDS_WELCOME_MAX}
-                placeholder="Thanks for being a regular — see you in the chair soon!"
+                placeholder={`Thanks for being a regular — see you in the ${vocab.stationNoun} soon!`}
                 aria-invalid={fieldErrors.rewardsWelcome ? true : undefined}
                 aria-describedby={fieldErrors.rewardsWelcome ? "err-rewards-welcome" : undefined}
                 className={`mt-1 ${field} resize-none`}

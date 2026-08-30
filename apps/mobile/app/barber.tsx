@@ -117,7 +117,7 @@ export default function BarberScreen() {
     <SafeAreaView style={styles.flex} edges={["top"]}>
       {/* The way back to the picker. Sits in the top strip this screen already
           reserves, so it never covers the dashboard's own bottom nav. */}
-      <ModeSwitchBar label="Barbershop" />
+      <ModeSwitchBar label="Shop" />
       <AppWebView
         source={source}
         style={styles.flex}

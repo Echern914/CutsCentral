@@ -1,5 +1,6 @@
 "use client";
 
+import { cap, useVocab } from "@/components/VocabProvider";
 import { useEffect, useState } from "react";
 import { Card } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
@@ -36,6 +37,7 @@ export function ReferralShare({
   pendingCount: number;
   rewardDays: number;
 }) {
+  const vocab = useVocab();
   const { toast } = useToast();
 
   // A referral link is pasted into someone else's text messages, so it MUST be
@@ -118,7 +120,7 @@ export function ReferralShare({
         </div>
         {rows.length === 0 ? (
           <p className="px-5 py-6 text-sm text-muted">
-            Nobody yet. Barbers you refer show up here.
+            Nobody yet. {cap(vocab.providerNounPlural)} you refer show up here.
           </p>
         ) : (
           <ul className="divide-y divide-[rgba(245,245,244,0.08)]">

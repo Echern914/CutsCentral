@@ -55,9 +55,15 @@ export function RewardsClient({
   appStoreUrl,
   playStoreUrl,
   shopHref = null,
+  serviceNoun = "visit",
 }: {
   data: RewardsData;
   magicToken: string;
+  /**
+   * The shop's word for a visit, resolved server-side. NEUTRAL default: this is
+   * a public page and a wrong guess reaches the customer, not the owner.
+   */
+  serviceNoun?: string;
   /** VAPID public key (null when push isn't configured -> opt-in UI hidden). */
   vapidPublicKey: string | null;
   /** iOS App Store link for the "Get the app" banner (null => banner hidden). */
@@ -516,7 +522,7 @@ export function RewardsClient({
                   borderRadius: t.buttonRadius,
                 }}
               >
-                Book your next cut
+                Book your next {serviceNoun}
               </a>
             </motion.div>
           )}

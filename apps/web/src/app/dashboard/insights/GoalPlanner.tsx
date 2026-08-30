@@ -1,5 +1,6 @@
 "use client";
 
+import { cap, useVocab } from "@/components/VocabProvider";
 import { useId, useMemo, useState } from "react";
 import { pluralServiceNoun } from "@chairback/config/constants";
 import { cn } from "@/lib/cn";
@@ -56,7 +57,7 @@ export function GoalPlanner({
   planner,
   onSaved,
   onClose,
-  serviceNoun = "cut",
+  serviceNoun = "visit",
 }: {
   goal: Goal;
   planner: PlannerData;
@@ -65,6 +66,7 @@ export function GoalPlanner({
   /** The shop's singular visit-noun ("cut"/"twist") for all the copy below. */
   serviceNoun?: string;
 }) {
+  const vocab = useVocab();
   const period = goal.period;
   const metric = goal.metric;
   const nounPlural = pluralServiceNoun(serviceNoun);
@@ -213,7 +215,7 @@ export function GoalPlanner({
             intend to run, what this plan makes, and the gap. ───────────── */}
         <div className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-subtle bg-[rgb(var(--cb-fg)/0.06)] sm:grid-cols-4">
           <Stat label="Target" value={fmt(target)} sub={`per ${periodNoun}`} />
-          <Stat label="Booked at" value={`${bookedPct}%`} sub="of open chair time" />
+          <Stat label="Booked at" value={`${bookedPct}%`} sub={`of open ${vocab.stationNoun} time`} />
           <Stat label="This plan" value={fmt(proj.plannedTotal)} sub={`per ${periodNoun}`} />
           <Stat
             label={onTrack ? "Over goal" : "Gap to goal"}
@@ -452,6 +454,7 @@ function ServiceRow({
   onPrice: (n: number) => void;
   onCuts: (n: number) => void;
 }) {
+  const vocab = useVocab();
   // text-base (16px) is the iOS no-zoom floor; it relaxes to text-sm from `sm`,
   // where there is no touch keyboard to trigger it. See globals.css.
   const fieldCls =
@@ -534,7 +537,7 @@ function ServiceRow({
           </div>
           <p
             className="mt-2 text-[11px] leading-snug tabular-nums text-muted sm:mt-0 sm:text-right"
-            title={`If ${s.name} alone filled your ${bookedPct}%-booked chair time this ${periodNoun}.`}
+            title={`If ${s.name} alone filled your ${bookedPct}%-booked ${vocab.stationNoun} time this ${periodNoun}.`}
           >
             <span className="sm:hidden">Ceiling at {bookedPct}%: </span>
             {s.maxCuts} {nounPlural}

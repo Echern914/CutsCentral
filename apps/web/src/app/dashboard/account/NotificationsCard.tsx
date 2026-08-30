@@ -1,5 +1,6 @@
 "use client";
 
+import { cap, useVocab } from "@/components/VocabProvider";
 import { useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { NumberField } from "@/components/ui/NumberField";
@@ -90,6 +91,7 @@ export function NotificationsCard({
   devices: NotifyDevice[];
   shopNotifyPhone: string | null;
 }) {
+  const vocab = useVocab();
   const [prefs, setPrefs] = useState<NotifyPrefs>(initial);
   const [devices, setDevices] = useState<NotifyDevice[]>(initialDevices);
   const [pending, start] = useTransition();
@@ -146,7 +148,7 @@ export function NotificationsCard({
     <Card className="mt-6 overflow-hidden">
       <CardHeader
         title="Notifications"
-        subtitle="What you get told about your own chair — who's coming in, and when."
+        subtitle={`What you get told about your own ${vocab.stationNoun} — who's coming in, and when.`}
         action={
           <button
             type="button"
@@ -167,7 +169,7 @@ export function NotificationsCard({
           </p>
           <Row
             title="Before each appointment"
-            hint="Who's next and what they booked, so you're never surprised at the chair."
+            hint={`Who's next and what they booked, so you're never surprised at the ${vocab.stationNoun}.`}
           >
             <Toggle
               on={prefs.nextUpEnabled}
@@ -194,7 +196,7 @@ export function NotificationsCard({
           )}
           <Row
             title="Tomorrow's schedule"
-            hint="An evening rundown: how many cuts, when they start, who's first."
+            hint={`An evening rundown: how many ${vocab.serviceNounPlural}, when they start, who's first.`}
           >
             <Toggle
               on={prefs.dayAheadEnabled}

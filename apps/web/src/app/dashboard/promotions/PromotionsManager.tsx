@@ -1,5 +1,6 @@
 "use client";
 
+import { cap, useVocab } from "@/components/VocabProvider";
 import { useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { NumberField } from "@/components/ui/NumberField";
@@ -118,6 +119,7 @@ export function PromotionsManager({
 }
 
 function PromoRow({ promo, premiumLocked }: { promo: Promo; premiumLocked?: boolean }) {
+  const vocab = useVocab();
   const { toast } = useToast();
   // No "upgrade" steering inside the iOS app (Guideline 3.1.1).
   const inApp = useIsNativeApp();
@@ -163,7 +165,7 @@ function PromoRow({ promo, premiumLocked }: { promo: Promo; premiumLocked?: bool
         <div className="flex shrink-0 items-center gap-3 text-[11px] text-muted">
           <span title="Texts sent">📱 {promo.textsSent}</span>
           <span title="Rebookings after the text">↩ {promo.rebookings}</span>
-          <span title="Times used at the chair">✓ {promo.timesUsed}</span>
+          <span title={`Times used at the ${vocab.stationNoun}`}>✓ {promo.timesUsed}</span>
         </div>
         <div className="flex items-center gap-2">
           {promo.status === "live" && (
@@ -309,6 +311,7 @@ function PromoForm({
   onCancel: () => void;
   pending: boolean;
 }) {
+  const vocab = useVocab();
   const [kind, setKind] = useState<Promo["kind"]>("PERCENT_OFF");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -394,7 +397,7 @@ function PromoForm({
         <input
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          placeholder="20% off any weekday cut"
+          placeholder={`20% off any weekday ${vocab.serviceNoun}`}
           maxLength={200}
           className={`mt-1 ${field}`}
         />

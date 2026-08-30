@@ -3,6 +3,8 @@
 // TouchEvent is aliased because the DOM global of the same name is NOT the
 // React synthetic one, and the `React.` namespace is off-limits in this repo
 // (two @types/react copies resolve, so React.X picks the wrong one).
+import { cap, useVocab } from "@/components/VocabProvider";
+import type { BusinessVocabulary } from "@chairback/config/businessTypes";
 import {
   type TouchEvent as ReactTouchEvent,
   useCallback,
@@ -1075,6 +1077,7 @@ function WalkInBar({
   toast: Toast;
   onRecorded: () => void;
 }) {
+  const vocab = useVocab();
   const [open, setOpen] = useState(false);
   const [amount, setAmount] = useState("");
   // Set only once the server says it genuinely can't resolve the chair.
@@ -1099,7 +1102,7 @@ function WalkInBar({
       return;
     }
     if (needStaff && !staffId) {
-      toast("Pick whose chair", "error");
+      toast(`Pick whose ${vocab.stationNoun}`, "error");
       return;
     }
     start(async () => {
@@ -1116,7 +1119,7 @@ function WalkInBar({
       if (res.error === "staff_required") {
         // Ask once, keep the amount they already typed.
         setNeedStaff(true);
-        toast("Whose chair was it?", "error");
+        toast(`Whose ${vocab.stationNoun} was it?`, "error");
         return;
       }
       toast("Couldn't record that walk-in", "error");
@@ -1164,10 +1167,10 @@ function WalkInBar({
         <select
           value={staffId}
           onChange={(e) => setStaffId(e.target.value)}
-          aria-label="Whose chair"
+          aria-label={`Whose ${vocab.stationNoun}`}
           className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
         >
-          <option value="">Whose chair…</option>
+          <option value="">Whose {vocab.stationNoun}…</option>
           {active.map((s) => (
             <option key={s.id} value={s.id}>
               {s.name}
@@ -1236,6 +1239,7 @@ function DayPlanner({
    *  heading and the divider that separated it from the month grid. */
   standalone?: boolean;
 }) {
+  const vocab = useVocab();
   // ---- Day gauge: how full is this day, and in what? ----
   // null = "All". Reset per day: `key={selectedDay}` on the wrapper remounts
   // this component when the barber taps a different day, so a filter never
@@ -1578,10 +1582,12 @@ function DayPlanner({
 
 // Preset "come early" nudge messages (the pilot barber's own words). Custom
 // text is capped at 140 chars to match the server's zod limit.
-const NUDGE_PRESETS = [
+// A function of the shop's words rather than a module constant: one preset names
+// the workspace, and a module-level constant has no vocabulary to read.
+const nudgePresets = (v: BusinessVocabulary): string[] => [
   "I'm running 15 min ahead — come early if you can",
   "Running about 20 min behind, no rush",
-  "Chair's open, pull up whenever",
+  `${cap(v.stationNoun)}'s open, pull up whenever`,
 ];
 const NUDGE_MAX_LEN = 140;
 
@@ -1714,6 +1720,7 @@ function AppointmentBlock({
   toast: Toast;
   onChanged: () => void;
 }) {
+  const vocab = useVocab();
   const [pending, start] = useTransition();
   const [seriesMenu, setSeriesMenu] = useState(false);
   const [nudgeMenu, setNudgeMenu] = useState(false);
@@ -2172,7 +2179,7 @@ function AppointmentBlock({
               </button>
               {nudgeMenu && (
                 <div className="absolute left-0 z-20 mt-1 w-64 overflow-hidden rounded-lg border border-subtle bg-charcoal-900 p-1 shadow-lg">
-                  {NUDGE_PRESETS.map((preset) => (
+                  {nudgePresets(vocab).map((preset) => (
                     <button
                       key={preset}
                       onClick={() => sendNudge(preset)}

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { getVocabulary } from "@/lib/vocab";
 import { resolveHref, type SeatRole } from "@chairback/config/features";
 import { getMe } from "@/lib/me";
 import { featureLocks, getBillingSummary } from "@/lib/billing";
@@ -38,6 +39,7 @@ import {
  * silently.
  */
 export default async function AssistantPage() {
+  const vocab = await getVocabulary();
   const me = await getMe();
   const role: SeatRole = (me.data?.shopRole ?? "OWNER") as SeatRole;
   const rewardsEnabled = me.data?.rewardsEnabled ?? true;
@@ -49,7 +51,7 @@ export default async function AssistantPage() {
   // getConnections resolves to null and only the panel degrades - readiness,
   // help and navigation are untouched.
   const [readiness, connections] = await Promise.all([getReadiness(), getConnections()]);
-  const step = nextStep(readiness);
+  const step = nextStep(readiness, vocab.stationNoun);
   // Continue-setup already leads with the next item, so it is dropped from the
   // problem list rather than printed twice.
   const current = problems(readiness, step?.item.id);
@@ -73,7 +75,7 @@ export default async function AssistantPage() {
         <ConnectionPanel
           data={connections}
           shopName={shopName}
-          roleLabel={roleLabel(role)}
+          roleLabel={roleLabel(role, vocab.stationNoun)}
         />
 
       </header>
@@ -132,8 +134,8 @@ export default async function AssistantPage() {
   );
 }
 
-function roleLabel(role: SeatRole): string {
-  return role === "BARBER" ? "your chair" : role === "MANAGER" ? "manager" : "owner";
+function roleLabel(role: SeatRole, stationNoun: string): string {
+  return role === "BARBER" ? `your ${stationNoun}` : role === "MANAGER" ? "manager" : "owner";
 }
 
 /**
