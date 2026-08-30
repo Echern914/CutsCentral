@@ -30,6 +30,41 @@ const EVENT_STATUS: Record<string, { status: string; failureClass?: string }> = 
 const TERMINAL = new Set(["bounced", "complained", "failed"]);
 
 /**
+ * 🔴 MONOTONIC PRECEDENCE. Provider events arrive out of order routinely -
+ * svix retries, and two deliveries for one message can be in flight at the
+ * same time - so "latest event wins" reports whichever one happened to land
+ * last, not what happened to the mail.
+ *
+ * A record only ever moves FORWARD along this ranking:
+ *
+ *   sent (0) -> deferred (1) -> delivered (2) -> terminal failure (3)
+ *
+ *   - a late `sent` or `delivery_delayed` cannot downgrade a delivered message
+ *   - a late `delivered` cannot bury a bounce or a complaint
+ *   - equal rank changes nothing, so the FIRST terminal outcome is the one
+ *     kept and a second one only counts
+ *
+ * Every event is still counted, whether or not it is obeyed: "seen, counted,
+ * not obeyed" is a different thing from "lost".
+ */
+const RANK: Record<string, number> = {
+  sent: 0,
+  deferred: 1,
+  delivered: 2,
+  bounced: 3,
+  complained: 3,
+  failed: 3,
+};
+
+/**
+ * The status a row is created with when an EVENT arrives before our own
+ * dispatch write. It must be the LOWEST rank, so that the event which caused
+ * the creation is then applied by the ordinary transition rules rather than by
+ * a second, subtly different code path.
+ */
+const BASELINE_STATUS = "sent";
+
+/**
  * Record a dispatch. Fire-and-forget by design: this runs after the message
  * has already left, so a ledger problem must never surface as a send failure.
  */
@@ -62,7 +97,57 @@ export function recordEmailSent(messageId: string, input: SendEmailInput): void 
   })().catch(() => {});
 }
 
-export type ApplyOutcome = "applied" | "ignored" | "duplicate" | "created";
+export type ApplyOutcome =
+  | "applied"
+  | "ignored"
+  | "duplicate"
+  | "created"
+  /** Nothing was committed. The caller must NOT acknowledge the delivery. */
+  | "error";
+
+/**
+ * The ONE transition rule, shared by every path. Returns the patch to apply,
+ * or null when the incoming event does not advance the record - in which case
+ * it is still counted, just not obeyed.
+ */
+function transitionFor(
+  current: string,
+  incoming: { status: string; failureClass?: string },
+  now: Date,
+): {
+  status: string;
+  failureClass: string | null;
+  deliveredAt?: Date;
+  failedAt?: Date;
+} | null {
+  if ((RANK[incoming.status] ?? 0) <= (RANK[current] ?? 0)) return null;
+  return {
+    status: incoming.status,
+    // A NON-terminal failure class (a deferral) is stale once delivery
+    // actually succeeds - leaving it would report a delivered message as
+    // troubled forever.
+    failureClass: incoming.failureClass ?? null,
+    ...(incoming.status === "delivered" ? { deliveredAt: now } : {}),
+    ...(TERMINAL.has(incoming.status) ? { failedAt: now } : {}),
+  };
+}
+
+/**
+ * Read the row's current state under a ROW LOCK, so a concurrent event cannot
+ * read the same "before" value and overwrite our transition. Two events for
+ * one message serialise here instead of racing.
+ */
+async function lockDelivery(
+  tx: Prisma.TransactionClient,
+  messageId: string,
+): Promise<{ id: string; status: string } | null> {
+  const rows = await tx.$queryRaw<{ id: string; status: string }[]>(
+    Prisma.sql`SELECT "id", "status" FROM "EmailDelivery"
+                WHERE "messageId" = ${messageId}
+                  FOR UPDATE`,
+  );
+  return rows[0] ?? null;
+}
 
 /**
  * Apply one provider event INSIDE a caller-supplied transaction.
@@ -85,88 +170,63 @@ export async function applyEventInTx(
   if (!mapped) return "ignored";
   const now = params.now ?? new Date();
 
-  // The replay guard. The unique index makes "have I already applied this
-  // exact delivery" race-free rather than hopeful.
+  // 1. THE REPLAY GUARD, without throwing.
+  //
+  // 🔴 A P2002 CAUGHT IN JAVASCRIPT DOES NOT UNDO IT IN POSTGRES: the unique
+  // violation aborts the surrounding transaction, so every later statement
+  // fails with 25P02 and the "duplicate" answer was only correct because
+  // nothing was attempted after it. Insert with ON CONFLICT DO NOTHING
+  // (skipDuplicates) instead - zero rows IS the duplicate signal, and the
+  // transaction stays usable.
   if (params.svixId) {
-    try {
-      await tx.emailWebhookEvent.create({
-        data: {
-          svixId: params.svixId,
-          event: params.event,
-          messageId: params.messageId,
-        },
-      });
-    } catch (err) {
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-        return "duplicate"; // seen before - change nothing at all
-      }
-      throw err;
-    }
+    const marker = await tx.emailWebhookEvent.createMany({
+      data: [
+        { svixId: params.svixId, event: params.event, messageId: params.messageId },
+      ],
+      skipDuplicates: true,
+    });
+    if (marker.count === 0) return "duplicate"; // seen before - change nothing
   }
 
-  const row = await tx.emailDelivery.findUnique({
-    where: { messageId: params.messageId },
-    select: { id: true, status: true },
-  });
-
+  // 2. ENSURE THE ROW EXISTS, THEN LOCK IT.
+  //
   // 🔴 AN EVENT MAY ARRIVE BEFORE THE SENDER'S OWN WRITE, and a verified event
   // is evidence we must not discard: dropping it was how a bounce could vanish
-  // because the provider was faster than our metadata write. Upsert rather
-  // than create, so two concurrent first events for one unknown message both
-  // land instead of one dying on the unique index.
+  // because the provider was faster than our metadata write.
+  //
+  // The create is also conflict-tolerant, so two concurrent FIRST events for
+  // one unknown message do not race the unique index. The loser blocks on the
+  // winner's insert, then locks the committed row and applies its own event on
+  // top - which is why there is no longer a reduced "lost the create race"
+  // branch that quietly dropped non-terminal transitions.
+  let row = await lockDelivery(tx, params.messageId);
+  let created = false;
   if (!row) {
-    await tx.emailDelivery.upsert({
-      where: { messageId: params.messageId },
-      create: {
-        messageId: params.messageId,
-        kind: "unknown",
-        status: mapped.status,
-        failureClass: mapped.failureClass ?? null,
-        eventCount: 1,
-        awaitingDispatchMeta: true,
-        ...(mapped.status === "delivered" ? { deliveredAt: now } : {}),
-        ...(TERMINAL.has(mapped.status) ? { failedAt: now } : {}),
-      },
-      // Lost the race to create: fall through to the same precedence rules.
-      update: {
-        eventCount: { increment: 1 },
-        ...(TERMINAL.has(mapped.status)
-          ? {
-              status: mapped.status,
-              failureClass: mapped.failureClass ?? null,
-              failedAt: now,
-            }
-          : {}),
-      },
+    const insert = await tx.emailDelivery.createMany({
+      data: [
+        {
+          messageId: params.messageId,
+          kind: "unknown",
+          status: BASELINE_STATUS,
+          eventCount: 0,
+          awaitingDispatchMeta: true,
+        },
+      ],
+      skipDuplicates: true,
     });
-    return "created";
+    created = insert.count > 0;
+    row = await lockDelivery(tx, params.messageId);
   }
+  if (!row) throw new Error("email_delivery_row_unavailable");
 
-  if (TERMINAL.has(row.status) && !TERMINAL.has(mapped.status)) {
-    // Late "delivered" after a bounce: count it, keep the bad news. Terminal
-    // precedence is deliberate - a message that bounced did not arrive,
-    // whatever a later out-of-order event claims.
-    await tx.emailDelivery.update({
-      where: { id: row.id },
-      data: { eventCount: { increment: 1 } },
-    });
-    return "ignored";
-  }
-
+  // 3. ONE SHARED TRANSITION, whoever created the row and in whatever order
+  // the events arrived. Counted exactly once per accepted svix delivery.
+  const patch = transitionFor(row.status, mapped, now);
   await tx.emailDelivery.update({
     where: { id: row.id },
-    data: {
-      status: mapped.status,
-      // A NON-terminal failure class (a deferral) is stale once delivery
-      // actually succeeds - leaving it would report a delivered message as
-      // troubled forever. Terminal classes never reach here.
-      failureClass: mapped.failureClass ?? null,
-      ...(mapped.status === "delivered" ? { deliveredAt: now } : {}),
-      ...(TERMINAL.has(mapped.status) ? { failedAt: now } : {}),
-      eventCount: { increment: 1 },
-    },
+    data: { ...(patch ?? {}), eventCount: { increment: 1 } },
   });
-  return "applied";
+  return created ? "created" : patch ? "applied" : "ignored";
 }
 
 /**
@@ -184,12 +244,14 @@ export async function applyEmailEvent(params: {
     return await runAsOwner((tx) => applyEventInTx(tx, params));
   } catch {
     // 🔴 Fixed classification only - a provider payload can carry the
-    // recipient address and the whole rendered body. Nothing was committed.
+    // recipient address and the whole rendered body. Nothing was committed,
+    // marker included, so the caller must NOT acknowledge this delivery: a 200
+    // here would retire the provider's only retry for an event we dropped.
     logger.error(
       { event: params.event, reason: "email_event_apply_failed" },
       "email delivery event could not be applied",
     );
-    return "ignored";
+    return "error";
   }
 }
 

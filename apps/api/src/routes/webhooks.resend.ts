@@ -117,7 +117,14 @@ resendWebhookRouter.post("/", express.raw({ type: "*/*" }), async (req, res) => 
   // Event name and outcome only - never the payload, which carries the
   // recipient address and the rendered subject.
   logger.info({ event, outcome }, "resend delivery event");
-  // Always 200 on a verified event: a 5xx makes Resend retry, and applying an
-  // event is idempotent, so a retry buys nothing but noise.
+  // 🔴 ONLY ACK WHAT WE ACTUALLY RECORDED. An apply failure commits nothing -
+  // marker included - so answering 200 would spend the provider's only retry
+  // on an event we dropped, which is precisely how a bounce goes missing.
+  // Everything else is a 200: applying is idempotent, so a retry of a
+  // successful delivery buys nothing but noise.
+  if (outcome === "error") {
+    res.status(500).json({ ok: false });
+    return;
+  }
   res.json({ ok: true });
 });

@@ -1,7 +1,7 @@
 import request from "supertest";
 import { createHmac } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { prisma } from "@chairback/db";
+import { Prisma, prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
 import { verifySvixSignature } from "./webhooks.resend.js";
@@ -189,7 +189,17 @@ describe("applying events", () => {
     expect(res.status).toBe(200);
     // A verified event is evidence; creating the row is what stops a bounce
     // disappearing because the provider beat our own metadata write.
-    expect(await applyEmailEvent({ messageId: id, event: "email.delivered" })).toBe("applied");
+    const row = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
+    expect(row).not.toBeNull();
+    expect(row!.status).toBe("delivered");
+    expect(row!.awaitingDispatchMeta).toBe(true);
+    // A second, identical event advances nothing - but is still counted.
+    expect(await applyEmailEvent({ messageId: id, event: "email.delivered" })).toBe(
+      "ignored",
+    );
+    expect(
+      (await prisma.emailDelivery.findUnique({ where: { messageId: id } }))!.eventCount,
+    ).toBe(2);
   });
 
   it("ignores an event type outside the vocabulary", async () => {
@@ -437,13 +447,14 @@ describe("the replay marker and the state change are ONE transaction", () => {
     const a = `svix_${randomToken(8)}`;
     const b = `svix_${randomToken(8)}`;
 
-    // Both race to create the delivery row; the upsert means the loser folds
-    // into the winner instead of dying on the unique index.
+    // Both race to create the delivery row; the loser blocks on the winner's
+    // insert and then applies its own event on top, instead of dying on the
+    // unique index or falling into a reduced update branch.
     const [ra, rb] = await Promise.all([
       applyEmailEvent({ messageId: id, event: "email.delivered", svixId: a }),
       applyEmailEvent({ messageId: id, event: "email.bounced", svixId: b }),
     ]);
-    expect([ra, rb].every((r) => r === "created" || r === "applied")).toBe(true);
+    expect([ra, rb].every((r) => r !== "error" && r !== "duplicate")).toBe(true);
 
     // Both deliveries are on record...
     expect(await prisma.emailWebhookEvent.count({ where: { svixId: { in: [a, b] } } })).toBe(2);
@@ -451,6 +462,34 @@ describe("the replay marker and the state change are ONE transaction", () => {
     expect(row).not.toBeNull();
     // ...and the bounce wins regardless of which order they landed in.
     expect(row!.status).toBe("bounced");
+    expect(row!.eventCount).toBe(2);
+  });
+
+  it("🔴 a replayed svix id changes nothing WITHOUT aborting the transaction", async () => {
+    const id = `em_${randomToken(8)}`;
+    emails.push(id);
+    await seed(id);
+    const svixId = `svix_${randomToken(8)}`;
+    expect(await applyEmailEvent({ messageId: id, event: "email.delivered", svixId })).toBe(
+      "applied",
+    );
+    const first = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
+
+    await runAsOwner(async (tx) => {
+      expect(
+        await applyEventInTx(tx, { messageId: id, event: "email.delivered", svixId }),
+      ).toBe("duplicate");
+      // 🔴 THE POINT. Catching a P2002 in JavaScript does not un-abort the
+      // POSTGRES transaction: with the old `create` + catch, this next
+      // statement failed with 25P02 and the "duplicate" answer was only ever
+      // correct because nothing was attempted after it.
+      const rows = await tx.$queryRaw<{ ok: number }[]>(Prisma.sql`SELECT 1 AS ok`);
+      expect(rows[0]!.ok).toBe(1);
+    });
+
+    const after = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
+    expect(after!.eventCount).toBe(first!.eventCount);
+    expect(after!.status).toBe(first!.status);
   });
 
   it("a metadata write racing a webhook cannot walk the status backward", async () => {
@@ -468,5 +507,153 @@ describe("the replay marker and the state change are ONE transaction", () => {
     const row = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
     expect(row!.status).toBe("bounced"); // not "sent"
     expect(row!.kind).toBe("confirmation"); // metadata still attached
+  });
+});
+
+/**
+ * 🔴 A record only ever moves FORWARD: sent → deferred → delivered → terminal.
+ *
+ * Provider events arrive out of order as a matter of course, so "latest event
+ * wins" reports whichever one happened to land last rather than what happened
+ * to the mail. The concurrency case is the one that hid the defect: two FIRST
+ * events for an unknown message used to take a reduced update branch that
+ * counted the second event but applied it only if it was terminal - so
+ * `sent` + `delivered` left a delivered message reading "sent".
+ */
+describe("status transitions are monotonic", () => {
+  const apply = (messageId: string, event: string) =>
+    applyEmailEvent({ messageId, event, svixId: `svix_${randomToken(8)}` });
+
+  /**
+   * FORCE the interleaving rather than hope for it.
+   *
+   * `Promise.all` of two applies is not a race - the pool serialises them often
+   * enough that the defect hides. Here the first event is applied inside a
+   * transaction that is deliberately HELD OPEN while the second one runs, so
+   * the second genuinely finds no row, blocks on the first's uncommitted
+   * insert, and only then proceeds. That is the exact interleaving in which the
+   * old "lost the create race" branch counted an event without applying it.
+   */
+  async function forcedFirstEventRace(
+    messageId: string,
+    firstEvent: string,
+    secondEvent: string,
+  ): Promise<void> {
+    let allowCommit!: () => void;
+    const mayCommit = new Promise<void>((r) => (allowCommit = r));
+    let announceApplied!: () => void;
+    const applied = new Promise<void>((r) => (announceApplied = r));
+
+    const first = runAsOwner(async (tx) => {
+      await applyEventInTx(tx, {
+        messageId,
+        event: firstEvent,
+        svixId: `svix_${randomToken(8)}`,
+      });
+      announceApplied();
+      await mayCommit; // hold the row uncommitted while the second one starts
+    });
+
+    await applied;
+    const second = apply(messageId, secondEvent);
+    // Long enough for the second transaction to reach the insert and block.
+    await new Promise((r) => setTimeout(r, 200));
+    allowCommit();
+    await Promise.all([first, second]);
+  }
+
+  it("🔴 forced concurrent first events 'sent' and 'delivered' settle on DELIVERED", async () => {
+    const id = `em_${randomToken(8)}`;
+    emails.push(id);
+    // NEITHER IS TERMINAL, which is exactly why the old special-cased update
+    // branch counted the delivered event and then dropped its transition: the
+    // message read "sent" forever despite having been delivered.
+    await forcedFirstEventRace(id, "email.sent", "email.delivered");
+    const row = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
+    expect(row!.status).toBe("delivered");
+    expect(row!.deliveredAt).not.toBeNull();
+    expect(row!.eventCount).toBe(2); // counted once each
+  });
+
+  it("forced concurrent 'delivery_delayed' and 'delivered' settle on DELIVERED either way", async () => {
+    for (const [a, b] of [
+      ["email.delivery_delayed", "email.delivered"],
+      ["email.delivered", "email.delivery_delayed"],
+    ] as const) {
+      const id = `em_${randomToken(8)}`;
+      emails.push(id);
+      await forcedFirstEventRace(id, a, b);
+      const row = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
+      expect(row!.status).toBe("delivered");
+      expect(row!.failureClass).toBeNull(); // the deferral is stale once it lands
+      expect(row!.eventCount).toBe(2);
+    }
+  });
+
+  it("forced concurrent 'delivered' and 'bounced' keep the BOUNCE either way", async () => {
+    for (const [a, b] of [
+      ["email.delivered", "email.bounced"],
+      ["email.bounced", "email.delivered"],
+    ] as const) {
+      const id = `em_${randomToken(8)}`;
+      emails.push(id);
+      await forcedFirstEventRace(id, a, b);
+      const row = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
+      expect(row!.status).toBe("bounced");
+      expect(row!.failureClass).toBe("hard_bounce");
+      expect(row!.eventCount).toBe(2);
+    }
+  });
+
+  it("a late 'sent' or 'deferred' cannot downgrade a DELIVERED message", async () => {
+    const id = `em_${randomToken(8)}`;
+    emails.push(id);
+    await seed(id);
+    await apply(id, "email.delivered");
+    const deliveredAt = (await prisma.emailDelivery.findUnique({
+      where: { messageId: id },
+    }))!.deliveredAt;
+
+    await apply(id, "email.sent");
+    await apply(id, "email.delivery_delayed");
+
+    const row = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
+    expect(row!.status).toBe("delivered");
+    expect(row!.failureClass).toBeNull(); // no phantom deferral after delivery
+    expect(row!.deliveredAt?.getTime()).toBe(deliveredAt?.getTime());
+    expect(row!.eventCount).toBe(3); // all three seen and counted
+  });
+
+  it("a second terminal event does not overwrite the first", async () => {
+    const id = `em_${randomToken(8)}`;
+    emails.push(id);
+    await seed(id);
+    await apply(id, "email.bounced");
+    await apply(id, "email.complained");
+    const row = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
+    expect(row!.status).toBe("bounced"); // the first terminal outcome stands
+    expect(row!.failureClass).toBe("hard_bounce");
+    expect(row!.eventCount).toBe(2);
+  });
+
+  it("🔴 a delivery it could not record is NOT acknowledged, so the provider retries", async () => {
+    // A message id no btree index can hold, so the write genuinely fails.
+    // Nothing commits - marker included - and answering 200 would spend the
+    // provider's only retry on an event we dropped, which is precisely how a
+    // bounce goes missing.
+    // Random, so btree cannot compress it under the index-tuple limit.
+    const unstorable = `em_${Array.from({ length: 300 }, () => randomToken(16)).join("")}`;
+    expect(
+      await applyEmailEvent({
+        messageId: unstorable,
+        event: "email.bounced",
+        svixId: `svix_${randomToken(8)}`,
+      }),
+    ).toBe("error");
+    expect(await prisma.emailDelivery.count({ where: { messageId: unstorable } })).toBe(0);
+
+    // And the receiver says so, rather than acking a delivery it lost.
+    const res = await post({ type: "email.bounced", data: { email_id: unstorable } });
+    expect(res.status).toBe(500);
   });
 });

@@ -22,6 +22,22 @@ import { recordEmailSent } from "../services/emailDelivery.js";
 const RESEND_ENDPOINT = "https://api.resend.com/emails";
 
 /**
+ * 🔴 BOUNDED, AND DELIBERATELY FAR SHORTER THAN THE OUTBOX CLAIM TTL (5 min).
+ *
+ * An unbounded fetch can outlive its own claim: the row becomes claimable
+ * again, a second worker picks it up, and now two requests for the same
+ * message are in flight - the one case the provider's Idempotency-Key may not
+ * save us from, because a hung connection can still be accepted after the
+ * duplicate has gone. Twenty seconds is generous for a JSON POST and leaves an
+ * order of magnitude of headroom before the claim ages out.
+ *
+ * A timeout aborts with a DOMException rather than a ResendSendError, so it is
+ * classified as AMBIGUOUS - which is correct: a request we stopped waiting for
+ * may well have been accepted.
+ */
+export const RESEND_TIMEOUT_MS = 20_000;
+
+/**
  * WHICH MAILSTREAM a message belongs to. Deliberately explicit at every call
  * site rather than inferred, because the two carry different obligations:
  *
@@ -208,6 +224,7 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
 
   const res = await fetch(RESEND_ENDPOINT, {
     method: "POST",
+    signal: AbortSignal.timeout(RESEND_TIMEOUT_MS),
     headers: {
       Authorization: `Bearer ${env.RESEND_API_KEY}`,
       "Content-Type": "application/json",

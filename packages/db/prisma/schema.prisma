@@ -3354,10 +3354,14 @@ model EmailIntent {
   shopId        String
   appointmentId String?
 
-  // PENDING -> SENT | FAILED | ABANDONED. ABANDONED = past the provider's
-  // idempotency window with an ambiguous outcome, where a blind retry risks a
-  // duplicate; deliberately terminal and visible rather than retried forever.
   // PENDING -> SENT | FAILED | ABANDONED | SUPERSEDED | SUPPRESSED.
+  //   FAILED - the provider DEFINITIVELY refused it, so nothing was accepted.
+  //   ABANDONED - we STOPPED WITHOUT KNOWING: the last attempt was ambiguous
+  //     and either the provider's idempotency window has closed or the attempt
+  //     budget is spent, so another try could deliver a second copy. Terminal
+  //     and visible rather than retried forever, and never conflated with
+  //     FAILED - "it was refused" and "it may have arrived" are different
+  //     facts and the ledger must not claim the stronger one.
   //   SUPERSEDED - the appointment was restored, or canceled again on a newer
   //     revision; this intent describes a cancellation that no longer stands.
   //   SUPPRESSED - email was unconfigured or DRY_RUN when the worker reached
@@ -3379,11 +3383,24 @@ model EmailIntent {
   // window runs from that moment, not from when the row was created - an
   // intent can sit unconfigured for days without its safety window expiring.
   firstProviderAttemptAt DateTime?
+  // 🔴 WAS THE LAST REAL ATTEMPT AMBIGUOUS? This is what makes the expiry
+  // check possible BEFORE dispatching rather than after. An ambiguous attempt
+  // (transport died, or a 2xx with no message id) may already have been
+  // accepted, so once the provider's key window closes a retry can deliver a
+  // SECOND copy - and asking that question only after calling Resend again is
+  // asking it too late. A DEFINITIVE rejection clears the flag: Resend refused
+  // it, so retrying is safe however long has passed.
+  lastAttemptAmbiguous Boolean @default(false)
   // Bounded backoff, so a 429 or a 5xx is not retried once a minute forever.
   nextAttemptAt DateTime?
   // Held while a worker is working this row, so a second replica skips it and
   // a dead worker's row becomes claimable again once the claim ages out.
   claimedAt DateTime?
+  // The identity of the CURRENT claim. Every attempt reservation is a
+  // compare-and-set on this value, so a worker whose claim aged out and was
+  // taken by somebody else cannot wake up and spend another provider attempt
+  // on a row it no longer holds.
+  claimToken String?
   lastError String? // fixed classification only - never provider prose
   sentAt    DateTime?
   // Provider message id once accepted; joins to EmailDelivery.

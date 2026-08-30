@@ -4,10 +4,11 @@ import { prisma } from "@chairback/db";
 import { __setSendEmailForTests, type SendEmailInput } from "../messaging/email.js";
 import {
   cancellationIdempotencyKey,
+  deliverCancellationIntent,
   MAX_ATTEMPTS,
   PROVIDER_IDEMPOTENCY_WINDOW_MS,
 } from "./appointmentCanceledNotify.js";
-import { ResendSendError } from "../messaging/email.js";
+import { RESEND_TIMEOUT_MS, ResendSendError } from "../messaging/email.js";
 import { runEmailOutbox, CLAIM_TTL_MS } from "../engines/emailOutbox.js";
 import { cancelAppointment } from "../engines/appointmentPromotion.js";
 
@@ -514,19 +515,26 @@ describe("provider attempt accounting", () => {
     expect(intent!.attempts).toBe(MAX_ATTEMPTS);
   });
 
-  it("a DEFINITIVE rejection never ages into ABANDONED", async () => {
+  it("a DEFINITIVE rejection never ages into ABANDONED, and still retries past 24h", async () => {
     const id = await makeAppointment({ status: "BOOKED" });
     await cancelAppointment(shopId, id, "CANCELED", NOON);
+    let calls = 0;
     __setSendEmailForTests(async () => {
+      calls++;
       throw new ResendSendError(422); // Resend looked at it and said no
     });
     const first = new Date();
     await drain(first);
+    expect((await intentsFor(id))[0]!.lastAttemptAmbiguous).toBe(false);
+
     // Well past the idempotency window: still not "maybe delivered", because
-    // it was definitively refused.
+    // it was definitively refused - so the retry is safe and MUST still happen.
+    // This is the case the pre-dispatch expiry guard must NOT catch.
     await drain(new Date(first.getTime() + PROVIDER_IDEMPOTENCY_WINDOW_MS + 60_000));
+    expect(calls).toBe(2);
     const [intent] = await intentsFor(id);
     expect(intent!.status).not.toBe("ABANDONED");
+    expect(intent!.status).toBe("PENDING");
   });
 
   it("enforces backoff between attempts, without sleeping", async () => {
@@ -647,5 +655,182 @@ describe("confirmed acceptance", () => {
     expect(delivery!.kind).toBe("cancellation");
     expect(delivery!.appointmentId).toBe(id);
     await prisma.emailDelivery.deleteMany({ where: { appointmentId: id } });
+  });
+});
+
+/**
+ * 🔴 The window has to be checked BEFORE the request, not after it.
+ *
+ * Resend collapses repeats of an Idempotency-Key for 24 hours FROM THE FIRST
+ * REQUEST. Past that the key is meaningless, so a fresh request is a fresh
+ * email - and if the ambiguous first attempt had in fact been accepted, the
+ * customer gets the same cancellation twice. Asking the question inside the
+ * ambiguous handler asked it one HTTP call too late.
+ */
+describe("the expired-ambiguous guard runs BEFORE dispatch", () => {
+  it("🔴 an expired ambiguous intent makes ZERO further provider calls and is ABANDONED", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+
+    let calls = 0;
+    __setSendEmailForTests(async () => {
+      calls++;
+      // Ambiguous, not definitive: the connection died, so this may already
+      // have been accepted by Resend.
+      throw new Error("socket hang up");
+    });
+    const first = new Date();
+    await drain(first);
+    expect(calls).toBe(1);
+    let intent = (await intentsFor(id))[0]!;
+    expect(intent.status).toBe("PENDING");
+    expect(intent.lastAttemptAmbiguous).toBe(true);
+
+    // A day later, with a sender that WOULD succeed. If the guard ran after
+    // the request instead of before it, this is where the duplicate is sent.
+    __setSendEmailForTests(async (input) => {
+      calls++;
+      emails.push(input);
+      return { id: `em${emails.length}`, status: "sent" };
+    });
+    await drain(new Date(first.getTime() + PROVIDER_IDEMPOTENCY_WINDOW_MS + 60_000));
+
+    expect(calls).toBe(1); // 🔴 the whole point - not one more request
+    expect(emails).toHaveLength(0);
+    intent = (await intentsFor(id))[0]!;
+    expect(intent.status).toBe("ABANDONED");
+    expect(intent.lastError).toBe("idempotency_window_expired");
+    // A refusal to dispatch is not an attempt.
+    expect(intent.attempts).toBe(1);
+    expect((await prisma.appointment.findUnique({ where: { id } }))!
+      .cancellationEmailSentAt).toBeNull();
+  });
+
+  it("an ambiguous retry INSIDE the window reuses the same key and may succeed", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    __setSendEmailForTests(async () => {
+      throw new Error("socket hang up");
+    });
+    const first = new Date();
+    await drain(first);
+
+    __setSendEmailForTests(async (input) => {
+      emails.push(input);
+      return { id: `em${emails.length}`, status: "sent" };
+    });
+    // Six minutes later: past the backoff, nowhere near the 24h window, so the
+    // provider still collapses a repeat of this key. Retrying is SAFE here and
+    // the guard must not interfere.
+    await drain(new Date(first.getTime() + 6 * 60_000));
+    expect(emails).toHaveLength(1);
+    expect(emails[0]!.idempotencyKey).toBe(cancellationIdempotencyKey(id, 1));
+    const [intent] = await intentsFor(id);
+    expect(intent!.status).toBe("SENT");
+    // Confirmed acceptance clears the marker - the next attempt, if there
+    // somehow were one, is no longer working around an unknown.
+    expect(intent!.lastAttemptAmbiguous).toBe(false);
+  });
+
+  it("an ambiguous attempt that runs out of budget is ABANDONED, never FAILED", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    let calls = 0;
+    __setSendEmailForTests(async () => {
+      calls++;
+      throw new Error("socket hang up");
+    });
+    // Two hours per step keeps every pass INSIDE the 24h window, so this is
+    // the budget running out rather than the window closing.
+    let t = Date.now();
+    for (let i = 0; i < MAX_ATTEMPTS + 3; i++) {
+      t += 2 * 60 * 60 * 1000;
+      await drain(new Date(t));
+    }
+    expect(calls).toBe(MAX_ATTEMPTS);
+    const [intent] = await intentsFor(id);
+    // We stopped WITHOUT KNOWING. Recording FAILED would claim the provider
+    // refused it, which nothing here supports.
+    expect(intent!.status).toBe("ABANDONED");
+    expect(intent!.attempts).toBe(MAX_ATTEMPTS);
+  });
+});
+
+describe("attempt reservation is atomic and claim-bound", () => {
+  it("🔴 a worker whose claim was replaced cannot spend another attempt", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    const [intent] = await intentsFor(id);
+    // The row is claimed - by somebody else, as far as our stale worker knows.
+    await prisma.emailIntent.update({
+      where: { id: intent!.id },
+      data: { claimedAt: new Date(), claimToken: "claim-A" },
+    });
+
+    let calls = 0;
+    __setSendEmailForTests(async (input) => {
+      calls++;
+      emails.push(input);
+      return { id: `em${emails.length}`, status: "sent" };
+    });
+
+    // A worker that stalled past the TTL and had its row taken over: its token
+    // is no longer the one on disk, so it must not dispatch at all.
+    expect(
+      await deliverCancellationIntent({
+        intentId: intent!.id,
+        claimToken: "claim-B",
+        now: new Date(),
+      }),
+    ).toBe("stale_claim");
+    expect(calls).toBe(0);
+    expect((await intentsFor(id))[0]!.attempts).toBe(0);
+
+    // The holder of the CURRENT claim proceeds normally.
+    expect(
+      await deliverCancellationIntent({
+        intentId: intent!.id,
+        claimToken: "claim-A",
+        now: new Date(),
+      }),
+    ).toBe("sent");
+    expect(calls).toBe(1);
+  });
+
+  it("concurrent workers lose no increment and cannot exceed MAX_ATTEMPTS", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    const [intent] = await intentsFor(id);
+    await prisma.emailIntent.update({
+      where: { id: intent!.id },
+      data: { claimedAt: new Date(), claimToken: "claim-A" },
+    });
+
+    let calls = 0;
+    __setSendEmailForTests(async () => {
+      calls++;
+      throw new ResendSendError(500);
+    });
+
+    // Eight racers on one claim. Deriving the attempt number from a value read
+    // moments earlier would let two of them both write "3" - a lost increment,
+    // and a provider call the budget never accounted for.
+    const now = new Date();
+    await Promise.all(
+      Array.from({ length: 8 }, () =>
+        deliverCancellationIntent({ intentId: intent!.id, claimToken: "claim-A", now }),
+      ),
+    );
+
+    expect(calls).toBe(MAX_ATTEMPTS);
+    const [after] = await intentsFor(id);
+    expect(after!.attempts).toBe(MAX_ATTEMPTS); // every dispatch got its own number
+    expect(after!.status).toBe("FAILED"); // definitive rejections, so not ABANDONED
+  });
+
+  it("the provider request is bounded well inside the claim TTL", () => {
+    // An unbounded fetch can outlive its own claim: the row becomes claimable,
+    // a second worker takes it, and two requests for one message are in flight.
+    expect(RESEND_TIMEOUT_MS).toBeLessThan(CLAIM_TTL_MS / 2);
   });
 });
