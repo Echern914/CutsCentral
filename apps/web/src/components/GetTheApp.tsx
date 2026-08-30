@@ -57,7 +57,7 @@ const COPY: Record<AppBannerSurface, { headline: string; body: string }> = {
   },
   line: {
     headline: "Watch your place in line",
-    body: "Get a push the moment your barber is ready, instead of watching this page.",
+    body: "Get a push the moment they're ready, instead of watching this page.",
   },
 };
 

@@ -256,8 +256,10 @@ function NudgeBanner({
 
   return (
     <div className="rounded-xl border border-gold/30 bg-gold/10 p-3">
+      {/* Public page, outside any vocabulary provider - "your shop" is true for
+          every vertical without plumbing a payload field in for two words. */}
       <p className="text-xs uppercase tracking-wide text-gold/80">
-        From your barber
+        From your shop
       </p>
       <p className="mt-1 text-sm text-offwhite">{nudge.body ?? "Come early if you can"}</p>
       {answer === "on_my_way" ? (

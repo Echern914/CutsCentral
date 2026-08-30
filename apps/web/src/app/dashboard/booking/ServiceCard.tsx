@@ -1,6 +1,11 @@
 "use client";
 
 import type { ReactNode } from "react";
+import {
+  NEUTRAL_VOCABULARY,
+  type BusinessVocabulary,
+} from "@chairback/config/businessTypes";
+import { useVocab } from "@/components/VocabProvider";
 import { cn } from "@/lib/cn";
 import { formatPrice } from "@/lib/serviceFields";
 
@@ -59,6 +64,12 @@ export function serviceSummary(input: {
   timeOverrides?: unknown[] | null;
   offeredByAll: boolean;
   staffNames: string[];
+  /**
+   * The shop's words. Passed IN rather than read from a hook so this stays a
+   * pure, separately-testable function; omitted means NEUTRAL, which is generic
+   * rather than barbershop.
+   */
+  vocab?: BusinessVocabulary;
   /** hoursWindowsSummary() output, or null when the service is on regular hours. */
   customHours: string | null;
 }): ServiceSummary {
@@ -75,18 +86,22 @@ export function serviceSummary(input: {
     // it is unpriced, and the booking page shows it without a number.
     price: input.price === null ? "No price set" : formatPrice(input.price),
     varies: priceVaries || durationVaries ? "varies by day" : null,
-    barbers: barberLabel(input.offeredByAll, input.staffNames),
+    barbers: barberLabel(input.offeredByAll, input.staffNames, input.vocab ?? NEUTRAL_VOCABULARY),
     availability: input.customHours ?? "Regular hours",
   };
 }
 
 /**
- * Who does it. Two names then a count - a shop with eight barbers should not
+ * Who does it. Two names then a count - a shop with eight providers should not
  * get eight names wrapping onto three lines on a phone.
  */
-function barberLabel(offeredByAll: boolean, names: string[]): string {
-  if (offeredByAll) return "All barbers";
-  if (names.length === 0) return "No barber assigned";
+function barberLabel(
+  offeredByAll: boolean,
+  names: string[],
+  vocab: BusinessVocabulary,
+): string {
+  if (offeredByAll) return `All ${vocab.providerNounPlural}`;
+  if (names.length === 0) return `No ${vocab.providerNoun} assigned`;
   if (names.length <= 2) return names.join(", ");
   return `${names.slice(0, 2).join(", ")} +${names.length - 2}`;
 }
@@ -108,6 +123,7 @@ export function ServiceCard({
   flagTitle?: string;
   actions: ReactNode;
 }) {
+  const vocab = useVocab();
   return (
     <li
       // Dark ground + a thin gold outline, brighter when this is the service

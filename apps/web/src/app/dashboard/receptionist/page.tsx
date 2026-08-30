@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { getVocabulary } from "@/lib/vocab";
 import { apiGet } from "@/lib/api";
 import { featureLocks, getBillingSummary } from "@/lib/billing";
 import { Card } from "@/components/ui/Card";
@@ -30,6 +31,7 @@ interface ShopSettings {
 }
 
 export default async function ReceptionistPage() {
+  const vocab = await getVocabulary();
   // getBillingSummary replaces the page's own /api/billing round trip (it is
   // render-memoized and shared with the layout's lock computation).
   const shopRes = await apiGet<ShopSettings>("/api/shops/me");
@@ -45,7 +47,7 @@ export default async function ReceptionistPage() {
       <Card className="p-5">
         <CardHeader
           title="AI receptionist"
-          subtitle="Answers your texts and books clients while you're behind the chair."
+          subtitle={`Answers your texts and books clients while you're behind the ${vocab.stationNoun}.`}
         />
 
         {entitled && shop ? (

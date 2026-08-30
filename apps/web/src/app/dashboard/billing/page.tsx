@@ -1,4 +1,6 @@
 import { PLANS } from "@chairback/config/constants";
+import type { BusinessVocabulary } from "@chairback/config/businessTypes";
+import { getVocabulary } from "@/lib/vocab";
 import { apiGet } from "@/lib/api";
 import { getBillingSummary, type BillingSummary } from "@/lib/billing";
 import { getMe } from "@/lib/me";
@@ -49,7 +51,9 @@ const FREE_FEATURES: TierFeature[] = [
 // Premium — the outbound layer that actually brings clients back. (Acuity/
 // Square visit SYNC is free - the paid part is what we DO with the synced
 // calendar: texts + your own booking page.)
-const PREMIUM_FEATURES: TierFeature[] = [
+// A function of the shop words rather than a module constant: one perk names
+// the workspace, and a module-level constant has no vocabulary to read.
+const premiumFeatures = (v: BusinessVocabulary): TierFeature[] => [
   { lead: "Everything in Free, always" },
   {
     lead: `${PLANS.pro.smsMonthlyQuota} texts a month included`,
@@ -65,7 +69,7 @@ const PREMIUM_FEATURES: TierFeature[] = [
   },
   {
     lead: "Win-backs on autopilot",
-    detail: "quiet regulars get pulled back to the chair",
+    detail: `quiet regulars get pulled back to the ${v.stationNoun}`,
   },
   {
     lead: "Promo blasts with receipts",
@@ -123,6 +127,7 @@ export default async function BillingPage({
 }: {
   searchParams?: { checkout?: string; upgrade?: string; receptionist?: string };
 }) {
+  const vocab = await getVocabulary();
   const [res, shopRes, me] = await Promise.all([
     getBillingSummary(),
     apiGet<ShopSettings>("/api/shops/me"),
@@ -415,7 +420,7 @@ export default async function BillingPage({
                 The part that brings clients back.
               </p>
               <ul className="mt-3 flex flex-col gap-2.5">
-                {PREMIUM_FEATURES.map((item) => (
+                {premiumFeatures(vocab).map((item) => (
                   <li key={item.lead} className="flex items-start gap-2">
                     <span className="mt-0.5 text-sm text-gold">✓</span>
                     <span>

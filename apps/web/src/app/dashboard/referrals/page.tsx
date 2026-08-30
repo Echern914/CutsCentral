@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
+import { getVocabulary } from "@/lib/vocab";
 import Link from "next/link";
 import { apiGet } from "@/lib/api";
 import { ReferralShare, type ReferralRow } from "./ReferralShare";
 
-export const metadata: Metadata = { title: "Refer a barber" };
+export const metadata: Metadata = { title: "Refer a {vocab.providerNoun}" };
 
 interface ReferralData {
   code: string | null;
@@ -14,6 +15,7 @@ interface ReferralData {
 }
 
 export default async function ReferralsPage() {
+  const vocab = await getVocabulary();
   const res = await apiGet<ReferralData>("/api/dashboard/referrals");
   const data = res.data;
   const appBase = process.env.APP_BASE_URL ?? "";
@@ -27,7 +29,7 @@ export default async function ReferralsPage() {
         ← Dashboard
       </Link>
       <h1 className="mb-1 mt-1 font-display text-3xl tracking-tight">
-        Refer a barber
+        Refer a {vocab.providerNoun}
       </h1>
       <p className="mb-6 text-sm text-muted">
         Send your link. They get an extra month free, and you get a free month

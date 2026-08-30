@@ -1,5 +1,6 @@
 "use client";
 
+import { cap, useVocab } from "@/components/VocabProvider";
 import { useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
@@ -16,6 +17,7 @@ const field =
 const labelCls = "text-xs text-muted";
 
 export function PaymentsManager({ initial }: { initial: PaymentStatus }) {
+  const vocab = useVocab();
   const { toast } = useToast();
   const [pending, start] = useTransition();
   const [mode, setMode] = useState(initial.paymentsMode);
@@ -227,7 +229,7 @@ export function PaymentsManager({ initial }: { initial: PaymentStatus }) {
             active={mode === "off"}
             onClick={() => setMode("off")}
             title="In person"
-            desc="No online charge. Pay at the chair."
+            desc={`No online charge. Pay at the ${vocab.stationNoun}.`}
           />
           <ModeButton
             active={mode === "ahead"}
@@ -243,7 +245,7 @@ export function PaymentsManager({ initial }: { initial: PaymentStatus }) {
             title="Deposit to book"
             desc={
               ready
-                ? "A set amount now, the rest at the chair."
+                ? `A set amount now, the rest at the ${vocab.stationNoun}.`
                 : "Connect Stripe first."
             }
           />

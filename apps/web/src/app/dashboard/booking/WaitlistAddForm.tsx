@@ -1,5 +1,6 @@
 "use client";
 
+import { cap, useVocab } from "@/components/VocabProvider";
 import { useState, useTransition } from "react";
 import { Card } from "@/components/ui/Card";
 import { cn } from "@/lib/cn";
@@ -41,6 +42,7 @@ export function WaitlistAddForm({
   toast: Toast;
   onDone: () => void;
 }) {
+  const vocab = useVocab();
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [phone, setPhone] = useState("");
@@ -172,7 +174,7 @@ export function WaitlistAddForm({
           value={staffId}
           onChange={(e) => setStaffId(e.target.value)}
         >
-          <option value="">Any barber</option>
+          <option value="">Any {vocab.providerNoun}</option>
           {staff.map((s) => (
             <option key={s.id} value={s.id}>
               {s.name}

@@ -1,5 +1,6 @@
 "use client";
 
+import { useVocab } from "@/components/VocabProvider";
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { pluralServiceNoun } from "@chairback/config/constants";
@@ -710,6 +711,7 @@ function UtilizationCard({
   onSelectPeriod: (p: PeriodKey) => void;
   onApplyRange: (r: CustomRange) => void;
 }) {
+  const vocab = useVocab();
   const [by, setBy] = useState<"weekday" | "period" | "service">("weekday");
   const [staffId, setStaffId] = useState<string>("");
   // "" = all services, "s:<id>" = one service, "g:<id>" = one group.
@@ -794,7 +796,7 @@ function UtilizationCard({
   return (
     <Card className="overflow-hidden">
       <CardHeader
-        title="Chair time"
+        title={`${cap(vocab.stationNoun)} time`}
         subtitle={`How much of the time you were open actually got booked${
           data ? ` — ${data.periodLabel.toLowerCase()}` : ""
         }.`}
@@ -823,7 +825,7 @@ function UtilizationCard({
                 max={100}
                 integer
                 className="w-16 rounded-lg border border-subtle bg-charcoal-800 px-2 py-1.5 text-right text-sm tabular-nums"
-                aria-label="Chair time target percent"
+                aria-label={`${cap(vocab.stationNoun)} time target percent`}
               />
               % booked
             </label>
@@ -909,10 +911,10 @@ function UtilizationCard({
               <select
                 value={staffId}
                 onChange={(e) => setStaffId(e.target.value)}
-                aria-label="Barber"
+                aria-label={cap(vocab.providerNoun)}
                 className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
               >
-                <option value="">All barbers</option>
+                <option value="">All {vocab.providerNounPlural}</option>
                 {data!.staff.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
@@ -947,10 +949,10 @@ function UtilizationCard({
         )}
 
         {loading && !data ? (
-          <p className="py-4 text-sm text-muted">Working out your chair time…</p>
+          <p className="py-4 text-sm text-muted">Working out your {vocab.stationNoun} time…</p>
         ) : failed && !data ? (
           <p className="py-4 text-sm text-muted" role="alert">
-            Couldn&apos;t load chair time right now.
+            Couldn&apos;t load {vocab.stationNoun} time right now.
           </p>
         ) : data && data.noSchedule ? (
           <p className="py-4 text-sm text-muted">
@@ -1067,18 +1069,19 @@ function UtilizationCard({
               )}
               <p>
                 {by === "service"
-                  ? "Share of your open time each service filled. Services share one chair, so these add up to your total booked time."
+                  ? `Share of your open time each service filled. Services share one ${vocab.stationNoun}, so these add up to your total booked time.`
                   : "Open time comes from your current weekly hours, minus block-offs. Today counts only the hours already past, so checking before lunch doesn't read as a slump."}
               </p>
               {data?.syncedExcluded ? (
                 <p>
-                  One barber selected — Acuity and Square bookings aren&apos;t
-                  tied to a barber, so this view shows their native bookings only.
+                  One {vocab.providerNoun} selected — Acuity and Square bookings
+                  aren&apos;t tied to a {vocab.providerNoun}, so this view shows
+                  their native bookings only.
                 </p>
               ) : (
                 <p>
-                  Bookings made on Acuity or Square count too — they take up the
-                  chair.
+                  Bookings made on Acuity or Square count too — they take up the{" "}
+                  {vocab.stationNoun}.
                 </p>
               )}
             </div>

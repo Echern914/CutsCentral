@@ -1,5 +1,6 @@
 "use client";
 
+import { cap, useVocab } from "@/components/VocabProvider";
 import { useEffect, useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { NumberField } from "@/components/ui/NumberField";
@@ -248,6 +249,7 @@ function CardForm({
   onCancel: () => void;
   pending: boolean;
 }) {
+  const vocab = useVocab();
   const [name, setName] = useState(initial?.name ?? "");
   const [emoji, setEmoji] = useState(initial?.emoji ?? "");
   const [accentColor, setAccentColor] = useState(initial?.accentColor ?? "");
@@ -345,7 +347,7 @@ function CardForm({
           />
         </div>
         <p className="mt-1">
-          Leave empty for a card that only fills when you pick it at the chair. Cards
+          Leave empty for a card that only fills when you pick it at the {vocab.stationNoun}. Cards
           match before your default-card service bonuses.
         </p>
       </div>

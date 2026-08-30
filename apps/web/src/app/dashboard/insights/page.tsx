@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { getVocabulary } from "@/lib/vocab";
 import { pluralServiceNoun } from "@chairback/config/constants";
 import { apiGet } from "@/lib/api";
 import { getMe } from "@/lib/me";
@@ -178,6 +179,7 @@ export interface GoalResponse {
 }
 
 export default async function InsightsPage() {
+  const vocab = await getVocabulary();
   const [res, goalRes, me] = await Promise.all([
     apiGet<InsightsData>(`/api/insights?period=${DEFAULT_PERIOD}`),
     apiGet<GoalResponse>("/api/insights/goal"),
@@ -197,7 +199,7 @@ export default async function InsightsPage() {
         <p className="mt-1 text-sm text-muted">
           How your shop is doing: {pluralServiceNoun(me.data?.serviceNoun ?? "cut")} over
           time, what people book most, and where the money comes from. Counts
-          every booking that took the chair — native, Acuity and Square alike.
+          every booking that took the {vocab.stationNoun} — native, Acuity and Square alike.
         </p>
       </header>
       <div data-tour="charts">

@@ -1,5 +1,6 @@
 "use client";
 
+import { cap, useVocab } from "@/components/VocabProvider";
 import { useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { NumberField } from "@/components/ui/NumberField";
@@ -43,6 +44,7 @@ export function RewardsBuilder({ config }: { config: LoyaltyConfig }) {
 /*  Reward menu  */
 
 function RewardMenu({ rewards, cards }: { rewards: Reward[]; cards: CardType[] }) {
+  const vocab = useVocab();
   const { toast } = useToast();
   const [pending, startTransition] = useTransition();
   const [adding, setAdding] = useState(false);
@@ -64,7 +66,7 @@ function RewardMenu({ rewards, cards }: { rewards: Reward[]; cards: CardType[] }
     <Card className="overflow-hidden">
       <CardHeader
         title="Reward menu"
-        subtitle="What punches buy at your chair. Add as many as you want."
+        subtitle={`What punches buy at your ${vocab.stationNoun}. Add as many as you want.`}
         action={
           !adding && (
             <button onClick={() => setAdding(true)} className={goldBtn}>

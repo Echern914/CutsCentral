@@ -89,7 +89,11 @@ export async function getReadiness(): Promise<ReadinessWire | null> {
  * Deliberately one item, not a list. A new shop shown "3 of 11" reads as a
  * chore; the same shop shown "Add a service — about 2 minutes" starts.
  */
-export function nextStep(r: ReadinessWire | null): {
+export function nextStep(
+  r: ReadinessWire | null,
+  /** The shop's word for a workspace, for the own-scope milestone title. */
+  stationNoun: string,
+): {
   milestoneTitle: string;
   item: ReadinessItemWire;
   complete: number;
@@ -100,7 +104,7 @@ export function nextStep(r: ReadinessWire | null): {
     const item = r.personal.find((i) => !i.done && i.applicable);
     if (!item) return null;
     return {
-      milestoneTitle: "Your chair",
+      milestoneTitle: `Your ${stationNoun}`,
       item,
       complete: r.complete,
       total: r.applicable,

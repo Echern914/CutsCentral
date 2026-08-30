@@ -1,7 +1,10 @@
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { APP_NAME } from "@chairback/config/constants";
 import { getMe } from "@/lib/me";
+import { NEUTRAL_VOCABULARY } from "@chairback/config/businessTypes";
+import { VocabProvider } from "@/components/VocabProvider";
 import { featureLocks, getBillingSummary } from "@/lib/billing";
 import { collectNotificationSignals } from "@/lib/notificationSignals";
 import { PullToRefresh } from "@/components/PullToRefresh";
@@ -27,7 +30,10 @@ import { TrialBanner } from "./_components/TrialBanner";
 export default async function DashboardLayout({
   children,
 }: {
-  children: React.ReactNode;
+  // Imported `ReactNode`, not the global `React.` namespace: this repo resolves
+  // @types/react from two places, and mixing the two forms makes the resulting
+  // ReactNode types mutually unassignable at any component boundary.
+  children: ReactNode;
 }) {
   const me = await getMe();
   // The edge middleware only checks the cookie EXISTS, not that it's still valid.
@@ -36,6 +42,10 @@ export default async function DashboardLayout({
   // page on its own error state. Catch it once here, for the whole dashboard, and
   // send them to log back in (a fresh login mints a current-version token).
   if (me.status === 401) redirect("/login");
+  // Read straight off the same `me` payload the rest of this layout uses - one
+  // round trip, already resolved server-side. NEUTRAL when the shop has not
+  // chosen a type, or when the API is older than this web deploy.
+  const vocab = me.data?.businessType?.vocabulary ?? NEUTRAL_VOCABULARY;
   const isAdmin = me.data?.isAdmin ?? false;
   // Rewards-off shops get no Rewards nav pill (default true so a transient /me
   // failure never hides a paying shop's tab).
@@ -150,7 +160,9 @@ export default async function DashboardLayout({
         className="sm:!pb-0"
         style={{ paddingBottom: "calc(5.5rem + env(safe-area-inset-bottom))" }}
       >
-        {children}
+        {/* Resolved ONCE on the server here; every client component below reads
+            it with useVocab(). NEUTRAL for a shop that has not chosen a type. */}
+        <VocabProvider value={vocab}>{children}</VocabProvider>
       </div>
       <DashboardTabBar isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} barberOnly={barberOnly} locks={locks} />
     </div>

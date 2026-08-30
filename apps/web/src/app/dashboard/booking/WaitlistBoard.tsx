@@ -1,5 +1,6 @@
 "use client";
 
+import { cap, useVocab } from "@/components/VocabProvider";
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import { Card } from "@/components/ui/Card";
 import { cn } from "@/lib/cn";
@@ -337,6 +338,7 @@ function WaitlistCard({
   toast: Toast;
   onChanged: () => void;
 }) {
+  const vocab = useVocab();
   const [pending, start] = useTransition();
   const name = `${entry.firstName} ${entry.lastName ?? ""}`.trim() || "Client";
   const status = entry.status as WaitlistSection;
@@ -395,7 +397,7 @@ function WaitlistCard({
         <p className="[overflow-wrap:anywhere]">
           {entry.serviceName ?? "Any service"}
           {" · "}
-          {entry.staffName ?? "Any barber"}
+          {entry.staffName ?? `Any ${vocab.providerNoun}`}
         </p>
         <div className="flex flex-wrap gap-1.5">
           {entry.windows.map((w, i) => (

@@ -1,5 +1,7 @@
 "use client";
 
+import { cap, useVocab } from "@/components/VocabProvider";
+import type { BusinessVocabulary } from "@chairback/config/businessTypes";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { zonedWallTimeToUtc } from "@chairback/config/time";
 import { cn } from "@/lib/cn";
@@ -102,6 +104,7 @@ export function useAppointmentEdit({
   toast: Toast;
   onSaved: () => void;
 }): AppointmentEditState {
+  const vocab = useVocab();
   const [ctx, setCtx] = useState<EditContext | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [pending, start] = useTransition();
@@ -195,7 +198,7 @@ export function useAppointmentEdit({
     start(async () => {
       const res = await editAppointmentAction(row.id, patch);
       if (!res.ok) {
-        toast(ERROR_COPY[res.error ?? ""] ?? "Couldn't save those changes", "error");
+        toast(errorCopy(vocab)[res.error ?? ""] ?? "Couldn't save those changes", "error");
         return;
       }
       // Honest about the Acuity half. A move whose block did not confirm is
@@ -254,6 +257,7 @@ export function useAppointmentEdit({
  * when and with whom, what it costs, and the note only they see.
  */
 export function AppointmentEditFields({ state }: { state: AppointmentEditState }) {
+  const vocab = useVocab();
   const { ctx, row, detail, fields: f } = state;
 
   const matches = useMemo(() => {
@@ -393,7 +397,7 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
           </select>
         </Field>
 
-        <Field label="Barber">
+        <Field label={cap(vocab.providerNoun)}>
           <select
             value={f.staffId ?? ""}
             onChange={(e) => f.setStaffId(e.target.value || null)}
@@ -442,7 +446,7 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
           </Field>
         </div>
 
-        <Field label="Duration" hint="Minutes in the chair.">
+        <Field label="Duration" hint={`Minutes in the ${vocab.stationNoun}.`}>
           <input
             type="number"
             min={5}
@@ -500,8 +504,11 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
   );
 }
 
-const ERROR_COPY: Record<string, string> = {
-  slot_taken: "That time is already taken on this chair.",
+// A function of the shop's words rather than a module constant: two of these
+// name the workspace or the provider, and a module-level constant has no
+// vocabulary to read.
+const errorCopy = (vocab: BusinessVocabulary): Record<string, string> => ({
+  slot_taken: `That time is already taken on this ${vocab.stationNoun}.`,
   invalid_slot: "That time is outside your booking hours.",
   invalid_phone: "That phone number isn't one we can dial — check the digits.",
   price_change_on_paid:
@@ -509,6 +516,6 @@ const ERROR_COPY: Record<string, string> = {
   synced_appointment_readonly: "This one is managed in Acuity.",
   not_editable: "This appointment can no longer be edited.",
   client_not_found: "That client isn't in your book.",
-  staff_not_found: "That barber is no longer available.",
+  staff_not_found: `That ${vocab.providerNoun} is no longer available.`,
   service_not_found: "That service is no longer available.",
-};
+});

@@ -1,5 +1,6 @@
 "use client";
 
+import { cap, useVocab } from "@/components/VocabProvider";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { cn } from "@/lib/cn";
@@ -517,6 +518,7 @@ function Hero({
   timeLabel: string;
   durMin: number | null;
 }) {
+  const vocab = useVocab();
   const pill = appointmentStatusPill({
     status: row.status,
     checkInStatus: row.checkInStatus,
@@ -624,7 +626,7 @@ function Hero({
           <span className="[overflow-wrap:anywhere]">{service ?? "Appointment"}</span>
         </Fact>
         {barber && (
-          <Fact icon={<ScissorsIcon />} label="Barber">
+          <Fact icon={<ScissorsIcon />} label={cap(vocab.providerNoun)}>
             <span className="[overflow-wrap:anywhere]">{barber}</span>
           </Fact>
         )}
@@ -793,6 +795,7 @@ function PaymentCard({
   canCheckout: boolean;
   onCheckout: () => void;
 }) {
+  const vocab = useVocab();
   if (loadError) return null;
   if (!detail) return <CardSkeleton title="Payment" rows={3} />;
 
@@ -867,7 +870,7 @@ function PaymentCard({
           {p.inPersonCents > 0 && (
             <Line
               label={
-                p.method ? `At the chair · ${METHOD_LABEL[p.method] ?? p.method}` : "At the chair"
+                p.method ? `At the ${vocab.stationNoun} · ${METHOD_LABEL[p.method] ?? p.method}` : `At the ${vocab.stationNoun}`
               }
               value={money(p.inPersonCents)}
               tone="good"
