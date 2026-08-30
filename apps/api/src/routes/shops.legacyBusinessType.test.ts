@@ -11,16 +11,34 @@ import { createApp } from "../app.js";
  * put Barbershop there". Two commits set the line:
  *   a249a68 (2026-06-13) shipped the picker PRE-SELECTED to barber - a shop
  *                        whose owner never touched it still submitted "barber".
- *   dbb2b6a (2026-06-28) made it defaultless + required - the first real choice.
- * So only shops created from the cutoff forward are treated as having answered.
+ *   dbb2b6a               made it defaultless + required - the first real choice.
+ *                        Committed 2026-06-28T22:58:42-04:00 == 2026-06-29T02:58:42Z.
+ *
+ * 🔴 THE CUTOFF IS 2026-06-30 00:00:00 UTC, NOT 06-29.
+ *
+ * An earlier draft used 06-29 00:00:00, which is 2h58m BEFORE dbb2b6a existed -
+ * it would have claimed a choice for shops created while the defaultless picker
+ * was still unwritten. The production deploy time could not be established
+ * (GitHub retains only recent Preview deployments), so the boundary is the next
+ * midnight after the commit: ~21h of slack.
+ *
+ * The two errors are NOT symmetric, which is why this may only ever move later:
+ * a false NULL shows one legitimate shop the picker once; a false stamp
+ * permanently claims a choice that shop never made.
+ *
+ * `Shop."createdAt"` is `timestamp WITHOUT time zone` holding UTC, so the bare
+ * literal below is a UTC-to-UTC comparison no session TimeZone can shift.
  *
  * These tests exercise the RULE against synthetic rows on both sides of the
  * line, rather than re-running the migration (which has already applied).
  */
 const app = createApp();
 
-/** The exact predicate in 20260829120000_business_type_selected_at. */
-const CUTOFF = "2026-06-29 00:00:00";
+/**
+ * The exact predicate in 20260829120000_business_type_selected_at.
+ * 🔴 Keep byte-identical to the migration's literal.
+ */
+const CUTOFF = "2026-06-30 00:00:00";
 
 /** Every row this file creates, so cleanup can be exact rather than broad. */
 const createdShopIds: string[] = [];
@@ -93,7 +111,7 @@ describe("the backfill cohort rule", () => {
   });
 
   it("leaves the PRE-SELECTED-picker cohort unselected too", async () => {
-    // 2026-06-13..06-28: the dropdown existed but defaulted to Barbershop, so a
+    // 2026-06-13..06-29: the dropdown existed but defaulted to Barbershop, so a
     // stored "barber" is still not an answer. This is the subtle cohort, and
     // getting it wrong would mislabel real shops permanently.
     const id = await makeShopRow(new Date("2026-06-20T12:00:00.000Z"), "barber");
@@ -103,6 +121,96 @@ describe("the backfill cohort rule", () => {
       select: { businessTypeSelectedAt: true },
     });
     expect(row?.businessTypeSelectedAt).toBeNull();
+  });
+});
+
+/**
+ * 🔴 THE BOUNDARY ITSELF.
+ *
+ * The predicate is `>=`, so the instant AT the cutoff is stamped and everything
+ * strictly before it is not. These drive both sides to the millisecond, because
+ * an off-by-one here is not a rounding error - it is a shop permanently credited
+ * with a choice it never made.
+ */
+describe("the cutoff boundary, to the millisecond", () => {
+  const AT = "2026-06-30T00:00:00.000Z";
+  const JUST_BEFORE = "2026-06-29T23:59:59.999Z";
+  const JUST_AFTER = "2026-06-30T00:00:00.001Z";
+
+  async function selectedAtFor(iso: string): Promise<Date | null> {
+    const id = await makeShopRow(new Date(iso), "barber");
+    await applyBackfill(id);
+    const row = await prisma.shop.findUnique({
+      where: { id },
+      select: { businessTypeSelectedAt: true },
+    });
+    return row?.businessTypeSelectedAt ?? null;
+  }
+
+  it("a shop created 1ms BEFORE the cutoff stays NULL", async () => {
+    expect(await selectedAtFor(JUST_BEFORE)).toBeNull();
+  });
+
+  it("a shop created EXACTLY at the cutoff is stamped", async () => {
+    const stamped = await selectedAtFor(AT);
+    expect(stamped).not.toBeNull();
+    expect(stamped?.toISOString()).toBe(AT);
+  });
+
+  it("a shop created 1ms AFTER the cutoff is stamped", async () => {
+    expect(await selectedAtFor(JUST_AFTER)).not.toBeNull();
+  });
+
+  it("🔴 the cutoff is AFTER dbb2b6a existed", async () => {
+    // dbb2b6a was committed 2026-06-29T02:58:42Z. A shop created at that exact
+    // instant - the moment the defaultless picker's code first existed, before
+    // any deploy - must NOT be treated as having chosen.
+    expect(await selectedAtFor("2026-06-29T02:58:42.000Z")).toBeNull();
+    // And the constant itself must be strictly later than the commit.
+    expect(new Date(`${CUTOFF}Z`).getTime()).toBeGreaterThan(
+      new Date("2026-06-29T02:58:42.000Z").getTime(),
+    );
+  });
+
+  it("older shops are untouched by the boundary cases above", async () => {
+    const id = await makeShopRow(new Date("2026-01-05T08:00:00.000Z"), "barber");
+    await applyBackfill(id);
+    const row = await prisma.shop.findUnique({
+      where: { id },
+      select: { businessTypeSelectedAt: true, industry: true },
+    });
+    expect(row?.businessTypeSelectedAt).toBeNull();
+    expect(row?.industry).toBe("barber");
+  });
+
+  it("running the backfill twice is idempotent", async () => {
+    // A re-run must not move a stamp that already records a real createdAt.
+    const id = await makeShopRow(new Date("2026-08-01T10:15:00.000Z"), "nails");
+    await applyBackfill(id);
+    const first = (
+      await prisma.shop.findUnique({ where: { id }, select: { businessTypeSelectedAt: true } })
+    )?.businessTypeSelectedAt;
+    await applyBackfill(id);
+    const second = (
+      await prisma.shop.findUnique({ where: { id }, select: { businessTypeSelectedAt: true } })
+    )?.businessTypeSelectedAt;
+    expect(first).not.toBeNull();
+    expect(second?.toISOString()).toBe(first?.toISOString());
+  });
+
+  it("re-running does not resurrect a shop an owner has since re-answered", async () => {
+    // The migration writes `= "createdAt"`, so a later human choice would be
+    // overwritten if it ever ran again. It is a one-shot migration, but the
+    // predicate must at least never touch a PRE-cutoff row.
+    const id = await makeShopRow(new Date("2026-05-01T12:00:00.000Z"), "barber");
+    const chosen = new Date("2026-08-15T09:00:00.000Z");
+    await prisma.shop.update({ where: { id }, data: { businessTypeSelectedAt: chosen } });
+    await applyBackfill(id);
+    const row = await prisma.shop.findUnique({
+      where: { id },
+      select: { businessTypeSelectedAt: true },
+    });
+    expect(row?.businessTypeSelectedAt?.toISOString()).toBe(chosen.toISOString());
   });
 
   it("stamps a post-cutoff shop from its OWN createdAt", async () => {
