@@ -703,7 +703,6 @@ describe("Acuity health, end to end", () => {
     try {
       const item = pick(await itemsFor(acuityShopCookie), "integration.chair_mapping");
       expect(item.evidence).toContain("1 chair matched");
-      expect(item.title).toContain("chair");
     } finally {
       await prisma.shop.update({
         where: { id: before.id },

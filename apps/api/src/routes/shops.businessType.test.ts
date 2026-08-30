@@ -282,3 +282,159 @@ describe("tenant isolation", () => {
     expect(rowB?.bio).not.toBe("A's bio");
   });
 });
+
+describe("PATCH /api/shops/me/business-type - changing it later", () => {
+  /** Owner + a BARBER seat on the same shop, to exercise the role gate. */
+  async function shopWithBarberSeat() {
+    const ownerCookie = await signUp("owner");
+    const created = await request(app)
+      .post("/api/shops")
+      .set("Cookie", ownerCookie)
+      .send({ name: "Role Gate Co", industry: "barber", smsAttested: true });
+    const shopId = created.body.id as string;
+
+    const barberEmail = `seat-${randomToken(6)}@test.local`.toLowerCase();
+    const barberSignup = await request(app)
+      .post("/api/auth/signup")
+      .send({ email: barberEmail, password: "supersecret123", name: "Seat", smsAttested: true });
+    const barberCookie = (barberSignup.headers["set-cookie"] as unknown as string[])[0]!;
+    await prisma.shopMember.create({
+      data: { shopId, userId: barberSignup.body.id as string, role: "BARBER" },
+    });
+    return { ownerCookie, barberCookie, shopId };
+  }
+
+  it("an owner can change it, and the stamp records that a human chose", async () => {
+    const { ownerCookie, shopId } = await shopWithBarberSeat();
+    const res = await request(app)
+      .patch("/api/shops/me/business-type")
+      .set("Cookie", ownerCookie)
+      .send({ industry: "nails" });
+    expect(res.status).toBe(200);
+    expect(res.body.selected).toBe(true);
+    expect(res.body.vocabulary.providerNoun).toBe("nail tech");
+
+    const row = await prisma.shop.findUnique({
+      where: { id: shopId },
+      select: { industry: true, businessTypeSelectedAt: true },
+    });
+    expect(row?.industry).toBe("nails");
+    expect(row?.businessTypeSelectedAt).not.toBeNull();
+  });
+
+  it("a BARBER seat cannot change it", async () => {
+    const { barberCookie, shopId } = await shopWithBarberSeat();
+    const res = await request(app)
+      .patch("/api/shops/me/business-type")
+      .set("Cookie", barberCookie)
+      .send({ industry: "nails" });
+    expect(res.status).toBe(403);
+    const row = await prisma.shop.findUnique({
+      where: { id: shopId },
+      select: { industry: true },
+    });
+    expect(row?.industry).toBe("barber");
+  });
+
+  it("an anonymous caller cannot change it", async () => {
+    const res = await request(app)
+      .patch("/api/shops/me/business-type")
+      .send({ industry: "nails" });
+    expect(res.status).toBe(401);
+  });
+
+  it("rejects a forged type and leaves the row alone", async () => {
+    const { ownerCookie, shopId } = await shopWithBarberSeat();
+    for (const bad of ["dentist", "__proto__", "", 123, null]) {
+      const res = await request(app)
+        .patch("/api/shops/me/business-type")
+        .set("Cookie", ownerCookie)
+        .send({ industry: bad });
+      expect(res.status, JSON.stringify(bad)).toBe(400);
+    }
+    const row = await prisma.shop.findUnique({
+      where: { id: shopId },
+      select: { industry: true },
+    });
+    expect(row?.industry).toBe("barber");
+  });
+
+  it("🔴 the ungated path is gone - PATCH /me no longer accepts industry", async () => {
+    // It used to reach `updateShopSchema` by inheritance, so ANY seat that could
+    // save settings could change the shop's vertical. `.strict()` now refuses
+    // the key outright.
+    const { ownerCookie, shopId } = await shopWithBarberSeat();
+    const res = await request(app)
+      .patch("/api/shops/me")
+      .set("Cookie", ownerCookie)
+      .send({ industry: "nails" });
+    expect(res.status).toBe(400);
+    const row = await prisma.shop.findUnique({
+      where: { id: shopId },
+      select: { industry: true },
+    });
+    expect(row?.industry).toBe("barber");
+  });
+
+  it("writes exactly two columns - everything else is byte-identical", async () => {
+    const { ownerCookie, shopId } = await shopWithBarberSeat();
+    const service = await prisma.service.create({
+      data: { shopId, name: "Beard Trim", durationMin: 30, price: "25.00" },
+    });
+    const before = await prisma.shop.findUniqueOrThrow({ where: { id: shopId } });
+    const rewardBefore = await prisma.reward.findFirstOrThrow({
+      where: { shopId },
+      orderBy: { sortOrder: "asc" },
+    });
+
+    await request(app)
+      .patch("/api/shops/me/business-type")
+      .set("Cookie", ownerCookie)
+      .send({ industry: "detailing" });
+
+    const after = await prisma.shop.findUniqueOrThrow({ where: { id: shopId } });
+    // Compare the WHOLE row, so a future field added to the write is caught
+    // here rather than discovered in production.
+    //
+    // 🔴 JSON.stringify, not String(). `String(someDate)` renders to WHOLE
+    // SECONDS, so a re-stamp landing in the same second as the original reads
+    // as "unchanged" and this assertion passes vacuously - which is exactly how
+    // it first passed while proving nothing.
+    const changed = (Object.keys(after) as (keyof typeof after)[]).filter(
+      (k) => JSON.stringify(after[k]) !== JSON.stringify(before[k]),
+    );
+    // `updatedAt` is Prisma's `@updatedAt` column - it moves on ANY write and is
+    // not something this endpoint chose to touch. Listed explicitly rather than
+    // filtered out silently, so the set stays honest.
+    expect(changed.sort()).toEqual(["businessTypeSelectedAt", "industry", "updatedAt"]);
+
+    // The owner's own words, and the reward they may already have printed.
+    const svc = await prisma.service.findUnique({ where: { id: service.id } });
+    expect(svc?.name).toBe("Beard Trim");
+    const rewardAfter = await prisma.reward.findFirstOrThrow({
+      where: { shopId },
+      orderBy: { sortOrder: "asc" },
+    });
+    expect(rewardAfter.name).toBe(rewardBefore.name);
+    expect(rewardAfter.emoji).toBe(rewardBefore.emoji);
+  });
+
+  it("a lapsed shop can still answer the question", async () => {
+    // Deliberately not behind requireActiveAccess: being asked a question we
+    // should have asked earlier must not require an active subscription.
+    const { ownerCookie, shopId } = await shopWithBarberSeat();
+    await prisma.shop.update({
+      where: { id: shopId },
+      data: {
+        subscriptionStatus: "canceled",
+        trialEndsAt: new Date(Date.now() - 86_400_000),
+        compAccess: false,
+      },
+    });
+    const res = await request(app)
+      .patch("/api/shops/me/business-type")
+      .set("Cookie", ownerCookie)
+      .send({ industry: "salon" });
+    expect(res.status).toBe(200);
+  });
+});

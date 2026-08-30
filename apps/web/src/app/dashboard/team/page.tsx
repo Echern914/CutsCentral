@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { apiGet } from "@/lib/api";
+import { getVocabulary } from "@/lib/vocab";
 import { TeamClient } from "./TeamClient";
 
 export const metadata: Metadata = { title: "Team" };
@@ -35,7 +36,10 @@ export interface TeamData {
 }
 
 export default async function TeamPage() {
-  const res = await apiGet<TeamData>("/api/team");
+  // `getVocabulary` reads getMe(), which is React-cached per render, so asking
+  // for it here costs nothing extra. Passed DOWN as a prop rather than via a
+  // context provider - a provider would be a second source of truth.
+  const [res, vocab] = await Promise.all([apiGet<TeamData>("/api/team"), getVocabulary()]);
   const data = res.data;
 
   if (!data) {
@@ -51,7 +55,7 @@ export default async function TeamPage() {
 
   return (
     <main className="mx-auto w-full max-w-4xl px-5 py-8">
-      <TeamClient initial={data} />
+      <TeamClient initial={data} vocab={vocab} />
     </main>
   );
 }
