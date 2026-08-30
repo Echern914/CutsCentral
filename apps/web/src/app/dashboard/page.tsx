@@ -12,6 +12,7 @@ import { AtRiskTable, type AtRiskRow } from "./_components/AtRiskTable";
 import { ActivityFeed, type ActivityItem } from "./_components/ActivityFeed";
 import { TodayAgenda, type TodayRow } from "./_components/TodayAgenda";
 import { Leaderboard, type Leader } from "./_components/Leaderboard";
+import { BusinessTypeCard } from "./_components/BusinessTypeCard";
 import { SettingsCard, type ShopSettings } from "./_components/SettingsCard";
 import { ClientDemoCard } from "./_components/ClientDemoCard";
 import { TourReplayButton } from "./_components/TourReplayButton";
@@ -279,6 +280,14 @@ export default async function DashboardPage({
           />
         )}
         <ClientDemoCard />
+        {/* Above SettingsCard on purpose: for a shop that has never been asked,
+            this IS the question, and burying it under the settings form is how
+            it stays unanswered forever. */}
+        <BusinessTypeCard
+          current={who.data?.businessType?.id ?? shop.industry}
+          selected={who.data?.businessType?.selected ?? true}
+          canEdit={who.data?.shopRole !== "BARBER"}
+        />
         <SettingsCard settings={shop} />
         <div>
           <TourReplayButton />

@@ -5,6 +5,7 @@ import { Card, CardHeader } from "@/components/ui/Card";
 import { FormError } from "@/components/ui/FormError";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
+import type { BusinessVocabulary } from "@chairback/config";
 import type { ShopRole, TeamData } from "./page";
 import {
   inviteMemberAction,
@@ -17,27 +18,41 @@ import {
 const field =
   "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 
-const ROLE_LABEL: Record<ShopRole, string> = {
-  OWNER: "Owner",
-  MANAGER: "Manager",
-  BARBER: "Barber",
-};
+/**
+ * Sentence-case a vocabulary word ("nail tech" -> "Nail tech").
+ *
+ * 🔴 Defined HERE rather than imported from `@/lib/vocab`. That module reads
+ * `getMe()`, which reaches `next/headers`; importing even a one-line helper from
+ * it into a "use client" file drags the SERVER api client into the client bundle
+ * and fails `next build` with a message about the `pages/` directory that points
+ * nowhere near the cause. `tsc` does not catch it - only the build does.
+ */
+const capitalize = (word: string): string => word.charAt(0).toUpperCase() + word.slice(1);
 
-const ROLE_HINT: Record<ShopRole, string> = {
-  OWNER: "Full access, including billing and the team.",
-  MANAGER: "Runs the shop day to day. No billing or team changes.",
-  BARBER: "Their own chair. Sign-in works; their dashboard is coming next.",
-};
+/**
+ * 🔴 The KEYS are the `ShopRole` enum - authorization wire values that never
+ * change. Only the LABEL a human reads is vocabulary-driven, so a nail studio
+ * shows "Nail tech" while the seat is still `BARBER` everywhere it matters.
+ */
+const roleLabel = (role: ShopRole, v: BusinessVocabulary): string =>
+  role === "OWNER" ? "Owner" : role === "MANAGER" ? "Manager" : capitalize(v.providerNoun);
+
+const roleHint = (role: ShopRole, v: BusinessVocabulary): string =>
+  role === "OWNER"
+    ? "Full access, including billing and the team."
+    : role === "MANAGER"
+      ? "Runs the shop day to day. No billing or team changes."
+      : `Their own ${v.stationNoun}. Sign-in works; their dashboard is coming next.`;
 
 /** Turn an API error code into something a shop owner can act on. */
-function explain(code: string | undefined): string {
+function explain(code: string | undefined, v: BusinessVocabulary): string {
   switch (code) {
     case "already_member":
       return "They're already on your team.";
     case "staff_taken":
-      return "That chair is already linked to someone else.";
+      return `That ${v.stationNoun} is already linked to someone else.`;
     case "invalid_staff":
-      return "Pick a chair from your booking staff.";
+      return `Pick a ${v.stationNoun} from your booking staff.`;
     case "email_unavailable":
       return "Email isn't set up yet, so invites can't be sent.";
     case "email_failed":
@@ -58,7 +73,13 @@ function explain(code: string | undefined): string {
  * but not change it (the API enforces this — we just don't render the
  * controls, so nobody is offered a button that will 403).
  */
-export function TeamClient({ initial }: { initial: TeamData }) {
+export function TeamClient({
+  initial,
+  vocab,
+}: {
+  initial: TeamData;
+  vocab: BusinessVocabulary;
+}) {
   const { toast } = useToast();
   const [data, setData] = useState<TeamData>(initial);
   const [pending, start] = useTransition();
@@ -75,8 +96,8 @@ export function TeamClient({ initial }: { initial: TeamData }) {
     start(async () => {
       const res = await fn();
       if (!res.ok) {
-        setError(explain(res.error));
-        toast(explain(res.error), "error");
+        setError(explain(res.error, vocab));
+        toast(explain(res.error, vocab), "error");
         return;
       }
       setError(null);
@@ -122,7 +143,7 @@ export function TeamClient({ initial }: { initial: TeamData }) {
         <h1 className="font-display text-2xl">Team</h1>
         <p className="mt-1 text-sm text-muted">
           Everyone who can sign in to your shop. Adding someone here does not
-          change your booking staff — a chair and a login are separate things.
+          change your booking staff — a {vocab.stationNoun} and a login are separate things.
         </p>
       </div>
 
@@ -137,7 +158,7 @@ export function TeamClient({ initial }: { initial: TeamData }) {
             {!data.inviteAvailable ? (
               <p className="text-sm text-muted">
                 Invitations need email to be configured. Once it is, you can
-                invite your barbers from here.
+                invite your {vocab.providerNounPlural} from here.
               </p>
             ) : (
               <>
@@ -146,7 +167,7 @@ export function TeamClient({ initial }: { initial: TeamData }) {
                     className={field}
                     type="email"
                     autoComplete="off"
-                    placeholder="barber@example.com"
+                    placeholder={`${vocab.providerNoun.replace(/ /g, "")}@example.com`}
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     aria-label="Email address"
@@ -157,17 +178,17 @@ export function TeamClient({ initial }: { initial: TeamData }) {
                     aria-label="Role"
                     className="rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite"
                   >
-                    <option value="BARBER">Barber</option>
+                    <option value="BARBER">{capitalize(vocab.providerNoun)}</option>
                     <option value="MANAGER">Manager</option>
                   </select>
                   {freeStaff.length > 0 && (
                     <select
                       value={staffId}
                       onChange={(e) => setStaffId(e.target.value)}
-                      aria-label="Link to a chair"
+                      aria-label={`Link to a ${vocab.stationNoun}`}
                       className="rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite"
                     >
-                      <option value="">No chair</option>
+                      <option value="">No {vocab.stationNoun}</option>
                       {freeStaff.map((s) => (
                         <option key={s.id} value={s.id}>
                           {s.name}
@@ -183,7 +204,7 @@ export function TeamClient({ initial }: { initial: TeamData }) {
                     {pending ? "Sending…" : "Send invite"}
                   </button>
                 </div>
-                <p className="text-[11px] text-muted/80">{ROLE_HINT[role]}</p>
+                <p className="text-[11px] text-muted/80">{roleHint(role, vocab)}</p>
                 <FormError>{error}</FormError>
               </>
             )}
@@ -201,7 +222,7 @@ export function TeamClient({ initial }: { initial: TeamData }) {
                 <div className="min-w-0">
                   <p className="truncate text-sm text-offwhite">{i.email}</p>
                   <p className="text-xs text-muted">
-                    {ROLE_LABEL[i.role]}
+                    {roleLabel(i.role, vocab)}
                     {i.staffId && ` · ${staffName(i.staffId)}`} · expires{" "}
                     {new Date(i.expiresAt).toLocaleDateString()}
                   </p>
@@ -245,7 +266,7 @@ export function TeamClient({ initial }: { initial: TeamData }) {
                           : "bg-charcoal-600/60 text-muted",
                       )}
                     >
-                      {ROLE_LABEL[m.role]}
+                      {roleLabel(m.role, vocab)}
                     </span>
                   </p>
                   <p className="truncate text-xs text-muted">
@@ -271,14 +292,14 @@ export function TeamClient({ initial }: { initial: TeamData }) {
                       aria-label={`Role for ${m.user.name}`}
                       className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
                     >
-                      <option value="BARBER">Barber</option>
+                      <option value="BARBER">{capitalize(vocab.providerNoun)}</option>
                       <option value="MANAGER">Manager</option>
                     </select>
                     <button
                       onClick={() => {
                         if (
                           !window.confirm(
-                            `Remove ${m.user.name}'s access? Their chair, hours and appointment history stay exactly as they are.`,
+                            `Remove ${m.user.name}'s access? Their ${vocab.stationNoun}, hours and appointment history stay exactly as they are.`,
                           )
                         ) {
                           return;
@@ -299,9 +320,9 @@ export function TeamClient({ initial }: { initial: TeamData }) {
       </Card>
 
       <p className="text-[11px] text-muted/80">
-        Removing someone takes away their sign-in only. To stop a barber
-        appearing on your booking page, deactivate their chair under Booking →
-        Staff.
+        Removing someone takes away their sign-in only. To stop a{" "}
+        {vocab.providerNoun} appearing on your booking page, deactivate their{" "}
+        {vocab.stationNoun} under Booking → Staff.
       </p>
     </div>
   );

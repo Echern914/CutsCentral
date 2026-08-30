@@ -117,6 +117,27 @@ export async function winbackPreviewAction(): Promise<WinbackPreview | null> {
   return res.data;
 }
 
+/**
+ * Choose or change the shop's business type.
+ *
+ * Deliberately SEPARATE from `saveSettingsAction`, for two reasons that are easy
+ * to lose if it became one more field: the endpoint behind it is
+ * OWNER/MANAGER-gated where the generic settings save is not, and the
+ * revalidation set is wider - vocabulary renders in the dashboard chrome, in
+ * Insights and on the public site, so a stale layout would keep speaking the old
+ * words after the owner just watched themselves change them.
+ */
+export async function saveBusinessTypeAction(industry: string): Promise<{ ok: boolean }> {
+  const res = await apiSend("PATCH", "/api/shops/me/business-type", { industry });
+  if (!res.ok) return { ok: false };
+  // "layout" so the nav chrome and every nested page re-render, not just the
+  // leaf: getMe() is cached per render and the vocabulary rides on it.
+  revalidatePath("/dashboard", "layout");
+  revalidatePath("/dashboard/insights");
+  revalidatePath("/dashboard/site");
+  return { ok: true };
+}
+
 export async function saveSettingsAction(
   _prev: { saved?: boolean; error?: string },
   formData: FormData,

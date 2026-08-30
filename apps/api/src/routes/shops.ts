@@ -21,6 +21,7 @@ import {
   apiEnv,
   businessType,
   randomToken,
+  vocabularyForShop,
   type GalleryItem,
 } from "@chairback/config";
 import { Prisma, prisma } from "@chairback/db";
@@ -197,7 +198,20 @@ const createShopSchema = z
 // rest of the shop settings remain editable here, plus the public page fields.
 const updateShopSchema = createShopSchema
   // smsAttested is a create-time gate only; settings updates never carry it.
-  .omit({ rewardThreshold: true, rewardLabel: true, smsAttested: true })
+  //
+  // 🔴 `industry` is omitted too, and that is a FIX, not a tidy-up. It reached
+  // this schema by inheritance, so any seat that could save settings - including
+  // a BARBER - could change the shop's vertical, ungated and untested, which
+  // silently changes the visit-noun in every client's SMS. Business type now has
+  // its own OWNER/MANAGER endpoint (PATCH /me/business-type) which also stamps
+  // `businessTypeSelectedAt`; a generic settings save is not an answer to
+  // "what kind of business is this?".
+  .omit({
+    rewardThreshold: true,
+    rewardLabel: true,
+    smsAttested: true,
+    industry: true,
+  })
   .extend({
     slug: z
       .string()
@@ -538,6 +552,55 @@ shopsRouter.post(
       // A rotate that went through while the shop cannot serve says so, rather
       // than handing back a URL that looks healthy.
       ...(blockers.length > 0 ? { warning: "shop_not_ready", blockers } : {}),
+    });
+  },
+);
+
+/**
+ * Choose or change the shop's business type.
+ *
+ * Its own endpoint rather than a field on PATCH /me, for three reasons that all
+ * matter: the role gate is stated ONCE at the router (OWNER/MANAGER, never a
+ * BARBER seat), stamping `businessTypeSelectedAt` is the entire point and would
+ * be invisible folded into a generic settings save, and this is the one write
+ * that has to be provably non-destructive.
+ *
+ * 🔴 IT WRITES EXACTLY TWO COLUMNS. No service renamed, no reward re-seeded, no
+ * appointment, client, staff row, integration or payment setting touched. A shop
+ * that opened as a barbershop and later says "nail studio" keeps every "Beard
+ * Trim" it ever sold - those are the owner's words, not ours.
+ *
+ * Deliberately NOT behind `requireActiveAccess`: a lapsed shop being asked to
+ * answer a question we should have asked earlier must still be able to answer.
+ */
+shopsRouter.patch(
+  "/me/business-type",
+  requireUser,
+  requireShop,
+  requireManager,
+  async (req, res) => {
+    const parsed = z
+      .object({ industry: z.enum(BUSINESS_TYPE_IDS as [string, ...string[]]) })
+      .strict()
+      .safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+      return;
+    }
+    const shop = await prisma.shop.update({
+      where: { id: req.shop!.id },
+      data: {
+        industry: parsed.data.industry,
+        // The answer, and the moment a human gave it. Once set the shop stops
+        // rendering neutral wording, and stops being asked.
+        businessTypeSelectedAt: new Date(),
+      },
+      select: { industry: true, serviceNoun: true, businessTypeSelectedAt: true },
+    });
+    res.json({
+      industry: shop.industry,
+      selected: true,
+      vocabulary: vocabularyForShop(shop),
     });
   },
 );
