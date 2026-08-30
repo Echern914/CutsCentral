@@ -2357,6 +2357,12 @@ model Appointment {
   // SMS is dark (no 10DLC / no consent). Email only needs a valid address.
   confirmationEmailSentAt DateTime?
   reminderEmailSentAt     DateTime?
+  // "Your appointment was canceled". Its own stamp, CLAIMED before the send
+  // (updateMany-where-null, like the push tiers) rather than stamped after:
+  // two people hitting cancel at once, or a retry after an ambiguous provider
+  // failure, must produce exactly ONE email. Cleared by /restore, so a booking
+  // that is un-canceled and later canceled again can tell the customer twice.
+  cancellationEmailSentAt DateTime?
   // PUSH reminders (engines/pushReminders.ts) - a third channel with two tiers
   // (24h + 2h before start), each with its own at-most-once stamp claimed via
   // an atomic updateMany-where-null, so a double/concurrent run can never send
@@ -3246,4 +3252,44 @@ model PlatformOperationPassTask {
 
   @@unique([operationId, clientId])
   @@index([operationId, status])
+}
+
+ // EMAIL DELIVERY LEDGER - what actually happened to a transactional email.
+ // 
+ // Before this, the provider message id was logged and thrown away and there
+ // was no webhook, so nobody could tell "in the inbox" from "in spam" from
+ // "hard bounced". A barber reporting "my customers don't get emails" could
+ // not be answered with evidence.
+ // 
+ // 🔴 CARRIES NO RECIPIENT ADDRESS AND NO BODY. The provider message id is the
+ // join key; shopId/appointmentId say which booking it belonged to. That is
+ // enough to answer "did this booking's mail arrive" without duplicating a
+ // customer's address into a second table, and it means a leak of this table
+ // leaks no contact data.
+model EmailDelivery {
+  id String @id @default(cuid())
+
+  messageId String @unique
+
+  kind String
+
+  shopId        String?
+  appointmentId String?
+
+   // Latest known state. "sent" is what we observed at dispatch; everything
+   // else arrives by webhook. Fixed vocabulary, CHECK-pinned in the migration.
+  status String @default("sent")
+
+  failureClass String?
+
+  eventCount Int @default(0)
+
+  sentAt      DateTime  @default(now())
+  deliveredAt DateTime?
+  failedAt    DateTime?
+  updatedAt   DateTime  @updatedAt
+
+  @@index([shopId, sentAt])
+  @@index([status, sentAt])
+  @@index([appointmentId])
 }

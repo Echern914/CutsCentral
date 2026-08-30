@@ -1159,6 +1159,9 @@ async function rescheduleTool(
           // Check-in state from the old time is cleared too.
           confirmationSentAt: ctx.now,
           reminderSentAt: null,
+          // The email reminder must re-arm for the new time too - see the
+          // note on the other reschedule paths.
+          reminderEmailSentAt: null,
           reminder24hPushSentAt: null,
           reminder2hPushSentAt: null,
           checkInStatus: null,
