@@ -40,6 +40,24 @@ const RESEND_ENDPOINT = "https://api.resend.com/emails";
  */
 export type MailStream = "transactional" | "lifecycle";
 
+/**
+ * A provider rejection, carrying the HTTP status and NOTHING else. Callers
+ * classify from `status`; nobody can log a payload they were never given.
+ */
+export class ResendSendError extends Error {
+  constructor(readonly status: number) {
+    super(`resend_send_failed_${status}`);
+    this.name = "ResendSendError";
+  }
+  /** Fixed classification for a ledger row or a log line. */
+  get classification(): "auth" | "domain" | "rate_limited" | "provider_error" {
+    if (this.status === 401 || this.status === 403) return "auth";
+    if (this.status === 422) return "domain";
+    if (this.status === 429) return "rate_limited";
+    return "provider_error";
+  }
+}
+
 export interface SendEmailInput {
   to: string;
   subject: string;
@@ -63,6 +81,13 @@ export interface SendEmailInput {
   replyTo?: string;
   /** Defaults to "transactional" - the safe classification. */
   stream?: MailStream;
+  /**
+   * Resend's Idempotency-Key. When two attempts carry the same key the
+   * PROVIDER collapses them, which is what makes retrying an ambiguous send
+   * safe: we no longer have to guess whether the first attempt landed.
+   * Resend honours the key for 24h - see PROVIDER_IDEMPOTENCY_WINDOW_MS.
+   */
+  idempotencyKey?: string;
   /** Correlation only. Never a token, address, or body fragment. */
   meta?: { shopId?: string; appointmentId?: string; kind?: string };
 }
@@ -130,37 +155,48 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
   if (testSend) return testSend(input);
 
   const env = apiEnv();
+  // 🔴 NOTHING PERSON-SHAPED IN A LOG LINE - on any path, including the ones
+  // that send nothing. `to` is the customer's address and `subject` carries
+  // their name, their service and their shop. The meta ids say which booking
+  // this was; that is all an operator needs and all we may keep.
   if (!emailEnabled()) {
     logger.info(
-      { to: input.to, subject: input.subject },
+      { ...input.meta, reason: "email_unconfigured" },
       "email disabled (RESEND_API_KEY/EMAIL_FROM unset); skipping send",
     );
     return { id: "DISABLED", status: "skipped" };
   }
   if (env.DRY_RUN) {
-    logger.info({ to: input.to, subject: input.subject }, "[dry-run] suppressed email send");
+    logger.info({ ...input.meta, reason: "dry_run" }, "[dry-run] suppressed email send");
     return { id: "DRYRUN", status: "dry_run" };
   }
 
   const stream: MailStream = input.stream ?? "transactional";
-  // 🔴 One-click unsubscribe belongs on LIFECYCLE mail only. Gmail/Yahoo bulk
-  // rules want it on anything promotional, and its absence there is a spam
-  // vote - but putting it on a booking confirmation or a password reset
-  // invites opt-out from mail the customer actually needs, and tells the
-  // filter this stream is marketing. So the header follows the stream.
-  const headers =
-    stream === "lifecycle"
-      ? {
-          "List-Unsubscribe": `<${env.APP_BASE_URL.replace(/\/$/, "")}/unsubscribe>`,
-          "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-        }
-      : undefined;
+  // 🔴 NO List-Unsubscribe HEADER IS SENT, deliberately.
+  //
+  // An earlier cut advertised <APP_BASE_URL>/unsubscribe on lifecycle mail.
+  // That route does not exist, and a header pointing at a 404 is worse than
+  // no header at all: mailbox providers follow it, and a one-click
+  // unsubscribe that fails is a stronger negative signal than its absence.
+  //
+  // Nor is the right fix simply to build the route here. ChairBack sends NO
+  // marketing email - promotions are SMS-only (routes/promotions.ts). What
+  // the "lifecycle" stream actually carries is trial and AI-trial reminders
+  // to SHOP OWNERS about the state of their own account, which are account
+  // notices rather than promotions. Letting an owner one-click their way out
+  // of "your trial ends tomorrow" has a billing consequence that belongs to
+  // Eric, not to a deliverability patch.
+  //
+  // The STREAM stays, because it is still what separates owner lifecycle mail
+  // from customer transactional mail for reputation purposes and what a
+  // future dedicated subdomain (or a real unsubscribe) would key off.
 
   const res = await fetch(RESEND_ENDPOINT, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${env.RESEND_API_KEY}`,
       "Content-Type": "application/json",
+      ...(input.idempotencyKey ? { "Idempotency-Key": input.idempotencyKey } : {}),
     },
     body: JSON.stringify({
       from: buildFrom(env.EMAIL_FROM!, input.fromName),
@@ -172,23 +208,24 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
       // renders unpredictably. See wrapEmailHtml.
       ...(input.html ? { html: wrapEmailHtml(input.html, input.subject) } : {}),
       ...(input.replyTo ? { reply_to: [input.replyTo] } : {}),
-      ...(headers ? { headers } : {}),
     }),
   });
   if (!res.ok) {
-    // Body is Resend's error JSON - useful for debugging (unverified domain,
-    // bad key), bounded so a weird response can't flood the log line.
-    const body = await res.text().catch(() => "");
-    throw new Error(`resend_send_failed: ${res.status} ${body.slice(0, 300)}`);
+    // 🔴 THE STATUS CODE ONLY. Resend's error body echoes the request it
+    // rejected - recipient, subject, and the rendered HTML - and this Error
+    // travels into logs, Sentry and (via callers) provider-error columns.
+    // A hostile or merely verbose provider must not be able to smuggle the
+    // message back out through an exception string. The status is enough to
+    // separate "unverified domain" (403) from "bad key" (401) from "rate
+    // limited" (429), which is all the classification anyone acts on.
+    await res.text().catch(() => "");
+    throw new ResendSendError(res.status);
   }
   const data = (await res.json().catch(() => ({}))) as { id?: string };
   // 🔴 The recipient address is NOT logged. It was, and it is PII that buys
   // nothing: the provider message id is what correlates a send to a delivery
   // event, and the meta ids say which shop/appointment it belonged to.
-  logger.info(
-    { id: data.id, subject: input.subject, stream, ...input.meta },
-    "email sent",
-  );
+  logger.info({ id: data.id, stream, ...input.meta }, "email sent");
   // Record the send so a later delivery/bounce/complaint event has something
   // to attach to. Fire-and-forget: a ledger write must never fail a message
   // that has already left.

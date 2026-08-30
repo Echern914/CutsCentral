@@ -8,6 +8,7 @@ import { verifySvixSignature } from "./webhooks.resend.js";
 import {
   applyEmailEvent,
   readEmailDeliverySummary,
+  recordEmailSent,
 } from "../services/emailDelivery.js";
 
 /**
@@ -55,6 +56,7 @@ beforeAll(() => {
 });
 
 afterEach(async () => {
+  await prisma.emailWebhookEvent.deleteMany({ where: { messageId: { in: emails } } });
   await prisma.emailDelivery.deleteMany({ where: { messageId: { in: emails } } });
   emails.length = 0;
   process.env.RESEND_WEBHOOK_SECRET = SECRET;
@@ -178,12 +180,14 @@ describe("applying events", () => {
     expect(row!.eventCount).toBe(3);
   });
 
-  it("acks an event for a message it never recorded", async () => {
-    const res = await post({ type: "email.delivered", data: { email_id: "em_never_seen" } });
+  it("RETAINS an event for a message it never recorded, rather than discarding it", async () => {
+    const id = `em_${randomToken(8)}`;
+    emails.push(id);
+    const res = await post({ type: "email.delivered", data: { email_id: id } });
     expect(res.status).toBe(200);
-    expect(await applyEmailEvent({ messageId: "em_never_seen", event: "email.delivered" })).toBe(
-      "unknown_message",
-    );
+    // A verified event is evidence; creating the row is what stops a bounce
+    // disappearing because the provider beat our own metadata write.
+    expect(await applyEmailEvent({ messageId: id, event: "email.delivered" })).toBe("applied");
   });
 
   it("ignores an event type outside the vocabulary", async () => {
@@ -266,5 +270,128 @@ describe("the admin summary", () => {
     expect(summary.total).toBeGreaterThanOrEqual(3);
     expect(summary.byKind["confirmation"]!.bounced).toBeGreaterThanOrEqual(1);
     expect(summary.byStatus["bounced"]).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("race and replay safety", () => {
+  it("KEEPS an event that arrives before the sender's own metadata write", async () => {
+    // The provider is routinely faster than our fire-and-forget write. The
+    // old code returned unknown_message and threw the event away - which is
+    // how a bounce could vanish entirely.
+    const id = `em_${randomToken(8)}`;
+    emails.push(id);
+    const res = await post({ type: "email.bounced", data: { email_id: id } });
+    expect(res.status).toBe(200);
+
+    const row = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
+    expect(row).not.toBeNull();
+    expect(row!.status).toBe("bounced");
+    expect(row!.failureClass).toBe("hard_bounce");
+    expect(row!.awaitingDispatchMeta).toBe(true);
+  });
+
+  it("attaches late dispatch metadata WITHOUT overwriting the newer status", async () => {
+    const id = `em_${randomToken(8)}`;
+    emails.push(id);
+    // Event first...
+    await post({ type: "email.bounced", data: { email_id: id } });
+    // ...then our own write lands, carrying the correlation the event lacked.
+    recordEmailSent(id, {
+      to: "casey@example.com",
+      subject: "Booking confirmed",
+      text: "x",
+      meta: { shopId: "shop_1", appointmentId: "appt_1", kind: "confirmation" },
+    });
+    await new Promise((r) => setTimeout(r, 300));
+
+    const row = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
+    expect(row!.kind).toBe("confirmation"); // metadata attached
+    expect(row!.shopId).toBe("shop_1");
+    expect(row!.appointmentId).toBe("appt_1");
+    expect(row!.awaitingDispatchMeta).toBe(false);
+    // 🔴 And the outcome the provider already reported is untouched.
+    expect(row!.status).toBe("bounced");
+    expect(row!.failureClass).toBe("hard_bounce");
+  });
+
+  it("REPLAYING the same svix-id changes nothing at all", async () => {
+    const id = `em_${randomToken(8)}`;
+    emails.push(id);
+    await seed(id);
+
+    const s = signed({ type: "email.delivered", data: { email_id: id } });
+    const send = () =>
+      request(app)
+        .post("/webhooks/resend")
+        .set("Content-Type", "application/json")
+        .set("svix-id", s.id)
+        .set("svix-timestamp", s.ts)
+        .set("svix-signature", s.sig)
+        .send(s.raw);
+
+    expect((await send()).status).toBe(200);
+    const first = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
+
+    // Svix retries the SAME delivery - three more times.
+    for (let i = 0; i < 3; i++) expect((await send()).status).toBe(200);
+
+    const after = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
+    expect(after!.eventCount).toBe(first!.eventCount); // no inflation
+    expect(after!.status).toBe(first!.status);
+    expect(after!.deliveredAt?.getTime()).toBe(first!.deliveredAt?.getTime());
+    // Exactly one delivery record was kept.
+    expect(
+      await prisma.emailWebhookEvent.count({ where: { svixId: s.id } }),
+    ).toBe(1);
+  });
+
+  it("counts DISTINCT deliveries of the same event separately", async () => {
+    const id = `em_${randomToken(8)}`;
+    emails.push(id);
+    await seed(id);
+    await post({ type: "email.delivered", data: { email_id: id } });
+    await post({ type: "email.delivered", data: { email_id: id } }); // new svix id
+    const row = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
+    expect(row!.eventCount).toBe(2);
+  });
+
+  it("clears a STALE deferral once delivery actually succeeds", async () => {
+    const id = `em_${randomToken(8)}`;
+    emails.push(id);
+    await seed(id);
+    await post({ type: "email.delivery_delayed", data: { email_id: id } });
+    let row = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
+    expect(row!.status).toBe("deferred");
+    expect(row!.failureClass).toBe("deferred");
+
+    await post({ type: "email.delivered", data: { email_id: id } });
+    row = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
+    expect(row!.status).toBe("delivered");
+    // Leaving the stale class would report a delivered message as troubled.
+    expect(row!.failureClass).toBeNull();
+  });
+
+  it("🔴 but a TERMINAL failure still wins over a later success", async () => {
+    const id = `em_${randomToken(8)}`;
+    emails.push(id);
+    await seed(id);
+    await post({ type: "email.bounced", data: { email_id: id } });
+    await post({ type: "email.delivered", data: { email_id: id } });
+    const row = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
+    expect(row!.status).toBe("bounced");
+    expect(row!.failureClass).toBe("hard_bounce");
+    expect(row!.eventCount).toBe(2); // seen, counted, not obeyed
+  });
+
+  it("an unknown event type cannot corrupt an established state", async () => {
+    const id = `em_${randomToken(8)}`;
+    emails.push(id);
+    await seed(id);
+    await post({ type: "email.bounced", data: { email_id: id } });
+    await post({ type: "email.opened", data: { email_id: id } });
+    await post({ type: "not.an.event", data: { email_id: id } });
+    const row = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
+    expect(row!.status).toBe("bounced");
+    expect(row!.eventCount).toBe(1); // unknown types are not counted either
   });
 });

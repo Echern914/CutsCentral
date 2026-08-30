@@ -106,7 +106,14 @@ resendWebhookRouter.post("/", express.raw({ type: "*/*" }), async (req, res) => 
     return;
   }
 
-  const outcome = await applyEmailEvent({ messageId, event });
+  // The svix delivery id is the REPLAY key: svix retries on any non-2xx and
+  // can redeliver a success too, so applying an event must be keyed on the
+  // delivery, not merely on the message.
+  const outcome = await applyEmailEvent({
+    messageId,
+    event,
+    svixId: req.header("svix-id"),
+  });
   // Event name and outcome only - never the payload, which carries the
   // recipient address and the rendered subject.
   logger.info({ event, outcome }, "resend delivery event");

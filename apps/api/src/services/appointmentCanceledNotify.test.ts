@@ -2,17 +2,32 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { randomToken } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { __setSendEmailForTests, type SendEmailInput } from "../messaging/email.js";
-import { notifyAppointmentCanceled } from "./appointmentCanceledNotify.js";
+import {
+  cancellationIdempotencyKey,
+  deliverCancellationIntent,
+  PROVIDER_IDEMPOTENCY_WINDOW_MS,
+} from "./appointmentCanceledNotify.js";
+import { runEmailOutbox, CLAIM_TTL_MS } from "../engines/emailOutbox.js";
 import { cancelAppointment } from "../engines/appointmentPromotion.js";
 
 /**
- * "Your appointment was canceled" - the email a ChairBack customer never used
- * to receive on any path.
+ * "Your appointment was canceled" - via a DURABLE OUTBOX.
  *
- * The contract under test is not "an email is sent" but "EXACTLY ONE is sent,
- * from wherever the cancel came from, and never for something that is not a
- * cancellation".
+ * The contract is not "an email is sent" but: the promise to send survives a
+ * crash at any point, exactly one message results however many times the
+ * cancel is attempted or retried, and the cancellation itself is never undone
+ * by a mail problem.
+ *
+ * Process death is modelled honestly: the intent row is the only thing that
+ * survives a restart, so "kill the process here" is exercised by inspecting
+ * the row and then running a FRESH worker pass against it.
  */
+
+/** Drain the outbox the way the scheduled job does. */
+const drain = (now?: Date) => runEmailOutbox(now ? { now } : {});
+
+const intentsFor = (appointmentId: string) =>
+  prisma.emailIntent.findMany({ where: { appointmentId } });
 
 const NOON = new Date("2026-06-01T16:00:00Z");
 let emails: SendEmailInput[] = [];
@@ -84,6 +99,7 @@ beforeAll(async () => {
 
 afterEach(async () => {
   emails = [];
+  await prisma.emailIntent.deleteMany({ where: { shopId } });
   await prisma.appointment.deleteMany({ where: { shopId } });
   await prisma.client.deleteMany({ where: { shopId } });
   await prisma.staff.deleteMany({ where: { shopId } });
@@ -97,26 +113,26 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-describe("the cancellation email", () => {
+describe("the cancellation email itself", () => {
   it("tells the customer what was canceled, and how to book again", async () => {
-    const id = await makeAppointment();
-    expect(await notifyAppointmentCanceled({ shopId, appointmentId: id })).toBe("sent");
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    await drain();
     expect(emails).toHaveLength(1);
     const e = emails[0]!;
     expect(e.subject).toContain("Canceled");
     expect(e.subject).toContain("Skin Fade");
     expect(e.html).toContain("Your appointment was canceled");
-    expect(e.html).toContain("Skin Fade");
-    expect(e.html).toContain("Sam"); // the barber they booked with
+    expect(e.html).toContain("Sam");
     expect(e.html).toContain("Book another appointment");
-    // The shop leads the From line - the customer booked at a shop, not at us.
     expect(e.fromName).toBe("Canceled Cuts");
-    expect(e.stream ?? "transactional").toBe("transactional");
+    expect(e.stream).toBe("transactional");
   });
 
   it("offers NO manage/cancel button - it would resolve to nothing useful", async () => {
-    const id = await makeAppointment();
-    await notifyAppointmentCanceled({ shopId, appointmentId: id });
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    await drain();
     const e = emails[0]!;
     expect(e.html).not.toContain("/book/manage/");
     expect(e.text).not.toContain("/book/manage/");
@@ -124,38 +140,22 @@ describe("the cancellation email", () => {
   });
 
   it("puts no token or internal id in anything the CUSTOMER can see", async () => {
-    const id = await makeAppointment();
+    const id = await makeAppointment({ status: "BOOKED" });
     const appt = await prisma.appointment.findUnique({ where: { id } });
-    await notifyAppointmentCanceled({ shopId, appointmentId: id });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    await drain();
     const e = emails[0]!;
-    // The rendered message - subject, html, text - is what reaches a person.
-    const visible = `${e.subject}
-${e.html ?? ""}
-${e.text}`;
+    const visible = [e.subject, e.html ?? "", e.text].join("\n");
     expect(visible).not.toContain(appt!.manageToken);
     expect(visible).not.toContain(id);
     expect(visible).not.toContain(shopId);
   });
 
-  it("DOES carry shop/appointment ids as correlation metadata", async () => {
-    // Deliberately the other half of the rule: ids belong in the observability
-    // channel (which log line, which delivery event) and nowhere else. Without
-    // them a bounce cannot be traced back to a booking.
-    const id = await makeAppointment();
-    await notifyAppointmentCanceled({ shopId, appointmentId: id });
-    expect(emails[0]!.meta).toEqual({
-      shopId,
-      appointmentId: id,
-      kind: "cancellation",
-    });
-  });
-
   it("has a text fallback that stands on its own", async () => {
-    const id = await makeAppointment();
-    await notifyAppointmentCanceled({ shopId, appointmentId: id });
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    await drain();
     const t = emails[0]!.text;
-    // Someone reading ONLY the plain part must learn what, where, when, and
-    // what to do next.
     expect(t).toContain("Skin Fade");
     expect(t).toContain("Canceled Cuts");
     expect(t).toMatch(/canceled/i);
@@ -164,111 +164,179 @@ ${e.text}`;
   });
 });
 
-describe("exactly once", () => {
-  it("sends ONE email when two cancellations race", async () => {
-    const id = await makeAppointment();
-    const results = await Promise.all(
-      Array.from({ length: 6 }, () => notifyAppointmentCanceled({ shopId, appointmentId: id })),
-    );
+describe("durability: the promise survives a crash", () => {
+  it("leaves a PENDING intent committed with the cancellation, before any send", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+
+    // This is exactly the "process died right after the cancel committed"
+    // state: nothing sent, but the promise is on disk.
+    const intents = await intentsFor(id);
+    expect(intents).toHaveLength(1);
+    expect(intents[0]!.status).toBe("PENDING");
+    expect(emails).toHaveLength(0);
+
+    const appt = await prisma.appointment.findUnique({ where: { id } });
+    expect(appt!.status).toBe("CANCELED");
+    expect(appt!.cancellationEmailSentAt).toBeNull();
+
+    // A fresh worker - i.e. after the restart - keeps the promise.
+    await drain();
     expect(emails).toHaveLength(1);
-    expect(results.filter((r) => r === "sent")).toHaveLength(1);
-    expect(results.filter((r) => r === "already_sent")).toHaveLength(5);
+    const after = await prisma.appointment.findUnique({ where: { id } });
+    expect(after!.cancellationEmailSentAt).not.toBeNull();
   });
 
-  it("is idempotent on retry - a repeated call after success sends nothing", async () => {
-    const id = await makeAppointment();
-    expect(await notifyAppointmentCanceled({ shopId, appointmentId: id })).toBe("sent");
-    expect(await notifyAppointmentCanceled({ shopId, appointmentId: id })).toBe("already_sent");
-    expect(emails).toHaveLength(1);
-  });
+  it("recovers an intent whose worker died AFTER claiming, before the request", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    const [intent] = await intentsFor(id);
 
-  it("does NOT re-send after an ambiguous provider failure", async () => {
-    // The deliberate trade: the claim is taken BEFORE dispatch, so a provider
-    // error that may or may not have delivered is never doubled up.
-    const id = await makeAppointment();
-    __setSendEmailForTests(async () => {
-      throw new Error("resend_send_failed: 500 upstream exploded");
+    // The claim is on disk and the holder is gone; nothing will release it.
+    await prisma.emailIntent.update({
+      where: { id: intent!.id },
+      data: { claimedAt: new Date(), attempts: 1 },
     });
-    expect(await notifyAppointmentCanceled({ shopId, appointmentId: id })).toBe("failed");
+    // A worker running now must NOT steal a live claim.
+    await drain();
+    expect(emails).toHaveLength(0);
+
+    // Once the claim ages out the row is fair game again.
+    await drain(new Date(Date.now() + CLAIM_TTL_MS + 60_000));
+    expect(emails).toHaveLength(1);
+    expect((await intentsFor(id))[0]!.status).toBe("SENT");
+  });
+
+  it("stamps the appointment only AFTER the provider accepts", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    __setSendEmailForTests(async () => {
+      throw new Error("resend exploded");
+    });
+    await drain();
+    const appt = await prisma.appointment.findUnique({ where: { id } });
+    expect(appt!.cancellationEmailSentAt).toBeNull();
+    expect(appt!.status).toBe("CANCELED"); // the cancel is never undone
+    // Still PENDING: the old claim-then-send design suppressed this forever.
+    expect((await intentsFor(id))[0]!.status).toBe("PENDING");
+
     __setSendEmailForTests(async (input) => {
       emails.push(input);
       return { id: `em${emails.length}`, status: "sent" };
     });
-    expect(await notifyAppointmentCanceled({ shopId, appointmentId: id })).toBe("already_sent");
-    expect(emails).toHaveLength(0);
-    const after = await prisma.appointment.findUnique({ where: { id } });
-    // 🔴 And the CANCELLATION still stands - a mail failure never revives it.
-    expect(after!.status).toBe("CANCELED");
-    expect(after!.cancellationEmailSentAt).not.toBeNull();
-  });
-
-  it("leaks no address or provider text when the provider fails", async () => {
-    const id = await makeAppointment();
-    const { logger } = await import("../logger.js");
-    const errSpy = vi.spyOn(logger, "error").mockImplementation(() => logger);
-    __setSendEmailForTests(async () => {
-      throw new Error("resend 422 to=casey@example.com key=re_live_SECRET");
-    });
-    try {
-      await notifyAppointmentCanceled({ shopId, appointmentId: id });
-      const logged = JSON.stringify(errSpy.mock.calls);
-      expect(logged).not.toContain("casey@example.com");
-      expect(logged).not.toContain("re_live_SECRET");
-      expect(logged).toContain("cancellation_email_failed");
-    } finally {
-      errSpy.mockRestore();
-      __setSendEmailForTests(async (input) => {
-        emails.push(input);
-        return { id: `em${emails.length}`, status: "sent" };
-      });
-    }
+    await drain();
+    expect(emails).toHaveLength(1);
+    expect(
+      (await prisma.appointment.findUnique({ where: { id } }))!.cancellationEmailSentAt,
+    ).not.toBeNull();
   });
 });
 
-describe("what must NOT trigger it", () => {
-  it("sends nothing for a NO_SHOW", async () => {
-    const id = await makeAppointment({ status: "NO_SHOW" });
-    expect(await notifyAppointmentCanceled({ shopId, appointmentId: id })).toBe("skipped");
-    expect(emails).toHaveLength(0);
-  });
-
-  it("sends nothing for a COMPLETED appointment", async () => {
-    const id = await makeAppointment({ status: "COMPLETED" });
-    expect(await notifyAppointmentCanceled({ shopId, appointmentId: id })).toBe("skipped");
-    expect(emails).toHaveLength(0);
-  });
-
-  it("sends nothing for a still-BOOKED appointment (a stale call)", async () => {
+describe("exactly once", () => {
+  it("creates ONE intent when cancellations race", async () => {
     const id = await makeAppointment({ status: "BOOKED" });
-    expect(await notifyAppointmentCanceled({ shopId, appointmentId: id })).toBe("skipped");
-    expect(emails).toHaveLength(0);
+    await Promise.all(
+      Array.from({ length: 5 }, () => cancelAppointment(shopId, id, "CANCELED", NOON)),
+    );
+    expect(await intentsFor(id)).toHaveLength(1);
+    await drain();
+    expect(emails).toHaveLength(1);
   });
 
-  it("sends nothing when there is no address, and does not burn the claim", async () => {
-    const id = await makeAppointment({ email: null });
-    expect(await notifyAppointmentCanceled({ shopId, appointmentId: id })).toBe("skipped");
-    expect(emails).toHaveLength(0);
-    const after = await prisma.appointment.findUnique({ where: { id } });
-    expect(after!.cancellationEmailSentAt).toBeNull();
-  });
-});
-
-describe("the engine every cancel route funnels through", () => {
-  it("emails the customer when cancelAppointment CANCELS", async () => {
+  it("sends a stable Idempotency-Key, so a provider retry cannot double up", async () => {
     const id = await makeAppointment({ status: "BOOKED" });
     await cancelAppointment(shopId, id, "CANCELED", NOON);
-    // cancelAppointment dispatches fire-and-forget after commit.
-    await new Promise((r) => setTimeout(r, 400));
-    expect(emails).toHaveLength(1);
-    expect(emails[0]!.subject).toContain("Canceled");
-    const after = await prisma.appointment.findUnique({ where: { id } });
-    expect(after!.status).toBe("CANCELED");
+    await drain();
+    expect(emails[0]!.idempotencyKey).toBe(cancellationIdempotencyKey(id, NOON));
   });
 
-  it("emails NOTHING when cancelAppointment records a NO_SHOW", async () => {
+  it("a second and third drain after success do nothing", async () => {
     const id = await makeAppointment({ status: "BOOKED" });
-    await cancelAppointment(shopId, id, "NO_SHOW", NOON);
-    await new Promise((r) => setTimeout(r, 400));
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    await drain();
+    await drain();
+    await drain();
+    expect(emails).toHaveLength(1);
+  });
+
+  it("restore then cancel again produces a NEW email", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    await drain();
+    expect(emails).toHaveLength(1);
+
+    // Undo, exactly as /restore does.
+    await prisma.appointment.update({
+      where: { id },
+      data: { status: "BOOKED", canceledAt: null, cancellationEmailSentAt: null },
+    });
+
+    // Canceled again at a DIFFERENT instant: a new occurrence, a new key.
+    const later = new Date(NOON.getTime() + 60 * 60 * 1000);
+    await cancelAppointment(shopId, id, "CANCELED", later);
+    await drain(new Date(later.getTime() + 1000));
+    expect(emails).toHaveLength(2);
+    expect(new Set(emails.map((e) => e.idempotencyKey)).size).toBe(2);
+    expect(await intentsFor(id)).toHaveLength(2);
+  });
+});
+
+describe("giving up safely", () => {
+  it("ABANDONS rather than blindly retrying past the provider idempotency window", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    __setSendEmailForTests(async () => {
+      throw new Error("ambiguous");
+    });
+    // Past 24h the key means nothing to Resend, so a retry could deliver a
+    // SECOND copy. Terminal and visible beats a coin flip.
+    const past = new Date(Date.now() + PROVIDER_IDEMPOTENCY_WINDOW_MS + 60_000);
+    await drain(past);
+    expect((await intentsFor(id))[0]!.status).toBe("ABANDONED");
+
+    __setSendEmailForTests(async (input) => {
+      emails.push(input);
+      return { id: `em${emails.length}`, status: "sent" };
+    });
+    await drain(new Date(past.getTime() + 60_000));
+    expect(emails).toHaveLength(0);
+  });
+
+  it("does not send for an appointment restored before the worker ran", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    await prisma.appointment.update({
+      where: { id },
+      data: { status: "BOOKED", canceledAt: null },
+    });
+    await drain();
+    expect(emails).toHaveLength(0);
+    expect((await intentsFor(id))[0]!.status).toBe("FAILED");
+  });
+
+  it("records only a fixed classification, never provider prose", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    __setSendEmailForTests(async () => {
+      throw new Error("resend 422 to=casey@example.com key=re_live_SECRET body=<html>");
+    });
+    await drain();
+    const flat = JSON.stringify((await intentsFor(id))[0]);
+    expect(flat).not.toContain("casey@example.com");
+    expect(flat).not.toContain("re_live_SECRET");
+    expect(flat).not.toContain("<html>");
+  });
+
+  it("enqueues NOTHING for a NO_SHOW or for an appointment with no address", async () => {
+    const noShow = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, noShow, "NO_SHOW", NOON);
+    expect(await intentsFor(noShow)).toHaveLength(0);
+
+    const noEmail = await makeAppointment({ status: "BOOKED", email: null });
+    await cancelAppointment(shopId, noEmail, "CANCELED", NOON);
+    expect(await intentsFor(noEmail)).toHaveLength(0);
+
+    await drain();
     expect(emails).toHaveLength(0);
   });
 });

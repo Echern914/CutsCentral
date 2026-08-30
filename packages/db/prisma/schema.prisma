@@ -3282,7 +3282,15 @@ model EmailDelivery {
 
   failureClass String?
 
+  // Incremented ONCE per distinct svix delivery id - a replayed webhook must
+  // not inflate it.
   eventCount Int @default(0)
+
+  // True when this row was created by an EVENT that arrived before our own
+  // dispatch metadata (webhooks routinely beat the sender's own write). The
+  // dispatch write later fills kind/shopId/appointmentId WITHOUT touching the
+  // status the event already established.
+  awaitingDispatchMeta Boolean @default(false)
 
   sentAt      DateTime  @default(now())
   deliveredAt DateTime?
@@ -3291,5 +3299,71 @@ model EmailDelivery {
 
   @@index([shopId, sentAt])
   @@index([status, sentAt])
+  @@index([appointmentId])
+}
+
+// One provider webhook delivery, recorded so a REPLAY changes nothing.
+//
+// Svix (Resend's webhook transport) retries on any non-2xx and can deliver the
+// same event more than once even on success. Without a dedupe key a retry
+// double-counts eventCount and can walk a status backwards. The svix id is
+// that key.
+//
+// 🔴 Stores the delivery id and the event NAME only - never the payload, which
+// carries the recipient address and the rendered subject.
+model EmailWebhookEvent {
+  id        String   @id @default(cuid())
+  svixId    String   @unique
+  event     String
+  messageId String
+  createdAt DateTime @default(now())
+
+  @@index([messageId])
+}
+
+// DURABLE OUTBOX for the cancellation email.
+//
+// WHY AN OUTBOX AND NOT A STAMP: claiming a "sent" stamp before calling the
+// provider makes a crash between the two indistinguishable from a delivered
+// message - the appointment says the customer was told, and nothing will ever
+// tell them. The intent commits IN THE SAME TRANSACTION as the cancellation,
+// so the durable record of "this person must be emailed" cannot outlive or
+// precede the cancel; a lease-guarded worker drains it afterwards.
+//
+// idempotencyKey is per CANCELLATION OCCURRENCE, not per appointment: a
+// restore followed by a second cancel is genuinely a new notification and must
+// get one. It is ALSO the value sent as Resend's Idempotency-Key header, so a
+// retry of an ambiguous attempt is deduplicated by the PROVIDER rather than by
+// our guess about whether the first attempt landed.
+model EmailIntent {
+  id String @id @default(cuid())
+
+  // "appointment_canceled" today; CHECK-pinned in the migration.
+  kind String
+
+  // Stable per occurrence AND the provider Idempotency-Key. Unique, so two
+  // concurrent cancels of one occurrence create exactly one intent.
+  idempotencyKey String @unique
+
+  shopId        String
+  appointmentId String?
+
+  // PENDING -> SENT | FAILED | ABANDONED. ABANDONED = past the provider's
+  // idempotency window with an ambiguous outcome, where a blind retry risks a
+  // duplicate; deliberately terminal and visible rather than retried forever.
+  status String @default("PENDING")
+
+  attempts Int @default(0)
+  // Held while a worker is working this row, so a second replica skips it and
+  // a dead worker's row becomes claimable again once the lease ages out.
+  claimedAt DateTime?
+  lastError String? // fixed classification only - never provider prose
+  sentAt    DateTime?
+  // Provider message id once accepted; joins to EmailDelivery.
+  messageId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, createdAt])
   @@index([appointmentId])
 }

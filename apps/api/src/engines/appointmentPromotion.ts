@@ -9,7 +9,7 @@ import { recomputeCadence } from "./cadence.js";
 import { notifyPunchEarned } from "../services/loyaltyNotify.js";
 import { refundForCancellation } from "../billing/payments.js";
 import { notifySlotOpened } from "./slotOpened.js";
-import { notifyAppointmentCanceled } from "../services/appointmentCanceledNotify.js";
+import { enqueueCancellationEmail } from "../services/appointmentCanceledNotify.js";
 import { releaseForAppointment } from "./acuityMirror.js";
 import { completeWalkInEntryForAppointmentInTx } from "./walkInComplete.js";
 
@@ -237,6 +237,24 @@ export async function cancelAppointment(
       });
       await clawBackVisitEarn(tx, shopId, appt.visitId);
     }
+
+    // 🔴 THE PROMISE TO EMAIL COMMITS WITH THE CANCELLATION, in this same
+    // transaction. If the process dies one instruction later, the durable
+    // record of "this customer must be told" is already on disk and the
+    // outbox worker will keep it; if the transaction rolls back, so does the
+    // promise, and nobody is told about a cancellation that never happened.
+    //
+    // Resend is NEVER called from in here - only a row is written.
+    if (outcome === "CANCELED") {
+      await enqueueCancellationEmail(tx, {
+        shopId,
+        appointmentId: appt.id,
+        // Keyed on THIS occurrence, so a restore followed by another cancel
+        // is a new notification rather than a silenced duplicate.
+        canceledAt: now,
+      });
+    }
+
     return {
       clientId: appt.clientId,
       hadVisit: Boolean(appt.visitId),
@@ -283,20 +301,6 @@ export async function cancelAppointment(
   // cancel and the customer manage-page cancel, since both route through here.
   if (outcome === "CANCELED" && !opts.suppressSlotOpened) {
     void notifySlotOpened({ shopId, appointmentId, now });
-  }
-
-  // 🔴 TELL THE CUSTOMER. Every authorized native cancellation - customer
-  // manage link, dashboard, barber, series, AI receptionist - funnels through
-  // this one function, so wiring the email HERE is what makes "a canceled
-  // ChairBack appointment always emails the customer" structural rather than
-  // something five call sites have to remember.
-  //
-  // Fire-and-forget after the status write has committed: the cancel is done
-  // and must not be undone by a mail problem. The send claims an atomic stamp
-  // first, so concurrent cancels and retries produce exactly one email.
-  // NO_SHOW is excluded - "you didn't turn up" is not a cancellation notice.
-  if (outcome === "CANCELED") {
-    void notifyAppointmentCanceled({ shopId, appointmentId, now });
   }
 
   // Release the Acuity block this appointment was holding. ChairBack is

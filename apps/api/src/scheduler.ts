@@ -29,6 +29,7 @@ import { expireDueOffers } from "./engines/waitlistOffer.js";
 import { expireDeadWaitlistEntries } from "./engines/waitlistExpiry.js";
 import { sweepExpiredRateCounters } from "./middleware/pgRateStore.js";
 import { runDemoReset } from "./engines/demoReset.js";
+import { runEmailOutbox } from "./engines/emailOutbox.js";
 import { processRotationRun } from "./services/rewardsRotation.js";
 
 const env = apiEnv();
@@ -373,6 +374,23 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
       }
     },
     failMsg: "rewards rotation worker failed",
+  },
+  // Email outbox: send the cancellation notices whose intents were committed
+  // with the cancellation itself. Every minute, because a customer learning
+  // their haircut is gone is time-sensitive; bounded batches, and a claim that
+  // ages out so a worker dying mid-send cannot strand a row. No active intents
+  // means one indexed read.
+  {
+    cronExpr: "* * * * *",
+    name: "email-outbox",
+    ttlMs: 3 * MINUTE,
+    run: async () => {
+      const r = await runEmailOutbox();
+      if (r.sent > 0 || r.abandoned > 0) {
+        logger.info(r, "email outbox progressed");
+      }
+    },
+    failMsg: "email outbox worker failed",
   },
   // Live-demo shop: nightly restore to canonical state at 04:00 (quietest
   // hour). Clears viewer-submitted junk and re-rolls the seeded dates so the
