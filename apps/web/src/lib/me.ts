@@ -1,4 +1,5 @@
 import { cache } from "react";
+import type { BusinessVocabulary } from "@chairback/config";
 import { apiGet, type ApiResult } from "./api";
 
 export interface Me {
@@ -36,6 +37,19 @@ export interface Me {
    * back to the default copy.
    */
   serviceNoun?: string;
+  /**
+   * The active shop's business type, resolved server-side.
+   *
+   * `selected: false` means nobody has chosen yet (a shop predating the picker),
+   * so `vocabulary` is the NEUTRAL set — never blanks, and never barbershop
+   * words the shop never asked for. Optional so a web deploy ahead of the API
+   * keeps rendering the previous copy.
+   */
+  businessType?: {
+    id: string;
+    selected: boolean;
+    vocabulary: BusinessVocabulary;
+  } | null;
   /** Read-only public demo session (/demo/dashboard) — banner + hidden account UI. */
   demo?: boolean;
   /**

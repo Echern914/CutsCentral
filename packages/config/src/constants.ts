@@ -1,6 +1,14 @@
 /**
  * App-wide constants. The product name lives here ONLY - rename in one place.
  */
+import {
+  BUSINESS_TYPES,
+  BUSINESS_TYPE_IDS,
+  naivePlural,
+  vocabularyFor,
+  type BusinessTypeId,
+} from "./businessTypes.js";
+
 export const APP_NAME = "ChairBack";
 
 /** Default loyalty + nudge settings applied to newly created shops. */
@@ -81,26 +89,34 @@ export const REFERRAL = {
 } as const;
 
 /**
- * Shop verticals. The product is service-business generic (Shop/Client/Visit);
- * industry only flavors defaults and copy. `defaultReward` seeds the first
- * loyalty menu item during onboarding. `serviceNoun` is the singular word for a
- * visit in that vertical ("cut", "appointment") used in customer-facing copy
- * (e.g. the default rebooking text "since your last {serviceNoun}") so a nail
- * studio's clients aren't texted about a "cut".
+ * Shop verticals.
+ *
+ * @deprecated Use `BUSINESS_TYPES` from `./businessTypes.js` - the registry is
+ * the source of truth and carries the full vocabulary (provider/station/client
+ * nouns), service templates and marketing metadata. This stays as a thin
+ * projection of the four fields it always exposed so existing call sites and
+ * their pinned tests keep working unchanged.
  */
-export const INDUSTRIES = {
-  barber: { label: "Barbershop", defaultReward: "Free Cut", emoji: "✂️", serviceNoun: "cut" },
-  salon: { label: "Hair Salon", defaultReward: "Free Blowout", emoji: "💇", serviceNoun: "appointment" },
-  nails: { label: "Nail Studio", defaultReward: "Free Manicure", emoji: "💅", serviceNoun: "appointment" },
-  lashes: { label: "Lash & Brow Studio", defaultReward: "Free Lash Fill", emoji: "👁️", serviceNoun: "appointment" },
-  spa: { label: "Spa & Skincare", defaultReward: "Free Facial Add-On", emoji: "🧖", serviceNoun: "appointment" },
-  tattoo: { label: "Tattoo & Piercing", defaultReward: "$25 Off Next Session", emoji: "🖋️", serviceNoun: "session" },
-  other: { label: "Other", defaultReward: "Free Service", emoji: "⭐", serviceNoun: "visit" },
-} as const;
+export const INDUSTRIES = Object.fromEntries(
+  BUSINESS_TYPE_IDS.map((id) => [
+    id,
+    {
+      label: BUSINESS_TYPES[id].label,
+      defaultReward: BUSINESS_TYPES[id].defaultReward.name,
+      emoji: BUSINESS_TYPES[id].defaultReward.emoji,
+      serviceNoun: BUSINESS_TYPES[id].vocabulary.serviceNoun,
+    },
+  ]),
+) as Record<
+  BusinessTypeId,
+  { label: string; defaultReward: string; emoji: string; serviceNoun: string }
+>;
 
-export type IndustryKey = keyof typeof INDUSTRIES;
+/** @deprecated Use `BusinessTypeId`. */
+export type IndustryKey = BusinessTypeId;
 
-export const INDUSTRY_KEYS = Object.keys(INDUSTRIES) as IndustryKey[];
+/** @deprecated Use `BUSINESS_TYPE_IDS`. */
+export const INDUSTRY_KEYS: IndustryKey[] = BUSINESS_TYPE_IDS;
 
 /**
  * Self-reported visit cadence (Client.preferredCadence). Captured as one tap at
@@ -222,14 +238,21 @@ export function frequencySegment(
  * customer copy is never wrong (just generic). Used by the SMS/push nudge.
  */
 export function serviceNounFor(industry: string | null | undefined): string {
-  if (!industry) return "visit";
-  return (INDUSTRIES as Record<string, { serviceNoun?: string }>)[industry]?.serviceNoun ?? "visit";
+  return vocabularyFor(industry).serviceNoun;
 }
 
 /**
  * The visit-noun for a specific shop: the owner's custom word (Shop.serviceNoun,
  * e.g. "twist") when set, else the industry default. Pass the shop row (or any
  * object with the two fields) so the fallback logic lives in exactly one place.
+ *
+ * 🔴 Deliberately does NOT consult `businessTypeSelectedAt`, unlike
+ * `vocabularyForShop`. Every live SMS, push and public page runs through here, so
+ * teaching it the legacy rule would silently reword real messages to shops that
+ * have not been asked yet. Callers migrate to `vocabularyForShop` surface by
+ * surface; until then this keeps today's behavior byte-identical.
+ *
+ * @deprecated Use `vocabularyForShop` from `./businessTypes.js`.
  */
 export function serviceNounForShop(shop: {
   industry?: string | null;
@@ -239,9 +262,14 @@ export function serviceNounForShop(shop: {
   return custom ? custom : serviceNounFor(shop.industry);
 }
 
-/** Naive plural for UI labels ("cut" -> "cuts"); words already ending in s stay. */
+/**
+ * Naive plural for UI labels ("cut" -> "cuts"); words already ending in s stay.
+ *
+ * @deprecated Prefer the authored `serviceNounPlural` on a resolved vocabulary -
+ * it is right for irregulars this guess gets wrong.
+ */
 export function pluralServiceNoun(noun: string): string {
-  return noun.endsWith("s") ? noun : `${noun}s`;
+  return naivePlural(noun);
 }
 
 /** Nudge engine windows. */

@@ -5,12 +5,11 @@ import {
   ACCENT_HEX_REGEX,
   BILLING,
   BOOKING_MODES,
+  BUSINESS_TYPE_IDS,
   DEFAULTS,
   DEFAULT_SECTION_ORDER,
   GALLERY_CAPTION_MAX,
   GALLERY_MAX,
-  INDUSTRIES,
-  INDUSTRY_KEYS,
   LAYOUT_STYLE_KEYS,
   PAGE_FONT_KEYS,
   PAGE_SECTION_KEYS,
@@ -20,9 +19,9 @@ import {
   REWARDS_WELCOME_MAX,
   SLUG_REGEX,
   apiEnv,
+  businessType,
   randomToken,
   type GalleryItem,
-  type IndustryKey,
 } from "@chairback/config";
 import { Prisma, prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
@@ -163,7 +162,15 @@ const createShopSchema = z
     bookingUrl: httpUrl(500).nullish().or(z.literal("")),
     timezone: z.string().min(1).default(DEFAULTS.timezone),
     // Vertical: flavors the seeded reward + copy, nothing structural.
-    industry: z.enum(INDUSTRY_KEYS as [string, ...string[]]).default("other"),
+    //
+    // 🔴 Deliberately `.optional()` with NO default. A default would erase the
+    // difference between "this owner chose Barbershop" and "nobody said", and
+    // that difference is the whole legacy design - see businessTypeSelectedAt.
+    // An omitted value creates an honestly UNSELECTED shop (neutral wording plus
+    // a one-time picker), which is a stronger guarantee than a 400: a 400 only
+    // stops well-behaved clients, whereas this makes silent classification
+    // impossible for any caller. The signup form itself requires a choice.
+    industry: z.enum(BUSINESS_TYPE_IDS as [string, ...string[]]).optional(),
     // Seeds the FIRST reward on the shop's menu (the Reward table is the
     // source of truth; the legacy field names keep onboarding compatible).
     // rewardLabel falls back to the industry's default when omitted.
@@ -348,7 +355,14 @@ shopsRouter.post("/", requireUser, async (req, res) => {
     parsed.data;
   // Normalize an omitted/empty booking link to null (no external booking source).
   shopData.bookingUrl = shopData.bookingUrl?.trim() ? shopData.bookingUrl.trim() : null;
-  const industry = INDUSTRIES[shopData.industry as IndustryKey] ?? INDUSTRIES.other;
+  // Did a human actually pick a vertical, or did the caller just not say? Only an
+  // explicit choice gets stamped; everything else stays unselected and renders
+  // neutral wording until an owner or manager answers the question.
+  const chose = shopData.industry !== undefined;
+  // Store "other" (not the column's "barber" default) when unstated, so the row
+  // never *reads* as a barbershop nobody claimed. This is what shipped before.
+  const industryKey = shopData.industry ?? "other";
+  const type = businessType(industryKey);
   const slug = await availableSlug(parsed.data.name);
   // Shop + its first menu reward land together or not at all.
   const shop = await prisma.$transaction(async (tx) => {
@@ -361,13 +375,15 @@ shopsRouter.post("/", requireUser, async (req, res) => {
         // kicks in once Stripe is configured (see billing/stripe.ts).
         trialEndsAt: new Date(Date.now() + BILLING.trialDays * 86_400_000),
         ...shopData,
+        industry: industryKey,
+        businessTypeSelectedAt: chose ? new Date() : null,
       },
     });
     await tx.reward.create({
       data: {
         shopId: created.id,
-        name: rewardLabel ?? industry.defaultReward,
-        emoji: industry.emoji,
+        name: rewardLabel ?? type.defaultReward.name,
+        emoji: type.defaultReward.emoji,
         punchCost: rewardThreshold,
         sortOrder: 0,
       },

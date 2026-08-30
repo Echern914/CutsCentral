@@ -1,0 +1,53 @@
+-- Business type: record whether a human actually CHOSE the shop's vertical.
+--
+-- Additive and non-destructive. The previously deployed API never reads this
+-- column, so prod keeps working through the deploy window (same playbook as
+-- 20260612100000_billing_industry and 20260611020000_shop_page). Nothing is
+-- renamed, nothing is deleted, and `Shop.industry` is not touched.
+ALTER TABLE "Shop" ADD COLUMN "businessTypeSelectedAt" TIMESTAMP(3);
+
+-- NULL means "the stored industry is a DEFAULT, not an answer". Such a shop
+-- renders NEUTRAL vocabulary and is offered a one-time picker, rather than being
+-- presented as a barbershop it never claimed to be.
+--
+-- Three cohorts exist, established from the git history rather than guessed:
+--   before 2026-06-13  no picker at all; `industry` came from the ALTER's
+--                      DEFAULT 'barber' in 20260612100000_billing_industry.
+--   06-13 .. 06-29     a249a68 shipped a picker, but as useState("barber") -
+--                      pre-selected and not required, so an owner who never
+--                      touched it still submitted "barber". Also a default.
+--   from   dbb2b6a     useState("") + a disabled placeholder + required: the
+--                      first genuinely explicit choice.
+--
+-- So only the third cohort is stamped, and only from each shop's OWN createdAt,
+-- so the timestamp records something true instead of inventing a moment.
+--
+-- ---------------------------------------------------------------------------
+-- THE CUTOFF, IN UTC, AND WHY IT IS WHERE IT IS
+-- ---------------------------------------------------------------------------
+-- dbb2b6ac0ec22be6897f544d9982ca0acfc2efc8 was committed at
+--   2026-06-28T22:58:42-04:00  ==  2026-06-29T02:58:42Z
+--
+-- An earlier draft of this migration used 2026-06-29 00:00:00, which is
+-- 2h58m BEFORE that commit existed - it would have claimed a choice for shops
+-- created while the defaultless picker was still unwritten, let alone deployed.
+--
+-- The production deploy time could not be established: GitHub's deployments API
+-- retains only recent Preview entries, so there is no record of when this commit
+-- reached production. The cutoff is therefore set to the next midnight AFTER the
+-- commit, giving ~21h of slack for the deploy:
+--
+--   2026-06-30 00:00:00Z
+--
+-- `Shop."createdAt"` is TIMESTAMP(3) - `timestamp WITHOUT time zone` - and
+-- Prisma stores UTC in it, so this bare literal is a UTC-to-UTC comparison. No
+-- session TimeZone can shift it.
+--
+-- 🔴 THIS BOUNDARY MAY ONLY EVER MOVE LATER. The two errors are not symmetric:
+-- a false NULL shows one legitimate shop the picker once, while a false stamp
+-- permanently claims a choice the shop never made and destroys the only signal
+-- that we ought to have asked. If the real deploy time is ever established and
+-- it is later than this, move the constant forward.
+UPDATE "Shop"
+   SET "businessTypeSelectedAt" = "createdAt"
+ WHERE "createdAt" >= TIMESTAMP '2026-06-30 00:00:00';
