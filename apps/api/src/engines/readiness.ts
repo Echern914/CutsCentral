@@ -36,7 +36,14 @@
  * NO STORED COMPLETION STATE. There is no checklist table and there must never
  * be one: a stored "done" is a claim, and claims drift from the data they
  * describe. Every answer below is derived from canonical rows at read time.
+ *
+ * VOCABULARY IS AN INJECTED FACT. The wording ("chair" vs "station" vs "bay")
+ * arrives on `ReadinessFacts.vocabulary` like every other input, so this module
+ * stays a pure function and cannot reach for a shop row to ask what to call
+ * things. Item ids, milestone ids and CTA feature ids are WIRE VALUES and never
+ * move - only the prose does.
  */
+import type { BusinessVocabulary } from "@chairback/config";
 
 /** How hard an item is. */
 export type ReadinessClass = "required" | "conditional" | "recommended" | "info";
@@ -56,11 +63,18 @@ export const MILESTONE_IDS = [
 ] as const;
 export type MilestoneId = (typeof MILESTONE_IDS)[number];
 
-const MILESTONE_TITLES: Record<MilestoneId, string> = {
-  shop: "Your shop",
-  services_and_barber: "Services and barber",
-  hours_and_alerts: "Hours and alerts",
-  preview_and_go_live: "Preview and go live",
+/**
+ * Milestone titles resolve against the shop's vocabulary.
+ *
+ * 🔴 The KEYS are wire ids and never change - `services_and_barber` stays
+ * `services_and_barber` for a nail studio, because clients and the CTA
+ * destination manifest in readiness.test.ts key off it. Only the TITLE moves.
+ */
+const MILESTONE_TITLES: Record<MilestoneId, (v: BusinessVocabulary) => string> = {
+  shop: () => "Your shop",
+  services_and_barber: (v) => `Services and ${v.providerNounPlural}`,
+  hours_and_alerts: () => "Hours and alerts",
+  preview_and_go_live: () => "Preview and go live",
 };
 
 /** Minimum bookable service length. Mirrors the API's own service schema
@@ -277,6 +291,12 @@ export interface ServiceFacts {
 export interface ReadinessFacts {
   shopId: string;
   name: string;
+  /**
+   * What this shop calls its people, workspaces and visits. Injected rather than
+   * derived so the engine stays pure; NEUTRAL for a shop that has not chosen a
+   * business type, which is what a legacy shop must render.
+   */
+  vocabulary: BusinessVocabulary;
   timezone: string;
   /** Whether `timezone` is a zone this runtime can actually resolve. */
   timezoneValid: boolean;
@@ -412,6 +432,13 @@ function item(i: ItemInput): ReadinessItem {
 const plural = (n: number, one: string, many = one + "s") =>
   `${n} ${n === 1 ? one : many}`;
 
+/**
+ * Sentence-case a vocabulary word for the start of a title ("chair" -> "Chair").
+ * The registry stores every noun lowercase so it reads correctly mid-sentence;
+ * this is the one place that needs it capitalized.
+ */
+const cap = (word: string): string => word.charAt(0).toUpperCase() + word.slice(1);
+
 /** Native booking means ChairBack itself serves the slots and takes the booking. */
 function isNative(f: ReadinessFacts): boolean {
   return f.bookingMode === "native";
@@ -527,6 +554,7 @@ function staffItems(
   s: StaffFacts,
   caps: ReadinessCapabilities,
 ): ReadinessItem[] {
+  const v = facts.vocabulary;
   const r = recipientOf(facts, s);
   const channels = deliverableChannels(r, caps);
   const shopHasSeats = facts.staff.some((x) => x.seatLinked);
@@ -536,11 +564,13 @@ function staffItems(
       scope: "staff",
       staffId: s.id,
       milestone: "services_and_barber",
-      title: "Chair is active",
-      why: "An inactive chair is hidden from customers entirely.",
+      title: `${cap(v.stationNoun)} is active`,
+      why: `An inactive ${v.stationNoun} is hidden from customers entirely.`,
       klass: "required",
       done: s.active,
-      evidence: s.active ? "Active" : "Deactivated - customers cannot see this chair",
+      evidence: s.active
+        ? "Active"
+        : `Deactivated - customers cannot see this ${v.stationNoun}`,
       role: "manager",
       cta: { label: "Open Staff", featureId: "staff" },
     }),
@@ -550,7 +580,7 @@ function staffItems(
       staffId: s.id,
       milestone: "hours_and_alerts",
       title: "Weekly hours are set",
-      why: "Without hours this chair offers no times at all.",
+      why: `Without hours this ${v.stationNoun} offers no times at all.`,
       klass: "required",
       done: s.availabilityRuleCount > 0,
       evidence:
@@ -566,13 +596,13 @@ function staffItems(
       staffId: s.id,
       milestone: "services_and_barber",
       title: "Offers at least one service",
-      why: "A chair with no services assigned cannot be booked for anything.",
+      why: `A ${v.stationNoun} with no services assigned cannot be booked for anything.`,
       klass: "required",
       done: s.activeServiceLinkCount > 0,
       evidence:
         s.activeServiceLinkCount > 0
           ? `Offers ${plural(s.activeServiceLinkCount, "service")}`
-          : "No services assigned to this chair",
+          : `No services assigned to this ${v.stationNoun}`,
       role: "manager",
       cta: { label: "Assign services", featureId: "services" },
     }),
@@ -581,7 +611,7 @@ function staffItems(
       scope: "staff",
       staffId: s.id,
       milestone: "hours_and_alerts",
-      title: "Bookings reach whoever works this chair",
+      title: `Bookings reach whoever works this ${v.stationNoun}`,
       why: "A booking nobody is told about is a missed appointment.",
       klass: "required",
       done: channels.length > 0,
@@ -600,13 +630,13 @@ function staffItems(
       // Only meaningful once the shop actually has team logins. A solo shop's
       // single chair correctly routes to the owner and must not be nagged.
       applicable: shopHasSeats && s.active,
-      title: "Chair is linked to a login",
-      why: "Until the chair is linked to someone's login, its bookings alert the owner instead of them.",
+      title: `${cap(v.stationNoun)} is linked to a login`,
+      why: `Until the ${v.stationNoun} is linked to someone's login, its bookings alert the owner instead of them.`,
       klass: "conditional",
       done: s.seatLinked,
       evidence: s.seatLinked
         ? "Linked to a team member"
-        : "Not linked - this chair's alerts go to the shop owner",
+        : `Not linked - this ${v.stationNoun}'s alerts go to the shop owner`,
       role: "owner",
       cta: { label: "Link a login", featureId: "team" },
     }),
@@ -616,7 +646,7 @@ function staffItems(
       staffId: s.id,
       milestone: null,
       title: "Photo and short bio",
-      why: "Customers pick a barber they can see. Nothing breaks without it.",
+      why: `Customers pick a ${v.providerNoun} they can see. Nothing breaks without it.`,
       klass: "recommended",
       done: s.hasPhoto && s.hasBio,
       evidence:
@@ -628,7 +658,7 @@ function staffItems(
               ? "Bio added, no photo yet"
               : "No photo or bio yet",
       role: "manager",
-      cta: { label: "Edit chair", featureId: "staff" },
+      cta: { label: `Edit ${v.stationNoun}`, featureId: "staff" },
     }),
   ];
 }
@@ -639,6 +669,7 @@ function shopItems(
   caps: ReadinessCapabilities,
   bookableChairs: StaffFacts[],
 ): ReadinessItem[] {
+  const v = facts.vocabulary;
   const native = isNative(facts);
   const activeStaff = facts.staff.filter((s) => s.active);
   const activeServices = facts.services.filter((s) => s.active);
@@ -751,15 +782,15 @@ function shopItems(
     item({
       id: "shop.staff.active",
       milestone: "services_and_barber",
-      title: "At least one barber",
-      why: "Customers pick a barber before they pick a time.",
+      title: `At least one ${v.providerNoun}`,
+      why: `Customers pick a ${v.providerNoun} before they pick a time.`,
       klass: "required",
       done: activeStaff.length > 0,
       evidence:
         activeStaff.length > 0
-          ? `${plural(activeStaff.length, "active barber")}`
-          : "No active barbers yet",
-      cta: { label: "Add a barber", featureId: "staff" },
+          ? `${plural(activeStaff.length, `active ${v.providerNoun}`, `active ${v.providerNounPlural}`)}`
+          : `No active ${v.providerNounPlural} yet`,
+      cta: { label: `Add a ${v.providerNoun}`, featureId: "staff" },
     }),
     item({
       id: "shop.service.active",
@@ -799,15 +830,15 @@ function shopItems(
       // gap is already named by its own item, and reporting the same root cause
       // twice makes one fix look like two.
       applicable: native && activeStaff.length > 0 && activeServices.length > 0,
-      title: "A service is assigned to a barber",
-      why: "Barbers and services can both exist while no barber actually offers any of them - which leaves nothing bookable.",
+      title: `A service is assigned to a ${v.providerNoun}`,
+      why: `${cap(v.providerNounPlural)} and services can both exist while no ${v.providerNoun} actually offers any of them - which leaves nothing bookable.`,
       klass: "required",
       done: facts.activeOfferingPairs > 0,
       evidence:
         facts.activeOfferingPairs > 0
-          ? `${plural(facts.activeOfferingPairs, "service-to-barber assignment")}`
+          ? `${plural(facts.activeOfferingPairs, `service-to-${v.providerNoun} assignment`)}`
           : activeStaff.length > 0 && activeServices.length > 0
-            ? "You have barbers and services, but none are assigned to each other"
+            ? `You have ${v.providerNounPlural} and services, but none are assigned to each other`
             : "Nothing assigned yet",
       cta: { label: "Assign services", featureId: "services" },
     }),
@@ -844,8 +875,8 @@ function shopItems(
        * root cause reported exactly once.
        */
       applicable: native && atomicPrerequisitesMet,
-      title: "One barber is completely ready",
-      why: "Your barbers, services, hours and alerts can each be fine on their own and still be spread across different chairs - one has hours, another has the service - leaving nothing a customer can actually book. This is the check that says a single chair works end to end.",
+      title: `One ${v.providerNoun} is completely ready`,
+      why: `Your ${v.providerNounPlural}, services, hours and alerts can each be fine on their own and still be spread across different ${v.stationNounPlural} - one has hours, another has the service - leaving nothing a customer can actually book. This is the check that says a single ${v.stationNoun} works end to end.`,
       klass: "required",
       done: bookableChairs.length > 0,
       evidence:
@@ -854,7 +885,7 @@ function shopItems(
           : closestChair
             ? // Every atomic check passes here, so this is purely the split:
               // name the chair nearest the finish line and what it still needs.
-              `Your setup is split across barbers - no single one is complete. ${closestChair.name} is closest, and still needs ${
+              `Your setup is split across ${v.providerNounPlural} - no single one is complete. ${closestChair.name} is closest, and still needs ${
                 [
                   closestChair.availabilityRuleCount === 0 ? "weekly hours" : null,
                   closestChair.bookableServiceLinkCount === 0
@@ -869,7 +900,7 @@ function shopItems(
                   .filter(Boolean)
                   .join(" and ")
               }`
-            : "No single barber is fully set up",
+            : `No single ${v.providerNoun} is fully set up`,
       cta: { label: "Open Staff", featureId: "staff" },
     }),
 
@@ -885,8 +916,8 @@ function shopItems(
       klass: "required",
       done: activeStaff.some((s) => s.availabilityRuleCount > 0),
       evidence: activeStaff.some((s) => s.availabilityRuleCount > 0)
-        ? `${plural(activeStaff.filter((s) => s.availabilityRuleCount > 0).length, "barber has", "barbers have")} hours set`
-        : "No barber has any weekly hours",
+        ? `${plural(activeStaff.filter((s) => s.availabilityRuleCount > 0).length, `${v.providerNoun} has`, `${v.providerNounPlural} have`)} hours set`
+        : `No ${v.providerNoun} has any weekly hours`,
       cta: { label: "Set hours", featureId: "staff" },
     }),
     item({
@@ -1179,27 +1210,28 @@ function shopItems(
         facts.bookingMode === "native" &&
         facts.acuityOutboundMode !== "OFF" &&
         activeStaff.length > 0,
-      title: "Every chair is matched to its Acuity calendar",
-      why: "ChairBack holds the time on the matching Acuity calendar so the same chair cannot be sold twice. A chair it cannot match is left unprotected rather than blocked on somebody else's calendar.",
+      title: `Every ${v.stationNoun} is matched to its Acuity calendar`,
+      why: `ChairBack holds the time on the matching Acuity calendar so the same ${v.stationNoun} cannot be sold twice. A ${v.stationNoun} it cannot match is left unprotected rather than blocked on somebody else's calendar.`,
       klass: "conditional",
       done: activeStaff.every((s) => s.acuityMappingProblem === null),
       evidence: (() => {
         const unmapped = activeStaff.filter((s) => s.acuityMappingProblem === "unmapped");
         const stale = activeStaff.filter((s) => s.acuityMappingProblem === "stale");
+        const n = (count: number) => plural(count, v.stationNoun, v.stationNounPlural);
         if (unmapped.length === 0 && stale.length === 0) {
-          return `${plural(activeStaff.length, "chair")} matched`;
+          return `${n(activeStaff.length)} matched`;
         }
         const parts: string[] = [];
-        if (unmapped.length > 0) parts.push(`${plural(unmapped.length, "chair")} not matched yet`);
+        if (unmapped.length > 0) parts.push(`${n(unmapped.length)} not matched yet`);
         // Stale means the mapping predates the CURRENT connection - a reconnect
         // may be a different Acuity account where that calendar is someone else.
         if (stale.length > 0) {
-          parts.push(`${plural(stale.length, "chair")} matched before the latest reconnect`);
+          parts.push(`${n(stale.length)} matched before the latest reconnect`);
         }
         return parts.join(", ");
       })(),
       role: "owner",
-      cta: { label: "Match chairs", featureId: "integrations" },
+      cta: { label: `Match ${v.stationNounPlural}`, featureId: "integrations" },
     }),
 
     // ----- Informational: true things a barber cannot action -----
@@ -1244,11 +1276,11 @@ function shopItems(
       // recommendation, never a blocker - otherwise hiring a second barber
       // would take a live shop offline.
       applicable: bookableChairs.length > 0 && otherIncompleteChairs.length > 0,
-      title: "Finish setting up your other chairs",
-      why: "Customers can pick these barbers and find nothing available.",
+      title: `Finish setting up your other ${v.stationNounPlural}`,
+      why: `Customers can pick these ${v.providerNounPlural} and find nothing available.`,
       klass: "recommended",
       done: false,
-      evidence: `${plural(otherIncompleteChairs.length, "other chair is", "other chairs are")} not fully set up`,
+      evidence: `${plural(otherIncompleteChairs.length, `other ${v.stationNoun} is`, `other ${v.stationNounPlural} are`)} not fully set up`,
       cta: { label: "Open Staff", featureId: "staff" },
     }),
     item({
@@ -1256,7 +1288,7 @@ function shopItems(
       milestone: null,
       applicable: !paymentsOn && activeServices.length > 0,
       title: "Show your prices",
-      why: "Customers decide faster when the price is on the card. Not required - some shops quote at the chair.",
+      why: `Customers decide faster when the price is on the card. Not required - some shops quote at the ${v.stationNoun}.`,
       klass: "recommended",
       done: pricedServices.length === activeServices.length,
       evidence:
@@ -1324,7 +1356,7 @@ export function buildReadiness(
     );
     return {
       id,
-      title: MILESTONE_TITLES[id],
+      title: MILESTONE_TITLES[id](facts.vocabulary),
       done: blocking.length === 0,
       blocking,
       applicableCount: counted.length,

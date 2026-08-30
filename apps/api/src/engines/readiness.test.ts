@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveFeature } from "@chairback/config/features";
+import { BUSINESS_TYPES, NEUTRAL_VOCABULARY } from "@chairback/config/businessTypes";
 import {
   buildBarberReadiness,
   buildReadiness,
@@ -30,11 +31,13 @@ const CAPS: ReadinessCapabilities = {
   messagingCampaigns: 1,
 };
 
-/** A shop with everything required in place. */
+/** A shop with everything required in place. Barbershop wording by default, so
+ *  every existing assertion below reads exactly as it did before verticals. */
 function ready(over: Partial<ReadinessFacts> = {}): ReadinessFacts {
   return {
     shopId: "shop_1",
     name: "Chern Cuts",
+    vocabulary: BUSINESS_TYPES.barber.vocabulary,
     timezone: "America/New_York",
     timezoneValid: true,
     slug: "chern-cuts",
@@ -1377,5 +1380,129 @@ describe("shop.bookable_chair names the closest chair, not the first", () => {
   it("says which chairs are ready once one is", () => {
     const ev = find(build(), "shop.bookable_chair")!.evidence;
     expect(ev).toContain("Dre is ready to take bookings");
+  });
+});
+
+/**
+ * Vocabulary. The engine must speak each vertical's own words, keep the
+ * barbershop's exactly as they were, and never leak barbershop nouns into a
+ * business that has none.
+ */
+describe("business-type vocabulary", () => {
+  /**
+   * Every rendered string a shop would actually read - including the per-staff
+   * items and the "improve" list, which live off `report.items` and would
+   * otherwise be scanned by nothing.
+   */
+  function proseFor(facts: ReadinessFacts): string {
+    const r = buildReadiness(facts, CAPS);
+    const all = [...r.items, ...r.improve, ...r.staff.flatMap((s) => s.items)];
+    return [
+      ...all.flatMap((i) => [i.title, i.why, i.evidence, i.cta?.label ?? ""]),
+      ...r.milestones.map((m) => m.title),
+    ].join(" | ");
+  }
+
+  /**
+   * Every rendered string across enough shop SHAPES that both branches of the
+   * conditional evidence strings render.
+   *
+   * 🔴 A single happy-path shop is not enough, and this is not hypothetical:
+   * "No barber has any weekly hours" survived the first pass precisely because
+   * it only renders when nobody has hours, and the default fixture has them.
+   */
+  function prose(facts: ReadinessFacts): string {
+    return [
+      facts,
+      { ...facts, staff: facts.staff.map((s) => ({ ...s, availabilityRuleCount: 0 })) },
+      { ...facts, staff: facts.staff.map((s) => ({ ...s, active: false })) },
+      { ...facts, staff: [], services: [], activeOfferingPairs: 0 },
+      { ...facts, activeOfferingPairs: 0 },
+      { ...facts, acuityConnected: true, acuityOutboundMode: "ENFORCE" as const },
+      {
+        ...facts,
+        acuityConnected: true,
+        acuityOutboundMode: "ENFORCE" as const,
+        staff: facts.staff.map((s) => ({ ...s, acuityMappingProblem: "unmapped" as const })),
+      },
+    ]
+      .map(proseFor)
+      .join(" | ");
+  }
+
+  it("a barbershop still says chair, barber and cut", () => {
+    // The shops already using ChairBack must not notice this arc happened.
+    const text = prose(ready());
+    expect(text).toContain("Chair is active");
+    expect(text).toContain("At least one barber");
+    expect(text).toContain("Services and barbers");
+    expect(text).toContain("Edit chair");
+  });
+
+  it("a nail studio says station and nail tech instead", () => {
+    const text = prose(ready({ vocabulary: BUSINESS_TYPES.nails.vocabulary }));
+    expect(text).toContain("Station is active");
+    expect(text).toContain("At least one nail tech");
+    expect(text).toContain("Edit station");
+    expect(text).toContain("Services and nail techs");
+  });
+
+  it("an auto detailer says bay and detailer", () => {
+    const text = prose(ready({ vocabulary: BUSINESS_TYPES.detailing.vocabulary }));
+    expect(text).toContain("Bay is active");
+    expect(text).toContain("At least one detailer");
+  });
+
+  it("no non-barber vertical leaks barbershop nouns", () => {
+    // The forbidden set is per-type: a salon genuinely HAS chairs, so the rule
+    // is not "the word never appears", it is "the word only appears when this
+    // vertical's own vocabulary put it there".
+    for (const id of ["nails", "lashes", "multiservice", "spa", "detailing", "other"] as const) {
+      const v = BUSINESS_TYPES[id].vocabulary;
+      const own = new Set(Object.values(v as Record<string, string>));
+      const text = prose(ready({ vocabulary: v })).toLowerCase();
+      for (const lexeme of ["barber", "barbers", "chair", "chairs", "haircut"]) {
+        if (own.has(lexeme)) continue;
+        expect(text, `${id} leaked "${lexeme}"`).not.toMatch(
+          new RegExp(`\b${lexeme}\b`),
+        );
+      }
+      // ...and the opposite failure: everything neutered into mush.
+      expect(text, `${id} never says its own provider noun`).toContain(v.providerNoun);
+      expect(text, `${id} never says its own station noun`).toContain(v.stationNoun);
+    }
+  });
+
+  it("an unselected legacy shop renders complete neutral copy", () => {
+    // Blanks and borrowed barbershop words are both failures here.
+    const text = prose(ready({ vocabulary: NEUTRAL_VOCABULARY }));
+    expect(text).toContain("Workspace is active");
+    expect(text).toContain("At least one provider");
+    expect(text).not.toMatch(/\bbarber\b|\bchair\b/i);
+    expect(text).not.toMatch(/undefined|null|\[object/);
+  });
+
+  it("never calls anyone a cosmetologist", () => {
+    for (const id of ["barber", "nails", "detailing", "spa"] as const) {
+      expect(prose(ready({ vocabulary: BUSINESS_TYPES[id].vocabulary }))).not.toMatch(
+        /cosmetolog/i,
+      );
+    }
+  });
+
+  it("keeps item ids, milestone ids and CTA feature ids identical across types", () => {
+    // 🔴 Wording moves; the wire never does. Clients and the CTA destination
+    // manifest key off these, so a vertical must not be able to shift them.
+    const shape = (facts: ReadinessFacts) => {
+      const r = buildReadiness(facts, CAPS);
+      return JSON.stringify({
+        items: r.items.map((i) => [i.id, i.milestone, i.cta?.featureId ?? null]),
+        milestones: r.milestones.map((m) => m.id),
+      });
+    };
+    const barber = shape(ready());
+    for (const id of ["nails", "detailing", "other"] as const) {
+      expect(shape(ready({ vocabulary: BUSINESS_TYPES[id].vocabulary })), id).toBe(barber);
+    }
   });
 });

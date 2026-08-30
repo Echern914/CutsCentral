@@ -1,4 +1,4 @@
-import { apiEnv } from "@chairback/config";
+import { apiEnv, vocabularyForShop } from "@chairback/config";
 import { prisma, runAsOwner, runWithShop } from "@chairback/db";
 import { connectEnabled, hasActiveAccess } from "../billing/stripe.js";
 import { emailEnabled } from "../messaging/email.js";
@@ -94,6 +94,12 @@ export async function collectReadinessFacts(
     select: {
       id: true,
       name: true,
+      // Vocabulary inputs. Read HERE, outside runWithShop - Shop is RLS
+      // default-deny, so a read inside the tenant scope returns null and every
+      // shop would silently fall back to neutral wording in production only.
+      industry: true,
+      serviceNoun: true,
+      businessTypeSelectedAt: true,
       timezone: true,
       slug: true,
       publicPageEnabled: true,
@@ -332,6 +338,7 @@ export async function collectReadinessFacts(
   return {
     shopId: shop.id,
     name: shop.name,
+    vocabulary: vocabularyForShop(shop),
     timezone: shop.timezone,
     timezoneValid: isValidTimezone(shop.timezone),
     slug: shop.slug,

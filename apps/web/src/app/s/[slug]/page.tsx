@@ -5,6 +5,7 @@ import {
   serviceNounForShop,
   type BookingModeKey,
 } from "@chairback/config/constants";
+import { businessType } from "@chairback/config/businessTypes";
 import { apiPublicGet } from "@/lib/api";
 import { GetTheApp } from "@/components/GetTheApp";
 import { appleItunesApp } from "@/lib/appBanner";
@@ -109,21 +110,6 @@ export async function generateMetadata({
 }
 
 /**
- * schema.org business type by vertical - the most specific type Google
- * recognizes for each. Specificity matters: "BarberShop" is eligible for
- * treatments a generic LocalBusiness is not.
- */
-const SCHEMA_TYPE_BY_INDUSTRY: Record<string, string> = {
-  barber: "BarberShop",
-  salon: "HairSalon",
-  nails: "NailSalon",
-  lashes: "BeautySalon",
-  spa: "DaySpa",
-  tattoo: "TattooParlor",
-  other: "LocalBusiness",
-};
-
-/**
  * LocalBusiness structured data - the piece that makes the shop's ChairBack
  * page read as a BUSINESS to Google (name + address + rating rich results,
  * local-pack eligibility), not just a web page. Address is included only when
@@ -133,7 +119,11 @@ const SCHEMA_TYPE_BY_INDUSTRY: Record<string, string> = {
 function shopJsonLd(data: ShopPageData): Record<string, unknown> {
   const ld: Record<string, unknown> = {
     "@context": "https://schema.org",
-    "@type": SCHEMA_TYPE_BY_INDUSTRY[data.industry] ?? "LocalBusiness",
+    // From the registry, so a new vertical cannot silently fall back to a
+    // generic LocalBusiness and lose its rich-result eligibility - the old
+    // `Record<string,string>` + `?? "LocalBusiness"` degraded with nothing
+    // failing anywhere.
+    "@type": businessType(data.industry).schemaType,
     name: data.name,
     url: `https://getchairback.com/s/${encodeURIComponent(data.slug)}`,
     ...(data.bio ? { description: data.bio } : {}),

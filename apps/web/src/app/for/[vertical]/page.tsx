@@ -2,6 +2,11 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { APP_NAME, BILLING } from "@chairback/config/constants";
+import {
+  MARKETING_SLUGS,
+  type BusinessTypeId,
+  type MarketingSlug,
+} from "@chairback/config/businessTypes";
 
 /**
  * Vertical landing pages (/for/salons, /for/nails, ...). The homepage stays
@@ -12,7 +17,7 @@ import { APP_NAME, BILLING } from "@chairback/config/constants";
 
 interface VerticalCopy {
   label: string;
-  industryKey: string;
+  industryKey: BusinessTypeId;
   headline: [string, string]; // plain + gold-gradient halves
   sub: string;
   rhythm: string; // the visit-cadence hook
@@ -20,7 +25,16 @@ interface VerticalCopy {
   rewardExample: string;
 }
 
-const VERTICALS: Record<string, VerticalCopy> = {
+/**
+ * 🔴 Keyed by `MarketingSlug`, DERIVED from the business-type registry.
+ *
+ * That is what makes this table impossible to half-finish: giving a business
+ * type a `marketingSlug` without writing its copy here fails the BUILD, and
+ * this page and `sitemap.ts` can no longer disagree about which verticals
+ * exist. It was previously `Record<string, VerticalCopy>` with a free-text
+ * `industryKey` that nothing checked - a typo compiled and was read by nobody.
+ */
+const VERTICALS = {
   salons: {
     label: "Hair salons",
     industryKey: "salon",
@@ -159,10 +173,18 @@ const VERTICALS: Record<string, VerticalCopy> = {
     ],
     rewardExample: "“10 cuts = free cut” or “free lineup on visit 6”",
   },
-};
+} as const satisfies Record<MarketingSlug, VerticalCopy>;
 
 export function generateStaticParams() {
-  return Object.keys(VERTICALS).map((vertical) => ({ vertical }));
+  // From the registry, not this table's own keys, so the two cannot drift.
+  return MARKETING_SLUGS.map((vertical) => ({ vertical }));
+}
+
+/** The copy for a URL slug, or null for a slug that is not a real vertical. */
+function verticalCopy(slug: string): VerticalCopy | null {
+  return Object.prototype.hasOwnProperty.call(VERTICALS, slug)
+    ? VERTICALS[slug as MarketingSlug]
+    : null;
 }
 
 export function generateMetadata({
@@ -170,11 +192,14 @@ export function generateMetadata({
 }: {
   params: { vertical: string };
 }): Metadata {
-  const v = VERTICALS[params.vertical];
+  const v = verticalCopy(params.vertical);
   if (!v) return {};
   return {
     title: `${APP_NAME} for ${v.label}: loyalty punch cards & rebooking texts`,
     description: v.sub,
+    // A vertical page and the shop pages it competes with must not look like
+    // duplicates to a crawler.
+    alternates: { canonical: `/for/${params.vertical}` },
   };
 }
 
@@ -183,7 +208,7 @@ export default function VerticalPage({
 }: {
   params: { vertical: string };
 }) {
-  const v = VERTICALS[params.vertical];
+  const v = verticalCopy(params.vertical);
   if (!v) notFound();
 
   return (

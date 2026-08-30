@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { APP_NAME } from "@chairback/config/constants";
+import type { BusinessVocabulary } from "@chairback/config/businessTypes";
 import { apiPublicGet } from "@/lib/api";
 import { BookingClient } from "./BookingClient";
 import { GetTheApp } from "@/components/GetTheApp";
@@ -12,6 +13,12 @@ export interface BookShopData {
     name: string;
     slug: string;
     timezone: string;
+    /**
+     * What this business calls its people and visits, resolved by the API.
+     * Optional so a web deploy ahead of the API keeps today's copy; absent or
+     * unselected falls back to NEUTRAL, never to barbershop wording.
+     */
+    vocabulary?: BusinessVocabulary;
     logoUrl: string | null;
     accentColor: string | null;
     // Instagram handle WITHOUT the "@" (the API strips it on save).

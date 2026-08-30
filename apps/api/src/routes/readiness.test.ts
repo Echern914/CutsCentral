@@ -673,7 +673,38 @@ describe("Acuity health, end to end", () => {
     });
     const ok = pick(await itemsFor(acuityShopCookie), "integration.chair_mapping");
     expect(ok.done).toBe(true);
-    expect(ok.evidence).toContain("1 chair matched");
+    // "workspace", not "chair": this fixture shop never answered the
+    // business-type question, so it renders the NEUTRAL vocabulary rather than
+    // barbershop words it never chose. The item ID stays
+    // `integration.chair_mapping` - wording moves, wire values never do.
+    expect(ok.evidence).toContain("1 workspace matched");
+  });
+
+  it("speaks the shop's own words once it has chosen a business type", async () => {
+    // The same item, for a shop that HAS answered. Proves the neutral copy
+    // above is the legacy fallback doing its job, not the vocabulary failing to
+    // resolve at all.
+    const before = await prisma.shop.findFirstOrThrow({
+      where: { staff: { some: { id: acuityStaffId } } },
+      select: { id: true, industry: true, businessTypeSelectedAt: true },
+    });
+    await prisma.shop.update({
+      where: { id: before.id },
+      data: { industry: "barber", businessTypeSelectedAt: new Date() },
+    });
+    try {
+      const item = pick(await itemsFor(acuityShopCookie), "integration.chair_mapping");
+      expect(item.evidence).toContain("1 chair matched");
+      expect(item.title).toContain("chair");
+    } finally {
+      await prisma.shop.update({
+        where: { id: before.id },
+        data: {
+          industry: before.industry,
+          businessTypeSelectedAt: before.businessTypeSelectedAt,
+        },
+      });
+    }
   });
 
   it("neither item can block a launch", async () => {
