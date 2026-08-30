@@ -4,9 +4,10 @@ import { prisma } from "@chairback/db";
 import { __setSendEmailForTests, type SendEmailInput } from "../messaging/email.js";
 import {
   cancellationIdempotencyKey,
-  deliverCancellationIntent,
+  MAX_ATTEMPTS,
   PROVIDER_IDEMPOTENCY_WINDOW_MS,
 } from "./appointmentCanceledNotify.js";
+import { ResendSendError } from "../messaging/email.js";
 import { runEmailOutbox, CLAIM_TTL_MS } from "../engines/emailOutbox.js";
 import { cancelAppointment } from "../engines/appointmentPromotion.js";
 
@@ -99,6 +100,14 @@ beforeAll(async () => {
 
 afterEach(async () => {
   emails = [];
+  // 🔴 ONE restoration point. Several cases install a throwing or suppressed
+  // sender; restoring per-test meant one forgotten line silently starved every
+  // later case of email and made real assertions pass for the wrong reason.
+  __setSendEmailForTests(async (input) => {
+    emails.push(input);
+    return { id: `em${emails.length}`, status: "sent" };
+  });
+  await prisma.emailDelivery.deleteMany({ where: { shopId } });
   await prisma.emailIntent.deleteMany({ where: { shopId } });
   await prisma.appointment.deleteMany({ where: { shopId } });
   await prisma.client.deleteMany({ where: { shopId } });
@@ -224,7 +233,13 @@ describe("durability: the promise survives a crash", () => {
       emails.push(input);
       return { id: `em${emails.length}`, status: "sent" };
     });
+    // A rejected attempt is retried with BACKOFF, so the row is not due again
+    // immediately - draining right away must correctly do nothing.
     await drain();
+    expect(emails).toHaveLength(0);
+
+    // Backoff after the first ambiguous attempt is 5 minutes.
+    await drain(new Date(Date.now() + 6 * 60_000));
     expect(emails).toHaveLength(1);
     expect(
       (await prisma.appointment.findUnique({ where: { id } }))!.cancellationEmailSentAt,
@@ -247,7 +262,7 @@ describe("exactly once", () => {
     const id = await makeAppointment({ status: "BOOKED" });
     await cancelAppointment(shopId, id, "CANCELED", NOON);
     await drain();
-    expect(emails[0]!.idempotencyKey).toBe(cancellationIdempotencyKey(id, NOON));
+    expect(emails[0]!.idempotencyKey).toBe(cancellationIdempotencyKey(id, 1));
   });
 
   it("a second and third drain after success do nothing", async () => {
@@ -288,11 +303,20 @@ describe("giving up safely", () => {
     __setSendEmailForTests(async () => {
       throw new Error("ambiguous");
     });
-    // Past 24h the key means nothing to Resend, so a retry could deliver a
-    // SECOND copy. Terminal and visible beats a coin flip.
-    const past = new Date(Date.now() + PROVIDER_IDEMPOTENCY_WINDOW_MS + 60_000);
+    // 🔴 The window runs from the FIRST REAL ATTEMPT, not from row creation.
+    // One attempt now opens it...
+    const first = new Date();
+    await drain(first);
+    let intent = (await intentsFor(id))[0]!;
+    expect(intent.status).toBe("PENDING"); // still inside the window
+    expect(intent.firstProviderAttemptAt).not.toBeNull();
+    expect(intent.attempts).toBe(1);
+
+    // ...and only an attempt past 24h from THAT moment is unsafe to repeat.
+    const past = new Date(first.getTime() + PROVIDER_IDEMPOTENCY_WINDOW_MS + 60_000);
     await drain(past);
-    expect((await intentsFor(id))[0]!.status).toBe("ABANDONED");
+    intent = (await intentsFor(id))[0]!;
+    expect(intent.status).toBe("ABANDONED");
 
     __setSendEmailForTests(async (input) => {
       emails.push(input);
@@ -311,7 +335,7 @@ describe("giving up safely", () => {
     });
     await drain();
     expect(emails).toHaveLength(0);
-    expect((await intentsFor(id))[0]!.status).toBe("FAILED");
+    expect((await intentsFor(id))[0]!.status).toBe("SUPERSEDED");
   });
 
   it("records only a fixed classification, never provider prose", async () => {
@@ -338,5 +362,290 @@ describe("giving up safely", () => {
 
     await drain();
     expect(emails).toHaveLength(0);
+  });
+});
+
+describe("revision binding: an intent names an OCCURRENCE, not a request", () => {
+  it("concurrent cancels with DIFFERENT clocks still produce one intent and one send", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    // 🔴 The real-world condition the old test hid by handing every racer the
+    // same fixed NOON: concurrent requests have their own wall clocks.
+    await Promise.all(
+      Array.from({ length: 6 }, (_, i) =>
+        cancelAppointment(shopId, id, "CANCELED", new Date(NOON.getTime() + i * 137)),
+      ),
+    );
+    const intents = await intentsFor(id);
+    expect(intents).toHaveLength(1);
+    // One occurrence, so exactly one revision bump.
+    const appt = await prisma.appointment.findUnique({ where: { id } });
+    expect(appt!.cancellationRevision).toBe(1);
+    expect(intents[0]!.cancellationRevision).toBe(1);
+
+    await drain();
+    expect(emails).toHaveLength(1);
+  });
+
+  it("cancelling an ALREADY-canceled appointment creates nothing new", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    const before = await prisma.appointment.findUnique({ where: { id } });
+
+    // Repeated cancellation is an idempotent no-op: no second intent, no
+    // second revision, no second email.
+    await cancelAppointment(shopId, id, "CANCELED", new Date(NOON.getTime() + 5000));
+    await cancelAppointment(shopId, id, "CANCELED", new Date(NOON.getTime() + 9000));
+
+    expect(await intentsFor(id)).toHaveLength(1);
+    const after = await prisma.appointment.findUnique({ where: { id } });
+    expect(after!.cancellationRevision).toBe(before!.cancellationRevision);
+    await drain();
+    expect(emails).toHaveLength(1);
+  });
+
+  it("🔴 cancel A pending → restore → cancel B → the drain sends ONLY B", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    // A: canceled, intent queued, worker has NOT run yet.
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    const [intentA] = await intentsFor(id);
+    expect(intentA!.cancellationRevision).toBe(1);
+
+    // Restore, exactly as /restore does - superseding the pending intent in
+    // the same breath.
+    await prisma.$transaction(async (tx) => {
+      await tx.appointment.update({
+        where: { id },
+        data: { status: "BOOKED", canceledAt: null, cancellationEmailSentAt: null },
+      });
+      await tx.emailIntent.updateMany({
+        where: { appointmentId: id, status: "PENDING" },
+        data: { status: "SUPERSEDED", lastError: "restored" },
+      });
+    });
+
+    // B: a genuinely new occurrence.
+    await cancelAppointment(shopId, id, "CANCELED", new Date(NOON.getTime() + 1000));
+    const intents = await intentsFor(id);
+    expect(intents).toHaveLength(2);
+
+    await drain(new Date(NOON.getTime() + 2000));
+    // ONE email, and it is B's.
+    expect(emails).toHaveLength(1);
+    expect(emails[0]!.idempotencyKey).toBe(cancellationIdempotencyKey(id, 2));
+  });
+
+  it("the revision guard alone stops a stale intent, even if nothing superseded it", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    // Restore WITHOUT superseding - the belt fails, so the braces must hold.
+    await prisma.appointment.update({
+      where: { id },
+      data: { status: "BOOKED", canceledAt: null, cancellationEmailSentAt: null },
+    });
+    await cancelAppointment(shopId, id, "CANCELED", new Date(NOON.getTime() + 1000));
+
+    await drain(new Date(NOON.getTime() + 2000));
+    expect(emails).toHaveLength(1);
+    expect(emails[0]!.idempotencyKey).toBe(cancellationIdempotencyKey(id, 2));
+    const stale = (await intentsFor(id)).find((i) => i.cancellationRevision === 1);
+    expect(stale!.status).toBe("SUPERSEDED");
+  });
+
+  it("restore then re-cancel in the SAME millisecond is still two occurrences", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    const t = new Date(NOON.getTime());
+    await cancelAppointment(shopId, id, "CANCELED", t);
+    await prisma.appointment.update({
+      where: { id },
+      data: { status: "BOOKED", canceledAt: null },
+    });
+    await cancelAppointment(shopId, id, "CANCELED", t); // identical timestamp
+    const intents = await intentsFor(id);
+    // A clock-keyed design would have collided here and silently sent nothing.
+    expect(intents).toHaveLength(2);
+    expect(new Set(intents.map((i) => i.idempotencyKey)).size).toBe(2);
+  });
+});
+
+describe("provider attempt accounting", () => {
+  it("five worker claims that die before dispatch consume ZERO provider attempts", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    const [intent] = await intentsFor(id);
+
+    // Model five crashed workers: each claims the row and dies. Only the claim
+    // is on disk; no request was ever made.
+    for (let i = 0; i < 5; i++) {
+      await prisma.emailIntent.update({
+        where: { id: intent!.id },
+        data: { claimedAt: new Date(Date.now() - CLAIM_TTL_MS - 60_000) },
+      });
+      await prisma.emailIntent.update({
+        where: { id: intent!.id },
+        data: { claimedAt: null },
+      });
+    }
+    const after = await prisma.emailIntent.findUnique({ where: { id: intent!.id } });
+    expect(after!.attempts).toBe(0);
+    expect(after!.firstProviderAttemptAt).toBeNull();
+
+    // The budget is intact, so the message still goes.
+    await drain();
+    expect(emails).toHaveLength(1);
+  });
+
+  it("permits exactly MAX_ATTEMPTS real dispatches, then stops", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    let calls = 0;
+    __setSendEmailForTests(async () => {
+      calls++;
+      throw new ResendSendError(500);
+    });
+    // Walk forward past each backoff so every due attempt is taken.
+    let t = Date.now();
+    for (let i = 0; i < MAX_ATTEMPTS + 3; i++) {
+      t += 2 * 60 * 60 * 1000;
+      await drain(new Date(t));
+    }
+    expect(calls).toBe(MAX_ATTEMPTS);
+    const [intent] = await intentsFor(id);
+    expect(intent!.status).toBe("FAILED"); // definitive rejection, not ambiguous
+    expect(intent!.attempts).toBe(MAX_ATTEMPTS);
+  });
+
+  it("a DEFINITIVE rejection never ages into ABANDONED", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    __setSendEmailForTests(async () => {
+      throw new ResendSendError(422); // Resend looked at it and said no
+    });
+    const first = new Date();
+    await drain(first);
+    // Well past the idempotency window: still not "maybe delivered", because
+    // it was definitively refused.
+    await drain(new Date(first.getTime() + PROVIDER_IDEMPOTENCY_WINDOW_MS + 60_000));
+    const [intent] = await intentsFor(id);
+    expect(intent!.status).not.toBe("ABANDONED");
+  });
+
+  it("enforces backoff between attempts, without sleeping", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    let calls = 0;
+    __setSendEmailForTests(async () => {
+      calls++;
+      throw new ResendSendError(429);
+    });
+    await drain();
+    expect(calls).toBe(1);
+    await drain(); // immediately again - not due
+    await drain();
+    expect(calls).toBe(1);
+    const [intent] = await intentsFor(id);
+    expect(intent!.nextAttemptAt).not.toBeNull();
+    // The first retry is 5 minutes out, so 2 minutes is deliberately too soon
+    // and 6 is due.
+    await drain(new Date(Date.now() + 2 * 60_000));
+    expect(calls).toBe(1);
+    await drain(new Date(Date.now() + 6 * 60_000));
+    expect(calls).toBe(2);
+  });
+});
+
+describe("suppression is terminal, not a queued blast", () => {
+  it("DRY_RUN sends nothing, stamps nothing, and does not become SENT", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    // No injected sender => the real dispatch-mode logic applies, and the test
+    // environment runs DRY_RUN=true.
+    __setSendEmailForTests(undefined);
+    await drain();
+
+    const [intent] = await intentsFor(id);
+    expect(intent!.status).toBe("SUPPRESSED");
+    expect(intent!.attempts).toBe(0); // a dry run is not a provider attempt
+    expect(intent!.firstProviderAttemptAt).toBeNull();
+    const appt = await prisma.appointment.findUnique({ where: { id } });
+    expect(appt!.cancellationEmailSentAt).toBeNull();
+
+    __setSendEmailForTests(async (input) => {
+      emails.push(input);
+      return { id: `em${emails.length}`, status: "sent" };
+    });
+  });
+
+  it("🔴 enabling email later does NOT blast previously suppressed cancellations", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    __setSendEmailForTests(undefined);
+    await drain();
+    expect((await intentsFor(id))[0]!.status).toBe("SUPPRESSED");
+
+    // Email comes back on, weeks later. The old customer hears nothing - the
+    // cancellation is long past and a surprise notice would be worse than
+    // silence.
+    __setSendEmailForTests(async (input) => {
+      emails.push(input);
+      return { id: `em${emails.length}`, status: "sent" };
+    });
+    await drain(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
+    expect(emails).toHaveLength(0);
+  });
+
+  it("an intent suppressed for over 24h is not mistaken for an expired ambiguous send", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    __setSendEmailForTests(undefined);
+    await drain(new Date(Date.now() + PROVIDER_IDEMPOTENCY_WINDOW_MS + 60_000));
+    const [intent] = await intentsFor(id);
+    // SUPPRESSED, not ABANDONED: nothing was ever put in front of the provider,
+    // so there is no ambiguity to age out.
+    expect(intent!.status).toBe("SUPPRESSED");
+    __setSendEmailForTests(async (input) => {
+      emails.push(input);
+      return { id: `em${emails.length}`, status: "sent" };
+    });
+  });
+});
+
+describe("confirmed acceptance", () => {
+  it("a 2xx WITHOUT a message id does not stamp the appointment", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    __setSendEmailForTests(async () => ({ id: "unknown", status: "sent" }));
+    await drain();
+
+    const appt = await prisma.appointment.findUnique({ where: { id } });
+    expect(appt!.cancellationEmailSentAt).toBeNull();
+    const [intent] = await intentsFor(id);
+    expect(intent!.status).not.toBe("SENT");
+    expect(intent!.attempts).toBe(1); // it WAS a real attempt
+
+    __setSendEmailForTests(async (input) => {
+      emails.push(input);
+      return { id: `em${emails.length}`, status: "sent" };
+    });
+  });
+
+  it("settles the intent, the stamp AND the delivery row together", async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    await drain();
+
+    const [intent] = await intentsFor(id);
+    expect(intent!.status).toBe("SENT");
+    expect(intent!.messageId).toBeTruthy();
+    const appt = await prisma.appointment.findUnique({ where: { id } });
+    expect(appt!.cancellationEmailSentAt).not.toBeNull();
+    // The ledger row exists synchronously, carrying the provider id - not left
+    // to a fire-and-forget write that a crash could lose.
+    const delivery = await prisma.emailDelivery.findUnique({
+      where: { messageId: intent!.messageId! },
+    });
+    expect(delivery).not.toBeNull();
+    expect(delivery!.kind).toBe("cancellation");
+    expect(delivery!.appointmentId).toBe(id);
+    await prisma.emailDelivery.deleteMany({ where: { appointmentId: id } });
   });
 });

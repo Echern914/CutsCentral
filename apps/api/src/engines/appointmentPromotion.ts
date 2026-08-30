@@ -213,13 +213,33 @@ export async function cancelAppointment(
     });
     if (!appt) return null;
 
-    await tx.appointment.update({
-      where: { id: appt.id },
+    // 🔴 THE TRANSITION IS A COMPARE-AND-SET, and the revision it bumps is
+    // what identifies this cancellation.
+    //
+    // An unconditional update made "cancel" idempotent in appearance only:
+    // two concurrent requests both succeeded, and because the outbox key was
+    // built from each request's own clock they produced two different
+    // "unique" keys - two intents, two emails. Real requests do not share a
+    // millisecond; the old test only passed because it handed every racer the
+    // same fixed timestamp.
+    //
+    // Now exactly one caller can move a BOOKED appointment to CANCELED. The
+    // loser matches zero rows and does nothing at all, and the winner's
+    // revision - a persisted counter, not a wall clock - becomes the identity
+    // the email intent is bound to.
+    const transitioned = await tx.appointment.updateMany({
+      where: { id: appt.id, shopId, status: { not: outcome } },
       data: {
         status: outcome,
         canceledAt: outcome === "CANCELED" ? now : undefined,
+        ...(outcome === "CANCELED"
+          ? { cancellationRevision: { increment: 1 } }
+          : {}),
       },
     });
+    // Already in this state: an idempotent no-op. No second intent, no second
+    // refund, no second teardown.
+    if (transitioned.count === 0) return null;
 
     // Already promoted: tear down the Visit's loyalty footprint.
     if (appt.visitId) {
@@ -246,12 +266,17 @@ export async function cancelAppointment(
     //
     // Resend is NEVER called from in here - only a row is written.
     if (outcome === "CANCELED") {
+      // Read back the revision this transition actually won, and key the
+      // intent on it. Two racers cannot both get here, and the surviving
+      // intent names a state change rather than a request.
+      const current = await tx.appointment.findFirst({
+        where: { id: appt.id, shopId },
+        select: { cancellationRevision: true },
+      });
       await enqueueCancellationEmail(tx, {
         shopId,
         appointmentId: appt.id,
-        // Keyed on THIS occurrence, so a restore followed by another cancel
-        // is a new notification rather than a silenced duplicate.
-        canceledAt: now,
+        cancellationRevision: current?.cancellationRevision ?? 1,
       });
     }
 

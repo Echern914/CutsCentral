@@ -5,8 +5,10 @@ import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
 import { verifySvixSignature } from "./webhooks.resend.js";
+import { runAsOwner } from "@chairback/db";
 import {
   applyEmailEvent,
+  applyEventInTx,
   readEmailDeliverySummary,
   recordEmailSent,
 } from "../services/emailDelivery.js";
@@ -393,5 +395,78 @@ describe("race and replay safety", () => {
     const row = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
     expect(row!.status).toBe("bounced");
     expect(row!.eventCount).toBe(1); // unknown types are not counted either
+  });
+});
+
+describe("the replay marker and the state change are ONE transaction", () => {
+  it("🔴 a crash after the marker rolls BOTH back, so the retry still applies", async () => {
+    const id = `em_${randomToken(8)}`;
+    emails.push(id);
+    await seed(id);
+
+    // Model "the process died between inserting the marker and updating the
+    // ledger" by aborting the very transaction the production path uses.
+    // Committing the marker separately was the bug: svix would retry, see a
+    // duplicate, refuse to apply, and the bounce would be lost forever.
+    const svixId = `svix_${randomToken(8)}`;
+    await expect(
+      runAsOwner(async (tx) => {
+        await applyEventInTx(tx, { messageId: id, event: "email.bounced", svixId });
+        throw new Error("process died mid-transaction");
+      }),
+    ).rejects.toThrow();
+
+    // Neither half survived.
+    expect(await prisma.emailWebhookEvent.count({ where: { svixId } })).toBe(0);
+    expect(
+      (await prisma.emailDelivery.findUnique({ where: { messageId: id } }))!.status,
+    ).toBe("sent");
+
+    // The retry lands properly.
+    expect(await applyEmailEvent({ messageId: id, event: "email.bounced", svixId })).toBe(
+      "applied",
+    );
+    const row = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
+    expect(row!.status).toBe("bounced");
+    expect(await prisma.emailWebhookEvent.count({ where: { svixId } })).toBe(1);
+  });
+
+  it("two concurrent FIRST events for an unknown message both record, neither is lost", async () => {
+    const id = `em_${randomToken(8)}`;
+    emails.push(id);
+    const a = `svix_${randomToken(8)}`;
+    const b = `svix_${randomToken(8)}`;
+
+    // Both race to create the delivery row; the upsert means the loser folds
+    // into the winner instead of dying on the unique index.
+    const [ra, rb] = await Promise.all([
+      applyEmailEvent({ messageId: id, event: "email.delivered", svixId: a }),
+      applyEmailEvent({ messageId: id, event: "email.bounced", svixId: b }),
+    ]);
+    expect([ra, rb].every((r) => r === "created" || r === "applied")).toBe(true);
+
+    // Both deliveries are on record...
+    expect(await prisma.emailWebhookEvent.count({ where: { svixId: { in: [a, b] } } })).toBe(2);
+    const row = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
+    expect(row).not.toBeNull();
+    // ...and the bounce wins regardless of which order they landed in.
+    expect(row!.status).toBe("bounced");
+  });
+
+  it("a metadata write racing a webhook cannot walk the status backward", async () => {
+    const id = `em_${randomToken(8)}`;
+    emails.push(id);
+    await post({ type: "email.bounced", data: { email_id: id } });
+    // The sender's own write arrives late, as it routinely does.
+    recordEmailSent(id, {
+      to: "casey@example.com",
+      subject: "Booking confirmed",
+      text: "x",
+      meta: { shopId: "shop_x", kind: "confirmation" },
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    const row = await prisma.emailDelivery.findUnique({ where: { messageId: id } });
+    expect(row!.status).toBe("bounced"); // not "sent"
+    expect(row!.kind).toBe("confirmation"); // metadata still attached
   });
 });

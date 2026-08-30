@@ -1,6 +1,10 @@
 import { Prisma, runAsOwner } from "@chairback/db";
 import { buildAppointmentCanceledEmail } from "../messaging/templates.js";
-import { ResendSendError, sendEmail } from "../messaging/email.js";
+import {
+  emailDispatchMode,
+  ResendSendError,
+  sendEmail,
+} from "../messaging/email.js";
 import { logger } from "../logger.js";
 
 /**
@@ -42,9 +46,9 @@ const NOTIFIABLE = new Set(["CANCELED"]);
  */
 export function cancellationIdempotencyKey(
   appointmentId: string,
-  canceledAt: Date,
+  cancellationRevision: number,
 ): string {
-  return `cancel:${appointmentId}:${canceledAt.getTime()}`;
+  return `cancel:${appointmentId}:r${cancellationRevision}`;
 }
 
 /**
@@ -56,7 +60,7 @@ export function cancellationIdempotencyKey(
  */
 export async function enqueueCancellationEmail(
   tx: Prisma.TransactionClient,
-  params: { shopId: string; appointmentId: string; canceledAt: Date },
+  params: { shopId: string; appointmentId: string; cancellationRevision: number },
 ): Promise<string | null> {
   const appt = await tx.appointment.findFirst({
     where: { id: params.appointmentId, shopId: params.shopId },
@@ -70,9 +74,13 @@ export async function enqueueCancellationEmail(
   // No address is not a failure - there is simply nobody to write to.
   if (!(appt.email ?? appt.client?.email)) return null;
 
-  const idempotencyKey = cancellationIdempotencyKey(appt.id, params.canceledAt);
-  // Two concurrent cancels race this insert; the unique index picks the
-  // winner and the loser is a silent no-op.
+  // Keyed on the REVISION the winning transition produced, so the key names a
+  // cancellation that actually happened. Two concurrent requests can no
+  // longer mint two keys, because only one of them wins the transition at all.
+  const idempotencyKey = cancellationIdempotencyKey(
+    appt.id,
+    params.cancellationRevision,
+  );
   await tx.emailIntent.createMany({
     data: [
       {
@@ -80,10 +88,12 @@ export async function enqueueCancellationEmail(
         idempotencyKey,
         shopId: params.shopId,
         appointmentId: appt.id,
+        cancellationRevision: params.cancellationRevision,
         status: "PENDING",
+        nextAttemptAt: new Date(0), // due immediately
       },
     ],
-    skipDuplicates: true,
+    skipDuplicates: true, // belt: the unique index is the real guarantee
   });
   return idempotencyKey;
 }
@@ -93,14 +103,42 @@ export type IntentOutcome =
   | "skipped"
   | "retry"
   | "abandoned"
+  | "suppressed"
+  | "superseded"
   | "not_found";
 
 /**
- * Render and send ONE pending intent. Called only by the outbox worker, which
- * has already claimed the row.
+ * Resend honours an Idempotency-Key for 24 HOURS FROM THE FIRST REQUEST that
+ * carried it. Measuring from row creation was wrong: an intent can sit for
+ * days while email is unconfigured without ever having been put in front of
+ * the provider, and its safety window has not started, let alone expired.
+ */
+export const PROVIDER_IDEMPOTENCY_WINDOW_MS = 24 * 60 * 60 * 1000;
+/** Real provider dispatches permitted - claims and suppressions are not attempts. */
+export const MAX_ATTEMPTS = 5;
+/** Bounded exponential backoff: ~1m, 5m, 25m, capped. */
+const BACKOFF_MS = [60_000, 5 * 60_000, 25 * 60_000, 60 * 60_000, 60 * 60_000];
+
+function backoffFor(attempts: number): number {
+  return BACKOFF_MS[Math.min(attempts, BACKOFF_MS.length - 1)]!;
+}
+
+/**
+ * Render and send ONE claimed intent.
  *
- * `cancellationEmailSentAt` is stamped only AFTER the provider accepts - it is
- * a record of what happened, never a promise about what is about to.
+ * The state machine distinguishes three genuinely different failures, because
+ * conflating them is how customers get told twice or never told at all:
+ *
+ *   SUPPRESSED  email is unconfigured, or DRY_RUN is on. Nothing was sent and
+ *               nothing will be. TERMINAL on purpose - keeping it PENDING
+ *               means switching email on next month blasts everyone whose
+ *               cancellation was silently swallowed weeks ago.
+ *   FAILED      the provider DEFINITIVELY rejected it (an HTTP error). It was
+ *               not accepted, so a retry cannot duplicate; retry with backoff
+ *               up to MAX_ATTEMPTS, then give up.
+ *   ABANDONED   the outcome was AMBIGUOUS (transport died, or a 2xx with no
+ *               message id) and we are past the provider's idempotency window,
+ *               so a retry might deliver a SECOND copy. Terminal and visible.
  */
 export async function deliverCancellationIntent(params: {
   intentId: string;
@@ -118,6 +156,7 @@ export async function deliverCancellationIntent(params: {
       select: {
         id: true,
         status: true,
+        cancellationRevision: true,
         startsAt: true,
         firstName: true,
         email: true,
@@ -128,17 +167,34 @@ export async function deliverCancellationIntent(params: {
       },
     }),
   );
-  // Restored to BOOKED (or turned into a NO_SHOW) between enqueue and send:
-  // the message would now be a lie, so retire the intent rather than send it.
-  if (!appt || !NOTIFIABLE.has(appt.status)) {
-    await settle(params.intentId, "FAILED", "superseded");
-    return "skipped";
+
+  // 🔴 BOTH GUARDS, immediately before dispatch. Status alone is not enough:
+  // after cancel -> restore -> cancel the appointment IS canceled again, and a
+  // stale intent from the first occurrence would happily send beside the new
+  // one. The revision is what makes "this cancellation" a specific event.
+  if (
+    !appt ||
+    !NOTIFIABLE.has(appt.status) ||
+    (intent.cancellationRevision !== null &&
+      intent.cancellationRevision !== appt.cancellationRevision)
+  ) {
+    await settle(params.intentId, "SUPERSEDED", "superseded");
+    return "superseded";
   }
 
   const to = appt.email ?? appt.client?.email ?? null;
   if (!to) {
     await settle(params.intentId, "FAILED", "no_address");
     return "skipped";
+  }
+
+  // Decided BEFORE the attempt is counted: a send that never reaches a
+  // provider must not consume the provider budget. Terminal on purpose - see
+  // SUPPRESSED in the header.
+  const mode = emailDispatchMode();
+  if (mode !== "live") {
+    await settle(params.intentId, "SUPPRESSED", mode);
+    return "suppressed";
   }
 
   const email = buildAppointmentCanceledEmail({
@@ -151,6 +207,22 @@ export async function deliverCancellationIntent(params: {
     staffName: appt.staff?.name ?? null,
   });
 
+  // 🔴 COUNT THE ATTEMPT HERE - immediately before a real request, and record
+  // when the provider first saw this key. Counting on the worker's claim meant
+  // a worker that died five times before dispatching exhausted the budget
+  // without Resend ever being contacted.
+  const attemptNo = intent.attempts + 1;
+  await runAsOwner((tx) =>
+    tx.emailIntent.update({
+      where: { id: params.intentId },
+      data: {
+        attempts: attemptNo,
+        firstProviderAttemptAt: intent.firstProviderAttemptAt ?? now,
+      },
+    }),
+  );
+  const firstAttemptAt = intent.firstProviderAttemptAt ?? now;
+
   try {
     const result = await sendEmail({
       to,
@@ -159,24 +231,24 @@ export async function deliverCancellationIntent(params: {
       html: email.html,
       fromName: appt.shop.name,
       stream: "transactional",
-      // The PROVIDER-side exactly-once guard. Resend collapses repeat
-      // attempts carrying the same key, so retrying an ambiguous send cannot
-      // deliver twice.
+      // The PROVIDER-side exactly-once guard: Resend collapses repeat attempts
+      // carrying the same key, so retrying an ambiguous send cannot deliver
+      // twice - within its window.
       idempotencyKey: intent.idempotencyKey,
-      meta: {
-        shopId: intent.shopId,
-        appointmentId: appt.id,
-        kind: "cancellation",
-      },
+      meta: { shopId: intent.shopId, appointmentId: appt.id, kind: "cancellation" },
     });
 
-    if (result.status === "skipped") {
-      // Email is not configured at all. Leave it PENDING so it goes out if
-      // and when it is - nothing has been lost.
-      await release(params.intentId);
-      return "retry";
+    // A 2xx with no message id is NOT confirmed acceptance - there is nothing
+    // to correlate a delivery event to, so treat it as ambiguous rather than
+    // stamping the appointment on a shrug.
+    if (result.status !== "sent" || !result.id || result.id === "unknown") {
+      return ambiguous(params.intentId, attemptNo, firstAttemptAt, now, "no_message_id");
     }
 
+    // 🔴 ONE TRANSACTION settles everything: the intent, the appointment stamp
+    // and the delivery ledger row carrying the provider id. Leaving the ledger
+    // to the fire-and-forget metadata write meant a crash here could stamp the
+    // appointment while nothing recorded which message did it.
     await runAsOwner(async (tx) => {
       await tx.emailIntent.update({
         where: { id: params.intentId },
@@ -185,80 +257,119 @@ export async function deliverCancellationIntent(params: {
           sentAt: now,
           messageId: result.id,
           claimedAt: null,
+          nextAttemptAt: null,
           lastError: null,
         },
       });
-      // 🔴 Only NOW. The stamp records provider acceptance, nothing sooner.
+      // Only NOW: the stamp records provider acceptance, nothing sooner.
       await tx.appointment.updateMany({
         where: { id: appt.id, shopId: intent.shopId },
         data: { cancellationEmailSentAt: now },
       });
+      // Upsert, not create: a webhook may already have created this row from
+      // an event that beat us here, and its status must survive.
+      await tx.emailDelivery.upsert({
+        where: { messageId: result.id },
+        create: {
+          messageId: result.id,
+          kind: "cancellation",
+          shopId: intent.shopId,
+          appointmentId: appt.id,
+          status: "sent",
+        },
+        update: {
+          kind: "cancellation",
+          shopId: intent.shopId,
+          appointmentId: appt.id,
+          awaitingDispatchMeta: false,
+        },
+      });
     });
     return "sent";
   } catch (err) {
-    const classification =
-      err instanceof ResendSendError ? err.classification : "provider_error";
-    return finishFailure(params.intentId, intent.attempts, classification, now);
+    if (err instanceof ResendSendError) {
+      // DEFINITIVE rejection: Resend looked at it and said no, so nothing was
+      // accepted and a retry cannot duplicate. This is never "ambiguous".
+      return definitiveFailure(params.intentId, attemptNo, err.classification, now);
+    }
+    // Transport died mid-flight - it may or may not have been accepted.
+    return ambiguous(params.intentId, attemptNo, firstAttemptAt, now, "transport_error");
   }
 }
 
-/**
- * Resend deduplicates by Idempotency-Key for 24 hours. Inside that window a
- * retry is safe: a first attempt that may have landed will be collapsed.
- * OUTSIDE it, the key means nothing and a retry is a coin flip that can
- * deliver a second copy - so the intent is ABANDONED instead, terminal and
- * visible, rather than retried forever or silently dropped.
- */
-export const PROVIDER_IDEMPOTENCY_WINDOW_MS = 24 * 60 * 60 * 1000;
-const MAX_ATTEMPTS = 5;
-
-async function finishFailure(
+/** Rejected outright: safe to retry, bounded by MAX_ATTEMPTS. */
+async function definitiveFailure(
   intentId: string,
-  attempts: number,
+  attemptNo: number,
   classification: string,
   now: Date,
 ): Promise<IntentOutcome> {
-  const intent = await runAsOwner((tx) =>
-    tx.emailIntent.findUnique({
-      where: { id: intentId },
-      select: { createdAt: true },
-    }),
-  );
-  const agedOut =
-    !!intent &&
-    now.getTime() - intent.createdAt.getTime() > PROVIDER_IDEMPOTENCY_WINDOW_MS;
-
-  if (agedOut || attempts + 1 >= MAX_ATTEMPTS) {
-    await settle(intentId, agedOut ? "ABANDONED" : "FAILED", classification);
+  if (attemptNo >= MAX_ATTEMPTS) {
+    await settle(intentId, "FAILED", classification);
     logger.error(
-      { intentId, reason: classification, outcome: agedOut ? "abandoned" : "failed" },
-      "cancellation email intent gave up",
+      { intentId, reason: classification, attempts: attemptNo },
+      "cancellation email rejected by provider, giving up",
     );
-    return agedOut ? "abandoned" : "skipped";
+    return "skipped";
   }
-  await release(intentId, classification);
+  await release(intentId, classification, new Date(now.getTime() + backoffFor(attemptNo)));
+  return "retry";
+}
+
+/**
+ * Might have been delivered. Safe to retry ONLY while the provider still
+ * honours the idempotency key - measured from the FIRST attempt, which is when
+ * that window actually opened.
+ */
+async function ambiguous(
+  intentId: string,
+  attemptNo: number,
+  firstAttemptAt: Date,
+  now: Date,
+  classification: string,
+): Promise<IntentOutcome> {
+  const windowClosed =
+    now.getTime() - firstAttemptAt.getTime() > PROVIDER_IDEMPOTENCY_WINDOW_MS;
+  if (windowClosed || attemptNo >= MAX_ATTEMPTS) {
+    await settle(intentId, windowClosed ? "ABANDONED" : "FAILED", classification);
+    logger.error(
+      {
+        intentId,
+        reason: classification,
+        attempts: attemptNo,
+        outcome: windowClosed ? "abandoned" : "failed",
+      },
+      "cancellation email gave up after an ambiguous attempt",
+    );
+    return windowClosed ? "abandoned" : "skipped";
+  }
+  await release(intentId, classification, new Date(now.getTime() + backoffFor(attemptNo)));
   return "retry";
 }
 
 async function settle(
   intentId: string,
-  status: "FAILED" | "ABANDONED",
+  status: "FAILED" | "ABANDONED" | "SUPERSEDED" | "SUPPRESSED",
   lastError: string,
 ): Promise<void> {
   await runAsOwner((tx) =>
     tx.emailIntent.update({
       where: { id: intentId },
-      data: { status, lastError, claimedAt: null },
+      data: { status, lastError, claimedAt: null, nextAttemptAt: null },
     }),
   ).catch(() => {});
 }
 
-/** Put a row back for another pass, recording only a fixed classification. */
-async function release(intentId: string, lastError?: string): Promise<void> {
+/** Put a row back for a LATER pass, recording only a fixed classification. */
+async function release(
+  intentId: string,
+  lastError: string,
+  nextAttemptAt: Date,
+): Promise<void> {
   await runAsOwner((tx) =>
     tx.emailIntent.update({
       where: { id: intentId },
-      data: { claimedAt: null, ...(lastError ? { lastError } : {}) },
+      data: { claimedAt: null, lastError, nextAttemptAt },
     }),
   ).catch(() => {});
 }

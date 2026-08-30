@@ -148,6 +148,21 @@ export function emailEnabled(): boolean {
 }
 
 /**
+ * WILL a send actually reach a provider right now?
+ *
+ * The single source of truth for sendEmail's own branch order, so a caller
+ * that must decide BEFORE dispatching (the outbox worker, which may not spend
+ * a provider attempt on a message that is never going to leave) cannot drift
+ * from what sendEmail would really do. An injected test sender counts as
+ * "live" for exactly the reason it does inside sendEmail: it is the dispatch.
+ */
+export function emailDispatchMode(): "live" | "dry_run" | "unconfigured" {
+  if (testSend) return "live";
+  if (!emailEnabled()) return "unconfigured";
+  return apiEnv().DRY_RUN ? "dry_run" : "live";
+}
+
+/**
  * Send one transactional email. Never throws on the disabled/dry-run paths;
  * a real Resend failure DOES throw so callers can decide (log vs surface).
  */

@@ -2357,12 +2357,18 @@ model Appointment {
   // SMS is dark (no 10DLC / no consent). Email only needs a valid address.
   confirmationEmailSentAt DateTime?
   reminderEmailSentAt     DateTime?
-  // "Your appointment was canceled". Its own stamp, CLAIMED before the send
-  // (updateMany-where-null, like the push tiers) rather than stamped after:
-  // two people hitting cancel at once, or a retry after an ambiguous provider
-  // failure, must produce exactly ONE email. Cleared by /restore, so a booking
-  // that is un-canceled and later canceled again can tell the customer twice.
+  // "Your appointment was canceled" - written ONLY after the provider accepted
+  // the message (see services/appointmentCanceledNotify.ts). It is a record of
+  // what happened, never a claim staked before sending: the durable
+  // EmailIntent outbox is what guarantees at-most-once, not this column.
   cancellationEmailSentAt DateTime?
+  // Which cancellation OCCURRENCE this appointment is on. Incremented only by
+  // the atomic transition INTO CANCELED, so it is the identity of a real state
+  // change rather than of a request. An outbox intent carries the revision it
+  // was created for and refuses to send if the appointment has moved on -
+  // which is what makes cancel -> restore -> cancel deliver exactly one email
+  // (the newer one) instead of both.
+  cancellationRevision Int @default(0)
   // PUSH reminders (engines/pushReminders.ts) - a third channel with two tiers
   // (24h + 2h before start), each with its own at-most-once stamp claimed via
   // an atomic updateMany-where-null, so a double/concurrent run can never send
@@ -3351,11 +3357,32 @@ model EmailIntent {
   // PENDING -> SENT | FAILED | ABANDONED. ABANDONED = past the provider's
   // idempotency window with an ambiguous outcome, where a blind retry risks a
   // duplicate; deliberately terminal and visible rather than retried forever.
+  // PENDING -> SENT | FAILED | ABANDONED | SUPERSEDED | SUPPRESSED.
+  //   SUPERSEDED - the appointment was restored, or canceled again on a newer
+  //     revision; this intent describes a cancellation that no longer stands.
+  //   SUPPRESSED - email was unconfigured or DRY_RUN when the worker reached
+  //     it. Terminal ON PURPOSE: holding it PENDING would mean that turning
+  //     email on later blasts every customer whose cancellation was quietly
+  //     swallowed weeks ago.
   status String @default("PENDING")
 
+  // The cancellation occurrence this intent belongs to. Checked against the
+  // appointment's current revision immediately before dispatch.
+  cancellationRevision Int?
+
+  // 🔴 REAL PROVIDER ATTEMPTS ONLY. Incremented immediately before an actual
+  // Resend request - never on a worker claim, an unconfigured send or a dry
+  // run. Otherwise a worker that crashes before dispatching five times would
+  // exhaust the budget without Resend ever having been contacted.
   attempts Int @default(0)
+  // When we FIRST put this key in front of Resend. The provider's idempotency
+  // window runs from that moment, not from when the row was created - an
+  // intent can sit unconfigured for days without its safety window expiring.
+  firstProviderAttemptAt DateTime?
+  // Bounded backoff, so a 429 or a 5xx is not retried once a minute forever.
+  nextAttemptAt DateTime?
   // Held while a worker is working this row, so a second replica skips it and
-  // a dead worker's row becomes claimable again once the lease ages out.
+  // a dead worker's row becomes claimable again once the claim ages out.
   claimedAt DateTime?
   lastError String? // fixed classification only - never provider prose
   sentAt    DateTime?
@@ -3364,6 +3391,6 @@ model EmailIntent {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([status, createdAt])
+  @@index([status, nextAttemptAt])
   @@index([appointmentId])
 }
