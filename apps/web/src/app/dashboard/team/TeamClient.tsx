@@ -5,7 +5,6 @@ import { Card, CardHeader } from "@/components/ui/Card";
 import { FormError } from "@/components/ui/FormError";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
-import { capitalize } from "@/lib/vocab";
 import type { BusinessVocabulary } from "@chairback/config";
 import type { ShopRole, TeamData } from "./page";
 import {
@@ -18,6 +17,17 @@ import {
 
 const field =
   "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+
+/**
+ * Sentence-case a vocabulary word ("nail tech" -> "Nail tech").
+ *
+ * 🔴 Defined HERE rather than imported from `@/lib/vocab`. That module reads
+ * `getMe()`, which reaches `next/headers`; importing even a one-line helper from
+ * it into a "use client" file drags the SERVER api client into the client bundle
+ * and fails `next build` with a message about the `pages/` directory that points
+ * nowhere near the cause. `tsc` does not catch it - only the build does.
+ */
+const capitalize = (word: string): string => word.charAt(0).toUpperCase() + word.slice(1);
 
 /**
  * 🔴 The KEYS are the `ShopRole` enum - authorization wire values that never
