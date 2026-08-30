@@ -1,6 +1,11 @@
 import { Router } from "express";
 import { z } from "zod";
-import { apiEnv, ACTIVE_SHOP_COOKIE_NAME, serviceNounForShop } from "@chairback/config";
+import {
+  apiEnv,
+  ACTIVE_SHOP_COOKIE_NAME,
+  serviceNounForShop,
+  vocabularyForShop,
+} from "@chairback/config";
 import { prisma, Prisma } from "@chairback/db";
 import { hashPassword, verifyPassword } from "../auth/password.js";
 import {
@@ -234,7 +239,12 @@ authRouter.get("/me", requireUser, async (req, res) => {
   const activeShopRewards = activeShop
     ? await prisma.shop.findUnique({
         where: { id: activeShop.id },
-        select: { rewardsEnabled: true, industry: true, serviceNoun: true },
+        select: {
+          rewardsEnabled: true,
+          industry: true,
+          serviceNoun: true,
+          businessTypeSelectedAt: true,
+        },
       })
     : null;
   res.json({
@@ -258,6 +268,19 @@ authRouter.get("/me", requireUser, async (req, res) => {
     // The ACTIVE shop's singular visit-noun ("cut"/"twist"), custom-first with
     // the industry fallback resolved HERE so the web never re-derives it.
     serviceNoun: activeShopRewards ? serviceNounForShop(activeShopRewards) : "visit",
+    // The ACTIVE shop's business type, fully resolved server-side for the same
+    // reason: one resolver, and the web never re-derives vocabulary.
+    //   selected=false => nobody has chosen yet, so `vocabulary` is the NEUTRAL
+    //   set and the dashboard offers a one-time picker. `id` is still reported so
+    //   that picker can pre-highlight the stored guess without SPEAKING as if it
+    //   were an answer.
+    businessType: activeShopRewards
+      ? {
+          id: activeShopRewards.industry,
+          selected: activeShopRewards.businessTypeSelectedAt !== null,
+          vocabulary: vocabularyForShop(activeShopRewards),
+        }
+      : null,
     // Read-only demo session (the public dashboard tour) — the web chrome
     // shows the demo banner + signup CTA and hides account-level actions.
     demo: req.demoSession === true,

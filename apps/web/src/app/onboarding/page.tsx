@@ -4,10 +4,10 @@ import { useState } from "react";
 import { useFormState, useFormStatus } from "react-dom";
 import { motion } from "framer-motion";
 import {
-  INDUSTRIES,
-  INDUSTRY_KEYS,
-  type IndustryKey,
-} from "@chairback/config/constants";
+  BUSINESS_TYPES,
+  SELECTABLE_BUSINESS_TYPE_IDS,
+  type BusinessTypeId,
+} from "@chairback/config/businessTypes";
 import { createShopAction } from "./actions";
 import { saveThemeAction } from "../dashboard/actions";
 import { ThemePicker } from "@/components/ThemePicker";
@@ -38,7 +38,9 @@ export default function OnboardingShopPage() {
   const [state, action] = useFormState(createShopAction, {});
   // No default vertical: force an explicit pick so a non-barber shop never
   // silently inherits "barber" (which would wrong-foot its seeded reward + SMS).
-  const [industry, setIndustry] = useState<IndustryKey | "">("");
+  // The API mirrors this - it stamps businessTypeSelectedAt only when a type is
+  // actually supplied, so an unanswered question stays visibly unanswered.
+  const [industry, setIndustry] = useState<BusinessTypeId | "">("");
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center px-5">
@@ -63,21 +65,26 @@ export default function OnboardingShopPage() {
             />
             <select
               name="industry"
-              aria-label="What kind of business?"
+              aria-label="What kind of business are you setting up?"
               value={industry}
-              onChange={(e) => setIndustry(e.target.value as IndustryKey)}
+              onChange={(e) => setIndustry(e.target.value as BusinessTypeId)}
               required
               className={field}
             >
               <option value="" disabled>
-                What kind of business?
+                What kind of business are you setting up?
               </option>
-              {INDUSTRY_KEYS.map((k) => (
+              {SELECTABLE_BUSINESS_TYPE_IDS.map((k) => (
                 <option key={k} value={k}>
-                  {INDUSTRIES[k].label}
+                  {BUSINESS_TYPES[k].emoji} {BUSINESS_TYPES[k].label}
                 </option>
               ))}
             </select>
+            {/* The tagline disambiguates neighbours ("Hair Salon" vs
+                "Multi-Service Salon") without making the picker a wall of text. */}
+            {industry ? (
+              <p className="-mt-1 text-xs text-muted">{BUSINESS_TYPES[industry].tagline}</p>
+            ) : null}
             <input
               name="bookingUrl"
               type="url"
@@ -123,7 +130,7 @@ export default function OnboardingShopPage() {
                 <input
                   name="rewardLabel"
                   key={industry}
-                  defaultValue={industry ? INDUSTRIES[industry].defaultReward : ""}
+                  defaultValue={industry ? BUSINESS_TYPES[industry].defaultReward.name : ""}
                   placeholder="Reward name"
                   aria-label="Reward name"
                   className={field}

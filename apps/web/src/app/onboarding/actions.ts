@@ -18,9 +18,15 @@ export async function createShopAction(
   if (formData.get("smsAttested") !== "on") {
     return { error: "Please confirm the SMS consent statement to continue." };
   }
+  // 🔴 No `?? "other"` fallback. The picker is `required` and deliberately has no
+  // default, so a missing value means the question was not answered - and
+  // inventing an answer here is exactly the silent classification the business
+  // type design exists to prevent. Omitting the field creates an UNSELECTED shop
+  // that renders neutral wording and gets asked once, which is the honest result.
+  const industry = String(formData.get("industry") ?? "").trim();
   const res = await apiSend("POST", "/api/shops", {
     name: String(formData.get("name") ?? ""),
-    industry: String(formData.get("industry") ?? "other"),
+    ...(industry ? { industry } : {}),
     bookingUrl: String(formData.get("bookingUrl") ?? ""),
     timezone: String(formData.get("timezone") ?? "America/New_York"),
     rewardThreshold: Number(formData.get("rewardThreshold") ?? 10),

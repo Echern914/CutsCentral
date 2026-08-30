@@ -265,9 +265,17 @@ model Shop {
   // last visit. Drives the urgency timer on the rewards page. Default 14 (<2 wks).
   rebookWindowDays    Int     @default(14)
   plan                String  @default("free") // "free" | "pro" | "pro_ai"; kept in sync by the Stripe webhook
-  // Vertical (INDUSTRIES key in packages/config). Flavors onboarding defaults
-  // and copy only - the data model is service-business generic.
+  // Vertical (BUSINESS_TYPES key in packages/config). Flavors onboarding
+  // defaults and copy only - the data model is service-business generic.
+  // TEXT, not an enum, so a new vertical ships without a migration.
   industry            String  @default("barber")
+  // When an authorized human explicitly CHOSE `industry`. NULL means the stored
+  // value is a DEFAULT, not an answer: vocabulary falls back to NEUTRAL and the
+  // dashboard offers a one-time picker. Shops predating the defaultless picker
+  // (2026-06-28, dbb2b6a) carry "barber" because a migration put it there, and
+  // must not be presented as barbershops on the strength of that.
+  // Never written by a migration again - only by an owner or manager choosing.
+  businessTypeSelectedAt DateTime?
   // Optional custom singular visit-noun ("twist"); null = the industry default
   // via serviceNounFor. Flavors Insights copy + client texts. Stored lowercase.
   serviceNoun         String?
