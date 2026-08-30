@@ -595,7 +595,15 @@ describe("Acuity health, end to end", () => {
   async function itemsFor(cookie: string) {
     const res = await request(app).get("/api/readiness").set("Cookie", cookie);
     expect(res.status).toBe(200);
-    return res.body.items as { id: string; applicable: boolean; done: boolean; evidence: string }[];
+    // `title` is on the wire too (ReadinessItem carries it); declared here so the
+    // vocabulary assertions below can read it without a second cast.
+    return res.body.items as {
+      id: string;
+      applicable: boolean;
+      done: boolean;
+      evidence: string;
+      title: string;
+    }[];
   }
   const pick = (items: Awaited<ReturnType<typeof itemsFor>>, id: string) =>
     items.find((i) => i.id === id)!;
