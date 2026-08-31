@@ -42,8 +42,8 @@ import {
  *
  * THREE roles, TWO destinations - the table lives in src/mode.ts, because the
  * BACK ARROW resolves through it too and the two must never disagree:
- *   - "I own a barbershop"      -> mode "barber"   -> /login -> /barber
- *   - "I manage multiple shops" -> mode "manager"  -> /login -> /barber  (same
+ *   - "I own a business"            -> mode "barber"  -> /login -> /barber
+ *   - "I manage multiple locations" -> mode "manager" -> /login -> /barber (same
  *                                                     dashboard; switcher later)
  *   - "I'm a customer"          -> mode "customer" -> /customer
  *
@@ -234,20 +234,24 @@ type Role = {
 };
 
 const ROLES: Role[] = [
+  // 🔑 Vertical-neutral on purpose: ChairBack sells to salons, nail and lash
+  // studios and detailers now, not only barbershops - the front door must not
+  // tell a spa owner this app is for someone else. The internal mode keys
+  // ("barber"/"manager") are PERSISTED on existing installs and never change.
   {
     mode: "barber",
-    title: "I own a shop",
+    title: "I own a business",
     sub: "Your bookings, your clients, your dashboard.",
-    label: "Continue as a shop owner",
-    hint: "Opens the shop dashboard.",
+    label: "Continue as an owner",
+    hint: "Opens your business dashboard.",
     Icon: ScissorsIcon,
   },
   {
     mode: "manager",
-    title: "I manage multiple shops",
+    title: "I manage multiple locations",
     sub: "Oversee every location in one place.",
-    label: "Continue as a multi-shop manager",
-    hint: "Opens the multi-shop dashboard.",
+    label: "Continue as a multi-location manager",
+    hint: "Opens the multi-location dashboard.",
     Icon: ShopsIcon,
   },
   {
