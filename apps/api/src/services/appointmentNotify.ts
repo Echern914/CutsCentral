@@ -1,6 +1,7 @@
 import { apiEnv } from "@chairback/config";
 import { forShop, prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
+import { appointmentWalletEnabled } from "../wallet/appointmentPass.js";
 import { redactForAudit } from "../messaging/auditBody.js";
 import {
   buildAppointmentConfirmationBody,
@@ -365,6 +366,9 @@ export async function notifyAppointmentConfirmation(params: {
           timezone: shop.timezone,
           staffName: appt.staff.name,
           manageToken: appt.manageToken,
+          // The template cannot know whether the pass type is configured, and
+          // an Add-to-Wallet button whose link 404s is worse than none.
+          walletPassAvailable: appointmentWalletEnabled(),
         });
         const sent = await sendAppointmentEmail({
           shopId: shop.id,

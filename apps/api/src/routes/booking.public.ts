@@ -38,6 +38,12 @@ import {
   priceRangeForService,
 } from "../engines/pricing.js";
 import { connectEnabled, hasActiveAccess } from "../billing/stripe.js";
+import { buildAppointmentIcs } from "../messaging/ics.js";
+import {
+  appointmentWalletEnabled,
+  buildPassForAppointment,
+  pokeAppointmentPass,
+} from "../wallet/appointmentPass.js";
 import {
   createAheadPaymentIntent,
   depositChargeCents,
@@ -1873,6 +1879,106 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
 
 //  Manage by token (cancel / reschedule) - the token IS the authorization.
 
+/**
+ * "Add to Calendar" - the .ics behind the confirmation email's button. Works
+ * for every calendar app with no vendor account or certificate, which is why
+ * it is the floor everyone gets while the Apple Wallet pass below is the
+ * iOS-only companion. Manage-token authenticated, like everything else about
+ * one appointment; the token is already redacted from logs by redactUrl.
+ *
+ * BOOKED only: an .ics for a canceled (or finished) appointment would plant a
+ * dead event in someone's calendar, which is worse than a 404.
+ */
+bookingPublicRouter.get(
+  "/manage/:token/calendar.ics",
+  rewardsLimiter,
+  async (req, res) => {
+    const appt = await prisma.appointment.findUnique({
+      where: { manageToken: String(req.params.token) },
+      select: {
+        id: true,
+        status: true,
+        startsAt: true,
+        endsAt: true,
+        updatedAt: true,
+        manageToken: true,
+        service: { select: { name: true } },
+        staff: { select: { name: true } },
+        shop: {
+          select: {
+            name: true,
+            addressStreet: true,
+            addressCity: true,
+            addressRegion: true,
+          },
+        },
+      },
+    });
+    if (!appt || appt.status !== "BOOKED") {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    const ics = buildAppointmentIcs({
+      appointmentId: appt.id,
+      serviceName: appt.service?.name ?? "Appointment",
+      shopName: appt.shop.name,
+      startsAt: appt.startsAt,
+      endsAt: appt.endsAt,
+      staffName: appt.staff?.name ?? null,
+      addressLines: [
+        appt.shop.addressStreet,
+        appt.shop.addressCity,
+        appt.shop.addressRegion,
+      ],
+      manageUrl: `${apiEnv().APP_BASE_URL}/book/manage/${appt.manageToken}`,
+      // Rises when the appointment changes (reschedule touches updatedAt), so
+      // a re-imported file REPLACES the old calendar entry instead of sitting
+      // beside it. Minute resolution is plenty; it only has to be monotonic.
+      sequence: Math.floor(appt.updatedAt.getTime() / 60_000),
+    });
+    res
+      .set("Content-Type", "text/calendar; charset=utf-8")
+      .set("Content-Disposition", 'attachment; filename="appointment.ics"')
+      .send(ics);
+  },
+);
+
+/**
+ * "Add to Apple Wallet" - the signed .pkpass behind the confirmation email's
+ * button. 404 while the appointment pass type is unconfigured (the email
+ * hides the button then too - see WALLET-SETUP.md), and 404 for anything not
+ * BOOKED: a FRESH download of a dead appointment is refused, while devices
+ * that already added the pass get the voided update through the wallet web
+ * service, which answers to the pass's own auth token instead.
+ */
+bookingPublicRouter.get(
+  "/manage/:token/wallet-pass",
+  rewardsLimiter,
+  async (req, res) => {
+    if (!appointmentWalletEnabled()) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    const appt = await prisma.appointment.findUnique({
+      where: { manageToken: String(req.params.token) },
+      select: { id: true, status: true },
+    });
+    if (!appt || appt.status !== "BOOKED") {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    const pass = await buildPassForAppointment(appt.id);
+    if (!pass) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    res
+      .set("Content-Type", "application/vnd.apple.pkpass")
+      .set("Content-Disposition", 'attachment; filename="appointment.pkpass"')
+      .send(pass);
+  },
+);
+
 bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
   const appt = await prisma.appointment.findUnique({
     where: { manageToken: String(req.params.token) },
@@ -2482,6 +2588,10 @@ bookingPublicRouter.post(
     // New block first, then release the old. Delete-first would leave the new
     // time briefly bookable in Acuity - the exact window this engine closes.
     await completeReschedule(appt.shopId, appt.id, publicReschedOutboxId);
+
+    // Devices holding this appointment's Wallet pass re-fetch the NEW time.
+    // Fire-and-forget: a wallet problem must never affect the reschedule.
+    void pokeAppointmentPass(appt.id);
 
     void notifyAppointmentConfirmation({
       shopId: appt.shopId,

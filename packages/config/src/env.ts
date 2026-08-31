@@ -199,6 +199,18 @@ const apiSchema = z.object({
   WALLET_PASS_KEY_PASSPHRASE: z.string().optional(),
   WALLET_WWDR_CERT_BASE64: z.string().min(1).optional(),
 
+  // Apple Wallet APPOINTMENT pass (optional; a SEPARATE Pass Type ID from the
+  // punch card - an appointment is an eventTicket, a punch card is a
+  // storeCard, and Apple binds each certificate to exactly one type id). Dark
+  // until all three are set AND the shared WALLET_TEAM_ID +
+  // WALLET_WWDR_CERT_BASE64 above exist: the confirmation email hides its
+  // Add-to-Wallet button and the pass routes 404. Same cert ceremony as the
+  // punch card - see WALLET-SETUP.md "Appointment pass".
+  WALLET_APPT_PASS_TYPE_ID: z.string().min(1).optional(),
+  WALLET_APPT_PASS_CERT_BASE64: z.string().min(1).optional(),
+  WALLET_APPT_PASS_KEY_BASE64: z.string().min(1).optional(),
+  WALLET_APPT_PASS_KEY_PASSPHRASE: z.string().optional(),
+
   // AI receptionist (optional - while ANTHROPIC_API_KEY is unset,
   // receptionistConfigured() is false and the whole feature is dark: the Twilio
   // inbound webhook keeps its STOP/START-only behavior and the gap-fill branch

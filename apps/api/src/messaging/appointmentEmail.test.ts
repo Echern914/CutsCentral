@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildAppointmentCanceledEmail,
+  buildAppointmentConfirmationBody,
   buildAppointmentConfirmationEmail,
+  buildAppointmentReminderBody,
   buildAppointmentReminderEmail,
   buildSyncedVisitReminderEmail,
 } from "./templates.js";
@@ -77,5 +80,80 @@ describe("appointment emails point at the button, never at a reply", () => {
       expect(email.html.toLowerCase()).not.toContain("reply to this email");
       expect(email.html).toContain("Drick&#39;s Barbershop");
     });
+  });
+});
+
+/**
+ * The confirmation email's KEEP-IT-HANDY row: "Add to Calendar" always, "Add
+ * to Apple Wallet" only while the appointment pass type is configured, the
+ * app-store CTA closing, the manage button untouched - and NONE of it in SMS.
+ */
+describe("calendar, wallet and the app CTA", () => {
+  const dark = buildAppointmentConfirmationEmail(base);
+  const lit = buildAppointmentConfirmationEmail({ ...base, walletPassAvailable: true });
+
+  it("always offers Add to Calendar, in both halves", () => {
+    for (const email of [dark, lit]) {
+      expect(email.html).toContain("/api/book/manage/tok_abc123/calendar.ics");
+      expect(email.html).toContain("Add to Calendar");
+      expect(email.text).toContain("/api/book/manage/tok_abc123/calendar.ics");
+    }
+  });
+
+  it("🔴 offers Apple Wallet ONLY when the pass type is configured", () => {
+    // A button whose link 404s is worse than no button.
+    expect(dark.html).not.toContain("wallet-pass");
+    expect(dark.html).not.toContain("Apple Wallet");
+    expect(dark.text).not.toContain("wallet-pass");
+
+    expect(lit.html).toContain("/api/book/manage/tok_abc123/wallet-pass");
+    expect(lit.html).toContain("Add to Apple Wallet");
+    expect(lit.text).toContain("/api/book/manage/tok_abc123/wallet-pass");
+  });
+
+  it("wallet ACCOMPANIES the calendar link, never replaces it", () => {
+    expect(lit.html).toContain("calendar.ics");
+    expect(lit.html).toContain("wallet-pass");
+  });
+
+  it("keeps the manage button as the primary action", () => {
+    for (const email of [dark, lit]) {
+      expect(email.html).toContain("Reschedule or cancel");
+      expect(email.html).toContain("/book/manage/tok_abc123");
+    }
+  });
+
+  it("closes with the app-store CTA", () => {
+    for (const email of [dark, lit]) {
+      expect(email.html).toContain("https://apps.apple.com/app/id6783995804");
+      expect(email.html).toContain("get the ChairBack app");
+      expect(email.text).toContain("https://apps.apple.com/app/id6783995804");
+    }
+  });
+
+  it("🔴 the CANCELLATION email carries none of it", () => {
+    const canceled = buildAppointmentCanceledEmail({
+      firstName: "Casey",
+      shopName: "Drick's Barbershop",
+      shopSlug: "dricks",
+      serviceName: "Skin Fade",
+      startsAt: base.startsAt,
+      timezone: base.timezone,
+      staffName: "Drick",
+    });
+    const both = canceled.html + "\n" + canceled.text;
+    expect(both).not.toContain("calendar.ics");
+    expect(both).not.toContain("wallet-pass");
+    expect(both).not.toContain("Apple Wallet");
+  });
+
+  it("🔴 SMS stays untouched - no wallet, no ics, no store link (this phase)", () => {
+    const confirmation = buildAppointmentConfirmationBody(base);
+    const reminder = buildAppointmentReminderBody(base);
+    for (const body of [confirmation, reminder]) {
+      expect(body).not.toContain("calendar.ics");
+      expect(body).not.toContain("wallet-pass");
+      expect(body).not.toContain("apps.apple.com");
+    }
   });
 });

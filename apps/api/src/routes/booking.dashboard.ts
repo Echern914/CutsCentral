@@ -14,6 +14,7 @@ import { recomputeCadence } from "../engines/cadence.js";
 import { collapseExternalBlocks } from "../engines/externalBlockCollapse.js";
 import { notifyPunchEarned } from "../services/loyaltyNotify.js";
 import { notifyAppointmentConfirmation } from "../services/appointmentNotify.js";
+import { pokeAppointmentPass } from "../wallet/appointmentPass.js";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
@@ -3247,6 +3248,9 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
   // The customer is told their time moved. No barber alert here, unlike the
   // customer-initiated path - the barber is the one who just did it.
   void notifyAppointmentConfirmation({ shopId, appointmentId: appt.id });
+  // Devices holding this appointment's Wallet pass re-fetch the NEW time.
+  // Fire-and-forget: a wallet problem must never affect the reschedule.
+  void pokeAppointmentPass(appt.id);
   invalidateShopAvailabilityCaches(shopId);
   res.json({ ok: true, startsAt: startsAt.toISOString() });
 });

@@ -541,6 +541,7 @@ model Shop {
   receptionistMessages      ReceptionistMessage[]
   pushSubscriptions   PushSubscription[]
   walletPasses        WalletPassRegistration[]
+  walletApptPasses    WalletAppointmentPassRegistration[]
 
   // Native booking engine relations
   staff                  Staff[]
@@ -2441,6 +2442,7 @@ model Appointment {
   @@index([shopId, status, startsAt]) // dashboard upcoming list
   @@index([seriesId]) // "future rows of this series" lookups for cancel-scope
   @@index([status, holdExpiresAt]) // expired-hold sweep + busy-set exclusion
+  walletApptPasses   WalletAppointmentPassRegistration[]
 }
 
 enum RecurringSeriesStatus {
@@ -3417,4 +3419,24 @@ model EmailIntent {
 
   @@index([status, nextAttemptAt])
   @@index([appointmentId])
+}
+
+// One iOS device registered for auto-updates of one APPOINTMENT's Wallet pass
+// (Apple's PassKit Web Service protocol; the punch card's twin table). The
+// pushToken is the PASS-update APNs token on the appointment pass type's
+// topic, not the app push token. Rows die with their appointment.
+model WalletAppointmentPassRegistration {
+  id                      String      @id @default(cuid())
+  shopId                  String
+  shop                    Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  appointmentId           String
+  appointment             Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  deviceLibraryIdentifier String
+  pushToken               String
+  createdAt               DateTime    @default(now())
+
+  // A device registers a given pass once; re-registering refreshes the token.
+  @@unique([deviceLibraryIdentifier, appointmentId])
+  @@index([appointmentId]) // the poke path ("devices holding this pass")
+  @@index([shopId])
 }

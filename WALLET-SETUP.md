@@ -72,3 +72,54 @@ Redeploy the API. That's it — no web env needed (the page reads
   (intercept the .pkpass URL in AppWebView → hand to the OS).
 - Kill switch: unset any WALLET_* var and everything goes dark again; passes
   already in Wallet stay but stop updating.
+
+---
+
+# Appointment pass (second pass type) — go-live steps
+
+The confirmation email offers "Add to Apple Wallet" for the BOOKING itself: an
+eventTicket showing the date, time, service and barber, which updates itself on
+reschedule and greys out (voids) on cancellation. It is a SEPARATE Pass Type ID
+from the punch card — Apple binds each certificate to exactly one type id — so
+it needs its own identifier + certificate, but reuses the same Team ID and WWDR
+intermediate you already exported above.
+
+Ships DARK: until the three `WALLET_APPT_*` vars are set the email hides the
+button and every appointment-pass route 404s. "Add to Calendar" (.ics) does NOT
+depend on any of this — it works from the moment the code deploys.
+
+## 1. Create the second Pass Type ID
+
+developer.apple.com → Identifiers → `+` → **Pass Type IDs** →
+Description: `ChairBack appointment`. Identifier:
+**`pass.com.getchairback.appointment`** → Register.
+
+## 2–3. Certificate + PEM export
+
+Exactly the punch-card steps above, against the NEW Pass Type ID. You will end
+with a second `wallet-appt-cert.pem` + `wallet-appt-key.pem`. (The WWDR file is
+the same one — no need to re-download.)
+
+## 4. Set the Railway env (API service)
+
+```sh
+WALLET_APPT_PASS_TYPE_ID=pass.com.getchairback.appointment
+WALLET_APPT_PASS_CERT_BASE64=$(base64 -i wallet-appt-cert.pem)
+WALLET_APPT_PASS_KEY_BASE64=$(base64 -i wallet-appt-key.pem)
+WALLET_APPT_PASS_KEY_PASSPHRASE=<the key passphrase, if you set one>
+```
+
+(`WALLET_TEAM_ID` and `WALLET_WWDR_CERT_BASE64` are shared with the punch card
+and must already be set.)
+
+## 5. Verify
+
+1. Book a test appointment with your own email → the confirmation email now
+   shows BOTH "Add to Apple Wallet" and "Add to Calendar".
+2. `curl -sI https://api.getchairback.com/api/book/manage/<manage-token>/wallet-pass`
+   → `200` + `application/vnd.apple.pkpass` (`404` while dark).
+3. Add the pass on an iPhone, then reschedule the appointment from the
+   dashboard → within seconds the pass shows the new time (APNs poke).
+4. Cancel it → the pass greys out as no longer valid.
+
+Same expiry note as above: the cert renews yearly, refresh the two BASE64 vars.
