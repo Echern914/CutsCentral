@@ -2829,8 +2829,14 @@ dashboardRouter.post(
  *
  * GET mints the code on first view (lazily, so no backfill was needed), which
  * is why a read endpoint writes. Referral rows are read with plain prisma
- * rather than forShop: a row spans two shops, and the referrer needs the
- * REFERRED shop's name, which a shop-scoped read can't reach.
+ * rather than forShop: a row spans two shops, which a shop-scoped read can't
+ * reach.
+ *
+ * The response deliberately says NOTHING identifying about the referred shop.
+ * It used to return the referred shop's name - a cross-tenant leak: signing up
+ * through someone's link must not hand the referrer your business name. The
+ * label is derived from the referral row's own id (a cuid fragment - not
+ * enumerable, identifies nothing).
  */
 dashboardRouter.get("/referrals", async (req, res) => {
   const shop = req.shop!;
@@ -2845,14 +2851,13 @@ dashboardRouter.get("/referrals", async (req, res) => {
       status: true,
       createdAt: true,
       rewardedAt: true,
-      referredShop: { select: { name: true } },
     },
   });
   res.json({
     code,
     referrals: rows.map((r) => ({
       id: r.id,
-      shopName: r.referredShop.name,
+      label: `Business ••••${r.id.slice(-4)}`,
       status: r.status,
       joinedAt: r.createdAt.toISOString(),
       rewardedAt: r.rewardedAt?.toISOString() ?? null,

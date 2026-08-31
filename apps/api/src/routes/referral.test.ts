@@ -285,6 +285,11 @@ describe("referral: the dashboard page", () => {
       .set("Cookie", referrer.cookie);
     expect(withPending.body.referrals).toHaveLength(1);
     expect(withPending.body.referrals[0].status).toBe("PENDING");
+    // The referred shop's identity must not cross the tenant boundary: no name
+    // anywhere in the row, only the masked label derived from the row's own id.
+    expect(withPending.body.referrals[0].shopName).toBeUndefined();
+    expect(withPending.body.referrals[0].label).toMatch(/^Business ••••/);
+    expect(JSON.stringify(withPending.body)).not.toContain("friend-f");
     expect(withPending.body.pendingCount).toBe(1);
     expect(withPending.body.earnedMonths).toBe(0);
 
