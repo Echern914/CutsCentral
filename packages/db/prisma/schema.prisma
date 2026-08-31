@@ -3588,3 +3588,82 @@ model AffiliateAuditEvent {
   @@index([accountId, createdAt])
   @@index([type, createdAt])
 }
+
+// ---------------------------------------------------------------------------
+// AFFILIATE ATTRIBUTION (arc phase 2). Default-deny like the rest of the
+// affiliate schema. The LEGACY referral program (the Referral model above) is
+// untouched and remains authoritative in production: while
+// AFFILIATE_PROGRAM_ENABLED is false nothing here is ever written, so the two
+// systems cannot both claim a shop.
+// ---------------------------------------------------------------------------
+
+// The durable outcome of one referred shop's attribution attempt, written
+// INSIDE the shop-creation transaction. Exactly one row per referred shop
+// (referredShopId is UNIQUE - a database constraint, not an application
+// check), and it is terminal: attribution happens at shop creation or never,
+// which is what makes retroactive claiming of an existing shop impossible.
+//
+// A row is written for a REJECTED outcome too (unknown code, suspended
+// affiliate, self-referral, expired claim) so an ineligible attempt is a
+// durable, auditable fact rather than an untracked silent drop. A forged or
+// malformed claim writes NOTHING - it was never a claim.
+//
+// 🔴 The locked facts are immutable at the DATABASE layer: a BEFORE UPDATE
+// trigger refuses any change to referredShopId, codeUsed, source, capturedAt
+// or lockedAt. The one legal mutation is a platform-admin correction, which
+// may move affiliateAccountId and must fill the correction columns; the
+// seven-day window is enforced in the service.
+//
+// NO foreign keys, on purpose: this is the evidence a future payment rests on
+// and it must outlive the shop it describes (the AffiliateAuditEvent stance).
+model AffiliateReferralAttribution {
+  id String @id @default(cuid())
+
+  // Null only for a REJECTED row whose code never resolved to an account.
+  affiliateAccountId String?
+  referredShopId     String  @unique
+
+  // The code as presented. Public identifier, not a credential.
+  codeUsed String
+  source   String // link | explicit_code (CHECK-pinned)
+  state    String // ATTRIBUTED | REJECTED (CHECK-pinned)
+  // Fixed classification, required exactly when state = REJECTED.
+  rejectionReason String?
+
+  // capturedAt is when the visitor's claim was minted (iat), lockedAt is the
+  // instant the shop was created. claimExpiresAt is that claim's own window,
+  // kept so a later audit can see the claim was live when it was spent.
+  capturedAt     DateTime
+  lockedAt       DateTime
+  claimExpiresAt DateTime
+
+  // Platform-admin correction (7-day window, reason required, audited).
+  correctedAt                DateTime?
+  correctedByUserId          String?
+  correctionReason           String?
+  previousAffiliateAccountId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([affiliateAccountId, state])
+  @@index([state, lockedAt])
+}
+
+// Bounded click counters: ONE row per affiliate per day, incremented in place.
+// Deliberately not a row per click - a public endpoint must not let anyone
+// grow a table without limit. No IP, no user agent, no visitor identifier of
+// any kind is stored or derived here, so there is nothing to hash and nothing
+// to retain: the counter is the whole record.
+model AffiliateClickDay {
+  id                 String   @id @default(cuid())
+  affiliateAccountId String
+  /// UTC day bucket.
+  day                DateTime @db.Date
+  count              Int      @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([affiliateAccountId, day])
+  @@index([day])
+}

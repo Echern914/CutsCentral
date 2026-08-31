@@ -248,6 +248,19 @@ export const uploadLimiter = make({
 });
 
 /**
+ * Referral-link capture: per VISITOR (publicIpKey), the outer bound on anyone
+ * probing the claim endpoint for valid codes. Codes are 72-bit random so
+ * enumeration is hopeless anyway; this keeps the attempt cheap to refuse and
+ * stops the daily click counters being trivially inflated.
+ */
+export const affiliateClaimLimiter = make({
+  name: "affClaim",
+  windowMs: 60 * 1000,
+  limit: 20,
+  keyGenerator: publicIpKey,
+});
+
+/**
  * Affiliate application submissions: per-session, tight. Applying is a
  * once-ever action and the double-submit failure mode is the whole reason a
  * limiter sits here at all - the real guard is the partial unique index on

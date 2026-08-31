@@ -28,6 +28,11 @@ import { Prisma, prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 import { linkReferralOnShopCreate } from "../services/referral.js";
+import { AFFILIATE_CLAIM_COOKIE } from "@chairback/config";
+import {
+  applyAttributionInTx,
+  planAttribution,
+} from "../services/affiliateAttribution.js";
 import { collectCapabilities, collectReadinessFacts } from "../services/readinessFacts.js";
 import { buildReadiness } from "../engines/readiness.js";
 import { previewNudgeBody } from "../messaging/templates.js";
@@ -378,6 +383,18 @@ shopsRouter.post("/", requireUser, async (req, res) => {
   const industryKey = shopData.industry ?? "other";
   const type = businessType(industryKey);
   const slug = await availableSlug(parsed.data.name);
+  // Affiliate attribution is DECIDED here, before the transaction opens, so a
+  // lookup failure can never cost this barber their shop - planAttribution
+  // never throws and answers null for "nothing to record". It returns null
+  // outright while AFFILIATE_PROGRAM_ENABLED is false, which is why this whole
+  // path is inert in production today. The legacy referral program below is
+  // untouched and remains the only one that pays anything.
+  const attribution = await planAttribution({
+    claimToken: (req.cookies as Record<string, string> | undefined)?.[
+      AFFILIATE_CLAIM_COOKIE
+    ],
+    ownerId: req.userId!,
+  });
   // Shop + its first menu reward land together or not at all.
   const shop = await prisma.$transaction(async (tx) => {
     const created = await tx.shop.create({
@@ -415,6 +432,14 @@ shopsRouter.post("/", requireUser, async (req, res) => {
       where: { id: req.userId!, smsAttestedAt: null },
       data: { smsAttestedAt: new Date() },
     });
+    // The affiliate lock, INSIDE the shop's transaction: a committed shop
+    // always carries its attribution outcome, and two racing creations produce
+    // one row because referredShopId is UNIQUE (the insert is a skipDuplicates
+    // createMany, so the loser is a no-op rather than an exception that would
+    // abort this transaction).
+    if (attribution) {
+      await applyAttributionInTx(tx, attribution, created.id);
+    }
     return created;
   });
   // Referral attribution, AFTER the shop transaction commits. Deliberately not
