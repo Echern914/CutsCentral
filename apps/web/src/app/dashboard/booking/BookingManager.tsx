@@ -1720,6 +1720,12 @@ function TargetedSlotsManager({
   const [weekTimes, setWeekTimes] = useState<Record<string, WeekRange[]>>({});
   const [startDate, setStartDate] = useState(""); // YYYY-MM-DD, blank = today
   const [minutes, setMinutes] = useState(30);
+  // Weekly mode: fill each window with repeating `minutes`-long bookings
+  // (Drick's "my hours are set but only one appointment shows" — a window
+  // used to publish exactly ONE slot as long as the window itself). Default
+  // ON for new rules; editing derives it from what the rule stored, so an
+  // old one-slot series stays a one-slot series until the barber flips it.
+  const [fillWindows, setFillWindows] = useState(true);
   const [price, setPrice] = useState("");
   const [repeatWeeks, setRepeatWeeks] = useState(0);
   // "Until I turn it off" — an indefinite weekly series (Drick: capping at N
@@ -1813,6 +1819,13 @@ function TargetedSlotsManager({
       }));
     }
     setWeekTimes(seeded);
+    // A rule published with slotMin was filling its windows; one without was
+    // the original one-slot-per-window shape. Keep whichever it was.
+    setFillWindows(
+      Object.values(rule.schedule)
+        .flat()
+        .some((t) => typeof t.slotMin === "number"),
+    );
     setStartDate("");
     setRepeatForever(rule.indefinite);
     setRepeatWeeks(0);
@@ -1850,6 +1863,18 @@ function TargetedSlotsManager({
           );
           return;
         }
+        // Filling a window with slots needs at least one whole slot to fit -
+        // publishing a special that can never materialize would be a silent
+        // lie, so refuse it here with the window named.
+        if (fillWindows && minutes > span) {
+          toast(
+            `${WEEKDAYS[Number(wd)]}: a ${minutes}-min booking doesn't fit in ${fmtWallTime(
+              hhmmToMinutes(r.start),
+            )}–${fmtWallTime(hhmmToMinutes(r.end))} — widen the window or shorten the booking`,
+            "error",
+          );
+          return;
+        }
       }
     }
     const schedule = Object.fromEntries(
@@ -1862,6 +1887,9 @@ function TargetedSlotsManager({
             // The window's length IS this occurrence's duration; it
             // overrides the rule's base minutes for just this time.
             durationMin: hhmmToMinutes(r.end) - hhmmToMinutes(r.start),
+            // Filling: the window packs repeating `minutes`-long bookings
+            // instead of publishing one slot as long as itself.
+            ...(fillWindows ? { slotMin: minutes } : {}),
           })),
       ]),
     );
@@ -2197,6 +2225,43 @@ function TargetedSlotsManager({
               onChange={setWeekTimes}
               defaultDurationMin={minutes}
             />
+            {/* What a WINDOW means. "Fill" is Drick's expectation - hours plus
+                a booking length should read as several bookable times - and
+                the original one-long-slot shape stays one radio away for the
+                "one 2-hour late-night retwist" case it was built for. */}
+            <div
+              role="radiogroup"
+              aria-label="How each window publishes"
+              className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted"
+            >
+              <span className="shrink-0">Each window offers</span>
+              <label className="flex items-center gap-1.5">
+                <input
+                  type="radio"
+                  name="window-fill"
+                  checked={fillWindows}
+                  onChange={() => setFillWindows(true)}
+                />
+                <span className={fillWindows ? "text-offwhite" : undefined}>
+                  repeating {minutes}-min bookings
+                </span>
+              </label>
+              <label className="flex items-center gap-1.5">
+                <input
+                  type="radio"
+                  name="window-fill"
+                  checked={!fillWindows}
+                  onChange={() => setFillWindows(false)}
+                />
+                <span className={!fillWindows ? "text-offwhite" : undefined}>
+                  one booking for the whole window
+                </span>
+              </label>
+            </div>
+            <p className="text-[11px] text-muted">
+              Tip: set one day&apos;s times, then tick other days to copy them —
+              or use “Same times every day”.
+            </p>
             {!editingRule && (
               <label className="flex flex-wrap items-center gap-2 text-xs text-muted">
                 Starting
@@ -2590,7 +2655,10 @@ function scheduleSummary(
   const span = (t: RuleScheduleTime) =>
     `${fmtWallTime(t.startMin)} – ${fmtWallTime(
       t.startMin + (t.durationMin ?? baseDurationMin),
-    )}`;
+      // A filled window is a RANGE of bookings, and the card must say so - a
+      // barber reading "9:00 PM – 11:00 PM" needs to know whether that is one
+      // two-hour special or four half-hour ones.
+    )}${typeof t.slotMin === "number" ? ` (${t.slotMin}-min slots)` : ""}`;
   const byTimes = new Map<string, number[]>();
   for (const wd of MON_FIRST_WEEKDAYS) {
     const times = schedule[String(wd)];

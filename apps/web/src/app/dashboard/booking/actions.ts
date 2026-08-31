@@ -697,6 +697,9 @@ export interface RuleScheduleTime {
   startMin: number;
   durationMin?: number;
   price?: number;
+  /** Present = this entry is a WINDOW of repeating `slotMin`-minute slots
+   *  packed inside `durationMin`; absent = one slot exactly that long. */
+  slotMin?: number;
 }
 
 /** A weekly series ("every night 9pm", "Mon+Sat mornings"), condensed to one
@@ -782,7 +785,7 @@ export async function createTargetedScheduleAction(input: {
   label?: string;
   durationMin: number;
   price: number;
-  schedule: Record<string, { start: string; durationMin?: number; price?: number }[]>;
+  schedule: Record<string, { start: string; durationMin?: number; price?: number; slotMin?: number }[]>;
   startDate?: string; // YYYY-MM-DD, shop-local; defaults to today
   repeatWeeks?: number;
   repeatForever?: boolean;
@@ -806,7 +809,7 @@ export async function updateTargetedSlotRuleAction(
     label?: string; // "" clears it
     durationMin?: number;
     price?: number;
-    schedule?: Record<string, { start: string; durationMin?: number; price?: number }[]>;
+    schedule?: Record<string, { start: string; durationMin?: number; price?: number; slotMin?: number }[]>;
   },
 ): Promise<Result> {
   return done(await apiSend("PATCH", `/api/booking/targeted-slots/rules/${id}`, input));

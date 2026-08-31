@@ -48,6 +48,7 @@ import { resolveAddOns } from "../engines/addOns.js";
 import {
   effectiveSchedule,
   materializeTargetedRule,
+  occurrencesForTime,
   TARGETED_RULE_HORIZON_DAYS,
   type RuleSchedule,
 } from "../engines/targetedSlotRules.js";
@@ -3352,8 +3353,25 @@ const scheduleTimeSchema = z
     start: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
     durationMin: z.number().int().min(5).max(600).optional(),
     price: z.number().min(0).max(100000).optional(),
+    // Makes this entry a WINDOW of repeating slots: `slotMin`-minute slots
+    // packed from `start` while a whole one fits inside `durationMin` (the
+    // window's length). Requires durationMin and must fit inside it - a slot
+    // longer than its own window would materialize nothing, and publishing a
+    // special that can never appear is a silent lie to the barber.
+    slotMin: z.number().int().min(5).max(600).optional(),
   })
-  .strict();
+  .strict()
+  .refine((t) => t.slotMin === undefined || t.durationMin !== undefined, {
+    message: "slotMin needs the window's durationMin",
+    path: ["slotMin"],
+  })
+  .refine(
+    (t) =>
+      t.slotMin === undefined ||
+      t.durationMin === undefined ||
+      t.slotMin <= t.durationMin,
+    { message: "slot length cannot exceed its window", path: ["slotMin"] },
+  );
 const targetedScheduleSchema = z
   .object({
     staffId: z.string().min(1),
@@ -3695,6 +3713,7 @@ bookingDashboardRouter.post("/targeted-slots", async (req, res) => {
             Number(t.start.slice(0, 2)) * 60 + Number(t.start.slice(3, 5)),
           ...(t.durationMin !== undefined ? { durationMin: t.durationMin } : {}),
           ...(t.price !== undefined ? { price: t.price } : {}),
+          ...(t.slotMin !== undefined ? { slotMin: t.slotMin } : {}),
         }))
         .sort((a, b) => a.startMin - b.startMin);
     }
@@ -4140,6 +4159,7 @@ bookingDashboardRouter.patch("/targeted-slots/rules/:id", async (req, res) => {
           startMin: Number(t.start.slice(0, 2)) * 60 + Number(t.start.slice(3, 5)),
           ...(t.durationMin !== undefined ? { durationMin: t.durationMin } : {}),
           ...(t.price !== undefined ? { price: t.price } : {}),
+          ...(t.slotMin !== undefined ? { slotMin: t.slotMin } : {}),
         }))
         .sort((a, b) => a.startMin - b.startMin);
     }
@@ -4236,42 +4256,48 @@ bookingDashboardRouter.patch("/targeted-slots/rules/:id", async (req, res) => {
         const wd = Number(key);
         const offset = (wd - anchor.weekday + 7) % 7;
         for (const t of times) {
-          const startsAt = zonedWallTimeToUtc(
-            anchor.year,
-            anchor.month0,
-            anchor.day + k * 7 + offset,
-            t.startMin,
-            tz,
-          );
-          if (startsAt.getTime() <= now.getTime()) continue;
-          if (startsAt.getTime() < rule.anchor.getTime()) continue;
-          // The horizon stops NEW weeks only. Weeks below the cursor were
-          // already materialized under the old schedule, and their unbooked
-          // rows are gone (deleted above) - stopping short of the cursor would
-          // strand them: the cursor stays monotonic (lowering it would make
-          // the roll-forward re-create weeks whose BOOKED survivors it can't
-          // see, i.e. duplicates), so a week skipped here would never be built
-          // again. Rebuild every already-materialized week in full; the
-          // horizon gates only the frontier beyond the cursor.
-          if (
-            horizonEnd &&
-            startsAt.getTime() > horizonEnd.getTime() &&
-            k >= rule.weeksMaterialized
-          ) {
-            overHorizon = true;
-            break;
+          // Same expansion as materializeTargetedRule - a window entry emits
+          // repeating slots, a plain one emits itself. Shared so an edit can
+          // never reshape a series differently than the roll-forward would.
+          for (const occ of occurrencesForTime(t, durationMin)) {
+            const startsAt = zonedWallTimeToUtc(
+              anchor.year,
+              anchor.month0,
+              anchor.day + k * 7 + offset,
+              occ.startMin,
+              tz,
+            );
+            if (startsAt.getTime() <= now.getTime()) continue;
+            if (startsAt.getTime() < rule.anchor.getTime()) continue;
+            // The horizon stops NEW weeks only. Weeks below the cursor were
+            // already materialized under the old schedule, and their unbooked
+            // rows are gone (deleted above) - stopping short of the cursor would
+            // strand them: the cursor stays monotonic (lowering it would make
+            // the roll-forward re-create weeks whose BOOKED survivors it can't
+            // see, i.e. duplicates), so a week skipped here would never be built
+            // again. Rebuild every already-materialized week in full; the
+            // horizon gates only the frontier beyond the cursor.
+            if (
+              horizonEnd &&
+              startsAt.getTime() > horizonEnd.getTime() &&
+              k >= rule.weeksMaterialized
+            ) {
+              overHorizon = true;
+              break;
+            }
+            if (claimed.has(startsAt.getTime())) continue;
+            week.push({
+              shopId,
+              staffId: rule.staffId,
+              serviceId: rule.serviceId,
+              label,
+              startsAt,
+              durationMin: occ.durationMin,
+              price: (t.price ?? price) as never,
+              ruleId: rule.id,
+            });
           }
-          if (claimed.has(startsAt.getTime())) continue;
-          week.push({
-            shopId,
-            staffId: rule.staffId,
-            serviceId: rule.serviceId,
-            label,
-            startsAt,
-            durationMin: t.durationMin ?? durationMin,
-            price: (t.price ?? price) as never,
-            ruleId: rule.id,
-          });
+          if (overHorizon) break;
         }
         if (overHorizon) break;
       }

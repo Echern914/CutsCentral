@@ -86,10 +86,12 @@ export async function lockStaffAndAssertSlotFree(
      */
     serviceDayLimit: { serviceId: string; timezone: string } | null;
     /**
-     * Booking INTO a targeted slot: exclude that one slot's own block so the
-     * claim doesn't conflict with itself, while any OTHER overlapping targeted
-     * slot still blocks. Normal bookings omit this and are blocked by every
-     * active unbooked targeted slot.
+     * Booking INTO a targeted slot. When set, UNBOOKED targeted-slot spans do
+     * not block at all: overlapping specials are competing offers of the same
+     * physical time, and each vetoing the other made both unbookable. The
+     * appointment-overlap check (same advisory lock) is what enforces
+     * capacity. Normal bookings omit this and are blocked by every active
+     * unbooked targeted slot, exactly as before.
      */
     targetedSlotIdToIgnore?: string;
     /**
@@ -203,23 +205,31 @@ export async function lockStaffAndAssertSlotFree(
   if (overlap.length > 0) throw new SlotTakenError();
 
   // Targeted slots: an ACTIVE, UNBOOKED barber-published slot owns its span
-  // (buffer-padded like an appointment) so a normal booking can't be laid over
+  // (buffer-padded like an appointment) so a NORMAL booking can't be laid over
   // it. Once booked it stops matching here - its Appointment row (checked
   // above) is what blocks instead, so the time is never counted twice. Runs
   // under the SAME advisory lock, same ISO-text timestamp discipline.
-  const slotIgnoreFragment = opts.targetedSlotIdToIgnore
-    ? Prisma.sql`AND "id" <> ${opts.targetedSlotIdToIgnore}`
-    : Prisma.empty;
-  const targetedOverlap = await tx.$queryRaw<{ id: string }[]>(
-    Prisma.sql`SELECT id FROM "TargetedSlot"
-               WHERE "staffId" = ${opts.staffId}
-                 AND "active" = true
-                 AND "bookedAppointmentId" IS NULL
-                 ${slotIgnoreFragment}
-                 AND "startsAt" < ${overlapEnd.toISOString()}::timestamp
-                 AND ("startsAt" + "durationMin" * interval '1 minute') > ${overlapStart.toISOString()}::timestamp`,
-  );
-  if (targetedOverlap.length > 0) throw new SlotTakenError();
+  //
+  // 🔴 CLAIMING A TARGETED SLOT SKIPS THIS CHECK ENTIRELY. Two specials
+  // published over the same physical time ("after-hours braids" AND
+  // "after-hours cuts" at 9pm) are COMPETING OFFERS of one span, not two
+  // commitments - and when each treated the other as busy, NEITHER was
+  // bookable: every customer got slot_taken while both chips kept rendering.
+  // Unbooked alternatives must not veto the first real booking; the moment one
+  // wins, its Appointment row (checked above, under the same advisory lock)
+  // blocks every later claim, so two simultaneous claims still resolve to
+  // exactly one winner - capacity never came from this check.
+  if (!opts.targetedSlotIdToIgnore) {
+    const targetedOverlap = await tx.$queryRaw<{ id: string }[]>(
+      Prisma.sql`SELECT id FROM "TargetedSlot"
+                 WHERE "staffId" = ${opts.staffId}
+                   AND "active" = true
+                   AND "bookedAppointmentId" IS NULL
+                   AND "startsAt" < ${overlapEnd.toISOString()}::timestamp
+                   AND ("startsAt" + "durationMin" * interval '1 minute') > ${overlapStart.toISOString()}::timestamp`,
+    );
+    if (targetedOverlap.length > 0) throw new SlotTakenError();
+  }
 
   // Waitlist holds: a LIVE offer (OFFERED and unexpired) owns its span on this
   // barber exactly like a pending appointment would - that slot is promised to
