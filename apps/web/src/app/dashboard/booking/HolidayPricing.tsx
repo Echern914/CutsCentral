@@ -5,6 +5,7 @@ import { Card, CardHeader } from "@/components/ui/Card";
 import { cn } from "@/lib/cn";
 import { MoneyField } from "@/components/ui/UnitField";
 import { parsePrice } from "@/lib/serviceFields";
+import { collapseRuns, expandRange, MAX_RANGE_DAYS } from "@/lib/dateRanges";
 import { updateServiceAction } from "./actions";
 import type { ServiceRow } from "./page";
 
@@ -66,10 +67,13 @@ export function HolidayPricing({
   const [pending, start] = useTransition();
   const [adding, setAdding] = useState(false);
   // SEVERAL dates share one price rule (Drick: "we still need multiple date
-  // selection") - Dec 24 AND 26, or a whole holiday weekend, is one decision,
-  // not three passes through this form. The picker stages into `date`; "+ Add"
-  // moves it into `dates`; save prices EVERY date on every picked service.
+  // selection"; Eric: "it should be from a day to a day ... december 25-31").
+  // The picker is a from/to pair - leave "to" blank for a single day - and
+  // "+ Add" stages the whole INCLUSIVE stretch into `dates`; save prices
+  // EVERY staged date on every picked service. Contiguous stretches render
+  // and remove as ONE chip (collapseRuns), so a priced week reads as a week.
   const [date, setDate] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [dates, setDates] = useState<string[]>([]);
   const [price, setPrice] = useState("");
   const [picked, setPicked] = useState<Set<string>>(new Set());
@@ -93,6 +97,39 @@ export function HolidayPricing({
       .sort((a, b) => a.date.localeCompare(b.date));
   }, [services]);
 
+  // Saved dates collapse the same way the staged chips do: contiguous days
+  // priced IDENTICALLY (same services at the same prices) render as one
+  // "Dec 25 – 31" row, and Remove clears the whole stretch. Days that differ
+  // stay separate rows - collapsing them would hide a real difference.
+  const displayGroups = useMemo(() => {
+    const signature = (g: HolidayGroup) =>
+      JSON.stringify(
+        [...g.entries]
+          .map((e) => [e.serviceId, e.price] as const)
+          .sort((a, b) => a[0].localeCompare(b[0])),
+      );
+    const byDate = new Map(groups.map((g) => [g.date, g]));
+    const out: { from: string; to: string; dates: string[]; group: HolidayGroup }[] = [];
+    for (const run of collapseRuns(groups.map((g) => g.date))) {
+      let days = expandRange(run.from, run.to) ?? [run.from];
+      // Split a contiguous stretch wherever the pricing changes mid-run.
+      while (days.length > 0) {
+        const first = byDate.get(days[0]!)!;
+        const sig = signature(first);
+        let n = 1;
+        while (n < days.length && signature(byDate.get(days[n]!)!) === sig) n++;
+        out.push({
+          from: days[0]!,
+          to: days[n - 1]!,
+          dates: days.slice(0, n),
+          group: first,
+        });
+        days = days.slice(n);
+      }
+    }
+    return out;
+  }, [groups]);
+
   const today = todayKey();
 
   function toggle(id: string) {
@@ -107,24 +144,54 @@ export function HolidayPricing({
   function reset() {
     setAdding(false);
     setDate("");
+    setDateTo("");
     setDates([]);
     setPrice("");
     setPicked(new Set());
   }
 
-  /** The picker's current date plus every staged one, deduped and sorted. */
-  function allDates(): string[] {
-    return [...new Set([...dates, ...(date ? [date] : [])])].sort();
+  /**
+   * What the from/to pair currently describes: one day, an inclusive range,
+   * or null when the pair is invalid (backwards, or absurdly long) - the
+   * caller says WHY with a toast rather than silently pricing something else.
+   */
+  function pickerDates(): string[] | null {
+    if (!date) return [];
+    if (!dateTo) return [date];
+    return expandRange(date, dateTo);
+  }
+
+  /** The staged chips plus whatever the picker currently holds. */
+  function allDates(): string[] | null {
+    const fromPicker = pickerDates();
+    if (fromPicker === null) return null;
+    return [...new Set([...dates, ...fromPicker])].sort();
   }
 
   function stageDate() {
-    if (!date) return;
-    setDates((cur) => (cur.includes(date) ? cur : [...cur, date].sort()));
+    const fromPicker = pickerDates();
+    if (fromPicker === null) {
+      toast(
+        `That range doesn't work — "to" must be on or after the first date, within ${MAX_RANGE_DAYS} days`,
+        "error",
+      );
+      return;
+    }
+    if (fromPicker.length === 0) return;
+    setDates((cur) => [...new Set([...cur, ...fromPicker])].sort());
     setDate("");
+    setDateTo("");
   }
 
   function save() {
     const chosen = allDates();
+    if (chosen === null) {
+      toast(
+        `That range doesn't work — "to" must be on or after the first date, within ${MAX_RANGE_DAYS} days`,
+        "error",
+      );
+      return;
+    }
     if (chosen.length === 0) {
       toast("Pick a date", "error");
       return;
@@ -180,14 +247,16 @@ export function HolidayPricing({
     });
   }
 
-  function clearDate(group: HolidayGroup) {
+  /** Remove a whole displayed stretch: every date of the run, per service. */
+  function clearDates(datesToClear: string[], entries: HolidayGroup["entries"]) {
     start(async () => {
+      const serviceIds = [...new Set(entries.map((e) => e.serviceId))];
       const results = await Promise.all(
-        group.entries.map((e) => {
-          const svc = services.find((s) => s.id === e.serviceId);
+        serviceIds.map((id) => {
+          const svc = services.find((s) => s.id === id);
           const rest = { ...(svc?.dateOverrides ?? {}) };
-          delete rest[group.date];
-          return updateServiceAction(e.serviceId, { dateOverrides: rest });
+          for (const d of datesToClear) delete rest[d];
+          return updateServiceAction(id, { dateOverrides: rest });
         }),
       );
       if (results.every((r) => r.ok)) toast("Holiday removed", "success");
@@ -210,11 +279,15 @@ export function HolidayPricing({
         </p>
       ) : (
         <ul className="mt-3 divide-y divide-subtle overflow-hidden rounded-xl border border-subtle">
-          {groups.map((g) => {
-            const past = g.date < today;
+          {displayGroups.map((run) => {
+            const past = run.to < today;
+            const label =
+              run.from === run.to
+                ? prettyDate(run.from)
+                : `${prettyDate(run.from)} – ${prettyDate(run.to)}`;
             return (
               <li
-                key={g.date}
+                key={run.from}
                 className={cn(
                   "flex flex-wrap items-start justify-between gap-x-4 gap-y-1 px-3 py-2.5",
                   past && "opacity-50",
@@ -222,7 +295,7 @@ export function HolidayPricing({
               >
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-offwhite">
-                    {prettyDate(g.date)}
+                    {label}
                     {past && (
                       <span className="ml-2 text-[11px] font-normal text-muted">
                         passed
@@ -230,17 +303,17 @@ export function HolidayPricing({
                     )}
                   </p>
                   <p className="text-xs text-muted">
-                    {g.entries
+                    {run.group.entries
                       .map((e) => `${e.serviceName} $${e.price.toFixed(0)}`)
                       .join(" · ")}
                   </p>
                 </div>
                 <button
                   type="button"
-                  onClick={() => clearDate(g)}
+                  onClick={() => clearDates(run.dates, run.group.entries)}
                   disabled={pending}
                   className="rounded px-1.5 py-1 text-xs text-muted transition-colors hover:text-danger-soft disabled:opacity-50"
-                  aria-label={`Remove holiday pricing on ${prettyDate(g.date)}`}
+                  aria-label={`Remove holiday pricing on ${label}`}
                 >
                   Remove
                 </button>
@@ -263,24 +336,34 @@ export function HolidayPricing({
         <div className="mt-4 rounded-xl border border-gold/40 bg-gold/5 p-3">
           <div className="flex flex-wrap items-end gap-3">
             <label className="flex flex-col gap-1 text-[11px] text-muted">
-              Dates
-              <span className="flex items-center gap-1.5">
+              Dates (leave “to” blank for one day)
+              <span className="flex flex-wrap items-center gap-1.5">
                 <input
                   type="date"
                   min={today}
                   value={date}
                   onChange={(e) => setDate(e.target.value)}
+                  aria-label="First day"
                   className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1.5 text-xs text-offwhite"
                 />
-                {/* Staging is optional: Save prices the picker's date too, so
-                    the one-date flow is still pick → save, no extra tap. */}
+                <span className="px-0.5 text-muted">–</span>
+                <input
+                  type="date"
+                  min={date || today}
+                  value={dateTo}
+                  onChange={(e) => setDateTo(e.target.value)}
+                  aria-label="Last day (optional)"
+                  className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1.5 text-xs text-offwhite"
+                />
+                {/* Staging is optional: Save prices the picker's dates too, so
+                    the one-shot flow is still pick → save, no extra tap. */}
                 <button
                   type="button"
                   onClick={stageDate}
                   disabled={!date}
                   className="rounded-lg border border-subtle px-2 py-1.5 text-xs text-muted transition-colors hover:border-gold/50 hover:text-gold disabled:opacity-40"
                 >
-                  + Add date
+                  + Add dates
                 </button>
               </span>
             </label>
@@ -295,22 +378,33 @@ export function HolidayPricing({
           </div>
           {dates.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1.5">
-              {dates.map((d) => (
-                <span
-                  key={d}
-                  className="inline-flex items-center gap-1 rounded-full border border-gold/40 bg-gold/10 px-2 py-0.5 text-[11px] text-gold"
-                >
-                  {prettyDate(d)}
-                  <button
-                    type="button"
-                    onClick={() => setDates((cur) => cur.filter((x) => x !== d))}
-                    className="rounded px-0.5 text-muted transition-colors hover:text-danger-soft"
-                    aria-label={`Remove ${prettyDate(d)}`}
+              {/* Contiguous days render as ONE chip - a staged Dec 25-31 is a
+                  week, not seven pills - and ✕ removes the whole stretch. */}
+              {collapseRuns(dates).map((run) => {
+                const runDays = expandRange(run.from, run.to) ?? [run.from];
+                const text =
+                  run.from === run.to
+                    ? prettyDate(run.from)
+                    : `${prettyDate(run.from)} – ${prettyDate(run.to)}`;
+                return (
+                  <span
+                    key={run.from}
+                    className="inline-flex items-center gap-1 rounded-full border border-gold/40 bg-gold/10 px-2 py-0.5 text-[11px] text-gold"
                   >
-                    ✕
-                  </button>
-                </span>
-              ))}
+                    {text}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDates((cur) => cur.filter((x) => !runDays.includes(x)))
+                      }
+                      className="rounded px-0.5 text-muted transition-colors hover:text-danger-soft"
+                      aria-label={`Remove ${text}`}
+                    >
+                      ✕
+                    </button>
+                  </span>
+                );
+              })}
             </div>
           )}
 
