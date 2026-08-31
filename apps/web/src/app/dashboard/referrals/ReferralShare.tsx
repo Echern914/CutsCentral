@@ -7,7 +7,9 @@ import { useToast } from "@/components/ui/Toast";
 
 export interface ReferralRow {
   id: string;
-  shopName: string;
+  /** Masked, non-identifying ("Business ••••1027") - the referred shop's real
+   *  name must never cross the tenant boundary. */
+  label: string;
   status: "PENDING" | "REWARDED" | "VOID";
   joinedAt: string;
   rewardedAt: string | null;
@@ -128,7 +130,7 @@ export function ReferralShare({
               <li key={r.id} className="flex items-center gap-3 px-5 py-3.5">
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-offwhite">
-                    {r.shopName}
+                    {r.label}
                   </p>
                   <p className="mt-0.5 text-xs text-muted">
                     Joined {new Date(r.joinedAt).toLocaleDateString(undefined, {
