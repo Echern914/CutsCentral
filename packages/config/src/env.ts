@@ -263,6 +263,21 @@ const apiSchema = z.object({
   // WOULD expire, writing nothing), so the counts watched before enabling
   // are the counts you get. Sends nothing either way.
   WALK_IN_EXPIRY_ENABLED: boolish.default("false"),
+  // AFFILIATE PROGRAM - four layered kill switches, all dark by default.
+  // boolish accepts exactly "true"/"false"/"1"/"0"; ANY other value (TRUE,
+  // yes, an empty string) kills boot - a mistyped flag fails CLOSED, never
+  // open. While the master flag is false every affiliate surface answers 404
+  // as if it does not exist, so the schema and API can merge and sit dark.
+  AFFILIATE_PROGRAM_ENABLED: boolish.default("false"),
+  // The application DOOR, separately switchable: status stays readable for
+  // existing affiliates with the master flag alone.
+  AFFILIATE_PUBLIC_APPLICATIONS_ENABLED: boolish.default("false"),
+  // Declared now, read by NOTHING yet: the qualification phase's worker flag
+  // and the credit-execution phase's outbox flag. Declaring them here pins
+  // the names and the fail-closed parsing before any code exists to misread
+  // them.
+  AFFILIATE_QUALIFICATION_ENABLED: boolish.default("false"),
+  AFFILIATE_CREDIT_EXECUTION_ENABLED: boolish.default("false"),
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace"])
     .default("info"),

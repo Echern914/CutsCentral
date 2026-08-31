@@ -24,6 +24,7 @@ import { walletEnabled } from "../wallet/pass.js";
 import { receptionistConfigured } from "../receptionist/config.js";
 import { buildPreflight } from "../ops/preflight.js";
 import { fetchWebConfig } from "../ops/webConfig.js";
+import { affiliateAdminRouter } from "./adminPortal.affiliate.js";
 
 /**
  * Operator portal API (the founder's own admin surface). Session-gated to
@@ -33,6 +34,11 @@ import { fetchWebConfig } from "../ops/webConfig.js";
  */
 export const adminPortalRouter: Router = Router();
 adminPortalRouter.use(requireUser, requireAdmin);
+
+// Affiliate program review (its own file; inherits the gates above, and adds
+// the AFFILIATE_PROGRAM_ENABLED dark-launch check - while the program is off,
+// even an admin sees 404 here).
+adminPortalRouter.use("/affiliate", affiliateAdminRouter);
 
 const MS_PER_DAY = 86_400_000;
 
