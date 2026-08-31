@@ -506,6 +506,77 @@ export function buildAppointmentConfirmationEmail(params: {
   };
 }
 
+/**
+ * "Your appointment was canceled" - the email a customer never used to get.
+ *
+ * 🔴 NO MANAGE BUTTON. The shared shell's footer offers "Reschedule or
+ * cancel", which is worse than useless once the appointment is gone: the link
+ * still resolves, shows a canceled booking, and offers nothing. This template
+ * therefore builds its own footer with a BOOK AGAIN call to action - the only
+ * thing the customer can actually do next - and passes no manageUrl.
+ *
+ * Carries no ids, no tokens and no internal notes: the customer needs to know
+ * WHICH appointment is gone and how to get another one, and nothing else.
+ */
+export function buildAppointmentCanceledEmail(params: {
+  firstName: string | null;
+  shopName: string;
+  shopSlug: string | null;
+  serviceName: string;
+  startsAt: Date;
+  timezone: string;
+  staffName?: string | null;
+  /** Shown only when the shop has published one. */
+  contactLine?: string | null;
+}): EmailCopy {
+  const when = formatApptTime(params.startsAt, params.timezone);
+  const who = params.firstName ?? "there";
+  const withWhom = params.staffName ? ` with ${params.staffName}` : "";
+  // Book-again points at the shop's own booking page when it has a slug; a
+  // shop without one gets no invented URL.
+  const bookUrl = params.shopSlug
+    ? `${env.APP_BASE_URL}/book/${params.shopSlug}`
+    : null;
+  const contact = params.contactLine?.trim() || null;
+
+  const textLines = [
+    `Hi ${who}, your ${params.serviceName} at ${params.shopName}${withWhom} on ${when} has been canceled.`,
+  ];
+  if (bookUrl) textLines.push(``, `Book another appointment: ${bookUrl}`);
+  if (contact) textLines.push(``, contact);
+
+  const cta = bookUrl
+    ? `<a href="${escapeAttr(bookUrl)}" style="display:inline-block;background:#D4AF37;color:#0f0f0f;font-size:15px;font-weight:700;text-decoration:none;padding:13px 22px;border-radius:10px">Book another appointment</a>`
+    : "";
+  const contactHtml = contact
+    ? `<p style="color:#71717a;font-size:12px;line-height:1.5;margin:16px 0 0">${escapeHtml(contact)}</p>`
+    : "";
+
+  return {
+    subject: `Canceled: ${params.serviceName} at ${params.shopName}`,
+    text: textLines.join("\n"),
+    html: `<!-- appointment canceled email -->
+<div style="background:#0f0f0f;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+  <div style="max-width:480px;margin:0 auto;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:16px;overflow:hidden">
+    <div style="padding:28px 28px 8px">
+      <div style="color:#D4AF37;font-size:13px;font-weight:600;letter-spacing:.04em;text-transform:uppercase">${escapeHtml(params.shopName)}</div>
+      <h1 style="color:#fafafa;font-size:20px;font-weight:700;margin:10px 0 6px">Your appointment was canceled</h1>
+      <p style="color:#a1a1aa;font-size:15px;line-height:1.5;margin:0">Hi ${escapeHtml(who)}, this appointment is no longer booked.</p>
+    </div>
+    <div style="margin:16px 28px;padding:16px 18px;background:#0f0f0f;border:1px solid #2a2a2a;border-radius:12px">
+      <div style="color:#fafafa;font-size:16px;font-weight:600;text-decoration:line-through">${escapeHtml(params.serviceName)}</div>
+      ${params.staffName ? `<div style="color:#71717a;font-size:14px;margin-top:2px">with ${escapeHtml(params.staffName)}</div>` : ""}
+      <div style="color:#71717a;font-size:15px;font-weight:600;margin-top:8px;text-decoration:line-through">${escapeHtml(when)}</div>
+    </div>
+    <div style="padding:4px 28px 28px">
+      ${cta}
+      ${contactHtml}
+    </div>
+  </div>
+</div>`,
+  };
+}
+
 /** "Appointment reminder" email - the email twin of buildAppointmentReminderBody. */
 export function buildAppointmentReminderEmail(params: {
   firstName: string | null;

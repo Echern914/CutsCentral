@@ -2357,6 +2357,18 @@ model Appointment {
   // SMS is dark (no 10DLC / no consent). Email only needs a valid address.
   confirmationEmailSentAt DateTime?
   reminderEmailSentAt     DateTime?
+  // "Your appointment was canceled" - written ONLY after the provider accepted
+  // the message (see services/appointmentCanceledNotify.ts). It is a record of
+  // what happened, never a claim staked before sending: the durable
+  // EmailIntent outbox is what guarantees at-most-once, not this column.
+  cancellationEmailSentAt DateTime?
+  // Which cancellation OCCURRENCE this appointment is on. Incremented only by
+  // the atomic transition INTO CANCELED, so it is the identity of a real state
+  // change rather than of a request. An outbox intent carries the revision it
+  // was created for and refuses to send if the appointment has moved on -
+  // which is what makes cancel -> restore -> cancel deliver exactly one email
+  // (the newer one) instead of both.
+  cancellationRevision Int @default(0)
   // PUSH reminders (engines/pushReminders.ts) - a third channel with two tiers
   // (24h + 2h before start), each with its own at-most-once stamp claimed via
   // an atomic updateMany-where-null, so a double/concurrent run can never send
@@ -3246,4 +3258,163 @@ model PlatformOperationPassTask {
 
   @@unique([operationId, clientId])
   @@index([operationId, status])
+}
+
+ // EMAIL DELIVERY LEDGER - what actually happened to a transactional email.
+ // 
+ // Before this, the provider message id was logged and thrown away and there
+ // was no webhook, so nobody could tell "in the inbox" from "in spam" from
+ // "hard bounced". A barber reporting "my customers don't get emails" could
+ // not be answered with evidence.
+ // 
+ // 🔴 CARRIES NO RECIPIENT ADDRESS AND NO BODY. The provider message id is the
+ // join key; shopId/appointmentId say which booking it belonged to. That is
+ // enough to answer "did this booking's mail arrive" without duplicating a
+ // customer's address into a second table, and it means a leak of this table
+ // leaks no contact data.
+model EmailDelivery {
+  id String @id @default(cuid())
+
+  messageId String @unique
+
+  kind String
+
+  shopId        String?
+  appointmentId String?
+
+   // Latest known state. "sent" is what we observed at dispatch; everything
+   // else arrives by webhook. Fixed vocabulary, CHECK-pinned in the migration.
+  status String @default("sent")
+
+  failureClass String?
+
+  // Incremented ONCE per distinct svix delivery id - a replayed webhook must
+  // not inflate it.
+  eventCount Int @default(0)
+
+  // True when this row was created by an EVENT that arrived before our own
+  // dispatch metadata (webhooks routinely beat the sender's own write). The
+  // dispatch write later fills kind/shopId/appointmentId WITHOUT touching the
+  // status the event already established.
+  awaitingDispatchMeta Boolean @default(false)
+
+  sentAt      DateTime  @default(now())
+  deliveredAt DateTime?
+  failedAt    DateTime?
+  updatedAt   DateTime  @updatedAt
+
+  @@index([shopId, sentAt])
+  @@index([status, sentAt])
+  @@index([appointmentId])
+}
+
+// One provider webhook delivery, recorded so a REPLAY changes nothing.
+//
+// Svix (Resend's webhook transport) retries on any non-2xx and can deliver the
+// same event more than once even on success. Without a dedupe key a retry
+// double-counts eventCount and can walk a status backwards. The svix id is
+// that key.
+//
+// 🔴 Stores the delivery id and the event NAME only - never the payload, which
+// carries the recipient address and the rendered subject.
+model EmailWebhookEvent {
+  id        String   @id @default(cuid())
+  svixId    String   @unique
+  event     String
+  messageId String
+  createdAt DateTime @default(now())
+
+  @@index([messageId])
+}
+
+// DURABLE OUTBOX for the cancellation email.
+//
+// WHY AN OUTBOX AND NOT A STAMP: claiming a "sent" stamp before calling the
+// provider makes a crash between the two indistinguishable from a delivered
+// message - the appointment says the customer was told, and nothing will ever
+// tell them. The intent commits IN THE SAME TRANSACTION as the cancellation,
+// so the durable record of "this person must be emailed" cannot outlive or
+// precede the cancel; a lease-guarded worker drains it afterwards.
+//
+// idempotencyKey is per CANCELLATION OCCURRENCE, not per appointment: a
+// restore followed by a second cancel is genuinely a new notification and must
+// get one. It is ALSO the value sent as Resend's Idempotency-Key header, so a
+// retry of an ambiguous attempt is deduplicated by the PROVIDER rather than by
+// our guess about whether the first attempt landed.
+model EmailIntent {
+  id String @id @default(cuid())
+
+  // "appointment_canceled" today; CHECK-pinned in the migration.
+  kind String
+
+  // Stable per occurrence AND the provider Idempotency-Key. Unique, so two
+  // concurrent cancels of one occurrence create exactly one intent.
+  idempotencyKey String @unique
+
+  shopId        String
+  appointmentId String?
+
+  // PENDING -> SENT | FAILED | ABANDONED | SUPERSEDED | SUPPRESSED.
+  //   FAILED - the provider DEFINITIVELY refused it, so nothing was accepted.
+  //   ABANDONED - we STOPPED WITHOUT KNOWING: the last attempt was ambiguous
+  //     and either the provider's idempotency window has closed or the attempt
+  //     budget is spent, so another try could deliver a second copy. Terminal
+  //     and visible rather than retried forever, and never conflated with
+  //     FAILED - "it was refused" and "it may have arrived" are different
+  //     facts and the ledger must not claim the stronger one.
+  //   SUPERSEDED - the appointment was restored, or canceled again on a newer
+  //     revision; this intent describes a cancellation that no longer stands.
+  //   SUPPRESSED - email was unconfigured or DRY_RUN when the worker reached
+  //     it. Terminal ON PURPOSE: holding it PENDING would mean that turning
+  //     email on later blasts every customer whose cancellation was quietly
+  //     swallowed weeks ago.
+  status String @default("PENDING")
+
+  // The cancellation occurrence this intent belongs to. Checked against the
+  // appointment's current revision immediately before dispatch.
+  cancellationRevision Int?
+
+  // 🔴 REAL PROVIDER ATTEMPTS ONLY. Incremented immediately before an actual
+  // Resend request - never on a worker claim, an unconfigured send or a dry
+  // run. Otherwise a worker that crashes before dispatching five times would
+  // exhaust the budget without Resend ever having been contacted.
+  attempts Int @default(0)
+  // When we FIRST put this key in front of Resend. The provider's idempotency
+  // window runs from that moment, not from when the row was created - an
+  // intent can sit unconfigured for days without its safety window expiring.
+  firstProviderAttemptAt DateTime?
+  // 🔴 WRITE-AHEAD: set to true in the SAME atomic statement that reserves the
+  // attempt, which commits BEFORE the Resend request leaves - not afterwards
+  // when the outcome is known.
+  //
+  // Writing it after the fact leaves one window with no correct answer: a
+  // process that dies AFTER Resend accepts the message but BEFORE the response
+  // is handled runs none of the classification code, so the row would still
+  // read false - "safe to retry" - and a retry past the provider's 24h key
+  // window would deliver a SECOND copy. That crash cannot be observed later,
+  // so the fact is recorded before it can happen.
+  //
+  // Cleared ONLY by a definitive answer: confirmed acceptance, or an explicit
+  // provider rejection (which is safe to retry however long has passed,
+  // because nothing was accepted).
+  lastAttemptAmbiguous Boolean @default(false)
+  // Bounded backoff, so a 429 or a 5xx is not retried once a minute forever.
+  nextAttemptAt DateTime?
+  // Held while a worker is working this row, so a second replica skips it and
+  // a dead worker's row becomes claimable again once the claim ages out.
+  claimedAt DateTime?
+  // The identity of the CURRENT claim. Every attempt reservation is a
+  // compare-and-set on this value, so a worker whose claim aged out and was
+  // taken by somebody else cannot wake up and spend another provider attempt
+  // on a row it no longer holds.
+  claimToken String?
+  lastError String? // fixed classification only - never provider prose
+  sentAt    DateTime?
+  // Provider message id once accepted; joins to EmailDelivery.
+  messageId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([appointmentId])
 }

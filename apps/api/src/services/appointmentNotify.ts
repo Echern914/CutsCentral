@@ -176,18 +176,42 @@ async function sendAppointmentSms(
  * as "attempted+ok" for the stamp; a disabled/skipped send returns false so the
  * stamp stays null and a later run can retry once email is configured).
  */
-async function sendAppointmentEmail(
-  shopId: string,
-  to: string,
-  subject: string,
-  text: string,
-  html: string,
-): Promise<boolean> {
+async function sendAppointmentEmail(params: {
+  shopId: string;
+  shopName: string;
+  to: string;
+  subject: string;
+  text: string;
+  html: string;
+  kind: string;
+  appointmentId?: string;
+}): Promise<boolean> {
   try {
-    const result = await sendEmail({ to, subject, text, html });
+    const result = await sendEmail({
+      to: params.to,
+      subject: params.subject,
+      text: params.text,
+      html: params.html,
+      // The customer booked at a SHOP, not at a platform. Leading with the
+      // shop name is the difference between a sender they recognise and one
+      // they report.
+      fromName: params.shopName,
+      stream: "transactional",
+      meta: {
+        shopId: params.shopId,
+        kind: params.kind,
+        ...(params.appointmentId ? { appointmentId: params.appointmentId } : {}),
+      },
+    });
     return result.status === "sent" || result.status === "dry_run";
   } catch (err) {
-    logger.error({ err, shopId, to }, "appointment email send failed");
+    // 🔴 Fixed classification, and NO recipient address: a provider error can
+    // echo the payload back, and this log line is the one place an address
+    // would otherwise be duplicated outside the Client table.
+    logger.error(
+      { shopId: params.shopId, kind: params.kind, reason: "email_send_failed" },
+      "appointment email send failed",
+    );
     return false;
   }
 }
@@ -342,13 +366,16 @@ export async function notifyAppointmentConfirmation(params: {
           staffName: appt.staff.name,
           manageToken: appt.manageToken,
         });
-        const sent = await sendAppointmentEmail(
-          shop.id,
-          emailTo!,
-          email.subject,
-          email.text,
-          email.html,
-        );
+        const sent = await sendAppointmentEmail({
+          shopId: shop.id,
+          shopName: shop.name,
+          to: emailTo!,
+          subject: email.subject,
+          text: email.text,
+          html: email.html,
+          kind: "confirmation",
+          appointmentId: appt.id,
+        });
         if (sent) {
           await forShop(shop.id).appointment.update({
             where: { id: appt.id },
@@ -439,13 +466,16 @@ export async function notifyAppointmentReminder(params: {
           staffName: appt.staff.name,
           manageToken: appt.manageToken,
         });
-        const sent = await sendAppointmentEmail(
-          shop.id,
-          emailTo!,
-          email.subject,
-          email.text,
-          email.html,
-        );
+        const sent = await sendAppointmentEmail({
+          shopId: shop.id,
+          shopName: shop.name,
+          to: emailTo!,
+          subject: email.subject,
+          text: email.text,
+          html: email.html,
+          kind: "reminder",
+          appointmentId: appt.id,
+        });
         if (sent) {
           await forShop(shop.id).appointment.update({
             where: { id: appt.id },
@@ -579,13 +609,15 @@ export async function notifySyncedVisitReminder(params: {
           startsAt: visit.scheduledAt,
           timezone: shop.timezone,
         });
-        const sent = await sendAppointmentEmail(
-          shop.id,
-          emailTo!,
-          email.subject,
-          email.text,
-          email.html,
-        );
+        const sent = await sendAppointmentEmail({
+          shopId: shop.id,
+          shopName: shop.name,
+          to: emailTo!,
+          subject: email.subject,
+          text: email.text,
+          html: email.html,
+          kind: "synced_reminder",
+        });
         if (sent) {
           await forShop(shop.id).visit.update({
             where: { id: visit.id },

@@ -2952,6 +2952,11 @@ bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
           // Undoing the cancel also un-hides the row: leaving it dismissed
           // would restore a booking the barber then couldn't see.
           dismissedAt: null,
+          // Release the cancellation-email claim. Without this the FIRST
+          // cancel would permanently silence every later one for this
+          // appointment: the stamp is what makes the send at-most-once, so an
+          // undo has to give it back.
+          cancellationEmailSentAt: null,
         },
       });
       mirrorOutboxId = await recordMirrorIntent(tx, {
@@ -3183,8 +3188,17 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
           startsAt,
           endsAt,
           priceAtBooking: effectivePrice ?? null,
+          // 🔴 The EMAIL stamps must reset with the SMS ones. Confirmation
+          // SMS is off for cost (CONFIRMATION_SMS_ENABLED=false), so email is
+          // the only channel a customer hears about a booking on - and
+          // notifyAppointmentConfirmation gates it on confirmationEmailSentAt
+          // being null. Leaving these set meant a rescheduled appointment
+          // told the customer NOTHING, and never re-sent a reminder for the
+          // new time either. They kept whatever the old email said.
           confirmationSentAt: null,
           reminderSentAt: null,
+          confirmationEmailSentAt: null,
+          reminderEmailSentAt: null,
           reminder24hPushSentAt: null,
           reminder2hPushSentAt: null,
           checkInStatus: null,

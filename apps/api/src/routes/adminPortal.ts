@@ -5,6 +5,7 @@ import { prisma } from "@chairback/db";
 import { requireUser } from "../middleware/auth.js";
 import { requireAdmin } from "../middleware/admin.js";
 import { readBookingRefusals } from "../services/bookingRefusal.js";
+import { readEmailDeliverySummary } from "../services/emailDelivery.js";
 import {
   readLatestRotationRun,
   rotateAllEnabled,
@@ -363,4 +364,14 @@ adminPortalRouter.get("/rotate-all-rewards-links", async (_req, res) => {
 adminPortalRouter.get("/booking-refusals", async (req, res) => {
   const days = Math.min(Math.max(Number.parseInt(String(req.query.days ?? "7"), 10) || 7, 1), 31);
   res.json(await readBookingRefusals(new Date(), days));
+});
+
+/**
+ * Email delivery board. Answers "are our emails arriving?" with evidence -
+ * counts by status and by kind over the last N days. Counts only; the ledger
+ * stores no address, subject or body.
+ */
+adminPortalRouter.get("/email-delivery", async (req, res) => {
+  const days = Math.min(Math.max(Number.parseInt(String(req.query.days ?? "7"), 10) || 7, 1), 31);
+  res.json(await readEmailDeliverySummary(new Date(), days));
 });

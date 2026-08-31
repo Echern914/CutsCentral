@@ -21,6 +21,7 @@ import { uploadRouter } from "./routes/upload.js";
 import { acuityWebhookRouter } from "./routes/webhooks.acuity.js";
 import { squareWebhookRouter } from "./routes/webhooks.square.js";
 import { twilioWebhookRouter } from "./routes/webhooks.twilio.js";
+import { resendWebhookRouter } from "./routes/webhooks.resend.js";
 import { acuityOAuthRouter } from "./routes/acuity.oauth.js";
 import { mcpRouter, mcpWellKnownRouter } from "./routes/mcp.js";
 import { mcpOAuthRouter } from "./routes/mcp.oauth.js";
@@ -118,6 +119,8 @@ export function createApp(): Express {
   app.use("/webhooks/acuity", webhookLimiter, acuityWebhookRouter);
   app.use("/webhooks/square", webhookLimiter, squareWebhookRouter);
   app.use("/webhooks/twilio", webhookLimiter, twilioWebhookRouter);
+  // Email delivery events (bounce/complaint/delivered) - see webhooks.resend.
+  app.use("/webhooks/resend", webhookLimiter, resendWebhookRouter);
   app.use("/webhooks/stripe", webhookLimiter, stripeWebhookRouter);
   app.use("/webhooks/stripe-connect", webhookLimiter, connectWebhookRouter);
 
