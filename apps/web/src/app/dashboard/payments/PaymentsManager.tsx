@@ -7,6 +7,7 @@ import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
 import type { PaymentStatus } from "./actions";
 import {
+  disconnectStripeAction,
   savePaymentSettingsAction,
   savePayDirectAction,
   startConnectOnboardingAction,
@@ -16,10 +17,19 @@ const field =
   "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 const labelCls = "text-xs text-muted";
 
-export function PaymentsManager({ initial }: { initial: PaymentStatus }) {
+export function PaymentsManager({
+  initial,
+  apiBase,
+}: {
+  initial: PaymentStatus;
+  /** API origin. The Standard door is a top-level NAVIGATION to the API host,
+   *  not a fetch — the session cookie is set on the parent domain so it rides. */
+  apiBase: string;
+}) {
   const vocab = useVocab();
   const { toast } = useToast();
   const [pending, start] = useTransition();
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [mode, setMode] = useState(initial.paymentsMode);
   // Held as raw strings so the field can be empty while typing. A numeric state
   // defaulting to 0 rendered a literal "0" the barber couldn't delete (typing
@@ -67,6 +77,29 @@ export function PaymentsManager({ initial }: { initial: PaymentStatus }) {
         window.location.href = r.url; // Stripe-hosted onboarding
       } else {
         toast("Couldn't start Stripe setup", "error");
+      }
+    });
+  }
+
+  /**
+   * The other door: the barber logs in at Stripe and authorises an account they
+   * ALREADY own. A full-page navigation, not a fetch — it is an OAuth redirect
+   * chain, exactly like the Acuity/Square connect buttons.
+   */
+  function linkExistingStripe() {
+    start(() => {
+      window.location.href = `${apiBase}/api/payments/connect/oauth/start`;
+    });
+  }
+
+  function disconnectStripe() {
+    start(async () => {
+      const r = await disconnectStripeAction();
+      if (r.ok) {
+        setConfirmDisconnect(false);
+        toast("Stripe disconnected", "success");
+      } else {
+        toast("Couldn't disconnect", "error");
       }
     });
   }
@@ -187,36 +220,117 @@ export function PaymentsManager({ initial }: { initial: PaymentStatus }) {
         {!connect.connected ? (
           <div className="mt-3">
             <p className="text-sm text-muted">
-              Connect a Stripe account to start taking payments. Stripe handles
-              the signup, your bank details, and payouts — ChairBack never sees
-              your card or bank info.
+              Your money lands in your own Stripe account and pays out to your
+              own bank. Stripe handles your details and payouts — ChairBack never
+              sees your card or bank info.
             </p>
-            <button
-              onClick={connectStripe}
-              disabled={pending}
-              className="mt-4 rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
-            >
-              {pending ? "Starting…" : "Connect with Stripe"}
-            </button>
+            {/* 🔴 TWO DOORS, and the order is deliberate. Most barbers have
+                never taken card payments, so the door that makes an account for
+                them leads. The other one exists because someone who ALREADY has
+                Stripe should never be forced into a second account. Both end at
+                the same place: an account they own, that we never hold money in. */}
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+              <button
+                onClick={connectStripe}
+                disabled={pending}
+                className="rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+              >
+                {pending ? "Starting…" : "Set up a new Stripe account"}
+              </button>
+              {initial.standardAvailable && (
+                <button
+                  onClick={linkExistingStripe}
+                  disabled={pending}
+                  className="rounded-xl border border-subtle px-5 py-2.5 text-sm font-medium text-offwhite transition-colors duration-150 ease-out hover:border-strong disabled:opacity-50"
+                >
+                  {pending ? "Opening…" : "I already have Stripe"}
+                </button>
+              )}
+            </div>
+            {initial.standardAvailable && (
+              <p className="mt-2 text-xs text-muted">
+                Linking keeps everything in the account you already use. Setting
+                one up is the quicker route if you&apos;ve never taken card
+                payments — you don&apos;t need a Stripe account beforehand.
+              </p>
+            )}
           </div>
         ) : (
           <div className="mt-3 flex flex-col gap-2">
+            {/* 🔴 WHICH account. Without this a barber has no way to tell the
+                right Stripe account from the wrong one, and "wrong one" means
+                their money is arriving somewhere they aren't looking. */}
+            {initial.connectAccountLast4 && (
+              <p className="text-xs text-muted">
+                {initial.connectAccountType === "standard"
+                  ? "Your own Stripe account, linked by you"
+                  : "Stripe account set up through ChairBack"}{" "}
+                · ends {initial.connectAccountLast4}
+              </p>
+            )}
             <StatusRow label="Charges enabled" ok={connect.chargesEnabled} />
             <StatusRow label="Payouts enabled" ok={connect.payoutsEnabled} />
-            {!ready && (
-              <>
+            {!ready &&
+              /* Only an EXPRESS account has a ChairBack-openable form to go back
+                 to. A standard account is finished in the barber's own Stripe
+                 dashboard, so offering a button that reopens nothing would send
+                 them in a circle. */
+              (initial.connectAccountType !== "standard" ? (
+                <>
+                  <p className="mt-1 text-xs text-muted">
+                    Stripe still needs a few details before you can take payments.
+                  </p>
+                  <button
+                    onClick={connectStripe}
+                    disabled={pending}
+                    className="mt-1 self-start rounded-xl border border-subtle px-4 py-2 text-sm text-offwhite disabled:opacity-50"
+                  >
+                    {pending ? "Opening…" : "Finish Stripe setup"}
+                  </button>
+                </>
+              ) : (
                 <p className="mt-1 text-xs text-muted">
                   Stripe still needs a few details before you can take payments.
+                  Finish them in your own Stripe dashboard — this page updates
+                  when Stripe tells us you're done.
                 </p>
+              ))}
+
+            <div className="mt-2 border-t border-subtle pt-2">
+              {confirmDisconnect ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-muted">
+                    Stop sending payments to this account?
+                  </span>
+                  <button
+                    onClick={disconnectStripe}
+                    disabled={pending}
+                    className="rounded-full bg-danger px-3 py-1.5 text-xs font-semibold text-offwhite disabled:opacity-60"
+                  >
+                    {pending ? "Disconnecting…" : "Yes, disconnect"}
+                  </button>
+                  <button
+                    onClick={() => setConfirmDisconnect(false)}
+                    className="rounded-full border border-subtle px-3 py-1.5 text-xs font-medium text-muted"
+                  >
+                    Keep it
+                  </button>
+                </div>
+              ) : (
                 <button
-                  onClick={connectStripe}
-                  disabled={pending}
-                  className="mt-1 self-start rounded-xl border border-subtle px-4 py-2 text-sm text-offwhite disabled:opacity-50"
+                  onClick={() => setConfirmDisconnect(true)}
+                  className="text-xs font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite"
                 >
-                  {pending ? "Opening…" : "Finish Stripe setup"}
+                  Disconnect this account
                 </button>
-              </>
-            )}
+              )}
+              {/* Said plainly: money already taken is not affected, which is the
+                  first thing anyone hesitating over this button worries about. */}
+              <p className="mt-1.5 text-xs text-muted">
+                New bookings fall back to paying in person. Payments already taken
+                are unaffected.
+              </p>
+            </div>
           </div>
         )}
       </Card>

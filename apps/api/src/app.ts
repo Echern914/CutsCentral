@@ -23,6 +23,7 @@ import { squareWebhookRouter } from "./routes/webhooks.square.js";
 import { twilioWebhookRouter } from "./routes/webhooks.twilio.js";
 import { resendWebhookRouter } from "./routes/webhooks.resend.js";
 import { acuityOAuthRouter } from "./routes/acuity.oauth.js";
+import { stripeConnectOAuthRouter } from "./routes/stripeConnect.oauth.js";
 import { mcpRouter, mcpWellKnownRouter } from "./routes/mcp.js";
 import { mcpOAuthRouter } from "./routes/mcp.oauth.js";
 import { squareOAuthRouter } from "./routes/square.oauth.js";
@@ -164,6 +165,10 @@ export function createApp(): Express {
   // `mcpLimiter` (per-connection fair-sharing) and only then `requireMcpAuth`.
   app.use("/mcp", mcpIpLimiter, mcpRouter);
 
+  // Stripe Connect STANDARD onboarding. Mounted here, NOT under the payments
+  // dashboard router, because /callback is a redirect back from Stripe with no
+  // session on it - it authenticates via its signed state cookie instead.
+  app.use("/api/payments/connect/oauth", oauthLimiter, stripeConnectOAuthRouter);
   app.use("/api/acuity/oauth", oauthLimiter, acuityOAuthRouter);
   app.use("/api/square/oauth", oauthLimiter, squareOAuthRouter);
   // Phone-verified rewards recovery (per-route limiters inside). Mounted on

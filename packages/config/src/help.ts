@@ -347,6 +347,14 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     action: { label: "Open payments", featureId: "pay-ahead" },
   },
   {
+    id: "link-existing-stripe",
+    q: "I already have a Stripe account — can I use that one?",
+    a: "Yes. On the Payments page pick \"I already have Stripe\", log in at Stripe and approve it. Payments then land in the account you already use, and you manage everything from the Stripe dashboard you already know.\n\nIf you don't have one, pick \"Set up a new Stripe account\" instead and Stripe walks you through it — you don't need an account beforehand.\n\nEither way the account is yours. ChairBack never holds your money.",
+    keywords: ["existing stripe", "already have stripe", "link stripe", "connect stripe", "my stripe account", "use my own stripe", "stripe login", "same stripe"],
+    category: "money",
+    action: { label: "Open payments", featureId: "pay-ahead" },
+  },
+  {
     id: "when-paid-out",
     q: "When does the money reach my bank?",
     a: "Card payments go into your own Stripe account, not ours — we never hold your money — so payouts follow Stripe's schedule for your account, typically a couple of business days.\n\nZelle, Venmo, and Cash App are direct between you and the client, so that's instant and fee-free.",
