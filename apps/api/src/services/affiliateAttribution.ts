@@ -161,6 +161,12 @@ async function bumpClickCounter(accountId: string, nowMs: number): Promise<void>
  * shop creation.
  */
 export async function planAttribution(params: {
+  /**
+   * The SHOP-CREATION transaction. Everything here reads through it, so the
+   * decision and the shop commit together and no other writer can move an
+   * affiliate's status underneath a half-finished creation.
+   */
+  tx: Prisma.TransactionClient;
   claimToken: string | undefined;
   ownerId: string;
   nowMs?: number;
@@ -170,13 +176,14 @@ export async function planAttribution(params: {
 
   const nowMs = params.nowMs ?? Date.now();
   const nowSeconds = Math.floor(nowMs / 1000);
-  try {
+  {
     // allowExpired so a genuine-but-stale claim can be told apart from a
     // forgery; the expiry decision is made explicitly below.
     const claim = verifyAffiliateClaim(params.claimToken, keyring(), nowSeconds, {
       allowExpired: true,
     });
     // Forged, tampered, wrong key, malformed: not a claim, nothing recorded.
+    // Cheap and CPU-only, so this costs the transaction nothing.
     if (!claim) return null;
 
     const base = {
@@ -203,18 +210,17 @@ export async function planAttribution(params: {
     // touches it. That is what makes "a referred shop cannot be claimable in
     // both systems" true structurally rather than by scheduling, and it holds
     // for as long as the two programs coexist.
-    const legacyClaimant = await runAsOwner(async (tx) => {
-      const owner = await tx.user.findUnique({
-        where: { id: params.ownerId },
-        select: { referralCode: true },
-      });
-      const legacyCode = owner?.referralCode?.trim();
-      if (!legacyCode) return null;
-      return tx.shop.findUnique({
-        where: { referralCode: legacyCode },
-        select: { id: true },
-      });
+    const owner = await params.tx.user.findUnique({
+      where: { id: params.ownerId },
+      select: { referralCode: true },
     });
+    const legacyCode = owner?.referralCode?.trim();
+    const legacyClaimant = legacyCode
+      ? await params.tx.shop.findUnique({
+          where: { referralCode: legacyCode },
+          select: { id: true },
+        })
+      : null;
     if (legacyClaimant) {
       return {
         ...base,
@@ -225,17 +231,15 @@ export async function planAttribution(params: {
       };
     }
 
-    const account = await runAsOwner((tx) =>
-      tx.affiliateAccount.findUnique({
-        where: { code: claim.code },
-        select: {
-          id: true,
-          status: true,
-          shopId: true,
-          shop: { select: { ownerId: true } },
-        },
-      }),
-    );
+    const account = await params.tx.affiliateAccount.findUnique({
+      where: { code: claim.code },
+      select: {
+        id: true,
+        status: true,
+        shopId: true,
+        shop: { select: { ownerId: true } },
+      },
+    });
     if (!account) {
       // Includes a code that was rotated after capture: the old code no longer
       // resolves, so the stale claim is refused rather than following the
@@ -273,15 +277,6 @@ export async function planAttribution(params: {
       affiliateShopId: account.shopId,
       rejectionReason: null,
     };
-  } catch (err) {
-    // A lookup failure must not cost the customer their shop. The error object
-    // itself is NOT logged: a Prisma error embeds the failing query's
-    // parameters, and here that is the referral code.
-    logger.warn(
-      { errName: err instanceof Error ? err.name : "unknown" },
-      "affiliate: attribution planning failed; not attributed",
-    );
-    return null;
   }
 }
 

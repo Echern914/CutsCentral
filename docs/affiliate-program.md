@@ -51,7 +51,7 @@ constants:
 |---|---|
 | `AFFILIATE_PROGRAM_ENABLED` | master: off ⇒ every affiliate surface 404s before auth, indistinguishable from unmounted |
 | `AFFILIATE_PUBLIC_APPLICATIONS_ENABLED` | the application door only (status stays readable) |
-| `AFFILIATE_QUALIFICATION_ENABLED` | qualification phase worker (declared; nothing reads it yet) |
+| `AFFILIATE_QUALIFICATION_ENABLED` | the qualification consumer and the reward-hold sweep (read from phase 3; both inert while it is false) |
 | `AFFILIATE_CREDIT_EXECUTION_ENABLED` | credit-execution outbox (declared; nothing reads it yet) |
 
 Deploying this phase's migration changes nothing user-visible: no UI, no
@@ -128,8 +128,9 @@ atomically with its audit event.
   item — the legacy program has the same dependency).
 - Referral credits change invoice totals; any future tax enablement needs a
   tax review before this program's credits are live.
-- The platform webhook has no event-id dedupe table; qualification counts
-  distinct invoice ids instead, which is sufficient for this program.
+- The platform webhook's LEGACY handlers still have no event-id dedupe, by
+  design: phase 3 added `StripeWebhookEvent` for the affiliate consumer only,
+  so legacy billing keeps its exact existing replay behaviour.
 
 ---
 
@@ -285,3 +286,145 @@ SELECT count(*) FROM (SELECT "referredShopId" FROM "Referral"
 `/join/enter`, the public claim endpoint, and the lock inside shop creation.
 While it is false `planAttribution` returns before it even reads a cookie, so a
 claim minted during a brief enablement cannot bind afterwards.
+
+---
+
+# Phase 3: qualification, and the two invariants phase 2 left open
+
+## The same-owner shop-creation lock
+
+`POST /api/shops` enforced "one shop per owner" with a read followed by a
+write, which is not a rule: two simultaneous requests from the same owner both
+saw "no shop" and both created one. Everything now happens in **one
+transaction, in one order**:
+
+```
+1. pg_advisory_xact_lock(hashtext("shopcreate:<ownerId>"))
+2. does this owner already have a shop?      -> 409 shop_exists, naming it
+3. create Shop (+ first reward, owner seat, SMS attestation)
+4. validate the affiliate claim
+5. write the attribution outcome, or its durable rejection
+6. commit  (which is also what releases the lock)
+```
+
+A transaction-scoped **advisory lock**, not a unique index on `Shop.ownerId`:
+multi-location ownership is a live possibility and a unique index would
+foreclose it, whereas the lock enforces today's contract without writing it
+into the schema. `pg_advisory_xact_lock(hashtext(...))` is the house primitive
+(`engines/bookingWrite.ts`, `engines/walkInQueue.ts`, `services/rewardsRecovery.ts`),
+it is held by the database rather than the process, so it holds across API
+replicas, and it is released by commit or rollback — never leaked.
+
+Because claim validation moved inside the transaction, a genuine **database
+fault** while resolving it now rolls the shop back too. That is the honest
+outcome — nothing committed, the caller retries — and it is a different thing
+from "this affiliate is not eligible", which is still recorded as a durable
+rejection and still never costs anyone their shop.
+
+**Lock order, everywhere that participates:** `shopcreate:<ownerId>` →
+`Shop` → `AffiliateReferralAttribution`. The legacy path takes `Referral` →
+`AffiliateReferralAttribution` and never acquires the owner lock, so no cycle
+exists between them.
+
+## The cross-ledger boundary
+
+Phase 2 checked one direction only: at shop creation, look for an existing
+legacy claim. That cannot stop the other order — and the other order is the
+one that actually happens, because `linkReferralOnShopCreate` inserts its
+`Referral` *after* the shop transaction has already committed an attribution.
+
+The invariant now lives in the database, on the **legacy** table:
+
+```sql
+CREATE TRIGGER affiliate_legacy_supersedes_ins
+  AFTER INSERT ON "Referral"
+  FOR EACH ROW EXECUTE FUNCTION affiliate_legacy_supersedes();
+```
+
+Inserting a legacy `Referral` atomically supersedes any live attribution for
+the same referred shop — `state -> REJECTED`, `rejectionReason ->
+legacy_claimed`, `legacyReferralId -> the legacy row's id` — and writes an
+`attribution.superseded_by_legacy` audit event, all inside the legacy
+transaction. Properties, each pinned by a test:
+
+* An existing legacy claim still makes the new attribution `legacy_claimed`
+  (the phase-2 check, unchanged).
+* A legacy claim arriving **after** a new attribution supersedes it atomically.
+* If the legacy transaction rolls back, **so does the supersession**.
+* The legacy insert itself is never blocked, altered or failed: the function
+  cannot raise, and it is `SECURITY DEFINER` precisely so that a caller without
+  rights on the default-deny attribution table still succeeds.
+* An already-rejected attribution is left exactly as it is.
+* `legacyReferralId` is UNIQUE — the durable reconciliation key the cutover
+  imports against.
+* No code, no personal data and no free text enters the audit row: the trigger
+  writes a fixed two-key JSON object.
+* Tenant sessions can neither read the attribution table nor reach the
+  transition.
+
+**What changed for legacy:** no legacy *file* changed — `services/referral.ts`
+and `billing/stripe.ts` are untouched — but the legacy *table* gained a
+trigger. In production that trigger can only ever act on new-system rows,
+which cannot exist while the program is dark, so its effect on the live
+program today is nil.
+
+## Qualification
+
+`applyAffiliateStripeEvent` runs **after** `applyStripeEvent` and
+`applyPaymentEvent` in the same webhook, has its own event dedupe rather than
+gating the shared handlers, and never throws — so legacy billing and the legacy
+referral grant keep their exact existing semantics, and an affiliate problem
+cannot cost Stripe a delivery the billing side already handled.
+
+```
+invoice.paid ──> already-seen event id?           -> stop   (StripeWebhookEvent, UNIQUE)
+             ──> base-subscription cents > 0?     -> else stop (tax/add-on/one-time excluded)
+             ──> customer -> Shop -> ATTRIBUTED attribution? -> else stop
+             ──> record AffiliateQualifyingInvoice (stripeInvoiceId UNIQUE)
+             ──> distinct qualifying invoices >= 2 ?
+                        └─> create ONE AffiliateReward (referredShopId UNIQUE)
+                            PENDING + holdEndsAt = now + 14d
+                            REVIEW_REQUIRED if: affiliate suspended,
+                                                referrer on no paid plan,
+                                                or > 12 qualified in a rolling year
+refund / dispute / credit note ──> reward PENDING|AVAILABLE|REVIEW_REQUIRED -> REVERSED
+hourly `affiliate-reward-hold` ──> PENDING past its hold -> AVAILABLE (+12-month expiry)
+```
+
+**Two unique indexes carry the whole thing.** The *event* id makes a
+redelivery a no-op; the *invoice* id makes qualification count distinct
+invoices rather than deliveries — which matters because Stripe emits more than
+one event about the same invoice, and out of order. The reward's
+`referredShopId` unique index means two simultaneous qualifying invoices
+produce exactly one reward, with the loser a `skipDuplicates` no-op rather than
+an exception that would abort the transaction.
+
+**No Stripe call happens anywhere in this phase.** The money snapshot comes
+from the referrer's own plan in `PLANS`, recorded as `amountCents` +
+`currency` + `basisPlan` and never recomputed. `RESERVED` and `APPLIED` belong
+to the credit-execution phase; a reversal here is a status transition and an
+audit event, never a card charge.
+
+**Open item carried forward:** the snapshot is the plan's list price. A
+referrer on a Stripe-discounted subscription would be credited more than they
+pay. The credit-execution phase must reconcile against the real subscription
+before applying anything.
+
+## Before qualification can ever be switched on
+
+`invoice.paid` must be subscribed on the LIVE Stripe webhook endpoint. It could
+not be verified from this machine (no live Stripe credentials here), and this
+phase deliberately does not check or change it. To confirm:
+
+1. Stripe Dashboard → **Developers → Webhooks** (make sure the account is in
+   **live** mode, not test).
+2. Open the endpoint pointing at `https://api.getchairback.com/webhooks/stripe`.
+3. Under **Events to send**, confirm `invoice.paid` is listed. Add it with
+   **Update details → Select events** if it is not.
+4. For reversals to work, also subscribe `charge.refunded`,
+   `charge.dispute.created` and `credit_note.created`.
+5. Nothing needs redeploying afterwards — the handlers already exist and stay
+   dark behind the flags.
+
+The same dependency has always applied to the **legacy** program: if
+`invoice.paid` is not subscribed, legacy referrers have never been paid either.

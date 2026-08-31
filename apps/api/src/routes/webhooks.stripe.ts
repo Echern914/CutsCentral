@@ -7,6 +7,7 @@ import {
   verifyStripeWebhook,
 } from "../billing/stripe.js";
 import { applyPaymentEvent } from "../billing/payments.js";
+import { applyAffiliateStripeEvent } from "../services/affiliateQualification.js";
 
 /**
  * Stripe webhook receiver. Mounted BEFORE the global express.json() (like the
@@ -41,5 +42,12 @@ stripeWebhookRouter.post("/", express.raw({ type: "*/*" }), async (req, res) => 
   // whichever endpoint Stripe routes the event to.
   await applyStripeEvent(event);
   await applyPaymentEvent(event);
+  // Affiliate qualification, LAST and strictly additive. It has its own event
+  // dedupe rather than gating the handlers above, so legacy billing and the
+  // legacy referral grant keep their exact existing semantics; it returns
+  // immediately unless both affiliate flags are on; and it never throws, so an
+  // affiliate problem cannot cost Stripe a delivery the billing side already
+  // handled.
+  await applyAffiliateStripeEvent(event);
   res.json({ received: true });
 });

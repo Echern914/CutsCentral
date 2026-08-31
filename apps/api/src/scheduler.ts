@@ -24,6 +24,7 @@ import { runTrialReminders } from "./engines/trialReminder.js";
 import { runAiTrialReminders } from "./engines/aiTrialReminder.js";
 import { autoCloseIdleConversations } from "./receptionist/conversation.js";
 import { expireStaleWalkIns } from "./engines/walkInExpiry.js";
+import { releaseAffiliateRewardHolds } from "./services/affiliateQualification.js";
 import { sweepExpiredHolds } from "./engines/holdSweep.js";
 import { expireDueOffers } from "./engines/waitlistOffer.js";
 import { expireDeadWaitlistEntries } from "./engines/waitlistExpiry.js";
@@ -338,6 +339,23 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
     ttlMs: 2 * MINUTE,
     run: () => expireStaleWalkIns().then(() => undefined),
     failMsg: "walk-in expiry sweep failed",
+  },
+  // Affiliate reward holds. Hourly at :41. A qualified reward waits out the
+  // policy hold (a refund window) before it becomes available, and this is
+  // what ends that wait. DARK by default: with the affiliate flags off every
+  // run is a dry-run that reports what it WOULD release and writes nothing.
+  // Sends nothing ever - this program has no SMS and no email.
+  {
+    cronExpr: "41 * * * *",
+    name: "affiliate-reward-hold",
+    ttlMs: 5 * MINUTE,
+    run: async () => {
+      const result = await releaseAffiliateRewardHolds();
+      if (result.due > 0) {
+        logger.info(result, "affiliate reward holds swept");
+      }
+    },
+    failMsg: "affiliate reward hold sweep failed",
   },
   // Rate-limit store hygiene: delete counter rows whose window expired >1h ago
   // every 30 min. The store is correct without this (an expired row resets on
