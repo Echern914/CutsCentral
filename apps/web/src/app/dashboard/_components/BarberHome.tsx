@@ -1,3 +1,12 @@
+"use client";
+
+// 🔴 REQUIRED, not stylistic. This component calls useVocab(), which is a
+// client hook exported from a "use client" module - invoking it during a
+// SERVER render throws at request time and the error boundary swallowed the
+// whole dashboard home ("Something went wrong") for every barber home view.
+// next build cannot catch it: /dashboard is dynamic, so nothing prerenders
+// this tree, and ignoreBuildErrors hides the rest. See vocabUseClient.test.ts.
+
 import Link from "next/link";
 import { cap, useVocab } from "@/components/VocabProvider";
 import { Card } from "@/components/ui/Card";
