@@ -154,6 +154,13 @@ const apiSchema = z.object({
   // connected account), so they arrive via a "Your account" endpoint with its
   // own secret. The connect route tries both secrets when verifying.
   STRIPE_PLATFORM_WEBHOOK_SECRET: z.string().min(1).optional(),
+  // The platform's Connect OAUTH client id (ca_…), from the Stripe dashboard's
+  // Connect settings. Required ONLY for the STANDARD door — the barber who
+  // already has a Stripe account and links it instead of creating a new one.
+  // It is a separate credential from STRIPE_SECRET_KEY, so Express onboarding
+  // keeps working with this unset; standardConnectEnabled() is simply false and
+  // the UI offers the one door that works.
+  STRIPE_CONNECT_CLIENT_ID: z.string().min(1).optional(),
 
   // Transactional email via Resend (optional - while EITHER is unset,
   // emailEnabled() is false: sendEmail() is a logged no-op, the forgot-password

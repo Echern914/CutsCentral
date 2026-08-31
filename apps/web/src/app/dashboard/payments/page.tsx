@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { apiGet } from "@/lib/api";
+import { API_BASE, apiGet } from "@/lib/api";
 import { DemoTour } from "@/components/tour/DemoTour";
 import { PaymentsManager } from "./PaymentsManager";
 import type { PaymentStatus } from "./actions";
@@ -26,7 +26,7 @@ export default async function PaymentsPage() {
         </p>
       </header>
       <div data-tour="payments-setup">
-        <PaymentsManager initial={res.data} />
+        <PaymentsManager initial={res.data} apiBase={API_BASE} />
       </div>
     </main>
   );

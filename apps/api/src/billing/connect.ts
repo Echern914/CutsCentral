@@ -43,7 +43,8 @@ export async function ensureConnectAccount(shop: ConnectShop): Promise<string> {
   });
   await prisma.shop.update({
     where: { id: shop.id },
-    data: { stripeConnectAccountId: account.id },
+    // Recorded at the same instant as the id so the pair can never disagree.
+    data: { stripeConnectAccountId: account.id, stripeConnectAccountType: "express" },
   });
   return account.id;
 }
@@ -158,6 +159,54 @@ export async function applyConnectEvent(event: Stripe.Event): Promise<void> {
       });
       if (count === 0) {
         logger.warn({ accountId: acct.id }, "connect account.updated matched no shop");
+      }
+      return;
+    }
+    /**
+     * 🔴 THE BARBER REVOKED US FROM THEIR OWN STRIPE DASHBOARD.
+     *
+     * Only STANDARD accounts can do this, and it happens entirely outside
+     * ChairBack — no request hits us, no button is pressed here. If we ignore
+     * it the shop keeps rendering "connected" while every single charge fails
+     * at Stripe: a silent money outage that looks like ChairBack being broken.
+     *
+     * Clearing the id is what actually stops it. The booking path requires BOTH
+     * `connectChargesEnabled` and `stripeConnectAccountId` (booking.public.ts),
+     * so a cleared row falls straight back to pay-in-person instead of offering
+     * a card form that cannot succeed.
+     *
+     * paymentsMode is deliberately LEFT ALONE. It is the barber's setting, the
+     * guard above already makes it inert, and silently rewriting it would mean
+     * a reconnect comes back with payments mysteriously off.
+     *
+     * Payment history is unaffected: each Payment row snapshots its own
+     * stripeConnectAccountId at charge time, so refunds and reconciliation for
+     * past charges still resolve.
+     */
+    case "account.application.deauthorized": {
+      // The account id is on the EVENT envelope, not the object: the object is
+      // the deauthorized Application, whose id is our platform's ca_… — matching
+      // shops on that would match none, every time, and look like a no-op bug.
+      const accountId = event.account;
+      if (!accountId) {
+        logger.warn({ eventId: event.id }, "connect deauthorized event carried no account");
+        return;
+      }
+      const { count } = await prisma.shop.updateMany({
+        where: { stripeConnectAccountId: accountId },
+        data: {
+          stripeConnectAccountId: null,
+          stripeConnectAccountType: null,
+          connectChargesEnabled: false,
+          payoutsEnabled: false,
+        },
+      });
+      if (count === 0) {
+        // Expected when an account was already disconnected here, or belongs to
+        // another platform environment. Not an error.
+        logger.info({ accountId }, "connect deauthorized matched no shop");
+      } else {
+        logger.warn({ accountId, shops: count }, "connect account DEAUTHORIZED - payments disabled");
       }
       return;
     }

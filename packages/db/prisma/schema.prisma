@@ -465,9 +465,20 @@ model Shop {
   // shop has active groups; ships default-off so no existing page changes.
   bookingGroupsFirst Boolean   @default(false)
 
-  // Customer payments (Stripe Connect Express). All default to "off"/absent so
-  // existing shops are unchanged until the barber connects + turns payments on.
+  // Customer payments (Stripe Connect). All default to "off"/absent so existing
+  // shops are unchanged until the barber connects + turns payments on.
   stripeConnectAccountId String?      @unique // the shop's acct_ (NOT stripeCustomerId)
+  // WHICH DOOR the barber came through: "express" (we created the account for
+  // them) or "standard" (they linked a Stripe account they already had, via
+  // OAuth). NULL only on rows that predate this column — all of which are
+  // express, since standard did not exist yet; the migration backfills them.
+  //
+  // 🔴 PRESENTATION AND RECOVERY ONLY. Charges are destination charges with
+  // on_behalf_of either way (billing/payments.ts), so NOTHING about taking money
+  // may branch on this. It decides what we can TELL the barber, and whether
+  // "Finish setup" can reopen a Stripe-hosted form — standard accounts have no
+  // such form, they are managed in the barber's own Stripe dashboard.
+  stripeConnectAccountType String?
   // Stripe Terminal Location, required before ANY reader (incl. Tap to Pay on
   // iPhone) can connect. One per shop, created lazily and cached here so we
   // never make a duplicate Location on every connection-token request.

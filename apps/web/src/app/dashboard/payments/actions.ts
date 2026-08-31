@@ -16,6 +16,17 @@ export async function startConnectOnboardingAction(): Promise<{
   return { ok: true, url: res.data.url };
 }
 
+/**
+ * Unlink the Stripe account. For a STANDARD account this also revokes ChairBack
+ * at Stripe, so it disappears from the barber's own connected-apps list rather
+ * than only appearing to be gone here.
+ */
+export async function disconnectStripeAction(): Promise<Result> {
+  const res = await apiSend("POST", "/api/payments/connect/oauth/disconnect");
+  if (res.ok) revalidatePath("/dashboard/payments");
+  return res.ok ? { ok: true } : { ok: false, error: res.error ?? "failed" };
+}
+
 /** Save payment mode + cancellation policy. */
 export async function savePaymentSettingsAction(input: {
   paymentsMode?: "off" | "ahead" | "deposit" | "hold";
@@ -52,6 +63,12 @@ export async function savePayDirectAction(input: {
 
 export interface PaymentStatus {
   connectAvailable: boolean;
+  /** Whether the "link the Stripe account I already have" door can be offered. */
+  standardAvailable?: boolean;
+  /** Which door the shop came through. Presentation only. */
+  connectAccountType?: "express" | "standard" | null;
+  /** Last 4 of the acct_, so a barber can confirm WHICH account this is. */
+  connectAccountLast4?: string | null;
   connect: {
     connected: boolean;
     chargesEnabled: boolean;

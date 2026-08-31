@@ -8,6 +8,7 @@ import {
   createOnboardingLink,
   getConnectStatus,
 } from "../billing/connect.js";
+import { standardConnectEnabled } from "../billing/connectOauth.js";
 import {
   createConnectionToken,
   ensureTerminalLocation,
@@ -30,6 +31,7 @@ paymentsDashboardRouter.get("/status", async (req, res) => {
     where: { id: req.shop!.id },
     select: {
       stripeConnectAccountId: true,
+      stripeConnectAccountType: true,
       paymentsMode: true,
       platformFeeBps: true,
       cancelWindowHours: true,
@@ -51,7 +53,19 @@ paymentsDashboardRouter.get("/status", async (req, res) => {
     : { connected: false, chargesEnabled: false, payoutsEnabled: false, detailsSubmitted: false };
   res.json({
     connectAvailable: connectEnabled(),
+    // Whether the SECOND door (link an existing Stripe account) can be offered.
+    // Needs its own credential, so it can be dark while Express works fine.
+    standardAvailable: standardConnectEnabled(),
     connect: status,
+    // "express" | "standard" | null. Presentation only - it decides what we can
+    // tell the barber and whether "Finish setup" has a form to reopen.
+    connectAccountType: shop.stripeConnectAccountType,
+    // Shown so a barber can confirm WHICH account this is before trusting it
+    // with money. Last 4 of the acct_ only: enough to match against Stripe,
+    // useless on its own.
+    connectAccountLast4: shop.stripeConnectAccountId
+      ? shop.stripeConnectAccountId.slice(-4)
+      : null,
     paymentsMode: shop.paymentsMode,
     platformFeeBps: shop.platformFeeBps,
     cancelWindowHours: shop.cancelWindowHours,
