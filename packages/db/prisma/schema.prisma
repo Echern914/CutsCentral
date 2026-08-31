@@ -3637,6 +3637,10 @@ model AffiliateReferralAttribution {
   lockedAt       DateTime
   claimExpiresAt DateTime
 
+  /// Set when the LEGACY program superseded this attribution: the legacy
+  /// Referral row that won. The durable cross-ledger reconciliation key.
+  legacyReferralId String? @unique
+
   // Platform-admin correction (7-day window, reason required, audited).
   correctedAt                DateTime?
   correctedByUserId          String?
@@ -3666,4 +3670,81 @@ model AffiliateClickDay {
 
   @@unique([affiliateAccountId, day])
   @@index([day])
+}
+
+// ---------------------------------------------------------------------------
+// AFFILIATE QUALIFICATION (arc phase 3). Still default-deny, still dark.
+// The LEGACY program is untouched and remains the only system that pays.
+// ---------------------------------------------------------------------------
+
+// Durable Stripe event-id dedupe for the AFFILIATE consumer only.
+//
+// 🔴 Deliberately NOT a gate in front of applyStripeEvent: legacy billing and
+// the legacy referral grant keep their existing semantics exactly, and this
+// table decides only whether the affiliate side has already seen an event.
+// Stripe redelivers for days and out of order, so counting webhook DELIVERIES
+// instead of distinct invoices is how a referral qualifies twice.
+model StripeWebhookEvent {
+  id        String   @id @default(cuid())
+  /// Stripe's own event id (evt_...). The dedupe key.
+  eventId   String   @unique
+  type      String
+  createdAt DateTime @default(now())
+
+  @@index([type, createdAt])
+}
+
+// One row per invoice that COUNTS toward qualification. The Stripe invoice id
+// is unique, so a replayed or reordered webhook can never inflate the count -
+// qualification counts distinct invoices, not deliveries.
+model AffiliateQualifyingInvoice {
+  id              String   @id @default(cuid())
+  referredShopId  String
+  stripeInvoiceId String   @unique
+  amountCents     Int
+  currency        String
+  paidAt          DateTime
+  createdAt       DateTime @default(now())
+
+  @@index([referredShopId, paidAt])
+}
+
+// The immutable reward ledger. One reward per referred shop, ever.
+//
+// PR 3 only ever creates rewards in PENDING and moves them to AVAILABLE (or
+// REVERSED / REVIEW_REQUIRED). Nothing here talks to Stripe: RESERVED and
+// APPLIED belong to the credit-execution phase, and a reversal is a status
+// transition plus an audit event, never a card charge.
+model AffiliateReward {
+  id                 String @id @default(cuid())
+  affiliateAccountId String
+  /// One qualification reward per referred shop - a database constraint.
+  referredShopId     String @unique
+  attributionId      String @unique
+
+  rewardType String // subscription_credit (CHECK-pinned)
+  /// Money snapshot taken at qualification and NEVER recomputed.
+  amountCents Int
+  currency    String
+  /// The referrer's base plan at qualification ("pro" | "pro_ai").
+  basisPlan   String
+
+  status String @default("PENDING") // PENDING|AVAILABLE|RESERVED|APPLIED|REVERSED|EXPIRED|REVIEW_REQUIRED
+
+  qualifiedAt DateTime
+  /// PENDING until this instant; the hold is what a refund window buys us.
+  holdEndsAt  DateTime
+  availableAt DateTime?
+  expiresAt   DateTime?
+  reversedAt  DateTime?
+  /// Fixed classification, never prose.
+  reversalReason String?
+  /// Why a reward is held for a human instead of becoming available.
+  reviewReason   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, holdEndsAt])
+  @@index([affiliateAccountId, status])
 }

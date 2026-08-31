@@ -36,9 +36,11 @@ export type AffiliateEventType =
   // ---- account lifecycle (this PR) ----
   | "account.suspended"
   | "account.reactivated"
-  // ---- attribution phase (reserved) ----
+  // ---- attribution phase ----
   | "attribution.locked"
   | "attribution.corrected"
+  /** The legacy program claimed this shop; written by a database trigger. */
+  | "attribution.superseded_by_legacy"
   // ---- qualification phase (reserved) ----
   | "reward.qualified"
   | "reward.available"
@@ -72,6 +74,8 @@ export const AFFILIATE_AUDIT_METADATA_KEYS = [
   "decisionReason",
   "suspensionReason",
   "rejectionReason",
+  "reversalReason",
+  "basisPlan",
   // attribution corrections: previous and new value, as ids. The admin's
   // written reason is deliberately NOT here - it is free text, and free text
   // can never be redacted out of an append-only table. It lives on the

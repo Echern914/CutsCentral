@@ -364,11 +364,6 @@ shopsRouter.post("/", requireUser, async (req, res) => {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
     return;
   }
-  const existing = await prisma.shop.findFirst({ where: { ownerId: req.userId } });
-  if (existing) {
-    res.status(409).json({ error: "shop_exists", shopId: existing.id });
-    return;
-  }
   // smsAttested is a gate, not a Shop column - pull it out before the spread.
   const { rewardLabel, rewardThreshold, smsAttested: _smsAttested, ...shopData } =
     parsed.data;
@@ -383,20 +378,44 @@ shopsRouter.post("/", requireUser, async (req, res) => {
   const industryKey = shopData.industry ?? "other";
   const type = businessType(industryKey);
   const slug = await availableSlug(parsed.data.name);
-  // Affiliate attribution is DECIDED here, before the transaction opens, so a
-  // lookup failure can never cost this barber their shop - planAttribution
-  // never throws and answers null for "nothing to record". It returns null
-  // outright while AFFILIATE_PROGRAM_ENABLED is false, which is why this whole
-  // path is inert in production today. The legacy referral program below is
-  // untouched and remains the only one that pays anything.
-  const attribution = await planAttribution({
-    claimToken: (req.cookies as Record<string, string> | undefined)?.[
-      AFFILIATE_CLAIM_COOKIE
-    ],
-    ownerId: req.userId!,
-  });
-  // Shop + its first menu reward land together or not at all.
-  const shop = await prisma.$transaction(async (tx) => {
+  const claimToken = (req.cookies as Record<string, string> | undefined)?.[
+    AFFILIATE_CLAIM_COOKIE
+  ];
+
+  /**
+   * 🔴 ONE TRANSACTION, ONE LOCK, IN THIS ORDER:
+   *   1. pg_advisory_xact_lock(hashtext("shopcreate:<ownerId>"))
+   *   2. does this owner already have a shop?
+   *   3. create Shop (+ first reward, owner seat, attestation)
+   *   4. validate the affiliate claim
+   *   5. write the attribution outcome (or its durable rejection)
+   *   6. commit - which is also what releases the lock
+   *
+   * The lock comes FIRST because the "one shop per owner" rule had no database
+   * constraint behind it: the check and the insert were two statements, so two
+   * simultaneous requests from the same owner both saw "no shop" and both
+   * created one. An advisory lock keyed on the owner serializes the whole
+   * decision across API replicas (an in-process mutex would not), and it is
+   * the house primitive for exactly this - see engines/bookingWrite.ts.
+   *
+   * A transaction-scoped lock rather than a unique index on Shop.ownerId
+   * deliberately: multi-location ownership is a live possibility and a unique
+   * index would foreclose it. The lock enforces today's one-shop contract
+   * without writing that contract into the schema.
+   *
+   * Because claim validation now runs INSIDE the transaction, a genuine
+   * database fault while resolving it rolls back the shop too. That is the
+   * honest outcome - nothing committed, the caller retries - and it is
+   * different from "this affiliate is not eligible", which is recorded as a
+   * durable rejection and never costs anyone their shop.
+   */
+  const result = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw(
+      Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`shopcreate:${req.userId}`}))`,
+    );
+    const existing = await tx.shop.findFirst({ where: { ownerId: req.userId } });
+    if (existing) return { conflict: existing.id } as const;
+
     const created = await tx.shop.create({
       data: {
         ownerId: req.userId!,
@@ -432,16 +451,25 @@ shopsRouter.post("/", requireUser, async (req, res) => {
       where: { id: req.userId!, smsAttestedAt: null },
       data: { smsAttestedAt: new Date() },
     });
-    // The affiliate lock, INSIDE the shop's transaction: a committed shop
-    // always carries its attribution outcome, and two racing creations produce
-    // one row because referredShopId is UNIQUE (the insert is a skipDuplicates
-    // createMany, so the loser is a no-op rather than an exception that would
-    // abort this transaction).
+    // Affiliate attribution, decided and written inside the same transaction:
+    // a committed shop always carries its outcome, and there is no window in
+    // which a shop exists without one.
+    const attribution = await planAttribution({
+      tx,
+      claimToken,
+      ownerId: req.userId!,
+    });
     if (attribution) {
       await applyAttributionInTx(tx, attribution, created.id);
     }
-    return created;
+    return { created } as const;
   });
+
+  if ("conflict" in result) {
+    res.status(409).json({ error: "shop_exists", shopId: result.conflict });
+    return;
+  }
+  const shop = result.created;
   // Referral attribution, AFTER the shop transaction commits. Deliberately not
   // inside it: a referral is a growth nicety and must never be able to fail
   // shop creation. It reads User.referralCode (the code this owner arrived
