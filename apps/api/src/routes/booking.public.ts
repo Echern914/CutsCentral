@@ -104,13 +104,42 @@ async function filterBlockedTargeted<
     fromMs = Math.min(fromMs, t.startsAt.getTime());
     toMs = Math.max(toMs, t.startsAt.getTime() + t.durationMin * 60_000);
   }
-  const blocked = await blockedRangesByStaff({
-    shopId,
-    staffIds: slots.map((t) => t.staffId),
-    fromMs,
-    toMs,
-    timezone,
-  });
+  const staffIds = [...new Set(slots.map((t) => t.staffId))];
+  const now = new Date();
+  const [blocked, busy] = await Promise.all([
+    blockedRangesByStaff({
+      shopId,
+      staffIds,
+      fromMs,
+      toMs,
+      timezone,
+    }),
+    // 🔴 A LIVE APPOINTMENT HIDES EVERY SPECIAL IT OVERLAPS. Booking a
+    // targeted slot consumes only its OWN row (bookedAppointmentId) - a
+    // DIFFERENT special published over the same physical time stayed
+    // rendered, and tapping it could only ever end in slot_taken: the write
+    // guard has been refusing it all along, so this filter makes the page
+    // stop offering what the write was already refusing (the same read/write
+    // parity lesson as the Aug 29 grid outage). Same occupancy set the grid
+    // subtracts: BOOKED, plus PENDING requests and un-expired receptionist
+    // holds.
+    prisma.appointment.findMany({
+      where: {
+        shopId,
+        staffId: { in: staffIds },
+        status: { in: ["BOOKED", "PENDING"] },
+        AND: [{ OR: [{ holdExpiresAt: null }, { holdExpiresAt: { gt: now } }] }],
+        startsAt: { lt: new Date(toMs) },
+        endsAt: { gt: new Date(fromMs) },
+      },
+      select: { staffId: true, startsAt: true, endsAt: true },
+    }),
+  ]);
+  for (const a of busy) {
+    const ranges = blocked.get(a.staffId) ?? [];
+    ranges.push({ start: a.startsAt.getTime(), end: a.endsAt.getTime() });
+    blocked.set(a.staffId, ranges);
+  }
   return dropBlockedTargetedSlots(slots, blocked);
 }
 

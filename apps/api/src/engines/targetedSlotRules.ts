@@ -36,6 +36,51 @@ export interface RuleTime {
   startMin: number;
   durationMin?: number;
   price?: number;
+  /**
+   * When set, this entry is a WINDOW rather than a single long slot: it
+   * materializes repeating slots of `slotMin` minutes, starting at `startMin`
+   * and packing forward while a whole slot still fits inside `durationMin`
+   * (the window's length). Absent = the pre-2026-08-31 behaviour, one slot
+   * exactly `durationMin` long - which is what every already-published rule
+   * stored, so nothing existing changes shape.
+   */
+  slotMin?: number;
+}
+
+/** Hard ceiling on repeats per window - a 5-min slot across a 12h window is
+ *  144 rows; beyond ~50 the barber has recreated the ordinary grid and the
+ *  weekly materialization would bloat for no scheduling gain. */
+export const MAX_SLOTS_PER_WINDOW = 48;
+
+/**
+ * Expand ONE schedule entry into its concrete occurrences (start minute +
+ * slot length), shared by every materializer - the create/roll-forward path
+ * and the edit regeneration MUST agree on what a window means, or an edit
+ * would silently reshape a series.
+ *
+ * Plain entry: one occurrence, `durationMin ?? ruleDurationMin` long (the
+ * original semantics, byte-for-byte). Window entry (`slotMin` set): repeating
+ * starts every `slotMin` minutes while a WHOLE slot fits - a 9:00-10:00
+ * window with 25-min slots yields 9:00 and 9:25, never a 9:50 that spills
+ * past the barber's stated end.
+ */
+export function occurrencesForTime(
+  t: RuleTime,
+  ruleDurationMin: number,
+): Array<{ startMin: number; durationMin: number }> {
+  const windowMin = t.durationMin ?? ruleDurationMin;
+  if (!t.slotMin || t.slotMin <= 0) {
+    return [{ startMin: t.startMin, durationMin: windowMin }];
+  }
+  const out: Array<{ startMin: number; durationMin: number }> = [];
+  for (
+    let start = t.startMin;
+    start + t.slotMin <= t.startMin + windowMin && out.length < MAX_SLOTS_PER_WINDOW;
+    start += t.slotMin
+  ) {
+    out.push({ startMin: start, durationMin: t.slotMin });
+  }
+  return out;
 }
 /** {"0".."6": RuleTime[]} — Service.hoursWindows key convention (0=Sun). */
 export type RuleSchedule = Record<string, RuleTime[]>;
@@ -75,12 +120,13 @@ export function effectiveSchedule(
       const times: RuleTime[] = [];
       for (const t of value) {
         if (typeof t !== "object" || t === null) continue;
-        const { startMin, durationMin, price } = t as Record<string, unknown>;
+        const { startMin, durationMin, price, slotMin } = t as Record<string, unknown>;
         if (typeof startMin !== "number" || startMin < 0 || startMin >= 24 * 60) continue;
         times.push({
           startMin,
           ...(typeof durationMin === "number" && durationMin > 0 ? { durationMin } : {}),
           ...(typeof price === "number" && price >= 0 ? { price } : {}),
+          ...(typeof slotMin === "number" && slotMin > 0 ? { slotMin } : {}),
         });
       }
       if (times.length > 0) out[String(wd)] = times.sort((a, b) => a.startMin - b.startMin);
@@ -124,30 +170,35 @@ export async function materializeTargetedRule(
       // back before the series start.
       const offset = (wd - anchor.weekday + 7) % 7;
       for (const t of times) {
-        const startsAt = zonedWallTimeToUtc(
-          anchor.year,
-          anchor.month0,
-          anchor.day + k * 7 + offset, // Date.UTC in the helper normalizes overflow
-          t.startMin,
-          timezone,
-        );
-        // Week 0 can straddle the series start on the anchor's own day (a
-        // morning time when the series was created for tonight): never
-        // materialize before the anchor.
-        if (startsAt.getTime() < rule.anchor.getTime()) continue;
-        if (startsAt.getTime() > horizonEnd.getTime()) {
-          overHorizon = true;
-          break;
+        // A window entry expands to several occurrences; a plain entry to one.
+        // The SAME expansion runs in the edit regeneration - shared on purpose.
+        for (const occ of occurrencesForTime(t, rule.durationMin)) {
+          const startsAt = zonedWallTimeToUtc(
+            anchor.year,
+            anchor.month0,
+            anchor.day + k * 7 + offset, // Date.UTC in the helper normalizes overflow
+            occ.startMin,
+            timezone,
+          );
+          // Week 0 can straddle the series start on the anchor's own day (a
+          // morning time when the series was created for tonight): never
+          // materialize before the anchor.
+          if (startsAt.getTime() < rule.anchor.getTime()) continue;
+          if (startsAt.getTime() > horizonEnd.getTime()) {
+            overHorizon = true;
+            break;
+          }
+          week.push({
+            staffId: rule.staffId,
+            serviceId: rule.serviceId,
+            label: rule.label,
+            startsAt,
+            durationMin: occ.durationMin,
+            price: t.price ?? rule.price,
+            ruleId: rule.id,
+          });
         }
-        week.push({
-          staffId: rule.staffId,
-          serviceId: rule.serviceId,
-          label: rule.label,
-          startsAt,
-          durationMin: t.durationMin ?? rule.durationMin,
-          price: t.price ?? rule.price,
-          ruleId: rule.id,
-        });
+        if (overHorizon) break;
       }
       if (overHorizon) break;
     }

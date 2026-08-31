@@ -1171,3 +1171,310 @@ describe("editing one occurrence", () => {
     expect(missing.status).toBe(404);
   });
 });
+
+/**
+ * FILLED WINDOWS (Drick, 2026-08-31): "i have my hours set but only one
+ * appointment shows during those hours." A window used to publish exactly ONE
+ * slot as long as itself - by explicit design choice when end-times shipped.
+ * With `slotMin` a window packs repeating bookings instead, on every
+ * materializer (create, edit, roll-forward) through one shared expander.
+ */
+describe("filled windows: repeating slots inside a schedule window", () => {
+  it("🔴 a 2-hour window with 30-min slots publishes FOUR bookable times a night", async () => {
+    const created = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        label: "After hours",
+        durationMin: 30,
+        price: 55,
+        // 21:00-23:00 with 30-min slots.
+        schedule: { "2": [{ start: "21:00", durationMin: 120, slotMin: 30 }] },
+        repeatWeeks: 0,
+      });
+    expect(created.status).toBe(201);
+    const ruleId = created.body.ruleId as string;
+
+    const rows = await prisma.targetedSlot.findMany({
+      where: { shopId, ruleId },
+      orderBy: { startsAt: "asc" },
+    });
+    expect(rows).toHaveLength(4);
+    expect(
+      rows.map((r) => r.startsAt.getUTCHours() * 60 + r.startsAt.getUTCMinutes()),
+    ).toEqual([21 * 60, 21 * 60 + 30, 22 * 60, 22 * 60 + 30]);
+    // Each row is a 30-min booking at the special's price - not one 2h slot.
+    expect(rows.every((r) => r.durationMin === 30)).toBe(true);
+    expect(rows.every((r) => Number(r.price) === 55)).toBe(true);
+
+    await request(app)
+      .delete(`/api/booking/targeted-slots/rules/${ruleId}`)
+      .set("Cookie", cookie);
+  });
+
+  it("a plain window without slotMin still publishes ONE slot as long as itself", async () => {
+    const created = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        durationMin: 30,
+        price: 60,
+        schedule: { "3": [{ start: "21:00", durationMin: 120 }] },
+        repeatWeeks: 0,
+      });
+    expect(created.status).toBe(201);
+    const ruleId = created.body.ruleId as string;
+    const rows = await prisma.targetedSlot.findMany({ where: { shopId, ruleId } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.durationMin).toBe(120); // the original one-long-slot shape
+    await request(app)
+      .delete(`/api/booking/targeted-slots/rules/${ruleId}`)
+      .set("Cookie", cookie);
+  });
+
+  it("rejects a slot longer than its window, and slotMin without a window length", async () => {
+    const tooLong = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        durationMin: 30,
+        price: 60,
+        schedule: { "3": [{ start: "21:00", durationMin: 60, slotMin: 90 }] },
+      });
+    expect(tooLong.status).toBe(400);
+
+    const noWindow = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        durationMin: 30,
+        price: 60,
+        schedule: { "3": [{ start: "21:00", slotMin: 30 }] },
+      });
+    expect(noWindow.status).toBe(400);
+  });
+
+  it("an EDIT can convert a one-slot window into a filled one, and the fill survives roll-forward", async () => {
+    const created = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        durationMin: 60,
+        price: 45,
+        schedule: { "5": [{ start: "20:00", durationMin: 120 }] },
+        repeatForever: true,
+      });
+    expect(created.status).toBe(201);
+    const ruleId = created.body.ruleId as string;
+    const before = await prisma.targetedSlot.count({
+      where: { shopId, ruleId, startsAt: { gt: new Date() } },
+    });
+
+    const patched = await request(app)
+      .patch(`/api/booking/targeted-slots/rules/${ruleId}`)
+      .set("Cookie", cookie)
+      .send({
+        durationMin: 40,
+        schedule: { "5": [{ start: "20:00", durationMin: 120, slotMin: 40 }] },
+      });
+    expect(patched.status).toBe(200);
+
+    const after = await prisma.targetedSlot.findMany({
+      where: { shopId, ruleId, startsAt: { gt: new Date() } },
+      orderBy: { startsAt: "asc" },
+    });
+    // Three 40-min slots per Friday window now, where one 2h slot stood.
+    expect(after.length).toBe(before * 3);
+    expect(after.every((r) => r.durationMin === 40)).toBe(true);
+    const firstNight = after
+      .slice(0, 3)
+      .map((r) => r.startsAt.getUTCHours() * 60 + r.startsAt.getUTCMinutes());
+    expect(firstNight).toEqual([20 * 60, 20 * 60 + 40, 21 * 60 + 20]);
+
+    // The roll-forward regenerates with the same shared expander: no
+    // duplicates, no reversion to one-slot windows.
+    await rollForwardTargetedRules();
+    const rolled = await prisma.targetedSlot.count({
+      where: { shopId, ruleId, startsAt: { gt: new Date() } },
+    });
+    expect(rolled).toBe(after.length);
+
+    await request(app)
+      .delete(`/api/booking/targeted-slots/rules/${ruleId}`)
+      .set("Cookie", cookie);
+  });
+});
+
+/**
+ * LIVE APPOINTMENTS HIDE OVERLAPPING SPECIALS (Drick: "if after hour braids
+ * are booked the after hour cuts should disappear"). Booking a targeted slot
+ * consumes its OWN row; a DIFFERENT special over the same physical time kept
+ * rendering, and tapping it could only ever end in slot_taken - the write
+ * guard has refused it all along. The public payloads now subtract the same
+ * occupancy the grid does.
+ */
+describe("a live appointment hides every special it overlaps", () => {
+  it("🔴 booking one special makes the OTHER special at that hour disappear", async () => {
+    const when = tomorrowAt(1, 0); // deep off-hours, clear of the 3:15am booked-claim fixture
+    // Two independently published specials over the same physical time.
+    const braids = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        label: "AH braids",
+        durationMin: 90,
+        price: 130,
+        startsAt: when.toISOString(),
+      });
+    const cuts = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        label: "AH cuts",
+        durationMin: 30,
+        price: 45,
+        startsAt: when.toISOString(),
+      });
+    expect(braids.status).toBe(201);
+    expect(cuts.status).toBe(201);
+    // The create body carries the RULE id; claiming needs the SLOT row id -
+    // same lookup the booked-claim precedent above uses.
+    const braidsRow = await prisma.targetedSlot.findFirst({
+      where: { shopId, label: "AH braids", startsAt: when },
+      select: { id: true },
+    });
+    const cutsRow = await prisma.targetedSlot.findFirst({
+      where: { shopId, label: "AH cuts", startsAt: when },
+      select: { id: true },
+    });
+
+    // Both render while nothing is booked.
+    let pub = await request(app).get(`/api/book/${slug}`);
+    let labels = (pub.body.targetedSlots as { label: string | null; startsAt: string }[])
+      .filter((t) => t.startsAt === when.toISOString())
+      .map((t) => t.label);
+    expect(labels).toContain("AH braids");
+    expect(labels).toContain("AH cuts");
+
+    // A customer books the braids special.
+    const booked = await publicBooking(when, { targetedSlotId: braidsRow!.id });
+    expect(booked.status).toBe(201);
+
+    // The cuts special vanishes from the public payload - the page stops
+    // offering what the write guard would refuse anyway.
+    pub = await request(app).get(`/api/book/${slug}`);
+    labels = (pub.body.targetedSlots as { label: string | null; startsAt: string }[])
+      .filter((t) => t.startsAt === when.toISOString())
+      .map((t) => t.label);
+    expect(labels).not.toContain("AH braids"); // consumed (booked)
+    expect(labels).not.toContain("AH cuts"); // hidden (overlapped)
+
+    // Its ROW survives untouched: cancel the appointment and it comes back.
+    await prisma.appointment.updateMany({
+      where: { id: booked.body.id as string },
+      data: { status: "CANCELED", canceledAt: new Date() },
+    });
+    pub = await request(app).get(`/api/book/${slug}`);
+    labels = (pub.body.targetedSlots as { label: string | null; startsAt: string }[])
+      .filter((t) => t.startsAt === when.toISOString())
+      .map((t) => t.label);
+    expect(labels).toContain("AH cuts");
+
+    await prisma.targetedSlot.deleteMany({
+      where: { shopId, id: { in: [braidsRow!.id, cutsRow!.id] } },
+    });
+    await prisma.appointment.deleteMany({ where: { id: booked.body.id as string } });
+  });
+
+
+  it("REAL race: simultaneous claims of two OVERLAPPING specials - exactly one wins", async () => {
+    // The mutual-veto fix removed unbooked specials from each other's write
+    // check; this proves capacity did not come from that check. Two different
+    // specials over one span, claimed at the same instant: the advisory lock
+    // serializes them and the second sees the first's appointment.
+    const when = tomorrowAt(4, 30); // clear of every other fixture
+    for (const [label, durationMin, price] of [
+      ["Race braids", 60, 120],
+      ["Race cuts", 30, 40],
+    ] as const) {
+      const created = await request(app)
+        .post("/api/booking/targeted-slots")
+        .set("Cookie", cookie)
+        .send({ staffId, serviceId, label, durationMin, price, startsAt: when.toISOString() });
+      expect(created.status).toBe(201);
+    }
+    const rows = await prisma.targetedSlot.findMany({
+      where: { shopId, startsAt: when, label: { in: ["Race braids", "Race cuts"] } },
+      select: { id: true },
+    });
+    expect(rows).toHaveLength(2);
+
+    const [a, b] = await Promise.all([
+      publicBooking(when, { targetedSlotId: rows[0]!.id }),
+      publicBooking(when, { targetedSlotId: rows[1]!.id }),
+    ]);
+    expect([a.status, b.status].sort()).toEqual([201, 409]);
+    const appts = await prisma.appointment.count({
+      where: { shopId, startsAt: when, status: "BOOKED" },
+    });
+    expect(appts).toBe(1);
+
+    await prisma.appointment.deleteMany({ where: { shopId, startsAt: when } });
+    await prisma.targetedSlot.deleteMany({
+      where: { shopId, id: { in: rows.map((r) => r.id) } },
+    });
+  });
+
+  it("an ORDINARY booking over a special's span hides it too", async () => {
+    const when = tomorrowAt(10, 0); // inside normal hours
+    const special = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        label: "Mid-morning",
+        durationMin: 30,
+        price: 40,
+        startsAt: when.toISOString(),
+      });
+    expect(special.status).toBe(201);
+
+    // A normal appointment straddling the special (dashboard-created row).
+    const appt = await prisma.appointment.create({
+      data: {
+        shopId,
+        staffId,
+        serviceId,
+        firstName: "Walk",
+        status: "BOOKED",
+        startsAt: new Date(when.getTime() - 15 * 60_000),
+        endsAt: new Date(when.getTime() + 15 * 60_000),
+        manageToken: randomToken(),
+      },
+    });
+
+    const pub = await request(app).get(`/api/book/${slug}`);
+    const labels = (pub.body.targetedSlots as { label: string | null }[]).map(
+      (t) => t.label,
+    );
+    expect(labels).not.toContain("Mid-morning");
+
+    await prisma.appointment.delete({ where: { id: appt.id } });
+    await prisma.targetedSlot.deleteMany({ where: { shopId, label: "Mid-morning" } });
+  });
+});

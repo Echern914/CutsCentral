@@ -65,7 +65,12 @@ export function HolidayPricing({
   // way every other card on this tab stays current.
   const [pending, start] = useTransition();
   const [adding, setAdding] = useState(false);
+  // SEVERAL dates share one price rule (Drick: "we still need multiple date
+  // selection") - Dec 24 AND 26, or a whole holiday weekend, is one decision,
+  // not three passes through this form. The picker stages into `date`; "+ Add"
+  // moves it into `dates`; save prices EVERY date on every picked service.
   const [date, setDate] = useState("");
+  const [dates, setDates] = useState<string[]>([]);
   const [price, setPrice] = useState("");
   const [picked, setPicked] = useState<Set<string>>(new Set());
 
@@ -102,12 +107,25 @@ export function HolidayPricing({
   function reset() {
     setAdding(false);
     setDate("");
+    setDates([]);
     setPrice("");
     setPicked(new Set());
   }
 
+  /** The picker's current date plus every staged one, deduped and sorted. */
+  function allDates(): string[] {
+    return [...new Set([...dates, ...(date ? [date] : [])])].sort();
+  }
+
+  function stageDate() {
+    if (!date) return;
+    setDates((cur) => (cur.includes(date) ? cur : [...cur, date].sort()));
+    setDate("");
+  }
+
   function save() {
-    if (!date) {
+    const chosen = allDates();
+    if (chosen.length === 0) {
       toast("Pick a date", "error");
       return;
     }
@@ -131,19 +149,26 @@ export function HolidayPricing({
     }
     start(async () => {
       // dateOverrides is a per-service blob, so a shop-wide holiday is N
-      // writes. MERGE into what each service already has rather than replacing
-      // it — another holiday on the same service has to survive this save.
+      // writes - ONE per service, whatever the date count: all the chosen
+      // dates merge into each service's existing blob together, so another
+      // holiday already on the service survives, and a two-date save cannot
+      // half-land on a service.
       const results = await Promise.all(
         [...picked].map((id) => {
           const svc = services.find((s) => s.id === id);
-          const merged = { ...(svc?.dateOverrides ?? {}), [date]: value };
+          const merged = { ...(svc?.dateOverrides ?? {}) };
+          for (const d of chosen) merged[d] = value;
           return updateServiceAction(id, { dateOverrides: merged });
         }),
       );
       const failed = results.filter((r) => !r.ok).length;
       if (failed === 0) {
         toast(
-          `${prettyDate(date)} priced on ${picked.size} service${picked.size === 1 ? "" : "s"}`,
+          `${
+            chosen.length === 1
+              ? prettyDate(chosen[0]!)
+              : `${chosen.length} dates`
+          } priced on ${picked.size} service${picked.size === 1 ? "" : "s"}`,
           "success",
         );
         reset();
@@ -238,17 +263,29 @@ export function HolidayPricing({
         <div className="mt-4 rounded-xl border border-gold/40 bg-gold/5 p-3">
           <div className="flex flex-wrap items-end gap-3">
             <label className="flex flex-col gap-1 text-[11px] text-muted">
-              Date
-              <input
-                type="date"
-                min={today}
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1.5 text-xs text-offwhite"
-              />
+              Dates
+              <span className="flex items-center gap-1.5">
+                <input
+                  type="date"
+                  min={today}
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1.5 text-xs text-offwhite"
+                />
+                {/* Staging is optional: Save prices the picker's date too, so
+                    the one-date flow is still pick → save, no extra tap. */}
+                <button
+                  type="button"
+                  onClick={stageDate}
+                  disabled={!date}
+                  className="rounded-lg border border-subtle px-2 py-1.5 text-xs text-muted transition-colors hover:border-gold/50 hover:text-gold disabled:opacity-40"
+                >
+                  + Add date
+                </button>
+              </span>
             </label>
             <MoneyField
-              label="Price that day"
+              label="Price those days"
               value={price}
               onChange={setPrice}
               placeholder="75"
@@ -256,6 +293,26 @@ export function HolidayPricing({
               inputClassName="rounded-lg py-1.5 text-xs"
             />
           </div>
+          {dates.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {dates.map((d) => (
+                <span
+                  key={d}
+                  className="inline-flex items-center gap-1 rounded-full border border-gold/40 bg-gold/10 px-2 py-0.5 text-[11px] text-gold"
+                >
+                  {prettyDate(d)}
+                  <button
+                    type="button"
+                    onClick={() => setDates((cur) => cur.filter((x) => x !== d))}
+                    className="rounded px-0.5 text-muted transition-colors hover:text-danger-soft"
+                    aria-label={`Remove ${prettyDate(d)}`}
+                  >
+                    ✕
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
 
           <p className="mt-3 text-[11px] text-muted">Applies to</p>
           <div className="mt-1 flex flex-wrap gap-1.5">
