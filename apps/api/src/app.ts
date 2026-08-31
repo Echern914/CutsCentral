@@ -48,6 +48,7 @@ import { bookingDashboardRouter } from "./routes/booking.dashboard.js";
 import { loyaltyRouter } from "./routes/loyalty.js";
 import { promotionsRouter } from "./routes/promotions.js";
 import { billingRouter } from "./routes/billing.js";
+import { affiliateClaimRouter } from "./routes/affiliate.claim.js";
 import { affiliateDashboardRouter } from "./routes/affiliate.dashboard.js";
 import { stripeWebhookRouter } from "./routes/webhooks.stripe.js";
 import { connectWebhookRouter } from "./routes/webhooks.connect.js";
@@ -65,6 +66,7 @@ import { corsMiddleware } from "./middleware/cors.js";
 import { requireAdminIp } from "./middleware/adminIp.js";
 import {
   adminLimiter,
+  affiliateClaimLimiter,
   dashboardLimiter,
   mcpIpLimiter,
   oauthLimiter,
@@ -250,6 +252,11 @@ export function createApp(): Express {
   // false the router 404s before auth, indistinguishable from unmounted.
   // Deliberately not behind the subscription wall - a lapsed shop must still
   // be able to read its own affiliate standing.
+  // The PUBLIC claim endpoint, mounted BEFORE the authenticated affiliate
+  // router so its more specific prefix wins: a visitor following a referral
+  // link has no session, no shop and no owner role. Also dark behind
+  // AFFILIATE_PROGRAM_ENABLED.
+  app.use("/api/affiliate/claim", affiliateClaimLimiter, affiliateClaimRouter);
   app.use("/api/affiliate", dashboardLimiter, affiliateDashboardRouter);
   // The operator surface gets an optional IP allowlist (requireAdminIp) ahead of
   // its credential gates. Fail-open when ADMIN_IP_ALLOWLIST is unset.

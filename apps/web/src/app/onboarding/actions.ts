@@ -1,6 +1,8 @@
 "use server";
 
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { AFFILIATE_CLAIM_COOKIE } from "@chairback/config";
 import { apiSend } from "@/lib/api";
 import { mintAppReturnUrl } from "@/lib/mobileReturn";
 
@@ -36,6 +38,13 @@ export async function createShopAction(
   if (!res.ok && res.status !== 409) {
     return { error: "Could not create your shop. Check the booking URL." };
   }
+  // The affiliate claim (if any) travelled with this request - apiSend forwards
+  // this origin's cookies - and the shop it applied to now exists, so the claim
+  // is spent. Clearing it keeps a stale claim from following the same browser
+  // into somebody else's signup on a shared machine. The database is what
+  // actually guarantees one attribution per shop; this is hygiene, not the
+  // guard, and a failure to clear costs nothing.
+  cookies().delete(AFFILIATE_CLAIM_COOKIE);
   // If the native app started this in the system browser, the shop now EXISTS
   // and this is the moment to hand the session back. Same ordering rule as the
   // team invitation: what they came to do is done and committed before any of

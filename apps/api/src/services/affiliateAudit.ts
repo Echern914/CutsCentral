@@ -71,6 +71,13 @@ export const AFFILIATE_AUDIT_METADATA_KEYS = [
   // machine reasons - fixed classifications ONLY
   "decisionReason",
   "suspensionReason",
+  "rejectionReason",
+  // attribution corrections: previous and new value, as ids. The admin's
+  // written reason is deliberately NOT here - it is free text, and free text
+  // can never be redacted out of an append-only table. It lives on the
+  // attribution row; this event is the proof that one was required.
+  "previousAccountId",
+  "newAccountId",
   // what was agreed to / approved under
   "termsVersion",
   "policyVersion",

@@ -5,6 +5,7 @@ import {
   AFFILIATE_SUSPENSION_REASONS,
   apiEnv,
 } from "@chairback/config";
+import { correctAttribution } from "../services/affiliateAttribution.js";
 import {
   approveApplication,
   getApplicationForAdmin,
@@ -175,6 +176,42 @@ affiliateAdminRouter.post("/accounts/:id/reactivate", async (req, res) => {
     accountId: req.params.id,
     adminUserId: req.userId!,
     internalNote: parsed.data.internalNote,
+  });
+  if (!result.ok) {
+    res
+      .status(result.error === "not_found" ? 404 : 409)
+      .json({ error: result.error });
+    return;
+  }
+  res.json(result.value);
+});
+
+/**
+ * Move a locked attribution to a different affiliate.
+ *
+ * The only mutation the lock permits, and the narrowest one: inside the policy
+ * window, to an eligible affiliate, with a written reason, recorded as an
+ * append-only event naming the previous and the new account. A tenant owner
+ * has no route to this at all - it lives behind the operator's own gates.
+ */
+const correctSchema = z
+  .object({
+    newCode: z.string().min(1).max(64),
+    reason: z.string().trim().min(3).max(2000),
+  })
+  .strict();
+
+affiliateAdminRouter.post("/attributions/:id/correct", async (req, res) => {
+  const parsed = correctSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const result = await correctAttribution({
+    attributionId: req.params.id,
+    newCode: parsed.data.newCode,
+    reason: parsed.data.reason,
+    adminUserId: req.userId!,
   });
   if (!result.ok) {
     res
