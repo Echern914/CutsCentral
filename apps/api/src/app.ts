@@ -48,6 +48,7 @@ import { bookingDashboardRouter } from "./routes/booking.dashboard.js";
 import { loyaltyRouter } from "./routes/loyalty.js";
 import { promotionsRouter } from "./routes/promotions.js";
 import { billingRouter } from "./routes/billing.js";
+import { affiliateDashboardRouter } from "./routes/affiliate.dashboard.js";
 import { stripeWebhookRouter } from "./routes/webhooks.stripe.js";
 import { connectWebhookRouter } from "./routes/webhooks.connect.js";
 import { paymentsDashboardRouter } from "./routes/payments.dashboard.js";
@@ -244,6 +245,12 @@ export function createApp(): Express {
   app.use("/api/loyalty", dashboardLimiter, loyaltyRouter);
   app.use("/api/promos", dashboardLimiter, promotionsRouter);
   app.use("/api/billing", dashboardLimiter, billingRouter);
+  // Affiliate program (the NEW one - the legacy referral page stays on
+  // /api/dashboard/referrals). Dark behind AFFILIATE_PROGRAM_ENABLED: while
+  // false the router 404s before auth, indistinguishable from unmounted.
+  // Deliberately not behind the subscription wall - a lapsed shop must still
+  // be able to read its own affiliate standing.
+  app.use("/api/affiliate", dashboardLimiter, affiliateDashboardRouter);
   // The operator surface gets an optional IP allowlist (requireAdminIp) ahead of
   // its credential gates. Fail-open when ADMIN_IP_ALLOWLIST is unset.
   app.use("/api/admin-portal", requireAdminIp, dashboardLimiter, adminPortalRouter);

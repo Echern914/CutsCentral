@@ -602,6 +602,11 @@ model Shop {
   walkInEvents        WalkInEvent[]
   walkInPhoneCodes    WalkInPhoneCode[]
 
+  // Affiliate program (the NEW one; the Referral rows above are the legacy
+  // program). At most one application open and one account ever, per shop.
+  affiliateApplications AffiliateApplication[]
+  affiliateAccount      AffiliateAccount?
+
   @@index([ownerId])
 }
 
@@ -3450,4 +3455,136 @@ model WalletAppointmentPassRegistration {
   @@unique([deviceLibraryIdentifier, appointmentId])
   @@index([appointmentId]) // the poke path ("devices holding this pass")
   @@index([shopId])
+}
+
+// ---------------------------------------------------------------------------
+// AFFILIATE PROGRAM (v1) - the NEW program; the legacy Referral model above is
+// untouched and keeps running until the attribution phase freezes it.
+// Applications, accounts, and the append-only audit spine.
+//
+// ALL THREE tables are default-deny at the DB layer (REVOKE from
+// chairback_app, RLS enabled + FORCED, ZERO policies): applications and
+// accounts carry admin-internal fields (internalNote, decidedByUserId) and
+// RLS is row-level, not column-level, so a tenant policy would hand those to
+// every tenant-scoped code path - the MCP assistant tools included. Owner-
+// facing reads go through masked runAsOwner services keyed by the SESSION's
+// shop id (services/affiliate.ts), never through runWithShop/forShop. See
+// migration 20260901000000 for the CHECKs, the partial unique index, the
+// immutability trigger and the grants story.
+// ---------------------------------------------------------------------------
+
+// One owner's request to join the program. PENDING -> APPROVED | REJECTED,
+// both terminal: an application is an immutable decision, and a rejected shop
+// applies again with a NEW row. Suspension lives on AffiliateAccount - you
+// suspend an affiliate, not a form.
+//
+// 🔴 At most one PENDING row per shop, enforced by a partial unique index in
+// SQL (Prisma cannot express it): AffiliateApplication_one_pending_per_shop.
+// The submit service relies on the index - it never pre-checks-then-inserts.
+model AffiliateApplication {
+  id     String @id @default(cuid())
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  // The owner who applied (ownership can change later; the fact stays).
+  // Plain id, no relation - the WaitlistEvent.actorUserId stance.
+  submittedByUserId String
+
+  status String @default("PENDING") // PENDING | APPROVED | REJECTED (CHECK-pinned)
+
+  // What the applicant told us. Free text is length-capped at the API; the
+  // channel vocabulary is validated there against config.
+  promotionChannels   String[] @default([])
+  audienceDescription String
+  links               String[] @default([])
+  promotionPlan       String
+  // FTC disclosure acknowledgement - recorded as an instant, never a boolean.
+  ftcAcknowledgedAt   DateTime
+
+  // Terms acceptance, the sms-consent shape: version + instant + source.
+  acceptedTermsVersion String
+  acceptedTermsAt      DateTime
+  acceptedTermsSource  String   @default("dashboard")
+
+  // The decision. decisionReason is a FIXED classification (CHECK-pinned);
+  // the applicant-visible message is DERIVED from it in config
+  // (AFFILIATE_DECISION_PUBLIC_COPY) - admin free text never reaches an
+  // applicant. internalNote is admin-only prose for the review surface.
+  decidedAt       DateTime?
+  decidedByUserId String?
+  decisionReason  String?
+  internalNote    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, createdAt]) // the admin queue, oldest first
+  @@index([shopId])
+}
+
+// A live affiliate. Minted ONLY by approval; exactly one per shop, ever.
+// Suspension flips status and stamps why - it never deletes anything: the
+// code, the application and every audit row survive it untouched.
+model AffiliateAccount {
+  id     String @id @default(cuid())
+  shopId String @unique
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  // Provenance pointer to the application that minted this account. Plain id
+  // on purpose (no relation) - historical, not navigational.
+  applicationId String @unique
+
+  // The public referral code: 9 random bytes -> 12 base64url chars (72 bits).
+  // An identifier, not a credential - it is printed into share links - so
+  // plaintext, unlike every hashed bearer token in this schema. Deliberately
+  // named `code`, never `referralCode`, so greps for the legacy program
+  // (Shop.referralCode / User.referralCode) stay unambiguous. INERT until the
+  // attribution phase wires capture.
+  code String @unique
+
+  status String @default("ACTIVE") // ACTIVE | SUSPENDED (CHECK-pinned)
+
+  suspendedAt      DateTime?
+  suspensionReason String? // fixed classification (CHECK-pinned)
+  reactivatedAt    DateTime?
+  internalNote     String? // admin-only prose; the durable trail is the audit table
+
+  // Snapshots of what this affiliate agreed to / was approved under.
+  acceptedTermsVersion String
+  policyVersion        Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+}
+
+// Append-only program audit spine (immutable via BEFORE UPDATE trigger, same
+// construction as WaitlistEvent/WalkInEvent). NO relations and NO foreign
+// keys: money-adjacent history must outlive the shop it describes. Ids and
+// fixed codes only - internalNote prose and applicant free text NEVER land
+// here (an append-only table cannot be redacted later). The type CHECK pins
+// the FULL arc vocabulary up front (attribution/reward/credit types included)
+// so later phases never alter a constraint under live traffic.
+model AffiliateAuditEvent {
+  id            String  @id @default(cuid())
+  shopId        String // the AFFILIATE's shop
+  applicationId String?
+  accountId     String?
+
+  type      String // CHECK-pinned vocabulary - see the migration
+  actorType String // admin | applicant | system (CHECK-pinned)
+  // Required when actorType = 'admin' (CHECK): an unattributed admin action
+  // would read as attributed while being worth nothing.
+  actorUserId String?
+
+  // Sanitized by services/affiliateAudit.ts: key allowlist, scalars only,
+  // max 64 chars, personal-data heuristics (the FIXED cuid-exempt variant).
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([shopId, createdAt])
+  @@index([accountId, createdAt])
+  @@index([type, createdAt])
 }

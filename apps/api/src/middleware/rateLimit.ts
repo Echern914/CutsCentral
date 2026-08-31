@@ -248,6 +248,19 @@ export const uploadLimiter = make({
 });
 
 /**
+ * Affiliate application submissions: per-session, tight. Applying is a
+ * once-ever action and the double-submit failure mode is the whole reason a
+ * limiter sits here at all - the real guard is the partial unique index on
+ * PENDING applications; this just keeps a stuck retry loop from hammering it.
+ */
+export const affiliateApplyLimiter = make({
+  name: "affApply",
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  keyGenerator: sessionKey,
+});
+
+/**
  * Authenticated account mutations (name/avatar, change password/email, delete).
  * Per-SESSION, not per-IP: sharing authLimiter's per-IP bucket would couple a
  * shop's shared Wi-Fi to the login brute-force budget, and the brute-force
