@@ -1,35 +1,78 @@
 /**
- * The support capability inventory — every question ChairBack support is
+ * The support capability registry — every question ChairBack support is
  * expected to handle, who may ask it, what may answer it, and what must never
  * leak while doing so.
  *
- * PR 0 SCOPE: this is a MEASUREMENT artifact. The eval harness uses it to
- * classify baseline behavior, and `supportEval.test.ts` validates it against
- * the live corpus/tool tables so it cannot silently rot. PR 1 promotes it to
- * the runtime capability registry the shared support engine resolves against.
+ * This is the RUNTIME registry `supportEngine.ts` resolves against, and the
+ * table the evaluation suite measures against. One list, both jobs: a
+ * capability the engine will not serve is a capability the eval scores as
+ * unserved, so the map and the territory cannot drift apart.
+ *
+ * 🔴 It is also the reason the assistant may not answer a question merely
+ * because the corpus happens to match it. `actors` gates delivery: staff
+ * instructions are not handed to a customer, and a capability with an EMPTY
+ * actor list is a must-refuse (cross-tenant lookup, identity-by-guessing).
  *
  * Field semantics:
- * - `actors`: who may ask. Absence is a refusal, not a downgrade.
+ * - `actors`: who may ask. Absence is a refusal, not a downgrade. Empty = never.
  * - `dataClass`: what kind of information answers it. `product_knowledge`
  *   needs no identity; `public_shop_config` needs a shop but no identity;
  *   `verified_customer_data` needs a live customer credential;
  *   `shop_data` needs an authenticated seat.
- * - `authority`: where the truth lives (see KNOWLEDGE_AUTHORITIES ranking).
- * - `corpusIds`: help.ts entries that CORRECTLY answer it today. Empty means
- *   the corpus cannot answer it — a measured knowledge gap, not an oversight
- *   in this table.
- * - `wrongCorpusIds`: entries the matcher is known to serve for this intent
- *   that are WRONG answers. Confidently wrong beats out shrugging as the worst
- *   outcome, so these are tracked explicitly.
+ * - `authority`: where the truth lives. Live state outranks written copy.
+ * - `corpusIds`: help.ts entries that CORRECTLY answer it. Empty means the
+ *   corpus cannot answer it — a measured knowledge gap, tracked, not hidden.
+ * - `wrongCorpusIds`: entries observed to answer this intent WRONGLY.
+ *   A confidently wrong answer is worse than a shrug, because the asker acts
+ *   on it, so these are named rather than left to fold into the noise.
  * - `mcpTool`: the read tool bound to it over MCP, or null when none exists.
- * - `confirmationRequired`: true for anything consequential; PR 0 has no
- *   actions, but the inventory records the contract now so PR 3 cannot
- *   quietly skip it.
+ * - `confirmationRequired`: true for anything consequential.
  * - `neverExpose`: information that must not appear in ANY answer to this
  *   capability, regardless of actor.
  */
 
-import type { KnowledgeAuthority, SupportActor } from "./outcomes.js";
+/** Who is asking. The support system must never treat these as one actor. */
+export type SupportActor =
+  /** Anyone on the public internet. No identity at all. */
+  | "public_customer"
+  /**
+   * A customer holding a live scoped credential: an appointment manage token,
+   * a rewards link, a waitlist offer/cancel token, or a walk-in track token.
+   * Identity extends exactly as far as that credential's scope.
+   */
+  | "verified_customer"
+  /** BARBER seat: own chair only, never the shop's book. */
+  | "barber"
+  /** MANAGER seat: shop-wide reads and day-to-day writes. */
+  | "manager"
+  /** OWNER seat: everything a manager has, plus billing. */
+  | "owner"
+  /**
+   * A cross-shop ChairBack operator. Listed for completeness of the matrix;
+   * no shop support surface ever resolves a request to this actor, because
+   * the operator portal is not a shop-scoped surface.
+   */
+  | "platform_admin"
+  /**
+   * An external AI holding an OAuth token minted for a seat. Effective rights
+   * are ALWAYS the intersection of that seat's role and the token's scopes —
+   * never more than the human who connected it.
+   */
+  | "mcp_user";
+
+/**
+ * How authoritative a knowledge source is. Lower in this list never overrides
+ * higher: a model's general knowledge must never beat live ChairBack data.
+ */
+export type KnowledgeAuthority =
+  /** 1 — live database or provider state, read at answer time. */
+  | "live_state"
+  /** 2 — current application policy/configuration (env, PLANS, registry). */
+  | "app_config"
+  /** 3 — canonical ChairBack help content (help.ts corpus). */
+  | "help_corpus"
+  /** 4 — static explanatory content (marketing/support pages, docs). */
+  | "static_content";
 
 export type SupportDataClass =
   | "product_knowledge"
@@ -64,7 +107,7 @@ const SEAT_ACTORS = ["barber", "manager", "owner", "mcp_user"] as const;
 const MANAGER_UP = ["manager", "owner", "mcp_user"] as const;
 
 /** The one escalation channel that exists today. */
-export const SUPPORT_ESCALATION = "support@getchairback.com";
+export const SUPPORT_ESCALATION_EMAIL = "support@getchairback.com";
 
 export const SUPPORT_CAPABILITIES: readonly SupportCapability[] = [
   /* ─────────────────────────── customer-facing ─────────────────────────── */
@@ -114,8 +157,11 @@ export const SUPPORT_CAPABILITIES: readonly SupportCapability[] = [
     actors: [...CUSTOMER_ACTORS, ...SEAT_ACTORS],
     dataClass: "verified_customer_data",
     authority: "live_state",
-    // The EmailDelivery ledger exists (PR #352) but nothing surfaces it.
-    corpusIds: [],
+    // 🔴 The EmailDelivery ledger exists (#352) but NO dashboard UI surfaces
+    // it, and it stores no recipient address — so no answer can ever say
+    // "check the delivery log". The corpus entry says check spam, confirm the
+    // address, then escalate, which is the whole truth available.
+    corpusIds: ["email-didnt-arrive"],
     wrongCorpusIds: ["client-didnt-get-text"],
     mcpTool: null,
     readOnly: true,
@@ -129,7 +175,7 @@ export const SUPPORT_CAPABILITIES: readonly SupportCapability[] = [
     actors: [...CUSTOMER_ACTORS, ...SEAT_ACTORS],
     dataClass: "verified_customer_data",
     authority: "live_state",
-    corpusIds: [],
+    corpusIds: ["cancellation-email"],
     mcpTool: null,
     readOnly: true,
     confirmationRequired: false,
@@ -142,7 +188,7 @@ export const SUPPORT_CAPABILITIES: readonly SupportCapability[] = [
     actors: [...CUSTOMER_ACTORS, ...SEAT_ACTORS],
     dataClass: "product_knowledge",
     authority: "help_corpus",
-    corpusIds: [],
+    corpusIds: ["email-in-spam"],
     mcpTool: "help_find_feature",
     readOnly: true,
     confirmationRequired: false,
@@ -155,13 +201,16 @@ export const SUPPORT_CAPABILITIES: readonly SupportCapability[] = [
     actors: [...CUSTOMER_ACTORS, ...SEAT_ACTORS],
     dataClass: "product_knowledge",
     authority: "help_corpus",
-    // .ics attachments shipped in #356; zero corpus coverage.
-    corpusIds: [],
+    corpusIds: ["add-to-calendar"],
     wrongCorpusIds: ["walk-in"],
     mcpTool: "help_find_feature",
     readOnly: true,
     confirmationRequired: false,
-    safeFallback: "Open the .ics attachment on the confirmation email.",
+    // 🔴 A LINK, not an attachment. The confirmation email carries an "Add to
+    // Calendar" BUTTON pointing at /api/book/manage/:token/calendar.ics -
+    // sendEmail has no attachments field at all. PR 0's inventory said
+    // "attachment" and was simply wrong about shipping behavior.
+    safeFallback: "Tap Add to Calendar in the confirmation email.",
     neverExpose: [],
   },
   {
@@ -170,22 +219,25 @@ export const SUPPORT_CAPABILITIES: readonly SupportCapability[] = [
     actors: [...CUSTOMER_ACTORS, ...SEAT_ACTORS],
     dataClass: "product_knowledge",
     authority: "help_corpus",
-    // Wallet passes shipped (#356 + rewards pass); zero corpus coverage.
-    corpusIds: [],
+    corpusIds: ["apple-wallet"],
     mcpTool: "help_find_feature",
     readOnly: true,
     confirmationRequired: false,
-    safeFallback: "Use the Add to Apple Wallet button on the rewards page.",
+    // 🔴 BOTH pass types are DARK until their Apple certificate ceremonies are
+    // done (WALLET-SETUP.md), and they need two SEPARATE certs. Copy must not
+    // promise a button that may not render.
+    safeFallback: "The button appears on the rewards page once passes are on.",
     neverExpose: ["pass auth tokens"],
   },
   {
     id: "rewards_link_broken",
     intent: "My rewards link or QR code is not working.",
-    actors: CUSTOMER_ACTORS,
+    // Customers hit this, but shop staff are the ones who ASK about it - the
+    // client is standing in front of them holding a dead link.
+    actors: [...CUSTOMER_ACTORS, ...SEAT_ACTORS],
     dataClass: "verified_customer_data",
     authority: "help_corpus",
-    // The recovery door (/my-rewards phone verification) shipped in #339-#343.
-    corpusIds: [],
+    corpusIds: ["rewards-link-broken"],
     wrongCorpusIds: ["page-not-loading"],
     mcpTool: null,
     readOnly: true,
@@ -196,11 +248,11 @@ export const SUPPORT_CAPABILITIES: readonly SupportCapability[] = [
   {
     id: "recover_rewards",
     intent: "How do I recover my rewards?",
-    actors: CUSTOMER_ACTORS,
+    actors: [...CUSTOMER_ACTORS, ...SEAT_ACTORS],
     dataClass: "verified_customer_data",
     authority: "help_corpus",
-    corpusIds: [],
-    // The matcher confidently routes this to DISABLING rewards.
+    corpusIds: ["recover-rewards"],
+    // The matcher used to route this confidently to DISABLING rewards.
     wrongCorpusIds: ["turn-off-rewards"],
     mcpTool: null,
     readOnly: true,
@@ -242,9 +294,10 @@ export const SUPPORT_CAPABILITIES: readonly SupportCapability[] = [
     actors: CUSTOMER_ACTORS,
     dataClass: "public_shop_config",
     authority: "live_state",
-    // Address columns exist on Shop; the receptionist prompt hard-codes a
-    // refusal and no assistant/MCP surface reads them.
-    corpusIds: [],
+    // 🔴 The address is editable and feeds Google's structured data and the
+    // calendar file, but it is NOT rendered as text on the public page - the
+    // schema comment claiming otherwise is stale. Copy must not promise it.
+    corpusIds: ["shop-address"],
     mcpTool: null,
     readOnly: true,
     confirmationRequired: false,
@@ -270,7 +323,10 @@ export const SUPPORT_CAPABILITIES: readonly SupportCapability[] = [
     actors: [...CUSTOMER_ACTORS, ...SEAT_ACTORS],
     dataClass: "public_shop_config",
     authority: "live_state",
-    corpusIds: ["slot-not-showing"],
+    // Both are right for "what times are available": the booking-works entry
+    // explains where a customer sees them, slot-not-showing explains why one
+    // is missing. Which the asker meant depends on whether they are surprised.
+    corpusIds: ["how-booking-works", "slot-not-showing"],
     mcpTool: "calendar_openings",
     readOnly: true,
     confirmationRequired: false,
@@ -326,7 +382,7 @@ export const SUPPORT_CAPABILITIES: readonly SupportCapability[] = [
     mcpTool: "help_find_feature",
     readOnly: true,
     confirmationRequired: false,
-    safeFallback: `Email ${SUPPORT_ESCALATION}.`,
+    safeFallback: `Email ${SUPPORT_ESCALATION_EMAIL}.`,
     neverExpose: [],
   },
 
@@ -364,7 +420,10 @@ export const SUPPORT_CAPABILITIES: readonly SupportCapability[] = [
     dataClass: "shop_data",
     authority: "live_state",
     // The Nudge ledger + EmailDelivery events exist; corpus covers SMS only.
-    corpusIds: ["client-didnt-get-text"],
+    // Either answer is correct here: the confirmation SMS is switched off, so
+    // "didn't get notified" is now usually an EMAIL question, while a reminder
+    // is still a text. Accepting both is honest, not a widened goalpost.
+    corpusIds: ["client-didnt-get-text", "email-didnt-arrive"],
     mcpTool: null,
     readOnly: true,
     confirmationRequired: false,
@@ -416,12 +475,13 @@ export const SUPPORT_CAPABILITIES: readonly SupportCapability[] = [
     actors: MANAGER_UP,
     dataClass: "shop_data",
     authority: "help_corpus",
-    // Shipped on the client sheet; zero corpus coverage.
-    corpusIds: [],
+    corpusIds: ["resend-rewards-link"],
     mcpTool: null,
     readOnly: false,
     confirmationRequired: true,
-    safeFallback: "Resend from the client's profile in the dashboard.",
+    // 🔴 One-tap resend exists ONLY on the barber seat's own-clients card.
+    // A manager copies the link from the client sheet instead.
+    safeFallback: "Barber seats text it; managers copy it from the client.",
     neverExpose: ["the magic link itself in any log or answer"],
   },
   {
@@ -456,8 +516,7 @@ export const SUPPORT_CAPABILITIES: readonly SupportCapability[] = [
     actors: ["owner", "mcp_user"],
     dataClass: "shop_data",
     authority: "help_corpus",
-    // Shipped in #351; the matcher confidently serves the shop-NAME entry.
-    corpusIds: [],
+    corpusIds: ["change-business-type"],
     wrongCorpusIds: ["shop-name"],
     mcpTool: null,
     readOnly: false,
@@ -497,8 +556,7 @@ export const SUPPORT_CAPABILITIES: readonly SupportCapability[] = [
     actors: MANAGER_UP,
     dataClass: "shop_data",
     authority: "help_corpus",
-    // Shipped (#357/#358); "holiday" is token-owned by time-off/pause-account.
-    corpusIds: ["feature-day-pricing"],
+    corpusIds: ["holiday-pricing", "feature-day-pricing"],
     wrongCorpusIds: ["time-off", "pause-account"],
     mcpTool: null,
     readOnly: false,
@@ -539,9 +597,9 @@ export const SUPPORT_CAPABILITIES: readonly SupportCapability[] = [
     actors: SEAT_ACTORS,
     dataClass: "shop_data",
     authority: "live_state",
-    // The columns exist; the only prose formatter lives inside the
-    // receptionist prompt module and is not exported.
-    corpusIds: [],
+    // The prose formatter is now shared (config/shopPolicy.ts), so live values
+    // can lead this written answer instead of only ever reaching SMS.
+    corpusIds: ["my-policy"],
     mcpTool: null,
     readOnly: true,
     confirmationRequired: false,
@@ -596,4 +654,24 @@ const byId = new Map(SUPPORT_CAPABILITIES.map((c) => [c.id, c]));
 
 export function capabilityById(id: string): SupportCapability | undefined {
   return byId.get(id);
+}
+
+/**
+ * Corpus entry -> the capability it answers.
+ *
+ * 🔴 FIRST DECLARATION WINS, and `supportCapabilities.test.ts` proves no
+ * corpus id is claimed twice. Two capabilities claiming one entry would mean
+ * two different actor lists gating the same answer, and which one applied
+ * would depend on array order — an authorization rule decided by where
+ * somebody pasted a block.
+ */
+const byCorpusId = new Map<string, SupportCapability>();
+for (const cap of SUPPORT_CAPABILITIES) {
+  for (const id of cap.corpusIds) {
+    if (!byCorpusId.has(id)) byCorpusId.set(id, cap);
+  }
+}
+
+export function capabilityForCorpusId(id: string): SupportCapability | undefined {
+  return byCorpusId.get(id);
 }

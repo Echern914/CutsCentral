@@ -2,9 +2,13 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { resolveFeature, type SeatRole } from "@chairback/config/features";
-import { findHelp, type HelpResponse } from "@chairback/config/helpMatch";
-import type { HelpAnswer } from "@chairback/config/help";
+import type { SeatRole } from "@chairback/config/features";
+import {
+  actorForSeat,
+  resolveSupport,
+  resolveSupportAnswerById,
+  type SupportResolution,
+} from "@chairback/config/supportEngine";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
 
 /**
@@ -22,8 +26,17 @@ import { useIsNativeApp } from "@/lib/useIsNativeApp";
  *
  * When a question is genuinely personal ("who should I rebook?", "why is MY
  * sync down?") the corpus can only point at the right screen. Connecting a
- * personal ChatGPT or Claude account is what answers those, and that lands in a
- * later PR — this field says so honestly rather than pretending.
+ * personal ChatGPT or Claude account is what answers those — this field says so
+ * honestly rather than pretending.
+ *
+ * 🔴 THE ANSWER IS NOT DECIDED HERE. `resolveSupport` in @chairback/config is
+ * the one brain: it matches the question, checks this seat may receive the
+ * answer, resolves the destination, and — when it cannot answer — attaches the
+ * route to a human. This field used to run the matcher itself and render chips
+ * with NO way to reach a person, which made the page titled "Assistant" the
+ * only dead end in the product. Rendering `resolution.escalation` whenever it
+ * is non-null is what keeps that fixed; the invariant is the engine's, so the
+ * bubble and this field cannot drift apart again.
  */
 
 /** The examples under the field. Each one is answerable, or points somewhere real. */
@@ -49,27 +62,42 @@ export function AskField({
   const router = useRouter();
   const inApp = useIsNativeApp();
   const [query, setQuery] = useState("");
-  const [asked, setAsked] = useState<string | null>(null);
+  const [asked, setAsked] = useState<{ kind: "text" | "id"; value: string } | null>(null);
 
-  const ctx = useMemo(
+  const request = useMemo(
     () => ({
-      role,
-      inApp: inApp === true,
-      flagsOff: rewardsEnabled ? [] : (["rewardsEnabled"] as const),
+      actor: actorForSeat(role),
+      channel: "in_app" as const,
+      seat: {
+        role,
+        inApp: inApp === true,
+        flagsOff: rewardsEnabled ? [] : (["rewardsEnabled"] as const),
+      },
     }),
     [role, inApp, rewardsEnabled],
   );
 
-  const response: HelpResponse | null = useMemo(
-    () => (asked ? findHelp(asked, { inApp: inApp === true }) : null),
-    [asked, inApp],
-  );
+  // A tapped chip resolves BY ID rather than by re-typing its question: the
+  // corpus guarantees a canonical question matches itself, but going through
+  // the matcher again to find a thing we already have is a guess where an
+  // exact answer exists.
+  const resolution: SupportResolution | null = useMemo(() => {
+    if (!asked) return null;
+    return asked.kind === "id"
+      ? resolveSupportAnswerById(asked.value, request)
+      : resolveSupport({ question: asked.value, ...request });
+  }, [asked, request]);
 
   function ask(q: string) {
     const t = q.trim();
     if (!t) return;
     setQuery(t);
-    setAsked(t);
+    setAsked({ kind: "text", value: t });
+  }
+
+  function openTopic(id: string, label: string) {
+    setQuery(label);
+    setAsked({ kind: "id", value: id });
   }
 
   return (
@@ -103,11 +131,10 @@ export function AskField({
         </button>
       </form>
 
-      {response ? (
+      {resolution ? (
         <Answer
-          response={response}
-          ctx={ctx}
-          onPick={(a) => ask(a.q)}
+          resolution={resolution}
+          onPick={(id, label) => openTopic(id, label)}
           onGo={(href) => router.push(href)}
         />
       ) : (
@@ -130,63 +157,70 @@ export function AskField({
 }
 
 function Answer({
-  response,
-  ctx,
+  resolution,
   onPick,
   onGo,
 }: {
-  response: HelpResponse;
-  ctx: { role: SeatRole; inApp: boolean; flagsOff: readonly "rewardsEnabled"[] };
-  onPick: (a: HelpAnswer) => void;
+  resolution: SupportResolution;
+  onPick: (id: string, label: string) => void;
   onGo: (href: string) => void;
 }) {
-  const answer = response.answer;
-  const resolved = answer?.action
-    ? resolveFeature(answer.action.featureId, { ...ctx, flagsOff: [...ctx.flagsOff] })
-    : null;
-  const destination = resolved?.ok ? resolved : null;
+  const { answer, suggestions, escalation } = resolution;
 
   return (
     <div className="mt-3 rounded-2xl border border-subtle bg-charcoal-800/60 px-4 py-4">
       {answer ? (
         <>
-          {answer.a.split("\n\n").map((para, i) => (
+          {answer.body.split("\n\n").map((para, i) => (
             <p key={i} className="mb-2 whitespace-pre-line text-sm leading-relaxed text-offwhite">
               {para}
             </p>
           ))}
-          {destination && (
+          {answer.action && (
             <button
               type="button"
-              onClick={() => onGo(destination.href)}
+              onClick={() => onGo(answer.action!.href)}
               className="mt-1 rounded-full bg-gold px-4 py-2 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted"
             >
-              {answer.action!.label} →
+              {answer.action.label} →
             </button>
           )}
         </>
       ) : (
-        // findHelp never dead-ends: when it isn't confident it hands back the
-        // closest topics rather than a shrug.
         <p className="mb-2 text-sm leading-relaxed text-offwhite">
-          I&apos;m not certain what you meant. These are the closest things I know:
+          I don&apos;t have that one written up exactly. Here&apos;s the closest — or email a
+          human and we&apos;ll answer it properly.
         </p>
       )}
 
-      {response.suggestions.length > 0 && (
+      {suggestions.length > 0 && (
         <ul className="mt-3 flex flex-wrap gap-1.5">
-          {response.suggestions.map((s) => (
+          {suggestions.map((s) => (
             <li key={s.id}>
               <button
                 type="button"
-                onClick={() => onPick(s)}
+                onClick={() => onPick(s.id, s.question)}
                 className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:border-gold/30 hover:text-offwhite"
               >
-                {s.q}
+                {s.question}
               </button>
             </li>
           ))}
         </ul>
+      )}
+
+      {/* 🔴 THE NO-DEAD-END RULE, rendered. The engine attaches an escalation
+          to every outcome except ANSWERED, so if it handed one over, it goes on
+          the screen — this field previously offered chips and nothing else. */}
+      {escalation && (
+        <a
+          href={`mailto:${escalation.email}?subject=${encodeURIComponent(
+            "ChairBack question",
+          )}&body=${encodeURIComponent(escalation.summary)}`}
+          className="mt-3 inline-block text-xs font-semibold text-gold underline underline-offset-2"
+        >
+          Email {escalation.email}
+        </a>
       )}
     </div>
   );

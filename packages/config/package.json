@@ -19,7 +19,10 @@
     "./help": "./src/help.ts",
     "./helpMatch": "./src/helpMatch.ts",
     "./nextPath": "./src/nextPath.ts",
-    "./mcpScopes": "./src/mcpScopes.ts"
+    "./mcpScopes": "./src/mcpScopes.ts",
+    "./shopPolicy": "./src/shopPolicy.ts",
+    "./supportCapabilities": "./src/supportCapabilities.ts",
+    "./supportEngine": "./src/supportEngine.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

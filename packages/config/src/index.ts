@@ -11,3 +11,6 @@ export * from "./demoTour.js";
 export * from "./features.js";
 export * from "./nextPath.js";
 export * from "./mcpScopes.js";
+export * from "./supportCapabilities.js";
+export * from "./supportEngine.js";
+export * from "./shopPolicy.js";

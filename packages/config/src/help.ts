@@ -111,7 +111,11 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     id: "get-started",
     q: "How do I get set up?",
     a: "Four things, about fifteen minutes:\n\n1. Add your services with prices and durations.\n2. Set the hours you take appointments.\n3. Add any other barbers in the shop.\n4. Share your booking link.\n\nEverything else — punch cards, reminders, your public page — is already on and working the moment your first appointment lands.",
-    keywords: ["set up", "setup", "start", "begin", "onboard", "new", "first steps", "getting started"],
+    keywords: [
+      "set up", "setup", "start", "begin", "onboard", "new", "first steps",
+      "getting started", "finish setting up", "finish setup", "setting up my shop",
+      "go live", "finish my shop", "ready to launch",
+    ],
     category: "start",
     action: { label: "Open booking setup", featureId: "online-booking" },
   },
@@ -126,7 +130,11 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     id: "booking-link",
     q: "Where's my booking link?",
     a: "Your public page is your booking link — it's on your Shop page settings, ready to copy.\n\nPut it in your Instagram bio, your Google listing, and your text signature. It's the one link that does everything: services, prices, live openings, and booking.",
-    keywords: ["link", "url", "share", "instagram bio", "my page", "booking link", "where do clients book"],
+    keywords: [
+      "link", "url", "share", "instagram bio", "my page", "booking link",
+      "where do clients book", "booking page unavailable", "page unavailable",
+      "booking page off", "booking page down",
+    ],
     category: "start",
     action: { label: "Open Shop page", featureId: "mini-site" },
   },
@@ -158,19 +166,27 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     id: "how-booking-works",
     q: "How does online booking work?",
     a: "Clients open your page, pick a service, pick a barber, and pick from the times you're actually free. The slot is held the moment they confirm, and it disappears for everyone else immediately — no double bookings.\n\nThey get a confirmation right away, then automatic reminders before the appointment.",
-    keywords: ["online booking", "how does booking work", "book online", "appointments", "schedule"],
+    keywords: [
+      "online booking", "how does booking work", "book online", "appointments", "schedule",
+      "how do i book", "how to book", "available times", "what times", "times available",
+      "openings", "free times",
+    ],
     category: "booking",
     action: { label: "Open booking", featureId: "online-booking" },
   },
   {
     id: "set-hours",
     q: "How do I set my hours?",
-    a: "Your hours live on your services — each service carries the hours it's offered, so a service you only do on weekends simply isn't bookable midweek.\n\nIf you're the only barber in the shop, saving hours on a service widens your own weekly availability to match, so you set them once and you're done.",
+    a: "Two layers, and the order matters.\n\nThe ceiling is per person: Calendar → Staff → Hours sets the days and times someone actually works. Nothing can be booked outside that.\n\nThen each service can narrow it further — a service you only do on weekends simply isn't bookable midweek. Service hours can shorten your day, never extend it, so if a time is missing, widen the staff hours first.\n\nIf you're the only one in the shop, saving hours on a service widens your own week to match, so you set them once and you're done.",
     keywords: [
       "hours", "availability", "schedule", "open times", "when i work",
       "working hours", "shifts", "change hours", "edit hours", "update hours",
       "set availability", "days off", "opening times",
+      // "what are the shop's hours" was landing on reminders: "hours" hit here
+      // but "shop" did not, and half-coverage loses.
+      "shop hours", "business hours", "store hours", "what are your hours",
     ],
+    primaryFor: ["hours"],
     category: "booking",
     action: { label: "Open services", featureId: "services" },
   },
@@ -181,6 +197,8 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     keywords: [
       "service", "price", "menu", "duration", "add service", "change price",
       "cost of cut", "how long", "haircut", "takes", "minutes", "length",
+      "services available", "what services", "which services", "available services",
+      "service list", "what do you offer",
     ],
     category: "booking",
     action: { label: "Open services", featureId: "services" },
@@ -844,6 +862,203 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     ],
     category: "texting",
     action: { label: "Open inbox", featureId: "inbox" },
+  },
+  /* ===================== Email, calendar and Wallet =======================
+   * Everything a client receives after booking, and the three questions the
+   * corpus could not answer at all before: where the confirmation went, how
+   * the appointment reaches a phone calendar, and what Apple Wallet does.
+   *
+   * 🔴 Written against the shipping code, not the roadmap. The confirmation
+   * SMS is switched OFF, so email is the ONLY thing that tells a client their
+   * booking exists; the calendar file is a LINK in that email rather than an
+   * attachment; and the Wallet passes need an Apple certificate that is a
+   * ChairBack-side step, so the copy says "if the button isn't there" instead
+   * of promising one.
+   * ====================================================================== */
+  {
+    id: "confirmation-email",
+    q: "What does a client receive after booking?",
+    a: "Yes — an email, immediately. It confirms the service, who they're with and the time, and it carries their own reschedule-or-cancel link so they can move it without calling you.\n\nThat email is the only confirmation we send, which is why the booking form asks for an email address. The reminder before the appointment still goes out as a text.\n\nIf you take bookings as requests, the confirmation goes out when you approve — not when they ask.",
+    keywords: [
+      "confirmation", "confirmation email", "booking email", "do they get an email",
+      "does the client get", "receipt", "booking confirmed email", "what do they receive",
+    ],
+    category: "booking",
+    action: { label: "Open booking", featureId: "online-booking" },
+  },
+  {
+    id: "email-didnt-arrive",
+    q: "A client didn't get their confirmation email",
+    a: "Work down this list — it's ordered by how often each one is the answer:\n\n1. It's in spam or Promotions. Ask them to look there first; it's the usual culprit.\n2. The address has a typo, or they booked with an old one. The appointment shows the address it was sent to.\n3. You take bookings as requests and haven't approved this one yet — nothing is sent until you approve.\n4. The appointment was added by you or came in from Acuity or Square without an email address, so there was nobody to write to.\n\nIf none of those fit, email support@getchairback.com with the shop name and the appointment time and we'll trace that specific message.\n\nWorth knowing: their booking is real either way. The email is a notification, not the booking, so nothing is lost while you sort it out.",
+    keywords: [
+      "didnt get email", "no confirmation email", "email never arrived", "email didnt send",
+      "missing confirmation", "never got the email", "email not received", "no email",
+      "client didnt get the email", "confirmation didnt arrive",
+    ],
+    // 🔴 NO primaryFor HERE, AND IT IS NOT AN OVERSIGHT. It reads as "this
+    // entry owns the phrase", but scoring is per TOKEN: declaring
+    // "confirmation email" hands this entry the bare word "email" at primary
+    // weight, and it then swallows every question about spam, cancellations
+    // and texts. Measured, not guessed - it cost three right answers.
+    category: "booking",
+  },
+  {
+    id: "email-in-spam",
+    q: "Our emails are going to spam",
+    a: "Ask the client to open the message, mark it as \"not spam\", and add the sender to their contacts. That teaches their mailbox for every future one, and it's the single most effective thing anyone can do.\n\nWe can't promise where a mailbox files a message — no sender can — but the sending domain is set up properly on our side, so this is usually a one-time fix per client.\n\nIf a whole run of clients reports it at once, email support@getchairback.com and we'll look into it.",
+    keywords: [
+      "spam", "junk", "junk folder", "promotions tab", "not in inbox", "filtered",
+      "going to spam", "spam folder", "blocked", "confirmation", "went to spam",
+      "email went to spam", "confirmation email went to spam",
+    ],
+    primaryFor: ["spam", "junk"],
+    category: "booking",
+  },
+  {
+    id: "cancellation-email",
+    q: "Does a client get an email when an appointment is canceled?",
+    a: "Yes — whether you cancel it or they do. It tells them the appointment is no longer booked and offers a link to book another time.\n\nIt's queued the instant the cancellation saves, so it survives a restart or a hiccup at our end and can't go out twice.\n\nTwo deliberate exceptions: marking someone a no-show sends nothing, and an appointment with no email address on it has nobody to write to.",
+    keywords: [
+      "cancellation email", "canceled email", "cancel email", "do they get told",
+      "does the client know", "notify cancel", "cancellation notice",
+      "cancellation email never arrived", "never got the cancellation email",
+      "no cancellation email", "cancellation email didnt arrive",
+    ],
+    category: "booking",
+  },
+  {
+    id: "add-to-calendar",
+    q: "How does a client add the appointment to their calendar?",
+    a: "The confirmation email has an \"Add to Calendar\" button. Tapping it opens the appointment in whatever calendar they use — Apple Calendar, Google Calendar and Outlook all handle it.\n\nIf they reschedule, the new confirmation updates the entry they already saved instead of leaving two.\n\nOne thing to tell them: cancelling doesn't remove it from their calendar. We don't reach into a calendar we don't own, so they'll want to delete that entry themselves.",
+    keywords: [
+      "add to calendar", "calendar", "ics", "apple calendar", "google calendar", "outlook",
+      "calendar invite", "save the appointment", "iphone calendar", "put it in my calendar",
+    ],
+    primaryFor: ["add to calendar", "calendar invite", "ics"],
+    category: "booking",
+  },
+  {
+    id: "apple-wallet",
+    q: "Can a client keep their punch card or appointment in Apple Wallet?",
+    a: "That's built, in two pieces: a punch card that lives in Wallet and updates its balance on its own, and an appointment pass that shows the time and greys itself out if the booking is canceled.\n\nOn an iPhone, the Add to Apple Wallet button shows up on their rewards page, and on the confirmation email for the appointment one. It doesn't appear inside the ChairBack app itself — that's an Apple limitation, so send them to the page in Safari.\n\nIf the button isn't there at all, Wallet passes aren't switched on yet. That's a one-time setup on our side, not something you can enable — email support@getchairback.com and we'll tell you where it stands.",
+    keywords: [
+      "wallet", "apple wallet", "pkpass", "add to wallet", "phone wallet", "passbook",
+      "digital punch card", "card in wallet", "wallet pass",
+    ],
+    primaryFor: ["wallet", "apple wallet"],
+    category: "clients",
+    action: { label: "Open rewards", featureId: "punch-cards" },
+  },
+  /* ======================== Rewards access ================================
+   * How a client gets back to their punch card. Three questions the corpus
+   * could not answer at all, two of which it answered CONFIDENTLY WRONG:
+   * "how do I recover my rewards" returned the entry about switching rewards
+   * OFF, and a broken rewards link returned the generic page-not-loading one.
+   *
+   * 🔴 The one-shop rule shapes this copy: a rewards surface must never reveal
+   * that a phone number exists at another shop. The recovery flow only shows
+   * a chooser AFTER the person proves they hold the phone, so the answers
+   * below describe verification first and never promise a lookup by name.
+   * ====================================================================== */
+  {
+    id: "rewards-link-broken",
+    q: "A client's rewards link stopped working",
+    a: "Their punches are fine — the link is just a door, and the punches live on their profile.\n\nSend them to the \"Find my rewards\" page. They put in the mobile number you have for them, we text a 6-digit code, and they're back in. It's on your booking page, and a dead link now offers it automatically.\n\nA link stops working for one of two reasons: someone replaced it (the \"New link\" button on their profile kills every old one, which is exactly what you want if a link leaked), or the number moved to a different profile.\n\nIf they can't get the code, check the number on their profile is the one they're texting from.",
+    keywords: [
+      "link not working", "rewards link broken", "link expired", "link doesnt work",
+      "lost link", "lost rewards", "cant open rewards", "rewards link dead",
+      "punch card link", "qr code", "qr not working", "link stopped working",
+    ],
+    // No primaryFor: "reward" belongs to the punch-card entry. A broken link
+    // is a door problem, not what rewards ARE.
+    category: "clients",
+    action: { label: "Open rewards", featureId: "punch-cards" },
+  },
+  {
+    id: "recover-rewards",
+    q: "How does a client get their rewards back if they lost the link?",
+    a: "They verify their phone. On the \"Find my rewards\" page they enter their mobile number, we text a 6-digit code that lasts five minutes, and once it checks out they pick their business and land straight on their punch card.\n\nThe number has to be one you already have on their profile and they must not have texted STOP. Nothing is revealed before they verify — the page looks identical whether or not that number is on file, which is deliberate: it stops anyone fishing for whether someone is a client here.\n\nIf their number changed, update it on their profile first and then send them through.",
+    keywords: [
+      "recover", "recovery", "find my rewards", "get rewards back", "verify phone",
+      "forgot link", "restore rewards", "lost punches", "cant find rewards",
+      "phone verification", "6 digit code", "verification code",
+    ],
+    // Single words only, and deliberately not "rewards": see above.
+    primaryFor: ["recover", "recovery"],
+    category: "clients",
+  },
+  {
+    id: "resend-rewards-link",
+    q: "How do I send a client their rewards link again?",
+    a: "It depends which seat you're in.\n\nOn a chair seat, the \"Your clients\" card on your home screen has a \"Text link\" button next to everyone you've served — one tap and it's sent.\n\nAs the owner or a manager, open the client and use \"Copy rewards link\", then send it however you like. That page also has \"New link\", which mints a fresh one and kills every link they've been sent before — use that if a link ended up somewhere it shouldn't have, not for a routine resend.\n\nTexting is limited on purpose: the same link won't resend for five minutes, there's a daily cap per client, and anyone who texted STOP can't be texted at all until they text START themselves. If you're blocked, point them at \"Find my rewards\" instead — that door is theirs, not yours.",
+    keywords: [
+      "resend", "send link again", "text link", "send rewards link", "text their link",
+      "send them their link", "share rewards link", "copy rewards link", "new link",
+    ],
+    primaryFor: ["resend", "text link"],
+    category: "clients",
+    action: { label: "Open clients", featureId: "clients" },
+  },
+  /* ===================== Shop settings people ask about ===================
+   * Three more the corpus could not answer. All three were measured returning
+   * a confidently WRONG answer: business type landed on renaming the shop, and
+   * "what's my cancellation policy" landed on generic billing copy.
+   * ====================================================================== */
+  {
+    id: "change-business-type",
+    q: "How do I change my business type?",
+    a: "It's on your dashboard home, in the \"Business type\" card — pick the one that fits and save. Nine are on the list, from barbershop and hair salon through nails, lashes, spa, tattoo and detailing.\n\nIt changes wording only: what ChairBack calls your team, your workspaces and a visit. Nothing is renamed or moved — your services, appointments, clients, team and connected calendars are all untouched, and it never affects your plan or what anyone can do.\n\nYou can change it as often as you like. Owners and managers can; a chair seat doesn't see the card.",
+    keywords: [
+      "business type", "industry", "vertical", "not a barbershop", "nail salon",
+      "change industry", "salon instead", "type of business", "what kind of business",
+      "nail studio", "studio", "switch", "i run a", "im not a barbershop",
+      "spa", "tattoo", "detailing", "lashes", "vocabulary", "wording",
+    ],
+    primaryFor: ["business type", "industry"],
+    category: "account",
+  },
+  {
+    id: "shop-address",
+    q: "Where do I set my shop's address?",
+    a: "Dashboard → Your page, in the \"About\" card: street, city, state and ZIP.\n\nBe aware of what it's actually for. It's what puts you in Google's results as a local business, and it's what fills in the location when a client saves the appointment to their calendar. It is not printed as text on your public page — if you want clients to read your address there, put it in the free-text hours or description field as well.",
+    keywords: [
+      "address", "location", "where is the shop", "street", "city", "zip", "postcode",
+      "set my address", "shop address", "directions", "map",
+    ],
+    primaryFor: ["address", "location"],
+    category: "brand",
+    action: { label: "Open your page", featureId: "mini-site" },
+  },
+  {
+    id: "my-policy",
+    q: "What is my cancellation policy set to?",
+    a: "Dashboard → Payments holds all of it: how customers pay, the free-cancel cutoff in hours, and the fee charged inside that cutoff.\n\nA cutoff of 0 means every cancellation is a full refund. A fee of 100% means no refund inside the cutoff.\n\nOne catch worth knowing: a cancellation fee can only actually be charged if you take payment through ChairBack. If you're set to pay-in-person, the fee sits there as a number and nothing collects it.",
+    keywords: [
+      "cancellation policy", "my policy", "cancel policy", "refund policy", "cutoff",
+      "cancellation fee", "late cancel", "what is my policy", "policy set",
+      "free cancel", "cancellation window",
+    ],
+    primaryFor: ["policy", "cutoff"],
+    category: "money",
+    action: { label: "Open payments", featureId: "pay-ahead" },
+  },
+  {
+    id: "holiday-pricing",
+    q: "How do I set holiday pricing?",
+    a: "That's day pricing, on the Services tab. Open a service, add a date override, and set what that day costs — you can pick a stretch of dates at once, so Christmas week is one entry rather than seven.\n\nThe higher price is shown honestly at booking, so nobody is surprised at the chair.\n\nIf what you actually want is to be CLOSED that day, block the time on your calendar instead.",
+    keywords: [
+      "holiday pricing", "holiday price", "christmas", "new year", "thanksgiving",
+      "date pricing", "price for a day", "date override", "december 25",
+      // NOT "charge more" / "surge": those belong to day pricing generally, and
+      // claiming them here stole "can i charge more on saturday".
+    ],
+    // 🔴 "holiday" is DECLARED here on purpose. It was owned by the time-off and
+    // pause-account entries (its vacation sense), so "holiday pricing" landed on
+    // "can I pause my account". Both readings are real; this one is the one
+    // people type, and the vacation answers are still one tap away.
+    primaryFor: ["holiday"],
+    category: "money",
+    action: { label: "Open services", featureId: "day-pricing" },
   },
   /* ========================= Asked, but unanswered ========================
    * A second pass driven by measurement rather than imagination: 70 questions
