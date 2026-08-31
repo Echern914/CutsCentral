@@ -48,7 +48,21 @@ interface Step {
   warn?: string;
 }
 
-const STEPS: Record<Provider, { name: string; planNote: string; steps: Step[] }> = {
+const STEPS: Record<
+  Provider,
+  {
+    name: string;
+    /**
+     * A few words on the tab itself, for a plan limit narrow enough that
+     * discovering it AFTER working through the steps would waste real time.
+     * The full rule is in `planNote`; this is the version you see before you
+     * commit to reading anything.
+     */
+    tabHint?: string;
+    planNote: string;
+    steps: Step[];
+  }
+> = {
   claude: {
     name: "Claude",
     planNote:
@@ -95,20 +109,33 @@ const STEPS: Record<Provider, { name: string; planNote: string; steps: Step[] }>
   },
   chatgpt: {
     name: "ChatGPT",
+    tabHint: "Business plans only",
     planNote:
-      // "ChatGPT's requirement" rather than naming the company: the
-      // cost-boundary guard greps this directory for model-provider names, and
-      // a barber knows the product, not the vendor. Both reasons point the
-      // same way, so there is no need to loosen the guard.
-      "Custom connectors need a paid ChatGPT plan, and availability differs between plan types. That's ChatGPT's requirement, not ChairBack's — and ChairBack never charges you for AI.",
+      // 🔴 SAY THE REAL RULE, BEFORE THEY SPEND TEN MINUTES ON IT.
+      //
+      // This used to read "custom connectors need a paid ChatGPT plan, and
+      // availability differs between plan types". Someone paying for a personal
+      // plan reads that as "I qualify", works through every step, and only finds
+      // out at Settings → Connectors that there is nothing to add. "Availability
+      // differs between plan types" is the kind of hedge that sounds careful and
+      // tells you nothing.
+      //
+      // The actual rule is narrow, so it is stated narrowly: business-tier
+      // workspaces only, an admin has to switch it on, and it is still in beta.
+      // A personal plan cannot do it at any price.
+      //
+      // Said as "ChatGPT's" rather than naming the vendor: the cost-boundary
+      // guard greps this directory for model-provider names, and a barber knows
+      // the product, not the company. Both reasons point the same way.
+      "Custom connectors in ChatGPT are limited to Business, Enterprise and Edu workspaces, an admin has to turn on developer mode for the workspace, and the feature is still in beta. A personal plan — including the paid ones — can't add one today, at any price. That's ChatGPT's rule, not ChairBack's, and it isn't something ChairBack can switch on for you. ChairBack never charges you for AI. If you're on a personal plan, use Claude instead: it works on a paid personal plan today.",
     steps: [
       {
         do: "Copy your shop's connection address above.",
         see: "The Copy button says “Copied”.",
       },
       {
-        do: "Open ChatGPT on a computer and go to Settings → Connectors. If you can't find it, search your settings for “connector”.",
-        see: "A connectors list. If there's no option to add your own, your plan doesn't include custom connectors yet.",
+        do: "On a Business, Enterprise or Edu workspace, open ChatGPT on a computer and go to Settings → Connectors. If you can't find it, search your settings for “connector”.",
+        see: "A connectors list with an option to add your own. If there's no such option, either the workspace admin hasn't enabled developer mode or you're on a personal plan — neither is something ChairBack can change. Connect Claude instead.",
       },
       {
         do: "Add a custom connector, name it whatever you like, and paste the address into the URL box.",
@@ -137,7 +164,7 @@ const STEPS: Record<Provider, { name: string; planNote: string; steps: Step[] }>
 const TROUBLE: { q: string; a: string }[] = [
   {
     q: "There's no option to add a custom connector",
-    a: "That's your AI plan, not ChairBack. Custom connectors are a paid feature at both Claude and ChatGPT, and it isn't something ChairBack can turn on for you.",
+    a: "That's your AI plan, not ChairBack — and the two are not the same.\n\nIn Claude, custom connectors come with a paid personal plan, so this usually means you're on the free one.\n\nIn ChatGPT, they're limited to Business, Enterprise and Edu workspaces, an admin has to turn on developer mode, and the feature is in beta — so a personal plan won't show the option however much you pay for it. If that's you, connect Claude instead.\n\nEither way it isn't something ChairBack can turn on for you.",
   },
   {
     q: "It failed straight after I pressed Add",
@@ -201,6 +228,14 @@ export function ConnectSteps({ connectUrl }: { connectUrl: string }) {
                 }`}
               >
                 {STEPS[key].name}
+                {STEPS[key].tabHint ? (
+                  // Part of the tab's accessible name on purpose: a screen
+                  // reader should hear the limit at the same moment a sighted
+                  // reader sees it, not only once the panel below is open.
+                  <span className="ml-1 font-normal opacity-70">
+                    · {STEPS[key].tabHint}
+                  </span>
+                ) : null}
               </button>
             ))}
           </div>
