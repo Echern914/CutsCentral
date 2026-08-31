@@ -5,6 +5,7 @@ import { logger } from "../logger.js";
 import { isSlotBookable } from "../engines/slots.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import { completeReschedule, swapForReschedule } from "../engines/acuityMirror.js";
+import { pokeAppointmentPass } from "../wallet/appointmentPass.js";
 import { toE164 } from "../acuity/clientKey.js";
 import { editClient } from "../services/client.js";
 
@@ -426,6 +427,11 @@ export function registerAppointmentEdit(
       },
       "appointment edited",
     );
+
+    // Devices holding this appointment's Wallet pass re-fetch the new face
+    // (time or service changed). Fire-and-forget: a wallet problem must never
+    // affect the edit.
+    if (timeMoved) void pokeAppointmentPass(appt.id);
 
     invalidateAvailability(shopId);
     res.json({ ok: true, id: appt.id, status: appt.status, mirror });

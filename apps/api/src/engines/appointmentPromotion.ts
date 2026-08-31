@@ -1,5 +1,6 @@
 import { prisma, runWithShop, type Prisma } from "@chairback/db";
 import { logger } from "../logger.js";
+import { pokeAppointmentPass } from "../wallet/appointmentPass.js";
 import {
   clawBackVisitEarn,
   earnPunchForVisitInTx,
@@ -342,6 +343,12 @@ export async function cancelAppointment(
     // releaseForAppointment logs its own transitions; swallowing here keeps a
     // background rejection from taking the process down.
   });
+
+  // Grey out the Apple Wallet appointment pass on every device that added it
+  // (the pass re-fetches as VOIDED). Post-commit and fire-and-forget like every
+  // notify above: a wallet problem must never affect the cancel, and the poke
+  // never throws by contract. Runs for NO_SHOW too - that pass is equally dead.
+  void pokeAppointmentPass(appointmentId);
   return true;
 }
 

@@ -57,18 +57,44 @@ export function verifyPassAuth(header: string | undefined, clientId: string): bo
   return presented.length === expected.length && timingSafeEqual(presented, expected);
 }
 
+/** Signing material for ONE pass type, decoded from its base64 env vars. */
+export interface WalletCerts {
+  wwdr: string;
+  signerCert: string;
+  signerKey: string;
+  signerKeyPassphrase?: string;
+}
+
+/**
+ * Decode one pass type's signing material. Shared with the appointment pass
+ * (wallet/appointmentPass.ts): Apple binds each certificate to exactly one
+ * Pass Type ID, so the punch card and the appointment pass carry their own
+ * cert+key - but the WWDR intermediate and the decode dance are identical.
+ */
+export function decodeWalletCerts(input: {
+  certBase64: string;
+  keyBase64: string;
+  keyPassphrase?: string;
+}): WalletCerts {
+  return {
+    wwdr: Buffer.from(env.WALLET_WWDR_CERT_BASE64!, "base64").toString("utf8"),
+    signerCert: Buffer.from(input.certBase64, "base64").toString("utf8"),
+    signerKey: Buffer.from(input.keyBase64, "base64").toString("utf8"),
+    ...(input.keyPassphrase ? { signerKeyPassphrase: input.keyPassphrase } : {}),
+  };
+}
+
 // Signing material, decoded once. Lazy so boot never depends on wallet config.
-let certs: { wwdr: string; signerCert: string; signerKey: string; signerKeyPassphrase?: string } | null = null;
-function loadCerts() {
+let certs: WalletCerts | null = null;
+function loadCerts(): WalletCerts {
   if (!certs) {
-    certs = {
-      wwdr: Buffer.from(env.WALLET_WWDR_CERT_BASE64!, "base64").toString("utf8"),
-      signerCert: Buffer.from(env.WALLET_PASS_CERT_BASE64!, "base64").toString("utf8"),
-      signerKey: Buffer.from(env.WALLET_PASS_KEY_BASE64!, "base64").toString("utf8"),
+    certs = decodeWalletCerts({
+      certBase64: env.WALLET_PASS_CERT_BASE64!,
+      keyBase64: env.WALLET_PASS_KEY_BASE64!,
       ...(env.WALLET_PASS_KEY_PASSPHRASE
-        ? { signerKeyPassphrase: env.WALLET_PASS_KEY_PASSPHRASE }
+        ? { keyPassphrase: env.WALLET_PASS_KEY_PASSPHRASE }
         : {}),
-    };
+    });
   }
   return certs;
 }
@@ -77,7 +103,7 @@ function loadCerts() {
 // via tsx from src, so import.meta.url-relative paths hold in prod).
 const ASSETS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "assets");
 let art: Record<string, Buffer> | null = null;
-function loadArt(): Record<string, Buffer> {
+export function loadArt(): Record<string, Buffer> {
   if (!art) {
     art = Object.fromEntries(
       ["icon.png", "icon@2x.png", "icon@3x.png", "logo.png", "logo@2x.png"].map(
@@ -89,7 +115,7 @@ function loadArt(): Record<string, Buffer> {
 }
 
 /** "#D4AF37" -> "rgb(212,175,55)" (pass.json colors must be rgb() strings). */
-function hexToRgb(hex: string | null, fallback: string): string {
+export function hexToRgb(hex: string | null, fallback: string): string {
   const m = hex?.match(/^#?([0-9a-f]{6})$/i);
   if (!m) return fallback;
   const n = parseInt(m[1]!, 16);
@@ -279,13 +305,46 @@ export async function pokeWalletPass(clientId: string): Promise<WalletPokeResult
     return "retryable_unavailable";
   }
 
-  let certs: ReturnType<typeof loadCerts>;
+  let certs: WalletCerts;
   try {
     certs = loadCerts();
   } catch {
     logger.error({ clientId, reason: "certs_unreadable" }, "wallet poke unavailable");
     return "retryable_unavailable";
   }
+
+  return pokeApnsRegistrations({
+    regs,
+    topic: env.WALLET_PASS_TYPE_ID!,
+    certs,
+    logKey: { clientId },
+    prune: (regId) =>
+      runAsOwner((tx) =>
+        tx.walletPassRegistration.deleteMany({ where: { id: regId } }),
+      ).then(() => undefined),
+  });
+}
+
+/**
+ * Send the EMPTY "re-fetch your pass" APNs push to one batch of registrations.
+ *
+ * Extracted so the punch card and the APPOINTMENT pass share one transport:
+ * the two differ only in which table holds their registrations, which
+ * pass-type topic the push rides, and which certificate authenticates it.
+ * The semantics - watchdog, 410-prune, fixed-classification logging, the
+ * result vocabulary - must never fork between them.
+ */
+export function pokeApnsRegistrations(params: {
+  regs: Array<{ id: string; pushToken: string }>;
+  /** The apns-topic: the pass type identifier whose cert signs the session. */
+  topic: string;
+  certs: WalletCerts;
+  /** Correlation ids for log lines - never a token or an address. */
+  logKey: Record<string, string>;
+  /** Drop one registration after a 410-Unregistered. Best-effort. */
+  prune: (registrationId: string) => Promise<void>;
+}): Promise<WalletPokeResult> {
+  const { regs, topic, certs, logKey } = params;
   const { signerCert, signerKey, signerKeyPassphrase } = certs;
 
   return new Promise<WalletPokeResult>((resolve) => {
@@ -298,14 +357,14 @@ export async function pokeWalletPass(clientId: string): Promise<WalletPokeResult
       ...(signerKeyPassphrase ? { passphrase: signerKeyPassphrase } : {}),
     });
     // One watchdog for the whole batch: APNs pokes are tiny, so a hung session
-    // must never hold up the punch flow that triggered us.
+    // must never hold up the flow that triggered us.
     const timer = setTimeout(() => {
       session.destroy();
       // We connected and sent - an ambiguous outcome IS an attempt.
       resolve("attempted_failure");
     }, 5000);
     session.on("error", () => {
-      logger.warn({ clientId, reason: "apns_session_error" }, "wallet pass poke failed");
+      logger.warn({ ...logKey, reason: "apns_session_error" }, "wallet pass poke failed");
       clearTimeout(timer);
       resolve("attempted_failure");
     });
@@ -316,8 +375,8 @@ export async function pokeWalletPass(clientId: string): Promise<WalletPokeResult
         clearTimeout(timer);
         session.close();
         if (failed) resolve("attempted_failure");
-        // Every device was pruned as unregistered: no stale QR remains, so
-        // this client is genuinely finished rather than merely un-refreshed.
+        // Every device was pruned as unregistered: nothing stale remains, so
+        // this pass is genuinely finished rather than merely un-refreshed.
         else if (accepted === 0 && pruned > 0) resolve("nothing_to_do");
         else resolve("delivered");
       }
@@ -326,7 +385,7 @@ export async function pokeWalletPass(clientId: string): Promise<WalletPokeResult
       const req = session.request({
         ":method": "POST",
         ":path": `/3/device/${reg.pushToken}`,
-        "apns-topic": env.WALLET_PASS_TYPE_ID!,
+        "apns-topic": topic,
       });
       req.setEncoding("utf8");
       let status = 0;
@@ -337,11 +396,9 @@ export async function pokeWalletPass(clientId: string): Promise<WalletPokeResult
         if (status === 410) {
           // Device no longer has the pass: drop the registration.
           pruned++;
-          runAsOwner((tx) =>
-            tx.walletPassRegistration.deleteMany({ where: { id: reg.id } }),
-          ).catch(() => {});
+          params.prune(reg.id).catch(() => {});
         } else if (status !== 200) {
-          logger.warn({ status, clientId }, "wallet pass poke rejected");
+          logger.warn({ status, ...logKey }, "wallet pass poke rejected");
           failed = true;
         } else {
           accepted++;

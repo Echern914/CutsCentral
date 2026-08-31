@@ -1,4 +1,4 @@
-import { apiEnv, serviceNounForShop } from "@chairback/config";
+import { apiEnv, MOBILE_APP, serviceNounForShop } from "@chairback/config";
 
 const env = apiEnv();
 
@@ -445,6 +445,20 @@ function appointmentEmailHtml(params: {
   /** Omitted for SYNCED bookings: they have no ChairBack manage page, and a
    *  "Manage appointment" button leading to a 404 is worse than no button. */
   manageUrl?: string | null;
+  /**
+   * "Add to Calendar" (.ics). Universal - every calendar app opens it - so
+   * when present it renders unconditionally, ALWAYS beside (never replaced
+   * by) the Wallet button.
+   */
+  calendarUrl?: string | null;
+  /**
+   * "Add to Apple Wallet" (.pkpass). Only passed while the appointment pass
+   * type is actually configured (appointmentWalletEnabled()); a button whose
+   * link 404s is worse than no button.
+   */
+  walletPassUrl?: string | null;
+  /** The one-line "get the app" close. Confirmation emails only. */
+  appStoreUrl?: string | null;
 }): string {
   const withWhom = params.staffName
     ? `<div style="color:#71717a;font-size:14px;margin-top:2px">with ${escapeHtml(params.staffName)}</div>`
@@ -455,6 +469,25 @@ function appointmentEmailHtml(params: {
     // SYNCED bookings have no ChairBack manage page, so there is no button to
     // offer. Point them at the shop rather than at a reply nobody reads.
     : `<p style="color:#71717a;font-size:12px;line-height:1.5;margin:0">Need to cancel or reschedule? Contact ${escapeHtml(params.shopName)} directly.</p>`;
+  // Secondary "keep it handy" row: calendar always (when offered), Wallet only
+  // when the pass type is live. Quiet outline buttons - the gold manage button
+  // stays the page's single loud action.
+  const keepButtons = [
+    params.walletPassUrl
+      ? `<a href="${escapeAttr(params.walletPassUrl)}" style="display:inline-block;border:1px solid #3f3f46;color:#fafafa;font-size:13px;font-weight:600;text-decoration:none;padding:10px 16px;border-radius:10px;margin:0 8px 8px 0">&#63743; Add to Apple Wallet</a>`
+      : "",
+    params.calendarUrl
+      ? `<a href="${escapeAttr(params.calendarUrl)}" style="display:inline-block;border:1px solid #3f3f46;color:#fafafa;font-size:13px;font-weight:600;text-decoration:none;padding:10px 16px;border-radius:10px;margin:0 8px 8px 0">&#128197; Add to Calendar</a>`
+      : "",
+  ].join("");
+  const keepRow = keepButtons
+    ? `<div style="padding:0 28px 8px">${keepButtons}</div>`
+    : "";
+  const appRow = params.appStoreUrl
+    ? `<div style="border-top:1px solid #2a2a2a;margin:0 28px;padding:16px 0 20px">
+      <p style="color:#71717a;font-size:12px;line-height:1.5;margin:0">Book faster next time — <a href="${escapeAttr(params.appStoreUrl)}" style="color:#D4AF37;text-decoration:none;font-weight:600">get the ChairBack app</a>.</p>
+    </div>`
+    : "";
   return `<!-- appointment email -->
 <div style="background:#0f0f0f;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
   <div style="max-width:480px;margin:0 auto;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:16px;overflow:hidden">
@@ -468,14 +501,27 @@ function appointmentEmailHtml(params: {
       ${withWhom}
       <div style="color:#D4AF37;font-size:15px;font-weight:600;margin-top:8px">${escapeHtml(params.when)}</div>
     </div>
+    ${keepRow}
     <div style="padding:4px 28px 28px">
       ${footer}
     </div>
+    ${appRow}
   </div>
 </div>`;
 }
 
-/** "Booking confirmed" email - the email twin of buildAppointmentConfirmationBody. */
+/**
+ * "Booking confirmed" email - the email twin of buildAppointmentConfirmationBody.
+ *
+ * Besides the manage button it carries the KEEP-IT-HANDY row: "Add to
+ * Calendar" (.ics - universal, always offered) and "Add to Apple Wallet" -
+ * only when the appointment pass type is configured, because a button whose
+ * link 404s is worse than none. Both, never one instead of the other: Wallet
+ * is iOS-only and a calendar entry serves everyone. Closes with the app CTA.
+ *
+ * 🔴 EMAIL ONLY. The SMS twin deliberately carries none of these links - an
+ * SMS is 160 chars of trust and the manage URL is already spending most of it.
+ */
 export function buildAppointmentConfirmationEmail(params: {
   firstName: string | null;
   shopName: string;
@@ -484,16 +530,26 @@ export function buildAppointmentConfirmationEmail(params: {
   timezone: string;
   staffName?: string | null;
   manageToken: string;
+  /** Set by the caller iff appointmentWalletEnabled() - the template cannot know. */
+  walletPassAvailable?: boolean;
 }): EmailCopy {
   const when = formatApptTime(params.startsAt, params.timezone);
   const manageUrl = `${env.APP_BASE_URL}/book/manage/${params.manageToken}`;
+  // Served by the API (they stream files); the manage PAGE stays on the web app.
+  const calendarUrl = `${env.API_BASE_URL}/api/book/manage/${params.manageToken}/calendar.ics`;
+  const walletPassUrl = params.walletPassAvailable
+    ? `${env.API_BASE_URL}/api/book/manage/${params.manageToken}/wallet-pass`
+    : null;
   const who = params.firstName ?? "there";
   const withWhom = params.staffName ? ` with ${params.staffName}` : "";
   return {
     subject: `Booking confirmed: ${params.serviceName} at ${params.shopName}`,
     text:
       `Hi ${who}, your ${params.serviceName} at ${params.shopName}${withWhom} is booked for ${when}.\n\n` +
-      `Need to reschedule or cancel? ${manageUrl}`,
+      `Add to calendar: ${calendarUrl}\n` +
+      (walletPassUrl ? `Add to Apple Wallet: ${walletPassUrl}\n` : "") +
+      `\nNeed to reschedule or cancel? ${manageUrl}\n\n` +
+      `Book faster next time - get the ChairBack app: ${MOBILE_APP.appStoreUrl}`,
     html: appointmentEmailHtml({
       heading: "You're booked",
       intro: `Hi ${who}, your appointment is confirmed. Here are the details:`,
@@ -502,6 +558,9 @@ export function buildAppointmentConfirmationEmail(params: {
       when,
       staffName: params.staffName,
       manageUrl,
+      calendarUrl,
+      walletPassUrl,
+      appStoreUrl: MOBILE_APP.appStoreUrl,
     }),
   };
 }
