@@ -235,6 +235,12 @@ export async function bookAction(
   paymentIsDeposit?: boolean;
   /** Cents still due in person after this charge. */
   paymentBalanceDueCents?: number | null;
+  /**
+   * How many minutes the chair is held while they pay. The appointment is a
+   * HOLD until the payment lands, so this is a real deadline, not decoration -
+   * the customer is entitled to know how long they have.
+   */
+  paymentHoldMinutes?: number | null;
   // true = the shop requires approval; this is a REQUEST awaiting confirmation.
   pending?: boolean;
   error?: string;
@@ -247,6 +253,7 @@ export async function bookAction(
       amountCents: number;
       isDeposit: boolean;
       balanceDueCents: number;
+      holdMinutes?: number;
     } | null;
     pending?: boolean;
   }>("POST", `/api/book/${encodeURIComponent(slug)}`, input);
@@ -258,6 +265,7 @@ export async function bookAction(
     paymentAmountCents: res.data.payment?.amountCents ?? null,
     paymentIsDeposit: res.data.payment?.isDeposit ?? false,
     paymentBalanceDueCents: res.data.payment?.balanceDueCents ?? null,
+    paymentHoldMinutes: res.data.payment?.holdMinutes ?? null,
     pending: Boolean(res.data.pending),
   };
 }

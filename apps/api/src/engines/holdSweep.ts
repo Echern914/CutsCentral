@@ -15,10 +15,17 @@ import { logger } from "../logger.js";
  * (staffId, startsAt) key (widened to PENDING rows by the approval migration)
  * - lockStaffAndAssertSlotFree clears the exact-start ghost inline for every
  * write path; this sweep tidies the rest.
+ *
+ * 🔴 SCOPED TO RECEPTIONIST HOLDS (holdReason IS NULL). A PAYMENT hold looks
+ * identical in the schema but owns two things this light flip does not know
+ * about - an Acuity block and an in-flight PaymentIntent - so cancelling one
+ * here would strand a block on the barber's calendar forever and leave the
+ * customer's card authorization dangling. Those are swept by
+ * sweepExpiredPaymentHolds in services/appointmentPaymentHold.ts.
  */
 export async function sweepExpiredHolds(now: Date = new Date()): Promise<number> {
   const { count } = await prisma.appointment.updateMany({
-    where: { status: "PENDING", holdExpiresAt: { lt: now } },
+    where: { status: "PENDING", holdReason: null, holdExpiresAt: { lt: now } },
     data: { status: "CANCELED", canceledAt: now },
   });
   if (count > 0) logger.info({ count }, "expired receptionist holds swept");

@@ -196,8 +196,10 @@ export function BookingClient({ data }: { data: BookShopData }) {
   // true when the shop requires approval: the customer submitted a REQUEST, not a
   // confirmed booking, so the success screen reads "Request sent".
   const [wasRequest, setWasRequest] = useState(false);
-  // Set when the shop charges at booking: the booking is created (BOOKED) and we
-  // collect payment before showing the confirmation screen.
+  // Set when the shop charges at booking. The appointment exists at this point
+  // but as a HOLD, not a booking: it becomes real only when this payment
+  // succeeds, and the chair is released if the customer abandons this screen.
+  // So the confirmation screen genuinely must wait for the card to clear.
   const [paymentSecret, setPaymentSecret] = useState<string | null>(null);
   // What is actually being charged, straight from the API. Never derive this
   // from the service price: in DEPOSIT mode the two differ, and labelling the
@@ -207,6 +209,8 @@ export function BookingClient({ data }: { data: BookShopData }) {
     amountCents: number;
     isDeposit: boolean;
     balanceDueCents: number;
+    /** Minutes the chair is held while they pay; null if the API didn't say. */
+    holdMinutes: number | null;
   } | null>(null);
   // The manage token of a booking awaiting payment (shown after the card clears).
   const [manageTokenPending, setManageTokenPending] = useState<string | null>(null);
@@ -1281,6 +1285,7 @@ export function BookingClient({ data }: { data: BookShopData }) {
                 amountCents: res.paymentAmountCents,
                 isDeposit: res.paymentIsDeposit ?? false,
                 balanceDueCents: res.paymentBalanceDueCents ?? 0,
+                holdMinutes: res.paymentHoldMinutes ?? null,
               }
             : null,
         );
@@ -1435,6 +1440,19 @@ export function BookingClient({ data }: { data: BookShopData }) {
               </>
             )}
           </p>
+          {/*
+            The hold is a real deadline now - the appointment does not exist
+            until this payment lands, and the chair goes back on sale when the
+            window closes. Saying so is the difference between a customer who
+            finishes and one who wanders off assuming they are booked.
+          */}
+          {payCharge?.holdMinutes ? (
+            <p className="mb-4 text-xs text-muted">
+              We&rsquo;ll hold this time for {payCharge.holdMinutes} minutes.
+              Your appointment isn&rsquo;t confirmed until this payment goes
+              through.
+            </p>
+          ) : null}
           <PaymentStep
             clientSecret={paymentSecret}
             amountLabel={

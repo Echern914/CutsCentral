@@ -50,6 +50,12 @@ import {
   toCents,
 } from "../billing/payments.js";
 import {
+  PAYMENT_HOLD_MINUTES,
+  collectsPaymentUpFront,
+  paymentHoldExpiry,
+  promotePaidHold,
+} from "../services/appointmentPaymentHold.js";
+import {
   notifyAppointmentConfirmation,
   notifyBarberBookingEvent,
   publicBookingEmailRequired,
@@ -1619,6 +1625,40 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
     return;
   }
 
+  // WILL THIS BOOKING COLLECT MONEY UP FRONT? Decided HERE, before the write,
+  // because it changes what we write.
+  //
+  // 🔴 This predicate used to live after the commit, and that was the defect: a
+  // deposit-mode booking committed as BOOKED, mirrored, emailed a confirmation
+  // and buzzed the barber's phone, and only THEN showed a payment screen. A
+  // customer who closed the tab kept the chair, unpaid, forever - no webhook
+  // and no sweep ever looked at it. A shop reported it as "it still books the
+  // appointments even though it says deposit required", which is exactly what
+  // it did.
+  //
+  // When true the appointment is written as a HOLD instead (PENDING with a
+  // holdExpiresAt minutes out) and becomes a booking only when Stripe says the
+  // money landed - see services/appointmentPaymentHold.ts.
+  const fullCents = toCents(effectivePrice);
+  // DEPOSIT charges a fixed amount now and leaves the rest for the chair; AHEAD
+  // charges the whole ticket. Capped at the price either way, so a $20 deposit
+  // can never overcharge a $15 line-up.
+  const chargeCents =
+    shop.paymentsMode === "deposit"
+      ? depositChargeCents(shop.depositAmountCents, fullCents)
+      : fullCents;
+  const collectsUpFront = collectsPaymentUpFront({
+    connectEnabled: connectEnabled(),
+    paymentsMode: shop.paymentsMode,
+    // Don't charge a card for a request that may be declined - payment is
+    // collected on/after approval (or the shop runs approval + pay-in-person).
+    requireBookingApproval: shop.requireBookingApproval,
+    connectChargesEnabled: shop.connectChargesEnabled,
+    stripeConnectAccountId: shop.stripeConnectAccountId,
+    chargeCents,
+  });
+  const holdExpiresAt = collectsUpFront ? paymentHoldExpiry(now) : null;
+
   let appointmentId: string;
   let manageToken: string;
   let mirrorOutboxId: string | null = null;
@@ -1690,9 +1730,14 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
           lastName: d.lastName || null,
           phone,
           email: d.email || null,
-          // Request-before-booking: land as PENDING (holds the slot, no
-          // confirmation) until the barber approves; else confirm immediately.
-          status: shop.requireBookingApproval ? "PENDING" : "BOOKED",
+          // Three outcomes, and only one of them is a confirmed booking:
+          //  - approval required -> PENDING, indefinite, the barber decides.
+          //  - money due up front -> PENDING with holdExpiresAt: the chair is
+          //    theirs while they pay and is released if they don't.
+          //  - everything else    -> BOOKED, as it always was.
+          status: shop.requireBookingApproval || collectsUpFront ? "PENDING" : "BOOKED",
+          holdExpiresAt,
+          holdReason: collectsUpFront ? "payment" : null,
           startsAt,
           endsAt,
           priceAtBooking: effectivePrice ?? undefined,
@@ -1728,10 +1773,15 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
         startsAt,
         endsAt,
         occupancy: {
-          status: shop.requireBookingApproval ? "PENDING" : "BOOKED",
+          status: shop.requireBookingApproval || collectsUpFront ? "PENDING" : "BOOKED",
           startsAt,
           endsAt,
-          holdExpiresAt: null, // a public booking is never an ephemeral hold
+          // A payment hold IS mirrored, unlike the receptionist's ephemeral
+          // one: a real customer is on the checkout screen and Acuity must not
+          // sell that chair while they pay. shouldMirrorOnCreate reads the
+          // reason to tell the two apart.
+          holdExpiresAt,
+          holdReason: collectsUpFront ? "payment" : null,
           visitId: null,
         },
       });
@@ -1807,6 +1857,15 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
         { shopId: shop.id, appointmentId, outboxId: mirrorOutboxId },
         "acuity mirror: ambiguous create - holding booking, suppressing confirmations",
       );
+      // This return happens BEFORE any PaymentIntent is created, so a payment
+      // hold left here would have nothing to promote it and would quietly
+      // evaporate in ten minutes - the customer's appointment lost to a lost
+      // HTTP response. Settle it as a booking, exactly as this branch did
+      // before holds existed, and keep the promise silent: notify: false, so
+      // the "say nothing confirmatory" rule above still holds.
+      if (collectsUpFront) {
+        await promotePaidHold({ appointmentId, now, notify: false });
+      }
       invalidateShopAvailabilityCaches(shop.id);
       res.status(202).json({
         status: "processing",
@@ -1817,52 +1876,47 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
     }
   }
 
-  // Confirmation SMS after commit (gated by consent/quiet-hours/billing inside
-  // notify; honors DRY_RUN). Fire-and-forget: a send issue must not fail the
-  // booking, which is already durably saved. SKIPPED for an approval-required
-  // request - the confirmation fires when the barber APPROVES it, not before.
-  if (!shop.requireBookingApproval) {
+  // Confirmation SMS/email after commit (gated by consent/quiet-hours/billing
+  // inside notify; honors DRY_RUN). Fire-and-forget: a send issue must not fail
+  // the booking, which is already durably saved.
+  //
+  // SKIPPED twice over. For an approval-required request the confirmation
+  // fires when the barber APPROVES it. For a PAYMENT HOLD it fires when the
+  // money lands (promotePaidHold) - telling someone "you're booked", with an
+  // .ics and an Add-to-Wallet button, before they have paid the deposit is
+  // precisely the complaint that started this.
+  if (!shop.requireBookingApproval && !collectsUpFront) {
     void notifyAppointmentConfirmation({ shopId: shop.id, appointmentId });
   }
   // Barber-side alert (push to the booked staffer's devices + notifyPhone SMS).
   // Fires for BOTH an instant booking and an approval request - the wording
-  // adapts. Fire-and-forget after commit, like the confirmation above.
-  void notifyBarberBookingEvent({
-    shopId: shop.id,
-    appointmentId,
-    kind: shop.requireBookingApproval ? "requested" : "booked",
-  });
+  // adapts. Held back for a payment hold for the same reason: the barber
+  // should not be told they have a booking that may evaporate in ten minutes.
+  if (!collectsUpFront) {
+    void notifyBarberBookingEvent({
+      shopId: shop.id,
+      appointmentId,
+      kind: shop.requireBookingApproval ? "requested" : "booked",
+    });
+  }
   invalidateShopAvailabilityCaches(shop.id);
 
-  // Pay-ahead: create a PaymentIntent for the customer to confirm (card/Apple
-  // Pay) and return its client secret. Gated on the shop being in `ahead` mode
-  // with a connected, charges-enabled account, Connect configured, and a real
-  // price. AFTER commit (no Stripe call inside the booking tx). A failure here
-  // never fails the booking — the customer falls back to paying in person.
+  // Pay-ahead / deposit: create a PaymentIntent for the customer to confirm
+  // (card/Apple Pay) and return its client secret. AFTER commit - no Stripe
+  // call inside the booking tx.
+  //
+  // The decision was made before the write (see collectsUpFront) because it
+  // determined whether the row above is a booking or a hold; this block only
+  // acts on it.
   let payment: {
     clientSecret: string;
     amountCents: number;
     isDeposit: boolean;
     balanceDueCents: number;
+    /** Minutes the chair is held while they pay. */
+    holdMinutes: number;
   } | null = null;
-  const fullCents = toCents(effectivePrice);
-  // DEPOSIT charges a fixed amount now and leaves the rest for the chair; AHEAD
-  // charges the whole ticket. Capped at the price either way, so a $20 deposit
-  // can never overcharge a $15 line-up.
-  const chargeCents =
-    shop.paymentsMode === "deposit"
-      ? depositChargeCents(shop.depositAmountCents, fullCents)
-      : fullCents;
-  if (
-    connectEnabled() &&
-    // Don't charge a card for a hold that may be declined - payment is
-    // collected on/after approval (or the shop runs approval + pay-in-person).
-    !shop.requireBookingApproval &&
-    (shop.paymentsMode === "ahead" || shop.paymentsMode === "deposit") &&
-    shop.connectChargesEnabled &&
-    shop.stripeConnectAccountId &&
-    chargeCents !== null
-  ) {
+  if (collectsUpFront && shop.stripeConnectAccountId && chargeCents !== null) {
     const isDeposit = shop.paymentsMode === "deposit" && chargeCents !== fullCents;
     const created = await createAheadPaymentIntent({
       shopId: shop.id,
@@ -1887,7 +1941,28 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
         isDeposit,
         // What they still owe at the shop; 0 when the whole ticket is paid.
         balanceDueCents: Math.max(0, (fullCents ?? 0) - chargeCents),
+        holdMinutes: PAYMENT_HOLD_MINUTES,
       };
+    } else {
+      // Stripe was unreachable, or the account cannot take this charge. The
+      // appointment is sitting there as a hold that nothing will ever promote,
+      // so it would silently evaporate in ten minutes - strictly worse than
+      // the old behaviour.
+      //
+      // Fall back to exactly what this route did before holds existed: confirm
+      // the booking and let them pay in person. A payment hiccup must never
+      // cost a customer their appointment.
+      logger.warn(
+        { shopId: shop.id, appointmentId },
+        "payment hold: no PaymentIntent - confirming the booking for pay-in-person",
+      );
+      const outcome = await promotePaidHold({ appointmentId, now });
+      if (outcome !== "promoted" && outcome !== "already_booked") {
+        logger.error(
+          { shopId: shop.id, appointmentId, outcome },
+          "payment hold: fallback promotion failed - the hold will lapse",
+        );
+      }
     }
   }
 

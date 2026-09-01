@@ -26,6 +26,7 @@ import { autoCloseIdleConversations } from "./receptionist/conversation.js";
 import { expireStaleWalkIns } from "./engines/walkInExpiry.js";
 import { releaseAffiliateRewardHolds } from "./services/affiliateQualification.js";
 import { sweepExpiredHolds } from "./engines/holdSweep.js";
+import { sweepExpiredPaymentHolds } from "./services/appointmentPaymentHold.js";
 import { expireDueOffers } from "./engines/waitlistOffer.js";
 import { expireDeadWaitlistEntries } from "./engines/waitlistExpiry.js";
 import { sweepExpiredRateCounters } from "./middleware/pgRateStore.js";
@@ -319,15 +320,32 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
     run: () => expireDeadWaitlistEntries(),
     failMsg: "waitlist entry expiry sweep failed",
   },
-  // AI receptionist: sweep expired slot holds every 5 minutes. Hygiene only -
-  // the slot engine + overlap guards already ignore expired holds, so the slot
-  // is free the moment a hold lapses regardless of this job's cadence.
+  // Sweep expired slot holds every 5 minutes - BOTH kinds.
+  //
+  // The receptionist half is hygiene only: the slot engine + overlap guards
+  // already ignore expired holds, so the chair is free the moment one lapses
+  // regardless of this job's cadence. The PAYMENT half does real work - it
+  // hands the chair back in Acuity and voids the customer's uncollected
+  // PaymentIntent - but the chair itself is likewise already free.
+  //
+  // Deliberately riding the EXISTING lease rather than registering a second
+  // job: a new cron with no job_lease seed row never runs in production at
+  // all, and these two want the same cadence for the same reason. Both run
+  // even if the first throws.
   {
     cronExpr: "*/5 * * * *",
     name: "receptionist-hold-sweep",
     ttlMs: 2 * MINUTE,
-    run: () => sweepExpiredHolds(),
-    failMsg: "receptionist hold sweep failed",
+    run: async () => {
+      const results = await Promise.allSettled([
+        sweepExpiredHolds(),
+        sweepExpiredPaymentHolds(),
+      ]);
+      for (const r of results) {
+        if (r.status === "rejected") logger.error({ err: r.reason }, "hold sweep half failed");
+      }
+    },
+    failMsg: "hold sweep failed",
   },
   // Walk-in end-of-day expiry. Hourly at :23 (off the top-of-hour rush; the
   // boundary is a day-level event, tighter cadence buys nothing). DARK by

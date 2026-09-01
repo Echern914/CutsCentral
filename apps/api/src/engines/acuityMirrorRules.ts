@@ -65,10 +65,20 @@ export interface OccupancySlice {
   startsAt: Date;
   endsAt: Date;
   /**
-   * Set only on an AI-receptionist HOLD - a PENDING row that lapses on its
-   * own. A pending APPROVAL REQUEST has this null and waits indefinitely.
+   * Set on a HOLD - a PENDING row that lapses on its own. A pending APPROVAL
+   * REQUEST has this null and waits indefinitely.
    */
   holdExpiresAt: Date | null;
+  /**
+   * WHICH kind of hold. null = the AI receptionist's (and every row from
+   * before the column existed); "payment" = a customer on the checkout screen.
+   * Read by shouldMirrorOnCreate and nowhere else - see the note there.
+   *
+   * Optional on the interface because several callers build this slice from a
+   * hand-written `select` and a missing field must read as "receptionist",
+   * which is the pre-existing behaviour.
+   */
+  holdReason?: string | null;
   /**
    * The synced Visit this appointment was promoted from, if any. A linked row
    * is Acuity's OWN booking reflected inward; mirroring it back out would
@@ -115,14 +125,23 @@ export function appointmentOccupiesTime(appt: OccupancySlice, now: Date): boolea
 /**
  * Should CREATING this appointment mirror out?
  *
- * Ephemeral receptionist holds are skipped by design: they are minutes long,
+ * Ephemeral RECEPTIONIST holds are skipped by design: they are minutes long,
  * lapse without an explicit action, and would multiply outbound writes against
  * an unknown Acuity rate limit for time that is usually released before a
  * customer could ever have booked it. An indefinite approval request is the
  * opposite case and IS mirrored.
+ *
+ * A PAYMENT hold is mirrored, and that is the one exception. It looks
+ * identical in the schema - PENDING with a holdExpiresAt minutes away - but it
+ * is not speculative: a real customer is on the checkout screen right now with
+ * their card out. Leaving that chair open in Acuity for the length of a card
+ * payment is precisely how a ChairBack booking that had held 6:10pm got sold
+ * over from the Acuity side. The block is released when the hold lapses
+ * (services/appointmentPaymentHold.ts) exactly as it is on any cancellation.
  */
 export function shouldMirrorOnCreate(appt: OccupancySlice, now: Date): boolean {
-  if (appt.holdExpiresAt !== null) return false; // ephemeral hold
+  // Ephemeral hold, and not the one kind we defend.
+  if (appt.holdExpiresAt !== null && appt.holdReason !== "payment") return false;
   return appointmentOccupiesTime(appt, now);
 }
 
