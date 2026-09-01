@@ -43,6 +43,48 @@ export default function CustomerScreen() {
     { selectionId: string; name: string; city: string | null; region: string | null; industry: string }[]
   >([]);
   const [recMsg, setRecMsg] = useState<string | null>(null);
+  /**
+   * Find a shop by its exact handle.
+   *
+   * 🔴 A LOOKUP, NOT A SEARCH. `drickcuttinup` finds Drick's shop; `drick`
+   * finds nothing. The API refuses prefixes, near misses and anything fuzzy,
+   * and answers a private shop exactly as it answers a shop that does not
+   * exist - so nobody can type letters and discover other people's businesses.
+   *
+   * The input is forgiving about SHAPE though: capitals, a leading @, or the
+   * whole pasted link all resolve, because that is the same knowledge wearing
+   * different clothes.
+   */
+  const [handleInput, setHandleInput] = useState("");
+  const [handleErr, setHandleErr] = useState<string | null>(null);
+  const [finding, setFinding] = useState(false);
+
+  async function findShop() {
+    const typed = handleInput.trim();
+    if (!typed) return;
+    setHandleErr(null);
+    setFinding(true);
+    try {
+      const res = await fetch(
+        `${API_ORIGIN}/api/find-shop?handle=${encodeURIComponent(typed)}`,
+      );
+      if (!res.ok) {
+        // One message for every miss, matching the API's single refusal: we
+        // must not hint that a shop exists but is private.
+        setHandleErr(
+          "No shop with that name. Check the spelling with them, or use the link they sent.",
+        );
+        return;
+      }
+      const body = (await res.json()) as { shop: { bookUrl: string } };
+      await Linking.openURL(body.shop.bookUrl);
+    } catch {
+      setHandleErr("Something went wrong. Please try again.");
+    } finally {
+      setFinding(false);
+    }
+  }
+
   const [recBusy, setRecBusy] = useState(false);
   // Mirror of the server's 60s resend cooldown - the server suppresses early
   // resends silently, so the button says why instead of lying.
@@ -300,6 +342,38 @@ export default function CustomerScreen() {
           {linkErr && <Text style={styles.note}>{linkErr}</Text>}
           <Pressable style={styles.button} onPress={openPastedLink}>
             <Text style={styles.buttonText}>Open my rewards</Text>
+          </Pressable>
+
+          <View style={styles.divider}>
+            <View style={styles.line} />
+            <Text style={styles.dividerText}>or</Text>
+            <View style={styles.line} />
+          </View>
+
+          {/* Find the shop by the exact name they gave you. Deliberately worded
+              as "exact" up front: a customer who expects a search box and gets
+              nothing back assumes the app is broken, whereas one who knows it
+              wants the exact handle just asks their barber for it. */}
+          <Text style={styles.sub}>Know your shop&apos;s name? Enter it exactly:</Text>
+          <TextInput
+            value={handleInput}
+            onChangeText={setHandleInput}
+            placeholder="drickcuttinup"
+            placeholderTextColor="#6b6b70"
+            autoCapitalize="none"
+            autoCorrect={false}
+            autoComplete="off"
+            style={styles.input}
+          />
+          {handleErr && <Text style={styles.note}>{handleErr}</Text>}
+          <Pressable
+            style={[styles.button, styles.buttonSecondary]}
+            onPress={() => void findShop()}
+            disabled={finding}
+          >
+            <Text style={styles.buttonSecondaryText}>
+              {finding ? "Looking…" : "Find my shop"}
+            </Text>
           </Pressable>
 
           <View style={styles.divider}>

@@ -30,6 +30,7 @@ import { squareOAuthRouter } from "./routes/square.oauth.js";
 import { adminRouter } from "./routes/admin.js";
 import { rewardsRouter } from "./routes/rewards.js";
 import { rewardsRecoveryRouter } from "./routes/rewardsRecovery.js";
+import { findShopRouter } from "./routes/findShop.public.js";
 import { walletRouter } from "./routes/wallet.js";
 import { dashboardRouter } from "./routes/dashboard.js";
 import { barberRouter } from "./routes/barber.js";
@@ -179,6 +180,10 @@ export function createApp(): Express {
   app.use("/api/rewards-recovery", rewardsRecoveryRouter);
   app.use("/api/rewards", rewardsLimiter, rewardsRouter);
   app.use("/api/wallet", rewardsLimiter, walletRouter); // Apple Wallet pass web service (public, ApplePass-token auth)
+  // 🔴 Its OWN mount, not a /find route under /api/page. publicPageRouter owns
+  // "/:slug", so a sibling path there would make "find" a reserved slug that
+  // silently shadows any shop legitimately called that.
+  app.use("/api/find-shop", rewardsLimiter, findShopRouter);
   app.use("/api/page", rewardsLimiter, publicPageRouter); // public shop pages
   app.use("/api/book", bookingPublicRouter); // public native booking (per-route limits inside)
   // Walk-In Mode public surface: the kiosk tablet + "My Place in Line".
