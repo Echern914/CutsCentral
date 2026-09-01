@@ -5,6 +5,7 @@ import {
   describeCancellationPolicy,
   describeDepositPolicy,
 } from "@chairback/config";
+import { connectEnabled } from "../billing/stripe.js";
 import { forShop, prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 
@@ -153,9 +154,13 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
       paymentsMode: true,
       cancelWindowHours: true,
       cancelFeeBps: true,
-      // Needed by describeDepositPolicy: without it a deposit shop could only
-      // be described vaguely, and it used not to be described at all.
       depositAmountCents: true,
+      // CAPABILITY, not intent. paymentsMode says what the shop WANTS; these
+      // say whether a card can actually be taken. A shop can sit in deposit
+      // mode through all of Connect onboarding and collect nothing.
+      connectChargesEnabled: true,
+      stripeConnectAccountId: true,
+      requireBookingApproval: true,
       publicPageEnabled: true,
     },
   });
@@ -202,13 +207,25 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
   }
 
   const names = staff.map((s) => s.name);
-  // 🔴 These sentences moved to @chairback/config/shopPolicy so the assistant
-  // can answer "what is my cancellation policy?" from the SAME words the
-  // receptionist quotes to a customer. The move also fixed a real defect: the
-  // chain here tested only "ahead" and "hold", so a shop in DEPOSIT mode was
-  // told there was no deposit while its booking page charged one.
-  const cancellation = describeCancellationPolicy(shop);
-  const deposit = describeDepositPolicy(shop);
+  // These sentences live in @chairback/config/shopPolicy so the assistant can
+  // answer "what is my cancellation policy?" from the SAME words the
+  // receptionist quotes to a customer.
+  //
+  // 🔴 THE CHANNEL FLAG IS LOAD-BEARING. `book_appointment` in tools.ts writes
+  // an Appointment and NO Payment - this conversation collects nothing, ever.
+  // Without `collectsAtBooking: false` the receptionist tells an SMS customer
+  // that a deposit is taken at booking and then takes none, which is the same
+  // class of lie as the deposit-mode gap that put this code here, pointing the
+  // other way.
+  const policyShop = {
+    ...shop,
+    paymentsLive:
+      connectEnabled() && shop.connectChargesEnabled && Boolean(shop.stripeConnectAccountId),
+    requiresApproval: shop.requireBookingApproval,
+  };
+  const channel = { collectsAtBooking: false } as const;
+  const cancellation = describeCancellationPolicy(policyShop, channel);
+  const deposit = describeDepositPolicy(policyShop, channel);
 
   const config: ShopPromptConfig = {
     shopName: shop.name,
