@@ -144,8 +144,16 @@ describe("renderPromptForShop", () => {
     expect(text).toContain("Tue 9:00 AM-6:00 PM");
     expect(text).toContain("Sat 10:00 AM-4:00 PM");
     expect(text).toContain(`/book/${shop.slug}`);
-    expect(text).toContain("free up to 12h before");
-    expect(text).toContain("50% of the price");
+    // 🔴 THIS SHOP CANNOT CHARGE THE FEE IT HAS CONFIGURED. paymentsMode is
+    // left at its default (off), so no card is ever taken and
+    // cancelAppointment computes the fee from an amount that does not exist.
+    // The prompt used to quote "50% of the price is kept as a fee" anyway -
+    // a threat the system cannot carry out, told to a customer over SMS.
+    expect(text).toContain("free cancellation any time before the appointment");
+    expect(text).not.toContain("50%");
+    // Nothing is collected here either: this conversation books, it never
+    // charges, and its own booking tool writes no Payment row.
+    expect(text).toContain("none - pay at the shop");
     expect(text).toContain("relaxed & friendly");
     // Every config placeholder got filled.
     expect(text).not.toMatch(/\{\{(SHOP_NAME|BARBER_NAMES|TIMEZONE|HOURS|SERVICE_MENU|BOOKING_URL|DEPOSIT_POLICY|CANCELLATION_POLICY|TONE)\}\}/);
