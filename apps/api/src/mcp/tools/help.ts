@@ -7,8 +7,13 @@ import {
   type NavDenial,
   type SeatRole,
 } from "@chairback/config/features";
-import type { HelpAnswer } from "@chairback/config/help";
-import { findHelp, searchFeatures } from "@chairback/config/helpMatch";
+import { searchFeatures } from "@chairback/config/helpMatch";
+import {
+  actorForSeat,
+  resolveSupport,
+  resolveSupportAnswerById,
+  type SupportResolution,
+} from "@chairback/config/supportEngine";
 import {
   INVALID_ARGS,
   type ToolDefinition,
@@ -32,11 +37,31 @@ import {
  * Nothing here reads the database. That is what makes them safe to leave
  * available to a lapsed shop: a barber whose plan ended still has to be able to
  * ask "how do I start paying again", and refusing that would be an own goal.
+ *
+ * ── 🔴 WHY THESE CALL resolveSupport AND NOT findHelp ────────────────────────
+ *
+ * The in-app assistant and this connector answer out of ONE corpus, and they
+ * used to answer from it with materially different quality. A miss here handed
+ * the host model four question TITLES with no bodies and no tool that could
+ * redeem an id - a dead end dressed as a menu - while the web bubble held the
+ * whole answer object and rendered it on a tap. Worse, the four-item slice cut
+ * off `contact-human`, so the one path where the connector knew nothing was
+ * also the one where it withheld the way to reach a person.
+ *
+ * Going through the shared engine fixes all of that at once: bodies come back
+ * on suggestions, an escalation rides along on every non-answer, and the actor
+ * gate that the web surfaces already respect applies here too.
  */
 
 const findSchema = z
   .object({
     query: z.string().min(1).max(200),
+  })
+  .strict();
+
+const getSchema = z
+  .object({
+    id: z.string().min(1).max(80),
   })
   .strict();
 
@@ -55,23 +80,49 @@ const DENIAL_COPY: Record<NavDenial, string> = {
  *
  * Its `action` is a FEATURE ID, never a route — the corpus stopped carrying
  * hrefs precisely because 72 hand-written ones drifted from the index they
- * duplicated. Resolving it here makes the button role-aware for free: a seat
- * that cannot open the destination simply gets no action.
+ * duplicated. The engine resolved it against this seat already, so a seat that
+ * cannot open the destination simply gets no action.
  */
-function wireAnswer(a: HelpAnswer, ctx: { role: SeatRole; hasAccess: boolean }) {
-  const action = a.action ? resolveFeature(a.action.featureId, ctx) : null;
+function wireAnswer(r: SupportResolution) {
+  const a = r.answer;
+  if (!a) return null;
   return {
     id: a.id,
-    question: a.q,
-    body: a.a,
-    action:
-      a.action && action?.ok
-        ? {
-            label: a.action.label,
-            featureId: a.action.featureId,
-            href: action.href,
-          }
-        : undefined,
+    question: a.question,
+    body: a.body,
+    action: a.action ?? undefined,
+  };
+}
+
+/**
+ * Suggestions, WITH their bodies.
+ *
+ * 🔴 The id alone was the defect. A host model given `{id, question}` and no
+ * way to look an id up can only re-ask in prose and hope the matcher lands
+ * somewhere better - so it usually relayed the titles to the barber as a menu,
+ * which is precisely the "it just gives me options" complaint.
+ */
+function wireSuggestions(r: SupportResolution, inv: ToolInvocation) {
+  return r.suggestions.map((sug) => {
+    const full = resolveSupportAnswerById(sug.id, supportRequestBase(inv));
+    return {
+      id: sug.id,
+      question: sug.question,
+      body: full.answer?.body,
+    };
+  });
+}
+
+/** The actor/seat every call in this file resolves against. */
+function supportRequestBase(inv: ToolInvocation) {
+  return {
+    // An MCP token is minted FOR a seat and can never exceed it. The engine
+    // gates capabilities by actor, so the seat has to arrive intact.
+    actor: actorForSeat(inv.role),
+    channel: "mcp" as const,
+    // `inApp` is deliberately unset: an MCP client is not the iOS shell, so
+    // the App Store billing restriction does not apply to it.
+    seat: { role: inv.role, hasAccess: inv.hasAccess },
   };
 }
 
@@ -91,16 +142,17 @@ async function findFeature(inv: ToolInvocation): Promise<ToolResult> {
   if (!parsed.success) return INVALID_ARGS;
   const { query } = parsed.data;
 
-  // The seat is what the registry resolves against. `inApp` is deliberately
-  // NOT set: an MCP client is not the iOS shell, so the App Store billing
-  // restriction does not apply to it.
   const ctx = { role: inv.role, hasAccess: inv.hasAccess };
 
   // Features first - "where do I ..." is nearly always a navigation question.
+  //
+  // 🔴 searchFeatures is strict AND: every literally typed token must land on
+  // an entry. That is right for a keyboard palette and wrong for a sentence
+  // relayed by a model, so a miss here is normal and must not be read as "no
+  // such feature" - the corpus answer below is the real reply.
   const hits = searchFeatures(query, visibleFeatures(ctx)).slice(0, 5);
 
-  // Then the help corpus, which answers "how does X work" rather than "where".
-  const help = findHelp(query);
+  const resolution = resolveSupport({ question: query, ...supportRequestBase(inv) });
 
   return {
     ok: true,
@@ -115,9 +167,40 @@ async function findFeature(inv: ToolInvocation): Promise<ToolResult> {
           unavailable: r.ok ? undefined : DENIAL_COPY[r.reason],
         };
       }),
-      answer: help.kind === "answer" && help.answer ? wireAnswer(help.answer, ctx) : null,
-      suggestions: help.suggestions.slice(0, 4).map((a) => ({ id: a.id, question: a.q })),
+      outcome: resolution.outcome,
+      answer: wireAnswer(resolution),
+      // Bodies included, and NOT sliced: the four-item cut used to drop
+      // `contact-human` on exactly the queries that matched nothing.
+      suggestions: wireSuggestions(resolution, inv),
+      // 🔴 Present on every outcome except ANSWERED. The host model must never
+      // have to invent a way for the barber to reach a person.
+      escalation: resolution.escalation ?? undefined,
     },
+  };
+}
+
+/**
+ * Redeem a suggestion id for its full answer.
+ *
+ * `helpAnswerById` has existed since the corpus did, and the web bubble has
+ * always used it to turn a tapped chip into an answer. It was simply never
+ * exposed here, which is why a suggestion over MCP was a title and a shrug.
+ */
+async function getAnswer(inv: ToolInvocation): Promise<ToolResult> {
+  const parsed = getSchema.safeParse(inv.args ?? {});
+  if (!parsed.success) return INVALID_ARGS;
+  const resolution = resolveSupportAnswerById(parsed.data.id, supportRequestBase(inv));
+  if (!resolution.answer) {
+    return {
+      ok: false,
+      code: "no_such_answer",
+      message: "There is no help topic with that id. Search again with help_find_feature.",
+    };
+  }
+  return {
+    ok: true,
+    data: { outcome: resolution.outcome, answer: wireAnswer(resolution) },
+    resource: { type: "help_answer", id: parsed.data.id },
   };
 }
 
@@ -147,7 +230,14 @@ async function listFeatures(inv: ToolInvocation): Promise<ToolResult> {
       categories: FEATURE_CATEGORIES.map((c) => ({ id: c.id, name: c.name })),
       features: entries.map((e) => {
         const r = resolveFeature(e.id, ctx);
-        return wire(e, r.ok ? r.href : null);
+        // 🔴 The REASON, not just a null href. visibleFeatures deliberately
+        // lists a lapsed shop everything, so without this a barber's model saw
+        // a full catalogue of unexplained dead links and could not tell
+        // "manager only" from "your plan ended" from "switched off".
+        return {
+          ...wire(e, r.ok ? r.href : null),
+          unavailable: r.ok ? undefined : DENIAL_COPY[r.reason],
+        };
       }),
     },
   };
@@ -162,7 +252,7 @@ export const helpTools: ToolDefinition[] = [
         query: {
           type: "string",
           description:
-            "What the barber is trying to do, in their own words. e.g. 'take a deposit', 'stop double bookings'.",
+            "What the barber is trying to do, in their own words - a whole question is fine. e.g. 'why did a client not get their confirmation email', 'deposits'.",
           maxLength: 200,
         },
       },
@@ -185,5 +275,22 @@ export const helpTools: ToolDefinition[] = [
       additionalProperties: false,
     },
     handler: listFeatures,
+  },
+  {
+    name: "help_get_answer",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: {
+          type: "string",
+          description:
+            "The id of a suggestion returned by help_find_feature. Use this to read a suggested topic in full rather than guessing at its wording.",
+          maxLength: 80,
+        },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    handler: getAnswer,
   },
 ];

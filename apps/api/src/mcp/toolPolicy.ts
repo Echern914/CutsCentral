@@ -119,7 +119,19 @@ export const TOOL_POLICIES: readonly ToolPolicy[] = [
     lapsedRationale: "Carries no shop data. Same reasoning as help_find_feature.",
     chairScope: "none",
     write: false,
-    description: "List the ChairBack features available to you, by category.",
+    description:
+      "List the ChairBack features available to you, by category. Use help_find_feature for an actual question; this is for browsing what exists.",
+  },
+  {
+    name: "help_get_answer",
+    scope: "chairback:help:read",
+    minRole: "BARBER",
+    whenLapsed: "allow",
+    lapsedRationale: "Carries no shop data. Same reasoning as help_find_feature.",
+    chairScope: "none",
+    write: false,
+    description:
+      "Read one help topic in full by its id, as returned in help_find_feature's suggestions.",
   },
   {
     name: "readiness_report",
@@ -157,7 +169,10 @@ export const TOOL_POLICIES: readonly ToolPolicy[] = [
     lapsedRationale: "Mirrors GET /clients/:id and its ledger, both inside isOwnDataRead.",
     chairScope: "shop",
     write: false,
-    description: "One client's visit history, spend and loyalty standing.",
+    // "spend" promised an aggregate that does not exist - each visit carries
+    // its own price and nothing sums them.
+    description:
+      "One client's recent visits with the price of each, plus their loyalty tier. Never contact details.",
   },
   {
     name: "calendar_agenda",
@@ -168,7 +183,11 @@ export const TOOL_POLICIES: readonly ToolPolicy[] = [
       "Mirrors /api/barber and /api/booking, both walled. A lapsed shop is not taking bookings, so its calendar is not a thing the assistant reads.",
     chairScope: "own_chair",
     write: false,
-    description: "Appointments and blocked time for a day or a range, for a chair or the shop.",
+    // The caller CANNOT choose the scope: decideTool fixes it from the seat
+    // before the handler runs, and there is deliberately no staffId parameter.
+    // Advertising a choice that does not exist invites a wasted retry.
+    description:
+      "Appointments and blocked time for a day or a range. Scope follows your seat: a chair sees its own book, a manager sees the shop.",
   },
   {
     name: "calendar_openings",
@@ -200,7 +219,11 @@ export const TOOL_POLICIES: readonly ToolPolicy[] = [
     lapsedRationale: "Mirrors /api/insights — manager-gated and walled.",
     chairScope: "shop",
     write: false,
-    description: "Revenue, bookings and chair utilisation over a date range.",
+    // Said "chair utilisation" and never returned one: the payload is work,
+    // revenue, byChair, byService, unassignedSynced. A model that trusts the
+    // description either invents the figure or tells the barber we lied.
+    description:
+      "Revenue, bookings and per-chair takings over a date range. Does not include a utilisation percentage.",
   },
   {
     name: "integration_health",

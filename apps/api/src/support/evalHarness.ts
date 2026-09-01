@@ -64,6 +64,14 @@ function classify(
   answerId: string | null,
   suggestionIds: readonly string[],
 ): ObservedBehavior {
+  // 🔴 A MUST-REFUSE CAPABILITY IS ANSWERED CORRECTLY BY BEING REFUSED.
+  // Prompt injection, cross-tenant lookup and identity-by-guessing have an
+  // EMPTY actor list and no accepted answer, so scoring them the ordinary way
+  // marked every correct refusal as a failure - four of them - and quietly
+  // implied the fix was to go write those answers. Withholding is the win.
+  if (cap.actors.length === 0) {
+    return answerId === null ? "correct_answer" : "wrong_answer";
+  }
   const accepted = new Set(cap.corpusIds);
   if (answerId !== null) {
     return accepted.has(answerId) ? "correct_answer" : "wrong_answer";
@@ -102,8 +110,10 @@ export function observeInApp(fixture: SupportFixture): ChannelObservation {
 /** The exact shape help_find_feature puts on the wire (subset we assert on). */
 interface McpHelpData {
   features: readonly { id: string }[];
+  outcome?: string;
   answer: { id: string } | null;
   suggestions: readonly { id: string; question: string; body?: string }[];
+  escalation?: { email: string; summary: string };
 }
 
 /** A fixed clock so the harness can never depend on wall time. */
@@ -133,10 +143,19 @@ export async function observeMcp(fixture: SupportFixture): Promise<ChannelObserv
     behavior: classify(cap, answerId, suggestionIds),
     answerId,
     suggestionIds,
+    // The wire now carries an escalation on every non-answer, exactly as the
+    // in-app adapters do. The two chip-based routes remain as weaker signals.
     escalationOffered:
-      answerId === "contact-human" || suggestionIds.includes("contact-human"),
+      data.escalation !== undefined ||
+      answerId === "contact-human" ||
+      suggestionIds.includes("contact-human"),
     featureHits: data.features.length,
-    suggestionsHaveBodies: data.suggestions.some((s) => typeof s.body === "string"),
+    // Every suggestion should now arrive WITH its body. `every` rather than
+    // `some`: one body among four is still a menu.
+    suggestionsHaveBodies:
+      data.suggestions.length > 0 &&
+      data.suggestions.every((s) => typeof s.body === "string" && s.body.length > 0),
+    outcome: data.outcome,
   };
 }
 

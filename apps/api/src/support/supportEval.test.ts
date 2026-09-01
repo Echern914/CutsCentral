@@ -180,13 +180,21 @@ describe("the baseline ratchet", () => {
     expect(b.inApp.correct_answer / total).toBeGreaterThan(0.75);
   });
 
-  it("MCP still lags in-app — that gap is PR 2's job, and it is measured", () => {
-    // Same corpus, same matcher, worse delivery: the wire drops answer bodies
-    // and slices the escalation entry off the total-miss path. Recording the
-    // gap here stops PR 2 being declared done without moving these numbers.
+  it("🔴 MCP now matches in-app: no wrong answers, no miss without a way out", () => {
+    // The gap PR 2 existed to close. Same corpus, same matcher, and now the
+    // same delivery: bodies on suggestions, an escalation on every non-answer,
+    // and the same actor gate. Both numbers are hard zeros, not thresholds.
     const b = SUPPORT_EVAL_BASELINE;
-    expect(b.mcp.wrong_answer).toBeGreaterThan(0);
-    expect(b.missesWithoutEscalation.mcp).toBeGreaterThan(0);
+    expect(b.mcp.wrong_answer).toBe(0);
+    expect(b.missesWithoutEscalation.mcp).toBe(0);
+  });
+
+  it("🔴 the two channels classify every shared fixture identically", () => {
+    // One brain, two adapters. A divergence here means a surface has grown a
+    // second opinion about the same corpus - the exact drift this arc removed.
+    const { agree, of } = SUPPORT_EVAL_BASELINE.channelAgreement;
+    expect(of).toBeGreaterThan(40);
+    expect(agree).toBe(of);
   });
 });
 
@@ -213,9 +221,12 @@ describe("defect pins — a FAILURE here means a defect was fixed; flip it", () 
     }
   });
 
-  it("STILL OPEN (PR 2): the help tool's own schema example returns zero features", async () => {
-    // help.ts's query description literally suggests "take a deposit", and
-    // searchFeatures' AND semantics guarantee that phrasing matches nothing.
+  it("FIXED: the tool's own example phrasing now returns a real answer", async () => {
+    // help.ts's query description used to suggest "take a deposit", which
+    // searchFeatures' strict AND semantics guaranteed would match nothing -
+    // the documented usage was a guaranteed zero-result. The feature array can
+    // still legitimately be empty for a phrase like this; what matters is that
+    // the corpus ANSWER now carries the reply.
     const obs = await observeMcp({
       id: "pin-deposit",
       capabilityId: "refunds_deposits_howto",
@@ -224,10 +235,11 @@ describe("defect pins — a FAILURE here means a defect was fixed; flip it", () 
       question: "take a deposit",
       probe: "terse",
     });
-    expect(obs.featureHits).toBe(0);
+    expect(obs.answerId).toBe("take-a-deposit");
+    expect(obs.behavior).toBe("correct_answer");
   });
 
-  it("STILL OPEN (PR 2): MCP suggestions carry no bodies and nothing can redeem them", async () => {
+  it("FIXED: MCP suggestions carry their bodies, and an id can be redeemed", async () => {
     const obs = await observeMcp({
       id: "pin-bodies",
       capabilityId: "human_help",
@@ -236,15 +248,17 @@ describe("defect pins — a FAILURE here means a defect was fixed; flip it", () 
       question: "do you integrate with quickbooks",
       probe: "canonical",
     });
-    expect(obs.answerId).toBeNull();
     expect(obs.suggestionIds.length).toBeGreaterThan(0);
-    expect(obs.suggestionsHaveBodies).toBe(false);
-    // The bodies exist server-side (helpAnswerById) and the web bubble uses
-    // them; no MCP tool exposes them. PR 2 adds the redemption path.
-    expect(toolDefinition("help_get_answer")).toBeUndefined();
+    // Every suggestion, not just one: a single body among four is still a menu.
+    expect(obs.suggestionsHaveBodies).toBe(true);
+    // And the redemption path the web bubble always had now exists here too.
+    expect(toolDefinition("help_get_answer")).toBeDefined();
   });
 
-  it("STILL OPEN (PR 2): the total-miss path drops the route to a human", async () => {
+  it("FIXED: a total miss over MCP still hands back the route to a human", async () => {
+    // The worst version of the old behaviour: on the ONE path where the
+    // connector knew nothing, a four-item slice cut off `contact-human` - the
+    // only entry carrying the support address.
     const obs = await observeMcp({
       id: "pin-esc",
       capabilityId: "human_help",
@@ -253,8 +267,6 @@ describe("defect pins — a FAILURE here means a defect was fixed; flip it", () 
       question: "do you integrate with quickbooks",
       probe: "canonical",
     });
-    expect(obs.answerId).toBeNull();
-    expect(obs.suggestionIds).toHaveLength(4);
-    expect(obs.escalationOffered).toBe(false);
+    expect(obs.escalationOffered).toBe(true);
   });
 });

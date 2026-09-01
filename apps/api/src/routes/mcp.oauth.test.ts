@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
+import { SERVER_AUTHORED_NOTICE, UNTRUSTED_NOTICE } from "../mcp/dispatch.js";
 import { mcpResourceUrl } from "../mcp/metadata.js";
 import { ACCESS_TOKEN_TTL_MS, hashToken } from "../mcp/tokens.js";
 
@@ -323,6 +324,7 @@ describe("authorization code + PKCE", () => {
     // those two families and nothing that carries customer data.
     expect((ok.body.result.tools as { name: string }[]).map((t) => t.name).sort()).toEqual([
       "help_find_feature",
+      "help_get_answer",
       "help_list_features",
       "readiness_report",
     ]);
@@ -1531,6 +1533,129 @@ describe("the MCP endpoint itself", () => {
  * assumption as the code they were testing. Every test below uses `.type("form")`
  * on purpose; a JSON-only test here would be worthless.
  */
+describe("🔴 support parity at the wire", () => {
+  /**
+   * The things a HOST MODEL experiences, which is where the "it just gives me
+   * options" complaint actually lived. Auth, tenancy and the policy matrix are
+   * covered elsewhere; these ride on the same bearer so they exercise the real
+   * dispatcher, envelope and router.
+   */
+  async function call(token: string, method: string, params?: unknown, id: unknown = 1) {
+    const body: Record<string, unknown> = { jsonrpc: "2.0", method };
+    if (id !== undefined) body.id = id;
+    if (params) body.params = params;
+    return request(app).post("/mcp").set("Authorization", `Bearer ${token}`).send(body);
+  }
+
+  function payload(res: { body: { result?: { structuredContent?: unknown } } }) {
+    return res.body.result?.structuredContent as {
+      chairback: string;
+      notice: string;
+      data: {
+        outcome?: string;
+        answer: { id: string; body: string } | null;
+        suggestions: { id: string; question: string; body?: string }[];
+        escalation?: { email: string; summary: string };
+      };
+    };
+  }
+
+  it("a miss returns suggestion BODIES and a route to a human", async () => {
+    // Before: four bare titles, and the four-item slice cut off the one entry
+    // carrying the support address - on exactly the queries that matched
+    // nothing. A menu with no way out, which is what a model relayed onward.
+    const { access_token } = await connect();
+    const res = await call(access_token, "tools/call", {
+      name: "help_find_feature",
+      arguments: { query: "do you integrate with quickbooks" },
+    });
+    expect(res.status).toBe(200);
+    const data = payload(res).data;
+    expect(data.suggestions.length).toBeGreaterThan(0);
+    for (const s of data.suggestions) {
+      expect(s.body, `suggestion ${s.id} has no body`).toBeTruthy();
+    }
+    expect(data.escalation?.email).toContain("@");
+    expect(data.outcome).not.toBe("ANSWERED");
+  });
+
+  it("a suggestion id can be redeemed with help_get_answer", async () => {
+    const { access_token } = await connect();
+    const found = await call(access_token, "tools/call", {
+      name: "help_find_feature",
+      arguments: { query: "do you integrate with quickbooks" },
+    });
+    const id = payload(found).data.suggestions[0]!.id;
+
+    const got = await call(access_token, "tools/call", {
+      name: "help_get_answer",
+      arguments: { id },
+    });
+    expect(got.status).toBe(200);
+    const answer = payload(got).data.answer;
+    expect(answer?.id).toBe(id);
+    expect(answer?.body.length).toBeGreaterThan(20);
+  });
+
+  it("an unknown help id is refused, not answered with something else", async () => {
+    const { access_token } = await connect();
+    const res = await call(access_token, "tools/call", {
+      name: "help_get_answer",
+      arguments: { id: "no-such-topic-at-all" },
+    });
+    expect(res.body.result.isError).toBe(true);
+    expect(res.body.result.content[0].text).toContain("no help topic");
+  });
+
+  it("🔴 ChairBack's OWN documentation is not labelled untrusted shop data", async () => {
+    // The help tools read no shop rows at all - their payload is static
+    // product documentation compiled into the server. Telling the model to
+    // treat it as untrusted content from a shop's records made a cautious
+    // assistant hedge ChairBack's own answers.
+    const { access_token } = await connect();
+    const res = await call(access_token, "tools/call", {
+      name: "help_find_feature",
+      arguments: { query: "how do punch cards work" },
+    });
+    const env = payload(res);
+    expect(env.chairback).toBe("chairback-documentation");
+    expect(env.notice).toBe(SERVER_AUTHORED_NOTICE);
+    expect(env.notice).not.toBe(UNTRUSTED_NOTICE);
+  });
+
+  it("a tool that DOES read shop rows keeps the untrusted envelope", async () => {
+    // The boundary still exists and still defaults closed - only the two
+    // chairScope:"none" help tools are server-authored.
+    const { access_token } = await connect();
+    const res = await call(access_token, "tools/call", {
+      name: "readiness_report",
+      arguments: {},
+    });
+    const env = payload(res);
+    expect(env.chairback).toBe("untrusted-data");
+    expect(env.notice).toBe(UNTRUSTED_NOTICE);
+  });
+
+  it("🔴 notifications/initialized gets 202, not a 404 error body", async () => {
+    // Every spec-compliant client sends this the instant the handshake
+    // completes. Answering an error made a correct client look broken.
+    const { access_token } = await connect();
+    const res = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${access_token}`)
+      .send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    expect(res.status).toBe(202);
+    expect(res.text).toBe("");
+  });
+
+  it("an unknown non-notification method is still a proper error", async () => {
+    const { access_token } = await connect();
+    const res = await call(access_token, "resources/list");
+    expect(res.status).toBe(404);
+    expect(res.body.error.message).toBe("unknown method");
+  });
+});
+
 describe("🔴 the OAuth endpoints accept form-encoded bodies", () => {
   it("the token endpoint parses a form body at all", async () => {
     // The exact symptom: a form body that did not parse produced
