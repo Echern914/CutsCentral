@@ -2423,6 +2423,20 @@ model Appointment {
   // busy set + overlap guards (and swept to CANCELED) so it releases the slot
   // without a slot-opened blast. Cleared (set null) when the hold is booked.
   holdExpiresAt DateTime?
+  // WHICH KIND of hold this is. null = the AI-receptionist hold described
+  // above (every row before this column existed). "payment" = a customer is on
+  // the checkout screen right now, paying the deposit or the full ticket, and
+  // the chair is theirs until they finish or the window lapses.
+  //
+  // The two kinds differ in exactly one respect that matters, and it is the
+  // reason this column exists rather than a bare boolean: a receptionist hold
+  // is deliberately NOT mirrored to Acuity (minutes long, lapses on its own,
+  // usually released before anyone could have booked it), whereas a PAYMENT
+  // hold must be, because a real customer is mid-checkout and Acuity selling
+  // that chair underneath them is the exact outage the mirror exists to
+  // prevent. shouldMirrorOnCreate reads this. Everything else - the busy set,
+  // the overlap guards, the sweep - treats both kinds identically.
+  holdReason    String?
   // Origin marker: "receptionist" for AI-created rows; null for everything else.
   bookedVia     String?
   // Client check-in ("On my way"). A nullable TEXT sub-state of BOOKED, not an

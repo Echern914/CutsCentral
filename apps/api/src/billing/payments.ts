@@ -260,6 +260,7 @@ export async function applyPaymentEvent(event: Stripe.Event): Promise<boolean> {
         },
         noDowngrade ? ["succeeded", "refunded", "partially_refunded"] : undefined,
       );
+      if (pi.status === "succeeded") await promoteHoldForPaidIntent(pi);
       return true;
     }
     case "charge.refunded": {
@@ -291,6 +292,45 @@ export async function applyPaymentEvent(event: Stripe.Event): Promise<boolean> {
     }
     default:
       return false; // not a payment event (account.updated handled in connect.ts)
+  }
+}
+
+/**
+ * The money landed: turn the payment hold into a real booking.
+ *
+ * This is the moment a deposit/pay-ahead booking becomes real. Until it runs,
+ * the appointment is a PENDING hold that expires on its own, so a customer who
+ * abandons the payment screen releases the chair instead of keeping it.
+ *
+ * Deliberately only on `succeeded`. `payment_intent.payment_failed` is NOT a
+ * signal to release the hold: a declined card leaves the intent reusable and
+ * the customer is very often typing in a second one. Letting the window lapse
+ * is the only honest way to tell "gave up" from "trying again".
+ *
+ * If we cannot honor the slot after taking the money, refund it in full -
+ * never leave a customer charged for an appointment that does not exist.
+ *
+ * Dynamically imported to keep the dependency one-directional: the hold
+ * service imports this module for refunds, so a static import here would be a
+ * cycle. Same pattern services/referral.ts uses to reach the Stripe client.
+ */
+async function promoteHoldForPaidIntent(pi: Stripe.PaymentIntent): Promise<void> {
+  const appointmentId = pi.metadata?.appointmentId;
+  const shopId = pi.metadata?.shopId;
+  if (!appointmentId || !shopId) return; // not a booking payment (terminal, etc.)
+  try {
+    const { promotePaidHold, refundUnhonoredHold } = await import(
+      "../services/appointmentPaymentHold.js"
+    );
+    const outcome = await promotePaidHold({ appointmentId });
+    if (outcome === "lapsed" || outcome === "slot_taken") {
+      await refundUnhonoredHold({ appointmentId, shopId });
+    }
+  } catch (err) {
+    // Never throw into the webhook: Stripe would retry the whole event and
+    // re-run the reconcile above. The row is already correct; the appointment
+    // is recoverable by hand and loud in the log.
+    logger.error({ err, appointmentId }, "promoting a paid hold failed");
   }
 }
 

@@ -113,6 +113,11 @@ const CANDIDATE_SELECT = {
   startsAt: true,
   endsAt: true,
   holdExpiresAt: true,
+  // Load-bearing: shouldMirrorOnCreate reads it to tell a payment hold (which
+  // IS mirrored) from a receptionist hold (which is not). The slice below is
+  // cast, not inferred, so leaving this out would silently read as undefined
+  // and quietly demote every payment hold back to "never mirror".
+  holdReason: true,
   visitId: true,
 } as const;
 

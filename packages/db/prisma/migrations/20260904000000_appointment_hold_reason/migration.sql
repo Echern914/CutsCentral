@@ -1,0 +1,27 @@
+-- Which KIND of hold a PENDING+holdExpiresAt row is.
+--
+-- Until now every ephemeral hold came from one place (the AI receptionist),
+-- so "has holdExpiresAt" and "is a receptionist hold" were the same fact and
+-- one column carried both. Deposit/pay-ahead bookings add a second kind: a
+-- customer sitting on the checkout screen with the chair held while they pay.
+--
+-- The two kinds are identical to every guard, the busy set and the sweep. They
+-- differ in exactly one place - shouldMirrorOnCreate - because a receptionist
+-- hold is deliberately not mirrored to Acuity (minutes long, lapses on its
+-- own, usually released before anyone could have booked it) while a payment
+-- hold MUST be: a real customer is mid-checkout, and Acuity selling that chair
+-- underneath them is the exact failure the mirror exists to prevent.
+--
+-- NULL on every existing row, which reads as "receptionist hold" and is
+-- precisely the behaviour those rows already have. Nullable and additive, so
+-- this is safe to deploy ahead of the code that writes it.
+ALTER TABLE "Appointment" ADD COLUMN IF NOT EXISTS "holdReason" TEXT;
+
+-- Deliberately NOT a CHECK-pinned vocabulary yet. There are two values in
+-- play (NULL and 'payment') and a constraint that must be dropped and re-added
+-- to grow is a poor trade for a column read by one predicate. Add one here if
+-- a third kind of hold ever appears.
+--
+-- Deliberately NO new index. The existing (status, holdExpiresAt) index still
+-- serves the sweep and the busy-set exclusion; holdReason is only ever read
+-- from an already-located row, never scanned on.

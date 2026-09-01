@@ -798,6 +798,7 @@ export async function buildObserveReport(
       startsAt: true,
       endsAt: true,
       holdExpiresAt: true,
+      holdReason: true, // shouldMirrorOnCreate below reads it; the slice is cast, not inferred
       visitId: true,
       staff: { select: { name: true, acuityCalendarId: true, acuityCalendarMappedAt: true } },
     },
