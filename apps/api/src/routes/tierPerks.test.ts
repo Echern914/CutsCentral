@@ -171,3 +171,93 @@ describe("the client sees where they stand", () => {
     }
   });
 });
+
+describe("book the usual", () => {
+  /**
+   * The note asked for "an auto rebook for the haircut they had in the past,
+   * all they have to do is pick a time". The link has to name the service AND
+   * the provider, and it has to disappear the moment we cannot honour it -
+   * a link that dead-ends on arrival is worse than the ordinary menu.
+   */
+  async function usualFor(token: string) {
+    const res = await request(app).get(`/api/rewards/${token}`);
+    expect(res.status).toBe(200);
+    return res.body.usual as {
+      serviceId: string;
+      staffId: string;
+      serviceName: string;
+      staffName: string;
+      url: string;
+    } | null;
+  }
+
+  it("offers nothing before there is a booking to repeat", async () => {
+    expect(await usualFor(magicToken)).toBeNull();
+  });
+
+  it("🔴 names the last service AND provider, in a link that pre-picks both", async () => {
+    const client = await prisma.client.findFirstOrThrow({ where: { shopId } });
+    const staff = await prisma.staff.create({ data: { shopId, name: "Drick" } });
+    const service = await prisma.service.create({
+      data: { shopId, name: "Skin fade", durationMin: 30, price: 40 },
+    });
+    await prisma.shop.update({
+      where: { id: shopId },
+      data: { bookingMode: "native", slug: `tier-${randomToken(5).toLowerCase()}` },
+    });
+    await prisma.appointment.create({
+      data: {
+        shopId,
+        clientId: client.id,
+        staffId: staff.id,
+        serviceId: service.id,
+        status: "COMPLETED",
+        startsAt: new Date("2026-04-10T15:00:00Z"),
+        endsAt: new Date("2026-04-10T15:30:00Z"),
+        manageToken: randomToken(16),
+        firstName: "Ricky",
+      },
+    });
+
+    const usual = await usualFor(magicToken);
+    expect(usual).not.toBeNull();
+    expect(usual!.serviceName).toBe("Skin fade");
+    expect(usual!.staffName).toBe("Drick");
+    // The link is the whole feature: it must carry BOTH ids, or the client
+    // lands back on the menu they were meant to skip.
+    expect(usual!.url).toContain(`service=${usual!.serviceId}`);
+    expect(usual!.url).toContain(`staff=${usual!.staffId}`);
+    expect(usual!.url).toContain("/book/");
+  });
+
+  it("🔴 withdraws the offer when the service is retired", async () => {
+    // The link would resolve to a service the booking page no longer lists, so
+    // the prefill silently does nothing and the client wonders what happened.
+    await prisma.service.updateMany({ where: { shopId }, data: { active: false } });
+    try {
+      expect(await usualFor(magicToken)).toBeNull();
+    } finally {
+      await prisma.service.updateMany({ where: { shopId }, data: { active: true } });
+    }
+  });
+
+  it("🔴 withdraws the offer when the provider has left", async () => {
+    await prisma.staff.updateMany({ where: { shopId }, data: { active: false } });
+    try {
+      expect(await usualFor(magicToken)).toBeNull();
+    } finally {
+      await prisma.staff.updateMany({ where: { shopId }, data: { active: true } });
+    }
+  });
+
+  it("offers nothing when the shop books somewhere else", async () => {
+    // An Acuity/Square shop's calendar does not live here, so a /book/ link
+    // would be a link to a page that cannot take the booking.
+    await prisma.shop.update({ where: { id: shopId }, data: { bookingMode: "acuity" } });
+    try {
+      expect(await usualFor(magicToken)).toBeNull();
+    } finally {
+      await prisma.shop.update({ where: { id: shopId }, data: { bookingMode: "native" } });
+    }
+  });
+});

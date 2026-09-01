@@ -84,6 +84,7 @@ export function RewardsClient({
     client,
     cadence,
     loyalty,
+    usual,
     consent,
     punches,
     rewards,
@@ -544,20 +545,53 @@ export function RewardsClient({
               the shop page's rewards sub-view, the shop page owns Book - two
               competing "book" entry points made the card feel like an ad rather
               than the client's own record; back-to-shop lives in the header. */}
-          {!shopHref && shop.bookingUrl && (
+          {!shopHref && (usual || shop.bookingUrl) && (
             <motion.div variants={fadeUp} className="text-center">
-              <a
-                href={shop.bookingUrl}
-                className="block w-full py-3.5 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01]"
-                style={{
-                  backgroundColor: accent,
-                  color: t.onAccent,
-                  boxShadow: `0 8px 30px -10px ${accent}AA`,
-                  borderRadius: t.buttonRadius,
-                }}
-              >
-                Book your next {serviceNoun}
-              </a>
+              {/* 🔴 "The usual" first, when we know it. The generic link drops
+                  the client at a menu they have already worked through however
+                  many times they have been here - service, then provider, then
+                  a day, then a time. This one lands them on the calendar for
+                  the exact thing they had last time, so the only decision left
+                  is when. Falls back to the plain link the moment anything is
+                  unknown, retired, or belongs to another booking system. */}
+              {usual ? (
+                <>
+                  <a
+                    href={usual.url}
+                    className="block w-full py-3.5 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01]"
+                    style={{
+                      backgroundColor: accent,
+                      color: t.onAccent,
+                      boxShadow: `0 8px 30px -10px ${accent}AA`,
+                      borderRadius: t.buttonRadius,
+                    }}
+                  >
+                    Book the usual — {usual.serviceName} with {usual.staffName}
+                  </a>
+                  {shop.bookingUrl && (
+                    <a
+                      href={shop.bookingUrl}
+                      className="mt-2 inline-block text-xs underline underline-offset-2"
+                      style={{ color: t.muted }}
+                    >
+                      Book something else
+                    </a>
+                  )}
+                </>
+              ) : shop.bookingUrl ? (
+                <a
+                  href={shop.bookingUrl}
+                  className="block w-full py-3.5 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01]"
+                  style={{
+                    backgroundColor: accent,
+                    color: t.onAccent,
+                    boxShadow: `0 8px 30px -10px ${accent}AA`,
+                    borderRadius: t.buttonRadius,
+                  }}
+                >
+                  Book your next {serviceNoun}
+                </a>
+              ) : null}
             </motion.div>
           )}
 

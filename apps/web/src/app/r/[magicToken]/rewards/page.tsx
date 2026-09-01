@@ -54,6 +54,19 @@ export interface RewardsData {
     perk: string | null;
     nextTier: { label: string; visitsAway: number; perk: string | null } | null;
   };
+  /**
+   * What "book my usual" would book - the service and provider from this
+   * client's last booking. Null when there is no prior booking, the shop has
+   * no public page, or its bookings live in another system.
+   */
+  usual: {
+    serviceId: string;
+    staffId: string;
+    serviceName: string;
+    staffName: string;
+    /** Server-built: the native booking page with the pick already made. */
+    url: string;
+  } | null;
   consent: {
     state: "opted_in" | "needs_consent" | "opted_out";
     hasPhone: boolean;

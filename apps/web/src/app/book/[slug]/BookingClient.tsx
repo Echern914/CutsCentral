@@ -116,7 +116,24 @@ const WEEKDAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
 /** Fixed gold for special slots — see the note in BookingClient. */
 const SPECIAL_GOLD = "#D4AF37";
 
-export function BookingClient({ data }: { data: BookShopData }) {
+/**
+ * A rebook prefill from a link: "the usual, just pick a time".
+ *
+ * Ids only, and only ones already public on this page - this preselects what
+ * the client could have tapped themselves, and grants nothing.
+ */
+export interface BookingPrefill {
+  serviceId: string | null;
+  staffId: string | null;
+}
+
+export function BookingClient({
+  data,
+  prefill = null,
+}: {
+  data: BookShopData;
+  prefill?: BookingPrefill | null;
+}) {
   // Clear the native app's WebView spinner (reachable from the shop page's Book
   // CTA inside the app; the shell may be waiting on this ready signal).
   useSignalNativeReady();
@@ -1094,6 +1111,48 @@ export function BookingClient({ data }: { data: BookShopData }) {
       loadSlots(id, pool);
     }
   }
+
+  /**
+   * Rebook prefill: land the client on the calendar for the service (and
+   * barber) they had last time, so all that is left is picking a time.
+   *
+   * 🔴 VALIDATED, NEVER TRUSTED. The ids come off a URL that may be months old
+   * and forwarded to anyone. A service that has been retired, renamed away, or
+   * a barber who has left, must not error and must not silently book something
+   * else - it degrades to the ordinary booking page, which is exactly what the
+   * client would have seen anyway.
+   *
+   * 🔴 Deliberately skipped during the demo tour: the tour drives the same
+   * controls, and two auto-drivers racing would land somewhere neither meant.
+   */
+  const prefilled = useRef(false);
+  useEffect(() => {
+    if (demoTour || prefilled.current || !prefill) return;
+    if (serviceId || bookableServices.length === 0) return;
+    prefilled.current = true;
+
+    const svc = prefill.serviceId
+      ? bookableServices.find((s) => s.id === prefill.serviceId)
+      : undefined;
+    if (!svc) return; // unknown or no-longer-bookable service: ordinary flow
+
+    const pool = staffPoolFor(svc.id);
+    // The barber only survives if they still work here AND still do this
+    // service; otherwise the client picks, rather than us choosing for them.
+    const stf =
+      prefill.staffId && pool.includes(prefill.staffId)
+        ? data.staff.find((s) => s.id === prefill.staffId)
+        : undefined;
+
+    pickService(svc.id);
+    // pickService already loads the calendar for a single-barber service; only
+    // force it for a multi-barber one, so this costs exactly one fetch either way.
+    if (stf && pool.length > 1) {
+      setStaffId(stf.id);
+      loadSlots(svc.id, [stf.id]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill, demoTour, bookableServices.length]);
 
   // Add-ons valid for the chosen service (shop-wide null, or scoped to it).
   const addOnsForService = useMemo(() => {

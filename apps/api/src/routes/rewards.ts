@@ -63,7 +63,18 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
     if (!client) return null;
 
     const now = new Date();
-    const [visits, upcoming, rewards, promotions, redemptions, completedCount, cardTypes, grants, ledgerGroups] =
+    const [
+      visits,
+      upcoming,
+      rewards,
+      promotions,
+      redemptions,
+      completedCount,
+      cardTypes,
+      grants,
+      ledgerGroups,
+      lastAppointment,
+    ] =
       await Promise.all([
       tx.visit.findMany({
       where: { shopId: client.shopId, clientId: client.id, status: "COMPLETED" },
@@ -179,11 +190,42 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
       where: { shopId: client.shopId, clientId: client.id },
       _sum: { punchesEarned: true, punchesRedeemed: true },
     }),
+      /**
+       * "The usual" - the service and barber from this client's last booking,
+       * so the page can offer a one-tap rebook where all that is left is
+       * picking a time.
+       *
+       * 🔴 FROM Appointment, NOT Visit. A Visit row carries only a serviceName
+       * STRING (it is the synced/imported shape), and a name cannot be
+       * prefilled into a booking flow that works in ids.
+       *
+       * 🔴 Both must still be BOOKABLE. A retired service or a departed barber
+       * would make a link that dead-ends on arrival, so the offer is withheld
+       * and the client gets the ordinary booking page - which is what they
+       * would have seen anyway.
+       */
+      tx.appointment.findFirst({
+        where: {
+          shopId: client.shopId,
+          clientId: client.id,
+          status: { in: ["BOOKED", "COMPLETED"] },
+          service: { active: true },
+          staff: { active: true },
+        },
+        orderBy: { startsAt: "desc" },
+        select: {
+          serviceId: true,
+          staffId: true,
+          service: { select: { name: true } },
+          staff: { select: { name: true } },
+        },
+      }),
     ]);
     return {
       client,
       visits,
       upcoming,
+      lastAppointment,
       rewards,
       promotions,
       redemptions,
@@ -202,6 +244,7 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
     client,
     visits,
     upcoming,
+    lastAppointment,
     rewards,
     promotions,
     redemptions,
@@ -255,6 +298,29 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
         }
       : null,
   };
+
+  // What "book my usual" would book. Null when we cannot honour it: no prior
+  // booking, a shop with no public page, or a shop whose bookings live in
+  // Acuity/Square rather than here.
+  //
+  // 🔴 THE SERVER BUILDS THE URL. `shop.bookingUrl` is the EXTERNAL link column
+  // (Acuity/Booksy/Square) and is normally NULL for a native shop - the very
+  // shops this feature is for. Reusing it would have meant the button never
+  // rendered for anybody. The native booking page is /book/<slug>, and this is
+  // the one place that knows both the slug and APP_BASE_URL.
+  const usual =
+    lastAppointment && client.shop.slug && client.shop.bookingMode === "native"
+      ? {
+          serviceId: lastAppointment.serviceId,
+          staffId: lastAppointment.staffId,
+          serviceName: lastAppointment.service.name,
+          staffName: lastAppointment.staff.name,
+          url:
+            `${env.APP_BASE_URL}/book/${client.shop.slug}` +
+            `?service=${encodeURIComponent(lastAppointment.serviceId)}` +
+            `&staff=${encodeURIComponent(lastAppointment.staffId)}`,
+        }
+      : null;
 
   // The punch grid counts toward the cheapest reward the client can't afford
   // yet; with everything in reach (or an empty menu) there's no next target.
@@ -399,6 +465,9 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
     // Whether the API can mint Apple Wallet passes (WALLET_* env configured) -
     // drives the rewards page's Add-to-Wallet button. Hidden while rewards are
     // off (already-installed passes keep working via the wallet routes).
+    // One-tap rebook of the client's usual. Distinct from `rebook` below, which
+    // is the countdown STATE ("you're due"); this is WHAT to book.
+    usual,
     wallet: { available: rewardsOn && walletEnabled() },
     punches: {
       balance: rewardsOn ? balance : 0,
