@@ -200,6 +200,19 @@ export function BookingClient({
   // and the total; validated at create (if they overflow the slot, the create
   // returns invalid_slot and the customer picks another time).
   const [addOnIds, setAddOnIds] = useState<string[]>([]);
+  /**
+   * A standing appointment: null = just once. Offered only when the API says
+   * the shop allows it (recurringAvailable) and no add-ons or special are in
+   * play - both refused server-side, so the control hides rather than letting
+   * a choice be silently dropped at submit.
+   */
+  const [repeat, setRepeat] = useState<{ interval: number; count: number } | null>(null);
+  /** What the series booking actually produced, for the confirmation screen. */
+  const [seriesResult, setSeriesResult] = useState<{
+    booked: number;
+    total: number;
+    skipped: string[];
+  } | null>(null);
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [phone, setPhone] = useState("");
@@ -1290,6 +1303,11 @@ export function BookingClient({
         addOnIds:
           !slotTargeted && addOnIds.length > 0 ? addOnIds : undefined,
         targetedSlotId: slotTargeted?.id,
+        // Sent only when the control was visible for it - the same conditions
+        // that hide it. A repeat chosen before an add-on was added is not
+        // sent, which matches what the customer can see on the screen.
+        recurrence:
+          repeatOffered && repeat ? { interval: repeat.interval, count: repeat.count } : undefined,
       });
       if (!res.ok) {
         if (res.error === "slot_taken") {
@@ -1351,9 +1369,16 @@ export function BookingClient({
         return;
       }
       setWasRequest(Boolean(res.pending));
+      setSeriesResult(res.series ?? null);
       setConfirmedToken(res.manageToken ?? null);
     });
   }
+
+  // When the repeat control may be shown - and, identically, when a chosen
+  // repeat is sent. One expression for both, so they cannot drift.
+  const repeatOffered =
+    data.shop.recurringAvailable === true && !slotTargeted && addOnIds.length === 0;
+  const repeatMax = Math.max(2, Math.min(52, data.shop.recurringMaxCount ?? 12));
 
   // Sorted day keys (YYYY-MM-DD; lexicographic == chronological). Everything
   // downstream — the calendar month fallback, the soonest slot, availableDays —
@@ -1560,6 +1585,23 @@ export function BookingClient({
               {selectedService ? (
                 <span className="font-normal text-muted"> · {selectedService.name}</span>
               ) : null}
+            </p>
+          )}
+          {/* A standing appointment: what actually landed, and WHICH dates did
+              not. A customer who asked for twelve and got ten must hear it
+              here, not from a missing reminder in March. */}
+          {seriesResult && (
+            <p className="mt-2 text-sm">
+              <span className="font-semibold">
+                {seriesResult.booked} of {seriesResult.total} visits booked
+              </span>
+              {seriesResult.skipped.length > 0 && (
+                <span className="block text-xs text-muted">
+                  Already taken, so not booked:{" "}
+                  {seriesResult.skipped.map((d) => dateFmt.format(new Date(d))).join(", ")}.
+                  Book those separately if you still want them.
+                </span>
+              )}
             </p>
           )}
           <p className="mt-2 text-sm text-muted">
@@ -2491,6 +2533,64 @@ export function BookingClient({
               onChange={(e) => setEmail(e.target.value)}
               aria-label="Email"
             />
+            {/* A standing appointment. Two decisions, kept to two controls:
+                how often, and for how many visits. Hidden entirely when the
+                shop takes payment at booking or runs approval (the API decides
+                that, and would refuse the write), and while a special or an
+                add-on is selected (neither can repeat). */}
+            {repeatOffered && (
+              <div className="flex flex-col gap-2 rounded-xl border border-white/10 px-3 py-3">
+                <div className="flex items-center justify-between gap-2">
+                  <label htmlFor="repeat-every" className="text-xs text-muted">
+                    Make it a standing appointment?
+                  </label>
+                  <select
+                    id="repeat-every"
+                    className="rounded-lg bg-white/10 px-2 py-1.5 text-base text-offwhite"
+                    value={repeat?.interval ?? 0}
+                    onChange={(e) => {
+                      const interval = Number(e.target.value);
+                      setRepeat(interval === 0 ? null : { interval, count: repeat?.count ?? 6 });
+                    }}
+                  >
+                    <option value={0}>Just this once</option>
+                    <option value={1}>Every week</option>
+                    <option value={2}>Every 2 weeks</option>
+                    <option value={3}>Every 3 weeks</option>
+                    <option value={4}>Every 4 weeks</option>
+                  </select>
+                </div>
+                {repeat && (
+                  <div className="flex items-center justify-between gap-2">
+                    <label htmlFor="repeat-count" className="text-xs text-muted">
+                      For how many visits?
+                    </label>
+                    <select
+                      id="repeat-count"
+                      className="rounded-lg bg-white/10 px-2 py-1.5 text-base text-offwhite"
+                      value={repeat.count}
+                      onChange={(e) =>
+                        setRepeat({ interval: repeat.interval, count: Number(e.target.value) })
+                      }
+                    >
+                      {Array.from({ length: repeatMax - 1 }, (_, i) => i + 2).map((n) => (
+                        <option key={n} value={n}>
+                          {n} visits
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {repeat && slot !== null && (
+                  <p className="text-xs text-muted">
+                    Same time, {timeFmt.format(new Date(slot))}, every{" "}
+                    {repeat.interval === 1 ? "week" : `${repeat.interval} weeks`} — each visit gets
+                    its own reminder and can be moved or cancelled on its own. If a date is
+                    already taken we&apos;ll book the rest and tell you which one.
+                  </p>
+                )}
+              </div>
+            )}
             <label className="flex items-start gap-2 text-xs text-muted">
               <input
                 type="checkbox"
@@ -2542,7 +2642,11 @@ export function BookingClient({
               className={primaryBtn}
               style={{ backgroundColor: accent, color: onAccent }}
             >
-              {pending ? "Booking…" : "Confirm booking"}
+              {pending
+                ? "Booking…"
+                : repeatOffered && repeat
+                  ? `Confirm ${repeat.count} visits`
+                  : "Confirm booking"}
             </button>
           </div>
         </Section>

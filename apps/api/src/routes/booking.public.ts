@@ -2,7 +2,15 @@ import { Router } from "express";
 import { z } from "zod";
 import { countBookingRefusals } from "../services/bookingRefusal.js";
 import { redactForAudit } from "../messaging/auditBody.js";
-import { apiEnv, randomToken, vocabularyForShop, zonedWallTimeToUtc } from "@chairback/config";
+import {
+  apiEnv,
+  localMinutesOfDay,
+  randomToken,
+  vocabularyForShop,
+  zonedDateParts,
+  zonedWallTimeToUtc,
+} from "@chairback/config";
+import { materializeSeries, type RecurrencePattern } from "../engines/recurringSeries.js";
 import { prisma, Prisma } from "@chairback/db";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
@@ -475,6 +483,11 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
             note: shop.payDirectNote,
           }
         : null,
+      // Whether the form may offer "repeat this every N weeks". The SAME
+      // predicate the POST refuses with, so the page never offers what the
+      // write would turn down.
+      recurringAvailable: recurringOfferedTo(shop),
+      recurringMaxCount: PUBLIC_MAX_OCCURRENCES,
     },
     staff,
     services: services.map((s) => {
@@ -1329,6 +1342,53 @@ async function computeOpenDays(shop: {
 }
 
 // POST /api/book/:slug - create a booking. Tighter (lead) limiter: anti-spam.
+/**
+ * How many occurrences a CUSTOMER may book in one tap.
+ *
+ * The barber's own form allows 52. A customer gets 12 - about six months
+ * fortnightly - because one tap on a public page must not be able to fill a
+ * calendar, and because a standing appointment is a promise the shop is also
+ * making; a season is a reasonable first promise.
+ */
+const PUBLIC_MAX_OCCURRENCES = 12;
+
+/**
+ * 🔴 WHETHER A CUSTOMER MAY BOOK A STANDING APPOINTMENT HERE - decided ONCE,
+ * and used by both the GET (to offer it) and the POST (to refuse it).
+ *
+ * The public page must never offer what the write then refuses: that
+ * read/write split is exactly what produced the Aug-29 booking outage. So the
+ * GET payload's `recurringAvailable` and the POST's `recurrence_unavailable`
+ * refusal are the same function, not two opinions.
+ *
+ * Off when the shop takes money at booking. Twelve fortnightly bookings at a
+ * deposit shop is a real money question - twelve deposits, one, or none - and
+ * this ships the feature for the shops that pay at the chair while leaving
+ * that decision to a human rather than making it silently. Also off for
+ * approval-mode shops: a series of twelve requests is twelve decisions for the
+ * barber, which is not what "approve each booking" was asking for.
+ *
+ * Reuses collectsPaymentUpFront for the payment half rather than re-deriving
+ * it, with a priced-service sentinel: if a $1 service would be charged, every
+ * priced service would be.
+ */
+function recurringOfferedTo(shop: {
+  paymentsMode: string | null;
+  requireBookingApproval: boolean;
+  connectChargesEnabled: boolean;
+  stripeConnectAccountId: string | null;
+}): boolean {
+  if (shop.requireBookingApproval) return false;
+  return !collectsPaymentUpFront({
+    connectEnabled: connectEnabled(),
+    paymentsMode: shop.paymentsMode,
+    requireBookingApproval: shop.requireBookingApproval,
+    connectChargesEnabled: shop.connectChargesEnabled,
+    stripeConnectAccountId: shop.stripeConnectAccountId,
+    chargeCents: 1,
+  });
+}
+
 const createSchema = z
   .object({
     staffId: z.string().min(1),
@@ -1352,8 +1412,30 @@ const createSchema = z
     // Booking a barber-published TARGETED slot: its id fixes the time, length,
     // and price (validated server-side against the slot row; capacity 1).
     targetedSlotId: z.string().min(1).optional(),
+    // A standing appointment: this slot, then every `interval` weeks, `count`
+    // times in all (the first occurrence included). Count only - an end DATE
+    // is a barber's planning tool; a customer thinks in "for the next N".
+    recurrence: z
+      .object({
+        interval: z.number().int().min(1).max(8),
+        count: z.number().int().min(2).max(PUBLIC_MAX_OCCURRENCES),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
+  // A targeted slot is one piece of barber-published inventory at one time;
+  // it cannot repeat. Refused rather than silently un-targeted.
+  .refine((d) => !(d.recurrence && d.targetedSlotId), {
+    message: "A special can't repeat - book it on its own.",
+    path: ["recurrence"],
+  })
+  // Add-ons are not carried across a series (the barber's own form drops them
+  // silently; a customer paying for one deserves a refusal instead).
+  .refine((d) => !(d.recurrence && d.addOnIds && d.addOnIds.length > 0), {
+    message: "Add-ons can't repeat - book them on a single visit.",
+    path: ["recurrence"],
+  })
   .refine((d) => Boolean(d.phone?.trim()) || Boolean(d.email?.trim()), {
     message: "Provide a phone or email.",
     path: ["phone"],
@@ -1622,6 +1704,134 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       "acuity mirror: ENFORCE with unmapped/stale chair - refusing this barber's bookings",
     );
     res.status(409).json({ error: "slot_unavailable_external" });
+    return;
+  }
+
+  // ── A STANDING APPOINTMENT ────────────────────────────────────────────────
+  //
+  // Everything above still applied: the service is real and offered by this
+  // staff member, the FIRST time is a genuinely open slot inside the shop's
+  // lead/max window, and the chair's mirror is healthy. From here the series
+  // engine takes over - the same materializeSeries the barber's own form uses,
+  // with checkAvailability ON, so every later occurrence is gated by hours,
+  // exceptions and the per-occurrence overlap lock exactly like a customer
+  // booking it by hand, and a taken date is skipped and reported, never forced.
+  if (d.recurrence) {
+    // The read said no, or the shop changed since the page loaded. One code,
+    // the same predicate the GET used, so the two can never disagree.
+    if (!recurringOfferedTo(shop)) {
+      res.status(409).json({ error: "recurrence_unavailable" });
+      return;
+    }
+
+    // Same tenant-scoped client upsert as the single booking below. Done once,
+    // up front, because the engine runs each occurrence in its own transaction
+    // and all twelve must land on one Client row.
+    const client = await prisma.client.upsert({
+      where: { shopId_acuityClientKey: { shopId: shop.id, acuityClientKey } },
+      create: {
+        shopId: shop.id,
+        acuityClientKey,
+        magicToken: randomToken(),
+        firstName: d.firstName,
+        lastName: d.lastName || null,
+        phone,
+        email: d.email || null,
+        source: "manual",
+        smsConsentAt: consented ? now : null,
+        smsConsentSource: consented ? "booking" : null,
+      },
+      update: {
+        firstName: d.firstName,
+        lastName: d.lastName || undefined,
+        phone: phone ?? undefined,
+        email: d.email || undefined,
+      },
+      select: { id: true },
+    });
+    if (consented) {
+      await prisma.client.updateMany({
+        where: { id: client.id, smsConsentAt: null },
+        data: { smsConsentAt: now, smsConsentSource: "booking" },
+      });
+    }
+
+    const pattern: RecurrencePattern = {
+      interval: d.recurrence.interval,
+      weekday: zonedDateParts(startsAt, shop.timezone).weekday,
+      startMin: localMinutesOfDay(startsAt, shop.timezone),
+      count: d.recurrence.count,
+    };
+    const series = await materializeSeries({
+      shopId: shop.id,
+      staffId: d.staffId,
+      serviceId: d.serviceId,
+      clientId: client.id,
+      firstName: d.firstName,
+      lastName: d.lastName || null,
+      phone,
+      email: d.email || null,
+      durationMin: service.durationMin,
+      durationOverrides: service.durationOverrides,
+      timeOverrides: service.timeOverrides,
+      basePrice: service.price === null ? null : Number(service.price),
+      priceOverrides: service.priceOverrides,
+      dateOverrides: service.dateOverrides,
+      timezone: shop.timezone,
+      bookingBufferMin: shop.bookingBufferMin,
+      // A customer never gets the barber's "force it" - hours and exceptions
+      // gate every occurrence.
+      checkAvailability: true,
+      pattern,
+      anchor: startsAt,
+      now,
+    });
+
+    const first = series.booked[0];
+    if (!first) {
+      // Not even the first occurrence landed - it was taken between the
+      // availability check above and the write. Same answer the single path
+      // gives for the same race.
+      res.status(409).json({ error: "slot_taken" });
+      return;
+    }
+    const firstRow = await prisma.appointment.findUnique({
+      where: { id: first.appointmentId },
+      select: { manageToken: true, endsAt: true },
+    });
+
+    // ONE confirmation, for the first visit, not twelve. The series is one
+    // decision the customer made; the email says it repeats. Each later
+    // occurrence still carries its own manage token, so each can be moved or
+    // cancelled on its own from its reminder.
+    void notifyAppointmentConfirmation({ shopId: shop.id, appointmentId: first.appointmentId });
+    void notifyBarberBookingEvent({
+      shopId: shop.id,
+      appointmentId: first.appointmentId,
+      kind: "booked",
+    });
+    invalidateShopAvailabilityCaches(shop.id);
+
+    res.status(201).json({
+      ok: true,
+      manageToken: firstRow?.manageToken ?? null,
+      startsAt: startsAt.toISOString(),
+      endsAt: firstRow?.endsAt?.toISOString() ?? null,
+      pending: false,
+      payment: null,
+      series: {
+        id: series.seriesId,
+        // What actually landed versus what was asked for. A customer who asked
+        // for twelve and got ten must be told which two, not left to find out
+        // from a missing reminder in March.
+        booked: series.booked.length,
+        total: d.recurrence.count,
+        skipped: series.skipped.map((k) => ({
+          startsAt: k.startsAt.toISOString(),
+          reason: k.reason,
+        })),
+      },
+    });
     return;
   }
 
