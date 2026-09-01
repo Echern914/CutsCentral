@@ -213,6 +213,8 @@ export interface BookInput {
   addOnIds?: string[];
   // Booking a barber-published targeted slot (fixed time/length/price).
   targetedSlotId?: string;
+  /** A standing appointment: this time, every `interval` weeks, `count` times. */
+  recurrence?: { interval: number; count: number };
 }
 
 /**
@@ -243,6 +245,12 @@ export async function bookAction(
   paymentHoldMinutes?: number | null;
   // true = the shop requires approval; this is a REQUEST awaiting confirmation.
   pending?: boolean;
+  /**
+   * For a standing appointment: how many of the requested visits actually
+   * landed. `skipped` lists the dates that were already taken, so the screen
+   * can name them rather than let a missing March reminder be the first hint.
+   */
+  series?: { booked: number; total: number; skipped: string[] };
   error?: string;
 }> {
   const res = await apiPublicSend<{
@@ -256,11 +264,23 @@ export async function bookAction(
       holdMinutes?: number;
     } | null;
     pending?: boolean;
+    series?: {
+      booked: number;
+      total: number;
+      skipped: { startsAt: string; reason: string }[];
+    };
   }>("POST", `/api/book/${encodeURIComponent(slug)}`, input);
   if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
   return {
     ok: true,
     manageToken: res.data.manageToken,
+    series: res.data.series
+      ? {
+          booked: res.data.series.booked,
+          total: res.data.series.total,
+          skipped: res.data.series.skipped.map((k) => k.startsAt),
+        }
+      : undefined,
     paymentClientSecret: res.data.payment?.clientSecret ?? null,
     paymentAmountCents: res.data.payment?.amountCents ?? null,
     paymentIsDeposit: res.data.payment?.isDeposit ?? false,

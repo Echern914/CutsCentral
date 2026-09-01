@@ -44,6 +44,15 @@ export interface BookShopData {
       cashApp: string | null;
       note: string | null;
     } | null;
+    /**
+     * Whether the form may offer a standing appointment. Decided by the API
+     * with the SAME predicate the create route refuses with, so this page
+     * never offers what the write would turn down. Optional so a web deploy
+     * ahead of the API simply does not offer it.
+     */
+    recurringAvailable?: boolean;
+    /** The most occurrences a customer may book in one tap (API-owned). */
+    recurringMaxCount?: number;
   };
   staff: { id: string; name: string; bio: string | null; imageUrl: string | null }[];
   services: {
