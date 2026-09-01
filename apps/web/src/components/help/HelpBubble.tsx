@@ -3,18 +3,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { usePathname, useRouter } from "next/navigation";
-import { HELP_STARTERS, type HelpAnswer } from "@chairback/config/help";
+import { HELP_STARTERS } from "@chairback/config/help";
 import { resolveFeature } from "@chairback/config/features";
-import { findHelp, helpAnswerById, type HelpResponse } from "@chairback/config/helpMatch";
+import {
+  resolveSupport,
+  resolveSupportAnswerById,
+  type SupportResolution,
+} from "@chairback/config/supportEngine";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
 
 /**
  * The Assistant, in the corner of every page.
  *
- * Answers come from the curated corpus in @chairback/config/help, matched
- * locally — no network call, no API cost, and nothing that can invent a price
- * or a policy we don't ship. `findHelp` guarantees a useful reply for ANY
- * input, so this component has no "I didn't understand" state to render.
+ * Answers come from `resolveSupport` in @chairback/config — the SAME shared
+ * engine the Assistant tab calls, matched locally against the curated corpus:
+ * no network call, no API cost, and nothing that can invent a price or a
+ * policy we don't ship. The engine guarantees a useful reply for ANY input and
+ * attaches a route to a human whenever it cannot answer, so this component has
+ * no "I didn't understand" state to render and no dead end to fall into.
  *
  * DELIBERATELY NO TYPING INDICATOR. Matching takes about a millisecond, and
  * faking a pause to seem more human would be spending the one advantage this
@@ -36,7 +42,8 @@ import { useIsNativeApp } from "@/lib/useIsNativeApp";
  * client pages are excluded — see HIDDEN_PREFIXES.
  */
 
-const SUPPORT_EMAIL = "support@getchairback.com";
+/** Paragraph separator used by every corpus body. */
+const PARA = "\n\n";
 
 /**
  * Client-facing routes. A barber's shop page belongs to the SHOP, and a
@@ -48,7 +55,7 @@ const HIDDEN_PREFIXES = ["/s/", "/r/", "/book", "/demo", "/welcome", "/team/join
 
 type Message =
   | { id: number; role: "user"; text: string }
-  | { id: number; role: "bot"; text?: string; response?: HelpResponse };
+  | { id: number; role: "bot"; text?: string; response?: SupportResolution };
 
 export function HelpBubble() {
   const pathname = usePathname() ?? "/";
@@ -97,7 +104,15 @@ export function HelpBubble() {
       // `inApp === null` means "not yet known" (pre-hydration). Treat it as the
       // browser, matching useIsNativeApp's documented contract — by the time
       // anyone has typed, the effect has long since resolved.
-      const response = findHelp(trimmed, { inApp: inApp === true });
+      const response = resolveSupport({
+        question: trimmed,
+        // The bubble renders on marketing pages too, where nobody is signed
+        // in. Owner is the widest seat and the corpus is shop-facing; the
+        // engine still withholds any destination this viewer cannot open.
+        actor: "owner",
+        channel: "in_app",
+        seat: { role: "OWNER", inApp: inApp === true },
+      });
       setMessages((prev) => [
         ...prev,
         { id: nextId.current++, role: "user", text: trimmed },
@@ -108,18 +123,29 @@ export function HelpBubble() {
     [inApp],
   );
 
-  /** A suggestion chip: show the canonical question, then answer it exactly. */
-  const openAnswer = useCallback((answer: HelpAnswer) => {
-    setMessages((prev) => [
-      ...prev,
-      { id: nextId.current++, role: "user", text: answer.q },
-      {
-        id: nextId.current++,
-        role: "bot",
-        response: { kind: "answer", answer, suggestions: [] },
-      },
-    ]);
-  }, []);
+  /**
+   * A suggestion chip: show the canonical question, then answer it exactly.
+   * Resolved BY ID, so a tap returns the entry the chip names rather than
+   * whatever re-running the matcher over its text happens to find.
+   */
+  const openAnswer = useCallback(
+    (id: string, label: string) => {
+      setMessages((prev) => [
+        ...prev,
+        { id: nextId.current++, role: "user", text: label },
+        {
+          id: nextId.current++,
+          role: "bot",
+          response: resolveSupportAnswerById(id, {
+            actor: "owner",
+            channel: "in_app",
+            seat: { role: "OWNER", inApp: inApp === true },
+          }),
+        },
+      ]);
+    },
+    [inApp],
+  );
 
   // Greet on first open so the panel is never an empty box with a cursor.
   useEffect(() => {
@@ -193,9 +219,16 @@ export function HelpBubble() {
   const starters = useMemo(() => {
     // Starter chips must obey the same 3.1.1 filter as the corpus, or the very
     // first thing the app shows is a tap straight into plan pricing.
-    return HELP_STARTERS.map((q) => findHelp(q, { inApp: inApp === true }))
+    return HELP_STARTERS.map((q) =>
+      resolveSupport({
+        question: q,
+        actor: "owner",
+        channel: "in_app",
+        seat: { role: "OWNER", inApp: inApp === true },
+      }),
+    )
       .map((r) => r.answer)
-      .filter((a): a is HelpAnswer => a !== null)
+      .filter((a): a is NonNullable<typeof a> => a !== null)
       .slice(0, 5);
   }, [inApp]);
 
@@ -269,7 +302,6 @@ export function HelpBubble() {
                     key={m.id}
                     text={m.text}
                     response={m.response}
-                    inApp={inApp === true}
                     onPick={openAnswer}
                     onNavigate={(href) => {
                       setOpen(false);
@@ -286,7 +318,11 @@ export function HelpBubble() {
                   </p>
                   <div className="flex flex-wrap gap-1.5">
                     {starters.map((s) => (
-                      <Chip key={s.id} label={s.q} onClick={() => openAnswer(s)} />
+                      <Chip
+                        key={s.id}
+                        label={s.question}
+                        onClick={() => openAnswer(s.id, s.question)}
+                      />
                     ))}
                   </div>
                 </div>
@@ -360,30 +396,28 @@ function UserBubble({ text }: { text: string }) {
 function BotBubble({
   text,
   response,
-  inApp,
   onPick,
   onNavigate,
 }: {
   text?: string;
-  response?: HelpResponse;
-  /** Inside the native shell — the registry withholds billing destinations. */
-  inApp: boolean;
-  onPick: (a: HelpAnswer) => void;
+  response?: SupportResolution;
+  onPick: (id: string, label: string) => void;
   onNavigate: (href: string) => void;
 }) {
   const answer = response?.answer ?? null;
   const suggestions = response?.suggestions ?? [];
-  const body = answer?.a ?? text ?? "";
-  // The corpus names a feature id; the registry turns it into a route this
-  // reader is actually allowed to open, or into nothing at all.
-  const resolved = answer?.action ? resolveFeature(answer.action.featureId, { inApp }) : null;
-  const action = resolved?.ok ? resolved : null;
+  const escalation = response?.escalation ?? null;
+  const body = answer?.body ?? text ?? "";
+  // The engine already resolved the destination against this reader's seat - a
+  // refusal (billing inside the shell, a page this seat cannot open) arrives as
+  // a null action rather than as a link that dead-ends.
+  const action = answer?.action ?? null;
 
   return (
     <div className="flex flex-col items-start gap-2">
       {body && (
         <div className="max-w-[92%] space-y-2 rounded-2xl rounded-bl-sm bg-charcoal-700/70 px-3 py-2">
-          {body.split("\n\n").map((para, i) => (
+          {body.split(PARA).map((para, i) => (
             <p key={i} className="whitespace-pre-line text-sm leading-relaxed text-offwhite">
               {para}
             </p>
@@ -391,51 +425,52 @@ function BotBubble({
         </div>
       )}
 
-      {/* The answer names a FEATURE, and the registry decides whether this
-          reader may go there. A refusal (billing inside the shell, a page this
-          seat cannot open) renders no button rather than a link that dead-ends
-          — the answer itself still stands on its own. */}
       {action && (
         <button
           type="button"
           onClick={() => onNavigate(action.href)}
           className="rounded-full border border-gold/40 px-3 py-1 text-xs font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
         >
-          {answer!.action!.label} →
+          {action.label} →
         </button>
       )}
 
-      {/* The no-dead-end branch: we weren't confident, so say so plainly and
-          hand over the closest topics plus a real person. Never a shrug. */}
-      {response && response.kind === "suggestions" && (
+      {/* The no-dead-end branch. The ENGINE decides there is no confident
+          answer and hands over an escalation; this renders both halves of what
+          it gave us, so the guarantee cannot be lost in a component. */}
+      {escalation && (
         <div className="max-w-[92%] space-y-2">
           <p className="text-sm leading-relaxed text-offwhite">
-            I don&apos;t have that one written up exactly. Here&apos;s the closest — or email a
-            human and we&apos;ll answer it properly.
+            I don&apos;t have that one written up exactly. Here&apos;s the closest &mdash; or
+            email a human and we&apos;ll answer it properly.
           </p>
-          <div className="flex flex-wrap gap-1.5">
-            {suggestions.map((s) => (
-              <Chip key={s.id} label={s.q} onClick={() => onPick(s)} />
-            ))}
-          </div>
+          {suggestions.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {suggestions.map((s) => (
+                <Chip key={s.id} label={s.question} onClick={() => onPick(s.id, s.question)} />
+              ))}
+            </div>
+          )}
           <a
-            href={`mailto:${SUPPORT_EMAIL}`}
+            href={`mailto:${escalation.email}?subject=${encodeURIComponent(
+              "ChairBack question",
+            )}&body=${encodeURIComponent(escalation.summary)}`}
             className="inline-block text-xs font-semibold text-gold underline underline-offset-2"
           >
-            Email {SUPPORT_EMAIL}
+            Email {escalation.email}
           </a>
         </div>
       )}
 
       {/* Confident answer, but there were near-misses worth offering. */}
-      {response?.kind === "answer" && suggestions.length > 0 && (
+      {answer && suggestions.length > 0 && (
         <div className="max-w-[92%]">
           <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
             Related
           </p>
           <div className="flex flex-wrap gap-1.5">
             {suggestions.map((s) => (
-              <Chip key={s.id} label={s.q} onClick={() => onPick(s)} />
+              <Chip key={s.id} label={s.question} onClick={() => onPick(s.id, s.question)} />
             ))}
           </div>
         </div>

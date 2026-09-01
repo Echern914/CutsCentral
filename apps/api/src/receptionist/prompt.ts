@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { apiEnv } from "@chairback/config";
+import {
+  apiEnv,
+  describeCancellationPolicy,
+  describeDepositPolicy,
+} from "@chairback/config";
 import { forShop, prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 
@@ -149,6 +153,9 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
       paymentsMode: true,
       cancelWindowHours: true,
       cancelFeeBps: true,
+      // Needed by describeDepositPolicy: without it a deposit shop could only
+      // be described vaguely, and it used not to be described at all.
+      depositAmountCents: true,
       publicPageEnabled: true,
     },
   });
@@ -195,18 +202,13 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
   }
 
   const names = staff.map((s) => s.name);
-  const cancellation =
-    shop.cancelWindowHours > 0 && shop.cancelFeeBps > 0
-      ? `free up to ${shop.cancelWindowHours}h before; inside that window ${(
-          shop.cancelFeeBps / 100
-        ).toFixed(0)}% of the price is kept as a fee`
-      : "free cancellation any time before the appointment";
-  const deposit =
-    shop.paymentsMode === "ahead"
-      ? "full payment collected at booking time"
-      : shop.paymentsMode === "hold"
-        ? "card authorized at booking, charged after the appointment"
-        : "none - pay at the shop";
+  // 🔴 These sentences moved to @chairback/config/shopPolicy so the assistant
+  // can answer "what is my cancellation policy?" from the SAME words the
+  // receptionist quotes to a customer. The move also fixed a real defect: the
+  // chain here tested only "ahead" and "hold", so a shop in DEPOSIT mode was
+  // told there was no deposit while its booking page charged one.
+  const cancellation = describeCancellationPolicy(shop);
+  const deposit = describeDepositPolicy(shop);
 
   const config: ShopPromptConfig = {
     shopName: shop.name,

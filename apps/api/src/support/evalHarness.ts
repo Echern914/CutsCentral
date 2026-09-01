@@ -4,8 +4,12 @@
  * It measures the two support channels by driving the SAME code production
  * runs — no model, no network, no database:
  *
- * - `in_app`: `findHelp()` from @chairback/config, which is the entire answer
- *   engine behind the Assistant tab's ask field and the corner help bubble.
+ * - `in_app`: `resolveSupport()` from @chairback/config — the shared support
+ *   engine both in-app surfaces now call. PR 0 measured `findHelp()` directly,
+ *   which was right when that WAS the whole answer path; measuring the raw
+ *   matcher now would score something users never see, and would miss the two
+ *   things PR 1 added on top of it: actor gating and the guarantee that a
+ *   non-answer still carries a route to a human.
  * - `mcp`: the real `help_find_feature` tool handler out of TOOL_DEFINITIONS,
  *   invoked exactly as the dispatcher would after auth (the handler touches no
  *   shop data, so a synthetic invocation is byte-for-byte what the wire runs).
@@ -20,14 +24,14 @@
  */
 
 import { READ_SCOPES } from "@chairback/config";
-import { findHelp } from "@chairback/config/helpMatch";
+import { resolveSupport, type SupportActor } from "@chairback/config";
 import { decideTool } from "../mcp/toolPolicy.js";
 import { toolDefinition } from "../mcp/tools/index.js";
 import {
   capabilityById,
   SUPPORT_CAPABILITIES,
   type SupportCapability,
-} from "./capabilities.js";
+} from "@chairback/config";
 import { SUPPORT_FIXTURES, type SupportFixture } from "./evalFixtures.js";
 import type { ObservedBehavior, SupportChannel } from "./outcomes.js";
 
@@ -51,6 +55,8 @@ export interface ChannelObservation {
   featureHits?: number;
   /** MCP only: whether suggestions carried answer bodies (today: never). */
   suggestionsHaveBodies?: boolean;
+  /** in_app only: the typed outcome the engine returned. */
+  outcome?: string;
 }
 
 function classify(
@@ -71,15 +77,25 @@ function classify(
 /** Run one fixture through the in-app engine (Assistant tab / help bubble). */
 export function observeInApp(fixture: SupportFixture): ChannelObservation {
   const cap = mustCapability(fixture);
-  const res = findHelp(fixture.question, {});
-  const answerId = res.kind === "answer" && res.answer ? res.answer.id : null;
+  const res = resolveSupport({
+    question: fixture.question,
+    actor: fixture.actor as SupportActor,
+    channel: "in_app",
+  });
+  const answerId = res.answer?.id ?? null;
   const suggestionIds = res.suggestions.map((s) => s.id);
   return {
     behavior: classify(cap, answerId, suggestionIds),
     answerId,
     suggestionIds,
+    // The engine attaches an escalation to every outcome except ANSWERED, and
+    // the adapters render it. `contact-human` appearing among the chips is a
+    // second, weaker route that predates the guarantee.
     escalationOffered:
-      answerId === "contact-human" || suggestionIds.includes("contact-human"),
+      res.escalation !== null ||
+      answerId === "contact-human" ||
+      suggestionIds.includes("contact-human"),
+    outcome: res.outcome,
   };
 }
 
