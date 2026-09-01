@@ -171,6 +171,15 @@ mcpRouter.post("/", mcpLimiter, requireMcpAuth, async (req, res) => {
     }
 
     default:
+      // 🔴 A JSON-RPC NOTIFICATION HAS NO id AND EXPECTS NO REPLY. Every
+      // spec-compliant MCP client sends `notifications/initialized` the moment
+      // the handshake completes; answering it 404 with an error body made a
+      // correct client look like a failed one, and a strict one tear the
+      // session down. 202 with an empty body is what the spec asks for.
+      if (typeof method === "string" && method.startsWith("notifications/")) {
+        res.status(202).end();
+        return;
+      }
       res.status(404).json({
         jsonrpc: "2.0",
         id,

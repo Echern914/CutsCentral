@@ -1195,6 +1195,10 @@ When the trial ends your shop stops taking bookings until you subscribe. Your cl
     keywords: [
       "deposit", "deposits", "upfront", "up front", "partial payment", "hold a slot",
       "secure the booking", "booking fee", "pay to book",
+      // The literal phrase help_find_feature's schema tells a model to send.
+      // Kept deliberately narrow: broader deposit wording out-ranked day
+      // pricing on "can i charge more on saturday".
+      "take a deposit", "taking a deposit",
     ],
     category: "money",
     action: { label: "Open payments", featureId: "pay-ahead" },

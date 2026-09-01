@@ -3,7 +3,7 @@ import request from "supertest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken, READ_SCOPES } from "@chairback/config";
-import { UNTRUSTED_NOTICE } from "../mcp/dispatch.js";
+import { SERVER_AUTHORED_NOTICE, UNTRUSTED_NOTICE } from "../mcp/dispatch.js";
 import { TOOL_POLICIES } from "../mcp/toolPolicy.js";
 import { TOOL_DEFINITIONS } from "../mcp/tools/index.js";
 
@@ -160,10 +160,23 @@ async function call(token: string, name: string, args?: unknown): Promise<CallRe
   }
 
   const structured = result.structuredContent as Record<string, unknown>;
-  expect(structured.chairback, `${name} lost its untrusted-data marker`).toBe("untrusted-data");
-  // The PRODUCTION notice, imported - not a copy that could drift or that would
-  // keep passing if the real one were emptied.
-  expect(structured.notice).toBe(UNTRUSTED_NOTICE);
+
+  // 🔴 EXACTLY TWO ENVELOPES, AND THE TOOL DOES NOT CHOOSE ITS OWN. A tool
+  // whose policy declares `chairScope: "none"` reads no shop rows at all - its
+  // payload is ChairBack's own documentation, and labelling that "untrusted
+  // content from a shop's records" told the host model to distrust our own
+  // answers. Everything else keeps the untrusted marker, and the boundary
+  // still defaults closed: anything not declared none falls to untrusted.
+  const policy = TOOL_POLICIES.find((t) => t.name === name);
+  const serverAuthored = policy?.chairScope === "none";
+  expect(structured.chairback, `${name} has the wrong envelope kind`).toBe(
+    serverAuthored ? "chairback-documentation" : "untrusted-data",
+  );
+  // The PRODUCTION notices, imported - not copies that could drift, or that
+  // would keep passing if the real ones were emptied.
+  expect(structured.notice).toBe(
+    serverAuthored ? SERVER_AUTHORED_NOTICE : UNTRUSTED_NOTICE,
+  );
 
   // The text channel carries the same envelope, byte for byte.
   const fromText = JSON.parse(result.content[0].text);
@@ -433,13 +446,18 @@ describe("tools/list is scoped to the caller", () => {
       "calendar_agenda",
       "calendar_openings",
       "help_find_feature",
+      "help_get_answer",
       "help_list_features",
       "readiness_report",
     ]);
   });
 
   it("consent narrows the list", async () => {
-    expect(await listTools(helpOnlyToken)).toEqual(["help_find_feature", "help_list_features"]);
+    expect(await listTools(helpOnlyToken)).toEqual([
+      "help_find_feature",
+      "help_get_answer",
+      "help_list_features",
+    ]);
   });
 
   it("the server advertises a tools capability now that it has tools", async () => {
@@ -1084,8 +1102,17 @@ describe("🔴 the untrusted-data envelope", () => {
       const res = await rpc(ownerToken, "tools/call", { name, arguments: args });
       const result = res.body.result;
       expect(result.isError, name).toBeUndefined();
-      expect(result.structuredContent.chairback, name).toBe("untrusted-data");
-      expect(result.structuredContent.notice, name).toBe(UNTRUSTED_NOTICE);
+      // Two kinds, and the SHOP-DATA tools must all still be untrusted. The
+      // help tools read no shop rows, so labelling their payload as shop
+      // records told the model to distrust ChairBack's own documentation.
+      const serverAuthored =
+        TOOL_POLICIES.find((t) => t.name === name)?.chairScope === "none";
+      expect(result.structuredContent.chairback, name).toBe(
+        serverAuthored ? "chairback-documentation" : "untrusted-data",
+      );
+      expect(result.structuredContent.notice, name).toBe(
+        serverAuthored ? SERVER_AUTHORED_NOTICE : UNTRUSTED_NOTICE,
+      );
       expect(JSON.parse(result.content[0].text), name).toEqual(result.structuredContent);
       // The tool's payload lives under exactly one key.
       expect(Object.keys(result.structuredContent).sort(), name).toEqual([
@@ -1177,11 +1204,22 @@ describe("🔴 the untrusted-data envelope", () => {
   });
 
   it("the notice is server-authored, not assembled from anything requestable", async () => {
-    // Two different shops, two different tools: byte-identical notice.
+    // Two different shops, same tool: byte-identical notice. Nothing from the
+    // shop, the request or the payload is interpolated into it.
     const a = await call(ownerToken, "readiness_report");
-    const b = await call(otherShopToken, "help_list_features");
+    const b = await call(otherShopToken, "readiness_report");
     expect(a.envelope!.notice).toBe(b.envelope!.notice);
     expect(a.envelope!.notice).toBe(UNTRUSTED_NOTICE);
+
+    // And the second kind is equally fixed across shops.
+    const c = await call(ownerToken, "help_list_features");
+    const d = await call(otherShopToken, "help_list_features");
+    expect(c.envelope!.notice).toBe(d.envelope!.notice);
+    expect(c.envelope!.notice).toBe(SERVER_AUTHORED_NOTICE);
+
+    // 🔴 The two are genuinely different strings, so a tool cannot be granted
+    // the trusted notice by accident and have this suite stay green.
+    expect(SERVER_AUTHORED_NOTICE).not.toBe(UNTRUSTED_NOTICE);
   });
 
   it("the 96KB cap is measured on the whole wire payload, envelope included", async () => {
@@ -1255,6 +1293,7 @@ describe("🔴 the wall, per tool", () => {
         "client_detail",
         "clients_search",
         "help_find_feature",
+        "help_get_answer",
         "help_list_features",
         "readiness_report",
       ]);
