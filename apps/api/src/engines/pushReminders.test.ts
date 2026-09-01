@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
+import { raceBehindRowLock } from "../testing/raceBarrier.js";
 import { randomToken } from "@chairback/config";
 import {
   __setPushSenderForTests,
@@ -203,12 +204,24 @@ describe("runPushReminders", () => {
     await seedAppt({ startsInHours: 20 });
     await seedAppt({ startsInHours: 1 });
 
-    const [a, b] = await Promise.all([
-      runPushReminders(NOW),
-      runPushReminders(NOW),
+    // 🔴 A BARRIER, not Promise.all. The guard is the atomic stamp claim
+    // (UPDATE ... WHERE stamp IS NULL); only an interleaving where both runs
+    // have selected the same appointment exercises it. Holding one of the two
+    // appointments makes both sweeps queue on it. With Promise.all alone this
+    // passed even with the `WHERE stamp IS NULL` deleted.
+    const held = await prisma.appointment.findFirstOrThrow({
+      where: { shopId },
+      select: { id: true },
+      orderBy: { startsAt: "asc" },
+    });
+    const { results, settledEarly } = await raceBehindRowLock("Appointment", held.id, [
+      () => runPushReminders(NOW),
+      () => runPushReminders(NOW),
     ]);
+    expect(settledEarly).toBe(0);
+    const [a, b] = results.map((r) => (r.status === "fulfilled" ? r.value : 0));
     // Each of the 2 reminders was sent by exactly one of the racers.
-    expect(a + b).toBe(2);
+    expect(a! + b!).toBe(2);
     expect(pushes).toHaveLength(2);
   });
 });

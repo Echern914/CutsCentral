@@ -1,6 +1,7 @@
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { Prisma, prisma, runAsOwner } from "@chairback/db";
+import { prisma, runAsOwner } from "@chairback/db";
+import { holdAdvisoryLock, raceBehindBarrier } from "../testing/raceBarrier.js";
 import {
   AFFILIATE_CLAIM_COOKIE,
   AFFILIATE_TERMS_VERSION,
@@ -134,32 +135,22 @@ describe("shop creation: the same-owner race", () => {
     // are released from a BARRIER: an external transaction holds the very lock
     // they need, all eight pile up behind it, and freeing it turns them loose
     // together with the pre-check and the insert genuinely interleaved.
-    let release!: () => void;
-    const barrier = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const holder = prisma.$transaction(
-      async (tx) => {
-        await tx.$executeRaw(
-          Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`shopcreate:${owner.userId}`}))`,
-        );
-        await barrier;
-      },
-      { timeout: 20_000 },
+    const barrier = await holdAdvisoryLock(`shopcreate:${owner.userId}`);
+    const { results: settled, settledEarly } = await raceBehindBarrier(
+      barrier,
+      Array.from({ length: 8 }, (_, i) => () =>
+        request(app)
+          .post("/api/shops")
+          .set("Cookie", cookies)
+          .set("x-request-id", `race-${i}`)
+          .send({ name: `Race Shop ${i}`, smsAttested: true }),
+      ),
     );
-
-    const inFlight = Array.from({ length: 8 }, (_, i) =>
-      request(app)
-        .post("/api/shops")
-        .set("Cookie", cookies)
-        .set("x-request-id", `race-${i}`)
-        .send({ name: `Race Shop ${i}`, smsAttested: true }),
-    );
-    // Let every one of them reach the lock before any may pass it.
-    await new Promise((r) => setTimeout(r, 400));
-    release();
-    await holder;
-    const results = await Promise.all(inFlight);
+    // Nobody got through while the lock was held - they really did contend.
+    expect(settledEarly).toBe(0);
+    const results = settled.map((r) =>
+      r.status === "fulfilled" ? r.value : { status: 0, body: {} },
+    ) as Array<{ status: number; body: { id?: string; error?: string; shopId?: string } }>;
 
     const created = results.filter((r) => r.status === 201);
     const conflicts = results.filter((r) => r.status === 409);
@@ -196,16 +187,7 @@ describe("shop creation: the same-owner race", () => {
     // Hold the SAME advisory lock in a separate transaction, on its own
     // connection, and keep it held. Any shop creation for this owner must
     // now be unable to finish.
-    let release!: () => void;
-    const barrier = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const holder = prisma.$transaction(async (tx) => {
-      await tx.$executeRaw(
-        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`,
-      );
-      await barrier;
-    });
+    const held = await holdAdvisoryLock(lockKey);
 
     let settled = false;
     const attempt = request(app)
@@ -224,8 +206,7 @@ describe("shop creation: the same-owner race", () => {
     );
     expect(await prisma.shop.count({ where: { ownerId: owner.userId } })).toBe(0);
 
-    release();
-    await holder;
+    await held.release();
     const res = await attempt;
     expect(res.status).toBe(201);
     shopIds.push(res.body.id as string);
