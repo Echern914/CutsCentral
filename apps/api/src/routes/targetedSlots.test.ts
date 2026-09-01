@@ -1,6 +1,7 @@
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
+import { raceBehindAdvisoryLock } from "../testing/raceBarrier.js";
 import { randomToken } from "@chairback/config";
 import { computeOpenSlots } from "../engines/slots.js";
 import { rollForwardTargetedRules } from "../engines/targetedSlotRules.js";
@@ -210,11 +211,23 @@ describe("booking a targeted slot", () => {
       (s) => s.startsAt === at.toISOString(),
     )!;
 
-    const [a, b] = await Promise.all([
-      publicBooking(at, { targetedSlotId: slot.id }),
-      publicBooking(at, { targetedSlotId: slot.id }),
-    ]);
-    const statuses = [a.status, b.status].sort();
+    // 🔴 A BARRIER, not Promise.all. bookingWrite serialises every concurrent
+    // write to a chair with pg_advisory_xact_lock("appt:<staffId>"); holding
+    // that same lock here is what forces both requests to actually contend
+    // for it. Promise.all alone let the first finish before the second began,
+    // and this test passed with the lock deleted.
+    const { results, settledEarly } = await raceBehindAdvisoryLock(
+      `appt:${staffId}`,
+      [
+        () => publicBooking(at, { targetedSlotId: slot.id }),
+        () => publicBooking(at, { targetedSlotId: slot.id }),
+      ],
+    );
+    expect(settledEarly).toBe(0);
+    const [a, b] = results.map((r) =>
+      r.status === "fulfilled" ? r.value : { status: 0 },
+    );
+    const statuses = [a!.status, b!.status].sort();
     expect(statuses).toEqual([201, 409]);
 
     const appts = await prisma.appointment.count({
@@ -239,10 +252,15 @@ describe("booking a targeted slot", () => {
       (s) => s.startsAt === at.toISOString(),
     )!;
 
-    const [targeted, normal] = await Promise.all([
-      publicBooking(at, { targetedSlotId: slot.id }),
-      publicBooking(at),
-    ]);
+    const { results: raceResults, settledEarly: earlyNormal } =
+      await raceBehindAdvisoryLock(`appt:${staffId}`, [
+        () => publicBooking(at, { targetedSlotId: slot.id }),
+        () => publicBooking(at),
+      ]);
+    expect(earlyNormal).toBe(0);
+    const [targeted, normal] = raceResults.map((r) =>
+      r.status === "fulfilled" ? r.value : { status: 0 },
+    ) as [{ status: number }, { status: number }];
     // The normal booking can never win this time: the slot blocks it while
     // unbooked, and the winning targeted appointment blocks it after.
     expect(targeted.status).toBe(201);
@@ -1423,10 +1441,15 @@ describe("a live appointment hides every special it overlaps", () => {
     });
     expect(rows).toHaveLength(2);
 
-    const [a, b] = await Promise.all([
-      publicBooking(when, { targetedSlotId: rows[0]!.id }),
-      publicBooking(when, { targetedSlotId: rows[1]!.id }),
-    ]);
+    const { results: overlapResults, settledEarly: earlyOverlap } =
+      await raceBehindAdvisoryLock(`appt:${staffId}`, [
+        () => publicBooking(when, { targetedSlotId: rows[0]!.id }),
+        () => publicBooking(when, { targetedSlotId: rows[1]!.id }),
+      ]);
+    expect(earlyOverlap).toBe(0);
+    const [a, b] = overlapResults.map((r) =>
+      r.status === "fulfilled" ? r.value : { status: 0 },
+    ) as [{ status: number }, { status: number }];
     expect([a.status, b.status].sort()).toEqual([201, 409]);
     const appts = await prisma.appointment.count({
       where: { shopId, startsAt: when, status: "BOOKED" },

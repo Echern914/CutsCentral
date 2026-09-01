@@ -1,5 +1,9 @@
 import { afterEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma, runWithShop } from "@chairback/db";
+import {
+  raceBehindAdvisoryLock,
+  raceBehindRowLock,
+} from "../testing/raceBarrier.js";
 import { randomToken } from "@chairback/config";
 import { completeEntry, startEntry } from "./walkInStart.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "./bookingWrite.js";
@@ -262,10 +266,26 @@ describe("start", () => {
     const t = lane();
     const e = await makeEntry();
     await assignEntry({ shopId, entryId: e.id, staffId: chairB, actor: MANAGER, now: t });
-    const results = await Promise.allSettled([
-      startEntry({ shopId, entryId: e.id, actor: MANAGER, now: t }),
-      startEntry({ shopId, entryId: e.id, actor: MANAGER, now: new Date(t.getTime() + 60_000) }),
-    ]);
+    // 🔴 A BARRIER, not Promise.all. Starting a walk-in is guarded by a
+    // compare-and-set on the entry's status; only an interleaving where BOTH
+    // callers have read the same status exercises it. Holding the row makes
+    // that interleaving certain instead of hoping for it - with Promise.all
+    // alone this test passed with the CAS deleted.
+    const { results, settledEarly } = await raceBehindRowLock(
+      "WalkInEntry",
+      e.id,
+      [
+        () => startEntry({ shopId, entryId: e.id, actor: MANAGER, now: t }),
+        () =>
+          startEntry({
+            shopId,
+            entryId: e.id,
+            actor: MANAGER,
+            now: new Date(t.getTime() + 60_000),
+          }),
+      ],
+    );
+    expect(settledEarly).toBe(0);
     const won = results.filter((r) => r.status === "fulfilled");
     expect(won).toHaveLength(1);
     const appts = await prisma.appointment.count({
@@ -400,10 +420,25 @@ describe("walk-in capacity versus the public booking path", () => {
     // whichever transaction takes the chair's advisory lock first.
     const t = lane();
     const e = await makeEntry();
-    const results = await Promise.allSettled([
-      startEntry({ shopId, entryId: e.id, actor: MANAGER, staffId: chairB, now: t }),
-      publicBooking(chairB, t, t),
-    ]);
+    // The chair's advisory lock is what decides this one, so the barrier IS
+    // that lock: hold `appt:<staffId>` on another connection and both writers
+    // must queue behind it. Without the lock neither waits, and the old
+    // Promise.all version passed even with it deleted.
+    const { results, settledEarly } = await raceBehindAdvisoryLock(
+      `appt:${chairB}`,
+      [
+        () =>
+          startEntry({
+            shopId,
+            entryId: e.id,
+            actor: MANAGER,
+            staffId: chairB,
+            now: t,
+          }).then(() => "walk-in" as const),
+        () => publicBooking(chairB, t, t).then(() => "booking" as const),
+      ],
+    );
+    expect(settledEarly).toBe(0);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
 
     // One chair, one instant, one appointment - whoever won.

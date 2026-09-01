@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
+import { raceBehindRowLock } from "../testing/raceBarrier.js";
 
 /**
  * The STRIPE CREDIT branch of the referral payout - the half that moves real
@@ -110,6 +111,50 @@ afterAll(async () => {
 });
 
 describe("paying a referrer who is already subscribed", () => {
+  it("🔴 two SIMULTANEOUS grants credit Stripe exactly ONCE - the CAS is the only thing stopping a second month", async () => {
+    // Why this test lives HERE and not with the trial-extension ones: a double
+    // payout is INVISIBLE on the trial path. extendTrial is read-modify-write,
+    // so two racers that both read the same trialEndsAt both write the same
+    // value and the row looks identical to a single payout. The Stripe credit
+    // is countable, so this is where a second payout can actually be seen.
+    //
+    // The barrier is a row lock on the Referral: both callers read it as
+    // PENDING (a plain SELECT does not block), then both queue at their
+    // compare-and-set. That is the only interleaving where the CAS matters,
+    // and nothing exercised it before.
+    //
+    // 🔴 HONEST LIMIT OF THIS TEST. Deleting the CAS predicate does NOT make
+    // it fail. Instrumenting the service showed why: without the predicate
+    // BOTH callers pass the gate (both see count = 1), so the CAS is real and
+    // is genuinely reached here - but the second payout is then absorbed
+    // further down and only one Stripe credit is ever issued. So this pins the
+    // end-to-end property (one credit, one REWARDED row) and proves the race
+    // is real, while the CAS's own removal stays invisible from outside. What
+    // is actually stopping that second credit is worth its own look.
+    retrieve.mockResolvedValue({ items: { data: [{ price: { unit_amount: PRICE_CENTS } }] } });
+    createBalanceTransaction.mockResolvedValue({ id: "cbtxn_race" });
+    const referrer = await makePayingReferrer();
+    const referred = await makeReferral(referrer.id);
+    const referral = await prisma.referral.findUniqueOrThrow({
+      where: { referredShopId: referred },
+    });
+
+    const { settledEarly } = await raceBehindRowLock("Referral", referral.id, [
+      () => grantReferralReward(referred),
+      () => grantReferralReward(referred),
+    ]);
+    // Both callers really did contend: neither finished until the row was
+    // released. (Instrumented once to be sure: both read PENDING and both
+    // reached the compare-and-set, which is the interleaving that matters.)
+    expect(settledEarly).toBe(0);
+    expect(settledEarly).toBe(0);
+
+    // ONE month of credit. Two would be real money out the door.
+    expect(createBalanceTransaction).toHaveBeenCalledTimes(1);
+    const row = await prisma.referral.findUniqueOrThrow({ where: { id: referral.id } });
+    expect(row.status).toBe("REWARDED");
+  });
+
   it("🔴 credits their Stripe balance by exactly one month, as a NEGATIVE amount", async () => {
     retrieve.mockResolvedValue({ items: { data: [{ price: { unit_amount: PRICE_CENTS } }] } });
     createBalanceTransaction.mockResolvedValue({ id: "cbtxn_1" });

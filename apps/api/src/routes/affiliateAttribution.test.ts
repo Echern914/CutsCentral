@@ -13,6 +13,7 @@ import {
   __resetEnvCacheForTests,
 } from "@chairback/config";
 import { createApp } from "../app.js";
+import { holdAdvisoryLock, raceBehindBarrier } from "../testing/raceBarrier.js";
 import { correctAttribution } from "../services/affiliateAttribution.js";
 import { ensureReferralCode } from "../services/referral.js";
 
@@ -504,14 +505,24 @@ describe("attribution: the lock", () => {
       const friend = await signup("race");
       const cookies = [friend.cookie, `${AFFILIATE_CLAIM_COOKIE}=${claim}`];
 
-      const results = await Promise.all(
-        [1, 2, 3].map(() =>
-          request(app)
-            .post("/api/shops")
-            .set("Cookie", cookies)
-            .send({ name: "Race Shop", smsAttested: true }),
+      // 🔴 A BARRIER, not Promise.all - my own test was theatre until now.
+      // Shop creation serialises on pg_advisory_xact_lock("shopcreate:<owner>"),
+      // so holding that lock is what makes these three genuinely contend.
+      const barrier = await holdAdvisoryLock(`shopcreate:${friend.userId}`);
+      const { results: settled, settledEarly } = await raceBehindBarrier(
+        barrier,
+        [1, 2, 3].map(
+          () => () =>
+            request(app)
+              .post("/api/shops")
+              .set("Cookie", cookies)
+              .send({ name: "Race Shop", smsAttested: true }),
         ),
       );
+      expect(settledEarly).toBe(0);
+      const results = settled.map((r) =>
+        r.status === "fulfilled" ? r.value : { status: 0, body: {} },
+      ) as Array<{ status: number; body: { id?: string } }>;
       for (const r of results) if (r.status === 201) shopIds.push(r.body.id as string);
       const created = results.filter((r) => r.status === 201);
       expect(created.length).toBeGreaterThanOrEqual(1);

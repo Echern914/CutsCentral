@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
+import { raceBehindRowLock } from "../testing/raceBarrier.js";
 import { randomToken } from "@chairback/config";
 import {
   assignEntry,
@@ -204,10 +205,25 @@ describe("create + snapshots + ordering", () => {
 describe("🔴 concurrency: exactly one winner", () => {
   it("two simultaneous claims -> one ASSIGNED, one stale", async () => {
     const e = await makeEntry();
-    const results = await Promise.allSettled([
-      claimEntry({ shopId, entryId: e.id, actor: barberOn(chairA), now: NOW }),
-      claimEntry({ shopId, entryId: e.id, actor: barberOn(chairB), now: NOW }),
-    ]);
+    // 🔴 A BARRIER, not Promise.all. The guard here is the claim's
+    // compare-and-set (WHERE status = the status we read), and only a real
+    // interleaving exercises it: both callers must READ the entry as WAITING
+    // and only then reach their UPDATE. Holding the row with SELECT ... FOR
+    // UPDATE gives exactly that - a plain SELECT does not block, so both read
+    // WAITING, then both queue at the write. Promise.all alone let the first
+    // call finish before the second started, and this test passed with the
+    // CAS deleted.
+    const { results, settledEarly } = await raceBehindRowLock(
+      "WalkInEntry",
+      e.id,
+      [
+        () => claimEntry({ shopId, entryId: e.id, actor: barberOn(chairA), now: NOW }),
+        () => claimEntry({ shopId, entryId: e.id, actor: barberOn(chairB), now: NOW }),
+      ],
+    );
+    // Nobody may finish before the barrier lifts: a claim that completed early
+    // never contended for anything, and this test would be theatre.
+    expect(settledEarly).toBe(0);
     const won = results.filter((r) => r.status === "fulfilled");
     const lost = results.filter((r) => r.status === "rejected");
     expect(won).toHaveLength(1);
@@ -234,10 +250,16 @@ describe("🔴 concurrency: exactly one winner", () => {
 
   it("claim vs cancel: exactly one of them decides", async () => {
     const e = await makeEntry();
-    const results = await Promise.allSettled([
-      claimEntry({ shopId, entryId: e.id, actor: barberOn(chairA), now: NOW }),
-      cancelEntry({ shopId, entryId: e.id, actor: MANAGER, now: NOW }),
-    ]);
+    // Same barrier: both transitions read WAITING, both queue at their CAS.
+    const { results, settledEarly } = await raceBehindRowLock(
+      "WalkInEntry",
+      e.id,
+      [
+        () => claimEntry({ shopId, entryId: e.id, actor: barberOn(chairA), now: NOW }),
+        () => cancelEntry({ shopId, entryId: e.id, actor: MANAGER, now: NOW }),
+      ],
+    );
+    expect(settledEarly).toBe(0);
     const won = results.filter((r) => r.status === "fulfilled");
     expect(won).toHaveLength(1);
     const row = await prisma.walkInEntry.findUnique({ where: { id: e.id } });

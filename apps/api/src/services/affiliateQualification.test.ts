@@ -11,6 +11,7 @@ import {
   applyAffiliateStripeEvent,
   releaseAffiliateRewardHolds,
 } from "./affiliateQualification.js";
+import { raceBehindRowLock } from "../testing/raceBarrier.js";
 
 /**
  * Qualification: two cleared base-subscription invoices, a hold, one reward.
@@ -244,11 +245,39 @@ describe("qualification: the two-invoice rule", () => {
   it("🔴 two SIMULTANEOUS qualifying invoices produce exactly one reward", async () => {
     const s = await scenario("race");
     await applyAffiliateStripeEvent(invoicePaid({ customerId: s.customerId }));
-    // Two different invoices arriving together, each enough to be the second.
+    // 🔴 The honest shape for THIS guard is the constraint itself, not a
+    // barrier. A row lock cannot make these two deliveries contend: they only
+    // READ the attribution and then INSERT elsewhere, so holding any row lets
+    // both run straight through (measured - the barrier version reported both
+    // racers finishing early). What actually stops a second reward is the
+    // unique index on referredShopId, so that is what gets asserted, directly
+    // and deterministically.
     await Promise.all([
       applyAffiliateStripeEvent(invoicePaid({ customerId: s.customerId })),
       applyAffiliateStripeEvent(invoicePaid({ customerId: s.customerId })),
     ]);
+    const existing = await rewardFor(s.referredShopId);
+    expect(existing).not.toBeNull();
+
+    // THE guard: a second reward for this shop is refused by the database,
+    // whatever the application layer believes. Drop the index and this fails.
+    await expect(
+      runAsOwner((tx) =>
+        tx.affiliateReward.create({
+          data: {
+            affiliateAccountId: s.accountId,
+            referredShopId: s.referredShopId,
+            attributionId: `att-dup-${randomToken(6)}`,
+            rewardType: "subscription_credit",
+            amountCents: 3499,
+            currency: "usd",
+            basisPlan: "pro",
+            qualifiedAt: new Date(),
+            holdEndsAt: new Date(),
+          },
+        }),
+      ),
+    ).rejects.toThrow();
     const rewards = await runAsOwner((tx) =>
       tx.affiliateReward.count({ where: { referredShopId: s.referredShopId } }),
     );
