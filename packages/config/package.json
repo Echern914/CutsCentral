@@ -21,6 +21,7 @@
     "./nextPath": "./src/nextPath.ts",
     "./mcpScopes": "./src/mcpScopes.ts",
     "./shopPolicy": "./src/shopPolicy.ts",
+    "./tierPerks": "./src/tierPerks.ts",
     "./supportCapabilities": "./src/supportCapabilities.ts",
     "./supportEngine": "./src/supportEngine.ts"
   },

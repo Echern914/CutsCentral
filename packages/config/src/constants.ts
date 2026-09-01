@@ -191,6 +191,64 @@ export function serviceColorHex(key: string | null | undefined): string | null {
   return (SERVICE_COLORS as Record<string, { hex: string }>)[key]?.hex ?? null;
 }
 
+/**
+ * How far a client is through their current tier, and what reaches the next.
+ *
+ * 🔴 THE POINT OF THIS IS THE CUSTOMER, NOT THE BARBER. A tier a client cannot
+ * see is a tier that changes nobody's behaviour: the whole reason to rank
+ * someone Bronze is so they know Silver exists and what gets them there. The
+ * rank was stamped on the Client row from the first release and shown to
+ * nobody but staff, so this returns the SHAPE a progress bar needs - where you
+ * are, what is next, and how many visits close the gap - rather than making
+ * each surface re-derive it and disagree.
+ *
+ * Pure, and deliberately in the same file as the tier table so a threshold
+ * change moves the badge and the bar together.
+ */
+export interface LoyaltyTierProgress {
+  /** The tier held now. Null before the first one is earned. */
+  current: LoyaltyTierKey | null;
+  /** The next tier up, or null once the top is reached. */
+  next: LoyaltyTierKey | null;
+  /** Lifetime completed visits, as counted by the loyalty engine. */
+  visits: number;
+  /** Completed visits still needed to reach `next`. 0 when there is no next. */
+  visitsToNext: number;
+  /**
+   * How far through the CURRENT band, 0..1, for a progress bar.
+   *
+   * Measured across the band the client is in - from the tier they hold to the
+   * one they are chasing - not from zero. Measuring from zero makes the bar
+   * crawl for a client who is one visit from Gold, which is exactly the client
+   * it should be encouraging.
+   *
+   * 1 at the top tier: the bar is full because there is nothing further.
+   */
+  fraction: number;
+}
+
+export function loyaltyTierProgress(completedVisits: number): LoyaltyTierProgress {
+  const visits = Math.max(0, Math.floor(completedVisits));
+  const current = loyaltyTierForVisits(visits);
+  const currentIndex = current === null ? -1 : LOYALTY_TIER_KEYS.indexOf(current);
+  const next = LOYALTY_TIER_KEYS[currentIndex + 1] ?? null;
+
+  if (!next) return { current, next: null, visits, visitsToNext: 0, fraction: 1 };
+
+  // The floor of the band: 0 before the first tier, else the tier they hold.
+  const from = current === null ? 0 : LOYALTY_TIERS[current].minVisits;
+  const to = LOYALTY_TIERS[next].minVisits;
+  const span = Math.max(1, to - from);
+  const done = Math.min(Math.max(visits - from, 0), span);
+  return {
+    current,
+    next,
+    visits,
+    visitsToNext: Math.max(0, to - visits),
+    fraction: done / span,
+  };
+}
+
 /** The loyalty tier a client earns at a given lifetime completed-visit count (or null). */
 export function loyaltyTierForVisits(completedVisits: number): LoyaltyTierKey | null {
   let earned: LoyaltyTierKey | null = null;

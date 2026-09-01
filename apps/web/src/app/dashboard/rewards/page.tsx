@@ -4,11 +4,14 @@ import { apiGet } from "@/lib/api";
 import { getMe } from "@/lib/me";
 import { DemoTour } from "@/components/tour/DemoTour";
 import { RewardsBuilder } from "./RewardsBuilder";
+import { TierPerks } from "./TierPerks";
 
 export const metadata: Metadata = { title: "Rewards" };
 
 export interface LoyaltyConfig {
   punchesPerVisit: number;
+  /** What each loyalty tier is worth at this shop. Every key optional. */
+  tierPerks: Partial<Record<"BRONZE" | "SILVER" | "GOLD", string>>;
   cards: {
     id: string;
     name: string;
@@ -89,6 +92,10 @@ export default async function RewardsPage() {
       <div data-tour="menu">
         <RewardsBuilder config={res.data} />
       </div>
+      {/* 🔴 The feature registry has always pointed "Loyalty status tiers" at
+          this page, and this page had nothing about tiers on it - an owner
+          searching "gold" landed somewhere that never said the word. */}
+      <TierPerks initial={res.data.tierPerks ?? {}} />
     </main>
   );
 }

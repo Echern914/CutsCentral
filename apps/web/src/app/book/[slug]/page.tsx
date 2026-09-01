@@ -144,14 +144,25 @@ export async function generateMetadata({
 
 export default async function BookPage({
   params,
+  searchParams,
 }: {
   params: { slug: string };
+  searchParams?: { service?: string; staff?: string };
 }) {
   const data = await getData(params.slug);
   if (!data) notFound();
+  // 🔴 A PREFILL, NOT A PERMISSION. `?service=` and `?staff=` only pre-pick
+  // what the client could have tapped themselves two screens in - these ids
+  // are already public on this page. BookingClient validates them against what
+  // this shop actually offers and ignores anything else, so a stale link from
+  // a months-old text lands on the ordinary booking page rather than an error.
+  const prefill =
+    searchParams?.service || searchParams?.staff
+      ? { serviceId: searchParams.service ?? null, staffId: searchParams.staff ?? null }
+      : null;
   return (
     <>
-      <BookingClient data={data} />
+      <BookingClient data={data} prefill={prefill} />
       {/* Below the flow, never above it: the booking is what they came for. */}
       <div className="mx-auto w-full max-w-2xl px-4 pb-8">
         <GetTheApp surface="booking" />

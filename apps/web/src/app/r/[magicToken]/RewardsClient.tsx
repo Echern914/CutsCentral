@@ -84,6 +84,7 @@ export function RewardsClient({
     client,
     cadence,
     loyalty,
+    usual,
     consent,
     punches,
     rewards,
@@ -218,12 +219,46 @@ export function RewardsClient({
                 {loyalty.label} member
               </span>
             )}
-            {rewardsOn && loyalty.nextTier && (
-              <p className="mt-2 text-xs" style={{ color: t.muted }}>
-                {loyalty.nextTier.visitsAway}{" "}
-                {loyalty.nextTier.visitsAway === 1 ? "visit" : "visits"} to{" "}
-                {loyalty.nextTier.label}
+            {/* What the tier is actually WORTH here. A rank with nothing
+                attached is a badge; a rank with a promise under it is a reason
+                to come back. Rendered only when the shop has written one. */}
+            {rewardsOn && loyalty.perk && (
+              <p className="mt-1.5 text-xs font-medium" style={{ color: t.text }}>
+                {loyalty.perk}
               </p>
+            )}
+
+            {/* 🔴 THE BAR. The count alone ("2 visits to Gold") is a fact; the
+                bar is the thing that reads as nearly-there at a glance, which
+                is the whole reason to show a client their tier at all. It fills
+                across the CURRENT band, so the last visit before a tier looks
+                different from the first. */}
+            {rewardsOn && loyalty.nextTier && (
+              <div className="mx-auto mt-3 w-full max-w-[15rem]">
+                <div
+                  className="h-1.5 w-full overflow-hidden rounded-full"
+                  style={{ backgroundColor: `${loyalty.color ?? accent}26` }}
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.round(loyalty.fraction * 100)}
+                  aria-label={`Progress to ${loyalty.nextTier.label}`}
+                >
+                  <motion.div
+                    className="h-full rounded-full"
+                    style={{ backgroundColor: loyalty.color ?? accent }}
+                    initial={{ width: 0 }}
+                    animate={{ width: `${Math.round(loyalty.fraction * 100)}%` }}
+                    transition={{ duration: 0.6, ease: "easeOut" }}
+                  />
+                </div>
+                <p className="mt-1.5 text-xs" style={{ color: t.muted }}>
+                  {loyalty.nextTier.visitsAway}{" "}
+                  {loyalty.nextTier.visitsAway === 1 ? "visit" : "visits"} to{" "}
+                  {loyalty.nextTier.label}
+                  {loyalty.nextTier.perk ? ` — ${loyalty.nextTier.perk}` : ""}
+                </p>
+              </div>
             )}
           </motion.header>
 
@@ -510,20 +545,53 @@ export function RewardsClient({
               the shop page's rewards sub-view, the shop page owns Book - two
               competing "book" entry points made the card feel like an ad rather
               than the client's own record; back-to-shop lives in the header. */}
-          {!shopHref && shop.bookingUrl && (
+          {!shopHref && (usual || shop.bookingUrl) && (
             <motion.div variants={fadeUp} className="text-center">
-              <a
-                href={shop.bookingUrl}
-                className="block w-full py-3.5 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01]"
-                style={{
-                  backgroundColor: accent,
-                  color: t.onAccent,
-                  boxShadow: `0 8px 30px -10px ${accent}AA`,
-                  borderRadius: t.buttonRadius,
-                }}
-              >
-                Book your next {serviceNoun}
-              </a>
+              {/* 🔴 "The usual" first, when we know it. The generic link drops
+                  the client at a menu they have already worked through however
+                  many times they have been here - service, then provider, then
+                  a day, then a time. This one lands them on the calendar for
+                  the exact thing they had last time, so the only decision left
+                  is when. Falls back to the plain link the moment anything is
+                  unknown, retired, or belongs to another booking system. */}
+              {usual ? (
+                <>
+                  <a
+                    href={usual.url}
+                    className="block w-full py-3.5 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01]"
+                    style={{
+                      backgroundColor: accent,
+                      color: t.onAccent,
+                      boxShadow: `0 8px 30px -10px ${accent}AA`,
+                      borderRadius: t.buttonRadius,
+                    }}
+                  >
+                    Book the usual — {usual.serviceName} with {usual.staffName}
+                  </a>
+                  {shop.bookingUrl && (
+                    <a
+                      href={shop.bookingUrl}
+                      className="mt-2 inline-block text-xs underline underline-offset-2"
+                      style={{ color: t.muted }}
+                    >
+                      Book something else
+                    </a>
+                  )}
+                </>
+              ) : shop.bookingUrl ? (
+                <a
+                  href={shop.bookingUrl}
+                  className="block w-full py-3.5 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01]"
+                  style={{
+                    backgroundColor: accent,
+                    color: t.onAccent,
+                    boxShadow: `0 8px 30px -10px ${accent}AA`,
+                    borderRadius: t.buttonRadius,
+                  }}
+                >
+                  Book your next {serviceNoun}
+                </a>
+              ) : null}
             </motion.div>
           )}
 
