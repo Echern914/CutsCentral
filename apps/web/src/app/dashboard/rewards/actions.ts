@@ -185,3 +185,25 @@ export async function revokeCardAction(
   revalidatePath("/dashboard/rewards");
   return { ok: res.ok };
 }
+
+/**
+ * Save what each loyalty tier is worth at this shop.
+ *
+ * Blank clears a tier (the API stores only non-empty strings), so an owner can
+ * withdraw a promise without it lingering on the client's page. Revalidates
+ * the rewards page AND the dashboard, because the tier copy is read
+ * server-side on the customer's rewards page too.
+ */
+export async function saveTierPerksAction(
+  perks: Partial<Record<"BRONZE" | "SILVER" | "GOLD", string>>,
+): Promise<{ saved?: boolean; error?: string }> {
+  const res = await apiSend("PATCH", "/api/shops/me", {
+    tierPerks: {
+      BRONZE: (perks.BRONZE ?? "").trim(),
+      SILVER: (perks.SILVER ?? "").trim(),
+      GOLD: (perks.GOLD ?? "").trim(),
+    },
+  });
+  revalidatePath("/dashboard/rewards");
+  return res.ok ? { saved: true } : { error: "Could not save tier perks." };
+}

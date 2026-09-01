@@ -14,3 +14,4 @@ export * from "./mcpScopes.js";
 export * from "./supportCapabilities.js";
 export * from "./supportEngine.js";
 export * from "./shopPolicy.js";
+export * from "./tierPerks.js";

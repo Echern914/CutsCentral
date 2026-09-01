@@ -239,6 +239,18 @@ model Shop {
   // barbers just want a booking app); the migration backfilled every existing
   // shop to TRUE so nothing changed for them.
   rewardsEnabled      Boolean @default(false)
+  // What this shop gives at each loyalty tier, in its own words:
+  // {"BRONZE": "...", "SILVER": "...", "GOLD": "..."}, every key optional.
+  // NULL = the owner has written none, which is every shop until they do.
+  //
+  // 🔴 NOTHING ENFORCES THESE. A tier perk is a promise the SHOP makes and the
+  // barber honours - priority booking, a free beard trim, first refusal on a
+  // cancellation - most of which happens at the chair, not in software.
+  // Modelling it as an entitlement would be inventing a promise ChairBack
+  // cannot keep. Always read through parseTierPerks(): a Json column holds
+  // whatever was last written to it, and the customer rewards page is the
+  // worst place to find that out.
+  tierPerks           Json?
   // Base loyalty earn rate: punches per completed visit. Service-specific
   // EarnRule rows override it for matching services.
   punchesPerVisit     Int     @default(1)

@@ -1,0 +1,13 @@
+-- What a shop promises at each loyalty tier, in the shop's own words.
+--
+-- One nullable Json column rather than a table: three short strings that are
+-- always read together, always written together, and never queried across
+-- shops. NULL means the shop has written none, which is every existing shop -
+-- so this changes nothing for anybody until an owner fills it in.
+--
+-- Shape: {"BRONZE": "...", "SILVER": "...", "GOLD": "..."}, every key
+-- optional. Nothing enforces these; they are a promise the shop makes to a
+-- client who earned it, honoured by the barber. Read defensively through
+-- parseTierPerks in @chairback/config, because a Json column holds whatever
+-- was last written to it.
+ALTER TABLE "Shop" ADD COLUMN "tierPerks" JSONB;

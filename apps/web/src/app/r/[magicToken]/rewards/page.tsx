@@ -48,7 +48,11 @@ export interface RewardsData {
     label: string | null;
     color: string | null;
     visits: number;
-    nextTier: { label: string; visitsAway: number } | null;
+    /** 0..1 through the CURRENT tier band, for the progress bar. */
+    fraction: number;
+    /** What this shop gives at the tier they hold. Null if it has not said. */
+    perk: string | null;
+    nextTier: { label: string; visitsAway: number; perk: string | null } | null;
   };
   consent: {
     state: "opted_in" | "needs_consent" | "opted_out";

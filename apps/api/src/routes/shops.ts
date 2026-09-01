@@ -23,6 +23,8 @@ import {
   randomToken,
   vocabularyForShop,
   type GalleryItem,
+  parseTierPerks,
+  TIER_PERK_MAX_LENGTH,
 } from "@chairback/config";
 import { Prisma, prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
@@ -284,6 +286,17 @@ const updateShopSchema = createShopSchema
     // Master rewards/loyalty switch (pure gate - balances survive toggling).
     // Default false for NEW shops; existing shops were backfilled true.
     rewardsEnabled: z.boolean(),
+    // What this shop gives at each loyalty tier, in its own words. Every key
+    // optional; "" clears one. NOTHING ENFORCES THESE - a tier perk is a
+    // promise the shop makes and the barber honours, so the only rule here is
+    // that it fits under a badge on a phone.
+    tierPerks: z
+      .object({
+        BRONZE: z.string().max(TIER_PERK_MAX_LENGTH).optional(),
+        SILVER: z.string().max(TIER_PERK_MAX_LENGTH).optional(),
+        GOLD: z.string().max(TIER_PERK_MAX_LENGTH).optional(),
+      })
+      .strict(),
     // Transactional loyalty SMS to clients (earn/redeem confirmations). Off by
     // default; gated by client consent + quiet hours regardless. See
     // services/loyaltyNotify.ts.
@@ -915,6 +928,7 @@ publicPageRouter.get("/:slug", async (req, res) => {
     waitlistEnabled: shop.waitlistEnabled,
     punchesPerVisit: shop.punchesPerVisit,
     rewardsEnabled: shop.rewardsEnabled,
+    tierPerks: parseTierPerks(shop.tierPerks),
     rewards,
     promotions: promotions.map((p) => ({
       ...p,

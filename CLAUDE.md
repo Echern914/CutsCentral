@@ -60,6 +60,18 @@ dev answer as if it were prod.
 
 Never `prisma db push` against prod. `migrate deploy` only.
 
+🔴 **Migrations read `DIRECT_URL`, not `DATABASE_URL`.** The datasource sets
+`directUrl = env("DIRECT_URL")`, so overriding only `DATABASE_URL` on a
+`prisma migrate` command silently targets whatever `.env` says — the **dev
+Supabase project** — while printing a success message. Override BOTH:
+
+```bash
+DATABASE_URL="$TEST_DATABASE_URL" DIRECT_URL="$TEST_DATABASE_URL"   npx prisma migrate deploy --schema packages/db/prisma/schema.prisma
+```
+
+Read the "Datasource" line it echoes back and confirm it says `localhost`
+before believing it migrated the test database.
+
 ## Gates
 
 CI runs Vercel builds only, so the local suites ARE the merge gate:
@@ -77,6 +89,14 @@ pnpm --filter @chairback/web build       # the Vercel gate
 own** — the web *build* is the gate. To show your change adds no type debt,
 count errors with your changes stashed and again with them applied, and compare;
 the absolute number moves on its own as main advances.
+
+🔴 **A client component must import `@chairback/config` by SUBPATH.** The
+barrel (`@chairback/config`) re-exports `crypto.ts` and `session.ts`, so a
+`"use client"` file importing from it drags `node:crypto` into the browser
+bundle and `next build` dies with `UnhandledSchemeError`. Use
+`@chairback/config/constants`, `/tierPerks`, `/features` and so on. Typecheck
+passes either way — only the build catches it, which is the same reason the
+build is the gate.
 
 ## Support surfaces
 
