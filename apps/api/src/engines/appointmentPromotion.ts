@@ -1,3 +1,4 @@
+import { cancellationFeeCents } from "@chairback/config";
 import { prisma, runWithShop, type Prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import { pokeAppointmentPass } from "../wallet/appointmentPass.js";
@@ -305,16 +306,21 @@ export async function cancelAppointment(
         select: { cancelWindowHours: true, cancelFeeBps: true },
       });
       if (shop && shop.cancelWindowHours > 0 && shop.cancelFeeBps > 0) {
-        const windowMs = shop.cancelWindowHours * 60 * 60 * 1000;
-        const insideWindow = result.startsAt.getTime() - now.getTime() < windowMs;
-        if (insideWindow) {
-          const payment = await prisma.payment.findUnique({
-            where: { id: result.paymentId },
-            select: { amount: true, capturedAmount: true },
-          });
-          const collected = payment?.capturedAmount ?? payment?.amount ?? 0;
-          feeCents = Math.floor((collected * shop.cancelFeeBps) / 10000);
-        }
+        const payment = await prisma.payment.findUnique({
+          where: { id: result.paymentId },
+          select: { amount: true, capturedAmount: true },
+        });
+        // 🔴 The SHARED formula (config/shopPolicy.ts), so what the
+        // receptionist tells a client a cancellation costs is computed by the
+        // same rule this line charges with. It used to be inline here, where
+        // nothing that speaks to customers could see it.
+        feeCents = cancellationFeeCents({
+          collectedCents: payment?.capturedAmount ?? payment?.amount ?? 0,
+          cancelWindowHours: shop.cancelWindowHours,
+          cancelFeeBps: shop.cancelFeeBps,
+          startsAt: result.startsAt,
+          now,
+        });
       }
     }
     await refundForCancellation({ paymentId: result.paymentId, feeCents });

@@ -5,6 +5,7 @@ import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { computeOpenSlots, isSlotBookable, type Slot } from "../engines/slots.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
+import { cancellationFeeCents } from "@chairback/config";
 import {
   completeReschedule,
   dispatchAfterCommit,
@@ -334,11 +335,33 @@ function parseYmd(s: string): { year: number; month0: number; day: number } {
 async function resolveService(
   shopId: string,
   name: string,
-): Promise<{ id: string; name: string; durationMin: number } | null> {
+): Promise<{
+  id: string;
+  name: string;
+  durationMin: number;
+  price: { toString(): string } | null;
+  priceOverrides: unknown;
+  durationOverrides: unknown;
+  timeOverrides: unknown;
+  dateOverrides: unknown;
+} | null> {
   const db = forShop(shopId);
+  // Every layer, so a slot can carry its OWN price and length. The tool used
+  // to return the base duration and no price at all, which left the stale
+  // menu line as the model's only source - and the corrected figure showed up
+  // only in book_appointment's result, after it had already quoted a number.
   const services = await db.service.findMany({
     where: { active: true },
-    select: { id: true, name: true, durationMin: true },
+    select: {
+      id: true,
+      name: true,
+      durationMin: true,
+      price: true,
+      priceOverrides: true,
+      durationOverrides: true,
+      timeOverrides: true,
+      dateOverrides: true,
+    },
   });
   const q = name.trim().toLowerCase();
   return (
@@ -439,7 +462,11 @@ async function checkAvailability(
     return fail("that date range is entirely in the past");
   }
 
-  const perStaff: { barber: string; slots: { slot_id: string; label: string }[] }[] = [];
+  const perStaff: {
+    barber: string;
+    slots: { slot_id: string; label: string; price: number | null; duration_min: number }[];
+  }[] = [];
+  const basePrice = service.price === null ? null : Number(service.price.toString());
   for (const member of staff.slice(0, 3)) {
     const slots = await computeOpenSlots({
       shopId: ctx.shopId,
@@ -455,6 +482,22 @@ async function checkAvailability(
       slots: picked.map((s) => ({
         slot_id: encodeSlotId(member.id, service.id, s.startsAt),
         label: formatApptTime(s.startsAt, shop.timezone),
+        // 🔴 THE SAME resolution book_appointment writes with. Weekday
+        // overrides, time-of-day windows and holiday dates all apply, so the
+        // number quoted here is the number that lands on the appointment.
+        price: effectivePriceAt(basePrice, {
+          at: s.startsAt,
+          timezone: shop.timezone,
+          weekdayOverrides: service.priceOverrides,
+          timeWindows: service.timeOverrides,
+          dateOverrides: service.dateOverrides,
+        }),
+        duration_min: effectiveDurationAt(service.durationMin, {
+          at: s.startsAt,
+          timezone: shop.timezone,
+          weekdayOverrides: service.durationOverrides,
+          timeWindows: service.timeOverrides,
+        }),
       })),
     });
   }
@@ -462,13 +505,14 @@ async function checkAvailability(
   const total = perStaff.reduce((n, s) => n + s.slots.length, 0);
   return ok({
     service: service.name,
+    // Base length - each slot below carries its OWN duration_min and price.
     duration_min: service.durationMin,
     timezone: shop.timezone,
     availability: perStaff,
     note:
       total === 0
         ? "nothing open in that range - try nearby dates or offer the waitlist"
-        : "offer 2-3 of these; hold_slot the ones you offer",
+        : "offer 2-3 of these; hold_slot the ones you offer. Quote each slot's own price and duration_min - they can differ by day and time.",
   });
 }
 
@@ -1218,6 +1262,32 @@ async function cancelTool(ctx: ToolContext, rawInput: unknown): Promise<ToolExec
     return fail("that appointment can't be cancelled (not an upcoming booked appointment)");
   }
 
+  // 🔴 WHAT THIS CANCEL WILL COST, computed BEFORE the cancel with the SAME
+  // formula the engine charges with (config/shopPolicy.ts). The tool used to
+  // return no fee at all, and the catalog trained "no worries, cancelled" - so
+  // a fee-configured shop kept half the money while the receptionist said it
+  // was fine. Nothing was collected through this channel, but a client may
+  // have paid on the website and be cancelling by text.
+  const shop = await prisma.shop.findUnique({
+    where: { id: ctx.shopId },
+    select: { timezone: true, cancelWindowHours: true, cancelFeeBps: true },
+  });
+  const payment = await prisma.payment.findUnique({
+    where: { appointmentId: appt.id },
+    select: { amount: true, capturedAmount: true, status: true },
+  });
+  const collectedCents =
+    payment && payment.status === "succeeded"
+      ? (payment.capturedAmount ?? payment.amount)
+      : 0;
+  const feeCents = cancellationFeeCents({
+    collectedCents,
+    cancelWindowHours: shop?.cancelWindowHours ?? 0,
+    cancelFeeBps: shop?.cancelFeeBps ?? 0,
+    startsAt: appt.startsAt,
+    now: ctx.now,
+  });
+
   // Customer-initiated: the shop's cancellation policy applies (a fee may be
   // kept inside the window), and the freed slot fires the slot-opened flow -
   // which is exactly what feeds the gap-filler.
@@ -1226,15 +1296,19 @@ async function cancelTool(ctx: ToolContext, rawInput: unknown): Promise<ToolExec
   });
   if (!okCancel) return fail("cancel failed - escalate_to_human");
 
-  const shop = await prisma.shop.findUnique({
-    where: { id: ctx.shopId },
-    select: { timezone: true },
-  });
   return ok({
     cancelled: true,
     appointment_id: appt.id,
     was: formatApptTime(appt.startsAt, shop?.timezone ?? "America/New_York"),
-    note: "keep it warm - no guilt-trip, leave the door open",
+    fee_cents: feeCents,
+    fee_note:
+      feeCents > 0
+        ? `inside the cancellation window - $${(feeCents / 100).toFixed(2)} of what they paid stays with the shop; tell them plainly`
+        : "no fee - nothing kept",
+    note:
+      feeCents > 0
+        ? "be straight about the fee, then keep it warm - leave the door open"
+        : "keep it warm - no guilt-trip, leave the door open",
   });
 }
 

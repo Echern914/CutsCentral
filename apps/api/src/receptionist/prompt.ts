@@ -4,7 +4,13 @@ import {
   apiEnv,
   describeCancellationPolicy,
   describeDepositPolicy,
+  describeNoShowPolicy,
 } from "@chairback/config";
+import {
+  durationRangeForService,
+  parseDateOverrides,
+  priceRangeForService,
+} from "../engines/pricing.js";
 import { connectEnabled } from "../billing/stripe.js";
 import { forShop, prisma } from "@chairback/db";
 import { logger } from "../logger.js";
@@ -78,7 +84,8 @@ export function __resetPromptCacheForTests(): void {
 export interface ShopPromptConfig {
   shopName: string;
   barberNames: string;
-  otherBarber: string;
+  firstBarber: string;
+  otherBarberOffer: string;
   address: string;
   timezone: string;
   hours: string;
@@ -86,6 +93,7 @@ export interface ShopPromptConfig {
   bookingUrl: string;
   depositPolicy: string;
   cancellationPolicy: string;
+  noShowPolicy: string;
   tone: string;
 }
 
@@ -107,9 +115,22 @@ function fmtMinutes(min: number): string {
  */
 function formatHours(
   rules: { weekday: number; startMin: number; endMin: number }[],
-  fallback: string | null,
+  hoursText: string | null,
 ): string {
-  if (rules.length === 0) return fallback ?? "not configured - check with the barber";
+  // The shop's own words used to be consulted ONLY when there were no rules,
+  // so a shop that typed "closed 1-2 for lunch" AND had rules got its note
+  // discarded by the receptionist while the public page showed it. Both now.
+  const note = hoursText?.trim() ? ` (shop's own note: ${hoursText.trim()})` : "";
+  if (rules.length === 0) {
+    return hoursText?.trim() ? hoursText.trim() : "not configured - check with the barber";
+  }
+  const computed = formatRuleEnvelope(rules);
+  return `${computed}${note}. These are the usual weekly hours - always check_availability for a specific day; holidays and days off are not listed here.`;
+}
+
+function formatRuleEnvelope(
+  rules: { weekday: number; startMin: number; endMin: number }[],
+): string {
   const byDay = new Map<number, { start: number; end: number }>();
   for (const r of rules) {
     const cur = byDay.get(r.weekday);
@@ -125,6 +146,18 @@ function formatHours(
     if (w) parts.push(`${WEEKDAYS[d]} ${fmtMinutes(w.start)}-${fmtMinutes(w.end)}`);
   }
   return parts.join(", ");
+}
+
+/** "$35", or "$35-$55" when the price depends on the day or time. */
+function fmtPriceRange(r: { min: number; max: number } | null): string {
+  if (r === null) return "price varies";
+  const one = (n: number) => (Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`);
+  return r.min === r.max ? one(r.min) : `${one(r.min)}-${one(r.max)}`;
+}
+
+/** "30 min", or "30-45 min" when the length depends on the day or time. */
+function fmtDurationRange(r: { min: number; max: number }): string {
+  return r.min === r.max ? `${r.min} min` : `${r.min}-${r.max} min`;
 }
 
 /** "$35" / "$37.50"; null price -> "price varies". */
@@ -150,6 +183,13 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
       slug: true,
       timezone: true,
       hoursText: true,
+      // The address the shop already publishes as LocalBusiness data. It used
+      // to be hard-coded here as "not listed - don't quote an address", which
+      // refused a top-five front-desk question the data could answer.
+      addressStreet: true,
+      addressCity: true,
+      addressRegion: true,
+      addressPostal: true,
       receptionistTone: true,
       paymentsMode: true,
       cancelWindowHours: true,
@@ -171,12 +211,25 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
     db.staff.findMany({
       where: { active: true },
       orderBy: { name: "asc" },
-      select: { name: true },
+      select: { id: true, name: true },
     }),
     db.service.findMany({
       where: { active: true },
       orderBy: { sortOrder: "asc" },
-      select: { id: true, name: true, durationMin: true, price: true },
+      // Every pricing layer, not just the base. The menu used to read
+      // `price`/`durationMin` alone while the booking tool wrote the
+      // day-adjusted figure - so on a Saturday the receptionist quoted $40
+      // and its own booking saved $55, in one conversation.
+      select: {
+        id: true,
+        name: true,
+        durationMin: true,
+        price: true,
+        priceOverrides: true,
+        durationOverrides: true,
+        timeOverrides: true,
+        dateOverrides: true,
+      },
     }),
     // serviceIds [] = offered on EVERY service; non-empty = scoped to those.
     db.serviceAddOn.findMany({
@@ -185,13 +238,31 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
       select: { serviceIds: true, name: true, durationMin: true, price: true },
     }),
     db.availabilityRule.findMany({
-      select: { weekday: true, startMin: true, endMin: true },
+      select: { staffId: true, weekday: true, startMin: true, endMin: true },
     }),
   ]);
 
+  // 🔴 ACTIVE staff only. Deactivating a barber soft-deletes them (the slot
+  // engine ignores inactive staff, so their rules are never pruned). The
+  // booking page filters to active staff; this did not, so a departed barber
+  // who worked Sundays kept "Sun 9-5" in the receptionist's mouth forever.
+  const activeStaffIds = new Set(staff.map((x) => x.id));
+  const activeRules = rules.filter((r) => activeStaffIds.has(r.staffId));
+
   const menuLines: string[] = [];
+  let anyDatePricing = false;
   for (const s of services) {
-    menuLines.push(`${s.name} - ${fmtPrice(s.price)} (${s.durationMin} min)`);
+    const base = s.price === null ? null : Number(s.price);
+    const priceRange = priceRangeForService(base, {
+      weekdayOverrides: s.priceOverrides,
+      timeWindows: s.timeOverrides,
+    });
+    const durationRange = durationRangeForService(s.durationMin, {
+      weekdayOverrides: s.durationOverrides,
+      timeWindows: s.timeOverrides,
+    });
+    if (Object.keys(parseDateOverrides(s.dateOverrides)).length > 0) anyDatePricing = true;
+    menuLines.push(`${s.name} - ${fmtPriceRange(priceRange)} (${fmtDurationRange(durationRange)})`);
     for (const a of addOns.filter((x) => x.serviceIds.includes(s.id))) {
       menuLines.push(
         `  + add-on: ${a.name} - ${fmtPrice(a.price)} (+${a.durationMin} min)`,
@@ -204,6 +275,16 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
     for (const a of shopWide) {
       menuLines.push(`  + ${a.name} - ${fmtPrice(a.price)} (+${a.durationMin} min)`);
     }
+  }
+  if (menuLines.some((l) => l.includes("-") && /\$\d+-\$\d+|\d+-\d+ min/.test(l))) {
+    menuLines.push(
+      "A range means the price or length depends on the day or time - check_availability returns the exact figure for each slot; quote THAT, not the range.",
+    );
+  }
+  if (anyDatePricing) {
+    menuLines.push(
+      "Some dates carry holiday pricing - the exact price for a slot comes back from check_availability.",
+    );
   }
 
   const names = staff.map((s) => s.name);
@@ -227,13 +308,36 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
   const cancellation = describeCancellationPolicy(policyShop, channel);
   const deposit = describeDepositPolicy(policyShop, channel);
 
+  const noShow = describeNoShowPolicy(policyShop, channel);
+
+  // The address, when the shop has published one. Street + city is the floor;
+  // region and postal join when present. It is NOT on the booking page either,
+  // so the old fallback's "the booking page has details" was wrong twice over.
+  const addressParts = [
+    shop.addressStreet?.trim(),
+    shop.addressCity?.trim(),
+    [shop.addressRegion?.trim(), shop.addressPostal?.trim()].filter(Boolean).join(" "),
+  ].filter(Boolean);
+  const address =
+    shop.addressStreet?.trim() && shop.addressCity?.trim()
+      ? addressParts.join(", ")
+      : "not listed - the shop hasn't published one; don't guess";
+
   const config: ShopPromptConfig = {
     shopName: shop.name,
     barberNames: names.length > 0 ? names.join(", ") : "the barber",
-    otherBarber: names.length > 1 ? names[1]! : "another barber",
-    address: "not listed - don't quote an address; the booking page has details",
+    // The one name the catalog uses in the assistant's own voice ("I'll let
+    // {{FIRST_BARBER}} know"). Was hard-coded "Drick" in fifteen example turns,
+    // which every other shop's receptionist then learned to say.
+    firstBarber: names[0] ?? "the barber",
+    // 🔴 An OFFER, not a name. At a one-chair shop the old {{OTHER_BARBER}}
+    // rendered "or another barber has spots this week?" - offering staff that
+    // do not exist. Solo shops now get an empty string and the sentence
+    // simply ends.
+    otherBarberOffer: names.length > 1 ? ` or ${names[1]!} has spots this week?` : "",
+    address,
     timezone: shop.timezone,
-    hours: formatHours(rules, shop.hoursText),
+    hours: formatHours(activeRules, shop.hoursText),
     serviceMenu: menuLines.length > 0 ? menuLines.join("\n") : "not configured yet",
     bookingUrl:
       shop.publicPageEnabled && shop.slug
@@ -241,6 +345,7 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
         : "no online booking page - book through this conversation",
     depositPolicy: deposit,
     cancellationPolicy: cancellation,
+    noShowPolicy: noShow,
     tone: shop.receptionistTone ?? "relaxed & friendly",
   };
 
@@ -252,7 +357,8 @@ export function renderTemplate(template: string, config: ShopPromptConfig): stri
   const map: Record<string, string> = {
     SHOP_NAME: config.shopName,
     BARBER_NAMES: config.barberNames,
-    OTHER_BARBER: config.otherBarber,
+    FIRST_BARBER: config.firstBarber,
+    OTHER_BARBER_OFFER: config.otherBarberOffer,
     ADDRESS: config.address,
     TIMEZONE: config.timezone,
     HOURS: config.hours,
@@ -260,6 +366,7 @@ export function renderTemplate(template: string, config: ShopPromptConfig): stri
     BOOKING_URL: config.bookingUrl,
     DEPOSIT_POLICY: config.depositPolicy,
     CANCELLATION_POLICY: config.cancellationPolicy,
+    NO_SHOW_POLICY: config.noShowPolicy,
     TONE: config.tone,
   };
   return template.replace(/\{\{([A-Z_]+)\}\}/g, (whole, key: string) => {

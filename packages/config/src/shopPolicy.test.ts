@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  cancellationFeeCents,
   describeCancellationPolicy,
   describeDepositPolicy,
+  describeNoShowPolicy,
   describeShopPolicy,
   type ShopPolicyInput,
 } from "./shopPolicy.js";
@@ -219,5 +221,94 @@ describe("channel and capability — the regression this file shipped once", () 
     const owner = describeShopPolicy({ ...depositShop, paymentsLive: false });
     expect(owner).toContain("50%");
     expect(owner).toContain("cannot actually be charged");
+  });
+});
+
+describe("cancellationFeeCents — the ONE formula the engine charges with", () => {
+  const start = new Date("2026-06-10T15:00:00Z");
+  const policy = { cancelWindowHours: 12, cancelFeeBps: 5000 };
+
+  it("keeps the configured share inside the window", () => {
+    expect(
+      cancellationFeeCents({
+        collectedCents: 4000,
+        ...policy,
+        startsAt: start,
+        now: new Date("2026-06-10T10:00:00Z"), // 5h before: inside 12h
+      }),
+    ).toBe(2000);
+  });
+
+  it("is zero outside the window", () => {
+    expect(
+      cancellationFeeCents({
+        collectedCents: 4000,
+        ...policy,
+        startsAt: start,
+        now: new Date("2026-06-09T10:00:00Z"), // 29h before
+      }),
+    ).toBe(0);
+  });
+
+  it("🔴 is zero when nothing was collected, whatever the settings say", () => {
+    // The receptionist collects nothing, and a shop with payments off has no
+    // payment row. A fee with nothing to take it from is not a fee - which is
+    // exactly why "no worries, cancelled" was TRUE for those clients and
+    // FALSE for the ones who had paid on the website.
+    expect(
+      cancellationFeeCents({
+        collectedCents: 0,
+        ...policy,
+        startsAt: start,
+        now: new Date("2026-06-10T10:00:00Z"),
+      }),
+    ).toBe(0);
+  });
+
+  it("is zero without both a window and a rate", () => {
+    const inside = new Date("2026-06-10T10:00:00Z");
+    expect(
+      cancellationFeeCents({ collectedCents: 4000, cancelWindowHours: 0, cancelFeeBps: 5000, startsAt: start, now: inside }),
+    ).toBe(0);
+    expect(
+      cancellationFeeCents({ collectedCents: 4000, cancelWindowHours: 12, cancelFeeBps: 0, startsAt: start, now: inside }),
+    ).toBe(0);
+  });
+
+  it("floors to whole cents, matching the engine", () => {
+    expect(
+      cancellationFeeCents({
+        collectedCents: 3333,
+        cancelWindowHours: 12,
+        cancelFeeBps: 3333,
+        startsAt: start,
+        now: new Date("2026-06-10T10:00:00Z"),
+      }),
+    ).toBe(Math.floor((3333 * 3333) / 10000));
+  });
+});
+
+describe("describeNoShowPolicy", () => {
+  const paying: ShopPolicyInput = {
+    paymentsMode: "deposit",
+    cancelWindowHours: 0,
+    cancelFeeBps: 0,
+    depositAmountCents: 2000,
+    paymentsLive: true,
+    requiresApproval: false,
+  };
+
+  it("a paid booking is kept on a no-show - nothing is refunded", () => {
+    expect(describeNoShowPolicy(paying)).toContain("not refunded");
+  });
+
+  it("🔴 a channel that collected nothing has nothing to keep, and says to cancel instead", () => {
+    // The receptionist takes no money. Threatening a no-show fee there is a
+    // threat with nothing behind it; the honest, useful line is "cancel so the
+    // slot can go to someone else".
+    const line = describeNoShowPolicy(paying, { collectsAtBooking: false });
+    expect(line).toContain("no charge");
+    expect(line).toContain("cancel");
+    expect(line).not.toContain("not refunded");
   });
 });
