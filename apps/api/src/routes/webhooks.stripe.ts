@@ -34,6 +34,20 @@ stripeWebhookRouter.post("/", express.raw({ type: "*/*" }), async (req, res) => 
     res.status(400).json({ error: "bad_signature" });
     return;
   }
+  // 🔴 RECORD WHAT ACTUALLY ARRIVES - event type and id only, no payload, no
+  // customer, no amounts.
+  //
+  // Why this line exists: `invoice.paid` is the ONLY trigger for a referral
+  // reward anywhere in the codebase (billing/stripe.ts has the single call to
+  // grantReferralReward). If that event is not subscribed on the live endpoint
+  // then no referrer has ever been paid - and nothing would say so, because an
+  // event we do not handle falls through `default: return` in silence.
+  //
+  // "Does invoice.paid actually reach us in production?" was answerable only
+  // from inside the Stripe dashboard. A feature dying quietly should not
+  // depend on someone thinking to go and look.
+  logger.info({ stripeEventType: event.type, stripeEventId: event.id }, "stripe webhook received");
+
   // Subscription/billing events fold into Shop state. Destination-charge
   // payment events (payment_intent.*, charge.refunded) fire on the PLATFORM
   // account too, so reconcile them here as well - applyPaymentEvent ignores

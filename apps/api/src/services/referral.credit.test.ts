@@ -95,6 +95,21 @@ beforeAll(async () => {
     select: { id: true },
   });
   userId = user.id;
+
+  // 🔴 PRE-WARM THE MOCKED MODULE, and this line is load-bearing.
+  //
+  // payReferrer reaches Stripe through a DYNAMIC `await import()`, so the
+  // module is first resolved deep inside the call. In the race test below, two
+  // callers trigger that first resolution simultaneously - and one of them
+  // used to win the mock while the other got the REAL stripeClient and threw
+  // `stripe_not_configured`, which grantReferralReward's catch then swallowed.
+  //
+  // That artifact hid a genuine defect for an entire audit: with the CAS
+  // deleted the second caller really does reach payReferrer, but the test
+  // could not see the doubled credit because that caller crashed on an
+  // unmocked client instead of issuing one. Resolving the module ONCE here
+  // means both racers get the mock and a second payout is actually countable.
+  await import("../billing/stripe.js");
 });
 
 afterEach(async () => {
@@ -123,14 +138,21 @@ describe("paying a referrer who is already subscribed", () => {
     // compare-and-set. That is the only interleaving where the CAS matters,
     // and nothing exercised it before.
     //
-    // 🔴 HONEST LIMIT OF THIS TEST. Deleting the CAS predicate does NOT make
-    // it fail. Instrumenting the service showed why: without the predicate
-    // BOTH callers pass the gate (both see count = 1), so the CAS is real and
-    // is genuinely reached here - but the second payout is then absorbed
-    // further down and only one Stripe credit is ever issued. So this pins the
-    // end-to-end property (one credit, one REWARDED row) and proves the race
-    // is real, while the CAS's own removal stays invisible from outside. What
-    // is actually stopping that second credit is worth its own look.
+    // 🔴 VERIFIED FALSIFIER: delete `status: "PENDING"` from the CAS in
+    // grantReferralReward and this fails with "expected 1 times, got 2" - a
+    // referrer credited twice, real money out the door.
+    //
+    // It did NOT always fail, and the reason is worth keeping. payReferrer
+    // reaches Stripe via a dynamic `await import()`, so with the CAS gone both
+    // racers raced to resolve that module for the first time; one won the mock
+    // and the other got the REAL stripeClient, threw `stripe_not_configured`,
+    // and had its failure swallowed by grantReferralReward's catch. The second
+    // credit was never issued, so the spy stayed at 1 and the test "passed".
+    //
+    // That looked exactly like a guard somewhere downstream absorbing the
+    // duplicate, and it was written up that way. There is no such guard. The
+    // CAS is the only thing standing between a race and a double payout. The
+    // pre-warm in beforeAll is what makes that visible from outside.
     retrieve.mockResolvedValue({ items: { data: [{ price: { unit_amount: PRICE_CENTS } }] } });
     createBalanceTransaction.mockResolvedValue({ id: "cbtxn_race" });
     const referrer = await makePayingReferrer();
@@ -146,7 +168,6 @@ describe("paying a referrer who is already subscribed", () => {
     // Both callers really did contend: neither finished until the row was
     // released. (Instrumented once to be sure: both read PENDING and both
     // reached the compare-and-set, which is the interleaving that matters.)
-    expect(settledEarly).toBe(0);
     expect(settledEarly).toBe(0);
 
     // ONE month of credit. Two would be real money out the door.
