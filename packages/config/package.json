@@ -20,6 +20,7 @@
     "./helpMatch": "./src/helpMatch.ts",
     "./nextPath": "./src/nextPath.ts",
     "./mcpScopes": "./src/mcpScopes.ts",
+    "./shopHandle": "./src/shopHandle.ts",
     "./shopPolicy": "./src/shopPolicy.ts",
     "./tierPerks": "./src/tierPerks.ts",
     "./supportCapabilities": "./src/supportCapabilities.ts",
