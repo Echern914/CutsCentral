@@ -8,20 +8,7 @@ This release: everything merged to `main` after `f60b3c5`.
 ## Paste into App Store Connect → "What's New in This Version"
 
 ```
-New in this version:
-
-• Find your shop by its exact name — type it in, or open the link your barber sent, and you're in. Nobody else's shop comes up.
-• Sign in for rewards with your phone number. Your verified number is your account, so a new phone or a lost link never loses your visits.
-• See your rewards tier, how far you are from the next one, and what each tier gets you at your shop.
-• Book a standing appointment — pick your usual time and it's yours for the weeks ahead. Cancel one visit, or all of them, from a single link.
-• Creating an account opens in your browser and brings you straight back signed in.
-
-Also new since the last release:
-
-• A fresh front door that fits every kind of shop, not just barbers
-• Holiday and special-date pricing shows up before you book, not after
-• Booking confirmations by email, with a calendar file attached
-• Your barber's text assistant now quotes the exact price and time for the slot it offers
+Find your shop by its exact name or the link your barber sent, and nobody else's shop comes up. Sign in for rewards with your phone number, so a new phone or a lost link never loses your visits, and see your tier, how far you are from the next one, and what each tier gets you at your shop. Book a standing appointment at your usual time for the weeks ahead, and cancel one visit or all of them from a single link. Also new: holiday and special-date pricing shows before you book, booking confirmations arrive by email with a calendar file, and your barber's text assistant quotes the exact price and time for the slot it offers.
 ```
 
 ## Honesty note for whoever ships this
@@ -34,6 +21,22 @@ is why the copy never says "we fixed".
 
 No prices, no plans, no purchase CTAs, no "free payments", no competitor
 mentions - the same rules as the listing (see LISTING.md).
+
+🔴 The "Create an account" door (#314, in this binary) opens the website in the
+system browser to register a business. Round 5 of the July review rejected an
+in-app button that linked out to registration under 3.1.1. The copy above does
+NOT advertise the door; the reviewer notes below describe it truthfully. Whether
+to hide it in-app before review is the owner's call.
+
+## App Review Information → Notes (paste; credentials unchanged, see APP-REVIEW-RESPONSE-2026-07.md)
+
+```
+WHAT'S NEW IN 1.0.7: customer-side features only. Customers can look up their shop by its exact name, sign in for rewards with the phone number their shop has on file (one-time code), see their loyalty tier and progress, and book a standing weekly appointment from the shop's booking page. Nothing is sold in the app, there are no In-App Purchases, and plans and billing exist only on our website in a web browser.
+
+SIGN-IN: The welcome screen is a sign-in selector. "I own a barbershop" and "I manage multiple shops" open a sign-in screen for an existing account (Apple, Google, or email). Use the credentials above, or tap "Explore the demo" for a read-only demo dashboard with a guided tour. "I'm a customer" opens the customer view; tap "Try the demo" for a fully populated demo rewards page, no link needed.
+
+ACCOUNTS: The app contains no registration form and no purchase flow. "Create an account" on the sign-in screen opens our website in the system browser (Safari); the account is created there and the browser returns the person to the app signed in.
+```
 
 ## The 94 commits in this release
 
