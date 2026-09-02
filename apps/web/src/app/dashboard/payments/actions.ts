@@ -17,6 +17,21 @@ export async function startConnectOnboardingAction(): Promise<{
 }
 
 /**
+ * Mint a one-time link into the barber's Stripe dashboard - the Express
+ * dashboard for an account set up through ChairBack (there is NO stripe.com
+ * login for those), or dashboard.stripe.com for a linked Standard account.
+ */
+export async function openStripeDashboardAction(): Promise<{
+  ok: boolean;
+  url?: string;
+  error?: string;
+}> {
+  const res = await apiSend<{ url: string }>("POST", "/api/payments/connect/dashboard");
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, url: res.data.url };
+}
+
+/**
  * Unlink the Stripe account. For a STANDARD account this also revokes ChairBack
  * at Stripe, so it disappears from the barber's own connected-apps list rather
  * than only appearing to be gone here.
