@@ -56,7 +56,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   // build, not an OTA: expo-web-browser and expo-secure-store are config
   // plugins, so the entitlement and the authentication-session APIs only exist
   // in a freshly compiled binary.
-  version: "1.0.6",
+  version: "1.0.7",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
