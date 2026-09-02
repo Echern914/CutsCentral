@@ -34,7 +34,8 @@ export function ManageClient({
   // confirmation link opened inside the app).
   useSignalNativeReady();
 
-  const [canceled, setCanceled] = useState(false);
+  // What the customer canceled: just this visit, or this and every later one.
+  const [canceledScope, setCanceledScope] = useState<"this" | "future" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   // Set once a reschedule succeeds, so the page shows the NEW time immediately
@@ -71,19 +72,22 @@ export function ManageClient({
   );
   const when = whenFmt.format(new Date(movedTo ?? data.startsAt));
 
-  function cancel() {
+  function cancel(scope: "this" | "future") {
     setError(null);
     startTransition(async () => {
-      const res = await cancelBookingAction(token);
+      const res = await cancelBookingAction(token, scope);
       if (!res.ok) {
         setError("Couldn't cancel. Please try again or call the shop.");
         return;
       }
-      setCanceled(true);
+      setCanceledScope(scope);
     });
   }
 
-  const isCanceled = canceled || data.status === "CANCELED";
+  const isCanceled = canceledScope !== null || data.status === "CANCELED";
+  // Later visits of a standing appointment that are still on the books. Zero
+  // (or not a series) hides the second cancel button entirely.
+  const laterVisits = data.series?.remaining ?? 0;
   const isDone = data.status === "COMPLETED" || data.status === "NO_SHOW";
 
   return (
@@ -127,7 +131,9 @@ export function ManageClient({
 
         {isCanceled ? (
           <div className="mt-6 rounded-xl border border-white/10 bg-white/5 p-4 text-center text-sm text-muted">
-            This appointment is canceled.
+            {canceledScope === "future"
+              ? `This appointment and your ${laterVisits} later ${laterVisits === 1 ? "visit" : "visits"} are canceled.`
+              : "This appointment is canceled."}
             {data.shop.slug && (
               <Link
                 href={`/book/${data.shop.slug}`}
@@ -174,11 +180,23 @@ export function ManageClient({
             {data.canCancel && !demoTour && (
               <button
                 type="button"
-                onClick={cancel}
+                onClick={() => cancel("this")}
                 disabled={pending}
                 className="rounded-xl border border-red-500/40 py-3 text-center text-sm font-semibold text-red-400 disabled:opacity-50"
               >
-                {pending ? "Canceling…" : "Cancel appointment"}
+                {pending ? "Canceling…" : laterVisits > 0 ? "Cancel just this visit" : "Cancel appointment"}
+              </button>
+            )}
+            {data.canCancel && !demoTour && laterVisits > 0 && (
+              <button
+                type="button"
+                onClick={() => cancel("future")}
+                disabled={pending}
+                className="rounded-xl border border-red-500/40 py-3 text-center text-sm font-semibold text-red-400 disabled:opacity-50"
+              >
+                {pending
+                  ? "Canceling…"
+                  : `Cancel this and the ${laterVisits} later ${laterVisits === 1 ? "visit" : "visits"}`}
               </button>
             )}
             {demoTour && (

@@ -16,6 +16,8 @@ export interface ManageData {
   staff: { name: string };
   canCancel: boolean;
   canReschedule: boolean;
+  // A standing appointment: later visits still on the books (null = not a series).
+  series: { remaining: number } | null;
   // Check-in ("On my way"). open is computed server-side (60 min before start
   // through 15 min after) so this component does no timezone math.
   checkin: {

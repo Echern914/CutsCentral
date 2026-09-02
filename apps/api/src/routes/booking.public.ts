@@ -69,7 +69,7 @@ import {
   publicBookingEmailRequired,
 } from "../services/appointmentNotify.js";
 import { sendPushToUser } from "../messaging/push.js";
-import { cancelAppointment } from "../engines/appointmentPromotion.js";
+import { cancelAppointment, cancelSeries } from "../engines/appointmentPromotion.js";
 import { claimOffer } from "../engines/waitlistOffer.js";
 import { sha256Hex } from "../engines/waitlistJoin.js";
 import {
@@ -2305,6 +2305,7 @@ bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
       checkInStatus: true,
       etaMinutes: true,
       runningLate: true,
+      seriesId: true,
       shop: { select: { name: true, timezone: true, slug: true } },
       service: { select: { name: true, durationMin: true } },
       staff: { select: { name: true } },
@@ -2316,6 +2317,17 @@ bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
   }
   const now = new Date();
   const canChange = appt.status === "BOOKED" && appt.startsAt > now;
+
+  // A standing appointment: how many LATER visits are still on the books, so
+  // the page can offer "cancel this and the rest" instead of making the
+  // customer open twelve links. Counted from this occurrence forward - earlier
+  // ones already happened or were handled on their own.
+  const remainingInSeries =
+    appt.seriesId && canChange
+      ? await prisma.appointment.count({
+          where: { seriesId: appt.seriesId, status: "BOOKED", startsAt: { gt: appt.startsAt } },
+        })
+      : 0;
 
   // The barber's "come early" nudges for THIS appointment, newest first, plus
   // whether the client already sent their one-tap reply. Shown as a banner with
@@ -2350,6 +2362,7 @@ bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
     staff: appt.staff,
     canCancel: canChange,
     canReschedule: canChange,
+    series: appt.seriesId ? { remaining: remainingInSeries } : null,
     // Check-in ("On my way"): the window is computed HERE so the client needs
     // no timezone math - it just renders the button when open is true. A
     // received nudge opens the window early (the barber ASKED them to come).
@@ -2587,13 +2600,27 @@ bookingPublicRouter.post(
 );
 
 // POST /api/book/manage/:token/cancel - the customer cancels their own booking.
+// scope "future" (a standing appointment only) cancels this visit AND every
+// later still-booked one in the series, through the same engine the barber's
+// series cancel uses. The appointment's own token is the authorization - the
+// customer already holds it; no second link is needed.
+const cancelScopeSchema = z
+  .object({ scope: z.enum(["this", "future"]).optional() })
+  .strict();
+
 bookingPublicRouter.post(
   "/manage/:token/cancel",
   bookingWriteLimiter,
   async (req, res) => {
+    const parsed = cancelScopeSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid_input" });
+      return;
+    }
+    const scope = parsed.data.scope ?? "this";
     const appt = await prisma.appointment.findUnique({
       where: { manageToken: String(req.params.token) },
-      select: { id: true, shopId: true, status: true, startsAt: true },
+      select: { id: true, shopId: true, status: true, startsAt: true, seriesId: true },
     });
     if (!appt) {
       res.status(404).json({ error: "not_found" });
@@ -2601,6 +2628,30 @@ bookingPublicRouter.post(
     }
     if (appt.status !== "BOOKED" || appt.startsAt <= new Date()) {
       res.status(409).json({ error: "not_cancelable" });
+      return;
+    }
+    if (scope === "future") {
+      if (!appt.seriesId) {
+        res.status(409).json({ error: "not_a_series" });
+        return;
+      }
+      const result = await cancelSeries(appt.shopId, appt.seriesId, "future", appt.id, new Date(), {
+        applyPolicyFee: true,
+      });
+      if (!result) {
+        res.status(409).json({ error: "not_cancelable" });
+        return;
+      }
+      // The engine suppresses the per-slot alerts for a batch; the barber did
+      // NOT initiate this one, so tell them once, anchored on the visit the
+      // customer opened.
+      void notifyBarberBookingEvent({
+        shopId: appt.shopId,
+        appointmentId: appt.id,
+        kind: "canceled",
+      });
+      invalidateShopAvailabilityCaches(appt.shopId);
+      res.json({ ok: true, canceled: result.canceled });
       return;
     }
     // Customer-initiated: honor the shop's cancellation policy (a fee may apply
