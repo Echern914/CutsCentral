@@ -20,7 +20,8 @@ import {
 const FIXTURE: ShopPromptConfig = {
   shopName: "Fade Lab",
   barberNames: "Drick, Moe",
-  otherBarber: "Moe",
+  firstBarber: "Drick",
+  otherBarberOffer: " or Moe has spots this week?",
   address: "n/a",
   timezone: "America/New_York",
   hours: "Mon 9:00 AM-6:00 PM",
@@ -28,6 +29,7 @@ const FIXTURE: ShopPromptConfig = {
   bookingUrl: "https://x.test/book/fade-lab",
   depositPolicy: "none - pay at the shop",
   cancellationPolicy: "free cancellation any time before the appointment",
+  noShowPolicy: "no charge for a no-show",
   tone: "sharp & no-nonsense",
 };
 
@@ -55,9 +57,9 @@ describe("renderTemplate", () => {
     const template =
       "Shop {{SHOP_NAME}} run by {{BARBER_NAMES}} ({{TIMEZONE}}), hours {{HOURS}}.\n" +
       "{{SERVICE_MENU}}\nBook: {{BOOKING_URL}} deposit {{DEPOSIT_POLICY}} " +
-      "cancel {{CANCELLATION_POLICY}} vibe {{TONE}} other {{OTHER_BARBER}} at {{ADDRESS}}";
+      "cancel {{CANCELLATION_POLICY}} vibe {{TONE}} first {{FIRST_BARBER}}{{OTHER_BARBER_OFFER}} at {{ADDRESS}} noshow {{NO_SHOW_POLICY}}";
     const out = renderTemplate(template, FIXTURE);
-    expect(out).not.toMatch(/\{\{(SHOP_NAME|BARBER_NAMES|TIMEZONE|HOURS|SERVICE_MENU|BOOKING_URL|DEPOSIT_POLICY|CANCELLATION_POLICY|TONE|OTHER_BARBER|ADDRESS)\}\}/);
+    expect(out).not.toMatch(/\{\{(SHOP_NAME|BARBER_NAMES|TIMEZONE|HOURS|SERVICE_MENU|BOOKING_URL|DEPOSIT_POLICY|CANCELLATION_POLICY|NO_SHOW_POLICY|TONE|FIRST_BARBER|OTHER_BARBER_OFFER|ADDRESS)\}\}/);
     expect(out).toContain("Fade Lab");
     expect(out).toContain("Drick, Moe");
     expect(out).toContain("Cut - $35 (30 min)");
@@ -156,6 +158,6 @@ describe("renderPromptForShop", () => {
     expect(text).toContain("none - pay at the shop");
     expect(text).toContain("relaxed & friendly");
     // Every config placeholder got filled.
-    expect(text).not.toMatch(/\{\{(SHOP_NAME|BARBER_NAMES|TIMEZONE|HOURS|SERVICE_MENU|BOOKING_URL|DEPOSIT_POLICY|CANCELLATION_POLICY|TONE)\}\}/);
+    expect(text).not.toMatch(/\{\{(SHOP_NAME|BARBER_NAMES|TIMEZONE|HOURS|SERVICE_MENU|BOOKING_URL|DEPOSIT_POLICY|CANCELLATION_POLICY|NO_SHOW_POLICY|TONE|FIRST_BARBER|OTHER_BARBER_OFFER|ADDRESS)\}\}/);
   });
 });

@@ -184,3 +184,48 @@ export function describeShopPolicy(shop: ShopPolicyInput): string {
       : "";
   return `Your policy right now: ${cancellation}. Payment: ${deposit}.${inert}`;
 }
+
+/**
+ * The cancellation fee in cents, given what was actually collected.
+ *
+ * 🔴 THIS FORMULA USED TO LIVE INLINE IN THE CANCEL ENGINE, where nothing else
+ * could see it - so the receptionist told a client "no worries, cancelled"
+ * while the engine quietly kept half their money. Any surface that wants to
+ * SAY what a cancellation costs has to compute it from the same rule the
+ * engine CHARGES with, or the two drift, which is the defect this file exists
+ * to end. A fee needs a window, a rate, a start inside the window, and money
+ * to take it from; miss any one and it is zero.
+ */
+export function cancellationFeeCents(input: {
+  collectedCents: number;
+  cancelWindowHours: number;
+  cancelFeeBps: number;
+  startsAt: Date;
+  now: Date;
+}): number {
+  if (input.collectedCents <= 0) return 0;
+  if (input.cancelWindowHours <= 0 || input.cancelFeeBps <= 0) return 0;
+  const windowMs = input.cancelWindowHours * 60 * 60 * 1000;
+  const insideWindow = input.startsAt.getTime() - input.now.getTime() < windowMs;
+  if (!insideWindow) return 0;
+  return Math.floor((input.collectedCents * input.cancelFeeBps) / 10000);
+}
+
+/**
+ * What a no-show costs, on THIS channel.
+ *
+ * Nobody owned this sentence before, so the receptionist improvised whenever
+ * a client asked "what if I don't show?". The engine's actual behaviour: a
+ * no-show never auto-refunds - whatever was paid at booking stays with the
+ * shop - and a channel that collected nothing has nothing to keep. Saying the
+ * second half plainly matters too: the useful ask is "cancel instead", because
+ * a cancelled slot can be offered to somebody else and a no-show cannot.
+ */
+export function describeNoShowPolicy(
+  shop: ShopPolicyInput,
+  channel: PolicyChannel = {},
+): string {
+  return collectsMoney(shop, channel)
+    ? "a no-show keeps whatever was paid at booking - it is not refunded"
+    : "no charge for a no-show (nothing is collected up front), but a cancellation frees the time for someone else, so ask them to cancel rather than not turn up";
+}
