@@ -108,7 +108,8 @@ export function TierPerks({
   }
 
   return (
-    <section className="mt-8 rounded-2xl border border-subtle bg-charcoal-800/60 p-5">
+    // `id` is the registry's deep link (FEATURE_INDEX "loyalty-tiers").
+    <section id="tiers" className="mt-8 rounded-2xl border border-subtle bg-charcoal-800/60 p-5">
       <h2 className="font-display text-xl tracking-tight">What each tier gets</h2>
       <p className="mt-1 text-sm text-muted">
         {cap(vocab.clientNounPlural)} earn Bronze, Silver and Gold by coming back. Set how many

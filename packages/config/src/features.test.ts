@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { DEMO_TOUR_STEPS } from "./demoTour.js";
-import { FEATURE_CATEGORIES, FEATURE_INDEX, isBillingHref } from "./features.js";
+import {
+  FEATURE_CATEGORIES,
+  FEATURE_INDEX,
+  isBillingHref,
+  searchableFeatures,
+  visibleFeatures,
+} from "./features.js";
 
 describe("FEATURE_INDEX", () => {
   it("has unique ids and names", () => {
@@ -83,6 +89,34 @@ describe("FEATURE_INDEX", () => {
     for (const href of REQUIRED_HREFS) {
       expect(indexed.has(href), `${href} has no FEATURE_INDEX entry - orphaned page`).toBe(true);
     }
+  });
+});
+
+describe("searchable vs listed", () => {
+  // /support is a PUBLIC page: no shelf in the More directory, but "help"
+  // typed into the palette must not dead-end - every seat has it.
+  it("support is typeable but not browsable", () => {
+    const listed = visibleFeatures({ role: "BARBER" }).map((f) => f.id);
+    const typeable = searchableFeatures({ role: "BARBER" }).map((f) => f.id);
+    expect(listed).not.toContain("support");
+    expect(typeable).toContain("support");
+    // The other public pages stay out of both.
+    for (const id of ["privacy", "pricing", "signup", "onboarding-connect"]) {
+      expect(listed).not.toContain(id);
+      expect(typeable).not.toContain(id);
+    }
+  });
+
+  it("the searchable index is otherwise exactly the visible one", () => {
+    const listed = visibleFeatures({ role: "OWNER" }).map((f) => f.id);
+    const typeable = searchableFeatures({ role: "OWNER" }).map((f) => f.id);
+    expect(typeable.filter((id) => id !== "support")).toEqual(listed);
+  });
+
+  it("still honours the seat: a manager cannot type their way to an owner page", () => {
+    const ids = searchableFeatures({ role: "MANAGER" }).map((f) => f.id);
+    expect(ids).not.toContain("billing");
+    expect(ids).not.toContain("affiliates");
   });
 });
 

@@ -121,6 +121,23 @@ const SYNONYMS: Record<string, string[]> = {
   secure: ["privacy", "security"],
 };
 
+/**
+ * Verbs a barber wraps a feature name in. "change tier", "add a barber", "turn
+ * on reminders" - the verb says what they want to DO, the noun says WHERE. The
+ * palette's AND rule used to demand the verb land on the entry too, so "change
+ * tier" found nothing while "tier" found the page. These are dropped from a
+ * feature search when anything else remains; a bare verb still searches.
+ *
+ * Feature-search only. findHelp's confidence math counts a question's real
+ * words, and a how-to answer ("how do I change my password") legitimately
+ * matches on its verb.
+ */
+const ACTION_VERBS = new Set([
+  "add", "change", "edit", "set", "update", "turn", "enable", "disable",
+  "see", "view", "find", "show", "open", "use", "manage", "make", "go",
+  "want", "wanna", "looking", "trying", "adjust", "configure", "customize",
+]);
+
 function normalize(input: string): string {
   return input
     .toLowerCase()
@@ -256,8 +273,22 @@ export const HELP_CORPUS: HelpAnswer[] = [
   ...FEATURE_INDEX.filter((f) => f.listed !== false).map(featureAnswer),
 ];
 
+/** The ids of the generated feature pointers, as opposed to hand-written answers. */
+const GENERATED_IDS = new Set(FEATURE_INDEX.map((f) => `feature-${f.id}`));
+
+/**
+ * A generated "it's under X in your dashboard" pointer scores at a discount
+ * against a hand-written answer. The registry's synonyms are the words a
+ * barber TYPES to find a page; they are not a claim that the page answers a
+ * how/why question. Without this, "how do I add a barber" started landing on
+ * the Staff pointer the day "add barber" became a search synonym - correct
+ * destination, worse answer than the how-to written for exactly that question.
+ */
+const GENERATED_DISCOUNT = 0.85;
+
 interface Indexed {
   entry: HelpAnswer;
+  generated: boolean;
   primaryTokens: Set<string>;
   questionTokens: Set<string>;
   keywordTokens: Set<string>;
@@ -276,6 +307,7 @@ const INDEXED: Indexed[] = HELP_CORPUS.map((entry) => {
   const primaryTokens = new Set((entry.primaryFor ?? []).flatMap((k) => tokenize(k)));
   return {
     entry,
+    generated: GENERATED_IDS.has(entry.id),
     primaryTokens,
     questionTokens,
     keywordTokens,
@@ -365,6 +397,7 @@ function scoreEntry(
     if (idx.normalizedQuestion.includes(normalizedQuery)) score += PHRASE_QUESTION_BONUS;
     else if (idx.normalizedKeywords.includes(normalizedQuery)) score += PHRASE_KEYWORD_BONUS;
   }
+  if (idx.generated) score *= GENERATED_DISCOUNT;
 
   return { score, coverage, bestHit, realTokens };
 }
@@ -540,16 +573,28 @@ function hitScore(token: string, field: Set<string>, weight: number): number {
   return 0;
 }
 
+/** The tokens of a phrase as one comparable string: "Loyalty status tiers" -> "loyalty status tier". */
+function tokenKey(phrase: string): string {
+  return tokenize(phrase).join(" ");
+}
+
 export function searchFeatures(
   query: string,
   index: readonly FeatureIndexEntry[],
 ): FeatureHit[] {
-  const expanded = expandQuery(query);
-  if (expanded.length === 0) return [];
+  const all = expandQuery(query);
+  if (all.length === 0) return [];
+  // Drop the verb wrapper ("change", "add", "turn") when there is a noun left
+  // to search for - see ACTION_VERBS. A synonym expansion of a verb goes too.
+  const nouns = all.filter((t) => t.weight < 1 || !ACTION_VERBS.has(t.token));
+  const expanded = nouns.some((t) => t.weight === 1) ? nouns : all;
   // Only unweighted (i.e. literally typed) tokens are REQUIRED. A synonym
   // expansion is a bonus; demanding it would make the AND rule stricter than
   // what the barber actually typed.
   const required = expanded.filter((t) => t.weight === 1).map((t) => t.token);
+  // The typed words as a key, so "affiliate" equals the name "Affiliates" and
+  // "card punch"... does not, but "punch cards" equals "Punch cards".
+  const queryKey = required.join(" ");
 
   const hits: FeatureHit[] = [];
   for (const entry of index) {
@@ -579,11 +624,19 @@ export function searchFeatures(
     // multi-word synonym is the strongest signal in the index - somebody sat
     // down and wrote that phrase against that feature - so it has to outrank
     // an incidental single-token hit.
+    //
+    // Equality is on TOKENS, not raw text: "affiliate" is the name
+    // "Affiliates", "tier" is the synonym "tiers", "change tier" (verb dropped)
+    // is "tiers" too. Before this, "affiliate" lost to an entry that merely
+    // LISTED the word as a synonym, because the name was one letter longer.
     const nq = normalize(query);
     if (nq) {
-      if (normalize(entry.name) === nq) score += 10;
-      else if (entry.synonyms.some((s) => normalize(s) === nq)) score += 8;
+      if (normalize(entry.name) === nq || tokenKey(entry.name) === queryKey) score += 10;
       else if (
+        entry.synonyms.some((s) => normalize(s) === nq || tokenKey(s) === queryKey)
+      ) {
+        score += 8;
+      } else if (
         nq.includes(" ") &&
         (normalize(entry.name).includes(nq) ||
           entry.synonyms.some((s) => normalize(s).includes(nq)))
