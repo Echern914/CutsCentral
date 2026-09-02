@@ -22,6 +22,7 @@ import {
   validateTierThresholds,
   type TierThresholds,
 } from "@chairback/config/constants";
+import { cap, useVocab } from "@/components/VocabProvider";
 import { saveTierPerksAction } from "./actions";
 
 /**
@@ -49,6 +50,10 @@ export function TierPerks({
   initialThresholds?: TierThresholds;
 }) {
   const router = useRouter();
+  // The shop's own words: a nail studio keeps its promise at a station, not
+  // a chair. (The vocabulary guard only scans string literals, so this JSX
+  // text slipped past it - worth knowing when reading a green lint.)
+  const vocab = useVocab();
   const [perks, setPerks] = useState<TierPerksMap>(initial);
   // Held as strings so a half-typed value ("" while retyping 12) does not snap
   // to a number under the barber's fingers.
@@ -106,12 +111,13 @@ export function TierPerks({
     <section className="mt-8 rounded-2xl border border-subtle bg-charcoal-800/60 p-5">
       <h2 className="font-display text-xl tracking-tight">What each tier gets</h2>
       <p className="mt-1 text-sm text-muted">
-        Clients earn Bronze, Silver and Gold by coming back. Set how many visits each one
-        takes, and write what it is worth — both show on their rewards page, under their badge.
+        {cap(vocab.clientNounPlural)} earn Bronze, Silver and Gold by coming back. Set how many
+        visits each one takes, and write what it is worth — both show on their rewards page,
+        under their badge.
       </p>
       <p className="mt-2 text-xs text-muted">
-        ChairBack shows the promise; you keep it at the chair. Leave one blank and clients
-        simply see the badge.
+        ChairBack shows the promise; you keep it at the {vocab.stationNoun}. Leave one blank
+        and {vocab.clientNounPlural} simply see the badge.
       </p>
 
       <div className="mt-5 space-y-4">
