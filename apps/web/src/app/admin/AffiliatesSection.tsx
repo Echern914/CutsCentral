@@ -14,9 +14,12 @@ import { cn } from "@/lib/cn";
 import {
   approveAffiliateAction,
   correctAttributionAction,
+  markAffiliateCreditAppliedAction,
   reactivateAffiliateAction,
   rejectAffiliateAction,
+  releaseAffiliateCreditAction,
   releaseAffiliateRewardAction,
+  retryAffiliateCreditAction,
   reverseAffiliateRewardAction,
   suspendAffiliateAction,
 } from "./actions";
@@ -78,6 +81,23 @@ export interface AdminLiability {
   applicationsPending: number;
 }
 
+export interface AdminCredit {
+  id: string;
+  rewardId: string;
+  status: string;
+  amountCents: number;
+  appliedCents: number | null;
+  currency: string;
+  attempts: number;
+  lastError: string | null;
+  lastAttemptAmbiguous: boolean;
+  nextAttemptAt: string | null;
+  appliedAt: string | null;
+  stripeBalanceTransactionId: string | null;
+  affiliateShopName: string;
+  createdAt: string;
+}
+
 export interface AdminFlags {
   programEnabled: boolean;
   publicApplicationsEnabled: boolean;
@@ -121,12 +141,14 @@ export function AffiliatesSection({
   rewards,
   liability,
   flags,
+  credits = [],
 }: {
   applications: AdminApplication[];
   accounts: AdminAccount[];
   rewards: AdminReward[];
   liability: AdminLiability | null;
   flags: AdminFlags | null;
+  credits?: AdminCredit[];
 }) {
   const { toast } = useToast();
   const [busy, setBusy] = useState<string | null>(null);
@@ -285,6 +307,30 @@ export function AffiliatesSection({
         )}
       </Card>
 
+      <h3 className="mb-2 mt-6 text-sm font-medium text-offwhite">
+        Credits ({credits.filter((c) => c.status !== "APPLIED" && c.status !== "CANCELED").length} open)
+      </h3>
+      <Card className="overflow-hidden p-0">
+        {credits.length === 0 ? (
+          <p className="px-4 py-4 text-sm text-muted">No credit operations yet.</p>
+        ) : (
+          <ul className="divide-y divide-subtle/60">
+            {credits.map((c) => (
+              <CreditRow
+                key={c.id}
+                c={c}
+                busy={busy === c.id}
+                onRetry={() => run(c.id, () => retryAffiliateCreditAction(c.id), "Queued again")}
+                onMarkApplied={(txn) =>
+                  run(c.id, () => markAffiliateCreditAppliedAction(c.id, txn), "Marked applied")
+                }
+                onRelease={() => run(c.id, () => releaseAffiliateCreditAction(c.id), "Released to available")}
+              />
+            ))}
+          </ul>
+        )}
+      </Card>
+
       <CorrectionForm
         busy={busy === "correction"}
         onSubmit={(id, code, reason) =>
@@ -432,6 +478,67 @@ function AccountRow({
         )}
       </td>
     </tr>
+  );
+}
+
+function CreditRow({
+  c,
+  busy,
+  onRetry,
+  onMarkApplied,
+  onRelease,
+}: {
+  c: AdminCredit;
+  busy: boolean;
+  onRetry: () => void;
+  onMarkApplied: (txn: string) => void;
+  onRelease: () => void;
+}) {
+  const [txn, setTxn] = useState("");
+  const open = c.status === "FAILED" || c.status === "ABANDONED";
+  return (
+    <li className="flex flex-wrap items-center gap-3 px-4 py-3">
+      <div className="min-w-0 flex-1">
+        <p className="text-sm text-offwhite">
+          {c.affiliateShopName} · {money(c.appliedCents ?? c.amountCents, c.currency)}
+        </p>
+        <p className="text-xs text-muted">
+          {c.status.toLowerCase()} · {c.attempts} attempt{c.attempts === 1 ? "" : "s"}
+          {c.lastError ? ` · ${c.lastError}` : ""}
+          {c.lastAttemptAmbiguous && c.status !== "APPLIED" ? " · ambiguous - check Stripe first" : ""}
+          {c.stripeBalanceTransactionId ? ` · ${c.stripeBalanceTransactionId}` : ""}
+        </p>
+      </div>
+      {c.status === "FAILED" && (
+        <button type="button" className={BTN_GOLD} disabled={busy} onClick={onRetry}>
+          Retry
+        </button>
+      )}
+      {c.status === "ABANDONED" && (
+        <>
+          <input
+            className={cn(INPUT, "min-w-[12rem]")}
+            placeholder="cbtxn_… from Stripe"
+            value={txn}
+            onChange={(e) => setTxn(e.target.value)}
+            aria-label="Stripe balance transaction id"
+          />
+          <button
+            type="button"
+            className={BTN_GOLD}
+            disabled={busy || txn.trim().length < 3}
+            onClick={() => onMarkApplied(txn.trim())}
+          >
+            Mark applied
+          </button>
+        </>
+      )}
+      {open && (
+        <button type="button" className={BTN_RED} disabled={busy} onClick={onRelease}>
+          Release
+        </button>
+      )}
+    </li>
   );
 }
 

@@ -11,6 +11,7 @@ import {
   AffiliatesSection,
   type AdminAccount,
   type AdminApplication,
+  type AdminCredit,
   type AdminFlags,
   type AdminLiability,
   type AdminReward,
@@ -55,7 +56,7 @@ interface AdminShop {
  * This page never trusts a client flag - the API session check is the gate.
  */
 export default async function AdminPage() {
-  const [metricsRes, shopsRes, analyticsRes, preflightRes, affApps, affAccounts, affRewards, affLiability, affFlags] =
+  const [metricsRes, shopsRes, analyticsRes, preflightRes, affApps, affAccounts, affRewards, affLiability, affFlags, affCredits] =
     await Promise.all([
       apiGet<Metrics>("/api/admin-portal/metrics"),
       apiGet<{ shops: AdminShop[] }>("/api/admin-portal/shops"),
@@ -68,6 +69,7 @@ export default async function AdminPage() {
       apiGet<{ rewards: AdminReward[] }>("/api/admin-portal/affiliate/rewards?status=REVIEW_REQUIRED"),
       apiGet<AdminLiability>("/api/admin-portal/affiliate/liability"),
       apiGet<AdminFlags>("/api/admin-portal/affiliate/flags"),
+      apiGet<{ credits: AdminCredit[] }>("/api/admin-portal/affiliate/credits"),
     ]);
   if (metricsRes.status === 404 || metricsRes.status === 401) redirect("/dashboard");
   const m = metricsRes.data;
@@ -122,6 +124,7 @@ export default async function AdminPage() {
             rewards={affRewards.data?.rewards ?? []}
             liability={affLiability.data ?? null}
             flags={affFlags.data ?? null}
+            credits={affCredits.data?.credits ?? []}
           />
         )}
 

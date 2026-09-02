@@ -3779,3 +3779,38 @@ model AffiliateReward {
   @@index([status, holdEndsAt])
   @@index([affiliateAccountId, status])
 }
+
+// The affiliate credit outbox: turns an AVAILABLE reward into a Stripe
+// customer-balance credit exactly once. EmailIntent shape on purpose (claim
+// token + TTL, write-ahead ambiguity, provider idempotency window, fixed
+// error classifications). DEFAULT-DENY like every affiliate table.
+model AffiliateCreditOperation {
+  id                 String @id @default(cuid())
+  rewardId           String @unique
+  affiliateAccountId String
+  shopId             String // the AFFILIATE's shop (whose Stripe customer gets the credit)
+
+  status String @default("PENDING") // PENDING|APPLIED|FAILED|ABANDONED|CANCELED (CHECK-pinned)
+
+  amountCents  Int // snapshot at reserve
+  appliedCents Int? // reconciled down to the real month at execution
+  currency     String
+
+  stripeCustomerId           String?
+  stripeBalanceTransactionId String? @unique
+
+  attempts               Int       @default(0)
+  firstProviderAttemptAt DateTime?
+  lastAttemptAmbiguous   Boolean   @default(false)
+  nextAttemptAt          DateTime?
+  claimedAt              DateTime?
+  claimToken             String?
+  lastError              String? // fixed classification only - never provider prose
+  appliedAt              DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([affiliateAccountId, status])
+}

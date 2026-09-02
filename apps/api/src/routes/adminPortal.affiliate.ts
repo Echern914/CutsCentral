@@ -7,6 +7,12 @@ import {
 } from "@chairback/config";
 import { correctAttribution } from "../services/affiliateAttribution.js";
 import {
+  listCreditOperations,
+  markCreditApplied,
+  releaseCreditOperation,
+  retryCreditOperation,
+} from "../engines/affiliateCredit.js";
+import {
   affiliateFlags,
   affiliateLiability,
   exportAffiliatesCsv,
@@ -292,4 +298,64 @@ affiliateAdminRouter.get("/export.csv", async (_req, res) => {
 /** The four kill switches as the running process sees them. */
 affiliateAdminRouter.get("/flags", (_req, res) => {
   res.json(affiliateFlags());
+});
+
+/**
+ * Credit operations: what happened to each month off on its way to Stripe.
+ * Three admin verbs, each narrow: retry a DEFINITIVE failure (nothing was
+ * applied); resolve an ABANDONED one with the Stripe transaction id a person
+ * found; release a FAILED/ABANDONED one back to AVAILABLE when Stripe shows
+ * nothing landed. An ambiguous ending is never retried blind.
+ */
+const creditsQuerySchema = z.object({
+  status: z.enum(["PENDING", "APPLIED", "FAILED", "ABANDONED", "CANCELED"]).optional(),
+});
+
+affiliateAdminRouter.get("/credits", async (req, res) => {
+  const parsed = creditsQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  res.json({ credits: await listCreditOperations({ status: parsed.data.status }) });
+});
+
+affiliateAdminRouter.post("/credits/:id/retry", async (req, res) => {
+  const result = await retryCreditOperation({ operationId: req.params.id, adminUserId: req.userId! });
+  if (!result.ok) {
+    res.status(result.error === "not_found" ? 404 : 409).json({ error: result.error });
+    return;
+  }
+  res.json(result.value);
+});
+
+const markAppliedSchema = z
+  .object({ stripeBalanceTransactionId: z.string().trim().min(3).max(120) })
+  .strict();
+
+affiliateAdminRouter.post("/credits/:id/mark-applied", async (req, res) => {
+  const parsed = markAppliedSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const result = await markCreditApplied({
+    operationId: req.params.id,
+    adminUserId: req.userId!,
+    stripeBalanceTransactionId: parsed.data.stripeBalanceTransactionId,
+  });
+  if (!result.ok) {
+    res.status(result.error === "not_found" ? 404 : 409).json({ error: result.error });
+    return;
+  }
+  res.json(result.value);
+});
+
+affiliateAdminRouter.post("/credits/:id/release", async (req, res) => {
+  const result = await releaseCreditOperation({ operationId: req.params.id, adminUserId: req.userId! });
+  if (!result.ok) {
+    res.status(result.error === "not_found" ? 404 : 409).json({ error: result.error });
+    return;
+  }
+  res.json(result.value);
 });
