@@ -15,6 +15,7 @@ import {
   type AffiliateSuspensionReason,
 } from "@chairback/config";
 import { recordAffiliateEvent } from "./affiliateAudit.js";
+import { enqueueAffiliateEmail } from "./affiliateNotify.js";
 
 /**
  * The affiliate DASHBOARD's reads and the two small writes around it, plus
@@ -374,6 +375,11 @@ export async function releaseReviewedReward(params: {
       actor: { type: "admin", userId: params.adminUserId },
       metadata: { fromStatus: "REVIEW_REQUIRED", toStatus: "AVAILABLE" },
     });
+    await enqueueAffiliateEmail(tx, {
+      kind: "affiliate_reward_available",
+      affiliateAccountId: reward.affiliateAccountId,
+      subjectId: reward.id,
+    });
     return {
       ok: true as const,
       value: {
@@ -414,6 +420,11 @@ export async function reverseRewardByAdmin(params: {
       type: "reward.reversed",
       actor: { type: "admin", userId: params.adminUserId },
       metadata: { toStatus: "REVERSED", reversalReason: "admin_adjustment" },
+    });
+    await enqueueAffiliateEmail(tx, {
+      kind: "affiliate_reward_reversed",
+      affiliateAccountId: reward.affiliateAccountId,
+      subjectId: reward.id,
     });
     return {
       ok: true as const,

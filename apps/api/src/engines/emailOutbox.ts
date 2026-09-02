@@ -2,6 +2,7 @@ import { randomToken } from "@chairback/config";
 import { Prisma, runAsOwner } from "@chairback/db";
 import { logger } from "../logger.js";
 import { deliverCancellationIntent } from "../services/appointmentCanceledNotify.js";
+import { deliverAffiliateIntent, isAffiliateEmailKind } from "../services/affiliateNotify.js";
 
 /**
  * The email outbox worker: drains PENDING EmailIntent rows.
@@ -62,7 +63,7 @@ export async function runEmailOutbox(
   // `nextAttemptAt` is the backoff gate: a row rejected with a 429 or a 5xx
   // comes back due later rather than being hammered every minute.
   const claimed = await runAsOwner((tx) =>
-    tx.$queryRaw<{ id: string }[]>(Prisma.sql`
+    tx.$queryRaw<{ id: string; kind: string }[]>(Prisma.sql`
       UPDATE "EmailIntent"
          SET "claimedAt" = ${now.toISOString()}::timestamp,
              "claimToken" = ${claimToken},
@@ -77,7 +78,7 @@ export async function runEmailOutbox(
           LIMIT ${batch}
           FOR UPDATE SKIP LOCKED
        )
-      RETURNING "id"`),
+      RETURNING "id", "kind"`),
   );
 
   const result: OutboxResult = {
@@ -93,7 +94,12 @@ export async function runEmailOutbox(
   for (const row of claimed) {
     // Never throws: deliver* classifies every failure itself. A single bad
     // intent must not stop the batch.
-    const outcome = await deliverCancellationIntent({
+    // One outbox, two families of email. The kind on the row picks the
+    // deliverer; both share the claim/attempt/idempotency state machine.
+    const deliver = isAffiliateEmailKind(row.kind)
+      ? deliverAffiliateIntent
+      : deliverCancellationIntent;
+    const outcome = await deliver({
       intentId: row.id,
       claimToken,
       now,

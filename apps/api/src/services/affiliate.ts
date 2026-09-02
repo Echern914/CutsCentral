@@ -9,6 +9,7 @@ import {
   type AffiliateSuspensionReason,
 } from "@chairback/config";
 import { recordAffiliateEvent } from "./affiliateAudit.js";
+import { enqueueAffiliateEmail } from "./affiliateNotify.js";
 
 /**
  * Affiliate program lifecycle: apply -> review -> account, plus suspension.
@@ -307,6 +308,12 @@ export async function approveApplication(params: {
             policyVersion: AFFILIATE_POLICY_VERSION,
           },
         });
+        // The "you're in" email, in the SAME transaction as the approval.
+        await enqueueAffiliateEmail(tx, {
+          kind: "affiliate_approved",
+          affiliateShopId: existing.shopId,
+          subjectId: existing.id,
+        });
         const application = await tx.affiliateApplication.findUniqueOrThrow({
           where: { id: existing.id },
           select: APPLICATION_ADMIN_SELECT,
@@ -367,6 +374,11 @@ export async function rejectApplication(params: {
         toStatus: "REJECTED",
         decisionReason: params.decisionReason,
       },
+    });
+    await enqueueAffiliateEmail(tx, {
+      kind: "affiliate_rejected",
+      affiliateShopId: existing.shopId,
+      subjectId: existing.id,
     });
     const application = await tx.affiliateApplication.findUniqueOrThrow({
       where: { id: existing.id },
