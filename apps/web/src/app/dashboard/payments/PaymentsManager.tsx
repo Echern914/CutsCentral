@@ -48,6 +48,12 @@ export function PaymentsManager({
     String((initial.depositAmountCents ?? 2000) / 100),
   );
 
+  // Whether shown prices already include a tip. THREE states, not two: null
+  // means the barber has not said, and the booking page then says nothing.
+  // There is no safe default here - claiming “included” wrongly costs their
+  // staff money, and claiming “not included” invents a policy they never set.
+  const [tipPolicy, setTipPolicy] = useState(initial.tipPolicy);
+
   // Fee-free pay-direct (Zelle/Venmo/Cash App) — independent of Stripe Connect.
   const [pd, setPd] = useState(initial.payDirect);
   function setPdField<K extends keyof typeof pd>(k: K, v: (typeof pd)[K]) {
@@ -121,6 +127,7 @@ export function PaymentsManager({
         cancelWindowHours: hours,
         cancelFeeBps: Math.round(feePct * 100),
         ...(mode === "deposit" ? { depositAmountCents: depositCents } : {}),
+        tipPolicy,
       });
       if (r.ok) toast("Payment settings saved", "success");
       else if (r.error === "connect_not_ready")
@@ -391,6 +398,43 @@ export function PaymentsManager({
         )}
         <p className="mt-3 text-xs text-muted">
           Pay-after (hold the card until the cut is done) is coming soon.
+        </p>
+      </Card>
+
+      {/* Tips */}
+      <Card className="p-5">
+        <CardHeader
+          title="Tips"
+          subtitle="Tell customers whether the price they see already includes a tip. This is wording only — it never changes what you charge."
+        />
+        <div className="mt-3 flex flex-wrap gap-2">
+          {(
+            [
+                { v: null, label: "Don’t say", hint: "Nothing about tips appears" },
+                { v: "not_included" as const, label: "Tip not included", hint: "They can tip at the shop" },
+                { v: "included" as const, label: "Tip included", hint: "Price covers everything" },
+            ] as const
+          ).map((o) => (
+            <button
+              key={String(o.v)}
+              type="button"
+              onClick={() => setTipPolicy(o.v)}
+              aria-pressed={tipPolicy === o.v}
+              className={cn(
+                "rounded-xl border px-3 py-2 text-left text-sm transition-colors",
+                tipPolicy === o.v
+                  ? "border-gold/60 bg-gold/10 text-offwhite"
+                  : "border-subtle bg-charcoal-700 text-muted hover:text-offwhite",
+              )}
+            >
+              <span className="block font-medium">{o.label}</span>
+              <span className="block text-xs text-muted">{o.hint}</span>
+            </button>
+          ))}
+        </div>
+        <p className="mt-3 text-xs text-muted">
+          Shown under the total on your booking page, and again on the payment
+          screen if you collect online. Saved with the button below.
         </p>
       </Card>
 

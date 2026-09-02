@@ -473,6 +473,11 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
       // When on (and groups exist), the menu shows group cards first instead
       // of every service "off rip".
       groupsFirst: shop.bookingGroupsFirst,
+      // Whether the prices on this page already include a tip. null = the
+      // barber has not said, and the page then says nothing rather than
+      // guessing. DISPLAY ONLY - it moves no money and is never read by the
+      // charge path.
+      tipPolicy: shop.tipPolicy,
       // Fee-free pay-direct handles (display-only) so the confirmation screen can
       // show "pay the barber directly". Only surfaced when the barber enabled it.
       payDirect: shop.payDirectEnabled

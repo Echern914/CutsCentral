@@ -34,6 +34,11 @@ export async function savePaymentSettingsAction(input: {
   cancelFeeBps?: number;
   /** Deposit taken at booking, in CENTS (deposit mode only). */
   depositAmountCents?: number;
+  /**
+   * Whether shown prices already include a tip. DISPLAY ONLY - it moves no
+   * money. null clears it back to saying nothing.
+   */
+  tipPolicy?: "included" | "not_included" | null;
 }): Promise<Result> {
   const res = await apiSend("PATCH", "/api/payments/settings", input);
   if (res.ok) revalidatePath("/dashboard/payments");
@@ -78,6 +83,8 @@ export interface PaymentStatus {
   paymentsMode: "off" | "ahead" | "deposit" | "hold";
   /** Null until the shop picks one; the UI suggests $20. */
   depositAmountCents: number | null;
+  /** null = the barber has not said, and the booking page then says nothing. */
+  tipPolicy: "included" | "not_included" | null;
   platformFeeBps: number;
   cancelWindowHours: number;
   cancelFeeBps: number;
