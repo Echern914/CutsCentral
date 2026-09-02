@@ -17,6 +17,9 @@ vi.mock("./actions", () => ({
   releaseAffiliateRewardAction: vi.fn(async () => ({ ok: true })),
   reverseAffiliateRewardAction: vi.fn(async () => ({ ok: true })),
   correctAttributionAction: vi.fn(async () => ({ ok: true })),
+  retryAffiliateCreditAction: vi.fn(async () => ({ ok: true })),
+  markAffiliateCreditAppliedAction: vi.fn(async () => ({ ok: true })),
+  releaseAffiliateCreditAction: vi.fn(async () => ({ ok: true })),
 }));
 const toast = vi.fn();
 vi.mock("@/components/ui/Toast", () => ({ useToast: () => ({ toast }) }));

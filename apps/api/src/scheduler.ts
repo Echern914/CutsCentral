@@ -32,6 +32,7 @@ import { expireDeadWaitlistEntries } from "./engines/waitlistExpiry.js";
 import { sweepExpiredRateCounters } from "./middleware/pgRateStore.js";
 import { runDemoReset } from "./engines/demoReset.js";
 import { runEmailOutbox } from "./engines/emailOutbox.js";
+import { runAffiliateCreditExecution } from "./engines/affiliateCredit.js";
 import { processRotationRun } from "./services/rewardsRotation.js";
 
 const env = apiEnv();
@@ -374,6 +375,25 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
       }
     },
     failMsg: "affiliate reward hold sweep failed",
+  },
+  // Credit execution: reserve AVAILABLE rewards, apply them to the affiliate's
+  // Stripe balance exactly once, expire the stale ones. DRY RUN while
+  // AFFILIATE_CREDIT_EXECUTION_ENABLED is off - it reports what it would do.
+  {
+    cronExpr: "53 * * * *",
+    name: "affiliate-credit-execution",
+    ttlMs: 5 * MINUTE,
+    run: async () => {
+      const r = await runAffiliateCreditExecution();
+      if (
+        r.reserve.due > 0 ||
+        r.expire.due > 0 ||
+        (r.execute && (r.execute.applied > 0 || r.execute.failed > 0 || r.execute.abandoned > 0))
+      ) {
+        logger.info(r, "affiliate credit execution pass");
+      }
+    },
+    failMsg: "affiliate credit execution failed",
   },
   // Rate-limit store hygiene: delete counter rows whose window expired >1h ago
   // every 30 min. The store is correct without this (an expired row resets on

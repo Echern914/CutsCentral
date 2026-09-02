@@ -45,3 +45,13 @@ export async function reverseAffiliateRewardAction(rewardId: string): Promise<Ad
 export async function correctAttributionAction(attributionId: string, newCode: string, reason: string): Promise<AdminResult> {
   return affiliate(`/attributions/${attributionId}/correct`, { newCode, reason });
 }
+
+export async function retryAffiliateCreditAction(operationId: string): Promise<AdminResult> {
+  return affiliate(`/credits/${operationId}/retry`);
+}
+export async function markAffiliateCreditAppliedAction(operationId: string, stripeBalanceTransactionId: string): Promise<AdminResult> {
+  return affiliate(`/credits/${operationId}/mark-applied`, { stripeBalanceTransactionId });
+}
+export async function releaseAffiliateCreditAction(operationId: string): Promise<AdminResult> {
+  return affiliate(`/credits/${operationId}/release`);
+}
