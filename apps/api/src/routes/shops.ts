@@ -25,8 +25,13 @@ import {
   type GalleryItem,
   parseTierPerks,
   TIER_PERK_MAX_LENGTH,
+  TIER_MAX_VISITS,
+  TIER_MIN_VISITS,
+  parseTierThresholds,
+  validateTierThresholds,
 } from "@chairback/config";
-import { Prisma, prisma } from "@chairback/db";
+import { Prisma, prisma, runWithShop } from "@chairback/db";
+import { recomputeLoyaltyTiers } from "../engines/loyaltyTierRecompute.js";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 import { linkReferralOnShopCreate } from "../services/referral.js";
@@ -295,6 +300,16 @@ const updateShopSchema = createShopSchema
         BRONZE: z.string().max(TIER_PERK_MAX_LENGTH).optional(),
         SILVER: z.string().max(TIER_PERK_MAX_LENGTH).optional(),
         GOLD: z.string().max(TIER_PERK_MAX_LENGTH).optional(),
+      })
+      .strict(),
+    // What it takes to reach each tier here. Shape only at this layer - the
+    // ORDER rule (strictly increasing) is validateTierThresholds in config, so
+    // one function decides it for the API, the page and the recompute.
+    tierThresholds: z
+      .object({
+        BRONZE: z.number().int().min(TIER_MIN_VISITS).max(TIER_MAX_VISITS),
+        SILVER: z.number().int().min(TIER_MIN_VISITS).max(TIER_MAX_VISITS),
+        GOLD: z.number().int().min(TIER_MIN_VISITS).max(TIER_MAX_VISITS),
       })
       .strict(),
     // Transactional loyalty SMS to clients (earn/redeem confirmations). Off by
@@ -767,6 +782,32 @@ shopsRouter.patch("/me", requireUser, requireShop, requireActiveAccess, async (r
     return;
   }
   try {
+    // 🔴 THE THRESHOLDS AND THE BADGES MOVE TOGETHER. Client.loyaltyTier is a
+    // stored column, so writing new numbers without re-stamping every client
+    // leaves badges asserting the OLD rules - silently, and on the customer's
+    // own rewards page. One transaction, or neither.
+    if (data.tierThresholds !== undefined) {
+      const checked = validateTierThresholds(
+        data.tierThresholds as Record<string, unknown>,
+      );
+      if (!checked.ok) {
+        res
+          .status(400)
+          .json({ error: "invalid_tier_thresholds", reason: checked.error, tier: checked.tier });
+        return;
+      }
+      data.tierThresholds = checked.value;
+      const shopId = req.shop!.id;
+      let recompute: { clients: number; changed: number } = { clients: 0, changed: 0 };
+      const updated = await runWithShop(shopId, async (tx) => {
+        const row = await prisma.shop.update({ where: { id: shopId }, data });
+        recompute = await recomputeLoyaltyTiers(shopId, checked.value, tx);
+        return row;
+      });
+      res.json({ ...serializeShop(updated), tierRecompute: recompute });
+      return;
+    }
+
     const shop = await prisma.shop.update({
       where: { id: req.shop!.id },
       data,
@@ -929,6 +970,7 @@ publicPageRouter.get("/:slug", async (req, res) => {
     punchesPerVisit: shop.punchesPerVisit,
     rewardsEnabled: shop.rewardsEnabled,
     tierPerks: parseTierPerks(shop.tierPerks),
+    tierThresholds: parseTierThresholds(shop.tierThresholds),
     rewards,
     promotions: promotions.map((p) => ({
       ...p,
@@ -1486,6 +1528,8 @@ function serializeShop(shop: {
   receptionistSubscriptionStatus: string;
   receptionistCompAccess: boolean;
   twilioNumber: string | null;
+  tierPerks: unknown;
+  tierThresholds: unknown;
 }) {
   // Note: webhookSecret is intentionally NOT exposed to the client.
   return {
@@ -1531,6 +1575,10 @@ function serializeShop(shop: {
     pushReminder2hEnabled: shop.pushReminder2hEnabled,
     notifyPhone: shop.notifyPhone,
     rewardsEnabled: shop.rewardsEnabled,
+    // What each tier is worth here, and what it takes to reach it. Parsed on
+    // the way out: both are Json columns.
+    tierPerks: parseTierPerks(shop.tierPerks),
+    tierThresholds: parseTierThresholds(shop.tierThresholds),
     loyaltyTextsEnabled: shop.loyaltyTextsEnabled,
     bookingMode: shop.bookingMode,
     bookingLeadHours: shop.bookingLeadHours,
