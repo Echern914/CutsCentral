@@ -7,6 +7,14 @@ import {
 } from "@chairback/config";
 import { correctAttribution } from "../services/affiliateAttribution.js";
 import {
+  affiliateFlags,
+  affiliateLiability,
+  exportAffiliatesCsv,
+  listRewardsForAdmin,
+  releaseReviewedReward,
+  reverseRewardByAdmin,
+} from "../services/affiliateOverview.js";
+import {
   approveApplication,
   getApplicationForAdmin,
   listAccounts,
@@ -220,4 +228,68 @@ affiliateAdminRouter.post("/attributions/:id/correct", async (req, res) => {
     return;
   }
   res.json(result.value);
+});
+
+/**
+ * The rewards ledger from the operator's side: the review queue (rewards the
+ * rolling-year rule held back), and the two things an admin may do to one -
+ * release it, or take it back. Both are CAS transitions with an audit event,
+ * exactly like the qualification engine's own.
+ */
+const rewardsQuerySchema = z.object({
+  status: z
+    .enum(["PENDING", "AVAILABLE", "RESERVED", "APPLIED", "REVERSED", "EXPIRED", "REVIEW_REQUIRED"])
+    .optional(),
+});
+
+affiliateAdminRouter.get("/rewards", async (req, res) => {
+  const parsed = rewardsQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const rewards = await listRewardsForAdmin({ status: parsed.data.status });
+  res.json({ rewards });
+});
+
+affiliateAdminRouter.post("/rewards/:id/release", async (req, res) => {
+  const result = await releaseReviewedReward({
+    rewardId: req.params.id,
+    adminUserId: req.userId!,
+  });
+  if (!result.ok) {
+    res.status(result.error === "not_found" ? 404 : 409).json({ error: result.error });
+    return;
+  }
+  res.json(result.value);
+});
+
+affiliateAdminRouter.post("/rewards/:id/reverse", async (req, res) => {
+  const result = await reverseRewardByAdmin({
+    rewardId: req.params.id,
+    adminUserId: req.userId!,
+  });
+  if (!result.ok) {
+    res.status(result.error === "not_found" ? 404 : 409).json({ error: result.error });
+    return;
+  }
+  res.json(result.value);
+});
+
+/** What the program owes, in rewards and cents, by status. */
+affiliateAdminRouter.get("/liability", async (_req, res) => {
+  res.json(await affiliateLiability());
+});
+
+/** Accounts + counts as CSV. Codes and ids only - no names, no emails. */
+affiliateAdminRouter.get("/export.csv", async (_req, res) => {
+  const csv = await exportAffiliatesCsv();
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", 'attachment; filename="affiliates.csv"');
+  res.send(csv);
+});
+
+/** The four kill switches as the running process sees them. */
+affiliateAdminRouter.get("/flags", (_req, res) => {
+  res.json(affiliateFlags());
 });

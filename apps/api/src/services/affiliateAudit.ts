@@ -36,6 +36,8 @@ export type AffiliateEventType =
   // ---- account lifecycle (this PR) ----
   | "account.suspended"
   | "account.reactivated"
+  /** The affiliate chose (or changed) how they promote. */
+  | "account.styles_set"
   // ---- attribution phase ----
   | "attribution.locked"
   | "attribution.corrected"

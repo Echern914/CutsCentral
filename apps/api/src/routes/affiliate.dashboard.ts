@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import {
   AFFILIATE_PROMOTION_CHANNELS,
+  AFFILIATE_PROMOTION_STYLES,
   AFFILIATE_TERMS_VERSION,
   apiEnv,
 } from "@chairback/config";
@@ -9,6 +10,7 @@ import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireOwner } from "../auth/roles.js";
 import { affiliateApplyLimiter } from "../middleware/rateLimit.js";
 import { getAffiliateStatus, submitApplication } from "../services/affiliate.js";
+import { getAffiliateOverview, setAffiliateStyles } from "../services/affiliateOverview.js";
 
 /**
  * The Affiliate Program's OWNER surface: apply, and read your own standing.
@@ -70,6 +72,49 @@ affiliateDashboardRouter.use(
 affiliateDashboardRouter.get("/status", async (req, res) => {
   const status = await getAffiliateStatus(req.shop!.id);
   res.json(status);
+});
+
+/**
+ * Everything the affiliate dashboard renders, in one round trip: months off,
+ * clicks, who they brought on (masked), the ledger. 404 no_account until an
+ * application is approved - the status route is the one to poll before that.
+ */
+affiliateDashboardRouter.get("/overview", async (req, res) => {
+  const overview = await getAffiliateOverview(req.shop!.id);
+  if (!overview) {
+    res.status(404).json({ error: "no_account" });
+    return;
+  }
+  res.json(overview);
+});
+
+/** Choose (or change) how they promote. ACTIVE accounts only - a suspended
+ *  affiliate keeps their history but cannot re-arm their toolkit. */
+const stylesSchema = z
+  .object({
+    styles: z
+      .array(z.enum(AFFILIATE_PROMOTION_STYLES))
+      .min(1)
+      .max(AFFILIATE_PROMOTION_STYLES.length),
+  })
+  .strict();
+
+affiliateDashboardRouter.put("/styles", async (req, res) => {
+  const parsed = stylesSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const result = await setAffiliateStyles({
+    shopId: req.shop!.id,
+    userId: req.userId!,
+    styles: [...new Set(parsed.data.styles)],
+  });
+  if (!result.ok) {
+    res.status(409).json({ error: result.error });
+    return;
+  }
+  res.json({ account: result.account });
 });
 
 const applicationSchema = z
