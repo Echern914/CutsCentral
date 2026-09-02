@@ -160,6 +160,11 @@ const apiSchema = z.object({
   // It is a separate credential from STRIPE_SECRET_KEY, so Express onboarding
   // keeps working with this unset; standardConnectEnabled() is simply false and
   // the UI offers the one door that works.
+  //
+  // Also accepted under the name STRIPE_CONNECT_ID (see applyEnvAliases): the
+  // door stayed dark in production for a day because the value was set under
+  // that name (2026-09-02), and a misnamed credential should light the feature
+  // up rather than silently hide a button.
   STRIPE_CONNECT_CLIENT_ID: z.string().min(1).optional(),
 
   // Transactional email via Resend (optional - while EITHER is unset,
@@ -293,9 +298,23 @@ export type ApiEnv = z.infer<typeof apiSchema>;
 
 let cachedApiEnv: ApiEnv | undefined;
 
+/**
+ * Accepted alternate names for a variable, folded onto the canonical name
+ * BEFORE validation so the schema above stays the single definition of what
+ * exists. Only fills a canonical name that is unset - a value under the real
+ * name always wins. Pure; exported for its test.
+ */
+export function applyEnvAliases(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { ...source };
+  if (!out.STRIPE_CONNECT_CLIENT_ID && out.STRIPE_CONNECT_ID) {
+    out.STRIPE_CONNECT_CLIENT_ID = out.STRIPE_CONNECT_ID;
+  }
+  return out;
+}
+
 export function apiEnv(source: NodeJS.ProcessEnv = process.env): ApiEnv {
   if (cachedApiEnv) return cachedApiEnv;
-  const parsed = apiSchema.safeParse(source);
+  const parsed = apiSchema.safeParse(applyEnvAliases(source));
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
