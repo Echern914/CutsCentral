@@ -113,7 +113,7 @@ describe("sign up", () => {
     expect(send.disabled).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Instagram" }));
-    fireEvent.change(screen.getByPlaceholderText(/Clients at the chair/), {
+    fireEvent.change(screen.getByPlaceholderText(/at the workspace/), {
       target: { value: "Local clients and a small following." },
     });
     fireEvent.change(screen.getByPlaceholderText(/A story when someone new/), {
@@ -151,7 +151,7 @@ describe("sign up", () => {
     mockApply.mockResolvedValueOnce({ ok: false, error: "terms_not_accepted", status: 400 });
     render(<AffiliatesClient status={status()} overview={null} appBase={APP} shopName="Fade Lab" />);
     fireEvent.click(screen.getByRole("button", { name: "In person" }));
-    fireEvent.change(screen.getByPlaceholderText(/Clients at the chair/), { target: { value: "x" } });
+    fireEvent.change(screen.getByPlaceholderText(/at the workspace/), { target: { value: "x" } });
     fireEvent.change(screen.getByPlaceholderText(/A story when someone new/), { target: { value: "y" } });
     for (const box of screen.getAllByRole("checkbox")) fireEvent.click(box);
     fireEvent.click(screen.getByRole("button", { name: "Send my sign-up" }));
@@ -247,7 +247,7 @@ describe("dashboard", () => {
     expect(screen.getByText(`${APP}/join?ref=abcDEF123456`)).toBeTruthy();
     expect(screen.getAllByTestId("toolkit-card")).toHaveLength(2);
     expect(screen.getByText("Short video")).toBeTruthy();
-    expect(screen.getByText("In the chair")).toBeTruthy();
+    expect(screen.getByText("In the workspace")).toBeTruthy();
     expect(screen.getByText("Business ••••1027")).toBeTruthy();
     // The referral badge and the reward row both say it - one per surface.
     expect(screen.getAllByText("In the hold")).toHaveLength(2);
@@ -289,10 +289,22 @@ describe("dashboard", () => {
 });
 
 describe("toolkit", () => {
+  it("🔴 speaks the shop's own words - a nail tech's templates mention no chairs", () => {
+    const nails = { stationNoun: "station", businessNoun: "studio", clientNounPlural: "guests" };
+    for (const style of ["short_video", "posts_stories", "in_the_chair", "flyer_qr", "blog_podcast"] as const) {
+      const card = toolkitFor(style, { link: "https://x.test/join?ref=a", shopName: "Polish", vocab: nails });
+      expect(`${card.title} ${card.blurb} ${card.text}`).not.toMatch(/chairs?/i);
+    }
+  });
+
   it("every asset carries the link or a bio pointer, and the disclosure line", () => {
     const link = "https://getchairback.com/join?ref=abc";
     for (const style of ["short_video", "posts_stories", "in_the_chair", "text_dm", "email_list", "flyer_qr", "blog_podcast", "other"] as const) {
-      const card = toolkitFor(style, { link, shopName: "Fade Lab" });
+      const card = toolkitFor(style, {
+        link,
+        shopName: "Fade Lab",
+        vocab: { stationNoun: "chair", businessNoun: "barbershop", clientNounPlural: "clients" },
+      });
       expect(card.text).toMatch(/affiliate/i);
       expect(card.text.includes(link) || /link in (my )?bio|text you my link/i.test(card.text)).toBe(true);
       expect(card.text).not.toMatch(/\$\s?\d/);

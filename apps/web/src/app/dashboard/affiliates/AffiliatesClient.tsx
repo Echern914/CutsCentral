@@ -13,6 +13,7 @@ import {
   type AffiliatePromotionStyle,
 } from "@chairback/config/affiliateProgram";
 import { Card } from "@/components/ui/Card";
+import { cap, useVocab } from "@/components/VocabProvider";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
 import {
@@ -229,6 +230,7 @@ function Pitch() {
 }
 
 function SignUp({ status }: { status: AffiliateStatus }) {
+  const vocab = useVocab();
   const router = useRouter();
   const [channels, setChannels] = useState<string[]>([]);
   const [audience, setAudience] = useState("");
@@ -323,7 +325,7 @@ function SignUp({ status }: { status: AffiliateStatus }) {
               maxLength={1000}
               value={audience}
               onChange={(e) => setAudience(e.target.value)}
-              placeholder="Clients at the chair, a local following, other owners I know…"
+              placeholder={`${cap(vocab.clientNounPlural)} at the ${vocab.stationNoun}, a local following, other owners I know…`}
             />
           </label>
 
@@ -344,7 +346,7 @@ function SignUp({ status }: { status: AffiliateStatus }) {
               maxLength={2000}
               value={plan}
               onChange={(e) => setPlan(e.target.value)}
-              placeholder="A story when someone new sits in my chair, and the link in my bio."
+              placeholder="A story when someone new books in, and the link in my bio."
             />
           </label>
 
@@ -560,7 +562,11 @@ function Dashboard({
 
   const m = overview.months;
   const styles = overview.account.promotionStyles as AffiliatePromotionStyle[];
-  const toolkit = useMemo(() => styles.map((s) => toolkitFor(s, { link, shopName })), [styles, link, shopName]);
+  const vocab = useVocab();
+  const toolkit = useMemo(
+    () => styles.map((s) => toolkitFor(s, { link, shopName, vocab })),
+    [styles, link, shopName, vocab],
+  );
 
   return (
     <>
@@ -595,7 +601,7 @@ function Dashboard({
           month · {overview.clicks.allTime} all time
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
-          <button type="button" onClick={() => share(toolkitFor("text_dm", { link, shopName }).text)} className={PRIMARY}>
+          <button type="button" onClick={() => share(toolkitFor("text_dm", { link, shopName, vocab }).text)} className={PRIMARY}>
             Share
           </button>
           <button type="button" onClick={() => copy(link, "Link")} className={SECONDARY}>
@@ -762,11 +768,26 @@ interface ToolkitCard {
   text: string;
 }
 
+/** The words this business uses for itself - so a nail tech's templates do
+ *  not talk about chairs and haircuts. */
+export interface ToolkitVocab {
+  stationNoun: string;
+  businessNoun: string;
+  clientNounPlural: string;
+}
+
+const NEUTRAL_TOOLKIT_VOCAB: ToolkitVocab = {
+  stationNoun: "station",
+  businessNoun: "business",
+  clientNounPlural: "clients",
+};
+
 export function toolkitFor(
   style: AffiliatePromotionStyle,
-  ctx: { link: string; shopName: string },
+  ctx: { link: string; shopName: string; vocab?: ToolkitVocab },
 ): ToolkitCard {
   const { link } = ctx;
+  const v = ctx.vocab ?? NEUTRAL_TOOLKIT_VOCAB;
   switch (style) {
     case "short_video":
       return {
@@ -774,7 +795,7 @@ export function toolkitFor(
         title: "Short video",
         blurb: "A 20-second script. Put the link in your bio and say so at the end.",
         text:
-          "Real talk for anyone who cuts hair or runs a chair: I stopped losing people between visits when I started running my book on ChairBack. Booking, reminders, a client list that's actually mine. " +
+          `Real talk for anyone running their own ${v.businessNoun}: I stopped losing people between visits when I started running my book on ChairBack. Booking, reminders, a ${v.clientNounPlural} list that's actually mine. ` +
           "Link in my bio if you want to try it. " +
           DISCLOSURE,
       };
@@ -784,7 +805,7 @@ export function toolkitFor(
         title: "Post or story",
         blurb: "Caption for a photo of your setup. Add the link to your bio or a sticker.",
         text:
-          "My book, my clients, my reminders. All in one place, and it's mine. If you run a chair too, here's my link: " +
+          `My book, my ${v.clientNounPlural}, my reminders. All in one place, and it's mine. If you run your own ${v.businessNoun} too, here's my link: ` +
           link +
           "\n\n" +
           DISCLOSURE,
@@ -792,8 +813,8 @@ export function toolkitFor(
     case "in_the_chair":
       return {
         style,
-        title: "In the chair",
-        blurb: "What to say when a client turns out to run a shop or a booth.",
+        title: `In the ${v.stationNoun}`,
+        blurb: `What to say when someone in your ${v.stationNoun} turns out to run their own ${v.businessNoun}.`,
         text:
           "You run your own book? I use ChairBack for mine. Booking, reminders, rewards, the lot. " +
           "I'll text you my link after this, it gets you set up. " +
@@ -831,7 +852,8 @@ export function toolkitFor(
         title: "Flyer or QR at the shop",
         blurb: "Print the QR code from above. This is the caption under it.",
         text:
-          "Run your own chair? Scan to try ChairBack: booking, reminders, rewards.\n" +
+          `Run your own ${v.businessNoun}? Scan to try ChairBack: booking, reminders, rewards.
+` +
           link +
           "\n" +
           DISCLOSURE,
@@ -842,7 +864,7 @@ export function toolkitFor(
         title: "Blog or podcast",
         blurb: "A paragraph you can read out or paste in, disclosure included.",
         text:
-          "One thing that changed how I run my chair: moving my book to ChairBack. Clients book themselves, reminders go out without me, and the client list belongs to me, not to a marketplace. " +
+          `One thing that changed how I run my ${v.businessNoun}: moving my book to ChairBack. ${cap(v.clientNounPlural)} book themselves, reminders go out without me, and the ${v.clientNounPlural} list belongs to me, not to a marketplace. ` +
           "If you want to try it, my link is " +
           link +
           ". " +
