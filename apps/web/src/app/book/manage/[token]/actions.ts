@@ -2,13 +2,19 @@
 
 import { apiPublicGet, apiPublicSend } from "@/lib/api";
 
-/** Cancel a booking by its manage token (customer-initiated, no login). */
+/**
+ * Cancel a booking by its manage token (customer-initiated, no login).
+ * scope "future" - a standing appointment only - also cancels every later
+ * visit in the series.
+ */
 export async function cancelBookingAction(
   token: string,
+  scope: "this" | "future" = "this",
 ): Promise<{ ok: boolean; error?: string }> {
   const res = await apiPublicSend(
     "POST",
     `/api/book/manage/${encodeURIComponent(token)}/cancel`,
+    { scope },
   );
   if (!res.ok) return { ok: false, error: res.error ?? "failed" };
   return { ok: true };

@@ -376,6 +376,7 @@ export async function cancelSeries(
   scope: CancelSeriesScope,
   fromAppointmentId?: string,
   now = new Date(),
+  opts: { applyPolicyFee?: boolean } = {},
 ): Promise<CancelSeriesResult | null> {
   // Resolve the anchor occurrence's start when scope needs it.
   let fromStartsAt: Date | null = null;
@@ -417,6 +418,10 @@ export async function cancelSeries(
   for (const r of rows) {
     const ok = await cancelAppointment(shopId, r.id, "CANCELED", now, {
       suppressSlotOpened: suppress,
+      // Customer-initiated (the manage page): the shop's cancellation policy
+      // applies per occurrence, exactly as it would one visit at a time. The
+      // barber's own series cancel never charges their client.
+      applyPolicyFee: opts.applyPolicyFee === true,
     });
     if (ok) canceled++;
   }
