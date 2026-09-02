@@ -5,16 +5,20 @@ import { cn } from "@/lib/cn";
  * `hover` adds a lift + gold-tinted border for interactive grids.
  */
 export function Card({
+  id,
   className,
   hover = false,
   children,
 }: {
+  /** Anchor for a deep link - the feature registry points "#tips" at a card. */
+  id?: string;
   className?: string;
   hover?: boolean;
   children?: React.ReactNode;
 }) {
   return (
     <div
+      id={id}
       className={cn(
         "glass rounded-2xl",
         hover &&

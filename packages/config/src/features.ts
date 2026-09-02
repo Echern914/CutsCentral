@@ -179,6 +179,12 @@ export interface FeatureIndexEntry {
    * corpus links to them, but they are not shop features.
    */
   listed?: boolean;
+  /**
+   * True keeps an UNLISTED entry reachable by typing. The directory (More)
+   * still hides it, but "help" or "support" in the palette must not dead-end
+   * on the one destination every seat is guaranteed to have.
+   */
+  searchable?: boolean;
 }
 
 /**
@@ -213,7 +219,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "home",
     name: "Home",
-    synonyms: ["dashboard", "overview", "today", "start", "main"],
+    synonyms: ["dashboard", "overview", "today", "start", "main", "get started", "setup", "set up", "my day"],
     description: "Today's chair at a glance — what's booked and what needs you",
     href: "/dashboard",
     category: "account",
@@ -225,7 +231,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "assistant",
     name: "Assistant",
-    synonyms: ["help me", "ask", "chatgpt", "claude", "ai help", "guide", "walkthrough", "what do I do"],
+    synonyms: ["help", "help me", "ask", "chatgpt", "claude", "ai help", "guide", "walkthrough", "what do I do", "what next"],
     description: "Ask what to do next, finish setup, and fix what's blocking you",
     href: "/dashboard/assistant",
     category: "account",
@@ -243,7 +249,21 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "mini-site",
     name: "Public shop page",
-    synonyms: ["mini site", "website", "landing page", "shop link", "page"],
+    synonyms: [
+      "mini site",
+      "website",
+      "landing page",
+      "shop link",
+      "page",
+      "booking link",
+      "booking page",
+      "share my page",
+      "instagram",
+      "social links",
+      "google reviews",
+      "address",
+      "bio",
+    ],
     description: "Your own booking mini-site clients open from a link",
     href: "/dashboard/site",
     category: "brand",
@@ -254,7 +274,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "themes",
     name: "Themes, fonts & branding",
-    synonyms: ["theme", "colors", "fonts", "accent", "logo", "branding", "style", "qr code", "logo", "colors", "brand"],
+    synonyms: ["theme", "colors", "fonts", "font", "accent", "logo", "branding", "style", "brand", "look"],
     description: "Make your page and rewards hub look like YOUR shop",
     href: "/dashboard/site",
     category: "brand",
@@ -303,6 +323,12 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
       "import bookings",
       "existing calendar",
       "switch over",
+      "booksy",
+      "vagaro",
+      "calendly",
+      "google calendar",
+      "migrate",
+      "import my calendar",
     ],
     description: "Keep your current booking site and sync it into ChairBack",
     // 🔴 ?tab=Settings, not the bare route. ConnectPlatforms - the card that
@@ -331,7 +357,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "promotions",
     name: "Promotions",
-    synonyms: ["promo", "deals", "specials", "discount", "sale", "offer"],
+    synonyms: ["promo", "deals", "specials", "discount", "sale", "offer", "promo code", "coupon", "blast", "text blast", "mass text"],
     description: "Run specials that show on your page and can be texted out",
     href: "/dashboard/promotions",
     category: "retention",
@@ -370,7 +396,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "appointments",
     name: "Appointments",
-    synonyms: ["book appointment", "new appointment", "add appointment", "walk in", "reschedule", "cancel", "no show", "mark no show", "check in"],
+    synonyms: ["book appointment", "new appointment", "add appointment", "walk in", "reschedule", "cancel", "cancel appointment", "move appointment", "no show", "mark no show", "check in", "today's appointments"],
     description: "The day's book — create, move, cancel and check people in",
     href: "/dashboard/booking?tab=Appointments",
     category: "booking",
@@ -384,7 +410,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "staff",
     name: "Staff & providers",
-    synonyms: ["barbers", "team", "providers", "employees", "chairs", "staff hours", "weekly hours", "availability", "time off", "vacation", "day off", "lunch break", "break", "closed", "block off", "blocked time", "working hours"],
+    synonyms: ["barbers", "team", "providers", "employees", "chairs", "staff hours", "weekly hours", "hours", "open hours", "opening hours", "schedule", "availability", "time off", "vacation", "day off", "days off", "lunch break", "lunch", "break", "closed", "block off", "block time", "blocked time", "working hours", "add barber", "add a provider"],
     description: "Multiple barbers, each with their own services and hours",
     href: "/dashboard/booking?tab=Staff",
     category: "booking",
@@ -398,7 +424,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "services",
     name: "Services & pricing",
-    synonyms: ["menu", "prices", "haircut", "service list", "duration", "service group", "group", "add service", "edit service", "photo", "description", "service photo", "holiday", "holiday pricing", "special date", "max per day"],
+    synonyms: ["services", "menu", "prices", "price", "price list", "haircut", "service list", "duration", "service group", "group", "add service", "add a service", "edit service", "change price", "photo", "description", "service photo", "holiday", "holiday pricing", "special date", "max per day"],
     description: "Your service menu with durations and prices",
     href: "/dashboard/booking?tab=Services",
     category: "booking",
@@ -409,7 +435,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "day-pricing",
     name: "Day-specific pricing & durations",
-    synonyms: ["saturday price", "weekend pricing", "price overrides", "surge", "day rates", "holiday price", "specific date", "sunday surcharge", "date pricing"],
+    synonyms: ["saturday price", "weekend price", "weekend pricing", "price overrides", "surge", "day rates", "holiday price", "specific date", "sunday surcharge", "date pricing"],
     description: "Charge (or pace) differently per weekday — shown honestly at booking",
     href: "/dashboard/booking?tab=Services",
     category: "booking",
@@ -453,7 +479,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     // retroactive recorder lives on the book); this is the LIVE LINE.
     // NOT the waitlist either: that queue is "call me when a future slot
     // opens" - this one is "I am standing in the shop right now".
-    synonyms: ["live queue", "walk-in line", "kiosk", "check-in queue", "who is waiting now"],
+    synonyms: ["live queue", "walk-in line", "walk-ins", "walk-in queue", "kiosk", "queue", "the line", "check-in queue", "who is waiting now"],
     description: "Today's live line — kiosk check-ins, claims, and service starts",
     href: "/dashboard/booking?tab=Walk-ins",
     category: "booking",
@@ -505,7 +531,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "pay-ahead",
     name: "Card & Apple Pay at booking",
-    synonyms: ["stripe", "card payments", "apple pay", "pay ahead", "prepay", "deposit", "deposit", "tax", "receipt", "refund", "cancellation policy", "no show fee"],
+    synonyms: ["stripe", "card payments", "payments", "apple pay", "pay ahead", "prepay", "deposit", "card on file", "tax", "receipt", "refund", "cancellation policy", "cancellation fee", "cancel fee", "late cancel", "no show fee"],
     description: "Collect payment when they book — money hits your Stripe account",
     href: "/dashboard/payments",
     category: "money",
@@ -528,9 +554,21 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     minRole: "OWNER",
   },
   {
+    // The tip-policy toggle shipped inside the payments page with no words of
+    // its own, so "tip" - the single most obvious thing to type - found the
+    // card that says "mul-TIP-le" and nothing else.
+    id: "tips",
+    name: "Tips",
+    synonyms: ["tip", "tipping", "gratuity", "price includes tip", "tip included", "tips included"],
+    description: "Say whether the prices clients see already include a tip",
+    href: "/dashboard/payments#tips",
+    category: "money",
+    minRole: "OWNER",
+  },
+  {
     id: "reminders",
     name: "Automatic reminders",
-    synonyms: ["24 hour reminder", "notifications", "confirmations", "reminder", "text reminder", "email reminder", "day before", "booking alerts"],
+    synonyms: ["24 hour reminder", "notifications", "confirmations", "reminder", "text reminder", "text reminders", "confirmation text", "email reminder", "day before", "booking alerts"],
     description: "Booking confirmations plus 24h and 2h reminders, hands-off",
     href: "/dashboard/booking?tab=Settings",
     category: "booking",
@@ -569,9 +607,9 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "loyalty-tiers",
     name: "Loyalty status tiers",
-    synonyms: ["bronze", "silver", "gold", "status", "tiers", "member"],
+    synonyms: ["bronze", "silver", "gold", "status", "tier", "tiers", "tier visits", "visits needed", "levels", "member", "vip status", "badge"],
     description: "Clients climb Bronze → Silver → Gold on lifetime visits",
-    href: "/dashboard/rewards",
+    href: "/dashboard/rewards#tiers",
     category: "retention",
     tourStepId: "rewards-extras",
     flag: "rewardsEnabled",
@@ -579,7 +617,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "rebook-nudges",
     name: "Rebooking nudges",
-    synonyms: ["nudge", "win back", "lapsed clients", "come back", "retention"],
+    synonyms: ["nudge", "nudges", "win back", "winback", "lapsed clients", "lapsed", "overdue", "rebook", "come back", "haven't been back", "retention"],
     description: "Overdue clients get an automatic 'time to rebook' text or push",
     href: "/dashboard/nudges",
     category: "retention",
@@ -590,7 +628,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "clients",
     name: "Client book",
-    synonyms: ["customers", "contacts", "client list", "crm", "export", "csv", "import", "merge", "merge clients", "duplicate client", "opt out", "consent", "unsubscribe", "client notes"],
+    synonyms: ["customers", "customer list", "contacts", "contact list", "client list", "crm", "export", "csv", "import", "import clients", "merge", "merge clients", "duplicate client", "opt out", "consent", "unsubscribe", "client notes", "notes", "tags"],
     description: "Your client list — yours to keep, filter, and export",
     href: "/dashboard/clients",
     category: "data",
@@ -611,7 +649,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "insights",
     name: "Insights & trends",
-    synonyms: ["analytics", "stats", "charts", "revenue", "trends", "reports", "goal", "chair time", "utilization", "how busy", "daily target", "quota", "planner"],
+    synonyms: ["analytics", "stats", "numbers", "charts", "revenue", "earnings", "income", "money", "trends", "reports", "goal", "chair time", "utilization", "how busy", "busiest", "top services", "daily target", "quota", "planner", "how am I doing"],
     description: "Visits, revenue, retention, and loyalty trends over time",
     href: "/dashboard/insights",
     category: "data",
@@ -633,7 +671,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     // entry, orphaning the receptionist's SMS threads entirely.
     id: "inbox",
     name: "Inbox",
-    synonyms: ["messages", "texts", "conversations", "sms", "replies", "chat"],
+    synonyms: ["messages", "texts", "conversations", "sms", "replies", "chat", "text a client", "message a client", "send a text"],
     description: "Text conversations with your clients, including AI receptionist chats",
     href: "/dashboard/inbox",
     category: "data",
@@ -669,6 +707,12 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
       "auto reply",
       "robot",
       "assistant",
+      "phone number",
+      "shop number",
+      "text number",
+      "texting number",
+      "business number",
+      "twilio",
     ],
     description: "An AI that books clients over text when you're behind the chair",
     href: "/dashboard/receptionist",
@@ -678,7 +722,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "billing",
     name: "Plan & billing",
-    synonyms: ["subscription", "upgrade", "premium", "price", "plan", "quota", "texts left", "sms usage", "invoice", "cancel plan", "comped"],
+    synonyms: ["subscription", "upgrade", "premium", "plan", "my plan", "quota", "texts left", "sms usage", "invoice", "cancel plan", "cancel subscription", "comped"],
     description: "Your ChairBack plan, texting quota, and add-ons",
     href: "/dashboard/billing",
     category: "money",
@@ -694,7 +738,6 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
       "invite",
       "share",
       "free month",
-      "affiliate",
       "referral link",
     ],
     description: "Send your link — they get an extra month, you get one free",
@@ -708,6 +751,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     id: "affiliates",
     name: "Affiliates",
     synonyms: [
+      "affiliate",
       "affiliate program",
       "refer and earn",
       "months off",
@@ -750,6 +794,18 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
       "profile photo",
       "delete account",
       "my name",
+      "sign out",
+      "log out",
+      "logout",
+      "dark mode",
+      "light mode",
+      "appearance",
+      "push notifications",
+      "push",
+      "app",
+      "mobile app",
+      "download the app",
+      "email",
     ],
     description: "Your name, photo, password, sign-in, and account deletion",
     href: "/dashboard/account",
@@ -767,6 +823,18 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     href: "/dashboard?tour=1",
     category: "account",
     minRole: "BARBER",
+    readOnly: true,
+  },
+  {
+    // "qr code" used to be a synonym on Themes, which has no QR code. The card
+    // renders on Home (and on Booking -> Settings); Home is the one every
+    // manager already has open.
+    id: "qr-code",
+    name: "Scan-to-book QR code",
+    synonyms: ["qr", "qr code", "scan to book", "sticker", "flyer", "poster", "print", "counter card"],
+    description: "A code clients scan to open your booking page — print it for the counter",
+    href: "/dashboard#qr",
+    category: "brand",
     readOnly: true,
   },
 
@@ -792,13 +860,14 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "support",
     name: "Contact support",
-    synonyms: ["support", "help", "contact us", "email us", "human"],
+    synonyms: ["support", "help", "contact us", "contact support", "email us", "human", "talk to a person", "bug", "report a problem", "something is broken"],
     description: "Reach a person at ChairBack",
     href: "/support",
     category: "account",
     minRole: "BARBER",
     readOnly: true,
     listed: false,
+    searchable: true,
   },
   {
     id: "privacy",
@@ -976,6 +1045,20 @@ export function availableToBarberSeat(entry: FeatureIndexEntry): boolean {
 export function visibleFeatures(ctx: NavContext = {}): FeatureIndexEntry[] {
   return FEATURE_INDEX.filter((f) => {
     if (f.listed === false) return false;
+    const r = resolveFeature(f.id, { ...ctx, hasAccess: true, hasPremiumAi: true });
+    return r.ok;
+  });
+}
+
+/**
+ * `visibleFeatures` plus the unlisted entries flagged `searchable` - the index
+ * the palette types against. The directory (More) stays on `visibleFeatures`;
+ * a public page has no shelf there, but "help" typed into a search box must
+ * land somewhere.
+ */
+export function searchableFeatures(ctx: NavContext = {}): FeatureIndexEntry[] {
+  return FEATURE_INDEX.filter((f) => {
+    if (f.listed === false && f.searchable !== true) return false;
     const r = resolveFeature(f.id, { ...ctx, hasAccess: true, hasPremiumAi: true });
     return r.ok;
   });

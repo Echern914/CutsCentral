@@ -212,7 +212,10 @@ export default async function DashboardPage({
           the page the barber already has open - not three taps into Booking →
           Settings. Same card that tab renders; needs a slug to point at. */}
       {shop.slug && (
-        <HomeQrCard bookUrl={`${appBase}/book/${shop.slug}`} shopName={shop.name} />
+        // `id` is the registry's deep link (FEATURE_INDEX "qr-code").
+        <div id="qr">
+          <HomeQrCard bookUrl={`${appBase}/book/${shop.slug}`} shopName={shop.name} />
+        </div>
       )}
 
       {stats.data && (

@@ -401,8 +401,8 @@ export function PaymentsManager({
         </p>
       </Card>
 
-      {/* Tips */}
-      <Card className="p-5">
+      {/* Tips. `id` is the registry's deep link (FEATURE_INDEX "tips"). */}
+      <Card id="tips" className="p-5">
         <CardHeader
           title="Tips"
           subtitle="Tell customers whether the price they see already includes a tip. This is wording only — it never changes what you charge."

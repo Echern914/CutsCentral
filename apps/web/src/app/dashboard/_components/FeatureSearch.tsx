@@ -3,9 +3,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
-import { visibleFeatures, type FeatureIndexEntry, type SeatRole, flagsOffFor } from "@chairback/config/features";
+import {
+  FEATURE_CATEGORIES,
+  resolveHref,
+  searchableFeatures,
+  type FeatureIndexEntry,
+  type SeatRole,
+  flagsOffFor,
+} from "@chairback/config/features";
 import { searchFeatures } from "@chairback/config/helpMatch";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
+import { recentFeatureIds, rememberFeature } from "@/lib/recentFeatures";
 import { lockedTier, type FeatureLocks } from "@/lib/featureLocks";
 import { PlanBadge } from "./PlanBadge";
 
@@ -40,15 +48,22 @@ export function FeatureSearch({
   // `null` (pre-hydration) reads as the browser, but the palette only opens on
   // a tap, by which point the check has resolved.
   const inApp = useIsNativeApp();
+  // `searchableFeatures`, not `visibleFeatures`: the palette also types
+  // against the unlisted-but-searchable entries (Contact support), which have
+  // no shelf in the More directory but must not dead-end here.
   const index = useMemo(
     () =>
-      visibleFeatures({
+      searchableFeatures({
         role,
         inApp: inApp === true,
         flagsOff: flagsOffFor({ rewardsEnabled, affiliateProgramEnabled }),
       }),
     [inApp, role, rewardsEnabled, affiliateProgramEnabled],
   );
+  // Where a query that matches nothing is handed off to. The assistant reads
+  // the same registry PLUS the help corpus, so it can answer the "how do I…"
+  // questions a feature name cannot.
+  const askHref = resolveHref("assistant", { role });
   const [open, setOpen] = useState(false);
   // Portals need a DOM to target, which SSR has none of — same mounted gate the
   // demo tour uses. The palette only opens on a tap/Ctrl-K, long after mount.
@@ -120,13 +135,27 @@ export function FeatureSearch({
   // SUBSTRING, which returned nothing for 37 of 46 real keywords ("buffer",
   // "lunch break", "card punch") and confident garbage for others ("age" hit
   // "Public shop p-AGE"). See the note on searchFeatures for the full autopsy.
+  // The last few things this person opened lead the list when nothing is
+  // typed. Read on open, not at mount: another tab may have added to it.
+  const [recentIds, setRecentIds] = useState<string[]>([]);
+  useEffect(() => {
+    if (open) setRecentIds(recentFeatureIds());
+  }, [open]);
+  const recents = useMemo(
+    () =>
+      recentIds
+        .map((id) => index.find((f) => f.id === id))
+        .filter((f): f is FeatureIndexEntry => f !== undefined),
+    [recentIds, index],
+  );
   const results = useMemo(() => {
-    if (!query.trim()) return index;
+    if (!query.trim()) return [...recents, ...index.filter((f) => !recents.includes(f))];
     return searchFeatures(query, index).map((h) => h.entry);
-  }, [query, index]);
+  }, [query, index, recents]);
 
   const go = useCallback(
-    (href: string) => {
+    (feature: FeatureIndexEntry | null, href: string) => {
+      if (feature) rememberFeature(feature.id);
       setOpen(false);
       router.push(href);
     },
@@ -143,7 +172,7 @@ export function FeatureSearch({
     } else if (e.key === "Enter") {
       e.preventDefault();
       const hit = results[Math.min(cursor, results.length - 1)];
-      if (hit) go(hit.href);
+      if (hit) go(hit, hit.href);
     }
   }
 
@@ -253,7 +282,23 @@ export function FeatureSearch({
             >
               {results.length === 0 && (
                 <li className="px-4 py-6 text-center text-sm text-muted">
-                  Nothing matches &ldquo;{query}&rdquo; — try another word.
+                  <p>Nothing here is called &ldquo;{query.trim()}&rdquo;.</p>
+                  {/* A dead end is the one outcome that makes a search box
+                      worse than none: the person concludes the feature does
+                      not exist. Hand the words to the assistant instead - it
+                      also reads the help corpus, so "how do I…" gets an answer
+                      where a feature NAME could not. */}
+                  {askHref && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        go(null, `${askHref}?q=${encodeURIComponent(query.trim())}`)
+                      }
+                      className="mt-3 rounded-full border border-gold/40 px-3.5 py-1.5 text-xs font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
+                    >
+                      Ask the assistant about &ldquo;{query.trim()}&rdquo; →
+                    </button>
+                  )}
                 </li>
               )}
               {results.map((f, i) => (
@@ -262,9 +307,10 @@ export function FeatureSearch({
                   feature={f}
                   index={i}
                   active={i === cursor}
+                  tag={!query.trim() && recents.includes(f) ? "Recent" : categoryName(f)}
                   onHover={() => setCursor(i)}
-                  onOpen={() => go(f.href)}
-                  onDemo={f.tourStepId ? () => go(`/demo?step=${f.tourStepId}`) : undefined}
+                  onOpen={() => go(f, f.href)}
+                  onDemo={f.tourStepId ? () => go(null, `/demo?step=${f.tourStepId}`) : undefined}
                   lockedAs={lockedTier(f.tier, locks)}
                 />
               ))}
@@ -277,10 +323,16 @@ export function FeatureSearch({
   );
 }
 
+/** The More-sheet shelf this feature sits on, for the row's tag. */
+function categoryName(f: FeatureIndexEntry): string {
+  return FEATURE_CATEGORIES.find((c) => c.id === f.category)?.name ?? "";
+}
+
 function Row({
   feature,
   index,
   active,
+  tag,
   onHover,
   onOpen,
   onDemo,
@@ -289,6 +341,8 @@ function Row({
   feature: FeatureIndexEntry;
   index: number;
   active: boolean;
+  /** "Recent", or the More-sheet shelf - so a hit says WHERE it lives, too. */
+  tag: string;
   onHover: () => void;
   onOpen: () => void;
   /** Present when this feature has a live-demo step to jump to. */
@@ -310,13 +364,18 @@ function Row({
         <button
           type="button"
           onClick={onOpen}
-          className="flex-1 rounded-lg px-2 py-1.5 text-left"
+          className="min-w-0 flex-1 rounded-lg px-2 py-1.5 text-left"
         >
           <p className="flex items-center gap-2 text-sm font-medium text-offwhite">
-            {feature.name}
+            <span className="min-w-0 truncate">{feature.name}</span>
             {lockedAs && <PlanBadge tier={lockedAs} />}
+            {tag && (
+              <span className="ml-auto shrink-0 text-[10px] uppercase tracking-[0.14em] text-muted">
+                {tag}
+              </span>
+            )}
           </p>
-          <p className="text-xs text-muted">{feature.description}</p>
+          <p className="truncate text-xs text-muted">{feature.description}</p>
         </button>
         {onDemo && (
           <button

@@ -57,15 +57,25 @@ export function AskField({
   role,
   rewardsEnabled,
   affiliateProgramEnabled,
+  initialQuestion,
 }: {
   role: SeatRole;
   rewardsEnabled: boolean;
   affiliateProgramEnabled: boolean;
+  /**
+   * A question to answer on arrival (`?q=` from the feature search's empty
+   * state). The search box could not name a feature for it, so the person
+   * lands here with the answer already open rather than typing it twice.
+   */
+  initialQuestion?: string;
 }) {
   const router = useRouter();
   const inApp = useIsNativeApp();
-  const [query, setQuery] = useState("");
-  const [asked, setAsked] = useState<{ kind: "text" | "id"; value: string } | null>(null);
+  const opening = (initialQuestion ?? "").trim();
+  const [query, setQuery] = useState(opening);
+  const [asked, setAsked] = useState<{ kind: "text" | "id"; value: string } | null>(
+    opening ? { kind: "text", value: opening } : null,
+  );
 
   const request = useMemo(
     () => ({

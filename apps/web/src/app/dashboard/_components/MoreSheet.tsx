@@ -1,11 +1,22 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { createPortal } from "react-dom";
-import { FEATURE_CATEGORIES, resolveHref, visibleFeatures, type FeatureIndexEntry, type SeatRole, flagsOffFor } from "@chairback/config/features";
+import {
+  FEATURE_CATEGORIES,
+  resolveHref,
+  searchableFeatures,
+  visibleFeatures,
+  type FeatureIndexEntry,
+  type SeatRole,
+  flagsOffFor,
+} from "@chairback/config/features";
+import { searchFeatures } from "@chairback/config/helpMatch";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { lockedTier, type FeatureLocks } from "@/lib/featureLocks";
+import { recentFeatureIds, rememberFeature } from "@/lib/recentFeatures";
 import { PlanBadge } from "./PlanBadge";
 
 /**
@@ -15,9 +26,14 @@ import { PlanBadge } from "./PlanBadge";
  * a barber can now DISCOVER a feature instead of having to already know its
  * name to search for it.
  *
- * Deliberately a plain list of links, not a second search box: FeatureSearch
- * (Ctrl/Cmd-K) already owns "I know what I want"; this owns "show me what's
- * here". Both read the same index, so neither can drift from the other.
+ * It ALSO carries a search box, which it did not at first. FeatureSearch
+ * (Ctrl/Cmd-K) owns "I know what I want", but on a phone that palette is a
+ * small magnifier in the header, and the More tab is where a thumb actually
+ * goes when something is missing - so a person who could not find Affiliates
+ * scrolled this directory, did not spot it, and concluded it did not exist.
+ * The box types against the same matcher and the same registry the palette
+ * uses, so the two never disagree; the directory below it is the "show me
+ * what's here" browse for when the name is not known.
  */
 export function MoreSheet({
   open,
@@ -57,11 +73,43 @@ export function MoreSheet({
   // Unlisted entry, so it never appears in the directory above — but still
   // resolved rather than hard-coded.
   const supportHref = resolveHref("support") ?? "/support";
-  const visible = visibleFeatures({
-    role,
-    inApp: inApp === true,
-    flagsOff: flagsOffFor({ rewardsEnabled, affiliateProgramEnabled }),
-  });
+  const ctx = useMemo(
+    () => ({
+      role,
+      inApp: inApp === true,
+      flagsOff: flagsOffFor({ rewardsEnabled, affiliateProgramEnabled }),
+    }),
+    [role, inApp, rewardsEnabled, affiliateProgramEnabled],
+  );
+  const visible = useMemo(() => visibleFeatures(ctx), [ctx]);
+  // The search box types against the wider index: the directory hides the
+  // unlisted Contact support entry (it has its own section below), but "help"
+  // typed here must still find it.
+  const typeable = useMemo(() => searchableFeatures(ctx), [ctx]);
+  const askHref = resolveHref("assistant", { role });
+
+  const pathname = usePathname();
+  const [query, setQuery] = useState("");
+  const [recentIds, setRecentIds] = useState<string[]>([]);
+  // A fresh sheet every time: last time's query would hide the directory, and
+  // the recents are re-read because another tab may have added to them.
+  useEffect(() => {
+    if (open) {
+      setQuery("");
+      setRecentIds(recentFeatureIds());
+    }
+  }, [open]);
+  const recents = useMemo(
+    () =>
+      recentIds
+        .map((id) => visible.find((f) => f.id === id))
+        .filter((f): f is FeatureIndexEntry => f !== undefined),
+    [recentIds, visible],
+  );
+  const hits = useMemo(
+    () => (query.trim() ? searchFeatures(query, typeable).map((h) => h.entry) : null),
+    [query, typeable],
+  );
 
   // Esc closes; focus moves into the sheet on open and back to the page after.
   useEffect(() => {
@@ -103,40 +151,112 @@ export function MoreSheet({
         // home-indicator gap itself (the native shell insets only the TOP).
         style={{ paddingBottom: "calc(1.5rem + env(safe-area-inset-bottom))" }}
       >
-        <div className="sticky top-0 z-10 -mx-4 mb-2 flex items-center justify-between bg-charcoal-800/80 px-4 py-2 backdrop-blur sm:-mx-6 sm:px-6">
-          <h2 className="font-display text-lg tracking-tight">Everything else</h2>
-          <button
-            ref={closeRef}
-            type="button"
-            onClick={onClose}
-            className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
-          >
-            Done
-          </button>
+        <div className="sticky top-0 z-10 -mx-4 mb-3 bg-charcoal-800/80 px-4 pb-3 pt-2 backdrop-blur sm:-mx-6 sm:px-6">
+          <div className="flex items-center justify-between">
+            <h2 className="font-display text-lg tracking-tight">Everything else</h2>
+            <button
+              ref={closeRef}
+              type="button"
+              onClick={onClose}
+              className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
+            >
+              Done
+            </button>
+          </div>
+          {/* text-base, not text-sm: iOS Safari zooms the page on focus for
+              anything under 16px, and this box is mostly tapped on a phone. */}
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Type what you're looking for…"
+            aria-label="Search everything"
+            autoComplete="off"
+            enterKeyHint="search"
+            className="mt-2 w-full rounded-xl border border-subtle bg-charcoal-900/60 px-3.5 py-2.5 text-base text-offwhite placeholder:text-muted focus:border-gold/50 focus:outline-none focus:ring-2 focus:ring-gold/25"
+          />
         </div>
 
-        {FEATURE_CATEGORIES.map((cat) => {
-          const items = visible.filter((f) => f.category === cat.id);
-          if (items.length === 0) return null;
-          return (
-            <section key={cat.id} className="mb-6">
-              <h3 className="px-1 text-xs uppercase tracking-[0.16em] text-muted">
-                {cat.name}
-              </h3>
-              <ul className="mt-2 grid gap-1.5 sm:grid-cols-2">
-                {items.map((f) => (
+        {hits !== null ? (
+          <section className="mb-4" aria-label="Search results">
+            {hits.length === 0 ? (
+              <div className="px-1 py-6 text-center text-sm text-muted">
+                <p>Nothing here is called &ldquo;{query.trim()}&rdquo;.</p>
+                {/* Same hand-off as the palette: a dead end teaches "it does
+                    not exist"; the assistant also reads the help corpus and
+                    can answer a "how do I…" that no feature NAME matches. */}
+                {askHref && (
+                  <Link
+                    href={`${askHref}?q=${encodeURIComponent(query.trim())}`}
+                    onClick={onClose}
+                    className="mt-3 inline-block rounded-full border border-gold/40 px-3.5 py-1.5 text-xs font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
+                  >
+                    Ask the assistant about &ldquo;{query.trim()}&rdquo; →
+                  </Link>
+                )}
+              </div>
+            ) : (
+              <ul className="grid gap-1.5 sm:grid-cols-2">
+                {hits.map((f) => (
                   <li key={f.id}>
                     <FeatureLink
                       feature={f}
+                      tag={categoryName(f)}
+                      current={isCurrentPage(f, pathname)}
                       onNavigate={onClose}
                       lockedAs={lockedTier(f.tier, locks)}
                     />
                   </li>
                 ))}
               </ul>
-            </section>
-          );
-        })}
+            )}
+          </section>
+        ) : (
+          <>
+            {recents.length > 0 && (
+              <section className="mb-6">
+                <h3 className="px-1 text-xs uppercase tracking-[0.16em] text-muted">Recent</h3>
+                <ul className="mt-2 grid gap-1.5 sm:grid-cols-2">
+                  {recents.map((f) => (
+                    <li key={f.id}>
+                      <FeatureLink
+                        feature={f}
+                        tag={categoryName(f)}
+                        current={isCurrentPage(f, pathname)}
+                        onNavigate={onClose}
+                        lockedAs={lockedTier(f.tier, locks)}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
+            {FEATURE_CATEGORIES.map((cat) => {
+              const items = visible.filter((f) => f.category === cat.id);
+              if (items.length === 0) return null;
+              return (
+                <section key={cat.id} className="mb-6">
+                  <h3 className="px-1 text-xs uppercase tracking-[0.16em] text-muted">
+                    {cat.name}
+                  </h3>
+                  <ul className="mt-2 grid gap-1.5 sm:grid-cols-2">
+                    {items.map((f) => (
+                      <li key={f.id}>
+                        <FeatureLink
+                          feature={f}
+                          current={isCurrentPage(f, pathname)}
+                          onNavigate={onClose}
+                          lockedAs={lockedTier(f.tier, locks)}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              );
+            })}
+          </>
+        )}
 
         {/* Support is an UNLISTED registry entry: /support is a PUBLIC page, so
             it has no business in the browsable directory above, but it must stay
@@ -187,12 +307,33 @@ export function MoreSheet({
   );
 }
 
+/** The shelf a feature sits on, for a row shown OUTSIDE its shelf (search, recents). */
+function categoryName(f: FeatureIndexEntry): string {
+  return FEATURE_CATEGORIES.find((c) => c.id === f.category)?.name ?? "";
+}
+
+/**
+ * "You're here" - the row for the page underneath the sheet. Only a BARE href
+ * counts: the six `?tab=` entries all live on /dashboard/booking, and marking
+ * every one of them would say nothing.
+ */
+function isCurrentPage(f: FeatureIndexEntry, pathname: string | null): boolean {
+  if (!pathname || f.href.includes("?") || f.href.includes("#")) return false;
+  return f.href === pathname;
+}
+
 function FeatureLink({
   feature,
+  tag,
+  current = false,
   onNavigate,
   lockedAs,
 }: {
   feature: FeatureIndexEntry;
+  /** Where this lives, when the row is shown away from its shelf. */
+  tag?: string;
+  /** This row is the page the sheet opened over. */
+  current?: boolean;
   onNavigate: () => void;
   /** Plan diamond to show when the shop's plan doesn't include this feature. */
   lockedAs: "pro" | "pro_ai" | null;
@@ -203,12 +344,23 @@ function FeatureLink({
     // as broken.
     <Link
       href={feature.href}
-      onClick={onNavigate}
-      className="block rounded-2xl border border-subtle px-3.5 py-3 transition-colors duration-150 ease-out hover:bg-charcoal-700"
+      aria-current={current ? "page" : undefined}
+      onClick={() => {
+        rememberFeature(feature.id);
+        onNavigate();
+      }}
+      className={`block rounded-2xl border px-3.5 py-3 transition-colors duration-150 ease-out hover:bg-charcoal-700 ${
+        current ? "border-gold/40 bg-gold/5" : "border-subtle"
+      }`}
     >
       <span className="flex items-center gap-2">
-        <span className="text-sm font-medium">{feature.name}</span>
+        <span className="min-w-0 truncate text-sm font-medium">{feature.name}</span>
         {lockedAs && <PlanBadge tier={lockedAs} />}
+        {(current || tag) && (
+          <span className="ml-auto shrink-0 text-[10px] uppercase tracking-[0.14em] text-muted">
+            {current ? "You're here" : tag}
+          </span>
+        )}
       </span>
       <span className="mt-0.5 block text-xs text-muted">{feature.description}</span>
     </Link>

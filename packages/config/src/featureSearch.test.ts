@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FEATURE_INDEX } from "./features.js";
+import { FEATURE_INDEX, searchableFeatures } from "./features.js";
 import { searchFeatures } from "./helpMatch.js";
 
 /**
@@ -17,7 +17,14 @@ import { searchFeatures } from "./helpMatch.js";
  * failure mode is silent: the palette just says "Nothing matches" and the
  * barber concludes the feature doesn't exist.
  */
-const top = (q: string) => searchFeatures(q, FEATURE_INDEX)[0]?.entry.name ?? null;
+/**
+ * The index the palette actually types against for an owner: every listed
+ * entry plus the searchable public page (Contact support). Not the raw
+ * FEATURE_INDEX - the unlisted signup page also knows "get started", and it
+ * is never offered to someone who already has a shop.
+ */
+const INDEX = searchableFeatures({ role: "OWNER", flagsOff: [] });
+const top = (q: string) => searchFeatures(q, INDEX)[0]?.entry.name ?? null;
 
 /** query -> the entry that should rank FIRST. Verified against the live index. */
 const EXPECTED: [string, string][] = [
@@ -45,7 +52,9 @@ const EXPECTED: [string, string][] = [
   ["service group", "Services & pricing"],
   ["max per day", "Services & pricing"],
   ["holiday", "Services & pricing"],
-  ["photo", "Services & pricing"],
+  // The gallery is literally CALLED photo; a name hit outranks the service
+  // editor's "service photo" synonym, per the field weights.
+  ["photo", "Photo gallery"],
   ["saterday", "Day-specific pricing & durations"], // typo, on purpose
   // Money.
   ["deposit", "Card & Apple Pay at booking"],
@@ -69,7 +78,7 @@ const EXPECTED: [string, string][] = [
   ["sync", "Acuity & Square sync"],
   ["domain", "Your own domain"],
   ["timezone", "Time zone"],
-  ["qr code", "Themes, fonts & branding"],
+  ["qr code", "Scan-to-book QR code"],
   // Marking a no-show is an action in the book. Reminders REDUCE no-shows,
   // which is a claim for their description to make, not a word to win on.
   ["no show", "Appointments"],
@@ -82,6 +91,112 @@ const EXPECTED: [string, string][] = [
 describe("feature search: the words barbers actually type", () => {
   it.each(EXPECTED)("%j finds %j", (query, expected) => {
     expect(top(query)).toBe(expected);
+  });
+});
+
+/**
+ * Round two, measured 2026-09-02 against the live registry with a battery of
+ * 130 things an OWNER types. Before: 18 dead ends (tip, hours, add barber,
+ * phone number, qr code, sign out, google calendar...) and a run of confidently
+ * wrong firsts ("affiliate" -> Refer a barber, "busiest" -> Affiliates, "qr" ->
+ * Themes, "dark mode" -> Appointments). Two matcher rules and a vocabulary
+ * pass fixed them; this table keeps them fixed.
+ */
+const EXPECTED_2: [string, string][] = [
+  // 🔴 "affiliate" ranked Refer a barber first: Refer listed the word as a
+  // synonym, and the exact-name bonus compared RAW strings, so "affiliate"
+  // was one letter short of "Affiliates". Equality is on tokens now.
+  ["affiliate", "Affiliates"],
+  ["afiliate", "Affiliates"], // typo, on purpose
+  ["months off", "Affiliates"],
+  ["refer", "Refer a barber"],
+  ["referral link", "Refer a barber"],
+  // The verb wrapper is dropped when a noun remains: "change tier" used to
+  // find NOTHING because the AND rule demanded "change" land somewhere too.
+  ["tier", "Loyalty status tiers"],
+  ["change tier", "Loyalty status tiers"],
+  ["tier visits", "Loyalty status tiers"],
+  ["gold", "Loyalty status tiers"],
+  ["vip", "VIP & custom cards"],
+  // The tip-policy toggle lives on the payments page and had no entry: "tip"
+  // matched "mul-TIP-le" and nothing else.
+  ["tip", "Tips"],
+  ["tips", "Tips"],
+  ["tipping", "Tips"],
+  ["gratuity", "Tips"],
+  ["cancellation fee", "Card & Apple Pay at booking"],
+  ["card on file", "Card & Apple Pay at booking"],
+  // Hours. "hours" alone ranked Automatic reminders (24 HOUR reminder).
+  ["hours", "Staff & providers"],
+  ["open hours", "Staff & providers"],
+  ["lunch", "Staff & providers"],
+  ["block time", "Staff & providers"],
+  ["add barber", "Staff & providers"],
+  ["add a barber", "Staff & providers"],
+  // "services" tied Services with Service add-ons and lost on the alphabet;
+  // "price" went to Plan & billing - ChairBack's price, not the barber's.
+  ["services", "Services & pricing"],
+  ["add a service", "Services & pricing"],
+  ["price", "Services & pricing"],
+  ["prices", "Services & pricing"],
+  ["kiosk", "Walk-in queue"],
+  ["walk-ins", "Walk-in queue"],
+  // The public page carries the booking link and the social/review links.
+  ["booking link", "Public shop page"],
+  ["instagram", "Public shop page"],
+  ["google reviews", "Public shop page"],
+  ["booksy", "Acuity & Square sync"],
+  ["google calendar", "Acuity & Square sync"],
+  ["winback", "Rebooking nudges"],
+  ["lapsed", "Rebooking nudges"],
+  ["blast", "Promotions"],
+  ["promo code", "Promotions"],
+  ["notes", "Client book"],
+  ["import clients", "Client book"],
+  ["phone number", "AI receptionist"],
+  ["twilio", "AI receptionist"],
+  // Themes claimed "qr code" and has no QR code; the card is on Home.
+  ["qr", "Scan-to-book QR code"],
+  ["qr code", "Scan-to-book QR code"],
+  ["dark mode", "Account & security"],
+  ["sign out", "Account & security"],
+  ["log out", "Account & security"],
+  ["download the app", "Account & security"],
+  ["push notifications", "Account & security"],
+  ["busiest", "Insights & trends"],
+  ["top services", "Insights & trends"],
+  ["money", "Insights & trends"],
+  ["upgrade", "Plan & billing"],
+  ["setup", "Home"],
+  ["get started", "Home"],
+  ["help", "Assistant"],
+  ["support", "Contact support"],
+];
+
+describe("feature search: round two (owner vocabulary)", () => {
+  it.each(EXPECTED_2)("%j finds %j", (query, expected) => {
+    expect(top(query)).toBe(expected);
+  });
+
+  it("a bare verb still searches - only the WRAPPER is dropped", () => {
+    expect(searchFeatures("add", FEATURE_INDEX).length).toBeGreaterThan(0);
+    expect(searchFeatures("change", FEATURE_INDEX).length).toBeGreaterThan(0);
+    // With a noun present the verb no longer vetoes the entry.
+    expect(searchFeatures("turn on reminders", FEATURE_INDEX)[0]?.entry.name).toBe(
+      "Automatic reminders",
+    );
+    expect(searchFeatures("set up my hours", FEATURE_INDEX)[0]?.entry.name).toBe(
+      "Staff & providers",
+    );
+  });
+
+  it("a dead end is honest: nothing in the product answers these", () => {
+    // Not features. The palette's empty state hands these to the assistant
+    // instead of pretending; if one of them starts matching, something
+    // acquired a synonym it should not have.
+    for (const q of ["commission", "birthday", "zzzzqqq"]) {
+      expect(searchFeatures(q, FEATURE_INDEX), q).toEqual([]);
+    }
   });
 });
 

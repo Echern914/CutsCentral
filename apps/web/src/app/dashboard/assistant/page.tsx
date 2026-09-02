@@ -38,7 +38,13 @@ import {
  * shop needs this page most. Everything it reads either has no gate or fails
  * silently.
  */
-export default async function AssistantPage() {
+export default async function AssistantPage({
+  searchParams,
+}: {
+  /** `?q=` - a question handed over by the feature search's empty state. */
+  searchParams?: { q?: string | string[] };
+}) {
+  const handedOver = typeof searchParams?.q === "string" ? searchParams.q.slice(0, 200) : "";
   const vocab = await getVocabulary();
   const me = await getMe();
   const role: SeatRole = (me.data?.shopRole ?? "OWNER") as SeatRole;
@@ -81,7 +87,12 @@ export default async function AssistantPage() {
 
       </header>
 
-      <AskField role={role} rewardsEnabled={rewardsEnabled} affiliateProgramEnabled={affiliateProgramEnabled} />
+      <AskField
+        role={role}
+        rewardsEnabled={rewardsEnabled}
+        affiliateProgramEnabled={affiliateProgramEnabled}
+        initialQuestion={handedOver}
+      />
 
       {step && (
         <Card className="mb-6">
