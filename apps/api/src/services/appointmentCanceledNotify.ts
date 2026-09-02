@@ -229,7 +229,7 @@ export async function deliverCancellationIntent(params: {
   if (expired.count > 0) {
     logger.error(
       { intentId: params.intentId, reason: "idempotency_window_expired" },
-      "cancellation email abandoned unsent - an earlier attempt may already have been delivered",
+      "outbox email abandoned unsent - an earlier attempt may already have been delivered",
     );
     return "abandoned";
   }
@@ -384,7 +384,7 @@ export async function deliverCancellationIntent(params: {
  * Returns the number the DATABASE assigned, or null when this worker may not
  * attempt at all.
  */
-async function reserveAttempt(
+export async function reserveAttempt(
   intentId: string,
   claimToken: string,
   now: Date,
@@ -412,7 +412,7 @@ async function reserveAttempt(
  * The reservation was refused. Say WHY, because the three reasons want
  * different endings and only one of them is a failure.
  */
-async function classifyRefusedReservation(
+export async function classifyRefusedReservation(
   params: { intentId: string; claimToken: string },
   now: Date,
 ): Promise<IntentOutcome> {
@@ -436,7 +436,7 @@ async function classifyRefusedReservation(
   await settle(params.intentId, status, "max_attempts");
   logger.error(
     { intentId: params.intentId, reason: "max_attempts", outcome: status },
-    "cancellation email gave up - attempt budget exhausted",
+    "outbox email gave up - attempt budget exhausted",
   );
   return row.lastAttemptAmbiguous ? "abandoned" : "skipped";
 }
@@ -446,7 +446,7 @@ async function classifyRefusedReservation(
  * retry LATER THAN THE IDEMPOTENCY WINDOW too, which is why this clears the
  * ambiguity marker. Nothing was accepted, so nothing can be duplicated.
  */
-async function definitiveFailure(
+export async function definitiveFailure(
   intentId: string,
   attemptNo: number,
   classification: string,
@@ -456,7 +456,7 @@ async function definitiveFailure(
     await settle(intentId, "FAILED", classification, { ambiguous: false });
     logger.error(
       { intentId, reason: classification, attempts: attemptNo },
-      "cancellation email rejected by provider, giving up",
+      "outbox email rejected by provider, giving up",
     );
     return "skipped";
   }
@@ -476,7 +476,7 @@ async function definitiveFailure(
  * too late for the crash-after-acceptance case, so this is a restatement, not
  * the mechanism.
  */
-async function ambiguous(
+export async function ambiguous(
   intentId: string,
   attemptNo: number,
   now: Date,
@@ -503,7 +503,7 @@ async function ambiguous(
         attempts: attemptNo,
         outcome: windowClosed ? "window_closed" : "max_attempts",
       },
-      "cancellation email gave up after an ambiguous attempt",
+      "outbox email gave up after an ambiguous attempt",
     );
     return "abandoned";
   }
@@ -518,7 +518,7 @@ async function ambiguous(
  * real attempt - superseding or suppressing an intent says nothing about what
  * a provider did or did not accept.
  */
-async function settle(
+export async function settle(
   intentId: string,
   status: "FAILED" | "ABANDONED" | "SUPERSEDED" | "SUPPRESSED",
   lastError: string,

@@ -2,6 +2,7 @@ import { Prisma, runAsOwner } from "@chairback/db";
 import { AFFILIATE_POLICY, PLANS, apiEnv } from "@chairback/config";
 import { logger } from "../logger.js";
 import { recordAffiliateEvent } from "./affiliateAudit.js";
+import { enqueueAffiliateEmail } from "./affiliateNotify.js";
 
 /**
  * Affiliate qualification: turning cleared money into a reward LEDGER ENTRY.
@@ -283,6 +284,19 @@ async function qualifyFromInvoice(
       basisPlan: amount?.basisPlan ?? account.shop.plan,
     },
   });
+  // "A month off is on the way" - createMany returns no id, so read the one
+  // row the unique index guarantees. Same transaction as the reward.
+  const created = await tx.affiliateReward.findUnique({
+    where: { referredShopId: referredShop.id },
+    select: { id: true },
+  });
+  if (created) {
+    await enqueueAffiliateEmail(tx, {
+      kind: "affiliate_reward_qualified",
+      affiliateShopId: account.shopId,
+      subjectId: created.id,
+    });
+  }
 }
 
 /**
@@ -333,7 +347,7 @@ async function reverseFromEvent(
 
   const reward = await tx.affiliateReward.findUnique({
     where: { referredShopId: qualifying.referredShopId },
-    select: { affiliateAccountId: true },
+    select: { id: true, affiliateAccountId: true },
   });
   await recordAffiliateEvent(tx, {
     shopId: qualifying.referredShopId,
@@ -342,6 +356,13 @@ async function reverseFromEvent(
     actor: { type: "system" },
     metadata: { toStatus: "REVERSED", reversalReason: reason },
   });
+  if (reward) {
+    await enqueueAffiliateEmail(tx, {
+      kind: "affiliate_reward_reversed",
+      affiliateAccountId: reward.affiliateAccountId,
+      subjectId: reward.id,
+    });
+  }
 }
 
 /**
@@ -387,6 +408,11 @@ export async function releaseAffiliateRewardHolds(opts?: {
         type: "reward.available",
         actor: { type: "system" },
         metadata: { fromStatus: "PENDING", toStatus: "AVAILABLE" },
+      });
+      await enqueueAffiliateEmail(tx, {
+        kind: "affiliate_reward_available",
+        affiliateAccountId: reward.affiliateAccountId,
+        subjectId: reward.id,
       });
     }
     return { due: due.length, released, dryRun };
