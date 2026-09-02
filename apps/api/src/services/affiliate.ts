@@ -400,6 +400,12 @@ const ACCOUNT_ADMIN_SELECT = {
   internalNote: true,
   acceptedTermsVersion: true,
   policyVersion: true,
+  promotionStyles: true,
+  stylesChosenAt: true,
+  // 🔴 The desk RENDERS these. A select that omits a field the UI reads is
+  // invisible to TypeScript (the row type is the select's, but the web
+  // declares its own interface) and shows up only as a runtime 500 on a page
+  // that has at least one account - which is exactly how it was found.
   createdAt: true,
 } satisfies Prisma.AffiliateAccountSelect;
 

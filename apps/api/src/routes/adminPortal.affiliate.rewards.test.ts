@@ -296,6 +296,21 @@ describe("liability, export, flags", () => {
     expect(text).not.toContain(held.referredName);
   });
 
+  it("🔴 the accounts payload carries every field the admin desk renders", async () => {
+    programOn();
+    const res = await get("/accounts", op.cookie);
+    expect(res.status).toBe(200);
+    const row = (res.body.accounts as Record<string, unknown>[]).find((a) => a.id === account.id);
+    expect(row).toBeDefined();
+    // The desk reads each of these. A select that omits one is invisible to
+    // the compiler (the web declares its own interface) and surfaces only as
+    // a 500 on an admin page that has at least one account.
+    for (const field of ["id", "shopId", "code", "status", "suspensionReason", "createdAt", "shopName", "promotionStyles"]) {
+      expect(Object.hasOwn(row!, field), `accounts payload is missing ${field}`).toBe(true);
+    }
+    expect(row!.promotionStyles).toEqual(["short_video", "flyer_qr"]);
+  });
+
   it("reports the four flags as the process sees them", async () => {
     programOn();
     const res = await get("/flags", op.cookie);
