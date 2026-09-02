@@ -27,40 +27,23 @@ Run your chair. Keep clients.
 ## Promotional text (170 char max — editable without a new build)
 
 ```
-Now with chair-side checkout, one-tap walk-ins, and a Day view for your calendar. Switch between your barber dashboard and your rewards card without signing out.
+New: keep your usual time with a standing appointment, sign in for rewards with your phone number, and watch your tier fill up as you go.
 ```
 
 ## Description
 
 ```
-ChairBack is the app for the chair — for the barber running it, and the client sitting in it.
+ChairBack is the app for the chair - for the barber running it, and the client sitting in it.
 
-FOR BARBERS AND SHOP OWNERS
-Your whole book, on your phone.
+If you cut hair, your whole book lives on your phone. See your day hour by hour or your month at a glance, and take a booking, move one, or block off time in a couple of taps. When the cut is done, check your client out right there at the chair and record what you actually collected, whether that was cash, card, or transfer. A walk-in takes one tap: no name, no signup, just what they paid. Between clients you can see who is coming in next, who has not been back in a while, how full your chair really is, and what your time is honestly worth. Already booked somewhere else? Bring your book with you from Acuity or Square, or import a client list, and keep the appointments you already have.
 
-• See your day hour by hour, or your month at a glance
-• Take a booking, move one, or block off time in a couple of taps
-• Check a client out at the chair and record what you actually collected — cash, card, or transfer
-• Log a walk-in in one tap: no name, no signup, just what they paid
-• Know who is coming in next, and who has not been back in a while
-• Watch how full your chair really is, what sells, and what a cut is worth
-• Bring your existing book with you from Acuity or Square, or import a client list
+If you are the one in the chair, there is nothing to sign up for. Find your shop by its exact name, or open the link your barber sent you, and your rewards card is waiting - your visits, the tier you are on, and how close the next one is. Book your next cut in a few taps, or set a standing appointment so your usual time stays yours for the weeks ahead. A reminder lands before you are due so you never lose the slot, and your card can live in Apple Wallet instead of your back pocket.
 
-FOR CLIENTS
-No account, no password.
+Barbers, stylists, and anyone else who works a chair will find their own words in here rather than someone else's. And if you keep a chair of your own, you can flip between the dashboard and your own rewards card without signing out. Sign in with Apple or Google, or with the email you already use.
 
-• Your rewards card lives in the app — see your punches and what you have earned
-• Book your next cut with your barber in a few taps
-• Get a reminder before your appointment so you never lose the slot
-• Add your card to Apple Wallet and stop counting on paper
+ChairBack takes 0% of what you charge. Card processing is handled by our payment processor, whose own fees apply. Your client list is yours, and you can export it whenever you like.
 
-ONE APP, BOTH SIDES
-Barbers with their own chair can flip between the dashboard and their rewards card without signing out. Sign in with Apple or Google, or with the email you already use.
-
-BUILT FOR SMALL SHOPS
-ChairBack takes 0% of what you charge. Card processing is handled by our payment processor, whose own fees apply. You keep your client list — it is yours, and you can export it whenever you want.
-
-Just looking? The app has a demo mode for both sides, so you can see the whole thing before you create anything.
+Just looking? There is a demo on both sides, so you can walk through the whole thing first.
 ```
 
 ## Keywords (100 char max, comma-separated, no spaces after commas)
@@ -69,6 +52,8 @@ Just looking? The app has a demo mode for both sides, so you can see the whole t
 barber,barbershop,booking,appointments,salon,scheduling,rewards,loyalty,haircut,clients,calendar
 ```
 
-## What's New in This Version — 1.0.5
+## What's New in This Version — 1.0.7
 
-See `WHATS-NEW-1.0.5.md`.
+See `WHATS-NEW-1.0.7.md` (it also carries the
+App Review Information notes for this version). Older releases keep their own
+file; `WHATS-NEW-1.0.5.md` is the previous one.
