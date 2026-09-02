@@ -1,5 +1,11 @@
-import { addDays, dayGaps, median, loyaltyTierForVisits } from "@chairback/config";
-import { forShop } from "@chairback/db";
+import {
+  addDays,
+  dayGaps,
+  median,
+  loyaltyTierForVisits,
+  parseTierThresholds,
+} from "@chairback/config";
+import { forShop, prisma } from "@chairback/db";
 
 /**
  * Recompute a client's visit cadence from their COMPLETED visits.
@@ -28,7 +34,18 @@ export async function recomputeCadence(
   const lastVisitAt = dates.length ? dates[dates.length - 1]! : null;
   // Lifetime completed-visit count drives the loyalty tier (null below the
   // first threshold, e.g. a brand-new client with 0 completed visits).
-  const loyaltyTier = loyaltyTierForVisits(dates.length);
+  //
+  // 🔴 Read as the OWNER, not through forShop: Shop is default-deny inside a
+  // tenant session, so a scoped read returns null and every client would
+  // silently fall back to the platform defaults.
+  const shop = await prisma.shop.findUnique({
+    where: { id: shopId },
+    select: { tierThresholds: true },
+  });
+  const loyaltyTier = loyaltyTierForVisits(
+    dates.length,
+    parseTierThresholds(shop?.tierThresholds),
+  );
 
   if (dates.length < 2) {
     await db.client.update({

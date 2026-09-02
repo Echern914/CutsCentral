@@ -12,6 +12,8 @@ export interface LoyaltyConfig {
   punchesPerVisit: number;
   /** What each loyalty tier is worth at this shop. Every key optional. */
   tierPerks: Partial<Record<"BRONZE" | "SILVER" | "GOLD", string>>;
+  /** What it takes to reach each tier at this shop (defaults when unset). */
+  tierThresholds?: Record<"BRONZE" | "SILVER" | "GOLD", number>;
   cards: {
     id: string;
     name: string;
@@ -95,7 +97,10 @@ export default async function RewardsPage() {
       {/* 🔴 The feature registry has always pointed "Loyalty status tiers" at
           this page, and this page had nothing about tiers on it - an owner
           searching "gold" landed somewhere that never said the word. */}
-      <TierPerks initial={res.data.tierPerks ?? {}} />
+      <TierPerks
+        initial={res.data.tierPerks ?? {}}
+        initialThresholds={res.data.tierThresholds}
+      />
     </main>
   );
 }

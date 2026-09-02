@@ -251,6 +251,11 @@ model Shop {
   // whatever was last written to it, and the customer rewards page is the
   // worst place to find that out.
   tierPerks           Json?
+  // What it takes to reach each tier HERE ({BRONZE,SILVER,GOLD} -> visits).
+  // Null = the platform defaults (1/6/12). 🔴 Changing it must RECOMPUTE every
+  // Client.loyaltyTier at this shop - the tier is a stored column, so stale
+  // rows would keep showing what the old numbers said.
+  tierThresholds      Json?
   // Base loyalty earn rate: punches per completed visit. Service-specific
   // EarnRule rows override it for matching services.
   punchesPerVisit     Int     @default(1)

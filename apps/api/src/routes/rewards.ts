@@ -11,6 +11,7 @@ import {
   LOYALTY_TIER_KEYS,
   loyaltyTierProgress,
   parseTierPerks,
+  parseTierThresholds,
   tierPerk,
   randomToken,
 } from "@chairback/config";
@@ -276,7 +277,10 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
   // repeated here. This route used to walk LOYALTY_TIER_KEYS itself, which was
   // correct but was also a second copy of a rule that has to agree with the
   // badge, the bar, and whatever reads it next.
-  const progress = loyaltyTierProgress(completedCount);
+  const progress = loyaltyTierProgress(
+    completedCount,
+    parseTierThresholds(client.shop.tierThresholds),
+  );
   const perks = parseTierPerks(client.shop.tierPerks);
   const loyalty = {
     tier: progress.current,

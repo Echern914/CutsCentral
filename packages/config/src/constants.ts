@@ -161,6 +161,82 @@ export type LoyaltyTierKey = keyof typeof LOYALTY_TIERS;
 export const LOYALTY_TIER_KEYS = Object.keys(LOYALTY_TIERS) as LoyaltyTierKey[];
 
 /**
+ * What it takes to reach each tier AT ONE SHOP (Shop.tierThresholds).
+ *
+ * The visit counts above are only the defaults. A shop that sees its regulars
+ * weekly wants Gold at 30; a barber doing high-ticket work wants it at 6 - so
+ * the number is theirs to set, and everything that names a tier has to read
+ * the shop's, never the constant.
+ *
+ * 🔴 Client.loyaltyTier is a STORED column (engines/cadence.ts writes it on
+ * every completed visit, so bulk lists can filter without counting). Changing
+ * these numbers therefore has to RECOMPUTE every client at that shop, or the
+ * badges keep showing what the old thresholds said. See
+ * engines/loyaltyTierRecompute.ts - the write and the recompute ship together
+ * on purpose.
+ */
+export type TierThresholds = Record<LoyaltyTierKey, number>;
+
+export const DEFAULT_TIER_THRESHOLDS: TierThresholds = {
+  BRONZE: LOYALTY_TIERS.BRONZE.minVisits,
+  SILVER: LOYALTY_TIERS.SILVER.minVisits,
+  GOLD: LOYALTY_TIERS.GOLD.minVisits,
+};
+
+/** Nobody earns a tier at zero visits, and no shop needs a four-figure one. */
+export const TIER_MIN_VISITS = 1;
+export const TIER_MAX_VISITS = 999;
+
+export type TierThresholdError =
+  | "not_a_whole_number"
+  | "out_of_range"
+  | "not_increasing";
+
+/**
+ * Validate a proposed set. The API refuses rather than repairs: silently
+ * "fixing" 5/3/9 into something ordered would set thresholds the owner never
+ * chose, and they would find out from a client's badge.
+ */
+export function validateTierThresholds(
+  input: Partial<Record<LoyaltyTierKey, unknown>>,
+): { ok: true; value: TierThresholds } | { ok: false; error: TierThresholdError; tier: LoyaltyTierKey } {
+  const value = {} as TierThresholds;
+  for (const key of LOYALTY_TIER_KEYS) {
+    const raw = input[key];
+    const n = typeof raw === "number" ? raw : Number(raw);
+    if (!Number.isInteger(n)) return { ok: false, error: "not_a_whole_number", tier: key };
+    if (n < TIER_MIN_VISITS || n > TIER_MAX_VISITS) {
+      return { ok: false, error: "out_of_range", tier: key };
+    }
+    value[key] = n;
+  }
+  // Strictly increasing: two tiers sharing a number would make the lower one
+  // unreachable, and a client would jump a badge they never held.
+  for (let i = 1; i < LOYALTY_TIER_KEYS.length; i++) {
+    const prev = LOYALTY_TIER_KEYS[i - 1]!;
+    const key = LOYALTY_TIER_KEYS[i]!;
+    if (value[key] <= value[prev]) return { ok: false, error: "not_increasing", tier: key };
+  }
+  return { ok: true, value };
+}
+
+/**
+ * Read a stored value back. It is a Json column, so its runtime type is
+ * whatever was last written - anything that does not validate falls back to
+ * the defaults rather than throwing on a page load.
+ */
+export function parseTierThresholds(raw: unknown): TierThresholds {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ...DEFAULT_TIER_THRESHOLDS };
+  const checked = validateTierThresholds(raw as Partial<Record<LoyaltyTierKey, unknown>>);
+  return checked.ok ? checked.value : { ...DEFAULT_TIER_THRESHOLDS };
+}
+
+/** True when a shop has moved off the defaults (for "custom" copy in the UI). */
+export function usesCustomTierThresholds(t: TierThresholds): boolean {
+  return LOYALTY_TIER_KEYS.some((k) => t[k] !== DEFAULT_TIER_THRESHOLDS[k]);
+}
+
+/**
  * Curated palette for color-coding services on the barber's calendar. The
  * barber picks one per service (Service.color stores the KEY, not the hex, so
  * the palette can be re-tuned without a data migration). Each `hex` is chosen to
@@ -227,17 +303,20 @@ export interface LoyaltyTierProgress {
   fraction: number;
 }
 
-export function loyaltyTierProgress(completedVisits: number): LoyaltyTierProgress {
+export function loyaltyTierProgress(
+  completedVisits: number,
+  thresholds: TierThresholds = DEFAULT_TIER_THRESHOLDS,
+): LoyaltyTierProgress {
   const visits = Math.max(0, Math.floor(completedVisits));
-  const current = loyaltyTierForVisits(visits);
+  const current = loyaltyTierForVisits(visits, thresholds);
   const currentIndex = current === null ? -1 : LOYALTY_TIER_KEYS.indexOf(current);
   const next = LOYALTY_TIER_KEYS[currentIndex + 1] ?? null;
 
   if (!next) return { current, next: null, visits, visitsToNext: 0, fraction: 1 };
 
   // The floor of the band: 0 before the first tier, else the tier they hold.
-  const from = current === null ? 0 : LOYALTY_TIERS[current].minVisits;
-  const to = LOYALTY_TIERS[next].minVisits;
+  const from = current === null ? 0 : thresholds[current];
+  const to = thresholds[next];
   const span = Math.max(1, to - from);
   const done = Math.min(Math.max(visits - from, 0), span);
   return {
@@ -250,10 +329,13 @@ export function loyaltyTierProgress(completedVisits: number): LoyaltyTierProgres
 }
 
 /** The loyalty tier a client earns at a given lifetime completed-visit count (or null). */
-export function loyaltyTierForVisits(completedVisits: number): LoyaltyTierKey | null {
+export function loyaltyTierForVisits(
+  completedVisits: number,
+  thresholds: TierThresholds = DEFAULT_TIER_THRESHOLDS,
+): LoyaltyTierKey | null {
   let earned: LoyaltyTierKey | null = null;
   for (const key of LOYALTY_TIER_KEYS) {
-    if (completedVisits >= LOYALTY_TIERS[key].minVisits) earned = key;
+    if (completedVisits >= thresholds[key]) earned = key;
   }
   return earned;
 }

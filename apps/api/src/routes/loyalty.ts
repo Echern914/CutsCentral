@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { parseTierPerks } from "@chairback/config";
+import { parseTierPerks, parseTierThresholds } from "@chairback/config";
 import { forShop, prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
@@ -128,6 +128,8 @@ loyaltyRouter.get("/", async (req, res) => {
     // What each loyalty tier is worth here. Parsed rather than passed through:
     // it is a Json column, so its runtime type is whatever was last written.
     tierPerks: parseTierPerks(shop.tierPerks),
+    // What it takes to reach each tier here, parsed for the same reason.
+    tierThresholds: parseTierThresholds(shop.tierThresholds),
     cards: cards.map((c) => ({
       id: c.id,
       name: c.name,

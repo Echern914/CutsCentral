@@ -196,6 +196,9 @@ export async function revokeCardAction(
  */
 export async function saveTierPerksAction(
   perks: Partial<Record<"BRONZE" | "SILVER" | "GOLD", string>>,
+  /** Omitted when the typed numbers are not valid - the API is never sent
+   *  thresholds the page already knows it would refuse. */
+  thresholds?: Record<"BRONZE" | "SILVER" | "GOLD", number>,
 ): Promise<{ saved?: boolean; error?: string }> {
   const res = await apiSend("PATCH", "/api/shops/me", {
     tierPerks: {
@@ -203,6 +206,7 @@ export async function saveTierPerksAction(
       SILVER: (perks.SILVER ?? "").trim(),
       GOLD: (perks.GOLD ?? "").trim(),
     },
+    ...(thresholds ? { tierThresholds: thresholds } : {}),
   });
   revalidatePath("/dashboard/rewards");
   return res.ok ? { saved: true } : { error: "Could not save tier perks." };
