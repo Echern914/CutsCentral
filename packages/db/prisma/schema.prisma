@@ -518,6 +518,19 @@ model Shop {
   // line-up. Null = the shop has not chosen one yet (UI offers $20).
   depositAmountCents Int?
 
+  // Does the price a customer sees already include a tip?
+  //
+  // DISPLAY ONLY. It changes not one cent of what is charged - it answers the
+  // question a customer asks at the moment they are handing money over, which
+  // got sharper the day pay-ahead started taking the full ticket up front:
+  // "do I still tip on top of this?"
+  //
+  // NULL on purpose, and NULL says NOTHING. Every shop that existed before
+  // this column is null, and guessing on their behalf would put a claim about
+  // money in their mouth that they never made. The line appears only once a
+  // barber picks. "included" | "not_included" - CHECK-pinned in SQL, additive.
+  tipPolicy          String?
+
   payDirectEnabled Boolean @default(false)
   payDirectZelle   String? // Zelle email or phone number
   payDirectVenmo   String? // Venmo @handle (without the leading @)

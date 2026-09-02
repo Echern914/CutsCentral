@@ -36,6 +36,15 @@ export interface BookShopData {
     // When on (and the shop has groups), the menu opens with group cards
     // instead of the full flat service list.
     groupsFirst?: boolean;
+    /**
+     * Whether the prices shown already include a tip.
+     *
+     * Optional AND nullable, and both matter: undefined means an older API
+     * that predates the field, null means the barber has deliberately not
+     * said. Both render nothing - the page never guesses a shop’s tipping
+     * policy on their behalf.
+     */
+    tipPolicy?: "included" | "not_included" | null;
     // Fee-free direct-payment handles (display-only); null when the barber hasn't
     // turned it on. Shown on the confirmation so the customer can pay directly.
     payDirect: {

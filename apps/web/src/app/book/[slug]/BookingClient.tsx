@@ -1481,6 +1481,21 @@ export function BookingClient({
     .filter((a) => addOnIds.includes(a.id))
     .reduce((sum, a) => sum + (a.price ?? 0), 0);
   const grandTotal = selectedPrice === null ? null : selectedPrice + addOnsTotal;
+  /**
+   * One short line telling the customer whether the price they are looking at
+   * already has a tip in it.
+   *
+   * null when the barber has not chosen (and when an older API omits the
+   * field entirely) - the page then says nothing at all. Saying "tip not
+   * included" for a shop that never said so would invent a policy on their
+   * behalf, and saying "included" wrongly would cost their staff money.
+   */
+  const tipNote =
+    data.shop.tipPolicy === "included"
+      ? "Tip included"
+      : data.shop.tipPolicy === "not_included"
+        ? "Tip not included"
+        : null;
   const primaryBtn =
     "w-full rounded-xl py-3 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01] disabled:opacity-50";
   // No focus:outline-none — the global :focus-visible ring must stay visible
@@ -1535,6 +1550,23 @@ export function BookingClient({
               We&rsquo;ll hold this time for {payCharge.holdMinutes} minutes.
               Your appointment isn&rsquo;t confirmed until this payment goes
               through.
+            </p>
+          ) : null}
+          {/*
+            The tip question lands hardest HERE - a card is out and a number is
+            on the button. On a DEPOSIT the wording has to be different: the
+            deposit is not the whole ticket, so “tip not included” would read
+            as though the tip were the only thing left to pay.
+          */}
+          {tipNote !== null ? (
+            <p className="mb-4 text-xs text-muted">
+              {payCharge?.isDeposit
+                ? data.shop.tipPolicy === "included"
+                  ? "Tip is included in your total."
+                  : "Tip is not included in your total."
+                : data.shop.tipPolicy === "included"
+                  ? "Tip is included — nothing more to pay at the shop."
+                  : "Tip is not included — you can tip at the shop."}
             </p>
           ) : null}
           <PaymentStep
@@ -2493,6 +2525,15 @@ export function BookingClient({
                   </span>
                   <span className="font-semibold">${grandTotal.toFixed(0)}</span>
                 </div>
+              )}
+              {/*
+                Whether that number already has a tip in it. Sits under the
+                total rather than beside every service line: it is one fact
+                about the shop, and repeating it on each row turns an answer
+                into noise. Renders nothing when the barber has not said.
+              */}
+              {tipNote !== null && grandTotal !== null && (
+                <p className="text-xs text-muted">{tipNote}</p>
               )}
             </div>
           )}

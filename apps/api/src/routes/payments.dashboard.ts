@@ -37,6 +37,7 @@ paymentsDashboardRouter.get("/status", async (req, res) => {
       cancelWindowHours: true,
       cancelFeeBps: true,
       depositAmountCents: true,
+      tipPolicy: true,
       payDirectEnabled: true,
       payDirectZelle: true,
       payDirectVenmo: true,
@@ -71,6 +72,7 @@ paymentsDashboardRouter.get("/status", async (req, res) => {
     cancelWindowHours: shop.cancelWindowHours,
     cancelFeeBps: shop.cancelFeeBps,
     depositAmountCents: shop.depositAmountCents,
+    tipPolicy: shop.tipPolicy,
     // Fee-free pay-direct (Zelle/Venmo/Cash App) — display-only, no Stripe needed.
     payDirect: {
       enabled: shop.payDirectEnabled,
@@ -115,6 +117,11 @@ const settingsSchema = z
     // $0 deposit" can't be saved as a silently-free booking; ceiling of $1,000
     // is far past any real haircut and bounds a fat-finger.
     depositAmountCents: z.number().int().min(100).max(100_000).optional(),
+    // Whether the shown price already includes a tip. DISPLAY ONLY - it moves
+    // no money. null CLEARS it back to saying nothing, which is why this is
+    // nullish rather than optional: a barber must be able to take the claim
+    // back down as easily as they put it up.
+    tipPolicy: z.enum(["included", "not_included"]).nullish(),
   })
   .strict();
 
@@ -153,6 +160,7 @@ paymentsDashboardRouter.patch("/settings", async (req, res) => {
       ...(d.paymentsMode !== undefined ? { paymentsMode: d.paymentsMode } : {}),
       ...(d.cancelWindowHours !== undefined ? { cancelWindowHours: d.cancelWindowHours } : {}),
       ...(d.cancelFeeBps !== undefined ? { cancelFeeBps: d.cancelFeeBps } : {}),
+      ...(d.tipPolicy !== undefined ? { tipPolicy: d.tipPolicy ?? null } : {}),
       ...(d.depositAmountCents !== undefined
         ? { depositAmountCents: d.depositAmountCents }
         : {}),
