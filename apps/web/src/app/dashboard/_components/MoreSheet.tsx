@@ -3,13 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { createPortal } from "react-dom";
-import {
-  FEATURE_CATEGORIES,
-  resolveHref,
-  visibleFeatures,
-  type FeatureIndexEntry,
-  type SeatRole,
-} from "@chairback/config/features";
+import { FEATURE_CATEGORIES, resolveHref, visibleFeatures, type FeatureIndexEntry, type SeatRole, flagsOffFor } from "@chairback/config/features";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { lockedTier, type FeatureLocks } from "@/lib/featureLocks";
 import { PlanBadge } from "./PlanBadge";
@@ -30,6 +24,7 @@ export function MoreSheet({
   onClose,
   isAdmin = false,
   rewardsEnabled = true,
+  affiliateProgramEnabled = false,
   role,
   locks,
 }: {
@@ -37,6 +32,7 @@ export function MoreSheet({
   onClose: () => void;
   isAdmin?: boolean;
   rewardsEnabled?: boolean;
+  affiliateProgramEnabled?: boolean;
   /** The seat browsing. Manager-only entries drop out for an employee. */
   role?: SeatRole;
   /** Premium lock flags — tier-tagged rows get a diamond when locked. */
@@ -64,7 +60,7 @@ export function MoreSheet({
   const visible = visibleFeatures({
     role,
     inApp: inApp === true,
-    flagsOff: rewardsEnabled ? [] : ["rewardsEnabled"],
+    flagsOff: flagsOffFor({ rewardsEnabled, affiliateProgramEnabled }),
   });
 
   // Esc closes; focus moves into the sheet on open and back to the page after.

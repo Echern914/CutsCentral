@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { flagsOffFor } from "@chairback/config/features";
 import { useRouter } from "next/navigation";
 import type { SeatRole } from "@chairback/config/features";
 import {
@@ -55,9 +56,11 @@ const EXAMPLES = [
 export function AskField({
   role,
   rewardsEnabled,
+  affiliateProgramEnabled,
 }: {
   role: SeatRole;
   rewardsEnabled: boolean;
+  affiliateProgramEnabled: boolean;
 }) {
   const router = useRouter();
   const inApp = useIsNativeApp();
@@ -71,10 +74,10 @@ export function AskField({
       seat: {
         role,
         inApp: inApp === true,
-        flagsOff: rewardsEnabled ? [] : (["rewardsEnabled"] as const),
+        flagsOff: flagsOffFor({ rewardsEnabled, affiliateProgramEnabled }),
       },
     }),
-    [role, inApp, rewardsEnabled],
+    [role, inApp, rewardsEnabled, affiliateProgramEnabled],
   );
 
   // A tapped chip resolves BY ID rather than by re-typing its question: the

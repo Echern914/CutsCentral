@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { resolveHref } from "@chairback/config/features";
+import { resolveHref, flagsOffFor } from "@chairback/config/features";
 import { Card } from "@/components/ui/Card";
 
 /**
@@ -12,10 +12,12 @@ export function GettingStarted({
   connected,
   hasClients,
   rewardsEnabled = true,
+  affiliateProgramEnabled = false,
 }: {
   connected: boolean;
   hasClients: boolean;
   rewardsEnabled?: boolean;
+  affiliateProgramEnabled?: boolean;
 }) {
   if (hasClients) return null;
 
@@ -24,7 +26,7 @@ export function GettingStarted({
   const connectHref = resolveHref("onboarding-connect", { role: "OWNER" });
   const clientsHref = resolveHref("clients");
   const rewardsHref = resolveHref("punch-cards", {
-    flagsOff: rewardsEnabled ? [] : ["rewardsEnabled"],
+    flagsOff: flagsOffFor({ rewardsEnabled, affiliateProgramEnabled }),
   });
 
   const steps = [

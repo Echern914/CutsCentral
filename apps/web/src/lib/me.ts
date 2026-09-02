@@ -32,6 +32,11 @@ export interface Me {
   /** Whether the ACTIVE shop has rewards on - gates every rewards surface. */
   rewardsEnabled: boolean;
   /**
+   * The affiliate program's platform flag. Optional so a web deploy ahead of
+   * the API treats it as OFF and never shows a tab whose page would 404.
+   */
+  affiliateProgramEnabled?: boolean;
+  /**
    * The active shop's singular visit-noun ("cut"/"twist"), already resolved
    * custom-first by the API. Optional so a web deploy ahead of the API falls
    * back to the default copy.

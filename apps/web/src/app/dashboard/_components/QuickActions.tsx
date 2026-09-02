@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { resolveHref } from "@chairback/config/features";
+import { resolveHref, flagsOffFor } from "@chairback/config/features";
 import { useToast } from "@/components/ui/Toast";
 import { ShareBookingDialog } from "./ShareBookingDialog";
 
@@ -18,10 +18,12 @@ import { ShareBookingDialog } from "./ShareBookingDialog";
  */
 export function QuickActions({
   rewardsEnabled,
+  affiliateProgramEnabled,
   bookUrl,
   shopName,
 }: {
   rewardsEnabled: boolean;
+  affiliateProgramEnabled: boolean;
   /** Absolute public booking URL; null until the shop picks a slug. */
   bookUrl: string | null;
   shopName: string;
@@ -36,8 +38,7 @@ export function QuickActions({
   // second copy of the registry's answer, and a silent one - it would paper
   // over exactly the drift this change exists to remove. A tile the registry
   // withholds is simply not drawn.
-  const flagsOff = rewardsEnabled ? [] : (["rewardsEnabled"] as const);
-  const ctx = { flagsOff: [...flagsOff] };
+  const ctx = { flagsOff: flagsOffFor({ rewardsEnabled, affiliateProgramEnabled }) };
   const bookHref = resolveHref("appointments", ctx);
   const clientsHref = resolveHref("clients", ctx);
   const siteHref = resolveHref("mini-site", ctx);

@@ -50,6 +50,8 @@ export default async function DashboardLayout({
   // Rewards-off shops get no Rewards nav pill (default true so a transient /me
   // failure never hides a paying shop's tab).
   const rewardsEnabled = me.data?.rewardsEnabled ?? true;
+  // OFF when unknown - see flagsOffFor in the registry for why the defaults differ.
+  const affiliateProgramEnabled = me.data?.affiliateProgramEnabled ?? false;
   // An employee seat: no nav (their app is one screen), and no feature search
   // (every result is a manager page that would 403). Defaults to false so a
   // transient /me failure never strips an owner's chrome.
@@ -88,13 +90,13 @@ export default async function DashboardLayout({
               {APP_NAME}
             </span>
           </Link>
-          <DashboardNavInline isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} barberOnly={barberOnly} locks={locks} />
+          <DashboardNavInline isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} affiliateProgramEnabled={affiliateProgramEnabled} barberOnly={barberOnly} locks={locks} />
           <div className="flex shrink-0 items-center gap-2">
             {!barberOnly && (
               <FeatureSearch
                 locks={locks}
                 role={barberOnly ? "BARBER" : "MANAGER"}
-                rewardsEnabled={rewardsEnabled}
+                rewardsEnabled={rewardsEnabled} affiliateProgramEnabled={affiliateProgramEnabled}
               />
             )}
             {/* Shown for EVERY seat, unlike search: readiness answers for an
@@ -164,7 +166,7 @@ export default async function DashboardLayout({
             it with useVocab(). NEUTRAL for a shop that has not chosen a type. */}
         <VocabProvider value={vocab}>{children}</VocabProvider>
       </div>
-      <DashboardTabBar isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} barberOnly={barberOnly} locks={locks} />
+      <DashboardTabBar isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} affiliateProgramEnabled={affiliateProgramEnabled} barberOnly={barberOnly} locks={locks} />
     </div>
   );
 }

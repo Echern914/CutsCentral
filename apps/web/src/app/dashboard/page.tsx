@@ -58,6 +58,8 @@ export default async function DashboardPage({
   // with pieces missing. getMe() is memoized, so this costs no extra round trip
   // for owners.
   const who = await getMe();
+  // OFF when unknown: a web deploy ahead of the API must never point at a dark tab.
+  const affiliateProgramEnabled = who.data?.affiliateProgramEnabled ?? false;
   if (who.status === 401) redirect("/login");
   if (who.data?.shopRole === "BARBER") {
     // Generous UTC window; the API narrows to the shop's own calendar day.
@@ -184,6 +186,7 @@ export default async function DashboardPage({
         />
         <QuickActions
           rewardsEnabled={shop.rewardsEnabled}
+        affiliateProgramEnabled={affiliateProgramEnabled}
           bookUrl={shop.slug ? `${appBase}/book/${shop.slug}` : null}
           shopName={shop.name}
         />
@@ -195,6 +198,7 @@ export default async function DashboardPage({
         connected={shop.connected}
         hasClients={(sync.data?.clientCount ?? 0) > 0}
         rewardsEnabled={shop.rewardsEnabled}
+        affiliateProgramEnabled={affiliateProgramEnabled}
       />
 
       <ConsentSetup needConsentCount={sync.data?.clientsNeedingConsent ?? 0} />
