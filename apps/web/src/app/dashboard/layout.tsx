@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { SeatRole } from "@chairback/config/features";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { APP_NAME } from "@chairback/config/constants";
@@ -56,6 +57,10 @@ export default async function DashboardLayout({
   // (every result is a manager page that would 403). Defaults to false so a
   // transient /me failure never strips an owner's chrome.
   const barberOnly = me.data?.shopRole === "BARBER";
+  // The seat itself, for the registry. `barberOnly` above answers a LAYOUT
+  // question (how many tabs); this answers an ACCESS one, and conflating them
+  // is what hid every owner-only destination from owners.
+  const seatRole: SeatRole = (me.data?.shopRole ?? "OWNER") as SeatRole;
   // Multi-shop managers get a shop switcher; a normal single-shop barber never
   // sees it (list has one entry).
   const shops = me.data?.shops ?? [];
@@ -90,12 +95,12 @@ export default async function DashboardLayout({
               {APP_NAME}
             </span>
           </Link>
-          <DashboardNavInline isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} affiliateProgramEnabled={affiliateProgramEnabled} barberOnly={barberOnly} locks={locks} />
+          <DashboardNavInline isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} affiliateProgramEnabled={affiliateProgramEnabled} barberOnly={barberOnly} role={seatRole} locks={locks} />
           <div className="flex shrink-0 items-center gap-2">
             {!barberOnly && (
               <FeatureSearch
                 locks={locks}
-                role={barberOnly ? "BARBER" : "MANAGER"}
+                role={seatRole}
                 rewardsEnabled={rewardsEnabled} affiliateProgramEnabled={affiliateProgramEnabled}
               />
             )}
@@ -166,7 +171,7 @@ export default async function DashboardLayout({
             it with useVocab(). NEUTRAL for a shop that has not chosen a type. */}
         <VocabProvider value={vocab}>{children}</VocabProvider>
       </div>
-      <DashboardTabBar isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} affiliateProgramEnabled={affiliateProgramEnabled} barberOnly={barberOnly} locks={locks} />
+      <DashboardTabBar isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} affiliateProgramEnabled={affiliateProgramEnabled} barberOnly={barberOnly} role={seatRole} locks={locks} />
     </div>
   );
 }
