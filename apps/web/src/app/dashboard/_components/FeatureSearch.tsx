@@ -3,11 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
-import {
-  visibleFeatures,
-  type FeatureIndexEntry,
-  type SeatRole,
-} from "@chairback/config/features";
+import { visibleFeatures, type FeatureIndexEntry, type SeatRole, flagsOffFor } from "@chairback/config/features";
 import { searchFeatures } from "@chairback/config/helpMatch";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { lockedTier, type FeatureLocks } from "@/lib/featureLocks";
@@ -28,11 +24,13 @@ export function FeatureSearch({
   locks,
   role,
   rewardsEnabled = true,
+  affiliateProgramEnabled = false,
 }: {
   locks?: FeatureLocks;
   /** The seat browsing. Manager-only entries drop out for an employee. */
   role?: SeatRole;
   rewardsEnabled?: boolean;
+  affiliateProgramEnabled?: boolean;
 } = {}) {
   const router = useRouter();
   // The registry decides what this seat can reach — including the 3.1.1 rule
@@ -47,9 +45,9 @@ export function FeatureSearch({
       visibleFeatures({
         role,
         inApp: inApp === true,
-        flagsOff: rewardsEnabled ? [] : ["rewardsEnabled"],
+        flagsOff: flagsOffFor({ rewardsEnabled, affiliateProgramEnabled }),
       }),
-    [inApp, role, rewardsEnabled],
+    [inApp, role, rewardsEnabled, affiliateProgramEnabled],
   );
   const [open, setOpen] = useState(false);
   // Portals need a DOM to target, which SSR has none of — same mounted gate the

@@ -71,7 +71,9 @@ affiliateDashboardRouter.use(
 
 affiliateDashboardRouter.get("/status", async (req, res) => {
   const status = await getAffiliateStatus(req.shop!.id);
-  res.json(status);
+  // Whether the sign-up door is open, so the page can say "closed right now"
+  // instead of rendering a form that would 404 on submit.
+  res.json({ ...status, applicationsOpen: apiEnv().AFFILIATE_PUBLIC_APPLICATIONS_ENABLED });
 });
 
 /**

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { getVocabulary } from "@/lib/vocab";
-import { resolveHref, type SeatRole } from "@chairback/config/features";
+import { resolveHref, type SeatRole, flagsOffFor } from "@chairback/config/features";
 import { getMe } from "@/lib/me";
 import { featureLocks, getBillingSummary } from "@/lib/billing";
 import { Card, CardHeader } from "@/components/ui/Card";
@@ -43,6 +43,7 @@ export default async function AssistantPage() {
   const me = await getMe();
   const role: SeatRole = (me.data?.shopRole ?? "OWNER") as SeatRole;
   const rewardsEnabled = me.data?.rewardsEnabled ?? true;
+  const affiliateProgramEnabled = me.data?.affiliateProgramEnabled ?? false;
   const barberOnly = role === "BARBER";
   // Employee seats 403 on /api/billing, so they never ask (see lib/billing).
   const locks = barberOnly ? undefined : featureLocks(await getBillingSummary());
@@ -80,7 +81,7 @@ export default async function AssistantPage() {
 
       </header>
 
-      <AskField role={role} rewardsEnabled={rewardsEnabled} />
+      <AskField role={role} rewardsEnabled={rewardsEnabled} affiliateProgramEnabled={affiliateProgramEnabled} />
 
       {step && (
         <Card className="mb-6">
@@ -129,7 +130,7 @@ export default async function AssistantPage() {
         )}
       </Card>
 
-      <QuickActions role={role} rewardsEnabled={rewardsEnabled} premiumAiLocked={locks?.premiumAi ?? false} />
+      <QuickActions role={role} rewardsEnabled={rewardsEnabled} affiliateProgramEnabled={affiliateProgramEnabled} premiumAiLocked={locks?.premiumAi ?? false} />
     </main>
   );
 }
@@ -230,15 +231,17 @@ function ProblemRow({
 function QuickActions({
   role,
   rewardsEnabled,
+  affiliateProgramEnabled,
   premiumAiLocked,
 }: {
   role: SeatRole;
   rewardsEnabled: boolean;
+  affiliateProgramEnabled: boolean;
   premiumAiLocked: boolean;
 }) {
   const ctx = {
     role,
-    flagsOff: rewardsEnabled ? [] : (["rewardsEnabled"] as const),
+    flagsOff: flagsOffFor({ rewardsEnabled, affiliateProgramEnabled }),
     // A locked premium feature still LISTS (its page explains the lock); only
     // the receptionist inbox is hidden when the add-on was never bought, since
     // for that shop it is a permanently empty room.

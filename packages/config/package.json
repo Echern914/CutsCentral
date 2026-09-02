@@ -23,6 +23,7 @@
     "./shopHandle": "./src/shopHandle.ts",
     "./shopPolicy": "./src/shopPolicy.ts",
     "./tierPerks": "./src/tierPerks.ts",
+    "./affiliateProgram": "./src/affiliateProgram.ts",
     "./supportCapabilities": "./src/supportCapabilities.ts",
     "./supportEngine": "./src/supportEngine.ts"
   },

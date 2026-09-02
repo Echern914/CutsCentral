@@ -265,6 +265,9 @@ authRouter.get("/me", requireUser, async (req, res) => {
     // this a barber's chrome had no shop name to render at all.
     activeShopName: activeShop?.name ?? null,
     rewardsEnabled: activeShopRewards?.rewardsEnabled ?? false,
+    // The affiliate program's master flag, so the dashboard chrome can hide
+    // the Affiliates tab while the program is dark (its page would 404).
+    affiliateProgramEnabled: apiEnv().AFFILIATE_PROGRAM_ENABLED,
     // The ACTIVE shop's singular visit-noun ("cut"/"twist"), custom-first with
     // the industry fallback resolved HERE so the web never re-derives it.
     serviceNoun: activeShopRewards ? serviceNounForShop(activeShopRewards) : "visit",

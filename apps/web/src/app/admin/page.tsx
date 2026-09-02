@@ -7,6 +7,14 @@ import { LocalDate } from "@/components/ui/LocalDate";
 import { CompToggle } from "./CompToggle";
 import { AnalyticsSection, type Analytics } from "./Analytics";
 import { PreflightSection, type Preflight } from "./Preflight";
+import {
+  AffiliatesSection,
+  type AdminAccount,
+  type AdminApplication,
+  type AdminFlags,
+  type AdminLiability,
+  type AdminReward,
+} from "./AffiliatesSection";
 
 export const metadata = { title: `${APP_NAME} Admin` };
 
@@ -47,17 +55,26 @@ interface AdminShop {
  * This page never trusts a client flag - the API session check is the gate.
  */
 export default async function AdminPage() {
-  const [metricsRes, shopsRes, analyticsRes, preflightRes] = await Promise.all([
-    apiGet<Metrics>("/api/admin-portal/metrics"),
-    apiGet<{ shops: AdminShop[] }>("/api/admin-portal/shops"),
-    apiGet<Analytics>("/api/admin-portal/analytics?days=30"),
-    apiGet<Preflight>("/api/admin-portal/preflight"),
-  ]);
+  const [metricsRes, shopsRes, analyticsRes, preflightRes, affApps, affAccounts, affRewards, affLiability, affFlags] =
+    await Promise.all([
+      apiGet<Metrics>("/api/admin-portal/metrics"),
+      apiGet<{ shops: AdminShop[] }>("/api/admin-portal/shops"),
+      apiGet<Analytics>("/api/admin-portal/analytics?days=30"),
+      apiGet<Preflight>("/api/admin-portal/preflight"),
+      // The affiliate program answers 404 while its flag is off; the whole
+      // section then stays out of the page rather than rendering empty.
+      apiGet<{ applications: AdminApplication[] }>("/api/admin-portal/affiliate/applications?status=PENDING"),
+      apiGet<{ accounts: AdminAccount[] }>("/api/admin-portal/affiliate/accounts"),
+      apiGet<{ rewards: AdminReward[] }>("/api/admin-portal/affiliate/rewards?status=REVIEW_REQUIRED"),
+      apiGet<AdminLiability>("/api/admin-portal/affiliate/liability"),
+      apiGet<AdminFlags>("/api/admin-portal/affiliate/flags"),
+    ]);
   if (metricsRes.status === 404 || metricsRes.status === 401) redirect("/dashboard");
   const m = metricsRes.data;
   const shops = shopsRes.data?.shops ?? [];
   const analytics = analyticsRes.data;
   const preflight = preflightRes.data;
+  const affiliateProgramLive = affFlags.ok && Boolean(affFlags.data);
 
   return (
     <div className="min-h-dvh">
@@ -97,6 +114,16 @@ export default async function AdminPage() {
         {preflight && <PreflightSection p={preflight} />}
 
         {analytics && <AnalyticsSection a={analytics} />}
+
+        {affiliateProgramLive && (
+          <AffiliatesSection
+            applications={affApps.data?.applications ?? []}
+            accounts={affAccounts.data?.accounts ?? []}
+            rewards={affRewards.data?.rewards ?? []}
+            liability={affLiability.data ?? null}
+            flags={affFlags.data ?? null}
+          />
+        )}
 
         <h2 className="mb-3 mt-10 font-display text-lg">All shops</h2>
         <Card className="overflow-hidden p-0">

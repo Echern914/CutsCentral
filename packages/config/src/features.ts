@@ -89,7 +89,26 @@ export const FEATURE_CATEGORIES: FeatureCategory[] = [
 export type SeatRole = "OWNER" | "MANAGER" | "BARBER";
 
 /** Feature flags a shop can switch off, which then hide whole destinations. */
-export type FeatureFlag = "rewardsEnabled";
+export type FeatureFlag = "rewardsEnabled" | "affiliateProgramEnabled";
+
+/**
+ * The flags a surface should treat as OFF, from the booleans /me carries.
+ *
+ * ONE place, so a new flag reaches every nav, search and assistant surface by
+ * editing this and nothing else. The defaults differ on purpose: rewards is
+ * ON when unknown (a transient /me failure must never hide a paying shop's
+ * tab), the affiliate program is OFF when unknown (a web deploy ahead of the
+ * API must never show a tab whose page would 404).
+ */
+export function flagsOffFor(flags: {
+  rewardsEnabled?: boolean;
+  affiliateProgramEnabled?: boolean;
+}): FeatureFlag[] {
+  const off: FeatureFlag[] = [];
+  if (flags.rewardsEnabled === false) off.push("rewardsEnabled");
+  if (flags.affiliateProgramEnabled !== true) off.push("affiliateProgramEnabled");
+  return off;
+}
 
 export interface FeatureIndexEntry {
   /** Stable id. This is the ONLY thing a caller outside the product may name. */
@@ -684,6 +703,28 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     // about the barber's own plan, not something their clients ever see.
     category: "account",
     minRole: "OWNER",
+  },
+  {
+    id: "affiliates",
+    name: "Affiliates",
+    synonyms: [
+      "affiliate program",
+      "refer and earn",
+      "months off",
+      "affiliate link",
+      "partner",
+      "promote",
+      "bring a business",
+    ],
+    description: "Bring businesses onto ChairBack and get months off your plan",
+    href: "/dashboard/affiliates",
+    // Same shelf as referrals: the owner's own plan, never a client-facing thing.
+    category: "account",
+    minRole: "OWNER",
+    // A platform flag, not a shop switch: while the program is dark the page
+    // 404s, so the entry must not exist anywhere - nav, search, assistant.
+    flag: "affiliateProgramEnabled",
+    inDemo: false,
   },
   {
     id: "live-demo",

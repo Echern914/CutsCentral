@@ -110,6 +110,7 @@ function isActive(pathname: string, href: string): boolean {
 interface NavProps {
   isAdmin?: boolean;
   rewardsEnabled?: boolean;
+  affiliateProgramEnabled?: boolean;
   /**
    * True for an employee seat. They used to get NO nav at all, because Home was
    * their only reachable tab. Assistant is the second one — their personal
@@ -128,6 +129,7 @@ interface NavProps {
 export function DashboardTabBar({
   isAdmin = false,
   rewardsEnabled = true,
+  affiliateProgramEnabled = false,
   barberOnly = false,
   locks,
 }: NavProps) {
@@ -170,6 +172,7 @@ export function DashboardTabBar({
         onClose={() => setMoreOpen(false)}
         isAdmin={isAdmin}
         rewardsEnabled={rewardsEnabled}
+        affiliateProgramEnabled={affiliateProgramEnabled}
         role={role}
         locks={locks}
       />
@@ -181,6 +184,7 @@ export function DashboardTabBar({
 export function DashboardNavInline({
   isAdmin = false,
   rewardsEnabled = true,
+  affiliateProgramEnabled = false,
   barberOnly = false,
   locks,
 }: NavProps) {
@@ -244,6 +248,7 @@ export function DashboardNavInline({
         onClose={() => setMoreOpen(false)}
         isAdmin={isAdmin}
         rewardsEnabled={rewardsEnabled}
+        affiliateProgramEnabled={affiliateProgramEnabled}
         role={role}
         locks={locks}
       />
