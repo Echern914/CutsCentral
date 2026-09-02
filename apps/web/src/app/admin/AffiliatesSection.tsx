@@ -57,7 +57,8 @@ export interface AdminAccount {
   code: string;
   status: "ACTIVE" | "SUSPENDED";
   suspensionReason: string | null;
-  promotionStyles: string[];
+  /** Optional: a web deploy ahead of the API must not 500 the whole page. */
+  promotionStyles?: string[];
   createdAt: string;
   shopName: string;
 }
@@ -438,9 +439,9 @@ function AccountRow({
       <td className="px-4 py-3 text-offwhite">{acc.shopName}</td>
       <td className="px-4 py-3 font-mono text-xs text-muted">{acc.code}</td>
       <td className="px-4 py-3 text-xs text-muted">
-        {acc.promotionStyles.length === 0
+        {(acc.promotionStyles ?? []).length === 0
           ? "not chosen yet"
-          : acc.promotionStyles
+          : (acc.promotionStyles ?? [])
               .map((s) => AFFILIATE_PROMOTION_STYLE_LABELS[s as AffiliatePromotionStyle] ?? s)
               .join(", ")}
       </td>
