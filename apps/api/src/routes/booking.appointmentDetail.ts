@@ -5,6 +5,7 @@ import {
   appointmentPaymentSnapshot,
   type AppointmentPaymentSnapshot,
 } from "../engines/appointmentPayment.js";
+import { appointmentOwnedByPlatform } from "../engines/visitOrigin.js";
 
 /**
  * ONE BOOKING, IN FULL — the read behind the appointment sheet.
@@ -402,6 +403,9 @@ export function registerAppointmentDetail(router: Router): void {
         addOns: true,
         checkInStatus: true,
         visitId: true,
+        // The Visit's source namespace is what decides ownership (see
+        // engines/visitOrigin.ts) - `visitId` alone never can.
+        visit: { select: { acuityAppointmentId: true } },
         paidAmount: true,
         paidMethod: true,
         paidAt: true,
@@ -431,6 +435,7 @@ export function registerAppointmentDetail(router: Router): void {
       addOns: Prisma.JsonValue | null;
       checkInStatus: string | null;
       visitId: string | null;
+      visit: { acuityAppointmentId: string } | null;
       paidAmount: Prisma.Decimal | null;
       paidMethod: string | null;
       paidAt: Date | null;
@@ -460,10 +465,16 @@ export function registerAppointmentDetail(router: Router): void {
       },
     });
 
-    // A native row already promoted to a Visit is Acuity's from then on — the
-    // same predicate the edit endpoint refuses on, so the sheet's read-only
-    // state and the server's refusal can never disagree.
-    const external = appt.visitId !== null;
+    // 🔴 OWNERSHIP IS NOT "HAS A VISIT". Every COMPLETED native booking is
+    // linked to a Visit by the completion promoter (its loyalty record), so
+    // `visitId !== null` used to turn every finished ChairBack booking into
+    // "Managed in Acuity / No ChairBack payment recorded" — including one whose
+    // $10 deposit was collected and sitting in the barber's Stripe balance
+    // (FadesByMikey, 2026-09-02). A booking is another platform's only when
+    // its Visit came FROM that platform. Same predicate the edit endpoint
+    // refuses on, so the sheet's read-only state and the server's refusal can
+    // never disagree.
+    const external = appointmentOwnedByPlatform(appt);
     const price = appt.priceAtBooking == null ? null : Number(appt.priceAtBooking);
     const status = APPT_STATUS[appt.status] ?? "upcoming";
     const editable = !external && (appt.status === "BOOKED" || appt.status === "PENDING");

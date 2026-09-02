@@ -11,6 +11,7 @@ import request from "supertest";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
+import { promoteFulfilledAppointments } from "../engines/appointmentPromotion.js";
 
 /**
  * The read behind the appointment sheet. These tests are about what the
@@ -332,8 +333,21 @@ describe("an Acuity-synced booking", () => {
     await prisma.acuityConnection.deleteMany({ where: { shopId } });
   });
 
-  it("a NATIVE row already promoted to a Visit is external too", async () => {
-    const v = await makeVisit();
+  it("a NATIVE row linked to an ACUITY-ingested Visit is external", async () => {
+    // Acuity ids are bare digits - the one namespace that means "Acuity's".
+    const v = await prisma.visit.create({
+      data: {
+        shopId,
+        clientId,
+        acuityAppointmentId: "1764227908",
+        status: "SCHEDULED",
+        scheduledAt: slotAt(18),
+        endAt: new Date(slotAt(18).getTime() + 30 * 60_000),
+        price: 35,
+        serviceName: "Beard trim",
+      },
+      select: { id: true },
+    });
     const a = await makeAppt({
       visitId: v.id,
       paidAmount: 40,
@@ -343,10 +357,150 @@ describe("an Acuity-synced booking", () => {
     const res = await getAppt(a.id);
     expect(res.body.origin).toBe("external");
     expect(res.body.payment.state).toBe("external");
-    // Even a local chair-checkout row discloses nothing once Acuity owns it.
+    // A chair figure on a booking Acuity owns is not something we can vouch for.
     expect(res.body.payment.inPersonCents).toBe(0);
     expect(res.body.editable).toBe(false);
     expect(res.body.readOnlyReason).toBe("external");
+  });
+});
+
+/**
+ * 🔴 THE FADESBYMIKEY REGRESSION (2026-09-02). A customer paid a $10 deposit
+ * through ChairBack; the cut happened; the completion promoter linked the
+ * booking to its loyalty Visit - and from that moment the sheet said
+ * "Managed in Acuity" and "No ChairBack payment recorded". The barber read it
+ * as the money being gone. It was in his Stripe balance the whole time.
+ *
+ * These pin BOTH layers of the fix: ownership no longer follows `visitId`, and
+ * the payment snapshot discloses a Payment row no matter what.
+ */
+describe("a COMPLETED native booking keeps its deposit on the sheet", () => {
+  it("stays ChairBack's after the REAL completion promoter links its loyalty Visit", async () => {
+    // Book it in the past so the promoter (the actual production job) picks it up.
+    const startsAt = new Date(Date.now() - 2 * 60 * 60_000);
+    const a = await prisma.appointment.create({
+      data: {
+        shopId,
+        staffId,
+        serviceId,
+        clientId,
+        firstName: "Gerardo",
+        lastName: "Vizcaino",
+        status: "BOOKED",
+        startsAt,
+        endsAt: new Date(startsAt.getTime() + 30 * 60_000),
+        priceAtBooking: 35,
+        manageToken: randomToken(),
+      },
+      select: { id: true },
+    });
+    await prisma.payment.create({
+      data: {
+        shopId,
+        appointmentId: a.id,
+        stripePaymentIntentId: `pi_${randomToken(10)}`,
+        stripeConnectAccountId: "acct_test",
+        mode: "ahead",
+        amount: 1000,
+        capturedAmount: 1000,
+        status: "succeeded",
+      },
+    });
+
+    await promoteFulfilledAppointments(new Date());
+    const promoted = await prisma.appointment.findUnique({
+      where: { id: a.id },
+      select: { status: true, visitId: true, visit: { select: { acuityAppointmentId: true } } },
+    });
+    // Sanity: the promoter really did what production does.
+    expect(promoted?.status).toBe("COMPLETED");
+    expect(promoted?.visitId).not.toBeNull();
+    expect(promoted?.visit?.acuityAppointmentId).toBe(`booking:${a.id}`);
+
+    const res = await getAppt(a.id);
+    expect(res.status).toBe(200);
+    expect(res.body.origin).toBe("chairback");
+    expect(res.body.originLabel).toBe("ChairBack");
+    expect(res.body.status).toBe("completed");
+    // The deposit is still on the sheet, with the balance the chair still owes.
+    expect(res.body.payment.state).toBe("deposit");
+    expect(res.body.payment.onlineCents).toBe(1000);
+    expect(res.body.payment.collectedCents).toBe(1000);
+    expect(res.body.payment.remainingCents).toBe(2500);
+    // Read-only because it is DONE, not because someone else owns it - so the
+    // barber still gets "Start checkout" for the balance.
+    expect(res.body.editable).toBe(false);
+    expect(res.body.readOnlyReason).toBe("not_editable");
+    expect(res.body.externalManageUrl).toBeNull();
+  });
+
+  it("holds even when the shop ALSO has an Acuity connection on file", async () => {
+    // FadesByMikey imports Acuity history; the label must not leak from that.
+    await prisma.acuityConnection.create({
+      data: { shopId, acuityAccountId: randomToken(6), accessToken: "tok" },
+    });
+    try {
+      const v = await prisma.visit.create({
+        data: {
+          shopId,
+          clientId,
+          acuityAppointmentId: "booking:placeholder",
+          status: "COMPLETED",
+          scheduledAt: slotAt(15, -1),
+          endAt: new Date(slotAt(15, -1).getTime() + 30 * 60_000),
+          price: 35,
+          serviceName: "Haircut",
+        },
+        select: { id: true },
+      });
+      const a = await makeAppt({ status: "COMPLETED", visitId: v.id });
+      // Link the Visit to the appointment the way the promoter names it.
+      await prisma.visit.update({
+        where: { id: v.id },
+        data: { acuityAppointmentId: `booking:${a.id}` },
+      });
+      await prisma.payment.create({
+        data: {
+          shopId,
+          appointmentId: a.id,
+          stripePaymentIntentId: `pi_${randomToken(10)}`,
+          stripeConnectAccountId: "acct_test",
+          mode: "ahead",
+          amount: 1000,
+          status: "succeeded",
+        },
+      });
+      const res = await getAppt(a.id);
+      expect(res.body.origin).toBe("chairback");
+      expect(res.body.originLabel).toBe("ChairBack");
+      expect(res.body.payment.state).toBe("deposit");
+      expect(res.body.payment.onlineCents).toBe(1000);
+      expect(res.body.readOnlyReason).toBe("not_editable");
+    } finally {
+      await prisma.acuityConnection.deleteMany({ where: { shopId } });
+    }
+  });
+
+  it("the edit endpoint refuses a finished booking for its STATUS, not as Acuity's", async () => {
+    const v = await prisma.visit.create({
+      data: {
+        shopId,
+        clientId,
+        acuityAppointmentId: "booking:edit-check",
+        status: "COMPLETED",
+        scheduledAt: slotAt(15, -1),
+        endAt: new Date(slotAt(15, -1).getTime() + 30 * 60_000),
+        price: 40,
+        serviceName: "Skin fade",
+      },
+      select: { id: true },
+    });
+    const a = await makeAppt({ status: "COMPLETED", visitId: v.id });
+    const res = await agent
+      .patch(`/api/booking/appointments/${encodeURIComponent(a.id)}`)
+      .send({ notes: "late" });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("not_editable");
   });
 });
 

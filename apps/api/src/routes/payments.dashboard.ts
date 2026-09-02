@@ -5,6 +5,7 @@ import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 import {
   connectEnabled,
+  createDashboardLink,
   createOnboardingLink,
   getConnectStatus,
 } from "../billing/connect.js";
@@ -103,6 +104,42 @@ paymentsDashboardRouter.post("/connect/onboard", async (req, res) => {
     res.json({ url });
   } catch (err) {
     logger.error({ err, shopId: shop.id }, "connect onboarding link failed");
+    res.status(502).json({ error: "stripe_error" });
+  }
+});
+
+// POST /api/payments/connect/dashboard - where the money actually is.
+//
+// Mints a one-time link into the shop's Stripe dashboard (the Express
+// dashboard for an account set up through ChairBack; plain dashboard.stripe.com
+// for a linked Standard account). This is the ONLY way into an Express
+// account's balance and payouts - there is no stripe.com login for it - so a
+// barber checking on a payment has to be handed the door, not told to look.
+paymentsDashboardRouter.post("/connect/dashboard", async (req, res) => {
+  if (!connectEnabled()) {
+    res.status(503).json({ error: "connect_disabled" });
+    return;
+  }
+  const shop = await prisma.shop.findUnique({
+    where: { id: req.shop!.id },
+    select: { id: true, stripeConnectAccountId: true, stripeConnectAccountType: true },
+  });
+  if (!shop) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if (!shop.stripeConnectAccountId) {
+    res.status(409).json({ error: "connect_not_ready" });
+    return;
+  }
+  try {
+    const url = await createDashboardLink({
+      stripeConnectAccountId: shop.stripeConnectAccountId,
+      stripeConnectAccountType: shop.stripeConnectAccountType,
+    });
+    res.json({ url });
+  } catch (err) {
+    logger.error({ err, shopId: shop.id }, "connect dashboard link failed");
     res.status(502).json({ error: "stripe_error" });
   }
 });

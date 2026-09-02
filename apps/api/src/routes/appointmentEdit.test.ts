@@ -273,12 +273,14 @@ describe("status is never silently changed", () => {
 });
 
 describe("Acuity-owned bookings are read-only", () => {
-  it("a Visit-linked appointment is refused", async () => {
+  it("an appointment linked to an ACUITY-ingested Visit is refused", async () => {
+    // Acuity ids are bare digits - the namespace that means "Acuity's" (see
+    // engines/visitOrigin.ts).
     const visit = await prisma.visit.create({
       data: {
         shopId,
         clientId,
-        acuityAppointmentId: randomToken(8),
+        acuityAppointmentId: "1764227908",
         status: "SCHEDULED",
         scheduledAt: slotAt(15),
         endAt: slotAt(16),
@@ -289,6 +291,35 @@ describe("Acuity-owned bookings are read-only", () => {
     const res = await patch(a.id, { notes: "nope" });
     expect(res.status).toBe(409);
     expect(res.body.error).toBe("synced_appointment_readonly");
+  });
+
+  it("an appointment linked to its OWN loyalty Visit is still ChairBack's", async () => {
+    // The completion promoter links every finished native booking to a
+    // "booking:{id}" Visit. That link is bookkeeping, not a change of owner -
+    // reading it as Acuity's is the FadesByMikey bug (2026-09-02). A row that
+    // is still BOOKED stays editable; a COMPLETED one is refused for its
+    // status, never as "synced".
+    const a = await makeAppt();
+    const visit = await prisma.visit.create({
+      data: {
+        shopId,
+        clientId,
+        acuityAppointmentId: `booking:${a.id}`,
+        status: "COMPLETED",
+        scheduledAt: slotAt(15),
+        endAt: slotAt(16),
+      },
+      select: { id: true },
+    });
+    await prisma.appointment.update({ where: { id: a.id }, data: { visitId: visit.id } });
+
+    let res = await patch(a.id, { notes: "still ours" });
+    expect(res.status).toBe(200);
+
+    await prisma.appointment.update({ where: { id: a.id }, data: { status: "COMPLETED" } });
+    res = await patch(a.id, { notes: "done now" });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("not_editable");
   });
 });
 

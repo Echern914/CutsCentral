@@ -41,11 +41,45 @@ describe("what ChairBack refuses to claim", () => {
     expect(snap.collectedCents).toBe(0);
   });
 
-  it("an external booking discloses NOTHING from a stray local payment row", () => {
+  it("a ChairBack Payment row is disclosed EVEN IF the caller flags the booking external", () => {
+    // A Payment row exists only because ChairBack ran a checkout for this
+    // appointment - it is our own record of money we took. The origin flag is
+    // a judgement about the schedule; the row is a fact about the money, and
+    // a wrong flag must never hide it (FadesByMikey, 2026-09-02: a $10 deposit
+    // reported as "No ChairBack payment recorded").
     const snap = appointmentPaymentSnapshot({
       ...base,
       external: true,
-      payment: pay(),
+      payment: pay({ amount: 1000 }),
+    });
+    expect(snap.state).toBe("deposit");
+    expect(snap.onlineCents).toBe(1000);
+    expect(snap.collectedCents).toBe(1000);
+    expect(snap.remainingCents).toBe(3000);
+  });
+
+  it("with a Payment row, the chair half is disclosed too", () => {
+    const snap = appointmentPaymentSnapshot({
+      ...base,
+      external: true,
+      payment: pay({ amount: 1000 }),
+      chairPaid: 30,
+      chairMethod: "cash",
+      chairCheckedOut: true,
+    });
+    expect(snap.state).toBe("paid");
+    expect(snap.onlineCents).toBe(1000);
+    expect(snap.inPersonCents).toBe(3000);
+    expect(snap.method).toBe("cash");
+    expect(snap.remainingCents).toBe(0);
+  });
+
+  it("external with NO Payment row still discloses nothing, even from a chair figure", () => {
+    // No ChairBack checkout ever ran, so a chair figure on an Acuity-owned row
+    // is not something we can vouch for.
+    const snap = appointmentPaymentSnapshot({
+      ...base,
+      external: true,
       chairPaid: 40,
       chairMethod: "cash",
     });

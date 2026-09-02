@@ -5,6 +5,7 @@ import { logger } from "../logger.js";
 import { isSlotBookable } from "../engines/slots.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import { completeReschedule, swapForReschedule } from "../engines/acuityMirror.js";
+import { appointmentOwnedByPlatform } from "../engines/visitOrigin.js";
 import { pokeAppointmentPass } from "../wallet/appointmentPass.js";
 import { toE164 } from "../acuity/clientKey.js";
 import { editClient } from "../services/client.js";
@@ -145,6 +146,7 @@ export function registerAppointmentEdit(
         startsAt: true,
         endsAt: true,
         visitId: true,
+        visit: { select: { acuityAppointmentId: true } },
         clientId: true,
       },
     });
@@ -152,9 +154,16 @@ export function registerAppointmentEdit(
       res.status(404).json({ error: "not_found" });
       return;
     }
-    // Owned by Acuity. A local edit would make the two systems disagree about
-    // the authoritative time, with no way to push the change back.
-    if (appt.visitId) {
+    // Owned by Acuity/Square (its Visit was ingested from there). A local edit
+    // would make the two systems disagree about the authoritative time, with
+    // no way to push the change back. NOT `visitId` alone: a completed native
+    // booking is linked to its own loyalty Visit and is still ours - it is
+    // refused below as not_editable, for its status, not for its owner.
+    // forShop() erases nested-relation types from a `select`, so the linked
+    // Visit is named here exactly as requested above (same as the detail read).
+    const linkedVisit = (appt as unknown as { visit: { acuityAppointmentId: string } | null })
+      .visit;
+    if (appointmentOwnedByPlatform({ visit: linkedVisit })) {
       res.status(409).json({ error: "synced_appointment_readonly" });
       return;
     }

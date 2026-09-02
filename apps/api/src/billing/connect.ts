@@ -217,4 +217,28 @@ export async function applyConnectEvent(event: Stripe.Event): Promise<void> {
   }
 }
 
+/**
+ * THE DOOR TO THE BARBER'S OWN MONEY. An Express account has NO login at
+ * dashboard.stripe.com - it lives behind a separate Express dashboard that
+ * Stripe only opens through a one-time login link minted by the platform.
+ * Without this, a barber who goes looking for a payment at stripe.com finds
+ * an empty (or unrelated) account and concludes the money never arrived -
+ * which is exactly what FadesByMikey reported on 2026-09-02 while a $10
+ * deposit sat, collected, in his connected balance.
+ *
+ * Minted fresh per click, never persisted (single-use, short-lived). A
+ * STANDARD account is the barber's own login, so it simply gets the normal
+ * dashboard URL - Stripe refuses login links for those.
+ */
+export async function createDashboardLink(shop: {
+  stripeConnectAccountId: string;
+  stripeConnectAccountType: string | null;
+}): Promise<string> {
+  if (shop.stripeConnectAccountType === "standard") {
+    return "https://dashboard.stripe.com/";
+  }
+  const link = await stripeClient().accounts.createLoginLink(shop.stripeConnectAccountId);
+  return link.url;
+}
+
 export { connectEnabled };

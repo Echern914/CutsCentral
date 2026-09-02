@@ -1,6 +1,7 @@
 "use client";
 
 import { cap, useVocab } from "@/components/VocabProvider";
+import { APP_NAME } from "@chairback/config/constants";
 import { useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
@@ -8,6 +9,7 @@ import { cn } from "@/lib/cn";
 import type { PaymentStatus } from "./actions";
 import {
   disconnectStripeAction,
+  openStripeDashboardAction,
   savePaymentSettingsAction,
   savePayDirectAction,
   startConnectOnboardingAction,
@@ -83,6 +85,24 @@ export function PaymentsManager({
         window.location.href = r.url; // Stripe-hosted onboarding
       } else {
         toast("Couldn't start Stripe setup", "error");
+      }
+    });
+  }
+
+  /**
+   * Where the money is. An account set up through ChairBack is an Express
+   * account, which has NO login at stripe.com - a barber who goes looking there
+   * finds nothing and assumes the payment never arrived (FadesByMikey,
+   * 2026-09-02, while a collected deposit sat in his balance). The only way in
+   * is a one-time link the platform mints, so this button IS the door.
+   */
+  function openStripeDashboard() {
+    start(async () => {
+      const r = await openStripeDashboardAction();
+      if (r.ok && r.url) {
+        window.location.href = r.url;
+      } else {
+        toast("Couldn't open your Stripe dashboard", "error");
       }
     });
   }
@@ -277,6 +297,23 @@ export function PaymentsManager({
             )}
             <StatusRow label="Charges enabled" ok={connect.chargesEnabled} />
             <StatusRow label="Payouts enabled" ok={connect.payoutsEnabled} />
+            {/* 🔴 THE DOOR TO THE MONEY. Every payment ChairBack takes lands in
+                THIS account, and for an Express account this button is the only
+                way to see its balance and payouts — stripe.com will not show it. */}
+            <div className="mt-1 flex flex-col gap-1">
+              <button
+                onClick={openStripeDashboard}
+                disabled={pending}
+                className="self-start rounded-xl bg-gold px-4 py-2 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+              >
+                {pending ? "Opening…" : "See your balance & payouts in Stripe"}
+              </button>
+              <p className="text-xs text-muted">
+                Every card payment and deposit taken through {APP_NAME} lands
+                here. New money shows as <em>pending</em> for two business days,
+                then pays out to your bank on Stripe&apos;s schedule.
+              </p>
+            </div>
             {!ready &&
               /* Only an EXPRESS account has a ChairBack-openable form to go back
                  to. A standard account is finished in the barber's own Stripe
