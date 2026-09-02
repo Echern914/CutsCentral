@@ -3575,6 +3575,11 @@ model AffiliateAccount {
   reactivatedAt    DateTime?
   internalNote     String? // admin-only prose; the durable trail is the audit table
 
+  // How they'll get the word out - chosen AFTER approval, editable, fixed
+  // vocabulary (AffiliateAccount_promotionStyles_check). Empty = not chosen yet.
+  promotionStyles String[]  @default([])
+  stylesChosenAt  DateTime?
+
   // Snapshots of what this affiliate agreed to / was approved under.
   acceptedTermsVersion String
   policyVersion        Int

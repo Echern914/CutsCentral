@@ -147,3 +147,153 @@ export const AFFILIATE_DECISION_PUBLIC_COPY: Record<
   policy_violation: "Your application couldn't be approved.",
   other: "Your application couldn't be approved at this time.",
 };
+
+/**
+ * How an APPROVED affiliate says they'll get the word out. Chosen after
+ * approval (the flow: sign up -> approve -> choose styles -> dashboard),
+ * editable later, and each chosen style switches on its toolkit card.
+ * Mirrors AffiliateAccount_promotionStyles_check.
+ */
+export const AFFILIATE_PROMOTION_STYLES = [
+  "short_video",
+  "posts_stories",
+  "in_the_chair",
+  "text_dm",
+  "email_list",
+  "flyer_qr",
+  "blog_podcast",
+  "other",
+] as const;
+export type AffiliatePromotionStyle = (typeof AFFILIATE_PROMOTION_STYLES)[number];
+
+export const AFFILIATE_PROMOTION_STYLE_LABELS: Record<AffiliatePromotionStyle, string> = {
+  short_video: "Short video (TikTok, Reels)",
+  posts_stories: "Posts and stories",
+  in_the_chair: "In the chair, word of mouth",
+  text_dm: "Text or DM",
+  email_list: "Email list",
+  flyer_qr: "Flyer or QR at the shop",
+  blog_podcast: "Blog or podcast",
+  other: "Something else",
+};
+
+/**
+ * The affiliate-visible sentence for each suspension classification. Same
+ * rule as decisions: derived from the fixed code, so admin prose never leaks.
+ */
+export const AFFILIATE_SUSPENSION_PUBLIC_COPY: Record<AffiliateSuspensionReason, string> = {
+  terms_violation:
+    "Your affiliate link is paused because of a terms issue. Your history is kept.",
+  suspected_abuse:
+    "Your affiliate link is paused while we look into some activity. Your history is kept.",
+  admin_review: "Your affiliate link is paused during a review. Your history is kept.",
+  other: "Your affiliate link is paused. Your history is kept.",
+};
+
+/** Why a month was taken back (mirrors the qualification engine's reasons). */
+export const AFFILIATE_REVERSAL_REASONS = [
+  "invoice_refunded",
+  "payment_disputed",
+  "credit_note",
+  "admin_adjustment",
+] as const;
+export type AffiliateReversalReason = (typeof AFFILIATE_REVERSAL_REASONS)[number];
+
+export const AFFILIATE_REVERSAL_PUBLIC_COPY: Record<AffiliateReversalReason, string> = {
+  invoice_refunded: "Their payment was refunded, so this month was taken back.",
+  payment_disputed: "Their payment was disputed, so this month was taken back.",
+  credit_note: "Their invoice was credited back, so this month was taken back.",
+  admin_adjustment: "Adjusted after a review.",
+};
+
+/**
+ * Where a referred business is on the road to a month off. ONE derivation,
+ * used by the dashboard, the admin table and the emails - the read/write
+ * parity rule: nothing else may name a stage.
+ */
+export const AFFILIATE_REFERRAL_STAGES = [
+  "signed_up",
+  "first_payment",
+  "second_payment",
+  "hold",
+  "month_off",
+  "applied",
+  "reversed",
+  "expired",
+  "under_review",
+] as const;
+export type AffiliateReferralStage = (typeof AFFILIATE_REFERRAL_STAGES)[number];
+
+export function affiliateStage(input: {
+  qualifyingInvoices: number;
+  rewardStatus: string | null;
+}): AffiliateReferralStage {
+  switch (input.rewardStatus) {
+    case "PENDING":
+      return "hold";
+    case "AVAILABLE":
+      return "month_off";
+    case "RESERVED":
+    case "APPLIED":
+      return "applied";
+    case "REVERSED":
+      return "reversed";
+    case "EXPIRED":
+      return "expired";
+    case "REVIEW_REQUIRED":
+      return "under_review";
+    default:
+      break;
+  }
+  if (input.qualifyingInvoices >= AFFILIATE_POLICY.qualification.qualifyingInvoices) {
+    return "second_payment";
+  }
+  if (input.qualifyingInvoices === 1) return "first_payment";
+  return "signed_up";
+}
+
+/** Months off, counted from the reward ledger. One reward = one month. */
+export interface AffiliateMonths {
+  earned: number;
+  onTheWay: number;
+  underReview: number;
+  reversed: number;
+  expired: number;
+}
+
+export function affiliateMonths(rewards: ReadonlyArray<{ status: string }>): AffiliateMonths {
+  const m: AffiliateMonths = { earned: 0, onTheWay: 0, underReview: 0, reversed: 0, expired: 0 };
+  for (const r of rewards) {
+    switch (r.status) {
+      case "APPLIED":
+        m.earned += 1;
+        break;
+      case "RESERVED":
+      case "AVAILABLE":
+      case "PENDING":
+        m.onTheWay += 1;
+        break;
+      case "REVIEW_REQUIRED":
+        m.underReview += 1;
+        break;
+      case "REVERSED":
+        m.reversed += 1;
+        break;
+      case "EXPIRED":
+        m.expired += 1;
+        break;
+      default:
+        break;
+    }
+  }
+  return m;
+}
+
+/**
+ * The ONLY label an affiliate may ever see for a business they referred
+ * (#360: a referred shop's name never crosses the tenant boundary). The cuid
+ * tail is stable, non-identifying, and enough to tell two rows apart.
+ */
+export function maskBusinessLabel(referredShopId: string): string {
+  return "Business ••••" + referredShopId.slice(-4);
+}
