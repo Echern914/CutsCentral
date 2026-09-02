@@ -112,6 +112,20 @@ interface NavProps {
   rewardsEnabled?: boolean;
   affiliateProgramEnabled?: boolean;
   /**
+   * 🔴 THE SEAT, as /me reports it - not an inference.
+   *
+   * This used to be `barberOnly ? "BARBER" : "MANAGER"`, which silently
+   * demoted every OWNER to MANAGER and so WITHHELD all five owner-only
+   * destinations (Affiliates, Plan & billing, Refer a barber, and both
+   * payment settings) from the More sheet and the feature search - from the
+   * owner, on their own shop. The registry was right; the caller lied to it.
+   *
+   * Defaults to OWNER when unknown, matching the assistant page and the
+   * registry's own documented default: a caller that knows nothing gets the
+   * owner-on-web behaviour rather than a quietly reduced product.
+   */
+  role?: SeatRole;
+  /**
    * True for an employee seat. They used to get NO nav at all, because Home was
    * their only reachable tab. Assistant is the second one — their personal
    * setup tasks and the offline help corpus both live there — so a two-tab bar
@@ -131,11 +145,12 @@ export function DashboardTabBar({
   rewardsEnabled = true,
   affiliateProgramEnabled = false,
   barberOnly = false,
+  role: seatRole,
   locks,
 }: NavProps) {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
-  const role: SeatRole = barberOnly ? "BARBER" : "MANAGER";
+  const role: SeatRole = seatRole ?? (barberOnly ? "BARBER" : "OWNER");
   const tabs = tabsFor(role);
   const moreActive = !tabs.some((t) => isActive(pathname, t.href));
 
@@ -186,11 +201,12 @@ export function DashboardNavInline({
   rewardsEnabled = true,
   affiliateProgramEnabled = false,
   barberOnly = false,
+  role: seatRole,
   locks,
 }: NavProps) {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
-  const role: SeatRole = barberOnly ? "BARBER" : "MANAGER";
+  const role: SeatRole = seatRole ?? (barberOnly ? "BARBER" : "OWNER");
   const tabs = tabsFor(role);
   // Any page that isn't one of the tabs was reached THROUGH More, so More
   // carries the active state — the nav never looks like nothing is on.
