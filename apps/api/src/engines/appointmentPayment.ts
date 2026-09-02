@@ -22,6 +22,13 @@
  *     there is no payment field on the appointment payload we ingest. Such a
  *     row is `external`, never `unpaid`: telling a barber a booking is unpaid
  *     when we simply cannot see it is a lie that costs them money at the chair.
+ *     THE RULE CUTS BOTH WAYS. A `Payment` row exists only because ChairBack
+ *     itself ran a checkout for that appointment, so it is OUR record of money
+ *     we took. It is disclosed no matter what the caller believes about
+ *     ownership: `external` can silence a guess, never a fact. (FadesByMikey,
+ *     2026-09-02: an ownership bug flagged a completed, deposit-paid booking
+ *     as Acuity's, and the sheet swore "No ChairBack payment recorded" about
+ *     $10 sitting in the barber's Stripe balance.)
  *  2. AN AUTHORIZED HOLD IS NOT COLLECTED MONEY. `requires_capture` means
  *     Stripe is holding a card, not that the shop has been paid, so it never
  *     counts toward `collectedCents` - the balance stays owed and the barber
@@ -73,7 +80,9 @@ export interface AppointmentPaymentInput {
   chairCheckedOut: boolean;
   /**
    * True when the booking belongs to another system (an Acuity/Square `Visit`,
-   * or a native row already promoted to one). Forces the `external` state.
+   * or a native row linked to one - see engines/visitOrigin.ts). Forces the
+   * `external` state ONLY while there is no `Payment` row: money ChairBack
+   * itself collected is always disclosed.
    */
   external: boolean;
 }
@@ -165,7 +174,13 @@ export function appointmentPaymentSnapshot(
 
   // A booking another system owns short-circuits everything: we report the
   // ticket we mirrored and refuse to characterize money we cannot see.
-  if (input.external) {
+  //
+  // UNLESS a Payment row exists. That row is written by ChairBack's own
+  // checkout for this exact appointment, so the money is something we CAN
+  // see - and an `external` flag that disagrees is the flag that is wrong, not
+  // the record. Falling through here is what keeps a mislabeled origin from
+  // ever hiding a deposit again.
+  if (input.external && input.payment === null) {
     return {
       state: "external",
       totalCents,
