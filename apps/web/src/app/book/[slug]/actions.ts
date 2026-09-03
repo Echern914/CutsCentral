@@ -243,6 +243,13 @@ export async function bookAction(
    * the customer is entitled to know how long they have.
    */
   paymentHoldMinutes?: number | null;
+  /**
+   * The instant the chair goes back on sale, so the screen can count DOWN. A
+   * minute count is only true at the moment it is rendered; a customer who
+   * switches apps to fetch their card comes back to a number that has been
+   * lying to them ever since.
+   */
+  paymentExpiresAt?: string | null;
   // true = the shop requires approval; this is a REQUEST awaiting confirmation.
   pending?: boolean;
   /**
@@ -262,6 +269,7 @@ export async function bookAction(
       isDeposit: boolean;
       balanceDueCents: number;
       holdMinutes?: number;
+      expiresAt?: string | null;
     } | null;
     pending?: boolean;
     series?: {
@@ -286,8 +294,37 @@ export async function bookAction(
     paymentIsDeposit: res.data.payment?.isDeposit ?? false,
     paymentBalanceDueCents: res.data.payment?.balanceDueCents ?? null,
     paymentHoldMinutes: res.data.payment?.holdMinutes ?? null,
+    paymentExpiresAt: res.data.payment?.expiresAt ?? null,
     pending: Boolean(res.data.pending),
   };
+}
+
+/**
+ * Has the booking actually been confirmed yet?
+ *
+ * 🔴 WHY THE CLIENT CANNOT JUST TRUST `confirmPayment`. Stripe telling the
+ * BROWSER the payment succeeded is not the same fact as ChairBack having a
+ * booking. The appointment is written as a HOLD and is promoted to BOOKED only
+ * when `payment_intent.succeeded` reaches our webhook
+ * (billing/payments.ts -> promotePaidHold). Until then the chair is still on a
+ * ten-minute fuse, and the sweep cancels it with no notification whatsoever.
+ *
+ * The old screen declared "You're booked!" straight off the browser's return
+ * value, so a webhook that was slow, or a payment that went to `processing`
+ * and later failed, produced a customer holding a confirmation page for an
+ * appointment that quietly no longer existed.
+ *
+ * This asks the one authority that knows. The client polls it for a few
+ * seconds after paying; the answer is the appointment's real status.
+ */
+export async function bookingStatusAction(
+  token: string,
+): Promise<{ ok: boolean; status?: string }> {
+  const res = await apiPublicGet<{ status: string }>(
+    `/api/book/manage/${encodeURIComponent(token)}`,
+  );
+  if (!res.ok || !res.data) return { ok: false };
+  return { ok: true, status: res.data.status };
 }
 
 /** A date+time preference. Null on either half means ANY for that half. */

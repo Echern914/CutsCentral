@@ -12,21 +12,32 @@ const isDev = process.env.NODE_ENV === "development";
 const analyticsScriptSrc = "https://connect.facebook.net https://us-assets.i.posthog.com";
 const analyticsConnectSrc =
   "https://www.facebook.com https://us.i.posthog.com https://us-assets.i.posthog.com";
-// Stripe.js (the pay-ahead Payment Element on /book/[slug]) needs three
-// allowances per Stripe's own CSP guidance: its script from js.stripe.com,
-// its iframes (js.stripe.com + hooks.stripe.com), and API calls to
-// api.stripe.com. Without these the payment step dies silently - the script
-// tag loadStripe injects is cross-origin and script-src 'self' blocks it.
+// Stripe.js (the Payment Element on /book/[slug]) per Stripe's own CSP
+// guidance: its script + iframes from js.stripe.com AND `*.js.stripe.com`,
+// hooks.stripe.com for redirect-based methods, and api.stripe.com for the
+// API. Without these the payment step dies silently - the script tag
+// loadStripe injects is cross-origin and script-src 'self' blocks it.
+//
+// 🔴 `*.js.stripe.com` was missing and is not cosmetic. Stripe.js starts its
+// frames on separate origins "where possible" for performance, and a wallet
+// (Apple Pay, Link) is exactly the case that reaches for one - so the tab
+// either fails to appear or fails on tap, with only a console error nobody
+// sees. Link additionally serves its UI from link.com subdomains.
+const stripeFrameSrc = "https://js.stripe.com https://*.js.stripe.com https://hooks.stripe.com";
+const stripeScriptSrc = "https://js.stripe.com https://*.js.stripe.com";
+const linkSrc = "https://link.com https://*.link.com";
 const csp = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline' https://js.stripe.com ${analyticsScriptSrc}${isDev ? " 'unsafe-eval'" : ""}`,
+  `script-src 'self' 'unsafe-inline' ${stripeScriptSrc} ${analyticsScriptSrc}${isDev ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
+  // img allows https: wholesale (shop logos are barber-provided URLs), which
+  // already covers Stripe's and Link's asset hosts.
   "img-src 'self' https: data:",
   "font-src 'self' data:",
   // connect-src: same-origin for the app itself (push subscribe etc. go through
   // same-origin Next route handlers) + Stripe's API + the analytics beacons.
-  `connect-src 'self' https://api.stripe.com ${analyticsConnectSrc}`,
-  "frame-src https://js.stripe.com https://hooks.stripe.com",
+  `connect-src 'self' https://api.stripe.com ${linkSrc} ${analyticsConnectSrc}`,
+  `frame-src ${stripeFrameSrc} ${linkSrc}`,
   // The rewards PWA service worker (public/sw.js, same origin).
   "worker-src 'self'",
   // The per-shop dynamic manifest route (same origin).

@@ -23,6 +23,7 @@ import type { BookShopData } from "./page";
 import { readableOn } from "@/lib/contrast";
 import {
   bookAction,
+  bookingStatusAction,
   getDayBundlesAction,
   getMergedSlotsAction,
   getOpenDaysAction,
@@ -241,9 +242,26 @@ export function BookingClient({
     balanceDueCents: number;
     /** Minutes the chair is held while they pay; null if the API didn't say. */
     holdMinutes: number | null;
+    /** The instant the chair goes back on sale, so the screen can count DOWN. */
+    expiresAt: string | null;
   } | null>(null);
   // The manage token of a booking awaiting payment (shown after the card clears).
   const [manageTokenPending, setManageTokenPending] = useState<string | null>(null);
+  /**
+   * What happened after the card cleared.
+   *
+   * 🔴 "The money left" and "you have a booking" are DIFFERENT FACTS. The
+   * appointment is a hold until `payment_intent.succeeded` reaches the webhook
+   * and promotes it, so this screen used to promise a confirmation it had no
+   * way to know about: a slow webhook, or a payment that went to `processing`
+   * and later failed, left the customer reading "You're booked!" while the
+   * sweep quietly cancelled the chair out from under them.
+   *
+   * "checking" = paid, asking the server. "slow" = the money is away but the
+   * booking has not appeared yet, which is worth saying honestly rather than
+   * guessing in either direction. "gone" = the server says it did not survive.
+   */
+  const [payConfirm, setPayConfirm] = useState<"no" | "checking" | "slow" | "gone">("no");
   const [pending, startTransition] = useTransition();
   // Waitlist: null = hidden; "standing" = generic join; "slot" = join for the
   // currently-chosen service/provider (a fully-booked day).
@@ -1338,6 +1356,17 @@ export function BookingClient({
           if (dayFirst && dayDate) pickDay(dayDate);
           else if (serviceId && loadedPool.length) loadSlots(serviceId, loadedPool);
           clearSlotPick();
+        } else if (res.error === "day_full") {
+          // The API distinguishes "this TIME went" from "this DAY is done" on
+          // purpose (a per-service daily cap). Without its own copy this read
+          // as "Something went wrong", and the customer retried the same full
+          // day until they gave up.
+          setError(
+            "That day is fully booked for this service. Try another day.",
+          );
+          if (dayFirst && dayDate) pickDay(dayDate);
+          else if (serviceId && loadedPool.length) loadSlots(serviceId, loadedPool);
+          clearSlotPick();
         } else if (res.error === "slot_unavailable_external") {
           // The shop's external calendar (Acuity/Square) refused the mirror, so
           // the booking was rolled back. Their calendar is the authority here.
@@ -1363,6 +1392,7 @@ export function BookingClient({
                 isDeposit: res.paymentIsDeposit ?? false,
                 balanceDueCents: res.paymentBalanceDueCents ?? 0,
                 holdMinutes: res.paymentHoldMinutes ?? null,
+                expiresAt: res.paymentExpiresAt ?? null,
               }
             : null,
         );
@@ -1372,6 +1402,40 @@ export function BookingClient({
       setSeriesResult(res.series ?? null);
       setConfirmedToken(res.manageToken ?? null);
     });
+  }
+
+  /**
+   * The card cleared. Now find out whether ChairBack actually has a booking.
+   *
+   * Polls the manage endpoint - the one authority that knows, because it reads
+   * the appointment row the webhook promotes. Deliberately bounded: after
+   * ~25 seconds we stop guessing and tell the customer exactly where things
+   * stand, which is far better than either a false confirmation or a spinner
+   * with no end.
+   */
+  async function confirmAfterPayment(token: string) {
+    setPayConfirm("checking");
+    const deadline = Date.now() + 25_000;
+    for (;;) {
+      const res = await bookingStatusAction(token);
+      if (res.ok && res.status === "BOOKED") {
+        setPayConfirm("no");
+        setConfirmedToken(token);
+        return;
+      }
+      // The hold lapsed and the sweep took it (the payment is refunded in
+      // full by the same path). Saying so is the only honest option - the
+      // alternative is a confirmation for an appointment that does not exist.
+      if (res.ok && (res.status === "CANCELED" || res.status === "NO_SHOW")) {
+        setPayConfirm("gone");
+        return;
+      }
+      if (Date.now() >= deadline) {
+        setPayConfirm("slow");
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 1500));
+    }
   }
 
   // When the repeat control may be shown - and, identically, when a chosen
@@ -1545,7 +1609,9 @@ export function BookingClient({
             window closes. Saying so is the difference between a customer who
             finishes and one who wanders off assuming they are booked.
           */}
-          {payCharge?.holdMinutes ? (
+          {payCharge?.expiresAt ? (
+            <HoldCountdown expiresAt={payCharge.expiresAt} />
+          ) : payCharge?.holdMinutes ? (
             <p className="mb-4 text-xs text-muted">
               We&rsquo;ll hold this time for {payCharge.holdMinutes} minutes.
               Your appointment isn&rsquo;t confirmed until this payment goes
@@ -1569,21 +1635,67 @@ export function BookingClient({
                   : "Tip is not included — you can tip at the shop."}
             </p>
           ) : null}
-          <PaymentStep
-            clientSecret={paymentSecret}
-            amountLabel={
-              payCharge
-                ? `$${(payCharge.amountCents / 100).toFixed(0)}`
-                : selectedPrice !== null
-                  ? `$${selectedPrice.toFixed(0)}`
-                  : null
-            }
-            accent={accent}
-            onPaid={() => setConfirmedToken(manageTokenPending)}
-          />
-          <p className="mt-3 text-center text-[11px] text-muted">
-            Powered by Stripe. Your card details never touch {data.shop.name}.
-          </p>
+          {payConfirm === "checking" ? (
+            <p role="status" className="py-6 text-center text-sm text-muted">
+              Payment received. Confirming your booking&hellip;
+            </p>
+          ) : payConfirm === "slow" ? (
+            <div role="status" className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm">
+              <p className="font-medium">Your payment went through.</p>
+              <p className="mt-1 text-muted">
+                We&rsquo;re still confirming with {data.shop.name} — this
+                usually takes a few seconds. Your confirmation will arrive by
+                email, and you can check this link any time.
+              </p>
+              {manageTokenPending && (
+                <Link
+                  href={`/book/manage/${manageTokenPending}`}
+                  className="mt-3 inline-block underline underline-offset-4"
+                >
+                  Check my appointment
+                </Link>
+              )}
+            </div>
+          ) : payConfirm === "gone" ? (
+            <div role="alert" className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-200">
+              <p className="font-medium">That time was released before the payment landed.</p>
+              <p className="mt-1 text-amber-200/80">
+                You have not been charged — anything taken is refunded in full.
+                Please pick another time, or call {data.shop.name}.
+              </p>
+            </div>
+          ) : (
+            <PaymentStep
+              clientSecret={paymentSecret}
+              amountLabel={
+                payCharge
+                  ? `$${(payCharge.amountCents / 100).toFixed(0)}`
+                  : selectedPrice !== null
+                    ? `$${selectedPrice.toFixed(0)}`
+                    : null
+              }
+              accent={accent}
+              // Where a redirect-based method returns to. The manage page is
+              // the honest destination: it survives losing every scrap of
+              // component state and shows the appointment itself.
+              returnUrl={
+                manageTokenPending && typeof window !== "undefined"
+                  ? `${window.location.origin}/book/manage/${manageTokenPending}`
+                  : typeof window !== "undefined"
+                    ? window.location.href
+                    : ""
+              }
+              onPaid={() => {
+                if (manageTokenPending) void confirmAfterPayment(manageTokenPending);
+                else setPayConfirm("slow");
+              }}
+            />
+          )}
+          {payConfirm === "no" && (
+            <p className="mt-3 text-center text-[11px] text-muted">
+              Powered by Stripe. Your card details never touch {data.shop.name}.
+            </p>
+          )}
         </div>
       </main>
     );
@@ -2977,5 +3089,55 @@ function PayDirectInfo({
         <p className="mt-2 text-xs text-muted">{payDirect.note}</p>
       )}
     </div>
+  );
+}
+
+/**
+ * The chair is held on a real deadline. Count it DOWN.
+ *
+ * 🔴 A minute count is only true at the instant it renders. The old copy said
+ * "we'll hold this time for 10 minutes" and then never moved, so a customer who
+ * switched apps to fetch their card came back to a sentence that had been
+ * lying to them for however long they were gone — and the first thing they
+ * learned about the deadline was that their appointment had vanished.
+ *
+ * At zero this says so plainly rather than sitting at 0:00: the payment can
+ * still succeed and will simply be refunded, and a customer who knows that
+ * calls the shop instead of assuming they are booked.
+ */
+function HoldCountdown({ expiresAt }: { expiresAt: string }) {
+  const target = new Date(expiresAt).getTime();
+  const [msLeft, setMsLeft] = useState(() => Math.max(0, target - Date.now()));
+  useEffect(() => {
+    const id = window.setInterval(
+      () => setMsLeft(Math.max(0, target - Date.now())),
+      1000,
+    );
+    return () => window.clearInterval(id);
+  }, [target]);
+
+  if (!Number.isFinite(target)) return null;
+  if (msLeft <= 0) {
+    return (
+      <p role="alert" className="mb-4 text-xs text-amber-300">
+        This hold has expired and the time is back on sale. You can still try to
+        pay — if the time has gone, you will not be charged.
+      </p>
+    );
+  }
+  const totalSeconds = Math.ceil(msLeft / 1000);
+  const mins = Math.floor(totalSeconds / 60);
+  const secs = totalSeconds % 60;
+  return (
+    <p className="mb-4 text-xs text-muted">
+      {/* aria-live on the WRAPPER, not the number: a per-second announcement
+          would make a screen reader unusable. "off" here, and the deadline is
+          stated in the sentence itself. */}
+      We&rsquo;ll hold this time for{" "}
+      <span className="font-medium tabular-nums text-offwhite" aria-live="off">
+        {mins}:{secs.toString().padStart(2, "0")}
+      </span>
+      . Your appointment isn&rsquo;t confirmed until this payment goes through.
+    </p>
   );
 }
