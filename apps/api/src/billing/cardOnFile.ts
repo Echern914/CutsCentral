@@ -1,5 +1,6 @@
 import type Stripe from "stripe";
 import { prisma, runWithShop } from "@chairback/db";
+import type { CardOnFileChargeReason } from "@chairback/config";
 import { logger } from "../logger.js";
 import { stripeClient } from "./stripe.js";
 
@@ -209,4 +210,171 @@ function cryptoRandomId(): string {
   const bytes = new Uint8Array(12);
   crypto.getRandomValues(bytes);
   return `cof_${Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+
+export type ChargeOutcome =
+  | { outcome: "charged"; paymentId: string; cents: number }
+  | { outcome: "declined"; paymentId: string; reason: string }
+  | { outcome: "no_card" }
+  | { outcome: "nothing_to_charge" }
+  | { outcome: "already" }
+  | { outcome: "error"; reason: string };
+
+/**
+ * Charge the card kept at booking. The ONLY path that ever charges a card on
+ * file, and it runs only when the shop switched fees on and the appointment
+ * ended on the customer: a no-show mark, or a cancel inside the window.
+ *
+ * 🔴 TWO MARKS, ONE CHARGE. The CardOnFile row's status is the compare-and-swap:
+ * `saved -> charging` succeeds for exactly one caller, so two barbers tapping
+ * "no-show" together (or a retry racing the first) cannot charge twice. The
+ * Stripe idempotency key is keyed on the row too, as a second wall.
+ *
+ * A fresh off-session PaymentIntent (customer + saved payment_method,
+ * off_session + confirm), destination charge like every other customer charge.
+ * A decline is recorded, never retried automatically, and the barber is told -
+ * the fee becomes something to collect at the next visit, not a silent loss.
+ * Never throws: the no-show mark and the cancel must complete regardless.
+ */
+export async function chargeCardOnFile(params: {
+  shopId: string;
+  appointmentId: string;
+  cents: number;
+  reason: CardOnFileChargeReason;
+  description: string;
+}): Promise<ChargeOutcome> {
+  if (params.cents <= 0) return { outcome: "nothing_to_charge" };
+  try {
+    const claimed = await runWithShop(params.shopId, async (tx) => {
+      const row = await tx.cardOnFile.findUnique({
+        where: { appointmentId: params.appointmentId },
+        select: { id: true, status: true, stripeCustomerId: true, stripePaymentMethodId: true },
+      });
+      if (!row || !row.stripePaymentMethodId) return null;
+      if (row.status !== "saved") return { row, won: false } as const;
+      const cas = await tx.cardOnFile.updateMany({
+        where: { id: row.id, status: "saved" },
+        data: { status: "charging" },
+      });
+      return { row, won: cas.count === 1 } as const;
+    });
+    if (!claimed) return { outcome: "no_card" };
+    if (!claimed.won) return { outcome: "already" };
+    const { row } = claimed;
+    // Narrowed inside the tx above; TypeScript loses it across the return.
+    const paymentMethodId = row.stripePaymentMethodId;
+    if (!paymentMethodId) {
+      await setStatus(params.shopId, row.id, "saved");
+      return { outcome: "no_card" };
+    }
+
+    const shop = await prisma.shop.findUnique({
+      where: { id: params.shopId },
+      select: { stripeConnectAccountId: true, platformFeeBps: true },
+    });
+    if (!shop?.stripeConnectAccountId) {
+      await setStatus(params.shopId, row.id, "saved");
+      return { outcome: "error", reason: "no_connect_account" };
+    }
+    const feeAmount = Math.floor((params.cents * shop.platformFeeBps) / 10000);
+    const paymentId = `pay_${randomHex(24)}`;
+    await runWithShop(params.shopId, (tx) =>
+      tx.payment.create({
+        data: {
+          id: paymentId,
+          shopId: params.shopId,
+          appointmentId: params.appointmentId,
+          stripePaymentIntentId: `pending:${paymentId}`,
+          stripeConnectAccountId: shop.stripeConnectAccountId!,
+          mode: "card_on_file",
+          amount: params.cents,
+          currency: "usd",
+          applicationFeeAmount: feeAmount,
+          status: "requires_confirmation",
+        },
+      }),
+    );
+
+    try {
+      const pi = await stripeClient().paymentIntents.create(
+        {
+          amount: params.cents,
+          currency: "usd",
+          customer: row.stripeCustomerId,
+          payment_method: paymentMethodId,
+          off_session: true,
+          confirm: true,
+          on_behalf_of: shop.stripeConnectAccountId,
+          transfer_data: { destination: shop.stripeConnectAccountId },
+          ...(feeAmount > 0 ? { application_fee_amount: feeAmount } : {}),
+          description: params.description,
+          metadata: {
+            shopId: params.shopId,
+            appointmentId: params.appointmentId,
+            paymentId,
+            cardOnFileId: row.id,
+            reason: params.reason,
+          },
+        },
+        { idempotencyKey: `cof-charge:${row.id}` },
+      );
+      const chargeId = typeof pi.latest_charge === "string" ? pi.latest_charge : pi.latest_charge?.id ?? null;
+      await runWithShop(params.shopId, async (tx) => {
+        await tx.payment.update({
+          where: { id: paymentId },
+          data: {
+            stripePaymentIntentId: pi.id,
+            status: pi.status,
+            ...(chargeId ? { stripeChargeId: chargeId } : {}),
+            ...(pi.status === "succeeded" ? { capturedAmount: pi.amount_received } : {}),
+          },
+        });
+        await tx.cardOnFile.update({
+          where: { id: row.id },
+          data: { status: pi.status === "succeeded" ? "charged" : "failed" },
+        });
+      });
+      return pi.status === "succeeded"
+        ? { outcome: "charged", paymentId, cents: params.cents }
+        : { outcome: "declined", paymentId, reason: pi.status };
+    } catch (err) {
+      // Stripe refuses an off-session charge with a card error whose
+      // payment_intent (when present) carries the decline. Record and move on.
+      const reason = stripeErrorCode(err);
+      const piId = stripeErrorIntentId(err);
+      await runWithShop(params.shopId, async (tx) => {
+        await tx.payment.update({
+          where: { id: paymentId },
+          data: { status: "failed", ...(piId ? { stripePaymentIntentId: piId } : {}) },
+        });
+        await tx.cardOnFile.update({ where: { id: row.id }, data: { status: "failed" } });
+      });
+      logger.warn({ appointmentId: params.appointmentId, reason }, "card on file: charge declined");
+      return { outcome: "declined", paymentId, reason };
+    }
+  } catch (err) {
+    logger.error({ err, appointmentId: params.appointmentId }, "chargeCardOnFile failed");
+    return { outcome: "error", reason: err instanceof Error ? err.message : "unknown" };
+  }
+}
+
+async function setStatus(shopId: string, id: string, status: string): Promise<void> {
+  await runWithShop(shopId, (tx) => tx.cardOnFile.update({ where: { id }, data: { status } }));
+}
+
+function stripeErrorCode(err: unknown): string {
+  const e = err as { code?: string; decline_code?: string; message?: string } | null;
+  return e?.decline_code ?? e?.code ?? e?.message ?? "unknown";
+}
+
+function stripeErrorIntentId(err: unknown): string | null {
+  const e = err as { payment_intent?: { id?: string } } | null;
+  return e?.payment_intent?.id ?? null;
+}
+
+
+function randomHex(bytes: number): string {
+  const buf = new Uint8Array(bytes);
+  crypto.getRandomValues(buf);
+  return Array.from(buf, (b) => b.toString(16).padStart(2, "0")).join("");
 }

@@ -944,6 +944,8 @@ export interface DetailPayment {
   refundedCents: number;
   /** An UNCAPTURED card hold: not collected, and it does not reduce the balance. */
   authorizedCents: number;
+  /** A card kept at booking (card on file) and what became of it; null when none. Optional: a web deploy ahead of the API renders the plain label. */
+  cardOnFile?: { status: string } | null;
   remainingCents: number | null;
   method: string | null;
   /** Always null - ChairBack persists no card data. Rendered only if it ever isn't. */

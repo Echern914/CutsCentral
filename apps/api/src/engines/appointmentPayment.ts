@@ -79,6 +79,12 @@ export interface AppointmentPaymentInput {
    */
   chairCheckedOut: boolean;
   /**
+   * The CardOnFile row, if the booking kept a card. brand/last4 are Stripe's
+   * own words about a payment method it verified when the customer saved it -
+   * the one source this engine accepts for `card` (see the honesty rule).
+   */
+  cardOnFile?: { brand: string | null; last4: string | null; status: string } | null;
+  /**
    * True when the booking belongs to another system (an Acuity/Square `Visit`,
    * or a native row linked to one - see engines/visitOrigin.ts). Forces the
    * `external` state ONLY while there is no `Payment` row: money ChairBack
@@ -120,8 +126,10 @@ export interface AppointmentPaymentSnapshot {
   /** "cash" | "direct" | "card" | "other" | null - how the chair was paid. */
   method: string | null;
   /**
-   * Verified card identity. Always null: ChairBack persists no card data (see
-   * the honesty rule above). Kept so a future verified source has one seam.
+   * Verified card identity. Populated ONLY from a card kept at booking
+   * (paymentsMode card_on_file), whose brand and last four Stripe reported when
+   * the customer saved it. Null for every other booking: ChairBack persists no
+   * card data of its own and never synthesises this from a payload.
    */
   card: { brand: string; last4: string } | null;
   /**
@@ -130,6 +138,13 @@ export interface AppointmentPaymentSnapshot {
    * somewhere that does not exist.
    */
   receiptUrl: string | null;
+  /**
+   * A card KEPT at booking (card_on_file), and what became of it: `saved` =
+   * held, nothing charged; `charged` = a no-show / late-cancel fee was taken
+   * (the Payment row carries the money); `failed` = the charge was declined and
+   * the fee is owed at the chair; `released` = let go. Null when none was kept.
+   */
+  cardOnFile: { status: string } | null;
 }
 
 function dollarsToCents(dollars: number | null): number {
@@ -158,6 +173,13 @@ export function appointmentPaymentSnapshot(
   input: AppointmentPaymentInput,
 ): AppointmentPaymentSnapshot {
   const totalCents = input.price === null ? null : Math.max(0, dollarsToCents(input.price));
+  // The only card facts this engine will ever repeat: Stripe's, about a card it
+  // verified when the customer saved it. Never synthesised from a payload.
+  const cardFacts =
+    input.cardOnFile?.brand && input.cardOnFile.last4
+      ? { brand: input.cardOnFile.brand, last4: input.cardOnFile.last4 }
+      : null;
+  const cardOnFile = input.cardOnFile ? { status: input.cardOnFile.status } : null;
   const onlineCents = stripeCollectedCents(input.payment);
   const inPersonCents = Math.max(0, dollarsToCents(input.chairPaid));
   const collectedCents = onlineCents + inPersonCents;
@@ -191,8 +213,9 @@ export function appointmentPaymentSnapshot(
       authorizedCents: 0,
       remainingCents: null,
       method: null,
-      card: null,
+      card: cardFacts,
       receiptUrl: null,
+      cardOnFile,
     };
   }
 
@@ -217,7 +240,8 @@ export function appointmentPaymentSnapshot(
     authorizedCents,
     remainingCents,
     method: input.chairMethod ?? null,
-    card: null,
+    card: cardFacts,
     receiptUrl: null,
+    cardOnFile,
   };
 }

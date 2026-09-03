@@ -6,6 +6,7 @@ import {
   describeNoShowPolicy,
   describeShopPolicy,
   type ShopPolicyInput,
+  cardOnFileFeeCents,
 } from "./shopPolicy.js";
 
 const base: ShopPolicyInput = {
@@ -357,3 +358,26 @@ describe("card on file", () => {
     ).toBe(0);
   });
 });
+
+
+describe("cardOnFileFeeCents - the fee for a kept card", () => {
+  const start = new Date("2026-09-12T15:00:00Z");
+  const policy = { priceCents: 4000, cancelWindowHours: 24, cancelFeeBps: 5000, startsAt: start };
+
+  it("a no-show owes the percentage of the price - nothing was collected to keep", () => {
+    expect(cardOnFileFeeCents({ ...policy, now: new Date("2026-09-12T16:00:00Z"), reason: "no_show" })).toBe(2000);
+  });
+  it("a late cancel owes it only INSIDE the window", () => {
+    expect(cardOnFileFeeCents({ ...policy, now: new Date("2026-09-12T03:00:00Z"), reason: "late_cancel" })).toBe(2000);
+    expect(cardOnFileFeeCents({ ...policy, now: new Date("2026-09-10T15:00:00Z"), reason: "late_cancel" })).toBe(0);
+  });
+  it("🔴 no fee configured means no charge, ever", () => {
+    expect(cardOnFileFeeCents({ ...policy, cancelFeeBps: 0, now: start, reason: "no_show" })).toBe(0);
+    expect(cardOnFileFeeCents({ ...policy, cancelWindowHours: 0, now: start, reason: "late_cancel" })).toBe(0);
+    expect(cardOnFileFeeCents({ ...policy, priceCents: null, now: start, reason: "no_show" })).toBe(0);
+  });
+  it("rounds down, never up", () => {
+    expect(cardOnFileFeeCents({ ...policy, priceCents: 3333, cancelFeeBps: 3333, now: start, reason: "no_show" })).toBe(1110);
+  });
+});
+

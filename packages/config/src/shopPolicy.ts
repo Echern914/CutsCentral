@@ -259,3 +259,45 @@ export function describeNoShowPolicy(
     ? "a no-show keeps whatever was paid at booking - it is not refunded"
     : "no charge for a no-show (nothing is collected up front), but a cancellation frees the time for someone else, so ask them to cancel rather than not turn up";
 }
+
+/** Why a kept card is being charged. Nothing else may ever charge it. */
+export type CardOnFileChargeReason = "no_show" | "late_cancel";
+
+/**
+ * The fee to charge a CARD ON FILE, in cents.
+ *
+ * The sibling of `cancellationFeeCents`, for the case that formula cannot
+ * express: nothing was collected at booking, so the base is the price of the
+ * appointment itself, not the money in hand. Same percentage, same window, so a
+ * shop configures ONE policy and it means the same thing whether the customer
+ * prepaid, left a deposit, or left a card.
+ *
+ *  - `no_show`: the appointment came and went; the window test is moot (the
+ *    start has passed) and the fee is the percentage of the price.
+ *  - `late_cancel`: charged only INSIDE the cancellation window - a customer who
+ *    cancels a day early with a 12h window owes nothing, exactly as they would
+ *    have been refunded in full had they prepaid.
+ *
+ * Zero whenever the shop has no fee configured (window or percentage unset),
+ * so a shop that keeps cards "just in case" and never set a fee can never be
+ * surprised by a charge. `chargeCardOnFileFees` - the master switch - is
+ * checked by the CALLER, not here: this is the arithmetic, that is the policy.
+ */
+export function cardOnFileFeeCents(input: {
+  priceCents: number | null;
+  cancelWindowHours: number;
+  cancelFeeBps: number;
+  startsAt: Date;
+  now: Date;
+  reason: CardOnFileChargeReason;
+}): number {
+  if (!input.priceCents || input.priceCents <= 0) return 0;
+  if (input.cancelFeeBps <= 0) return 0;
+  if (input.reason === "late_cancel") {
+    if (input.cancelWindowHours <= 0) return 0;
+    const windowStart = input.startsAt.getTime() - input.cancelWindowHours * 3_600_000;
+    if (input.now.getTime() < windowStart) return 0;
+  }
+  return Math.floor((input.priceCents * input.cancelFeeBps) / 10000);
+}
+
