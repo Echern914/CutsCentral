@@ -56,7 +56,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   // build, not an OTA: expo-web-browser and expo-secure-store are config
   // plugins, so the entitlement and the authentication-session APIs only exist
   // in a freshly compiled binary.
-  version: "1.0.7",
+  //
+  // 1.0.8 = build 39, carrying #392 (connect Stripe from inside the app via the
+  // system browser). 🔴 The bump is REQUIRED, not cosmetic: 1.0.7 has already
+  // gone to Apple as build 38, and a version string that was already submitted
+  // cannot take another build - that is exactly how build 37 died
+  // (SUBMISSION_SERVICE_IOS_OLD_APP_VERSION).
+  version: "1.0.8",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
