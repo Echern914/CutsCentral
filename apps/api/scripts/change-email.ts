@@ -52,7 +52,10 @@ function dbTarget(): string {
   if (!raw) return "(DATABASE_URL unset)";
   try {
     const u = new URL(raw);
-    return `${u.hostname}${u.port ? `:${u.port}` : ""}${u.pathname}`;
+    // The username is not a secret and it is where a Supabase POOLER url
+    // carries the project ref ("postgres.<ref>"); the host alone reads the
+    // same for dev and prod on the pooler.
+    return `${u.username}@${u.hostname}${u.port ? `:${u.port}` : ""}${u.pathname}`;
   } catch {
     return "(unparseable DATABASE_URL)";
   }
