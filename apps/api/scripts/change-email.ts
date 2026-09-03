@@ -19,10 +19,15 @@ import { billingEnabled, stripeClient } from "../src/billing/stripe.js";
  * the third, which is how receipts and dunning keep going to an address nobody
  * reads.
  *
- * Usage (from the repo root, with DATABASE_URL pointed at the target DB):
+ * Usage (from the repo root, with DATABASE_URL pointed at the target DB - under
+ * `railway run` it already is, and the root .env cannot override it):
  *   pnpm --filter @chairback/api admin:email <currentEmail> --check
  *   pnpm --filter @chairback/api admin:email <currentEmail> <newEmail>
+ *   pnpm --filter @chairback/api admin:email shop:<slug> <newEmail>
  *   pnpm --filter @chairback/api admin:email <currentEmail> <newEmail> --keep-sessions
+ *
+ * shop:<slug> names the shop instead of the owner's current address, for the
+ * usual case where nobody remembers what that address was.
  *
  * --check resolves and reports, writing nothing. Run it first.
  *
@@ -115,22 +120,43 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const flags = new Set(args.filter((a) => a.startsWith("--")));
   const positional = args.filter((a) => !a.startsWith("--"));
-  const currentEmail = positional[0]?.trim().toLowerCase();
-  const newEmail = positional[1]?.trim().toLowerCase();
   const checkOnly = flags.has("--check");
   const keepSessions = flags.has("--keep-sessions");
 
-  if (!currentEmail || (!newEmail && !checkOnly)) {
-    console.error("Usage: admin:email <currentEmail> <newEmail> [--keep-sessions]");
-    console.error("       admin:email <currentEmail> --check");
+  // Either the current address, or the shop whose OWNER is being moved. The
+  // support case that motivates this script is "the barber lost the inbox they
+  // signed up with" - and then nobody, the barber included, reliably remembers
+  // what that address was. Everyone remembers the shop.
+  const shopSlug = positional[0]?.startsWith("shop:") ? positional[0].slice(5).trim() : null;
+  const currentEmail = shopSlug ? null : positional[0]?.trim().toLowerCase();
+  const newEmail = positional[1]?.trim().toLowerCase();
+
+  if ((!currentEmail && !shopSlug) || (!newEmail && !checkOnly)) {
+    console.error("Usage: admin:email <currentEmail | shop:slug> <newEmail> [--keep-sessions]");
+    console.error("       admin:email <currentEmail | shop:slug> --check");
     process.exit(1);
   }
 
   console.log(`Database:  ${dbTarget()}\n`);
 
-  const user = await describe(currentEmail);
+  let lookup = currentEmail;
+  if (shopSlug) {
+    const shop = await prisma.shop.findUnique({
+      where: { slug: shopSlug },
+      select: { name: true, owner: { select: { email: true } } },
+    });
+    if (!shop) {
+      console.error(`No shop with slug "${shopSlug}" in ${dbTarget()}.`);
+      console.error("If that is not the database you meant, export DATABASE_URL and re-run.");
+      process.exit(1);
+    }
+    console.log(`Shop:      ${shop.name} (${shopSlug}), owned by ${shop.owner.email}\n`);
+    lookup = shop.owner.email;
+  }
+
+  const user = await describe(lookup as string);
   if (!user) {
-    console.error(`No user with email ${currentEmail} in ${dbTarget()}.`);
+    console.error(`No user with email ${lookup} in ${dbTarget()}.`);
     console.error("If that is not the database you meant, export DATABASE_URL and re-run.");
     process.exit(1);
   }
