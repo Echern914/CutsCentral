@@ -4,6 +4,8 @@ import { countBookingRefusals } from "../services/bookingRefusal.js";
 import { redactForAudit } from "../messaging/auditBody.js";
 import {
   apiEnv,
+  describeDepositPolicy,
+  type ShopPaymentsMode,
   formatShopAddress,
   localMinutesOfDay,
   mapsUrlFor,
@@ -49,6 +51,7 @@ import {
   priceRangeForService,
 } from "../engines/pricing.js";
 import { connectEnabled, hasActiveAccess } from "../billing/stripe.js";
+import { createCardOnFileSetupIntent, verifyCardSaved } from "../billing/cardOnFile.js";
 import { buildAppointmentIcs } from "../messaging/ics.js";
 import {
   appointmentWalletEnabled,
@@ -62,6 +65,7 @@ import {
 } from "../billing/payments.js";
 import {
   PAYMENT_HOLD_MINUTES,
+  collectsAtBooking,
   collectsPaymentUpFront,
   paymentHoldExpiry,
   promotePaidHold,
@@ -168,6 +172,52 @@ async function resolveNativeShop(slugRaw: string | undefined) {
     return null;
   }
   return shop;
+}
+
+/**
+ * The customer-facing money summary for a shop, computed from the SAME
+ * predicate the booking write uses (collectsAtBooking) and the SAME prose the
+ * receptionist speaks (describeDepositPolicy). `collects` is what THIS page
+ * will do on Confirm; `sentence` is how to say it.
+ */
+function publicPaymentSummary(shop: {
+  paymentsMode: string;
+  depositAmountCents: number | null;
+  chargeCardOnFileFees: boolean;
+  cancelWindowHours: number;
+  cancelFeeBps: number;
+  requireBookingApproval: boolean;
+  connectChargesEnabled: boolean;
+  stripeConnectAccountId: string | null;
+}): {
+  collects: "payment" | "card" | null;
+  mode: string;
+  depositAmountCents: number | null;
+  sentence: string;
+} {
+  const collects = collectsAtBooking({
+    connectEnabled: connectEnabled(),
+    paymentsMode: shop.paymentsMode,
+    requireBookingApproval: shop.requireBookingApproval,
+    connectChargesEnabled: shop.connectChargesEnabled,
+    stripeConnectAccountId: shop.stripeConnectAccountId,
+    // The page does not know the service yet; a positive placeholder keeps the
+    // "nothing to charge" gate out of a question about the shop's INTENT.
+    chargeCents: 1,
+  });
+  const sentence = describeDepositPolicy(
+    {
+      paymentsMode: shop.paymentsMode as ShopPaymentsMode,
+      cancelWindowHours: shop.cancelWindowHours,
+      cancelFeeBps: shop.cancelFeeBps,
+      depositAmountCents: shop.depositAmountCents,
+      chargeCardOnFileFees: shop.chargeCardOnFileFees,
+      paymentsLive: collects !== null,
+      requiresApproval: shop.requireBookingApproval,
+    },
+    { collectsAtBooking: true },
+  );
+  return { collects, mode: shop.paymentsMode, depositAmountCents: shop.depositAmountCents, sentence };
 }
 
 // ---------------------------------------------------------------------------
@@ -496,6 +546,11 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
       // write would turn down.
       recurringAvailable: recurringOfferedTo(shop),
       recurringMaxCount: PUBLIC_MAX_OCCURRENCES,
+      // What happens with money when they tap Confirm - said BEFORE the chair
+      // is held, in the same words the receptionist and the assistant use.
+      // Until this existed the first mention of a deposit was the card screen
+      // that appeared after the booking had already been written.
+      payment: publicPaymentSummary(shop),
     },
     staff,
     services: services.map((s) => {
@@ -1865,7 +1920,10 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
     shop.paymentsMode === "deposit"
       ? depositChargeCents(shop.depositAmountCents, fullCents)
       : fullCents;
-  const collectsUpFront = collectsPaymentUpFront({
+  // "payment" (ahead/deposit), "card" (card on file: a SetupIntent, nothing
+  // charged) or null. Either non-null answer means the row is written as a
+  // HOLD; only the Stripe object it waits for differs.
+  const collection = collectsAtBooking({
     connectEnabled: connectEnabled(),
     paymentsMode: shop.paymentsMode,
     // Don't charge a card for a request that may be declined - payment is
@@ -1875,6 +1933,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
     stripeConnectAccountId: shop.stripeConnectAccountId,
     chargeCents,
   });
+  const collectsUpFront = collection !== null;
   const holdExpiresAt = collectsUpFront ? paymentHoldExpiry(now) : null;
 
   let appointmentId: string;
@@ -2127,6 +2186,12 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
   // determined whether the row above is a booking or a hold; this block only
   // acts on it.
   let payment: {
+    /**
+     * "payment" - a PaymentIntent, money moves now (ahead / deposit).
+     * "setup"   - a SetupIntent, the card is KEPT and nothing is charged
+     *             (card_on_file). The client confirms with confirmSetup.
+     */
+    kind: "payment" | "setup";
     clientSecret: string;
     amountCents: number;
     isDeposit: boolean;
@@ -2141,7 +2206,48 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
      */
     expiresAt: string | null;
   } | null = null;
-  if (collectsUpFront && shop.stripeConnectAccountId && chargeCents !== null) {
+  if (collection === "card" && shop.stripeConnectAccountId) {
+    // Card on file: save the card, charge nothing. The hold is promoted when
+    // the SetupIntent succeeds - by the webhook, or by the browser asking us to
+    // verify (POST /manage/:token/card-saved) so a customer's confirmation never
+    // waits on a webhook subscription.
+    const created = await createCardOnFileSetupIntent({
+      shopId: shop.id,
+      appointmentId,
+      connectAccountId: shop.stripeConnectAccountId,
+      customer: {
+        name: [d.firstName, d.lastName].filter(Boolean).join(" "),
+        email: d.email ?? null,
+        phone: phone ?? null,
+      },
+      description: `Card on file for ${service.name} at ${shop.name}`,
+    });
+    if (created) {
+      payment = {
+        kind: "setup",
+        clientSecret: created.clientSecret,
+        amountCents: 0,
+        isDeposit: false,
+        balanceDueCents: fullCents ?? 0,
+        holdMinutes: PAYMENT_HOLD_MINUTES,
+        expiresAt: holdExpiresAt?.toISOString() ?? null,
+      };
+    } else {
+      // Same rule as the deposit fallback below: a Stripe hiccup must never
+      // cost a customer their appointment. Confirm it; they pay at the shop.
+      logger.warn(
+        { shopId: shop.id, appointmentId },
+        "card on file: no SetupIntent - confirming the booking for pay-in-person",
+      );
+      const outcome = await promotePaidHold({ appointmentId, now });
+      if (outcome !== "promoted" && outcome !== "already_booked") {
+        logger.error(
+          { shopId: shop.id, appointmentId, outcome },
+          "card on file: fallback promotion failed - the hold will lapse",
+        );
+      }
+    }
+  } else if (collection === "payment" && shop.stripeConnectAccountId && chargeCents !== null) {
     const isDeposit = shop.paymentsMode === "deposit" && chargeCents !== fullCents;
     const created = await createAheadPaymentIntent({
       shopId: shop.id,
@@ -2158,6 +2264,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
     });
     if (created) {
       payment = {
+        kind: "payment",
         clientSecret: created.clientSecret,
         // What we are ACTUALLY charging. The client used to label its button
         // from the full service price, which in deposit mode would read
@@ -2628,6 +2735,37 @@ bookingPublicRouter.post(
       logger.error({ err, appointmentId: appt.id }, "nudge reply push failed"),
     );
     res.json({ ok: true });
+  },
+);
+
+// POST /api/book/manage/:token/card-saved - card on file: the browser reports
+// that confirmSetup succeeded. We do not take its word for it: the SetupIntent
+// is retrieved from Stripe and, if it really succeeded, the hold is promoted -
+// the same path the setup_intent.succeeded webhook takes. So a confirmation
+// never waits on a webhook subscription being configured, and a forged call
+// can promote nothing Stripe has not confirmed.
+bookingPublicRouter.post(
+  "/manage/:token/card-saved",
+  bookingWriteLimiter,
+  async (req, res) => {
+    const appt = await prisma.appointment.findUnique({
+      where: { manageToken: String(req.params.token) },
+      select: { id: true, shopId: true, status: true },
+    });
+    if (!appt) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    if (appt.status === "BOOKED") {
+      res.json({ ok: true, status: "BOOKED" });
+      return;
+    }
+    const outcome = await verifyCardSaved({ shopId: appt.shopId, appointmentId: appt.id });
+    const after = await prisma.appointment.findUnique({
+      where: { id: appt.id },
+      select: { status: true },
+    });
+    res.json({ ok: true, outcome, status: after?.status ?? appt.status });
   },
 );
 

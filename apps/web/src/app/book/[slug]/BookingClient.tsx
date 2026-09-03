@@ -244,6 +244,8 @@ export function BookingClient({
     holdMinutes: number | null;
     /** The instant the chair goes back on sale, so the screen can count DOWN. */
     expiresAt: string | null;
+    /** "setup" = card on file: the card is kept and NOTHING is charged now. */
+    kind: "payment" | "setup";
   } | null>(null);
   // The manage token of a booking awaiting payment (shown after the card clears).
   const [manageTokenPending, setManageTokenPending] = useState<string | null>(null);
@@ -1393,6 +1395,7 @@ export function BookingClient({
                 balanceDueCents: res.paymentBalanceDueCents ?? 0,
                 holdMinutes: res.paymentHoldMinutes ?? null,
                 expiresAt: res.paymentExpiresAt ?? null,
+                kind: res.paymentKind ?? "payment",
               }
             : null,
         );
@@ -1573,10 +1576,25 @@ export function BookingClient({
       <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-5 py-10 text-offwhite">
         <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
           <h1 ref={paymentHeadingRef} tabIndex={-1} className="font-display text-2xl outline-none">
-            {payCharge?.isDeposit ? "Deposit to confirm" : "Pay to confirm"}
+            {payCharge?.kind === "setup"
+              ? "Save a card to confirm"
+              : payCharge?.isDeposit
+                ? "Deposit to confirm"
+                : "Pay to confirm"}
           </h1>
           <p className="mt-1 mb-4 text-sm text-muted">
-            {payCharge?.isDeposit ? (
+            {payCharge?.kind === "setup" ? (
+              <>
+                Your time is held. {data.shop.name} keeps a card on file — you
+                are <strong className="text-offwhite">not charged today</strong>
+                , and you pay at your visit.
+                {data.shop.payment?.sentence.includes("charged only") ? (
+                  <> It is charged only for a no-show or a cancellation inside the shop&rsquo;s cancellation window.</>
+                ) : (
+                  <> It is not charged unless the shop turns on no-show fees.</>
+                )}
+              </>
+            ) : payCharge?.isDeposit ? (
               <>
                 Your time is held. Pay a{" "}
                 <strong className="text-offwhite">
@@ -1668,12 +1686,15 @@ export function BookingClient({
             <PaymentStep
               clientSecret={paymentSecret}
               amountLabel={
-                payCharge
-                  ? `$${(payCharge.amountCents / 100).toFixed(0)}`
-                  : selectedPrice !== null
-                    ? `$${selectedPrice.toFixed(0)}`
-                    : null
+                payCharge?.kind === "setup"
+                  ? null
+                  : payCharge
+                    ? `$${(payCharge.amountCents / 100).toFixed(0)}`
+                    : selectedPrice !== null
+                      ? `$${selectedPrice.toFixed(0)}`
+                      : null
               }
+              intent={payCharge?.kind === "setup" ? "setup" : "payment"}
               accent={accent}
               // Where a redirect-based method returns to. The manage page is
               // the honest destination: it survives losing every scrap of
@@ -2646,6 +2667,19 @@ export function BookingClient({
               */}
               {tipNote !== null && grandTotal !== null && (
                 <p className="text-xs text-muted">{tipNote}</p>
+              )}
+              {/* What Confirm does with money. Until this line existed the first
+                  mention of a deposit or a saved card was the card screen that
+                  appeared AFTER the booking had been written. Same sentence the
+                  receptionist speaks, so no surface contradicts another. */}
+              {data.shop.payment?.collects && (
+                <p className="text-xs text-muted" data-qa="payment-terms">
+                  {data.shop.payment.collects === "card"
+                    ? "You'll save a card to confirm — no charge today."
+                    : data.shop.payment.mode === "deposit" && data.shop.payment.depositAmountCents
+                      ? `A $${Math.round(data.shop.payment.depositAmountCents / 100)} deposit is taken when you book.`
+                      : "Payment is taken when you book."}
+                </p>
               )}
             </div>
           )}

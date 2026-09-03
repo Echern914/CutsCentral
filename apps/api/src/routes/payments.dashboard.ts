@@ -38,6 +38,7 @@ paymentsDashboardRouter.get("/status", async (req, res) => {
       cancelWindowHours: true,
       cancelFeeBps: true,
       depositAmountCents: true,
+      chargeCardOnFileFees: true,
       tipPolicy: true,
       payDirectEnabled: true,
       payDirectZelle: true,
@@ -73,6 +74,7 @@ paymentsDashboardRouter.get("/status", async (req, res) => {
     cancelWindowHours: shop.cancelWindowHours,
     cancelFeeBps: shop.cancelFeeBps,
     depositAmountCents: shop.depositAmountCents,
+    chargeCardOnFileFees: shop.chargeCardOnFileFees,
     tipPolicy: shop.tipPolicy,
     // Fee-free pay-direct (Zelle/Venmo/Cash App) — display-only, no Stripe needed.
     payDirect: {
@@ -162,7 +164,11 @@ paymentsDashboardRouter.post("/connect/dashboard", async (req, res) => {
 // PATCH /api/payments/settings - payment mode + cancellation policy.
 const settingsSchema = z
   .object({
-    paymentsMode: z.enum(["off", "ahead", "deposit", "hold"]).optional(),
+    paymentsMode: z.enum(["off", "ahead", "deposit", "card_on_file", "hold"]).optional(),
+    // card_on_file: may the kept card be charged for a no-show / late cancel?
+    // A separate switch from the mode on purpose - "unless the barber is set
+    // and it's on them" (Eric). Default false in the schema.
+    chargeCardOnFileFees: z.boolean().optional(),
     cancelWindowHours: z.number().int().min(0).max(720).optional(),
     cancelFeeBps: z.number().int().min(0).max(10000).optional(),
     // Deposit taken at booking, in CENTS. Floor of $1 so "deposit mode with a
@@ -213,6 +219,7 @@ paymentsDashboardRouter.patch("/settings", async (req, res) => {
       ...(d.cancelWindowHours !== undefined ? { cancelWindowHours: d.cancelWindowHours } : {}),
       ...(d.cancelFeeBps !== undefined ? { cancelFeeBps: d.cancelFeeBps } : {}),
       ...(d.tipPolicy !== undefined ? { tipPolicy: d.tipPolicy ?? null } : {}),
+      ...(d.chargeCardOnFileFees !== undefined ? { chargeCardOnFileFees: d.chargeCardOnFileFees } : {}),
       ...(d.depositAmountCents !== undefined
         ? { depositAmountCents: d.depositAmountCents }
         : {}),

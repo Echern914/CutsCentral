@@ -231,6 +231,8 @@ export async function bookAction(
   ok: boolean;
   manageToken?: string;
   paymentClientSecret?: string | null;
+  /** "payment" (charge now) or "setup" (card kept, nothing charged). */
+  paymentKind?: "payment" | "setup";
   /** What is actually being charged now, in cents (deposit < full price). */
   paymentAmountCents?: number | null;
   /** True when this is a DEPOSIT and money is still owed at the shop. */
@@ -264,6 +266,8 @@ export async function bookAction(
     ok: boolean;
     manageToken: string;
     payment: {
+      /** "payment" moves money now; "setup" keeps the card and charges nothing. */
+      kind?: "payment" | "setup";
       clientSecret: string;
       amountCents: number;
       isDeposit: boolean;
@@ -290,6 +294,7 @@ export async function bookAction(
         }
       : undefined,
     paymentClientSecret: res.data.payment?.clientSecret ?? null,
+    paymentKind: res.data.payment?.kind ?? "payment",
     paymentAmountCents: res.data.payment?.amountCents ?? null,
     paymentIsDeposit: res.data.payment?.isDeposit ?? false,
     paymentBalanceDueCents: res.data.payment?.balanceDueCents ?? null,

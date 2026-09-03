@@ -55,6 +55,7 @@ export function PaymentStep({
   accent,
   returnUrl,
   onPaid,
+  intent = "payment",
 }: {
   clientSecret: string;
   amountLabel: string | null;
@@ -68,6 +69,12 @@ export function PaymentStep({
   returnUrl: string;
   /** The money is away. The PARENT confirms with the server. */
   onPaid: () => void;
+  /**
+   * "payment" confirms a PaymentIntent (money moves). "setup" confirms a
+   * SetupIntent: the card is saved and NOTHING is charged - card on file.
+   * Same Element, same wallets, same hand-off; only the Stripe call differs.
+   */
+  intent?: "payment" | "setup";
 }) {
   // A missing publishable key is a deployment fault, not a customer error, and
   // the old screen expressed it as an inert "Pay $20" button over a chair that
@@ -98,6 +105,7 @@ export function PaymentStep({
         accent={accent}
         returnUrl={returnUrl}
         onPaid={onPaid}
+        intent={intent}
       />
     </Elements>
   );
@@ -108,11 +116,13 @@ function PaymentForm({
   accent,
   returnUrl,
   onPaid,
+  intent = "payment",
 }: {
   amountLabel: string | null;
   accent: string;
   returnUrl: string;
   onPaid: () => void;
+  intent?: "payment" | "setup";
 }) {
   const stripe = useStripe();
   const elements = useElements();
@@ -136,17 +146,35 @@ function PaymentForm({
     if (!stripe || !elements) return;
     setError(null);
     setPaying(true);
-    const { error: err, paymentIntent } = await stripe.confirmPayment({
-      elements,
-      // `if_required` keeps the common card path on-page; a method that MUST
-      // redirect (and several the Element offers do) leaves and comes back to
-      // return_url, where the confirmation screen picks the booking up by its
-      // manage token.
-      redirect: "if_required",
-      confirmParams: { return_url: returnUrl },
-    });
+    // `if_required` keeps the common card path on-page; a method that MUST
+    // redirect (and several the Element offers do) leaves and comes back to
+    // return_url, where the confirmation screen picks the booking up by its
+    // manage token.
+    // Both calls answer { error } or the intent; only the Stripe object differs.
+    let err: { message?: string } | undefined;
+    let paymentIntent: { status: string } | undefined;
+    if (intent === "setup") {
+      const r = await stripe.confirmSetup({
+        elements,
+        redirect: "if_required",
+        confirmParams: { return_url: returnUrl },
+      });
+      err = r.error;
+      paymentIntent = r.setupIntent;
+    } else {
+      const r = await stripe.confirmPayment({
+        elements,
+        redirect: "if_required",
+        confirmParams: { return_url: returnUrl },
+      });
+      err = r.error;
+      paymentIntent = r.paymentIntent;
+    }
     if (err) {
-      setError(err.message ?? "Payment failed. Please try another card.");
+      setError(
+        err.message ??
+          (intent === "setup" ? "We couldn't save that card. Please try another." : "Payment failed. Please try another card."),
+      );
       setPaying(false);
       return;
     }
@@ -194,7 +222,13 @@ function PaymentForm({
         className="w-full rounded-xl py-3 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01] disabled:opacity-50"
         style={{ backgroundColor: accent, color: readableOn(accent) }}
       >
-        {paying ? "Processing…" : amountLabel ? `Pay ${amountLabel}` : "Pay & confirm"}
+        {paying
+          ? "Processing…"
+          : intent === "setup"
+            ? "Save card & confirm"
+            : amountLabel
+              ? `Pay ${amountLabel}`
+              : "Pay & confirm"}
       </button>
     </div>
   );

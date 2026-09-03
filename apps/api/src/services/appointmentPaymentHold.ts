@@ -63,6 +63,37 @@ export function paymentHoldExpiry(now: Date): Date {
  *    its settings and no deposit is ever actually taken.
  *  - Nothing to charge (unpriced service, or deposit mode with no amount set).
  */
+/**
+ * What, if anything, the public booking page collects before the appointment
+ * becomes real: "payment" (ahead/deposit - a PaymentIntent), "card"
+ * (card_on_file - a SetupIntent, nothing charged), or null (pay at the shop).
+ *
+ * Every gate `collectsPaymentUpFront` applies holds here too, for the same
+ * reasons: no Connect, approval-first shops, an account that cannot take
+ * charges yet. A saved card the shop could never charge is not protection, it
+ * is a form the customer filled in for nothing.
+ */
+export function collectsAtBooking(input: {
+  connectEnabled: boolean;
+  paymentsMode: string | null;
+  requireBookingApproval: boolean;
+  connectChargesEnabled: boolean;
+  stripeConnectAccountId: string | null;
+  chargeCents: number | null;
+}): "payment" | "card" | null {
+  if (collectsPaymentUpFront(input)) return "payment";
+  if (
+    input.paymentsMode === "card_on_file" &&
+    input.connectEnabled &&
+    !input.requireBookingApproval &&
+    input.connectChargesEnabled &&
+    Boolean(input.stripeConnectAccountId)
+  ) {
+    return "card";
+  }
+  return null;
+}
+
 export function collectsPaymentUpFront(input: {
   connectEnabled: boolean;
   paymentsMode: string | null;

@@ -522,6 +522,10 @@ model Shop {
   // the service price at charge time, so a $20 deposit never overcharges a $15
   // line-up. Null = the shop has not chosen one yet (UI offers $20).
   depositAmountCents Int?
+  // Card on file: may the saved card be charged for a no-show or a late
+  // cancel? Default OFF - choosing the mode is never, by itself, a decision to
+  // charge anyone. "unless the barber is set and it's on them" (Eric).
+  chargeCardOnFileFees Boolean @default(false)
 
   // Does the price a customer sees already include a tip?
   //
@@ -607,6 +611,7 @@ model Shop {
   serviceUpgradeRules       ServiceUpgradeRule[]
   serviceUpgradeRuleSources ServiceUpgradeRuleSource[]
   payments               Payment[]
+  cardsOnFile            CardOnFile[]
 
   // Team: who else can sign in to this shop, and outstanding invites.
   members     ShopMember[]
@@ -2485,6 +2490,7 @@ model Appointment {
   updatedAt          DateTime          @updatedAt
 
   payment Payment? // the customer payment for this booking (if any)
+  cardOnFile CardOnFile? // the card kept at booking (card_on_file mode)
   nudges  Nudge[] // appointment-scoped sends (checkin_nudge + replies)
   // Set when this booking claimed a barber-published targeted slot.
   targetedSlot TargetedSlot?
@@ -2567,6 +2573,11 @@ enum PaymentsMode {
   // Take a fixed DEPOSIT at booking; the rest is collected at the chair. The
   // no-show deterrent without asking a stranger to prepay a whole haircut.
   deposit
+  // Keep the card, charge nothing. A SetupIntent saves it at booking; any
+  // later no-show / late-cancel fee is a fresh off-session charge - and only
+  // when Shop.chargeCardOnFileFees is on. Pay-at-the-chair shops' no-show
+  // protection without asking a stranger to prepay.
+  card_on_file
   hold
   // Card-present (Tap to Pay on iPhone / Stripe Terminal). Only ever a Payment
   // row SNAPSHOT - never a shop setting, because a shop does not "run in
@@ -2610,6 +2621,36 @@ model Payment {
 
   @@index([shopId, status])
   @@index([status, holdExpiresAt]) // the hold-release/capture-retry sweep
+}
+
+/// A card kept at booking without being charged (paymentsMode card_on_file).
+/// Separate from Payment on purpose: a Payment row is money that moved; this
+/// is a credential held on the customer's behalf, and Payment.appointmentId is
+/// unique - a later fee needs its own Payment row against the same appointment.
+/// The Customer + SetupIntent live on the PLATFORM account (destination-charge
+/// topology), one Customer per booking so a card saved for one shop can never
+/// be charged by another. FORCE RLS + tenant_isolation like Payment.
+model CardOnFile {
+  id                    String      @id
+  shopId                String
+  shop                  Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  appointmentId         String      @unique
+  appointment           Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  stripeCustomerId      String
+  stripeSetupIntentId   String      @unique
+  stripePaymentMethodId String?
+  // Out-of-PCI-scope display facts, verbatim from Stripe, never synthesised.
+  brand                 String?
+  last4                 String?
+  // pending | saved | released | charged | failed (CHECK-pinned in SQL)
+  status                String      @default("pending")
+  savedAt               DateTime?
+  releasedAt            DateTime?
+  lastWebhookEventId    String?
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+
+  @@index([shopId, status])
 }
 
 // Cross-replica mutex for the in-process node-cron scheduler. One row per named
