@@ -5,17 +5,6 @@ import { apiGet, apiSend } from "@/lib/api";
 
 type Result = { ok: boolean; error?: string };
 
-/** Mint a Stripe onboarding link and return its URL for the client to open. */
-export async function startConnectOnboardingAction(): Promise<{
-  ok: boolean;
-  url?: string;
-  error?: string;
-}> {
-  const res = await apiSend<{ url: string }>("POST", "/api/payments/connect/onboard");
-  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
-  return { ok: true, url: res.data.url };
-}
-
 /**
  * Mint a one-time link into the barber's Stripe dashboard - the Express
  * dashboard for an account set up through ChairBack (there is NO stripe.com

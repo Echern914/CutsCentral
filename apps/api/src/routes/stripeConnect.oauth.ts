@@ -4,9 +4,11 @@ import { Prisma, prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 import { connectEnabled, stripeClient } from "../billing/stripe.js";
+import { getConnectStatus } from "../billing/connect.js";
 import {
   CONNECT_OAUTH_STATE_COOKIE,
   buildConnectAuthorizeUrl,
+  canReplaceConnectedAccount,
   createConnectState,
   exchangeConnectCode,
   standardConnectEnabled,
@@ -23,8 +25,12 @@ import { logger } from "../logger.js";
  * Its authority comes from the signed state cookie instead.
  *
  * Deliberately shaped like acuity.oauth.ts (same state format, same cookie
- * handling, same start/callback split). The Express door is untouched and still
- * lives at POST /api/payments/connect/onboard.
+ * handling, same start/callback split).
+ *
+ * Since 2026-09-02 this is THE door: the Express door no longer creates
+ * accounts (POST /api/payments/connect/onboard only finishes an existing one).
+ * A barber's money belongs in an account they own and can log into at
+ * stripe.com.
  */
 export const stripeConnectOAuthRouter: Router = Router();
 
@@ -70,12 +76,32 @@ stripeConnectOAuthRouter.get(
     }
 
     const shop = req.shop!;
-    // Relinking the SAME account is fine (re-consent, scope change). Pointing a
-    // shop at a DIFFERENT account is where money silently changes destination,
-    // so it needs a deliberate disconnect first rather than a quiet overwrite.
+    // Pointing a shop at a DIFFERENT account is where money silently changes
+    // destination, so an account that can charge needs a deliberate disconnect
+    // first rather than a quiet overwrite. The one exception is an unfinished
+    // Express account (retired door, never able to charge, holds nothing):
+    // replacing it is the whole point of this button for those shops. Status is
+    // read LIVE from Stripe here, not from the mirrored flag, so a Express
+    // account that became able to charge since the last page load is still
+    // protected.
     if (shop.stripeConnectAccountId) {
-      res.redirect(back("already"));
-      return;
+      const current = await prisma.shop.findUnique({
+        where: { id: shop.id },
+        select: { stripeConnectAccountId: true, stripeConnectAccountType: true },
+      });
+      const live = await getConnectStatus({
+        id: shop.id,
+        stripeConnectAccountId: current?.stripeConnectAccountId ?? null,
+      });
+      if (
+        !canReplaceConnectedAccount({
+          type: current?.stripeConnectAccountType ?? null,
+          chargesEnabled: live.chargesEnabled,
+        })
+      ) {
+        res.redirect(back("already"));
+        return;
+      }
     }
 
     const user = await prisma.user.findUnique({
@@ -136,7 +162,12 @@ stripeConnectOAuthRouter.get("/callback", async (req, res) => {
 
   const shop = await prisma.shop.findUnique({
     where: { id: state.shopId },
-    select: { id: true, stripeConnectAccountId: true },
+    select: {
+      id: true,
+      stripeConnectAccountId: true,
+      stripeConnectAccountType: true,
+      connectChargesEnabled: true,
+    },
   });
   if (!shop) {
     res.status(404).json({ error: "shop_not_found" });
@@ -154,7 +185,16 @@ stripeConnectOAuthRouter.get("/callback", async (req, res) => {
 
   // Re-check against the shop we actually resolved: /start checked too, but the
   // barber has been away at Stripe and could have connected in another tab.
-  if (shop.stripeConnectAccountId && shop.stripeConnectAccountId !== accountId) {
+  // Same rule as /start (the mirrored flag is fresh - /start just read it live).
+  const replacing =
+    shop.stripeConnectAccountId !== null && shop.stripeConnectAccountId !== accountId;
+  if (
+    replacing &&
+    !canReplaceConnectedAccount({
+      type: shop.stripeConnectAccountType,
+      chargesEnabled: shop.connectChargesEnabled,
+    })
+  ) {
     logger.warn({ shopId: shop.id }, "stripe connect oauth returned while already connected");
     res.redirect(back("already"));
     return;
@@ -163,8 +203,21 @@ stripeConnectOAuthRouter.get("/callback", async (req, res) => {
   try {
     await prisma.shop.update({
       where: { id: shop.id },
-      data: { stripeConnectAccountId: accountId, stripeConnectAccountType: "standard" },
+      data: {
+        stripeConnectAccountId: accountId,
+        stripeConnectAccountType: "standard",
+        // The flags describe the OLD account when replacing; the next status
+        // read mirrors the new one from Stripe. Never let a stale "enabled"
+        // leak onto an account we have not looked at yet.
+        ...(replacing ? { connectChargesEnabled: false, payoutsEnabled: false } : {}),
+      },
     });
+    if (replacing) {
+      logger.info(
+        { shopId: shop.id, replaced: shop.stripeConnectAccountId },
+        "stripe connect: unfinished Express account replaced by the barber's own",
+      );
+    }
   } catch (err) {
     /**
      * stripeConnectAccountId is @unique, so this is the real and reachable case

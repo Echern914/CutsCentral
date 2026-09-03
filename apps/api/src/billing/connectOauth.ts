@@ -107,6 +107,27 @@ export function standardConnectEnabled(): boolean {
 }
 
 /**
+ * May the Standard door REPLACE the account a shop already holds?
+ *
+ * Yes only for an Express account that has never been able to take a charge:
+ * it was created by the (now retired) Express door, was never finished, and
+ * holds no money - so pointing the shop at the barber's own account loses
+ * nothing. That is the state every unfinished shop was stuck in on 2026-09-02:
+ * every button on the page led back into "Sign in to Express".
+ *
+ * Anything that CAN charge (a working Express account, or any Standard one)
+ * may hold money or be mid-payout, so it needs a deliberate Disconnect first
+ * rather than a quiet overwrite. ONE definition, used by /start and /callback
+ * so they cannot disagree.
+ */
+export function canReplaceConnectedAccount(existing: {
+  type: string | null;
+  chargesEnabled: boolean;
+}): boolean {
+  return existing.type !== "standard" && !existing.chargesEnabled;
+}
+
+/**
  * Where Stripe sends the barber back. Must EXACTLY match a redirect URI
  * registered in the Stripe dashboard's Connect settings, or Stripe refuses the
  * authorize request before the barber sees anything.

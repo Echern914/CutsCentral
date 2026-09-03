@@ -2,7 +2,7 @@
 
 import { cap, useVocab } from "@/components/VocabProvider";
 import { APP_NAME } from "@chairback/config/constants";
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
@@ -12,8 +12,24 @@ import {
   openStripeDashboardAction,
   savePaymentSettingsAction,
   savePayDirectAction,
-  startConnectOnboardingAction,
 } from "./actions";
+
+/**
+ * What Stripe's OAuth round-trip says when it lands the barber back here
+ * (?connect=…). Without this the page said NOTHING after a redirect, so a
+ * refused link looked exactly like a broken button.
+ */
+const CONNECT_RESULT: Record<string, { text: string; tone: "success" | "error" }> = {
+  linked: { text: "Your Stripe account is connected. Payments land there from now on.", tone: "success" },
+  already: {
+    text: "This shop already has a working Stripe account. Disconnect it first to switch.",
+    tone: "error",
+  },
+  cancelled: { text: "No changes — you left Stripe without authorizing.", tone: "error" },
+  taken: { text: "That Stripe account is already connected to another shop.", tone: "error" },
+  unavailable: { text: "Connecting a Stripe account isn't available right now.", tone: "error" },
+  error: { text: "Stripe didn't complete the connection. Please try again.", tone: "error" },
+};
 
 const field =
   "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
@@ -77,17 +93,24 @@ export function PaymentsManager({
 
   const { connect, connectAvailable } = initial;
   const ready = connect.chargesEnabled;
+  // An account made by the retired Express door. Working ones (money inside)
+  // keep working; an unfinished one is only in the way.
+  const isExpress = connect.connected && initial.connectAccountType !== "standard";
+  const unfinishedExpress = isExpress && !ready;
 
-  function connectStripe() {
-    start(async () => {
-      const r = await startConnectOnboardingAction();
-      if (r.ok && r.url) {
-        window.location.href = r.url; // Stripe-hosted onboarding
-      } else {
-        toast("Couldn't start Stripe setup", "error");
-      }
-    });
-  }
+  // Say what the OAuth round-trip concluded, once, then clean the URL so a
+  // reload doesn't repeat it.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const outcome = params.get("connect");
+    if (!outcome) return;
+    const msg = CONNECT_RESULT[outcome];
+    if (msg) toast(msg.text, msg.tone);
+    params.delete("connect");
+    const qs = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /**
    * Where the money is. An account set up through ChairBack is an Express
@@ -108,9 +131,11 @@ export function PaymentsManager({
   }
 
   /**
-   * The other door: the barber logs in at Stripe and authorises an account they
-   * ALREADY own. A full-page navigation, not a fetch — it is an OAuth redirect
-   * chain, exactly like the Acuity/Square connect buttons.
+   * THE door (since 2026-09-02): the barber logs in at Stripe and authorises an
+   * account they own. A full-page navigation, not a fetch — it is an OAuth
+   * redirect chain, exactly like the Acuity/Square connect buttons. Express
+   * (a Stripe-managed account behind a separate login) is no longer offered:
+   * it is where "nothing is showing in my Stripe" came from.
    */
   function linkExistingStripe() {
     start(() => {
@@ -251,34 +276,30 @@ export function PaymentsManager({
               own bank. Stripe handles your details and payouts — ChairBack never
               sees your card or bank info.
             </p>
-            {/* 🔴 TWO DOORS, and the order is deliberate. Most barbers have
-                never taken card payments, so the door that makes an account for
-                them leads. The other one exists because someone who ALREADY has
-                Stripe should never be forced into a second account. Both end at
-                the same place: an account they own, that we never hold money in. */}
-            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-              <button
-                onClick={connectStripe}
-                disabled={pending}
-                className="rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
-              >
-                {pending ? "Starting…" : "Set up a new Stripe account"}
-              </button>
-              {initial.standardAvailable && (
+            {/* 🔴 ONE DOOR. The barber's own Stripe account, linked by logging in
+                at stripe.com and authorizing. No Stripe-managed (Express)
+                account is created any more: those live behind a separate login,
+                which is exactly how a collected deposit came to look "missing". */}
+            {initial.standardAvailable ? (
+              <>
                 <button
                   onClick={linkExistingStripe}
                   disabled={pending}
-                  className="rounded-xl border border-subtle px-5 py-2.5 text-sm font-medium text-offwhite transition-colors duration-150 ease-out hover:border-strong disabled:opacity-50"
+                  className="mt-4 rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
                 >
-                  {pending ? "Opening…" : "I already have Stripe"}
+                  {pending ? "Opening…" : "Connect your Stripe account"}
                 </button>
-              )}
-            </div>
-            {initial.standardAvailable && (
-              <p className="mt-2 text-xs text-muted">
-                Linking keeps everything in the account you already use. Setting
-                one up is the quicker route if you&apos;ve never taken card
-                payments — you don&apos;t need a Stripe account beforehand.
+                <p className="mt-2 text-xs text-muted">
+                  You&apos;ll log in at Stripe and approve {APP_NAME}. No Stripe
+                  account yet? Create one free at stripe.com first, then come
+                  back and tap this — it takes a few minutes.
+                </p>
+              </>
+            ) : (
+              <p className="mt-3 rounded-xl border border-subtle bg-charcoal-700/50 px-3.5 py-2.5 text-xs text-muted">
+                Connecting a Stripe account isn&apos;t switched on for this
+                platform yet — the Stripe Connect client ID is missing on the
+                server. Nothing to do on your side.
               </p>
             )}
           </div>
@@ -297,48 +318,74 @@ export function PaymentsManager({
             )}
             <StatusRow label="Charges enabled" ok={connect.chargesEnabled} />
             <StatusRow label="Payouts enabled" ok={connect.payoutsEnabled} />
-            {/* 🔴 THE DOOR TO THE MONEY. Every payment ChairBack takes lands in
-                THIS account, and for an Express account this button is the only
-                way to see its balance and payouts — stripe.com will not show it. */}
-            <div className="mt-1 flex flex-col gap-1">
-              <button
-                onClick={openStripeDashboard}
-                disabled={pending}
-                className="self-start rounded-xl bg-gold px-4 py-2 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
-              >
-                {pending ? "Opening…" : "See your balance & payouts in Stripe"}
-              </button>
-              <p className="text-xs text-muted">
-                Every card payment and deposit taken through {APP_NAME} lands
-                here. New money shows as <em>pending</em> for two business days,
-                then pays out to your bank on Stripe&apos;s schedule.
-              </p>
-            </div>
-            {!ready &&
-              /* Only an EXPRESS account has a ChairBack-openable form to go back
-                 to. A standard account is finished in the barber's own Stripe
-                 dashboard, so offering a button that reopens nothing would send
-                 them in a circle. */
-              (initial.connectAccountType !== "standard" ? (
-                <>
+
+            {unfinishedExpress ? (
+              /* 🔴 THE STUCK STATE. An Express account the retired door started
+                 and nobody finished. Every button used to lead back into
+                 "Sign in to Express"; now the one button here replaces it with
+                 the barber's own account (the API allows the swap only for an
+                 Express account that has never been able to charge). */
+              <div className="mt-1 rounded-xl border border-gold/30 bg-gold/5 px-3.5 py-3">
+                <p className="text-sm text-offwhite">
+                  This is a Stripe Express setup that was started through {APP_NAME}{" "}
+                  and never finished. It holds no money.
+                </p>
+                <p className="mt-1 text-xs text-muted">
+                  Connect your own Stripe account instead — it replaces this one
+                  in one step, and payments land where you can see them.
+                </p>
+                {initial.standardAvailable ? (
+                  <button
+                    onClick={linkExistingStripe}
+                    disabled={pending}
+                    className="mt-3 rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+                  >
+                    {pending ? "Opening…" : "Connect your Stripe account"}
+                  </button>
+                ) : (
+                  <p className="mt-2 text-xs text-muted">
+                    Connecting a Stripe account isn&apos;t switched on for this
+                    platform yet.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <>
+                {/* 🔴 THE DOOR TO THE MONEY. Every payment ChairBack takes lands
+                    in THIS account. For an Express account this button is the
+                    only way to see its balance and payouts — stripe.com will not
+                    show it. For a Standard one it is simply their dashboard. */}
+                <div className="mt-1 flex flex-col gap-1">
+                  <button
+                    onClick={openStripeDashboard}
+                    disabled={pending}
+                    className="self-start rounded-xl bg-gold px-4 py-2 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+                  >
+                    {pending ? "Opening…" : "See your balance & payouts in Stripe"}
+                  </button>
+                  <p className="text-xs text-muted">
+                    Every card payment and deposit taken through {APP_NAME} lands
+                    here. New money shows as <em>pending</em> for two business days,
+                    then pays out to your bank on Stripe&apos;s schedule.
+                  </p>
+                </div>
+                {!ready && (
                   <p className="mt-1 text-xs text-muted">
                     Stripe still needs a few details before you can take payments.
+                    Finish them in your Stripe dashboard — this page updates when
+                    Stripe tells us you&apos;re done.
                   </p>
-                  <button
-                    onClick={connectStripe}
-                    disabled={pending}
-                    className="mt-1 self-start rounded-xl border border-subtle px-4 py-2 text-sm text-offwhite disabled:opacity-50"
-                  >
-                    {pending ? "Opening…" : "Finish Stripe setup"}
-                  </button>
-                </>
-              ) : (
-                <p className="mt-1 text-xs text-muted">
-                  Stripe still needs a few details before you can take payments.
-                  Finish them in your own Stripe dashboard — this page updates
-                  when Stripe tells us you're done.
-                </p>
-              ))}
+                )}
+                {isExpress && ready && (
+                  <p className="mt-1 text-xs text-muted">
+                    This account was set up through {APP_NAME} and lives behind
+                    Stripe&apos;s Express login (the button above). Prefer your
+                    own Stripe account? Once its pending payouts have cleared,
+                    disconnect it below and connect yours.
+                  </p>
+                )}
+              </>
+            )}
 
             <div className="mt-2 border-t border-subtle pt-2">
               {confirmDisconnect ? (

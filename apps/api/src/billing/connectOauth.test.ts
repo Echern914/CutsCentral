@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  canReplaceConnectedAccount,
   createConnectState,
   verifyConnectState,
   standardConnectEnabled,
@@ -93,5 +94,28 @@ describe("standardConnectEnabled", () => {
     if (!process.env.STRIPE_CONNECT_CLIENT_ID || !process.env.STRIPE_SECRET_KEY) {
       expect(standardConnectEnabled()).toBe(false);
     }
+  });
+});
+
+/**
+ * Whether linking a barber's OWN account may replace the one the shop holds.
+ * The unfinished-Express case is the one every stuck shop was in on
+ * 2026-09-02; the other rows are the money-holding states that must never be
+ * overwritten without a deliberate Disconnect.
+ */
+describe("canReplaceConnectedAccount", () => {
+  it("an unfinished Express account (never able to charge) may be replaced", () => {
+    expect(canReplaceConnectedAccount({ type: "express", chargesEnabled: false })).toBe(true);
+    // Rows from before the type column existed are Express too.
+    expect(canReplaceConnectedAccount({ type: null, chargesEnabled: false })).toBe(true);
+  });
+
+  it("a WORKING Express account is never silently replaced - it may hold money", () => {
+    expect(canReplaceConnectedAccount({ type: "express", chargesEnabled: true })).toBe(false);
+  });
+
+  it("a Standard account is never replaced by another, finished or not", () => {
+    expect(canReplaceConnectedAccount({ type: "standard", chargesEnabled: false })).toBe(false);
+    expect(canReplaceConnectedAccount({ type: "standard", chargesEnabled: true })).toBe(false);
   });
 });
