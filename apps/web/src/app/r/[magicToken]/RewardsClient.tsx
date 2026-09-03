@@ -14,6 +14,7 @@ import { RewardsClaimed } from "@/components/rewards/RewardsClaimed";
 import { VisitHistory } from "@/components/rewards/VisitHistory";
 import { ConsentCard } from "./ConsentCard";
 import { CadenceCard } from "./CadenceCard";
+import { NextVisitCard } from "./NextVisitCard";
 import { PushOptIn } from "./PushOptIn";
 import { GetTheApp } from "./GetTheApp";
 import { AddToWallet } from "./AddToWallet";
@@ -92,6 +93,7 @@ export function RewardsClient({
     visits,
     redemptions,
     rebook,
+    nextVisit,
   } = data;
   // Resolve the barber's full page identity. Every surface below reads from these
   // tokens (color, type, shape) so the client's rewards page matches the shop's
@@ -262,6 +264,16 @@ export function RewardsClient({
             )}
           </motion.header>
 
+          {/* The customer's next appointment - first, because it is the one thing
+              someone opens the app for on the day. Not gated by the barber's
+              rewards-section toggles or the rewards master switch: it is not a
+              reward, it is their booking. */}
+          {nextVisit && (
+            <motion.div variants={fadeUp}>
+              <NextVisitCard visit={nextVisit} theme={t} />
+            </motion.div>
+          )}
+
           {/* The shop's AI text line. High on the page on purpose: this is a
               returning client, and "text to see what's open" is the fastest
               path back into the chair — faster than any booking link. Renders
@@ -377,7 +389,7 @@ export function RewardsClient({
           )}
 
           {/* Rebooking countdown - drives urgency to book the next visit */}
-          {show("rebook") && (
+          {!nextVisit && show("rebook") && (
             <motion.div variants={fadeUp} data-tour="loyalty-extras">
               <RebookCountdown rebook={rebook} bookingUrl={shop.bookingUrl} theme={t} />
             </motion.div>

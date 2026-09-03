@@ -14,6 +14,8 @@ import {
   parseTierThresholds,
   tierPerk,
   randomToken,
+  formatShopAddress,
+  mapsUrlFor,
 } from "@chairback/config";
 import { prisma, runAsOwner } from "@chairback/db";
 import { toE164 } from "../acuity/clientKey.js";
@@ -67,6 +69,7 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
     const [
       visits,
       upcoming,
+      upcomingAppointment,
       rewards,
       promotions,
       redemptions,
@@ -104,7 +107,30 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
         scheduledAt: { gt: now },
       },
       orderBy: { scheduledAt: "asc" },
-      select: { scheduledAt: true },
+      select: { scheduledAt: true, serviceName: true },
+    }),
+    /**
+     * 🔴 A NATIVE booking has no Visit row until it is COMPLETED
+     * (appointmentPromotion.ts upserts it then), so the Visit query above sees
+     * only Acuity-synced visits. For a ChairBack-booked customer "You're
+     * booked - next visit ..." therefore never rendered, and the app could not
+     * show the one thing they opened it for. This is the native half; the two
+     * are merged below and the sooner one wins.
+     */
+    tx.appointment.findFirst({
+      where: {
+        shopId: client.shopId,
+        clientId: client.id,
+        status: "BOOKED",
+        startsAt: { gt: now },
+      },
+      orderBy: { startsAt: "asc" },
+      select: {
+        startsAt: true,
+        manageToken: true,
+        service: { select: { name: true } },
+        staff: { select: { name: true } },
+      },
     }),
     tx.reward.findMany({
       where: { shopId: client.shopId, active: true },
@@ -226,6 +252,7 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
       client,
       visits,
       upcoming,
+      upcomingAppointment,
       lastAppointment,
       rewards,
       promotions,
@@ -245,6 +272,7 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
     client,
     visits,
     upcoming,
+    upcomingAppointment,
     lastAppointment,
     rewards,
     promotions,
@@ -400,8 +428,39 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
     windowDays: number;
     upcomingAt: string | null;
   };
-  if (upcoming) {
-    rebook = { state: "booked", deadline: null, windowDays, upcomingAt: upcoming.scheduledAt.toISOString() };
+  // The customer's next appointment, from whichever system holds it: a
+  // ChairBack booking (with a manage link) or an Acuity-synced visit (without).
+  // Time, place and "how long until" all come from the same shared helpers the
+  // confirmation email and the manage page use, so the app never disagrees
+  // with the message that brought the customer here.
+  const nativeNext = upcomingAppointment;
+  const syncedNext = upcoming;
+  const nativeWins =
+    nativeNext !== null &&
+    (syncedNext === null || nativeNext.startsAt.getTime() <= syncedNext.scheduledAt.getTime());
+  const nextVisit = nativeWins
+    ? {
+        startsAt: nativeNext.startsAt.toISOString(),
+        serviceName: nativeNext.service?.name ?? null,
+        staffName: nativeNext.staff?.name ?? null,
+        manageToken: nativeNext.manageToken,
+        timezone: client.shop.timezone,
+        address: formatShopAddress(client.shop),
+        mapsUrl: mapsUrlFor(client.shop),
+      }
+    : syncedNext
+      ? {
+          startsAt: syncedNext.scheduledAt.toISOString(),
+          serviceName: syncedNext.serviceName,
+          staffName: null,
+          manageToken: null,
+          timezone: client.shop.timezone,
+          address: formatShopAddress(client.shop),
+          mapsUrl: mapsUrlFor(client.shop),
+        }
+      : null;
+  if (nextVisit) {
+    rebook = { state: "booked", deadline: null, windowDays, upcomingAt: nextVisit.startsAt };
   } else if (lastVisitAt) {
     const deadline = new Date(lastVisitAt.getTime() + windowDays * 86_400_000);
     rebook = {
@@ -513,6 +572,9 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
       endsAt: p.endsAt?.toISOString() ?? null,
     })),
     rebook,
+    // The card at the top of the app: what, when, with whom, where, and the
+    // manage link when ChairBack holds the booking. null when nothing is ahead.
+    nextVisit,
     visits: visits.map((v) => ({
       date: v.scheduledAt.toISOString(),
       service: v.serviceName,

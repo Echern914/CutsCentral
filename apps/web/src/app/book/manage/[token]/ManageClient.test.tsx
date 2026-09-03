@@ -28,7 +28,9 @@ const { ManageClient } = await import("./ManageClient");
 // A fixed "now" so the countdown is deterministic: Tuesday 11:00 New York.
 const NOW = new Date("2026-09-08T15:00:00Z");
 
-function data(over: Partial<ManageData> & { shop?: Partial<ManageData["shop"]> } = {}): ManageData {
+function data(
+  over: Omit<Partial<ManageData>, "shop"> & { shop?: Partial<ManageData["shop"]> } = {},
+): ManageData {
   const { shop, ...rest } = over;
   return {
     status: "BOOKED",

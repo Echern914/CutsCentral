@@ -117,6 +117,20 @@ export interface RewardsData {
     extraPunches: number | null;
     endsAt: string | null;
   }[];
+  /**
+   * The customer's next appointment - from ChairBack (with a manage link) or
+   * synced from Acuity (without). Optional so a web deploy ahead of the API
+   * simply renders no card.
+   */
+  nextVisit?: {
+    startsAt: string;
+    serviceName: string | null;
+    staffName: string | null;
+    manageToken: string | null;
+    timezone: string;
+    address: string | null;
+    mapsUrl: string | null;
+  } | null;
   rebook: {
     state: "booked" | "counting" | "overdue" | "none";
     deadline: string | null;
