@@ -10,7 +10,9 @@ import {
   StyleSheet,
 } from "react-native";
 import { WebView, type WebViewProps } from "react-native-webview";
-import { WEB_ORIGIN } from "@/src/config";
+import * as WebBrowser from "expo-web-browser";
+import { API_ORIGIN, WEB_ORIGIN } from "@/src/config";
+import { parseOpenAuthRequest, resumeUrl } from "@/src/nativeBridge";
 
 // If the real page content hasn't signaled ready within this long, stop spinning
 // and offer a retry. The page posts "cb:ready" when its real UI mounts; we do NOT
@@ -120,6 +122,18 @@ true;
  * so those pages ALSO hide the forbidden UI themselves (HideInNativeApp); this
  * is the backstop for cold loads, server redirects, and plain <a> links.
  */
+// Tells our pages this build can open a system authentication browser on
+// request (the "cb:open-auth" message). A page that sees the bridge but NOT
+// this flag knows it is inside an older build and offers a browser instead.
+const ANNOUNCE_CAPABILITIES = `
+(function () {
+  try {
+    window.__cbNative = Object.assign(window.__cbNative || {}, { openAuth: true });
+  } catch (e) {}
+})();
+true;
+`;
+
 const OPEN_EXTERNALLY_PATHS = new Set([
   "/",
   "/login",
@@ -224,6 +238,28 @@ export function AppWebView({
     setKey((k) => k + 1);
   }
 
+  /**
+   * "cb:open-auth": run a sign-in the WebView cannot host (Stripe's) in the
+   * system authentication browser, then bring the page back with the outcome.
+   * The sheet closes itself when the flow redirects to the request's custom
+   * scheme; a dismissed sheet resumes the page as "cancelled" so it can say
+   * so. Same door as "Join your shop" (joinAuth.ts), same reasons.
+   */
+  async function runOpenAuth(req: { url: string; returnUrl: string; resumePath: string }) {
+    let resultUrl: string | null = null;
+    try {
+      const result = await WebBrowser.openAuthSessionAsync(req.url, req.returnUrl, {
+        // Reuse the sign-in the phone already has (the barber's own Stripe login).
+        preferEphemeralSession: false,
+      });
+      if (result.type === "success" && result.url) resultUrl = result.url;
+    } catch {
+      resultUrl = null;
+    }
+    const next = resumeUrl(WEB_ORIGIN, req.resumePath, resultUrl);
+    webref.current?.injectJavaScript(`window.location.assign(${JSON.stringify(next)}); true;`);
+  }
+
   // Android hardware/gesture back: consume it while the WebView has history to
   // pop; otherwise let the system handle it (screen back / app exit). iOS has
   // no system back — it gets allowsBackForwardNavigationGestures below plus
@@ -270,7 +306,9 @@ export function AppWebView({
         scalesPageToFit={false}
         setBuiltInZoomControls={false}
         setDisplayZoomControls={false}
-        injectedJavaScriptBeforeContentLoaded={LOCK_VIEWPORT + HIDE_FORBIDDEN_UI}
+        injectedJavaScriptBeforeContentLoaded={
+          LOCK_VIEWPORT + HIDE_FORBIDDEN_UI + ANNOUNCE_CAPABILITIES
+        }
         bounces={false}
         overScrollMode="never"
         textInteractionEnabled
@@ -296,6 +334,11 @@ export function AppWebView({
         // signal that we can hide the spinner. Chain any caller-provided onMessage.
         onMessage={(e) => {
           if (e.nativeEvent.data === READY_MESSAGE) clearLoading();
+          const openAuth = parseOpenAuthRequest(e.nativeEvent.data, { apiOrigin: API_ORIGIN });
+          if (openAuth) {
+            void runOpenAuth(openAuth);
+            return;
+          }
           callerOnMessage?.(e);
         }}
         // Surface load failures instead of spinning forever. onError = native

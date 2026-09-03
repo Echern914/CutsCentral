@@ -6,6 +6,22 @@ import { apiGet, apiSend } from "@/lib/api";
 type Result = { ok: boolean; error?: string };
 
 /**
+ * The native app's way to start the Stripe connection: a ready-made Stripe
+ * authorize URL carrying a NATIVE state, which the app opens in the system
+ * authentication browser (Stripe's sign-in does not work inside a WebView).
+ * `error` is "unavailable" | "already" | "failed".
+ */
+export async function startStripeConnectHandoffAction(): Promise<{
+  ok: boolean;
+  url?: string;
+  error?: string;
+}> {
+  const res = await apiSend<{ url: string }>("POST", "/api/payments/connect/oauth/handoff");
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, url: res.data.url };
+}
+
+/**
  * Mint a one-time link into the barber's Stripe dashboard - the Express
  * dashboard for an account set up through ChairBack (there is NO stripe.com
  * login for those), or dashboard.stripe.com for a linked Standard account.

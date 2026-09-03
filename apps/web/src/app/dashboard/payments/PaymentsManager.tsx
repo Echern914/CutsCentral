@@ -6,13 +6,26 @@ import { useEffect, useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
+import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import type { PaymentStatus } from "./actions";
 import {
   disconnectStripeAction,
   openStripeDashboardAction,
   savePaymentSettingsAction,
   savePayDirectAction,
+  startStripeConnectHandoffAction,
 } from "./actions";
+
+/**
+ * The native shell's bridge, when the page runs inside the app. `__cbNative`
+ * is injected by app builds that can open a system authentication browser
+ * (apps/mobile/src/AppWebView.tsx); an older build has the postMessage bridge
+ * but not that flag, and must be told to connect from a browser instead.
+ */
+interface NativeBridge {
+  ReactNativeWebView?: { postMessage: (m: string) => void };
+  __cbNative?: { openAuth?: boolean };
+}
 
 /**
  * What Stripe's OAuth round-trip says when it lands the barber back here
@@ -48,6 +61,10 @@ export function PaymentsManager({
   const { toast } = useToast();
   const [pending, start] = useTransition();
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const inApp = useIsNativeApp();
+  // Shown when this app build cannot open Stripe's sign-in properly (see
+  // linkExistingStripe): the honest alternative, not a blank page.
+  const [browserHelp, setBrowserHelp] = useState(false);
   const [mode, setMode] = useState(initial.paymentsMode);
   // Held as raw strings so the field can be empty while typing. A numeric state
   // defaulting to 0 rendered a literal "0" the barber couldn't delete (typing
@@ -138,6 +155,40 @@ export function PaymentsManager({
    * it is where "nothing is showing in my Stripe" came from.
    */
   function linkExistingStripe() {
+    if (inApp) {
+      // 🔴 Stripe's sign-in dead-ends inside an embedded WebView (a blank page
+      // after "Continue with email"). Inside the app the connection runs in
+      // the SYSTEM authentication browser instead: ask the API for a
+      // ready-made authorize URL and hand it to the shell, which reloads this
+      // page with ?connect=… when the sheet closes. An app build without that
+      // capability gets told to use a browser rather than sent into the wall.
+      const bridge = window as unknown as NativeBridge;
+      if (!bridge.__cbNative?.openAuth || !bridge.ReactNativeWebView) {
+        setBrowserHelp(true);
+        return;
+      }
+      start(async () => {
+        const r = await startStripeConnectHandoffAction();
+        if (r.ok && r.url) {
+          bridge.ReactNativeWebView!.postMessage(
+            JSON.stringify({
+              type: "cb:open-auth",
+              url: r.url,
+              returnUrl: "chairback://stripe/connected",
+              resumePath: "/dashboard/payments",
+            }),
+          );
+        } else {
+          toast(
+            r.error === "already"
+              ? CONNECT_RESULT.already!.text
+              : "Couldn't start the Stripe connection. Please try again.",
+            "error",
+          );
+        }
+      });
+      return;
+    }
     start(() => {
       window.location.href = `${apiBase}/api/payments/connect/oauth/start`;
     });
@@ -269,6 +320,21 @@ export function PaymentsManager({
       {/* Connect status */}
       <Card className="p-5">
         <CardHeader title="Your Stripe account" subtitle="Where your payments land." />
+        {browserHelp && (
+          <div className="mt-3 rounded-xl border border-gold/30 bg-gold/5 px-3.5 py-3 text-sm">
+            <p className="text-offwhite">
+              Stripe&apos;s sign-in needs a full browser, and this version of the
+              app can&apos;t open one for it yet.
+            </p>
+            <p className="mt-1 text-xs text-muted">
+              Open <span className="text-offwhite">getchairback.com</span> in
+              Safari or Chrome, sign in, go to Payments, and tap{" "}
+              <span className="text-offwhite">Connect your Stripe account</span>.
+              It takes about two minutes, and this page updates on its own once
+              it&apos;s done.
+            </p>
+          </div>
+        )}
         {!connect.connected ? (
           <div className="mt-3">
             <p className="text-sm text-muted">

@@ -119,3 +119,13 @@ describe("canReplaceConnectedAccount", () => {
     expect(canReplaceConnectedAccount({ type: "standard", chargesEnabled: true })).toBe(false);
   });
 });
+
+describe("native state", () => {
+  it("carries the native flag through signing and verification", () => {
+    const now = Math.floor(Date.now() / 1000);
+    const native = createConnectState("shop_n", now, { native: true });
+    expect(verifyConnectState(native, now)?.native).toBe(true);
+    const browser = createConnectState("shop_n", now);
+    expect(verifyConnectState(browser, now)?.native).toBeUndefined();
+  });
+});
