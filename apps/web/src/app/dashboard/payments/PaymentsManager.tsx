@@ -66,6 +66,9 @@ export function PaymentsManager({
   // linkExistingStripe): the honest alternative, not a blank page.
   const [browserHelp, setBrowserHelp] = useState(false);
   const [mode, setMode] = useState(initial.paymentsMode);
+  // card_on_file: the fee switch. Separate from the mode on purpose - keeping
+  // a card is not, by itself, a decision to charge anyone.
+  const [chargeFees, setChargeFees] = useState(initial.chargeCardOnFileFees ?? false);
   // Held as raw strings so the field can be empty while typing. A numeric state
   // defaulting to 0 rendered a literal "0" the barber couldn't delete (typing
   // "40" showed "040"); the string lets the input clear, and we coerce on save.
@@ -223,6 +226,7 @@ export function PaymentsManager({
         cancelWindowHours: hours,
         cancelFeeBps: Math.round(feePct * 100),
         ...(mode === "deposit" ? { depositAmountCents: depositCents } : {}),
+        ...(mode === "card_on_file" ? { chargeCardOnFileFees: chargeFees } : {}),
         tipPolicy,
       });
       if (r.ok) toast("Payment settings saved", "success");
@@ -520,7 +524,42 @@ export function PaymentsManager({
                 : "Connect Stripe first."
             }
           />
+          <ModeButton
+            active={mode === "card_on_file"}
+            onClick={() => ready && setMode("card_on_file")}
+            disabled={!ready}
+            title="Card on file"
+            desc={
+              ready
+                ? `No charge at booking. They pay at the ${vocab.stationNoun}; the card is kept in case of a no-show.`
+                : "Connect Stripe first."
+            }
+          />
         </div>
+        {mode === "card_on_file" && (
+          <div className="mt-3 rounded-xl border border-subtle p-3">
+            <label className="flex items-start gap-3">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4"
+                checked={chargeFees}
+                onChange={(e) => setChargeFees(e.target.checked)}
+                aria-label="Charge the card on file for no-shows and late cancellations"
+              />
+              <span>
+                <span className="block text-sm font-medium">
+                  Charge the card for no-shows and late cancellations
+                </span>
+                <span className="mt-0.5 block text-[11px] text-muted">
+                  Off by default: the card is only ever kept. On: when you mark a
+                  no-show, or a customer cancels inside your free-cancel cutoff, the
+                  fee below is charged to the card they saved. Nothing else is ever
+                  charged to it.
+                </span>
+              </span>
+            </label>
+          </div>
+        )}
         {mode === "deposit" && (
           <label className="mt-3 block max-w-56">
             <span className={labelCls}>Deposit amount</span>

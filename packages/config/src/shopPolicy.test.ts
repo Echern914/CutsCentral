@@ -312,3 +312,48 @@ describe("describeNoShowPolicy", () => {
     expect(line).not.toContain("not refunded");
   });
 });
+
+/**
+ * Card on file: a card is KEPT at booking and nothing is charged. The prose
+ * has to hold two things apart that the mode alone blurs - whether a card is
+ * saved, and whether it can ever be charged - because a shop that switches the
+ * mode on has not, by that act, decided to charge anybody.
+ */
+describe("card on file", () => {
+  const base = { paymentsMode: "card_on_file" as const, cancelWindowHours: 24, cancelFeeBps: 5000 };
+
+  it("says a card is kept and NOT charged while the fee switch is off", () => {
+    const s = describeDepositPolicy(base);
+    expect(s).toMatch(/no charge at booking/);
+    expect(s).toMatch(/card is kept on file/);
+    expect(s).toMatch(/not charged unless/);
+    expect(describeNoShowPolicy(base)).toMatch(/no charge for a no-show/);
+  });
+
+  it("names the one condition once the switch is on", () => {
+    const on = { ...base, chargeCardOnFileFees: true };
+    expect(describeDepositPolicy(on)).toMatch(/charged only for a no-show or a cancellation inside/);
+    expect(describeNoShowPolicy(on)).toMatch(/charged to the card on file/);
+  });
+
+  it("🔴 a channel that cannot save a card says so, whatever the switch", () => {
+    const on = { ...base, chargeCardOnFileFees: true };
+    expect(describeDepositPolicy(on, { collectsAtBooking: false })).toBe("none up front - pay at the shop");
+    expect(describeNoShowPolicy(on, { collectsAtBooking: false })).toMatch(/no charge for a no-show/);
+    // Intent is not capability: Connect not live means no card was ever kept.
+    expect(describeDepositPolicy({ ...on, paymentsLive: false })).toBe("none up front - pay at the shop");
+    expect(describeNoShowPolicy({ ...on, paymentsLive: false })).toMatch(/no charge for a no-show/);
+  });
+
+  it("collects no money, so the cancellation-fee formula still yields nothing from nothing", () => {
+    expect(
+      cancellationFeeCents({
+        collectedCents: 0,
+        cancelWindowHours: 24,
+        cancelFeeBps: 5000,
+        startsAt: new Date("2026-09-10T15:00:00Z"),
+        now: new Date("2026-09-10T10:00:00Z"),
+      }),
+    ).toBe(0);
+  });
+});

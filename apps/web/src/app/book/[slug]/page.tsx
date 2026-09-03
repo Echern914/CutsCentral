@@ -45,6 +45,18 @@ export interface BookShopData {
      * policy on their behalf.
      */
     tipPolicy?: "included" | "not_included" | null;
+    /**
+     * What happens with money on Confirm, said BEFORE the chair is held.
+     * `collects` is what the write will do; `sentence` is how the receptionist
+     * and the assistant say it too. Optional: a web deploy ahead of the API
+     * simply says nothing.
+     */
+    payment?: {
+      collects: "payment" | "card" | null;
+      mode: string;
+      depositAmountCents: number | null;
+      sentence: string;
+    } | null;
     // Fee-free direct-payment handles (display-only); null when the barber hasn't
     // turned it on. Shown on the confirmation so the customer can pay directly.
     payDirect: {

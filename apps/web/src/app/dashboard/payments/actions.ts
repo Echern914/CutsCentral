@@ -49,7 +49,9 @@ export async function disconnectStripeAction(): Promise<Result> {
 
 /** Save payment mode + cancellation policy. */
 export async function savePaymentSettingsAction(input: {
-  paymentsMode?: "off" | "ahead" | "deposit" | "hold";
+  paymentsMode?: "off" | "ahead" | "deposit" | "card_on_file" | "hold";
+  /** card_on_file: may the kept card be charged for a no-show / late cancel? */
+  chargeCardOnFileFees?: boolean;
   cancelWindowHours?: number;
   cancelFeeBps?: number;
   /** Deposit taken at booking, in CENTS (deposit mode only). */
@@ -100,9 +102,11 @@ export interface PaymentStatus {
     payoutsEnabled: boolean;
     detailsSubmitted: boolean;
   };
-  paymentsMode: "off" | "ahead" | "deposit" | "hold";
+  paymentsMode: "off" | "ahead" | "deposit" | "card_on_file" | "hold";
   /** Null until the shop picks one; the UI suggests $20. */
   depositAmountCents: number | null;
+  /** card_on_file: whether the kept card may be charged for a no-show / late cancel. */
+  chargeCardOnFileFees: boolean;
   /** null = the barber has not said, and the booking page then says nothing. */
   tipPolicy: "included" | "not_included" | null;
   platformFeeBps: number;

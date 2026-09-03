@@ -290,6 +290,15 @@ export async function applyPaymentEvent(event: Stripe.Event): Promise<boolean> {
       );
       return true;
     }
+    case "setup_intent.succeeded": {
+      // Card on file: the customer's card is attached; promote the hold. Same
+      // idempotency posture as the intents above (the row's status is the CAS).
+      // Dynamic import: cardOnFile.ts imports this module's neighbours.
+      const si = event.data.object as Stripe.SetupIntent;
+      const { markCardSaved } = await import("./cardOnFile.js");
+      await markCardSaved(si, { eventId: event.id });
+      return true;
+    }
     default:
       return false; // not a payment event (account.updated handled in connect.ts)
   }

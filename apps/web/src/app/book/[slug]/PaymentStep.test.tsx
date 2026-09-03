@@ -15,6 +15,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
  */
 
 const confirmPayment = vi.hoisted(() => vi.fn());
+const confirmSetup = vi.hoisted(() => vi.fn());
 const elementProps = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }));
 
 vi.mock("@stripe/stripe-js", () => ({ loadStripe: vi.fn(async () => ({})) }));
@@ -30,7 +31,7 @@ vi.mock("@stripe/react-stripe-js", () => ({
       </button>
     );
   },
-  useStripe: () => ({ confirmPayment }),
+  useStripe: () => ({ confirmPayment, confirmSetup }),
   useElements: () => ({}),
 }));
 
@@ -56,6 +57,7 @@ function mount(onPaid = vi.fn()) {
 
 beforeEach(() => {
   confirmPayment.mockReset();
+  confirmSetup.mockReset();
   elementProps.current = null;
 });
 
@@ -151,5 +153,51 @@ describe("when the deployment has no Stripe key", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Nothing has been charged");
     expect(screen.queryByRole("button", { name: /Pay/ })).toBeNull();
     vi.unstubAllEnvs();
+  });
+});
+
+/**
+ * Card on file: the same Element, the same wallets, the same hand-off - but the
+ * Stripe call is confirmSetup, nothing is charged, and the button must say so.
+ */
+describe("PaymentStep in setup mode (card on file)", () => {
+  function mountSetup(onPaid = vi.fn()) {
+    render(
+      <PaymentStep
+        clientSecret="seti_secret_123"
+        amountLabel={null}
+        accent="#c8a24a"
+        returnUrl="https://example.test/book/manage/tok_123"
+        onPaid={onPaid}
+        intent="setup"
+      />,
+    );
+    fireEvent.click(screen.getByTestId("element-ready"));
+    return { onPaid, button: screen.getByRole("button", { name: "Save card & confirm" }) };
+  }
+
+  it("confirms a SetupIntent, never a payment, and hands off on success", async () => {
+    confirmSetup.mockResolvedValue({ setupIntent: { status: "succeeded" } });
+    const { onPaid, button } = mountSetup();
+    fireEvent.click(button);
+    await waitFor(() => expect(onPaid).toHaveBeenCalledTimes(1));
+    expect(confirmPayment).not.toHaveBeenCalled();
+    expect(confirmSetup.mock.calls[0]![0]).toMatchObject({
+      redirect: "if_required",
+      confirmParams: { return_url: "https://example.test/book/manage/tok_123" },
+    });
+  });
+
+  it("the button never says Pay - nothing is charged", () => {
+    mountSetup();
+    expect(screen.queryByRole("button", { name: /^Pay/ })).toBeNull();
+  });
+
+  it("a refused card says so in card terms and lets them try another", async () => {
+    confirmSetup.mockResolvedValue({ error: {} });
+    const { onPaid, button } = mountSetup();
+    fireEvent.click(button);
+    expect(await screen.findByRole("alert")).toHaveTextContent("We couldn't save that card");
+    expect(onPaid).not.toHaveBeenCalled();
   });
 });

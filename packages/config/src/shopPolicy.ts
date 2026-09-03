@@ -27,7 +27,7 @@
  * impossible value becomes an unhandled crash. It reads as pay-in-person,
  * because card-present IS paying at the shop.
  */
-export type ShopPaymentsMode = "off" | "ahead" | "deposit" | "hold" | "terminal";
+export type ShopPaymentsMode = "off" | "ahead" | "deposit" | "card_on_file" | "hold" | "terminal";
 
 export interface ShopPolicyInput {
   paymentsMode: ShopPaymentsMode;
@@ -50,6 +50,12 @@ export interface ShopPolicyInput {
   paymentsLive?: boolean;
   /** Approval-mode shops never charge at booking; payment waits for approval. */
   requiresApproval?: boolean;
+  /**
+   * card_on_file only: may the saved card be charged for a no-show or a late
+   * cancel? Default false - keeping a card is not, by itself, a decision to
+   * charge anyone, and the prose must not imply otherwise.
+   */
+  chargeCardOnFileFees?: boolean;
 }
 
 /**
@@ -123,6 +129,19 @@ export function describeDepositPolicy(
 ): string {
   const payAtShop = "none - pay at the shop";
   if (shop.paymentsMode === "off" || shop.paymentsMode === "terminal") return payAtShop;
+
+  // Card on file COLLECTS nothing, so it is described before the collectsMoney
+  // branch: the honest sentence is about the card being kept, and about the
+  // one condition under which it could be charged. Only the web booking page
+  // can save a card, so a channel that takes no card says so.
+  if (shop.paymentsMode === "card_on_file") {
+    if (channel.collectsAtBooking === false || shop.paymentsLive === false || shop.requiresApproval) {
+      return "none up front - pay at the shop";
+    }
+    return shop.chargeCardOnFileFees
+      ? "no charge at booking; a card is kept on file and is charged only for a no-show or a cancellation inside the cancellation window (see the cancellation policy)"
+      : "no charge at booking; a card is kept on file and is not charged unless the shop turns on no-show fees - pay at the shop";
+  }
 
   // The shop intends to charge, but this channel or this configuration does
   // not. Say both halves: a customer who books by text and hears "collected
@@ -225,6 +244,17 @@ export function describeNoShowPolicy(
   shop: ShopPolicyInput,
   channel: PolicyChannel = {},
 ): string {
+  // A saved card changes the answer only when the shop has actually switched
+  // fees on; a kept card with the switch off is exactly "nothing collected".
+  if (
+    shop.paymentsMode === "card_on_file" &&
+    shop.chargeCardOnFileFees &&
+    channel.collectsAtBooking !== false &&
+    shop.paymentsLive !== false &&
+    !shop.requiresApproval
+  ) {
+    return "a no-show is charged to the card on file under the cancellation policy - cancelling ahead of time avoids it";
+  }
   return collectsMoney(shop, channel)
     ? "a no-show keeps whatever was paid at booking - it is not refunded"
     : "no charge for a no-show (nothing is collected up front), but a cancellation frees the time for someone else, so ask them to cancel rather than not turn up";
