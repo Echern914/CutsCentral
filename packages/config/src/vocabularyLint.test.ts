@@ -239,6 +239,13 @@ const ALLOWED: Exception[] = [
     why: "The Mode union's own type guard - the definition the two writers above must match.",
   },
   {
+    path: "apps/mobile/app/stripe/connected.tsx",
+    lexeme: "barber",
+    snippet: '"/barber"',
+    count: 1,
+    why: "An expo-router ROUTE PATH (app/barber.tsx), not copy. Renaming it would break the deep link the Stripe return lands on.",
+  },
+  {
     path: "apps/web/src/app/dashboard/assistant/readiness.ts",
     lexeme: "barber",
     snippet: '"barber"',

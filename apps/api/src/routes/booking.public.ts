@@ -2130,6 +2130,13 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
     balanceDueCents: number;
     /** Minutes the chair is held while they pay. */
     holdMinutes: number;
+    /**
+     * When the chair goes back on sale, as an instant. The minute count alone
+     * cannot be counted down: a customer who leaves the tab and comes back has
+     * no idea whether two minutes or nine have passed, and the first thing
+     * they learn about the deadline is that their booking vanished.
+     */
+    expiresAt: string | null;
   } | null = null;
   if (collectsUpFront && shop.stripeConnectAccountId && chargeCents !== null) {
     const isDeposit = shop.paymentsMode === "deposit" && chargeCents !== fullCents;
@@ -2157,6 +2164,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
         // What they still owe at the shop; 0 when the whole ticket is paid.
         balanceDueCents: Math.max(0, (fullCents ?? 0) - chargeCents),
         holdMinutes: PAYMENT_HOLD_MINUTES,
+        expiresAt: holdExpiresAt?.toISOString() ?? null,
       };
     } else {
       // Stripe was unreachable, or the account cannot take this charge. The

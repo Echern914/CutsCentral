@@ -5,6 +5,7 @@ import { createApp } from "./app.js";
 import { logger } from "./logger.js";
 import { startScheduler } from "./scheduler.js";
 import { logIntegrationStatusAtBoot } from "./ops/bootReport.js";
+import { ensureWalletDomainsAtBoot } from "./billing/paymentMethodDomains.js";
 import { billingEnabled, connectEnabled } from "./billing/stripe.js";
 import { emailEnabled } from "./messaging/email.js";
 import { pushEnabled } from "./messaging/push.js";
@@ -34,6 +35,11 @@ startScheduler();
 // Name any dark integration in the deploy log. See ops/bootReport.ts: the
 // admin preflight was correct for months while four integrations were off,
 // because nobody had reason to open it.
+// Apple Pay renders only on domains registered with Stripe, and an
+// unregistered domain fails SILENTLY (the tab is simply absent). Re-asserting
+// it every boot is what stops that going unnoticed on a new environment.
+ensureWalletDomainsAtBoot();
+
 logIntegrationStatusAtBoot({
   billing: billingEnabled(),
   connect: connectEnabled(),
