@@ -85,18 +85,33 @@ paymentsDashboardRouter.get("/status", async (req, res) => {
   });
 });
 
-// POST /api/payments/connect/onboard - mint a Stripe-hosted onboarding link.
+// POST /api/payments/connect/onboard - mint a Stripe-hosted onboarding link
+// for an EXISTING Express account (finish KYC). It no longer CREATES one.
+//
+// 🔴 EXPRESS IS RETIRED FOR NEW SHOPS (2026-09-02). A barber's money should
+// land in a Stripe account they own and can log into at stripe.com - the
+// Standard door (connect/oauth/start). Express accounts live behind a separate
+// login nobody knows about, which is how "nothing is showing in his Stripe"
+// happened while a deposit sat collected in the balance. Shops that already
+// hold an Express account keep working unchanged (money is in there); they can
+// still finish its setup here, and can Disconnect + link their own account.
 paymentsDashboardRouter.post("/connect/onboard", async (req, res) => {
-  if (!connectEnabled()) {
-    res.status(503).json({ error: "connect_disabled" });
-    return;
-  }
   const shop = await prisma.shop.findUnique({
     where: { id: req.shop!.id },
     select: { id: true, name: true, stripeConnectAccountId: true },
   });
   if (!shop) {
     res.status(404).json({ error: "not_found" });
+    return;
+  }
+  // Checked BEFORE the Stripe-config gate so the answer never depends on env:
+  // no account = nothing to finish, and we will not make one.
+  if (!shop.stripeConnectAccountId) {
+    res.status(410).json({ error: "express_retired" });
+    return;
+  }
+  if (!connectEnabled()) {
+    res.status(503).json({ error: "connect_disabled" });
     return;
   }
   try {

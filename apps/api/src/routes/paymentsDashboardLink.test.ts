@@ -59,6 +59,25 @@ describe("POST /api/payments/connect/dashboard", () => {
   });
 });
 
+describe("POST /api/payments/connect/onboard", () => {
+  it("no longer creates Express accounts: a shop with no account gets 410, not a Stripe form", async () => {
+    // Express is retired for new shops (2026-09-02) - a barber's money belongs
+    // in an account they own and can log into at stripe.com. Checked before
+    // the Stripe-config gate, so the refusal is the same in every environment.
+    const { cookie, shopId } = await makeOwner("Onboard Retired");
+    const res = await request(app)
+      .post("/api/payments/connect/onboard")
+      .set("Cookie", cookie);
+    expect(res.status).toBe(410);
+    expect(res.body.error).toBe("express_retired");
+    const row = await prisma.shop.findUnique({
+      where: { id: shopId },
+      select: { stripeConnectAccountId: true },
+    });
+    expect(row?.stripeConnectAccountId).toBeNull();
+  });
+});
+
 describe("createDashboardLink", () => {
   it("a STANDARD account is the barber's own login - plain dashboard.stripe.com, no Stripe call", async () => {
     // Stripe refuses login links for Standard accounts; the test env has no
