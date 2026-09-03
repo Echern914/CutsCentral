@@ -894,7 +894,23 @@ function PaymentCard({
           )}
           {/* ChairBack persists no card data, so this renders only if a
               verified brand/last-four ever reaches the payload. */}
-          {p.card && <Line label="Card" value={`${p.card.brand} ···· ${p.card.last4}`} />}
+          {p.card && (
+            <Line
+              label={
+                p.cardOnFile?.status === "saved"
+                  ? "Card on file (kept, not charged)"
+                  : p.cardOnFile?.status === "charged"
+                    ? "Card on file · fee charged"
+                    : p.cardOnFile?.status === "failed"
+                      ? "Card on file · charge declined - collect at the next visit"
+                      : p.cardOnFile?.status === "released"
+                        ? "Card on file · released"
+                        : "Card"
+              }
+              value={`${p.card.brand} ···· ${p.card.last4}`}
+              tone={p.cardOnFile?.status === "failed" ? "bad" : undefined}
+            />
+          )}
         </dl>
       )}
 

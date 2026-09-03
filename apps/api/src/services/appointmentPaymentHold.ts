@@ -309,6 +309,12 @@ async function releasePaymentHoldRow(shopId: string, appointmentId: string): Pro
   // Hand the chair back in Acuity. Unlike a receptionist hold, a payment hold
   // DOES take a block (see shouldMirrorOnCreate), so it has to give one back.
   await releaseForAppointment(shopId, appointmentId);
+  // A card-on-file hold that lapsed may have a SetupIntent (or even a saved
+  // card, if Stripe confirmed after the window). Detach it: the chair went back
+  // on sale, and a card kept for an appointment that no longer exists is a
+  // liability with no purpose. Dynamic import - cardOnFile.ts imports this file.
+  const { releaseCardOnFile } = await import("../billing/cardOnFile.js");
+  await releaseCardOnFile({ shopId, appointmentId, reason: "hold_lapsed" });
 }
 
 /**

@@ -5,7 +5,7 @@ import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { computeOpenSlots, isSlotBookable, type Slot } from "../engines/slots.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
-import { cancellationFeeCents } from "@chairback/config";
+import { cancellationFeeCents, cardOnFileFeeCents } from "@chairback/config";
 import {
   completeReschedule,
   dispatchAfterCommit,
@@ -1270,7 +1270,7 @@ async function cancelTool(ctx: ToolContext, rawInput: unknown): Promise<ToolExec
   // have paid on the website and be cancelling by text.
   const shop = await prisma.shop.findUnique({
     where: { id: ctx.shopId },
-    select: { timezone: true, cancelWindowHours: true, cancelFeeBps: true },
+    select: { timezone: true, cancelWindowHours: true, cancelFeeBps: true, chargeCardOnFileFees: true },
   });
   const payment = await prisma.payment.findUnique({
     where: { appointmentId: appt.id },
@@ -1280,13 +1280,40 @@ async function cancelTool(ctx: ToolContext, rawInput: unknown): Promise<ToolExec
     payment && payment.status === "succeeded"
       ? (payment.capturedAmount ?? payment.amount)
       : 0;
-  const feeCents = cancellationFeeCents({
+  let feeCents = cancellationFeeCents({
     collectedCents,
     cancelWindowHours: shop?.cancelWindowHours ?? 0,
     cancelFeeBps: shop?.cancelFeeBps ?? 0,
     startsAt: appt.startsAt,
     now: ctx.now,
   });
+  // A card KEPT at booking (nothing collected) is charged on a late cancel only
+  // when the shop switched fees on - the same rule and the same formula the
+  // engine settles with (services/cardOnFileSettle.ts), so what this tool tells
+  // the client is exactly what their card is about to be charged.
+  if (feeCents === 0 && shop?.chargeCardOnFileFees) {
+    const kept = await prisma.cardOnFile.findUnique({
+      where: { appointmentId: appt.id },
+      select: { status: true },
+    });
+    if (kept?.status === "saved") {
+      const priced = await prisma.appointment.findUnique({
+        where: { id: appt.id },
+        select: { priceAtBooking: true },
+      });
+      const price = priced?.priceAtBooking === null || priced?.priceAtBooking === undefined
+        ? null
+        : Number(priced.priceAtBooking);
+      feeCents = cardOnFileFeeCents({
+        priceCents: price === null || !Number.isFinite(price) ? null : Math.round(price * 100),
+        cancelWindowHours: shop.cancelWindowHours,
+        cancelFeeBps: shop.cancelFeeBps,
+        startsAt: appt.startsAt,
+        now: ctx.now,
+        reason: "late_cancel",
+      });
+    }
+  }
 
   // Customer-initiated: the shop's cancellation policy applies (a fee may be
   // kept inside the window), and the freed slot fires the slot-opened flow -

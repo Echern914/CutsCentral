@@ -37,6 +37,7 @@ import {
   BackfillRefusedError,
 } from "../engines/acuityBackfill.js";
 import { toCents } from "../billing/payments.js";
+import { releaseCardOnFile } from "../billing/cardOnFile.js";
 import { createTerminalPaymentIntent, terminalEnabled } from "../billing/terminal.js";
 import {
   APPOINTMENT_NUDGE_KIND,
@@ -4660,6 +4661,8 @@ bookingDashboardRouter.post("/appointments/:id/complete", async (req, res) => {
     return;
   }
   await recomputeCadence(shopId, result.clientId);
+  // The visit happened: a kept card has nothing left to protect. Let it go.
+  void releaseCardOnFile({ shopId, appointmentId: req.params.id!, reason: "completed" });
   if (result.earn) {
     void notifyPunchEarned({
       shopId,
@@ -4868,6 +4871,8 @@ bookingDashboardRouter.post("/appointments/:id/checkout", async (req, res) => {
     res.status(409).json({ error: "paid_already" });
     return;
   }
+  // Checked out at the chair: the kept card (if any) is released either way.
+  void releaseCardOnFile({ shopId, appointmentId: req.params.id!, reason: "checked_out" });
   if (result.clientId) {
     await recomputeCadence(shopId, result.clientId);
     if (result.earn) {

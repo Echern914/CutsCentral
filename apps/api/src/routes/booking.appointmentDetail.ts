@@ -409,6 +409,7 @@ export function registerAppointmentDetail(router: Router): void {
         paidAmount: true,
         paidMethod: true,
         paidAt: true,
+        cardOnFile: { select: { brand: true, last4: true, status: true } },
         service: { select: { name: true } },
         staff: { select: { name: true } },
         client: {
@@ -439,6 +440,7 @@ export function registerAppointmentDetail(router: Router): void {
       paidAmount: Prisma.Decimal | null;
       paidMethod: string | null;
       paidAt: Date | null;
+      cardOnFile: { brand: string | null; last4: string | null; status: string } | null;
       service: { name: string } | null;
       staff: { name: string } | null;
       client: {
@@ -521,6 +523,7 @@ export function registerAppointmentDetail(router: Router): void {
         chairMethod: appt.paidMethod,
         chairCheckedOut: appt.paidAt !== null,
         external,
+        cardOnFile: appt.cardOnFile ?? null,
       }),
       checkedOutAt: appt.paidAt ? appt.paidAt.toISOString() : null,
       editable,

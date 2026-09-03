@@ -1,3 +1,5 @@
+import { releaseCardOnFile } from "../billing/cardOnFile.js";
+import { settleCardOnFile } from "../services/cardOnFileSettle.js";
 import { cancellationFeeCents } from "@chairback/config";
 import { prisma, runWithShop, type Prisma } from "@chairback/db";
 import { logger } from "../logger.js";
@@ -158,6 +160,8 @@ export async function promoteFulfilledAppointments(
         ),
       );
       await recomputeCadence(a.shopId, a.clientId);
+      // The visit happened: nothing left to protect. Let the kept card go.
+      void releaseCardOnFile({ shopId: a.shopId, appointmentId: a.id, reason: "completed" });
       if (earn) {
         await notifyPunchEarned({
           shopId: a.shopId,
@@ -210,7 +214,11 @@ export async function cancelAppointment(
         visitId: true,
         status: true,
         startsAt: true,
+        priceAtBooking: true,
+        service: { select: { name: true } },
         payment: { select: { id: true } },
+        // Card on file: what to charge or let go of AFTER the tx (Stripe call).
+        cardOnFile: { select: { id: true, status: true } },
       },
     });
     if (!appt) return null;
@@ -287,6 +295,9 @@ export async function cancelAppointment(
       hadVisit: Boolean(appt.visitId),
       paymentId: appt.payment?.id ?? null,
       startsAt: appt.startsAt,
+      priceAtBooking: appt.priceAtBooking,
+      serviceName: appt.service?.name ?? null,
+      cardOnFile: appt.cardOnFile,
     };
   });
 
@@ -324,6 +335,25 @@ export async function cancelAppointment(
       }
     }
     await refundForCancellation({ paymentId: result.paymentId, feeCents });
+  }
+
+  // CARD ON FILE. Nothing was collected, so there is nothing to refund - but
+  // there may be something to CHARGE, or a card to let go of. The rule lives in
+  // services/cardOnFileSettle.ts: charged only when the shop switched fees on
+  // AND it is on the customer (a no-show, or their own cancel inside the
+  // window); everything else releases the card. Awaited like the refund above
+  // and never throws - the mark itself already stands.
+  if (result.cardOnFile && result.cardOnFile.status === "saved") {
+    await settleCardOnFile({
+      shopId,
+      appointmentId,
+      outcome,
+      applyPolicyFee: Boolean(opts.applyPolicyFee),
+      priceAtBooking: result.priceAtBooking,
+      serviceName: result.serviceName,
+      startsAt: result.startsAt,
+      now,
+    });
   }
 
   // A CANCELED future slot frees up: alert the barber + nudge matching

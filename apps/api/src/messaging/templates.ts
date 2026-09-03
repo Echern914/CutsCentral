@@ -1001,3 +1001,50 @@ export function buildWalkInRemovedBody(params: { shopName: string }): string {
     `If that's a surprise, check with the front desk - you can rejoin any time. Reply STOP to opt out.`
   );
 }
+
+/**
+ * "Your card was charged" - the one message a customer must hear from us and
+ * not from their bank statement. Sent only after an off-session charge to a
+ * card on file SUCCEEDED (a decline goes to the barber instead). Says the
+ * amount, the reason, and which card, and hands over the manage link so the
+ * appointment it refers to is one tap away.
+ */
+export function buildCardChargedEmail(params: {
+  firstName: string | null;
+  shopName: string;
+  serviceName: string;
+  startsAt: Date;
+  timezone: string;
+  cents: number;
+  reason: "no_show" | "late_cancel";
+  brand: string | null;
+  last4: string | null;
+  manageToken: string;
+}): EmailCopy {
+  const when = formatApptTime(params.startsAt, params.timezone);
+  const manageUrl = `${env.APP_BASE_URL}/book/manage/${params.manageToken}`;
+  const who = params.firstName ?? "there";
+  const dollars = `$${(params.cents / 100).toFixed(2)}`;
+  const card = params.last4
+    ? `your ${params.brand ? `${params.brand} ` : ""}card ending ${params.last4}`
+    : "the card you saved";
+  const why =
+    params.reason === "no_show"
+      ? `the ${params.serviceName} at ${params.shopName} on ${when} was missed`
+      : `the ${params.serviceName} at ${params.shopName} on ${when} was cancelled inside the shop's cancellation window`;
+  return {
+    subject: `${dollars} charged to your card - ${params.shopName}`,
+    text:
+      `Hi ${who}, ${dollars} was charged to ${card} because ${why}.\n\n` +
+      `This is the fee you agreed to when you saved a card to book. Questions? Contact ${params.shopName} directly.\n\n` +
+      `The appointment: ${manageUrl}`,
+    html: appointmentEmailHtml({
+      heading: `${dollars} charged`,
+      intro: `Hi ${who}, ${dollars} was charged to ${card} because ${why}. This is the fee you agreed to when you saved a card to book.`,
+      shopName: params.shopName,
+      serviceName: params.serviceName,
+      when,
+      manageUrl,
+    }),
+  };
+}
