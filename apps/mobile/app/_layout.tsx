@@ -80,6 +80,8 @@ export default function RootLayout() {
         <Stack.Screen name="auth/callback" />
         <Stack.Screen name="auth/mobile/callback" />
         <Stack.Screen name="team/join" />
+        {/* The Stripe connection's custom-scheme return (see stripe/connected.tsx). */}
+        <Stack.Screen name="stripe/connected" />
       </Stack>
     </SafeAreaProvider>
   );

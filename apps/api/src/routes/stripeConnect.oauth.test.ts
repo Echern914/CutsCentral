@@ -3,7 +3,11 @@ import { afterAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
-import { createConnectState, CONNECT_OAUTH_STATE_COOKIE } from "../billing/connectOauth.js";
+import {
+  createConnectState,
+  CONNECT_OAUTH_STATE_COOKIE,
+  NATIVE_RETURN_URL,
+} from "../billing/connectOauth.js";
 
 /**
  * The STANDARD Connect door — linking a Stripe account the barber already owns.
@@ -129,6 +133,69 @@ describe("GET /api/payments/connect/oauth/callback", () => {
       .query({ code: "ac_test", state })
       .set("Cookie", [`${CONNECT_OAUTH_STATE_COOKIE}=${state}`]);
     expect(res.status).toBe(404);
+  });
+});
+
+describe("POST /api/payments/connect/oauth/handoff (the native app's start)", () => {
+  it("refuses an anonymous caller", async () => {
+    const res = await request(app).post("/api/payments/connect/oauth/handoff");
+    expect(res.status).toBe(401);
+  });
+
+  it("answers 'unavailable' as JSON while Standard is unconfigured - never a half URL", async () => {
+    const { cookie } = await makeOwner("Handoff Dark");
+    const res = await request(app)
+      .post("/api/payments/connect/oauth/handoff")
+      .set("Cookie", cookie);
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe("unavailable");
+    expect(res.body.url).toBeUndefined();
+  });
+});
+
+describe("the NATIVE round-trip at /callback", () => {
+  // The system authentication browser carries none of our cookies, so a
+  // native state binds on its signature + expiry alone and every outcome goes
+  // back to the app's custom scheme, which is what closes the sheet.
+  const now = () => Math.floor(Date.now() / 1000);
+
+  it("a cancel at Stripe returns to the APP, not the web dashboard", async () => {
+    const state = createConnectState("shop_native", now(), { native: true });
+    const res = await request(app)
+      .get("/api/payments/connect/oauth/callback")
+      .query({ error: "access_denied", state });
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe(`${NATIVE_RETURN_URL}?connect=cancelled`);
+  });
+
+  it("a native state needs NO cookie (reaches the shop lookup)", async () => {
+    const state = createConnectState("shop_deleted_native", now(), { native: true });
+    const res = await request(app)
+      .get("/api/payments/connect/oauth/callback")
+      .query({ code: "ac_test", state });
+    // Past the state checks; the shop does not exist, so 404 - proof the
+    // missing cookie was not what stopped it.
+    expect(res.status).toBe(404);
+  });
+
+  it("🔴 a BROWSER state still needs its cookie - the CSRF binding is unchanged", async () => {
+    const state = createConnectState("shop_browser", now());
+    const res = await request(app)
+      .get("/api/payments/connect/oauth/callback")
+      .query({ code: "ac_test", state });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_oauth_state");
+  });
+
+  it("🔴 a forged 'native' flag on an unsigned state buys nothing", async () => {
+    const forged = Buffer.from(
+      JSON.stringify({ shopId: "shop_victim", nonce: "n", exp: 9_999_999_999, native: true }),
+      "utf8",
+    ).toString("base64url");
+    const res = await request(app)
+      .get("/api/payments/connect/oauth/callback")
+      .query({ code: "ac_test", state: forged });
+    expect(res.status).toBe(400);
   });
 });
 

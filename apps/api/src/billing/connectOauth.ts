@@ -46,7 +46,22 @@ export interface ConnectOAuthState {
   shopId: string;
   nonce: string;
   exp: number; // epoch seconds
+  /**
+   * The round-trip was started from the NATIVE app (POST /handoff) and runs in
+   * the system authentication browser, which has no access to our cookies. The
+   * callback therefore binds on the signature + expiry alone and returns to
+   * the app's custom scheme instead of the web dashboard.
+   */
+  native?: true;
 }
+
+/**
+ * Where a native round-trip ends. The app opens the authorize URL with
+ * openAuthSessionAsync(url, NATIVE_RETURN_URL); iOS/Android close the sheet
+ * the moment the callback redirects here and hand the URL (with ?connect=…)
+ * back to the app as a result.
+ */
+export const NATIVE_RETURN_URL = "chairback://stripe/connected";
 
 function signState(payloadB64: string): string {
   return createHmac("sha256", apiEnv().SESSION_SECRET)
@@ -54,11 +69,16 @@ function signState(payloadB64: string): string {
     .digest("base64url");
 }
 
-export function createConnectState(shopId: string, nowSeconds: number): string {
+export function createConnectState(
+  shopId: string,
+  nowSeconds: number,
+  opts: { native?: boolean } = {},
+): string {
   const payload: ConnectOAuthState = {
     shopId,
     nonce: randomBytes(16).toString("base64url"),
     exp: nowSeconds + STATE_TTL_SECONDS,
+    ...(opts.native ? { native: true as const } : {}),
   };
   const b64 = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
   return `${b64}.${signState(b64)}`;
