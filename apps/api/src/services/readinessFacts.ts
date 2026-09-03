@@ -1,4 +1,4 @@
-import { apiEnv, vocabularyForShop } from "@chairback/config";
+import { apiEnv, hasShopAddress, vocabularyForShop } from "@chairback/config";
 import { prisma, runAsOwner, runWithShop } from "@chairback/db";
 import { connectEnabled, hasActiveAccess } from "../billing/stripe.js";
 import { emailEnabled } from "../messaging/email.js";
@@ -102,6 +102,8 @@ export async function collectReadinessFacts(
       businessTypeSelectedAt: true,
       timezone: true,
       slug: true,
+      addressStreet: true,
+      addressCity: true,
       publicPageEnabled: true,
       bookingMode: true,
       bookingUrl: true,
@@ -342,6 +344,7 @@ export async function collectReadinessFacts(
     timezone: shop.timezone,
     timezoneValid: isValidTimezone(shop.timezone),
     slug: shop.slug,
+    hasAddress: hasShopAddress(shop),
     publicPageEnabled: shop.publicPageEnabled,
     bookingMode: shop.bookingMode,
     bookingUrl: shop.bookingUrl,

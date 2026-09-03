@@ -497,6 +497,45 @@ describe("manage by token + tenant isolation", () => {
     const res = await request(app).get(`/api/book/${meB.body.slug}`);
     expect(res.status).toBe(404);
   });
+
+  /**
+   * "Where is it?" - the manage page went two years without answering. The
+   * address is formatted SERVER-side by the one formatter in @chairback/config
+   * (the same one the confirmation email, the reminder, the calendar entry
+   * and the SMS receptionist use), so the page renders a string and never
+   * re-decides what counts as a usable address.
+   */
+  it("tells the customer where the shop is, once the shop has said", async () => {
+    const startsAt = futureAtHour(6, 11).toISOString();
+    const booking = await request(app)
+      .post(`/api/book/${slugA}`)
+      .send({ staffId, serviceId, startsAt, firstName: "Wes", lastName: "Tester", phone: "(302) 555-0711", email: "cust0711@example.com" });
+    expect(booking.status).toBe(201);
+    const token = booking.body.manageToken;
+
+    // No address published: the page says nothing rather than guessing.
+    const before = await request(app).get(`/api/book/manage/${token}`);
+    expect(before.status).toBe(200);
+    expect(before.body.shop.address).toBeNull();
+    expect(before.body.shop.mapsUrl).toBeNull();
+
+    const patch = await request(app)
+      .patch("/api/shops/me")
+      .set("Cookie", cookieA)
+      .send({ addressStreet: "123 Main St", addressCity: "Wilmington", addressRegion: "DE", addressPostal: "19801" });
+    expect(patch.status).toBe(200);
+
+    const after = await request(app).get(`/api/book/manage/${token}`);
+    expect(after.body.shop.address).toBe("123 Main St, Wilmington, DE 19801");
+    expect(after.body.shop.mapsUrl).toBe(
+      "https://www.google.com/maps/search/?api=1&query=123%20Main%20St%2C%20Wilmington%2C%20DE%2019801",
+    );
+
+    // Half an address (street cleared) is not navigable - back to nothing.
+    await request(app).patch("/api/shops/me").set("Cookie", cookieA).send({ addressStreet: "" });
+    const half = await request(app).get(`/api/book/manage/${token}`);
+    expect(half.body.shop.address).toBeNull();
+  });
 });
 
 describe("day-of-week pricing", () => {

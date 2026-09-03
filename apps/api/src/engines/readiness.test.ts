@@ -41,6 +41,7 @@ function ready(over: Partial<ReadinessFacts> = {}): ReadinessFacts {
     timezone: "America/New_York",
     timezoneValid: true,
     slug: "chern-cuts",
+    hasAddress: true,
     publicPageEnabled: true,
     bookingMode: "native",
     bookingUrl: null,
@@ -210,6 +211,7 @@ describe("readiness CTA destinations", () => {
     "shop.service.active": "/dashboard/booking?tab=Services",
     "shop.service.duration": "/dashboard/booking?tab=Services",
     "shop.service.hours_open": "/dashboard/booking?tab=Services",
+    "shop.address": "/dashboard/site",
     "shop.slug": "/dashboard/site",
     "shop.staff.active": "/dashboard/booking?tab=Staff",
     "shop.test_booking": "/dashboard/booking?tab=Appointments",
@@ -280,6 +282,24 @@ describe("a fully configured shop", () => {
     expect(t.klass).toBe("recommended");
     expect(t.blocksLaunch).toBe(false);
     expect(t.deferrable).toBe(true);
+  });
+});
+
+describe("the shop address", () => {
+  it("is recommended, not a blocker - and says what the customer loses without it", () => {
+    const r = build({ hasAddress: false });
+    expect(r.canGoLive).toBe(true);
+    expect(blockingIds(r)).not.toContain("shop.address");
+    const item = [...r.items, ...r.improve].find((i) => i.id === "shop.address");
+    expect(item?.done).toBe(false);
+    expect(item?.evidence).toMatch(/time with no place/);
+    expect(item?.cta?.featureId).toBe("mini-site");
+  });
+
+  it("is silent once published", () => {
+    const r = build({ hasAddress: true });
+    const item = [...r.items, ...r.improve].find((i) => i.id === "shop.address");
+    expect(item === undefined || item.done).toBe(true);
   });
 });
 

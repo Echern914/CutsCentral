@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { DEMO } from "@chairback/config/demo";
+import { untilLabel } from "@chairback/config/relativeTime";
 import { useSignalNativeReady } from "@/lib/nativeReady";
 import { CustomerBack } from "@/components/CustomerBack";
 import { DemoTour } from "@/components/tour/DemoTour";
@@ -71,6 +72,15 @@ export function ManageClient({
     [data.shop.timezone],
   );
   const when = whenFmt.format(new Date(movedTo ?? data.startsAt));
+  // "How long until?" - re-read every minute so a page left open on the way to
+  // the shop keeps telling the truth. Same helper the app's next-visit card
+  // uses, so the two never disagree.
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(id);
+  }, []);
+  const until = untilLabel(new Date(movedTo ?? data.startsAt), now, data.shop.timezone);
 
   function cancel(scope: "this" | "future") {
     setError(null);
@@ -106,11 +116,39 @@ export function ManageClient({
       <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
         <p className="text-xs uppercase tracking-wide text-muted">Your appointment</p>
         <h1 className="mt-1 font-display text-2xl">{data.shop.name}</h1>
+        {until && !isCanceled && !isDone && (
+          <p className="mt-1 text-sm text-muted" data-qa="until">
+            <span className="font-medium text-offwhite">{until[0]!.toUpperCase() + until.slice(1)}</span>
+          </p>
+        )}
 
         <dl className="mt-4 space-y-2 text-sm">
           <Row label="Service" value={data.service.name} />
           <Row label="With" value={data.staff.name} />
           <Row label="When" value={when} />
+          {/* The address is the most-asked question about an appointment and
+              this page went two years without answering it. A link, so a phone
+              hands it straight to a maps app. A shop with none published
+              renders no row rather than a blank one. */}
+          {data.shop.address && (
+            <div className="flex justify-between gap-3">
+              <dt className="text-muted">Where</dt>
+              <dd className="min-w-0 text-right font-medium">
+                {data.shop.mapsUrl ? (
+                  <a
+                    href={data.shop.mapsUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline decoration-white/30 underline-offset-4 hover:decoration-white"
+                  >
+                    {data.shop.address}
+                  </a>
+                ) : (
+                  data.shop.address
+                )}
+              </dd>
+            </div>
+          )}
           <Row
             label="Status"
             value={

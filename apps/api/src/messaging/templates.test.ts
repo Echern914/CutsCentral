@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { serviceNounFor } from "@chairback/config";
 import {
+  buildAppointmentConfirmationBody,
+  buildAppointmentConfirmationEmail,
+  buildAppointmentReminderBody,
+  buildAppointmentReminderEmail,
   buildNudgeBody,
   buildNudgePush,
   buildPunchEarnedBody,
@@ -192,5 +196,88 @@ describe("loyalty copy is card-aware", () => {
       cardName: "Retwist",
     });
     expect(carded).toContain("You have 1 punch left on your Retwist card.");
+  });
+});
+
+/**
+ * "Where is it?" - the most-asked question about an appointment, and the one
+ * the confirmation and reminder never answered. Every builder takes the shop's
+ * ADDRESS COLUMNS and formats them through @chairback/config, so the address in
+ * the email is the address the receptionist quotes and the calendar entry
+ * carries. A shop with none published says nothing rather than guessing.
+ */
+describe("appointment messages carry the shop address", () => {
+  const SHOP = {
+    addressStreet: "123 Main St",
+    addressCity: "Wilmington",
+    addressRegion: "DE",
+    addressPostal: "19801",
+  };
+  const base = {
+    firstName: "Michael",
+    shopName: "Chern Cuts",
+    serviceName: "Haircut",
+    startsAt: new Date("2026-09-08T18:00:00Z"),
+    timezone: "America/New_York",
+    staffName: "Dre",
+    manageToken: "A".repeat(43),
+  };
+
+  it("the confirmation email says where, as a directions link", () => {
+    const email = buildAppointmentConfirmationEmail({ ...base, address: SHOP });
+    expect(email.text).toContain("Where: 123 Main St, Wilmington, DE 19801");
+    expect(email.html).toContain("Where");
+    expect(email.html).toContain("123 Main St");
+    expect(email.html).toContain("Get directions");
+    expect(email.html).toContain("https://www.google.com/maps/search/?api=1&amp;query=");
+  });
+
+  it("so does the reminder email", () => {
+    const email = buildAppointmentReminderEmail({ ...base, address: SHOP });
+    expect(email.text).toContain("Where: 123 Main St, Wilmington, DE 19801");
+    expect(email.html).toContain("Get directions");
+  });
+
+  it("the texts carry it too", () => {
+    expect(buildAppointmentConfirmationBody({ ...base, address: SHOP })).toContain(
+      "123 Main St, Wilmington, DE 19801.",
+    );
+    expect(buildAppointmentReminderBody({ ...base, address: SHOP })).toContain(
+      "123 Main St, Wilmington, DE 19801.",
+    );
+  });
+
+  it("the reminder text stays inside its existing two segments - the address rides for free", () => {
+    // Already two segments before the address (the manage link alone is ~62
+    // chars). Concatenated SMS carries 153 GSM-7 chars per segment; a THIRD
+    // segment would raise the reminder bill by half for every shop, so the
+    // budget is pinned here with a deliberately long name, service and shop.
+    const body = buildAppointmentReminderBody({
+      ...base,
+      firstName: "Christopher",
+      serviceName: "Skin Fade + Beard Trim",
+      shopName: "The Gentlemen's Grooming Lounge",
+      address: { ...SHOP, addressStreet: "1234 Washington Boulevard" },
+    });
+    expect(body.length).toBeLessThanOrEqual(306);
+  });
+
+  it("a shop with no published address says nothing about one", () => {
+    const partial = { addressCity: "Wilmington", addressRegion: "DE" }; // no street
+    const email = buildAppointmentConfirmationEmail({ ...base, address: partial });
+    expect(email.text).not.toContain("Where:");
+    expect(email.html).not.toContain(">Where<");
+    expect(email.html).not.toContain("Get directions");
+    expect(buildAppointmentReminderBody({ ...base, address: partial })).not.toContain("Wilmington");
+    expect(buildAppointmentReminderBody({ ...base })).not.toContain("Where");
+  });
+
+  it("escapes what the barber typed before it reaches HTML", () => {
+    const email = buildAppointmentConfirmationEmail({
+      ...base,
+      address: { addressStreet: "12 A&B St <Unit 3>", addressCity: "Queens" },
+    });
+    expect(email.html).toContain("12 A&amp;B St &lt;Unit 3&gt;");
+    expect(email.html).not.toContain("<Unit 3>");
   });
 });
