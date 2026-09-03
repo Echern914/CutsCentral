@@ -1,6 +1,6 @@
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { forShop, prisma, runAsOwner } from "@chairback/db";
+import { forShop, prisma, runAsOwner, runWithShop } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
 
@@ -128,6 +128,86 @@ describe("GET /api/rewards/:magicToken", () => {
       name: "Free Cut",
       punchCost: 10,
       remaining: 5,
+    });
+  });
+});
+
+/**
+ * 🔴 A native ChairBack booking has NO Visit row until it completes, so the
+ * page's "You're booked - next visit" state only ever fired for Acuity-synced
+ * shops. A customer who booked through ChairBack opened the app and saw
+ * nothing about the appointment they came to check.
+ */
+describe("the next appointment", () => {
+  it("is null while nothing is ahead", async () => {
+    const res = await request(app).get(`/api/rewards/${magicToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.nextVisit).toBeNull();
+    expect(res.body.rebook.state).not.toBe("booked");
+  });
+
+  it("🔴 shows a ChairBack booking: what, when, with whom, where, and the manage link", async () => {
+    const client = await forShop(shopId).client.findFirst({ where: { magicToken } });
+    const startsAt = new Date(Date.now() + 3 * 86_400_000);
+    const manageToken = randomToken();
+    await runWithShop(shopId, async (tx) => {
+      const staff = await tx.staff.create({ data: { shopId, name: "Dre" } });
+      const service = await tx.service.create({
+        data: { shopId, name: "Haircut", durationMin: 30, price: 40 },
+      });
+      await tx.appointment.create({
+        data: {
+          shopId,
+          clientId: client!.id,
+          staffId: staff.id,
+          serviceId: service.id,
+          firstName: "Reward",
+          startsAt,
+          endsAt: new Date(startsAt.getTime() + 30 * 60_000),
+          manageToken,
+          status: "BOOKED",
+        },
+      });
+    });
+    await prisma.shop.update({
+      where: { id: shopId },
+      data: { addressStreet: "123 Main St", addressCity: "Wilmington", addressRegion: "DE", addressPostal: "19801" },
+    });
+
+    const res = await request(app).get(`/api/rewards/${magicToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.nextVisit).toMatchObject({
+      startsAt: startsAt.toISOString(),
+      serviceName: "Haircut",
+      staffName: "Dre",
+      manageToken,
+      address: "123 Main St, Wilmington, DE 19801",
+    });
+    expect(res.body.nextVisit.mapsUrl).toContain("google.com/maps/search/?api=1&query=");
+    // ...and the rebook countdown agrees - one fact, not two.
+    expect(res.body.rebook).toMatchObject({ state: "booked", upcomingAt: startsAt.toISOString() });
+  });
+
+  it("a synced visit that is SOONER wins, and carries no manage link", async () => {
+    const client = await forShop(shopId).client.findFirst({ where: { magicToken } });
+    const sooner = new Date(Date.now() + 1 * 86_400_000);
+    await forShop(shopId).visit.upsert({
+      where: { shopId_acuityAppointmentId: { shopId, acuityAppointmentId: "rw-next-synced" } },
+      create: {
+        clientId: client!.id,
+        acuityAppointmentId: "rw-next-synced",
+        status: "SCHEDULED",
+        scheduledAt: sooner,
+        serviceName: "Beard Trim",
+      },
+      update: {},
+    });
+    const res = await request(app).get(`/api/rewards/${magicToken}`);
+    expect(res.body.nextVisit).toMatchObject({
+      startsAt: sooner.toISOString(),
+      serviceName: "Beard Trim",
+      staffName: null,
+      manageToken: null,
     });
   });
 });
