@@ -11,7 +11,14 @@ export interface ManageData {
   firstName: string;
   startsAt: string;
   endsAt: string;
-  shop: { name: string; timezone: string; slug: string | null };
+  shop: {
+    name: string;
+    timezone: string;
+    slug: string | null;
+    /** Formatted by the API from the one formatter; null when the shop has not published one. */
+    address: string | null;
+    mapsUrl: string | null;
+  };
   service: { name: string; durationMin: number };
   staff: { name: string };
   canCancel: boolean;

@@ -1,4 +1,12 @@
-import { apiEnv, MOBILE_APP, serviceNounForShop } from "@chairback/config";
+import {
+  apiEnv,
+  formatShopAddress,
+  mapsUrlFor,
+  MOBILE_APP,
+  serviceNounForShop,
+  shopAddressLines,
+  type ShopAddressInput,
+} from "@chairback/config";
 
 const env = apiEnv();
 
@@ -161,6 +169,17 @@ export function previewWinbackBody(
 }
 
 /** Append the compliance opt-out line unless the copy already carries one. */
+/**
+ * The shop address, formatted for a message.
+ *
+ * 🔴 Every one of these builders takes the shop's ADDRESS COLUMNS, not a
+ * pre-formatted string, and asks `@chairback/config` to render them. The
+ * alternative - each caller formatting its own - is exactly how the
+ * receptionist ended up with a different idea of a "good enough" address than
+ * the calendar attachment. `formatShopAddress` returns null when there is no
+ * usable address, and every use below is therefore conditional: a shop that
+ * has not published one says nothing rather than guessing.
+ */
 function withStopNotice(body: string): string {
   return /reply stop/i.test(body) ? body : `${body} Reply STOP to opt out.`;
 }
@@ -349,13 +368,16 @@ export function buildAppointmentConfirmationBody(params: {
   timezone: string;
   staffName?: string | null;
   manageToken: string;
+  address?: ShopAddressInput | null;
 }): string {
   const when = formatApptTime(params.startsAt, params.timezone);
   const manageUrl = `${env.APP_BASE_URL}/book/manage/${params.manageToken}`;
   const who = params.firstName ?? "there";
   const withWhom = params.staffName ? ` with ${params.staffName}` : "";
+  const address = params.address ? formatShopAddress(params.address) : null;
   const body =
     `Hi ${who}, your ${params.serviceName} at ${params.shopName}${withWhom} is booked for ${when}. ` +
+    (address ? `${address}. ` : "") +
     `Need to reschedule or cancel? ${manageUrl}`;
   return withStopNotice(body);
 }
@@ -371,12 +393,19 @@ export function buildAppointmentReminderBody(params: {
   startsAt: Date;
   timezone: string;
   manageToken: string;
+  address?: ShopAddressInput | null;
 }): string {
   const when = formatApptTime(params.startsAt, params.timezone);
   const manageUrl = `${env.APP_BASE_URL}/book/manage/${params.manageToken}`;
   const who = params.firstName ?? "there";
+  // The address rides along because it is FREE here: this message is already
+  // two segments and a typical address keeps it inside two (measured, and
+  // pinned in templates.test.ts). If that budget is ever exceeded the test
+  // fails rather than the SMS bill quietly doubling.
+  const address = params.address ? formatShopAddress(params.address) : null;
   const body =
     `Reminder, ${who}: your ${params.serviceName} at ${params.shopName} is ${when}. ` +
+    (address ? `${address}. ` : "") +
     `See you then! Manage: ${manageUrl}`;
   return withStopNotice(body);
 }
@@ -459,10 +488,32 @@ function appointmentEmailHtml(params: {
   walletPassUrl?: string | null;
   /** The one-line "get the app" close. Confirmation emails only. */
   appStoreUrl?: string | null;
+  /**
+   * The shop's address columns. Rendered as a tappable "Where" block when the
+   * shop has published a usable one - this is the single most-asked question
+   * about an appointment, and the email is where people look for it.
+   */
+  address?: ShopAddressInput | null;
 }): string {
   const withWhom = params.staffName
     ? `<div style="color:#71717a;font-size:14px;margin-top:2px">with ${escapeHtml(params.staffName)}</div>`
     : "";
+  // "Where" sits INSIDE the details card, under the time, because that is the
+  // block people screenshot. The address is a link so a phone can hand it
+  // straight to a maps app; a shop with no published address renders nothing.
+  const addressLines = params.address ? shopAddressLines(params.address) : [];
+  const mapsUrl = params.address ? mapsUrlFor(params.address) : null;
+  const whereBlock =
+    addressLines.length > 0
+      ? `<div style="border-top:1px solid #2a2a2a;margin-top:12px;padding-top:12px">
+        <div style="color:#71717a;font-size:12px;letter-spacing:.04em;text-transform:uppercase">Where</div>
+        ${
+          mapsUrl
+            ? `<a href="${escapeAttr(mapsUrl)}" style="color:#fafafa;font-size:14px;line-height:1.5;text-decoration:none;display:block;margin-top:4px">${addressLines.map((l) => escapeHtml(l)).join("<br>")}<span style="color:#D4AF37;display:block;margin-top:4px;font-size:13px;font-weight:600">Get directions</span></a>`
+            : `<div style="color:#fafafa;font-size:14px;line-height:1.5;margin-top:4px">${addressLines.map((l) => escapeHtml(l)).join("<br>")}</div>`
+        }
+      </div>`
+      : "";
   const footer = params.manageUrl
     ? `<a href="${escapeAttr(params.manageUrl)}" style="display:inline-block;background:#D4AF37;color:#0f0f0f;font-size:15px;font-weight:700;text-decoration:none;padding:13px 22px;border-radius:10px">Reschedule or cancel</a>
       <p style="color:#71717a;font-size:12px;line-height:1.5;margin:16px 0 0">Pick a new time yourself — no need to call or reply.</p>`
@@ -500,6 +551,7 @@ function appointmentEmailHtml(params: {
       <div style="color:#fafafa;font-size:16px;font-weight:600">${escapeHtml(params.serviceName)}</div>
       ${withWhom}
       <div style="color:#D4AF37;font-size:15px;font-weight:600;margin-top:8px">${escapeHtml(params.when)}</div>
+      ${whereBlock}
     </div>
     ${keepRow}
     <div style="padding:4px 28px 28px">
@@ -532,6 +584,7 @@ export function buildAppointmentConfirmationEmail(params: {
   manageToken: string;
   /** Set by the caller iff appointmentWalletEnabled() - the template cannot know. */
   walletPassAvailable?: boolean;
+  address?: ShopAddressInput | null;
 }): EmailCopy {
   const when = formatApptTime(params.startsAt, params.timezone);
   const manageUrl = `${env.APP_BASE_URL}/book/manage/${params.manageToken}`;
@@ -542,10 +595,12 @@ export function buildAppointmentConfirmationEmail(params: {
     : null;
   const who = params.firstName ?? "there";
   const withWhom = params.staffName ? ` with ${params.staffName}` : "";
+  const address = params.address ? formatShopAddress(params.address) : null;
   return {
     subject: `Booking confirmed: ${params.serviceName} at ${params.shopName}`,
     text:
       `Hi ${who}, your ${params.serviceName} at ${params.shopName}${withWhom} is booked for ${when}.\n\n` +
+      (address ? `Where: ${address}\n\n` : "") +
       `Add to calendar: ${calendarUrl}\n` +
       (walletPassUrl ? `Add to Apple Wallet: ${walletPassUrl}\n` : "") +
       `\nNeed to reschedule or cancel? ${manageUrl}\n\n` +
@@ -561,6 +616,7 @@ export function buildAppointmentConfirmationEmail(params: {
       calendarUrl,
       walletPassUrl,
       appStoreUrl: MOBILE_APP.appStoreUrl,
+      address: params.address,
     }),
   };
 }
@@ -645,14 +701,17 @@ export function buildAppointmentReminderEmail(params: {
   timezone: string;
   staffName?: string | null;
   manageToken: string;
+  address?: ShopAddressInput | null;
 }): EmailCopy {
   const when = formatApptTime(params.startsAt, params.timezone);
   const manageUrl = `${env.APP_BASE_URL}/book/manage/${params.manageToken}`;
   const who = params.firstName ?? "there";
+  const address = params.address ? formatShopAddress(params.address) : null;
   return {
     subject: `Reminder: ${params.serviceName} at ${params.shopName}`,
     text:
       `Reminder, ${who}: your ${params.serviceName} at ${params.shopName} is ${when}. See you then!\n\n` +
+      (address ? `Where: ${address}\n\n` : "") +
       `Reschedule or cancel: ${manageUrl}`,
     html: appointmentEmailHtml({
       heading: "See you soon",
@@ -662,6 +721,7 @@ export function buildAppointmentReminderEmail(params: {
       when,
       staffName: params.staffName,
       manageUrl,
+      address: params.address,
     }),
   };
 }

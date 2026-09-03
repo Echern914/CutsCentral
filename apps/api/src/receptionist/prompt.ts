@@ -5,6 +5,7 @@ import {
   describeCancellationPolicy,
   describeDepositPolicy,
   describeNoShowPolicy,
+  formatShopAddress,
 } from "@chairback/config";
 import {
   durationRangeForService,
@@ -310,18 +311,13 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
 
   const noShow = describeNoShowPolicy(policyShop, channel);
 
-  // The address, when the shop has published one. Street + city is the floor;
-  // region and postal join when present. It is NOT on the booking page either,
-  // so the old fallback's "the booking page has details" was wrong twice over.
-  const addressParts = [
-    shop.addressStreet?.trim(),
-    shop.addressCity?.trim(),
-    [shop.addressRegion?.trim(), shop.addressPostal?.trim()].filter(Boolean).join(" "),
-  ].filter(Boolean);
+  // The address, when the shop has published one. The FORMATTING lives in
+  // @chairback/config so the receptionist, the confirmation email, the
+  // reminder and the calendar attachment cannot disagree about what the shop's
+  // address is - this function used to spell out its own rules here, which is
+  // precisely how two customer-facing copies of one fact start drifting.
   const address =
-    shop.addressStreet?.trim() && shop.addressCity?.trim()
-      ? addressParts.join(", ")
-      : "not listed - the shop hasn't published one; don't guess";
+    formatShopAddress(shop) ?? "not listed - the shop hasn't published one; don't guess";
 
   const config: ShopPromptConfig = {
     shopName: shop.name,

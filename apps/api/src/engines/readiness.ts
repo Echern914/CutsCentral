@@ -301,6 +301,8 @@ export interface ReadinessFacts {
   /** Whether `timezone` is a zone this runtime can actually resolve. */
   timezoneValid: boolean;
   slug: string | null;
+  /** hasShopAddress(shop): street + city published. */
+  hasAddress: boolean;
   publicPageEnabled: boolean;
   bookingMode: string;
   bookingUrl: string | null;
@@ -761,6 +763,22 @@ function shopItems(
       silentWhenDone: true,
       evidence: facts.slug ? `getchairback.com/book/${facts.slug}` : "No link yet",
       cta: { label: "Open your page", featureId: "mini-site" },
+    }),
+    item({
+      // Recommended, not required: a shop can take bookings without it. But it
+      // is the most-asked question about an appointment, and every message a
+      // customer gets - confirmation, reminder, calendar entry, the receptionist
+      // - answers it from this one field. Left blank, they get a time and no
+      // place.
+      id: "shop.address",
+      milestone: "shop",
+      title: "Shop address",
+      why: "Printed on every confirmation, reminder and calendar entry, and the receptionist quotes it. Without one, customers are told when but not where.",
+      klass: "recommended",
+      done: facts.hasAddress,
+      silentWhenDone: true,
+      evidence: facts.hasAddress ? "Published" : "Not set - customers get a time with no place",
+      cta: { label: "Add your address", featureId: "mini-site" },
     }),
     item({
       id: "shop.booking_source",

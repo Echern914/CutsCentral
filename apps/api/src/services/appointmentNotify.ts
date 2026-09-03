@@ -57,6 +57,12 @@ const SHOP_SELECT = {
   trialEndsAt: true,
   compAccess: true,
   twilioNumber: true,
+  // "Where is it?" is the most-asked question about an appointment, and the
+  // confirmation was the one message that never answered it.
+  addressStreet: true,
+  addressCity: true,
+  addressRegion: true,
+  addressPostal: true,
 } as const;
 
 type ApptShop = {
@@ -67,6 +73,10 @@ type ApptShop = {
   trialEndsAt: Date | null;
   compAccess: boolean;
   twilioNumber: string | null;
+  addressStreet: string | null;
+  addressCity: string | null;
+  addressRegion: string | null;
+  addressPostal: string | null;
 };
 
 type ApptClient = {
@@ -324,6 +334,7 @@ export async function notifyAppointmentConfirmation(params: {
         );
       } else {
         const body = buildAppointmentConfirmationBody({
+          address: shop,
           firstName: appt.firstName,
           shopName: shop.name,
           serviceName: appt.service.name,
@@ -359,6 +370,7 @@ export async function notifyAppointmentConfirmation(params: {
         );
       } else {
         const email = buildAppointmentConfirmationEmail({
+          address: shop,
           firstName: appt.firstName,
           shopName: shop.name,
           serviceName: appt.service.name,
@@ -427,6 +439,7 @@ export async function notifyAppointmentReminder(params: {
         );
       } else {
         const body = buildAppointmentReminderBody({
+          address: shop,
           firstName: appt.firstName,
           shopName: shop.name,
           serviceName: appt.service.name,
@@ -462,6 +475,7 @@ export async function notifyAppointmentReminder(params: {
         );
       } else {
         const email = buildAppointmentReminderEmail({
+          address: shop,
           firstName: appt.firstName,
           shopName: shop.name,
           serviceName: appt.service.name,

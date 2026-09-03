@@ -4,8 +4,11 @@ import { countBookingRefusals } from "../services/bookingRefusal.js";
 import { redactForAudit } from "../messaging/auditBody.js";
 import {
   apiEnv,
+  formatShopAddress,
   localMinutesOfDay,
+  mapsUrlFor,
   randomToken,
+  shopAddressLines,
   vocabularyForShop,
   zonedDateParts,
   zonedWallTimeToUtc,
@@ -2252,11 +2255,9 @@ bookingPublicRouter.get(
       startsAt: appt.startsAt,
       endsAt: appt.endsAt,
       staffName: appt.staff?.name ?? null,
-      addressLines: [
-        appt.shop.addressStreet,
-        appt.shop.addressCity,
-        appt.shop.addressRegion,
-      ],
+      // Same formatter the emails and the receptionist use, so the address on
+      // the calendar entry is the address in the message that carried it.
+      addressLines: shopAddressLines(appt.shop),
       manageUrl: `${apiEnv().APP_BASE_URL}/book/manage/${appt.manageToken}`,
       // Rises when the appointment changes (reschedule touches updatedAt), so
       // a re-imported file REPLACES the old calendar entry instead of sitting
@@ -2319,7 +2320,19 @@ bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
       etaMinutes: true,
       runningLate: true,
       seriesId: true,
-      shop: { select: { name: true, timezone: true, slug: true } },
+      shop: {
+        select: {
+          name: true,
+          timezone: true,
+          slug: true,
+          // "Where is it?" - the question this page existed for two years
+          // without answering.
+          addressStreet: true,
+          addressCity: true,
+          addressRegion: true,
+          addressPostal: true,
+        },
+      },
       service: { select: { name: true, durationMin: true } },
       staff: { select: { name: true } },
     },
@@ -2370,7 +2383,13 @@ bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
     firstName: appt.firstName,
     startsAt: appt.startsAt.toISOString(),
     endsAt: appt.endsAt.toISOString(),
-    shop: appt.shop,
+    // Formatted server-side, from the one formatter, so the page renders a
+    // string rather than re-deciding what counts as a usable address.
+    shop: {
+      ...appt.shop,
+      address: formatShopAddress(appt.shop),
+      mapsUrl: mapsUrlFor(appt.shop),
+    },
     service: appt.service,
     staff: appt.staff,
     canCancel: canChange,

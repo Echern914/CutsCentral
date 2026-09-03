@@ -13,6 +13,8 @@
     "./time": "./src/time.ts",
     "./crypto": "./src/crypto.ts",
     "./session": "./src/session.ts",
+    "./shopAddress": "./src/shopAddress.ts",
+    "./relativeTime": "./src/relativeTime.ts",
     "./demo": "./src/demo.ts",
     "./demoTour": "./src/demoTour.ts",
     "./features": "./src/features.ts",
