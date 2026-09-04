@@ -195,16 +195,6 @@ describe("exactly one credit", () => {
       Array.from({ length: 20 }, () => executeAffiliateCredits({ now: NOW })),
     );
     const mine = createBalanceTransaction.mock.calls.filter((c) => c[0] === f.customerId);
-    const opsNow = await operationsFor(f.rewardId);
-    console.log(
-      "RACE_DIAG",
-      JSON.stringify({
-        calls: mine.map((c) => [c[1]?.metadata, c[2]]),
-        attempts: opsNow[0]?.attempts,
-        status: opsNow[0]?.status,
-        runs: runs.map((r) => [r.claimed, r.applied, r.staleClaim, r.retry, r.superseded]),
-      }),
-    );
     expect(mine).toHaveLength(1);
     expect(mine[0]![2]).toEqual({ idempotencyKey: `affiliate-reward:${f.rewardId}` });
     // The workers also drain whatever other operations this file left pending;
