@@ -1585,23 +1585,33 @@ function classifyCreateInput(
   body: Record<string, unknown>,
 ): { status: 400 | 422; code: BookingErrorCode; field?: BookingErrorField } {
   const paths = new Set(issues.map((i) => String(i.path[0] ?? "")));
-  if (paths.has("email")) {
-    return { status: 422, code: "INVALID_EMAIL", field: "email" };
-  }
-  if (paths.has("phone")) {
-    return { status: 422, code: "INVALID_PHONE", field: "phone" };
-  }
-  // A field the schema accepted but that is still not a usable address (the
-  // schema allows the empty string for shops that do not require email).
   const email = typeof body.email === "string" ? body.email.trim() : "";
+  const phone = typeof body.phone === "string" ? body.phone.trim() : "";
+
+  // 🔑 MISSING IS NOT THE SAME AS MALFORMED, and the two are separated on the
+  // VALUE rather than on the zod path. Several refinements report under
+  // `path: ["email"]` for reasons that are nothing to do with the address
+  // being wrong - "we need an address because SMS is off" is a required-field
+  // omission, and answering 422 INVALID_EMAIL to a customer who typed no email
+  // at all would be telling them their address is invalid when they have not
+  // given one. An omission stays a 400 VALIDATION_ERROR, which is also the
+  // status this endpoint has always returned for it.
   if (email && !isLikelyEmail(email)) {
     return { status: 422, code: "INVALID_EMAIL", field: "email" };
   }
-  const first = [...paths].find((p) => p === "firstName" || p === "lastName" || p === "startsAt");
+  if (phone && paths.has("phone")) {
+    return { status: 422, code: "INVALID_PHONE", field: "phone" };
+  }
+  // The field to put the cursor on, when the schema named one. Email and phone
+  // are included here on purpose: a MISSING required email is still best fixed
+  // at the email box, it is simply not an "invalid address".
+  const field = ["email", "phone", "firstName", "lastName", "startsAt"].find((f) =>
+    paths.has(f),
+  );
   return {
     status: 400,
     code: "VALIDATION_ERROR",
-    ...(first ? { field: first as BookingErrorField } : {}),
+    ...(field ? { field: field as BookingErrorField } : {}),
   };
 }
 

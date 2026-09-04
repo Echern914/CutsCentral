@@ -31,7 +31,7 @@ const TEST = process.env.VITEST === "true";
  * with the limiter name so 429 storms are VISIBLE in Railway logs instead of
  * surfacing only as user complaints.
  */
-export function rateLimitedHandler(name: string) {
+export function rateLimitedHandler(name: string, code?: string) {
   return (req: Request, res: Response): void => {
     logger.warn(
       // 🔴 REDACTED. rewardsLimiter, bookingWriteLimiter and
@@ -41,15 +41,23 @@ export function rateLimitedHandler(name: string) {
       { limiter: name, path: redactUrl(requestUrl(req)), ip: req.ip },
       "rate limit exceeded",
     );
-    // `code` mirrors the booking vocabulary (packages/config/bookingErrors.ts)
-    // so a client can classify a 429 the same way it classifies every other
-    // refusal, without matching on the legacy string.
-    res.status(429).json({ error: "rate_limited", code: "RATE_LIMITED" });
+    // A limiter may carry a CODE from its surface's own vocabulary - the public
+    // booking limiter answers `RATE_LIMITED` from packages/config's booking
+    // codes, so the booking page can classify a 429 the same way it classifies
+    // every other refusal instead of matching on a string.
+    //
+    // 🔴 Opt-in, not global. Most limiters guard surfaces with nothing to do
+    // with booking (MCP speaks its own protocol and pins this body shape), and
+    // stamping a booking code onto their 429s would be both meaningless and a
+    // silent change to a contract someone else depends on.
+    res.status(429).json(code ? { error: "rate_limited", code } : { error: "rate_limited" });
   };
 }
 
 function make(opts: {
   name: string;
+  /** A machine-readable code for THIS limiter's surface. See rateLimitedHandler. */
+  code?: string;
   windowMs: number;
   limit: number;
   keyGenerator?: (req: Request) => string;
@@ -60,7 +68,7 @@ function make(opts: {
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: opts.keyGenerator,
-    handler: rateLimitedHandler(opts.name),
+    handler: rateLimitedHandler(opts.name, opts.code),
     // Postgres store in real envs; MemoryStore (default) in tests.
     ...(TEST ? {} : { store: new PgRateStore(`${opts.name}:`) }),
   });
@@ -166,6 +174,9 @@ export const bookingReadLimiter = make({
  */
 export const bookingWriteLimiter = make({
   name: "bookwrite",
+  // The public booking page classifies every refusal by code; a 429 is one of
+  // them (packages/config/src/bookingErrors.ts).
+  code: "RATE_LIMITED",
   windowMs: 60 * 1000,
   limit: 20,
   keyGenerator: publicIpKey,

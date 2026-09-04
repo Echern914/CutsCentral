@@ -241,6 +241,8 @@ export function BookingClient({
   const [fieldError, setFieldError] = useState<{ field: BookingErrorField; message: string } | null>(
     null,
   );
+  /** The lost-slot banner, so it can be focused the moment it appears. */
+  const conflictRef = useRef<HTMLParagraphElement | null>(null);
   const emailRef = useRef<HTMLInputElement | null>(null);
   const phoneRef = useRef<HTMLInputElement | null>(null);
   const firstNameRef = useRef<HTMLInputElement | null>(null);
@@ -274,6 +276,21 @@ export function BookingClient({
   // actively selected by the user). See the booking consent label below.
   const [consent, setConsent] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  /**
+   * Bring the lost-slot banner to the customer the moment it appears.
+   *
+   * `role="alert"` alone announces it to a screen reader but does nothing for
+   * a sighted customer whose phone may be scrolled anywhere; focusing does the
+   * scrolling on every browser we support and puts the keyboard where the
+   * message is. Guarded on `slot === null` so it only fires in the state the
+   * banner actually renders in.
+   */
+  useEffect(() => {
+    if (error && slot === null) conflictRef.current?.focus();
+    // Only when a NEW message arrives - not on every unrelated re-render.
+  }, [error, slot]);
+
   const [confirmedToken, setConfirmedToken] = useState<string | null>(null);
   // true when the shop requires approval: the customer submitted a REQUEST, not a
   // confirmed booking, so the success screen reads "Request sent".
@@ -1393,6 +1410,25 @@ export function BookingClient({
         recurrence:
           repeatOffered && repeat ? { interval: repeat.interval, count: repeat.count } : undefined,
       });
+      /**
+       * Refresh the available times, then say what happened.
+       *
+       * 🔴 THE ORDER IS LOAD-BEARING, AND GETTING IT WRONG IS SILENT.
+       * `loadSlots` clears `error` as its first act (it is also used for an
+       * ordinary reload, where a stale message would be wrong). So setting the
+       * message BEFORE refreshing wiped it, and the customer lost their slot,
+       * watched the list change under them, and was told nothing at all - the
+       * exact "the product is broken" reading that the slot-conflict copy
+       * exists to prevent. Caught by the render QA, not by any unit test:
+       * both calls "worked", they just undid each other.
+       */
+      const refreshTimesThenSay = (message: string) => {
+        if (dayFirst && dayDate) pickDay(dayDate);
+        else if (serviceId && loadedPool.length) loadSlots(serviceId, loadedPool);
+        clearSlotPick();
+        setError(message);
+      };
+
       if (!res.ok) {
         // 🔴 BRANCH ON THE CODE, NEVER ON THE COPY. `res.code` is the stable
         // vocabulary from packages/config/bookingErrors.ts; `res.error` is the
@@ -1413,8 +1449,14 @@ export function BookingClient({
           return;
         }
         if (res.code === "VALIDATION_ERROR") {
+          // A required value that is MISSING, not malformed. Still fixed at the
+          // field, so the customer's cursor lands where the answer goes.
           if (res.field === "firstName" || res.field === "lastName") {
             showFieldError(res.field, "Enter your first and last name.");
+          } else if (res.field === "email") {
+            showFieldError("email", "Add your email — that's where your confirmation goes.");
+          } else if (res.field === "phone") {
+            showFieldError("phone", "Add a phone or email so we can confirm.");
           } else {
             setError("Check your details and try again.");
           }
@@ -1425,14 +1467,11 @@ export function BookingClient({
           return;
         }
         if (res.code === "SLOT_UNAVAILABLE" && res.error === "slot_taken") {
-          setError(SLOT_CONFLICT_MESSAGE);
           // Refresh availability so the taken slot disappears — day-first
           // refetches the whole day; service-first reloads the SAME pool the
           // calendar was built from (not just one barber), so a merged
           // multi-barber calendar doesn't collapse to a single provider.
-          if (dayFirst && dayDate) pickDay(dayDate);
-          else if (serviceId && loadedPool.length) loadSlots(serviceId, loadedPool);
-          clearSlotPick();
+          refreshTimesThenSay(SLOT_CONFLICT_MESSAGE);
         } else if (res.error === "no_active_access") {
           setError(
             `Online booking is paused for ${data.shop.name} right now. Please contact the shop directly to book.`,
@@ -1448,28 +1487,17 @@ export function BookingClient({
           // "Something went wrong" during the Sep boundary-slot outage, which
           // is why a real customer concluded the product was broken instead of
           // picking another time.
-          setError("That time isn't available anymore. Pick another slot.");
-          if (dayFirst && dayDate) pickDay(dayDate);
-          else if (serviceId && loadedPool.length) loadSlots(serviceId, loadedPool);
-          clearSlotPick();
+          refreshTimesThenSay("That time isn't available anymore. Pick another slot.");
         } else if (res.error === "day_full") {
           // The API distinguishes "this TIME went" from "this DAY is done" on
           // purpose (a per-service daily cap). Without its own copy this read
           // as "Something went wrong", and the customer retried the same full
           // day until they gave up.
-          setError(
-            "That day is fully booked for this service. Try another day.",
-          );
-          if (dayFirst && dayDate) pickDay(dayDate);
-          else if (serviceId && loadedPool.length) loadSlots(serviceId, loadedPool);
-          clearSlotPick();
+          refreshTimesThenSay("That day is fully booked for this service. Try another day.");
         } else if (res.error === "slot_unavailable_external") {
           // The shop's external calendar (Acuity/Square) refused the mirror, so
           // the booking was rolled back. Their calendar is the authority here.
-          setError(SLOT_CONFLICT_MESSAGE);
-          if (dayFirst && dayDate) pickDay(dayDate);
-          else if (serviceId && loadedPool.length) loadSlots(serviceId, loadedPool);
-          clearSlotPick();
+          refreshTimesThenSay(SLOT_CONFLICT_MESSAGE);
         } else {
           // BOOKING_FAILED and anything unrecognised: a safe generic message.
           // The real cause is in the server log under a sanitized
@@ -1984,6 +2012,32 @@ export function BookingClient({
           would wipe the booking's manage link off the screen. Refreshing must
           never be able to cost a customer the thing they just did. */}
       <PullToRefresh />
+      {/*
+        WHY THE LOST-SLOT MESSAGE LIVES AT THE TOP.
+
+        🔴 It used to render at the very BOTTOM of this page, after the whole
+        calendar and every service. When a slot is taken out from under a
+        customer, the page refreshes the times and drops them back on the time
+        step - scrolled to the top - so the one sentence explaining what just
+        happened sat several screens below where they were looking. Render QA
+        caught it: the dead chip really had disappeared and the copy really was
+        in the DOM, and a real customer would still have watched a list quietly
+        rearrange itself for no stated reason. That is exactly the "the product
+        is broken" reading the conflict copy exists to prevent.
+
+        Focused as well as shown, so a screen reader announces it and a phone
+        brings it into view.
+      */}
+      {error && !slot && (
+        <p
+          ref={conflictRef}
+          role="alert"
+          tabIndex={-1}
+          className="mb-4 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2.5 text-center text-sm text-amber-200 outline-none"
+        >
+          {error}
+        </p>
+      )}
       {/* Guided client-experience tour — demo tenant only. Step anchors are the
           data-tour attributes below (keep in sync with
           packages/config/src/demoTour.ts). */}
@@ -2979,11 +3033,6 @@ export function BookingClient({
         </Section>
       )}
 
-      {error && !slot && (
-        <p role="alert" className="mt-3 text-center text-xs text-red-400">
-          {error}
-        </p>
-      )}
     </main>
   );
 }

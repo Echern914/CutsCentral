@@ -146,6 +146,8 @@ export interface YearlyReportData {
   staffId: string | null;
   subjectName: string;
   scope: "shop" | "staff";
+  /** The shop's own word for a provider ("barber", "stylist", "nail tech"). */
+  providerNoun: string;
   syncedExcluded: boolean;
   totals: {
     appointments: number;

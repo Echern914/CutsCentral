@@ -92,8 +92,13 @@ describe("Apple Pay cannot be switched off by accident", () => {
 
   it("keeps no Stripe secret and no raw card data on any client", async () => {
     const webSrc = path.resolve(SRC, "../../web/src");
-    const { globSync } = await import("node:fs");
-    const files = globSync("**/*.{ts,tsx}", { cwd: webSrc }) as string[];
+    // `readdirSync({ recursive })` rather than `fs.globSync`: the latter exists
+    // at runtime on this Node but not in @types/node 20, and the Railway build
+    // gate type-checks test files too - a green vitest run and a red deploy.
+    const { readdirSync } = await import("node:fs");
+    const files = (readdirSync(webSrc, { recursive: true }) as string[]).filter((f) =>
+      /\.(ts|tsx)$/.test(f),
+    );
     expect(files.length).toBeGreaterThan(50);
     for (const rel of files) {
       const text = await readFile(path.join(webSrc, rel), "utf8");

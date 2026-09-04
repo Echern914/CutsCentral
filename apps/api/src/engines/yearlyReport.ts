@@ -95,6 +95,15 @@ export interface YearlyReport {
   subjectName: string;
   scope: "shop" | "staff";
   /**
+   * The shop's own word for a provider - "barber", "stylist", "nail tech".
+   *
+   * Resolved from the business type, never hard-coded: a salon printing
+   * "Barber at Glow Studio" on a document its owner hands to a landlord is the
+   * exact failure packages/config/vocabularyLint.test.ts exists to prevent, and
+   * a printed page cannot be quietly corrected later.
+   */
+  providerNoun: string;
+  /**
    * True when this is one barber's report and the shop also has externally
    * synced (Acuity/Square) bookings, which carry no barber and are therefore
    * NOT in these numbers. The page says so - a barber must not read a
@@ -231,6 +240,8 @@ export interface BuildYearlyReportInput {
   shopId: string;
   shopName: string;
   timezone: string;
+  /** The shop's word for a provider; defaults to the neutral one. */
+  providerNoun?: string;
   year: number;
   /** One barber's report, or null for the whole shop. */
   staffId: string | null;
@@ -438,6 +449,7 @@ export async function buildYearlyReport(
     staffId,
     subjectName: staffId ? (input.staffName?.trim() || "This barber") : input.shopName,
     scope: staffId ? "staff" : "shop",
+    providerNoun: input.providerNoun?.trim() || "provider",
     syncedExcluded,
 
     totals: {

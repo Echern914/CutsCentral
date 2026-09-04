@@ -142,7 +142,7 @@ function identity(page: PdfPage, report: YearlyReport): void {
   });
   const sub =
     report.scope === "staff"
-      ? `Barber at ${report.shopName}`
+      ? `${report.providerNoun.charAt(0).toUpperCase()}${report.providerNoun.slice(1)} at ${report.shopName}`
       : "Whole-shop performance summary";
   page.text(fitText(sub, nameMax, 10, REGULAR), M, 108, {
     size: 10,
@@ -169,7 +169,7 @@ function identity(page: PdfPage, report: YearlyReport): void {
 /** The four numbers a barber is actually asked for, in a gold band. */
 function summaryTiles(page: PdfPage, report: YearlyReport): number {
   const top = 140;
-  const h = 74;
+  const h = 82;
   page.rect(M, top, W, h, GOLD_TINT);
   page.rect(M, top, 3, h, GOLD);
 
@@ -183,8 +183,8 @@ function summaryTiles(page: PdfPage, report: YearlyReport): number {
   const colW = (W - 14) / tiles.length;
   tiles.forEach(([label, value], i) => {
     const cx = M + 14 + colW * i;
-    page.text(label.toUpperCase(), cx, top + 22, { size: 7.5, font: BOLD, color: MUTED });
-    page.text(fitText(value, colW - 14, 21, BOLD), cx, top + 50, {
+    page.text(label.toUpperCase(), cx, top + 24, { size: 7.5, font: BOLD, color: MUTED });
+    page.text(fitText(value, colW - 14, 21, BOLD), cx, top + 54, {
       size: 21,
       font: BOLD,
       color: INK,
@@ -195,7 +195,7 @@ function summaryTiles(page: PdfPage, report: YearlyReport): number {
   page.text(
     `All amounts in ${report.currency}. Revenue is money earned: collected payments net of refunds, plus work settled at the chair.`,
     M + 14,
-    top + 66,
+    top + 72,
     { size: 7, color: MUTED },
   );
   return top + h;
@@ -219,27 +219,27 @@ function metricGrid(page: PdfPage, report: YearlyReport, top: number): number {
     ["Busiest day", report.busiest.weekday ?? "—", "of the week"],
   ];
 
-  const gap = 9;
+  const gap = 11;
   const colW = (W - gap * 3) / 4;
-  const rowH = 50;
+  const rowH = 58;
   cells.forEach(([label, value, note], i) => {
     const col = i % 4;
     const row = Math.floor(i / 4);
     const x = M + col * (colW + gap);
     const y = top + row * (rowH + gap);
     page.rect(x, y, colW, rowH, CARD);
-    page.text(fitText(label, colW - 16, 7.5, BOLD).toUpperCase(), x + 8, y + 15, {
+    page.text(fitText(label, colW - 16, 7.5, BOLD).toUpperCase(), x + 8, y + 16, {
       size: 7.5,
       font: BOLD,
       color: MUTED,
     });
-    page.text(fitText(value, colW - 16, 16, BOLD), x + 8, y + 33, {
+    page.text(fitText(value, colW - 16, 16, BOLD), x + 8, y + 37, {
       size: 16,
       font: BOLD,
       color: INK,
     });
     if (note) {
-      page.text(fitText(note, colW - 16, 6.8, REGULAR), x + 8, y + 43, {
+      page.text(fitText(note, colW - 16, 6.8, REGULAR), x + 8, y + 49, {
         size: 6.8,
         color: MUTED,
       });
@@ -256,7 +256,10 @@ function metricGrid(page: PdfPage, report: YearlyReport, top: number): number {
  * never read as a collapse in business.
  */
 function monthlyChart(page: PdfPage, report: YearlyReport, top: number): number {
-  const h = 128;
+  // The chart absorbs the page's slack deliberately. A one-page report has a
+  // FIXED height, so the choice is between a tall chart and a band of white
+  // above the footer - and the chart is the part a barber actually points at.
+  const h = 168;
   const plotTop = top + 24;
   const plotH = h - 44;
   const baseline = plotTop + plotH;
@@ -323,7 +326,7 @@ function bottomSections(page: PdfPage, report: YearlyReport, top: number): void 
     page.text("No bookings in this range.", M, top + 28, { size: 8.5, color: MUTED });
   } else {
     rows.forEach((s, i) => {
-      const y = top + 28 + i * 15;
+      const y = top + 30 + i * 17;
       page.text(fitText(s.name, colW - 150, 8.5, REGULAR), M, y, { size: 8.5, color: INK });
       page.text(`${s.count}`, M + colW - 96, y, {
         size: 8.5,
@@ -353,7 +356,9 @@ function bottomSections(page: PdfPage, report: YearlyReport, top: number): void 
     "Refunded and unsettled payments are not counted as revenue.",
   ];
   if (report.scope === "staff" && report.syncedExcluded) {
-    notes.push("Bookings synced from another calendar carry no barber, so they are not here.");
+    notes.push(
+      `Bookings synced from another calendar carry no ${report.providerNoun}, so they are not here.`,
+    );
   }
   for (const u of report.unavailable) notes.push(`${u.label}: ${u.reason}`);
 

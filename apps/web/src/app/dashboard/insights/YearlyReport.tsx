@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Dialog } from "@/components/ui/Dialog";
+import { cap, useVocab } from "@/components/VocabProvider";
 import {
   yearlyReportAction,
   yearlyReportOptionsAction,
@@ -57,7 +58,12 @@ function prettyDay(ymd: string): string {
   return `${MONTHS_SHORT[m - 1]} ${d}, ${y}`;
 }
 
-export function YearlyReport({ serviceNoun = "visit" }: { serviceNoun?: string }) {
+export function YearlyReport() {
+  // A barbershop says "barber", a salon says "stylist", a nail bar says "nail
+  // tech". Hard-coding any of them is the exact failure the vocabulary guard
+  // exists to catch (packages/config/vocabularyLint.test.ts), and this copy is
+  // the customer-facing kind it is strictest about.
+  const vocab = useVocab();
   const [open, setOpen] = useState(false);
   const [options, setOptions] = useState<YearlyReportOptions | null>(null);
   const [year, setYear] = useState<number | null>(null);
@@ -99,7 +105,7 @@ export function YearlyReport({ serviceNoun = "visit" }: { serviceNoun?: string }
       setError(
         res.error === "forbidden"
           ? "You can only generate your own report."
-          : "That barber isn't in this shop.",
+          : `That ${vocab.providerNoun} isn't in this shop.`,
       );
       setReport(null);
       return;
@@ -316,7 +322,7 @@ export function YearlyReport({ serviceNoun = "visit" }: { serviceNoun?: string }
               data-testid="yearly-report-preview"
               className={loading ? "opacity-60 transition-opacity duration-150" : undefined}
             >
-              <ReportPreview report={report} serviceNoun={serviceNoun} />
+              <ReportPreview report={report} providerNoun={report.providerNoun || vocab.providerNoun} />
             </div>
           )}
         </div>
@@ -335,10 +341,11 @@ export function YearlyReport({ serviceNoun = "visit" }: { serviceNoun?: string }
  */
 function ReportPreview({
   report,
-  serviceNoun,
+  providerNoun,
 }: {
   report: YearlyReportData;
-  serviceNoun: string;
+  /** The shop's own word for a provider ("barber", "stylist", "nail tech"). */
+  providerNoun: string;
 }) {
   const t = report.totals;
   const peak = Math.max(...report.months.map((m) => m.revenueCents), 0);
@@ -352,7 +359,7 @@ function ReportPreview({
           <h3 className="truncate font-display text-lg text-offwhite">{report.subjectName}</h3>
           <p className="truncate text-xs text-muted">
             {report.scope === "staff"
-              ? `Barber at ${report.shopName}`
+              ? `${cap(providerNoun)} at ${report.shopName}`
               : "Whole-shop performance summary"}
           </p>
         </div>
@@ -365,7 +372,11 @@ function ReportPreview({
       </header>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Tile label={`${serviceNoun === "visit" ? "Appointments" : "Services"} completed`} value={t.appointments.toLocaleString()} accent />
+        {/* The label is FIXED, not the shop's service noun: the printed page
+            says "Appointments completed", and the screen a barber checks it
+            against must say the same words. A per-shop noun here would make
+            the two documents describe the same number differently. */}
+        <Tile label="Appointments completed" value={t.appointments.toLocaleString()} accent />
         <Tile label="Total revenue" value={moneyWhole(t.revenueCents)} />
         <Tile label="Clients served" value={t.uniqueClients.toLocaleString()} />
         <Tile
@@ -446,8 +457,8 @@ function ReportPreview({
         <ul className="flex flex-col gap-1 text-[11px] text-muted">
           {report.scope === "staff" && report.syncedExcluded && (
             <li>
-              Bookings synced from another calendar carry no barber, so they are not in these
-              numbers.
+              Bookings synced from another calendar carry no {providerNoun}, so they are not in
+              these numbers.
             </li>
           )}
           {report.unavailable.map((u) => (

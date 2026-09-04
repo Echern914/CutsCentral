@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { runWithShop } from "@chairback/db";
+import { vocabularyForShop } from "@chairback/config";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireActiveAccess } from "../middleware/billing.js";
 import {
@@ -180,6 +181,7 @@ yearlyReportRouter.get("/", async (req, res) => {
     shopId: shop.id,
     shopName: shop.name,
     timezone: shop.timezone,
+    providerNoun: vocabularyForShop(shop).providerNoun,
     year,
     staffId: scope.scope.staffId,
     staffName: scope.scope.staffName,
@@ -219,6 +221,7 @@ yearlyReportRouter.get("/pdf", async (req, res) => {
     shopId: shop.id,
     shopName: shop.name,
     timezone: shop.timezone,
+    providerNoun: vocabularyForShop(shop).providerNoun,
     year,
     staffId: scope.scope.staffId,
     staffName: scope.scope.staffName,

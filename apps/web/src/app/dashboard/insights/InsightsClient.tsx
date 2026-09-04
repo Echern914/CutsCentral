@@ -172,7 +172,7 @@ export function InsightsClient({
             </p>
           )}
         </div>
-        <YearlyReport serviceNoun={serviceNoun} />
+        <YearlyReport />
       </motion.div>
 
       {/* Goals — one target per metric AND period, each kept separately. */}

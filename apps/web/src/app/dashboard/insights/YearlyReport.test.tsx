@@ -59,6 +59,7 @@ function makeReport(over: Partial<YearlyReportData> = {}): YearlyReportData {
     staffId: "staff_eric",
     subjectName: "Eric Chernichaw",
     scope: "staff",
+    providerNoun: "barber",
     syncedExcluded: true,
     totals: {
       appointments: 1284,
