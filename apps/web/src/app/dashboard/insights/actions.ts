@@ -119,3 +119,113 @@ export async function clearGoalAction(input: {
   );
   return { ok: res.ok };
 }
+
+//  The yearly performance report
+
+/**
+ * A number the report cannot honestly print, and why. Rendered as an explicit
+ * "not tracked" line - a missing row would read as a zero, and a zero reads as
+ * a fact.
+ */
+export interface UnavailableMetric {
+  key: string;
+  label: string;
+  reason: string;
+}
+
+export interface YearlyReportData {
+  year: number;
+  yearToDate: boolean;
+  periodLabel: string;
+  timezone: string;
+  currency: string;
+  rangeStart: string;
+  rangeEnd: string;
+  generatedAt: string;
+  shopName: string;
+  staffId: string | null;
+  subjectName: string;
+  scope: "shop" | "staff";
+  syncedExcluded: boolean;
+  totals: {
+    appointments: number;
+    noShows: number;
+    cancellations: number;
+    booked: number;
+    noShowRateBp: number | null;
+    cancellationRateBp: number | null;
+    uniqueClients: number;
+    newClients: number;
+    returningClients: number;
+    returnRateBp: number | null;
+    walkIns: number;
+    revenueCents: number;
+    avgMonthlyRevenueCents: number;
+    avgTicketCents: number | null;
+    pricedCount: number;
+    unpricedCount: number;
+    settledThroughChairbackCents: number;
+    collectedInPersonCents: number;
+  };
+  busiest: {
+    month: string | null;
+    monthKey: string | null;
+    weekday: string | null;
+    weekdayCounts: number[];
+  };
+  months: {
+    key: string;
+    label: string;
+    fullLabel: string;
+    appointments: number;
+    revenueCents: number;
+    complete: boolean;
+  }[];
+  services: { name: string; count: number; revenueCents: number }[];
+  unavailable: UnavailableMetric[];
+}
+
+export interface YearlyReportOptions {
+  years: number[];
+  currentYear: number;
+  timezone: string;
+  canReportShop: boolean;
+  defaultSubject: string | null;
+  shopName: string;
+  subjects: { id: string; name: string; active: boolean }[];
+}
+
+/**
+ * Which years and which barbers this session may ask for.
+ *
+ * Read from the API rather than assembled here, so the picker can never offer
+ * an option the API would refuse - a barber sees exactly one name (his own) and
+ * no "whole shop" choice, because the API filtered the list in its QUERY.
+ */
+export async function yearlyReportOptionsAction(): Promise<YearlyReportOptions | null> {
+  const res = await apiGet<YearlyReportOptions>("/api/yearly-report/options");
+  return res.ok ? (res.data ?? null) : null;
+}
+
+/**
+ * The report itself. The SAME payload the PDF is rendered from, so the preview
+ * on screen and the printed page cannot show different numbers.
+ */
+export async function yearlyReportAction(input: {
+  year: number;
+  subject: string;
+}): Promise<{ report: YearlyReportData; filename: string } | { error: string } | null> {
+  const params = new URLSearchParams({
+    year: String(input.year),
+    subject: input.subject,
+  });
+  const res = await apiGet<{ report: YearlyReportData; filename: string }>(
+    `/api/yearly-report?${params}`,
+  );
+  if (res.ok && res.data) return res.data;
+  // 403 is "not your report" and 404 "no such barber here" - two different
+  // sentences for the reader, so the status is not flattened into null.
+  if (res.status === 403) return { error: "forbidden" };
+  if (res.status === 404) return { error: "not_found" };
+  return null;
+}

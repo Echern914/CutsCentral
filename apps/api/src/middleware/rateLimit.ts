@@ -41,7 +41,10 @@ export function rateLimitedHandler(name: string) {
       { limiter: name, path: redactUrl(requestUrl(req)), ip: req.ip },
       "rate limit exceeded",
     );
-    res.status(429).json({ error: "rate_limited" });
+    // `code` mirrors the booking vocabulary (packages/config/bookingErrors.ts)
+    // so a client can classify a 429 the same way it classifies every other
+    // refusal, without matching on the legacy string.
+    res.status(429).json({ error: "rate_limited", code: "RATE_LIMITED" });
   };
 }
 

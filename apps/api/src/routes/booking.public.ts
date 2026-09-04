@@ -1,9 +1,25 @@
 import { Router } from "express";
 import { z } from "zod";
 import { countBookingRefusals } from "../services/bookingRefusal.js";
+import {
+  DAY_TTL_MS,
+  OPEN_DAYS_TTL_MS,
+  dayCache,
+  dayInFlight,
+  invalidateShopAvailabilityCaches,
+  openDaysCache,
+  openDaysInFlight,
+} from "../services/availabilityCache.js";
+import {
+  isAppointmentSlotConflict,
+  uniqueTargetOf,
+} from "../services/bookingErrorMapping.js";
 import { redactForAudit } from "../messaging/auditBody.js";
 import {
   apiEnv,
+  isLikelyEmail,
+  type BookingErrorCode,
+  type BookingErrorField,
   describeDepositPolicy,
   type ShopPaymentsMode,
   formatShopAddress,
@@ -99,6 +115,13 @@ import { logger } from "../logger.js";
  *
  * A 404 is returned for any shop that isn't live + native (no oracle).
  */
+/**
+ * Re-exported so the booking dashboard's invalidation hook keeps its existing
+ * import. The implementation moved to services/availabilityCache.ts - see that
+ * file for why.
+ */
+export { invalidateShopAvailabilityCaches };
+
 export const bookingPublicRouter: Router = Router();
 
 // z.coerce.date() turns an unparseable string into an Invalid Date that still
@@ -300,7 +323,8 @@ const claimSchema = z
   .object({
     firstName: z.string().trim().max(80).optional().or(z.literal("")),
     lastName: z.string().trim().max(80).optional().or(z.literal("")),
-    email: z.string().trim().email().max(200).optional().or(z.literal("")),
+    // Same address rule as the booking form - see createSchema below.
+    email: z.string().trim().max(200).refine(isLikelyEmail).optional().or(z.literal("")),
     phone: z.string().trim().max(40).optional().or(z.literal("")),
   })
   .strict();
@@ -362,10 +386,10 @@ bookingPublicRouter.post(
         res.status(410).json({ error: "offer_expired" });
         return;
       case "slot_taken":
-        res.status(409).json({ error: "slot_taken" });
+        res.status(409).json({ error: "slot_taken", code: "SLOT_UNAVAILABLE" });
         return;
       case "day_full":
-        res.status(409).json({ error: "day_full" });
+        res.status(409).json({ error: "day_full", code: "DAY_FULL" });
         return;
       case "deposit_required":
         // The shop turned deposits on mid-hold. The offer was RELEASED; the
@@ -376,7 +400,7 @@ bookingPublicRouter.post(
         // Enforcing a mirror that cannot protect this chair. The same code the
         // booking page gives, so a customer gets one consistent answer rather
         // than a refusal from one entry point and silence from another.
-        res.status(409).json({ error: "slot_unavailable_external" });
+        res.status(409).json({ error: "slot_unavailable_external", code: "SLOT_UNAVAILABLE" });
         return;
       default: {
         //  🔴 EXHAUSTIVENESS, AND WHY IT IS HERE.
@@ -689,35 +713,11 @@ const dayQuerySchema = z.object({
 // TTL 0 under vitest (same pattern as middleware/rateLimit.ts): suites edit
 // hours/services and immediately re-read the day, and serving the pre-edit
 // body would fail them for a staleness prod explicitly accepts.
-const DAY_TTL_MS = process.env.VITEST === "true" ? 0 : 60_000;
-const dayCache = new Map<string, { at: number; body: unknown }>();
-// Day sweeps CURRENTLY RUNNING, keyed by shop|date. Same reasoning as the
-// open-days in-flight map below: the cache holds only finished bodies, so
-// without this a burst of visitors on one date each runs the whole sweep.
-const dayInFlight = new Map<string, Promise<unknown>>();
+// The maps themselves now live in services/availabilityCache.ts so that ENGINES
+// and WEBHOOKS can invalidate them too - an engine importing this route would
+// be a cycle, which is exactly why an Acuity block or a receptionist hold used
+// to stay visible on the public page until the TTL lapsed.
 const DAY_FANOUT_LIMIT = 4;
-
-/**
- * Drop a shop's cached availability (every /day date + /open-days) after any
- * write that can change what's bookable.
- *
- * Public booking writes call it so the customer who loses a slot race sees the
- * dead chip disappear instead of looping on slot_taken until the TTL lapses.
- *
- * DASHBOARD writes call it too (via the invalidation hook on the booking
- * dashboard router): a barber's verify loop is "save hours -> open my booking
- * page -> check" and that happens in SECONDS. Serving him the pre-save times
- * for up to a minute reads as "it didn't save" — the single most damaging
- * thing a save can look like, and precisely the complaint that surfaced on
- * launch day. Availability edits are rare and this is one Map delete, so
- * there's no reason to make the barber wait out a TTL to see his own change.
- */
-export function invalidateShopAvailabilityCaches(shopId: string): void {
-  for (const key of dayCache.keys()) {
-    if (key.startsWith(`${shopId}|`)) dayCache.delete(key);
-  }
-  openDaysCache.delete(shopId);
-}
 
 /** Map with at most `limit` calls of `fn` in flight at once (order preserved). */
 async function mapWithLimit<T, R>(
@@ -1232,19 +1232,18 @@ bookingPublicRouter.get("/:slug/upgrades", bookingReadLimiter, async (req, res) 
 // that fall back to the client's weekday heuristic, and the horizon check in
 // the booking POST still rejects anything truly out of range.
 // TTL 0 under vitest, same reason as the /day cache above.
-const OPEN_DAYS_TTL_MS = process.env.VITEST === "true" ? 0 : 60_000;
 const OPEN_DAYS_SCAN_CAP = 45;
 // Keyed by shop.id (NOT the raw slug): the dashboard invalidator only knows the
 // shop id, and a slug key also let case variants of the same slug each hold
 // their own entry.
-const openDaysCache = new Map<string, { at: number; body: unknown }>();
+
 // Sweeps CURRENTLY RUNNING, keyed by shop. The cache above only holds FINISHED
 // bodies, so on a cold cache every concurrent visitor used to kick off their own
 // full sweep - each one holding OPEN_DAYS_FANOUT_LIMIT pooled connections
 // (computeOpenSlots runs inside runWithShop), which with connection_limit=10 is
 // how a popular shop starves its own database. Late arrivals now await the sweep
 // already in flight and everyone gets the same body.
-const openDaysInFlight = new Map<string, Promise<unknown>>();
+
 // Concurrency for the service x staff sweep. Same bound and reasoning as
 // DAY_FANOUT_LIMIT: enough to cut wall-clock hard, low enough that one request
 // can't monopolize the connection pool.
@@ -1468,7 +1467,20 @@ const createSchema = z
     // Email is then the only channel a customer is told their booking exists on,
     // so a blank one books them into silence. Enforced BELOW rather than with a
     // plain .min(1) so the message names the reason instead of "Required".
-    email: z.string().trim().email().max(200).optional().or(z.literal("")),
+    // 🔴 The SAME predicate the booking form runs (packages/config
+    // bookingErrors.ts), not zod's `.email()`. Two different rules is how a
+    // page accepts an address the API then refuses - or, worse, how a form
+    // bounces a real customer off a server that would have taken them.
+    // `isLikelyEmail` is permissive about the shapes real people use (plus
+    // tags, deep subdomains, long TLDs) and strict only about what is
+    // definitely broken.
+    email: z
+      .string()
+      .trim()
+      .max(200)
+      .refine(isLikelyEmail)
+      .optional()
+      .or(z.literal("")),
     smsConsent: z.boolean().optional(),
     // Chosen service add-ons (ids). Invalid/foreign ids are dropped server-side.
     addOnIds: z.array(z.string().min(1)).max(20).optional(),
@@ -1554,10 +1566,62 @@ async function compensateUnmirroredBooking(
   }
 }
 
+/**
+ * Turn a Zod failure on the create payload into ONE stable code plus the field
+ * the customer can fix.
+ *
+ * 🔴 THE DEFECT THIS CLOSES. Every malformed field used to come back as one
+ * undifferentiated `invalid_input`, and the booking page - having no way to
+ * tell an unusable email from an unusable time - fell through to whichever
+ * branch it had. A customer who mistyped their address was told the TIME was
+ * gone, refreshed, picked another, and was told the same thing again.
+ *
+ * Email is checked FIRST and by name, because it is by far the field a
+ * customer most often gets wrong and the only one they can fix without losing
+ * their place in the flow.
+ */
+function classifyCreateInput(
+  issues: z.ZodIssue[],
+  body: Record<string, unknown>,
+): { status: 400 | 422; code: BookingErrorCode; field?: BookingErrorField } {
+  const paths = new Set(issues.map((i) => String(i.path[0] ?? "")));
+  if (paths.has("email")) {
+    return { status: 422, code: "INVALID_EMAIL", field: "email" };
+  }
+  if (paths.has("phone")) {
+    return { status: 422, code: "INVALID_PHONE", field: "phone" };
+  }
+  // A field the schema accepted but that is still not a usable address (the
+  // schema allows the empty string for shops that do not require email).
+  const email = typeof body.email === "string" ? body.email.trim() : "";
+  if (email && !isLikelyEmail(email)) {
+    return { status: 422, code: "INVALID_EMAIL", field: "email" };
+  }
+  const first = [...paths].find((p) => p === "firstName" || p === "lastName" || p === "startsAt");
+  return {
+    status: 400,
+    code: "VALIDATION_ERROR",
+    ...(first ? { field: first as BookingErrorField } : {}),
+  };
+}
+
 bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, async (req, res) => {
   const parsed = createSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
-    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    // 🔴 NOTHING HAS BEEN WRITTEN AND NOTHING WILL BE. This is the first
+    // statement in the handler: no Client row, no Appointment, no slot hold, no
+    // PaymentIntent, no SetupIntent, no email, no SMS, no push. A correctable
+    // typo must cost the customer nothing but the correction.
+    const c = classifyCreateInput(
+      parsed.error.issues,
+      (req.body ?? {}) as Record<string, unknown>,
+    );
+    res.status(c.status).json({
+      error: "invalid_input",
+      code: c.code,
+      ...(c.field ? { field: c.field } : {}),
+      issues: parsed.error.issues,
+    });
     return;
   }
   const shop = await resolveNativeShop(req.params.slug);
@@ -1569,14 +1633,14 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
   res.locals.refusalShopId = shop.id;
   // SMS costs money - a shop without active access can't take native bookings.
   if (!hasActiveAccess(shop)) {
-    res.status(403).json({ error: "no_active_access" });
+    res.status(403).json({ error: "no_active_access", code: "BOOKING_UNAVAILABLE" });
     return;
   }
   const d = parsed.data;
   const phone = toE164(d.phone);
   // A non-empty but unparseable phone is a typo - refuse (same as the dashboard).
   if (d.phone?.trim() && !phone) {
-    res.status(400).json({ error: "invalid_phone" });
+    res.status(422).json({ error: "invalid_phone", code: "INVALID_PHONE", field: "phone" });
     return;
   }
 
@@ -1603,7 +1667,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
     select: { id: true },
   });
   if (!service || !offering || !staff) {
-    res.status(400).json({ error: "invalid_slot" });
+    res.status(400).json({ error: "invalid_slot", code: "SLOT_UNAVAILABLE" });
     return;
   }
 
@@ -1647,11 +1711,11 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       !slotOffersService(slot, d.serviceId) ||
       slot.startsAt.getTime() !== startsAt.getTime()
     ) {
-      res.status(400).json({ error: "invalid_slot" });
+      res.status(400).json({ error: "invalid_slot", code: "SLOT_UNAVAILABLE" });
       return;
     }
     if (!slot.active || slot.bookedAppointmentId !== null || startsAt <= now) {
-      res.status(409).json({ error: "slot_taken" });
+      res.status(409).json({ error: "slot_taken", code: "SLOT_UNAVAILABLE" });
       return;
     }
     // BLOCKED TIME WINS. A targeted slot deliberately bypasses hours and the
@@ -1669,7 +1733,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
         timezone: shop.timezone,
       })
     ) {
-      res.status(409).json({ error: "slot_taken" });
+      res.status(409).json({ error: "slot_taken", code: "SLOT_UNAVAILABLE" });
       return;
     }
     targeted = slot;
@@ -1743,7 +1807,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
         extraDurationMin: addOns.extraDurationMin,
       }))
     ) {
-      res.status(400).json({ error: "invalid_slot" });
+      res.status(400).json({ error: "invalid_slot", code: "SLOT_UNAVAILABLE" });
       return;
     }
   }
@@ -1766,7 +1830,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       { shopId: shop.id, staffId: d.staffId },
       "acuity mirror: ENFORCE with unmapped/stale chair - refusing this barber's bookings",
     );
-    res.status(409).json({ error: "slot_unavailable_external" });
+    res.status(409).json({ error: "slot_unavailable_external", code: "SLOT_UNAVAILABLE" });
     return;
   }
 
@@ -1855,7 +1919,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       // Not even the first occurrence landed - it was taken between the
       // availability check above and the write. Same answer the single path
       // gives for the same race.
-      res.status(409).json({ error: "slot_taken" });
+      res.status(409).json({ error: "slot_taken", code: "SLOT_UNAVAILABLE" });
       return;
     }
     const firstRow = await prisma.appointment.findUnique({
@@ -2073,11 +2137,13 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
     // free, so "pick another time today" would be wrong advice - the whole DAY
     // is done for this service.
     if (err instanceof ServiceDayFullError) {
-      res.status(409).json({ error: "day_full" });
+      res.status(409).json({ error: "day_full", code: "DAY_FULL" });
       return;
     }
     if (err instanceof SlotTakenError) {
-      res.status(409).json({ error: "slot_taken" });
+      // The atomic guard in engines/bookingWrite.ts. This is the ONLY thing
+      // besides the appointment unique index that may say the slot is gone.
+      res.status(409).json({ error: "slot_taken", code: "SLOT_UNAVAILABLE" });
       return;
     }
     // ENFORCING with an unmapped chair: Acuity would still show this time
@@ -2092,19 +2158,38 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
         { shopId: shop.id, staffId: err.staffId },
         "acuity mirror: ENFORCE with an unmapped chair - booking refused",
       );
-      res.status(409).json({ error: "slot_unavailable_external" });
+      res.status(409).json({ error: "slot_unavailable_external", code: "SLOT_UNAVAILABLE" });
       return;
     }
-    // P2002 = the partial-unique backstop fired on an identical-start race.
-    if (
-      err instanceof Prisma.PrismaClientKnownRequestError &&
-      err.code === "P2002"
-    ) {
-      res.status(409).json({ error: "slot_taken" });
+    // P2002 is "a unique constraint was violated" - and this transaction touches
+    // SEVERAL. Only ONE of them means the chair was taken: the partial unique on
+    // Appointment (staffId, startsAt). The others are the Client upsert's
+    // tenant key and the globally-unique magicToken/manageToken.
+    //
+    // 🔴 THIS BLANKET USED TO CATCH ALL OF THEM. Two customers whose details
+    // resolved to the same client key - a shared family email, the same
+    // household phone, or the `anon:<first>-<last>` fallback when a shop takes
+    // neither - could race the upsert on two COMPLETELY DIFFERENT times, and
+    // both were told "That time was just taken." They then picked another slot
+    // and were told it again. `slot_taken` is a statement about the calendar;
+    // saying it about a constraint on the CLIENT table was simply false.
+    //
+    // Now the target is read. Only the appointment's own index answers
+    // SLOT_UNAVAILABLE; anything else is an internal failure and says so.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      if (isAppointmentSlotConflict(err)) {
+        res.status(409).json({ error: "slot_taken", code: "SLOT_UNAVAILABLE" });
+        return;
+      }
+      logger.error(
+        { shopId: shop.id, constraint: uniqueTargetOf(err) },
+        "native booking create hit a non-slot unique constraint",
+      );
+      res.status(500).json({ error: "create_failed", code: "BOOKING_FAILED" });
       return;
     }
     logger.error({ err, shopId: shop.id }, "native booking create failed");
-    res.status(500).json({ error: "create_failed" });
+    res.status(500).json({ error: "create_failed", code: "BOOKING_FAILED" });
     return;
   }
 
@@ -2122,7 +2207,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       // exists yet, so this costs the customer nothing.
       await compensateUnmirroredBooking(shop.id, appointmentId, targeted?.id ?? null);
       invalidateShopAvailabilityCaches(shop.id);
-      res.status(409).json({ error: "slot_unavailable_external" });
+      res.status(409).json({ error: "slot_unavailable_external", code: "SLOT_UNAVAILABLE" });
       return;
     }
     if (outcome === "unknown") {
@@ -3032,7 +3117,7 @@ bookingPublicRouter.post(
         excludeAppointmentId: appt.id,
       }))
     ) {
-      res.status(400).json({ error: "invalid_slot" });
+      res.status(400).json({ error: "invalid_slot", code: "SLOT_UNAVAILABLE" });
       return;
     }
 
@@ -3104,19 +3189,23 @@ bookingPublicRouter.post(
       });
     } catch (err) {
       if (err instanceof ServiceDayFullError) {
-        res.status(409).json({ error: "day_full" });
+        res.status(409).json({ error: "day_full", code: "DAY_FULL" });
         return;
       }
+      // Same discipline as the create path: the atomic guard, or the
+      // appointment's OWN unique index, and nothing else, may report the slot
+      // as gone. See isAppointmentSlotConflict.
       if (
         err instanceof SlotTakenError ||
         (err instanceof Prisma.PrismaClientKnownRequestError &&
-          err.code === "P2002")
+          err.code === "P2002" &&
+          isAppointmentSlotConflict(err))
       ) {
-        res.status(409).json({ error: "slot_taken" });
+        res.status(409).json({ error: "slot_taken", code: "SLOT_UNAVAILABLE" });
         return;
       }
       logger.error({ err, appointmentId: appt.id }, "reschedule failed");
-      res.status(500).json({ error: "reschedule_failed" });
+      res.status(500).json({ error: "reschedule_failed", code: "BOOKING_FAILED" });
       return;
     }
 

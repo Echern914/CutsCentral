@@ -205,6 +205,8 @@ export async function promotePaidHold(params: {
 
     await prisma.$transaction(async (tx) => {
       await lockStaffAndAssertSlotFree(tx, {
+        // Blocked time is not enforced here: PROMOTING a hold that already exists - the money has landed, and a block that appeared mid-checkout must not lose the customer their booking.
+        externalBlocks: "ignore",
         staffId: appt.staffId,
         shopId: appt.shopId,
         startsAt: appt.startsAt,

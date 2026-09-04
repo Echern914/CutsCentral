@@ -1,5 +1,6 @@
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
+import { clearAllAvailabilityCaches } from "../services/availabilityCache.js";
 
 /**
  * Expired AI-receptionist holds -> CANCELED, as a LIGHT updateMany flip
@@ -28,6 +29,16 @@ export async function sweepExpiredHolds(now: Date = new Date()): Promise<number>
     where: { status: "PENDING", holdReason: null, holdExpiresAt: { lt: now } },
     data: { status: "CANCELED", canceledAt: now },
   });
-  if (count > 0) logger.info({ count }, "expired receptionist holds swept");
+  if (count > 0) {
+    logger.info({ count }, "expired receptionist holds swept");
+    // These rows are found across every shop in one updateMany, so the sweep
+    // does not know WHICH shops it freed time in. Dropping the whole cache is
+    // correct and costs nothing measurable: it is a Map clear, the sweep runs
+    // every five minutes, and it only fires when something actually expired.
+    //
+    // (The slot engine already ignores an expired hold, so the chair was free
+    // the instant it lapsed - this is about the page catching up.)
+    clearAllAvailabilityCaches();
+  }
   return count;
 }

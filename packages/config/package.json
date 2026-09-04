@@ -14,6 +14,7 @@
     "./crypto": "./src/crypto.ts",
     "./session": "./src/session.ts",
     "./shopAddress": "./src/shopAddress.ts",
+    "./bookingErrors": "./src/bookingErrors.ts",
     "./relativeTime": "./src/relativeTime.ts",
     "./demo": "./src/demo.ts",
     "./demoTour": "./src/demoTour.ts",

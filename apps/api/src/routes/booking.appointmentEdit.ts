@@ -292,6 +292,8 @@ export function registerAppointmentEdit(
       await runWithShop(shopId, async (tx) => {
         if (timeMoved) {
           await lockStaffAndAssertSlotFree(tx, {
+            // Blocked time is not enforced here: the barber editing an appointment he already accepted.
+            externalBlocks: "ignore",
             walkInCapacity: "ignore",
             staffId,
             shopId,

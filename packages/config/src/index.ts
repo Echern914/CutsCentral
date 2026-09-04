@@ -7,6 +7,7 @@ export * from "./time.js";
 export * from "./crypto.js";
 export * from "./session.js";
 export * from "./shopAddress.js";
+export * from "./bookingErrors.js";
 export * from "./relativeTime.js";
 export * from "./demo.js";
 export * from "./demoTour.js";

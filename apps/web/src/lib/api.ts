@@ -32,6 +32,18 @@ export interface ApiResult<T> {
    * with nothing to do next.
    */
   reason?: string;
+  /**
+   * The API's own STABLE classification of a failure, when it sent one.
+   *
+   * Distinct from `error` (a legacy free string) and from `reason` (endpoint
+   * specific): `code` is drawn from a shared vocabulary both apps import - see
+   * packages/config/bookingErrors.ts. Callers branch on this rather than on a
+   * message, because copy is reworded and translated and a load-bearing string
+   * turns every such edit into a silent behaviour change.
+   */
+  code?: string;
+  /** The form field a `code` points at, when it points at one. */
+  field?: string;
 }
 
 function authHeader(): Record<string, string> {
@@ -177,6 +189,8 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
   let error: string | undefined;
   let issues: ApiIssue[] | undefined;
   let reason: string | undefined;
+  let code: string | undefined;
+  let field: string | undefined;
   try {
     const json = (await res.json()) as T & { error?: string; issues?: unknown };
     if (res.ok) data = json;
@@ -184,6 +198,10 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
       error = (json as { error?: string }).error ?? `http_${res.status}`;
       const why = (json as { reason?: unknown }).reason;
       if (typeof why === "string") reason = why;
+      const classified = (json as { code?: unknown }).code;
+      if (typeof classified === "string") code = classified;
+      const which = (json as { field?: unknown }).field;
+      if (typeof which === "string") field = which;
       const raw = (json as { issues?: unknown }).issues;
       if (Array.isArray(raw)) {
         const valid = raw.filter(
@@ -206,6 +224,8 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
     error,
     ...(issues ? { issues } : {}),
     ...(reason ? { reason } : {}),
+    ...(code ? { code } : {}),
+    ...(field ? { field } : {}),
   };
 }
 

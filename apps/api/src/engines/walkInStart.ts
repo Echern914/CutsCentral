@@ -11,6 +11,7 @@ import { promoteOneAppointmentInTx } from "./appointmentPromotion.js";
 import { completeWalkInEntryForAppointmentInTx } from "./walkInComplete.js";
 import { recomputeCadence } from "./cadence.js";
 import { notifyPunchEarned } from "../services/loyaltyNotify.js";
+import { invalidateShopAvailabilityCaches } from "../services/availabilityCache.js";
 import {
   serializeEntry,
   WalkInIllegalTransitionError,
@@ -137,6 +138,8 @@ export async function startEntry(opts: {
     // stacking order, or everyone behind it would slide forward onto the very
     // span we are claiming and refuse every start with a queue behind it.
     await lockStaffAndAssertSlotFree(tx, {
+      // Blocked time is not enforced here: the customer is physically in the chair; a block must not eject them.
+      externalBlocks: "ignore",
       walkInCapacity: { excludeEntryId: entryId },
       staffId: chairId,
       shopId,
@@ -277,6 +280,11 @@ export async function startEntry(opts: {
     // background rejection from taking the process down.
   });
 
+  // The chair is physically occupied now, and the walk-in's projected span was
+  // already hidden from the grid - but the CACHED day was built before this
+  // started. Without this the public page keeps selling the chair the customer
+  // is sitting in.
+  invalidateShopAvailabilityCaches(shopId);
   return { entry: view, appointmentId };
 }
 
@@ -394,5 +402,8 @@ export async function completeEntry(opts: {
     ]),
   );
   if (!updated) throw new WalkInNotFoundError();
+  // Completing releases the chair's projected span, so time can come BACK on
+  // sale here. Same cache, opposite direction.
+  invalidateShopAvailabilityCaches(shopId);
   return serializeEntry(updated, services);
 }

@@ -2620,6 +2620,8 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
       // Shared advisory-lock + overlap guard (same as the public create);
       // SlotTakenError's message is "slot_taken", so the catch below matches.
       await lockStaffAndAssertSlotFree(tx, {
+        // Blocked time is not enforced here: the barber's own calendar - he may book over his own blocked time.
+        externalBlocks: "ignore",
         walkInCapacity: "ignore",
         staffId: d.staffId,
         shopId: shop.id,
@@ -2941,6 +2943,8 @@ bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
   try {
     await prisma.$transaction(async (tx) => {
       await lockStaffAndAssertSlotFree(tx, {
+        // Blocked time is not enforced here: the barber's own calendar - he may book over his own blocked time.
+        externalBlocks: "ignore",
         walkInCapacity: "ignore",
         staffId: appt.staffId,
         shopId,
@@ -3175,6 +3179,8 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
   try {
     await prisma.$transaction(async (tx) => {
       await lockStaffAndAssertSlotFree(tx, {
+        // Blocked time is not enforced here: the barber's own calendar - he may book over his own blocked time.
+        externalBlocks: "ignore",
         walkInCapacity: "ignore",
         staffId: appt.staffId,
         shopId,
@@ -4514,6 +4520,8 @@ bookingDashboardRouter.post("/appointments/:id/approve", async (req, res) => {
       // being approved is itself PENDING, and any conflicting PENDING would
       // have failed its own create guard (see engines/bookingWrite.ts).
       await lockStaffAndAssertSlotFree(tx, {
+        // Blocked time is not enforced here: the barber's own calendar - he may book over his own blocked time.
+        externalBlocks: "ignore",
         walkInCapacity: "ignore",
         staffId: appt.staffId,
         shopId,

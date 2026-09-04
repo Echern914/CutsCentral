@@ -12,6 +12,7 @@ import { fmtDurationExact } from "@/lib/duration";
 import { NumberField } from "@/components/ui/NumberField";
 import { GoalPlanner } from "./GoalPlanner";
 import { PeriodControl } from "./PeriodControl";
+import { YearlyReport } from "./YearlyReport";
 import type {
   Bucket,
   CustomRange,
@@ -142,27 +143,36 @@ export function InsightsClient({
       animate="show"
       className="flex flex-col gap-6"
     >
-      {/* The one range control for the whole tab. */}
-      <motion.div variants={fadeUp}>
-        <PeriodControl
-          periods={data.periods}
-          period={period}
-          periodLabel={data.periodLabel}
-          windowStart={data.windowStart}
-          windowEnd={data.windowEnd}
-          onSelectPeriod={selectPeriod}
-          onApplyRange={applyRange}
-        />
-        <p className="mt-2 text-[11px] text-muted">
-          {fmtDay(data.windowStart)} – {fmtDay(data.windowEnd)} · every card below
-          covers this range, in your shop&apos;s time.
-          {pending && " Updating…"}
-        </p>
-        {failed && (
-          <p role="alert" className="mt-1 text-[11px] text-amber-400">
-            Couldn&apos;t load that range — still showing {data.periodLabel.toLowerCase()}.
+      {/* The one range control for the whole tab, and the report that steps
+          OUTSIDE it. The yearly report deliberately ignores the period picker:
+          it answers a calendar-year question ("2026", "2025"), which is the
+          only shape an accountant, a landlord or an awards panel accepts. Two
+          different questions, so two different controls - putting the year
+          into the period picker would have made every other card on this page
+          answer a question nobody asked. */}
+      <motion.div variants={fadeUp} className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <PeriodControl
+            periods={data.periods}
+            period={period}
+            periodLabel={data.periodLabel}
+            windowStart={data.windowStart}
+            windowEnd={data.windowEnd}
+            onSelectPeriod={selectPeriod}
+            onApplyRange={applyRange}
+          />
+          <p className="mt-2 text-[11px] text-muted">
+            {fmtDay(data.windowStart)} – {fmtDay(data.windowEnd)} · every card below
+            covers this range, in your shop&apos;s time.
+            {pending && " Updating…"}
           </p>
-        )}
+          {failed && (
+            <p role="alert" className="mt-1 text-[11px] text-amber-400">
+              Couldn&apos;t load that range — still showing {data.periodLabel.toLowerCase()}.
+            </p>
+          )}
+        </div>
+        <YearlyReport serviceNoun={serviceNoun} />
       </motion.div>
 
       {/* Goals — one target per metric AND period, each kept separately. */}

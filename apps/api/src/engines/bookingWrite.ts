@@ -141,6 +141,34 @@ export async function lockStaffAndAssertSlotFree(
      * stale-grid refusal.
      */
     walkInCapacity: "enforce" | "ignore" | { excludeEntryId: string };
+    /**
+     * Does time the barber BLOCKED OFF in Acuity stop this write?
+     *
+     * 🔴 THE PARITY GAP THIS CLOSES. The slot grid has always subtracted
+     * ExternalBlock rows (engines/slots.ts), but this guard never looked at
+     * them - so blocked time was hidden by the READ and permitted by the
+     * WRITE. A stale tab, a customer who left the page open across an Acuity
+     * sync, or any hand-rolled POST could book straight into a barber's
+     * vacation day, and nothing in the transaction would object. "The grid
+     * hides it" is not a guarantee; only a check inside the lock is.
+     *
+     * Defaults to "enforce", and that default is deliberate - the opposite
+     * choice to `walkInCapacity` above, for the opposite reason. There, a
+     * forgotten answer would have been the UNSAFE one, so the compiler is made
+     * to demand it. Here the safe answer is refusing to book over a block, so
+     * a writer added later that never thinks about this gets protection rather
+     * than a hole. Opting OUT is the deliberate act, and it is spelled out at
+     * each site that does.
+     *
+     *   "enforce" - CUSTOMER-driven writes: public booking and reschedule, the
+     *               SMS receptionist, waitlist offers and gap-fill. A block is
+     *               the barber saying "I am not there".
+     *   "ignore"  - BARBER-driven writes (his own calendar, his own override),
+     *               and paths that PROMOTE a row that already exists - a paid
+     *               hold must never fail to become a booking because a block
+     *               landed while the customer was paying.
+     */
+    externalBlocks?: "enforce" | "ignore";
     now?: Date;
   },
 ): Promise<void> {
@@ -322,6 +350,21 @@ export async function lockStaffAndAssertSlotFree(
                  AND v."endAt" > ${overlapStart.toISOString()}::timestamp`,
   );
   if (visitOverlap.length > 0) throw new SlotTakenError();
+
+  // Time the barber BLOCKED OFF in the calendar he actually manages. Like a
+  // synced visit it carries no staffId, so it blocks every chair for its span -
+  // exactly how engines/slots.ts subtracts it on the read side. Same advisory
+  // lock, same ISO-text timestamp discipline (PR #70), so read and write can no
+  // longer disagree about a barber's day off.
+  if ((opts.externalBlocks ?? "enforce") === "enforce") {
+    const blockOverlap = await tx.$queryRaw<{ id: string }[]>(
+      Prisma.sql`SELECT id FROM "ExternalBlock"
+                 WHERE "shopId" = ${opts.shopId}
+                   AND "startsAt" < ${overlapEnd.toISOString()}::timestamp
+                   AND "endsAt" > ${overlapStart.toISOString()}::timestamp`,
+    );
+    if (blockOverlap.length > 0) throw new SlotTakenError();
+  }
 
   // The overlap predicate above correctly ignores EXPIRED holds (the slot
   // freed the moment the hold lapsed) - but until the 5-min sweep flips them
