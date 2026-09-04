@@ -411,19 +411,29 @@ function ReportPreview({
         </div>
         {/* Hand-rolled bars, the same approach as every other chart on this
             page - no chart library anywhere in this app. */}
-        <div className="flex h-24 items-end gap-1" role="img" aria-label="Revenue by month">
+        <div className="flex h-28 gap-1" role="img" aria-label="Revenue by month">
           {report.months.map((m) => (
-            <div key={m.key} className="flex min-w-0 flex-1 flex-col items-center gap-1">
-              <div
-                className={`w-full rounded-t ${m.complete ? "bg-gold/70" : "bg-gold/30"}`}
-                style={{
-                  height:
-                    peak > 0 && m.revenueCents > 0
-                      ? `${Math.max(3, (m.revenueCents / peak) * 100)}%`
-                      : "0%",
-                }}
-                title={`${m.fullLabel}: ${money(m.revenueCents)} · ${m.appointments}`}
-              />
+            <div key={m.key} className="flex h-full min-w-0 flex-1 flex-col items-center gap-1">
+              {/* 🔴 The bar's percentage height must resolve against a box
+                  with a DEFINITE height. The first version put `items-end` on
+                  the row, so each column shrank to its content, every
+                  percentage resolved to auto, and the chart rendered twelve
+                  labels and no bars - in both themes, caught only by looking
+                  at a screenshot. The column now stretches to the row's h-28
+                  and this box takes the space above the label. */}
+              <div className="flex w-full flex-1 items-end">
+                <div
+                  data-testid="month-bar"
+                  className={`w-full rounded-t ${m.complete ? "bg-gold/70" : "bg-gold/30"}`}
+                  style={{
+                    height:
+                      peak > 0 && m.revenueCents > 0
+                        ? `${Math.max(3, (m.revenueCents / peak) * 100)}%`
+                        : "0%",
+                  }}
+                  title={`${m.fullLabel}: ${money(m.revenueCents)} · ${m.appointments}`}
+                />
+              </div>
               <span className="text-[9px] text-muted">{m.label}</span>
             </div>
           ))}
@@ -497,7 +507,11 @@ function Tile({
         accent ? "border-gold/25 bg-gold/[0.07]" : "border-white/10 bg-white/[0.03]"
       }`}
     >
-      <p className="truncate text-[10px] uppercase tracking-wide text-muted">{label}</p>
+      {/* Wraps rather than truncates: "APPOINTMENTS COMPLETED" does not fit a
+          four-across tile at any phone width, and a headline label cut to
+          "APPOINTMENTS COMPL…" is worse than a second line. The grid keeps
+          each row's tiles the same height. */}
+      <p className="text-[10px] uppercase leading-tight tracking-wide text-muted">{label}</p>
       <p
         className={`truncate font-semibold tabular-nums text-offwhite ${
           small ? "text-base" : "text-xl"

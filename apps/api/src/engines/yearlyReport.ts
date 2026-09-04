@@ -188,18 +188,20 @@ export function currentShopYear(now: Date, timezone: string): number {
 }
 
 /**
- * The years a shop may ask for: every year from the shop's first January (or
- * EARLIEST_REPORT_YEAR, whichever is later) through the year in progress.
- * Descending - the newest is the one a barber wants.
+ * The years a shop may ask for: EARLIEST_REPORT_YEAR through the year in
+ * progress, newest first.
+ *
+ * Deliberately NOT anchored on the shop's `createdAt`. A shop that signed up
+ * this year and ran the Acuity backfill has last year's visits on the books,
+ * and last year is exactly the report it wants to print; keying the picker on
+ * the signup date hid that year from it. An empty year costs nothing - it
+ * renders the same one-page document with honest zeros (pinned in
+ * yearlyReport.test.ts), and a barber who picks it learns something true.
  */
-export function selectableYears(now: Date, timezone: string, shopCreatedAt: Date): number[] {
+export function selectableYears(now: Date, timezone: string): number[] {
   const current = currentShopYear(now, timezone);
-  const first = Math.max(
-    EARLIEST_REPORT_YEAR,
-    Math.min(current, shopLocalDay(shopCreatedAt, timezone).getUTCFullYear()),
-  );
   const out: number[] = [];
-  for (let y = current; y >= first; y--) out.push(y);
+  for (let y = current; y >= EARLIEST_REPORT_YEAR; y--) out.push(y);
   return out;
 }
 

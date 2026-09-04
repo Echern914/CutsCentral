@@ -146,7 +146,7 @@ yearlyReportRouter.get("/options", async (req, res) => {
 
   noStore(res);
   res.json({
-    years: selectableYears(now, shop.timezone, shop.createdAt),
+    years: selectableYears(now, shop.timezone),
     currentYear: currentShopYear(now, shop.timezone),
     timezone: shop.timezone,
     canReportShop: isManager,

@@ -144,6 +144,18 @@ describe("what the sheet shows", () => {
     expect(within(preview).getByTitle("Sat")).toBeTruthy();
   });
 
+  it("draws a bar for every month that earned money, sized against the peak", async () => {
+    await openSheet();
+    const bars = screen.getAllByTestId("month-bar");
+    expect(bars).toHaveLength(12);
+    // The fixture climbs by $200 a month, so December is the peak (100%) and
+    // January the shortest; nothing with revenue may collapse to zero.
+    const heights = bars.map((b) => parseFloat((b as HTMLElement).style.height));
+    expect(heights[11]).toBe(100);
+    expect(Math.min(...heights)).toBeGreaterThan(0);
+    for (let i = 1; i < 12; i++) expect(heights[i]).toBeGreaterThan(heights[i - 1]!);
+  });
+
   it("labels a finished year plainly and the year in progress as year to date", async () => {
     await openSheet();
     // A finished year is printed plainly - the preview's period label, not the
