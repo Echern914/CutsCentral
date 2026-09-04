@@ -51,7 +51,8 @@ work - it is a separate change with its own proof.
 | Legacy referral reward | ChairBack → referrer shop | referrer's own `unit_amount` (never the list price) | usd | `customers.createBalanceTransaction` (negative) | `Referral` (CAS PENDING→REWARDED, `stripeBalanceTransactionId` UNIQUE, `qualifyingInvoiceId`) | key `referral-reward:<referralId>` | `invoice.paid` (amount_paid > 0) | CAS = at most once; stranded rows audited hourly | `auditReferralGrants` | webhook only | **flag only**: refund/dispute/credit note of the qualifying invoice sets `reviewFlaggedAt`; a person decides | MEDIUM (no automatic clawback - by decision) | `services/referral.integrity.test.ts`, `referral.credit.test.ts` |
 | Affiliate reward (dark) | ChairBack → affiliate shop | `min(list-price snapshot, referrer's live unit_amount)` | usd | `customers.createBalanceTransaction` | `AffiliateReward` (UNIQUE per referred shop) + `AffiliateCreditOperation` (UNIQUE per reward, claim token, attempt budget, ambiguity marker) | key `affiliate-reward:<rewardId>`; FOR UPDATE SKIP LOCKED claim | `invoice.paid` ×2 distinct invoices, 14-day hold | bounded backoff; ambiguous past 24h → ABANDONED, evidence-only resolution | admin credits desk; liability from the ledger | admin (isAdmin, IP allowlist optional) | reversal CAS on refund/dispute/credit note before APPLIED | LOW while dark | `engines/affiliateCredit.test.ts`, `affiliateCredit.race.test.ts` |
 | Comp access | (no money) | n/a | n/a | none | `Shop.compAccess` | n/a | n/a | n/a | admin metrics | admin | toggle | LOW - **no audit row** (see findings) | `routes/financialAuthz.test.ts` |
-| Chair checkout (cash/direct/card reader) | customer → shop, off-platform | barber's figure | usd | none | `Appointment.paidAmount/paidMethod/paidAt` (CAS on `paidAt`) | `paidAt` claim | n/a | n/a | revenue (`insightsWindow`) | manager | price edit (#400) | LOW | `routes/chairCheckout.test.ts`, `appointmentPrice.test.ts` |
+| Chair checkout (cash/direct/card reader) | customer → shop, off-platform | barber's figure | usd | none | `Appointment.paidAmount/paidMethod/paidAt` (CAS on `paidAt`) | `paidAt` claim | n/a | n/a | revenue (`insightsWindow`) | manager | price edit (below) | LOW | `routes/chairCheckout.test.ts` |
+| Price edit (PR #400, `POST /appointments/:id/price`) | (no money moves) | manager's figure, integer cents from the boundary; `collected` only after checkout, only the CHAIR column | usd | **none - never a Stripe call** | `Appointment.priceAtBooking` (+ `paidAmount`) and an append-only `AppointmentPriceChange` row in the same transaction | compare-and-set on the ticket read, on status, on `paidAt`; loser gets 409 `stale_price` | n/a | n/a | the ledger; the card-on-file fee reads the FIRST ledger entry (the agreed price) | manager (`requireManager`); BARBER 403; other shop 404 + tenant RLS | n/a (refunds stay on their own path; a ticket below what Stripe settled is refused) | LOW | `routes/appointmentPrice.test.ts` (15) |
 
 Not present, and not built: transfers, payouts, `automatic_tax`, coupons of
 our own (Stripe promotion codes are allowed on Checkout), mobile in-app
@@ -90,6 +91,20 @@ purchases (the app sells nothing; App Review notes say so).
   guarded.
 - **The legacy referral credit is keyed and recorded** (`referral-reward:<id>`,
   `stripeBalanceTransactionId` unique) and its qualifying invoice is remembered.
+- **A by-hand price edit is one transaction with a memory.** `POST
+  /appointments/:id/price` converts dollars to integer cents at the boundary
+  (finite, non-negative, two decimals, under the ceiling, strict schema), then
+  writes with a compare-and-set on the ticket it read, on the status, and on
+  `paidAt` when the chair figure is included - and appends an immutable
+  `AppointmentPriceChange` row in the same transaction. Two racing edits: one
+  lands, one gets 409 `stale_price`. It never calls Stripe; it can never touch
+  the `Payment` row; `paidMethod` is not editable through it; a ticket below
+  what Stripe settled is refused. The chair figure is the one money figure
+  ChairBack cannot verify (cash), and it may only be corrected after checkout
+  wrote it. The card-on-file fee reads the FIRST ledger entry - the price the
+  customer agreed to - so a raised ticket cannot raise a fee they consented to
+  at the old one (`agreedPriceCents`). Revenue counts the chair figure once
+  checked out, else the ticket (`insightsWindow.readChairEvents`).
 
 ## Findings
 
@@ -110,10 +125,23 @@ Severity is about money at risk today, not code taste.
 | F11 | INFO | `Shop.platformFeeBps` is not writable through any route (DB-only); every shop is 0 | none needed |
 | F12 | INFO | Express account creation (`ensureConnectAccount`) still exists but is unreachable for new shops (`/connect/onboard` answers 410 without an account); `charges_enabled`/`payouts_enabled` are read from existing accounts | left as is - no new Connect code was written |
 | F13 | INFO | Money is stored as `Decimal(10,2)` on Appointment/Service and converted with `Math.round(x*100)` at the boundary; Payment/affiliate tables are integer cents | not converted (a storage migration of live rows is out of scope); boundaries validated |
+| F14 | MEDIUM | (found while auditing PR #400) The card-on-file fee was computed from the CURRENT ticket, so a price raised by hand after the customer saved a card would raise the no-show fee they never consented to; the price edit itself overwrote the figure with no record and read-then-wrote without a compare-and-set | append-only `AppointmentPriceChange` ledger in the same transaction; CAS on ticket/status/`paidAt`; `agreedPriceCents` caps the fee basis at the first ledger entry (the agreed price); an unpriced-at-booking appointment agrees to nothing (fee 0) |
 
 Withdrawn during the audit: "Payment has no RLS" - the live catalog shows RLS
 enabled + forced with a `tenant_isolation` policy (the migration grep missed
 it). Proven by `packages/db/src/rls.test.ts` and the receipt-table test.
+
+## Dependency: PR #400 (price edit) and this PR
+
+#400's head (`ff827a9`) was **not** an ancestor of this branch when the audit
+was first opened - both forked from `a6c4177`. This branch was rebased onto
+#400's head so the price-edit path is inside the audited tree, and the tests
+in `routes/appointmentPrice.test.ts` and the F14 fix above are the result.
+The tested tree hash is recorded in the PR. If #400 is squash-merged to main
+with nothing else landing in between, main's tree equals #400's tree, and
+rebasing this branch onto that main reproduces the same tree hash; if anything
+else lands first, the tree differs by exactly those unrelated files and the
+gates should be re-run.
 
 ## Webhook subscriptions (owner-verified 2026-09-03, screenshot)
 
@@ -160,29 +188,34 @@ confirmed), which parses as false.
   response) is asserted by key equality, not by a live Stripe.
 - **Comp audit trail** (F10) is unchanged.
 
-## Gates (run 2026-09-03/04 on the audit worktree, real exit codes)
+## Gates
 
-| Gate | Result | Exit |
-|---|---|---|
-| API tests (`pnpm --filter @chairback/api test`) | 274 files / 3177 tests passed | 0 |
-| Web tests | 44 files / 394 tests passed | 0 |
-| Config tests | 22 files / 443 tests passed | 0 |
-| DB tests (incl. the new receipt-table RLS test) | 6 files / 36 tests passed | 0 |
-| Typecheck api / config / db / mobile | 0 errors each | 0 / 0 / 0 / 0 |
-| Typecheck web | the pre-existing dual-React multiset, unchanged from main (135 x TS2345 + 20 others; no web file is touched here) | 1 (baseline) |
-| API build (`tsc -p`, the Railway gate) | clean | 0 |
-| Web build (`next build`, the Vercel gate) | clean | 0 |
-| Migration from scratch (`migrate reset`, 146 migrations) | all applied, status up to date | 0 |
-| Migration incremental (DB at main's set, then deploy) | exactly `20260912000000_financial_integrity` pending, applied | 0 |
-| Second deploy | "No pending migrations to apply" | 0 |
-| Schema vs migrations drift | only pre-existing items also present on main (`McpRefreshToken.scopes` default, a truncated `WalletAppointmentPassRegistration` index name) - nothing from this change | n/a |
-| Secret scan (regex over tracked files: sk_/rk_/whsec_/AKIA/private keys) | 0 hits | 0 |
-| Financial invariant guards (`financialInvariants.test.ts`) | 6 passed | 0 |
-| Lint | **no functioning lint tool**: `eslint` is not installed in the workspace, `pnpm --filter @chairback/api lint` fails at resolution | 1 (tooling absent) |
+The gates and their real exit codes are recorded in the PR that carries this
+document, against the exact tree hash they were run on - not here, so that
+recording a result never changes the tree the result is about. The gate list:
 
-The production API reported commit `a6c4177` at `/healthz` (read-only) - the
-same commit this audit started from. Nothing was deployed, merged or enabled,
-no Stripe setting was changed, and no production money moved.
+- `pnpm --filter @chairback/api test` (the merge gate - CI runs Vercel builds only)
+- `pnpm --filter @chairback/web test`, `@chairback/config test`, `@chairback/db test`
+- typecheck for api, web (compare the error MULTISET against main - the
+  dual-React `TransitionFunction` family is a known baseline), config, db, mobile
+- `pnpm --filter @chairback/api build` (the Railway gate `tsc`s the tests too)
+- `pnpm --filter @chairback/web build` (the Vercel gate)
+- migrations: from scratch (`migrate reset` in the feature worktree), incremental
+  (`migrate reset` from a worktree at the base branch, then `migrate deploy` from
+  the feature worktree: exactly the new migrations pending), second deploy = no-op,
+  and `migrate diff --from-migrations --to-schema-datamodel` for drift
+- a regex secret scan over tracked files; `financialInvariants.test.ts`
+- lint - there is no functioning lint tool in this workspace (`eslint` is not
+  installed), which is reported, not hidden
+
+🔴 `prisma migrate diff --shadow-database-url` RESETS the shadow database it is
+given. Point it at a scratch database (`chairback_shadowcheck`), never at
+`chairback_test`: pointing it at the test database wipes `_prisma_migrations` and
+every table, and the next `migrate deploy` answers P3005.
+
+The production API reported commit `a6c4177` at `/healthz` (read-only) when the
+audit started. Nothing was deployed, merged or enabled, no Stripe setting was
+changed, and no production money moved.
 
 ## Operating the reconciler
 

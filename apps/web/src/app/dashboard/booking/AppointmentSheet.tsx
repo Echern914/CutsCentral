@@ -779,7 +779,9 @@ function usePriceEdit({
               ? "Check out first to record what was collected."
               : res.error === "external"
                 ? "This booking's price lives where it was made."
-                : "Couldn't save the price.",
+                : res.error === "stale_price"
+                  ? "This booking changed while you were editing. Close and reopen it to see the current price."
+                  : "Couldn't save the price.",
         );
         return;
       }

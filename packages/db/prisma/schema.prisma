@@ -604,6 +604,7 @@ model Shop {
   availabilityExceptions AvailabilityException[]
   appointments           Appointment[]
   recurringSeries        RecurringSeries[]
+  appointmentPriceChanges AppointmentPriceChange[]
   serviceAddOns          ServiceAddOn[]
   serviceGroups          ServiceGroup[]
   goals                  ShopGoal[]
@@ -3918,4 +3919,26 @@ model StripeEventReceipt {
 
   @@index([status, receivedAt])
   @@index([type, receivedAt])
+}
+
+/// Append-only ledger of every by-hand change to a booking's money figures
+/// (POST /appointments/:id/price): who moved the ticket or the chair figure,
+/// from what, to what. Integer cents. The FIRST entry's `fromPriceCents` is the
+/// price the customer agreed to at booking - the card-on-file fee is computed
+/// from that, never from a later edit. Tenant table (FORCE RLS), append-only
+/// for everyone via a BEFORE UPDATE trigger; the tenant role may only INSERT/SELECT.
+model AppointmentPriceChange {
+  id            String  @id @default(cuid())
+  shopId        String
+  shop          Shop    @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  /// Not a FK on purpose: the history outlives the appointment row.
+  appointmentId String
+  actorUserId   String?
+  fromPriceCents     Int?
+  toPriceCents       Int
+  fromCollectedCents Int?
+  toCollectedCents   Int?
+  createdAt DateTime @default(now())
+
+  @@index([shopId, appointmentId, createdAt])
 }

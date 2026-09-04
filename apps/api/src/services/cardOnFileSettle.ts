@@ -2,6 +2,7 @@ import { cardOnFileFeeCents, type CardOnFileChargeReason } from "@chairback/conf
 import { prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { chargeCardOnFile, releaseCardOnFile } from "../billing/cardOnFile.js";
+import { agreedPriceCents } from "./appointmentPriceLedger.js";
 import { toCents as configToCents } from "../billing/payments.js";
 import { sendEmail } from "../messaging/email.js";
 import { buildCardChargedEmail } from "../messaging/templates.js";
@@ -59,7 +60,13 @@ export async function settleCardOnFile(params: {
     const onThem =
       params.outcome === "NO_SHOW" || (params.outcome === "CANCELED" && params.applyPolicyFee);
     const reason: CardOnFileChargeReason = params.outcome === "NO_SHOW" ? "no_show" : "late_cancel";
-    const priceCents = configToCents(numberOrNull(params.priceAtBooking));
+    // THE FEE BASIS IS WHAT THE CUSTOMER AGREED TO. The ticket can be corrected
+    // by hand after booking (POST /appointments/:id/price); a ticket RAISED
+    // after the customer saved their card must never raise the fee they
+    // consented to at the old one. The ledger's first entry remembers the
+    // price before any edit; a lowered ticket lowers the fee.
+    const currentCents = configToCents(numberOrNull(params.priceAtBooking));
+    const priceCents = await agreedPriceCents(params.shopId, params.appointmentId, currentCents);
     const cents =
       shop.chargeCardOnFileFees && onThem
         ? cardOnFileFeeCents({
