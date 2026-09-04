@@ -808,6 +808,9 @@ function usePriceEdit({
 }
 
 function PriceEditor({ state }: { state: PriceEditState }) {
+  // "Chair" is a barbershop word: a salon says station, a spa says room. The
+  // vocabulary provider owns it; nothing here may spell it out.
+  const vocab = useVocab();
   // Escape cancels THIS, not the whole sheet: Dialog listens for Escape too,
   // and without stopping it here one keypress would throw the booking away.
   function onKey(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -837,13 +840,13 @@ function PriceEditor({ state }: { state: PriceEditState }) {
         </label>
         {state.collected !== null && (
           <label className="flex min-w-0 flex-col gap-1 text-xs text-muted">
-            Collected at the chair
+            Collected at the {vocab.stationNoun}
             <input
               inputMode="decimal"
               value={state.collected}
               onChange={(e) => state.setCollected(e.target.value)}
               onKeyDown={onKey}
-              aria-label="Collected at the chair, in dollars"
+              aria-label={`Collected at the ${vocab.stationNoun}, in dollars`}
               className={cn(INPUT, "tabular-nums")}
             />
           </label>
