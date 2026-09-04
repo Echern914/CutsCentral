@@ -46,6 +46,43 @@ export class SlotTakenError extends Error {
   }
 }
 
+/** A span the barber blocked off in the calendar he manages (Acuity). */
+export interface ExternalBlockSpan {
+  id: string;
+  externalId: string;
+  startsAt: Date;
+  endsAt: Date;
+  reason: string | null;
+}
+
+/**
+ * The write crossed externally blocked time and was not told to.
+ *
+ * A SUBCLASS of SlotTakenError on purpose: to a customer, blocked time is
+ * simply "not available", and every public catch (`instanceof SlotTakenError`,
+ * `message === "slot_taken"`) keeps answering exactly that. Only the barber's
+ * own dashboard checks for this subclass first, so it can show him WHICH block
+ * he is about to book over and ask him to confirm.
+ */
+export class ExternalBlockError extends SlotTakenError {
+  readonly blocks: ExternalBlockSpan[];
+  constructor(blocks: ExternalBlockSpan[]) {
+    super();
+    this.name = "ExternalBlockError";
+    this.blocks = blocks;
+  }
+}
+
+/** What the guard reports back besides "you may write". */
+export interface SlotGuardResult {
+  /**
+   * The external blocks this write crosses. Empty unless `externalBlocks` was
+   * "override" - in "enforce" mode a crossing throws, in "ignore" mode it is
+   * not looked for. The caller that asked to override records these.
+   */
+  externalBlocksCrossed: ExternalBlockSpan[];
+}
+
 export async function lockStaffAndAssertSlotFree(
   tx: Prisma.TransactionClient,
   opts: {
@@ -160,18 +197,27 @@ export async function lockStaffAndAssertSlotFree(
      * than a hole. Opting OUT is the deliberate act, and it is spelled out at
      * each site that does.
      *
-     *   "enforce" - CUSTOMER-driven writes: public booking and reschedule, the
-     *               SMS receptionist, waitlist offers and gap-fill. A block is
-     *               the barber saying "I am not there".
-     *   "ignore"  - BARBER-driven writes (his own calendar, his own override),
-     *               and paths that PROMOTE a row that already exists - a paid
-     *               hold must never fail to become a booking because a block
-     *               landed while the customer was paying.
+     *   "enforce"  - the default, and every CUSTOMER-driven write: public
+     *                booking and reschedule, the SMS receptionist, waitlist
+     *                offers and gap-fill. A block is the barber saying "I am
+     *                not there". Also the dashboard's approve and restore,
+     *                which have no override step. Throws ExternalBlockError.
+     *   "override" - the dashboard's EXPLICIT override: the barber turned on
+     *                Custom time, was shown the block, and confirmed. The
+     *                crossing is still detected and RETURNED so the caller
+     *                can record an AppointmentOverride row in the same
+     *                transaction. Silence is not an option here - see
+     *                services/appointmentOverride.ts.
+     *   "ignore"   - the two paths that are not a barber choosing a time at
+     *                all: promoting a paid hold (the customer was promised the
+     *                chair and has paid; a block that landed mid-checkout must
+     *                not lose them their booking) and starting a walk-in who is
+     *                physically in the chair. Both documented at the call.
      */
-    externalBlocks?: "enforce" | "ignore";
+    externalBlocks?: "enforce" | "override" | "ignore";
     now?: Date;
   },
-): Promise<void> {
+): Promise<SlotGuardResult> {
   const now = opts.now ?? new Date();
   const bufferMs = Math.max(0, opts.bufferMin) * 60_000;
   const overlapStart = new Date(opts.startsAt.getTime() - bufferMs);
@@ -356,14 +402,20 @@ export async function lockStaffAndAssertSlotFree(
   // exactly how engines/slots.ts subtracts it on the read side. Same advisory
   // lock, same ISO-text timestamp discipline (PR #70), so read and write can no
   // longer disagree about a barber's day off.
-  if ((opts.externalBlocks ?? "enforce") === "enforce") {
-    const blockOverlap = await tx.$queryRaw<{ id: string }[]>(
-      Prisma.sql`SELECT id FROM "ExternalBlock"
+  const blockMode = opts.externalBlocks ?? "enforce";
+  let externalBlocksCrossed: ExternalBlockSpan[] = [];
+  if (blockMode !== "ignore") {
+    const blockOverlap = await tx.$queryRaw<ExternalBlockSpan[]>(
+      Prisma.sql`SELECT "id", "externalId", "startsAt", "endsAt", "reason" FROM "ExternalBlock"
                  WHERE "shopId" = ${opts.shopId}
                    AND "startsAt" < ${overlapEnd.toISOString()}::timestamp
-                   AND "endsAt" > ${overlapStart.toISOString()}::timestamp`,
+                   AND "endsAt" > ${overlapStart.toISOString()}::timestamp
+                 ORDER BY "startsAt" ASC`,
     );
-    if (blockOverlap.length > 0) throw new SlotTakenError();
+    if (blockOverlap.length > 0) {
+      if (blockMode === "enforce") throw new ExternalBlockError(blockOverlap);
+      externalBlocksCrossed = blockOverlap;
+    }
   }
 
   // The overlap predicate above correctly ignores EXPIRED holds (the slot
@@ -385,4 +437,6 @@ export async function lockStaffAndAssertSlotFree(
     },
     data: { status: "CANCELED", canceledAt: now },
   });
+
+  return { externalBlocksCrossed };
 }

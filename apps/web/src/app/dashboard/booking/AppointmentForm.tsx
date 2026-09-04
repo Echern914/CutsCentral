@@ -93,6 +93,13 @@ export function AppointmentForm({
   const [count, setCount] = useState(4);
   const [until, setUntil] = useState("");
   const [error, setError] = useState<string | null>(null);
+  /**
+   * The API refused because the time is blocked in the barber's EXTERNAL
+   * calendar (Acuity). Held separately from `error` because it is not a dead
+   * end: the sentence names the block, and the barber may confirm booking over
+   * it - which the API then records. Nothing is written until he does.
+   */
+  const [blockConflict, setBlockConflict] = useState<string | null>(null);
   const [pending, start] = useTransition();
 
   const selectedService = activeServices.find((s) => s.id === serviceId) ?? null;
@@ -163,7 +170,10 @@ export function AppointmentForm({
     return () => clearTimeout(t);
   }, [query]);
 
-  function submit() {
+  function submit(opts?: { overrideExternalBlock?: boolean }) {
+    // Read defensively: a footer button may hand us its click event.
+    const overrideExternalBlock = opts?.overrideExternalBlock === true;
+    setBlockConflict(null);
     setError(null);
     if (!serviceId) return setError("Pick a service.");
     if (!staffId) return setError("Pick a provider.");
@@ -196,11 +206,19 @@ export function AppointmentForm({
         phone: clientId ? undefined : newPhone.trim() || undefined,
         note: note.trim() || undefined,
         customTime,
+        overrideExternalBlock,
         recurrence,
         // Atomic waitlist link - see CreateApptInput.
         waitlistEntryId: waitlist?.entryId,
       });
       if (!res.ok) {
+        if (res.error === "external_block") {
+          // Show the block, ask - the booking happens only on confirm.
+          setBlockConflict(
+            res.reason ?? "That time is blocked in your external calendar.",
+          );
+          return;
+        }
         setError(
           res.error === "slot_taken"
             ? "That time is already booked."
@@ -248,6 +266,39 @@ export function AppointmentForm({
       }
     >
       <div data-qa="new-appt-form" className="flex min-w-0 flex-col gap-5">
+        {blockConflict && (
+          <div
+            role="alertdialog"
+            aria-labelledby="block-conflict-title"
+            data-qa="external-block-conflict"
+            className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-sm"
+          >
+            <p id="block-conflict-title" className="font-medium text-amber-200">
+              {blockConflict}
+            </p>
+            <p className="mt-1 text-xs text-amber-200/80">
+              Booking here puts an appointment on time you blocked off there. It will be
+              recorded as an override.
+            </p>
+            <div className="mt-3 flex gap-2">
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => submit({ overrideExternalBlock: true })}
+                className="rounded-lg bg-amber-400 px-3 py-2 text-xs font-semibold text-black disabled:opacity-50"
+              >
+                Book over it
+              </button>
+              <button
+                type="button"
+                onClick={() => setBlockConflict(null)}
+                className="rounded-lg border border-white/15 px-3 py-2 text-xs font-medium text-offwhite"
+              >
+                Keep the block
+              </button>
+            </div>
+          </div>
+        )}
         <Group title="Service">
           <div className="flex min-w-0 flex-col gap-1.5">
             {activeServices.map((s) => (

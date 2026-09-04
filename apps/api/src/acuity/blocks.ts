@@ -1,6 +1,6 @@
 import { runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
-import { invalidateShopAvailabilityCaches } from "../services/availabilityCache.js";
+import { noteAvailabilityChanged } from "../services/availabilityCache.js";
 import type { AcuityBlock } from "./types.js";
 
 /**
@@ -137,7 +137,7 @@ export async function syncAcuityBlocks(
   // barber has said he is not there for. A cached day built before the sync
   // defeats that entirely.
   if (result.upserted > 0 || result.removed > 0) {
-    invalidateShopAvailabilityCaches(shopId);
+    await noteAvailabilityChanged(shopId);
   }
   return result;
 }

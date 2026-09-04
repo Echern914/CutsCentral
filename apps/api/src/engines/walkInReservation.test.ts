@@ -2,7 +2,7 @@ import { afterEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { computeFreeRanges, computeOpenSlots, isSlotBookable } from "./slots.js";
-import { lockStaffAndAssertSlotFree, SlotTakenError } from "./bookingWrite.js";
+import { lockStaffAndAssertSlotFree, SlotTakenError, type SlotGuardResult } from "./bookingWrite.js";
 
 /**
  * Walk-in capacity: an ASSIGNED/READY walk-in holds its projected span against
@@ -65,7 +65,7 @@ function guard(opts: {
   endsAt: Date;
   walkInCapacity: "enforce" | "ignore" | { excludeEntryId: string };
   bufferMin?: number;
-}): Promise<void> {
+}): Promise<SlotGuardResult> {
   return prisma.$transaction((tx) =>
     lockStaffAndAssertSlotFree(tx, {
       walkInCapacity: opts.walkInCapacity,
@@ -236,7 +236,7 @@ describe("the write guard", () => {
     // The very next slot is untouched - this reserves a span, not a day.
     await expect(
       guard({ startsAt: at("14:30"), endsAt: at("15:00"), walkInCapacity: "enforce" }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ externalBlocksCrossed: [] });
   });
 
   it("a READY walk-in holds the chair exactly like an ASSIGNED one", async () => {
@@ -278,20 +278,20 @@ describe("the write guard", () => {
     }
     await expect(
       guard({ startsAt: at("15:00"), endsAt: at("15:30"), walkInCapacity: "enforce" }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ externalBlocksCrossed: [] });
   });
 
   it("a BARBER-driven write overrides the projection - it is their calendar", async () => {
     await reservation("ASSIGNED");
     await expect(
       guard({ startsAt: at("14:00"), endsAt: at("14:30"), walkInCapacity: "ignore" }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ externalBlocksCrossed: [] });
   });
 
   it("an empty queue changes nothing for anyone", async () => {
     await expect(
       guard({ startsAt: at("14:00"), endsAt: at("14:30"), walkInCapacity: "enforce" }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ externalBlocksCrossed: [] });
   });
 
   it("the turnover buffer is applied ONCE, not twice", async () => {
@@ -314,7 +314,7 @@ describe("the write guard", () => {
         bufferMin: 10,
         walkInCapacity: "enforce",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ externalBlocksCrossed: [] });
   });
 
   it("🔴 releasing, reassigning or terminalizing frees the span on the very next write", async () => {
@@ -329,14 +329,14 @@ describe("the write guard", () => {
       where: { id: a.id },
       data: { status: "WAITING", assignedStaffId: null, assignedAt: null },
     });
-    await expect(free()).resolves.toBeUndefined();
+    await expect(free()).resolves.toEqual({ externalBlocksCrossed: [] });
 
     // 2. Reassigned to another chair - it holds THAT chair now, not this one.
     await prisma.walkInEntry.update({
       where: { id: a.id },
       data: { status: "ASSIGNED", assignedStaffId: chairB, assignedAt: NOW },
     });
-    await expect(free()).resolves.toBeUndefined();
+    await expect(free()).resolves.toEqual({ externalBlocksCrossed: [] });
 
     // 3. Terminal - gone for good.
     await prisma.walkInEntry.update({
@@ -348,7 +348,7 @@ describe("the write guard", () => {
       where: { id: a.id },
       data: { status: "COMPLETED", completedAt: NOW },
     });
-    await expect(free()).resolves.toBeUndefined();
+    await expect(free()).resolves.toEqual({ externalBlocksCrossed: [] });
     await prisma.staff.delete({ where: { id: chairB } });
   });
 
@@ -363,7 +363,7 @@ describe("the write guard", () => {
         endsAt: at("14:30"),
         walkInCapacity: { excludeEntryId: first.id },
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ externalBlocksCrossed: [] });
 
     // 🔴 But it is still blocked by the person BEHIND it, whose projection did
     // not slide forward when we excluded the head. If the exclusion dropped

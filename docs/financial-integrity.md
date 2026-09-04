@@ -44,7 +44,7 @@ work - it is a separate change with its own proof.
 | Receptionist add-on checkout | shop → ChairBack | `STRIPE_RECEPTIONIST_PRICE_ID` | usd | `checkout.sessions.create` | `Shop.receptionistSubscriptionStatus` | key `checkout:<shop>:receptionist:<bucket>` | same, on its own clock (`receptionistEventCreated`) | same | same | manager | Portal | LOW | `billing.test.ts` |
 | Upgrade Premium → Premium AI | shop → ChairBack | Stripe price swap, `always_invoice` | usd | `subscriptions.update` | `Shop.plan` (optimistic) + webhook | key `upgrade:<sub>:<price>` | `customer.subscription.updated` | same key replays | webhook converges | manager | Portal downgrade | LOW | `billing.test.ts` |
 | Pay-ahead / deposit | customer → shop | server: service price / `depositChargeCents` (capped at price) | usd (`validateCharge`) | `paymentIntents.create` destination charge, automatic methods | `Payment` (row BEFORE the call, `pending:` id) | key `pi-create:<paymentId>`; request rebuilt from the row on retry | `payment_intent.succeeded` promotes the PENDING hold (`promotePaidHold` CAS) | same key; reconciler adopts by metadata search | `billing/reconcile.ts` | public route; hold expires if unpaid | `refundForCancellation` (policy fee, `reverse_transfer`, `refund_application_fee`) | LOW | `billing/paymentsRecovery.test.ts`, `deposit.test.ts`, `payments.test.ts` |
-| Card on file - keep | customer → (nothing) | n/a | usd | `customers.create` + `setupIntents.create` (`on_behalf_of`, off_session) | `CardOnFile` (FORCE RLS) | keys `cof-customer:<id>`, `seti-create:<id>` | `setup_intent.succeeded` AND server-side retrieve | reuse row/intent | hold lapse releases + detaches | public route | `releaseCardOnFile` detaches | LOW | `billing/cardOnFile.test.ts` |
+| Card on file - keep | customer → (nothing) | n/a | usd | `customers.create` + `setupIntents.create` (`on_behalf_of`, off_session, `automatic_payment_methods` - Apple Pay renders; Stripe offers only methods reusable off-session; PR #402) | `CardOnFile` (FORCE RLS) | keys `cof-customer:<id>`, `seti-create:<id>` | `setup_intent.succeeded` AND server-side retrieve | reuse row/intent | hold lapse releases + detaches | public route | `releaseCardOnFile` detaches | LOW | `billing/cardOnFile.test.ts` |
 | Card on file - charge fee | customer → shop | `cardOnFileFeeCents` (shopPolicy) from the ticket, only if `chargeCardOnFileFees` | usd | off-session `paymentIntents.create` confirm | `Payment` (row before the call) + `CardOnFile.status` | CAS `saved→charging` + key `cof-charge:<rowId>` | synchronous response; ambiguous → `ambiguousAt`, reconciler | never retried blind | reconciler (search by metadata) | manager no-show / customer late cancel | `refundForCancellation` | LOW | `services/cardOnFileSettle.test.ts`, `billing/reconcile.test.ts` |
 | Terminal (Tap to Pay) | customer → shop | server: ticket | usd (`validateCharge`) | `paymentIntents.create` card_present | `Payment` (row before the call) | key `terminal-pi:<paymentId>` | `payment_intent.succeeded` | same key | reconciler | manager | refund | LOW (mobile half not built) | `financialInvariants.test.ts` |
 | Refund on cancellation | shop → customer | `collected - refundedAmount - fee` (server) | usd | `refunds.create` `reverse_transfer` | `Payment.refundedAmount/status` (CAS on the prior total) | key `refund:<paymentId>:<refundedAmount>` | `charge.refunded` (monotonic) | same key replays the one refund | webhook + reconciler | manage token / manager | n/a | LOW | `paymentsRecovery.test.ts`, `payments.test.ts` |
@@ -105,6 +105,19 @@ purchases (the app sells nothing; App Review notes say so).
   customer agreed to - so a raised ticket cannot raise a fee they consented to
   at the old one (`agreedPriceCents`). Revenue counts the chair figure once
   checked out, else the ticket (`insightsWindow.readChairEvents`).
+
+## Addendum - PR #402 (2026-09-04)
+
+- The card-on-file SetupIntent no longer pins `payment_method_types: ["card"]`
+  (it used `automatic_payment_methods` on the pay-ahead/deposit PaymentIntent
+  already; card-on-file was the one screen without Apple Pay). Nothing about
+  the charge rule, the CAS on `CardOnFile.status`, the idempotency keys, the
+  ambiguity classification or the reconciler changed; `billing/walletInvariants.test.ts`
+  pins the parameter and the wallet-domain registration, and the #401 suites
+  ran green on the merged tree.
+- No money path was added. `AppointmentOverride` (a barber booking over an
+  Acuity block) and `Shop.availabilityGeneration` (the availability cache's
+  version) are scheduling records, outside this inventory.
 
 ## Findings
 

@@ -5,7 +5,7 @@ import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { computeOpenSlots, isSlotBookable, type Slot } from "../engines/slots.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
-import { invalidateShopAvailabilityCaches } from "../services/availabilityCache.js";
+import { noteAvailabilityChanged } from "../services/availabilityCache.js";
 import { cancellationFeeCents, cardOnFileFeeCents } from "@chairback/config";
 import {
   completeReschedule,
@@ -792,7 +792,7 @@ async function holdSlot(ctx: ToolContext, rawInput: unknown): Promise<ToolExecut
     });
     // The hold owns that chair now. Drop the public page's cached day so the
     // slot disappears immediately instead of staying tappable for the TTL.
-    invalidateShopAvailabilityCaches(ctx.shopId);
+    await noteAvailabilityChanged(ctx.shopId);
     return ok({
       held: true,
       slot_id: parsed.data.slot_id,
@@ -1049,7 +1049,7 @@ async function bookAppointment(
     });
     // A booking taken over SMS makes the same time unbookable on the web, and
     // the two surfaces must agree the moment it commits.
-    invalidateShopAvailabilityCaches(ctx.shopId);
+    await noteAvailabilityChanged(ctx.shopId);
 
     // Backfill the walk-in's name onto the Client row (outside the booking tx;
     // a failure here must not undo a successful booking). Guarded on still-null
@@ -1247,7 +1247,7 @@ async function rescheduleTool(
   }
   // A move frees the old time AND takes a new one; both sides of that are
   // wrong on the public page until the cache is dropped.
-  invalidateShopAvailabilityCaches(ctx.shopId);
+  await noteAvailabilityChanged(ctx.shopId);
 
   // New block first, then release the old - never the reverse.
   await completeReschedule(ctx.shopId, appt.id, reschedOutboxId);

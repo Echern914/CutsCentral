@@ -5,7 +5,7 @@ import { getAcuityClientForShop } from "./acuity/client.js";
 import { appointmentHasSmsConsent } from "./acuity/consent.js";
 import { resolveStatus } from "./acuity/mapping.js";
 import { recomputeCadence } from "./engines/cadence.js";
-import { invalidateShopAvailabilityCaches } from "./services/availabilityCache.js";
+import { noteAvailabilityChanged } from "./services/availabilityCache.js";
 import { clawBackVisitEarn, earnPunchForVisitInTx } from "./services/punch.js";
 import { notifyPunchEarned } from "./services/loyaltyNotify.js";
 import { logger } from "./logger.js";
@@ -190,7 +190,7 @@ export async function ingestAppointment(
   // Every Acuity/Square appointment - created, rescheduled or canceled -
   // passes through this function, which makes it the one place that has to
   // remember.
-  invalidateShopAvailabilityCaches(shop.id);
+  await noteAvailabilityChanged(shop.id);
 
   // The completed-visit set changed: lastVisitAt / median cadence / nextExpectedAt
   // were all advanced by the phantom visit and must be recomputed. (Outside the

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomToken } from "@chairback/config";
 import { prisma } from "@chairback/db";
-import { lockStaffAndAssertSlotFree, SlotTakenError } from "./bookingWrite.js";
+import { lockStaffAndAssertSlotFree, SlotTakenError, type SlotGuardResult } from "./bookingWrite.js";
 
 /**
  * The ONE shared double-booking guard (extracted from the five write sites).
@@ -48,7 +48,7 @@ function assertFree(opts: {
   bufferMin?: number;
   excludeAppointmentId?: string;
   statuses?: readonly ("BOOKED" | "PENDING")[];
-}): Promise<void> {
+}): Promise<SlotGuardResult> {
   return prisma.$transaction((tx) =>
     lockStaffAndAssertSlotFree(tx, {
       walkInCapacity: "enforce",
@@ -107,7 +107,7 @@ describe("lockStaffAndAssertSlotFree", () => {
       "slot_taken",
     );
     // A non-overlapping slot right after passes.
-    await expect(assertFree({ startsAt: T(14, 30), endsAt: T(15, 0) })).resolves.toBeUndefined();
+    await expect(assertFree({ startsAt: T(14, 30), endsAt: T(15, 0) })).resolves.toEqual({ externalBlocksCrossed: [] });
   });
 
   it("pads both sides by the turnover buffer", async () => {
@@ -118,7 +118,7 @@ describe("lockStaffAndAssertSlotFree", () => {
     ).rejects.toThrow(SlotTakenError);
     await expect(
       assertFree({ startsAt: T(9, 45), endsAt: T(10, 15), bufferMin: 15 }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ externalBlocksCrossed: [] });
   });
 
   it("excludeAppointmentId ignores the row's own slot (reschedule/approve)", async () => {
@@ -126,7 +126,7 @@ describe("lockStaffAndAssertSlotFree", () => {
     await expect(assertFree({ startsAt: T(11, 0), endsAt: T(11, 30) })).rejects.toThrow();
     await expect(
       assertFree({ startsAt: T(11, 0), endsAt: T(11, 30), excludeAppointmentId: id }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ externalBlocksCrossed: [] });
   });
 
   it("PENDING blocks by default; statuses:['BOOKED'] ignores it (approve path)", async () => {
@@ -134,7 +134,7 @@ describe("lockStaffAndAssertSlotFree", () => {
     await expect(assertFree({ startsAt: T(12, 0), endsAt: T(12, 30) })).rejects.toThrow();
     await expect(
       assertFree({ startsAt: T(12, 0), endsAt: T(12, 30), statuses: ["BOOKED"] }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ externalBlocksCrossed: [] });
   });
 
   it("an ACTIVE receptionist hold blocks; an EXPIRED one releases the slot", async () => {
@@ -156,7 +156,7 @@ describe("lockStaffAndAssertSlotFree", () => {
     });
     await expect(
       assertFree({ startsAt: T(16, 0), endsAt: T(16, 30) }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ externalBlocksCrossed: [] });
   });
 
   it("clears an EXPIRED hold's ghost row so the exact-start write can't P2002", async () => {

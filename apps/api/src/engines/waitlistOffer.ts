@@ -15,7 +15,7 @@ import {
   recordWaitlistEventBestEffort,
   SYSTEM_ACTOR,
 } from "./waitlistAudit.js";
-import { invalidateShopAvailabilityCaches } from "../services/availabilityCache.js";
+import { noteAvailabilityChanged } from "../services/availabilityCache.js";
 import { dispatchAfterCommit, recordMirrorIntent } from "./acuityMirror.js";
 import { isMirrorNotConfigured, mirrorNotConfiguredSource } from "./mirrorNotConfigured.js";
 import {
@@ -322,7 +322,7 @@ export async function offerFreedSlot(
     // subtracts it, but the public page would keep serving a cached day that
     // still showed it. Anyone else tapping it would be refused, and the
     // customer the slot was promised to could lose it to that race.
-    invalidateShopAvailabilityCaches(slot.shopId);
+    await noteAvailabilityChanged(slot.shopId);
     logger.info(
       {
         shopId: slot.shopId,
@@ -1016,7 +1016,7 @@ export async function claimOffer(params: {
     // The hold became a real booking. Same slot, different reason - but the
     // cached public day was built before either existed.
     if (claimResult && "shopId" in claimResult) {
-      invalidateShopAvailabilityCaches(String(claimResult.shopId));
+      await noteAvailabilityChanged(String(claimResult.shopId));
     }
     return claimResult;
   } catch (err) {
@@ -1124,7 +1124,7 @@ export async function expireDueOffers(
       // The hold lapsed, so the chair is FREE again - and the cached day was
       // built while it was held. Staleness in this direction costs the shop a
       // booking rather than double-booking it, which is why it went unnoticed.
-      invalidateShopAvailabilityCaches(offer.shopId);
+      await noteAvailabilityChanged(offer.shopId);
 
       const advance = opts?.forceAdvance ?? !apiEnv().DRY_RUN;
       if (!advance) {

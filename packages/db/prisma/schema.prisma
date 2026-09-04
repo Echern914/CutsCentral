@@ -484,6 +484,16 @@ model Shop {
   bookingLeadHours Int         @default(2) // earliest bookable slot = now + this many hours
   bookingMaxDays   Int         @default(60) // how far ahead a customer may book
   bookingBufferMin Int         @default(0) // turnover gap added after each appointment
+  // 🔴 THE AVAILABILITY GENERATION. Advanced (by one, atomically, AFTER commit)
+  // by every write that can change what is bookable - a booking, a hold, a
+  // cancellation, a synced Acuity visit or block, a waitlist offer, a walk-in,
+  // an hours edit. Every cached availability answer carries the generation it
+  // was computed under and is served only while the shop's generation still
+  // equals it. That is what makes the /day and /open-days caches correct across
+  // API processes (a Map in one replica cannot invalidate another) and closes
+  // the in-flight race (a calculation that began before a commit cannot be
+  // published as current once the commit is observed). services/availabilityCache.ts.
+  availabilityGeneration Int @default(0)
   // Public booking menu: show service-GROUP cards first (tap a group to see its
   // services) instead of the full flat service list. Only takes effect when the
   // shop has active groups; ships default-off so no existing page changes.
@@ -605,6 +615,7 @@ model Shop {
   appointments           Appointment[]
   recurringSeries        RecurringSeries[]
   appointmentPriceChanges AppointmentPriceChange[]
+  appointmentOverrides AppointmentOverride[]
   serviceAddOns          ServiceAddOn[]
   serviceGroups          ServiceGroup[]
   goals                  ShopGoal[]
@@ -3927,6 +3938,36 @@ model StripeEventReceipt {
 /// price the customer agreed to at booking - the card-on-file fee is computed
 /// from that, never from a later edit. Tenant table (FORCE RLS), append-only
 /// for everyone via a BEFORE UPDATE trigger; the tenant role may only INSERT/SELECT.
+/// A barber deliberately booked over time that was blocked in the calendar he
+/// actually manages (an Acuity block). Append-only: the override is the kind of
+/// decision that has to be explainable afterwards - to the barber who finds a
+/// client in his blocked-off afternoon, and to whoever asks why. Written in the
+/// same transaction as the appointment, only through the explicit confirm step
+/// on the dashboard (customTime + overrideExternalBlock). Never by a customer.
+model AppointmentOverride {
+  id            String @id @default(cuid())
+  shopId        String
+  shop          Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  /// Not a FK on purpose: the record outlives the appointment row.
+  appointmentId String
+  staffId       String
+  /// The signed-in user who confirmed it (User.id), when known.
+  actorUserId   String?
+  /// What was overridden. Today only "external_block".
+  kind          String
+  /// Which dashboard path did it: dashboard_create | dashboard_reschedule | dashboard_edit.
+  source        String
+  blockedFrom   DateTime
+  blockedTo     DateTime
+  blockReason   String?
+  /// The block's id in the external system, so it can be found there later.
+  externalId    String?
+  createdAt     DateTime @default(now())
+
+  @@index([shopId, appointmentId, createdAt])
+  @@index([shopId, createdAt])
+}
+
 model AppointmentPriceChange {
   id            String  @id @default(cuid())
   shopId        String

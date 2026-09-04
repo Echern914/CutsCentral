@@ -3,11 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
-import {
-  clearAllAvailabilityCaches,
-  dayCache,
-  invalidateShopAvailabilityCaches,
-} from "../services/availabilityCache.js";
+import { dayAvailabilityCache, noteAvailabilityChanged } from "../services/availabilityCache.js";
 import { raceBehindAdvisoryLock, winners } from "../testing/raceBarrier.js";
 
 /**
@@ -147,7 +143,7 @@ beforeEach(async () => {
   await prisma.appointment.deleteMany({ where: { shopId } });
   await prisma.externalBlock.deleteMany({ where: { shopId } });
   await prisma.visit.deleteMany({ where: { shopId } });
-  clearAllAvailabilityCaches();
+  await noteAvailabilityChanged(shopId);
 });
 
 afterAll(async () => {
@@ -167,7 +163,7 @@ describe("the grid never offers a time that is already gone", () => {
     const before = await slotsFor(shortId, chairA);
     expect(before).toContain(start.toISOString());
     await bookRaw({ staffId: chairA, startsAt: start, minutes: 30 });
-    clearAllAvailabilityCaches();
+    await noteAvailabilityChanged(shopId);
     expect(await slotsFor(shortId, chairA)).not.toContain(start.toISOString());
   });
 
@@ -180,7 +176,7 @@ describe("the grid never offers a time that is already gone", () => {
       status: "PENDING",
       holdExpiresAt: new Date(Date.now() + 5 * 60_000),
     });
-    clearAllAvailabilityCaches();
+    await noteAvailabilityChanged(shopId);
     expect(await slotsFor(shortId, chairA)).not.toContain(start.toISOString());
 
     // An EXPIRED hold releases instantly - the sweep's CANCELED flip is
@@ -189,7 +185,7 @@ describe("the grid never offers a time that is already gone", () => {
       where: { id: live.id },
       data: { holdExpiresAt: new Date(Date.now() - 60_000) },
     });
-    clearAllAvailabilityCaches();
+    await noteAvailabilityChanged(shopId);
     expect(await slotsFor(shortId, chairA)).toContain(start.toISOString());
   });
 
@@ -205,7 +201,7 @@ describe("the grid never offers a time that is already gone", () => {
         reason: "Dentist",
       },
     });
-    clearAllAvailabilityCaches();
+    await noteAvailabilityChanged(shopId);
     const after = await slotsFor(shortId, chairA);
     expect(after).not.toContain(start.toISOString());
     // A block carries no barber, so it closes the whole shop for its span.
@@ -229,27 +225,27 @@ describe("the grid never offers a time that is already gone", () => {
         serviceName: "Acuity cut",
       },
     });
-    clearAllAvailabilityCaches();
+    await noteAvailabilityChanged(shopId);
     expect(await slotsFor(shortId, chairA)).not.toContain(start.toISOString());
   });
 
   it("gives the time back when a booking is canceled", async () => {
     const start = at(7, 12);
     const appt = await bookRaw({ staffId: chairA, startsAt: start, minutes: 30 });
-    clearAllAvailabilityCaches();
+    await noteAvailabilityChanged(shopId);
     expect(await slotsFor(shortId, chairA)).not.toContain(start.toISOString());
     await prisma.appointment.update({
       where: { id: appt.id },
       data: { status: "CANCELED", canceledAt: new Date() },
     });
-    clearAllAvailabilityCaches();
+    await noteAvailabilityChanged(shopId);
     expect(await slotsFor(shortId, chairA)).toContain(start.toISOString());
   });
 
   it("keeps the other barber bookable", async () => {
     const start = at(8, 12);
     await bookRaw({ staffId: chairA, startsAt: start, minutes: 30 });
-    clearAllAvailabilityCaches();
+    await noteAvailabilityChanged(shopId);
     expect(await slotsFor(shortId, chairA)).not.toContain(start.toISOString());
     expect(await slotsFor(shortId, chairB)).toContain(start.toISOString());
   });
@@ -261,7 +257,7 @@ describe("the grid never offers a time that is already gone", () => {
     const gapStart = at(9, 12);
     await bookRaw({ staffId: chairA, startsAt: at(9, 11), minutes: 60 }); // 11:00-12:00
     await bookRaw({ staffId: chairA, startsAt: at(9, 12, 30), minutes: 60 }); // 12:30-13:30
-    clearAllAvailabilityCaches();
+    await noteAvailabilityChanged(shopId);
 
     const long = await slotsFor(longId, chairA);
     expect(long).not.toContain(gapStart.toISOString());
@@ -278,7 +274,7 @@ describe("the grid never offers a time that is already gone", () => {
     // unusable, so the 12:30 start that would otherwise fit is gone.
     const start = at(10, 12);
     await bookRaw({ staffId: chairA, startsAt: start, minutes: 30 });
-    clearAllAvailabilityCaches();
+    await noteAvailabilityChanged(shopId);
     const after = await slotsFor(shortId, chairA);
     expect(after).not.toContain(at(10, 12, 30).toISOString());
     expect(after).not.toContain(at(10, 11, 30).toISOString());
@@ -286,28 +282,43 @@ describe("the grid never offers a time that is already gone", () => {
 });
 
 describe("the cached page cannot outlive the truth", () => {
-  it("🔴 drops the cached day when a NON-booking writer takes the chair", async () => {
+  it("🔴 a NON-booking writer advances the shop's generation, so a cached day is no longer current", async () => {
     // The reported defect: the slot engine excluded these correctly, but the
     // public page served a body built before they existed - so the time stayed
     // tappable until the TTL lapsed, and the customer found out by being
     // refused. Only booking.public and the dashboard could invalidate; every
-    // engine and webhook could not, because importing a route is a cycle.
-    const date = dayString(11);
-    const warm = await request(app).get(`/api/book/${slug}/day?date=${date}`);
-    expect(warm.status).toBe(200);
-    dayCache.set(`${shopId}|${date}`, { at: Date.now(), body: { sentinel: true } });
-    expect(dayCache.has(`${shopId}|${date}`)).toBe(true);
+    // engine and webhook could not, because importing a route is a cycle. Now
+    // every writer advances a number in the DATABASE, and a cached body is
+    // served only while that number still matches.
+    const gen = async () =>
+      (await prisma.shop.findUniqueOrThrow({
+        where: { id: shopId },
+        select: { availabilityGeneration: true },
+      })).availabilityGeneration;
+    const before = await gen();
+    dayAvailabilityCache.setTtlForTests(60_000);
+    try {
+      const date = dayString(11);
+      const warm = await request(app).get(`/api/book/${slug}/day?date=${date}`);
+      expect(warm.status).toBe(200);
+      expect(dayAvailabilityCache.peek(`${shopId}|${date}`)?.generation).toBe(before);
 
-    invalidateShopAvailabilityCaches(shopId);
-    expect(dayCache.has(`${shopId}|${date}`)).toBe(false);
+      await noteAvailabilityChanged(shopId);
+      expect(await gen()).toBe(before + 1);
+      // Dropped locally - and, the part that matters across processes, a body
+      // under the old generation could not be served by anyone anyway.
+      expect(dayAvailabilityCache.peek(`${shopId}|${date}`)).toBeUndefined();
+    } finally {
+      dayAvailabilityCache.setTtlForTests(0);
+    }
   });
 
   it("is reachable from an engine without importing a route", async () => {
     // The whole point of services/availabilityCache.ts. If this module ever
-    // grows an import of routes/*, the cycle comes back and the engines lose
-    // their ability to invalidate.
+    // grows an import of routes/* or engines/*, the cycle comes back and the
+    // engines lose their ability to advance the generation.
     const mod = await import("../services/availabilityCache.js");
-    expect(typeof mod.invalidateShopAvailabilityCaches).toBe("function");
+    expect(typeof mod.noteAvailabilityChanged).toBe("function");
     const { fileURLToPath } = await import("node:url");
     const src = await import("node:fs/promises").then((fs) =>
       fs.readFile(
@@ -316,7 +327,7 @@ describe("the cached page cannot outlive the truth", () => {
       ),
     );
     expect(src).not.toMatch(/from\s+"\.\.\/routes\//);
-    expect(src).not.toMatch(/^import /m);
+    expect(src).not.toMatch(/from\s+"\.\.\/engines\//);
   });
 
   it("every writer that can take a chair drops the cache", async () => {
@@ -331,6 +342,7 @@ describe("the cached page cannot outlive the truth", () => {
       "engines/walkInStart.ts",
       "engines/recurringSeries.ts",
       "engines/holdSweep.ts",
+      "services/appointmentPaymentHold.ts",
       "receptionist/tools.ts",
       "acuity/blocks.ts",
       "ingest.ts",
@@ -339,8 +351,8 @@ describe("the cached page cannot outlive the truth", () => {
     ];
     for (const rel of writers) {
       const text = await fs.readFile(path.join(src, rel), "utf8");
-      expect(text, `${rel} must invalidate the availability cache`).toMatch(
-        /invalidateShopAvailabilityCaches|clearAllAvailabilityCaches/,
+      expect(text, `${rel} must advance the availability generation`).toMatch(
+        /noteAvailabilityChanged(For)?\(/,
       );
     }
   });
@@ -523,7 +535,7 @@ describe("the guard, not the grid, is what makes double-booking impossible", () 
     // Someone else takes it - through a path the tab could never have known
     // about, and which used not to invalidate anything.
     await bookRaw({ staffId: chairA, startsAt: start, minutes: 30 });
-    invalidateShopAvailabilityCaches(shopId);
+    await noteAvailabilityChanged(shopId);
 
     const res = await request(app)
       .post(`/api/book/${slug}`)
@@ -558,7 +570,7 @@ describe("the guard, not the grid, is what makes double-booking impossible", () 
         reason: "Away",
       },
     });
-    invalidateShopAvailabilityCaches(shopId);
+    await noteAvailabilityChanged(shopId);
     const res = await request(app)
       .post(`/api/book/${slug}`)
       .send({

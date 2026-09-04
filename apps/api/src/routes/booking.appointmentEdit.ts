@@ -3,7 +3,8 @@ import { z } from "zod";
 import { Prisma, forShop, prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { isSlotBookable } from "../engines/slots.js";
-import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
+import { ExternalBlockError, lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
+import { describeBlocks, recordExternalBlockOverrides } from "../services/appointmentOverride.js";
 import { completeReschedule, swapForReschedule } from "../engines/acuityMirror.js";
 import { appointmentOwnedByPlatform } from "../engines/visitOrigin.js";
 import { pokeAppointmentPass } from "../wallet/appointmentPass.js";
@@ -66,6 +67,8 @@ const editApptSchema = z
     email: z.string().max(200).nullable().optional(),
     /** Barber override: skip the hours/blocked gate. Overlap still applies. */
     customTime: z.boolean().optional(),
+    /** Confirms booking OVER an external block; recorded. See booking.dashboard.ts. */
+    overrideExternalBlock: z.boolean().optional(),
   })
   .strict();
 
@@ -291,9 +294,10 @@ export function registerAppointmentEdit(
     try {
       await runWithShop(shopId, async (tx) => {
         if (timeMoved) {
-          await lockStaffAndAssertSlotFree(tx, {
-            // Blocked time is not enforced here: the barber editing an appointment he already accepted.
-            externalBlocks: "ignore",
+          const guard = await lockStaffAndAssertSlotFree(tx, {
+            // External blocks: enforced unless explicitly overridden, and then
+            // recorded - the same rule as create and reschedule.
+            externalBlocks: d.customTime && d.overrideExternalBlock ? "override" : "enforce",
             walkInCapacity: "ignore",
             staffId,
             shopId,
@@ -308,6 +312,14 @@ export function registerAppointmentEdit(
             // A barber editing their own calendar overrides their own cap.
             serviceDayLimit: null,
             overrideWaitlistHolds: true,
+          });
+          await recordExternalBlockOverrides(tx, {
+            shopId,
+            appointmentId: appt.id,
+            staffId,
+            actorUserId: req.userId ?? null,
+            source: "dashboard_edit",
+            blocks: guard.externalBlocksCrossed,
           });
         }
         await tx.appointment.update({
@@ -365,6 +377,15 @@ export function registerAppointmentEdit(
         }
       });
     } catch (err) {
+      if (err instanceof ExternalBlockError) {
+        res.status(409).json({
+          error: "external_block",
+          code: "SLOT_UNAVAILABLE",
+          confirmable: true,
+          blocks: describeBlocks(err.blocks),
+        });
+        return;
+      }
       if (
         err instanceof SlotTakenError ||
         (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002")

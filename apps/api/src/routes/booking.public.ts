@@ -2,13 +2,9 @@ import { Router } from "express";
 import { z } from "zod";
 import { countBookingRefusals } from "../services/bookingRefusal.js";
 import {
-  DAY_TTL_MS,
-  OPEN_DAYS_TTL_MS,
-  dayCache,
-  dayInFlight,
-  invalidateShopAvailabilityCaches,
-  openDaysCache,
-  openDaysInFlight,
+  dayAvailabilityCache,
+  noteAvailabilityChanged,
+  openDaysAvailabilityCache,
 } from "../services/availabilityCache.js";
 import {
   isAppointmentSlotConflict,
@@ -115,13 +111,6 @@ import { logger } from "../logger.js";
  *
  * A 404 is returned for any shop that isn't live + native (no oracle).
  */
-/**
- * Re-exported so the booking dashboard's invalidation hook keeps its existing
- * import. The implementation moved to services/availabilityCache.ts - see that
- * file for why.
- */
-export { invalidateShopAvailabilityCaches };
-
 export const bookingPublicRouter: Router = Router();
 
 // z.coerce.date() turns an unparseable string into an Invalid Date that still
@@ -367,7 +356,7 @@ bookingPublicRouter.post(
           appointmentId: result.appointmentId,
           kind: result.pending ? "requested" : "booked",
         });
-        invalidateShopAvailabilityCaches(result.shopId);
+        await noteAvailabilityChanged(result.shopId);
         res.status(201).json({
           ok: true,
           manageToken: result.manageToken,
@@ -762,25 +751,15 @@ bookingPublicRouter.get("/:slug/day", bookingReadLimiter, async (req, res) => {
   }
   // Cache AFTER the horizon check: out-of-window days are cheap empties, and
   // keying by shop.id (not the raw slug) avoids case-variant duplicate entries.
+  // The generation this request observed rides on the shop row we already
+  // loaded - no extra query. The cache serves only a body computed under this
+  // same number, joins only a calculation started under it, and verifies it
+  // again before publishing. See services/availabilityCache.ts.
   const dayCacheKey = `${shop.id}|${parsed.data.date}`;
-  const dayCached = dayCache.get(dayCacheKey);
-  if (dayCached && Date.now() - dayCached.at < DAY_TTL_MS) {
-    res.json(dayCached.body);
-    return;
-  }
-
-  const inFlightDay = dayInFlight.get(dayCacheKey);
-  if (inFlightDay) {
-    res.json(await inFlightDay);
-    return;
-  }
-  const dayWork = computeDayBody(shop, parsed.data.date, dayStart, dayEnd, now);
-  dayInFlight.set(dayCacheKey, dayWork);
-  try {
-    res.json(await dayWork);
-  } finally {
-    dayInFlight.delete(dayCacheKey);
-  }
+  const body = await dayAvailabilityCache.get(dayCacheKey, shop.id, shop.availabilityGeneration, () =>
+    computeDayBody(shop, parsed.data.date, dayStart, dayEnd, now),
+  );
+  res.json(body);
 });
 
 /**
@@ -798,7 +777,6 @@ async function computeDayBody(
   dayEnd: Date,
   now: Date,
 ): Promise<unknown> {
-  const dayCacheKey = `${shop.id}|${date}`;
   const [services, links, groups, rawTargeted] = await Promise.all([
     prisma.service.findMany({
       where: { shopId: shop.id, active: true },
@@ -985,7 +963,6 @@ async function computeDayBody(
   const ungrouped = dayServices.filter((s) => !groupedIds.has(s.id));
 
   const dayBody = { timezone: shop.timezone, date, bundles, ungrouped };
-  dayCache.set(dayCacheKey, { at: Date.now(), body: dayBody });
   return dayBody;
 }
 
@@ -1255,23 +1232,11 @@ bookingPublicRouter.get("/:slug/open-days", bookingReadLimiter, async (req, res)
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const cached = openDaysCache.get(shop.id);
-  if (cached && Date.now() - cached.at < OPEN_DAYS_TTL_MS) {
-    res.json(cached.body);
-    return;
-  }
-  const inFlight = openDaysInFlight.get(shop.id);
-  if (inFlight) {
-    res.json(await inFlight);
-    return;
-  }
-  const sweep = computeOpenDays(shop);
-  openDaysInFlight.set(shop.id, sweep);
-  try {
-    res.json(await sweep);
-  } finally {
-    openDaysInFlight.delete(shop.id);
-  }
+  // Same generation discipline as /day; keyed by shop id, never the raw slug.
+  const body = await openDaysAvailabilityCache.get(shop.id, shop.id, shop.availabilityGeneration, () =>
+    computeOpenDays(shop),
+  );
+  res.json(body);
 });
 
 /**
@@ -1399,7 +1364,6 @@ async function computeOpenDays(shop: {
         }
       : null,
   };
-  openDaysCache.set(shop.id, { at: Date.now(), body });
   return body;
 }
 
@@ -1947,7 +1911,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       appointmentId: first.appointmentId,
       kind: "booked",
     });
-    invalidateShopAvailabilityCaches(shop.id);
+    await noteAvailabilityChanged(shop.id);
 
     res.status(201).json({
       ok: true,
@@ -2216,7 +2180,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       // as any other lost slot. Nothing has been sent and no PaymentIntent
       // exists yet, so this costs the customer nothing.
       await compensateUnmirroredBooking(shop.id, appointmentId, targeted?.id ?? null);
-      invalidateShopAvailabilityCaches(shop.id);
+      await noteAvailabilityChanged(shop.id);
       res.status(409).json({ error: "slot_unavailable_external", code: "SLOT_UNAVAILABLE" });
       return;
     }
@@ -2238,7 +2202,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       if (collectsUpFront) {
         await promotePaidHold({ appointmentId, now, notify: false });
       }
-      invalidateShopAvailabilityCaches(shop.id);
+      await noteAvailabilityChanged(shop.id);
       res.status(202).json({
         status: "processing",
         appointmentId,
@@ -2271,7 +2235,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       kind: shop.requireBookingApproval ? "requested" : "booked",
     });
   }
-  invalidateShopAvailabilityCaches(shop.id);
+  await noteAvailabilityChanged(shop.id);
 
   // Pay-ahead / deposit: create a PaymentIntent for the customer to confirm
   // (card/Apple Pay) and return its client secret. AFTER commit - no Stripe
@@ -2915,7 +2879,7 @@ bookingPublicRouter.post(
         appointmentId: appt.id,
         kind: "canceled",
       });
-      invalidateShopAvailabilityCaches(appt.shopId);
+      await noteAvailabilityChanged(appt.shopId);
       res.json({ ok: true, canceled: result.canceled });
       return;
     }
@@ -2930,7 +2894,7 @@ bookingPublicRouter.post(
       appointmentId: appt.id,
       kind: "canceled",
     });
-    invalidateShopAvailabilityCaches(appt.shopId);
+    await noteAvailabilityChanged(appt.shopId);
     res.json({ ok: true });
   },
 );
@@ -3237,7 +3201,7 @@ bookingPublicRouter.post(
       appointmentId: appt.id,
       kind: "rescheduled",
     });
-    invalidateShopAvailabilityCaches(appt.shopId);
+    await noteAvailabilityChanged(appt.shopId);
     res.json({ ok: true, startsAt: startsAt.toISOString() });
   },
 );

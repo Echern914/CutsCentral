@@ -134,6 +134,54 @@ export async function holdRowLock(table: string, id: string): Promise<HeldBarrie
   };
 }
 
+/**
+ * Hold an ACCESS EXCLUSIVE lock on a whole table, so that the next plain
+ * SELECT against it - from any other connection - blocks until release.
+ *
+ * This is how a READ-side calculation is paused deterministically at a chosen
+ * point: hold the lock on a table the calculation reads LATE (the slot engine
+ * reads "ExternalBlock" after it has already read the appointments), start the
+ * request, watch it fail to settle, commit the write it must not have seen,
+ * and only then let go. No sleep is load-bearing; the lock is.
+ *
+ * `table` is interpolated into SQL, so pass a literal - never user input.
+ */
+export async function holdTableLock(table: string): Promise<HeldBarrier> {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(table)) {
+    throw new Error(`holdTableLock: unsafe table name ${table}`);
+  }
+  let release!: () => void;
+  let acquired!: () => void;
+  let failed!: (err: unknown) => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const ready = new Promise<void>((r, j) => {
+    acquired = r;
+    failed = j;
+  });
+
+  const held = prisma
+    .$transaction(
+      async (tx) => {
+        await tx.$executeRawUnsafe(`LOCK TABLE "${table}" IN ACCESS EXCLUSIVE MODE`);
+        acquired();
+        await gate;
+      },
+      { timeout: BARRIER_TIMEOUT_MS, maxWait: BARRIER_TIMEOUT_MS },
+    )
+    .catch((err: unknown) => {
+      failed(err);
+      throw err;
+    });
+
+  await ready;
+  return {
+    async release() {
+      release();
+      await held;
+    },
+  };
+}
+
 export interface RaceOutcome<T> {
   results: PromiseSettledResult<T>[];
   /**
