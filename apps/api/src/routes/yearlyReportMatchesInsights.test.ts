@@ -182,6 +182,21 @@ beforeAll(async () => {
       price: 20,
     },
   });
+  // And a synced visit whose free-text name IS the native menu service. It
+  // must fold into the "Fade" row on both surfaces, not print a second "Fade".
+  await prisma.visit.create({
+    data: {
+      shopId,
+      clientId: a,
+      acuityAppointmentId: `match-${++seq}`,
+      status: "COMPLETED",
+      scheduledAt: new Date(Date.UTC(YEAR, 11, 15, 16, 0, 0)),
+      endAt: new Date(Date.UTC(YEAR, 11, 15, 16, 30, 0)),
+      completedAt: new Date(Date.UTC(YEAR, 11, 15, 16, 0, 0)),
+      serviceName: "fade ",
+      price: 45,
+    },
+  });
 });
 
 afterAll(async () => {
@@ -252,12 +267,13 @@ describe("the report and Insights cannot disagree", () => {
     expect(staffReport.status).toBe(200);
 
     // Every native booking is on this one chair; the only difference between
-    // the two reports is the synced $20 visit, which carries no barber.
+    // the two reports is the two synced visits ($20 + $45), which carry no
+    // barber.
     expect(
       shopReport.body.report.totals.revenueCents - staffReport.body.report.totals.revenueCents,
-    ).toBe(2_000);
+    ).toBe(6_500);
     expect(shopReport.body.report.totals.appointments).toBe(
-      staffReport.body.report.totals.appointments + 1,
+      staffReport.body.report.totals.appointments + 2,
     );
     expect(staffReport.body.report.syncedExcluded).toBe(true);
   });
@@ -274,6 +290,30 @@ describe("the report and Insights cannot disagree", () => {
     expect(months.reduce((s, m) => s + m.appointments, 0)).toBe(
       r.totals.appointments + r.totals.noShows,
     );
+  });
+
+  it("lists the same services with the same counts as Insights, each once", async () => {
+    const insights = await request(app)
+      .get(`/api/insights?period=custom&from=${YEAR}-01-01&to=${YEAR}-12-31`)
+      .set("Cookie", cookie);
+    const report = await request(app)
+      .get(`/api/yearly-report?year=${YEAR}&subject=shop`)
+      .set("Cookie", cookie);
+    const mine = report.body.report.services as { name: string; count: number; revenueCents: number }[];
+    const theirs = (insights.body.services as { name: string; count: number; revenue: number }[]).filter(
+      (s) => s.count > 0,
+    );
+    // No service printed twice - the synced "fade " visit folded into "Fade".
+    const names = mine.map((s) => s.name.trim().toLowerCase());
+    expect(new Set(names).size).toBe(names.length);
+    expect(names.filter((n) => n === "fade")).toHaveLength(1);
+    // Same rows, same counts, same money (to the dollar Insights rounds to).
+    expect(names.sort()).toEqual(theirs.map((s) => s.name.trim().toLowerCase()).sort());
+    for (const s of mine) {
+      const match = theirs.find((t) => t.name.trim().toLowerCase() === s.name.trim().toLowerCase())!;
+      expect(match.count, s.name).toBe(s.count);
+      expect(Math.round(s.revenueCents / 100), s.name).toBe(match.revenue);
+    }
   });
 
   it("adds the services back up to the year as well", async () => {

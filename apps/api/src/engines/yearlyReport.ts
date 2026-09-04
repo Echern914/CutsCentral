@@ -487,12 +487,44 @@ export async function buildYearlyReport(
     },
 
     months,
-    services: [...byService.values()]
+    services: foldSyncedIntoMenu(byService)
       .filter((s) => s.count > 0)
       .sort((a, b) => b.count - a.count || b.revenueCents - a.revenueCents)
       .slice(0, 6),
     unavailable: UNAVAILABLE_METRICS,
   };
+}
+
+/**
+ * One row per service, whichever system booked it.
+ *
+ * Native bookings group by service ID; a synced Acuity/Square visit carries
+ * only a free-text name, so it groups by `name:`. Left like that, a shop with
+ * native "Haircut" bookings AND a year of synced "Haircut" visits printed the
+ * service TWICE - "Haircut 286" and "Haircut 20" on the same page, which a
+ * reader can only take as a mistake. Insights folds the name-keyed tally into
+ * the id-keyed row (routes/insights.ts); this is the same fold, keyed on the
+ * trimmed, lowercased name the id row already carries, so the two surfaces
+ * list the same services with the same counts.
+ */
+function foldSyncedIntoMenu(byService: Map<string, YearlyServiceRow>): YearlyServiceRow[] {
+  const idRowsByName = new Map<string, YearlyServiceRow>();
+  for (const [key, row] of byService) {
+    if (key.startsWith("id:")) idRowsByName.set(row.name.trim().toLowerCase(), row);
+  }
+  const out: YearlyServiceRow[] = [];
+  for (const [key, row] of byService) {
+    if (key.startsWith("name:")) {
+      const target = idRowsByName.get(row.name.trim().toLowerCase());
+      if (target) {
+        target.count += row.count;
+        target.revenueCents += row.revenueCents;
+        continue;
+      }
+    }
+    out.push(row);
+  }
+  return out;
 }
 
 /**
