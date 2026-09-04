@@ -303,6 +303,13 @@ model Shop {
   stripeCustomerId     String?   @unique
   stripeSubscriptionId String?
   subscriptionStatus   String    @default("none") // mirrors Stripe subscription.status
+  // Ordering guard for the subscription webhook: `event.created` (unix seconds)
+  // of the last base-subscription / checkout event applied to this row. Stripe
+  // redelivers for days and out of order; an OLDER event must never overwrite
+  // a newer status - a replayed "active" landing after "canceled" is free
+  // access. The receptionist add-on keeps its own clock (separate subscription).
+  subscriptionEventCreated  Int?
+  receptionistEventCreated  Int?
   trialEndsAt          DateTime?
   // Comped full access (friends / testers / partners). When true, the shop has
   // Premium regardless of Stripe - independent of trial/subscription, survives
@@ -690,6 +697,15 @@ model Referral {
   // paying and needed money off their next invoice instead.
   rewardKind        String?
   rewardAmountCents Int?
+  // The invoice whose payment qualified this referral, and the Stripe balance
+  // transaction the credit landed as (null for a trial extension). Both exist
+  // so a refund / dispute / credit note against THAT invoice can be matched to
+  // this reward and flagged for a person - and so a paid credit reconciles
+  // against Stripe by id rather than by faith. Nothing here moves money.
+  qualifyingInvoiceId        String?
+  stripeBalanceTransactionId String?   @unique
+  reviewFlaggedAt            DateTime?
+  reviewReason               String? // invoice_refunded | payment_disputed | credit_note
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2616,6 +2632,12 @@ model Payment {
   capturedAt             DateTime?
   // Webhook replay guard: last processed Stripe event id for this row.
   lastWebhookEventId     String?
+  // A Stripe call whose outcome is UNKNOWN (transport error after the request
+  // may already have been accepted). Set instead of guessing "failed"; cleared
+  // by the reconciler once Stripe's own state has been read. The reconciler
+  // only ever reads and repairs local state - it never moves money.
+  ambiguousAt            DateTime?
+  reconciledAt           DateTime?
   createdAt              DateTime     @default(now())
   updatedAt              DateTime     @updatedAt
 
@@ -3872,4 +3894,28 @@ model AffiliateCreditOperation {
 
   @@index([status, nextAttemptAt])
   @@index([affiliateAccountId, status])
+}
+
+/// Every Stripe webhook delivery this API accepted, by Stripe event id - THE
+/// replay guard for both webhook endpoints. A delivery whose event id is
+/// already `processed` is acknowledged without being applied again; one that
+/// ended `failed` (a handler threw) is re-applied when Stripe redelivers it.
+/// Platform-global (no shopId): REVOKEd from the tenant role, FORCE RLS.
+model StripeEventReceipt {
+  id          String    @id @default(cuid())
+  eventId     String    @unique
+  type        String
+  livemode    Boolean
+  /// The connected account the event was delivered for; null on the platform endpoint.
+  account     String?
+  /// received | processed | failed (CHECK-pinned in SQL)
+  status      String    @default("received")
+  attempts    Int       @default(1)
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+  /// Fixed classification only - never provider prose.
+  lastError   String?
+
+  @@index([status, receivedAt])
+  @@index([type, receivedAt])
 }

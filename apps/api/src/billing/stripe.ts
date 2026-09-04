@@ -1,12 +1,13 @@
 import Stripe from "stripe";
 import { apiEnv } from "@chairback/config";
-import { prisma } from "@chairback/db";
+import { Prisma, prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import { ensureShopNumber } from "../messaging/numberProvision.js";
+import { stripeErrorFacts } from "./stripeErrors.js";
 // Static here, but referral.ts imports THIS module dynamically (inside the
 // functions that need a Stripe client) so the cycle never exists at module
 // evaluation time.
-import { grantReferralReward } from "../services/referral.js";
+import { flagReferralForReview, grantReferralReward } from "../services/referral.js";
 
 /**
  * Stripe billing. Two base tiers ("pro" = Premium, "pro_ai" = Premium AI) on
@@ -121,11 +122,16 @@ async function ensureCustomer(shop: CheckoutShop): Promise<string> {
     where: { id: shop.ownerId },
     select: { email: true },
   });
-  const customer = await stripe().customers.create({
-    email: owner?.email,
-    name: shop.name,
-    metadata: { shopId: shop.id },
-  });
+  // Keyed on the shop: a lost reply retried makes the same Customer, not a
+  // second one that the next checkout would then bill separately.
+  const customer = await stripe().customers.create(
+    {
+      email: owner?.email,
+      name: shop.name,
+      metadata: { shopId: shop.id },
+    },
+    { idempotencyKey: `customer:${shop.id}` },
+  );
   await prisma.shop.update({
     where: { id: shop.id },
     data: { stripeCustomerId: customer.id },
@@ -165,21 +171,32 @@ export async function createCheckoutUrl(
 
   const price =
     tier === "pro_ai" ? env.STRIPE_PREMIUM_AI_PRICE_ID! : env.STRIPE_PRICE_ID!;
-  const session = await stripe().checkout.sessions.create({
-    mode: "subscription",
-    customer,
-    line_items: [{ price, quantity: 1 }],
-    client_reference_id: shop.id,
-    metadata: { tier },
-    subscription_data: {
-      metadata: { shopId: shop.id, tier },
-      ...(useTrial ? { trial_end: Math.floor(trialEndMs / 1000) } : {}),
+  const session = await stripe().checkout.sessions.create(
+    {
+      mode: "subscription",
+      customer,
+      line_items: [{ price, quantity: 1 }],
+      client_reference_id: shop.id,
+      metadata: { tier },
+      subscription_data: {
+        metadata: { shopId: shop.id, tier },
+        ...(useTrial ? { trial_end: Math.floor(trialEndMs / 1000) } : {}),
+      },
+      allow_promotion_codes: true,
+      success_url: `${env.APP_BASE_URL}/dashboard/billing?checkout=success`,
+      cancel_url: `${env.APP_BASE_URL}/dashboard/billing?checkout=canceled`,
     },
-    allow_promotion_codes: true,
-    success_url: `${env.APP_BASE_URL}/dashboard/billing?checkout=success`,
-    cancel_url: `${env.APP_BASE_URL}/dashboard/billing?checkout=canceled`,
-  });
+    // A double-click or a retried request inside the window gets the SAME
+    // session back rather than two sessions a customer could complete twice.
+    // Bucketed so a later, deliberate checkout (after a cancel) is fresh.
+    { idempotencyKey: checkoutKey(shop.id, `base:${tier}`) },
+  );
   return session.url;
+}
+
+/** Ten-minute buckets: retries collapse, deliberate later checkouts do not. */
+function checkoutKey(shopId: string, what: string): string {
+  return `checkout:${shopId}:${what}:${Math.floor(Date.now() / 600_000)}`;
 }
 
 /**
@@ -210,11 +227,18 @@ export async function upgradeSubscriptionToPremiumAi(shop: {
     const sub = await stripe().subscriptions.retrieve(shop.stripeSubscriptionId);
     const item = sub.items.data[0];
     if (!item) return false;
-    await stripe().subscriptions.update(sub.id, {
-      items: [{ id: item.id, price: env.STRIPE_PREMIUM_AI_PRICE_ID }],
-      metadata: { ...sub.metadata, tier: "pro_ai" },
-      proration_behavior: "always_invoice",
-    });
+    await stripe().subscriptions.update(
+      sub.id,
+      {
+        items: [{ id: item.id, price: env.STRIPE_PREMIUM_AI_PRICE_ID }],
+        metadata: { ...sub.metadata, tier: "pro_ai" },
+        proration_behavior: "always_invoice",
+      },
+      // `always_invoice` bills the prorated difference the moment this lands;
+      // a retried request must not bill it twice. One key per (subscription,
+      // target price): the same upgrade replays, a different one does not.
+      { idempotencyKey: `upgrade:${sub.id}:${env.STRIPE_PREMIUM_AI_PRICE_ID}` },
+    );
     await prisma.shop.update({
       where: { id: shop.id },
       data: { plan: "pro_ai" },
@@ -225,7 +249,7 @@ export async function upgradeSubscriptionToPremiumAi(shop: {
     return true;
   } catch (err) {
     logger.error(
-      { err, shopId: shop.id, subscriptionId: shop.stripeSubscriptionId },
+      { shopId: shop.id, subscriptionId: shop.stripeSubscriptionId, ...stripeErrorFacts(err) },
       "premium-ai upgrade failed",
     );
     return false;
@@ -253,19 +277,22 @@ export async function createReceptionistCheckoutUrl(
 ): Promise<string | null> {
   const env = apiEnv();
   const customer = await ensureCustomer(shop);
-  const session = await stripe().checkout.sessions.create({
-    mode: "subscription",
-    customer,
-    line_items: [{ price: env.STRIPE_RECEPTIONIST_PRICE_ID!, quantity: 1 }],
-    client_reference_id: shop.id,
-    metadata: { addon: "receptionist" },
-    subscription_data: {
-      metadata: { shopId: shop.id, addon: "receptionist" },
+  const session = await stripe().checkout.sessions.create(
+    {
+      mode: "subscription",
+      customer,
+      line_items: [{ price: env.STRIPE_RECEPTIONIST_PRICE_ID!, quantity: 1 }],
+      client_reference_id: shop.id,
+      metadata: { addon: "receptionist" },
+      subscription_data: {
+        metadata: { shopId: shop.id, addon: "receptionist" },
+      },
+      allow_promotion_codes: true,
+      success_url: `${env.APP_BASE_URL}/dashboard/billing?receptionist=success`,
+      cancel_url: `${env.APP_BASE_URL}/dashboard/billing?receptionist=canceled`,
     },
-    allow_promotion_codes: true,
-    success_url: `${env.APP_BASE_URL}/dashboard/billing?receptionist=success`,
-    cancel_url: `${env.APP_BASE_URL}/dashboard/billing?receptionist=canceled`,
-  });
+    { idempotencyKey: checkoutKey(shop.id, "receptionist") },
+  );
   return session.url;
 }
 
@@ -307,12 +334,48 @@ export function verifyStripeWebhook(payload: Buffer, signature: string): Stripe.
 }
 
 /**
+ * `event.created` as an integer, or null when the event does not carry one
+ * (hand-built test events). Only an event that says when it happened can be
+ * ordered against another.
+ */
+function eventCreated(event: { created?: unknown }): number | null {
+  return typeof event.created === "number" && Number.isFinite(event.created)
+    ? Math.floor(event.created)
+    : null;
+}
+
+/**
+ * THE ORDERING GUARD. Stripe redelivers events for days and delivers them out
+ * of order, and a subscription's status is a value, not a counter - the row
+ * cannot tell an old "active" from a new one. `event.created` can: a write is
+ * applied only when the event is not older than the last one applied to that
+ * subscription's column, and it records its own clock as it lands. An event
+ * with no clock (see eventCreated) is applied unguarded, as before.
+ *
+ * Same-second events apply in arrival order - `lte`, not `lt` - because
+ * subscription.created and .updated routinely share a second and refusing
+ * the second would strand a real transition.
+ */
+function baseNotOlder(created: number | null): Prisma.ShopWhereInput {
+  if (created === null) return {};
+  return { OR: [{ subscriptionEventCreated: null }, { subscriptionEventCreated: { lte: created } }] };
+}
+function receptionistNotOlder(created: number | null): Prisma.ShopWhereInput {
+  if (created === null) return {};
+  return { OR: [{ receptionistEventCreated: null }, { receptionistEventCreated: { lte: created } }] };
+}
+
+/**
  * Fold a Stripe event into Shop billing state. Idempotent (plain column
  * writes), tolerant of unknown shops/events. checkout.session.completed and
  * customer.subscription.* can arrive in either order; both converge on the
- * subscription's real status.
+ * subscription's real status - and neither can move it BACKWARD in time (see
+ * baseNotOlder). The webhook route has already refused a duplicate delivery
+ * of the same event id before this runs; the guard here is for DIFFERENT
+ * events about the same subscription arriving in the wrong order.
  */
 export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
+  const created = eventCreated(event);
   switch (event.type) {
     case "checkout.session.completed": {
       const session = event.data.object as Stripe.Checkout.Session;
@@ -327,10 +390,15 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
             ? session.customer
             : session.customer?.id ?? null;
         await prisma.shop.updateMany({
-          where: { id: shopId, NOT: { receptionistSubscriptionStatus: "canceled" } },
+          where: {
+            id: shopId,
+            NOT: { receptionistSubscriptionStatus: "canceled" },
+            ...receptionistNotOlder(created),
+          },
           data: {
             stripeCustomerId: customerId ?? undefined,
             receptionistSubscriptionStatus: "active",
+            ...(created !== null ? { receptionistEventCreated: created } : {}),
           },
         });
         return;
@@ -366,6 +434,7 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
             stripeSubscriptionId: subscriptionId,
             subscriptionStatus: "canceled",
           },
+          ...baseNotOlder(created),
         },
         data: {
           stripeCustomerId: customerId ?? undefined,
@@ -374,6 +443,7 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
           // Sessions created before tiers existed carry no metadata.tier ->
           // "pro" (the legacy default). Only an explicit pro_ai tag upgrades.
           plan: session.metadata?.tier === "pro_ai" ? "pro_ai" : "pro",
+          ...(created !== null ? { subscriptionEventCreated: created } : {}),
         },
       });
       if (count === 0) {
@@ -400,8 +470,14 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
       // AI-receptionist ADD-ON subscription lifecycle: its own column only.
       if (sub.metadata?.addon === "receptionist") {
         await prisma.shop.updateMany({
-          where: shopId ? { id: shopId } : { stripeCustomerId: customerId },
-          data: { receptionistSubscriptionStatus: status },
+          where: {
+            ...(shopId ? { id: shopId } : { stripeCustomerId: customerId }),
+            ...receptionistNotOlder(created),
+          },
+          data: {
+            receptionistSubscriptionStatus: status,
+            ...(created !== null ? { receptionistEventCreated: created } : {}),
+          },
         });
         return;
       }
@@ -410,11 +486,15 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
       const { count } = await prisma.shop.updateMany({
         // metadata.shopId is authoritative; customer id covers subs created
         // outside checkout (e.g. from the Stripe dashboard).
-        where: shopId ? { id: shopId } : { stripeCustomerId: customerId },
+        where: {
+          ...(shopId ? { id: shopId } : { stripeCustomerId: customerId }),
+          ...baseNotOlder(created),
+        },
         data: {
           subscriptionStatus: status,
           stripeSubscriptionId: status === "canceled" ? null : sub.id,
           plan: ACTIVE_STATUSES.has(status) ? tier : "free",
+          ...(created !== null ? { subscriptionEventCreated: created } : {}),
         },
       });
       // An ACTIVE Premium AI subscription includes the shop's own number
@@ -432,8 +512,8 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
       }
       if (count === 0) {
         logger.warn(
-          { shopId, customerId, type: event.type },
-          "stripe event matched no shop",
+          { shopId, customerId, type: event.type, created },
+          "stripe event matched no shop, or was older than the state already applied",
         );
       }
       return;
@@ -472,14 +552,33 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
       // money, real money cleared, and $40 is well above the farming threshold
       // this rule exists to defend. Nothing here needs to distinguish them.
       //
-      // 🔴 What is NOT handled anywhere: a REFUND of this invoice. The reward
-      // is not reversed, because no refund event is subscribed on this endpoint
-      // (this switch handles four event types and charge.refunded is not one -
-      // the charge.refunded in billing/payments.ts is the CONNECT path, and
-      // matches on a Payment row a subscription invoice does not have). A
-      // refunded first invoice therefore leaves the referrer paid. Deliberate
-      // for now; revisit with the refund-handling work.
-      await grantReferralReward(paidShop.id);
+      // A refund, dispute or credit note against THIS invoice later is matched
+      // back to the reward through the invoice id recorded here, and flags the
+      // referral for a person (the three cases below). Nothing claws money
+      // back on its own: a month already used cannot be un-used, and a credit
+      // already consumed by an invoice is a decision, not a reflex.
+      await grantReferralReward(paidShop.id, { qualifyingInvoiceId: invoice.id ?? null });
+      return;
+    }
+    case "charge.refunded":
+    case "charge.dispute.created":
+    case "credit_note.created": {
+      // The subscription side of these three. (Connect payments handle
+      // charge.refunded separately in billing/payments.ts, by Payment row.)
+      // Each carries the invoice it is against; if that invoice is the one
+      // that paid a referrer, the referral is flagged - never reversed here.
+      const obj = event.data.object as { invoice?: string | { id?: string } | null };
+      const invoiceId =
+        typeof obj.invoice === "string" ? obj.invoice : (obj.invoice?.id ?? null);
+      if (!invoiceId) return;
+      await flagReferralForReview(
+        invoiceId,
+        event.type === "charge.dispute.created"
+          ? "payment_disputed"
+          : event.type === "credit_note.created"
+            ? "credit_note"
+            : "invoice_refunded",
+      );
       return;
     }
     default:

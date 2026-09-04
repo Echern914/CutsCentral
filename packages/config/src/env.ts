@@ -278,6 +278,12 @@ const apiSchema = z.object({
   // them.
   AFFILIATE_QUALIFICATION_ENABLED: boolish.default("false"),
   AFFILIATE_CREDIT_EXECUTION_ENABLED: boolish.default("false"),
+  // The payments reconciler (billing/reconcile.ts): compares Payment rows
+  // whose Stripe outcome is unknown or stale against Stripe's own state and
+  // repairs LOCAL rows only - it never creates a charge, refund or credit.
+  // OFF (the default) means DRY RUN: it reads Stripe, reports counts, writes
+  // nothing. Same contract as the affiliate execution flag.
+  PAYMENTS_RECONCILE_ENABLED: boolish.default("false"),
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace"])
     .default("info"),

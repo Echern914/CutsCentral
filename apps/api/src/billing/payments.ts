@@ -2,6 +2,7 @@ import type Stripe from "stripe";
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import { stripeClient } from "./stripe.js";
+import { errorClassification, stripeErrorFacts } from "./stripeErrors.js";
 
 /**
  * Customer PaymentIntents for native bookings, via the shop's connected account.
@@ -23,6 +24,44 @@ export function toCents(price: number | null | undefined): number | null {
   if (price === null || price === undefined) return null;
   const cents = Math.round(Number(price) * 100);
   return Number.isFinite(cents) && cents > 0 ? cents : null;
+}
+
+/** The only currency ChairBack charges in. Anything else is refused at the boundary. */
+export const SUPPORTED_CURRENCIES: ReadonlySet<string> = new Set(["usd"]);
+/** $100,000 in cents - far past any real ticket; an overflow / fat-finger ceiling. */
+export const MAX_CHARGE_CENTS = 10_000_000;
+
+/**
+ * A Payment row that exists BEFORE Stripe has been asked for anything carries
+ * this prefix + its own id where the PaymentIntent id will go. That row is the
+ * reservation: the durable proof an attempt was made, written ahead of the
+ * network call so a crash or a lost reply leaves a trace the reconciler can
+ * act on. Every charge path here follows the same order - row, then Stripe,
+ * then the row again - and re-issues the SAME request under the SAME
+ * idempotency key on a retry, so Stripe collapses it to the one intent.
+ */
+export const PENDING_INTENT_PREFIX = "pending:";
+export function pendingIntentId(paymentId: string): string {
+  return `${PENDING_INTENT_PREFIX}${paymentId}`;
+}
+export function isPendingIntentId(id: string): boolean {
+  return id.startsWith(PENDING_INTENT_PREFIX);
+}
+
+/**
+ * Integer cents inside (0, MAX] in a supported currency - or the reason it is
+ * not. Every amount that reaches Stripe from this module passes through here;
+ * a float, a negative, a zero, a nonsense currency or an overflow is refused
+ * before a row exists, never "rounded into shape".
+ */
+export function validateCharge(amountCents: number, currency: string): string | null {
+  if (typeof amountCents !== "number" || !Number.isInteger(amountCents)) return "amount_not_integer";
+  if (amountCents <= 0) return "amount_not_positive";
+  if (amountCents > MAX_CHARGE_CENTS) return "amount_too_large";
+  if (typeof currency !== "string" || !SUPPORTED_CURRENCIES.has(currency.toLowerCase())) {
+    return "unsupported_currency";
+  }
+  return null;
 }
 
 /**
@@ -60,73 +99,148 @@ interface CreateIntentInput {
 /**
  * Create a Payment row + an AHEAD PaymentIntent (automatic capture, card +
  * Apple Pay + Link). Returns the client secret for the Payment Element. Called
- * AFTER the appointment is durably committed. Idempotent per appointment via the
- * unique Payment.appointmentId + a per-attempt idempotency key. Returns null
- * (logged, never throws) on any Stripe error so a booking is never lost to a
- * payment hiccup — the customer just falls back to pay-in-person for that visit.
+ * AFTER the appointment is durably committed. Returns null (logged, never
+ * throws) on any Stripe error so a booking is never lost to a payment hiccup —
+ * the customer just falls back to pay-in-person for that visit.
+ *
+ * 🔴 ROW FIRST, STRIPE SECOND. The Payment row is written with a
+ * `pending:` intent id BEFORE the network call. That order is what makes the
+ * three bad endings recoverable instead of silent:
+ *   - crash after the row, before the request: the row says "pending", the
+ *     reconciler finds nothing at Stripe and marks it failed; no money moved.
+ *   - timeout after Stripe accepted: the row says "pending", a retry re-issues
+ *     the identical request under the identical key and Stripe hands back the
+ *     intent it already made; the reconciler can also find it by metadata.
+ *   - a second request for the same appointment (double-submit, two tabs):
+ *     the unique appointmentId makes the second caller REUSE the first row -
+ *     and therefore the first key - so two callers cannot mint two intents.
+ * The amounts on the retry come from the ROW, not the caller, so the request
+ * under a reused key can never differ from the first one.
  */
 export async function createAheadPaymentIntent(
   input: CreateIntentInput,
 ): Promise<{ clientSecret: string; paymentId: string } | null> {
-  const currency = input.currency ?? "usd";
+  const currency = (input.currency ?? "usd").toLowerCase();
+  const invalid = validateCharge(input.amountCents, currency);
+  if (invalid) {
+    logger.error(
+      { appointmentId: input.appointmentId, reason: invalid },
+      "createAheadPaymentIntent refused: invalid amount or currency",
+    );
+    return null;
+  }
   const feeAmount = Math.floor((input.amountCents * input.platformFeeBps) / 10000);
   try {
-    // One Payment row per appointment (unique). If a prior attempt already made
-    // one (retry/double-submit), reuse its PI rather than creating a second.
+    // One Payment row per appointment (unique). A prior attempt that got as far
+    // as a real intent is simply handed back; one that never got an answer is
+    // the retry case below.
     const existing = await prisma.payment.findUnique({
       where: { appointmentId: input.appointmentId },
-      select: { id: true, stripePaymentIntentId: true, status: true },
+      select: {
+        id: true,
+        stripePaymentIntentId: true,
+        status: true,
+        mode: true,
+        amount: true,
+        currency: true,
+        applicationFeeAmount: true,
+        stripeConnectAccountId: true,
+      },
     });
-    if (existing) {
+    if (existing && !isPendingIntentId(existing.stripePaymentIntentId)) {
       const pi = await stripeClient().paymentIntents.retrieve(existing.stripePaymentIntentId);
       return pi.client_secret
         ? { clientSecret: pi.client_secret, paymentId: existing.id }
         : null;
     }
+    if (existing && existing.mode !== "ahead") {
+      // A card-on-file fee is mid-flight for this appointment. Not ours to
+      // touch, and certainly not ours to replace with a second charge.
+      logger.warn(
+        { appointmentId: input.appointmentId, mode: existing.mode },
+        "createAheadPaymentIntent refused: another payment is pending for this appointment",
+      );
+      return null;
+    }
 
-    // Pre-create the row id so the PI metadata can point back at it before the
-    // PI exists (the webhook keys on metadata.paymentId / appointmentId).
-    const paymentId = cryptoRandomId();
-    const intent = await stripeClient().paymentIntents.create(
-      {
-        amount: input.amountCents,
-        currency,
-        // Destination charge: settles to the barber; platform is MoR-adjacent only.
-        on_behalf_of: input.connectAccountId,
-        transfer_data: { destination: input.connectAccountId },
-        ...(feeAmount > 0 ? { application_fee_amount: feeAmount } : {}),
-        capture_method: "automatic",
-        automatic_payment_methods: { enabled: true }, // card + Apple Pay + Link
-        description: input.description,
-        metadata: {
+    // THE RESERVATION. Pre-mint the row id so the intent's metadata can point
+    // back at it, and write the row before Stripe hears about any of this.
+    const paymentId = existing?.id ?? cryptoRandomId();
+    if (!existing) {
+      await prisma.payment.create({
+        data: {
+          id: paymentId,
           shopId: input.shopId,
           appointmentId: input.appointmentId,
-          paymentId,
+          stripePaymentIntentId: pendingIntentId(paymentId),
+          stripeConnectAccountId: input.connectAccountId,
+          mode: "ahead",
+          amount: input.amountCents,
+          currency,
+          applicationFeeAmount: feeAmount,
+          status: "requires_payment_method",
         },
-      },
-      { idempotencyKey: `pi-create:${paymentId}` },
-    );
+      });
+    }
+    // On a retry the request is rebuilt from the row, never from the caller.
+    const amount = existing?.amount ?? input.amountCents;
+    const fee = existing?.applicationFeeAmount ?? feeAmount;
+    const destination = existing?.stripeConnectAccountId ?? input.connectAccountId;
+    const cur = existing?.currency ?? currency;
 
-    await prisma.payment.create({
-      data: {
-        id: paymentId,
-        shopId: input.shopId,
-        appointmentId: input.appointmentId,
-        stripePaymentIntentId: intent.id,
-        stripeConnectAccountId: input.connectAccountId,
-        mode: "ahead",
-        amount: input.amountCents,
-        currency,
-        applicationFeeAmount: feeAmount,
-        status: intent.status,
-      },
-    });
-
-    return intent.client_secret
-      ? { clientSecret: intent.client_secret, paymentId }
-      : null;
+    try {
+      const intent = await stripeClient().paymentIntents.create(
+        {
+          amount,
+          currency: cur,
+          // Destination charge: settles to the barber; platform is MoR-adjacent only.
+          on_behalf_of: destination,
+          transfer_data: { destination },
+          ...(fee > 0 ? { application_fee_amount: fee } : {}),
+          capture_method: "automatic",
+          automatic_payment_methods: { enabled: true }, // card + Apple Pay + Link
+          description: input.description,
+          metadata: {
+            shopId: input.shopId,
+            appointmentId: input.appointmentId,
+            paymentId,
+          },
+        },
+        { idempotencyKey: `pi-create:${paymentId}` },
+      );
+      // Only the row that still says "pending" is adopted - a webhook or the
+      // reconciler may have got there first, and their answer stands.
+      await prisma.payment.updateMany({
+        where: { id: paymentId, stripePaymentIntentId: pendingIntentId(paymentId) },
+        data: { stripePaymentIntentId: intent.id, status: intent.status, ambiguousAt: null },
+      });
+      return intent.client_secret
+        ? { clientSecret: intent.client_secret, paymentId }
+        : null;
+    } catch (err) {
+      const facts = stripeErrorFacts(err);
+      if (!facts.definitive) {
+        // The request may have been accepted. Mark it, do not guess, and let
+        // the reconciler read Stripe. The row keeps its pending id, so the
+        // next attempt for this appointment reuses the same key.
+        await prisma.payment.updateMany({
+          where: { id: paymentId },
+          data: { ambiguousAt: new Date() },
+        });
+      }
+      logger.error(
+        { appointmentId: input.appointmentId, paymentId, ...facts },
+        facts.definitive
+          ? "createAheadPaymentIntent refused by Stripe"
+          : "createAheadPaymentIntent outcome unknown - the reconciler owns it",
+      );
+      return null;
+    }
   } catch (err) {
-    logger.error({ err, appointmentId: input.appointmentId }, "createAheadPaymentIntent failed");
+    logger.error(
+      { appointmentId: input.appointmentId, errName: errorClassification(err) },
+      "createAheadPaymentIntent failed",
+    );
     return null;
   }
 }
@@ -182,7 +296,7 @@ export async function refundForCancellation(params: {
         // refuses the cancel; the charge.succeeded webhook will mark it succeeded
         // and a later manual refund can recover it. Log, don't throw.
         logger.warn(
-          { err, paymentId: payment.id },
+          { paymentId: payment.id, ...stripeErrorFacts(err) },
           "in-flight PI cancel failed (likely already captured); needs manual review",
         );
       }
@@ -216,16 +330,42 @@ export async function refundForCancellation(params: {
       { idempotencyKey: `refund:${payment.id}:${payment.refundedAmount}` },
     );
     const newRefunded = payment.refundedAmount + (refund.amount ?? refundable);
-    await prisma.payment.update({
-      where: { id: payment.id },
+    // Compare-and-set on the figure this refund was computed from. Two
+    // concurrent partial refunds both read the same refundedAmount and both
+    // build the same idempotency key, so Stripe hands them the SAME refund;
+    // only the first local write may land, and the loser's stale total must
+    // not overwrite it. charge.refunded (monotonic) converges the rest.
+    const { count } = await prisma.payment.updateMany({
+      where: { id: payment.id, refundedAmount: payment.refundedAmount },
       data: {
         refundedAmount: newRefunded,
         status: newRefunded >= collected ? "refunded" : "partially_refunded",
+        ambiguousAt: null,
       },
     });
+    if (count === 0) {
+      logger.info(
+        { paymentId: payment.id },
+        "refund recorded at Stripe; local total already moved by a concurrent writer or the webhook",
+      );
+    }
     return refund.amount ?? refundable;
   } catch (err) {
-    logger.error({ err, paymentId: params.paymentId }, "refundForCancellation failed");
+    const facts = stripeErrorFacts(err);
+    if (!facts.definitive) {
+      // The refund may exist at Stripe. Mark, never guess: a retry reuses
+      // the same key (refundedAmount unchanged), so Stripe returns the one
+      // refund rather than making another; charge.refunded also lands it.
+      await prisma.payment
+        .updateMany({ where: { id: params.paymentId }, data: { ambiguousAt: new Date() } })
+        .catch(() => {});
+    }
+    logger.error(
+      { paymentId: params.paymentId, ...facts },
+      facts.definitive
+        ? "refundForCancellation refused by Stripe"
+        : "refundForCancellation outcome unknown - the reconciler owns it",
+    );
     return 0;
   }
 }
@@ -242,24 +382,7 @@ export async function applyPaymentEvent(event: Stripe.Event): Promise<boolean> {
     case "payment_intent.canceled":
     case "payment_intent.processing": {
       const pi = event.data.object as Stripe.PaymentIntent;
-      const chargeId =
-        typeof pi.latest_charge === "string" ? pi.latest_charge : pi.latest_charge?.id ?? null;
-      // Stripe redelivers webhooks for ~3 days and out of order. A stale
-      // processing/canceled/failed event arriving AFTER succeeded must NOT flip
-      // the row off "succeeded" - that would silently block its refund
-      // (refundForCancellation gates on succeeded). So only the succeeded event
-      // may write a terminal/collected row; the others no-op against one.
-      const noDowngrade = pi.status !== "succeeded";
-      await reconcile(
-        event.id,
-        { paymentId: pi.metadata?.paymentId, piId: pi.id },
-        {
-          status: pi.status,
-          ...(chargeId ? { stripeChargeId: chargeId } : {}),
-          ...(pi.status === "succeeded" ? { capturedAmount: pi.amount_received } : {}),
-        },
-        noDowngrade ? ["succeeded", "refunded", "partially_refunded"] : undefined,
-      );
+      await applyIntentSnapshot(pi, event.id);
       if (pi.status === "succeeded") await promoteHoldForPaidIntent(pi);
       return true;
     }
@@ -305,6 +428,43 @@ export async function applyPaymentEvent(event: Stripe.Event): Promise<boolean> {
 }
 
 /**
+ * Fold what Stripe says about an intent into its Payment row. Shared by the
+ * webhook (marker = the event id) and the reconciler (marker = intent id +
+ * status, so the same answer read twice is applied once).
+ *
+ * Stripe redelivers webhooks for ~3 days and out of order. A stale
+ * processing/canceled/failed snapshot arriving AFTER succeeded must NOT flip
+ * the row off "succeeded" - that would silently block its refund
+ * (refundForCancellation gates on succeeded). So only a succeeded snapshot may
+ * write a terminal/collected row; the others no-op against one.
+ *
+ * A row still carrying its `pending:` reservation id adopts the real intent
+ * id here - this is how a reply that never arrived is recovered from the
+ * webhook, or by the reconciler's search.
+ */
+export async function applyIntentSnapshot(
+  pi: Pick<Stripe.PaymentIntent, "id" | "status" | "amount_received" | "latest_charge" | "metadata">,
+  markerId: string,
+  opts: { reconciled?: boolean } = {},
+): Promise<void> {
+  const chargeId =
+    typeof pi.latest_charge === "string" ? pi.latest_charge : pi.latest_charge?.id ?? null;
+  const noDowngrade = pi.status !== "succeeded";
+  await reconcile(
+    markerId,
+    { paymentId: pi.metadata?.paymentId, piId: pi.id },
+    {
+      stripePaymentIntentId: pi.id,
+      status: pi.status,
+      ...(chargeId ? { stripeChargeId: chargeId } : {}),
+      ...(pi.status === "succeeded" ? { capturedAmount: pi.amount_received } : {}),
+      ...(opts.reconciled ? { ambiguousAt: null, reconciledAt: new Date() } : {}),
+    },
+    noDowngrade ? ["succeeded", "refunded", "partially_refunded"] : undefined,
+  );
+}
+
+/**
  * The money landed: turn the payment hold into a real booking.
  *
  * This is the moment a deposit/pay-ahead booking becomes real. Until it runs,
@@ -339,7 +499,7 @@ async function promoteHoldForPaidIntent(pi: Stripe.PaymentIntent): Promise<void>
     // Never throw into the webhook: Stripe would retry the whole event and
     // re-run the reconcile above. The row is already correct; the appointment
     // is recoverable by hand and loud in the log.
-    logger.error({ err, appointmentId }, "promoting a paid hold failed");
+    logger.error({ appointmentId, errName: errorClassification(err) }, "promoting a paid hold failed");
   }
 }
 

@@ -4,6 +4,7 @@ import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import { connectEnabled, stripeClient } from "./stripe.js";
 import { applyPaymentEvent } from "./payments.js";
+import { stripeErrorFacts } from "./stripeErrors.js";
 
 /**
  * Stripe Connect for per-barber CUSTOMER payments. Each shop gets ONE Express
@@ -97,7 +98,7 @@ export async function getConnectStatus(shop: {
     await mirrorAccountFlags(shop.id, status.chargesEnabled, status.payoutsEnabled);
     return status;
   } catch (err) {
-    logger.warn({ err, shopId: shop.id }, "connect status fetch failed");
+    logger.warn({ shopId: shop.id, ...stripeErrorFacts(err) }, "connect status fetch failed");
     return { connected: true, chargesEnabled: false, payoutsEnabled: false, detailsSubmitted: false };
   }
 }

@@ -33,6 +33,7 @@ import { sweepExpiredRateCounters } from "./middleware/pgRateStore.js";
 import { runDemoReset } from "./engines/demoReset.js";
 import { runEmailOutbox } from "./engines/emailOutbox.js";
 import { runAffiliateCreditExecution } from "./engines/affiliateCredit.js";
+import { reconcilePayments } from "./billing/reconcile.js";
 import { processRotationRun } from "./services/rewardsRotation.js";
 
 const env = apiEnv();
@@ -394,6 +395,20 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
       }
     },
     failMsg: "affiliate credit execution failed",
+  },
+  // Payments reconciler: reads Stripe's own state for every Payment row whose
+  // outcome is unknown (a lost reply) or stale, and repairs LOCAL rows only -
+  // it never creates a charge, refund or credit. DRY RUN while
+  // PAYMENTS_RECONCILE_ENABLED is off: it reports what it would repair.
+  {
+    cronExpr: "7,22,37,52 * * * *",
+    name: "payments-reconcile",
+    ttlMs: 5 * MINUTE,
+    run: async () => {
+      const r = await reconcilePayments();
+      if (r.scanned > 0) logger.info(r, "payments reconcile pass");
+    },
+    failMsg: "payments reconcile failed",
   },
   // Rate-limit store hygiene: delete counter rows whose window expired >1h ago
   // every 30 min. The store is correct without this (an expired row resets on

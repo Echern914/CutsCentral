@@ -109,6 +109,18 @@ export async function settleCardOnFile(params: {
       });
       return { action: "declined", cents, reason, code: charged.reason };
     }
+    if (charged.outcome === "ambiguous") {
+      // Stripe may or may not have taken the money. Nobody is told anything -
+      // not "charged" to the customer, not "declined, collect it at the next
+      // visit" to the barber - until the reconciler has read Stripe's own
+      // answer. Telling the barber "declined" here is how a fee gets collected
+      // twice.
+      logger.error(
+        { appointmentId: params.appointmentId, paymentId: charged.paymentId },
+        "card on file: charge outcome unknown - waiting for the reconciler before anyone is told",
+      );
+      return { action: "none" };
+    }
     // no_card / already / nothing_to_charge / error: nothing more to do here;
     // chargeCardOnFile logged the specifics.
     return { action: "none" };
