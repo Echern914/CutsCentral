@@ -23,6 +23,12 @@ import { registerAppointmentDetail } from "./booking.appointmentDetail.js";
 import { stripeCollectedCents } from "../engines/appointmentPayment.js";
 import { appointmentOwnedByPlatform } from "../engines/visitOrigin.js";
 import {
+  centsToDecimal,
+  decimalToCents,
+  dollarsToCentsExact,
+  recordPriceChange,
+} from "../services/appointmentPriceLedger.js";
+import {
   buildObserveReport,
   completeReschedule,
   dispatchAfterCommit,
@@ -5113,38 +5119,40 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
  * only now).
  *
  * `amount` is the ticket. `collected` is what actually changed hands at the
- * chair, accepted ONLY once the booking has been checked out: before that the
- * chair figure is checkout's to write (through its own paidAt claim), and
- * taking it here would be a second door onto the same money.
+ * CHAIR (cash, Zelle, the barber's own reader) - the one money figure ChairBack
+ * cannot verify, because ChairBack never touched it. It is accepted ONLY once
+ * the booking has been checked out: before that the chair figure is
+ * checkout's to write (through its own paidAt claim), and taking it here would
+ * be a second door onto the same money. It can never touch the Stripe record
+ * (`Payment`): what Stripe collected is Stripe's fact, read back from Stripe,
+ * and no request body reaches it. `paidMethod` - the revenue classification -
+ * is not editable here at all (the schema is strict).
  *
  * Refused for a booking money can no longer attach to (CANCELED, NO_SHOW), for
  * one owned by Acuity/Square (the price lives where the booking was made), and
  * for a ticket below what Stripe has already settled - a $60 online payment
  * against a $40 ticket is a refund, and refunds have their own path that
- * moves the money too; lying about the ticket would only hide it.
+ * moves the money too; lying about the ticket would only hide it. A ticket
+ * below the CHAIR figure is allowed: that is exactly the "they gave more"
+ * case, and the chair figure is what revenue counts.
  *
- * Money is written as a Decimal string, never through float arithmetic; the
- * input is capped at two decimals at the boundary for the same reason.
+ * Money is integer cents from the boundary in: the dollars in the body must
+ * be exactly representable (two decimals), finite, non-negative and under
+ * the ceiling, or the request is refused before anything is read. The write
+ * is ONE transaction: a compare-and-set on the ticket the request was
+ * computed from (two edits racing each other cannot both land - the loser is
+ * told the price moved), on the status (a cancel landing first wins), and on
+ * `paidAt` when `collected` is present - plus an append-only ledger row
+ * (services/appointmentPriceLedger.ts) naming who moved what from what to
+ * what. Nothing here talks to Stripe, ever.
  */
-const priceSchema = z
-  .object({
-    amount: z
-      .number()
-      .min(0)
-      .max(100_000)
-      .refine((n) => Number.isInteger(Math.round(n * 100)) && Math.abs(n * 100 - Math.round(n * 100)) < 1e-6, {
-        message: "at most two decimals",
-      }),
-    collected: z
-      .number()
-      .min(0)
-      .max(100_000)
-      .refine((n) => Math.abs(n * 100 - Math.round(n * 100)) < 1e-6, {
-        message: "at most two decimals",
-      })
-      .optional(),
-  })
-  .strict();
+const dollars = z
+  .number()
+  .finite()
+  .min(0)
+  .max(100_000)
+  .refine((n) => dollarsToCentsExact(n) !== null, { message: "at most two decimals" });
+const priceSchema = z.object({ amount: dollars, collected: dollars.optional() }).strict();
 
 bookingDashboardRouter.post("/appointments/:id/price", async (req, res) => {
   const parsed = priceSchema.safeParse(req.body ?? {});
@@ -5153,12 +5161,18 @@ bookingDashboardRouter.post("/appointments/:id/price", async (req, res) => {
     return;
   }
   const shopId = req.shop!.id;
+  const amountCents = dollarsToCentsExact(parsed.data.amount)!;
+  const collectedCents =
+    parsed.data.collected === undefined ? undefined : dollarsToCentsExact(parsed.data.collected)!;
+
   const appt = await prisma.appointment.findFirst({
     where: { id: req.params.id, shopId },
     select: {
       id: true,
       status: true,
       paidAt: true,
+      paidAmount: true,
+      priceAtBooking: true,
       visit: { select: { acuityAppointmentId: true } },
       payment: { select: { status: true, amount: true, capturedAmount: true, refundedAmount: true } },
     },
@@ -5175,41 +5189,67 @@ bookingDashboardRouter.post("/appointments/:id/price", async (req, res) => {
     res.status(409).json({ error: "not_priceable" });
     return;
   }
-  const amountCents = Math.round(parsed.data.amount * 100);
   const onlineCents = stripeCollectedCents(appt.payment);
   if (amountCents < onlineCents) {
     res.status(409).json({ error: "below_online_payment", onlineCents });
     return;
   }
-  if (parsed.data.collected !== undefined && appt.paidAt === null) {
+  if (collectedCents !== undefined && appt.paidAt === null) {
     res.status(409).json({ error: "not_checked_out" });
     return;
   }
+  const fromPriceCents = decimalToCents(appt.priceAtBooking);
+  const fromCollectedCents = decimalToCents(appt.paidAmount);
 
-  const data: Prisma.AppointmentUpdateManyMutationInput = {
-    priceAtBooking: new Prisma.Decimal(parsed.data.amount.toFixed(2)),
-  };
-  if (parsed.data.collected !== undefined) {
-    data.paidAmount = new Prisma.Decimal(parsed.data.collected.toFixed(2));
-  }
-  // updateMany with shopId in the WHERE, like every other write here: the
-  // tenant is part of the predicate, not a fact the read above is trusted for.
-  const updated = await prisma.appointment.updateMany({
-    where: { id: appt.id, shopId },
-    data,
+  // THE WRITE. Every guard above is re-asserted in the WHERE, so the state the
+  // request was computed against is the state it lands on - or it does not
+  // land. The ledger row goes in the same transaction; there is no window in
+  // which the money moved and the memory of it did not.
+  const outcome = await prisma.$transaction(async (tx) => {
+    const { count } = await tx.appointment.updateMany({
+      where: {
+        id: appt.id,
+        shopId,
+        status: { notIn: ["CANCELED", "NO_SHOW"] },
+        priceAtBooking: appt.priceAtBooking,
+        ...(collectedCents !== undefined ? { paidAt: { not: null } } : {}),
+      },
+      data: {
+        priceAtBooking: centsToDecimal(amountCents),
+        ...(collectedCents !== undefined ? { paidAmount: centsToDecimal(collectedCents) } : {}),
+      },
+    });
+    if (count === 0) return "stale" as const;
+    await recordPriceChange(tx, {
+      shopId,
+      appointmentId: appt.id,
+      actorUserId: req.userId ?? null,
+      fromPriceCents,
+      toPriceCents: amountCents,
+      fromCollectedCents: collectedCents !== undefined ? fromCollectedCents : null,
+      toCollectedCents: collectedCents ?? null,
+    });
+    return "ok" as const;
   });
-  if (updated.count === 0) {
-    res.status(404).json({ error: "not_found" });
+  if (outcome === "stale") {
+    // The booking changed under the request - another edit, a cancel, a
+    // checkout. The caller re-reads and decides again; nothing was written.
+    res.status(409).json({ error: "stale_price" });
     return;
   }
   logger.info(
     {
       shopId,
       appointmentId: appt.id,
-      amount: parsed.data.amount,
-      ...(parsed.data.collected !== undefined ? { collected: parsed.data.collected } : {}),
+      fromPriceCents,
+      toPriceCents: amountCents,
+      ...(collectedCents !== undefined ? { fromCollectedCents, toCollectedCents: collectedCents } : {}),
     },
     "appointment price changed",
   );
-  res.json({ ok: true });
+  res.json({
+    ok: true,
+    priceCents: amountCents,
+    collectedCents: collectedCents ?? fromCollectedCents,
+  });
 });

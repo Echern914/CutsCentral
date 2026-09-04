@@ -3,6 +3,7 @@ import { prisma, runWithShop } from "@chairback/db";
 import type { CardOnFileChargeReason } from "@chairback/config";
 import { logger } from "../logger.js";
 import { stripeClient } from "./stripe.js";
+import { errorClassification, stripeErrorFacts } from "./stripeErrors.js";
 
 /**
  * Card on file: keep the customer's card at booking WITHOUT charging it.
@@ -92,7 +93,10 @@ export async function createCardOnFileSetupIntent(
     );
     return intent.client_secret ? { clientSecret: intent.client_secret, cardOnFileId } : null;
   } catch (err) {
-    logger.error({ err, appointmentId: input.appointmentId }, "createCardOnFileSetupIntent failed");
+    logger.error(
+      { appointmentId: input.appointmentId, ...stripeErrorFacts(err) },
+      "createCardOnFileSetupIntent failed",
+    );
     return null;
   }
 }
@@ -121,7 +125,10 @@ export async function markCardSaved(
       brand = pm.card?.brand ?? null;
       last4 = pm.card?.last4 ?? null;
     } catch (err) {
-      logger.warn({ err, cardOnFileId }, "card on file: could not read the card's brand/last4");
+      logger.warn(
+        { cardOnFileId, ...stripeErrorFacts(err) },
+        "card on file: could not read the card's brand/last4",
+      );
     }
   }
 
@@ -193,7 +200,10 @@ export async function releaseCardOnFile(params: {
     try {
       await stripeClient().paymentMethods.detach(row.stripePaymentMethodId);
     } catch (err) {
-      logger.warn({ err, cardOnFileId: row.id }, "card on file: detach failed (already detached?)");
+      logger.warn(
+        { cardOnFileId: row.id, ...stripeErrorFacts(err) },
+        "card on file: detach failed (already detached?)",
+      );
     }
   }
   await runWithShop(params.shopId, (tx) =>
@@ -215,6 +225,8 @@ function cryptoRandomId(): string {
 export type ChargeOutcome =
   | { outcome: "charged"; paymentId: string; cents: number }
   | { outcome: "declined"; paymentId: string; reason: string }
+  /** Stripe did not answer. The card stays `charging`; the reconciler decides. */
+  | { outcome: "ambiguous"; paymentId: string }
   | { outcome: "no_card" }
   | { outcome: "nothing_to_charge" }
   | { outcome: "already" }
@@ -338,6 +350,25 @@ export async function chargeCardOnFile(params: {
         ? { outcome: "charged", paymentId, cents: params.cents }
         : { outcome: "declined", paymentId, reason: pi.status };
     } catch (err) {
+      const facts = stripeErrorFacts(err);
+      if (!facts.definitive) {
+        // 🔴 AMBIGUOUS. A timeout or a dropped socket after the request may
+        // have been accepted: the customer's card may be charged right now
+        // while nothing here says so. Calling that "declined" would tell the
+        // barber to collect the fee at the chair - a second time. The row
+        // stays `charging` (so nothing can charge it again - the CAS holds),
+        // the Payment is marked ambiguous, and the reconciler reads Stripe's
+        // own answer. A retry of the same request would reuse the same
+        // idempotency key, which is exactly what the reconciler does.
+        await runWithShop(params.shopId, (tx) =>
+          tx.payment.update({ where: { id: paymentId }, data: { ambiguousAt: new Date() } }),
+        );
+        logger.error(
+          { appointmentId: params.appointmentId, cardOnFileId: row.id, paymentId, ...facts },
+          "card on file: charge outcome unknown - left charging for the reconciler",
+        );
+        return { outcome: "ambiguous", paymentId };
+      }
       // Stripe refuses an off-session charge with a card error whose
       // payment_intent (when present) carries the decline. Record and move on.
       const reason = stripeErrorCode(err);
@@ -349,12 +380,18 @@ export async function chargeCardOnFile(params: {
         });
         await tx.cardOnFile.update({ where: { id: row.id }, data: { status: "failed" } });
       });
-      logger.warn({ appointmentId: params.appointmentId, reason }, "card on file: charge declined");
+      logger.warn(
+        { appointmentId: params.appointmentId, reason, requestId: facts.requestId },
+        "card on file: charge declined",
+      );
       return { outcome: "declined", paymentId, reason };
     }
   } catch (err) {
-    logger.error({ err, appointmentId: params.appointmentId }, "chargeCardOnFile failed");
-    return { outcome: "error", reason: err instanceof Error ? err.message : "unknown" };
+    logger.error(
+      { appointmentId: params.appointmentId, errName: errorClassification(err) },
+      "chargeCardOnFile failed",
+    );
+    return { outcome: "error", reason: errorClassification(err) };
   }
 }
 

@@ -126,7 +126,10 @@ export async function linkReferralOnShopCreate(opts: {
   } catch (err) {
     // Unique violation = this shop already has a referral row (a retry). Any
     // other failure is logged and swallowed: never break shop creation.
-    logger.warn({ err, shopId: opts.shopId }, "referral: link failed");
+    logger.warn(
+      { shopId: opts.shopId, errName: err instanceof Error ? err.name : "unknown" },
+      "referral: link failed",
+    );
     return false;
   }
 }
@@ -142,7 +145,10 @@ export async function linkReferralOnShopCreate(opts: {
  * something that costs real money. Such a row is visible as REWARDED with a
  * null rewardKind.
  */
-export async function grantReferralReward(referredShopId: string): Promise<void> {
+export async function grantReferralReward(
+  referredShopId: string,
+  opts: { qualifyingInvoiceId?: string | null } = {},
+): Promise<void> {
   const referral = await prisma.referral.findUnique({
     where: { referredShopId },
     select: { id: true, referrerShopId: true, status: true },
@@ -154,17 +160,28 @@ export async function grantReferralReward(referredShopId: string): Promise<void>
   const now = new Date();
   // CAS: only the caller that actually flips PENDING -> REWARDED may grant.
   // `data` is non-empty, so a count of 0 genuinely means "someone else won".
+  // The qualifying invoice is recorded in the same write, so a later refund
+  // of THAT invoice can find this reward (flagReferralForReview).
   const { count } = await prisma.referral.updateMany({
     where: { id: referral.id, status: "PENDING" },
-    data: { status: "REWARDED", qualifiedAt: now, rewardedAt: now },
+    data: {
+      status: "REWARDED",
+      qualifiedAt: now,
+      rewardedAt: now,
+      qualifyingInvoiceId: opts.qualifyingInvoiceId ?? undefined,
+    },
   });
   if (count === 0) return;
 
   try {
-    const kind = await payReferrer(referral.referrerShopId);
+    const kind = await payReferrer(referral.referrerShopId, referral.id);
     await prisma.referral.update({
       where: { id: referral.id },
-      data: { rewardKind: kind.kind, rewardAmountCents: kind.amountCents },
+      data: {
+        rewardKind: kind.kind,
+        rewardAmountCents: kind.amountCents,
+        stripeBalanceTransactionId: kind.stripeBalanceTransactionId,
+      },
     });
     logger.info(
       { referralId: referral.id, shopId: referral.referrerShopId, kind: kind.kind },
@@ -175,7 +192,11 @@ export async function grantReferralReward(referredShopId: string): Promise<void>
     // Loud because it needs manual repair: someone earned a month and didn't
     // get it, and no other code path will ever notice on its own.
     logger.error(
-      { err, referralId: referral.id, shopId: referral.referrerShopId },
+      {
+        referralId: referral.id,
+        shopId: referral.referrerShopId,
+        errName: err instanceof Error ? err.name : "unknown",
+      },
       "referral: MARKED REWARDED BUT GRANT FAILED - needs manual credit",
     );
     // 🔴 Sentry, not just the log stream. This is money that a person earned
@@ -201,7 +222,12 @@ export async function grantReferralReward(referredShopId: string): Promise<void>
  */
 async function payReferrer(
   shopId: string,
-): Promise<{ kind: "trial_extension" | "stripe_credit"; amountCents: number | null }> {
+  referralId: string,
+): Promise<{
+  kind: "trial_extension" | "stripe_credit";
+  amountCents: number | null;
+  stripeBalanceTransactionId: string | null;
+}> {
   const shop = await prisma.shop.findUnique({
     where: { id: shopId },
     select: { stripeCustomerId: true, stripeSubscriptionId: true, subscriptionStatus: true },
@@ -215,20 +241,66 @@ async function payReferrer(
 
   if (!paying) {
     await extendTrial(shopId, REWARD_MS);
-    return { kind: "trial_extension", amountCents: null };
+    return { kind: "trial_extension", amountCents: null, stripeBalanceTransactionId: null };
   }
 
   const amountCents = await monthlyPriceCents(shop.stripeSubscriptionId!);
   // A negative balance transaction is Stripe's "account credit": it is consumed
   // by the next invoice automatically, so there is nothing to schedule or
-  // reconcile later.
+  // reconcile later. The idempotency key is the referral's own id: the CAS
+  // above already makes a second grant impossible in our ledger, and the key
+  // makes a retried REQUEST (a timeout after Stripe accepted the first)
+  // collapse to the one credit at Stripe as well. The transaction id comes
+  // back and is stored, so the credit can be found by id, not by faith.
   const { stripeClient } = await import("../billing/stripe.js");
-  await stripeClient().customers.createBalanceTransaction(shop.stripeCustomerId!, {
-    amount: -amountCents,
-    currency: "usd",
-    description: "ChairBack referral reward - one month free",
+  const txn = await stripeClient().customers.createBalanceTransaction(
+    shop.stripeCustomerId!,
+    {
+      amount: -amountCents,
+      currency: "usd",
+      description: "ChairBack referral reward - one month free",
+      metadata: { referralId },
+    },
+    { idempotencyKey: `referral-reward:${referralId}` },
+  );
+  return { kind: "stripe_credit", amountCents, stripeBalanceTransactionId: txn.id };
+}
+
+export type ReferralReviewReason = "invoice_refunded" | "payment_disputed" | "credit_note";
+
+/**
+ * The money that paid a referrer came back: a refund, a dispute or a credit
+ * note against the invoice that qualified the referral.
+ *
+ * This FLAGS - it never reverses. A trial month already granted may already
+ * be half used; a Stripe credit may already have been consumed by the next
+ * invoice. Clawing either back is a policy a person decides, per case, with
+ * the Stripe dashboard open; what this guarantees is that the case is never
+ * invisible. Idempotent: one flag per referral, the first reason wins, and a
+ * redelivered event finds nothing left to flag.
+ */
+export async function flagReferralForReview(
+  qualifyingInvoiceId: string,
+  reason: ReferralReviewReason,
+  now: Date = new Date(),
+): Promise<number> {
+  const { count } = await prisma.referral.updateMany({
+    where: { qualifyingInvoiceId, status: "REWARDED", reviewFlaggedAt: null },
+    data: { reviewFlaggedAt: now, reviewReason: reason },
   });
-  return { kind: "stripe_credit", amountCents };
+  if (count > 0) {
+    logger.error(
+      { qualifyingInvoiceId, reason, flagged: count },
+      "referral: the invoice that paid a referrer was reversed - reward flagged for review",
+    );
+    captureError(new Error("referral reward flagged for review"), {
+      qualifyingInvoiceId,
+      reason,
+      flagged: count,
+      what: "referral_reward_review",
+    });
+  }
+  return count;
 }
 
 /** Subscription states where a shop is really paying and can use credit. */
@@ -327,6 +399,9 @@ export async function findStrandedReferralGrants(limit = 50): Promise<{
 export async function auditReferralGrants(): Promise<{
   stranded: number;
   referralIds: string[];
+  /** Rewards whose qualifying invoice was refunded, disputed or credited. */
+  flagged: number;
+  flaggedIds: string[];
 }> {
   const { count, referralIds } = await findStrandedReferralGrants();
   if (count > 0) {
@@ -339,5 +414,22 @@ export async function auditReferralGrants(): Promise<{
       { stranded: count, referralIds, reason: "referral_grant_stranded" },
     );
   }
-  return { stranded: count, referralIds };
+  // The other open question: rewards paid on money that has since come back.
+  // Nagged on every tick for the same reason as the stranded ones - a flag
+  // that stops repeating before a person acts is a flag that gets forgotten.
+  const flaggedRows = await prisma.referral.findMany({
+    where: { reviewFlaggedAt: { not: null } },
+    orderBy: { reviewFlaggedAt: "asc" },
+    take: 50,
+    select: { id: true },
+  });
+  const flagged = await prisma.referral.count({ where: { reviewFlaggedAt: { not: null } } });
+  const flaggedIds = flaggedRows.map((r) => r.id);
+  if (flagged > 0) {
+    logger.error(
+      { flagged, flaggedIds },
+      "referral: rewards whose qualifying invoice was reversed - review and decide, per case",
+    );
+  }
+  return { stranded: count, referralIds, flagged, flaggedIds };
 }

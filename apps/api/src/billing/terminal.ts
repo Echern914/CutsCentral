@@ -1,6 +1,8 @@
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import { connectEnabled, stripeClient } from "./stripe.js";
+import { isPendingIntentId, pendingIntentId, validateCharge } from "./payments.js";
+import { errorClassification, stripeErrorFacts } from "./stripeErrors.js";
 
 /**
  * Stripe Terminal — the server half of Tap to Pay on iPhone.
@@ -78,7 +80,7 @@ export async function ensureTerminalLocation(shopId: string): Promise<string | n
     });
     return location.id;
   } catch (err) {
-    logger.error({ err, shopId }, "ensureTerminalLocation failed");
+    logger.error({ shopId, ...stripeErrorFacts(err) }, "ensureTerminalLocation failed");
     return null;
   }
 }
@@ -96,7 +98,7 @@ export async function createConnectionToken(): Promise<string | null> {
     const token = await stripeClient().terminal.connectionTokens.create();
     return token.secret;
   } catch (err) {
-    logger.error({ err }, "createConnectionToken failed");
+    logger.error({ ...stripeErrorFacts(err) }, "createConnectionToken failed");
     return null;
   }
 }
@@ -141,10 +143,12 @@ export async function createTerminalPaymentIntent(
     where: { appointmentId: input.appointmentId },
     select: { id: true, stripePaymentIntentId: true, mode: true, status: true },
   });
-  if (existing) {
+  if (existing && !(existing.mode === "terminal" && isPendingIntentId(existing.stripePaymentIntentId))) {
     // A previous card-present attempt that never completed is resumable — the
     // reader dropped, the app crashed — so hand its intent back rather than
     // stranding the barber. Anything else (a real pay-ahead charge) is refused.
+    // (A terminal row still on its `pending:` reservation id falls through to
+    // the retry below, which re-issues the same request under the same key.)
     if (existing.mode === "terminal" && existing.status !== "succeeded") {
       try {
         const pi = await stripeClient().paymentIntents.retrieve(
@@ -159,55 +163,101 @@ export async function createTerminalPaymentIntent(
           };
         }
       } catch (err) {
-        logger.error({ err, appointmentId: input.appointmentId }, "terminal intent retrieve failed");
+        logger.error(
+          { appointmentId: input.appointmentId, ...stripeErrorFacts(err) },
+          "terminal intent retrieve failed",
+        );
       }
     }
     return { ok: false, reason: "payment_exists" };
   }
 
-  try {
-    // Pre-mint the row id so the PI metadata can point back before the row
-    // exists — the webhook keys on metadata.paymentId, exactly like pay-ahead.
-    const paymentId = `pay_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
-    const intent = await stripeClient().paymentIntents.create(
-      {
-        amount: input.amountCents,
-        currency,
-        payment_method_types: ["card_present"],
-        capture_method: "automatic",
-        on_behalf_of: input.connectAccountId,
-        transfer_data: { destination: input.connectAccountId },
-        ...(feeAmount > 0 ? { application_fee_amount: feeAmount } : {}),
-        description: input.description,
-        metadata: {
-          shopId: input.shopId,
-          appointmentId: input.appointmentId,
-          paymentId,
-        },
-      },
-      { idempotencyKey: `terminal-pi:${paymentId}` },
+  const invalid = validateCharge(input.amountCents, currency);
+  if (invalid) {
+    logger.error(
+      { appointmentId: input.appointmentId, reason: invalid },
+      "createTerminalPaymentIntent refused: invalid amount or currency",
     );
-
-    await prisma.payment.create({
-      data: {
-        id: paymentId,
-        shopId: input.shopId,
-        appointmentId: input.appointmentId,
-        stripePaymentIntentId: intent.id,
-        stripeConnectAccountId: input.connectAccountId,
-        mode: "terminal",
-        amount: input.amountCents,
-        currency,
-        applicationFeeAmount: feeAmount,
-        status: intent.status,
-      },
-    });
-
-    return intent.client_secret
-      ? { ok: true, clientSecret: intent.client_secret, paymentIntentId: intent.id, paymentId }
-      : { ok: false, reason: "stripe_error" };
-  } catch (err) {
-    logger.error({ err, appointmentId: input.appointmentId }, "createTerminalPaymentIntent failed");
     return { ok: false, reason: "stripe_error" };
   }
+
+  try {
+    // ROW FIRST, STRIPE SECOND - the same order as pay-ahead, for the same
+    // reasons (see createAheadPaymentIntent). A terminal row whose intent was
+    // never answered keeps its `pending:` id and is retried under the same key.
+    const pendingRow =
+      existing && isPendingIntentId(existing.stripePaymentIntentId) ? existing : null;
+    const paymentId = pendingRow?.id ?? `pay_${randomHex(24)}`;
+    if (!pendingRow) {
+      await prisma.payment.create({
+        data: {
+          id: paymentId,
+          shopId: input.shopId,
+          appointmentId: input.appointmentId,
+          stripePaymentIntentId: pendingIntentId(paymentId),
+          stripeConnectAccountId: input.connectAccountId,
+          mode: "terminal",
+          amount: input.amountCents,
+          currency,
+          applicationFeeAmount: feeAmount,
+          status: "requires_payment_method",
+        },
+      });
+    }
+
+    try {
+      const intent = await stripeClient().paymentIntents.create(
+        {
+          amount: input.amountCents,
+          currency,
+          payment_method_types: ["card_present"],
+          capture_method: "automatic",
+          on_behalf_of: input.connectAccountId,
+          transfer_data: { destination: input.connectAccountId },
+          ...(feeAmount > 0 ? { application_fee_amount: feeAmount } : {}),
+          description: input.description,
+          metadata: {
+            shopId: input.shopId,
+            appointmentId: input.appointmentId,
+            paymentId,
+          },
+        },
+        { idempotencyKey: `terminal-pi:${paymentId}` },
+      );
+      await prisma.payment.updateMany({
+        where: { id: paymentId, stripePaymentIntentId: pendingIntentId(paymentId) },
+        data: { stripePaymentIntentId: intent.id, status: intent.status, ambiguousAt: null },
+      });
+      return intent.client_secret
+        ? { ok: true, clientSecret: intent.client_secret, paymentIntentId: intent.id, paymentId }
+        : { ok: false, reason: "stripe_error" };
+    } catch (err) {
+      const facts = stripeErrorFacts(err);
+      if (!facts.definitive) {
+        await prisma.payment.updateMany({
+          where: { id: paymentId },
+          data: { ambiguousAt: new Date() },
+        });
+      }
+      logger.error(
+        { appointmentId: input.appointmentId, paymentId, ...facts },
+        facts.definitive
+          ? "createTerminalPaymentIntent refused by Stripe"
+          : "createTerminalPaymentIntent outcome unknown - the reconciler owns it",
+      );
+      return { ok: false, reason: "stripe_error" };
+    }
+  } catch (err) {
+    logger.error(
+      { appointmentId: input.appointmentId, errName: errorClassification(err) },
+      "createTerminalPaymentIntent failed",
+    );
+    return { ok: false, reason: "stripe_error" };
+  }
+}
+
+function randomHex(n: number): string {
+  const bytes = new Uint8Array(Math.ceil(n / 2));
+  globalThis.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("").slice(0, n);
 }

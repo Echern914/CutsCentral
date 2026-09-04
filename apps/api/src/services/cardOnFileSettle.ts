@@ -2,6 +2,7 @@ import { cardOnFileFeeCents, type CardOnFileChargeReason } from "@chairback/conf
 import { prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { chargeCardOnFile, releaseCardOnFile } from "../billing/cardOnFile.js";
+import { agreedPriceCents } from "./appointmentPriceLedger.js";
 import { toCents as configToCents } from "../billing/payments.js";
 import { sendEmail } from "../messaging/email.js";
 import { buildCardChargedEmail } from "../messaging/templates.js";
@@ -59,7 +60,13 @@ export async function settleCardOnFile(params: {
     const onThem =
       params.outcome === "NO_SHOW" || (params.outcome === "CANCELED" && params.applyPolicyFee);
     const reason: CardOnFileChargeReason = params.outcome === "NO_SHOW" ? "no_show" : "late_cancel";
-    const priceCents = configToCents(numberOrNull(params.priceAtBooking));
+    // THE FEE BASIS IS WHAT THE CUSTOMER AGREED TO. The ticket can be corrected
+    // by hand after booking (POST /appointments/:id/price); a ticket RAISED
+    // after the customer saved their card must never raise the fee they
+    // consented to at the old one. The ledger's first entry remembers the
+    // price before any edit; a lowered ticket lowers the fee.
+    const currentCents = configToCents(numberOrNull(params.priceAtBooking));
+    const priceCents = await agreedPriceCents(params.shopId, params.appointmentId, currentCents);
     const cents =
       shop.chargeCardOnFileFees && onThem
         ? cardOnFileFeeCents({
@@ -108,6 +115,18 @@ export async function settleCardOnFile(params: {
         code: charged.reason,
       });
       return { action: "declined", cents, reason, code: charged.reason };
+    }
+    if (charged.outcome === "ambiguous") {
+      // Stripe may or may not have taken the money. Nobody is told anything -
+      // not "charged" to the customer, not "declined, collect it at the next
+      // visit" to the barber - until the reconciler has read Stripe's own
+      // answer. Telling the barber "declined" here is how a fee gets collected
+      // twice.
+      logger.error(
+        { appointmentId: params.appointmentId, paymentId: charged.paymentId },
+        "card on file: charge outcome unknown - waiting for the reconciler before anyone is told",
+      );
+      return { action: "none" };
     }
     // no_card / already / nothing_to_charge / error: nothing more to do here;
     // chargeCardOnFile logged the specifics.
