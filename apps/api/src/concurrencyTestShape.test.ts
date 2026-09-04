@@ -42,6 +42,12 @@ const HONEST_SHAPES = [
   "raceBehindRowLock",
   "holdAdvisoryLock",
   "holdRowLock",
+  // A whole-table ACCESS EXCLUSIVE lock: the shape that pauses a READER at a
+  // chosen point (the slot engine reads "ExternalBlock" last, so a lock on it
+  // parks a /day sweep with the old appointments already in hand). Same file,
+  // same discipline - it resolves only once the lock is genuinely held, and
+  // the test must show the request had NOT settled before release.
+  "holdTableLock",
   // Asserting the constraint head-on is the best shape of all: deterministic,
   // instant, and it fails the moment the index or trigger is dropped.
   "rejects.toThrow",
