@@ -485,6 +485,20 @@ export async function checkoutAppointmentAction(
   );
 }
 
+/**
+ * Correct a booking's price from the sheet. `collected` is accepted by the API
+ * only once the booking has been checked out — before that, checkout owns the
+ * chair figure. Dollars with at most two decimals; the API refuses more.
+ */
+export async function updateAppointmentPriceAction(
+  appointmentId: string,
+  input: { amount: number; collected?: number },
+): Promise<Result> {
+  return done(
+    await apiSend("POST", `/api/booking/appointments/${appointmentId}/price`, input),
+  );
+}
+
 //  Waitlist (phase E admin)
 
 export type WaitlistSection =

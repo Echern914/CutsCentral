@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import Link from "next/link";
 import { cn } from "@/lib/cn";
 import { Dialog } from "@/components/ui/Dialog";
+import { INPUT } from "./formkit";
 import {
   NAME_WRAP_CLS,
   appointmentStatusPill,
@@ -19,6 +20,7 @@ import {
   cancelAppointmentAction,
   checkoutAppointmentAction,
   completeAppointmentAction,
+  updateAppointmentPriceAction,
   getAppointmentDetailAction,
   markArrivedAction,
   noShowAppointmentAction,
@@ -362,6 +364,10 @@ export function AppointmentSheet({
           onEdit={() => setView("edit")}
           onCheckout={() => setView("charges")}
           onAct={act}
+          onPriceSaved={() => {
+            onChanged();
+            load();
+          }}
         />
       )}
     </Dialog>
@@ -388,6 +394,7 @@ function DetailView({
   onEdit,
   onCheckout,
   onAct,
+  onPriceSaved,
 }: {
   row: AgendaRow;
   detail: AppointmentDetail | null;
@@ -410,6 +417,8 @@ function DetailView({
     label: string,
     closeAfter?: boolean,
   ) => void;
+  /** The price changed on the server: re-read the booking and the agenda. */
+  onPriceSaved: () => void;
 }) {
   return (
     <div className="flex flex-col gap-3">
@@ -419,6 +428,8 @@ function DetailView({
         dateLabel={dateLabel}
         timeLabel={timeLabel}
         durMin={durMin}
+        toast={toast}
+        onPriceSaved={onPriceSaved}
       />
 
       <ActionRow
@@ -512,14 +523,19 @@ function Hero({
   dateLabel,
   timeLabel,
   durMin,
+  toast,
+  onPriceSaved,
 }: {
   row: AgendaRow;
   detail: AppointmentDetail | null;
   dateLabel: string;
   timeLabel: string;
   durMin: number | null;
+  toast: Toast;
+  onPriceSaved: () => void;
 }) {
   const vocab = useVocab();
+  const priceEdit = usePriceEdit({ row, detail, toast, onSaved: onPriceSaved });
   const pill = appointmentStatusPill({
     status: row.status,
     checkInStatus: row.checkInStatus,
@@ -642,9 +658,227 @@ function Hero({
           <span className="tabular-nums">
             {price != null ? `$${price.toFixed(2)}` : "Not priced"}
           </span>
+          {priceEdit.allowed && !priceEdit.open && (
+            <button
+              type="button"
+              onClick={priceEdit.begin}
+              data-qa="price-edit"
+              className="ml-2 inline-flex h-11 items-center rounded-md px-2 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10 sm:h-7"
+            >
+              Edit
+            </button>
+          )}
         </Fact>
       </dl>
+      {priceEdit.open && <PriceEditor state={priceEdit} />}
     </section>
+  );
+}
+
+/**
+ * THE PRICE, CORRECTED FROM THE SHEET. The ticket is a snapshot from booking
+ * time and the chair is where it stops being true — an add-on, a regular's
+ * discount, or simply more handed over than the number on the screen.
+ * Checkout already keeps the barber's final figure, so this covers the two
+ * moments checkout cannot: before it (the sheet and the customer's manage page
+ * still show the old number) and after it (the money was recorded at the old
+ * ticket, and the real figure is known only now — that is the second field,
+ * shown only once the booking has been checked out).
+ *
+ * Offered only where the API would accept it: a native booking that is
+ * pending, upcoming or completed. The API is the rule; this is the same
+ * predicate so the button never leads to a refusal.
+ */
+type PriceEditState = {
+  allowed: boolean;
+  open: boolean;
+  amount: string;
+  collected: string | null;
+  error: string | null;
+  pending: boolean;
+  begin: () => void;
+  cancel: () => void;
+  setAmount: (v: string) => void;
+  setCollected: (v: string) => void;
+  save: () => void;
+};
+
+/** Dollars typed by a barber → a number with at most two decimals, or null. */
+function parseDollars(raw: string): number | null {
+  const s = raw.trim().replace(/^\$/, "");
+  if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
+  const n = Number(s);
+  return Number.isFinite(n) && n >= 0 && n <= 100_000 ? n : null;
+}
+
+function usePriceEdit({
+  row,
+  detail,
+  toast,
+  onSaved,
+}: {
+  row: AgendaRow;
+  detail: AppointmentDetail | null;
+  toast: Toast;
+  onSaved: () => void;
+}): PriceEditState {
+  const [open, setOpen] = useState(false);
+  const [amount, setAmount] = useState("");
+  const [collected, setCollected] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, start] = useTransition();
+
+  const allowed =
+    detail !== null &&
+    detail.source === "appointment" &&
+    detail.origin === "chairback" &&
+    (detail.status === "pending" ||
+      detail.status === "upcoming" ||
+      detail.status === "completed");
+  const checkedOut = detail?.checkedOutAt != null;
+
+  function begin() {
+    const price = detail?.price ?? row.price;
+    setAmount(price != null ? price.toFixed(2) : "");
+    setCollected(
+      checkedOut ? ((detail?.payment.inPersonCents ?? 0) / 100).toFixed(2) : null,
+    );
+    setError(null);
+    setOpen(true);
+  }
+  function cancel() {
+    setOpen(false);
+    setError(null);
+  }
+  function save() {
+    const a = parseDollars(amount);
+    if (a === null) {
+      setError("Enter a price like 45 or 45.50.");
+      return;
+    }
+    let c: number | undefined;
+    if (collected !== null) {
+      const parsed = parseDollars(collected);
+      if (parsed === null) {
+        setError("Enter what was collected, like 45 or 45.50.");
+        return;
+      }
+      c = parsed;
+    }
+    setError(null);
+    start(async () => {
+      const res = await updateAppointmentPriceAction(row.id, {
+        amount: a,
+        ...(c !== undefined ? { collected: c } : {}),
+      });
+      if (!res.ok) {
+        setError(
+          res.error === "below_online_payment"
+            ? "That's below what was already paid online. Refund from the payment instead."
+            : res.error === "not_checked_out"
+              ? "Check out first to record what was collected."
+              : res.error === "external"
+                ? "This booking's price lives where it was made."
+                : "Couldn't save the price.",
+        );
+        return;
+      }
+      toast(
+        c !== undefined ? `Price $${a.toFixed(2)} · collected $${c.toFixed(2)}` : `Price $${a.toFixed(2)}`,
+        "success",
+      );
+      setOpen(false);
+      onSaved();
+    });
+  }
+
+  return {
+    allowed,
+    open,
+    amount,
+    collected,
+    error,
+    pending,
+    begin,
+    cancel,
+    setAmount,
+    setCollected,
+    save,
+  };
+}
+
+function PriceEditor({ state }: { state: PriceEditState }) {
+  // Escape cancels THIS, not the whole sheet: Dialog listens for Escape too,
+  // and without stopping it here one keypress would throw the booking away.
+  function onKey(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      state.save();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      state.cancel();
+    }
+  }
+  return (
+    <div className="relative border-t border-subtle px-4 py-3 sm:px-6">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="flex min-w-0 flex-col gap-1 text-xs text-muted">
+          Price
+          <input
+            autoFocus
+            inputMode="decimal"
+            value={state.amount}
+            onChange={(e) => state.setAmount(e.target.value)}
+            onKeyDown={onKey}
+            aria-label="Price in dollars"
+            className={cn(INPUT, "tabular-nums")}
+          />
+        </label>
+        {state.collected !== null && (
+          <label className="flex min-w-0 flex-col gap-1 text-xs text-muted">
+            Collected at the chair
+            <input
+              inputMode="decimal"
+              value={state.collected}
+              onChange={(e) => state.setCollected(e.target.value)}
+              onKeyDown={onKey}
+              aria-label="Collected at the chair, in dollars"
+              className={cn(INPUT, "tabular-nums")}
+            />
+          </label>
+        )}
+      </div>
+      {state.collected !== null && (
+        <p className="mt-1.5 text-[11px] text-muted">
+          Already checked out — the collected figure is what counts as revenue.
+        </p>
+      )}
+      {state.error && (
+        <p role="alert" className="mt-1.5 text-xs text-danger-soft">
+          {state.error}
+        </p>
+      )}
+      <div className="mt-2.5 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={state.cancel}
+          disabled={state.pending}
+          className="h-11 rounded-lg border border-subtle px-3 text-sm text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite sm:h-9"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={state.save}
+          disabled={state.pending}
+          data-qa="price-save"
+          className="h-11 rounded-lg bg-gold px-3 text-sm font-semibold text-charcoal-900 transition-colors duration-150 ease-out hover:bg-gold/90 disabled:opacity-60 sm:h-9"
+        >
+          {state.pending ? "Saving…" : "Save price"}
+        </button>
+      </div>
+    </div>
   );
 }
 

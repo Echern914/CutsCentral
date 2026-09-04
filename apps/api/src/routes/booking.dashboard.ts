@@ -21,6 +21,7 @@ import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWr
 import { registerAppointmentEdit } from "./booking.appointmentEdit.js";
 import { registerAppointmentDetail } from "./booking.appointmentDetail.js";
 import { stripeCollectedCents } from "../engines/appointmentPayment.js";
+import { appointmentOwnedByPlatform } from "../engines/visitOrigin.js";
 import {
   buildObserveReport,
   completeReschedule,
@@ -5097,4 +5098,118 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
     "walk-in recorded",
   );
   res.status(201).json({ ok: true, id: result.id });
+});
+
+/**
+ * POST /appointments/:id/price - the barber corrects what a booking costs.
+ *
+ * The ticket (`priceAtBooking`) is a snapshot taken when the booking was made,
+ * and the chair is where it stops being true: the client added a beard trim,
+ * a regular got his usual ten off, or he simply handed over more than the
+ * number on the screen. Checkout already keeps the barber's final figure, so
+ * this exists for the two moments checkout cannot reach - BEFORE it (the
+ * customer's manage page and the sheet still show the old number) and AFTER
+ * it (the money was recorded at the old ticket and the real figure is known
+ * only now).
+ *
+ * `amount` is the ticket. `collected` is what actually changed hands at the
+ * chair, accepted ONLY once the booking has been checked out: before that the
+ * chair figure is checkout's to write (through its own paidAt claim), and
+ * taking it here would be a second door onto the same money.
+ *
+ * Refused for a booking money can no longer attach to (CANCELED, NO_SHOW), for
+ * one owned by Acuity/Square (the price lives where the booking was made), and
+ * for a ticket below what Stripe has already settled - a $60 online payment
+ * against a $40 ticket is a refund, and refunds have their own path that
+ * moves the money too; lying about the ticket would only hide it.
+ *
+ * Money is written as a Decimal string, never through float arithmetic; the
+ * input is capped at two decimals at the boundary for the same reason.
+ */
+const priceSchema = z
+  .object({
+    amount: z
+      .number()
+      .min(0)
+      .max(100_000)
+      .refine((n) => Number.isInteger(Math.round(n * 100)) && Math.abs(n * 100 - Math.round(n * 100)) < 1e-6, {
+        message: "at most two decimals",
+      }),
+    collected: z
+      .number()
+      .min(0)
+      .max(100_000)
+      .refine((n) => Math.abs(n * 100 - Math.round(n * 100)) < 1e-6, {
+        message: "at most two decimals",
+      })
+      .optional(),
+  })
+  .strict();
+
+bookingDashboardRouter.post("/appointments/:id/price", async (req, res) => {
+  const parsed = priceSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const shopId = req.shop!.id;
+  const appt = await prisma.appointment.findFirst({
+    where: { id: req.params.id, shopId },
+    select: {
+      id: true,
+      status: true,
+      paidAt: true,
+      visit: { select: { acuityAppointmentId: true } },
+      payment: { select: { status: true, amount: true, capturedAmount: true, refundedAmount: true } },
+    },
+  });
+  if (!appt) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if (appointmentOwnedByPlatform(appt)) {
+    res.status(409).json({ error: "external" });
+    return;
+  }
+  if (appt.status === "CANCELED" || appt.status === "NO_SHOW") {
+    res.status(409).json({ error: "not_priceable" });
+    return;
+  }
+  const amountCents = Math.round(parsed.data.amount * 100);
+  const onlineCents = stripeCollectedCents(appt.payment);
+  if (amountCents < onlineCents) {
+    res.status(409).json({ error: "below_online_payment", onlineCents });
+    return;
+  }
+  if (parsed.data.collected !== undefined && appt.paidAt === null) {
+    res.status(409).json({ error: "not_checked_out" });
+    return;
+  }
+
+  const data: Prisma.AppointmentUpdateManyMutationInput = {
+    priceAtBooking: new Prisma.Decimal(parsed.data.amount.toFixed(2)),
+  };
+  if (parsed.data.collected !== undefined) {
+    data.paidAmount = new Prisma.Decimal(parsed.data.collected.toFixed(2));
+  }
+  // updateMany with shopId in the WHERE, like every other write here: the
+  // tenant is part of the predicate, not a fact the read above is trusted for.
+  const updated = await prisma.appointment.updateMany({
+    where: { id: appt.id, shopId },
+    data,
+  });
+  if (updated.count === 0) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  logger.info(
+    {
+      shopId,
+      appointmentId: appt.id,
+      amount: parsed.data.amount,
+      ...(parsed.data.collected !== undefined ? { collected: parsed.data.collected } : {}),
+    },
+    "appointment price changed",
+  );
+  res.json({ ok: true });
 });
