@@ -33,6 +33,13 @@ export interface ApiResult<T> {
    */
   reason?: string;
   /**
+   * The one answer that resolves a specific refusal, when the API offered one.
+   * Today: the `external_block` 409's digest of the exact blocks it named -
+   * replaying it is what authorises writing over THOSE blocks and nothing
+   * else. Opaque to the page: it is shown to no one, only handed back.
+   */
+  confirmation?: string;
+  /**
    * The API's own STABLE classification of a failure, when it sent one.
    *
    * Distinct from `error` (a legacy free string) and from `reason` (endpoint
@@ -191,6 +198,7 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
   let reason: string | undefined;
   let code: string | undefined;
   let field: string | undefined;
+  let confirmation: string | undefined;
   try {
     const json = (await res.json()) as T & { error?: string; issues?: unknown };
     if (res.ok) data = json;
@@ -202,6 +210,8 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
       if (typeof classified === "string") code = classified;
       const which = (json as { field?: unknown }).field;
       if (typeof which === "string") field = which;
+      const answer = (json as { confirmation?: unknown }).confirmation;
+      if (typeof answer === "string") confirmation = answer;
       const raw = (json as { issues?: unknown }).issues;
       if (Array.isArray(raw)) {
         const valid = raw.filter(
@@ -226,6 +236,7 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
     ...(reason ? { reason } : {}),
     ...(code ? { code } : {}),
     ...(field ? { field } : {}),
+    ...(confirmation ? { confirmation } : {}),
   };
 }
 

@@ -4,7 +4,12 @@ import { Prisma, forShop, prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { isSlotBookable } from "../engines/slots.js";
 import { ExternalBlockError, lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
-import { describeBlocks, recordExternalBlockOverrides } from "../services/appointmentOverride.js";
+import {
+  blockedTimeIsTheOnlyObstacle,
+  blockSentence,
+  describeBlocks,
+  recordExternalBlockOverrides,
+} from "../services/appointmentOverride.js";
 import { completeReschedule, swapForReschedule } from "../engines/acuityMirror.js";
 import { appointmentOwnedByPlatform } from "../engines/visitOrigin.js";
 import { pokeAppointmentPass } from "../wallet/appointmentPass.js";
@@ -67,8 +72,13 @@ const editApptSchema = z
     email: z.string().max(200).nullable().optional(),
     /** Barber override: skip the hours/blocked gate. Overlap still applies. */
     customTime: z.boolean().optional(),
-    /** Confirms booking OVER an external block; recorded. See booking.dashboard.ts. */
-    overrideExternalBlock: z.boolean().optional(),
+    /**
+     * Confirms moving this booking ONTO the exact spans a previous 409
+     * `external_block` named - the `confirmation` digest from that refusal,
+     * replayed. Authorises those blocks and nothing else; recorded. See
+     * engines/bookingWrite.ts.
+     */
+    externalBlockConfirmation: z.string().trim().min(1).max(200).optional(),
   })
   .strict();
 
@@ -285,8 +295,26 @@ export function registerAppointmentEdit(
         extraDurationMin: Math.max(0, durationMin - service.durationMin),
       });
       if (!bookable) {
-        res.status(400).json({ error: "invalid_slot" });
-        return;
+        // 🔴 THE SHEET HAS NO "CUSTOM TIME" SWITCH, so a flat invalid_slot was
+        // the end of the road here: a barber dragging a booking into an
+        // afternoon he had blocked in Acuity was told "that time is outside
+        // your booking hours", which is not what happened and offers nothing
+        // to do about it. When the block is the ONLY obstacle, fall through -
+        // the guard below reads it under the lock and answers with the block
+        // itself plus the confirmation that overrides it. Hours, lead time and
+        // day caps still end here, and no confirmation can move them.
+        const onlyBlocked = await blockedTimeIsTheOnlyObstacle({
+          shopId,
+          staffId,
+          serviceId,
+          startsAt,
+          excludeAppointmentId: appt.id,
+          extraDurationMin: Math.max(0, durationMin - service.durationMin),
+        });
+        if (!onlyBlocked) {
+          res.status(400).json({ error: "invalid_slot" });
+          return;
+        }
       }
     }
 
@@ -295,9 +323,11 @@ export function registerAppointmentEdit(
       await runWithShop(shopId, async (tx) => {
         if (timeMoved) {
           const guard = await lockStaffAndAssertSlotFree(tx, {
-            // External blocks: enforced unless explicitly overridden, and then
-            // recorded - the same rule as create and reschedule.
-            externalBlocks: d.customTime && d.overrideExternalBlock ? "override" : "enforce",
+            // External blocks: always enforced. Only a confirmation matching
+            // the blocks read inside THIS lock crosses one, and the crossing
+            // is recorded - the same rule as create and reschedule.
+            externalBlocks: "enforce",
+            externalBlockConfirmation: d.externalBlockConfirmation ?? null,
             walkInCapacity: "ignore",
             staffId,
             shopId,
@@ -378,11 +408,17 @@ export function registerAppointmentEdit(
       });
     } catch (err) {
       if (err instanceof ExternalBlockError) {
+        // Nothing was written - the guard is the first statement in the
+        // transaction, so this rolled back before the appointment was touched.
+        // The barber gets the block by name, in his own zone, and the one
+        // confirmation that overrides THAT block.
         res.status(409).json({
           error: "external_block",
           code: "SLOT_UNAVAILABLE",
           confirmable: true,
+          reason: blockSentence(err.blocks, shop.timezone),
           blocks: describeBlocks(err.blocks),
+          confirmation: err.confirmation,
         });
         return;
       }
