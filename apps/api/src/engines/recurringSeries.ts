@@ -8,6 +8,7 @@ import { randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
 import { isSlotBookable } from "./slots.js";
 import { lockStaffAndAssertSlotFree } from "./bookingWrite.js";
+import { noteAvailabilityChanged } from "../services/availabilityCache.js";
 import { dispatchAfterCommit, recordMirrorIntent } from "./acuityMirror.js";
 import { isMirrorNotConfigured, mirrorNotConfiguredSource } from "./mirrorNotConfigured.js";
 import { effectiveDurationAt, effectivePriceAt } from "./pricing.js";
@@ -349,5 +350,8 @@ export async function materializeSeries(
     });
   }
 
+  // Up to twelve future dates just came off the board in one go. The public
+  // page's cached days were all built before any of them existed.
+  if (booked.length > 0) await noteAvailabilityChanged(input.shopId);
   return { seriesId: series.id, booked, skipped };
 }

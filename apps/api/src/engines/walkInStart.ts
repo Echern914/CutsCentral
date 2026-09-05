@@ -11,6 +11,7 @@ import { promoteOneAppointmentInTx } from "./appointmentPromotion.js";
 import { completeWalkInEntryForAppointmentInTx } from "./walkInComplete.js";
 import { recomputeCadence } from "./cadence.js";
 import { notifyPunchEarned } from "../services/loyaltyNotify.js";
+import { noteAvailabilityChanged } from "../services/availabilityCache.js";
 import {
   serializeEntry,
   WalkInIllegalTransitionError,
@@ -137,6 +138,12 @@ export async function startEntry(opts: {
     // stacking order, or everyone behind it would slide forward onto the very
     // span we are claiming and refuse every start with a queue behind it.
     await lockStaffAndAssertSlotFree(tx, {
+      // External blocks are not enforced on Walk-In Start, and this is not an
+      // oversight: the person is physically in the chair and the barber has
+      // tapped Start. Refusing would eject a customer who is already sitting
+      // down over a calendar entry. Reviewed in PR #402; the dashboard's own
+      // create/reschedule/edit require an explicit, recorded override instead.
+      externalBlocks: "ignore",
       walkInCapacity: { excludeEntryId: entryId },
       staffId: chairId,
       shopId,
@@ -277,6 +284,11 @@ export async function startEntry(opts: {
     // background rejection from taking the process down.
   });
 
+  // The chair is physically occupied now, and the walk-in's projected span was
+  // already hidden from the grid - but the CACHED day was built before this
+  // started. Without this the public page keeps selling the chair the customer
+  // is sitting in.
+  await noteAvailabilityChanged(shopId);
   return { entry: view, appointmentId };
 }
 
@@ -394,5 +406,8 @@ export async function completeEntry(opts: {
     ]),
   );
   if (!updated) throw new WalkInNotFoundError();
+  // Completing releases the chair's projected span, so time can come BACK on
+  // sale here. Same cache, opposite direction.
+  await noteAvailabilityChanged(shopId);
   return serializeEntry(updated, services);
 }

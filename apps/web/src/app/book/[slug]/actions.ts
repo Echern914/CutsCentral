@@ -1,6 +1,10 @@
 "use server";
 
 import { apiPublicGet, apiPublicSend } from "@/lib/api";
+import type {
+  BookingErrorCode,
+  BookingErrorField,
+} from "@chairback/config/bookingErrors";
 
 export interface SlotsResult {
   timezone: string;
@@ -260,7 +264,19 @@ export async function bookAction(
    * can name them rather than let a missing March reminder be the first hint.
    */
   series?: { booked: number; total: number; skipped: string[] };
+  /** The legacy string. Kept for back-compat; new branches read `code`. */
   error?: string;
+  /**
+   * The stable machine-readable reason (packages/config/bookingErrors.ts).
+   *
+   * 🔴 The UI branches on THIS, never on a message. Before it existed, the page
+   * had one undifferentiated `invalid_input` for every malformed field and fell
+   * through to whichever branch matched first - which is how a mistyped email
+   * address came back as "That time was just taken. Pick another slot."
+   */
+  code?: BookingErrorCode;
+  /** Which field to focus, when the customer can fix it in place. */
+  field?: BookingErrorField;
 }> {
   const res = await apiPublicSend<{
     ok: boolean;
@@ -282,7 +298,17 @@ export async function bookAction(
       skipped: { startsAt: string; reason: string }[];
     };
   }>("POST", `/api/book/${encodeURIComponent(slug)}`, input);
-  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  if (!res.ok || !res.data) {
+    // The API's own classification travels with the refusal. `raw` is the
+    // parsed body when there was one; a transport failure has none, and
+    // BOOKING_FAILED is the honest answer for "we never heard back".
+    return {
+      ok: false,
+      error: res.error ?? "failed",
+      code: (res.code as BookingErrorCode | undefined) ?? "BOOKING_FAILED",
+      ...(res.field ? { field: res.field as BookingErrorField } : {}),
+    };
+  }
   return {
     ok: true,
     manageToken: res.data.manageToken,

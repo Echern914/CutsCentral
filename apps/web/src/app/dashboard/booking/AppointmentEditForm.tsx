@@ -510,6 +510,8 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
 const errorCopy = (vocab: BusinessVocabulary): Record<string, string> => ({
   slot_taken: `That time is already taken on this ${vocab.stationNoun}.`,
   invalid_slot: "That time is outside your booking hours.",
+  external_block:
+    "That time is blocked in your external calendar. Clear the block there, or book it as a new appointment with Custom time.",
   invalid_phone: "That phone number isn't one we can dial — check the digits.",
   price_change_on_paid:
     "This booking is already paid — refund or take the difference in person first.",

@@ -1,5 +1,6 @@
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
+import { noteAvailabilityChangedFor } from "../services/availabilityCache.js";
 
 /**
  * Expired AI-receptionist holds -> CANCELED, as a LIGHT updateMany flip
@@ -24,10 +25,22 @@ import { logger } from "../logger.js";
  * sweepExpiredPaymentHolds in services/appointmentPaymentHold.ts.
  */
 export async function sweepExpiredHolds(now: Date = new Date()): Promise<number> {
-  const { count } = await prisma.appointment.updateMany({
-    where: { status: "PENDING", holdReason: null, holdExpiresAt: { lt: now } },
-    data: { status: "CANCELED", canceledAt: now },
-  });
-  if (count > 0) logger.info({ count }, "expired receptionist holds swept");
+  // RETURNING the shop of every row flipped, so the availability generation is
+  // advanced for exactly the shops whose time this freed - per shop, never a
+  // global clear. ISO text + ::timestamp, never a raw Date (PR #70).
+  const rows = await prisma.$queryRaw<{ shopId: string }[]>`
+    UPDATE "Appointment"
+       SET "status" = 'CANCELED', "canceledAt" = ${now.toISOString()}::timestamp
+     WHERE "status" = 'PENDING'
+       AND "holdReason" IS NULL
+       AND "holdExpiresAt" < ${now.toISOString()}::timestamp
+     RETURNING "shopId"`;
+  const count = rows.length;
+  if (count > 0) {
+    logger.info({ count }, "expired receptionist holds swept");
+    // The slot engine already ignores an expired hold, so the chair was free
+    // the instant it lapsed - this is about the cached page catching up.
+    await noteAvailabilityChangedFor(rows.map((r) => r.shopId));
+  }
   return count;
 }

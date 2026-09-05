@@ -39,6 +39,7 @@ import { walkInBarberRouter } from "./routes/walkIn.barber.js";
 import { walkInPublicRouter } from "./routes/walkIn.public.js";
 import { walkInDashboardRouter } from "./routes/walkIn.dashboard.js";
 import { insightsRouter } from "./routes/insights.js";
+import { yearlyReportRouter } from "./routes/yearlyReport.js";
 import { notificationsRouter } from "./routes/notifications.js";
 import { mcpConnectionsRouter } from "./routes/mcp.connections.js";
 import { readinessRouter } from "./routes/readiness.js";
@@ -233,6 +234,10 @@ export function createApp(): Express {
   app.use("/api/barber/clients", dashboardLimiter, barberClientsRouter);
   app.use("/api/barber", dashboardLimiter, barberRouter);
   app.use("/api/insights", dashboardLimiter, insightsRouter); // barber analytics page
+  // The yearly report has a gate of its own - a BARBER seat may read HIS OWN
+  // year here even though every other insights card is manager-only. See the
+  // header of routes/yearlyReport.ts.
+  app.use("/api/yearly-report", dashboardLimiter, yearlyReportRouter);
   app.use("/api/notifications", dashboardLimiter, notificationsRouter); // the barber's own alert settings
   // Launch readiness (READ-ONLY). NEVER WALLED on purpose - see the router's
   // own note: a lapsed shop has to be able to read WHY booking stopped, and

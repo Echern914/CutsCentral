@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { loadStripe, type Stripe } from "@stripe/stripe-js";
 import { readableOn } from "@/lib/contrast";
+import type { BookingErrorCode } from "@chairback/config/bookingErrors";
 import {
   Elements,
   PaymentElement,
@@ -127,6 +128,8 @@ function PaymentForm({
   const stripe = useStripe();
   const elements = useElements();
   const [error, setError] = useState<string | null>(null);
+  /** Why the last attempt failed, in the shared booking vocabulary. */
+  const [failureCode, setFailureCode] = useState<BookingErrorCode | null>(null);
   const [paying, setPaying] = useState(false);
   // The Element mounts asynchronously in a cross-origin iframe. Until it is
   // ready there is nothing to type into, and a live "Pay" button over an empty
@@ -171,6 +174,18 @@ function PaymentForm({
       paymentIntent = r.paymentIntent;
     }
     if (err) {
+      // 🔴 CLASSIFY IT AS A PAYMENT-METHOD FAILURE, and never as anything else.
+      // A declined card, a cancelled Apple Pay sheet and an unusable wallet all
+      // land here, and every one of them used to be indistinguishable from a
+      // scheduling problem to anything reading this screen. The code is the
+      // shared booking vocabulary (packages/config/bookingErrors.ts) so a
+      // failure here can never be mistaken for a slot that went away.
+      //
+      // Stripe's own `err.message` is the customer-facing text: it is written
+      // for customers, and it is the only part of a Stripe error that may be
+      // shown. The error OBJECT carries the intent and its client_secret, so
+      // it is never logged or rendered whole.
+      setFailureCode("PAYMENT_METHOD_FAILED");
       setError(
         err.message ??
           (intent === "setup" ? "We couldn't save that card. Please try another." : "Payment failed. Please try another card."),
@@ -191,6 +206,7 @@ function PaymentForm({
       onPaid();
       return;
     }
+    setFailureCode("PAYMENT_METHOD_FAILED");
     setError("Payment didn't complete. Please try again.");
     setPaying(false);
   }
@@ -210,7 +226,7 @@ function PaymentForm({
       )}
       <PaymentElement options={{ layout: "tabs" }} onReady={() => setReady(true)} />
       {error && (
-        <p role="alert" className="text-xs text-red-400">
+        <p role="alert" data-error-code={failureCode ?? undefined} className="text-xs text-red-400">
           {error}
         </p>
       )}

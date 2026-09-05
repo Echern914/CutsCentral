@@ -17,7 +17,8 @@ import { notifyAppointmentConfirmation } from "../services/appointmentNotify.js"
 import { pokeAppointmentPass } from "../wallet/appointmentPass.js";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
-import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
+import { ExternalBlockError, lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
+import { describeBlocks, recordExternalBlockOverrides } from "../services/appointmentOverride.js";
 import { registerAppointmentEdit } from "./booking.appointmentEdit.js";
 import { registerAppointmentDetail } from "./booking.appointmentDetail.js";
 import { stripeCollectedCents } from "../engines/appointmentPayment.js";
@@ -68,7 +69,7 @@ import {
   type RecurrencePattern,
 } from "../engines/recurringSeries.js";
 import { zonedDateParts, zonedWallTimeToUtc, localMinutesOfDay } from "@chairback/config";
-import { invalidateShopAvailabilityCaches } from "./booking.public.js";
+import { noteAvailabilityChanged } from "../services/availabilityCache.js";
 import { logger } from "../logger.js";
 import {
   isMirrorNotConfigured,
@@ -93,6 +94,30 @@ import { requireActiveAccess } from "../middleware/billing.js";
  *
  * The public customer-facing booking lives in booking.public.ts.
  */
+/**
+ * "Blocked in your external calendar: Dentist, Sep 10, 12:00 PM - 1:00 PM" -
+ * the sentence the dashboard shows before a barber confirms booking over a
+ * block. Formatted here, in the shop's zone, so every form says it the same way.
+ */
+function blockSentence(err: ExternalBlockError, timezone: string): string {
+  const day = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: timezone,
+  });
+  const time = new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: timezone,
+  });
+  const spans = err.blocks
+    .slice(0, 3)
+    .map((b) => `${b.reason?.trim() || "Blocked"}, ${day.format(b.startsAt)} - ${time.format(b.endsAt)}`);
+  return `Blocked in your external calendar: ${spans.join("; ")}`;
+}
+
 export const bookingDashboardRouter: Router = Router();
 bookingDashboardRouter.use(requireUser, requireShop, requireManager, requireActiveAccess);
 
@@ -118,7 +143,7 @@ bookingDashboardRouter.use((req, res, next) => {
   const shopId = req.shop?.id;
   if (shopId) {
     res.on("finish", () => {
-      if (res.statusCode < 400) invalidateShopAvailabilityCaches(shopId);
+      if (res.statusCode < 400) void noteAvailabilityChanged(shopId);
     });
   }
   next();
@@ -2352,6 +2377,14 @@ const createApptSchema = z
     // Bypass the availability check (barber forcing a time). Overlap is still
     // enforced so two real appointments can't collide.
     customTime: z.boolean().optional(),
+    /**
+     * Confirms booking OVER a span blocked in the external calendar. Only
+     * meaningful with customTime; without it the write answers 409
+     * `external_block` naming the block, so the barber sees what he is about
+     * to do before it is done. Every confirmed override is recorded
+     * (AppointmentOverride) in the same transaction.
+     */
+    overrideExternalBlock: z.boolean().optional(),
     // Chosen service add-ons (ids). Extend the appointment length + total; the
     // choice is snapshotted. Invalid/foreign ids are dropped server-side.
     addOnIds: z.array(z.string().min(1)).max(20).optional(),
@@ -2619,7 +2652,11 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
     const result = await prisma.$transaction(async (tx) => {
       // Shared advisory-lock + overlap guard (same as the public create);
       // SlotTakenError's message is "slot_taken", so the catch below matches.
-      await lockStaffAndAssertSlotFree(tx, {
+      const guard = await lockStaffAndAssertSlotFree(tx, {
+        // Blocked time in the EXTERNAL calendar (Acuity): enforced unless the
+        // barber explicitly confirmed the override - and then still detected
+        // and recorded. services/appointmentOverride.ts has the decision.
+        externalBlocks: d.customTime && d.overrideExternalBlock ? "override" : "enforce",
         walkInCapacity: "ignore",
         staffId: d.staffId,
         shopId: shop.id,
@@ -2759,6 +2796,16 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
               : { source: "dashboard", toStatus: "BOOKED", linked: true },
         });
       }
+      // The barber confirmed booking over a block: leave the record, in this
+      // same transaction, or the appointment does not land either.
+      await recordExternalBlockOverrides(tx, {
+        shopId,
+        appointmentId: appt.id,
+        staffId: d.staffId,
+        actorUserId: req.userId ?? null,
+        source: "dashboard_create",
+        blocks: guard.externalBlocksCrossed,
+      });
       return appt;
     });
     // After commit: place the block. Best-effort by design - the barber is
@@ -2771,6 +2818,18 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
     });
     res.status(201).json({ ok: true, id: result.id });
   } catch (err) {
+    // The one refusal that must be SHOWN, not just returned: which block, when,
+    // and why - so the barber decides with the facts, then confirms.
+    if (err instanceof ExternalBlockError) {
+      res.status(409).json({
+        error: "external_block",
+        code: "SLOT_UNAVAILABLE",
+        confirmable: true,
+        reason: blockSentence(err, shop.timezone),
+        blocks: describeBlocks(err.blocks),
+      });
+      return;
+    }
     const msg = (err as Error).message;
     if (msg === "slot_taken") {
       res.status(409).json({ error: "slot_taken" });
@@ -2941,6 +3000,10 @@ bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
   try {
     await prisma.$transaction(async (tx) => {
       await lockStaffAndAssertSlotFree(tx, {
+        // External blocks are ENFORCED here: this path has no override step.
+        // A block that landed since the customer asked means the barber
+        // declines (or clears the block where he made it) - the refusal says so.
+        externalBlocks: "enforce",
         walkInCapacity: "ignore",
         staffId: appt.staffId,
         shopId,
@@ -2986,6 +3049,18 @@ bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
       });
     });
   } catch (err) {
+    if (err instanceof ExternalBlockError) {
+      // No override on restore: the barber blocked this time where he manages
+      // it. Say which block, so he can clear it there if he means to.
+      res.status(409).json({
+        error: "external_block",
+        code: "SLOT_UNAVAILABLE",
+        confirmable: false,
+        reason: blockSentence(err, req.shop!.timezone),
+        blocks: describeBlocks(err.blocks),
+      });
+      return;
+    }
     if (
       err instanceof SlotTakenError ||
       (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002")
@@ -3009,7 +3084,7 @@ bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
     appointmentId: appt.id,
     via: "dashboard_restore",
   });
-  invalidateShopAvailabilityCaches(shopId);
+  await noteAvailabilityChanged(shopId);
   res.json({ ok: true });
 });
 
@@ -3064,6 +3139,14 @@ const rescheduleApptSchema = z
     startsAt: z.string().min(1),
     /** Barber override: skip the hours/blocked check. Overlap still applies. */
     customTime: z.boolean().optional(),
+    /**
+     * Confirms booking OVER a span blocked in the external calendar. Only
+     * meaningful with customTime; without it the write answers 409
+     * `external_block` naming the block, so the barber sees what he is about
+     * to do before it is done. Every confirmed override is recorded
+     * (AppointmentOverride) in the same transaction.
+     */
+    overrideExternalBlock: z.boolean().optional(),
   })
   .strict();
 
@@ -3174,7 +3257,10 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
   let rescheduleOutboxId: string | null = null;
   try {
     await prisma.$transaction(async (tx) => {
-      await lockStaffAndAssertSlotFree(tx, {
+      const guard = await lockStaffAndAssertSlotFree(tx, {
+        // External blocks: enforced unless explicitly overridden (and then
+        // recorded) - same rule as the create route.
+        externalBlocks: parsed.data.customTime && parsed.data.overrideExternalBlock ? "override" : "enforce",
         walkInCapacity: "ignore",
         staffId: appt.staffId,
         shopId,
@@ -3187,6 +3273,14 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
         // A live waitlist hold here is the shop's own automation - the barber
         // overrides it and the hold is RELEASED in this same transaction.
         overrideWaitlistHolds: true,
+      });
+      await recordExternalBlockOverrides(tx, {
+        shopId,
+        appointmentId: appt.id,
+        staffId: appt.staffId,
+        actorUserId: req.userId ?? null,
+        source: "dashboard_reschedule",
+        blocks: guard.externalBlocksCrossed,
       });
       // Send-state is reset so the moved booking gets a fresh confirmation and
       // fresh reminders - including the PUSH stamps, or a moved appointment
@@ -3237,6 +3331,16 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
       });
     });
   } catch (err) {
+    if (err instanceof ExternalBlockError) {
+      res.status(409).json({
+        error: "external_block",
+        code: "SLOT_UNAVAILABLE",
+        confirmable: true,
+        reason: blockSentence(err, shop.timezone),
+        blocks: describeBlocks(err.blocks),
+      });
+      return;
+    }
     if (
       err instanceof SlotTakenError ||
       (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002")
@@ -3260,13 +3364,13 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
   // Devices holding this appointment's Wallet pass re-fetch the NEW time.
   // Fire-and-forget: a wallet problem must never affect the reschedule.
   void pokeAppointmentPass(appt.id);
-  invalidateShopAvailabilityCaches(shopId);
+  await noteAvailabilityChanged(shopId);
   res.json({ ok: true, startsAt: startsAt.toISOString() });
 });
 
 // Edit an appointment (its own module - see booking.appointmentEdit.ts for the
 // reuse-the-same-engine rules and the Acuity-safe move ordering).
-registerAppointmentEdit(bookingDashboardRouter, invalidateShopAvailabilityCaches);
+registerAppointmentEdit(bookingDashboardRouter, noteAvailabilityChanged);
 
 // Read ONE booking in full, for the appointment sheet: contact, payment truth
 // and what may be edited (booking.appointmentDetail.ts).
@@ -4514,6 +4618,10 @@ bookingDashboardRouter.post("/appointments/:id/approve", async (req, res) => {
       // being approved is itself PENDING, and any conflicting PENDING would
       // have failed its own create guard (see engines/bookingWrite.ts).
       await lockStaffAndAssertSlotFree(tx, {
+        // External blocks are ENFORCED here: this path has no override step.
+        // A block that landed since the customer asked means the barber
+        // declines (or clears the block where he made it) - the refusal says so.
+        externalBlocks: "enforce",
         walkInCapacity: "ignore",
         staffId: appt.staffId,
         shopId,
@@ -4547,6 +4655,19 @@ bookingDashboardRouter.post("/appointments/:id/approve", async (req, res) => {
     void notifyAppointmentConfirmation({ shopId, appointmentId: approved });
     res.status(200).json({ ok: true });
   } catch (err) {
+    if (err instanceof ExternalBlockError) {
+      // No override on approve: the request now sits on time the barber
+      // blocked in Acuity. Decline it, or clear the block there.
+      res.status(409).json({
+        ok: false,
+        error: "external_block",
+        code: "SLOT_UNAVAILABLE",
+        confirmable: false,
+        reason: blockSentence(err, req.shop!.timezone),
+        blocks: describeBlocks(err.blocks),
+      });
+      return;
+    }
     if ((err as Error).message === "slot_taken") {
       res.status(409).json({ ok: false, error: "slot_taken" });
       return;

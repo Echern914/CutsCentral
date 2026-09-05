@@ -13,6 +13,12 @@ import { DEMO } from "@chairback/config/demo";
 import { serviceColorHex } from "@chairback/config/constants";
 import { NEUTRAL_VOCABULARY } from "@chairback/config/businessTypes";
 import { zonedMinutesOfDay } from "@chairback/config/time";
+import {
+  INVALID_EMAIL_MESSAGE,
+  SLOT_CONFLICT_MESSAGE,
+  isLikelyEmail,
+  type BookingErrorField,
+} from "@chairback/config/bookingErrors";
 import { BackToDashboard } from "@/components/BackToDashboard";
 import { CustomerBack } from "@/components/CustomerBack";
 import { PullToRefresh } from "@/components/PullToRefresh";
@@ -218,11 +224,73 @@ export function BookingClient({
   const [lastName, setLastName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
+  /**
+   * A correctable problem with ONE field, shown under that field.
+   *
+   * 🔴 THE DEFECT THIS REPLACES. There used to be a single `error` string for
+   * the whole step, so a malformed email address had nowhere of its own to be
+   * reported - and the server had one code for every malformed field, which
+   * meant the page fell through to whichever branch matched first. A customer
+   * who mistyped their address was told "That time was just taken. Pick another
+   * slot." They picked another slot. Same answer.
+   *
+   * The field error is separate from `error` on purpose: `error` is about the
+   * BOOKING (the slot went, the shop is paused), this is about the FORM, and
+   * conflating the two is what made a typo look like a broken calendar.
+   */
+  const [fieldError, setFieldError] = useState<{ field: BookingErrorField; message: string } | null>(
+    null,
+  );
+  /** The lost-slot banner, so it can be focused the moment it appears. */
+  const conflictRef = useRef<HTMLParagraphElement | null>(null);
+  const emailRef = useRef<HTMLInputElement | null>(null);
+  const phoneRef = useRef<HTMLInputElement | null>(null);
+  const firstNameRef = useRef<HTMLInputElement | null>(null);
+  const lastNameRef = useRef<HTMLInputElement | null>(null);
+
+  /**
+   * Put the customer's cursor on the thing they have to fix.
+   *
+   * Focusing does the scrolling on every browser we support, and it is what a
+   * screen reader follows - the `role="alert"` under the field announces the
+   * message, and the focus move says WHERE. `preventScroll: false` is the
+   * default and is what we want: on a phone the email field is often below the
+   * fold behind the keyboard.
+   */
+  function showFieldError(field: BookingErrorField, message: string) {
+    setFieldError({ field, message });
+    setError(null);
+    const target =
+      field === "email"
+        ? emailRef.current
+        : field === "phone"
+          ? phoneRef.current
+          : field === "lastName"
+            ? lastNameRef.current
+            : firstNameRef.current;
+    target?.focus();
+    target?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
   // MUST default to false: a pre-checked consent box is not valid consent under
   // TCPA and is explicitly rejected by 10DLC campaign vetting (the box must be
   // actively selected by the user). See the booking consent label below.
   const [consent, setConsent] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  /**
+   * Bring the lost-slot banner to the customer the moment it appears.
+   *
+   * `role="alert"` alone announces it to a screen reader but does nothing for
+   * a sighted customer whose phone may be scrolled anywhere; focusing does the
+   * scrolling on every browser we support and puts the keyboard where the
+   * message is. Guarded on `slot === null` so it only fires in the state the
+   * banner actually renders in.
+   */
+  useEffect(() => {
+    if (error && slot === null) conflictRef.current?.focus();
+    // Only when a NEW message arrives - not on every unrelated re-render.
+  }, [error, slot]);
+
   const [confirmedToken, setConfirmedToken] = useState<string | null>(null);
   // true when the shop requires approval: the customer submitted a REQUEST, not a
   // confirmed booking, so the success screen reads "Request sent".
@@ -1287,6 +1355,7 @@ export function BookingClient({
       setError("Please add your last name.");
       return;
     }
+    setFieldError(null);
     if (!phone.trim() && !email.trim()) {
       setError("Add a phone or email so we can confirm.");
       return;
@@ -1295,7 +1364,19 @@ export function BookingClient({
     // customer would never be told it exists. Caught here so they fix it at the
     // field instead of bouncing off the server.
     if (data.shop.emailRequired && !email.trim()) {
-      setError("Add your email — that's where your confirmation goes.");
+      showFieldError("email", "Add your email — that's where your confirmation goes.");
+      return;
+    }
+    // 🔴 FORMAT-CHECKED HERE, WITH THE SERVER'S OWN PREDICATE. `isLikelyEmail`
+    // lives in packages/config and is the SAME function the API runs, so this
+    // form can never accept an address the server would refuse, nor refuse one
+    // the server would take. It checks the SHAPE only - it cannot and does not
+    // claim the mailbox exists, and it deliberately accepts the forms real
+    // people use that naive regexes reject (plus tags, deep subdomains, long
+    // TLDs). Catching it here means no round trip, no lost form state, and no
+    // chance of the failure being mistaken for something about the calendar.
+    if (email.trim() && !isLikelyEmail(email)) {
+      showFieldError("email", INVALID_EMAIL_MESSAGE);
       return;
     }
     // The barber to write against: the one bound to the chosen slot (may differ
@@ -1329,16 +1410,68 @@ export function BookingClient({
         recurrence:
           repeatOffered && repeat ? { interval: repeat.interval, count: repeat.count } : undefined,
       });
+      /**
+       * Refresh the available times, then say what happened.
+       *
+       * 🔴 THE ORDER IS LOAD-BEARING, AND GETTING IT WRONG IS SILENT.
+       * `loadSlots` clears `error` as its first act (it is also used for an
+       * ordinary reload, where a stale message would be wrong). So setting the
+       * message BEFORE refreshing wiped it, and the customer lost their slot,
+       * watched the list change under them, and was told nothing at all - the
+       * exact "the product is broken" reading that the slot-conflict copy
+       * exists to prevent. Caught by the render QA, not by any unit test:
+       * both calls "worked", they just undid each other.
+       */
+      const refreshTimesThenSay = (message: string) => {
+        if (dayFirst && dayDate) pickDay(dayDate);
+        else if (serviceId && loadedPool.length) loadSlots(serviceId, loadedPool);
+        clearSlotPick();
+        setError(message);
+      };
+
       if (!res.ok) {
-        if (res.error === "slot_taken") {
-          setError("That time was just taken. Pick another slot.");
+        // 🔴 BRANCH ON THE CODE, NEVER ON THE COPY. `res.code` is the stable
+        // vocabulary from packages/config/bookingErrors.ts; `res.error` is the
+        // legacy string kept only for back-compat. Copy gets reworded and
+        // shortened for mobile - every one of those would be a silent change
+        // in behaviour if a message were load-bearing.
+        //
+        // A field problem is reported AT THE FIELD and stops here. It is not a
+        // booking failure, the customer's other answers are untouched, and it
+        // must never reach the slot branches below - which is exactly the bug
+        // that made a mistyped address read as "That time was just taken."
+        if (res.code === "INVALID_EMAIL") {
+          showFieldError("email", INVALID_EMAIL_MESSAGE);
+          return;
+        }
+        if (res.code === "INVALID_PHONE") {
+          showFieldError("phone", "Enter a valid mobile number.");
+          return;
+        }
+        if (res.code === "VALIDATION_ERROR") {
+          // A required value that is MISSING, not malformed. Still fixed at the
+          // field, so the customer's cursor lands where the answer goes.
+          if (res.field === "firstName" || res.field === "lastName") {
+            showFieldError(res.field, "Enter your first and last name.");
+          } else if (res.field === "email") {
+            showFieldError("email", "Add your email — that's where your confirmation goes.");
+          } else if (res.field === "phone") {
+            showFieldError("phone", "Add a phone or email so we can confirm.");
+          } else {
+            setError("Check your details and try again.");
+          }
+          return;
+        }
+        if (res.code === "RATE_LIMITED") {
+          setError("Too many attempts just now. Wait a moment and try again.");
+          return;
+        }
+        if (res.code === "SLOT_UNAVAILABLE" && res.error === "slot_taken") {
           // Refresh availability so the taken slot disappears — day-first
           // refetches the whole day; service-first reloads the SAME pool the
           // calendar was built from (not just one barber), so a merged
           // multi-barber calendar doesn't collapse to a single provider.
-          if (dayFirst && dayDate) pickDay(dayDate);
-          else if (serviceId && loadedPool.length) loadSlots(serviceId, loadedPool);
-          clearSlotPick();
+          refreshTimesThenSay(SLOT_CONFLICT_MESSAGE);
         } else if (res.error === "no_active_access") {
           setError(
             `Online booking is paused for ${data.shop.name} right now. Please contact the shop directly to book.`,
@@ -1354,31 +1487,21 @@ export function BookingClient({
           // "Something went wrong" during the Sep boundary-slot outage, which
           // is why a real customer concluded the product was broken instead of
           // picking another time.
-          setError("That time isn't available anymore. Pick another slot.");
-          if (dayFirst && dayDate) pickDay(dayDate);
-          else if (serviceId && loadedPool.length) loadSlots(serviceId, loadedPool);
-          clearSlotPick();
+          refreshTimesThenSay("That time isn't available anymore. Pick another slot.");
         } else if (res.error === "day_full") {
           // The API distinguishes "this TIME went" from "this DAY is done" on
           // purpose (a per-service daily cap). Without its own copy this read
           // as "Something went wrong", and the customer retried the same full
           // day until they gave up.
-          setError(
-            "That day is fully booked for this service. Try another day.",
-          );
-          if (dayFirst && dayDate) pickDay(dayDate);
-          else if (serviceId && loadedPool.length) loadSlots(serviceId, loadedPool);
-          clearSlotPick();
+          refreshTimesThenSay("That day is fully booked for this service. Try another day.");
         } else if (res.error === "slot_unavailable_external") {
           // The shop's external calendar (Acuity/Square) refused the mirror, so
           // the booking was rolled back. Their calendar is the authority here.
-          setError(
-            "That time was just taken on the shop's calendar. Pick another slot.",
-          );
-          if (dayFirst && dayDate) pickDay(dayDate);
-          else if (serviceId && loadedPool.length) loadSlots(serviceId, loadedPool);
-          clearSlotPick();
+          refreshTimesThenSay(SLOT_CONFLICT_MESSAGE);
         } else {
+          // BOOKING_FAILED and anything unrecognised: a safe generic message.
+          // The real cause is in the server log under a sanitized
+          // classification - never echoed to the customer.
           setError("Something went wrong. Please try again.");
         }
         return;
@@ -1569,6 +1692,29 @@ export function BookingClient({
   // for keyboard users (WCAG 2.4.7); the border tint alone is too weak.
   const input =
     "w-full rounded-lg border border-white/15 bg-white/5 px-4 py-2.5 text-sm text-offwhite placeholder:text-muted focus:border-white/40";
+  // The invalid state is a RED BORDER PLUS A SENTENCE, never colour alone -
+  // colour is not information for a customer who cannot see it, and the
+  // message below is what actually says how to fix it.
+  const invalidInput = "border-rose-400/70 bg-rose-500/5";
+  /** Join class names, dropping the false branches. */
+  const cx = (...parts: (string | false | null | undefined)[]) =>
+    parts.filter(Boolean).join(" ");
+
+  /**
+   * The message under one field.
+   *
+   * `role="alert"` on a node that renders only when there IS an error makes
+   * every screen reader announce it the moment it appears - a persistent
+   * container that merely changes text is announced unreliably. The id pairs
+   * with the input's aria-describedby, so the message is also read when the
+   * customer tabs back to the field to fix it.
+   */
+  const FieldError = ({ field }: { field: BookingErrorField }) =>
+    fieldError?.field === field ? (
+      <p id={`book-error-${field}`} role="alert" className="-mt-1 text-xs text-rose-300">
+        {fieldError.message}
+      </p>
+    ) : null;
 
   // ---- Payment screen (pay-ahead: booking created, collect card/Apple Pay) ----
   if (paymentSecret !== null && confirmedToken === null) {
@@ -1866,6 +2012,32 @@ export function BookingClient({
           would wipe the booking's manage link off the screen. Refreshing must
           never be able to cost a customer the thing they just did. */}
       <PullToRefresh />
+      {/*
+        WHY THE LOST-SLOT MESSAGE LIVES AT THE TOP.
+
+        🔴 It used to render at the very BOTTOM of this page, after the whole
+        calendar and every service. When a slot is taken out from under a
+        customer, the page refreshes the times and drops them back on the time
+        step - scrolled to the top - so the one sentence explaining what just
+        happened sat several screens below where they were looking. Render QA
+        caught it: the dead chip really had disappeared and the copy really was
+        in the DOM, and a real customer would still have watched a list quietly
+        rearrange itself for no stated reason. That is exactly the "the product
+        is broken" reading the conflict copy exists to prevent.
+
+        Focused as well as shown, so a screen reader announces it and a phone
+        brings it into view.
+      */}
+      {error && !slot && (
+        <p
+          ref={conflictRef}
+          role="alert"
+          tabIndex={-1}
+          className="mb-4 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2.5 text-center text-sm text-amber-200 outline-none"
+        >
+          {error}
+        </p>
+      )}
       {/* Guided client-experience tour — demo tenant only. Step anchors are the
           data-tour attributes below (keep in sync with
           packages/config/src/demoTour.ts). */}
@@ -2686,40 +2858,62 @@ export function BookingClient({
           <div className="flex flex-col gap-3" data-tour="checkout">
             <div className="flex gap-2">
               <input
-                className={input}
+                ref={firstNameRef}
+                className={cx(input, fieldError?.field === "firstName" && invalidInput)}
                 placeholder="First name"
                 value={firstName}
                 onChange={(e) => setFirstName(e.target.value)}
                 aria-label="First name"
+                aria-invalid={fieldError?.field === "firstName" || undefined}
               />
               <input
-                className={input}
+                ref={lastNameRef}
+                className={cx(input, fieldError?.field === "lastName" && invalidInput)}
                 placeholder="Last name"
                 value={lastName}
                 onChange={(e) => setLastName(e.target.value)}
                 aria-label="Last name"
+                aria-invalid={fieldError?.field === "lastName" || undefined}
               />
             </div>
+            <FieldError field="firstName" />
+            <FieldError field="lastName" />
             <input
-              className={input}
+              ref={phoneRef}
+              className={cx(input, fieldError?.field === "phone" && invalidInput)}
               type="tel"
               inputMode="tel"
               autoComplete="tel"
               placeholder="Mobile number"
               value={phone}
-              onChange={(e) => setPhone(e.target.value)}
+              onChange={(e) => {
+                setPhone(e.target.value);
+                if (fieldError?.field === "phone") setFieldError(null);
+              }}
               aria-label="Mobile number"
+              aria-invalid={fieldError?.field === "phone" || undefined}
+              aria-describedby={fieldError?.field === "phone" ? "book-error-phone" : undefined}
             />
+            <FieldError field="phone" />
             <input
-              className={input}
+              ref={emailRef}
+              className={cx(input, fieldError?.field === "email" && invalidInput)}
               type="email"
               autoComplete="email"
               required={data.shop.emailRequired}
               placeholder={data.shop.emailRequired ? "Email" : "Email (optional)"}
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) => {
+                setEmail(e.target.value);
+                // Clear as they type: leaving a red field under a value they
+                // have already corrected is its own small lie.
+                if (fieldError?.field === "email") setFieldError(null);
+              }}
               aria-label="Email"
+              aria-invalid={fieldError?.field === "email" || undefined}
+              aria-describedby={fieldError?.field === "email" ? "book-error-email" : undefined}
             />
+            <FieldError field="email" />
             {/* A standing appointment. Two decisions, kept to two controls:
                 how often, and for how many visits. Hidden entirely when the
                 shop takes payment at booking or runs approval (the API decides
@@ -2839,11 +3033,6 @@ export function BookingClient({
         </Section>
       )}
 
-      {error && !slot && (
-        <p role="alert" className="mt-3 text-center text-xs text-red-400">
-          {error}
-        </p>
-      )}
     </main>
   );
 }

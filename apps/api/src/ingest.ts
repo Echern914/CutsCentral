@@ -5,6 +5,7 @@ import { getAcuityClientForShop } from "./acuity/client.js";
 import { appointmentHasSmsConsent } from "./acuity/consent.js";
 import { resolveStatus } from "./acuity/mapping.js";
 import { recomputeCadence } from "./engines/cadence.js";
+import { noteAvailabilityChanged } from "./services/availabilityCache.js";
 import { clawBackVisitEarn, earnPunchForVisitInTx } from "./services/punch.js";
 import { notifyPunchEarned } from "./services/loyaltyNotify.js";
 import { logger } from "./logger.js";
@@ -181,6 +182,15 @@ export async function ingestAppointment(
 
     return { clientId: client.id, clawedBack: revokeCompleted, earn };
   });
+
+  // 🔴 A SYNCED APPOINTMENT OCCUPIES THE CHAIR. The slot engine subtracts live
+  // Visits shop-wide, but the public page's cached day was built before this
+  // one arrived - so a time the barber just booked in Acuity stayed tappable
+  // here for up to a minute, and the customer found out by being refused.
+  // Every Acuity/Square appointment - created, rescheduled or canceled -
+  // passes through this function, which makes it the one place that has to
+  // remember.
+  await noteAvailabilityChanged(shop.id);
 
   // The completed-visit set changed: lastVisitAt / median cadence / nextExpectedAt
   // were all advanced by the phantom visit and must be recomputed. (Outside the

@@ -1,5 +1,6 @@
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
+import { noteAvailabilityChangedFor } from "./availabilityCache.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import { ServiceDayFullError } from "../engines/serviceDailyLimit.js";
 import { releaseForAppointment } from "../engines/acuityMirror.js";
@@ -205,6 +206,13 @@ export async function promotePaidHold(params: {
 
     await prisma.$transaction(async (tx) => {
       await lockStaffAndAssertSlotFree(tx, {
+        // External blocks are not enforced when PROMOTING a paid hold, and
+        // this is not an oversight: the hold was validated against every block
+        // when it was created (customer path, enforced), the customer was
+        // promised the chair, and their money has landed. A block synced in
+        // the minutes they spent paying must not cost them the booking they
+        // paid for. Reviewed in PR #402.
+        externalBlocks: "ignore",
         staffId: appt.staffId,
         shopId: appt.shopId,
         startsAt: appt.startsAt,
@@ -336,9 +344,11 @@ export async function sweepExpiredPaymentHolds(now: Date = new Date()): Promise<
     take: 200,
   });
   let swept = 0;
+  const shopsFreed = new Set<string>();
   for (const appt of expired) {
     try {
       await releasePaymentHoldRow(appt.shopId, appt.id);
+      shopsFreed.add(appt.shopId);
       // Void the uncollected PaymentIntent so the customer is not left with a
       // pending charge for an appointment that no longer exists.
       // refundForCancellation already knows the difference between an
@@ -360,5 +370,7 @@ export async function sweepExpiredPaymentHolds(now: Date = new Date()): Promise<
     }
   }
   if (swept > 0) logger.info({ count: swept }, "expired payment holds swept");
+  // A lapsed hold puts its chair back on sale; the cached page must learn so.
+  await noteAvailabilityChangedFor(shopsFreed);
   return swept;
 }

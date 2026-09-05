@@ -72,7 +72,26 @@ export async function createCardOnFileSetupIntent(
         customer: customer.id,
         usage: "off_session",
         on_behalf_of: input.connectAccountId,
-        payment_method_types: ["card"],
+        // 🔴 WAS `payment_method_types: ["card"]`, WHICH SILENTLY DISABLED
+        // APPLE PAY ON THIS SCREEN.
+        //
+        // Naming the types explicitly overrides the account's payment method
+        // configuration, so the Payment Element rendered card-only - even on an
+        // iPhone, even with the wallet domain registered at boot
+        // (billing/paymentMethodDomains.ts) and the CSP fixed for Stripe's
+        // wallet frames. Pay-ahead and deposit already used
+        // `automatic_payment_methods` (billing/payments.ts) and DID show Apple
+        // Pay; only card-on-file was left behind, so "Apple Pay is missing"
+        // was true or false depending on which payment mode a shop ran.
+        //
+        // With automatic methods Stripe offers only what is compatible with
+        // THIS intent - a SetupIntent with `usage: off_session` - so nothing
+        // that cannot be saved and reused off-session can appear here. An
+        // Apple Pay card saved this way yields an ordinary reusable payment
+        // method, which is what services/cardOnFileSettle.ts later charges
+        // under the shop's no-show policy. Nothing is charged today, and the
+        // screen already says so.
+        automatic_payment_methods: { enabled: true },
         description: input.description,
         metadata: { shopId: input.shopId, appointmentId: input.appointmentId, cardOnFileId },
       },

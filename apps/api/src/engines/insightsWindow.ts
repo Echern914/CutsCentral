@@ -433,6 +433,16 @@ export interface ChairEvent {
    */
   price: number | null;
   /**
+   * The ticket in INTEGER CENTS - the exact figure `price` is derived from.
+   *
+   * Money must never be summed as dollars: 0.1 + 0.2 is not 0.3 in binary
+   * floating point, and a year of a busy shop is tens of thousands of such
+   * additions. Every consumer that TOTALS money reads the cents; `price` above
+   * stays for the display-only callers that predate this and is exactly
+   * `priceCents / 100`, so the two can never disagree.
+   */
+  priceCents: number | null;
+  /**
    * Money actually EARNED by this booking - what revenue and every goal count.
    *
    * Where the shop takes payment through the app, this is real collected money
@@ -448,6 +458,19 @@ export interface ChairEvent {
    * never "earned nothing".
    */
   earned: number;
+  /** `earned` in INTEGER CENTS. See priceCents - this is the summable one. */
+  earnedCents: number;
+  /**
+   * The part of `earnedCents` that SETTLED THROUGH CHAIRBACK - a Stripe
+   * payment in a collected status, net of refunds. Zero for a cash shop, for
+   * anything the barber closed out at the chair, and for every synced booking.
+   *
+   * This is the only payment-method fact ChairBack owns. It is NOT "card": a
+   * card swiped on the barber's own reader is money taken in person and lands
+   * in the remainder, exactly like cash. Anything that claims to split card
+   * from cash is inventing it - see UNAVAILABLE_METRICS in yearlyReport.ts.
+   */
+  settledCents: number;
   /** True when the chair was held but no work was sold - a no-show. */
   noShow: boolean;
   serviceId: string | null;
@@ -484,7 +507,15 @@ export interface ChairEvent {
  */
 const COLLECTED_STATUSES = new Set(["succeeded", "partially_refunded", "refunded"]);
 
-function collectedDollars(p: {
+/**
+ * Money in hand for one payment, in INTEGER CENTS, net of refunds.
+ *
+ * Every column read here is already an integer number of cents, so this does
+ * no division at all: a payment that is `processing`, `requires_action`,
+ * `requires_capture`, `canceled`, `failed` or `disputed` is not in
+ * COLLECTED_STATUSES and earns 0 until its webhook says otherwise.
+ */
+function collectedCents(p: {
   status: string;
   amount: number;
   capturedAmount: number | null;
@@ -492,7 +523,19 @@ function collectedDollars(p: {
 }): number {
   if (!COLLECTED_STATUSES.has(p.status)) return 0;
   const collected = p.capturedAmount ?? p.amount;
-  return Math.max(0, collected - p.refundedAmount) / 100;
+  return Math.max(0, collected - p.refundedAmount);
+}
+
+/**
+ * A Decimal-backed dollar column as integer cents.
+ *
+ * `Number(decimal)` then `* 100` can land a hair under (45.5 * 100 is exact,
+ * but 1.15 * 100 is 114.99999999999999), so the rounding is not optional.
+ * Every price column in the schema is Decimal(10,2), so rounding to the cent
+ * is lossless here rather than a judgement call.
+ */
+function decimalToCents(value: unknown): number {
+  return Math.round(Number(value) * 100);
 }
 
 // A native booking that held the chair. PENDING (awaiting approval) and holds
@@ -585,12 +628,21 @@ export async function readChairEvents(
 
   const events: ChairEvent[] = [];
   for (const a of appts) {
-    const ticket = a.priceAtBooking === null ? null : Number(a.priceAtBooking);
+    const ticketCents = a.priceAtBooking === null ? null : decimalToCents(a.priceAtBooking);
     const noShow = a.status === "NO_SHOW";
+    const earnedCents =
+      a.paidAmount != null
+        ? decimalToCents(a.paidAmount) + (a.payment ? collectedCents(a.payment) : 0)
+        : a.payment
+          ? collectedCents(a.payment)
+          : noShow
+            ? 0
+            : (ticketCents ?? 0);
     events.push({
       start: a.startsAt,
       end: a.endsAt,
-      price: ticket,
+      price: ticketCents === null ? null : ticketCents / 100,
+      priceCents: ticketCents,
       // Real money wins wherever it exists - it already accounts for refunds,
       // for a partial capture, and for a fee kept on a no-show. With no payment
       // record we trust the ticket, EXCEPT on a no-show: nobody sat in the
@@ -600,14 +652,9 @@ export async function readChairEvents(
       // Stripe already collected - the two never overlap by construction).
       // Falling back to the ticket only for cuts never checked out keeps every
       // cash shop, which is most of them, from reading $0.
-      earned:
-        a.paidAmount != null
-          ? Number(a.paidAmount) + (a.payment ? collectedDollars(a.payment) : 0)
-          : a.payment
-            ? collectedDollars(a.payment)
-            : noShow
-              ? 0
-              : (ticket ?? 0),
+      earned: earnedCents / 100,
+      earnedCents,
+      settledCents: a.payment ? collectedCents(a.payment) : 0,
       noShow,
       serviceId: a.serviceId,
       serviceName: a.service?.name ?? null,
@@ -617,14 +664,19 @@ export async function readChairEvents(
     });
   }
   for (const v of visits) {
-    const ticket = v.price === null ? null : Number(v.price);
+    const ticketCents = v.price === null ? null : decimalToCents(v.price);
     // Synced systems never send us a payment, so the ticket is all we have.
     const noShow = v.status === "NO_SHOW";
+    const earnedCents = noShow ? 0 : (ticketCents ?? 0);
     events.push({
       start: v.scheduledAt,
       end: v.endAt,
-      price: ticket,
-      earned: noShow ? 0 : (ticket ?? 0),
+      price: ticketCents === null ? null : ticketCents / 100,
+      priceCents: ticketCents,
+      earned: earnedCents / 100,
+      earnedCents,
+      // A synced system never tells us how the money moved.
+      settledCents: 0,
       noShow,
       serviceId: null,
       serviceName: v.serviceName,

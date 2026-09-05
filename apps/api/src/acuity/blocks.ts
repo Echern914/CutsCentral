@@ -1,5 +1,6 @@
 import { runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
+import { noteAvailabilityChanged } from "../services/availabilityCache.js";
 import type { AcuityBlock } from "./types.js";
 
 /**
@@ -76,7 +77,7 @@ export async function syncAcuityBlocks(
     });
   }
 
-  return runWithShop(shopId, async (tx) => {
+  const result = await runWithShop(shopId, async (tx) => {
     // SELF-ECHO GUARD. Blocks ChairBack itself created (engines/acuityMirror)
     // come straight back through GET /blocks, and without this they would be
     // imported as ExternalBlock rows - a phantom SECOND block laid over
@@ -131,4 +132,12 @@ export async function syncAcuityBlocks(
     }
     return { upserted: rows.length, removed: count, skipped };
   });
+  // Blocked time is the one busy source the write guard does NOT re-check, so
+  // the grid is the only thing standing between a customer and a time the
+  // barber has said he is not there for. A cached day built before the sync
+  // defeats that entirely.
+  if (result.upserted > 0 || result.removed > 0) {
+    await noteAvailabilityChanged(shopId);
+  }
+  return result;
 }

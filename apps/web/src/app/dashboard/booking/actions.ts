@@ -345,6 +345,12 @@ export interface CreateApptInput {
   note?: string;
   customTime?: boolean;
   /**
+   * Confirms booking over a span blocked in the external calendar. Sent only
+   * after the API refused with `external_block` and the barber chose to go
+   * ahead; the API records every confirmed override.
+   */
+  overrideExternalBlock?: boolean;
+  /**
    * Booking someone off the waitlist: the entry flips to BOOKED and takes
    * bookedAppointmentId INSIDE the same transaction that creates the
    * appointment, so a half-linked state cannot exist.
@@ -365,7 +371,11 @@ export interface SeriesSummary {
   skipped: { startsAt: string; reason: string }[];
 }
 
-export type CreateApptResult = Result & { series?: SeriesSummary };
+export type CreateApptResult = Result & {
+  series?: SeriesSummary;
+  /** For `external_block`: the block, in words, in the shop's zone. */
+  reason?: string;
+};
 
 export async function createAppointmentAction(
   input: CreateApptInput,
@@ -376,7 +386,9 @@ export async function createAppointmentAction(
     input,
   );
   if (res.ok) revalidatePath("/dashboard/booking");
-  if (!res.ok) return { ok: false, error: res.error ?? "failed" };
+  if (!res.ok) {
+    return { ok: false, error: res.error ?? "failed", ...(res.reason ? { reason: res.reason } : {}) };
+  }
   return { ok: true, series: res.data?.series };
 }
 
