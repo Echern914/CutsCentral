@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Prisma } from "@chairback/db";
 import { assertServiceDayHasRoom } from "./serviceDailyLimit.js";
 import { recordWaitlistEvent, SYSTEM_ACTOR } from "./waitlistAudit.js";
@@ -66,19 +67,56 @@ export interface ExternalBlockSpan {
  */
 export class ExternalBlockError extends SlotTakenError {
   readonly blocks: ExternalBlockSpan[];
+  /** The confirmation that - and ONLY that - authorises writing over these blocks. */
+  readonly confirmation: string;
   constructor(blocks: ExternalBlockSpan[]) {
     super();
     this.name = "ExternalBlockError";
     this.blocks = blocks;
+    this.confirmation = externalBlockConfirmation(blocks);
   }
+}
+
+/**
+ * 🔴 CONFIRMATION IS BOUND TO THE CONFLICT, NOT TO A BOOLEAN.
+ *
+ * A plain `overrideExternalBlock: true` says "book over whatever is in the
+ * way". That is a real defect, not a style point: a barber shown "Dentist,
+ * 12-2" who leaves the tab open while Acuity syncs a NEW block over the same
+ * hour would, on confirming, authorise a block he never saw. The banner in
+ * front of him would be describing something else.
+ *
+ * So the confirmation is a digest of the EXACT blocks the refusal named -
+ * their ids, their spans and the reason as it was shown. Confirming replays
+ * that digest; the guard recomputes it from the blocks it finds INSIDE the
+ * lock and refuses unless the two agree. If anything about the conflict moved,
+ * the digest moves with it and the write is refused again with the NEW
+ * conflict, which needs its own explicit confirmation.
+ *
+ * It is a BINDING, not a secret. Authorisation is the router's job
+ * (requireManager) and stays there; possession of a digest grants nothing on
+ * its own - it only says which conflict a manager was answering. That is also
+ * why it is a bare SHA-256 rather than an HMAC: it has to be reproducible by
+ * every replica with no shared key and no server-side state, or a barber whose
+ * confirm lands on the other container would be refused forever.
+ */
+export function externalBlockConfirmation(blocks: ExternalBlockSpan[]): string {
+  const canonical = blocks
+    .map(
+      (b) =>
+        `${b.id}|${b.externalId}|${b.startsAt.toISOString()}|${b.endsAt.toISOString()}|${b.reason ?? ""}`,
+    )
+    .sort()
+    .join(";");
+  return createHash("sha256").update(`external_block:v1:${canonical}`).digest("hex").slice(0, 32);
 }
 
 /** What the guard reports back besides "you may write". */
 export interface SlotGuardResult {
   /**
-   * The external blocks this write crosses. Empty unless `externalBlocks` was
-   * "override" - in "enforce" mode a crossing throws, in "ignore" mode it is
-   * not looked for. The caller that asked to override records these.
+   * The external blocks this write crossed WITH the barber's confirmation.
+   * Empty otherwise: an unconfirmed crossing throws ExternalBlockError, and
+   * under "ignore" blocks are not looked for at all. The caller records these.
    */
   externalBlocksCrossed: ExternalBlockSpan[];
 }
@@ -202,19 +240,29 @@ export async function lockStaffAndAssertSlotFree(
      *                offers and gap-fill. A block is the barber saying "I am
      *                not there". Also the dashboard's approve and restore,
      *                which have no override step. Throws ExternalBlockError.
-     *   "override" - the dashboard's EXPLICIT override: the barber turned on
-     *                Custom time, was shown the block, and confirmed. The
-     *                crossing is still detected and RETURNED so the caller
-     *                can record an AppointmentOverride row in the same
-     *                transaction. Silence is not an option here - see
-     *                services/appointmentOverride.ts.
+     *                Overriding is NOT a mode: it is `externalBlockConfirmation`
+     *                below, and it stays inside "enforce".
      *   "ignore"   - the two paths that are not a barber choosing a time at
      *                all: promoting a paid hold (the customer was promised the
      *                chair and has paid; a block that landed mid-checkout must
      *                not lose them their booking) and starting a walk-in who is
      *                physically in the chair. Both documented at the call.
      */
-    externalBlocks?: "enforce" | "override" | "ignore";
+    externalBlocks?: "enforce" | "ignore";
+    /**
+     * The barber's answer to a refusal this guard already gave: the
+     * `confirmation` digest from that ExternalBlockError, replayed.
+     *
+     * Checked against the blocks found INSIDE the lock, so it authorises the
+     * conflict he was actually shown and nothing else - not a block created
+     * since, not a different span, and never an appointment, hold, offer,
+     * synced visit or walk-in, every one of which has already thrown above
+     * before this line is reached. On a match the crossing is RETURNED rather
+     * than swallowed, so the caller records an AppointmentOverride row in the
+     * same transaction: silence is not an option. See
+     * services/appointmentOverride.ts.
+     */
+    externalBlockConfirmation?: string | null;
     now?: Date;
   },
 ): Promise<SlotGuardResult> {
@@ -413,7 +461,14 @@ export async function lockStaffAndAssertSlotFree(
                  ORDER BY "startsAt" ASC`,
     );
     if (blockOverlap.length > 0) {
-      if (blockMode === "enforce") throw new ExternalBlockError(blockOverlap);
+      // The confirmation has to match THESE blocks - the ones in the way right
+      // now, read under the lock - not merely be present. A plain equality is
+      // the right comparison: the digest is a binding, not a secret, so there
+      // is nothing here for a timing attack to learn.
+      const given = opts.externalBlockConfirmation?.trim() || null;
+      if (given === null || given !== externalBlockConfirmation(blockOverlap)) {
+        throw new ExternalBlockError(blockOverlap);
+      }
       externalBlocksCrossed = blockOverlap;
     }
   }

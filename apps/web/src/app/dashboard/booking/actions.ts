@@ -345,11 +345,13 @@ export interface CreateApptInput {
   note?: string;
   customTime?: boolean;
   /**
-   * Confirms booking over a span blocked in the external calendar. Sent only
-   * after the API refused with `external_block` and the barber chose to go
-   * ahead; the API records every confirmed override.
+   * Answers a refusal: the `confirmation` digest the API sent with an
+   * `external_block` 409, replayed after the barber chose to go ahead. It
+   * authorises the exact blocks that refusal named - if the conflict has
+   * changed since, the API refuses again with the new one. Every confirmed
+   * override is recorded server-side.
    */
-  overrideExternalBlock?: boolean;
+  externalBlockConfirmation?: string;
   /**
    * Booking someone off the waitlist: the entry flips to BOOKED and takes
    * bookedAppointmentId INSIDE the same transaction that creates the
@@ -375,6 +377,8 @@ export type CreateApptResult = Result & {
   series?: SeriesSummary;
   /** For `external_block`: the block, in words, in the shop's zone. */
   reason?: string;
+  /** For `external_block`: what to send back to confirm THAT block. */
+  confirmation?: string;
 };
 
 export async function createAppointmentAction(
@@ -387,7 +391,12 @@ export async function createAppointmentAction(
   );
   if (res.ok) revalidatePath("/dashboard/booking");
   if (!res.ok) {
-    return { ok: false, error: res.error ?? "failed", ...(res.reason ? { reason: res.reason } : {}) };
+    return {
+      ok: false,
+      error: res.error ?? "failed",
+      ...(res.reason ? { reason: res.reason } : {}),
+      ...(res.confirmation ? { confirmation: res.confirmation } : {}),
+    };
   }
   return { ok: true, series: res.data?.series };
 }
@@ -1065,6 +1074,14 @@ export interface EditResult {
   status?: string;
   /** Acuity mirror outcome: active | failed | unknown | skipped | observed. */
   mirror?: string;
+  /**
+   * For `external_block`: the block in words, in the SHOP's zone, exactly as
+   * the server wrote it. The sheet shows this - it never rebuilds the sentence
+   * from parts, and never renders it as markup.
+   */
+  reason?: string;
+  /** For `external_block`: what to send back to confirm THAT block. */
+  confirmation?: string;
 }
 
 /**
@@ -1087,6 +1104,8 @@ export async function editAppointmentAction(
     error: res.ok ? undefined : (res.error ?? "failed"),
     status: res.data?.status,
     mirror: res.data?.mirror,
+    ...(res.reason ? { reason: res.reason } : {}),
+    ...(res.confirmation ? { confirmation: res.confirmation } : {}),
   };
 }
 

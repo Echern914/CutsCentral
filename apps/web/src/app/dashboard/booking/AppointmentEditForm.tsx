@@ -2,7 +2,7 @@
 
 import { cap, useVocab } from "@/components/VocabProvider";
 import type { BusinessVocabulary } from "@chairback/config/businessTypes";
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { zonedWallTimeToUtc } from "@chairback/config/time";
 import { cn } from "@/lib/cn";
 import {
@@ -13,6 +13,7 @@ import {
 } from "./actions";
 import type { AgendaRow } from "./page";
 import { Field, Group, INPUT } from "./formkit";
+import { ExternalBlockBanner, type BlockConflict } from "./ExternalBlockBanner";
 
 /** Same local alias the sibling booking forms use - the provider's own
  * `Toast` interface is a toast OBJECT and is not exported. */
@@ -59,7 +60,20 @@ export interface AppointmentEditState {
   ctx: EditContext | null;
   loadError: boolean;
   pending: boolean;
-  save: () => void;
+  /**
+   * The footer hands this its click event, so it reads its argument
+   * defensively - only a real confirmation string counts.
+   */
+  save: (opts?: { confirmation?: string }) => void;
+  /**
+   * The one refusal a barber can answer: this edit would land on time he
+   * blocked in the calendar he manages. Null unless the server said so, and
+   * cleared only by saving successfully or by choosing another time - NOT by
+   * anything that merely re-reads the calendar underneath.
+   */
+  blockConflict: BlockConflict | null;
+  confirmBlock: () => void;
+  dismissBlock: () => void;
   row: AgendaRow;
   detail: AppointmentDetail | null;
   fields: {
@@ -127,6 +141,18 @@ export function useAppointmentEdit({
   const [changingClient, setChangingClient] = useState(false);
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
+  const [blockConflict, setBlockConflict] = useState<BlockConflict | null>(null);
+  // 🔴 NOT useTransition's `isPending` on its own. React 18 ends a transition
+  // when the callback RETURNS, and an async callback returns its promise
+  // immediately - so isPending is false for the entire time the request is
+  // actually in flight, and every "Saving…" that trusts it flickers off before
+  // the save has happened. This flag spans the await.
+  const [saving, setSaving] = useState(false);
+  // 🔴 A REF, not `pending`. Two clicks landing in the same tick both read the
+  // transition's pending as false and both fire - which on the confirm button
+  // would be two writes over the same block and two audit rows. The ref flips
+  // synchronously, so the second click has nothing to do.
+  const inFlight = useRef(false);
 
   useEffect(() => {
     let alive = true;
@@ -158,8 +184,14 @@ export function useAppointmentEdit({
     setEmail(detail.contact.email ?? "");
   }, [detail]);
 
-  function save() {
-    if (!ctx) return;
+  function save(opts?: { confirmation?: string }) {
+    // The footer passes its click event straight through, so only an actual
+    // string is treated as a confirmation.
+    const externalBlockConfirmation =
+      typeof opts?.confirmation === "string" && opts.confirmation.length > 0
+        ? opts.confirmation
+        : undefined;
+    if (!ctx || inFlight.current) return;
     const [y, m, d] = date.split("-").map(Number) as [number, number, number];
     const [hh, mm] = time.split(":").map(Number) as [number, number];
     if (!y || !m || !d || Number.isNaN(hh) || Number.isNaN(mm)) {
@@ -194,13 +226,40 @@ export function useAppointmentEdit({
       toast("Nothing to save yet");
       return;
     }
+    // Answers the refusal the barber is looking at, and only that one: the
+    // server checks this digest against the blocks it finds under the lock, so
+    // a banner that has gone stale authorises nothing.
+    if (externalBlockConfirmation) patch.externalBlockConfirmation = externalBlockConfirmation;
 
+    inFlight.current = true;
+    setSaving(true);
     start(async () => {
-      const res = await editAppointmentAction(row.id, patch);
+      let res;
+      try {
+        res = await editAppointmentAction(row.id, patch);
+      } finally {
+        inFlight.current = false;
+        setSaving(false);
+      }
       if (!res.ok) {
+        if (res.error === "external_block") {
+          // Nothing was written. Show which block, keep every field the barber
+          // typed, and let him decide - a confirmed retry sends the digest
+          // that came back with THIS refusal. A second refusal replaces the
+          // banner rather than compounding it.
+          setBlockConflict({
+            reason: res.reason ?? errorCopy(vocab).external_block!,
+            confirmation: res.confirmation ?? "",
+          });
+          return;
+        }
+        // Any other refusal is the authoritative answer now - the block banner
+        // is out of date, so it goes and the real error is what he sees.
+        setBlockConflict(null);
         toast(errorCopy(vocab)[res.error ?? ""] ?? "Couldn't save those changes", "error");
         return;
       }
+      setBlockConflict(null);
       // Honest about the Acuity half. A move whose block did not confirm is
       // NOT a clean success, and saying so is the whole point of reporting it.
       if (res.mirror === "unknown") {
@@ -217,8 +276,11 @@ export function useAppointmentEdit({
   return {
     ctx,
     loadError,
-    pending,
+    pending: pending || saving,
     save,
+    blockConflict,
+    confirmBlock: () => save({ confirmation: blockConflict?.confirmation }),
+    dismissBlock: () => setBlockConflict(null),
     row,
     detail,
     fields: {
@@ -281,6 +343,20 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
 
   return (
     <div className="flex min-w-0 flex-col gap-5">
+      {/* First in the body, and it takes focus when it appears: Save lives in
+          the sticky footer, so the barber can be scrolled far past this point
+          when the refusal comes back. */}
+      {state.blockConflict && (
+        <ExternalBlockBanner
+          conflict={state.blockConflict}
+          pending={state.pending}
+          confirmLabel="Save over this block"
+          pendingLabel="Saving…"
+          consequence="Moving it here puts this booking on time you blocked off there. It will be recorded as an override."
+          onConfirm={state.confirmBlock}
+          onDismiss={state.dismissBlock}
+        />
+      )}
       {row.status === "pending" && (
         <p className="rounded-xl border border-amber-400/40 bg-amber-400/10 px-3.5 py-2.5 text-xs leading-relaxed text-amber-300">
           This is still a <strong>request</strong>. Editing it keeps it a request — approve
@@ -510,8 +586,10 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
 const errorCopy = (vocab: BusinessVocabulary): Record<string, string> => ({
   slot_taken: `That time is already taken on this ${vocab.stationNoun}.`,
   invalid_slot: "That time is outside your booking hours.",
-  external_block:
-    "That time is blocked in your external calendar. Clear the block there, or book it as a new appointment with Custom time.",
+  // Only a FALLBACK: the server names the actual block and window, and that
+  // sentence is what the banner shows. This is what it says if a refusal ever
+  // arrives without one.
+  external_block: "That time is blocked in your external calendar.",
   invalid_phone: "That phone number isn't one we can dial — check the digits.",
   price_change_on_paid:
     "This booking is already paid — refund or take the difference in person first.",
