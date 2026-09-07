@@ -18,7 +18,12 @@ import { pokeAppointmentPass } from "../wallet/appointmentPass.js";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import { ExternalBlockError, lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
-import { describeBlocks, recordExternalBlockOverrides } from "../services/appointmentOverride.js";
+import {
+  blockedTimeIsTheOnlyObstacle,
+  blockSentence,
+  describeBlocks,
+  recordExternalBlockOverrides,
+} from "../services/appointmentOverride.js";
 import { registerAppointmentEdit } from "./booking.appointmentEdit.js";
 import { registerAppointmentDetail } from "./booking.appointmentDetail.js";
 import { stripeCollectedCents } from "../engines/appointmentPayment.js";
@@ -94,30 +99,6 @@ import { requireActiveAccess } from "../middleware/billing.js";
  *
  * The public customer-facing booking lives in booking.public.ts.
  */
-/**
- * "Blocked in your external calendar: Dentist, Sep 10, 12:00 PM - 1:00 PM" -
- * the sentence the dashboard shows before a barber confirms booking over a
- * block. Formatted here, in the shop's zone, so every form says it the same way.
- */
-function blockSentence(err: ExternalBlockError, timezone: string): string {
-  const day = new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    timeZone: timezone,
-  });
-  const time = new Intl.DateTimeFormat("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    timeZone: timezone,
-  });
-  const spans = err.blocks
-    .slice(0, 3)
-    .map((b) => `${b.reason?.trim() || "Blocked"}, ${day.format(b.startsAt)} - ${time.format(b.endsAt)}`);
-  return `Blocked in your external calendar: ${spans.join("; ")}`;
-}
-
 export const bookingDashboardRouter: Router = Router();
 bookingDashboardRouter.use(requireUser, requireShop, requireManager, requireActiveAccess);
 
@@ -2378,13 +2359,14 @@ const createApptSchema = z
     // enforced so two real appointments can't collide.
     customTime: z.boolean().optional(),
     /**
-     * Confirms booking OVER a span blocked in the external calendar. Only
-     * meaningful with customTime; without it the write answers 409
-     * `external_block` naming the block, so the barber sees what he is about
-     * to do before it is done. Every confirmed override is recorded
-     * (AppointmentOverride) in the same transaction.
+     * Confirms booking OVER the exact spans a previous 409 `external_block`
+     * named: the `confirmation` digest from that refusal, replayed. It
+     * authorises those blocks and nothing else - if the conflict changed, the
+     * digest no longer matches and the barber is asked again about the new
+     * one. Every confirmed override is recorded (AppointmentOverride) in the
+     * same transaction. See engines/bookingWrite.ts.
      */
-    overrideExternalBlock: z.boolean().optional(),
+    externalBlockConfirmation: z.string().trim().min(1).max(200).optional(),
     // Chosen service add-ons (ids). Extend the appointment length + total; the
     // choice is snapshotted. Invalid/foreign ids are dropped server-side.
     addOnIds: z.array(z.string().min(1)).max(20).optional(),
@@ -2574,8 +2556,24 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
       extraDurationMin: addOns.extraDurationMin,
     }))
   ) {
-    res.status(400).json({ error: "invalid_slot" });
-    return;
+    // Refused - but WHY matters. If time he blocked off in Acuity is the only
+    // thing in the way, fall through to the guard, which names that block and
+    // hands back the confirmation that answers it. Anything else stays a flat
+    // refusal that no confirmation can move. A recurring series is exempt: one
+    // banner cannot honestly ask about twelve different dates.
+    const onlyBlocked =
+      !d.recurrence &&
+      (await blockedTimeIsTheOnlyObstacle({
+        shopId,
+        staffId: d.staffId,
+        serviceId: d.serviceId,
+        startsAt,
+        extraDurationMin: addOns.extraDurationMin,
+      }));
+    if (!onlyBlocked) {
+      res.status(400).json({ error: "invalid_slot" });
+      return;
+    }
   }
 
   const phone = toE164(d.phone);
@@ -2653,10 +2651,13 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
       // Shared advisory-lock + overlap guard (same as the public create);
       // SlotTakenError's message is "slot_taken", so the catch below matches.
       const guard = await lockStaffAndAssertSlotFree(tx, {
-        // Blocked time in the EXTERNAL calendar (Acuity): enforced unless the
-        // barber explicitly confirmed the override - and then still detected
-        // and recorded. services/appointmentOverride.ts has the decision.
-        externalBlocks: d.customTime && d.overrideExternalBlock ? "override" : "enforce",
+        // Blocked time in the EXTERNAL calendar (Acuity): always enforced.
+        // The barber's confirmation, checked against the blocks read inside
+        // THIS lock, is the only thing that lets a write cross one - and the
+        // crossing is still recorded. services/appointmentOverride.ts has the
+        // decision.
+        externalBlocks: "enforce",
+        externalBlockConfirmation: d.externalBlockConfirmation ?? null,
         walkInCapacity: "ignore",
         staffId: d.staffId,
         shopId: shop.id,
@@ -2825,8 +2826,9 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         error: "external_block",
         code: "SLOT_UNAVAILABLE",
         confirmable: true,
-        reason: blockSentence(err, shop.timezone),
+        reason: blockSentence(err.blocks, shop.timezone),
         blocks: describeBlocks(err.blocks),
+        confirmation: err.confirmation,
       });
       return;
     }
@@ -3056,7 +3058,7 @@ bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
         error: "external_block",
         code: "SLOT_UNAVAILABLE",
         confirmable: false,
-        reason: blockSentence(err, req.shop!.timezone),
+        reason: blockSentence(err.blocks, req.shop!.timezone),
         blocks: describeBlocks(err.blocks),
       });
       return;
@@ -3140,13 +3142,14 @@ const rescheduleApptSchema = z
     /** Barber override: skip the hours/blocked check. Overlap still applies. */
     customTime: z.boolean().optional(),
     /**
-     * Confirms booking OVER a span blocked in the external calendar. Only
-     * meaningful with customTime; without it the write answers 409
-     * `external_block` naming the block, so the barber sees what he is about
-     * to do before it is done. Every confirmed override is recorded
-     * (AppointmentOverride) in the same transaction.
+     * Confirms booking OVER the exact spans a previous 409 `external_block`
+     * named: the `confirmation` digest from that refusal, replayed. It
+     * authorises those blocks and nothing else - if the conflict changed, the
+     * digest no longer matches and the barber is asked again about the new
+     * one. Every confirmed override is recorded (AppointmentOverride) in the
+     * same transaction. See engines/bookingWrite.ts.
      */
-    overrideExternalBlock: z.boolean().optional(),
+    externalBlockConfirmation: z.string().trim().min(1).max(200).optional(),
   })
   .strict();
 
@@ -3250,17 +3253,29 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
       excludeAppointmentId: appt.id,
     }))
   ) {
-    res.status(400).json({ error: "invalid_slot" });
-    return;
+    // Same rule as create: if blocked time is the whole obstacle, let the
+    // guard name it and offer the confirmation; otherwise refuse flatly.
+    const onlyBlocked = await blockedTimeIsTheOnlyObstacle({
+      shopId,
+      staffId: appt.staffId,
+      serviceId: appt.serviceId,
+      startsAt,
+      excludeAppointmentId: appt.id,
+    });
+    if (!onlyBlocked) {
+      res.status(400).json({ error: "invalid_slot" });
+      return;
+    }
   }
 
   let rescheduleOutboxId: string | null = null;
   try {
     await prisma.$transaction(async (tx) => {
       const guard = await lockStaffAndAssertSlotFree(tx, {
-        // External blocks: enforced unless explicitly overridden (and then
-        // recorded) - same rule as the create route.
-        externalBlocks: parsed.data.customTime && parsed.data.overrideExternalBlock ? "override" : "enforce",
+        // External blocks: always enforced; only a confirmation matching the
+        // blocks read inside this lock crosses one, and it is recorded.
+        externalBlocks: "enforce",
+        externalBlockConfirmation: parsed.data.externalBlockConfirmation ?? null,
         walkInCapacity: "ignore",
         staffId: appt.staffId,
         shopId,
@@ -3336,8 +3351,9 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
         error: "external_block",
         code: "SLOT_UNAVAILABLE",
         confirmable: true,
-        reason: blockSentence(err, shop.timezone),
+        reason: blockSentence(err.blocks, shop.timezone),
         blocks: describeBlocks(err.blocks),
+        confirmation: err.confirmation,
       });
       return;
     }
@@ -4663,7 +4679,7 @@ bookingDashboardRouter.post("/appointments/:id/approve", async (req, res) => {
         error: "external_block",
         code: "SLOT_UNAVAILABLE",
         confirmable: false,
-        reason: blockSentence(err, req.shop!.timezone),
+        reason: blockSentence(err.blocks, req.shop!.timezone),
         blocks: describeBlocks(err.blocks),
       });
       return;

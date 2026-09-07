@@ -164,6 +164,24 @@ export interface ComputeSlotsInput {
    */
   ignoreBooked?: boolean;
   /**
+   * Skip subtracting time the barber BLOCKED OFF in the external calendar
+   * (ExternalBlock / Acuity).
+   *
+   * Exists for exactly ONE question, asked only on the barber's own dashboard
+   * after a write was already refused: "is that block the only thing in the
+   * way?" A yes lets the API name the block and offer the confirmation that
+   * answers it, instead of a flat "that time isn't available" that tells him
+   * nothing he can act on. A no keeps the flat refusal, so confirming a block
+   * can never smuggle a write past HOURS, lead time or a day cap.
+   *
+   * 🔴 Never set on a customer-facing read, and it decides NOTHING about the
+   * write: engines/bookingWrite.ts still refuses unless the barber confirmed
+   * that exact block. Read and write stay in agreement - "bookable with this
+   * block ignored" is true precisely when "writable with this block confirmed"
+   * is.
+   */
+  ignoreExternalBlocks?: boolean;
+  /**
    * Extra minutes from chosen add-ons, added to the service duration. A longer
    * appointment needs a bigger free window, so the picker only offers slots that
    * can fit service + add-ons (and the write-path check validates the same).
@@ -198,6 +216,24 @@ export interface FreeRangesInput {
   now?: Date;
   excludeAppointmentId?: string;
   ignoreBooked?: boolean;
+  /**
+   * Skip subtracting time the barber BLOCKED OFF in the external calendar
+   * (ExternalBlock / Acuity).
+   *
+   * Exists for exactly ONE question, asked only on the barber's own dashboard
+   * after a write was already refused: "is that block the only thing in the
+   * way?" A yes lets the API name the block and offer the confirmation that
+   * answers it, instead of a flat "that time isn't available" that tells him
+   * nothing he can act on. A no keeps the flat refusal, so confirming a block
+   * can never smuggle a write past HOURS, lead time or a day cap.
+   *
+   * 🔴 Never set on a customer-facing read, and it decides NOTHING about the
+   * write: engines/bookingWrite.ts still refuses unless the barber confirmed
+   * that exact block. Read and write stay in agreement - "bookable with this
+   * block ignored" is true precisely when "writable with this block confirmed"
+   * is.
+   */
+  ignoreExternalBlocks?: boolean;
   /**
    * Skip the shop's bookingLeadHours when computing the lower bound. The lead
    * time is a BOOKING rule (how far ahead a customer must book online), not a
@@ -545,14 +581,16 @@ export async function computeFreeRanges(
     // Time the barber blocked off in Acuity. Like external visits it carries no
     // staff, so it blocks every chair for its span - offering a time he blocked
     // in the system he actually manages is the same double-book bug.
-    const externalBlocks = await tx.externalBlock.findMany({
-      where: {
-        shopId: input.shopId,
-        startsAt: { lt: new Date(rangeEnd) },
-        endsAt: { gt: new Date(rangeStart) },
-      },
-      select: { startsAt: true, endsAt: true },
-    });
+    const externalBlocks = input.ignoreExternalBlocks
+      ? []
+      : await tx.externalBlock.findMany({
+          where: {
+            shopId: input.shopId,
+            startsAt: { lt: new Date(rangeEnd) },
+            endsAt: { gt: new Date(rangeStart) },
+          },
+          select: { startsAt: true, endsAt: true },
+        });
 
     return {
       service,
@@ -808,6 +846,7 @@ export async function computeOpenSlots(
     now: input.now,
     excludeAppointmentId: input.excludeAppointmentId,
     ignoreBooked: input.ignoreBooked,
+    ignoreExternalBlocks: input.ignoreExternalBlocks,
   });
   if (!ctx || !ctx.service) return [];
   const service = ctx.service;
@@ -976,6 +1015,8 @@ export async function isSlotBookable(input: {
   excludeAppointmentId?: string;
   /** Extra minutes from chosen add-ons (the appointment must fit service + these). */
   extraDurationMin?: number;
+  /** See ComputeSlotsInput.ignoreExternalBlocks - dashboard refusal wording only. */
+  ignoreExternalBlocks?: boolean;
 }): Promise<boolean> {
   const target = input.startsAt.getTime();
   // A tight window bracketing the requested start keeps the computation cheap
@@ -989,6 +1030,7 @@ export async function isSlotBookable(input: {
     now: input.now,
     excludeAppointmentId: input.excludeAppointmentId,
     extraDurationMin: input.extraDurationMin,
+    ignoreExternalBlocks: input.ignoreExternalBlocks,
   };
 
   // PASS 1 - ignoreBooked: validates HOURS/EXCEPTIONS/BOUNDS only. Whether the

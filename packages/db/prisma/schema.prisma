@@ -3943,7 +3943,8 @@ model StripeEventReceipt {
 /// decision that has to be explainable afterwards - to the barber who finds a
 /// client in his blocked-off afternoon, and to whoever asks why. Written in the
 /// same transaction as the appointment, only through the explicit confirm step
-/// on the dashboard (customTime + overrideExternalBlock). Never by a customer.
+/// on the dashboard: the write is refused, the block is NAMED, and the barber
+/// replays that refusal's confirmation digest. Never by a customer.
 model AppointmentOverride {
   id            String @id @default(cuid())
   shopId        String
