@@ -36,6 +36,12 @@ export interface BlockConflict {
   reason: string;
   /** The digest that authorises exactly these blocks. Empty = not confirmable. */
   confirmation: string;
+  /**
+   * The server's own list under the sentence, one line each, in the shop's
+   * zone - the bookings a block would sit on. Same rule as `reason`: shown
+   * as text, never rebuilt here.
+   */
+  details?: string[];
 }
 
 export function ExternalBlockBanner({
@@ -44,6 +50,7 @@ export function ExternalBlockBanner({
   confirmLabel,
   pendingLabel,
   consequence,
+  dismissLabel = "Choose another time",
   onConfirm,
   onDismiss,
 }: {
@@ -53,6 +60,8 @@ export function ExternalBlockBanner({
   pendingLabel: string;
   /** What confirming actually does, in the caller's own words. */
   consequence: string;
+  /** The way out, in the caller's words ("Change the dates" for a block). */
+  dismissLabel?: string;
   onConfirm: () => void;
   onDismiss: () => void;
 }) {
@@ -94,6 +103,18 @@ export function ExternalBlockBanner({
       >
         {conflict.reason}
       </p>
+      {conflict.details && conflict.details.length > 0 && (
+        <ul
+          data-qa="block-conflict-details"
+          className="mt-2 flex min-w-0 flex-col gap-1 text-xs leading-snug text-offwhite/85"
+        >
+          {conflict.details.map((line, i) => (
+            <li key={i} className="min-w-0 [overflow-wrap:anywhere]">
+              {line}
+            </li>
+          ))}
+        </ul>
+      )}
       <p id="block-conflict-consequence" className="mt-1 text-xs leading-relaxed text-muted">
         {consequence}
       </p>
@@ -118,7 +139,7 @@ export function ExternalBlockBanner({
           onClick={onDismiss}
           className="min-h-[2.75rem] flex-none rounded-lg border border-subtle-strong px-3 py-2 text-xs font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
         >
-          Choose another time
+          {dismissLabel}
         </button>
       </div>
     </div>

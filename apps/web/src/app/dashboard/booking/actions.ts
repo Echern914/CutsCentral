@@ -455,23 +455,82 @@ export async function deleteAddOnAction(id: string): Promise<Result> {
   return done(await apiSend("DELETE", `/api/booking/addons/${id}`));
 }
 
-export interface BlockOffInput {
-  staffId: string;
-  startsAt: string; // ISO
-  endsAt: string; // ISO
+/**
+ * Block off time, two ways. `timed` carries the two instants the form already
+ * converted through the SHOP's zone; `days` carries shop-local day keys and
+ * lets the API resolve every midnight itself - a whole day is a statement
+ * about the calendar, not about two instants, and the API is the one place
+ * that knows the zone for certain. Both take the `confirmation` a previous
+ * `appointments_overlap` refusal handed back.
+ */
+export type BlockOffInput =
+  | {
+      kind: "timed";
+      staffId: string;
+      startsAt: string; // ISO
+      endsAt: string; // ISO
+      reason?: string;
+      confirmation?: string;
+    }
+  | {
+      kind: "days";
+      staffId: string;
+      fromDate: string; // YYYY-MM-DD, shop-local
+      toDate: string; // YYYY-MM-DD, shop-local, inclusive
+      reason?: string;
+      confirmation?: string;
+    };
+
+export interface BlockOffResult extends Result {
+  /** The API's headline for a refusal it can be talked past. */
   reason?: string;
+  /** One line per booking the block would sit on, in the shop's zone. */
+  conflicts?: string[];
+  /** The digest that authorises blocking over exactly those bookings. */
+  confirmation?: string;
+  /** How many rows the block became (one per day for a day range). */
+  created?: number;
 }
 
-/** Block off time (native). Reuses the existing staff-exceptions endpoint. */
-export async function addBlockAction(input: BlockOffInput): Promise<Result> {
-  return done(
-    await apiSend("POST", `/api/booking/staff/${input.staffId}/exceptions`, {
-      startsAt: input.startsAt,
-      endsAt: input.endsAt,
-      isBlock: true,
-      reason: input.reason,
-    }),
+/**
+ * Block off time (native). Same staff-exceptions endpoint as always; the
+ * `appointments_overlap` refusal is passed through whole so the form can show
+ * the bookings and offer to block anyway - the bookings themselves are never
+ * touched by this call.
+ */
+export async function addBlockAction(input: BlockOffInput): Promise<BlockOffResult> {
+  const body =
+    input.kind === "days"
+      ? {
+          fromDate: input.fromDate,
+          toDate: input.toDate,
+          allDay: true as const,
+          reason: input.reason,
+          confirmation: input.confirmation,
+        }
+      : {
+          startsAt: input.startsAt,
+          endsAt: input.endsAt,
+          isBlock: true,
+          reason: input.reason,
+          confirmation: input.confirmation,
+        };
+  const res = await apiSend<{ ok: boolean; created?: number }>(
+    "POST",
+    `/api/booking/staff/${input.staffId}/exceptions`,
+    body,
   );
+  if (res.ok) {
+    revalidatePath("/dashboard/booking");
+    return { ok: true, created: res.data?.created };
+  }
+  return {
+    ok: false,
+    error: res.error ?? "failed",
+    ...(res.reason ? { reason: res.reason } : {}),
+    ...(res.conflicts ? { conflicts: res.conflicts } : {}),
+    ...(res.confirmation ? { confirmation: res.confirmation } : {}),
+  };
 }
 
 /**

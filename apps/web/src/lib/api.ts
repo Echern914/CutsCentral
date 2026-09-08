@@ -40,6 +40,13 @@ export interface ApiResult<T> {
    */
   confirmation?: string;
   /**
+   * What a confirmable refusal is asking about, one line each, already
+   * formatted by the API in the shop's zone. The `appointments_overlap` 409
+   * lists the bookings a block would sit on this way; the page shows the
+   * lines as text and never rebuilds them from instants.
+   */
+  conflicts?: string[];
+  /**
    * The API's own STABLE classification of a failure, when it sent one.
    *
    * Distinct from `error` (a legacy free string) and from `reason` (endpoint
@@ -199,6 +206,7 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
   let code: string | undefined;
   let field: string | undefined;
   let confirmation: string | undefined;
+  let conflicts: string[] | undefined;
   try {
     const json = (await res.json()) as T & { error?: string; issues?: unknown };
     if (res.ok) data = json;
@@ -212,6 +220,11 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
       if (typeof which === "string") field = which;
       const answer = (json as { confirmation?: unknown }).confirmation;
       if (typeof answer === "string") confirmation = answer;
+      const listed = (json as { conflicts?: unknown }).conflicts;
+      if (Array.isArray(listed)) {
+        const lines = listed.filter((l): l is string => typeof l === "string");
+        if (lines.length > 0) conflicts = lines;
+      }
       const raw = (json as { issues?: unknown }).issues;
       if (Array.isArray(raw)) {
         const valid = raw.filter(
@@ -237,6 +250,7 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
     ...(code ? { code } : {}),
     ...(field ? { field } : {}),
     ...(confirmation ? { confirmation } : {}),
+    ...(conflicts ? { conflicts } : {}),
   };
 }
 

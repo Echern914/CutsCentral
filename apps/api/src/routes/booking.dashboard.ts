@@ -24,6 +24,14 @@ import {
   describeBlocks,
   recordExternalBlockOverrides,
 } from "../services/appointmentOverride.js";
+import {
+  appointmentConflictSentence,
+  blockOverAppointmentsConfirmation,
+  describeAppointmentConflicts,
+  findAppointmentsInSpan,
+  planAllDayBlock,
+  type BlockConflictRow,
+} from "../services/blockOffDays.js";
 import { registerAppointmentEdit } from "./booking.appointmentEdit.js";
 import { registerAppointmentDetail } from "./booking.appointmentDetail.js";
 import { stripeCollectedCents } from "../engines/appointmentPayment.js";
@@ -1222,42 +1230,157 @@ bookingDashboardRouter.put("/staff/:id/availability", async (req, res) => {
   res.json({ ok: true });
 });
 
-const exceptionSchema = z
+const exceptionReason = z.string().trim().max(200).optional().or(z.literal(""));
+/**
+ * Confirms blocking OVER the bookings a previous 409 `appointments_overlap`
+ * listed: that refusal's `confirmation` digest, replayed. It authorises those
+ * rows and nothing else - a booking that moved or arrived since changes the
+ * digest and the barber is asked again. See services/blockOffDays.ts.
+ */
+const overlapConfirmation = z.string().trim().min(1).max(200).optional();
+
+// A timed block (or, with isBlock:false, a one-off open window): two instants.
+const instantExceptionSchema = z
   .object({
     startsAt: z.coerce.date(),
     endsAt: z.coerce.date(),
     isBlock: z.boolean().optional(),
-    reason: z.string().trim().max(200).optional().or(z.literal("")),
+    reason: exceptionReason,
+    confirmation: overlapConfirmation,
   })
   .strict()
   .refine((d) => d.endsAt > d.startsAt, { message: "End must be after start." });
 
+// Whole shop-local days, first through last inclusive, all day each. The
+// instants are resolved HERE in the shop's zone (services/blockOffDays.ts) -
+// a device in another zone cannot block the wrong hours.
+const DAY_KEY = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD.");
+const dayRangeExceptionSchema = z
+  .object({
+    fromDate: DAY_KEY,
+    toDate: DAY_KEY,
+    allDay: z.literal(true),
+    reason: exceptionReason,
+    confirmation: overlapConfirmation,
+  })
+  .strict();
+
+const exceptionSchema = z.union([instantExceptionSchema, dayRangeExceptionSchema]);
+
+/**
+ * Block off time (or open a one-off window) on one chair.
+ *
+ * Two request shapes, one write path: instants for a timed block, day keys
+ * for "these whole days". Either way the rows land in ONE transaction under
+ * the same per-staff advisory lock every appointment write takes, so the
+ * bookings a block is about to sit on are read exactly as of commit.
+ *
+ * A block over existing bookings is refused with 409 `appointments_overlap`
+ * until the barber confirms THAT list (its digest replayed). Confirming
+ * writes the block and nothing else: no appointment is cancelled, moved or
+ * edited here - ever. The block only stops new bookings around them.
+ */
 bookingDashboardRouter.post("/staff/:id/exceptions", async (req, res) => {
   const parsed = exceptionSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
     return;
   }
-  const db = forShop(req.shop!.id);
-  const staff = await db.staff.findFirst({
-    where: { id: req.params.id },
-    select: { id: true },
+  const shopId = req.shop!.id;
+  const timezone = req.shop!.timezone;
+  const staffId = req.params.id!;
+  const d = parsed.data;
+  const now = new Date();
+
+  let spans: { startsAt: Date; endsAt: Date }[];
+  let isBlock: boolean;
+  if ("fromDate" in d) {
+    const plan = planAllDayBlock({
+      fromDate: d.fromDate,
+      toDate: d.toDate,
+      timezone,
+      now,
+    });
+    if (!plan.ok) {
+      res.status(400).json({
+        error: "invalid_input",
+        issues: [{ path: [plan.field], message: plan.message }],
+      });
+      return;
+    }
+    spans = plan.spans;
+    isBlock = true;
+  } else {
+    spans = [{ startsAt: d.startsAt, endsAt: d.endsAt }];
+    isBlock = d.isBlock ?? true;
+  }
+  const reason = d.reason || null;
+  const first = spans[0]!;
+  const last = spans[spans.length - 1]!;
+
+  const outcome = await runWithShop(shopId, async (tx) => {
+    const staff = await tx.staff.findFirst({
+      where: { id: staffId, shopId },
+      select: { id: true },
+    });
+    if (!staff) return { kind: "not_found" as const };
+
+    let conflicts: BlockConflictRow[] = [];
+    if (isBlock) {
+      // The lock the booking guard takes for this chair (engines/bookingWrite.ts),
+      // so a booking racing this block waits, and the list below cannot miss
+      // one that lands between the read and the write.
+      await tx.$executeRaw(
+        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`appt:${staffId}`}))`,
+      );
+      conflicts = await findAppointmentsInSpan(tx, {
+        shopId,
+        staffId,
+        startsAt: first.startsAt,
+        endsAt: last.endsAt,
+        now,
+      });
+      if (conflicts.length > 0) {
+        const confirmation = blockOverAppointmentsConfirmation(conflicts);
+        if (d.confirmation !== confirmation) {
+          return { kind: "conflict" as const, conflicts, confirmation };
+        }
+      }
+    }
+    await tx.availabilityException.createMany({
+      data: spans.map((s) => ({
+        shopId,
+        staffId,
+        startsAt: s.startsAt,
+        endsAt: s.endsAt,
+        isBlock,
+        reason,
+      })),
+    });
+    return { kind: "created" as const, count: spans.length, overlapping: conflicts.length };
   });
-  if (!staff) {
+
+  if (outcome.kind === "not_found") {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const d = parsed.data;
-  await db.availabilityException.create({
-    data: {
-      staffId: req.params.id!,
-      startsAt: d.startsAt,
-      endsAt: d.endsAt,
-      isBlock: d.isBlock ?? true,
-      reason: d.reason || null,
-    },
+  if (outcome.kind === "conflict") {
+    // Shown, not just returned: which bookings, when, and that they stay put.
+    res.status(409).json({
+      error: "appointments_overlap",
+      confirmable: true,
+      reason: appointmentConflictSentence(outcome.conflicts),
+      conflicts: describeAppointmentConflicts(outcome.conflicts, timezone),
+      count: outcome.conflicts.length,
+      confirmation: outcome.confirmation,
+    });
+    return;
+  }
+  res.status(201).json({
+    ok: true,
+    created: outcome.count,
+    overlappingAppointments: outcome.overlapping,
   });
-  res.status(201).json({ ok: true });
 });
 
 // Remove a one-off exception - in practice "unblock this time". Shop-scoped by
