@@ -95,7 +95,22 @@ export interface DaySpan {
  * boundaries roll over by arithmetic; the edges are resolved in the shop's zone
  * so a DST day is exactly as long as it really is.
  */
-export function allDaySpans(from: DayKeyParts, to: DayKeyParts, timezone: string): DaySpan[] {
+/**
+ * The same hours on every day of a range - "9:00 to 12:00 each day" - as
+ * shop-local minutes from midnight, end exclusive. 1440 means "through the
+ * end of the day". Absent = the whole day.
+ */
+export interface DayWindow {
+  fromMin: number;
+  toMin: number;
+}
+
+export function daySpans(
+  from: DayKeyParts,
+  to: DayKeyParts,
+  timezone: string,
+  window?: DayWindow,
+): DaySpan[] {
   const out: DaySpan[] = [];
   const first = Date.UTC(from.year, from.month0, from.day);
   const last = Date.UTC(to.year, to.month0, to.day);
@@ -104,33 +119,46 @@ export function allDaySpans(from: DayKeyParts, to: DayKeyParts, timezone: string
     const y = d.getUTCFullYear();
     const m0 = d.getUTCMonth();
     const day = d.getUTCDate();
+    const fromMin = window?.fromMin ?? 0;
+    const toMin = window?.toMin ?? 24 * 60;
     out.push({
       dayKey: dayKeyOf({ year: y, month0: m0, day }),
-      startsAt: zonedWallTimeToUtc(y, m0, day, 0, timezone),
-      // day+1 rather than minute 1440 of the same day: Date.UTC normalises the
-      // overflow into the next month/year, and resolving the NEXT day's
-      // midnight is what keeps a 23h/25h DST day exactly that long.
-      endsAt: zonedWallTimeToUtc(y, m0, day + 1, 0, timezone),
+      startsAt: zonedWallTimeToUtc(y, m0, day, fromMin, timezone),
+      // The end of a day is the NEXT day's midnight, not minute 1440 of this
+      // one: Date.UTC normalises the overflow into the next month/year, and
+      // resolving the next day's midnight is what keeps a 23h/25h DST day
+      // exactly that long. Any earlier end is resolved on the day itself.
+      endsAt:
+        toMin >= 24 * 60
+          ? zonedWallTimeToUtc(y, m0, day + 1, 0, timezone)
+          : zonedWallTimeToUtc(y, m0, day, toMin, timezone),
     });
   }
   return out;
 }
 
+/** Every day in [from, to], local midnight to the next local midnight. */
+export function allDaySpans(from: DayKeyParts, to: DayKeyParts, timezone: string): DaySpan[] {
+  return daySpans(from, to, timezone);
+}
+
 export type DayRangePlan =
   | { ok: true; spans: DaySpan[] }
-  | { ok: false; field: "fromDate" | "toDate"; message: string };
+  | { ok: false; field: "fromDate" | "toDate" | "fromMin" | "toMin"; message: string };
 
 /**
- * Validate a requested day range and resolve it to per-day spans. Refuses a
- * malformed or impossible date, an inverted range, a range longer than a
- * year, and a range that has already ended - a block on days that are gone
- * can do nothing, so asking for one is a mistake worth naming.
+ * Validate a requested day range (and its per-day window, when there is one)
+ * and resolve it to per-day spans. Refuses a malformed or impossible date, an
+ * inverted range, a range longer than a year, a range that has already ended
+ * - a block on days that are gone can do nothing, so asking for one is a
+ * mistake worth naming - and a window whose end is not after its start.
  */
-export function planAllDayBlock(input: {
+export function planDayRangeBlock(input: {
   fromDate: string;
   toDate: string;
   timezone: string;
   now: Date;
+  window?: DayWindow;
 }): DayRangePlan {
   const from = parseDayKey(input.fromDate);
   if (!from) return { ok: false, field: "fromDate", message: "Pick a real start date." };
@@ -143,7 +171,16 @@ export function planAllDayBlock(input: {
   if (input.toDate < today) {
     return { ok: false, field: "toDate", message: "Those days have already passed." };
   }
-  const spans = allDaySpans(from, to, input.timezone);
+  if (input.window) {
+    const { fromMin, toMin } = input.window;
+    if (!Number.isInteger(fromMin) || fromMin < 0 || fromMin >= 24 * 60) {
+      return { ok: false, field: "fromMin", message: "Pick a real start time." };
+    }
+    if (!Number.isInteger(toMin) || toMin > 24 * 60 || toMin <= fromMin) {
+      return { ok: false, field: "toMin", message: "The end time must be after the start time." };
+    }
+  }
+  const spans = daySpans(from, to, input.timezone, input.window);
   if (spans.length > MAX_BLOCK_DAYS) {
     return {
       ok: false,
@@ -152,6 +189,16 @@ export function planAllDayBlock(input: {
     };
   }
   return { ok: true, spans };
+}
+
+/** The whole-day plan; kept as the name the first callers used. */
+export function planAllDayBlock(input: {
+  fromDate: string;
+  toDate: string;
+  timezone: string;
+  now: Date;
+}): DayRangePlan {
+  return planDayRangeBlock(input);
 }
 
 /** An appointment a block would sit on top of. */
@@ -170,27 +217,60 @@ export const CONFLICTS_DESCRIBED = 10;
 const CONFLICTS_READ = 200;
 
 /**
- * The bookings on THIS chair that overlap [startsAt, endsAt): confirmed ones
- * and live requests/holds (a PENDING row whose hold has lapsed no longer
- * holds anything and is not in anyone's way). Read inside the caller's
- * transaction, under the same per-staff advisory lock every appointment
- * write takes, so the list is exact as of commit.
+ * Merge touching or overlapping spans, sorted. A run of all-day rows becomes
+ * ONE window; "9-12 each day" stays one window per day, with the afternoons
+ * left out - which is the whole point of asking per span rather than over
+ * the range: a 2 PM booking on a day whose mornings are blocked is not in
+ * the way of anything.
  */
-export async function findAppointmentsInSpan(
+export function coalesceSpans(
+  spans: { startsAt: Date; endsAt: Date }[],
+): { startsAt: Date; endsAt: Date }[] {
+  const sorted = [...spans].sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime());
+  const out: { startsAt: Date; endsAt: Date }[] = [];
+  for (const s of sorted) {
+    const last = out[out.length - 1];
+    if (last && s.startsAt.getTime() <= last.endsAt.getTime()) {
+      if (s.endsAt.getTime() > last.endsAt.getTime()) last.endsAt = s.endsAt;
+    } else {
+      out.push({ startsAt: s.startsAt, endsAt: s.endsAt });
+    }
+  }
+  return out;
+}
+
+/**
+ * The bookings on THIS chair that overlap ANY of `spans` (each half-open):
+ * confirmed ones and live requests/holds (a PENDING row whose hold has lapsed
+ * no longer holds anything and is not in anyone's way). Read inside the
+ * caller's transaction, under the same per-staff advisory lock every
+ * appointment write takes, so the list is exact as of commit.
+ */
+export async function findAppointmentsInSpans(
   tx: Prisma.TransactionClient,
-  input: { shopId: string; staffId: string; startsAt: Date; endsAt: Date; now: Date },
+  input: {
+    shopId: string;
+    staffId: string;
+    spans: { startsAt: Date; endsAt: Date }[];
+    now: Date;
+  },
 ): Promise<BlockConflictRow[]> {
+  const windows = coalesceSpans(input.spans);
+  if (windows.length === 0) return [];
   const rows = await tx.appointment.findMany({
     where: {
       shopId: input.shopId,
       staffId: input.staffId,
-      startsAt: { lt: input.endsAt },
-      endsAt: { gt: input.startsAt },
-      OR: [
-        { status: "BOOKED" },
+      AND: [
+        { OR: windows.map((w) => ({ startsAt: { lt: w.endsAt }, endsAt: { gt: w.startsAt } })) },
         {
-          status: "PENDING",
-          OR: [{ holdExpiresAt: null }, { holdExpiresAt: { gt: input.now } }],
+          OR: [
+            { status: "BOOKED" },
+            {
+              status: "PENDING",
+              OR: [{ holdExpiresAt: null }, { holdExpiresAt: { gt: input.now } }],
+            },
+          ],
         },
       ],
     },
@@ -215,6 +295,19 @@ export async function findAppointmentsInSpan(
     lastName: r.lastName,
     serviceName: r.service.name,
   }));
+}
+
+/** One span - the timed form's shape. */
+export function findAppointmentsInSpan(
+  tx: Prisma.TransactionClient,
+  input: { shopId: string; staffId: string; startsAt: Date; endsAt: Date; now: Date },
+): Promise<BlockConflictRow[]> {
+  return findAppointmentsInSpans(tx, {
+    shopId: input.shopId,
+    staffId: input.staffId,
+    spans: [{ startsAt: input.startsAt, endsAt: input.endsAt }],
+    now: input.now,
+  });
 }
 
 /**

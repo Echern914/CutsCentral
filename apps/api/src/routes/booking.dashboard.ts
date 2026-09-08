@@ -28,8 +28,8 @@ import {
   appointmentConflictSentence,
   blockOverAppointmentsConfirmation,
   describeAppointmentConflicts,
-  findAppointmentsInSpan,
-  planAllDayBlock,
+  findAppointmentsInSpans,
+  planDayRangeBlock,
   type BlockConflictRow,
 } from "../services/blockOffDays.js";
 import { registerAppointmentEdit } from "./booking.appointmentEdit.js";
@@ -1251,21 +1251,29 @@ const instantExceptionSchema = z
   .strict()
   .refine((d) => d.endsAt > d.startsAt, { message: "End must be after start." });
 
-// Whole shop-local days, first through last inclusive, all day each. The
-// instants are resolved HERE in the shop's zone (services/blockOffDays.ts) -
-// a device in another zone cannot block the wrong hours.
+// Whole shop-local days, first through last inclusive - all day each, or the
+// same hours on each. The instants are resolved HERE in the shop's zone
+// (services/blockOffDays.ts) - a device in another zone cannot block the
+// wrong hours.
 const DAY_KEY = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD.");
-const dayRangeExceptionSchema = z
+const dayRangeFields = {
+  fromDate: DAY_KEY,
+  toDate: DAY_KEY,
+  reason: exceptionReason,
+  confirmation: overlapConfirmation,
+};
+const allDayRangeSchema = z.object({ ...dayRangeFields, allDay: z.literal(true) }).strict();
+// "9:00-12:00 each day": shop-local minutes from midnight, end exclusive,
+// 1440 = through the end of the day. Each day becomes its own row.
+const timedRangeSchema = z
   .object({
-    fromDate: DAY_KEY,
-    toDate: DAY_KEY,
-    allDay: z.literal(true),
-    reason: exceptionReason,
-    confirmation: overlapConfirmation,
+    ...dayRangeFields,
+    fromMin: z.number().int().min(0).max(24 * 60 - 1),
+    toMin: z.number().int().min(1).max(24 * 60),
   })
   .strict();
 
-const exceptionSchema = z.union([instantExceptionSchema, dayRangeExceptionSchema]);
+const exceptionSchema = z.union([instantExceptionSchema, allDayRangeSchema, timedRangeSchema]);
 
 /**
  * Block off time (or open a one-off window) on one chair.
@@ -1295,11 +1303,12 @@ bookingDashboardRouter.post("/staff/:id/exceptions", async (req, res) => {
   let spans: { startsAt: Date; endsAt: Date }[];
   let isBlock: boolean;
   if ("fromDate" in d) {
-    const plan = planAllDayBlock({
+    const plan = planDayRangeBlock({
       fromDate: d.fromDate,
       toDate: d.toDate,
       timezone,
       now,
+      window: "fromMin" in d ? { fromMin: d.fromMin, toMin: d.toMin } : undefined,
     });
     if (!plan.ok) {
       res.status(400).json({
@@ -1315,8 +1324,6 @@ bookingDashboardRouter.post("/staff/:id/exceptions", async (req, res) => {
     isBlock = d.isBlock ?? true;
   }
   const reason = d.reason || null;
-  const first = spans[0]!;
-  const last = spans[spans.length - 1]!;
 
   const outcome = await runWithShop(shopId, async (tx) => {
     const staff = await tx.staff.findFirst({
@@ -1333,13 +1340,10 @@ bookingDashboardRouter.post("/staff/:id/exceptions", async (req, res) => {
       await tx.$executeRaw(
         Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`appt:${staffId}`}))`,
       );
-      conflicts = await findAppointmentsInSpan(tx, {
-        shopId,
-        staffId,
-        startsAt: first.startsAt,
-        endsAt: last.endsAt,
-        now,
-      });
+      // Per span, not over the range: "9-12 each day" must not flag the
+      // afternoons in between (services/blockOffDays.ts coalesces a run of
+      // whole days back into one window).
+      conflicts = await findAppointmentsInSpans(tx, { shopId, staffId, spans, now });
       if (conflicts.length > 0) {
         const confirmation = blockOverAppointmentsConfirmation(conflicts);
         if (d.confirmation !== confirmation) {

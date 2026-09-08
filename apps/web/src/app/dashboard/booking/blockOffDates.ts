@@ -129,12 +129,19 @@ export function minutesOf(hhmm: string): number {
 }
 
 export type BlockPlan =
-  | { kind: "days"; fromDate: string; toDate: string }
+  | {
+      kind: "days";
+      fromDate: string;
+      toDate: string;
+      /** The same hours on each day; absent = all day on each. */
+      window?: { fromTime: string; toTime: string };
+    }
   | { kind: "timed"; date: string; fromTime: string; toTime: string };
 
 /**
  * The line under the form: what will be blocked, in the barber's words.
  *   "September 9–16 · All day · 8 days"
+ *   "September 9–16 · 9:00 AM–12:00 PM each day · 8 days"
  *   "Tuesday, September 9 · All day"
  *   "Tuesday, September 9 · 2:00 PM–5:00 PM"
  * Says nothing about a plan it cannot describe (a bad date, an empty time),
@@ -145,7 +152,14 @@ export function blockSummary(plan: BlockPlan, todayKey: string): string {
     const n = dayCount(plan.fromDate, plan.toDate);
     if (n === 0) return "";
     const when = formatDayRange(plan.fromDate, plan.toDate, todayKey);
-    return n === 1 ? `${when} · All day` : `${when} · All day · ${n} days`;
+    let hours = "All day";
+    if (plan.window) {
+      const from = formatClock(plan.window.fromTime);
+      const to = formatClock(plan.window.toTime);
+      if (!from || !to) return "";
+      hours = n === 1 ? `${from}–${to}` : `${from}–${to} each day`;
+    }
+    return n === 1 ? `${when} · ${hours}` : `${when} · ${hours} · ${n} days`;
   }
   if (!isDayKey(plan.date)) return "";
   const from = formatClock(plan.fromTime);

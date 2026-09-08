@@ -130,18 +130,54 @@ describe("the block-off sheet", () => {
     });
   });
 
-  it("blocks a range of days from a start date through an end date", async () => {
+  it("blocks the same hours on every day of a range, as shop-local minutes the API resolves per day", async () => {
     await open();
     fireEvent.click(screen.getByRole("button", { name: "Block multiple days" }));
-    // The time card goes away: a range is all day on every day.
-    expect(screen.queryByLabelText("From")).toBeNull();
-    expect(screen.queryByRole("button", { name: "All day" })).toBeNull();
+    // The time card STAYS: a range takes these hours on every day it covers.
+    expect(screen.getByLabelText("From")).toHaveValue("12:00");
+    expect(screen.getByRole("button", { name: "All day" })).toHaveAttribute("aria-pressed", "false");
     // The end starts on the start - never behind it.
     expect(screen.getByLabelText("Start date")).toHaveValue("2026-09-09");
     expect(screen.getByLabelText("End date")).toHaveValue("2026-09-09");
     set("End date", "2026-09-16");
-    expect(summaryText()).toBe("September 9–16 · All day · 8 days");
+    set("From", "09:00");
+    set("To", "12:00");
+    expect(summaryText()).toBe("September 9–16 · 9:00 AM–12:00 PM each day · 8 days");
     expect(screen.getByRole("button", { name: "Block 8 days" })).toBeInTheDocument();
+
+    // An inverted window never reaches the server.
+    set("To", "08:00");
+    submit();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "End time must be after the start time.",
+    );
+    expect(addBlock).not.toHaveBeenCalled();
+
+    set("To", "12:00");
+    set("Only you see this", "Mornings off");
+    addBlock.mockResolvedValueOnce({ ok: true, created: 8 });
+    submit();
+    await waitFor(() => expect(addBlock).toHaveBeenCalledTimes(1));
+    expect(sent()).toEqual({
+      kind: "days",
+      staffId: "stf1",
+      fromDate: "2026-09-09",
+      toDate: "2026-09-16",
+      window: { fromMin: 9 * 60, toMin: 12 * 60 },
+      reason: "Mornings off",
+      confirmation: undefined,
+    });
+    await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+    expect(toast).toHaveBeenCalledWith("8 days blocked off", "success");
+  });
+
+  it("blocks a range of whole days when All day is on", async () => {
+    await open();
+    fireEvent.click(screen.getByRole("button", { name: "Block multiple days" }));
+    fireEvent.click(screen.getByRole("button", { name: "All day" }));
+    expect(screen.queryByLabelText("From")).toBeNull();
+    set("End date", "2026-09-16");
+    expect(summaryText()).toBe("September 9–16 · All day · 8 days");
     set("Only you see this", "Vacation");
     addBlock.mockResolvedValueOnce({ ok: true, created: 8 });
     submit();
@@ -154,6 +190,7 @@ describe("the block-off sheet", () => {
       reason: "Vacation",
       confirmation: undefined,
     });
+    expect(sent().window).toBeUndefined();
     await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
     expect(toast).toHaveBeenCalledWith("8 days blocked off", "success");
   });

@@ -83,10 +83,18 @@ export function BlockOffForm({
   const [busy, setBusy] = useState(false);
   const inFlight = useRef(false);
 
-  const wholeDays = multiDay || allDay;
-  const plan: BlockPlan = wholeDays
-    ? { kind: "days", fromDate: date, toDate: multiDay ? endDate : date }
-    : { kind: "timed", date, fromTime, toTime };
+  // A range is always sent as days (all day on each, or the same hours on
+  // each); a single day sends instants unless it is all day.
+  const plan: BlockPlan = multiDay
+    ? {
+        kind: "days",
+        fromDate: date,
+        toDate: endDate,
+        ...(allDay ? {} : { window: { fromTime, toTime } }),
+      }
+    : allDay
+      ? { kind: "days", fromDate: date, toDate: date }
+      : { kind: "timed", date, fromTime, toTime };
   const summary = blockSummary(plan, todayKey);
   const days = plan.kind === "days" ? dayCount(plan.fromDate, plan.toDate) : 1;
 
@@ -113,15 +121,25 @@ export function BlockOffForm({
       if (dayCount(date, endDate) > MAX_BLOCK_DAYS) {
         return `Block up to ${MAX_BLOCK_DAYS} days at a time.`;
       }
-    }
-    if (wholeDays) {
+      if (allDay) {
+        return { kind: "days", staffId, fromDate: date, toDate: endDate, reason: note };
+      }
+      // The same hours on every day, as shop-local minutes; the API resolves
+      // each day's instants itself. NaN from a cleared input fails the check.
+      const fromMin = minutesOf(fromTime);
+      const toMin = minutesOf(toTime);
+      if (!(toMin > fromMin)) return "End time must be after the start time.";
       return {
         kind: "days",
         staffId,
         fromDate: date,
-        toDate: multiDay ? endDate : date,
+        toDate: endDate,
+        window: { fromMin, toMin },
         reason: note,
       };
+    }
+    if (allDay) {
+      return { kind: "days", staffId, fromDate: date, toDate: date, reason: note };
     }
     // Build ISO instants from the day + time inputs. Both are naive wall clock
     // in the SHOP's tz (the schedule the barber sees), so convert via the shop
@@ -278,25 +296,29 @@ export function BlockOffForm({
           )}
           {multiDay && (
             <p className="text-[11px] text-muted">
-              Every day from the start date through the end date is blocked all day.
+              Every day from the start date through the end date, inclusive.
             </p>
           )}
         </Group>
 
-        {!multiDay && (
-          <Group
-            title="Time"
-            action={
-              <Pill on={allDay} onClick={() => setAllDay((v) => !v)} qa="block-all-day">
-                All day
-              </Pill>
-            }
-          >
-            {allDay ? (
-              <p className="text-[11px] text-muted">
-                Midnight to midnight, nothing bookable that day.
-              </p>
-            ) : (
+        {/* The same card for one day and for a range: a range takes these
+            hours on EVERY day it covers, or all day on each. */}
+        <Group
+          title="Time"
+          action={
+            <Pill on={allDay} onClick={() => setAllDay((v) => !v)} qa="block-all-day">
+              All day
+            </Pill>
+          }
+        >
+          {allDay ? (
+            <p className="text-[11px] text-muted">
+              {multiDay
+                ? "Midnight to midnight on every day in the range."
+                : "Midnight to midnight, nothing bookable that day."}
+            </p>
+          ) : (
+            <>
               <div className="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2">
                 <Field label="From">
                   <input
@@ -315,9 +337,14 @@ export function BlockOffForm({
                   />
                 </Field>
               </div>
-            )}
-          </Group>
-        )}
+              {multiDay && (
+                <p className="text-[11px] text-muted">
+                  These hours are blocked on every day in the range.
+                </p>
+              )}
+            </>
+          )}
+        </Group>
 
         <Group title="Note">
           <Field label="Only you see this">
