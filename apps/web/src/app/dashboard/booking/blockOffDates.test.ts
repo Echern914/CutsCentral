@@ -72,6 +72,44 @@ describe("the summary", () => {
     ).toBe("September 9–16 · All day · 8 days");
   });
 
+  it("says what the same hours on every day of a range will do", () => {
+    expect(
+      blockSummary(
+        {
+          kind: "days",
+          fromDate: "2026-09-09",
+          toDate: "2026-09-16",
+          window: { fromTime: "09:00", toTime: "12:00" },
+        },
+        TODAY,
+      ),
+    ).toBe("September 9–16 · 9:00 AM–12:00 PM each day · 8 days");
+    // A one-day "range" with hours reads like a single timed day.
+    expect(
+      blockSummary(
+        {
+          kind: "days",
+          fromDate: "2026-09-09",
+          toDate: "2026-09-09",
+          window: { fromTime: "09:00", toTime: "12:00" },
+        },
+        TODAY,
+      ),
+    ).toBe("September 9 · 9:00 AM–12:00 PM");
+    // A cleared time says nothing, like the timed form.
+    expect(
+      blockSummary(
+        {
+          kind: "days",
+          fromDate: "2026-09-09",
+          toDate: "2026-09-16",
+          window: { fromTime: "", toTime: "12:00" },
+        },
+        TODAY,
+      ),
+    ).toBe("");
+  });
+
   it("says what one whole day will do", () => {
     expect(
       blockSummary({ kind: "days", fromDate: "2026-09-09", toDate: "2026-09-09" }, TODAY),

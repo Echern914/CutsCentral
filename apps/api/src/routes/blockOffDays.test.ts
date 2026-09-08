@@ -390,3 +390,72 @@ describe("blocking over an existing booking", () => {
     expect(beside.status).toBe(201);
   });
 });
+
+describe("the same hours on every day of a range", () => {
+  it("writes one row per day at those shop-local hours, closes exactly them, and keeps the rest of each day open", async () => {
+    const from = dayKeyAhead(40);
+    const to = dayKeyAheadFrom(from, 2);
+    // 9:00-12:00 New York, each of the three days.
+    const res = await postBlock(S, {
+      fromDate: from,
+      toDate: to,
+      fromMin: 9 * 60,
+      toMin: 12 * 60,
+      reason: "Mornings off",
+    });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ ok: true, created: 3, overlappingAppointments: 0 });
+
+    const rows = (await blockRows(S)).filter((r) => r.reason === "Mornings off");
+    expect(rows).toHaveLength(3);
+    [from, dayKeyAheadFrom(from, 1), to].forEach((key, i) => {
+      expect(rows[i]!.startsAt.toISOString()).toBe(nyAt(key, 9).toISOString());
+      expect(rows[i]!.endsAt.toISOString()).toBe(nyAt(key, 12).toISOString());
+    });
+
+    for (const key of [from, dayKeyAheadFrom(from, 1), to]) {
+      const starts = new Set(await slotsOn(S, key));
+      expect(starts.has(nyAt(key, 9).toISOString())).toBe(false);
+      expect(starts.has(nyAt(key, 11).toISOString())).toBe(false);
+      // The afternoon is untouched, and so is the slot that starts as the block ends.
+      expect(starts.has(nyAt(key, 12).toISOString())).toBe(true);
+      expect(starts.has(nyAt(key, 14).toISOString())).toBe(true);
+    }
+    const inside = await book(S, nyAt(dayKeyAheadFrom(from, 1), 10));
+    expect(inside.status).toBe(400);
+    expect(inside.body.error).toBe("invalid_slot");
+    const afternoon = await book(S, nyAt(dayKeyAheadFrom(from, 1), 14));
+    expect(afternoon.status).toBe(201);
+  });
+
+  it("only bookings INSIDE the daily hours are conflicts - an afternoon booking is not in the way of blocked mornings", async () => {
+    const from = dayKeyAhead(45);
+    const to = dayKeyAheadFrom(from, 1);
+    expect((await book(S, nyAt(from, 14), "Afternoon")).status).toBe(201);
+
+    const clear = await postBlock(S, { fromDate: from, toDate: to, fromMin: 9 * 60, toMin: 12 * 60 });
+    expect(clear.status).toBe(201);
+    expect(clear.body.overlappingAppointments).toBe(0);
+
+    // A booking inside the hours on the SECOND day is.
+    expect((await book(S, nyAt(to, 15), "Late")).status).toBe(201);
+    const hit = await postBlock(S, { fromDate: from, toDate: to, fromMin: 14 * 60, toMin: 16 * 60 });
+    expect(hit.status).toBe(409);
+    expect(hit.body.count).toBe(2);
+    expect(hit.body.conflicts.join("\n")).toContain("Afternoon Rivera");
+    expect(hit.body.conflicts.join("\n")).toContain("Late Rivera");
+  });
+
+  it("refuses an inverted or impossible window", async () => {
+    const day = dayKeyAhead(50);
+    const before = (await blockRows(S)).length;
+    const inverted = await postBlock(S, { fromDate: day, toDate: day, fromMin: 12 * 60, toMin: 9 * 60 });
+    expect(inverted.status).toBe(400);
+    expect(JSON.stringify(inverted.body.issues)).toContain("toMin");
+    const tooLate = await postBlock(S, { fromDate: day, toDate: day, fromMin: 9 * 60, toMin: 25 * 60 });
+    expect(tooLate.status).toBe(400);
+    const halfShape = await postBlock(S, { fromDate: day, toDate: day, fromMin: 9 * 60 });
+    expect(halfShape.status).toBe(400);
+    expect((await blockRows(S)).length).toBe(before);
+  });
+});

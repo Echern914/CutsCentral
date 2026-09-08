@@ -477,6 +477,12 @@ export type BlockOffInput =
       staffId: string;
       fromDate: string; // YYYY-MM-DD, shop-local
       toDate: string; // YYYY-MM-DD, shop-local, inclusive
+      /**
+       * The same hours on EVERY day of the range, as shop-local minutes from
+       * midnight (end exclusive). Absent = all day on each day. The API turns
+       * each day into its own row either way.
+       */
+      window?: { fromMin: number; toMin: number };
       reason?: string;
       confirmation?: string;
     };
@@ -504,7 +510,9 @@ export async function addBlockAction(input: BlockOffInput): Promise<BlockOffResu
       ? {
           fromDate: input.fromDate,
           toDate: input.toDate,
-          allDay: true as const,
+          ...(input.window
+            ? { fromMin: input.window.fromMin, toMin: input.window.toMin }
+            : { allDay: true as const }),
           reason: input.reason,
           confirmation: input.confirmation,
         }
