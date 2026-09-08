@@ -33,12 +33,26 @@ export const DEFAULTS = {
  * apps/api/src/billing/quota.ts for enforcement.
  */
 export const PLANS = {
+  // "free" is the value of Shop.plan for a shop with NO subscription - a
+  // signup trial (full Premium until trialEndsAt) or a lapsed shop (walled).
+  // There is no free tier to fall back to; the flags below describe the trial.
   free: {
     key: "free",
     name: "Free",
     priceMonthlyUsd: 0,
     smsMonthlyQuota: 0,
     receptionistIncluded: false,
+    premiumFeatures: true,
+  },
+  // Starter: the booking site and the everyday tools, no texting, no AI, and
+  // Insights as a preview. Dark until STRIPE_STARTER_PRICE_ID is set.
+  starter: {
+    key: "starter",
+    name: "Starter",
+    priceMonthlyUsd: 20,
+    smsMonthlyQuota: 0,
+    receptionistIncluded: false,
+    premiumFeatures: false,
   },
   pro: {
     key: "pro",
@@ -46,6 +60,7 @@ export const PLANS = {
     priceMonthlyUsd: 34.99,
     smsMonthlyQuota: 600,
     receptionistIncluded: false,
+    premiumFeatures: true,
   },
   pro_ai: {
     key: "pro_ai",
@@ -53,20 +68,29 @@ export const PLANS = {
     priceMonthlyUsd: 74.99,
     smsMonthlyQuota: 2500,
     receptionistIncluded: true,
+    premiumFeatures: true,
   },
 } as const;
 
 export type PlanKey = keyof typeof PLANS;
 
+/** The plans a shop can buy, in the order the pricing surfaces list them. */
+export const PAID_PLAN_KEYS = ["starter", "pro", "pro_ai"] as const;
+export type PaidPlanKey = (typeof PAID_PLAN_KEYS)[number];
+
 /**
  * Back-compat alias over PLANS.pro (the original single paid plan). Existing
  * call sites (billing route, web banner/FAQ/vertical pages) read this; new
  * code should use PLANS directly.
+ *
+ * trialDays: every new shop gets this many days of FULL Premium before it
+ * has to pick a plan (Starter, Premium or Premium AI). Read at signup
+ * (routes/shops.ts) and by every trial sentence in the product.
  */
 export const BILLING = {
   planName: PLANS.pro.name,
   priceMonthlyUsd: PLANS.pro.priceMonthlyUsd,
-  trialDays: 30,
+  trialDays: 14,
 } as const;
 
 /**

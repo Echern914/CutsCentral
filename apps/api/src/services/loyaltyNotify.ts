@@ -13,6 +13,7 @@ import { sendPushToClient } from "../messaging/push.js";
 import { pokeWalletPass } from "../wallet/pass.js";
 import { inQuietHours } from "../engines/quietHours.js";
 import { hasActiveAccess } from "../billing/stripe.js";
+import { hasPremiumAccess } from "../billing/entitlements.js";
 
 const env = apiEnv();
 
@@ -56,6 +57,7 @@ const SHOP_SELECT = {
   subscriptionStatus: true,
   trialEndsAt: true,
   compAccess: true,
+  plan: true,
   twilioNumber: true,
 } as const;
 
@@ -79,6 +81,7 @@ type LoyaltyShop = {
   subscriptionStatus: string;
   trialEndsAt: Date | null;
   compAccess: boolean;
+  plan: string;
   twilioNumber: string | null;
 };
 
@@ -107,6 +110,9 @@ function skipReason(
   if (!shop.rewardsEnabled) return "rewards_disabled";
   if (!shop.loyaltyTextsEnabled) return "loyalty_texts_disabled";
   if (!hasActiveAccess(shop, { now })) return "no_active_access";
+  // Texts are a Premium feature; loyalty PUSH stays available on every plan
+  // (loyaltyPushEligible below deliberately does not check this).
+  if (!hasPremiumAccess(shop, { now })) return "texts_not_in_plan";
   if (client.archivedAt !== null) return "client_archived";
   if (client.optedOut) return "client_opted_out";
   if (client.smsConsentAt === null) return "no_sms_consent";

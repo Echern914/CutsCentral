@@ -7,15 +7,20 @@ import { requireManager } from "../auth/roles.js";
 import {
   ACTIVE_STATUSES,
   billingEnabled,
+  changeSubscriptionTier,
   createCheckoutUrl,
   createPortalUrl,
   createReceptionistCheckoutUrl,
   hasActiveAccess,
   premiumAiBillingEnabled,
   receptionistBillingEnabled,
+  starterBillingEnabled,
+  tierBillingEnabled,
   trialDaysLeft,
-  upgradeSubscriptionToPremiumAi,
+  type CheckoutTier,
 } from "../billing/stripe.js";
+import { planEntitlements } from "../billing/entitlements.js";
+import { hasMcpEntitlement } from "../mcp/entitlement.js";
 import {
   monthEndUtc,
   monthlySmsQuotaFor,
@@ -64,6 +69,21 @@ billingRouter.get("/", async (req, res) => {
     premiumAi: {
       billingEnabled: premiumAiBillingEnabled(),
       priceMonthlyUsd: PLANS.pro_ai.priceMonthlyUsd,
+    },
+    // Starter tier ($20/mo: booking site + everyday tools, no texts, no AI,
+    // Insights preview). Dark until STRIPE_STARTER_PRICE_ID is set.
+    starter: {
+      billingEnabled: starterBillingEnabled(),
+      priceMonthlyUsd: PLANS.starter.priceMonthlyUsd,
+    },
+    // What THIS shop's plan includes right now - the one source the web's
+    // lock derivation reads (lib/billing.ts). `premium` false with `hasAccess`
+    // true is a paid-up Starter shop: diamonds on the Premium features, no
+    // wall. See billing/entitlements.ts.
+    entitlements: {
+      ...planEntitlements(shop),
+      receptionist: hasReceptionistEntitlement(shop),
+      connector: hasMcpEntitlement(shop),
     },
     // AI receptionist add-on ($40/mo). Dark until STRIPE_RECEPTIONIST_PRICE_ID
     // is set; comped pilots pass via receptionistCompAccess.
@@ -143,23 +163,30 @@ billingRouter.post("/receptionist/checkout", async (req, res) => {
   res.json({ url });
 });
 
+/** The 409 for a tier whose Stripe price is not configured yet (the tier is dark). */
+const TIER_UNAVAILABLE: Record<CheckoutTier, string> = {
+  starter: "starter_unavailable",
+  pro: "billing_disabled",
+  pro_ai: "premium_ai_unavailable",
+};
+
 // Start a hosted Checkout for the base subscription -> { url }.
-// Body: { tier?: "pro" | "pro_ai" } (default "pro").
+// Body: { tier?: "starter" | "pro" | "pro_ai" } (default "pro").
 billingRouter.post("/checkout", async (req, res) => {
   if (!billingEnabled()) {
     res.status(409).json({ error: "billing_disabled" });
     return;
   }
   const parsed = z
-    .object({ tier: z.enum(["pro", "pro_ai"]).default("pro") })
+    .object({ tier: z.enum(["starter", "pro", "pro_ai"]).default("pro") })
     .safeParse(req.body ?? {});
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_input" });
     return;
   }
   const { tier } = parsed.data;
-  if (tier === "pro_ai" && !premiumAiBillingEnabled()) {
-    res.status(409).json({ error: "premium_ai_unavailable" });
+  if (!tierBillingEnabled(tier)) {
+    res.status(409).json({ error: TIER_UNAVAILABLE[tier] });
     return;
   }
   const shop = req.shop!;
@@ -177,24 +204,41 @@ billingRouter.post("/checkout", async (req, res) => {
   res.json({ url });
 });
 
-// Upgrade an existing Premium subscription to Premium AI in place (Stripe
-// price swap with immediate proration). Trial/free shops use /checkout with
-// tier "pro_ai" instead - there is no subscription to swap yet.
+/** Where an in-place upgrade may go from each plan. Downgrades use the portal. */
+const UPGRADE_PATHS: Record<string, readonly CheckoutTier[]> = {
+  starter: ["pro", "pro_ai"],
+  pro: ["pro_ai"],
+};
+
+// Upgrade an existing subscription in place (Stripe price swap with immediate
+// proration): Starter -> Premium, Starter -> Premium AI, Premium -> Premium
+// AI. Body: { tier?: "pro" | "pro_ai" } (default "pro_ai", the original
+// upgrade). Trial/free shops use /checkout instead - there is no subscription
+// to swap yet.
 billingRouter.post("/upgrade", async (req, res) => {
   if (!billingEnabled()) {
     res.status(409).json({ error: "billing_disabled" });
     return;
   }
-  if (!premiumAiBillingEnabled()) {
-    res.status(409).json({ error: "premium_ai_unavailable" });
+  const parsed = z
+    .object({ tier: z.enum(["pro", "pro_ai"]).default("pro_ai") })
+    .safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const { tier } = parsed.data;
+  if (!tierBillingEnabled(tier)) {
+    res.status(409).json({ error: TIER_UNAVAILABLE[tier] });
     return;
   }
   const shop = req.shop!;
-  // Already on the tier, or already paying the same money as pro + the $40
-  // add-on - upgrading would double-charge the receptionist.
+  // Already on the tier, or (for Premium AI) already paying the same money as
+  // pro + the $40 add-on - upgrading would double-charge the receptionist.
   if (
-    shop.plan === "pro_ai" ||
-    ACTIVE_STATUSES.has(shop.receptionistSubscriptionStatus)
+    shop.plan === tier ||
+    (tier === "pro_ai" &&
+      (shop.plan === "pro_ai" || ACTIVE_STATUSES.has(shop.receptionistSubscriptionStatus)))
   ) {
     res.status(409).json({ error: "already_entitled" });
     return;
@@ -206,7 +250,13 @@ billingRouter.post("/upgrade", async (req, res) => {
     res.status(409).json({ error: "no_subscription" });
     return;
   }
-  const ok = await upgradeSubscriptionToPremiumAi(shop);
+  // Only UP. A Premium shop asking for Starter is a downgrade, which the
+  // portal handles (with Stripe's own explanation of the proration).
+  if (!(UPGRADE_PATHS[shop.plan] ?? []).includes(tier)) {
+    res.status(409).json({ error: "not_an_upgrade" });
+    return;
+  }
+  const ok = await changeSubscriptionTier(shop, tier);
   if (!ok) {
     res.status(502).json({ error: "upgrade_failed" });
     return;

@@ -16,6 +16,7 @@ import {
   UpgradeButton,
   StartAiTrialButton,
   UpgradeToPremiumAiButton,
+  UpgradeToTierButton,
 } from "./BillingActions";
 import { ReceptionistControls } from "./ReceptionistControls";
 
@@ -37,31 +38,34 @@ interface TierFeature {
   detail?: string;
 }
 
-// The everyday half of the one plan. This was the old Free tier's whole
-// pitch; the features did not go anywhere, the separate free tier did.
-const FREE_FEATURES: TierFeature[] = [
+// Starter — the booking site and the everyday tools, no texting, no AI, and
+// Insights as a preview. The old Free tier's pitch plus the booking page,
+// which is the thing a $20 shop is actually buying.
+const STARTER_FEATURES: TierFeature[] = [
+  { lead: "Your own online booking page", detail: "add-ons, recurring, per-day pricing, request approval" },
+  { lead: "Calendar + block-off time", detail: "your day, your hours, your days off" },
+  { lead: "Email confirmations & reminders", detail: "with add-to-calendar and Apple Wallet" },
   { lead: "Digital punch cards", detail: "loyalty that runs itself, visit by visit" },
   { lead: "Branded rewards page + mini-site", detail: "your colors, your fonts, one shareable link" },
   { lead: "A client book that's YOURS", detail: "notes, history, CSV export — never locked in" },
-  { lead: "One-tap visit logging", detail: "walk-ins counted, no booking app needed" },
-  { lead: "At-risk radar", detail: "see who's overdue before they drift away" },
-  { lead: "Free web push notifications" },
+  { lead: "Card & Apple Pay at booking, or pay-direct", detail: "your Stripe, your money, 0% commission" },
+  { lead: "Insights preview", detail: "the headline numbers; the full picture is Premium" },
 ];
 
 // Premium — the outbound layer that actually brings clients back. (Acuity/
 // Square visit SYNC is free - the paid part is what we DO with the synced
-// calendar: texts + your own booking page.)
+// calendar: texts + the full analysis.)
 // A function of the shop words rather than a module constant: one perk names
 // the workspace, and a module-level constant has no vocabulary to read.
 const premiumFeatures = (v: BusinessVocabulary): TierFeature[] => [
-  { lead: "Everything in Free, always" },
+  { lead: "Everything in Starter" },
   {
     lead: `${PLANS.pro.smsMonthlyQuota} texts a month included`,
     detail: "confirmations, reminders, nudges, win-backs",
   },
   {
-    lead: "Your own online booking page",
-    detail: "add-ons, waitlist, recurring, per-day pricing",
+    lead: "The full Insights picture",
+    detail: "trends, services, booked vs open hours, goals and the yearly report",
   },
   {
     lead: "Smart rebooking texts",
@@ -117,6 +121,7 @@ function planLabel(b: BillingStatus): string {
     return `${PLANS.pro.name} + AI receptionist`;
   }
   if (b.compAccess) return `${b.planName} · complimentary`;
+  if (b.subscribed && b.plan === "starter") return PLANS.starter.name;
   if (b.subscribed) return b.planName;
   if (b.hasAccess && b.billingEnabled) return "Free trial";
   return "Free";
@@ -373,19 +378,28 @@ export default async function BillingPage({
               forbids in-app. Barbers compare and pick plans on the web. */}
           <HideInNativeApp>
           <div className="grid items-stretch gap-5 sm:grid-cols-3">
+            {/* Starter — the booking site and the everyday tools. No texts,
+                no AI, Insights as a preview. Dark until its Stripe price is
+                configured: the card still explains the tier, the button
+                says "almost here" instead of dead-ending. */}
             <Card className="flex flex-col p-6">
               <div className="flex items-center justify-between gap-2">
                 <p className="text-xs uppercase tracking-[0.2em] text-muted">
-                  Free, always
+                  {PLANS.starter.name}
+                  {/* Price omitted in-app (App Store 3.1.1). */}
+                  <HideInNativeApp> · ${PLANS.starter.priceMonthlyUsd}/mo</HideInNativeApp>
                 </p>
-                {!b.subscribed && b.plan !== "pro_ai" && (
-                  <span className="rounded-full border border-subtle px-2.5 py-1 text-[10px] uppercase tracking-wide text-muted">
-                    Your plan today
+                {b.subscribed && b.plan === "starter" && (
+                  <span className="rounded-full border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-soft">
+                    Current plan
                   </span>
                 )}
               </div>
+              <p className="mt-2 text-sm text-offwhite">
+                Take bookings online. Texts and AI are Premium.
+              </p>
               <ul className="mt-3 flex flex-col gap-2.5">
-                {FREE_FEATURES.map((item) => (
+                {STARTER_FEATURES.map((item) => (
                   <li key={item.lead} className="flex items-start gap-2">
                     <span className="mt-0.5 text-sm text-muted">✓</span>
                     <span>
@@ -397,6 +411,26 @@ export default async function BillingPage({
                   </li>
                 ))}
               </ul>
+              {!b.compAccess && b.billingEnabled && !b.subscribed && (
+                <HideInNativeApp>
+                  <div className="mt-5 pt-1">
+                    {b.starter.billingEnabled ? (
+                      <UpgradeButton
+                        tier="starter"
+                        variant="secondary"
+                        label={`Start with ${PLANS.starter.name} — $${b.starter.priceMonthlyUsd}/mo`}
+                      />
+                    ) : (
+                      <p className="text-xs text-muted">Almost here — check back soon.</p>
+                    )}
+                  </div>
+                </HideInNativeApp>
+              )}
+              {b.subscribed && b.plan !== "starter" && (
+                <p className="mt-auto pt-5 text-xs text-muted">
+                  Included in your plan. Switch plans any time from Manage billing.
+                </p>
+              )}
             </Card>
 
             <Card className="relative flex flex-col border-gold/30 p-6">
@@ -438,6 +472,18 @@ export default async function BillingPage({
                     <UpgradeButton
                       tier="pro"
                       label={`Go Premium — $${b.priceMonthlyUsd}/mo`}
+                    />
+                  </div>
+                </HideInNativeApp>
+              )}
+              {/* A Starter subscriber moves up in place (prorated today), not
+                  through a second checkout. */}
+              {!b.compAccess && b.billingEnabled && b.subscribed && b.plan === "starter" && (
+                <HideInNativeApp>
+                  <div className="mt-5 pt-1">
+                    <UpgradeToTierButton
+                      tier="pro"
+                      label={`Upgrade to ${PLANS.pro.name} — $${b.priceMonthlyUsd}/mo`}
                     />
                   </div>
                 </HideInNativeApp>

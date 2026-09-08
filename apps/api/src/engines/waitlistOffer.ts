@@ -26,7 +26,8 @@ import { ServiceDayFullError } from "./serviceDailyLimit.js";
 import { isSlotBookable } from "./slots.js";
 import { effectivePriceAt } from "./pricing.js";
 import { deriveAcuityClientKey } from "../acuity/clientKey.js";
-import { connectEnabled, hasActiveAccess } from "../billing/stripe.js";
+import { connectEnabled } from "../billing/stripe.js";
+import { hasPremiumAccess } from "../billing/entitlements.js";
 import { depositChargeCents, toCents } from "../billing/payments.js";
 import {
   buildWaitlistOfferCustomerEmail,
@@ -1150,16 +1151,18 @@ export async function expireDueOffers(
           subscriptionStatus: true,
           trialEndsAt: true,
           compAccess: true,
+          plan: true,
         },
       });
-      // Same gates the original offer honored - a shop that lapsed or turned
-      // the feature off mid-hold gets no further outreach.
+      // Same gates the original offer honored - a shop that lapsed, dropped
+      // to a plan without texts, or turned the feature off mid-hold gets no
+      // further outreach.
       if (
         !shop ||
         shop.bookingMode !== "native" ||
         !shop.waitlistEnabled ||
         !shop.slotOpenedTextsEnabled ||
-        !hasActiveAccess(shop, { now })
+        !hasPremiumAccess(shop, { now })
       ) {
         continue;
       }

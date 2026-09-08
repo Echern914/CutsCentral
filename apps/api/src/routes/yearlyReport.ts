@@ -3,7 +3,7 @@ import { z } from "zod";
 import { runWithShop } from "@chairback/db";
 import { vocabularyForShop } from "@chairback/config";
 import { requireShop, requireUser } from "../middleware/auth.js";
-import { requireActiveAccess } from "../middleware/billing.js";
+import { requireActiveAccess, requirePremiumAccess } from "../middleware/billing.js";
 import {
   EARLIEST_REPORT_YEAR,
   buildYearlyReport,
@@ -47,7 +47,9 @@ import {
  * shopId parameter anywhere on this router.
  */
 export const yearlyReportRouter: Router = Router();
-yearlyReportRouter.use(requireUser, requireShop, requireActiveAccess);
+// The yearly report is analysis, which Starter's Insights preview does not
+// include: paid up but not Premium answers 402 premium_required.
+yearlyReportRouter.use(requireUser, requireShop, requireActiveAccess, requirePremiumAccess);
 
 const querySchema = z.object({
   year: z.coerce.number().int().min(EARLIEST_REPORT_YEAR).max(2100).optional(),

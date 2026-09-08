@@ -42,6 +42,12 @@ export interface PeriodMeta {
 }
 
 export interface InsightsData extends PeriodMeta {
+  /**
+   * "peek" = the Starter sneak peek: totals only, `buckets`/`services` come
+   * back empty and the chair-time/goals endpoints 402. Absent on an older
+   * payload, which reads as "full".
+   */
+  scope?: "full" | "peek";
   buckets: {
     key: string;
     label: string; // short axis label

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { apiEnv, BILLING } from "@chairback/config";
+import { apiEnv, BILLING, PLANS } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { requireUser } from "../middleware/auth.js";
 import { requireAdmin } from "../middleware/admin.js";
@@ -51,17 +51,29 @@ adminPortalRouter.get("/metrics", async (_req, res) => {
     await Promise.all([
       prisma.shop.count(),
       prisma.shop.count({ where: { createdAt: { gte: weekAgo } } }),
-      prisma.shop.groupBy({ by: ["subscriptionStatus"], _count: { _all: true } }),
+      prisma.shop.groupBy({ by: ["subscriptionStatus", "plan"], _count: { _all: true } }),
       prisma.shop.count({ where: { compAccess: true } }),
       prisma.client.count(),
       prisma.visit.count(),
     ]);
 
-  const byStatus = new Map(statusGroups.map((g) => [g.subscriptionStatus, g._count._all]));
-  const paying = (byStatus.get("active") ?? 0) + (byStatus.get("past_due") ?? 0);
-  const trialing = byStatus.get("trialing") ?? 0;
-  // Only true paying subscriptions count toward MRR - comps are revenue-neutral.
-  const mrrEstimate = paying * BILLING.priceMonthlyUsd;
+  const PAYING = new Set(["active", "past_due"]);
+  let paying = 0;
+  let trialing = 0;
+  let mrrEstimate = 0;
+  for (const g of statusGroups) {
+    if (g.subscriptionStatus === "trialing") trialing += g._count._all;
+    if (!PAYING.has(g.subscriptionStatus)) continue;
+    paying += g._count._all;
+    // Only true paying subscriptions count toward MRR - comps are
+    // revenue-neutral - and each at ITS plan's price: a Starter shop is not a
+    // Premium shop's worth of revenue.
+    const price =
+      (PLANS as Record<string, { priceMonthlyUsd: number } | undefined>)[g.plan]
+        ?.priceMonthlyUsd ?? BILLING.priceMonthlyUsd;
+    mrrEstimate += g._count._all * price;
+  }
+  mrrEstimate = Math.round(mrrEstimate * 100) / 100;
 
   res.json({
     billingEnabled: billingEnabled(),

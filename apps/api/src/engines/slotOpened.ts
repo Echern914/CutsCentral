@@ -10,7 +10,7 @@ import { getMessageProvider } from "../messaging/twilio.js";
 import { sendPushToUser } from "../messaging/push.js";
 import { isSlotBookable } from "./slots.js";
 import { notifyOffer, offerFreedSlot } from "./waitlistOffer.js";
-import { hasActiveAccess } from "../billing/stripe.js";
+import { hasPremiumAccess } from "../billing/entitlements.js";
 import {
   receptionistConfigured,
   receptionistEnabledForShop,
@@ -84,7 +84,8 @@ export async function notifySlotOpened(params: {
     const receptionistOn =
       receptionistConfigured() && receptionistEnabledForShop(shop, { now });
     if (!shop.waitlistEnabled && !receptionistOn) return;
-    if (!hasActiveAccess(shop, { now })) return;
+    // "A slot just opened" texts are a Premium feature (Starter has none).
+    if (!hasPremiumAccess(shop, { now })) return;
 
     // The freed appointment (narrowed relation select via runWithShop).
     const appt = await runWithShop(params.shopId, (tx) =>

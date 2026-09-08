@@ -79,7 +79,10 @@ describe("trialStageAt", () => {
     expect(trialStageAt(end, new Date(end.getTime() - 8 * MS_PER_DAY))).toBe(0); // >7d left
     expect(trialStageAt(end, new Date(end.getTime() - 6 * MS_PER_DAY))).toBe(1); // ≤7d left
     expect(trialStageAt(end, new Date(end.getTime() - 12 * 60 * 60 * 1000))).toBe(2); // ≤1d left
-    expect(trialStageAt(end, new Date(end.getTime() + 12 * 60 * 60 * 1000))).toBe(2); // just expired (<1d ago)
+    // The ended email goes out on the first sweep AT or after expiry - the
+    // day the booking page stops, not the day after.
+    expect(trialStageAt(end, end)).toBe(3);
+    expect(trialStageAt(end, new Date(end.getTime() + 60 * 60 * 1000))).toBe(3); // just expired
     expect(trialStageAt(end, new Date(end.getTime() + 2 * MS_PER_DAY))).toBe(3); // expired ≥1d ago
   });
 });
@@ -126,6 +129,44 @@ describe("runTrialReminders", () => {
 
     const row = await prisma.shop.findUnique({ where: { id: shop.id } });
     expect(row?.trialReminderStage).toBe(3);
+
+    // The ended email is a REAL email: branded HTML with one button that says
+    // the thing, the plan list with prices, on the owner-lifecycle stream, and
+    // keyed so a retried send can never land twice.
+    const ended = mine()[2]!;
+    expect(ended.subject).toBe("Your ChairBack trial has ended - upgrade to keep everything");
+    expect(ended.html).toContain("Upgrade to keep everything");
+    expect(ended.html).toContain("Your free trial has ended");
+    expect(ended.html).toContain("/dashboard/billing");
+    expect(ended.html).toContain("$34.99/mo");
+    expect(ended.html).toContain("Nothing is lost.");
+    expect(ended.text).toContain("Nothing is lost.");
+    expect(ended.stream).toBe("lifecycle");
+    expect(ended.idempotencyKey).toBe(`trial-reminder:${shop.id}:3`);
+    // Every stage carries HTML now, not just the last.
+    expect(mine()[0]!.html).toContain("Choose a plan");
+    expect(mine()[1]!.html).toContain("Keep everything running");
+  });
+
+  it("the ended email goes out on the first sweep AT expiry, not a day later", async () => {
+    // Trial ended an hour before this sweep: stage 3 straight away.
+    const shop = await makeShop({ trialEndsAt: new Date(NOW.getTime() - 60 * 60 * 1000) });
+    const summaries = await runFiltered(NOW);
+    expect(summaries).toEqual([{ shopId: shop.id, stage: 3, ownerEmail }]);
+    expect(mine()[0]!.subject).toContain("trial has ended");
+  });
+
+  it("names only the plans that are actually for sale", async () => {
+    // Under the test seam only Premium is configured (no STRIPE_STARTER_PRICE_ID,
+    // no STRIPE_PREMIUM_AI_PRICE_ID), so the email must not offer Starter or
+    // Premium AI - the billing page would refuse to sell them.
+    const shop = await makeShop({ trialEndsAt: new Date(NOW.getTime() + 2 * MS_PER_DAY) });
+    await runFiltered(NOW);
+    const email = mine().find((e) => e.to === ownerEmail)!;
+    expect(email.text).toContain("Premium, $34.99/mo");
+    expect(email.text).not.toContain("Starter");
+    expect(email.text).not.toContain("Premium AI");
+    expect(shop.id).toBeTruthy();
   });
 
   it("a shop discovered already-expired gets ONE ended email (stage jump), not three", async () => {

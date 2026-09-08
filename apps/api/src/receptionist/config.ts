@@ -136,6 +136,9 @@ export function aiTrialAvailability(
   ) {
     return "no_subscription";
   }
+  // A taste of the tier ABOVE Premium: a Starter shop has two steps to climb,
+  // and its plan deliberately has no AI. Upgrade to Premium first.
+  if (shop.plan !== "pro") return "premium_required";
   return null;
 }
 

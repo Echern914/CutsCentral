@@ -7,7 +7,7 @@ import { getMessageProvider } from "../messaging/twilio.js";
 import { sendPushToClient } from "../messaging/push.js";
 import { isNudgeEligible, isNudgeDueByCadence } from "./eligibility.js";
 import { inQuietHours } from "./quietHours.js";
-import { hasActiveAccess } from "../billing/stripe.js";
+import { hasPremiumAccess } from "../billing/entitlements.js";
 import { remainingMonthlySms } from "../billing/quota.js";
 
 const env = apiEnv();
@@ -37,9 +37,10 @@ export async function runNudgeSweep(opts: SweepOptions = {}): Promise<SweepSumma
   const shops = await prisma.shop.findMany({ where: { acuity: { isNot: null } } });
   const summaries: SweepSummary[] = [];
   for (const shop of shops) {
-    // Trial over + no subscription = no scheduled sends (SMS costs real money).
-    if (!hasActiveAccess(shop, { now })) {
-      logger.info({ shopId: shop.id }, "sweep skipped: no active access");
+    // Trial over + no subscription, or a plan without texts (Starter) = no
+    // scheduled sends (SMS costs real money and is a Premium feature).
+    if (!hasPremiumAccess(shop, { now })) {
+      logger.info({ shopId: shop.id }, "sweep skipped: texts not included");
       continue;
     }
     try {

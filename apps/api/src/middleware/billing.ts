@@ -1,5 +1,6 @@
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { hasActiveAccess } from "../billing/stripe.js";
+import { hasPremiumAccess } from "../billing/entitlements.js";
 
 /**
  * The wall.
@@ -63,4 +64,26 @@ export function requireActiveAccessExcept(
     }
     requireActiveAccess(req, res, next);
   };
+}
+
+/**
+ * The second wall, for what a paid-up Starter shop does NOT get: the analysis
+ * half of Insights (chair time, goals, the yearly report). Distinct from the
+ * 402 above so the page can say "part of Premium" rather than "your plan has
+ * ended" to a shop that is paying. Mount AFTER requireActiveAccess: a lapsed
+ * shop should still hear the lapsed message first.
+ */
+export function requirePremiumAccess(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  if (hasPremiumAccess(req.shop!)) {
+    next();
+    return;
+  }
+  res.status(402).json({
+    error: "premium_required",
+    message: "This is part of Premium. Upgrade your plan to unlock it.",
+  });
 }

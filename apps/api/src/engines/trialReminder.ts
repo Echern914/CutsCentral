@@ -1,13 +1,14 @@
-import { APP_NAME, BILLING, apiEnv } from "@chairback/config";
+import { PAID_PLAN_KEYS, PLANS } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
-import { billingEnabled } from "../billing/stripe.js";
+import { billingEnabled, priceIdForTier } from "../billing/stripe.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
+import { buildTrialEmail, type TrialPlanLine } from "../messaging/trialEmails.js";
 
 /**
  * Trial-expiry reminder emails. A daily sweep that walks shops still on their
  * signup trial (no subscription, not comped) and emails the OWNER at three
- * moments: a week out, the day before, and the day after expiry. This is the
+ * moments: a week out, the day before, and the day it ends. This is the
  * conversion nudge Stripe can't send for us - the shop has no Stripe
  * subscription yet (plan stays "free" until Checkout), so nobody else knows
  * their trial is ending.
@@ -24,9 +25,13 @@ import { emailEnabled, sendEmail } from "../messaging/email.js";
  * run - just the current, most relevant one). The stage is compare-and-set
  * BEFORE dispatch (the write-ahead pattern of the nudge ledger): a crash or a
  * racing replica drops an email rather than ever double-sending.
+ *
+ * The copy lives in messaging/trialEmails.ts (HTML + text). The plan list in
+ * every email is built from the tiers that are actually FOR SALE right now
+ * (their Stripe price configured), so the email can never name a plan the
+ * billing page would then refuse to sell.
  */
 
-const env = apiEnv();
 const MS_PER_DAY = 86_400_000;
 
 /** Reminder stages, keyed by Shop.trialReminderStage. 0 = nothing sent yet. */
@@ -51,94 +56,46 @@ export interface TrialReminderOptions {
 
 /**
  * The stage the clock says a trial is at (independent of what's been sent).
- *  3 = expired a full day+ ago, 2 = ends within a day, 1 = ends within a week.
+ *  3 = ended (the first sweep at or after expiry - the day it happens, not
+ *      the day after: this is the email that says what just paused),
+ *  2 = ends within a day, 1 = ends within a week.
  * Checked strictly in that order so exactly one stage matches.
  */
 export function trialStageAt(trialEndsAt: Date, now: Date): TrialReminderStage | 0 {
   const msLeft = trialEndsAt.getTime() - now.getTime();
-  if (msLeft <= -MS_PER_DAY) return 3;
+  if (msLeft <= 0) return 3;
   if (msLeft <= MS_PER_DAY) return 2;
   if (msLeft <= 7 * MS_PER_DAY) return 1;
   return 0;
 }
 
-/** "July 9" - concrete enough for an email; no year (trials are 30 days out). */
-function friendlyDate(d: Date): string {
-  return new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric" }).format(d);
-}
-
-interface ReminderShop {
-  id: string;
-  name: string;
-  trialEndsAt: Date;
-  owner: { email: string; name: string };
-}
+/** One line per plan, what it is for - the email's plan table. */
+const PLAN_BLURBS: Record<(typeof PAID_PLAN_KEYS)[number], string> = {
+  starter:
+    "Your online booking page, calendar, client book, punch cards and email confirmations. No texts.",
+  pro: "Your booking page and everyday tools plus client texts: rebooking nudges, win-backs, promo blasts, waitlist alerts, and full Insights.",
+  pro_ai:
+    "Everything in Premium plus an AI receptionist that answers and books by text, on your own number.",
+};
 
 /**
- * The three emails. Copy stays short and concrete: what pauses (client texts +
- * the online booking page - the two things a shop actually feels), when, the
- * price, and one link. Plain text only; barbers read these on a phone.
+ * The plans an owner could buy right now, cheapest first. A tier whose Stripe
+ * price is not configured is dark on the billing page, so it is left out here
+ * too - an email must never offer what the next click refuses.
  */
-function buildReminderEmail(
-  stage: TrialReminderStage,
-  shop: ReminderShop,
-  now: Date,
-): { subject: string; text: string } {
-  const billingUrl = `${env.APP_BASE_URL}/dashboard/billing`;
-  const price = `$${BILLING.priceMonthlyUsd}/mo`;
-  const endDate = friendlyDate(shop.trialEndsAt);
-  const signoff = `— ${APP_NAME}`;
-
-  switch (stage) {
-    case 1:
-      return {
-        subject: `Your ${APP_NAME} trial ends in a week`,
-        text: [
-          `Hi ${shop.owner.name},`,
-          "",
-          `Your free trial for ${shop.name} ends on ${endDate}. After that, client texts and your online booking page pause until you subscribe.`,
-          "",
-          `Keep everything running for ${price}: ${billingUrl}`,
-          "",
-          signoff,
-        ].join("\n"),
-      };
-    case 2: {
-      // Stage 2 fires within 24h of expiry, but the daily sweep can first cross
-      // that line ON the expiry day (a trial ending after the sweep hour) - so
-      // "ends tomorrow" is often wrong. Say "today" once the trial ends within
-      // this calendar day (or already has), "tomorrow" otherwise.
-      const endsToday =
-        shop.trialEndsAt.getTime() <= now.getTime() ||
-        friendlyDate(shop.trialEndsAt) === friendlyDate(now);
-      const when = endsToday ? "today" : "tomorrow";
-      return {
-        subject: `Your ${APP_NAME} trial ends ${when}`,
-        text: [
-          `Hi ${shop.owner.name},`,
-          "",
-          `Heads up - your free trial for ${shop.name} ends ${when} (${endDate}). When it does, client texts and your online booking page pause.`,
-          "",
-          `It takes about a minute to subscribe (${price}): ${billingUrl}`,
-          "",
-          signoff,
-        ].join("\n"),
-      };
-    }
-    case 3:
-      return {
-        subject: `Your ${APP_NAME} trial has ended - texts and booking are paused`,
-        text: [
-          `Hi ${shop.owner.name},`,
-          "",
-          `Your free trial for ${shop.name} ended on ${endDate}, so client texts and your online booking page are paused. Your clients, visit history, and punch cards are all still here - nothing is lost.`,
-          "",
-          `Pick up right where you left off for ${price}: ${billingUrl}`,
-          "",
-          signoff,
-        ].join("\n"),
-      };
-  }
+export function purchasablePlans(
+  opts: { billingOn?: boolean } = {},
+): TrialPlanLine[] {
+  if (!(opts.billingOn ?? billingEnabled())) return [];
+  // Premium is the base plan - billing being on at all means its price is set.
+  // The other tiers are for sale only once their own price id is configured.
+  return PAID_PLAN_KEYS.filter((key) => key === "pro" || priceIdForTier(key) !== null).map(
+    (key) => ({
+      name: PLANS[key].name,
+      priceMonthlyUsd: PLANS[key].priceMonthlyUsd,
+      blurb: PLAN_BLURBS[key],
+    }),
+  );
 }
 
 /**
@@ -160,6 +117,8 @@ export async function runTrialReminders(
     logger.info("trial reminders skipped: email disabled (RESEND_API_KEY/EMAIL_FROM unset)");
     return [];
   }
+
+  const plans = purchasablePlans({ billingOn: opts.billingOn });
 
   // Only shops that can actually lapse: on a real trial (trialEndsAt set),
   // never subscribed ("none" - any Stripe status past that means they've been
@@ -190,13 +149,6 @@ export async function runTrialReminders(
       // type (stage 0 = trial not near expiry, never has an email).
       if (stage === 0 || stage <= shop.trialReminderStage) continue;
 
-      const reminderShop: ReminderShop = {
-        id: shop.id,
-        name: shop.name,
-        trialEndsAt: shop.trialEndsAt!,
-        owner: shop.owner,
-      };
-
       // Compare-and-set the stage BEFORE sending: if another pass (or a lease
       // TTL overrun) already advanced it, count === 0 and we send nothing.
       // Worst case is a dropped email on a crash between here and the send -
@@ -207,8 +159,24 @@ export async function runTrialReminders(
       });
       if (count === 0) continue;
 
-      const { subject, text } = buildReminderEmail(stage, reminderShop, now);
-      await sendEmail({ to: shop.owner.email, subject, text });
+      const { subject, text, html } = buildTrialEmail(stage, {
+        shopName: shop.name,
+        ownerName: shop.owner.name,
+        trialEndsAt: shop.trialEndsAt!,
+        now,
+        plans,
+      });
+      await sendEmail({
+        to: shop.owner.email,
+        subject,
+        text,
+        html,
+        stream: "lifecycle",
+        // Resend collapses a retried send under the same key, so a sweep that
+        // died after the provider accepted cannot send the same stage twice.
+        idempotencyKey: `trial-reminder:${shop.id}:${stage}`,
+        meta: { shopId: shop.id, kind: `trial_reminder_${stage}` },
+      });
       summaries.push({ shopId: shop.id, stage, ownerEmail: shop.owner.email });
       logger.info({ shopId: shop.id, stage }, "trial reminder sent");
     } catch (err) {

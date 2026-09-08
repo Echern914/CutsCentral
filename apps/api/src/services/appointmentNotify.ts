@@ -18,6 +18,7 @@ import { resolveNotifyPrefs, sendToBarber } from "./barberNotify.js";
 import { sendPushToUser } from "../messaging/push.js";
 import { inQuietHours } from "../engines/quietHours.js";
 import { hasActiveAccess } from "../billing/stripe.js";
+import { hasPremiumAccess } from "../billing/entitlements.js";
 
 /**
  * Transactional appointment notifications for the NATIVE booking engine: a
@@ -56,6 +57,7 @@ const SHOP_SELECT = {
   subscriptionStatus: true,
   trialEndsAt: true,
   compAccess: true,
+  plan: true,
   twilioNumber: true,
   // "Where is it?" is the most-asked question about an appointment, and the
   // confirmation was the one message that never answered it.
@@ -72,6 +74,7 @@ type ApptShop = {
   subscriptionStatus: string;
   trialEndsAt: Date | null;
   compAccess: boolean;
+  plan: string;
   twilioNumber: string | null;
   addressStreet: string | null;
   addressCity: string | null;
@@ -94,6 +97,9 @@ function skipReason(
   now: Date,
 ): string | null {
   if (!hasActiveAccess(shop, { now })) return "no_active_access";
+  // Texts are a Premium feature; a Starter shop's clients get the EMAIL twin
+  // (emailSkipReason below deliberately does not check this).
+  if (!hasPremiumAccess(shop, { now })) return "texts_not_in_plan";
   if (client.archivedAt !== null) return "client_archived";
   if (client.optedOut) return "client_opted_out";
   if (client.smsConsentAt === null) return "no_sms_consent";

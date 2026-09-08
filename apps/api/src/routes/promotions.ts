@@ -12,6 +12,7 @@ import { inQuietHours } from "../engines/quietHours.js";
 import { buildPromoBody } from "../messaging/templates.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 import { hasActiveAccess } from "../billing/stripe.js";
+import { hasPremiumAccess } from "../billing/entitlements.js";
 import { remainingMonthlySms } from "../billing/quota.js";
 
 import { requireActiveAccess } from "../middleware/billing.js";
@@ -271,6 +272,15 @@ promotionsRouter.post("/:id/blast", smsLimiter, async (req, res) => {
       error: "subscription_required",
       message:
         "Texting clients is a Premium feature. Upgrade to send rebooking nudges and promo blasts.",
+    });
+    return;
+  }
+  // Paid up, but on a plan without texts (Starter): same door, its own sign.
+  if (!dryRun && !hasPremiumAccess(shop)) {
+    res.status(402).json({
+      error: "premium_required",
+      message:
+        "Texting clients is part of Premium. Upgrade your plan to send rebooking nudges and promo blasts.",
     });
     return;
   }

@@ -9,7 +9,15 @@ import { SectionHeading } from "./SectionHeading";
  * and the standalone /pricing page. The HideInNativeApp wrapper lives INSIDE
  * so no caller can accidentally render plan prices in the iOS WebView (App
  * Store 3.1.1) - in-app this renders nothing at all.
+ *
+ * Starter is the way in for a shop that wants online booking and nothing
+ * outbound; Premium is the plan that brings clients back (texts + the full
+ * analysis); Premium AI adds the receptionist. Every new shop trials the whole
+ * thing for BILLING.trialDays days and then picks one.
  */
+
+const CHECK = "mt-0.5 h-4 w-4 shrink-0 text-gold";
+
 export function PricingSection() {
   return (
     <HideInNativeApp>
@@ -20,12 +28,51 @@ export function PricingSection() {
             title={
               <>
                 Start free.{" "}
-                <span className="text-gradient-gold">Upgrade when it pays for itself.</span>
+                <span className="text-gradient-gold">Pick the plan that pays for itself.</span>
               </>
             }
-            sub={`One plan, everything in it. Try the whole thing free for ${BILLING.trialDays} days — no card, nothing to cancel. One rebooked regular covers the month.`}
+            sub={`Every new shop gets the whole thing free for ${BILLING.trialDays} days — no card, nothing to cancel. Then keep everything from $${PLANS.starter.priceMonthlyUsd} a month.`}
           />
-          <Reveal delay={0.1} className="mx-auto mt-12 grid max-w-4xl gap-6 md:grid-cols-2">
+          <Reveal delay={0.1} className="mx-auto mt-12 grid max-w-6xl gap-6 md:grid-cols-3">
+            {/* Starter */}
+            <div className="glass relative flex flex-col overflow-hidden rounded-3xl border border-subtle p-8">
+              <div className="flex items-center justify-between">
+                <p className="text-xs uppercase tracking-[0.25em] text-muted">
+                  {PLANS.starter.name}
+                </p>
+              </div>
+              <p className="mt-4 font-display text-5xl tracking-tight">
+                ${PLANS.starter.priceMonthlyUsd}
+                <span className="text-lg text-muted">/month</span>
+              </p>
+              <p className="mt-2 text-sm text-muted">
+                Take bookings online. No texts, no AI.
+              </p>
+              <ul className="mt-6 flex flex-1 flex-col gap-2.5 text-left text-sm text-offwhite">
+                {[
+                  "Your own online booking page + calendar",
+                  "Email confirmations & reminders, add-to-calendar, Apple Wallet",
+                  "Digital punch cards, rewards & your branded loyalty page",
+                  "Client book, notes & CSV import/export",
+                  "Your public mini-site on your own domain",
+                  "Card & Apple Pay at booking, or Zelle / Venmo / Cash App — 0% commission",
+                  "Insights preview: the headline numbers",
+                ].map((t) => (
+                  <li key={t} className="flex items-start gap-2.5">
+                    <CheckIcon className={CHECK} />
+                    {t}
+                  </li>
+                ))}
+              </ul>
+              <Link
+                href="/signup"
+                className="mt-7 inline-flex items-center justify-center gap-2 rounded-full border border-subtle-strong px-7 py-3 text-sm font-semibold text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
+              >
+                Start your free trial
+                <ArrowIcon className="h-4 w-4" />
+              </Link>
+            </div>
+
             {/* Premium */}
             <div className="glass relative flex flex-col overflow-hidden rounded-3xl border border-gold/30 p-8">
               <div
@@ -45,26 +92,22 @@ export function PricingSection() {
                 <span className="text-lg text-muted">/month</span>
               </p>
               <p className="mt-2 text-sm text-muted">
-                Everything ChairBack does, from day one.{" "}
-                {BILLING.trialDays}-day free trial, no card.
+                Everything in Starter, plus the texts that bring clients back.
               </p>
               <ul className="mt-6 flex flex-1 flex-col gap-2.5 text-left text-sm text-offwhite">
                 {[
                   `${PLANS.pro.smsMonthlyQuota} texts a month included`,
-                  "Digital punch cards, rewards & your branded loyalty page",
-                  "Client book, notes & CSV import/export",
-                  "Your public mini-site on your own domain",
-                  "Your own online booking page + confirmation & reminder texts and emails",
+                  "Confirmation & reminder texts, on top of the emails",
                   "Smart rebooking texts, timed per client",
                   "Win-back texts that recover lapsed clients",
                   "Promo blasts with revenue attribution",
                   "Waitlist with “a slot just opened” alerts",
-                  "Recurring appointments, add-ons & request approval",
+                  "Full Insights: trends, services, booked vs open hours, goals & the yearly report",
                   "Holiday, weekend & time-of-day pricing, plus special-priced slots",
                   "Square & Acuity sync — reminder texts cover synced bookings too",
                 ].map((t) => (
                   <li key={t} className="flex items-start gap-2.5">
-                    <CheckIcon className="mt-0.5 h-4 w-4 shrink-0 text-gold" />
+                    <CheckIcon className={CHECK} />
                     {t}
                   </li>
                 ))}
@@ -109,7 +152,7 @@ export function PricingSection() {
                   "Everything in Premium",
                 ].map((t) => (
                   <li key={t} className="flex items-start gap-2.5">
-                    <CheckIcon className="mt-0.5 h-4 w-4 shrink-0 text-gold" />
+                    <CheckIcon className={CHECK} />
                     {t}
                   </li>
                 ))}
@@ -124,7 +167,7 @@ export function PricingSection() {
             </div>
           </Reveal>
           <p className="mx-auto mt-6 max-w-md text-center text-xs text-muted">
-            Generous monthly text allowances, no contracts, cancel anytime. The
+            No contracts, cancel anytime, switch plans whenever you like. The
             average shop recovers several no-show-again clients a month: the
             whole bill, many times over.
           </p>

@@ -236,6 +236,10 @@ const apiSchema = z.object({
   // While unset, the tier is dark: checkout/upgrade to pro_ai 409s and the
   // receptionist only sells via the $40 add-on path above.
   STRIPE_PREMIUM_AI_PRICE_ID: z.string().min(1).optional(),
+  // Stripe price for the $20/mo Starter tier (booking site, no texts, no AI,
+  // Insights preview). While unset, the tier is dark: checkout to starter
+  // 409s and the pricing surfaces show the card as "almost here".
+  STRIPE_STARTER_PRICE_ID: z.string().min(1).optional(),
 
   // Error monitoring (optional).
   SENTRY_DSN: cleanUrl().optional(),

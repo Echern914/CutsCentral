@@ -101,7 +101,14 @@ function baseSubscriptionCents(invoice: Record<string, unknown>): number {
 function rewardAmountCents(plan: string): { cents: number; basisPlan: string } | null {
   // The referrer's OWN plan decides the reward - a Premium AI referrer earns
   // their own month. Read from the plan table, never a literal in this file.
-  const entry = plan === "pro_ai" ? PLANS.pro_ai : plan === "pro" ? PLANS.pro : null;
+  const entry =
+    plan === "pro_ai"
+      ? PLANS.pro_ai
+      : plan === "pro"
+        ? PLANS.pro
+        : plan === "starter"
+          ? PLANS.starter
+          : null;
   if (!entry || entry.priceMonthlyUsd <= 0) return null;
   return { cents: Math.round(entry.priceMonthlyUsd * 100), basisPlan: plan };
 }
