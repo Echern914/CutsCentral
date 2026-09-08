@@ -618,12 +618,17 @@ export function BookingCalendar({
           const active = rows.filter(
             (r) => r.source !== "block" && r.status !== "canceled",
           ).length;
+          // Blocked-off time gets a quiet mark on the month grid, so a week
+          // off reads as a week off from here rather than as seven empty
+          // days that happen to take no bookings.
+          const blocked = rows.some((r) => r.source === "block");
           const isToday = key === todayKey;
           const isSelected = key === selectedDay;
           return (
             <button
               key={key}
               type="button"
+              title={blocked ? "Has blocked-off time" : undefined}
               onClick={() => setSelectedDay(isSelected ? null : key)}
               className={cn(
                 "relative flex aspect-square flex-col items-center justify-center rounded-lg text-sm transition-colors",
@@ -647,6 +652,13 @@ export function BookingCalendar({
                 >
                   {active}
                 </span>
+              )}
+              {blocked && (
+                <span
+                  aria-hidden
+                  data-qa="day-blocked-mark"
+                  className="absolute bottom-1 left-1/2 h-0.5 w-3 -translate-x-1/2 rounded-full bg-muted/50"
+                />
               )}
             </button>
           );
@@ -745,6 +757,7 @@ export function BookingCalendar({
         <BlockOffForm
           staff={staff}
           dayKey={blockDay.dayKey}
+          todayKey={todayKey}
           timezone={tz}
           defaultFromHour={blockDay.hour}
           onClose={() => setBlockDay(null)}
@@ -1267,12 +1280,19 @@ function DayPlanner({
 
   // Group appointments into their start hour, then render every hour in the
   // day's working window (default 8a-11p, widened to fit any early/late booking).
-  const byHour = new Map<number, AgendaRow[]>();
-  for (const r of shownRows) {
-    const h = hourOf(r.start);
-    byHour.set(h, [...(byHour.get(h) ?? []), r]);
-  }
-  const bookedHours = [...byHour.keys()];
+  // A block that starts at local midnight and ends at (or past) the NEXT
+  // midnight is the whole day. It is bucketed at the top of the working window
+  // rather than at 12 AM, so a day off does not drag the grid open at
+  // midnight just to hold its card; its label says "All day" instead of
+  // "12:00 AM–12:00 AM".
+  const isAllDayBlock = (r: AgendaRow) =>
+    r.source === "block" &&
+    !!r.end &&
+    r.end > r.start &&
+    minuteOf(r.start) === 0 &&
+    minuteOf(r.end) === 0;
+  const timedRows = shownRows.filter((r) => !isAllDayBlock(r));
+  const bookedHours = timedRows.map((r) => hourOf(r.start));
   // We show each appointment on its START hour, and hours are 0-23, so the window
   // never needs to exceed 23 (an 11 PM cut just needs the 11 PM row to exist -
   // no +1, which would spill into a bogus hour 24 labelled "12 PM").
@@ -1280,15 +1300,30 @@ function DayPlanner({
   const endHour = Math.min(23, Math.max(DEFAULT_END_HOUR, ...bookedHours));
   const hours: number[] = [];
   for (let h = startHour; h <= endHour; h++) hours.push(h);
+  const byHour = new Map<number, AgendaRow[]>();
+  for (const r of shownRows) {
+    const h = isAllDayBlock(r) ? startHour : hourOf(r.start);
+    byHour.set(h, [...(byHour.get(h) ?? []), r]);
+  }
 
   // Blocked intervals in shop-local minutes, so a 12-3 PM block can mark the
   // 1 PM and 2 PM rows as blocked instead of leaving them inviting "+ Add
   // appointment" inside time the barber explicitly took off. A block only
   // renders its card on its START hour; the covered hours get a slim
   // continuation strip via blockCovering().
+  //
+  // 🔴 A block that runs PAST midnight ends on a later day, so its end's
+  // wall-clock minute is at or before its start's (an all-day block reads
+  // 0..0). On THIS day it covers through 24:00 - clipping it there is what
+  // lets a day off mark every hour instead of none of them.
   const blockIntervals = rows
     .filter((r) => r.source === "block" && r.end && r.end > r.start)
-    .map((r) => ({ startMin: minuteOf(r.start), endMin: minuteOf(r.end!), endIso: r.end! }));
+    .map((r) => {
+      const startMin = minuteOf(r.start);
+      const rawEnd = minuteOf(r.end!);
+      const endMin = rawEnd <= startMin ? 24 * 60 : rawEnd;
+      return { startMin, endMin, endIso: r.end!, allDay: startMin === 0 && endMin === 24 * 60 };
+    });
   const blockCovering = (h: number) =>
     blockIntervals.find((iv) => iv.startMin <= h * 60 && iv.endMin >= (h + 1) * 60) ?? null;
 
@@ -1302,7 +1337,7 @@ function DayPlanner({
   // still has to be visible.
   type HourRow =
     | { kind: "hour"; hour: number }
-    | { kind: "blocked"; hour: number; endIso: string };
+    | { kind: "blocked"; hour: number; endIso: string; allDay: boolean };
   const hourRows: HourRow[] = [];
   for (const h of hours) {
     const covering = (byHour.get(h) ?? []).length === 0 ? blockCovering(h) : null;
@@ -1314,7 +1349,7 @@ function DayPlanner({
     // different end times stay separate bands.
     const prev = hourRows[hourRows.length - 1];
     if (prev?.kind === "blocked" && prev.endIso === covering.endIso) continue;
-    hourRows.push({ kind: "blocked", hour: h, endIso: covering.endIso });
+    hourRows.push({ kind: "blocked", hour: h, endIso: covering.endIso, allDay: covering.allDay });
   }
 
   // ---- Day summary (the totals footer) ----
@@ -1440,7 +1475,9 @@ function DayPlanner({
                       BLOCK_STRIPES,
                     )}
                   >
-                    blocked until {timeFmt.format(new Date(item.endIso))}
+                    {item.allDay
+                      ? "blocked all day"
+                      : `blocked until ${timeFmt.format(new Date(item.endIso))}`}
                   </div>
                 </div>
               </motion.div>
@@ -1487,9 +1524,11 @@ function DayPlanner({
                         // manual visits: no end, or a zero-length end (== start) -
                         // both fall back to just the start time (no bogus "2–2").
                         timeLabel={
-                          r.end && r.end !== r.start
-                            ? `${timeFmt.format(new Date(r.start))}–${timeFmt.format(new Date(r.end))}`
-                            : timeFmt.format(new Date(r.start))
+                          isAllDayBlock(r)
+                            ? "All day"
+                            : r.end && r.end !== r.start
+                              ? `${timeFmt.format(new Date(r.start))}–${timeFmt.format(new Date(r.end))}`
+                              : timeFmt.format(new Date(r.start))
                         }
                         toast={toast}
                         onChanged={onChanged}
