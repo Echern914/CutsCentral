@@ -140,21 +140,53 @@ async function ensureCustomer(shop: CheckoutShop): Promise<string> {
 }
 
 /** The two base-subscription tiers a checkout can buy. */
-export type CheckoutTier = "pro" | "pro_ai";
+export type CheckoutTier = "starter" | "pro" | "pro_ai";
+
+/**
+ * The Stripe price behind each purchasable tier, or null while that tier's
+ * price is not configured (the tier is dark). ONE lookup for checkout, the
+ * in-place plan change and the "can this be sold" flags, so they can never
+ * disagree about which env var a tier reads.
+ */
+export function priceIdForTier(tier: CheckoutTier): string | null {
+  const env = apiEnv();
+  switch (tier) {
+    case "starter":
+      return env.STRIPE_STARTER_PRICE_ID ?? null;
+    case "pro":
+      return env.STRIPE_PRICE_ID ?? null;
+    case "pro_ai":
+      return env.STRIPE_PREMIUM_AI_PRICE_ID ?? null;
+  }
+}
+
+/**
+ * Shop.plan for a Stripe subscription/session's metadata.tier. Subscriptions
+ * that predate tiers carry no metadata.tier and default to "pro" - that
+ * default is load-bearing (billing.test.ts pins it): every legacy paying shop
+ * is a Premium shop. Only an explicit, known tag maps elsewhere.
+ */
+export function planForTierMetadata(tier: string | undefined): CheckoutTier {
+  if (tier === "pro_ai" || tier === "starter") return tier;
+  return "pro";
+}
 
 /**
  * Hosted Checkout URL for the base subscription. `tier` picks the price:
- * "pro" (Premium $34.99) or "pro_ai" (Premium AI $74.99, receptionist
- * included). The tier rides metadata on BOTH the session and the subscription
- * (mirroring the add-on's metadata.addon pattern) so applyStripeEvent can map
- * subscription lifecycle events to the right Shop.plan value. Subscriptions
- * that predate tiers carry no metadata.tier and default to "pro".
+ * "starter" ($20), "pro" (Premium $34.99) or "pro_ai" (Premium AI $74.99,
+ * receptionist included). The tier rides metadata on BOTH the session and the
+ * subscription (mirroring the add-on's metadata.addon pattern) so
+ * applyStripeEvent can map subscription lifecycle events to the right
+ * Shop.plan value. Subscriptions that predate tiers carry no metadata.tier
+ * and default to "pro".
  */
 export async function createCheckoutUrl(
   shop: CheckoutShop,
   tier: CheckoutTier = "pro",
 ): Promise<string | null> {
   const env = apiEnv();
+  const price = priceIdForTier(tier);
+  if (!price) return null;
   const customer = await ensureCustomer(shop);
 
   // Pay AFTER the trial: if the shop's app-level trial hasn't ended yet, start the
@@ -169,8 +201,6 @@ export async function createCheckoutUrl(
   const trialEndMs = shop.trialEndsAt?.getTime() ?? 0;
   const useTrial = trialEndMs > Date.now() + MIN_TRIAL_LEEWAY_MS;
 
-  const price =
-    tier === "pro_ai" ? env.STRIPE_PREMIUM_AI_PRICE_ID! : env.STRIPE_PRICE_ID!;
   const session = await stripe().checkout.sessions.create(
     {
       mode: "subscription",
@@ -209,20 +239,39 @@ export function premiumAiBillingEnabled(): boolean {
 }
 
 /**
- * Upgrade an ACTIVE base subscription in place: swap its single item to the
- * Premium AI price and stamp metadata.tier="pro_ai" in the SAME update call
+ * Whether the $20/mo Starter TIER can be sold self-serve. Needs base billing
+ * configured PLUS its own price id. While unset, the tier is dark: no checkout,
+ * no card on the pricing surfaces, no mention in the trial emails.
+ */
+export function starterBillingEnabled(): boolean {
+  return billingEnabled() && Boolean(apiEnv().STRIPE_STARTER_PRICE_ID);
+}
+
+/** Can `tier` be bought right now? One answer for the route and the pages. */
+export function tierBillingEnabled(tier: CheckoutTier): boolean {
+  return billingEnabled() && priceIdForTier(tier) !== null;
+}
+
+/**
+ * Move an ACTIVE base subscription to another tier in place: swap its single
+ * item to the target price and stamp metadata.tier in the SAME update call
  * (two calls would race the customer.subscription.updated webhook - the
  * webhook fired by the items swap must already see the new tier).
- * always_invoice bills the prorated difference immediately. We also write
- * plan="pro_ai" optimistically so the UI flips at once; the webhook converges
- * to the same value. Returns false (logged) on any Stripe error.
+ * always_invoice bills the prorated difference immediately. We also write the
+ * new plan optimistically so the UI flips at once; the webhook converges to
+ * the same value. Returns false (logged) on any Stripe error.
+ *
+ * Used for UPGRADES (starter -> pro, starter -> pro_ai, pro -> pro_ai). A
+ * downgrade goes through the Stripe portal, where the proration and the
+ * mid-month loss of texts are explained by Stripe rather than by a silent
+ * price swap.
  */
-export async function upgradeSubscriptionToPremiumAi(shop: {
-  id: string;
-  stripeSubscriptionId: string | null;
-}): Promise<boolean> {
-  const env = apiEnv();
-  if (!shop.stripeSubscriptionId || !env.STRIPE_PREMIUM_AI_PRICE_ID) return false;
+export async function changeSubscriptionTier(
+  shop: { id: string; stripeSubscriptionId: string | null },
+  tier: CheckoutTier,
+): Promise<boolean> {
+  const price = priceIdForTier(tier);
+  if (!shop.stripeSubscriptionId || !price) return false;
   try {
     const sub = await stripe().subscriptions.retrieve(shop.stripeSubscriptionId);
     const item = sub.items.data[0];
@@ -230,30 +279,38 @@ export async function upgradeSubscriptionToPremiumAi(shop: {
     await stripe().subscriptions.update(
       sub.id,
       {
-        items: [{ id: item.id, price: env.STRIPE_PREMIUM_AI_PRICE_ID }],
-        metadata: { ...sub.metadata, tier: "pro_ai" },
+        items: [{ id: item.id, price }],
+        metadata: { ...sub.metadata, tier },
         proration_behavior: "always_invoice",
       },
       // `always_invoice` bills the prorated difference the moment this lands;
       // a retried request must not bill it twice. One key per (subscription,
       // target price): the same upgrade replays, a different one does not.
-      { idempotencyKey: `upgrade:${sub.id}:${env.STRIPE_PREMIUM_AI_PRICE_ID}` },
+      { idempotencyKey: `upgrade:${sub.id}:${price}` },
     );
     await prisma.shop.update({
       where: { id: shop.id },
-      data: { plan: "pro_ai" },
+      data: { plan: tier },
     });
     // Premium AI includes the shop's own number - provision it now
     // (idempotent fire-and-forget; a failure only logs, never blocks billing).
-    void ensureShopNumber(shop.id);
+    if (tier === "pro_ai") void ensureShopNumber(shop.id);
     return true;
   } catch (err) {
     logger.error(
-      { shopId: shop.id, subscriptionId: shop.stripeSubscriptionId, ...stripeErrorFacts(err) },
-      "premium-ai upgrade failed",
+      { shopId: shop.id, subscriptionId: shop.stripeSubscriptionId, tier, ...stripeErrorFacts(err) },
+      "subscription tier change failed",
     );
     return false;
   }
+}
+
+/** The original Premium -> Premium AI upgrade, now one case of changeSubscriptionTier. */
+export async function upgradeSubscriptionToPremiumAi(shop: {
+  id: string;
+  stripeSubscriptionId: string | null;
+}): Promise<boolean> {
+  return changeSubscriptionTier(shop, "pro_ai");
 }
 
 /**
@@ -441,8 +498,8 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
           stripeSubscriptionId: subscriptionId,
           subscriptionStatus: "active",
           // Sessions created before tiers existed carry no metadata.tier ->
-          // "pro" (the legacy default). Only an explicit pro_ai tag upgrades.
-          plan: session.metadata?.tier === "pro_ai" ? "pro_ai" : "pro",
+          // "pro" (the legacy default). Only an explicit, known tag maps elsewhere.
+          plan: planForTierMetadata(session.metadata?.tier),
           ...(created !== null ? { subscriptionEventCreated: created } : {}),
         },
       });
@@ -482,7 +539,7 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
         return;
       }
       // Legacy subs (created before tiers) have no metadata.tier -> "pro".
-      const tier = sub.metadata?.tier === "pro_ai" ? "pro_ai" : "pro";
+      const tier = planForTierMetadata(sub.metadata?.tier);
       const { count } = await prisma.shop.updateMany({
         // metadata.shopId is authoritative; customer id covers subs created
         // outside checkout (e.g. from the Stripe dashboard).

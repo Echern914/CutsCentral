@@ -13,6 +13,7 @@ import { NumberField } from "@/components/ui/NumberField";
 import { GoalPlanner } from "./GoalPlanner";
 import { PeriodControl } from "./PeriodControl";
 import { YearlyReport } from "./YearlyReport";
+import { UpgradeCallout } from "../_components/UpgradeCallout";
 import type {
   Bucket,
   CustomRange,
@@ -93,6 +94,9 @@ export function InsightsClient({
   // Keep showing the last good payload while the next one loads, so the page
   // dims rather than collapsing to empty every time the range changes.
   const [data, setData] = useState<InsightsData>(initial);
+  // Starter's sneak peek: the headline tiles stay, the analysis cards give
+  // way to one locked panel. The API decides (`scope`); the page only renders.
+  const peek = data.scope === "peek";
   const [pending, setPending] = useState(false);
   const [failed, setFailed] = useState(false);
 
@@ -172,18 +176,21 @@ export function InsightsClient({
             </p>
           )}
         </div>
-        <YearlyReport />
+        {/* The yearly report and goals are analysis: Premium, not the peek. */}
+        {!peek && <YearlyReport />}
       </motion.div>
 
       {/* Goals — one target per metric AND period, each kept separately. */}
-      <motion.div variants={fadeUp}>
-        <GoalsCard
-          goals={goalData?.goals ?? null}
-          planner={goalData?.planner ?? null}
-          onRefresh={refreshGoals}
-          serviceNoun={serviceNoun}
-        />
-      </motion.div>
+      {!peek && (
+        <motion.div variants={fadeUp}>
+          <GoalsCard
+            goals={goalData?.goals ?? null}
+            planner={goalData?.planner ?? null}
+            onRefresh={refreshGoals}
+            serviceNoun={serviceNoun}
+          />
+        </motion.div>
+      )}
 
       {/* Headline numbers for the window */}
       <motion.div
@@ -207,8 +214,21 @@ export function InsightsClient({
         <Tile label="Busiest day" value={busiest.weekday ?? "n/a"} />
       </motion.div>
 
+      {/* Starter's sneak peek: one honest panel where the analysis would be,
+          naming what Premium adds. No price here - the billing page owns it. */}
+      {peek && (
+        <motion.div variants={fadeUp} data-qa="insights-peek">
+          <UpgradeCallout tier="pro">
+            You&apos;re seeing the headline numbers. {cap(nounPlural)} over time,
+            the service breakdown, booked vs open hours, goals and the yearly
+            report are part of Premium.
+          </UpgradeCallout>
+        </motion.div>
+      )}
+
       {/* Cuts over time — the bar is whatever the range makes it, and the
           Day/Week/Month pills re-slice the same range on demand. */}
+      {!peek && (
       <motion.div variants={fadeUp}>
         <Card className="p-5">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
@@ -238,8 +258,10 @@ export function InsightsClient({
           />
         </Card>
       </motion.div>
+      )}
 
       {/* What people book (and pay for) most */}
+      {!peek && (
       <motion.div variants={fadeUp}>
         <Card className="overflow-hidden">
           <CardHeader
@@ -261,8 +283,10 @@ export function InsightsClient({
           )}
         </Card>
       </motion.div>
+      )}
 
       {/* Open chair time vs sold chair time */}
+      {!peek && (
       <motion.div variants={fadeUp}>
         <UtilizationCard
           period={period}
@@ -274,6 +298,7 @@ export function InsightsClient({
           onApplyRange={applyRange}
         />
       </motion.div>
+      )}
 
       <motion.div
         variants={fadeUp}

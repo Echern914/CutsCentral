@@ -1,7 +1,7 @@
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
-import { randomToken, REFERRAL } from "@chairback/config";
+import { BILLING, randomToken, REFERRAL } from "@chairback/config";
 import { createApp } from "../app.js";
 import { applyStripeEvent } from "../billing/stripe.js";
 import { ensureReferralCode } from "../services/referral.js";
@@ -112,8 +112,10 @@ describe("referral: attribution at signup", () => {
       where: { referredShopId: friend.shopId },
     });
     expect(row).toBeNull();
-    // No phantom reward for a typo'd link.
-    expect(await trialDaysLeft(friend.shopId)).toBe(REFERRAL.rewardDays);
+    // No phantom reward for a typo'd link: just the plain signup trial. (This
+    // used to compare against REFERRAL.rewardDays, which only worked while
+    // the trial and the reward both happened to be 30 days.)
+    expect(await trialDaysLeft(friend.shopId)).toBe(BILLING.trialDays);
   });
 
   it("voids a self-referral and grants no extra trial", async () => {

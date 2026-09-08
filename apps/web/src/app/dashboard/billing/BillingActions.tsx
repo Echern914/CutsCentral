@@ -16,7 +16,7 @@ export function UpgradeButton({
   variant = "primary",
 }: {
   label: string;
-  tier?: "pro" | "pro_ai";
+  tier?: "starter" | "pro" | "pro_ai";
   variant?: "primary" | "secondary";
 }) {
   const [pending, startTransition] = useTransition();
@@ -56,6 +56,42 @@ export function UpgradeToPremiumAiButton({ label }: { label: string }) {
           startTransition(async () => {
             const r = await upgradeAction();
             if (r?.error) setError(r.error);
+          })
+        }
+        className="rounded-full bg-gold-gradient px-6 py-2.5 text-sm font-semibold text-charcoal shadow-glow transition-all duration-150 ease-out hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
+      >
+        {pending ? "Upgrading…" : label}
+      </button>
+      {error && <p className="text-xs text-danger-soft">{error}</p>}
+    </div>
+  );
+}
+
+/**
+ * In-place move UP to another tier (Starter -> Premium, Starter -> Premium AI):
+ * a Stripe price swap on the subscription the shop already has, prorated
+ * today. Same button as the Premium AI upgrade, with the tier made explicit.
+ */
+export function UpgradeToTierButton({
+  tier,
+  label,
+}: {
+  tier: "pro" | "pro_ai";
+  label: string;
+}) {
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <div className="flex flex-col items-start gap-2">
+      <button
+        disabled={pending}
+        onClick={() =>
+          // A sync transition callback (the async form is the dual-React
+          // TransitionFunction typing hole every other button here carries).
+          startTransition(() => {
+            void upgradeAction(tier).then((r) => {
+              if (r?.error) setError(r.error);
+            });
           })
         }
         className="rounded-full bg-gold-gradient px-6 py-2.5 text-sm font-semibold text-charcoal shadow-glow transition-all duration-150 ease-out hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"

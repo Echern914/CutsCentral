@@ -22,6 +22,9 @@ export async function TrialBanner() {
   const res = await getBillingSummary();
   const b = res.data;
   if (!b?.billingEnabled || b.subscribed || b.compAccess) return null;
+  // The cheapest plan that is actually for sale: Starter once its price is
+  // configured, Premium until then. `starter` is absent on an older payload.
+  const from = b.starter?.billingEnabled ? b.starter.priceMonthlyUsd : b.priceMonthlyUsd;
 
   if (!b.hasAccess) {
     return (
@@ -29,15 +32,15 @@ export async function TrialBanner() {
         <HideInNativeApp>
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-gold/30 bg-gold/10 px-4 py-2.5 text-xs text-gold sm:text-sm">
             <span>
-              Your ChairBack plan has ended — bookings, texts and your calendar
-              are switched off. Subscribe (${b.priceMonthlyUsd}/mo) to turn your
-              shop back on.
+              Your ChairBack trial has ended — bookings, texts and your calendar
+              are switched off. Everything you set up is still here. Pick a plan
+              (from ${from}/mo) to turn your shop back on.
             </span>
             <Link
               href="/dashboard/billing"
               className="shrink-0 rounded-full bg-gold px-3.5 py-1.5 font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted"
             >
-              Upgrade
+              Upgrade to keep everything
             </Link>
           </div>
         </HideInNativeApp>
@@ -56,14 +59,14 @@ export async function TrialBanner() {
       <div className="mx-auto mt-3 w-full max-w-6xl px-4">
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-gold/30 bg-gold/10 px-4 py-2.5 text-xs text-gold sm:text-sm">
           <span>
-            Premium trial: {b.trialDaysLeft} day{b.trialDaysLeft === 1 ? "" : "s"} left.
-            Keep your nudges running for ${b.priceMonthlyUsd}/mo.
+            Free trial: {b.trialDaysLeft} day{b.trialDaysLeft === 1 ? "" : "s"} left.
+            Keep everything from ${from}/mo.
           </span>
           <Link
             href="/dashboard/billing"
             className="shrink-0 rounded-full border border-gold/50 px-3.5 py-1.5 font-medium transition-colors duration-150 ease-out hover:bg-gold/10"
           >
-            Set up billing
+            Choose a plan
           </Link>
         </div>
       </div>

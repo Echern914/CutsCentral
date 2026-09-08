@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { apiSend } from "@/lib/api";
 
 export async function checkoutAction(
-  tier: "pro" | "pro_ai" = "pro",
+  tier: "starter" | "pro" | "pro_ai" = "pro",
 ): Promise<{ error?: string }> {
   const res = await apiSend<{ url: string }>("POST", "/api/billing/checkout", {
     tier,
@@ -17,25 +17,37 @@ export async function checkoutAction(
         ? "Billing isn't switched on yet. Everything is free during early access."
         : res.error === "premium_ai_unavailable"
           ? "Premium AI isn't available quite yet. Check back soon."
-          : res.error === "already_subscribed"
-            ? "You're already subscribed."
-            : "Could not start checkout. Try again in a moment.",
+          : res.error === "starter_unavailable"
+            ? "Starter isn't available quite yet. Check back soon."
+            : res.error === "already_subscribed"
+              ? "You're already subscribed."
+              : "Could not start checkout. Try again in a moment.",
   };
 }
 
-/** In-place Premium -> Premium AI upgrade (Stripe price swap, prorated). */
-export async function upgradeAction(): Promise<{ error?: string }> {
-  const res = await apiSend<{ ok: boolean }>("POST", "/api/billing/upgrade");
+/**
+ * In-place upgrade of the subscription the shop already has (Stripe price
+ * swap, prorated today): Starter -> Premium, Starter -> Premium AI, Premium ->
+ * Premium AI. Defaults to Premium AI, the original upgrade.
+ */
+export async function upgradeAction(
+  tier: "pro" | "pro_ai" = "pro_ai",
+): Promise<{ error?: string }> {
+  const res = await apiSend<{ ok: boolean }>("POST", "/api/billing/upgrade", { tier });
   if (res.ok) redirect("/dashboard/billing?upgrade=success");
   return {
     error:
       res.error === "already_entitled"
-        ? "You already have the AI receptionist."
+        ? tier === "pro_ai"
+          ? "You already have the AI receptionist."
+          : "You're already on that plan."
         : res.error === "no_subscription"
-          ? "No active subscription to upgrade - start a Premium AI checkout instead."
+          ? "No active subscription to upgrade - start a checkout instead."
           : res.error === "premium_ai_unavailable"
             ? "Premium AI isn't available quite yet. Check back soon."
-            : "Could not upgrade. Try again in a moment.",
+            : res.error === "not_an_upgrade"
+              ? "To move to a smaller plan, use Manage billing."
+              : "Could not upgrade. Try again in a moment.",
   };
 }
 

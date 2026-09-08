@@ -4,7 +4,8 @@ import { Prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 import { openMinutesForDay, shopLocalDays } from "../engines/utilization.js";
-import { requireActiveAccess } from "../middleware/billing.js";
+import { requireActiveAccess, requirePremiumAccess } from "../middleware/billing.js";
+import { insightsScopeFor } from "../billing/entitlements.js";
 import {
   DAY_MS,
   PERIODS,
@@ -330,10 +331,15 @@ insightsRouter.get("/", async (req, res) => {
     ? dayCounts.indexOf(Math.max(...dayCounts))
     : -1;
 
+  // Starter's sneak peek: the headline numbers stay, the analysis (trends,
+  // the service breakdown, chair time, goals, the yearly report) is Premium.
+  // The web reads `scope` and renders one locked panel where the cards went.
+  const scope = insightsScopeFor(shop);
   res.json({
     ...periodMeta(period),
-    buckets,
-    services,
+    scope,
+    buckets: scope === "full" ? buckets : [],
+    services: scope === "full" ? services : [],
     totals: {
       visits: inWindow,
       revenue: Math.round(totalRevenue),
@@ -405,7 +411,7 @@ const utilizationQuerySchema = z.object({
   groupId: z.string().min(1).optional(),
 });
 
-insightsRouter.get("/utilization", async (req, res) => {
+insightsRouter.get("/utilization", requirePremiumAccess, async (req, res) => {
   const shop = req.shop!;
   const parsed = utilizationQuerySchema.safeParse(req.query);
   if (!parsed.success) {
@@ -783,7 +789,7 @@ function goalProgress(
  *                schedule's FULL open capacity for each window, so "fully
  *                booked at N%" is arithmetic the client can do live
  */
-insightsRouter.get("/goal", async (req, res) => {
+insightsRouter.get("/goal", requirePremiumAccess, async (req, res) => {
   const shop = req.shop!;
   const now = new Date();
   // One read covers both period shapes: the month window always contains the
@@ -1026,7 +1032,7 @@ const goalSchema = z.discriminatedUnion("metric", [
 // PUT /api/insights/goal - set or replace ONE goal: a shop-wide (metric,
 // period) slot, the standing chair-time %, or - with serviceId - one service's
 // quota. Everything else is untouched, so no edit can wipe another goal.
-insightsRouter.put("/goal", async (req, res) => {
+insightsRouter.put("/goal", requirePremiumAccess, async (req, res) => {
   const shop = req.shop!;
   const parsed = goalSchema.safeParse(req.body ?? {});
   if (!parsed.success) {

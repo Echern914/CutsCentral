@@ -7,7 +7,7 @@ import { getMessageProvider } from "../messaging/twilio.js";
 import { sendPushToClient } from "../messaging/push.js";
 import { isWinbackDue, isWinbackEligible } from "./winbackEligibility.js";
 import { inQuietHours } from "./quietHours.js";
-import { hasActiveAccess } from "../billing/stripe.js";
+import { hasPremiumAccess } from "../billing/entitlements.js";
 import { remainingMonthlySms } from "../billing/quota.js";
 
 const env = apiEnv();
@@ -61,8 +61,8 @@ export async function runWinbackSweep(opts: WinbackOptions = {}): Promise<Winbac
   const shops = await prisma.shop.findMany({ where: { winbackTextsEnabled: true } });
   const summaries: WinbackSummary[] = [];
   for (const shop of shops) {
-    if (!hasActiveAccess(shop, { now })) {
-      logger.info({ shopId: shop.id }, "winback skipped: no active access");
+    if (!hasPremiumAccess(shop, { now })) {
+      logger.info({ shopId: shop.id }, "winback skipped: texts not included");
       continue;
     }
     try {

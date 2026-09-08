@@ -14,13 +14,13 @@ import { HideInNativeApp } from "@/components/HideInNativeApp";
  * in-app surface links here.
  */
 
-const description = `${APP_NAME} pricing: ${
-  PLANS.pro.name
-} ($${PLANS.pro.priceMonthlyUsd}/mo, ${PLANS.pro.smsMonthlyQuota} texts) or ${
-  PLANS.pro_ai.name
-} ($${PLANS.pro_ai.priceMonthlyUsd}/mo with a 24/7 AI receptionist). ${
-  BILLING.trialDays
-}-day free trial, no contracts.`;
+const description = `${APP_NAME} pricing: ${PLANS.starter.name} ($${
+  PLANS.starter.priceMonthlyUsd
+}/mo, online booking), ${PLANS.pro.name} ($${PLANS.pro.priceMonthlyUsd}/mo, ${
+  PLANS.pro.smsMonthlyQuota
+} texts) or ${PLANS.pro_ai.name} ($${
+  PLANS.pro_ai.priceMonthlyUsd
+}/mo with a 24/7 AI receptionist). ${BILLING.trialDays}-day free trial, no contracts.`;
 
 export const metadata: Metadata = {
   title: "Pricing",

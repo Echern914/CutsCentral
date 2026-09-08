@@ -2,9 +2,9 @@ import { PLANS } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import {
   billingEnabled,
-  hasActiveAccess,
   type BillingShop,
 } from "./stripe.js";
+import { hasPremiumAccess } from "./entitlements.js";
 import { hasReceptionistEntitlement } from "../receptionist/config.js";
 
 /**
@@ -76,7 +76,9 @@ export function monthlySmsQuotaFor(
 ): number {
   const enabled = opts.enabled ?? billingEnabled();
   if (!enabled) return Infinity;
-  if (!hasActiveAccess(shop, { now: opts.now, enabled })) return 0;
+  // Texts are a Premium feature: lapsed shops AND Starter shops get 0. A
+  // Starter shop still inside its signup trial keeps the trial's quota.
+  if (!hasPremiumAccess(shop, { now: opts.now, enabled })) return 0;
   if (shop.plan === "pro_ai" || hasReceptionistEntitlement(shop)) {
     return PLANS.pro_ai.smsMonthlyQuota;
   }

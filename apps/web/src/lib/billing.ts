@@ -13,7 +13,7 @@ export interface BillingSummary {
   planName: string;
   priceMonthlyUsd: number;
   trialDays: number;
-  plan: "free" | "pro" | "pro_ai";
+  plan: "free" | "starter" | "pro" | "pro_ai";
   subscriptionStatus: string;
   subscribed: boolean;
   compAccess: boolean;
@@ -23,6 +23,21 @@ export interface BillingSummary {
   canManage: boolean;
   smsUsage: { used: number; quota: number | null; resetsAt: string };
   premiumAi: { billingEnabled: boolean; priceMonthlyUsd: number };
+  /** The $20 Starter tier; dark (billingEnabled false) until its Stripe price is set. */
+  starter: { billingEnabled: boolean; priceMonthlyUsd: number };
+  /**
+   * What this shop's plan includes right now, decided by the API
+   * (billing/entitlements.ts). `premium` false with `hasAccess` true is a
+   * paid-up Starter shop. Optional only so an older cached payload cannot
+   * crash a render; readers treat "absent" as "everything".
+   */
+  entitlements?: {
+    premium: boolean;
+    texts: boolean;
+    insights: "full" | "peek";
+    receptionist: boolean;
+    connector: boolean;
+  };
   /** The once-only 14-day free run at Premium AI, for a paying Premium shop. */
   aiTrial: {
     days: number;
@@ -68,6 +83,13 @@ export const getBillingSummary = cache(
  */
 export function featureLocks(res: ApiResult<BillingSummary>): FeatureLocks {
   const b = res.data;
-  if (!b || !b.billingEnabled || b.hasAccess) return NO_LOCKS;
+  if (!b || !b.billingEnabled) return NO_LOCKS;
+  // Two ways to be without Premium: lapsed (no access at all), or paid up on
+  // a plan that does not include it (Starter). The API decides the second
+  // (`entitlements.premium`); an older payload without the field reads as
+  // "has it", which is the safe direction - locks are an upsell, the API
+  // enforces.
+  const withoutPremium = !b.hasAccess || b.entitlements?.premium === false;
+  if (!withoutPremium) return NO_LOCKS;
   return { premium: true, premiumAi: !b.receptionist.entitled };
 }

@@ -26,6 +26,7 @@ import {
 } from "../middleware/billing.js";
 import { isOwnDataRead } from "../middleware/wallExemptions.js";
 import { hasActiveAccess } from "../billing/stripe.js";
+import { hasPremiumAccess } from "../billing/entitlements.js";
 import { remainingMonthlySms } from "../billing/quota.js";
 import { smsLimiter } from "../middleware/rateLimit.js";
 import {
@@ -1245,6 +1246,15 @@ dashboardRouter.post("/clients/bulk", smsLimiter, async (req, res) => {
       error: "subscription_required",
       message:
         "Texting clients is a Premium feature. Upgrade to send rebooking nudges and promo blasts.",
+    });
+    return;
+  }
+  // Paid up, but on a plan without texts (Starter): same door, its own sign.
+  if (action === "nudge" && !hasPremiumAccess(shop)) {
+    res.status(402).json({
+      error: "premium_required",
+      message:
+        "Texting clients is part of Premium. Upgrade your plan to send rebooking nudges and promo blasts.",
     });
     return;
   }
