@@ -53,7 +53,11 @@ import {
   slotServiceIds,
 } from "../engines/targetedSlotServices.js";
 import { resolveAddOns } from "../engines/addOns.js";
-import { bookingQuestionsForShop, resolveIntake } from "../engines/bookingIntake.js";
+import {
+  bookingQuestionsForShop,
+  questionsForService,
+  resolveIntake,
+} from "../engines/bookingIntake.js";
 import {
   durationRangeForService,
   effectiveDurationAt,
@@ -1741,10 +1745,15 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
     targeted = slot;
   }
 
-  // The shop's booking questions. Refused BEFORE anything is written or
-  // charged: a required answer the customer can still fix in place must never
-  // cost them a slot, and a mechanic with no address has no job to do.
-  const intake = resolveIntake(await bookingQuestionsForShop(shop.id), d.intake);
+  // The questions THIS service asks - the shop-wide ones plus any scoped to
+  // it, filtered exactly as the booking form filtered them. Refused BEFORE
+  // anything is written or charged: a required answer the customer can still
+  // fix in place must never cost them a slot, and a mechanic with no address
+  // has no job to do.
+  const intake = resolveIntake(
+    questionsForService(await bookingQuestionsForShop(shop.id), d.serviceId),
+    d.intake,
+  );
   if (!intake.ok) {
     res.status(422).json({
       error: "invalid_input",

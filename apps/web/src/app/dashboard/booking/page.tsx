@@ -124,6 +124,8 @@ export interface BookingQuestionRow {
   kind: "text" | "textarea" | "address" | "select" | "phone" | "email" | "number";
   required: boolean;
   options: string[];
+  /** [] = asked on every service; non-empty = only these. */
+  serviceIds: string[];
   sortOrder: number;
   active: boolean;
   /** Non-null = it came from the business type's suggestions. */
@@ -253,7 +255,7 @@ export default async function BookingPage({
   // `?tab=Appointments` lets the dashboard's "Book appointment" CTA land on the
   // calendar instead of the default Settings tab. An unknown or absent value
   // falls back to the default, so a stale or hand-typed link can't render blank.
-  searchParams?: { tab?: string };
+  searchParams?: { tab?: string; appointment?: string };
 }) {
   // The month calendar loads the current month on first paint (with a week of
   // padding on each side so the visible grid's leading/trailing days are filled),
@@ -320,6 +322,7 @@ export default async function BookingPage({
       <BookingManager
         shop={shopRes.data}
         initialTab={searchParams?.tab}
+        openAppointmentId={searchParams?.appointment}
         appBase={process.env.APP_BASE_URL ?? ""}
         apiBase={API_BASE}
         connect={connect}

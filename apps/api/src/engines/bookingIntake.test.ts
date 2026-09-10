@@ -3,6 +3,7 @@ import { BookingQuestionKind } from "@chairback/db";
 import { BUSINESS_TYPES, BUSINESS_TYPE_IDS } from "@chairback/config";
 import {
   BOOKING_QUESTION_KINDS,
+  questionsForService,
   readIntakeSnapshot,
   resolveIntake,
   type PublicBookingQuestion,
@@ -25,6 +26,7 @@ function q(over: Partial<PublicBookingQuestion> = {}): PublicBookingQuestion {
     kind: "address",
     required: true,
     options: [],
+    serviceIds: [],
     ...over,
   };
 }
@@ -192,5 +194,43 @@ describe("config and the database agree on what a question can be", () => {
       BUSINESS_TYPES[id].intakeTemplates.some((t) => t.required),
     );
     expect(requiring.sort()).toEqual(["detailing", "mechanic", "tattoo"]);
+  });
+});
+
+/**
+ * WHICH SERVICES ASK WHAT.
+ *
+ * A mobile mechanic drives to some jobs and does others in his own bay. Asking
+ * every customer for a street address he does not need is how a booking form
+ * starts costing bookings - so a question can be scoped, and the list the
+ * server ENFORCES is filtered the same way the form filtered it.
+ */
+describe("questionsForService", () => {
+  const shopWide = q({ id: "all", label: "Anything I should know?", serviceIds: [] });
+  const mobileOnly = q({ id: "addr", label: "Service address", serviceIds: ["mobile"] });
+  const all = [shopWide, mobileOnly];
+
+  it("an unscoped question is asked on every service", () => {
+    expect(questionsForService(all, "in-shop").map((x) => x.id)).toEqual(["all"]);
+    expect(questionsForService(all, "mobile").map((x) => x.id)).toEqual(["all", "addr"]);
+  });
+
+  it("🔴 a scoped question never reaches a service it was not scoped to", () => {
+    // This is the whole point: the in-shop job must not ask where to drive.
+    expect(questionsForService(all, "in-shop").some((x) => x.id === "addr")).toBe(false);
+  });
+
+  it("keeps the shop's order", () => {
+    const reversed = [mobileOnly, shopWide];
+    expect(questionsForService(reversed, "mobile").map((x) => x.id)).toEqual(["addr", "all"]);
+  });
+
+  it("🔴 a REQUIRED question cannot refuse a service that never asked it", () => {
+    // Filtering first is what makes this true: resolveIntake only ever sees
+    // the questions this service asks, so a required address scoped to the
+    // mobile job can never block an in-shop booking with no answer.
+    const required = q({ id: "addr", label: "Service address", required: true, serviceIds: ["mobile"] });
+    expect(resolveIntake(questionsForService([required], "in-shop"), []).ok).toBe(true);
+    expect(resolveIntake(questionsForService([required], "mobile"), []).ok).toBe(false);
   });
 });

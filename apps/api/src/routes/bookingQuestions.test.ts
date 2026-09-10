@@ -253,6 +253,111 @@ describe("editing the form", () => {
   });
 });
 
+describe("scoping a question to the services that need it", () => {
+  let mobileServiceId: string;
+  let inShopServiceId: string;
+
+  beforeEach(async () => {
+    // Two jobs a mechanic really runs: one he drives to, one done in his bay.
+    mobileServiceId = serviceId;
+    inShopServiceId = (
+      await request(app)
+        .post("/api/booking/services")
+        .set("Cookie", cookie)
+        .send({ name: "In-shop repair", durationMin: 60, price: 150, staffIds: [staffId] })
+    ).body.id;
+  });
+
+  async function addScoped(serviceIds: string[]) {
+    const res = await request(app)
+      .post("/api/booking/questions")
+      .set("Cookie", cookie)
+      .send({ label: "Service address", kind: "address", required: true, serviceIds });
+    expect(res.status).toBe(201);
+    return res.body.id as string;
+  }
+
+  it("the public page carries the scope, so the form can add and drop the field", async () => {
+    await addScoped([mobileServiceId]);
+    const questions = (await request(app).get(`/api/book/${slug}`)).body.questions as {
+      label: string;
+      serviceIds: string[];
+    }[];
+    expect(questions[0]!.serviceIds).toEqual([mobileServiceId]);
+  });
+
+  it("🔴 a required question scoped elsewhere does NOT block this service's booking", async () => {
+    // The whole point: the in-shop job must not demand an address, and must
+    // not refuse a customer who was never shown the field.
+    await addScoped([mobileServiceId]);
+    const res = await request(app)
+      .post(`/api/book/${slug}`)
+      .send({
+        staffId,
+        serviceId: inShopServiceId,
+        startsAt: futureAtHour(2, 10).toISOString(),
+        firstName: "Casey",
+        lastName: "Tester",
+        email: "casey@example.com",
+      });
+    expect(res.status).toBe(201);
+    const appt = await prisma.appointment.findFirst({
+      where: { shopId, serviceId: inShopServiceId },
+      select: { intake: true },
+    });
+    expect(appt!.intake).toEqual([]);
+  });
+
+  it("and DOES block the service it was scoped to", async () => {
+    const id = await addScoped([mobileServiceId]);
+    const res = await request(app)
+      .post(`/api/book/${slug}`)
+      .send({
+        staffId,
+        serviceId: mobileServiceId,
+        startsAt: futureAtHour(2, 11).toISOString(),
+        firstName: "Casey",
+        lastName: "Tester",
+        email: "casey@example.com",
+      });
+    expect(res.status).toBe(422);
+    expect(res.body.questionId).toBe(id);
+  });
+
+  it("an unscoped question is still asked on everything", async () => {
+    await addScoped([]);
+    const res = await request(app)
+      .post(`/api/book/${slug}`)
+      .send({
+        staffId,
+        serviceId: inShopServiceId,
+        startsAt: futureAtHour(2, 12).toISOString(),
+        firstName: "Casey",
+        lastName: "Tester",
+        email: "casey@example.com",
+      });
+    expect(res.status).toBe(422);
+  });
+
+  it("🔴 drops a foreign service id rather than scoping to another shop's service", async () => {
+    const other = await makeShop("Someone Else");
+    const foreignService = (
+      await request(app)
+        .post("/api/booking/services")
+        .set("Cookie", other.cookie)
+        .send({ name: "Theirs", durationMin: 30, price: 20 })
+    ).body.id as string;
+
+    await request(app)
+      .post("/api/booking/questions")
+      .set("Cookie", cookie)
+      .send({ label: "Scoped", kind: "text", serviceIds: [foreignService, mobileServiceId] });
+    const q = (await list()).body.questions[0] as { serviceIds: string[] };
+    // Only this shop's own service survives.
+    expect(q.serviceIds).toEqual([mobileServiceId]);
+  });
+});
+
 describe("the customer's booking", () => {
   async function seed() {
     await request(app).post("/api/booking/questions/seed").set("Cookie", cookie);

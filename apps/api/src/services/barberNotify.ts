@@ -86,10 +86,34 @@ export interface BarberMessage {
   title: string;
   /** The line every channel shares. */
   body: string;
+  /**
+   * A longer body for PUSH ONLY, when there is something worth saying that
+   * does not belong in a text message.
+   *
+   * 🔴 THE ONE USE TODAY IS A CUSTOMER'S ADDRESS, and the split is the point.
+   * A push goes to the barber's own device and is gone when dismissed; an SMS
+   * is stored in his message history, in the carrier's, and in Twilio's logs -
+   * a customer's home address does not belong in all three. It also costs a
+   * segment. So the address rides the free, private channel and the text stays
+   * as it was.
+   */
+  pushBody?: string;
   /** Deep link (push click + email button). Defaults to the calendar. */
   url?: string;
   /** Push tag - successive sends with one tag replace each other. */
   tag?: string;
+}
+
+/**
+ * The link that opens ONE booking, rather than the calendar it is somewhere on.
+ *
+ * Every barber alert used to land on /dashboard/booking, so acting on the
+ * alert meant finding the row in a month grid and opening it - three or four
+ * taps, typically while holding something. The sheet carries the address, the
+ * phone number and the checkout, which is everything the alert is about.
+ */
+export function appointmentDeepLink(appointmentId: string): string {
+  return `${apiEnv().APP_BASE_URL}/dashboard/booking?tab=Appointments&appointment=${encodeURIComponent(appointmentId)}`;
 }
 
 export interface BarberSendResult {
@@ -138,7 +162,8 @@ export async function sendToBarber(params: {
         shopId: params.shopId,
         payload: {
           title: params.message.title,
-          body: params.message.body,
+          // The push may say more than the text does (see pushBody).
+          body: params.message.pushBody ?? params.message.body,
           url,
           ...(params.message.tag ? { tag: params.message.tag } : {}),
         },

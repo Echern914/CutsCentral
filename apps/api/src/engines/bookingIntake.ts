@@ -35,6 +35,12 @@ export interface PublicBookingQuestion {
   kind: BookingQuestionKindId;
   required: boolean;
   options: string[];
+  /**
+   * Which services ask it. [] = all of them; non-empty = only those. Sent to
+   * the public form so it can add and remove fields as the customer changes
+   * service, without another round trip - exactly how add-ons behave.
+   */
+  serviceIds: string[];
 }
 
 /** One answer, frozen onto the appointment. */
@@ -78,6 +84,7 @@ export async function bookingQuestionsForShop(
       kind: true,
       required: true,
       options: true,
+      serviceIds: true,
     },
   });
   return (rows as unknown as PublicBookingQuestion[]).map((r) => ({
@@ -87,7 +94,26 @@ export async function bookingQuestionsForShop(
     kind: r.kind,
     required: r.required,
     options: r.options ?? [],
+    serviceIds: r.serviceIds ?? [],
   }));
+}
+
+/**
+ * The questions THIS service asks: the shop-wide ones plus any scoped to it.
+ *
+ * 🔴 THE ENFORCED LIST MUST MATCH THE ASKED LIST. The public form filters the
+ * same way (it is sent `serviceIds` with each question), so a question the
+ * customer never saw can never refuse their booking, and one they did see is
+ * always the one validated. Pure, given the questions - so the create handler
+ * and the form cannot drift apart.
+ */
+export function questionsForService(
+  questions: PublicBookingQuestion[],
+  serviceId: string,
+): PublicBookingQuestion[] {
+  return questions.filter(
+    (q) => q.serviceIds.length === 0 || q.serviceIds.includes(serviceId),
+  );
 }
 
 /**
