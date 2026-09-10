@@ -1,4 +1,13 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 
@@ -67,6 +76,15 @@ const { runBarberRemindersForShop } = await import("./barberReminders.js");
 /** Scoped to THIS suite's shop: the cron sweeps every shop in the shared test
  *  DB, which would fold other suites' appointments into these assertions. */
 const run = (now?: Date) => runBarberRemindersForShop(shopId, ownerId, now);
+
+/** Set this suite's owner's notification prefs for the shop. */
+async function setPrefs(data: Record<string, unknown>) {
+  await prisma.barberNotifyPref.upsert({
+    where: { userId_shopId: { userId: ownerId, shopId } },
+    create: { shopId, userId: ownerId, ...data },
+    update: data,
+  });
+}
 
 /** Sends belonging to THIS suite (the engine sweeps every shop in the DB). */
 function mineOnly(kind: string) {
@@ -378,5 +396,97 @@ describe("next up, for a job the barber has to travel to", () => {
     await run();
     const alert = mineOnly("nextUp").find((x) => x.title.includes("Morgan"));
     expect(alert!.url).toContain(`appointment=${appt.id}`);
+  });
+});
+
+/**
+ * TRAVEL-AWARE NEXT UP.
+ *
+ * The lead was a flat number measured from when the booking STARTS, which is
+ * right when the customer comes to the barber and wrong when the barber goes
+ * to the customer. Thirty minutes' warning on a job forty minutes away reads
+ * as "you have time" to somebody who is already late.
+ */
+describe("a job the barber has to drive to", () => {
+  const ADDRESS = [{ label: "Service address", value: "12 Main St, Newark NJ", kind: "address" }];
+
+  afterEach(async () => {
+    await setPrefs({ travelBufferMin: 0, nextUpLeadMin: 30 });
+  });
+
+  it("fires the travel allowance EARLIER than a normal lead would", async () => {
+    // 30 lead + 45 travel = 75 minutes of warning. At 60 minutes out the
+    // window is open; without the allowance it would not be.
+    await setPrefs({ nextUpLeadMin: 30, travelBufferMin: 45 });
+    await makeAppt(staffAId, 60, "Casey", ADDRESS);
+    await run();
+    expect(mineOnly("nextUp").some((x) => x.title.includes("Casey"))).toBe(true);
+  });
+
+  it("🔴 leaves an IN-CHAIR booking on its own lead, whatever the allowance says", async () => {
+    // The allowance is per barber, but it can only ever apply to a booking
+    // with somewhere to drive to. Turning it on must not make every
+    // appointment start shouting an hour early.
+    await setPrefs({ nextUpLeadMin: 30, travelBufferMin: 45 });
+    await makeAppt(staffAId, 60, "Robin"); // no address
+    await run();
+    expect(mineOnly("nextUp").some((x) => x.title.includes("Robin"))).toBe(false);
+
+    // ...and it still fires at its own 30 minutes.
+    await makeAppt(staffAId, 20, "Robin2");
+    await run();
+    expect(mineOnly("nextUp").some((x) => x.title.includes("Robin2"))).toBe(true);
+  });
+
+  it("says WHEN TO LEAVE, in every channel, because that is the fact it exists for", async () => {
+    await setPrefs({ nextUpLeadMin: 30, travelBufferMin: 45 });
+    await makeAppt(staffAId, 60, "Dana", ADDRESS);
+    await run();
+    const alert = mineOnly("nextUp").find((x) => x.title.includes("Dana"))!;
+    expect(alert.title).toContain("Time to leave");
+    // A time is not a customer's address: it belongs in the text too.
+    expect(alert.body).toContain("Leave by");
+    // 45 minutes before a job 60 minutes out = 15 minutes from the frozen now.
+    const leaveBy = new Date(FROZEN_NOW.getTime() + 15 * 60_000);
+    const hh = leaveBy.getUTCHours() % 12 || 12;
+    expect(alert.body).toContain(`${hh}:${String(leaveBy.getUTCMinutes()).padStart(2, "0")}`);
+    // The address still rides push only.
+    expect(alert.body).not.toContain("Main St");
+    expect(alert.pushBody).toContain("Main St");
+  });
+
+  it("with the allowance at zero, an address changes only the push - never the timing", async () => {
+    await setPrefs({ nextUpLeadMin: 30, travelBufferMin: 0 });
+    await makeAppt(staffAId, 60, "Jules", ADDRESS);
+    await run();
+    // 60 minutes out, 30 minutes of lead: not yet.
+    expect(mineOnly("nextUp").some((x) => x.title.includes("Jules"))).toBe(false);
+
+    await makeAppt(staffAId, 20, "Jules2", ADDRESS);
+    await run();
+    const alert = mineOnly("nextUp").find((x) => x.title.includes("Jules2"))!;
+    // No allowance = no leave-by claim, and the old title.
+    expect(alert.title).toContain("Next up");
+    expect(alert.body).not.toContain("Leave by");
+    expect(alert.pushBody).toContain("Main St");
+  });
+
+  it("🔴 still sends exactly once, however wide the window is", async () => {
+    await setPrefs({ nextUpLeadMin: 30, travelBufferMin: 90 });
+    await makeAppt(staffAId, 100, "Morgan", ADDRESS);
+    await run();
+    await run();
+    await run();
+    expect(mineOnly("nextUp").filter((x) => x.title.includes("Morgan"))).toHaveLength(1);
+  });
+
+  it("the scan reaches as far as the settings allow", async () => {
+    // The widest a barber may ask for: 120 lead + 120 travel. If the scan
+    // horizon stopped short, this alert could only be found after its own
+    // moment had passed - it would fire late and look like an engine bug.
+    await setPrefs({ nextUpLeadMin: 120, travelBufferMin: 120 });
+    await makeAppt(staffAId, 235, "Frankie", ADDRESS);
+    await run();
+    expect(mineOnly("nextUp").some((x) => x.title.includes("Frankie"))).toBe(true);
   });
 });

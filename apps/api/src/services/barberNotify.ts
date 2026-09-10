@@ -22,6 +22,20 @@ import { sendEmail } from "../messaging/email.js";
  * DRY_RUN still applies to every leg.
  */
 
+/**
+ * The bounds the settings form and the reminder scan MUST agree on.
+ *
+ * 🔴 THEY USED TO AGREE BY COINCIDENCE. The next-up scan looked two hours
+ * ahead with the comment "widest lead we allow", and the settings form
+ * happened to cap the lead at 120 minutes. Nothing tied the two together, so
+ * raising one without the other would have meant an alert that could only be
+ * found after its own moment had passed - it would fire late, and read as an
+ * engine bug rather than a mismatched constant. Both now come from here.
+ */
+export const MAX_NEXT_UP_LEAD_MIN = 120;
+/** As much travel as a barber may ask to be warned about. */
+export const MAX_TRAVEL_BUFFER_MIN = 120;
+
 /** Defaults for a barber who has never opened notification settings. */
 export const NOTIFY_DEFAULTS = {
   pushEnabled: true,
@@ -33,6 +47,8 @@ export const NOTIFY_DEFAULTS = {
   notifyPhone: null as string | null,
   nextUpEnabled: true,
   nextUpLeadMin: 30,
+  // Off: the overwhelming majority of shops have the customer come to them.
+  travelBufferMin: 0,
   dayAheadEnabled: true,
   dayAheadHour: 19,
   newBookingEnabled: true,
@@ -74,6 +90,7 @@ export async function resolveNotifyPrefs(
     notifyPhone: row.notifyPhone,
     nextUpEnabled: row.nextUpEnabled,
     nextUpLeadMin: row.nextUpLeadMin,
+    travelBufferMin: row.travelBufferMin,
     dayAheadEnabled: row.dayAheadEnabled,
     dayAheadHour: row.dayAheadHour,
     newBookingEnabled: row.newBookingEnabled,

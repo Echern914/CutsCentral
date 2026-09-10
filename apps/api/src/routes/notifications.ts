@@ -8,6 +8,8 @@ import {
   NOTIFY_DEFAULTS,
   resolveNotifyPrefs,
   sendToBarber,
+  MAX_NEXT_UP_LEAD_MIN,
+  MAX_TRAVEL_BUFFER_MIN,
 } from "../services/barberNotify.js";
 
 /**
@@ -75,8 +77,11 @@ const prefsSchema = z
     // "" clears it back to the shop-wide alert number.
     notifyPhone: z.string().trim().max(32).nullish(),
     nextUpEnabled: z.boolean(),
-    // 5 min is the tick floor; 2h is as early as a "next up" still means next.
-    nextUpLeadMin: z.number().int().min(5).max(120),
+    // 5 min is the tick floor; the ceiling is shared with the reminder scan's
+    // horizon so the two can never disagree (see MAX_NEXT_UP_LEAD_MIN).
+    nextUpLeadMin: z.number().int().min(5).max(MAX_NEXT_UP_LEAD_MIN),
+    // Extra warning on a job the barber drives to. 0 = off.
+    travelBufferMin: z.number().int().min(0).max(MAX_TRAVEL_BUFFER_MIN),
     dayAheadEnabled: z.boolean(),
     dayAheadHour: z.number().int().min(0).max(23),
     newBookingEnabled: z.boolean(),
