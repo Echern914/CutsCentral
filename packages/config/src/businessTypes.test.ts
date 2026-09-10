@@ -24,6 +24,8 @@ import { INDUSTRIES, INDUSTRY_KEYS, serviceNounFor, serviceNounForShop } from ".
 
 /** Every schema.org type we use must be a real LocalBusiness subtype. */
 const ALLOWED_SCHEMA_TYPES = [
+  // schema.org: LocalBusiness > AutomotiveBusiness > AutoRepair.
+  "AutoRepair",
   "AutoWash",
   "BarberShop",
   "BeautySalon",
@@ -47,6 +49,7 @@ describe("BUSINESS_TYPE_IDS", () => {
       "spa",
       "tattoo",
       "detailing",
+      "mechanic",
       "other",
     ]);
   });

@@ -456,6 +456,59 @@ export async function deleteAddOnAction(id: string): Promise<Result> {
 }
 
 /**
+ * BOOKING QUESTIONS - what the shop asks a customer before it can do the job.
+ *
+ * The kind list is the one in the database enum and in packages/config; a test
+ * holds all three together (apps/api engines/bookingIntake.test.ts).
+ */
+export type BookingQuestionKind =
+  | "text"
+  | "textarea"
+  | "address"
+  | "select"
+  | "phone"
+  | "email"
+  | "number";
+
+export interface BookingQuestionInput {
+  label?: string;
+  helpText?: string | null;
+  kind?: BookingQuestionKind;
+  required?: boolean;
+  options?: string[];
+  sortOrder?: number;
+  active?: boolean;
+}
+
+export async function createBookingQuestionAction(
+  input: BookingQuestionInput,
+): Promise<Result> {
+  return done(await apiSend("POST", "/api/booking/questions", input));
+}
+
+export async function updateBookingQuestionAction(
+  id: string,
+  input: BookingQuestionInput,
+): Promise<Result> {
+  return done(await apiSend("PATCH", `/api/booking/questions/${id}`, input));
+}
+
+export async function deleteBookingQuestionAction(id: string): Promise<Result> {
+  return done(await apiSend("DELETE", `/api/booking/questions/${id}`));
+}
+
+/**
+ * Add the suggested questions for this shop's business type. Idempotent - a
+ * second tap adds nothing - so the button is safe to press again, and returns
+ * how many were actually added so the page can say something true.
+ */
+export async function seedBookingQuestionsAction(): Promise<Result & { added?: number }> {
+  const res = await apiSend<{ added: number }>("POST", "/api/booking/questions/seed");
+  if (!res.ok) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, added: res.data?.added ?? 0 };
+}
+
+/**
  * Block off time, two ways. `timed` carries the two instants the form already
  * converted through the SHOP's zone; `days` carries shop-local day keys and
  * lets the API resolve every midnight itself - a whole day is a statement
@@ -1074,6 +1127,13 @@ export interface AppointmentDetail {
   price: number | null;
   notes: string | null;
   addOns: { id: string; name: string }[];
+  /**
+   * What the customer answered to the shop's OWN booking questions - the
+   * address a mobile mechanic is driving to, the vehicle he is quoting parts
+   * for. Read from the booking's frozen snapshot, so it says what was answered
+   * then even if the question has since been renamed or deleted.
+   */
+  intake: { label: string; value: string; kind: string }[];
   contact: DetailContact;
   /** Whether Text is a real action here, and why not when it isn't. */
   sms: DetailSms;

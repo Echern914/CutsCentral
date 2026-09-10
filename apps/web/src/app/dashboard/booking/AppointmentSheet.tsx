@@ -476,6 +476,40 @@ function DetailView({
             zoneDiffers={zoneDiffers}
             browserZone={browserZone}
           />
+          {/* 🔴 WHAT THE JOB NEEDS, ABOVE THE BARBER'S OWN NOTE. For a mobile
+              mechanic this panel IS the job: the address he is driving to and
+              the vehicle he is quoting. It reads from the booking's own frozen
+              answers, so it keeps saying what the customer told him even after
+              he has since reworded or removed the question. */}
+          {detail?.intake && detail.intake.length > 0 && (
+            <Panel title="What they told you">
+              <dl className="flex flex-col gap-2.5">
+                {detail.intake.map((a, i) => (
+                  <div key={`${a.label}-${i}`} className="min-w-0">
+                    <dt className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
+                      {a.label}
+                    </dt>
+                    <dd className="[overflow-wrap:anywhere] whitespace-pre-wrap text-sm leading-relaxed text-offwhite/85">
+                      {a.kind === "address" ? (
+                        // An address is somewhere he has to GET to, so it is a
+                        // tap that opens his maps app, not text to retype.
+                        <a
+                          href={`https://maps.google.com/?q=${encodeURIComponent(a.value)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-gold transition-colors hover:text-gold-muted"
+                        >
+                          {a.value}
+                        </a>
+                      ) : (
+                        a.value
+                      )}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </Panel>
+          )}
           {detail?.notes && (
             <Panel title="Note">
               <p className="[overflow-wrap:anywhere] whitespace-pre-wrap text-sm leading-relaxed text-offwhite/85">

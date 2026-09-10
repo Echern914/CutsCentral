@@ -116,6 +116,20 @@ export interface AddOnRow {
   active: boolean;
   sortOrder: number;
 }
+/** One question this shop asks a customer at booking. */
+export interface BookingQuestionRow {
+  id: string;
+  label: string;
+  helpText: string | null;
+  kind: "text" | "textarea" | "address" | "select" | "phone" | "email" | "number";
+  required: boolean;
+  options: string[];
+  sortOrder: number;
+  active: boolean;
+  /** Non-null = it came from the business type's suggestions. */
+  templateKey: string | null;
+}
+
 /**
  * One row of the barber's day-agenda calendar. Normalized on the server from
  * EITHER a native `Appointment` or a synced `Visit` (see /api/booking/agenda), so
@@ -250,13 +264,25 @@ export default async function BookingPage({
   const agendaFrom = new Date(monthStart.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const agendaTo = new Date(monthEnd.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
-  const [shopRes, staffRes, servicesRes, groupsRes, addOnsRes, agendaRes, waitlistRes, acuityRes, squareRes] =
+  const [
+    shopRes,
+    staffRes,
+    servicesRes,
+    groupsRes,
+    addOnsRes,
+    questionsRes,
+    agendaRes,
+    waitlistRes,
+    acuityRes,
+    squareRes,
+  ] =
     await Promise.all([
       apiGet<BookingShop>("/api/shops/me"),
       apiGet<{ staff: StaffRow[] }>("/api/booking/staff"),
       apiGet<{ services: ServiceRow[] }>("/api/booking/services"),
       apiGet<{ groups: ServiceGroupRow[] }>("/api/booking/groups"),
       apiGet<{ addOns: AddOnRow[] }>("/api/booking/addons"),
+      apiGet<{ questions: BookingQuestionRow[] }>("/api/booking/questions"),
       apiGet<AgendaResponse>(
         `/api/booking/agenda?from=${encodeURIComponent(agendaFrom)}&to=${encodeURIComponent(agendaTo)}`,
       ),
@@ -301,6 +327,7 @@ export default async function BookingPage({
         initialServices={servicesRes.data?.services ?? []}
         initialServiceGroups={groupsRes.data?.groups ?? []}
         initialAddOns={addOnsRes.data?.addOns ?? []}
+        initialQuestions={questionsRes.data?.questions ?? []}
         initialAgenda={
           agendaRes.data ?? {
             agenda: [],

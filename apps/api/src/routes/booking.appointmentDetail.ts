@@ -6,6 +6,7 @@ import {
   type AppointmentPaymentSnapshot,
 } from "../engines/appointmentPayment.js";
 import { appointmentOwnedByPlatform } from "../engines/visitOrigin.js";
+import { readIntakeSnapshot, type IntakeAnswer } from "../engines/bookingIntake.js";
 
 /**
  * ONE BOOKING, IN FULL — the read behind the appointment sheet.
@@ -123,6 +124,14 @@ export interface AppointmentDetail {
   /** The barber's private note on THIS booking (never the client's profile note). */
   notes: string | null;
   addOns: { id: string; name: string }[];
+  /**
+   * What the customer answered to the shop's own booking questions - the
+   * service address a mobile mechanic is driving to, the vehicle he is quoting.
+   * Read from the booking's own snapshot, so it says what was answered THEN
+   * even if the question has since been renamed or deleted. [] for a shop that
+   * asks nothing, and for every booking made before it started asking.
+   */
+  intake: { label: string; value: string; kind: string }[];
   contact: DetailContact;
   /** Whether Text is a real action here, and why not when it isn't. */
   sms: DetailSms;
@@ -228,6 +237,11 @@ function detailAddOns(raw: Prisma.JsonValue | null): { id: string; name: string 
     if (typeof id === "string" && typeof name === "string") out.push({ id, name });
   }
   return out;
+}
+
+/** Strip the question id: the sheet renders labels and values, nothing else. */
+function publicIntake(answers: IntakeAnswer[]): { label: string; value: string; kind: string }[] {
+  return answers.map((a) => ({ label: a.label, value: a.value, kind: a.kind }));
 }
 
 function durationMin(startsAt: Date, endsAt: Date | null): number | null {
@@ -401,6 +415,7 @@ export function registerAppointmentDetail(router: Router): void {
         priceAtBooking: true,
         notes: true,
         addOns: true,
+        intake: true,
         checkInStatus: true,
         visitId: true,
         // The Visit's source namespace is what decides ownership (see
@@ -434,6 +449,7 @@ export function registerAppointmentDetail(router: Router): void {
       priceAtBooking: Prisma.Decimal | null;
       notes: string | null;
       addOns: Prisma.JsonValue | null;
+      intake: Prisma.JsonValue | null;
       checkInStatus: string | null;
       visitId: string | null;
       visit: { acuityAppointmentId: string } | null;
@@ -508,6 +524,7 @@ export function registerAppointmentDetail(router: Router): void {
       price,
       notes: appt.notes,
       addOns: detailAddOns(appt.addOns),
+      intake: publicIntake(readIntakeSnapshot(appt.intake)),
       contact: resolveContact({
         apptPhone: appt.phone,
         apptEmail: appt.email,
@@ -617,6 +634,8 @@ export function registerAppointmentDetail(router: Router): void {
       price,
       notes: null, // barber notes live on native bookings only
       addOns: [],
+      // A synced booking never went through our form, so there is nothing to show.
+      intake: [],
       // The whole point of the synced sheet: the contact the ingest matched to
       // this shop's own client row, already normalized to E.164 by `toE164`.
       contact: resolveContact({
