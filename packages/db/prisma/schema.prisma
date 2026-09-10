@@ -782,6 +782,19 @@ model BarberNotifyPref {
   // "Your next client is Sam at 2:30 - Fade." The headline feature.
   nextUpEnabled Boolean @default(true)
   nextUpLeadMin Int     @default(30) // minutes before the appointment starts
+  // EXTRA minutes of warning on a job the barber has to TRAVEL to, on top of
+  // the lead above. 0 = off, which is every shop whose customers come to them.
+  //
+  // 🔴 AN ALLOWANCE THE BARBER SETS, NOT A ROUTE ANYONE CALCULATED. There is no
+  // maps integration here, no shop origin to measure from and no live traffic,
+  // so claiming a real travel time would be a guess dressed up as a fact. He
+  // knows his own patch; this is him saying "on a job I drive to, warn me this
+  // much earlier".
+  //
+  // Applies ONLY to a booking carrying an address answer (engines/
+  // bookingIntake.ts), so turning it on cannot make an in-chair appointment
+  // start shouting an hour early.
+  travelBufferMin Int   @default(0)
   // "Tomorrow: 6 cuts, 9:00am-4:30pm." Sent the evening before.
   dayAheadEnabled Boolean @default(true)
   dayAheadHour    Int     @default(19) // shop-local hour (0-23) to send it

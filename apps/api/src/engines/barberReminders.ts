@@ -8,6 +8,8 @@ import { logger } from "../logger.js";
 import { formatApptTime } from "../messaging/templates.js";
 import {
   appointmentDeepLink,
+  MAX_NEXT_UP_LEAD_MIN,
+  MAX_TRAVEL_BUFFER_MIN,
   resolveNotifyPrefs,
   sendToBarber,
   type NotifyPrefs,
@@ -21,6 +23,8 @@ import { readIntakeSnapshot } from "./bookingIntake.js";
  *  NEXT UP  - "Next up: Sam Cole, 2:30 PM - Fade." Fires `nextUpLeadMin`
  *             before each appointment starts. This is the feature barbers
  *             actually ask for: who is walking in, and what they booked.
+ *             On a job the barber DRIVES to it fires `travelBufferMin`
+ *             earlier still and says when to leave - see leadFor().
  *  DAY AHEAD - "Tomorrow: 6 cuts, 9:00 AM to 4:30 PM. First: Sam - Fade."
  *             Sent the evening before at the barber's chosen hour, so he can
  *             plan the night before rather than discovering it at 8am.
@@ -37,6 +41,24 @@ import { readIntakeSnapshot } from "./bookingIntake.js";
 
 /** How far past the ideal moment we'll still send, before it's just noise. */
 const NEXT_UP_GRACE_MIN = 15;
+
+/**
+ * How much warning THIS booking gets, in minutes before it starts.
+ *
+ * 🔴 THE DEFECT THIS CLOSES. The lead was a flat number measured from when the
+ * appointment STARTS, which is right when the customer comes to the barber and
+ * wrong when the barber goes to the customer: being told about a job thirty
+ * minutes out that is forty minutes away is worse than not being told, because
+ * it reads as "you have time" to someone who is already late.
+ *
+ * The travel allowance is added ONLY when this booking carries an address -
+ * the same signal the address line uses. A shop that asks for no address is
+ * untouched no matter what the setting says, so a barber who turns it on for
+ * his mobile work cannot make his in-chair appointments shout an hour early.
+ */
+function leadFor(prefs: NotifyPrefs, hasAddress: boolean): number {
+  return prefs.nextUpLeadMin + (hasAddress ? prefs.travelBufferMin : 0);
+}
 
 interface ApptRow {
   id: string;
@@ -79,7 +101,13 @@ function clientName(a: ApptRow): string {
  * authoritative rather than baking one shop-wide number into SQL.
  */
 async function runNextUp(shopId: string, ownerId: string, now: Date): Promise<number> {
-  const horizon = new Date(now.getTime() + 2 * 60 * 60_000); // widest lead we allow
+  // The widest warning any barber can ask for. Derived from the same bounds
+  // the settings form validates against, so the scan can never stop short of
+  // a lead someone is allowed to set - which would make that alert findable
+  // only after its own moment had passed, and fire it late.
+  const horizon = new Date(
+    now.getTime() + (MAX_NEXT_UP_LEAD_MIN + MAX_TRAVEL_BUFFER_MIN) * 60_000,
+  );
   const rows = (await runWithShop(shopId, (tx) =>
     tx.appointment.findMany({
       where: {
@@ -121,7 +149,8 @@ async function runNextUp(shopId: string, ownerId: string, now: Date): Promise<nu
     }
     if (!prefs.nextUpEnabled) continue;
 
-    const dueAt = a.startsAt.getTime() - prefs.nextUpLeadMin * 60_000;
+    const where = serviceAddress(a);
+    const dueAt = a.startsAt.getTime() - leadFor(prefs, where !== null) * 60_000;
     if (now.getTime() < dueAt) continue; // its lead window hasn't opened yet
 
     // Claim BEFORE sending: the stamp is the mutex, so a crash after this
@@ -134,19 +163,29 @@ async function runNextUp(shopId: string, ownerId: string, now: Date): Promise<nu
     );
     if (claimed.count === 0) continue; // another tick/replica got it
 
+    // Travel is only "applied" when there is somewhere to drive AND he asked
+    // to be warned about it. That pair is also what changes the wording: an
+    // alert that arrives an hour early has to SAY why, or it just looks broken.
+    const travelling = where !== null && prefs.travelBufferMin > 0;
+    const leaveBy = travelling
+      ? formatApptTime(new Date(a.startsAt.getTime() - prefs.travelBufferMin * 60_000), tz)
+      : null;
     const line = `${clientName(a)} - ${a.service.name} at ${formatApptTime(a.startsAt, tz)}`;
-    const where = serviceAddress(a);
+    // The leave-by time goes in the SHARED line: it is the one fact the alert
+    // now exists to deliver, and it is a time, not a customer's address - so
+    // it belongs in the text message too.
+    const body = leaveBy ? `${line}. Leave by ${leaveBy}.` : line;
     await sendToBarber({
       shopId,
       userId,
       kind: "nextUp",
       prefs,
       message: {
-        title: `Next up: ${clientName(a)}`,
-        // The text keeps its old line; the address rides push only, where it
-        // is private to his device and costs nothing. See BarberMessage.
-        body: line,
-        ...(where ? { pushBody: `${line}\n${where}` } : {}),
+        title: travelling ? `Time to leave: ${clientName(a)}` : `Next up: ${clientName(a)}`,
+        // The address rides push only, where it is private to his device and
+        // costs nothing. See BarberMessage.
+        body,
+        ...(where ? { pushBody: `${body}\n${where}` } : {}),
         // Straight to THIS booking - which is where the address, the phone
         // number and the checkout all are.
         url: appointmentDeepLink(a.id),

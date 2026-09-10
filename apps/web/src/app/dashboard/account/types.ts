@@ -10,6 +10,8 @@ export interface NotifyPrefs {
   notifyPhone: string | null;
   nextUpEnabled: boolean;
   nextUpLeadMin: number;
+  /** Extra warning on a job the barber drives to. 0 = off (most shops). */
+  travelBufferMin: number;
   dayAheadEnabled: boolean;
   /** Shop-local hour, 0-23. */
   dayAheadHour: number;

@@ -194,6 +194,32 @@ export function NotificationsCard({
               minutes before it starts
             </div>
           )}
+          {/* 🔴 ONLY MEANINGFUL FOR A TRADE THAT TRAVELS, and it says so
+              rather than presenting itself as a general setting. Left at 0 it
+              changes nothing, and it can only ever apply to a booking that
+              carries an address - so an in-chair appointment is never affected
+              by it, whatever the number says. */}
+          {prefs.nextUpEnabled && (
+            <div className="flex flex-wrap items-center gap-2 pb-2 pl-1 text-xs text-muted">
+              On jobs I travel to, warn me
+              <NumberField
+                value={prefs.travelBufferMin}
+                onChange={(n) => save({ travelBufferMin: n })}
+                min={0}
+                max={120}
+                step={5}
+                integer
+                className="w-16 rounded-lg border border-subtle bg-charcoal-800 px-2 py-1 text-right text-xs tabular-nums text-offwhite"
+                aria-label="Extra minutes of travel time"
+              />
+              minutes earlier
+              <span className="w-full text-muted/80">
+                {prefs.travelBufferMin > 0
+                  ? "Only on bookings that ask for an address. The alert tells you when to leave."
+                  : "Leave at 0 if your customers come to you."}
+              </span>
+            </div>
+          )}
           <Row
             title="Tomorrow's schedule"
             hint={`An evening rundown: how many ${vocab.serviceNounPlural}, when they start, who's first.`}
