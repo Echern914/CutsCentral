@@ -160,6 +160,7 @@ export function BookingCalendar({
   staff,
   services,
   toast,
+  openAppointmentId,
 }: {
   initial: AgendaResponse;
   initialWaitlist: WaitlistRow[];
@@ -170,6 +171,12 @@ export function BookingCalendar({
   staff: StaffRow[];
   services: ServiceRow[];
   toast: Toast;
+  /**
+   * A booking to open on arrival (?appointment=<id>) - where every barber
+   * alert now points. Without it the alert landed on the month grid and acting
+   * on it meant finding the row and opening it, three or four taps in.
+   */
+  openAppointmentId?: string;
 }) {
   const tz = initial.timezone;
   const router = useRouter();
@@ -513,6 +520,26 @@ export function BookingCalendar({
   const navBtn =
     "rounded-lg border border-subtle px-2.5 py-1.5 text-sm text-muted transition-colors hover:text-offwhite";
 
+  /**
+   * THE DEEP-LINKED BOOKING. Consumed ONCE on arrival and then dropped from the
+   * URL, so closing the sheet does not immediately reopen it and a refresh
+   * hours later does not resurrect a booking the barber is done with.
+   *
+   * If the id is not in the loaded window there is nothing to open and the
+   * calendar simply renders as usual - honest, and the alerts that link here
+   * fire minutes before the booking, which is always inside it.
+   */
+  const [deepLinkId, setDeepLinkId] = useState<string | null>(openAppointmentId ?? null);
+  useEffect(() => {
+    if (!openAppointmentId) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("appointment");
+    window.history.replaceState(null, "", url.pathname + url.search);
+  }, [openAppointmentId]);
+  const deepLinkedRow = deepLinkId
+    ? (agenda.find((r) => r.id === deepLinkId && r.source === "appointment") ?? null)
+    : null;
+
   return (
     <div className="flex flex-col gap-4">
       {/* Waitlist dropdown sits ABOVE the calendar. */}
@@ -767,6 +794,18 @@ export function BookingCalendar({
             router.refresh();
           }}
           toast={toast}
+        />
+      )}
+
+      {/* Opened straight from an alert. The same sheet a row opens, mounted
+          here because the alert names a booking, not a day. */}
+      {deepLinkedRow && (
+        <AppointmentSheet
+          row={deepLinkedRow}
+          toast={toast}
+          initialView="detail"
+          onClose={() => setDeepLinkId(null)}
+          onChanged={refreshAgenda}
         />
       )}
     </div>

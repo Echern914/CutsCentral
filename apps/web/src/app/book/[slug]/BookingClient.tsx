@@ -1397,7 +1397,7 @@ export function BookingClient({
     // The shop's own questions. Checked HERE as well as on the server, for the
     // same reason the email format is: a required answer the customer can fix
     // in place should never cost them a round trip, or their slot.
-    const missing = data.questions.find(
+    const missing = activeQuestions.find(
       (q) => q.required && !(answers[q.id] ?? "").trim(),
     );
     if (missing) {
@@ -1431,8 +1431,8 @@ export function BookingClient({
         targetedSlotId: slotTargeted?.id,
         // Only what the shop actually asks, and only what was answered - a
         // blank optional answer is nothing to send.
-        intake: data.questions.length
-          ? data.questions
+        intake: activeQuestions.length
+          ? activeQuestions
               .map((q) => ({ questionId: q.id, value: (answers[q.id] ?? "").trim() }))
               .filter((a) => a.value !== "")
           : undefined,
@@ -1639,6 +1639,22 @@ export function BookingClient({
   }
 
   const selectedService = data.services.find((s) => s.id === serviceId) ?? null;
+
+  /**
+   * The questions THIS service asks - shop-wide ones plus any scoped to it.
+   *
+   * 🔴 THE SAME FILTER THE SERVER RUNS before it validates (see
+   * engines/bookingIntake.ts). A question the customer was never shown must
+   * never be able to refuse their booking, and a mobile job's address field
+   * has no business on the one done in the shop's own bay.
+   */
+  const activeQuestions = useMemo(
+    () =>
+      data.questions.filter(
+        (q) => q.serviceIds.length === 0 || (serviceId !== null && q.serviceIds.includes(serviceId)),
+      ),
+    [data.questions, serviceId],
+  );
   // The barber the booking will actually be written against — named in the
   // upgrade offer so "keeps your time" is a concrete promise, not a vague one.
   const pickedStaffName = pickedStaffId
@@ -2970,7 +2986,7 @@ export function BookingClient({
 
                 Nothing renders at all for the shops that ask nothing, which is
                 most of them. */}
-            {data.questions.map((q) => {
+            {activeQuestions.map((q) => {
               const value = answers[q.id] ?? "";
               const invalid = questionError?.questionId === q.id;
               const errorId = `book-question-${q.id}`;

@@ -7,10 +7,12 @@ import {
 import { logger } from "../logger.js";
 import { formatApptTime } from "../messaging/templates.js";
 import {
+  appointmentDeepLink,
   resolveNotifyPrefs,
   sendToBarber,
   type NotifyPrefs,
 } from "../services/barberNotify.js";
+import { readIntakeSnapshot } from "./bookingIntake.js";
 
 /**
  * The barber's own reminders. Everything else in the system tells the CUSTOMER
@@ -41,8 +43,27 @@ interface ApptRow {
   startsAt: Date;
   firstName: string;
   lastName: string | null;
+  /** The customer's answers to the shop's booking questions (see bookingIntake). */
+  intake: unknown;
   service: { name: string };
   staff: { name: string; userId: string | null };
+}
+
+/**
+ * Where this job is, when the shop asked.
+ *
+ * 🔴 ONLY WHEN THERE IS ONE. Most shops ask nothing and the customer comes to
+ * them, so this is null and the alert is exactly the line it always was. A
+ * mobile trade is the case it exists for: at next-up time the barber is not
+ * deciding whether to go, he is leaving, and the address is the fact he needs.
+ */
+function serviceAddress(a: ApptRow): string | null {
+  const answer = readIntakeSnapshot(a.intake).find((x) => x.kind === "address");
+  const value = answer?.value.trim();
+  if (!value) return null;
+  // Notifications are one or two lines: a multi-line address is flattened
+  // rather than truncated, so nothing is silently lost from the end of it.
+  return value.replace(/\s*\n+\s*/g, ", ");
 }
 
 function clientName(a: ApptRow): string {
@@ -75,6 +96,7 @@ async function runNextUp(shopId: string, ownerId: string, now: Date): Promise<nu
         startsAt: true,
         firstName: true,
         lastName: true,
+        intake: true,
         service: { select: { name: true } },
         staff: { select: { name: true, userId: true } },
       },
@@ -112,6 +134,8 @@ async function runNextUp(shopId: string, ownerId: string, now: Date): Promise<nu
     );
     if (claimed.count === 0) continue; // another tick/replica got it
 
+    const line = `${clientName(a)} - ${a.service.name} at ${formatApptTime(a.startsAt, tz)}`;
+    const where = serviceAddress(a);
     await sendToBarber({
       shopId,
       userId,
@@ -119,7 +143,13 @@ async function runNextUp(shopId: string, ownerId: string, now: Date): Promise<nu
       prefs,
       message: {
         title: `Next up: ${clientName(a)}`,
-        body: `${clientName(a)} - ${a.service.name} at ${formatApptTime(a.startsAt, tz)}`,
+        // The text keeps its old line; the address rides push only, where it
+        // is private to his device and costs nothing. See BarberMessage.
+        body: line,
+        ...(where ? { pushBody: `${line}\n${where}` } : {}),
+        // Straight to THIS booking - which is where the address, the phone
+        // number and the checkout all are.
+        url: appointmentDeepLink(a.id),
         tag: `next-up-${a.id}`,
       },
     });

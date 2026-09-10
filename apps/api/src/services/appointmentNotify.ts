@@ -14,7 +14,7 @@ import {
 } from "../messaging/templates.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
-import { resolveNotifyPrefs, sendToBarber } from "./barberNotify.js";
+import { appointmentDeepLink, resolveNotifyPrefs, sendToBarber } from "./barberNotify.js";
 import { sendPushToUser } from "../messaging/push.js";
 import { inQuietHours } from "../engines/quietHours.js";
 import { hasActiveAccess } from "../billing/stripe.js";
@@ -759,7 +759,11 @@ export async function notifyBarberBookingEvent(params: {
       message: {
         title: BARBER_EVENT_TITLE[params.kind],
         body,
-        url: `${apiEnv().APP_BASE_URL}/dashboard/booking`,
+        // Straight to THIS booking rather than the calendar it is on. No
+        // address here on purpose: this fires when the booking is made, which
+        // can be days before anyone drives anywhere - the fact is useful at
+        // next-up time, and that is where it is sent.
+        url: appointmentDeepLink(appt.id),
         // Per-appointment tag: successive events on the SAME booking replace
         // each other (booked -> moved -> canceled), different bookings stack.
         tag: `booking-event-${appt.id}`,

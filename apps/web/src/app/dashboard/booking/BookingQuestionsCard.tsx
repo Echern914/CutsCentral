@@ -45,9 +45,12 @@ const field =
 
 export function BookingQuestionsCard({
   initial,
+  services,
   toast,
 }: {
   initial: BookingQuestionRow[];
+  /** Active services, so a question can be scoped to the ones that need it. */
+  services: { id: string; name: string; active: boolean }[];
   toast: Toast;
 }) {
   const vocab = useVocab();
@@ -59,6 +62,21 @@ export function BookingQuestionsCard({
   const [helpText, setHelpText] = useState("");
   const [optionsText, setOptionsText] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
+  // [] = every service. The common case, and the default.
+  const [serviceIds, setServiceIds] = useState<string[]>([]);
+  const bookable = services.filter((s) => s.active);
+  const nameOf = (id: string) => services.find((s) => s.id === id)?.name ?? "a service";
+
+  /** "Every service", or the ones it is scoped to, named. */
+  function scopeLabel(ids: string[]): string {
+    if (ids.length === 0) return "Every service";
+    if (ids.length <= 2) return ids.map(nameOf).join(" · ");
+    return `${ids.length} services`;
+  }
+
+  function toggle(list: string[], id: string): string[] {
+    return list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
+  }
 
   const optionList = optionsText
     .split("\n")
@@ -71,6 +89,7 @@ export function BookingQuestionsCard({
     setRequired(false);
     setHelpText("");
     setOptionsText("");
+    setServiceIds([]);
   }
 
   function add() {
@@ -87,6 +106,7 @@ export function BookingQuestionsCard({
         required,
         helpText: helpText.trim() || null,
         options: kind === "select" ? optionList : [],
+        serviceIds,
         // New questions go to the end of the form the customer sees.
         sortOrder: questions.reduce((max, q) => Math.max(max, q.sortOrder), -1) + 1,
       });
@@ -105,6 +125,7 @@ export function BookingQuestionsCard({
           kind,
           required,
           options: kind === "select" ? optionList : [],
+          serviceIds,
           sortOrder: prev.length,
           active: true,
           templateKey: null,
@@ -190,6 +211,8 @@ export function BookingQuestionsCard({
                   <p className="mt-0.5 text-xs text-muted">
                     {KINDS.find((k) => k.value === q.kind)?.label ?? q.kind}
                     {q.required ? " · Required" : " · Optional"}
+                    {" · "}
+                    {scopeLabel(q.serviceIds)}
                     {!q.active && " · Hidden"}
                   </p>
                   {q.helpText && (
@@ -245,6 +268,26 @@ export function BookingQuestionsCard({
                     }
                     onBlur={(e) => patch(q.id, { helpText: e.target.value.trim() || null })}
                   />
+                  {bookable.length > 0 && (
+                    <div>
+                      <p className="text-xs text-muted">Ask this on</p>
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        <ScopeChip
+                          label="Every service"
+                          on={q.serviceIds.length === 0}
+                          onClick={() => patch(q.id, { serviceIds: [] })}
+                        />
+                        {bookable.map((svc) => (
+                          <ScopeChip
+                            key={svc.id}
+                            label={svc.name}
+                            on={q.serviceIds.includes(svc.id)}
+                            onClick={() => patch(q.id, { serviceIds: toggle(q.serviceIds, svc.id) })}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <div className="flex flex-wrap items-center gap-4">
                     <label className="flex items-center gap-2 text-xs text-muted">
                       <input
@@ -333,6 +376,32 @@ export function BookingQuestionsCard({
               aria-label="Options, one per line"
             />
           )}
+          {bookable.length > 0 && (
+            <div>
+              <p className="text-xs text-muted">Ask this on</p>
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                <ScopeChip
+                  label="Every service"
+                  on={serviceIds.length === 0}
+                  onClick={() => setServiceIds([])}
+                />
+                {bookable.map((svc) => (
+                  <ScopeChip
+                    key={svc.id}
+                    label={svc.name}
+                    on={serviceIds.includes(svc.id)}
+                    onClick={() => setServiceIds((prev) => toggle(prev, svc.id))}
+                  />
+                ))}
+              </div>
+              {/* The reason this control exists, in the words of the trade that
+                  needed it. */}
+              <p className="mt-1.5 text-xs text-muted">
+                Pick the ones that need it — a job you drive to needs an address;
+                one done in your own {vocab.stationNoun} doesn&apos;t.
+              </p>
+            </div>
+          )}
           {/* 🔴 The cost, said before they tick it - not after a week of lost
               bookings nobody can explain. */}
           {required && (
@@ -357,5 +426,30 @@ export function BookingQuestionsCard({
         blanks what someone already answered.
       </p>
     </Card>
+  );
+}
+
+/** One service in the "ask this on" picker. On = this question is asked there. */
+function ScopeChip({
+  label,
+  on,
+  onClick,
+}: {
+  label: string;
+  on: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={on}
+      className={cn(
+        "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+        on ? "bg-gold/20 text-gold" : "border border-subtle text-muted hover:text-offwhite",
+      )}
+    >
+      {label}
+    </button>
   );
 }
