@@ -157,6 +157,10 @@ type RecurringSeriesCreateNoShop = Omit<
   Prisma.RecurringSeriesUncheckedCreateInput,
   "shopId"
 >;
+type BookingQuestionCreateNoShop = Omit<
+  Prisma.BookingQuestionUncheckedCreateInput,
+  "shopId"
+>;
 type ServiceAddOnCreateNoShop = Omit<
   Prisma.ServiceAddOnUncheckedCreateInput,
   "shopId"
@@ -854,6 +858,46 @@ export function forShop(shopId: string) {
       deleteMany: (args: Prisma.ServiceAddOnDeleteManyArgs) =>
         runWithShop(shopId, (tx) =>
           tx.serviceAddOn.deleteMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+    },
+
+    bookingQuestion: {
+      findMany: (args: Prisma.BookingQuestionFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.bookingQuestion.findMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      findFirst: (args: Prisma.BookingQuestionFindFirstArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.bookingQuestion.findFirst({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      count: (args: Prisma.BookingQuestionCountArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.bookingQuestion.count({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      create: (args: { data: BookingQuestionCreateNoShop }) =>
+        runWithShop(shopId, (tx) =>
+          tx.bookingQuestion.create({
+            data: stamp(args.data, shopId) as Prisma.BookingQuestionUncheckedCreateInput,
+          }),
+        ),
+      createMany: (args: { data: BookingQuestionCreateNoShop[] }) =>
+        runWithShop(shopId, (tx) =>
+          tx.bookingQuestion.createMany({
+            data: args.data.map(
+              (d) => stamp(d, shopId) as Prisma.BookingQuestionUncheckedCreateInput,
+            ),
+            // Seeding the business type's suggested questions is idempotent:
+            // the (shopId, templateKey) unique index absorbs one already there.
+            skipDuplicates: true,
+          }),
+        ),
+      updateMany: (args: Prisma.BookingQuestionUpdateManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.bookingQuestion.updateMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      deleteMany: (args: Prisma.BookingQuestionDeleteManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.bookingQuestion.deleteMany({ ...args, where: scopeWhere(args.where, shopId) }),
         ),
     },
 

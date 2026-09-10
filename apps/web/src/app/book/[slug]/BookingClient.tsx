@@ -275,6 +275,21 @@ export function BookingClient({
   // TCPA and is explicitly rejected by 10DLC campaign vetting (the box must be
   // actively selected by the user). See the booking consent label below.
   const [consent, setConsent] = useState(false);
+  /**
+   * The shop's own booking questions, keyed by question id.
+   *
+   * A mobile mechanic cannot start without a street address and the vehicle he
+   * is quoting; a barber asks nothing and this whole block renders nothing.
+   * Held as ONE record rather than a state per question because the questions
+   * are per shop - there is no fixed set to declare.
+   */
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  // Which question was refused, and what to say under it. Separate from
+  // `fieldError` because these fields are the SHOP's, not our fixed set.
+  const [questionError, setQuestionError] = useState<
+    { questionId: string; message: string } | null
+  >(null);
+  const questionRefs = useRef<Record<string, HTMLElement | null>>({});
   const [error, setError] = useState<string | null>(null);
 
   /**
@@ -1379,6 +1394,16 @@ export function BookingClient({
       showFieldError("email", INVALID_EMAIL_MESSAGE);
       return;
     }
+    // The shop's own questions. Checked HERE as well as on the server, for the
+    // same reason the email format is: a required answer the customer can fix
+    // in place should never cost them a round trip, or their slot.
+    const missing = data.questions.find(
+      (q) => q.required && !(answers[q.id] ?? "").trim(),
+    );
+    if (missing) {
+      showQuestionError(missing.id, `${missing.label} is required.`);
+      return;
+    }
     // The barber to write against: the one bound to the chosen slot (may differ
     // from `staffId` when the provider step was skipped and several were free).
     const writeStaffId = pickedStaffId ?? staffId;
@@ -1404,6 +1429,13 @@ export function BookingClient({
         addOnIds:
           !slotTargeted && addOnIds.length > 0 ? addOnIds : undefined,
         targetedSlotId: slotTargeted?.id,
+        // Only what the shop actually asks, and only what was answered - a
+        // blank optional answer is nothing to send.
+        intake: data.questions.length
+          ? data.questions
+              .map((q) => ({ questionId: q.id, value: (answers[q.id] ?? "").trim() }))
+              .filter((a) => a.value !== "")
+          : undefined,
         // Sent only when the control was visible for it - the same conditions
         // that hide it. A repeat chosen before an add-on was added is not
         // sent, which matches what the customer can see on the screen.
@@ -1460,6 +1492,12 @@ export function BookingClient({
           } else {
             setError("Check your details and try again.");
           }
+          return;
+        }
+        if (res.code === "INTAKE_INVALID" && res.questionId) {
+          // The server names the shop's own field and writes the sentence,
+          // because only it knows which rule failed.
+          showQuestionError(res.questionId, res.message ?? "Check this answer.");
           return;
         }
         if (res.code === "RATE_LIMITED") {
@@ -1709,6 +1747,15 @@ export function BookingClient({
    * with the input's aria-describedby, so the message is also read when the
    * customer tabs back to the field to fix it.
    */
+  /** Mark one of the SHOP's questions and put the cursor in it. */
+  function showQuestionError(questionId: string, message: string) {
+    setError(null);
+    setQuestionError({ questionId, message });
+    const el = questionRefs.current[questionId];
+    el?.scrollIntoView({ block: "center", behavior: "smooth" });
+    el?.focus();
+  }
+
   const FieldError = ({ field }: { field: BookingErrorField }) =>
     fieldError?.field === field ? (
       <p id={`book-error-${field}`} role="alert" className="-mt-1 text-xs text-rose-300">
@@ -2914,6 +2961,103 @@ export function BookingClient({
               aria-describedby={fieldError?.field === "email" ? "book-error-email" : undefined}
             />
             <FieldError field="email" />
+
+            {/* THE SHOP'S OWN QUESTIONS - what it has to know before it can do
+                the job (a mobile mechanic's address, the vehicle he is quoting
+                parts for). Rendered where the rest of the customer's details
+                are, because that is what they are; a separate step would be one
+                more screen between someone and their booking.
+
+                Nothing renders at all for the shops that ask nothing, which is
+                most of them. */}
+            {data.questions.map((q) => {
+              const value = answers[q.id] ?? "";
+              const invalid = questionError?.questionId === q.id;
+              const errorId = `book-question-${q.id}`;
+              const describedBy = invalid ? errorId : q.helpText ? `${errorId}-help` : undefined;
+              const set = (v: string) => {
+                setAnswers((prev) => ({ ...prev, [q.id]: v }));
+                // Clear as they type: a red field over an answer they have
+                // already fixed is its own small lie.
+                if (invalid) setQuestionError(null);
+              };
+              return (
+                <div key={q.id} className="flex flex-col gap-1">
+                  <label htmlFor={`q-${q.id}`} className="text-xs text-muted">
+                    {q.label}
+                    {/* Said in words, not with an asterisk nobody has explained. */}
+                    {!q.required && <span className="text-muted/70"> (optional)</span>}
+                  </label>
+                  {q.helpText && (
+                    <p id={`${errorId}-help`} className="text-xs text-muted/80">
+                      {q.helpText}
+                    </p>
+                  )}
+                  {q.kind === "select" ? (
+                    <select
+                      id={`q-${q.id}`}
+                      ref={(el) => {
+                        questionRefs.current[q.id] = el;
+                      }}
+                      className={cx(input, invalid && invalidInput)}
+                      value={value}
+                      onChange={(e) => set(e.target.value)}
+                      aria-invalid={invalid || undefined}
+                      aria-describedby={describedBy}
+                    >
+                      <option value="">Choose…</option>
+                      {q.options.map((o) => (
+                        <option key={o} value={o}>
+                          {o}
+                        </option>
+                      ))}
+                    </select>
+                  ) : q.kind === "textarea" || q.kind === "address" ? (
+                    <textarea
+                      id={`q-${q.id}`}
+                      ref={(el) => {
+                        questionRefs.current[q.id] = el;
+                      }}
+                      className={cx(input, "min-h-[72px] resize-y", invalid && invalidInput)}
+                      rows={q.kind === "address" ? 2 : 3}
+                      // An address is a real autofill target; a free-text
+                      // question is not, and offering the browser's guesses
+                      // there is noise.
+                      autoComplete={q.kind === "address" ? "street-address" : "off"}
+                      value={value}
+                      onChange={(e) => set(e.target.value)}
+                      aria-invalid={invalid || undefined}
+                      aria-describedby={describedBy}
+                    />
+                  ) : (
+                    <input
+                      id={`q-${q.id}`}
+                      ref={(el) => {
+                        questionRefs.current[q.id] = el;
+                      }}
+                      className={cx(input, invalid && invalidInput)}
+                      type={q.kind === "number" ? "text" : q.kind === "phone" ? "tel" : q.kind}
+                      // `number` as a TEXT input with a numeric keypad: a real
+                      // <input type="number"> brings spinners, silently drops
+                      // what it cannot parse, and turns a mistyped year into an
+                      // empty field the customer never sees go.
+                      inputMode={q.kind === "number" ? "numeric" : undefined}
+                      autoComplete={q.kind === "phone" ? "tel" : q.kind === "email" ? "email" : "off"}
+                      value={value}
+                      onChange={(e) => set(e.target.value)}
+                      aria-invalid={invalid || undefined}
+                      aria-describedby={describedBy}
+                    />
+                  )}
+                  {invalid && (
+                    <p id={errorId} role="alert" className="text-xs text-rose-300">
+                      {questionError.message}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+
             {/* A standing appointment. Two decisions, kept to two controls:
                 how often, and for how many visits. Hidden entirely when the
                 shop takes payment at booking or runs approval (the API decides

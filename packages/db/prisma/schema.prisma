@@ -617,6 +617,7 @@ model Shop {
   appointmentPriceChanges AppointmentPriceChange[]
   appointmentOverrides AppointmentOverride[]
   serviceAddOns          ServiceAddOn[]
+  bookingQuestions       BookingQuestion[]
   serviceGroups          ServiceGroup[]
   goals                  ShopGoal[]
   serviceGoals           ServiceGoal[]
@@ -1994,6 +1995,65 @@ model ServiceAddOn {
   @@index([shopId, active])
 }
 
+// What the customer is ASKED at booking, beyond name and contact.
+//
+// A haircut needs nothing: the barber knows what a fade is and where his chair
+// is. A MOBILE MECHANIC cannot start without a street address and the vehicle's
+// year, make and model - without them he arrives at the wrong house with the
+// wrong parts, and cannot quote at all. Same booking engine, different facts.
+//
+// 🔴 SHOP-WIDE, NOT PER-SERVICE. A shop's questions are the things it needs for
+// ANY job ("required with any service", in the words of the mechanic who asked
+// for this). Per-service questions are a real future want; scoping is a column
+// away and deliberately not guessed at now.
+//
+// Answers are SNAPSHOTTED onto Appointment.intake, never joined - editing or
+// deleting a question must not rewrite what a customer already answered. Same
+// contract as ServiceAddOn -> Appointment.addOns.
+model BookingQuestion {
+  id       String @id @default(cuid())
+  shopId   String
+  shop     Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  // What the customer reads above the field ("Service address").
+  label    String
+  // The small grey line under it ("Where should we bring the van?"). Optional -
+  // a clear label usually needs no help, and unnecessary help is noise.
+  helpText String?
+  // Which input to render + how to validate. TEXT is the fallback for anything
+  // this list does not cover, so an unknown kind can never break a booking page.
+  kind     BookingQuestionKind @default(text)
+  // 🔴 A required question BLOCKS a booking. That is the point (a mechanic
+  // cannot work without an address) and the risk (every extra required field
+  // loses customers), so it is opt-in per question and the editor says so.
+  required Boolean @default(false)
+  // `select` only: the choices, in order. Ignored for every other kind.
+  options  String[] @default([])
+  sortOrder Int     @default(0)
+  // false hides it from NEW bookings while keeping past answers readable.
+  active   Boolean  @default(true)
+  // Set when this row came from a business-type template, so "add the suggested
+  // questions" is idempotent and can never duplicate one the shop already has.
+  // Null for anything the owner wrote themselves.
+  templateKey String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([shopId, templateKey])
+  @@index([shopId, active, sortOrder])
+}
+
+// How a booking question is asked. Stored as an enum because the public form
+// renders a different input per value and an unknown one has no rendering.
+enum BookingQuestionKind {
+  text // one line
+  textarea // a paragraph (symptoms, "what's it doing?")
+  address // a street address, rendered multi-line
+  select // one of `options`
+  phone
+  email
+  number
+}
+
 // Which staff offer which service (explicit join, multi-staff). shopId is
 // denormalized so RLS is uniform across every booking table.
 model ServiceStaff {
@@ -2411,6 +2471,13 @@ model Appointment {
   // their price; this JSON preserves the itemized list for display even if an
   // add-on is later edited/deleted. [] = no add-ons (every pre-feature row).
   addOns             Json              @default("[]")
+  // The customer's answers to the shop's booking questions, snapshotted at
+  // booking time: [{questionId, label, kind, value}]. Frozen like addOns above -
+  // renaming or deleting a question never rewrites what someone answered, and a
+  // deleted question's answer stays readable on the booking it belongs to.
+  // [] = the shop asks nothing (every row before this feature, and every shop
+  // that never adds a question).
+  intake             Json              @default("[]")
   manageToken        String            @unique // cancel/reschedule auth (no login)
   // Barber's note about THIS booking. Deliberately separate from Client.notes:
   // that one is who the person is and follows them forever, this one is about

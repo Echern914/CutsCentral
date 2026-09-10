@@ -15,12 +15,14 @@ import { Card, CardHeader } from "@/components/ui/Card";
 import { FormError } from "@/components/ui/FormError";
 import { NumberField } from "@/components/ui/NumberField";
 import { useToast } from "@/components/ui/Toast";
+import { BookingQuestionsCard } from "./BookingQuestionsCard";
 import { useDemoTour } from "@/components/tour/state";
 import Link from "next/link";
 import { cn } from "@/lib/cn";
 import { useLeaveGuard } from "@/lib/useLeaveGuard";
 import type {
   AddOnRow,
+  BookingQuestionRow,
   AgendaResponse,
   BookingShop,
   ConnectStatus,
@@ -173,6 +175,7 @@ export function BookingManager({
   initialServices,
   initialServiceGroups,
   initialAddOns,
+  initialQuestions,
   initialAgenda,
   initialWaitlist,
 }: {
@@ -186,6 +189,7 @@ export function BookingManager({
   initialServices: ServiceRow[];
   initialServiceGroups: ServiceGroupRow[];
   initialAddOns: AddOnRow[];
+  initialQuestions: BookingQuestionRow[];
   initialAgenda: AgendaResponse;
   initialWaitlist: WaitlistRow[];
 }) {
@@ -301,13 +305,20 @@ export function BookingManager({
       </div>
 
       {tab === "Settings" && (
-        <SettingsTab
-          shop={shop}
-          bookUrl={bookUrl}
-          connect={connect}
-          apiBase={apiBase}
-          toast={toast}
-        />
+        <div className="flex flex-col gap-5">
+          <SettingsTab
+            shop={shop}
+            bookUrl={bookUrl}
+            connect={connect}
+            apiBase={apiBase}
+            toast={toast}
+          />
+          {/* What the booking form asks. Lives with the other booking settings
+              because that is what it is - and only matters for the shops whose
+              job needs more than a name (a mobile mechanic's address, the
+              vehicle he is quoting). */}
+          <BookingQuestionsCard initial={initialQuestions} toast={toast} />
+        </div>
       )}
       {tab === "Staff" && <StaffTab initial={initialStaff} toast={toast} />}
       {tab === "Services" && (

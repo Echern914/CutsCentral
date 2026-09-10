@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { randomToken, SERVICE_COLOR_KEYS } from "@chairback/config";
+import { businessType, randomToken, SERVICE_COLOR_KEYS } from "@chairback/config";
 import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
@@ -1012,6 +1012,185 @@ bookingDashboardRouter.delete("/addons/:id", async (req, res) => {
     where: { id: req.params.id },
   });
   res.json({ ok: count > 0 });
+});
+
+//  Booking questions - what this shop asks a customer before it can do the job
+
+/**
+ * 🔴 EVERY REQUIRED QUESTION COSTS BOOKINGS, and the shop is the only one who
+ * knows which ones are worth it. A mobile mechanic genuinely cannot start
+ * without an address and a year/make/model; a barber asking four questions for
+ * a fade will lose people. So nothing here is ever applied on the shop's
+ * behalf - the suggested set is offered, and every field is editable after.
+ */
+const questionFields = z
+  .object({
+    label: z.string().trim().min(1).max(120),
+    helpText: z.string().trim().max(200).nullish().or(z.literal("")),
+    kind: z.enum(["text", "textarea", "address", "select", "phone", "email", "number"]),
+    required: z.boolean().optional(),
+    // `select` only. Blank entries are dropped rather than rendered as an
+    // unpickable empty choice.
+    options: z.array(z.string().trim().max(120)).max(20).optional(),
+    sortOrder: z.number().int().min(0).max(1000).optional(),
+    active: z.boolean().optional(),
+  })
+  .strict();
+
+/** A select with nothing to select is a dead field on a live booking page. */
+const selectNeedsOptions = {
+  message: "A multiple-choice question needs at least one option.",
+  path: ["options"],
+};
+
+const questionSchema = questionFields.refine(
+  (d) => d.kind !== "select" || (d.options ?? []).some((o) => o.trim() !== ""),
+  selectNeedsOptions,
+);
+
+/**
+ * PATCH takes any subset. The select rule applies only when this request is
+ * the one turning the question INTO a select - a partial edit that never
+ * mentions `kind` cannot be judged against a kind it did not send, and the
+ * options for an existing select are resolved against the stored row below.
+ */
+const questionPatchSchema = questionFields
+  .partial()
+  .refine(
+    (d) => d.kind !== "select" || (d.options ?? []).some((o) => o.trim() !== ""),
+    selectNeedsOptions,
+  );
+
+function cleanOptions(options: string[] | undefined): string[] {
+  return (options ?? []).map((o) => o.trim()).filter((o) => o !== "");
+}
+
+// GET /api/booking/questions - the editor's list, INCLUDING inactive ones (the
+// public form filters to active; the owner has to be able to switch one back on).
+bookingDashboardRouter.get("/questions", async (req, res) => {
+  const questions = await forShop(req.shop!.id).bookingQuestion.findMany({
+    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+  });
+  res.json({ questions });
+});
+
+bookingDashboardRouter.post("/questions", async (req, res) => {
+  const parsed = questionSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const d = parsed.data;
+  const question = await forShop(req.shop!.id).bookingQuestion.create({
+    data: {
+      label: d.label,
+      helpText: d.helpText?.trim() ? d.helpText.trim() : null,
+      kind: d.kind,
+      required: d.required ?? false,
+      options: d.kind === "select" ? cleanOptions(d.options) : [],
+      sortOrder: d.sortOrder ?? 0,
+      active: d.active ?? true,
+    },
+  });
+  res.status(201).json({ id: question.id });
+});
+
+bookingDashboardRouter.patch("/questions/:id", async (req, res) => {
+  const parsed = questionPatchSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const d = parsed.data;
+  const db = forShop(req.shop!.id);
+  // Existence checked separately from the write (the /groups/:id gotcha): an
+  // empty PATCH yields empty data, and updateMany reports count 0 without
+  // touching the row - which is not "not found".
+  const existing = (await db.bookingQuestion.findMany({
+    where: { id: req.params.id },
+    select: { id: true, kind: true },
+  })) as unknown as { id: string; kind: string }[];
+  if (existing.length === 0) {
+    res.status(404).json({ ok: false });
+    return;
+  }
+  // Options belong to a select. Switching a question AWAY from select clears
+  // them, so a later switch back can't resurrect a stale list the owner has
+  // long forgotten writing.
+  const kind = d.kind ?? existing[0]!.kind;
+  const data = {
+    ...(d.label !== undefined ? { label: d.label } : {}),
+    ...(d.helpText !== undefined
+      ? { helpText: d.helpText?.trim() ? d.helpText.trim() : null }
+      : {}),
+    ...(d.kind !== undefined ? { kind: d.kind } : {}),
+    ...(d.required !== undefined ? { required: d.required } : {}),
+    ...(d.options !== undefined || d.kind !== undefined
+      ? { options: kind === "select" ? cleanOptions(d.options) : [] }
+      : {}),
+    ...(d.sortOrder !== undefined ? { sortOrder: d.sortOrder } : {}),
+    ...(d.active !== undefined ? { active: d.active } : {}),
+  };
+  if (Object.keys(data).length > 0) {
+    await db.bookingQuestion.updateMany({ where: { id: req.params.id }, data });
+  }
+  res.json({ ok: true });
+});
+
+// Hard delete. Answers are snapshotted onto Appointment.intake, never joined,
+// so removing a question never blanks a past booking's record of it.
+bookingDashboardRouter.delete("/questions/:id", async (req, res) => {
+  const { count } = await forShop(req.shop!.id).bookingQuestion.deleteMany({
+    where: { id: req.params.id },
+  });
+  res.json({ ok: count > 0 });
+});
+
+/**
+ * POST /api/booking/questions/seed - add this shop's business-type suggestions.
+ *
+ * Idempotent by construction: each seeded row carries the template's stable
+ * key, and (shopId, templateKey) is unique, so a second tap adds nothing.
+ * Deleting a suggestion and tapping again brings it back - which is the
+ * behaviour someone who deleted one by accident expects.
+ *
+ * New questions are appended AFTER whatever the shop already has, so seeding
+ * never reorders an existing form.
+ */
+bookingDashboardRouter.post("/questions/seed", async (req, res) => {
+  const shop = await prisma.shop.findUnique({
+    where: { id: req.shop!.id },
+    select: { industry: true },
+  });
+  const templates = businessType(shop?.industry ?? "other").intakeTemplates;
+  if (templates.length === 0) {
+    res.json({ added: 0 });
+    return;
+  }
+  const db = forShop(req.shop!.id);
+  const existing = (await db.bookingQuestion.findMany({
+    select: { templateKey: true, sortOrder: true },
+  })) as unknown as { templateKey: string | null; sortOrder: number }[];
+  const have = new Set(existing.map((q) => q.templateKey).filter(Boolean));
+  const base = existing.reduce((max, q) => Math.max(max, q.sortOrder), -1) + 1;
+  const missing = templates.filter((t) => !have.has(t.key));
+  if (missing.length === 0) {
+    res.json({ added: 0 });
+    return;
+  }
+  await db.bookingQuestion.createMany({
+    data: missing.map((t, i) => ({
+      label: t.label,
+      helpText: t.helpText ?? null,
+      kind: t.kind,
+      required: t.required,
+      options: t.options ?? [],
+      sortOrder: base + i,
+      active: true,
+      templateKey: t.key,
+    })),
+  });
+  res.status(201).json({ added: missing.length });
 });
 
 //  Staff

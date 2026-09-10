@@ -41,6 +41,13 @@ export const BOOKING_ERROR_CODES = [
   "RATE_LIMITED",
   /** Online booking is not available for this shop right now. */
   "BOOKING_UNAVAILABLE",
+  /**
+   * A booking QUESTION the shop asks was left blank or answered unusably (a
+   * mobile mechanic's service address, a vehicle's year). Carries `questionId`
+   * so the form can put the message under that exact field - the fields are
+   * per-shop, so they cannot be named in `BookingErrorField`.
+   */
+  "INTAKE_INVALID",
   /** Anything unexpected. The customer sees a safe generic message. */
   "BOOKING_FAILED",
 ] as const;
@@ -57,6 +64,17 @@ export interface BookingErrorBody {
   code: BookingErrorCode;
   /** The field to focus, when the customer can fix it in place. */
   field?: BookingErrorField;
+  /**
+   * With INTAKE_INVALID: which of the shop's own booking questions to focus.
+   * The form already holds the question (label and all), so the id is enough.
+   */
+  questionId?: string;
+  /**
+   * With INTAKE_INVALID: the ready-made sentence for that field ("Service
+   * address is required."). Server-authored because only the server knows
+   * which rule failed, and it names the shop's own label.
+   */
+  message?: string;
 }
 
 /**

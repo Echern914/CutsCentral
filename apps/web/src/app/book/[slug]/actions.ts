@@ -219,6 +219,11 @@ export interface BookInput {
   targetedSlotId?: string;
   /** A standing appointment: this time, every `interval` weeks, `count` times. */
   recurrence?: { interval: number; count: number };
+  /**
+   * Answers to the shop's own booking questions. Validated server-side against
+   * the questions themselves, so the rules live in one place.
+   */
+  intake?: { questionId: string; value: string }[];
 }
 
 /**
@@ -277,6 +282,10 @@ export async function bookAction(
   code?: BookingErrorCode;
   /** Which field to focus, when the customer can fix it in place. */
   field?: BookingErrorField;
+  /** With INTAKE_INVALID: which of the shop's own questions to mark. */
+  questionId?: string;
+  /** With INTAKE_INVALID: the sentence to show under that question. */
+  message?: string;
 }> {
   const res = await apiPublicSend<{
     ok: boolean;
@@ -307,6 +316,8 @@ export async function bookAction(
       error: res.error ?? "failed",
       code: (res.code as BookingErrorCode | undefined) ?? "BOOKING_FAILED",
       ...(res.field ? { field: res.field as BookingErrorField } : {}),
+      ...(res.questionId ? { questionId: res.questionId } : {}),
+      ...(res.message ? { message: res.message } : {}),
     };
   }
   return {

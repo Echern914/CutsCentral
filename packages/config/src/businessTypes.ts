@@ -34,6 +34,7 @@ export type BusinessTypeId =
   | "spa"
   | "tattoo"
   | "detailing"
+  | "mechanic"
   | "other";
 
 /**
@@ -59,6 +60,50 @@ export interface BusinessVocabulary {
   /** Who receives the work: "client" | "guest" | "customer". */
   clientNoun: string;
   clientNounPlural: string;
+}
+
+/**
+ * How a booking question is asked.
+ *
+ * 🔴 MIRRORS THE `BookingQuestionKind` PRISMA ENUM, value for value. Config
+ * cannot import the database client (the dependency runs the other way), so the
+ * two are kept in step by a test that compares them - see
+ * apps/api/src/engines/bookingIntake.test.ts. Adding a kind here without the
+ * migration fails that test rather than reaching a booking page.
+ */
+export type BookingQuestionKindId =
+  | "text"
+  | "textarea"
+  | "address"
+  | "select"
+  | "phone"
+  | "email"
+  | "number";
+
+/**
+ * A question a vertical usually needs answered before the job can be done.
+ *
+ * 🔴 SUGGESTIONS, LIKE serviceTemplates. Nothing seeds these silently: the
+ * owner taps "Add the suggested questions" and can edit or delete every one.
+ * A booking form is the narrowest part of the funnel, so what it asks is the
+ * shop's decision, never ours.
+ *
+ * `required` is set only where the job genuinely cannot start without the
+ * answer - a mobile mechanic with no address has nowhere to drive. Everything
+ * else is optional, because each required field costs bookings.
+ */
+export interface IntakeQuestionTemplate {
+  /**
+   * Stable across renames. Stored on the created row (`templateKey`) so
+   * re-seeding is idempotent and can never duplicate a question.
+   */
+  key: string;
+  label: string;
+  helpText?: string;
+  kind: BookingQuestionKindId;
+  required: boolean;
+  /** `select` only. */
+  options?: string[];
 }
 
 /**
@@ -101,6 +146,13 @@ export interface BusinessType {
   /** /for/<slug> landing page, or null when the vertical has no page yet. */
   marketingSlug: string | null;
   serviceTemplates: ServiceTemplate[];
+  /**
+   * What this vertical usually has to ask a customer at booking. Offered in the
+   * booking editor as "add the suggested questions"; never applied on its own.
+   * [] = the vertical needs nothing beyond a name and a way to reach them,
+   * which is true of most chairs.
+   */
+  intakeTemplates: IntakeQuestionTemplate[];
   /** Onboarding copy only ("most shops rebook every ~3 weeks"). Never engine behavior. */
   typicalRebookDays: number;
 }
@@ -133,6 +185,15 @@ export const BUSINESS_TYPES = {
       { id: "barber.lineup", name: "Line-Up", durationMin: 15, priceCents: null },
       { id: "barber.kids_cut", name: "Kids Cut", durationMin: 30, priceCents: null },
     ],
+    intakeTemplates: [
+      {
+        key: "notes",
+        label: "Anything I should know?",
+        helpText: "Specific requests, a reference photo you'll bring, or how you like it.",
+        kind: "textarea",
+        required: false,
+      },
+    ],
     typicalRebookDays: 21,
   },
   salon: {
@@ -161,6 +222,15 @@ export const BUSINESS_TYPES = {
       { id: "salon.root_touch_up", name: "Root Touch-Up", durationMin: 90, priceCents: null },
       { id: "salon.balayage", name: "Balayage", durationMin: 180, priceCents: null },
       { id: "salon.treatment", name: "Deep Conditioning Treatment", durationMin: 30, priceCents: null },
+    ],
+    intakeTemplates: [
+      {
+        key: "notes",
+        label: "Anything I should know?",
+        helpText: "Specific requests, a reference photo you'll bring, or how you like it.",
+        kind: "textarea",
+        required: false,
+      },
     ],
     typicalRebookDays: 42,
   },
@@ -191,6 +261,15 @@ export const BUSINESS_TYPES = {
       { id: "nails.pedicure", name: "Pedicure", durationMin: 60, priceCents: null },
       { id: "nails.nail_art", name: "Nail Art (per nail)", durationMin: 15, priceCents: null },
     ],
+    intakeTemplates: [
+      {
+        key: "notes",
+        label: "Anything I should know?",
+        helpText: "Specific requests, a reference photo you'll bring, or how you like it.",
+        kind: "textarea",
+        required: false,
+      },
+    ],
     typicalRebookDays: 21,
   },
   lashes: {
@@ -219,6 +298,22 @@ export const BUSINESS_TYPES = {
       { id: "lashes.fill_2wk", name: "2-Week Fill", durationMin: 60, priceCents: null },
       { id: "lashes.lift_tint", name: "Lash Lift & Tint", durationMin: 60, priceCents: null },
       { id: "lashes.brow_shaping", name: "Brow Shaping", durationMin: 30, priceCents: null },
+    ],
+    intakeTemplates: [
+      {
+        key: "lash_status",
+        label: "Do you have extensions on now?",
+        helpText: "A fill and a fresh set take different amounts of time.",
+        kind: "select",
+        required: false,
+        options: ["No, fresh set", "Yes, ready for a fill", "Yes, but they need removing"],
+      },
+      {
+        key: "allergies",
+        label: "Any allergies or sensitivities?",
+        kind: "textarea",
+        required: false,
+      },
     ],
     typicalRebookDays: 21,
   },
@@ -251,6 +346,15 @@ export const BUSINESS_TYPES = {
       { id: "multiservice.facial", name: "Facial", durationMin: 60, priceCents: null },
       { id: "multiservice.waxing", name: "Waxing", durationMin: 30, priceCents: null },
     ],
+    intakeTemplates: [
+      {
+        key: "notes",
+        label: "Anything I should know?",
+        helpText: "Specific requests, a reference photo you'll bring, or how you like it.",
+        kind: "textarea",
+        required: false,
+      },
+    ],
     typicalRebookDays: 30,
   },
   spa: {
@@ -280,6 +384,15 @@ export const BUSINESS_TYPES = {
       { id: "spa.body_treatment", name: "Body Treatment", durationMin: 90, priceCents: null },
       { id: "spa.chemical_peel", name: "Chemical Peel", durationMin: 45, priceCents: null },
     ],
+    intakeTemplates: [
+      {
+        key: "health",
+        label: "Any allergies, injuries or conditions we should know about?",
+        helpText: "So your therapist can adapt the treatment. Leave blank if none.",
+        kind: "textarea",
+        required: false,
+      },
+    ],
     typicalRebookDays: 42,
   },
   tattoo: {
@@ -308,6 +421,28 @@ export const BUSINESS_TYPES = {
       { id: "tattoo.half_day", name: "Half-Day Session", durationMin: 240, priceCents: null },
       { id: "tattoo.full_day", name: "Full-Day Session", durationMin: 480, priceCents: null },
       { id: "tattoo.piercing", name: "Piercing", durationMin: 30, priceCents: null },
+    ],
+    intakeTemplates: [
+      {
+        key: "idea",
+        label: "What are you thinking of getting?",
+        helpText: "The idea, the style, and anything you want included.",
+        kind: "textarea",
+        required: true,
+      },
+      {
+        key: "placement",
+        label: "Placement and rough size",
+        kind: "text",
+        required: false,
+      },
+      {
+        key: "first_tattoo",
+        label: "Is this your first tattoo?",
+        kind: "select",
+        required: false,
+        options: ["Yes", "No"],
+      },
     ],
     typicalRebookDays: 90,
   },
@@ -340,7 +475,110 @@ export const BUSINESS_TYPES = {
       { id: "detailing.paint_correction", name: "Paint Correction", durationMin: 480, priceCents: null },
       { id: "detailing.ceramic_coating", name: "Ceramic Coating", durationMin: 480, priceCents: null },
     ],
+    intakeTemplates: [
+      {
+        key: "vehicle",
+        label: "Vehicle year, make and model",
+        helpText: "So we bring the right products and quote the right size.",
+        kind: "text",
+        required: true,
+      },
+      {
+        key: "service_address",
+        label: "Where should we detail it?",
+        helpText: "Leave blank if you're bringing it to the shop.",
+        kind: "address",
+        required: false,
+      },
+      {
+        key: "notes",
+        label: "Anything we should know?",
+        helpText: "Pet hair, spills, paint you want looked at.",
+        kind: "textarea",
+        required: false,
+      },
+    ],
     typicalRebookDays: 90,
+  },
+  mechanic: {
+    id: "mechanic",
+    label: "Auto Repair",
+    tagline: "Mobile mechanic or shop - diagnostics, repairs and maintenance",
+    emoji: "🔧",
+    selectable: true,
+    vocabulary: {
+      // A mechanic does a "job", not an "appointment" and certainly not a
+      // "session" - and the person paying is a customer, like everywhere else
+      // cars are worked on.
+      serviceNoun: "job",
+      serviceNounPlural: "jobs",
+      providerNoun: "mechanic",
+      providerNounPlural: "mechanics",
+      stationNoun: "bay",
+      stationNounPlural: "bays",
+      businessNoun: "shop",
+      clientNoun: "customer",
+      clientNounPlural: "customers",
+    },
+    defaultReward: { name: "$25 Off Next Service", emoji: "🔧" },
+    schemaType: "AutoRepair",
+    // No landing page yet.
+    marketingSlug: null,
+    serviceTemplates: [
+      { id: "mechanic.diagnostic", name: "Diagnostic", durationMin: 60, priceCents: null },
+      { id: "mechanic.oil_change", name: "Oil Change", durationMin: 45, priceCents: null },
+      { id: "mechanic.brakes", name: "Brake Job", durationMin: 120, priceCents: null },
+      { id: "mechanic.battery", name: "Battery Replacement", durationMin: 45, priceCents: null },
+      { id: "mechanic.tune_up", name: "Tune-Up", durationMin: 120, priceCents: null },
+      {
+        id: "mechanic.pre_purchase",
+        name: "Pre-Purchase Inspection",
+        durationMin: 60,
+        priceCents: null,
+      },
+    ],
+    // 🔴 THE VERTICAL THIS FEATURE WAS BUILT FOR. A mobile mechanic cannot
+    // start a job without an address to drive to and the vehicle it is, and he
+    // cannot quote parts and labour without the year, make and model. These
+    // four are the only REQUIRED questions anywhere in this registry, and they
+    // are required because the work is impossible without them.
+    intakeTemplates: [
+      {
+        key: "service_address",
+        label: "Service address",
+        helpText: "Where should we meet the vehicle? Street, city and ZIP.",
+        kind: "address",
+        required: true,
+      },
+      {
+        key: "vehicle_year",
+        label: "Vehicle year",
+        kind: "text",
+        required: true,
+      },
+      {
+        key: "vehicle_make",
+        label: "Make",
+        helpText: "Ford, Honda, BMW…",
+        kind: "text",
+        required: true,
+      },
+      {
+        key: "vehicle_model",
+        label: "Model",
+        helpText: "With the trim or engine if you know it.",
+        kind: "text",
+        required: true,
+      },
+      {
+        key: "problem",
+        label: "What's it doing?",
+        helpText: "Symptoms, warning lights, or the work you already know you need.",
+        kind: "textarea",
+        required: false,
+      },
+    ],
+    typicalRebookDays: 120,
   },
   other: {
     id: "other",
@@ -368,6 +606,15 @@ export const BUSINESS_TYPES = {
     schemaType: "LocalBusiness",
     marketingSlug: null,
     serviceTemplates: [],
+    intakeTemplates: [
+      {
+        key: "notes",
+        label: "Anything I should know?",
+        helpText: "Specific requests, a reference photo you'll bring, or how you like it.",
+        kind: "textarea",
+        required: false,
+      },
+    ],
     typicalRebookDays: 30,
   },
 } as const satisfies Record<BusinessTypeId, BusinessType>;

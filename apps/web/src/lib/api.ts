@@ -58,6 +58,17 @@ export interface ApiResult<T> {
   code?: string;
   /** The form field a `code` points at, when it points at one. */
   field?: string;
+  /**
+   * With INTAKE_INVALID: which of the shop's OWN booking questions was refused.
+   * Those fields are per-shop, so they cannot be named in the fixed `field`
+   * vocabulary - the id is what lets the form mark that exact input.
+   */
+  questionId?: string;
+  /**
+   * A server-authored sentence for a refusal that names the shop's own wording
+   * ("Service address is required."). Only the server knows which rule failed.
+   */
+  message?: string;
 }
 
 function authHeader(): Record<string, string> {
@@ -205,6 +216,8 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
   let reason: string | undefined;
   let code: string | undefined;
   let field: string | undefined;
+  let questionId: string | undefined;
+  let message: string | undefined;
   let confirmation: string | undefined;
   let conflicts: string[] | undefined;
   try {
@@ -218,6 +231,10 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
       if (typeof classified === "string") code = classified;
       const which = (json as { field?: unknown }).field;
       if (typeof which === "string") field = which;
+      const question = (json as { questionId?: unknown }).questionId;
+      if (typeof question === "string") questionId = question;
+      const sentence = (json as { message?: unknown }).message;
+      if (typeof sentence === "string") message = sentence;
       const answer = (json as { confirmation?: unknown }).confirmation;
       if (typeof answer === "string") confirmation = answer;
       const listed = (json as { conflicts?: unknown }).conflicts;
@@ -249,6 +266,8 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
     ...(reason ? { reason } : {}),
     ...(code ? { code } : {}),
     ...(field ? { field } : {}),
+    ...(questionId ? { questionId } : {}),
+    ...(message ? { message } : {}),
     ...(confirmation ? { confirmation } : {}),
     ...(conflicts ? { conflicts } : {}),
   };

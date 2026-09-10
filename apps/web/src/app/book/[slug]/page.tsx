@@ -138,6 +138,19 @@ export interface BookShopData {
     price: number | null;
     serviceIds: string[];
   }[];
+  /**
+   * What this shop has to ask before it can do the job - a mobile mechanic's
+   * service address, the vehicle he is quoting parts for. [] for most shops,
+   * which renders exactly the form that shipped before questions existed.
+   */
+  questions: {
+    id: string;
+    label: string;
+    helpText: string | null;
+    kind: "text" | "textarea" | "address" | "select" | "phone" | "email" | "number";
+    required: boolean;
+    options: string[];
+  }[];
 }
 
 // Cache the booking SHELL (shop meta, staff, services, add-ons) for 30s: dedupes

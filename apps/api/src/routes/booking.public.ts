@@ -53,6 +53,7 @@ import {
   slotServiceIds,
 } from "../engines/targetedSlotServices.js";
 import { resolveAddOns } from "../engines/addOns.js";
+import { bookingQuestionsForShop, resolveIntake } from "../engines/bookingIntake.js";
 import {
   durationRangeForService,
   effectiveDurationAt,
@@ -425,7 +426,18 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const [staff, services, links, addOns, rawTargetedSlots, groups, availRules] = await Promise.all([
+  const [
+    staff,
+    services,
+    links,
+    addOns,
+    rawTargetedSlots,
+    groups,
+    availRules,
+    // What THIS shop has to ask before it can do the job (a mobile mechanic's
+    // service address, a vehicle's year/make/model). Empty for most shops.
+    questions,
+  ] = await Promise.all([
     prisma.staff.findMany({
       where: { shopId: shop.id, active: true },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
@@ -495,6 +507,7 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
       where: { shopId: shop.id },
       select: { weekday: true, staffId: true },
     }),
+    bookingQuestionsForShop(shop.id),
   ]);
   const activeStaffIds = new Set(staff.map((s) => s.id));
   const openWeekdays = [
@@ -636,6 +649,9 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
       price: a.price === null ? null : Number(a.price),
       serviceIds: a.serviceIds,
     })),
+    // The shop's own booking questions, in its own order. [] for a shop that
+    // asks nothing, which renders exactly the form that shipped before them.
+    questions,
   });
 });
 
@@ -1448,6 +1464,18 @@ const createSchema = z
     smsConsent: z.boolean().optional(),
     // Chosen service add-ons (ids). Invalid/foreign ids are dropped server-side.
     addOnIds: z.array(z.string().min(1)).max(20).optional(),
+    // Answers to the shop's own booking questions. Ids that aren't this shop's
+    // live questions are dropped server-side; what the shop DOES ask is
+    // validated against the question itself (engines/bookingIntake.ts), so the
+    // length ceilings and the required rule live in one place, not here.
+    intake: z
+      .array(
+        z
+          .object({ questionId: z.string().min(1).max(60), value: z.string().max(4000) })
+          .strict(),
+      )
+      .max(40)
+      .optional(),
     // Booking a barber-published TARGETED slot: its id fixes the time, length,
     // and price (validated server-side against the slot row; capacity 1).
     targetedSlotId: z.string().min(1).optional(),
@@ -1711,6 +1739,20 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       return;
     }
     targeted = slot;
+  }
+
+  // The shop's booking questions. Refused BEFORE anything is written or
+  // charged: a required answer the customer can still fix in place must never
+  // cost them a slot, and a mechanic with no address has no job to do.
+  const intake = resolveIntake(await bookingQuestionsForShop(shop.id), d.intake);
+  if (!intake.ok) {
+    res.status(422).json({
+      error: "invalid_input",
+      code: "INTAKE_INVALID",
+      questionId: intake.questionId,
+      message: intake.message,
+    });
+    return;
   }
 
   // Chosen add-ons extend the appointment + total. Invalid/foreign ids drop.
@@ -2057,6 +2099,9 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
           endsAt,
           priceAtBooking: effectivePrice ?? undefined,
           addOns: addOns.snapshot as unknown as Prisma.InputJsonValue,
+          // Frozen at booking time: renaming or deleting a question later never
+          // rewrites what this customer answered.
+          intake: intake.snapshot as unknown as Prisma.InputJsonValue,
           manageToken: token,
           bookedVia: targeted ? "targeted_slot" : undefined,
         },
