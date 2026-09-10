@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { Prisma } from "@chairback/db";
+import { occupyingSql, type CompletedInProgress } from "./chairOccupancy.js";
 import { assertServiceDayHasRoom } from "./serviceDailyLimit.js";
 import { recordWaitlistEvent, SYSTEM_ACTOR } from "./waitlistAudit.js";
 import { loadWalkInReservationPlan } from "./walkInCapacity.js";
@@ -263,6 +264,16 @@ export async function lockStaffAndAssertSlotFree(
      * services/appointmentOverride.ts.
      */
     externalBlockConfirmation?: string | null;
+    /**
+     * Does a walk-in still MID-CUT (recorded COMPLETED, span not yet elapsed)
+     * block this write?
+     *
+     * Defaults to "occupy", and that default is the point: a customer must
+     * never be sold a chair someone is sitting in. "ignore" is for the
+     * barber's own hand - starting the next person in the walk-in queue IS
+     * the statement that the chair turned over. See engines/chairOccupancy.ts.
+     */
+    completedInProgress?: CompletedInProgress;
     now?: Date;
   },
 ): Promise<SlotGuardResult> {
@@ -308,9 +319,11 @@ export async function lockStaffAndAssertSlotFree(
     Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`appt:${opts.staffId}`}))`,
   );
 
-  const statusFragment = statuses.includes("PENDING")
-    ? Prisma.sql`AND "status" IN ('BOOKED', 'PENDING')`
-    : Prisma.sql`AND "status" = 'BOOKED'`;
+  // Who is in the chair - the SAME rule the slot grid and the specials filter
+  // read with, so what is offered and what is accepted cannot disagree. It
+  // includes an in-progress walk-in (recorded COMPLETED, still occupying its
+  // span); see engines/chairOccupancy.ts for why that row exists at all.
+  const statusFragment = occupyingSql(now, statuses, opts.completedInProgress ?? "occupy");
   const excludeFragment = opts.excludeAppointmentId
     ? Prisma.sql`AND "id" <> ${opts.excludeAppointmentId}`
     : Prisma.empty;
@@ -320,7 +333,6 @@ export async function lockStaffAndAssertSlotFree(
                WHERE "staffId" = ${opts.staffId}
                  ${statusFragment}
                  ${excludeFragment}
-                 AND ("holdExpiresAt" IS NULL OR "holdExpiresAt" > ${now.toISOString()}::timestamp)
                  AND "startsAt" < ${overlapEnd.toISOString()}::timestamp
                  AND "endsAt" > ${overlapStart.toISOString()}::timestamp`,
   );

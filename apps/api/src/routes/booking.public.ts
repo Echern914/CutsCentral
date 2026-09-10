@@ -53,6 +53,7 @@ import {
   slotServiceIds,
 } from "../engines/targetedSlotServices.js";
 import { resolveAddOns } from "../engines/addOns.js";
+import { occupyingWhere } from "../engines/chairOccupancy.js";
 import {
   bookingQuestionsForShop,
   questionsForService,
@@ -165,8 +166,10 @@ async function filterBlockedTargeted<
       where: {
         shopId,
         staffId: { in: staffIds },
-        status: { in: ["BOOKED", "PENDING"] },
-        AND: [{ OR: [{ holdExpiresAt: null }, { holdExpiresAt: { gt: now } }] }],
+        // The same occupancy rule the grid and the write guard use - which
+        // includes an in-progress walk-in (recorded COMPLETED, still in the
+        // chair). See engines/chairOccupancy.ts.
+        ...occupyingWhere(now),
         startsAt: { lt: new Date(toMs) },
         endsAt: { gt: new Date(fromMs) },
       },
