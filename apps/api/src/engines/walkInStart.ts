@@ -145,6 +145,12 @@ export async function startEntry(opts: {
       // create/reschedule/edit require an explicit, recorded override instead.
       externalBlocks: "ignore",
       walkInCapacity: { excludeEntryId: entryId },
+      // 🔴 The barber is starting this person RIGHT NOW, which is itself the
+      // statement that the chair turned over - the last walk-in's nominal
+      // half hour may not have elapsed, but its client has got up. Refusing
+      // here would make the queue unusable in exactly the shop that needs it
+      // most. Every customer-facing path keeps the default.
+      completedInProgress: "ignore",
       staffId: chairId,
       shopId,
       startsAt,

@@ -10,6 +10,7 @@ import {
   openingSpansForWeekday,
   parseServiceHours,
 } from "./pricing.js";
+import { occupyingWhere } from "./chairOccupancy.js";
 import { weekdayWindowsToRanges } from "./blockedTime.js";
 import {
   fullDaysForService,
@@ -488,15 +489,13 @@ export async function computeFreeRanges(
           where: {
             staffId: input.staffId,
             shopId: input.shopId,
-            // PENDING requests hold their slot too (request-before-booking), so
-            // the picker must subtract them just like confirmed BOOKED
-            // appointments.
-            status: { in: ["BOOKED", "PENDING"] },
-            // AI-receptionist holds: an ACTIVE hold (holdExpiresAt > now) blocks
-            // like any PENDING row; an EXPIRED one releases its slot immediately -
-            // the CANCELED flip by the sweep is hygiene, not what frees the time.
-            // (Booking a hold clears holdExpiresAt, so BOOKED rows never carry one.)
-            AND: [{ OR: [{ holdExpiresAt: null }, { holdExpiresAt: { gt: now } }] }],
+            // Who is in the chair. PENDING requests hold their slot
+            // (request-before-booking); an ACTIVE receptionist hold blocks like
+            // any PENDING row while an EXPIRED one has already released it; and
+            // an in-progress WALK-IN counts even though it is recorded
+            // COMPLETED, because the client is physically in the chair. One
+            // definition, shared with the write guard - see chairOccupancy.ts.
+            ...occupyingWhere(now),
             startsAt: { lt: new Date(rangeEnd) },
             endsAt: { gt: new Date(rangeStart) },
             ...(input.excludeAppointmentId
