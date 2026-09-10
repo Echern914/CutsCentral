@@ -476,6 +476,8 @@ export interface BookingQuestionInput {
   kind?: BookingQuestionKind;
   required?: boolean;
   options?: string[];
+  /** [] = asked on every service; non-empty = only those. */
+  serviceIds?: string[];
   sortOrder?: number;
   active?: boolean;
 }

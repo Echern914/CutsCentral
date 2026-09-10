@@ -2002,10 +2002,11 @@ model ServiceAddOn {
 // year, make and model - without them he arrives at the wrong house with the
 // wrong parts, and cannot quote at all. Same booking engine, different facts.
 //
-// 🔴 SHOP-WIDE, NOT PER-SERVICE. A shop's questions are the things it needs for
-// ANY job ("required with any service", in the words of the mechanic who asked
-// for this). Per-service questions are a real future want; scoping is a column
-// away and deliberately not guessed at now.
+// 🔴 SCOPED PER SERVICE, THE SAME WAY ADD-ONS ARE. A mobile mechanic asks for
+// a street address on the jobs he drives to and asks nothing on the ones done
+// in his own bay; asking every customer for an address he does not need is how
+// a booking form starts losing people. `serviceIds` empty = every service (the
+// simple case, and what the suggestions seed); non-empty = only those.
 //
 // Answers are SNAPSHOTTED onto Appointment.intake, never joined - editing or
 // deleting a question must not rewrite what a customer already answered. Same
@@ -2014,6 +2015,10 @@ model BookingQuestion {
   id       String @id @default(cuid())
   shopId   String
   shop     Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  // Which services ask this. [] = all of them; non-empty = only these. Ids are
+  // intersected with the shop's real services on write, so a stale or foreign
+  // id can never scope a question to something that is not there.
+  serviceIds String[] @default([])
   // What the customer reads above the field ("Service address").
   label    String
   // The small grey line under it ("Where should we bring the van?"). Optional -

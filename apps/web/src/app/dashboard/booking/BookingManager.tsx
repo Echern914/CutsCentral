@@ -176,6 +176,7 @@ export function BookingManager({
   initialServiceGroups,
   initialAddOns,
   initialQuestions,
+  openAppointmentId,
   initialAgenda,
   initialWaitlist,
 }: {
@@ -190,6 +191,8 @@ export function BookingManager({
   initialServiceGroups: ServiceGroupRow[];
   initialAddOns: AddOnRow[];
   initialQuestions: BookingQuestionRow[];
+  /** A booking to open on arrival, from a barber alert's deep link. */
+  openAppointmentId?: string;
   initialAgenda: AgendaResponse;
   initialWaitlist: WaitlistRow[];
 }) {
@@ -317,7 +320,11 @@ export function BookingManager({
               because that is what it is - and only matters for the shops whose
               job needs more than a name (a mobile mechanic's address, the
               vehicle he is quoting). */}
-          <BookingQuestionsCard initial={initialQuestions} toast={toast} />
+          <BookingQuestionsCard
+            initial={initialQuestions}
+            services={initialServices}
+            toast={toast}
+          />
         </div>
       )}
       {tab === "Staff" && <StaffTab initial={initialStaff} toast={toast} />}
@@ -361,6 +368,7 @@ export function BookingManager({
             staff={initialStaff}
             services={initialServices}
             toast={toast}
+            openAppointmentId={openAppointmentId}
           />
         </div>
       )}

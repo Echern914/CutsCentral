@@ -150,6 +150,8 @@ export interface BookShopData {
     kind: "text" | "textarea" | "address" | "select" | "phone" | "email" | "number";
     required: boolean;
     options: string[];
+    /** [] = asked on every service; non-empty = only these. */
+    serviceIds: string[];
   }[];
 }
 

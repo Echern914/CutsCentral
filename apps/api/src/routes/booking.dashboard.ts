@@ -1032,6 +1032,10 @@ const questionFields = z
     // `select` only. Blank entries are dropped rather than rendered as an
     // unpickable empty choice.
     options: z.array(z.string().trim().max(120)).max(20).optional(),
+    // []/omitted = asked on every service; non-empty = only those. Ids are
+    // intersected with the shop's real services on write, the same silent-drop
+    // stance add-ons and group membership take.
+    serviceIds: z.array(z.string().min(1)).max(200).optional(),
     sortOrder: z.number().int().min(0).max(1000).optional(),
     active: z.boolean().optional(),
   })
@@ -1088,6 +1092,7 @@ bookingDashboardRouter.post("/questions", async (req, res) => {
       kind: d.kind,
       required: d.required ?? false,
       options: d.kind === "select" ? cleanOptions(d.options) : [],
+      serviceIds: await validServiceIds(req.shop!.id, d.serviceIds ?? []),
       sortOrder: d.sortOrder ?? 0,
       active: d.active ?? true,
     },
@@ -1127,6 +1132,9 @@ bookingDashboardRouter.patch("/questions/:id", async (req, res) => {
     ...(d.required !== undefined ? { required: d.required } : {}),
     ...(d.options !== undefined || d.kind !== undefined
       ? { options: kind === "select" ? cleanOptions(d.options) : [] }
+      : {}),
+    ...(d.serviceIds !== undefined
+      ? { serviceIds: await validServiceIds(req.shop!.id, d.serviceIds) }
       : {}),
     ...(d.sortOrder !== undefined ? { sortOrder: d.sortOrder } : {}),
     ...(d.active !== undefined ? { active: d.active } : {}),
@@ -1185,6 +1193,9 @@ bookingDashboardRouter.post("/questions/seed", async (req, res) => {
       kind: t.kind,
       required: t.required,
       options: t.options ?? [],
+      // Suggestions start shop-wide; scoping them to particular services is
+      // the owner's call, made in the editor.
+      serviceIds: [],
       sortOrder: base + i,
       active: true,
       templateKey: t.key,

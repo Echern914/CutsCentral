@@ -31,7 +31,14 @@ import { randomToken } from "@chairback/config";
  */
 
 // Capture sends instead of hitting push/SMS/email.
-const sent: { userId: string; kind: string; title: string; body: string }[] = [];
+const sent: {
+  userId: string;
+  kind: string;
+  title: string;
+  body: string;
+  pushBody?: string;
+  url?: string;
+}[] = [];
 vi.mock("../services/barberNotify.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../services/barberNotify.js")>();
   return {
@@ -42,6 +49,8 @@ vi.mock("../services/barberNotify.js", async (importOriginal) => {
         kind: p.kind,
         title: p.message.title,
         body: p.message.body,
+        pushBody: p.message.pushBody,
+        url: p.message.url,
       });
       return { pushed: true, texted: false, emailed: false };
     }),
@@ -73,7 +82,12 @@ let serviceId: string;
 let clientId: string;
 
 /** An appointment `minutesFromNow` out, on the given chair. */
-async function makeAppt(staffId: string, minutesFromNow: number, first = "Sam") {
+async function makeAppt(
+  staffId: string,
+  minutesFromNow: number,
+  first = "Sam",
+  intake?: { label: string; value: string; kind: string }[],
+) {
   const startsAt = new Date(Date.now() + minutesFromNow * 60_000);
   return prisma.appointment.create({
     data: {
@@ -87,6 +101,7 @@ async function makeAppt(staffId: string, minutesFromNow: number, first = "Sam") 
       startsAt,
       endsAt: new Date(startsAt.getTime() + 45 * 60_000),
       manageToken: randomToken(),
+      ...(intake ? { intake } : {}),
     },
     select: { id: true },
   });
@@ -294,5 +309,74 @@ describe("barber day-ahead digest", () => {
     });
     await runAtHour(20);
     expect(sent.filter((s) => s.kind === "dayAhead" && s.userId === ownerId)).toHaveLength(0);
+  });
+});
+
+/**
+ * WHERE THE JOB IS, AND GETTING TO IT.
+ *
+ * A mobile mechanic reading "Next up: Casey Cole - Diagnostic at 2:30 PM" 30
+ * minutes before the job still does not know where he is going. These pin the
+ * two halves of the answer: the address rides the alert, and the alert opens
+ * the booking rather than the month grid it is somewhere on.
+ */
+describe("next up, for a job the barber has to travel to", () => {
+  it("puts the service address in the PUSH", async () => {
+    const appt = await makeAppt(staffAId, 20, "Casey", [
+      { label: "Service address", value: "12 Main St, Newark NJ 07102", kind: "address" },
+      { label: "Vehicle year", value: "2014", kind: "text" },
+    ]);
+    await run();
+    const alert = mineOnly("nextUp").find((x) => x.title.includes("Casey"));
+    expect(alert).toBeTruthy();
+    expect(alert!.pushBody).toContain("12 Main St, Newark NJ 07102");
+    // The line it always had is still the first thing he reads.
+    expect(alert!.pushBody!.startsWith("Casey Cole - ")).toBe(true);
+    expect(appt.id).toBeTruthy();
+  });
+
+  it("🔴 keeps the address OUT of the text message", async () => {
+    // An SMS lives in his message history, the carrier's, and Twilio's logs.
+    // A customer's home address does not belong in all three - and it would
+    // cost an extra segment on every job.
+    await makeAppt(staffAId, 20, "Dana", [
+      { label: "Service address", value: "12 Main St, Newark NJ 07102", kind: "address" },
+    ]);
+    await run();
+    const alert = mineOnly("nextUp").find((x) => x.title.includes("Dana"));
+    expect(alert!.body).not.toContain("Main St");
+  });
+
+  it("says nothing extra when the shop asks for no address", async () => {
+    // Which is every barbershop: the client comes to him.
+    await makeAppt(staffAId, 20, "Robin");
+    await run();
+    const alert = mineOnly("nextUp").find((x) => x.title.includes("Robin"));
+    expect(alert!.pushBody).toBeUndefined();
+  });
+
+  it("flattens a multi-line address rather than losing the end of it", async () => {
+    await makeAppt(staffAId, 20, "Jules", [
+      { label: "Service address", value: "12 Main St\nApt 4\nNewark NJ", kind: "address" },
+    ]);
+    await run();
+    const alert = mineOnly("nextUp").find((x) => x.title.includes("Jules"));
+    expect(alert!.pushBody).toContain("12 Main St, Apt 4, Newark NJ");
+  });
+
+  it("ignores a non-address answer - only an address is somewhere to drive", async () => {
+    await makeAppt(staffAId, 20, "Alex", [
+      { label: "What's it doing?", value: "Grinding when I brake", kind: "textarea" },
+    ]);
+    await run();
+    const alert = mineOnly("nextUp").find((x) => x.title.includes("Alex"));
+    expect(alert!.pushBody).toBeUndefined();
+  });
+
+  it("links to THAT booking, not the calendar it is on", async () => {
+    const appt = await makeAppt(staffAId, 20, "Morgan");
+    await run();
+    const alert = mineOnly("nextUp").find((x) => x.title.includes("Morgan"));
+    expect(alert!.url).toContain(`appointment=${appt.id}`);
   });
 });
