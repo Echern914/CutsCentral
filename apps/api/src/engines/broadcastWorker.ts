@@ -109,6 +109,10 @@ type RowOutcome = "sent" | "retry" | "failed" | "abandoned" | "skipped" | "stale
  * suite kills the pass on purpose at each edge of that window and then checks
  * what recovery does with what was left on disk.
  *
+ * Awaited, so a hook may also do real work at that instant - which is how the
+ * suite arranges for another worker to take a claim over mid-flight, the one
+ * window where a write by row id alone would stamp over its successor.
+ *
  * Undefined in every real process. A thrown BroadcastCrash escapes the
  * per-recipient handler by design; nothing else does.
  */
@@ -119,10 +123,10 @@ export class BroadcastCrash extends Error {
   }
 }
 
-type CrashHook = (stage: "before_dispatch" | "after_dispatch", ctx: {
-  broadcastId: string;
-  clientId: string;
-}) => void;
+type CrashHook = (
+  stage: "before_dispatch" | "after_dispatch",
+  ctx: { broadcastId: string; clientId: string },
+) => void | Promise<void>;
 
 let crashHook: CrashHook | undefined;
 
@@ -155,6 +159,14 @@ export async function runBroadcastWorker(
   opts: { now?: Date; batch?: number } = {},
 ): Promise<BroadcastWorkerResult> {
   const now = opts.now ?? new Date();
+  /**
+   * The moment a given recipient is being worked on, as opposed to the moment
+   * the pass began. A batch of fifty takes fifty provider round-trips, so by
+   * the end the two are minutes apart - which is exactly what the claim
+   * refresh in reserveAttempt is for. An injected clock is honoured verbatim,
+   * because a test asking for a specific instant means it.
+   */
+  const clock = (): Date => opts.now ?? new Date();
   const batch = opts.batch ?? BATCH;
   const staleBefore = new Date(now.getTime() - CLAIM_TTL_MS);
   // 🔴 THE IDENTITY OF THIS CLAIM. Every attempt reservation compare-and-sets
@@ -228,11 +240,11 @@ export async function runBroadcastWorker(
     for (const row of claimed) {
       const ctx = contexts.get(row.broadcastId);
       if (!ctx) {
-        await settle(row.id, "FAILED", "broadcast_missing");
-        result.failed++;
+        if (await settle(row.id, claimToken, "FAILED", "broadcast_missing")) result.failed++;
+        else result.staleClaim++;
         continue;
       }
-      const outcome = await deliverRecipient({ row, ctx, claimToken, now });
+      const outcome = await deliverRecipient({ row, ctx, claimToken, now, clock });
       if (outcome === "sent") result.sent++;
       else if (outcome === "retry") result.retry++;
       else if (outcome === "failed") result.failed++;
@@ -322,6 +334,8 @@ async function deliverRecipient(params: {
   ctx: BroadcastContext;
   claimToken: string;
   now: Date;
+  /** This recipient's own moment - see runBroadcastWorker. */
+  clock: () => Date;
 }): Promise<RowOutcome> {
   const { row, ctx, now } = params;
   const client = ctx.clients.get(row.clientId);
@@ -329,8 +343,7 @@ async function deliverRecipient(params: {
     // The client was deleted between the freeze and now. Nothing to send and
     // nothing owed - but it is a skip, not a failure, and the report should
     // not count it against the barber's blast.
-    await settle(row.id, "SKIPPED", "archived");
-    return "skipped";
+    return outcomeOf(await settle(row.id, params.claimToken, "SKIPPED", "archived"), "skipped");
   }
 
   // 🔴 THE EXPIRED-AMBIGUOUS GUARD, BEFORE ANYTHING THAT COULD DISPATCH.
@@ -375,14 +388,12 @@ async function deliverRecipient(params: {
     // Same reasoning as the email branch below: a send that cannot reach a
     // device must not spend an attempt, and must not be recorded as "this
     // client has no device" - a dry run says nothing about the client.
-    await settle(row.id, "FAILED", "dry_run");
-    return "failed";
+    return outcomeOf(await settle(row.id, params.claimToken, "FAILED", "dry_run"), "failed");
   }
 
   if (ctx.channel === "email") {
     if (!client.email?.trim()) {
-      await settle(row.id, "SKIPPED", "no_email");
-      return "skipped";
+      return outcomeOf(await settle(row.id, params.claimToken, "SKIPPED", "no_email"), "skipped");
     }
     // Decided BEFORE the attempt is counted: a send that cannot reach a
     // provider must not spend the provider budget. Terminal on purpose -
@@ -390,8 +401,7 @@ async function deliverRecipient(params: {
     // delivers a promotion nobody remembers writing.
     const mode = emailDispatchMode();
     if (mode !== "live") {
-      await settle(row.id, "FAILED", mode);
-      return "failed";
+      return outcomeOf(await settle(row.id, params.claimToken, "FAILED", mode), "failed");
     }
     // 🔴 NO DURABLE UNSUBSCRIBE, NO EMAIL. The link in the footer resolves by
     // looking this digest up, so a message that leaves before it is committed
@@ -405,16 +415,16 @@ async function deliverRecipient(params: {
     // reason to send this recipient LATER, never a reason to send them a
     // broken link now.
     if (!(await ensureUnsubscribeDigest(client.id, client.unsubscribeTokenHash))) {
-      return unsubscribeDigestUnavailable(row.id, now);
+      return unsubscribeDigestUnavailable(row.id, params.claimToken, now);
     }
   }
 
-  crashHook?.("before_dispatch", { broadcastId: ctx.id, clientId: client.id });
+  await crashHook?.("before_dispatch", { broadcastId: ctx.id, clientId: client.id });
 
   // 🔴 RESERVE THE ATTEMPT ATOMICALLY, AND WRITE THE AMBIGUITY AHEAD OF IT.
   // This transaction COMMITS before the request below leaves. See
   // reserveAttempt for why that ordering IS the guarantee.
-  const attemptNo = await reserveAttempt(row.id, params.claimToken, now);
+  const attemptNo = await reserveAttempt(row.id, params.claimToken, params.clock());
   if (attemptNo === null) return classifyRefusedReservation(row.id, params.claimToken);
 
   // ---- THE BOUNDARY. Everything above is durable; everything below may never
@@ -432,7 +442,7 @@ async function deliverRecipient(params: {
           tag: broadcastCollapseTag(ctx.id),
         },
       });
-      crashHook?.("after_dispatch", { broadcastId: ctx.id, clientId: client.id });
+      await crashHook?.("after_dispatch", { broadcastId: ctx.id, clientId: client.id });
       if (res.anyDelivered) {
         // Push has no provider message id and no delivery ledger, but it gets
         // the same claim check: a worker whose claim aged out mid-send must
@@ -444,10 +454,14 @@ async function deliverRecipient(params: {
       // Every device is gone (pruned 404/410) - there is nobody to notify and
       // no later attempt that could change it.
       if (res.sent === 0 && res.failed === 0) {
-        await settle(row.id, "FAILED", "no_push_device", { ambiguous: false });
-        return "failed";
+        return outcomeOf(
+          await settle(row.id, params.claimToken, "FAILED", "no_push_device", {
+            ambiguous: false,
+          }),
+          "failed",
+        );
       }
-      return transientFailure(row.id, attemptNo, "push_failed", now);
+      return transientFailure(row.id, params.claimToken, attemptNo, "push_failed", now);
     }
 
     const unsubscribeUrl = unsubscribeUrlFor(client.id);
@@ -476,13 +490,13 @@ async function deliverRecipient(params: {
       // message id and swallow whatever it lost.
       recordsOwnDelivery: true,
     });
-    crashHook?.("after_dispatch", { broadcastId: ctx.id, clientId: client.id });
+    await crashHook?.("after_dispatch", { broadcastId: ctx.id, clientId: client.id });
 
     // A 2xx with no message id is NOT confirmed acceptance - there is nothing
     // to correlate a bounce to, so treat it as ambiguous rather than settling
     // on a shrug.
     if (result.status !== "sent" || !result.id || result.id === "unknown") {
-      return ambiguous(row.id, attemptNo, now, "no_message_id", ctx.channel);
+      return ambiguous(row.id, params.claimToken, attemptNo, now, "no_message_id", ctx.channel);
     }
 
     // 🔴 ONE TRANSACTION SETTLES BOTH HALVES, and it is the authoritative one.
@@ -518,7 +532,7 @@ async function deliverRecipient(params: {
         { broadcastId: ctx.id, reason: "settlement_failed" },
         "broadcast accepted by the provider but not settled locally - will retry under the same key",
       );
-      return ambiguous(row.id, attemptNo, now, "settlement_failed", ctx.channel);
+      return ambiguous(row.id, params.claimToken, attemptNo, now, "settlement_failed", ctx.channel);
     }
   } catch (err) {
     if (err instanceof BroadcastCrash) throw err;
@@ -526,14 +540,18 @@ async function deliverRecipient(params: {
       // DEFINITIVE rejection: the provider looked at it and said no, so
       // nothing was accepted and a retry cannot duplicate.
       if (isPermanentEmailFailure(err.status)) {
-        await settle(row.id, "FAILED", err.classification, { ambiguous: false });
-        return "failed";
+        return outcomeOf(
+          await settle(row.id, params.claimToken, "FAILED", err.classification, {
+            ambiguous: false,
+          }),
+          "failed",
+        );
       }
-      return transientFailure(row.id, attemptNo, err.classification, now);
+      return transientFailure(row.id, params.claimToken, attemptNo, err.classification, now);
     }
     // Transport died mid-flight, or the bounded fetch timeout fired - so it
     // may or may not have been accepted.
-    return ambiguous(row.id, attemptNo, now, "transport_error", ctx.channel);
+    return ambiguous(row.id, params.claimToken, attemptNo, now, "transport_error", ctx.channel);
   }
 }
 
@@ -601,11 +619,19 @@ async function ensureUnsubscribeDigest(
  * over. Slower, and still correct: the one outcome ruled out either way is an
  * email going out with a link that resolves to nothing.
  */
-async function unsubscribeDigestUnavailable(rowId: string, now: Date): Promise<RowOutcome> {
-  await release(rowId, "unsubscribe_digest_unavailable", new Date(now.getTime() + backoffFor(0)), {
-    ambiguous: false,
-  });
-  return "retry";
+async function unsubscribeDigestUnavailable(
+  rowId: string,
+  claimToken: string,
+  now: Date,
+): Promise<RowOutcome> {
+  const moved = await release(
+    rowId,
+    claimToken,
+    "unsubscribe_digest_unavailable",
+    new Date(now.getTime() + backoffFor(0)),
+    { ambiguous: false },
+  );
+  return outcomeOf(moved, "retry");
 }
 
 /**
@@ -629,11 +655,27 @@ async function unsubscribeDigestUnavailable(rowId: string, now: Date): Promise<R
  * request actually being made leaves a row that may eventually be ABANDONED
  * unsent. A customer who never hears about a promotion is a smaller harm than
  * a shop that mails the same person twice.
+ *
+ * 🔴 IT ALSO REFRESHES THE CLAIM, and that is not housekeeping.
+ *
+ * A pass claims fifty recipients in ONE statement and then works through them
+ * a provider round-trip at a time, so every row in that batch carried the
+ * timestamp of the moment the BATCH started. Row forty's claim could be four
+ * minutes old before its request was even made - leaving it less TTL than the
+ * request might take, and a successor free to take it over mid-flight.
+ * Stamping `claimedAt` here, in the same statement that reserves the attempt,
+ * gives each recipient a full TTL measured from ITS OWN dispatch:
+ * RESEND_TIMEOUT_MS (20s) against CLAIM_TTL_MS (5min) then has the order of
+ * magnitude of headroom that comparison always claimed and did not have.
+ *
+ * `attemptAt` is the real moment of THIS attempt rather than the pass's start -
+ * except under an injected clock, where a test is deliberately choosing the
+ * instant and gets exactly what it asked for.
  */
 export async function reserveAttempt(
   rowId: string,
   claimToken: string,
-  now: Date,
+  attemptAt: Date,
 ): Promise<number | null> {
   const rows = await runAsOwner((tx) =>
     // 🔴 ISO string + ::timestamp, never a JS Date in raw SQL - a Date is
@@ -642,7 +684,8 @@ export async function reserveAttempt(
       UPDATE "BroadcastSend"
          SET "attempts" = "attempts" + 1,
              "firstProviderAttemptAt" =
-               COALESCE("firstProviderAttemptAt", ${now.toISOString()}::timestamp),
+               COALESCE("firstProviderAttemptAt", ${attemptAt.toISOString()}::timestamp),
+             "claimedAt" = ${attemptAt.toISOString()}::timestamp,
              "lastAttemptAmbiguous" = true,
              "updatedAt" = now()
        WHERE "id" = ${rowId}
@@ -677,12 +720,14 @@ async function classifyRefusedReservation(
   // an ambiguous attempt: "we stopped without knowing" is the truth, and
   // recording "it failed" would claim more than the evidence supports.
   const status = row.lastAttemptAmbiguous ? "ABANDONED" : "FAILED";
-  await settle(rowId, status, "max_attempts");
-  logger.error(
-    { rowId, reason: "max_attempts", outcome: status },
-    "broadcast recipient gave up - attempt budget exhausted",
-  );
-  return row.lastAttemptAmbiguous ? "abandoned" : "failed";
+  const moved = await settle(rowId, claimToken, status, "max_attempts");
+  if (moved) {
+    logger.error(
+      { rowId, reason: "max_attempts", outcome: status },
+      "broadcast recipient gave up - attempt budget exhausted",
+    );
+  }
+  return outcomeOf(moved, row.lastAttemptAmbiguous ? "abandoned" : "failed");
 }
 
 /**
@@ -693,18 +738,25 @@ async function classifyRefusedReservation(
  */
 async function transientFailure(
   rowId: string,
+  claimToken: string,
   attemptNo: number,
   classification: string,
   now: Date,
 ): Promise<RowOutcome> {
   if (attemptNo >= MAX_ATTEMPTS) {
-    await settle(rowId, "FAILED", classification, { ambiguous: false });
-    return "failed";
+    return outcomeOf(
+      await settle(rowId, claimToken, "FAILED", classification, { ambiguous: false }),
+      "failed",
+    );
   }
-  await release(rowId, classification, new Date(now.getTime() + backoffFor(attemptNo)), {
-    ambiguous: false,
-  });
-  return "retry";
+  const moved = await release(
+    rowId,
+    claimToken,
+    classification,
+    new Date(now.getTime() + backoffFor(attemptNo)),
+    { ambiguous: false },
+  );
+  return outcomeOf(moved, "retry");
 }
 
 /**
@@ -724,12 +776,15 @@ async function transientFailure(
  */
 async function ambiguous(
   rowId: string,
+  claimToken: string,
   attemptNo: number,
   now: Date,
   classification: string,
   channel: "email" | "push",
 ): Promise<RowOutcome> {
-  if (channel === "push") return transientAmbiguousPush(rowId, attemptNo, now, classification);
+  if (channel === "push") {
+    return transientAmbiguousPush(rowId, claimToken, attemptNo, now, classification);
+  }
   const row = await runAsOwner((tx) =>
     tx.broadcastSend.findUnique({
       where: { id: rowId },
@@ -743,34 +798,49 @@ async function ambiguous(
     // 🔴 ABANDONED either way. An ambiguous attempt we stop retrying was never
     // confirmed refused, so calling it FAILED would put a claim in the ledger
     // that nothing supports.
-    await settle(rowId, "ABANDONED", classification, { ambiguous: true });
-    logger.error(
-      { rowId, reason: classification, attempts: attemptNo },
-      "broadcast recipient gave up after an ambiguous attempt",
-    );
-    return "abandoned";
+    const gaveUp = await settle(rowId, claimToken, "ABANDONED", classification, {
+      ambiguous: true,
+    });
+    if (gaveUp) {
+      logger.error(
+        { rowId, reason: classification, attempts: attemptNo },
+        "broadcast recipient gave up after an ambiguous attempt",
+      );
+    }
+    return outcomeOf(gaveUp, "abandoned");
   }
-  await release(rowId, classification, new Date(now.getTime() + backoffFor(attemptNo)), {
-    ambiguous: true,
-  });
-  return "retry";
+  const moved = await release(
+    rowId,
+    claimToken,
+    classification,
+    new Date(now.getTime() + backoffFor(attemptNo)),
+    { ambiguous: true },
+  );
+  return outcomeOf(moved, "retry");
 }
 
 /** Ambiguous push: bounded retry, ambiguity kept on the row for the record. */
 async function transientAmbiguousPush(
   rowId: string,
+  claimToken: string,
   attemptNo: number,
   now: Date,
   classification: string,
 ): Promise<RowOutcome> {
   if (attemptNo >= MAX_ATTEMPTS) {
-    await settle(rowId, "ABANDONED", classification, { ambiguous: true });
-    return "abandoned";
+    return outcomeOf(
+      await settle(rowId, claimToken, "ABANDONED", classification, { ambiguous: true }),
+      "abandoned",
+    );
   }
-  await release(rowId, classification, new Date(now.getTime() + backoffFor(attemptNo)), {
-    ambiguous: true,
-  });
-  return "retry";
+  const moved = await release(
+    rowId,
+    claimToken,
+    classification,
+    new Date(now.getTime() + backoffFor(attemptNo)),
+    { ambiguous: true },
+  );
+  return outcomeOf(moved, "retry");
 }
 
 /**
@@ -842,30 +912,77 @@ async function settleSent(params: {
 }
 
 /**
+ * 🔴 EVERY WRITE AFTER A CLAIM IS A COMPARE-AND-SET ON THAT CLAIM.
+ *
+ * The race this closes is not exotic; the numbers make it ordinary. A pass
+ * claims fifty recipients at once, the claim TTL is five minutes, and the
+ * scheduler lease is ten - so a worker grinding through a slow batch can still
+ * be holding row forty when row forty's claim aged out and another replica
+ * took it over. If worker A then wakes up on ANY outcome - a refusal, a
+ * backoff, a dry run, a missing client, a digest failure, an ambiguous result -
+ * and writes by row id alone, it stamps its own conclusion over a row worker B
+ * now owns. Clearing B's token is the worst of it: the row looks unclaimed, a
+ * third pass takes it, and a recipient who is mid-flight somewhere else is
+ * dispatched again.
+ *
+ * So the token travels with every one of those paths, and the update is
+ * conditional on it. Zero rows moved means "not ours any more", which is a
+ * complete answer: do nothing, and say so.
+ *
+ * Returns true only when this worker still owned the row and moved it.
+ */
+async function moveClaimed(
+  rowId: string,
+  claimToken: string,
+  data: Prisma.BroadcastSendUpdateManyMutationInput,
+  reason: string,
+): Promise<boolean> {
+  try {
+    const { count } = await runAsOwner((tx) =>
+      tx.broadcastSend.updateMany({
+        // PENDING as well as the token: a row another worker has already
+        // settled is not ours to re-open, and its token would be null.
+        where: { id: rowId, status: "PENDING", claimToken },
+        data,
+      }),
+    );
+    return count > 0;
+  } catch {
+    // A write that FAILED and a row we no longer own have the same consequence
+    // here - the row is untouched and recovers when its claim ages out - so
+    // both answer false. They are logged apart so an operator can tell which
+    // happened; a classification only, never a statement or its parameters.
+    logger.error({ rowId, reason, outcome: "write_failed" }, "broadcast row write failed");
+    return false;
+  }
+}
+
+/**
  * Terminal. `ambiguous` is left UNTOUCHED unless this settlement followed a
  * real attempt - skipping or suppressing a recipient says nothing about what a
  * provider did or did not accept.
  */
 async function settle(
   rowId: string,
+  claimToken: string,
   status: "FAILED" | "ABANDONED" | "SKIPPED",
   lastError: string,
   opts: { ambiguous?: boolean } = {},
-): Promise<void> {
-  await runAsOwner((tx) =>
-    tx.broadcastSend.update({
-      where: { id: rowId },
-      data: {
-        status,
-        lastError,
-        reason: status === "SKIPPED" ? lastError : undefined,
-        claimedAt: null,
-        claimToken: null,
-        nextAttemptAt: null,
-        ...(opts.ambiguous === undefined ? {} : { lastAttemptAmbiguous: opts.ambiguous }),
-      },
-    }),
-  ).catch(() => {});
+): Promise<boolean> {
+  return moveClaimed(
+    rowId,
+    claimToken,
+    {
+      status,
+      lastError,
+      reason: status === "SKIPPED" ? lastError : undefined,
+      claimedAt: null,
+      claimToken: null,
+      nextAttemptAt: null,
+      ...(opts.ambiguous === undefined ? {} : { lastAttemptAmbiguous: opts.ambiguous }),
+    },
+    `settle_${status.toLowerCase()}`,
+  );
 }
 
 /**
@@ -878,21 +995,27 @@ async function settle(
  */
 async function release(
   rowId: string,
+  claimToken: string,
   lastError: string,
   nextAttemptAt: Date,
   opts: { ambiguous: boolean },
-): Promise<void> {
-  await runAsOwner((tx) =>
-    tx.broadcastSend.update({
-      where: { id: rowId },
-      data: {
-        claimedAt: null,
-        lastError,
-        nextAttemptAt,
-        lastAttemptAmbiguous: opts.ambiguous,
-      },
-    }),
-  ).catch(() => {});
+): Promise<boolean> {
+  return moveClaimed(
+    rowId,
+    claimToken,
+    {
+      claimedAt: null,
+      lastError,
+      nextAttemptAt,
+      lastAttemptAmbiguous: opts.ambiguous,
+    },
+    "release",
+  );
+}
+
+/** Either the outcome we intended, or the honest answer that it was not ours. */
+function outcomeOf(moved: boolean, intended: RowOutcome): RowOutcome {
+  return moved ? intended : "stale_claim";
 }
 
 /**

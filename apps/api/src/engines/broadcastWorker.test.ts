@@ -3,6 +3,7 @@ import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import {
   __setSendEmailForTests,
+  RESEND_TIMEOUT_MS,
   ResendSendError,
   type SendEmailInput,
 } from "../messaging/email.js";
@@ -112,6 +113,10 @@ beforeEach(async () => {
   await prisma.broadcast.deleteMany({ where: { shopId } });
   await prisma.client.deleteMany({ where: { shopId } });
   await prisma.shopEmailQuota.deleteMany({ where: { shopId } });
+  // The delivery ledger is keyed by provider message id and survives the rows
+  // it describes - deliberately, since a bounce can arrive long after - so it
+  // has to be cleared here or one test's sends count as the next one's.
+  await prisma.emailDelivery.deleteMany({ where: { shopId } });
 });
 
 afterEach(() => {
@@ -439,6 +444,137 @@ describe("🔴 two workers on the same rows", () => {
     // The ghost's token is gone: the takeover overwrote it, which is exactly
     // what makes the ghost's own reservation fail if it ever wakes up.
     expect(after!.claimToken).toBeNull();
+  });
+});
+
+describe("🔴 a worker that lost its claim writes NOTHING", () => {
+  /**
+   * The race the numbers make ordinary rather than exotic: a pass claims fifty
+   * recipients in one statement, the claim TTL is five minutes, and the
+   * scheduler lease is ten - so a worker grinding through a slow batch can
+   * still be holding row forty when row forty's claim aged out and another
+   * replica took it over.
+   *
+   * 🔴 THE WORST OUTCOME IS NOT A WRONG STATUS. It is clearing the successor's
+   * token: the row then looks unclaimed, a third pass takes it, and a
+   * recipient who is mid-flight somewhere else is dispatched a second time.
+   *
+   * Every write after a claim is therefore conditional on that claim. These
+   * take the row away at the one instant where it matters - between the
+   * provider call and the write that records its outcome.
+   */
+  async function stealClaimAfterDispatch(): Promise<void> {
+    __setBroadcastCrashHookForTests(async (stage, ctx) => {
+      if (stage !== "after_dispatch") return;
+      await prisma.broadcastSend.updateMany({
+        where: { broadcastId: ctx.broadcastId, clientId: ctx.clientId },
+        data: { claimToken: "worker-b", claimedAt: new Date() },
+      });
+    });
+  }
+
+  it("🔴 cannot settle an email another worker now owns", async () => {
+    await makeClient();
+    const id = await queued("email");
+    await stealClaimAfterDispatch();
+
+    const pass = await runBroadcastWorker();
+    // The message did leave - this worker was entitled to send it when it did.
+    expect(outbox).toHaveLength(1);
+    expect(pass.sent).toBe(0);
+    expect(pass.staleClaim).toBe(1);
+
+    const [row] = await rowsOf(id);
+    // 🔴 Untouched. Worker B decides what happens to this recipient now, and
+    // it will settle under the SAME provider key, so nobody is mailed twice.
+    expect(row!.status).toBe("PENDING");
+    expect(row!.claimToken).toBe("worker-b");
+    expect(row!.sentAt).toBeNull();
+    expect(row!.messageId).toBeNull();
+    // And no delivery row: correlating a send this worker did not get to
+    // record is B's job, in B's transaction.
+    expect(await prisma.emailDelivery.count({ where: { shopId } })).toBe(0);
+  });
+
+  it("🔴 cannot fail a notification another worker now owns", async () => {
+    // The same window on a path that ends in settle() rather than settleSent():
+    // every device gone, which would normally be a permanent failure.
+    await makeClient({ push: true });
+    __setPushSenderForTests({
+      async send() {
+        const err = new Error("gone") as Error & { statusCode: number };
+        err.statusCode = 410;
+        throw err;
+      },
+    });
+    const id = await queued("push");
+    await stealClaimAfterDispatch();
+
+    const pass = await runBroadcastWorker();
+    expect(pass.failed).toBe(0);
+    expect(pass.staleClaim).toBe(1);
+
+    const [row] = await rowsOf(id);
+    expect(row!.status).toBe("PENDING");
+    expect(row!.claimToken).toBe("worker-b");
+    expect(row!.lastError).toBeNull();
+  });
+
+  it("🔴 cannot release a row another worker now owns", async () => {
+    // A transient refusal, which would normally push the row out on a backoff -
+    // and, crucially, clear claimedAt. Doing that to a row somebody else holds
+    // is how a live recipient becomes claimable by a third pass.
+    await makeClient();
+    const id = await queued("email");
+    failWith = { error: new ResendSendError(429), times: 99 };
+    // The send throws before after_dispatch, so take the row at the other edge
+    // and let the reservation carry on under the token it already reserved.
+    __setBroadcastCrashHookForTests(async (stage, ctx) => {
+      if (stage !== "before_dispatch") return;
+      await prisma.broadcastSend.updateMany({
+        where: { broadcastId: ctx.broadcastId, clientId: ctx.clientId },
+        data: { claimToken: "worker-b", claimedAt: new Date() },
+      });
+    });
+
+    const pass = await runBroadcastWorker();
+    expect(pass.staleClaim).toBe(1);
+    expect(pass.retry).toBe(0);
+
+    const [row] = await rowsOf(id);
+    expect(row!.claimToken).toBe("worker-b");
+    // Not even an attempt was spent on a row we no longer held: the
+    // reservation is a compare-and-set too, so nothing downstream ran.
+    expect(row!.attempts).toBe(0);
+    expect(row!.claimedAt).not.toBeNull();
+    expect(row!.nextAttemptAt!.getTime()).toBe(0);
+    expect(outbox).toHaveLength(0);
+  });
+});
+
+describe("🔴 the claim is refreshed at the moment of the attempt", () => {
+  it("gives every recipient a full TTL from ITS OWN dispatch", async () => {
+    // A batch of fifty is claimed in one statement and worked a round-trip at
+    // a time, so without this, row forty carried the timestamp of the moment
+    // the batch began - and could have less TTL left than its own request
+    // needs, letting a successor take it over mid-flight.
+    await makeClient();
+    const id = await queued("email");
+    const attemptAt = new Date(Date.now() + 3 * 60_000);
+
+    await runBroadcastWorker({ now: attemptAt });
+
+    const [row] = await rowsOf(id);
+    expect(row!.status).toBe("SENT");
+    // The claim was stamped at the attempt, not at the claim scan.
+    expect(row!.firstProviderAttemptAt!.getTime()).toBe(attemptAt.getTime());
+  });
+
+  it("🔴 the provider timeout stays far inside the refreshed claim", async () => {
+    // The comparison the outbox has always claimed, now true PER RECIPIENT
+    // rather than per batch. If a request could outlive its own claim, the row
+    // becomes claimable while it is still in flight and the customer gets two.
+    expect(RESEND_TIMEOUT_MS * 10).toBeLessThanOrEqual(CLAIM_TTL_MS);
   });
 });
 
