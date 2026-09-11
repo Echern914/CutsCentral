@@ -49,18 +49,13 @@ export function demoDashboardUrl(): string {
   return `${WEB_ORIGIN}/demo/dashboard`;
 }
 
-/**
- * Fixed Client.magicToken of the seeded demo client — the customer-side
- * demonstration mode. Deliberately public (the demo tenant holds no real data
- * and resets nightly); MUST match DEMO.MAGIC_TOKEN in packages/config/src/demo.ts,
- * the contract the demo seeder always restores.
- */
-export const DEMO_REWARDS_TOKEN = "demo-rewards-b91e57a3c40d268f7e13";
-
 /** Persisted-choice keys. */
 export const STORAGE = {
   mode: "cb.mode", // "barber" | "manager" | "customer"
-  lastToken: "cb.customerToken", // last magic token seen, for cold launches
+  // The last shop link opened (a magic token). No longer the customer's
+  // identity - My ChairBack's session is (src/customer/sessionStore.ts). Kept
+  // so an install updating from the one-shop app still has a way to its shop.
+  lastToken: "cb.customerToken",
   // The barber/manager cb_session JWT from native sign-in. The WebView's httpOnly
   // cookie can't be read by native, so we keep a copy to forward as the push
   // registration bearer.
@@ -84,8 +79,9 @@ export const GOOGLE_IOS_CLIENT_ID: string =
 /**
  * The 3-way role picker (app/index.tsx) is LIVE: "barber" and "manager" route to
  * the NATIVE Apple/Google sign-in (app/login.tsx) and then the dashboard
- * WebView via the /app-auth cookie handoff. The customer path needs no login at
- * all (the magic link IS the auth). Google's embedded-WebView OAuth block is why
+ * WebView via the /app-auth cookie handoff. The customer path is My ChairBack
+ * (app/customer/): native screens behind a one-time-code sign-in, with a shop's
+ * magic link still opening that shop's page. Google's embedded-WebView OAuth block is why
  * sign-in happens natively and why barber.tsx bounces any web /login navigation
  * back to the native screen.
  */
