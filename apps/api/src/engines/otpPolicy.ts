@@ -42,7 +42,7 @@ export const PROOF_TTL_MS = 10 * 60 * 1000;
 export const CLEANUP_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Every OTP purpose in the product. Adding one here is the whole registry. */
-export type OtpPurpose = "walk_in_check_in" | "rewards_recovery";
+export type OtpPurpose = "walk_in_check_in" | "rewards_recovery" | "customer_sign_in";
 
 export function sha256Hex(v: string): string {
   return createHash("sha256").update(v, "utf8").digest("hex");

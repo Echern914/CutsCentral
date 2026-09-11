@@ -136,6 +136,7 @@ function alertOnThreshold(
   hits: number,
   units: number,
   cap: number,
+  label: WindowedBudget["label"],
 ): void {
   // A multi-segment reservation can JUMP a threshold rather than land on it,
   // so fire for every threshold the jump crossed: prev < t <= hits.
@@ -145,9 +146,9 @@ function alertOnThreshold(
     if (prev < t && hits >= t) {
       logger.error(
         { scope, hits, cap, pct },
-        `recovery SMS budget at ${pct}% of the ${scope} ceiling`,
+        `${label.words} budget at ${pct}% of the ${scope} ceiling`,
       );
-      captureError(new Error(`recovery_sms_budget_${scope}_${pct}pct`), {
+      captureError(new Error(`${label.code}_${scope}_${pct}pct`), {
         scope,
         hits,
         cap,
@@ -155,6 +156,53 @@ function alertOnThreshold(
       });
     }
   }
+}
+
+/**
+ * One platform circuit breaker: an hourly and a daily window over
+ * `rate_limit_counter`, each taken atomically. The rewards-access breaker
+ * below is one; My ChairBack's sign-in codes have their own
+ * (services/customerSignIn.ts) - separate ledgers, so a flood of one can
+ * never starve the other.
+ */
+export interface WindowedBudget {
+  /** Key prefix; window stamps are appended. Pure timestamps only, never a person. */
+  keyPrefix: string;
+  hourlyCap: number;
+  dailyCap: number;
+  /** How the alert reads in a log line, and the Sentry error code it raises. */
+  label: { words: string; code: string };
+}
+
+/**
+ * Take `units` of BOTH windows, atomically each. False = at least one ceiling
+ * refused; nothing further may be dispatched.
+ */
+export async function takeWindowedBudget(
+  tx: Prisma.TransactionClient,
+  now: Date,
+  units: number,
+  budget: WindowedBudget,
+): Promise<boolean> {
+  const h = await takeCapped(
+    tx,
+    `${budget.keyPrefix}:h:${hourStamp(now)}`,
+    units,
+    budget.hourlyCap,
+    new Date(now.getTime() + 2 * HOUR_MS),
+  );
+  if (h === null) return false;
+  alertOnThreshold("hourly", h, units, budget.hourlyCap, budget.label);
+  const d = await takeCapped(
+    tx,
+    `${budget.keyPrefix}:d:${dayStamp(now)}`,
+    units,
+    budget.dailyCap,
+    new Date(now.getTime() + 2 * DAY_MS),
+  );
+  if (d === null) return false; // the hourly units stay consumed - see header
+  alertOnThreshold("daily", d, units, budget.dailyCap, budget.label);
+  return true;
 }
 
 /**
@@ -167,27 +215,17 @@ export async function takeRecoverySmsBudget(
   /** BILLABLE SEGMENTS the exact final body will cost - never a guess of 1. */
   segments: number,
 ): Promise<boolean> {
-  const hCap = hourlyCap();
-  const dCap = dailyCap();
-  const h = await takeCapped(
-    tx,
-    `recSms:budget:h:${hourStamp(now)}`,
-    segments,
-    hCap,
-    new Date(now.getTime() + 2 * HOUR_MS),
-  );
-  if (h === null) return false;
-  alertOnThreshold("hourly", h, segments, hCap);
-  const d = await takeCapped(
-    tx,
-    `recSms:budget:d:${dayStamp(now)}`,
-    segments,
-    dCap,
-    new Date(now.getTime() + 2 * DAY_MS),
-  );
-  if (d === null) return false; // the hourly units stay consumed - see header
-  alertOnThreshold("daily", d, segments, dCap);
-  return true;
+  return takeWindowedBudget(tx, now, segments, {
+    keyPrefix: "recSms:budget",
+    hourlyCap: hourlyCap(),
+    dailyCap: dailyCap(),
+    label: { words: "recovery SMS", code: "recovery_sms_budget" },
+  });
+}
+
+/** Read a positive integer cap from env, falling back (FAIL CLOSED) on anything else. */
+export function positiveCapFromEnv(name: string, fallback: number): number {
+  return capFromEnv(name, fallback);
 }
 
 /** The safe aggregate counters. Names are the whole vocabulary. */

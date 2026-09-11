@@ -323,12 +323,31 @@ export async function sendPushToClient(params: {
     return empty;
   }
 
-  const result = await deliverToSubs(
+  const shopResult = await deliverToSubs(
     db.pushSubscription,
     subs,
     params.payload,
     ids(params),
   );
+
+  // MY CHAIRBACK: the same notification to every phone signed in to the
+  // customer's own account, when this record is linked to one. A shop's
+  // PushSubscription rows follow one shop per device (the token is globally
+  // unique and re-pointed on each registration), so without this a customer
+  // at two shops heard from only the last one they opened. Tokens the shop's
+  // list already reached are skipped - one device, one notification.
+  const accountResult = await deliverToAccountDevices(
+    params.clientId,
+    new Set(subs.map((s) => s.expoPushToken).filter((t): t is string => t !== null)),
+    params.payload,
+    ids(params),
+  );
+  const result: PushSendResult = {
+    sent: shopResult.sent + accountResult.sent,
+    pruned: shopResult.pruned + accountResult.pruned,
+    failed: shopResult.failed + accountResult.failed,
+    anyDelivered: shopResult.anyDelivered || accountResult.anyDelivered,
+  };
 
   // Audit: one WEB_PUSH Nudge per delivered send, sharing the ledger with SMS so
   // attribution + history treat push as a first-class outbound message.
@@ -406,6 +425,66 @@ export async function sendPushToUser(params: {
     shopId: params.shopId,
     userId: params.userId,
   });
+}
+
+/**
+ * The account half of a client push: devices registered to the My ChairBack
+ * account ACTIVELY linked to this client record. Nothing when the record is
+ * unlinked, the account switched push off, or it is the demo account. Rows
+ * live in the owner-only CustomerDevice table, so reads and prunes run as
+ * owner; the client id comes from the send path, never from a request.
+ */
+async function deliverToAccountDevices(
+  clientId: string,
+  alreadyReached: Set<string>,
+  payload: PushPayload,
+  logCtx: Record<string, string | number>,
+): Promise<PushSendResult> {
+  const empty: PushSendResult = { sent: 0, pruned: 0, failed: 0, anyDelivered: false };
+  let devices: { id: string; expoPushToken: string }[];
+  try {
+    devices = await runAsOwner(async (tx) => {
+      const link = await tx.customerClientLink.findFirst({
+        where: { clientId, status: "active" },
+        select: { account: { select: { id: true, pushEnabled: true, isDemo: true } } },
+      });
+      if (!link || !link.account.pushEnabled || link.account.isDemo) return [];
+      return tx.customerDevice.findMany({
+        where: { accountId: link.account.id },
+        select: { id: true, expoPushToken: true },
+      });
+    });
+  } catch (err) {
+    logger.error({ err, ...logCtx }, "customer device lookup failed");
+    return empty;
+  }
+  const subs: DeliverableSub[] = devices
+    .filter((d) => !alreadyReached.has(d.expoPushToken))
+    .map((d) => ({
+      id: d.id,
+      kind: "expo",
+      endpoint: null,
+      p256dh: null,
+      auth: null,
+      expoPushToken: d.expoPushToken,
+    }));
+  // Same prune/bump discipline as a shop subscription, against the account's
+  // own device rows. Only `where.id` and the lastSeenAt/failureCount fields
+  // are ever written by the delivery loop.
+  const deviceWriter: SubWriter = {
+    updateMany: (args) =>
+      runAsOwner((tx) =>
+        tx.customerDevice.updateMany({
+          where: args.where as Prisma.CustomerDeviceWhereInput,
+          data: args.data as Prisma.CustomerDeviceUpdateManyMutationInput,
+        }),
+      ),
+    deleteMany: (args) =>
+      runAsOwner((tx) =>
+        tx.customerDevice.deleteMany({ where: args.where as Prisma.CustomerDeviceWhereInput }),
+      ),
+  };
+  return deliverToSubs(deviceWriter, subs, payload, { ...logCtx, via: "account" });
 }
 
 /** Delete a transient-failing subscription once it crosses this many strikes. */
