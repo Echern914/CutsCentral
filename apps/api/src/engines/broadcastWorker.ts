@@ -70,9 +70,35 @@ export const PROVIDER_IDEMPOTENCY_WINDOW_MS = 24 * 60 * 60 * 1000;
 const BACKOFF_MS = [60_000, 5 * 60_000, 25 * 60_000, 60 * 60_000, 60 * 60_000];
 /** Recipients per pass. Keeps one blast off one connection for ten minutes. */
 const BATCH = 50;
+/** A ceiling no caller can talk its way past - see boundedBatch. */
+const MAX_BATCH = 500;
 
 function backoffFor(attempts: number): number {
   return BACKOFF_MS[Math.min(attempts, BACKOFF_MS.length - 1)]!;
+}
+
+/**
+ * 🔴 THE BATCH SIZE IS INLINED, AND IT HAS TO BE.
+ *
+ * `LIMIT ${batch}` looked like every other interpolation in this file and was
+ * not: bound as a query PARAMETER, the limit was not applied at all - so one
+ * pass claimed EVERY due recipient across every shop, thousands of rows under a
+ * single claim token, held for as long as the pass took. "Bounded batches" was
+ * true in the comment and nowhere else. Caught by a test that asked for one row
+ * and was handed four.
+ *
+ * Same family as the `::timestamp` rule below: raw SQL plus driver parameter
+ * binding, where getting it wrong produces a working-looking query rather than
+ * an error.
+ *
+ * Inlining a value into SQL is only safe when it cannot be anything but a
+ * number, so this makes that true rather than assuming it - a positive integer,
+ * capped, derived from our own constants and never from a request.
+ */
+function boundedBatch(requested: number): number {
+  const n = Math.floor(requested);
+  if (!Number.isFinite(n) || n < 1) return 1;
+  return Math.min(n, MAX_BATCH);
 }
 
 /**
@@ -167,7 +193,7 @@ export async function runBroadcastWorker(
    * because a test asking for a specific instant means it.
    */
   const clock = (): Date => opts.now ?? new Date();
-  const batch = opts.batch ?? BATCH;
+  const batch = boundedBatch(opts.batch ?? BATCH);
   const staleBefore = new Date(now.getTime() - CLAIM_TTL_MS);
   // 🔴 THE IDENTITY OF THIS CLAIM. Every attempt reservation compare-and-sets
   // on it, so a worker that stalled past the TTL and had its rows taken over
@@ -202,7 +228,7 @@ export async function runBroadcastWorker(
             AND (s."claimedAt" IS NULL
                  OR s."claimedAt" < ${staleBefore.toISOString()}::timestamp)
           ORDER BY s."nextAttemptAt" NULLS FIRST, s."createdAt"
-          LIMIT ${batch}
+          LIMIT ${Prisma.raw(String(batch))}
           FOR UPDATE OF s SKIP LOCKED
        )
       RETURNING "id", "broadcastId", "shopId", "clientId"`),

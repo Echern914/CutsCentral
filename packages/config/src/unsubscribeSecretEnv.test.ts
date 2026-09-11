@@ -31,7 +31,13 @@ const BASE: NodeJS.ProcessEnv = {
   DATABASE_URL: "postgresql://u@localhost:5432/db",
 };
 
-/** `openssl rand -base64 32` - 32 random bytes, which is 44 characters. */
+/**
+ * Stands in for `openssl rand -base64 32`: 32 bytes, base64, 44 characters.
+ *
+ * 🔴 A FIXED FILLER BYTE, NEVER A REAL KEY. A test fixture is committed, read
+ * in review, and copied by whoever needs an example - so it must be obviously
+ * unusable rather than merely unused.
+ */
 const GOOD_SECRET = Buffer.alloc(32, 3).toString("base64");
 
 // These parse a synthetic environment into the module-level cache. Clear it so
@@ -69,18 +75,53 @@ describe("UNSUBSCRIBE_TOKEN_SECRET", () => {
     expect(res.message).toContain("must not be the same value as SESSION_SECRET");
   });
 
-  it("refuses a short one - a guessable opt-out key is not an opt-out key", () => {
-    const res = parse({ NODE_ENV: "production", UNSUBSCRIBE_TOKEN_SECRET: "too-short" });
-    expect(res.ok).toBe(false);
-    if (res.ok) return;
-    expect(res.message).toContain("32 bytes of entropy");
-  });
-
-  it("accepts 32 random bytes, base64", () => {
+  it("accepts 32 random bytes, base64 - what `openssl rand -base64 32` gives you", () => {
     const res = parse({ NODE_ENV: "production", UNSUBSCRIBE_TOKEN_SECRET: GOOD_SECRET });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.env.UNSUBSCRIBE_TOKEN_SECRET).toBe(GOOD_SECRET);
+  });
+
+  it("accepts the URL-safe alphabet too", () => {
+    // What `randomBytes(32).toString("base64url")` emits. Refusing a perfectly
+    // strong key over which of the two spellings somebody reached for is
+    // pedantry with a real cost: an operator who cannot get the variable
+    // accepted removes it.
+    const res = parse({
+      NODE_ENV: "production",
+      UNSUBSCRIBE_TOKEN_SECRET: Buffer.alloc(32, 250).toString("base64url"),
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("🔴 refuses a long string that is NOT base64", () => {
+    // The defect the old `.min(43)` had: it counted CHARACTERS, so this - the
+    // right length and none of the strength the length stood in for - sailed
+    // through. Buffer.from is no help on its own; it silently discards what it
+    // does not recognise and hands back a plausible-looking key.
+    const junk = "please-do-not-use-this-key-in-production!!!!!!";
+    expect(junk.length).toBeGreaterThan(43);
+    const res = parse({ NODE_ENV: "production", UNSUBSCRIBE_TOKEN_SECRET: junk });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.message).toContain("base64 decoding to at least 32 bytes");
+  });
+
+  it("🔴 refuses valid base64 that decodes to fewer than 32 bytes", () => {
+    // 24 bytes is 32 characters of base64 - long enough to look right, and a
+    // third short of the entropy the key is supposed to carry.
+    const short = Buffer.alloc(24, 9).toString("base64");
+    const res = parse({ NODE_ENV: "production", UNSUBSCRIBE_TOKEN_SECRET: short });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.message).toContain("at least 32 bytes");
+  });
+
+  it("refuses a short one - a guessable opt-out key is not an opt-out key", () => {
+    const res = parse({ NODE_ENV: "production", UNSUBSCRIBE_TOKEN_SECRET: "too-short" });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.message).toContain("at least 32 bytes");
   });
 
   it("🔴 a BLANK value is unset, not malformed", () => {

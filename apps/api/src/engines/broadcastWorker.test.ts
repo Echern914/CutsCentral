@@ -407,6 +407,50 @@ describe("🔴 the message left but nothing recorded it", () => {
   });
 });
 
+describe("🔴 a pass claims only what it asked for", () => {
+  it("stops at the batch size", async () => {
+    /**
+     * 🔴 THIS WAS NOT TRUE, AND THE COMMENT SAYING IT WAS IS WHY NOBODY
+     * LOOKED. `LIMIT ${batch}` bound the size as a query PARAMETER and the
+     * limit was then not applied at all: one pass claimed EVERY due recipient
+     * across EVERY shop - thousands of rows under one claim token, held for
+     * however long the pass took, with nothing else able to touch them.
+     *
+     * The damage is not theoretical. Bounded batches are what keep one blast
+     * off one connection, what let a second replica share the work, and what
+     * bounds how much is lost to a single stalled pass. A test that asked for
+     * one row and was handed four is what found it.
+     */
+    for (let i = 0; i < 4; i++) await makeClient();
+    const id = await queued("email");
+
+    const pass = await runBroadcastWorker({ batch: 1 });
+    expect(pass.claimed).toBe(1);
+    expect(outbox).toHaveLength(1);
+
+    const rows = await rowsOf(id);
+    expect(rows.filter((r) => r.status === "SENT")).toHaveLength(1);
+    expect(rows.filter((r) => r.status === "PENDING")).toHaveLength(3);
+    // Still going, because three people are still owed a message.
+    expect((await prisma.broadcast.findUnique({ where: { id } }))!.status).toBe("SENDING");
+
+    // The rest drain on later passes, still one at a time.
+    expect((await runBroadcastWorker({ batch: 2 })).claimed).toBe(2);
+    expect((await runBroadcastWorker({ batch: 50 })).claimed).toBe(1);
+    expect(outbox).toHaveLength(4);
+  });
+
+  it("refuses a nonsensical batch rather than inlining it", async () => {
+    // The size is interpolated into SQL, so "it is always a number" has to be
+    // enforced rather than assumed - even though every caller today is our own.
+    await makeClient();
+    const id = await queued("email");
+    expect((await runBroadcastWorker({ batch: 0 })).claimed).toBe(1);
+    const [row] = await rowsOf(id);
+    expect(row!.status).toBe("SENT");
+  });
+});
+
 describe("🔴 two workers on the same rows", () => {
   it("each recipient is delivered exactly once", async () => {
     for (let i = 0; i < 6; i++) await makeClient();

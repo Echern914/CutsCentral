@@ -21,6 +21,44 @@ const STRIP_EDGES = /^[\s\u200B-\u200D\uFEFF\u2060]+|[\s\u200B-\u200D\uFEFF\u206
 const cleanUrl = () =>
   z.string().transform((v) => v.replace(STRIP_EDGES, "")).pipe(z.string().url());
 
+/**
+ * How many BYTES a base64 string actually carries, or null if it is not base64.
+ *
+ * 🔴 A LENGTH CHECK IS NOT AN ENTROPY CHECK. `.min(43)` accepted
+ * "please-do-not-use-this-key-in-production!!!" - the right number of
+ * characters and none of the strength the number was standing in for. What
+ * matters for a key is how many random bytes it decodes to, so that is what is
+ * measured.
+ *
+ * `Buffer.from(v, "base64")` cannot be asked on its own: it is deliberately
+ * lenient and silently DISCARDS characters outside the alphabet, so
+ * "hello world!!!..." decodes to a plausible-looking buffer instead of an
+ * error. The shape is therefore checked first, and the result is re-encoded and
+ * compared - a value that does not survive a round trip was not canonical
+ * base64, whatever Buffer made of it.
+ *
+ * Both alphabets are accepted. Standard base64 is what `openssl rand -base64`
+ * emits and what the message names; URL-safe is what Node's
+ * `randomBytes(32).toString("base64url")` emits, and refusing a perfectly
+ * strong key over which of the two somebody reached for would be pedantry with
+ * a real cost - an operator who cannot get the variable accepted removes it.
+ */
+function decodedBase64Bytes(raw: string): number | null {
+  const v = raw.trim();
+  if (v.length === 0) return null;
+  // One alphabet or the other, never a mixture, with optional tail padding.
+  const standard = /^[A-Za-z0-9+/]+={0,2}$/.test(v);
+  const urlSafe = /^[A-Za-z0-9_-]+={0,2}$/.test(v);
+  if (!standard && !urlSafe) return null;
+  const canonical = v.replace(/-/g, "+").replace(/_/g, "/");
+  const buf = Buffer.from(canonical, "base64");
+  if (buf.length === 0) return null;
+  // Round trip, padding-insensitive: proves nothing was quietly dropped.
+  const strip = (x: string) => x.replace(/=+$/, "");
+  if (strip(buf.toString("base64")) !== strip(canonical)) return null;
+  return buf.length;
+}
+
 const apiSchema = z.object({
   DATABASE_URL: cleanUrl(),
   // Direct (non-pooled) connection for prisma migrate. Optional at app runtime.
@@ -59,9 +97,9 @@ const apiSchema = z.object({
     (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
     z
       .string()
-      .min(43, {
+      .refine((v) => decodedBase64Bytes(v) !== null && decodedBase64Bytes(v)! >= 32, {
         message:
-          "must carry at least 32 bytes of entropy - generate one with: openssl rand -base64 32",
+          "must be base64 decoding to at least 32 bytes - generate one with: openssl rand -base64 32",
       })
       .optional(),
   ),
