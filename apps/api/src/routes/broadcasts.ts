@@ -4,8 +4,8 @@ import { forShop, type LoyaltyTier } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 import { requireActiveAccess } from "../middleware/billing.js";
-import { logger } from "../logger.js";
-import { claimForSending, previewBroadcast, sendBroadcast } from "../engines/broadcast.js";
+import { previewBroadcast, queueBroadcast, type BroadcastBlocker } from "../engines/broadcast.js";
+import { broadcastProgress } from "../engines/broadcastWorker.js";
 import { SKIP_REASON_LABEL, type SkipReason } from "../engines/broadcastAudience.js";
 
 /**
@@ -16,9 +16,11 @@ import { SKIP_REASON_LABEL, type SkipReason } from "../engines/broadcastAudience
  * one tap. The enum has no value for it, so this is not a rule anyone can
  * forget.
  *
- * 🔴 MANAGER-AND-ABOVE, and behind the billing wall. A broadcast reaches every
- * client the shop has; it is not something a barber on a chair should be able
- * to do to the owner's list.
+ * 🔴 MANAGER-AND-ABOVE, behind the billing wall, and behind the same rate
+ * limiter as the rest of the dashboard. A broadcast reaches every client the
+ * shop has; it is not something a barber on a chair should be able to do to
+ * the owner's list, and it is not something a loop should be able to do at
+ * machine speed.
  *
  * The flow is deliberately two steps. A preview says exactly how many people
  * will receive it, who is excluded and why, and what it costs against the
@@ -38,17 +40,52 @@ const audienceSchema = z.object({
   tiers: z.array(z.enum(LOYALTY_TIERS)).max(LOYALTY_TIERS.length).optional(),
 });
 
-const draftSchema = audienceSchema.extend({
-  // The email subject, or the push notification's title. Required for both:
-  // a push with no title is not worth sending either.
-  subject: z.string().trim().min(1).max(120),
-  body: z.string().trim().min(1).max(4000),
-});
+/**
+ * 🔴 WHAT FITS IS A PROPERTY OF THE CHANNEL, NOT OF THE FORM.
+ *
+ * One shared 4,000-character limit was wrong in one direction and invisible in
+ * the other: an email that long is a newsletter, but a PUSH that long is a
+ * notification every phone truncates somewhere around 150-240 characters, so
+ * the barber writes four paragraphs, sees them accepted, and his customers
+ * receive a sentence and a half with the offer cut off mid-word. A limit that
+ * refuses at the keyboard is a worse message than a limit that lies at the
+ * lock screen.
+ */
+export const BODY_LIMITS = { email: 4000, push: 300 } as const;
+export const SUBJECT_LIMITS = { email: 120, push: 60 } as const;
+
+const draftSchema = audienceSchema
+  .extend({
+    // The email subject, or the push notification's title. Required for both:
+    // a push with no title is not worth sending either.
+    subject: z.string().trim().min(1).max(SUBJECT_LIMITS.email),
+    body: z.string().trim().min(1).max(BODY_LIMITS.email),
+  })
+  .superRefine((v, ctx) => {
+    if (v.subject.length > SUBJECT_LIMITS[v.channel]) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.too_big,
+        maximum: SUBJECT_LIMITS[v.channel],
+        type: "string",
+        inclusive: true,
+        path: ["subject"],
+        message: `A notification title has to fit on a lock screen - ${SUBJECT_LIMITS.push} characters or fewer.`,
+      });
+    }
+    if (v.body.length > BODY_LIMITS[v.channel]) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.too_big,
+        maximum: BODY_LIMITS[v.channel],
+        type: "string",
+        inclusive: true,
+        path: ["body"],
+        message: `A notification gets cut off on the phone - keep it to ${BODY_LIMITS.push} characters, or send it as an email instead.`,
+      });
+    }
+  });
 
 /** Turn the engine's refusal into something the compose screen can say. */
-function blockerMessage(
-  blocker: NonNullable<Awaited<ReturnType<typeof previewBroadcast>>["blocker"]>,
-): string {
+function blockerMessage(blocker: BroadcastBlocker): string {
   switch (blocker.kind) {
     case "no_recipients":
       return "Nobody in this group can be reached on that channel yet.";
@@ -60,6 +97,8 @@ function blockerMessage(
       return "Add your shop's street address first — marketing email has to carry it by law. App notifications don't, so you can send one of those right now.";
     case "already_sending":
       return "This one has already been sent.";
+    case "not_found":
+      return "That message no longer exists.";
   }
 }
 
@@ -79,6 +118,7 @@ broadcastsRouter.post("/preview", async (req, res) => {
     reachable: preview.reachable,
     considered: preview.considered,
     emailsRemaining: preview.emailsRemaining,
+    limits: { subject: SUBJECT_LIMITS[parsed.data.channel], body: BODY_LIMITS[parsed.data.channel] },
     skipped: preview.skipped.map((s) => ({
       reason: s.reason,
       count: s.count,
@@ -90,20 +130,74 @@ broadcastsRouter.post("/preview", async (req, res) => {
   });
 });
 
-// GET /api/broadcasts - what this shop has sent, newest first.
+/**
+ * GET /api/broadcasts - what this shop has sent, newest first, with LIVE
+ * progress.
+ *
+ * 🔴 THE PROGRESS COMES FROM THE RECIPIENT ROWS, not from the counters on the
+ * broadcast. Those are written when a blast FINISHES, so reading them mid-send
+ * would show 0 of 412 for several minutes and look exactly like a feature that
+ * had silently stopped - which is how a barber presses send a second time.
+ */
 broadcastsRouter.get("/", async (req, res) => {
-  const broadcasts = await forShop(req.shop!.id).broadcast.findMany({
+  const shopId = req.shop!.id;
+  const rows = (await forShop(shopId).broadcast.findMany({
     orderBy: { createdAt: "desc" },
-    take: 50,
+    take: 25,
+    select: {
+      id: true,
+      channel: true,
+      audienceTiers: true,
+      subject: true,
+      body: true,
+      status: true,
+      recipientCount: true,
+      sentCount: true,
+      failedCount: true,
+      skippedCount: true,
+      queuedAt: true,
+      sentAt: true,
+      createdAt: true,
+    },
+  })) as unknown as {
+    id: string;
+    status: string;
+    recipientCount: number;
+    sentCount: number;
+    failedCount: number;
+    skippedCount: number;
+  }[];
+
+  // Only the ones still moving need a live count; a finished blast's frozen
+  // numbers are the answer and re-deriving them would be work for nothing.
+  const inFlight = rows.filter((b) => b.status === "QUEUED" || b.status === "SENDING");
+  const progress = await broadcastProgress(shopId, inFlight.map((b) => b.id));
+
+  res.json({
+    broadcasts: rows.map((b) => {
+      const live = progress.get(b.id);
+      return {
+        ...b,
+        sentCount: live ? live.sent : b.sentCount,
+        failedCount: live ? live.failed : b.failedCount,
+        skippedCount: live ? live.skipped : b.skippedCount,
+        pendingCount: live ? live.pending : 0,
+      };
+    }),
   });
-  res.json({ broadcasts });
 });
 
 // POST /api/broadcasts - write a draft. Sends nothing.
 broadcastsRouter.post("/", async (req, res) => {
   const parsed = draftSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
-    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    res.status(400).json({
+      error: "invalid_input",
+      // The first issue is already worded for a person on the length rules
+      // above; the compose screen shows it rather than "invalid input".
+      message: parsed.error.issues[0]?.message,
+      issues: parsed.error.issues,
+    });
     return;
   }
   const d = parsed.data;
@@ -121,66 +215,49 @@ broadcastsRouter.post("/", async (req, res) => {
 });
 
 /**
- * POST /api/broadcasts/:id/send - actually send it.
+ * POST /api/broadcasts/:id/send - commit to it.
  *
- * 🔴 ANSWERS 202 AND KEEPS WORKING. A shop with 2,700 emailable clients cannot
- * be mailed inside one HTTP request - the request would time out somewhere in
- * the middle, and the caller would have no idea how far it got. The audience
- * is frozen into rows first (so the count in this response is real), the work
- * continues after the response, and progress is readable from the list above.
- * The per-recipient unique index means none of that can mail anybody twice.
+ * 🔴 THE 202 MEANS QUEUED, AND SAYS SO. Everything that makes the promise real
+ * happens BEFORE the response and inside one transaction: the audience is
+ * frozen into rows, the month's allowance is reserved against a locked row,
+ * and the broadcast moves DRAFT -> QUEUED. So the number returned here is a
+ * row count, not a forecast, and it cannot disagree with what gets delivered.
+ *
+ * Nothing is sent in this process. The earlier cut kept working after the
+ * response in a floating promise, which meant a deploy - or any restart - in
+ * the following seconds stranded the blast in SENDING with nothing to resume
+ * it. A worker with a lease drains the frozen rows instead, so the request
+ * dying is a delay of at most a minute rather than a silent, permanent halt.
  */
 broadcastsRouter.post("/:id/send", async (req, res) => {
   const shopId = req.shop!.id;
   const id = String(req.params.id);
-  const broadcast = (await forShop(shopId).broadcast.findFirst({
-    where: { id },
-    select: { id: true, channel: true, audienceTiers: true, status: true },
-  })) as unknown as {
-    id: string;
-    channel: "email" | "push";
-    audienceTiers: LoyaltyTier[];
-    status: string;
-  } | null;
-  if (!broadcast) {
-    res.status(404).json({ error: "not_found" });
-    return;
-  }
-  if (broadcast.status !== "DRAFT") {
-    res.status(409).json({ error: "already_sent", message: blockerMessage({ kind: "already_sending" }) });
-    return;
-  }
 
-  // Refuse BEFORE anything is written or sent, with the reason and the
-  // numbers - never a half-sent blast the barber cannot undo or resume.
-  const preview = await previewBroadcast({
-    shopId,
-    channel: broadcast.channel,
-    tiers: broadcast.audienceTiers,
-  });
-  if (preview.blocker) {
+  // Refuse BEFORE anything is written, with the reason and the numbers - the
+  // authoritative versions of these checks are taken again under the lock
+  // inside queueBroadcast, but a 409 that arrives without having touched
+  // anything is cheaper and reads better than one that rolled back.
+  const outcome = await queueBroadcast({ shopId, broadcastId: id });
+  if (!outcome.ok) {
+    const blocker = outcome.blocker;
+    if (blocker.kind === "not_found") {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
     res.status(409).json({
-      error: preview.blocker.kind,
-      message: blockerMessage(preview.blocker),
-      ...(preview.blocker.kind === "over_quota"
-        ? { need: preview.blocker.need, remaining: preview.blocker.remaining }
+      error: blocker.kind === "already_sending" ? "already_sent" : blocker.kind,
+      message: blockerMessage(blocker),
+      ...(blocker.kind === "over_quota"
+        ? { need: blocker.need, remaining: blocker.remaining }
         : {}),
     });
     return;
   }
 
-  // 🔴 CLAIM BEFORE ANSWERING. Two taps in the same second both reach here;
-  // only the one that moves the row out of DRAFT gets the 202, and the other
-  // is told plainly rather than handed a cheerful receipt for work it is not
-  // doing. Taking the mutex in the background instead would mean both callers
-  // saw success and only the logs knew otherwise.
-  if (!(await claimForSending(shopId, id))) {
-    res.status(409).json({ error: "already_sent", message: blockerMessage({ kind: "already_sending" }) });
-    return;
-  }
-
-  res.status(202).json({ ok: true, recipients: preview.reachable });
-  void sendBroadcast({ shopId, broadcastId: id }).catch((err: unknown) =>
-    logger.error({ err, shopId, broadcastId: id }, "broadcast send failed"),
-  );
+  res.status(202).json({
+    ok: true,
+    status: "QUEUED",
+    recipients: outcome.recipients,
+    skipped: outcome.skipped,
+  });
 });

@@ -41,6 +41,12 @@ export const DEFAULTS = {
  * SMS would make email pointlessly scarce, and one priced for email would give
  * away texts. A broadcast by app NOTIFICATION costs nothing to send and is not
  * metered at all - which is the whole reason the barber is offered the choice.
+ *
+ * How the number is actually enforced: a blast RESERVES its whole audience
+ * against ShopEmailQuota in the transaction that freezes it, and the unused
+ * remainder comes back when it finishes. So a shop can never start two blasts
+ * on the same last 400 emails, and a recipient who was never mailed never
+ * costs anything. See apps/api/src/billing/quota.ts.
  */
 export const PLANS = {
   // "free" is the value of Shop.plan for a shop with NO subscription - a

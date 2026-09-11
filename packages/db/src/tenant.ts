@@ -900,6 +900,10 @@ export function forShop(shopId: string) {
         runWithShop(shopId, (tx) =>
           tx.broadcastSend.findMany({ ...args, where: scopeWhere(args.where, shopId) }),
         ),
+      findFirst: (args: Prisma.BroadcastSendFindFirstArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.broadcastSend.findFirst({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
       count: (args: Prisma.BroadcastSendCountArgs = {}) =>
         runWithShop(shopId, (tx) =>
           tx.broadcastSend.count({ ...args, where: scopeWhere(args.where, shopId) }),
@@ -918,6 +922,18 @@ export function forShop(shopId: string) {
       updateMany: (args: Prisma.BroadcastSendUpdateManyArgs) =>
         runWithShop(shopId, (tx) =>
           tx.broadcastSend.updateMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+    },
+
+    // The shop's broadcast-email allowance for a month. Read-only through the
+    // facade: the only WRITES are the reserve/release pair in billing/quota.ts,
+    // which must run inside the caller's freeze transaction with the row
+    // LOCKED. A convenience `update` here would be an invitation to change the
+    // number outside that lock, which is the exact race the row exists to close.
+    shopEmailQuota: {
+      findFirst: (args: Prisma.ShopEmailQuotaFindFirstArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.shopEmailQuota.findFirst({ ...args, where: scopeWhere(args.where, shopId) }),
         ),
     },
 

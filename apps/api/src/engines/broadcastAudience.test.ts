@@ -13,6 +13,7 @@ function client(over: Partial<AudienceClient> = {}): AudienceClient {
     id: "c1",
     email: "a@example.com",
     emailOptedOut: false,
+    emailSuppressedAt: null,
     loyaltyTier: "GOLD",
     archivedAt: null,
     pushDevices: 1,

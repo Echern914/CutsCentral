@@ -20,6 +20,11 @@ export interface AudienceClient {
   emailOptedOut: boolean;
   loyaltyTier: LoyaltyTier | null;
   archivedAt: Date | null;
+  /**
+   * Set when the PROVIDER refused this address - a hard bounce or a spam
+   * complaint. Not the same fact as `emailOptedOut` and never merged with it.
+   */
+  emailSuppressedAt: Date | null;
   /** How many devices this client has registered for push. */
   pushDevices: number;
 }
@@ -30,6 +35,7 @@ export type SkipReason =
   | "not_in_audience"
   | "no_email"
   | "unsubscribed"
+  | "undeliverable"
   | "no_app";
 
 export interface AudienceSplit {
@@ -45,6 +51,7 @@ export const SKIP_REASON_LABEL: Record<SkipReason, string> = {
   not_in_audience: "Not in the group you picked",
   no_email: "No email address on file",
   unsubscribed: "Unsubscribed from your emails",
+  undeliverable: "Email bounced or was marked as spam",
   no_app: "Hasn't installed the app",
 };
 
@@ -64,6 +71,12 @@ export const SKIP_REASON_LABEL: Record<SkipReason, string> = {
  *
  * Archived clients are excluded everywhere: archiving is the barber saying
  * this person is not a client any more.
+ *
+ * 🔴 A PROVIDER SUPPRESSION IS NOT AN OPT-OUT EITHER. A hard bounce or a spam
+ * complaint stops email exactly as an unsubscribe does, but `emailSuppressedAt`
+ * stays its own field and its own skip reason: one is a fact about a mailbox,
+ * the other is a decision by a person, and reporting the first as the second
+ * puts words in a customer's mouth.
  */
 export function splitAudience(
   clients: AudienceClient[],
@@ -77,6 +90,7 @@ export function splitAudience(
     not_in_audience: 0,
     no_email: 0,
     unsubscribed: 0,
+    undeliverable: 0,
     no_app: 0,
   };
   const skip = (client: AudienceClient, reason: SkipReason) => {
@@ -102,6 +116,17 @@ export function splitAudience(
       }
       if (c.emailOptedOut) {
         skip(c, "unsubscribed");
+        continue;
+      }
+      // 🔴 A BOUNCE IS NOT AN UNSUBSCRIBE. The mailbox is gone, or its owner
+      // pressed "this is spam" - both mean stop sending, and neither means the
+      // customer made a choice to leave. Mailing a dead address again costs
+      // the whole platform's sending reputation, so it is excluded here; but
+      // it is counted and NAMED separately, because telling a barber "47
+      // people unsubscribed" when 47 mailboxes bounced is a different claim
+      // about his customers than the truth.
+      if (c.emailSuppressedAt !== null) {
+        skip(c, "undeliverable");
         continue;
       }
     } else if (c.pushDevices <= 0) {

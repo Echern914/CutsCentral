@@ -65,19 +65,64 @@ const RANK: Record<string, number> = {
 const BASELINE_STATUS = "sent";
 
 /**
+ * Outcomes that mean STOP SENDING MARKETING to this address.
+ *
+ * A hard bounce is a mailbox that does not exist; a complaint is somebody
+ * pressing "this is spam". Both end the relationship for promotional purposes,
+ * and continuing to mail either one is how a sending domain gets throttled -
+ * which would take every shop's booking confirmations down with it.
+ *
+ * `failed` is deliberately included: Resend reports a permanent send failure
+ * that way, and a message that can never be delivered is not worth attempting
+ * again for a promotion.
+ */
+const SUPPRESSING = new Set(["bounced", "complained", "failed"]);
+
+/**
+ * 🔴 A SUPPRESSION IS NOT AN UNSUBSCRIBE, and must never be written as one.
+ *
+ * The cheap version of this sets `emailOptedOut = true` and is done. It also
+ * quietly rewrites history: the barber's screen then says "47 people
+ * unsubscribed from your emails" when what actually happened is that 47
+ * mailboxes bounced, and a customer who never made any such choice is recorded
+ * as having made it. `emailSuppressedAt` is its own column, with its own skip
+ * reason in the audience split, for exactly that reason.
+ *
+ * Marketing only. Booking confirmations and reminders still attempt delivery:
+ * a bounce today may be a full mailbox, and silently ceasing to tell somebody
+ * when their own appointment is would be a far worse failure than a wasted
+ * send.
+ *
+ * First writer wins - the `null` guard keeps the ORIGINAL reason, because the
+ * first terminal event is the one that explains what happened.
+ */
+async function suppressClientEmail(
+  tx: Prisma.TransactionClient,
+  clientId: string,
+  reason: string,
+  now: Date,
+): Promise<void> {
+  await tx.client.updateMany({
+    where: { id: clientId, emailSuppressedAt: null },
+    data: { emailSuppressedAt: now, emailSuppressionReason: reason },
+  });
+}
+
+/**
  * Record a dispatch. Fire-and-forget by design: this runs after the message
  * has already left, so a ledger problem must never surface as a send failure.
  */
 export function recordEmailSent(messageId: string, input: SendEmailInput): void {
   void (async () => {
-    await runAsOwner((tx) =>
-      tx.emailDelivery.upsert({
+    await runAsOwner(async (tx) => {
+      const row = await tx.emailDelivery.upsert({
         where: { messageId },
         create: {
           messageId,
           kind: input.meta?.kind ?? "unknown",
           shopId: input.meta?.shopId ?? null,
           appointmentId: input.meta?.appointmentId ?? null,
+          clientId: input.meta?.clientId ?? null,
           status: "sent",
         },
         // 🔴 METADATA ONLY, NEVER THE STATUS. A webhook routinely beats the
@@ -90,10 +135,28 @@ export function recordEmailSent(messageId: string, input: SendEmailInput): void 
           kind: input.meta?.kind ?? "unknown",
           shopId: input.meta?.shopId ?? null,
           appointmentId: input.meta?.appointmentId ?? null,
+          clientId: input.meta?.clientId ?? null,
           awaitingDispatchMeta: false,
         },
-      }),
-    );
+      });
+
+      // 🔴 THE OTHER ORDER, WHICH IS NOT RARE. A verified bounce routinely
+      // arrives before this write - the provider has already rejected the
+      // message by the time our own metadata lands. That event could not
+      // suppress anybody, because at the moment it applied there was no
+      // clientId on the row to suppress. Now that there is one, the
+      // suppression it should have caused is applied here. Without this, a
+      // bounce that beat us was silently lost and the shop kept mailing a dead
+      // address forever.
+      if (input.meta?.clientId && SUPPRESSING.has(row.status)) {
+        await suppressClientEmail(
+          tx,
+          input.meta.clientId,
+          row.failureClass ?? row.status,
+          new Date(),
+        );
+      }
+    });
   })().catch(() => {});
 }
 
@@ -140,9 +203,9 @@ function transitionFor(
 async function lockDelivery(
   tx: Prisma.TransactionClient,
   messageId: string,
-): Promise<{ id: string; status: string } | null> {
-  const rows = await tx.$queryRaw<{ id: string; status: string }[]>(
-    Prisma.sql`SELECT "id", "status" FROM "EmailDelivery"
+): Promise<{ id: string; status: string; clientId: string | null } | null> {
+  const rows = await tx.$queryRaw<{ id: string; status: string; clientId: string | null }[]>(
+    Prisma.sql`SELECT "id", "status", "clientId" FROM "EmailDelivery"
                 WHERE "messageId" = ${messageId}
                   FOR UPDATE`,
   );
@@ -226,6 +289,12 @@ export async function applyEventInTx(
     where: { id: row.id },
     data: { ...(patch ?? {}), eventCount: { increment: 1 } },
   });
+
+  // 4. STOP MAILING AN ADDRESS THAT REFUSED US - in the SAME transaction, so
+  // the suppression cannot be lost by a crash that keeps the event marker.
+  if (patch && SUPPRESSING.has(patch.status) && row.clientId) {
+    await suppressClientEmail(tx, row.clientId, patch.failureClass ?? patch.status, now);
+  }
   return created ? "created" : patch ? "applied" : "ignored";
 }
 

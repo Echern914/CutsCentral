@@ -1,0 +1,493 @@
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { prisma } from "@chairback/db";
+import { randomToken } from "@chairback/config";
+import {
+  __setSendEmailForTests,
+  ResendSendError,
+  type SendEmailInput,
+} from "../messaging/email.js";
+import { __setPushSenderForTests } from "../messaging/push.js";
+import { queueBroadcast } from "./broadcast.js";
+import {
+  __setBroadcastCrashHookForTests,
+  BroadcastCrash,
+  broadcastIdempotencyKey,
+  CLAIM_TTL_MS,
+  MAX_ATTEMPTS,
+  PROVIDER_IDEMPOTENCY_WINDOW_MS,
+  runBroadcastWorker,
+} from "./broadcastWorker.js";
+
+/**
+ * THE FAILURES, DELIBERATELY CAUSED.
+ *
+ * Every guarantee this worker claims is about something going wrong at a
+ * moment nobody can observe after the fact: the process dying between "the
+ * provider accepted this" and "we wrote that down", two replicas reaching for
+ * the same recipient in the same millisecond, a claim held by a worker that no
+ * longer exists. None of those can be proven by a happy path.
+ *
+ * So these tests kill the pass on purpose at each edge of the dangerous
+ * window, run two workers at once on the same rows, and age claims past their
+ * TTL - then check what recovery does with whatever was left on disk.
+ *
+ * 🔴 THE ONE THING THAT MUST NEVER HAPPEN is a customer getting the same
+ * promotion twice. Where a guarantee has to be traded, these pin which way:
+ * unsent and visible beats delivered twice.
+ */
+
+const password = "supersecret123";
+let shopId: string;
+let ownerId: string;
+const cleanupShops: string[] = [];
+const cleanupUsers: string[] = [];
+
+let outbox: SendEmailInput[] = [];
+/** When set, the next N sends throw this instead of succeeding. */
+let failWith: { error: unknown; times: number } | null = null;
+
+beforeAll(async () => {
+  const email = `bw-${randomToken(6)}@test.local`.toLowerCase();
+  const user = await prisma.user.create({
+    data: { email, passwordHash: password, name: "W" },
+    select: { id: true },
+  });
+  ownerId = user.id;
+  cleanupUsers.push(user.id);
+  const shop = await prisma.shop.create({
+    data: {
+      name: "Worker Cuts",
+      ownerId,
+      slug: `worker-cuts-${randomToken(4).toLowerCase().replace(/[^a-z0-9]/g, "")}`,
+      bookingUrl: "https://w.test",
+      webhookSecret: randomToken(16),
+      addressStreet: "9 Chair Lane",
+      addressCity: "Newark",
+      addressRegion: "NJ",
+      addressPostal: "07102",
+    },
+    select: { id: true },
+  });
+  shopId = shop.id;
+  cleanupShops.push(shop.id);
+
+  __setSendEmailForTests(async (input) => {
+    outbox.push(input);
+    if (failWith && failWith.times > 0) {
+      failWith.times -= 1;
+      throw failWith.error;
+    }
+    return { id: `msg-${outbox.length}-${randomToken(4)}`, status: "sent" as const };
+  });
+});
+
+afterAll(async () => {
+  __setSendEmailForTests(undefined);
+  __setPushSenderForTests(undefined);
+  await prisma.shop.deleteMany({ where: { id: { in: cleanupShops } } });
+  await prisma.user.deleteMany({ where: { id: { in: cleanupUsers } } });
+});
+
+beforeEach(async () => {
+  outbox = [];
+  failWith = null;
+  __setBroadcastCrashHookForTests(undefined);
+  await prisma.broadcast.deleteMany({ where: { shopId } });
+  await prisma.client.deleteMany({ where: { shopId } });
+  await prisma.shopEmailQuota.deleteMany({ where: { shopId } });
+});
+
+afterEach(() => {
+  __setBroadcastCrashHookForTests(undefined);
+  __setPushSenderForTests(undefined);
+});
+
+async function makeClient(over: { email?: string | null; push?: boolean } = {}) {
+  const c = await prisma.client.create({
+    data: {
+      shopId,
+      acuityClientKey: `tel:+1${Math.floor(Math.random() * 9_000_000_000 + 1_000_000_000)}`,
+      magicToken: randomToken(),
+      firstName: "Client",
+      email: over.email === undefined ? `c${randomToken(6)}@example.com` : over.email,
+      loyaltyTier: "GOLD",
+    },
+    select: { id: true },
+  });
+  if (over.push) {
+    await prisma.pushSubscription.create({
+      data: {
+        shopId,
+        clientId: c.id,
+        endpoint: `https://push.test/${randomToken(8)}`,
+        kind: "web",
+        p256dh: "k",
+        auth: "a",
+      },
+    });
+  }
+  return c;
+}
+
+/** A committed, queued broadcast with its audience already frozen. */
+async function queued(
+  channel: "email" | "push",
+  body = "Two chairs open Friday.",
+): Promise<string> {
+  const b = await prisma.broadcast.create({
+    data: {
+      shopId,
+      createdByUserId: ownerId,
+      channel,
+      audienceTiers: [],
+      subject: "Friday",
+      body,
+      status: "DRAFT",
+    },
+    select: { id: true },
+  });
+  const outcome = await queueBroadcast({ shopId, broadcastId: b.id });
+  expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+  return b.id;
+}
+
+const rowsOf = (broadcastId: string) =>
+  prisma.broadcastSend.findMany({ where: { broadcastId }, orderBy: { createdAt: "asc" } });
+
+describe("🔴 a worker that dies BEFORE the provider is contacted", () => {
+  it("leaves the recipient untouched, and recovery sends exactly once", async () => {
+    await makeClient();
+    const id = await queued("email");
+
+    __setBroadcastCrashHookForTests((stage) => {
+      if (stage === "before_dispatch") throw new BroadcastCrash("before_dispatch");
+    });
+    await expect(runBroadcastWorker()).rejects.toBeInstanceOf(BroadcastCrash);
+
+    // 🔴 THE CLAIM IS NOT AN ATTEMPT. A worker that died five times before
+    // reaching Resend must not have spent this recipient's budget.
+    const [before] = await rowsOf(id);
+    expect(before!.status).toBe("PENDING");
+    expect(before!.attempts).toBe(0);
+    expect(before!.lastAttemptAmbiguous).toBe(false);
+    expect(before!.claimedAt).not.toBeNull();
+    expect(outbox).toHaveLength(0);
+
+    // The dead worker still holds the claim, so nobody may take it yet.
+    __setBroadcastCrashHookForTests(undefined);
+    expect((await runBroadcastWorker()).claimed).toBe(0);
+
+    // Past the TTL the claim is abandoned and another worker picks it up.
+    const later = new Date(Date.now() + CLAIM_TTL_MS + 1000);
+    const pass = await runBroadcastWorker({ now: later });
+    expect(pass.sent).toBe(1);
+    expect(outbox).toHaveLength(1);
+
+    const [after] = await rowsOf(id);
+    expect(after!.status).toBe("SENT");
+    expect(after!.attempts).toBe(1);
+  });
+});
+
+describe("🔴 a worker that dies AFTER the provider accepted", () => {
+  it("records that an attempt may be in flight BEFORE it happens", async () => {
+    await makeClient();
+    const id = await queued("email");
+
+    __setBroadcastCrashHookForTests((stage) => {
+      if (stage === "after_dispatch") throw new BroadcastCrash("after_dispatch");
+    });
+    await expect(runBroadcastWorker()).rejects.toBeInstanceOf(BroadcastCrash);
+
+    // The message left. Nothing recorded the outcome, because the code that
+    // would have recorded it never ran - which is the entire problem.
+    expect(outbox).toHaveLength(1);
+    const [row] = await rowsOf(id);
+    expect(row!.status).toBe("PENDING");
+    // 🔴 THIS IS THE GUARANTEE. The row already says "an attempt may be in
+    // flight", because reserveAttempt wrote it ahead of the request. Had it
+    // been written afterwards, this row would read "safe to retry" and a retry
+    // past the provider's window would deliver a SECOND copy.
+    expect(row!.attempts).toBe(1);
+    expect(row!.lastAttemptAmbiguous).toBe(true);
+    expect(row!.firstProviderAttemptAt).not.toBeNull();
+  });
+
+  it("recovery retries under the SAME provider key, so it cannot deliver twice", async () => {
+    const c = await makeClient();
+    const id = await queued("email");
+
+    __setBroadcastCrashHookForTests((stage) => {
+      if (stage === "after_dispatch") throw new BroadcastCrash("after_dispatch");
+    });
+    await expect(runBroadcastWorker()).rejects.toBeInstanceOf(BroadcastCrash);
+    __setBroadcastCrashHookForTests(undefined);
+
+    const later = new Date(Date.now() + CLAIM_TTL_MS + 1000);
+    const pass = await runBroadcastWorker({ now: later });
+    expect(pass.sent).toBe(1);
+
+    // Two requests left this process - and that is fine, because they are the
+    // SAME message as far as the provider is concerned. Resend collapses
+    // repeats of a key for 24h, so the customer receives one email.
+    expect(outbox).toHaveLength(2);
+    expect(outbox[0]!.idempotencyKey).toBe(broadcastIdempotencyKey(id, c.id));
+    expect(outbox[1]!.idempotencyKey).toBe(outbox[0]!.idempotencyKey);
+  });
+
+  it("🔴 past the provider's window it is ABANDONED UNSENT rather than retried", async () => {
+    await makeClient();
+    const id = await queued("email");
+
+    __setBroadcastCrashHookForTests((stage) => {
+      if (stage === "after_dispatch") throw new BroadcastCrash("after_dispatch");
+    });
+    await expect(runBroadcastWorker()).rejects.toBeInstanceOf(BroadcastCrash);
+    __setBroadcastCrashHookForTests(undefined);
+    expect(outbox).toHaveLength(1);
+
+    // A day later the key means nothing to Resend, so a fresh request would be
+    // a fresh email. The first one may well have been delivered.
+    const tomorrow = new Date(Date.now() + PROVIDER_IDEMPOTENCY_WINDOW_MS + 60_000);
+    const pass = await runBroadcastWorker({ now: tomorrow });
+    expect(pass.abandoned).toBe(1);
+    // 🔴 NOT ONE MORE REQUEST. Unsent and visible beats delivered twice.
+    expect(outbox).toHaveLength(1);
+
+    const [row] = await rowsOf(id);
+    expect(row!.status).toBe("ABANDONED");
+    expect(row!.lastError).toBe("idempotency_window_expired");
+    // And the broadcast says so honestly rather than claiming it was sent.
+    const b = await prisma.broadcast.findUnique({ where: { id } });
+    expect(b!.status).toBe("FAILED");
+    expect(b!.sentCount).toBe(0);
+  });
+});
+
+describe("🔴 two workers on the same rows", () => {
+  it("each recipient is delivered exactly once", async () => {
+    for (let i = 0; i < 6; i++) await makeClient();
+    const id = await queued("email");
+
+    // Both replicas tick in the same instant, as they do every minute in prod.
+    const [a, b] = await Promise.all([runBroadcastWorker(), runBroadcastWorker()]);
+
+    // Between them they did all the work and no more.
+    expect(a.sent + b.sent).toBe(6);
+    expect(outbox).toHaveLength(6);
+    const keys = outbox.map((m) => m.idempotencyKey);
+    expect(new Set(keys).size).toBe(6);
+
+    const rows = await rowsOf(id);
+    expect(rows).toHaveLength(6);
+    expect(rows.every((r) => r.status === "SENT")).toBe(true);
+    expect(rows.every((r) => r.attempts === 1)).toBe(true);
+  });
+
+  it("a claim taken over mid-flight cannot be settled by the worker that lost it", async () => {
+    await makeClient();
+    const id = await queued("email");
+    const [row] = await rowsOf(id);
+
+    // A dead worker's claim, older than the TTL.
+    await prisma.broadcastSend.update({
+      where: { id: row!.id },
+      data: { claimedAt: new Date(Date.now() - CLAIM_TTL_MS - 60_000), claimToken: "ghost" },
+    });
+
+    await runBroadcastWorker();
+    const after = await prisma.broadcastSend.findUnique({ where: { id: row!.id } });
+    expect(after!.status).toBe("SENT");
+    // The ghost's token is gone: the takeover overwrote it, which is exactly
+    // what makes the ghost's own reservation fail if it ever wakes up.
+    expect(after!.claimToken).toBeNull();
+  });
+});
+
+describe("🔴 the final status is the truth, not a tally", () => {
+  it("every recipient failing is FAILED - never SENT", async () => {
+    await makeClient();
+    await makeClient();
+    const id = await queued("email");
+    // 422 is a definitive refusal: the provider looked at it and said no.
+    failWith = { error: new ResendSendError(422), times: 99 };
+
+    await runBroadcastWorker();
+
+    const b = await prisma.broadcast.findUnique({ where: { id } });
+    expect(b!.status).toBe("FAILED");
+    expect(b!.sentCount).toBe(0);
+    expect(b!.failedCount).toBe(2);
+    const rows = await rowsOf(id);
+    // A permanent rejection is not retried: five attempts to be told the same
+    // thing five times is 10,000 pointless requests on a 2,000-person blast.
+    expect(rows.every((r) => r.status === "FAILED" && r.attempts === 1)).toBe(true);
+  });
+
+  it("some landing and some not is PARTIAL, which is its own word", async () => {
+    await makeClient();
+    await makeClient();
+    await makeClient();
+    const id = await queued("email");
+    failWith = { error: new ResendSendError(422), times: 1 };
+
+    await runBroadcastWorker();
+
+    const b = await prisma.broadcast.findUnique({ where: { id } });
+    // 🔴 Rounding this up to SENT is how a barber never learns that a third of
+    // his list did not hear from him.
+    expect(b!.status).toBe("PARTIAL");
+    expect(b!.sentCount).toBe(2);
+    expect(b!.failedCount).toBe(1);
+  });
+
+  it("counts come from the rows, so a second pass cannot inflate them", async () => {
+    await makeClient();
+    await makeClient();
+    const id = await queued("email");
+    await runBroadcastWorker({ batch: 1 }); // one recipient
+    await runBroadcastWorker({ batch: 1 }); // the other, then finalise
+    await runBroadcastWorker(); // nothing left to do
+
+    const b = await prisma.broadcast.findUnique({ where: { id } });
+    expect(b!.status).toBe("SENT");
+    expect(b!.sentCount).toBe(2);
+    expect(await prisma.broadcastSend.count({ where: { broadcastId: id, status: "SENT" } })).toBe(2);
+  });
+});
+
+describe("🔴 transient failures back off; permanent ones stop", () => {
+  it("a rate limit is retried on a schedule, then given up on", async () => {
+    await makeClient();
+    const id = await queued("email");
+    failWith = { error: new ResendSendError(429), times: 99 };
+
+    let now = new Date();
+    await runBroadcastWorker({ now });
+    let [row] = await rowsOf(id);
+    expect(row!.status).toBe("PENDING");
+    expect(row!.attempts).toBe(1);
+    // 🔴 Nothing was accepted, so a retry cannot duplicate - which is why a
+    // definitive rejection CLEARS the ambiguity marker.
+    expect(row!.lastAttemptAmbiguous).toBe(false);
+    expect(row!.nextAttemptAt!.getTime()).toBeGreaterThan(now.getTime());
+
+    // Not due yet: a backoff that is ignored is not a backoff.
+    expect((await runBroadcastWorker({ now })).claimed).toBe(0);
+
+    for (let i = 1; i < MAX_ATTEMPTS; i++) {
+      now = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+      await runBroadcastWorker({ now });
+    }
+    [row] = await rowsOf(id);
+    expect(row!.attempts).toBe(MAX_ATTEMPTS);
+    // FAILED, not ABANDONED: every attempt was definitively refused, so we
+    // know nothing was delivered.
+    expect(row!.status).toBe("FAILED");
+    expect(outbox).toHaveLength(MAX_ATTEMPTS);
+  });
+});
+
+describe("🔴 notifications get the same protection", () => {
+  it("one claim per recipient, and a stable collapse tag", async () => {
+    await makeClient({ push: true });
+    await makeClient({ push: true });
+    const sent: { endpoint: string; payload: string }[] = [];
+    __setPushSenderForTests({
+      async send(sub, payload) {
+        sent.push({ endpoint: sub.endpoint, payload });
+      },
+    });
+
+    const id = await queued("push", "Two chairs open Friday.");
+    const [a, b] = await Promise.all([runBroadcastWorker(), runBroadcastWorker()]);
+    expect(a.sent + b.sent).toBe(2);
+    expect(sent).toHaveLength(2);
+
+    // 🔴 Push has no provider idempotency key, so the guard is different in
+    // kind: a stable tag means a repeat REPLACES the earlier notification on
+    // the device instead of buzzing somebody twice about one promotion.
+    for (const s of sent) {
+      expect(JSON.parse(s.payload).tag).toBe(`broadcast:${id}`);
+    }
+    const rows = await rowsOf(id);
+    expect(rows.every((r) => r.status === "SENT" && r.attempts === 1)).toBe(true);
+  });
+
+  it("🔴 a dry run is recorded as a dry run, not as 'they have no device'", async () => {
+    // No injected sender, and DRY_RUN is on in the suite - so nothing reaches a
+    // device. Recording that as `no_push_device` would permanently libel every
+    // recipient of a simulated blast as unreachable.
+    await makeClient({ push: true });
+    const id = await queued("push");
+    await runBroadcastWorker();
+
+    const [row] = await rowsOf(id);
+    expect(row!.status).toBe("FAILED");
+    expect(row!.lastError).toBe("dry_run");
+    // And it never touched the attempt budget: no provider was contacted.
+    expect(row!.attempts).toBe(0);
+  });
+
+  it("a client whose every device is gone fails permanently, not forever", async () => {
+    await makeClient({ push: true });
+    __setPushSenderForTests({
+      async send() {
+        // 410 Gone: the push service says this subscription is dead, and the
+        // shared prune path deletes it.
+        const err = new Error("gone") as Error & { statusCode: number };
+        err.statusCode = 410;
+        throw err;
+      },
+    });
+
+    const id = await queued("push");
+    await runBroadcastWorker();
+
+    const [row] = await rowsOf(id);
+    expect(row!.status).toBe("FAILED");
+    expect(row!.lastError).toBe("no_push_device");
+    // There is no later attempt that could change it, so it is not retried.
+    expect(row!.attempts).toBe(1);
+  });
+});
+
+describe("🔴 the allowance is given back when it was not spent", () => {
+  it("releases the unused reservation into the month it was taken from", async () => {
+    await makeClient();
+    await makeClient();
+    const id = await queued("email");
+    failWith = { error: new ResendSendError(422), times: 1 };
+
+    // Billing is off in the suite, so the freeze reserved nothing. Stand a
+    // real reservation up so the RELEASE half has something to give back.
+    const periodStart = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1));
+    await prisma.shopEmailQuota.create({ data: { shopId, periodStart, reserved: 2 } });
+    await prisma.broadcast.update({ where: { id }, data: { emailsReserved: 2 } });
+
+    await runBroadcastWorker();
+
+    const b = await prisma.broadcast.findUnique({ where: { id } });
+    expect(b!.status).toBe("PARTIAL");
+    expect(b!.sentCount).toBe(1);
+    // One landed, one did not. The one that did not cost the shop nothing.
+    const quota = await prisma.shopEmailQuota.findFirst({ where: { shopId, periodStart } });
+    expect(quota!.reserved).toBe(1);
+  });
+
+  it("a finished broadcast is not released twice", async () => {
+    await makeClient();
+    const id = await queued("email");
+    const periodStart = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1));
+    await prisma.shopEmailQuota.create({ data: { shopId, periodStart, reserved: 5 } });
+    await prisma.broadcast.update({ where: { id }, data: { emailsReserved: 5 } });
+
+    await runBroadcastWorker();
+    await runBroadcastWorker();
+    await runBroadcastWorker();
+
+    // 5 reserved, 1 actually sent, 4 returned - once.
+    const quota = await prisma.shopEmailQuota.findFirst({ where: { shopId, periodStart } });
+    expect(quota!.reserved).toBe(1);
+  });
+});

@@ -126,13 +126,17 @@ describe("the serializer, through a real mounted router", () => {
 });
 
 describe("🔴 the unsubscribe link is a credential, not just a preference", () => {
-  it("never logs the token - it is the customer's whole rewards session", () => {
+  it("never logs the token", () => {
     // The footer of every broadcast email carries this URL, so it is the most
     // widely distributed secret the product has. A log line is forwarded
     // somewhere with a longer memory and looser access than the database.
-    const out = redactUrl("/api/unsubscribe/SECRET_MAGIC_TOKEN_VALUE");
+    //
+    // It is now a DEDICATED opt-out token rather than the rewards magic token
+    // it used to be - which shrinks the blast radius enormously, and changes
+    // nothing about whether it belongs in a log.
+    const out = redactUrl("/api/unsubscribe/SECRET_UNSUBSCRIBE_TOKEN");
     expect(out).toBe("/api/unsubscribe/[redacted]");
-    expect(out).not.toContain("SECRET_MAGIC_TOKEN_VALUE");
+    expect(out).not.toContain("SECRET_UNSUBSCRIBE_TOKEN");
   });
 });
 
@@ -157,8 +161,9 @@ describe("🔴 every route whose path IS a credential is covered", () => {
       "booking.public.ts/offer/",
       "rewards.ts/",
       "shops.ts/waitlist/cancel/",
-      // The unsubscribe link in every broadcast email carries the client's
-      // magicToken - the same credential as the rewards page.
+      // The unsubscribe link in every broadcast email. A dedicated,
+      // single-purpose token now - see engines/unsubscribeToken.ts - but still
+      // a credential in a URL, so still redacted.
       "unsubscribe.public.ts/",
     ]);
   });

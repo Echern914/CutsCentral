@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
+import { unsubscribeTokenDigest } from "../engines/unsubscribeToken.js";
 
 /**
  * ONE CLICK, AND THEY ARE OUT.
@@ -12,16 +13,31 @@ import { logger } from "../logger.js";
  * route which does not exist is worse than none - which was right. This is
  * that route.
  *
- * ── Design ──────────────────────────────────────────────────────────────────
+ * ── The credential ──────────────────────────────────────────────────────────
+ *
+ * 🔴 IT IS NOT THE REWARDS TOKEN. The first cut put `Client.magicToken` in the
+ * footer, which is that customer's entire rewards session - their visits,
+ * punches, appointments and settings - mailed out to a few thousand people
+ * every time a shop ran a promotion, through forwarding, screenshots, shared
+ * inboxes and every link scanner in between. What this accepts instead grants
+ * `emailOptedOut = true` and NOTHING ELSE: it cannot open the rewards page,
+ * read an appointment, or be exchanged for anything that can. See
+ * engines/unsubscribeToken.ts.
+ *
+ * The lookup is by DIGEST, so the database stores no usable link. The token
+ * itself is derived and stable, which is what lets an unsubscribe in a
+ * three-week-old email still work - a freshly minted token per send would
+ * break every earlier one, and CAN-SPAM requires the opposite.
+ *
+ * ── The rest of the design ──────────────────────────────────────────────────
  *
  * PUBLIC AND UNAUTHENTICATED, by necessity: somebody clicking a link in an
- * email has no session and is not going to make one. The client's magicToken
- * is the authority, exactly as it is for the rewards page - the token IS the
- * identification, and holding it is the proof.
+ * email has no session and is not going to make one.
  *
  * NEVER 404s ON A BAD TOKEN. Every request answers the same calm page whether
- * the token is real, spent, or invented. The alternative tells whoever is
- * probing which tokens belong to real people.
+ * the token is real, spent, or invented - and the same page when the write
+ * itself fails. The alternative tells whoever is probing which tokens belong
+ * to real people, and tells a mailbox provider that our unsubscribe is broken.
  *
  * BOTH VERBS. Gmail and Yahoo send a POST without the human seeing anything
  * (List-Unsubscribe-Post); a person clicking the link sends a GET and needs a
@@ -39,16 +55,20 @@ export const unsubscribeRouter: Router = Router();
 async function optOut(token: string): Promise<void> {
   if (!token || token.length > 200) return;
   try {
-    // Global token lookup, like the rewards page - it resolves without a shop.
+    // Global digest lookup: an unsubscribe link resolves before any shop is
+    // known, exactly as the rewards page does - but on a credential that can
+    // do only this.
     const { count } = await prisma.client.updateMany({
-      where: { magicToken: token, emailOptedOut: false },
+      where: { unsubscribeTokenHash: unsubscribeTokenDigest(token), emailOptedOut: false },
       data: { emailOptedOut: true, emailOptedOutAt: new Date() },
     });
     // Correlation only: never the token, never the address.
     if (count > 0) logger.info({ kind: "broadcast" }, "client unsubscribed from emails");
   } catch (err) {
-    // A failed write must not answer with an error page: the human would try
-    // again, and a provider would read a 500 as a broken unsubscribe.
+    // 🔴 A FAILED WRITE MUST NOT ANSWER WITH AN ERROR PAGE. The human would try
+    // again and see the same thing; worse, a mailbox provider reads a 500 from
+    // a List-Unsubscribe endpoint as a broken unsubscribe and holds it against
+    // the sending domain. Logged loudly, answered calmly.
     logger.error({ err }, "unsubscribe write failed");
   }
 }

@@ -260,8 +260,11 @@ export function createApp(): Express {
   // part of bookingDashboardRouter (the Square stack edits that file, and a
   // queue is not booking config). Dark behind WALK_IN_MODE_ENABLED.
   app.use("/api/walk-ins", dashboardLimiter, walkInDashboardRouter);
-  app.use("/api/payments", dashboardLimiter, paymentsDashboardRouter);
-  app.use("/api/broadcasts", broadcastsRouter); // barber payment settings
+  app.use("/api/payments", dashboardLimiter, paymentsDashboardRouter); // barber payment settings
+  // One message to many clients. Behind the ordinary dashboard limiter like
+  // every other authenticated surface - a route that can reach a shop's whole
+  // client book is the last one that should be exempt from rate limiting.
+  app.use("/api/broadcasts", dashboardLimiter, broadcastsRouter);
   app.use("/api/loyalty", dashboardLimiter, loyaltyRouter);
   app.use("/api/promos", dashboardLimiter, promotionsRouter);
   app.use("/api/billing", dashboardLimiter, billingRouter);

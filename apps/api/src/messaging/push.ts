@@ -93,6 +93,22 @@ export function __setPushSenderForTests(s: PushSender | undefined): void {
   testSender = s;
 }
 
+/**
+ * WILL a push actually reach a device right now?
+ *
+ * Mirrors emailDispatchMode(): one source of truth for deliverToSubs's own
+ * branch order, so a caller that must classify an outcome BEFORE dispatching
+ * cannot drift from what really happens. The broadcast worker needs it -
+ * without it a suppressed dry run is indistinguishable from "this client has
+ * no device", and every recipient of a dry-run blast would be permanently
+ * recorded as unreachable. An injected test sender counts as live for exactly
+ * the reason it does inside deliverToSubs: it IS the dispatch.
+ */
+export function pushDispatchMode(): "live" | "dry_run" {
+  if (testSender || testExpoSender) return "live";
+  return env.DRY_RUN ? "dry_run" : "live";
+}
+
 function senderOrNull(): PushSender | null {
   if (testSender) return testSender;
   if (env.DRY_RUN) return null;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
+import { prisma } from "@chairback/db";
 import { SCHEDULED_JOBS } from "./scheduler.js";
 
 /**
@@ -40,5 +41,34 @@ describe("job_lease seed coverage", () => {
   it("job names are unique", () => {
     const names = SCHEDULED_JOBS.map((j) => j.name);
     expect(new Set(names).size).toBe(names.length);
+  });
+
+  /**
+   * The same check verifyLeaseRows() makes at startup, made here against a
+   * database the migrations have actually been applied to.
+   *
+   * The structural test above proves a seed line was WRITTEN. This one proves
+   * it LANDED - a migration whose INSERT silently matched nothing (a renamed
+   * column, an ON CONFLICT that swallowed more than intended) would pass the
+   * first and fail this.
+   */
+  it("every scheduled job has a real job_lease row in the database", async () => {
+    const rows = await prisma.$queryRaw<{ name: string }[]>`SELECT "name" FROM "job_lease"`;
+    const seeded = new Set(rows.map((r) => r.name));
+    const missing = SCHEDULED_JOBS.map((j) => j.name).filter((n) => !seeded.has(n));
+    expect(missing, `job_lease rows missing (these jobs would NEVER run): ${missing.join(", ")}`)
+      .toEqual([]);
+  });
+
+  it("the broadcast worker is scheduled, not just seeded", () => {
+    // A lease with no job behind it is as dead as a job with no lease, and the
+    // broadcast worker is the ONLY thing that delivers a queued blast: without
+    // it, every send answers 202 and nothing ever leaves.
+    const job = SCHEDULED_JOBS.find((j) => j.name === "broadcast-worker");
+    expect(job, "broadcast-worker is not in SCHEDULED_JOBS").toBeDefined();
+    expect(job!.cronExpr).toBe("* * * * *");
+    // The TTL must comfortably exceed one pass, or a second replica could
+    // start claiming rows this one still holds.
+    expect(job!.ttlMs).toBeGreaterThanOrEqual(5 * 60_000);
   });
 });

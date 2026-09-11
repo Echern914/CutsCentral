@@ -114,8 +114,16 @@ export interface SendEmailInput {
    * unsubscribes the wrong client.
    */
   unsubscribeUrl?: string;
-  /** Correlation only. Never a token, address, or body fragment. */
-  meta?: { shopId?: string; appointmentId?: string; kind?: string };
+  /**
+   * Correlation only. Never a token, address, or body fragment.
+   *
+   * `clientId` is what lets a BOUNCE or a spam complaint be acted on later -
+   * without it, a provider event names a message id and nothing else, and the
+   * only way to find out whose mailbox rejected it would be to store the
+   * address. An id is not the address; the ledger still holds neither
+   * recipient, subject nor body.
+   */
+  meta?: { shopId?: string; appointmentId?: string; clientId?: string; kind?: string };
 }
 
 export interface SendEmailResult {
