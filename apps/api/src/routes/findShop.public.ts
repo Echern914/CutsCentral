@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { apiEnv, normalizeShopHandle } from "@chairback/config";
-import { prisma } from "@chairback/db";
+import { apiEnv, normalizeShopHandle, shopHandleKey } from "@chairback/config";
+import { Prisma, prisma } from "@chairback/db";
 
 /**
  * Find one shop by its exact handle.
@@ -49,19 +49,44 @@ findShopRouter.get("/", async (req, res) => {
 
   if (!handle) return miss();
 
-  const shop = await prisma.shop.findUnique({
-    where: { slug: handle },
-    select: {
-      name: true,
-      slug: true,
-      logoUrl: true,
-      addressCity: true,
-      addressRegion: true,
-      publicPageEnabled: true,
-      bookingMode: true,
-      bookingUrl: true,
-    },
-  });
+  const SELECT = {
+    name: true,
+    slug: true,
+    logoUrl: true,
+    addressCity: true,
+    addressRegion: true,
+    publicPageEnabled: true,
+    bookingMode: true,
+    bookingUrl: true,
+  } as const;
+
+  let shop = await prisma.shop.findUnique({ where: { slug: handle }, select: SELECT });
+
+  // 🔴 SECOND LOOK, SEPARATORS IGNORED - and only on a miss, so the common
+  // case is still one indexed unique lookup.
+  //
+  // "FadesByMikey Barbershop" mints `fadesbymikey-barbershop`: one word, then
+  // two, with the dash in a place nobody would guess. A customer who knows the
+  // shop perfectly well types "fades by mikey barbershop" and gets nothing.
+  // Comparing with the dashes stripped makes every spelling of the same
+  // letters resolve, and buys no ability to guess a shop nobody told you
+  // about: every letter is still required, in order.
+  //
+  // Matched in SQL against the SAME expression the index is built on, so this
+  // stays a single index probe rather than a scan over every shop.
+  if (!shop) {
+    const key = shopHandleKey(handle);
+    const hit = await prisma.$queryRaw<{ slug: string }[]>(
+      Prisma.sql`SELECT "slug" FROM "Shop"
+                 WHERE replace("slug", '-', '') = ${key}
+                 LIMIT 2`,
+    );
+    // Two shops whose handles differ only by dashes cannot be told apart from
+    // what was typed, so neither is offered - the same refusal as a miss.
+    if (hit.length === 1) {
+      shop = await prisma.shop.findUnique({ where: { slug: hit[0]!.slug }, select: SELECT });
+    }
+  }
   if (!shop || !shop.publicPageEnabled || !shop.slug) return miss();
 
   // Where to send them. A native shop books here; a shop whose calendar lives

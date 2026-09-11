@@ -46,14 +46,15 @@ export default function CustomerScreen() {
   /**
    * Find a shop by its exact handle.
    *
-   * 🔴 A LOOKUP, NOT A SEARCH. `drickcuttinup` finds Drick's shop; `drick`
-   * finds nothing. The API refuses prefixes, near misses and anything fuzzy,
-   * and answers a private shop exactly as it answers a shop that does not
-   * exist - so nobody can type letters and discover other people's businesses.
+   * 🔴 A LOOKUP, NOT A SEARCH. "Fades By Mikey Barbershop" and
+   * `fadesbymikey-barbershop` both find that shop; `fades` finds nothing. The
+   * API refuses prefixes, near misses and anything fuzzy, and answers a
+   * private shop exactly as it answers a shop that does not exist - so nobody
+   * can type letters and discover other people's businesses.
    *
-   * The input is forgiving about SHAPE though: capitals, a leading @, or the
-   * whole pasted link all resolve, because that is the same knowledge wearing
-   * different clothes.
+   * The input is forgiving about SHAPE though: the shop's full name, capitals,
+   * a leading @, where the spaces fall, or the whole pasted link all resolve,
+   * because that is the same knowledge wearing different clothes.
    */
   const [handleInput, setHandleInput] = useState("");
   const [handleErr, setHandleErr] = useState<string | null>(null);
@@ -72,7 +73,7 @@ export default function CustomerScreen() {
         // One message for every miss, matching the API's single refusal: we
         // must not hint that a shop exists but is private.
         setHandleErr(
-          "No shop with that name. Check the spelling with them, or use the link they sent.",
+          "No shop with that name. Check the full name with them, or use the link they sent.",
         );
         return;
       }
@@ -350,17 +351,24 @@ export default function CustomerScreen() {
             <View style={styles.line} />
           </View>
 
-          {/* Find the shop by the exact name they gave you. Deliberately worded
-              as "exact" up front: a customer who expects a search box and gets
-              nothing back assumes the app is broken, whereas one who knows it
-              wants the exact handle just asks their barber for it. */}
-          <Text style={styles.sub}>Know your shop&apos;s name? Enter it exactly:</Text>
+          {/* Find the shop by its FULL name. Still exact - a prefix or a typo
+              finds nothing - but the whole name now counts as knowing it,
+              because the name is what minted the handle. Worded as "full name"
+              rather than "exactly" because a customer who reads "exactly" and
+              holds only the name does not try, and a customer who expects a
+              search box and gets nothing assumes the app is broken. */}
+          <Text style={styles.sub}>
+            Know your shop&apos;s name? Enter it in full:
+          </Text>
           <TextInput
             value={handleInput}
             onChangeText={setHandleInput}
-            placeholder="drickcuttinup"
+            placeholder="Fades By Mikey Barbershop"
             placeholderTextColor="#6b6b70"
-            autoCapitalize="none"
+            // Names are capitalised by the people who type them, and the
+            // finder folds case anyway - fighting the keyboard here only made
+            // the field feel broken.
+            autoCapitalize="words"
             autoCorrect={false}
             autoComplete="off"
             style={styles.input}

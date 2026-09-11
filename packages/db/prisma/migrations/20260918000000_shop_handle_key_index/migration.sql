@@ -1,0 +1,13 @@
+-- Finding a shop by its own name, with the separators ignored.
+--
+-- "FadesByMikey Barbershop" mints the handle `fadesbymikey-barbershop` - one
+-- word, then two, with the dash somewhere nobody would guess. A customer who
+-- knows the shop perfectly well types its name and gets a 404. The finder now
+-- falls back to comparing handles with the dashes stripped, which is still
+-- exact matching (every letter, in order) and buys no ability to browse.
+--
+-- This index is what keeps that fallback a single probe instead of a scan over
+-- every shop on the platform. It must stay in step with shopHandleKey() in
+-- packages/config/src/shopHandle.ts - the query is written against exactly
+-- this expression.
+CREATE INDEX "Shop_handle_key_idx" ON "Shop" ((replace("slug", '-', '')));

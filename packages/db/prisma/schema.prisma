@@ -663,6 +663,11 @@ model Shop {
   affiliateAccount      AffiliateAccount?
 
   @@index([ownerId])
+  // The separator-insensitive handle index (`replace(slug,'-','')`) is added BY
+  // HAND in the migration - Prisma cannot express an expression index. It is
+  // what keeps the shop finder's second look a single probe; it must stay in
+  // step with shopHandleKey() in packages/config/src/shopHandle.ts.
+
 }
 
 enum ReferralStatus {

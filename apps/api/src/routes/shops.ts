@@ -29,6 +29,7 @@ import {
   TIER_MIN_VISITS,
   parseTierThresholds,
   validateTierThresholds,
+  shopSlugFromName,
 } from "@chairback/config";
 import { Prisma, prisma, runWithShop } from "@chairback/db";
 import { recomputeLoyaltyTiers } from "../engines/loyaltyTierRecompute.js";
@@ -79,13 +80,16 @@ import {
 } from "../engines/waitlistAudit.js";
 export const shopsRouter: Router = Router();
 
-/** URL handle for the public page: lowercase, digits, single dashes. */
+/**
+ * URL handle for the public page.
+ *
+ * 🔴 THE SHARED TRANSFORM, not a second copy of it. This used to be its own
+ * local regex and the shop FINDER had another, subtly different one - which is
+ * how typing a shop's own name came to 404 while its handle worked. One
+ * function now mints handles and reads them. See shopSlugFromName.
+ */
 function slugify(name: string): string {
-  const base = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return base || "shop";
+  return shopSlugFromName(name) || "shop";
 }
 
 /** First free slug: base, base-2, base-3... (unique index is the backstop). */
