@@ -91,3 +91,54 @@ describe("the manage page says where and how long", () => {
     expect(screen.getByText("Where")).toBeTruthy();
   });
 });
+
+describe("the manage page tells the truth about status", () => {
+  it("🔴 a pending request reads 'Requested', never 'Confirmed'", () => {
+    render(
+      <ManageClient
+        token="tok"
+        data={data({ status: "PENDING", requested: { reason: "approval" }, canCancel: false, canReschedule: false })}
+      />,
+    );
+    expect(screen.getByText("Requested")).toBeTruthy();
+    expect(screen.queryByText("Confirmed")).toBeNull();
+    expect(screen.queryByText("Booked")).toBeNull();
+    expect(screen.getByText("Waiting for Chern Cuts to confirm")).toBeTruthy();
+  });
+
+  it("names an unfinished payment instead of the shop", () => {
+    render(
+      <ManageClient
+        token="tok"
+        data={data({ status: "PENDING", requested: { reason: "payment" }, canCancel: false, canReschedule: false })}
+      />,
+    );
+    expect(screen.getByText("Payment not finished")).toBeTruthy();
+  });
+
+  it("still says 'Requested' when an older API sends no reason", () => {
+    render(<ManageClient token="tok" data={data({ status: "PENDING", canCancel: false, canReschedule: false })} />);
+    expect(screen.getByText("Requested")).toBeTruthy();
+    expect(screen.queryByText("Confirmed")).toBeNull();
+  });
+
+  it("a booked appointment reads 'Booked'", () => {
+    render(<ManageClient token="tok" data={data()} />);
+    expect(screen.getByText("Booked")).toBeTruthy();
+    expect(screen.queryByText("Confirmed")).toBeNull();
+  });
+
+  it("a no-show reads 'No-show' and is not thanked for visiting", () => {
+    render(<ManageClient token="tok" data={data({ status: "NO_SHOW" })} />);
+    expect(screen.getByText("No-show")).toBeTruthy();
+    expect(screen.queryByText("Completed")).toBeNull();
+    expect(screen.queryByText(/Thanks for visiting/)).toBeNull();
+    expect(screen.getByText("Chern Cuts marked this appointment as a no-show.")).toBeTruthy();
+  });
+
+  it("a completed visit reads 'Completed' and is thanked", () => {
+    render(<ManageClient token="tok" data={data({ status: "COMPLETED" })} />);
+    expect(screen.getByText("Completed")).toBeTruthy();
+    expect(screen.getByText("Thanks for visiting Chern Cuts!")).toBeTruthy();
+  });
+});
