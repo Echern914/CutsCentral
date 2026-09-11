@@ -235,7 +235,7 @@ describe("bonus punches respect the master gate", () => {
     const refused = await request(app)
       .post(`/api/dashboard/clients/${clientId}/bonus`)
       .set("Cookie", cookie)
-      .send({ count: 1 });
+      .send({ count: 1, reason: "Test adjustment" });
     expect(refused.status).toBe(403);
     expect(refused.body.error).toBe("rewards_disabled");
     expect(await balance()).toBe(before);
@@ -244,7 +244,7 @@ describe("bonus punches respect the master gate", () => {
     const ok = await request(app)
       .post(`/api/dashboard/clients/${clientId}/bonus`)
       .set("Cookie", cookie)
-      .send({ count: 1 });
+      .send({ count: 1, reason: "Test adjustment" });
     expect(ok.status).toBe(200);
     expect(await balance()).toBe(before + 1);
   });

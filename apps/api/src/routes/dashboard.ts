@@ -457,11 +457,19 @@ dashboardRouter.post("/nudge/:clientId", smsLimiter, requireActiveAccess, async 
   }
 });
 
+/**
+ * Why a staff member changed a client's punches, in their own words. REQUIRED
+ * for every manual adjustment (a bonus, an undo, an edit), stored beside the
+ * entry with who made it (PunchLedger.reason / actorUserId) and never shown to
+ * the customer. Two characters minimum so "." can't stand in for a reason.
+ */
+const ledgerReason = z.string().trim().min(2).max(200);
+
 // Manual redemption of a specific menu reward.
 dashboardRouter.post("/redeem/:clientId", async (req, res) => {
   const shop = req.shop!;
   const parsed = z
-    .object({ rewardId: z.string().min(1) })
+    .object({ rewardId: z.string().min(1), reason: ledgerReason.optional() })
     .strict()
     .safeParse(req.body);
   if (!parsed.success) {
@@ -475,7 +483,10 @@ dashboardRouter.post("/redeem/:clientId", async (req, res) => {
     return;
   }
   // Atomic check-and-redeem (double-click / two tabs can't redeem twice).
-  const result = await redeemReward(shop.id, client.id, parsed.data.rewardId);
+  const result = await redeemReward(shop.id, client.id, parsed.data.rewardId, {
+    actorUserId: req.userId ?? null,
+    reason: parsed.data.reason ?? null,
+  });
   if (!result.ok) {
     if (result.reason === "reward_not_found") {
       res.status(404).json({ error: "reward_not_found" });
@@ -1201,13 +1212,22 @@ dashboardRouter.post("/clients/:clientId/bonus", async (req, res) => {
     return;
   }
   const cardTypeId = cardParsed.data.cardTypeId ?? null;
+  // A bonus is a manual adjustment: no reason, no punches.
+  const reason = ledgerReason.safeParse(req.body?.reason);
+  if (!reason.success) {
+    res.status(400).json({ error: "reason_required" });
+    return;
+  }
   const db = forShop(shop.id);
   const client = await db.client.findFirst({ where: { id: req.params.clientId } });
   if (!client) {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const result = await grantBonusPunches(shop.id, client.id, count, cardTypeId);
+  const result = await grantBonusPunches(shop.id, client.id, count, cardTypeId, {
+    actorUserId: req.userId ?? null,
+    reason: reason.data,
+  });
   if (!result.ok) {
     if (result.reason === "rewards_disabled") {
       res.status(403).json({ error: "rewards_disabled" });
@@ -1456,6 +1476,18 @@ dashboardRouter.get("/clients/:clientId/ledger", async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
+  // Who made the manual entries. User is default-deny inside a tenant
+  // transaction, so names are read as owner - AFTER the tenant transaction has
+  // closed, keeping this request to one pooled connection at a time.
+  const actorIds = [
+    ...new Set(data.entries.map((e) => e.actorUserId).filter((v): v is string => v !== null)),
+  ];
+  const actors =
+    actorIds.length === 0
+      ? []
+      : await runAsOwner((otx) =>
+          otx.user.findMany({ where: { id: { in: actorIds } }, select: { id: true, name: true, email: true } }),
+        );
   const balanceByCard = new Map(
     data.groups.map((g) => [
       g.cardTypeId,
@@ -1476,6 +1508,7 @@ dashboardRouter.get("/clients/:clientId/ledger", async (req, res) => {
       balance: balanceByCard.get(c.id) ?? 0,
     })),
   ];
+  const actorName = new Map(actors.map((a) => [a.id, a.name?.trim() || a.email]));
   res.json({
     balance,
     cards,
@@ -1486,6 +1519,10 @@ dashboardRouter.get("/clients/:clientId/ledger", async (req, res) => {
       redeemed: e.punchesRedeemed,
       runningBalance: e.runningBalance,
       note: e.note,
+      // Who made a manual entry, and why - the staff-side trail. Null for the
+      // system's own entries and for history older than the columns.
+      by: e.actorUserId ? (actorName.get(e.actorUserId) ?? "A former team member") : null,
+      reason: e.reason,
       card: e.cardType
         ? {
             id: e.cardType.id,
@@ -1515,13 +1552,21 @@ dashboardRouter.get("/clients/:clientId/ledger", async (req, res) => {
 // service (entry must belong to this shop + this client).
 dashboardRouter.post("/clients/:clientId/ledger/:entryId/reverse", async (req, res) => {
   const shop = req.shop!;
+  const reason = ledgerReason.safeParse(req.body?.reason);
+  if (!reason.success) {
+    res.status(400).json({ error: "reason_required" });
+    return;
+  }
   const db = forShop(shop.id);
   const client = await db.client.findFirst({ where: { id: req.params.clientId } });
   if (!client) {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const result = await reverseLedgerEntry(shop.id, client.id, req.params.entryId);
+  const result = await reverseLedgerEntry(shop.id, client.id, req.params.entryId, {
+    actorUserId: req.userId ?? null,
+    reason: reason.data,
+  });
   if (!result.ok) {
     const status = result.reason === "entry_not_found" ? 404 : 409;
     res.status(status).json({ error: result.reason });
@@ -1538,11 +1583,16 @@ dashboardRouter.post("/clients/:clientId/ledger/:entryId/reverse", async (req, r
 dashboardRouter.post("/clients/:clientId/ledger/:entryId/adjust", async (req, res) => {
   const shop = req.shop!;
   const parsed = z
-    .object({ punches: z.number().int().min(1).max(20) })
+    .object({ punches: z.number().int().min(1).max(20), reason: z.unknown().optional() })
     .strict()
     .safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const reason = ledgerReason.safeParse(parsed.data.reason);
+  if (!reason.success) {
+    res.status(400).json({ error: "reason_required" });
     return;
   }
   const db = forShop(shop.id);
@@ -1556,6 +1606,7 @@ dashboardRouter.post("/clients/:clientId/ledger/:entryId/adjust", async (req, re
     client.id,
     req.params.entryId,
     parsed.data.punches,
+    { actorUserId: req.userId ?? null, reason: reason.data },
   );
   if (!result.ok) {
     if (result.reason === "entry_not_found") {

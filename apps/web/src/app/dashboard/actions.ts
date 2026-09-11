@@ -274,11 +274,14 @@ export async function saveNotesAction(
 export async function bonusPunchAction(
   clientId: string,
   count: number,
+  // Why - required: every manual punch change records who made it and why.
+  reason: string,
   // Which punch card to credit; omitted/null = the default card.
   cardTypeId?: string | null,
 ): Promise<{ ok: boolean }> {
   const res = await apiSend("POST", `/api/dashboard/clients/${clientId}/bonus`, {
     count,
+    reason,
     ...(cardTypeId !== undefined && { cardTypeId }),
   });
   revalidatePath(`/dashboard/clients/${clientId}`);
@@ -308,10 +311,12 @@ export async function logVisitAction(
 export async function reversePunchAction(
   clientId: string,
   entryId: string,
+  reason: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const res = await apiSend(
     "POST",
     `/api/dashboard/clients/${clientId}/ledger/${entryId}/reverse`,
+    { reason },
   );
   revalidatePath(`/dashboard/clients/${clientId}`);
   revalidatePath("/dashboard/clients");
@@ -323,11 +328,12 @@ export async function adjustPunchAction(
   clientId: string,
   entryId: string,
   punches: number,
+  reason: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const res = await apiSend(
     "POST",
     `/api/dashboard/clients/${clientId}/ledger/${entryId}/adjust`,
-    { punches },
+    { punches, reason },
   );
   revalidatePath(`/dashboard/clients/${clientId}`);
   revalidatePath("/dashboard/clients");

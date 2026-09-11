@@ -111,7 +111,7 @@ describe("manager rotation", () => {
     const punch = await request(app)
       .post(`/api/dashboard/clients/${id}/bonus`)
       .set("Cookie", ownerCookie)
-      .send({});
+      .send({ reason: "Test adjustment" });
     expect(punch.status).toBe(200);
 
     // And so does the manager rotation, which pokes it too.

@@ -131,6 +131,11 @@ export async function seedDemoShop(): Promise<DemoSeedResult> {
       // clearing anything viewers submitted (reviews, waitlist joins, bookings).
       const w = { shopId: shop.id };
       await tx.nudge.deleteMany({ where: w });
+      // 🔴 The punch ledger is append-only at the database (a trigger refuses
+      // deletes). The demo tenant is synthetic and rebuilt from scratch every
+      // night, so this ONE transaction declares a teardown - transaction-local,
+      // gone at commit. Nothing that holds a real customer's punches may do this.
+      await tx.$executeRawUnsafe("SELECT set_config('chairback.ledger_teardown', 'on', true)");
       await tx.punchLedger.deleteMany({ where: w });
       await tx.appointment.deleteMany({ where: w });
       await tx.recurringSeries.deleteMany({ where: w });

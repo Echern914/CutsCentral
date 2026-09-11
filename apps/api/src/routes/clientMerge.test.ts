@@ -187,7 +187,8 @@ describe("client merge routes", () => {
     const earn = (ledger.body.entries as { id: string; earned: number }[]).find((e) => e.earned > 0)!;
     const undo = await request(app)
       .post(`/api/dashboard/clients/${loser}/ledger/${earn.id}/reverse`)
-      .set("Cookie", cookieA);
+      .set("Cookie", cookieA)
+      .send({ reason: "Test adjustment" });
     expect(undo.status).toBe(200);
     expect(await balanceOf(cookieA, loser)).toBe(0);
 
@@ -228,7 +229,7 @@ describe("client merge routes", () => {
     const bonus = await request(app)
       .post(`/api/dashboard/clients/${loser}/bonus`)
       .set("Cookie", cookieA)
-      .send({ count: 2, cardTypeId: cardId });
+      .send({ count: 2, cardTypeId: cardId, reason: "Test adjustment" });
     expect(bonus.status).toBe(200);
 
     // The merge must SUCCEED despite the colliding grant...

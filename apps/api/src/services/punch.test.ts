@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { forShop, prisma } from "@chairback/db";
+import { forShop, prisma, runWithShop } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import {
   adjustLedgerEntry,
+  clawBackVisitEarn,
   earnPunchForVisit,
   grantBonusPunches,
   redeemReward,
@@ -241,88 +242,150 @@ describe("reverseLedgerEntry (undo a punch)", () => {
     if (!result.ok) expect(result.reason).toBe("entry_not_found");
   });
 
-  // Regression for the ingest claw-back orphan bug: when a barber manually undoes
-  // a VISIT's earn and Acuity later cancels/no-shows that visit, the claw-back
-  // must remove BOTH the earn (visitId set) AND its correction (visitId null,
-  // reversalOfId = earn.id). Deleting only by visitId would orphan the
-  // correction and silently understate the balance. This asserts the correction
-  // is reachable via reversalOfId = earn.id (the exact key ingest's cleanup uses)
-  // and that the two-step delete leaves a clean, correct balance.
-  it("a reversed visit-earn's correction is removable by the visit claw-back", async () => {
+  // The claw-back of a visit whose earn the barber had ALREADY undone: the
+  // earn + its correction already net to zero, so taking the visit back adds
+  // nothing - and keeps both rows (the ledger no longer deletes history).
+  it("clawing back an already-undone visit earn writes nothing new and keeps the history", async () => {
     const before = await balance();
     const visitId = await makeVisit("Standard Haircut");
     await earnPunchForVisit(earnShop(), clientId, visitId, "Standard Haircut"); // +2
     const earn = await prisma.punchLedger.findUnique({ where: { visitId } });
     await reverseLedgerEntry(shopId, clientId, earn!.id); // barber undoes it
-    expect(await balance()).toBe(before); // earn + correction net to 0
-
-    // The correction is discoverable by reversalOfId = earn.id (ingest's key).
-    const correction = await prisma.punchLedger.findFirst({
-      where: { shopId, clientId, reversalOfId: earn!.id },
-    });
-    expect(correction).not.toBeNull();
-    expect(correction!.visitId).toBeNull(); // why a visitId-only delete misses it
-
-    // Simulate ingest's claw-back (delete correction(s) THEN the earn).
-    await prisma.punchLedger.deleteMany({ where: { reversalOfId: earn!.id } });
-    await prisma.punchLedger.deleteMany({ where: { visitId } });
-
-    // No orphan left; balance is exactly back to where it started (not under).
-    const leftover = await prisma.punchLedger.findMany({
-      where: { shopId, clientId, OR: [{ visitId }, { reversalOfId: earn!.id }] },
-    });
-    expect(leftover).toHaveLength(0);
     expect(await balance()).toBe(before);
+    const rowsBefore = await prisma.punchLedger.count({ where: { shopId, clientId } });
+
+    await runWithShop(shopId, (tx) => clawBackVisitEarn(tx, shopId, visitId));
+
+    expect(await balance()).toBe(before);
+    expect(await prisma.punchLedger.count({ where: { shopId, clientId } })).toBe(rowsBefore);
+    // The slot is free, the earn row survives, detached.
+    expect(await prisma.punchLedger.findUnique({ where: { visitId } })).toBeNull();
+    expect((await prisma.punchLedger.findUnique({ where: { id: earn!.id } }))!.visitId).toBeNull();
   });
 
-  // Regression for the audit-found sibling bug: when a barber EDITS a visit-earn's
-  // count (adjustLedgerEntry, not just undo) and Acuity later cancels that visit,
-  // the claw-back must remove THREE rows: the original earn (visitId set), its
-  // correction (reversalOfId = earn.id), AND the fresh re-granted earn
-  // (correctionOfId = correction.id, visitId null, reversalOfId null). Deleting only
-  // earn+correction would orphan the regrant and OVERSTATE the balance. This pins
-  // the regrant being reachable via correctionOfId -> correction -> earn, the exact
-  // chain ingest's claw-back now walks (regrant first, then correction, then earn).
-  it("an edited visit-earn's regrant is removable by the visit claw-back", async () => {
+  // An EDITED visit earn (original -> correction -> regrant of +5) that the
+  // shop's calendar later cancels. The regrant is the only thing still
+  // counting; the claw-back must offset IT (not orphan it, which overstated
+  // the balance before the chain walk existed) and leave every row in place.
+  it("clawing back an edited visit earn offsets the regrant and keeps every row", async () => {
     const before = await balance();
     const visitId = await makeVisit("Standard Haircut");
     await earnPunchForVisit(earnShop(), clientId, visitId, "Standard Haircut"); // +2
     const earn = await prisma.punchLedger.findUnique({ where: { visitId } });
     await adjustLedgerEntry(shopId, clientId, earn!.id, 5); // edit 2 -> 5
-    expect(await balance()).toBe(before + 5); // original offset, regrant of +5 stands
-
-    // The regrant links to the correction, which links to the earn.
-    const correction = await prisma.punchLedger.findFirst({
-      where: { shopId, clientId, reversalOfId: earn!.id },
-    });
-    expect(correction).not.toBeNull();
+    expect(await balance()).toBe(before + 5);
     const regrant = await prisma.punchLedger.findFirst({
-      where: { shopId, clientId, correctionOfId: correction!.id },
+      where: { shopId, clientId, correctionOf: { reversalOfId: earn!.id } },
     });
     expect(regrant).not.toBeNull();
-    expect(regrant!.visitId).toBeNull(); // why visitId-only delete misses it
-    expect(regrant!.reversalOfId).toBeNull(); // and why reversalOfId delete misses it too
 
-    // Simulate ingest's claw-back: regrant(s) -> correction(s) -> earn.
-    const corrections = await prisma.punchLedger.findMany({
-      where: { reversalOfId: earn!.id },
-      select: { id: true },
-    });
-    const correctionIds = corrections.map((c) => c.id);
-    await prisma.punchLedger.deleteMany({ where: { correctionOfId: { in: correctionIds } } });
-    await prisma.punchLedger.deleteMany({ where: { id: { in: correctionIds } } });
-    await prisma.punchLedger.deleteMany({ where: { visitId } });
+    await runWithShop(shopId, (tx) => clawBackVisitEarn(tx, shopId, visitId));
 
-    // Whole footprint gone; balance exactly back to start (not over).
-    const leftover = await prisma.punchLedger.findMany({
-      where: {
-        shopId,
-        clientId,
-        OR: [{ visitId }, { reversalOfId: earn!.id }, { correctionOfId: { in: correctionIds } }],
-      },
-    });
-    expect(leftover).toHaveLength(0);
     expect(await balance()).toBe(before);
+    const offset = await prisma.punchLedger.findFirst({ where: { reversalOfId: regrant!.id } });
+    expect(offset).toMatchObject({ punchesEarned: 0, punchesRedeemed: 5 });
+    expect((await prisma.punchLedger.findUnique({ where: { id: regrant!.id } }))!.reversedAt).not.toBeNull();
+    // Earn, edit-correction, regrant and the take-back offset: four rows, all kept.
+    const chain = await prisma.punchLedger.findMany({
+      where: { OR: [{ id: earn!.id }, { reversalOfId: earn!.id }, { id: regrant!.id }, { reversalOfId: regrant!.id }] },
+    });
+    expect(chain).toHaveLength(4);
+  });
+
+  it("a visit that comes back after a claw-back earns again - fresh, through the normal path", async () => {
+    const before = await balance();
+    const visitId = await makeVisit("Standard Haircut");
+    await earnPunchForVisit(earnShop(), clientId, visitId, "Standard Haircut"); // +2
+    await runWithShop(shopId, (tx) => clawBackVisitEarn(tx, shopId, visitId));
+    expect(await balance()).toBe(before);
+    const again = await earnPunchForVisit(earnShop(), clientId, visitId, "Standard Haircut");
+    expect(again?.earned).toBe(2);
+    expect(await balance()).toBe(before + 2);
+  });
+});
+
+describe("🔴 the ledger is append-only - at the database", () => {
+  it("refuses to change an entry's amount", async () => {
+    await grantBonusPunches(shopId, clientId, 1);
+    const entry = await prisma.punchLedger.findFirstOrThrow({
+      where: { shopId, clientId, note: "bonus" },
+      orderBy: { createdAt: "desc" },
+    });
+    await expect(
+      prisma.punchLedger.update({ where: { id: entry.id }, data: { punchesEarned: 50 } }),
+    ).rejects.toThrow(/append-only/);
+    await expect(
+      prisma.punchLedger.update({ where: { id: entry.id }, data: { note: "rewritten" } }),
+    ).rejects.toThrow(/append-only/);
+  });
+
+  it("refuses to delete an entry while its client exists", async () => {
+    await grantBonusPunches(shopId, clientId, 1);
+    const entry = await prisma.punchLedger.findFirstOrThrow({
+      where: { shopId, clientId, note: "bonus" },
+      orderBy: { createdAt: "desc" },
+    });
+    await expect(prisma.punchLedger.delete({ where: { id: entry.id } })).rejects.toThrow(/append-only/);
+    // ...including from inside the shop's own tenant transaction, where the
+    // Shop table is invisible (the trigger checks as its definer, not the caller).
+    await expect(
+      runWithShop(shopId, (tx) => tx.punchLedger.delete({ where: { id: entry.id } })),
+    ).rejects.toThrow(/append-only/);
+  });
+
+  it("refuses to un-reverse an entry", async () => {
+    await grantBonusPunches(shopId, clientId, 1);
+    const entry = await prisma.punchLedger.findFirstOrThrow({
+      where: { shopId, clientId, note: "bonus" },
+      orderBy: { createdAt: "desc" },
+    });
+    await reverseLedgerEntry(shopId, clientId, entry.id);
+    await expect(
+      prisma.punchLedger.update({ where: { id: entry.id }, data: { reversedAt: null } }),
+    ).rejects.toThrow(/append-only/);
+  });
+
+  it("deleting a visit keeps its ledger rows (the link detaches)", async () => {
+    const visitId = await makeVisit("Standard Haircut");
+    await earnPunchForVisit(earnShop(), clientId, visitId, "Standard Haircut");
+    const earn = await prisma.punchLedger.findUniqueOrThrow({ where: { visitId } });
+    await prisma.visit.delete({ where: { id: visitId } });
+    const kept = await prisma.punchLedger.findUnique({ where: { id: earn.id } });
+    expect(kept).not.toBeNull();
+    expect(kept!.visitId).toBeNull();
+  });
+
+  it("tearing down a whole client still cascades", async () => {
+    const other = await prisma.client.create({
+      data: { shopId, acuityClientKey: `tel:+1302555${String(7000 + seq++)}`, magicToken: randomToken() },
+    });
+    await grantBonusPunches(shopId, other.id, 3);
+    await prisma.client.delete({ where: { id: other.id } });
+    expect(await prisma.punchLedger.count({ where: { clientId: other.id } })).toBe(0);
+  });
+});
+
+describe("manual adjustments record who and why", () => {
+  it("bonus, undo, edit and redeem carry the actor and the reason", async () => {
+    const audit = { actorUserId: userId, reason: "Referred a friend" };
+    const bonus = await grantBonusPunches(shopId, clientId, 2, null, audit);
+    expect(bonus.ok).toBe(true);
+    const row = await prisma.punchLedger.findFirstOrThrow({
+      where: { shopId, clientId, note: "bonus", reason: "Referred a friend" },
+    });
+    expect(row.actorUserId).toBe(userId);
+
+    await reverseLedgerEntry(shopId, clientId, row.id, { actorUserId: userId, reason: "Wrong client" });
+    const undo = await prisma.punchLedger.findFirstOrThrow({ where: { reversalOfId: row.id } });
+    expect(undo).toMatchObject({ actorUserId: userId, reason: "Wrong client" });
+  });
+
+  it("the system's own writes carry no actor", async () => {
+    const visitId = await makeVisit("Standard Haircut");
+    await earnPunchForVisit(earnShop(), clientId, visitId, "Standard Haircut");
+    const earn = await prisma.punchLedger.findUniqueOrThrow({ where: { visitId } });
+    expect(earn.actorUserId).toBeNull();
+    expect(earn.reason).toBeNull();
   });
 });
 
