@@ -378,10 +378,20 @@ async function deliverRecipient(params: {
       await settle(row.id, "FAILED", mode);
       return "failed";
     }
-    // The unsubscribe link has to resolve when somebody clicks it, so the
-    // digest is durable BEFORE the message carrying it leaves. Idempotent: the
-    // token is derived, so this writes the same value every time.
-    await ensureUnsubscribeDigest(client.id, client.unsubscribeTokenHash);
+    // 🔴 NO DURABLE UNSUBSCRIBE, NO EMAIL. The link in the footer resolves by
+    // looking this digest up, so a message that leaves before it is committed
+    // carries an unsubscribe that 404s - which is both unlawful to send and
+    // the single strongest negative signal a mailbox provider can record
+    // against the sending domain. Every shop's booking confirmations ride on
+    // that domain.
+    //
+    // So this is a HARD GATE, checked before an attempt is reserved and before
+    // any provider is contacted. A database that cannot take the write is a
+    // reason to send this recipient LATER, never a reason to send them a
+    // broken link now.
+    if (!(await ensureUnsubscribeDigest(client.id, client.unsubscribeTokenHash))) {
+      return unsubscribeDigestUnavailable(row.id, now);
+    }
   }
 
   crashHook?.("before_dispatch", { broadcastId: ctx.id, clientId: client.id });
@@ -492,17 +502,53 @@ function pushLandingFor(shop: BroadcastShop): string {
  * rotates: an unsubscribe link has to keep working long after the email that
  * carried it, and re-minting would silently break every earlier one.
  */
-async function ensureUnsubscribeDigest(clientId: string, current: string | null): Promise<void> {
+async function ensureUnsubscribeDigest(
+  clientId: string,
+  current: string | null,
+): Promise<boolean> {
   const digest = unsubscribeDigestFor(clientId);
-  if (current === digest) return;
-  await runAsOwner((tx) =>
-    tx.client.updateMany({ where: { id: clientId }, data: { unsubscribeTokenHash: digest } }),
-  ).catch((err: unknown) => {
-    // Not fatal to the send: the digest is written again on the next attempt,
-    // and an email whose unsubscribe link 404s is worse than one delayed - so
-    // this is logged loudly rather than swallowed.
-    logger.error({ err, clientId }, "unsubscribe digest write failed");
+  if (current === digest) return true;
+  try {
+    await runAsOwner((tx) =>
+      tx.client.updateMany({ where: { id: clientId }, data: { unsubscribeTokenHash: digest } }),
+    );
+    return true;
+  } catch (err: unknown) {
+    // 🔴 A CLASSIFICATION AND AN ID, NOTHING ELSE. A driver error carries the
+    // statement it failed on, and the parameter of this one is the digest
+    // itself - the value the whole scheme exists to keep out of places with
+    // longer memories than the database. The recipient's address, the subject
+    // and the body were never in scope here and must not become so.
+    logger.error(
+      {
+        clientId,
+        errName: err instanceof Error ? err.name : "unknown",
+        reason: "unsubscribe_digest_write_failed",
+      },
+      "broadcast held back - could not persist the unsubscribe credential",
+    );
+    return false;
+  }
+}
+
+/**
+ * The digest could not be committed, so nothing may be sent to this person yet.
+ *
+ * Put the recipient back for a later pass on the ordinary first-step backoff.
+ * Deliberately NOT a failure and NOT an attempt: no provider was contacted, so
+ * there is nothing to be ambiguous about and nothing to charge against the
+ * budget - a database blip must not spend five of a recipient's five chances.
+ *
+ * If the release itself cannot be written (the same outage, most likely), the
+ * row simply stays claimed until CLAIM_TTL_MS lapses and another pass takes it
+ * over. Slower, and still correct: the one outcome ruled out either way is an
+ * email going out with a link that resolves to nothing.
+ */
+async function unsubscribeDigestUnavailable(rowId: string, now: Date): Promise<RowOutcome> {
+  await release(rowId, "unsubscribe_digest_unavailable", new Date(now.getTime() + backoffFor(0)), {
+    ambiguous: false,
   });
+  return "retry";
 }
 
 /**

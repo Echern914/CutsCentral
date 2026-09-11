@@ -507,25 +507,59 @@ describe("🔴 unsubscribe", () => {
     expect((await request(app).post(path)).status).toBe(200);
   });
 
-  it("🔴 answers calmly even when the write fails", async () => {
-    // A 500 from a List-Unsubscribe endpoint is read by mailbox providers as a
-    // broken unsubscribe and held against the sending domain - and the human
-    // would just click again and see the same wall.
-    const { url } = await mailOneAndGetUnsubscribeUrl();
+  it("🔴 NEVER claims success when the write failed", async () => {
+    // The version this replaces caught the error and rendered "You're
+    // unsubscribed" anyway. Somebody reads that, believes it, and the next
+    // promotion arrives - at which point they do not click unsubscribe again,
+    // they press "this is spam". That costs the shop, and it costs the sending
+    // domain every other shop depends on, far more than one honest sentence.
+    const { clientId, url } = await mailOneAndGetUnsubscribeUrl();
     const path = new URL(url).pathname;
     const original = prisma.client.updateMany;
     (prisma.client as unknown as { updateMany: unknown }).updateMany = async () => {
       throw new Error("database is on fire");
     };
     try {
+      // Retryable, not "done". Gmail and Yahoo retry a 503 and keep the
+      // one-click working; a 200 would retire their only retry for a request
+      // that changed nothing.
       const post = await request(app).post(path);
-      expect(post.status).toBe(200);
+      expect(post.status).toBe(503);
+
       const get = await request(app).get(path);
-      expect(get.status).toBe(200);
-      expect(get.text).toContain("unsubscribed");
+      expect(get.status).toBe(503);
+      expect(get.text).not.toContain("You&#39;re unsubscribed");
+      expect(get.text).not.toContain("You're unsubscribed");
+      expect(get.text.toLowerCase()).toContain("not");
+      // 🔴 It gives NOTHING away: no address, no name, no shop, and nothing
+      // that says whether this token belonged to anybody.
+      expect(get.text).not.toContain(clientId);
+      expect(get.text).not.toContain("@");
+      expect(get.text).not.toContain("Blast Cuts");
+      // An invented token during the same outage is answered identically, so
+      // the failure cannot be used to tell real tokens from made-up ones.
+      const stranger = await request(app).get(`/api/unsubscribe/${randomToken()}`);
+      expect(stranger.status).toBe(get.status);
+      expect(stranger.text).toBe(get.text);
     } finally {
       (prisma.client as unknown as { updateMany: unknown }).updateMany = original;
     }
+
+    // And the flag really is still false - the page was telling the truth.
+    const after = await prisma.client.findUnique({
+      where: { id: clientId },
+      select: { emailOptedOut: true },
+    });
+    expect(after!.emailOptedOut).toBe(false);
+
+    // The same link works once the database is back, which is what the page
+    // told them to do.
+    expect((await request(app).post(path)).status).toBe(200);
+    const recovered = await prisma.client.findUnique({
+      where: { id: clientId },
+      select: { emailOptedOut: true },
+    });
+    expect(recovered!.emailOptedOut).toBe(true);
   });
 });
 

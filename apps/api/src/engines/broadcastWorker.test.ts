@@ -8,6 +8,7 @@ import {
 } from "../messaging/email.js";
 import { __setPushSenderForTests } from "../messaging/push.js";
 import { queueBroadcast } from "./broadcast.js";
+import { unsubscribeDigestFor, unsubscribeTokenFor } from "./unsubscribeToken.js";
 import {
   __setBroadcastCrashHookForTests,
   BroadcastCrash,
@@ -449,6 +450,119 @@ describe("🔴 notifications get the same protection", () => {
     expect(row!.lastError).toBe("no_push_device");
     // There is no later attempt that could change it, so it is not retried.
     expect(row!.attempts).toBe(1);
+  });
+});
+
+describe("🔴 nothing leaves without a working unsubscribe link", () => {
+  /**
+   * The footer resolves by looking the digest up, so a message that goes out
+   * before that write commits carries an unsubscribe that 404s. That is
+   * unlawful to send AND the strongest negative signal a mailbox provider can
+   * record against the sending domain - the same domain every shop's booking
+   * confirmations leave from.
+   *
+   * The first cut logged the failure and sent anyway.
+   *
+   * 🔴 THE FAILURE HERE IS REAL, NOT MOCKED. `unsubscribeTokenHash` is UNIQUE,
+   * so parking a client's digest on another row makes the write fail inside
+   * the transaction that actually performs it - which a stub on `prisma`
+   * cannot do, because the write runs on a transaction client. Production
+   * cannot produce this particular collision (digests are per-client), but the
+   * CONDITION it produces - "the statement that persists the credential threw"
+   * - is exactly the one an outage produces, and it exercises every line of
+   * the real path including Prisma's own error.
+   */
+  async function blockDigestFor(clientId: string): Promise<{ id: string }> {
+    return prisma.client.create({
+      data: {
+        shopId,
+        acuityClientKey: `tel:+1${Math.floor(Math.random() * 9_000_000_000 + 1_000_000_000)}`,
+        magicToken: randomToken(),
+        firstName: "Squatter",
+        // The digest the recipient's write is about to try to claim.
+        unsubscribeTokenHash: unsubscribeDigestFor(clientId),
+      },
+      select: { id: true },
+    });
+  }
+
+  it("🔴 refuses to contact the provider at all, and stays retryable", async () => {
+    const c = await makeClient();
+    const id = await queued("email");
+    // Created AFTER the freeze, so it is not itself a recipient.
+    await blockDigestFor(c.id);
+
+    const pass = await runBroadcastWorker();
+
+    // 🔴 ZERO PROVIDER CALLS. Not one, and not one we then tried to walk back.
+    expect(outbox).toHaveLength(0);
+    expect(pass.sent).toBe(0);
+    expect(pass.retry).toBe(1);
+
+    const [row] = await rowsOf(id);
+    expect(row!.status).toBe("PENDING");
+    // 🔴 THE BUDGET IS UNTOUCHED. A database blip must not spend one of this
+    // recipient's five chances - nothing was attempted, so nothing counts.
+    expect(row!.attempts).toBe(0);
+    // Nothing is in flight, so there is nothing to be uncertain about.
+    expect(row!.lastAttemptAmbiguous).toBe(false);
+    // 🔴 NOT PERMANENTLY CLAIMED. The claim is released and a backoff set, so
+    // the next pass can take it without waiting out the five-minute TTL.
+    expect(row!.claimedAt).toBeNull();
+    expect(row!.nextAttemptAt).not.toBeNull();
+    expect(row!.lastError).toBe("unsubscribe_digest_unavailable");
+
+    // The blast is still going - not failed, not finalised on a blip.
+    const b = await prisma.broadcast.findUnique({ where: { id } });
+    expect(b!.status).toBe("SENDING");
+  });
+
+  it("goes out normally once the write can succeed again", async () => {
+    const c = await makeClient();
+    const id = await queued("email");
+    const blocker = await blockDigestFor(c.id);
+    await runBroadcastWorker();
+    expect(outbox).toHaveLength(0);
+
+    // Recovery.
+    await prisma.client.delete({ where: { id: blocker.id } });
+    const later = new Date(Date.now() + 5 * 60_000);
+    expect((await runBroadcastWorker({ now: later })).sent).toBe(1);
+    expect(outbox).toHaveLength(1);
+
+    // The link it carries is the one that now resolves.
+    const stored = await prisma.client.findUnique({
+      where: { id: c.id },
+      select: { unsubscribeTokenHash: true },
+    });
+    expect(stored!.unsubscribeTokenHash).toBe(unsubscribeDigestFor(c.id));
+    expect(outbox[0]!.unsubscribeUrl).toContain(encodeURIComponent(unsubscribeTokenFor(c.id)));
+
+    const [row] = await rowsOf(id);
+    expect(row!.status).toBe("SENT");
+    // Exactly one provider attempt across both passes.
+    expect(row!.attempts).toBe(1);
+  });
+
+  it("one recipient held back does not hold back the rest", async () => {
+    // The gate is per person. A single client whose credential cannot be
+    // written must not stop the other 411 from hearing about Friday.
+    const blocked = await makeClient();
+    const fine = await makeClient();
+    const id = await queued("email");
+    await blockDigestFor(blocked.id);
+
+    await runBroadcastWorker();
+
+    expect(outbox).toHaveLength(1);
+    const rows = await rowsOf(id);
+    const sent = rows.filter((r) => r.status === "SENT");
+    const waiting = rows.filter((r) => r.status === "PENDING");
+    expect(sent.map((r) => r.clientId)).toEqual([fine.id]);
+    expect(waiting.map((r) => r.clientId)).toEqual([blocked.id]);
+    // Still in flight, because one person is still owed a message.
+    const b = await prisma.broadcast.findUnique({ where: { id } });
+    expect(b!.status).toBe("SENDING");
   });
 });
 
