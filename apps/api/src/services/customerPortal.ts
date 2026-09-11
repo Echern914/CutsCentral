@@ -50,6 +50,8 @@ export interface PortalShopRef {
   logoUrl: string | null;
   city: string | null;
   region: string | null;
+  /** The shop's IANA zone - every date about this shop is read on its clock. */
+  timezone: string;
 }
 
 export interface PortalAppointment {
@@ -101,7 +103,8 @@ export interface PortalRewardSummary {
 export interface PortalHome {
   firstName: string | null;
   vocabulary: { providerNounPlural: string; serviceNoun: string };
-  next: PortalAppointment | null;
+  /** The full detail (address included), so the home card can offer Directions. */
+  next: PortalAppointmentDetail | null;
   upcomingCount: number;
   shops: PortalShop[];
   rewards: PortalRewardSummary[];
@@ -283,6 +286,7 @@ export async function loadPortal(accountId: string, now = new Date()): Promise<P
       logoUrl: shop.logoUrl,
       city: shop.addressCity,
       region: shop.addressRegion,
+      timezone: shop.timezone,
     };
     const events = normalizeEvents(shop, ref, appts, visits, now);
 
@@ -513,7 +517,7 @@ export async function buildHome(accountId: string, now = new Date()): Promise<Po
   return {
     firstName: account?.firstName ?? null,
     vocabulary: homeVocabulary(bundles),
-    next: upcoming[0] ?? null,
+    next: upcoming[0] ? findEvent(bundles, upcoming[0].id) : null,
     upcomingCount: upcoming.length,
     shops: shopCards(bundles, now),
     rewards: programs.map(summarize).filter((s): s is PortalRewardSummary => s !== null),

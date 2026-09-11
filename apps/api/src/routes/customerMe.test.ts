@@ -292,7 +292,9 @@ describe("the home", () => {
       canManage: true,
       timezone: "America/New_York",
     });
-    expect(home.next.shop.name).toBe("Alpha Cuts");
+    expect(home.next.shop).toMatchObject({ name: "Alpha Cuts", timezone: "America/New_York" });
+    // The card offers Directions, so the next appointment carries its address.
+    expect(home.next.address).toBe("12 Main St, Brooklyn, NY 11201");
     expect(home.upcomingCount).toBe(3);
 
     const upcoming = (await get("/api/me/appointments", me.token)).body.upcoming;
