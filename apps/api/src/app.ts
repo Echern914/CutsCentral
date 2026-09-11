@@ -31,6 +31,8 @@ import { adminRouter } from "./routes/admin.js";
 import { rewardsRouter } from "./routes/rewards.js";
 import { rewardsRecoveryRouter } from "./routes/rewardsRecovery.js";
 import { findShopRouter } from "./routes/findShop.public.js";
+import { unsubscribeRouter } from "./routes/unsubscribe.public.js";
+import { broadcastsRouter } from "./routes/broadcasts.js";
 import { walletRouter } from "./routes/wallet.js";
 import { dashboardRouter } from "./routes/dashboard.js";
 import { barberRouter } from "./routes/barber.js";
@@ -185,6 +187,11 @@ export function createApp(): Express {
   // "/:slug", so a sibling path there would make "find" a reserved slug that
   // silently shadows any shop legitimately called that.
   app.use("/api/find-shop", rewardsLimiter, findShopRouter);
+  // 🔴 Unauthenticated by necessity: somebody clicking unsubscribe in an email
+  // has no session. The client's magicToken is the authority, exactly as it is
+  // for the rewards page. Rate-limited like every other token-addressed public
+  // route. See routes/unsubscribe.public.ts.
+  app.use("/api/unsubscribe", rewardsLimiter, unsubscribeRouter);
   app.use("/api/page", rewardsLimiter, publicPageRouter); // public shop pages
   app.use("/api/book", bookingPublicRouter); // public native booking (per-route limits inside)
   // Walk-In Mode public surface: the kiosk tablet + "My Place in Line".
@@ -253,7 +260,8 @@ export function createApp(): Express {
   // part of bookingDashboardRouter (the Square stack edits that file, and a
   // queue is not booking config). Dark behind WALK_IN_MODE_ENABLED.
   app.use("/api/walk-ins", dashboardLimiter, walkInDashboardRouter);
-  app.use("/api/payments", dashboardLimiter, paymentsDashboardRouter); // barber payment settings
+  app.use("/api/payments", dashboardLimiter, paymentsDashboardRouter);
+  app.use("/api/broadcasts", broadcastsRouter); // barber payment settings
   app.use("/api/loyalty", dashboardLimiter, loyaltyRouter);
   app.use("/api/promos", dashboardLimiter, promotionsRouter);
   app.use("/api/billing", dashboardLimiter, billingRouter);

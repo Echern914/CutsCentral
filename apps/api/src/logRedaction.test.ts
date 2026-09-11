@@ -125,6 +125,17 @@ describe("the serializer, through a real mounted router", () => {
   });
 });
 
+describe("🔴 the unsubscribe link is a credential, not just a preference", () => {
+  it("never logs the token - it is the customer's whole rewards session", () => {
+    // The footer of every broadcast email carries this URL, so it is the most
+    // widely distributed secret the product has. A log line is forwarded
+    // somewhere with a longer memory and looser access than the database.
+    const out = redactUrl("/api/unsubscribe/SECRET_MAGIC_TOKEN_VALUE");
+    expect(out).toBe("/api/unsubscribe/[redacted]");
+    expect(out).not.toContain("SECRET_MAGIC_TOKEN_VALUE");
+  });
+});
+
 describe("🔴 every route whose path IS a credential is covered", () => {
   it("no route file has grown a secret path shape the redactor does not know", () => {
     // A structural guard, not a code review. Add `/api/foo/:token` and this
@@ -146,6 +157,9 @@ describe("🔴 every route whose path IS a credential is covered", () => {
       "booking.public.ts/offer/",
       "rewards.ts/",
       "shops.ts/waitlist/cancel/",
+      // The unsubscribe link in every broadcast email carries the client's
+      // magicToken - the same credential as the rewards page.
+      "unsubscribe.public.ts/",
     ]);
   });
 });

@@ -2,6 +2,7 @@ import { PLANS } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import {
   billingEnabled,
+  hasActiveAccess,
   type BillingShop,
 } from "./stripe.js";
 import { hasPremiumAccess } from "./entitlements.js";
@@ -118,5 +119,83 @@ export async function remainingMonthlySms(
   if (!Number.isFinite(quota)) return Infinity;
   if (quota <= 0) return 0;
   const used = await monthlySmsUsed(shopId, now);
+  return Math.max(0, quota - used);
+}
+
+/**
+ * ── BROADCAST EMAIL ─────────────────────────────────────────────────────────
+ *
+ * A shop can send one message to many clients by EMAIL or by app NOTIFICATION
+ * (never SMS - see the Broadcast model). Only email is metered, and that is the
+ * whole reason the barber is offered the choice: a push costs nothing to send,
+ * so a shop that has run out of email for the month can still reach everyone
+ * who installed the app.
+ *
+ * Email has its OWN allowance rather than sharing the SMS one above, because a
+ * text costs roughly a hundred times what an email does. One shared budget
+ * priced for texts would make email pointlessly scarce; priced for email it
+ * would give away texts.
+ */
+
+/** The shop's monthly broadcast-EMAIL allowance. Infinity while billing is off. */
+export function monthlyEmailQuotaFor(
+  shop: QuotaShop,
+  opts: { now?: Date; enabled?: boolean } = {},
+): number {
+  const enabled = opts.enabled ?? billingEnabled();
+  if (!enabled) return Infinity;
+  // A lapsed shop sends nothing at all; a shop inside its signup trial is on
+  // Premium, exactly as the SMS quota treats it.
+  if (!hasActiveAccess(shop, { now: opts.now, enabled })) return 0;
+  const plan = PLANS[shop.plan as keyof typeof PLANS] ?? PLANS.free;
+  // Premium AI's allowance also covers a Premium shop carrying the
+  // receptionist add-on - same price, same allowance, same rule as SMS.
+  if (shop.plan === "pro_ai" || hasReceptionistEntitlement(shop)) {
+    return PLANS.pro_ai.emailMonthlyQuota;
+  }
+  // A trial or comped shop with plan "free" is marketed as full Premium.
+  if (plan.emailMonthlyQuota === 0 && plan.key === "free") {
+    return PLANS.pro.emailMonthlyQuota;
+  }
+  return plan.emailMonthlyQuota;
+}
+
+/**
+ * Broadcast emails actually SENT this UTC calendar month.
+ *
+ * Counts per RECIPIENT, not per broadcast: the cost is one email per person,
+ * and a barber who mails 400 clients has spent 400 of his allowance. Only
+ * `SENT` rows count - a skipped recipient was never mailed, and a failure
+ * cost nothing to deliver.
+ */
+export async function monthlyBroadcastEmailsUsed(
+  shopId: string,
+  now: Date = new Date(),
+): Promise<number> {
+  return prisma.broadcastSend.count({
+    where: {
+      shopId,
+      status: "SENT",
+      broadcast: { channel: "email" },
+      createdAt: { gte: monthStartUtc(now) },
+    },
+  });
+}
+
+/** How many broadcast emails the shop may still send this month (>= 0). */
+export async function remainingMonthlyEmails(
+  shopId: string,
+  now: Date = new Date(),
+): Promise<number> {
+  if (!billingEnabled()) return Infinity;
+  const shop = await prisma.shop.findUnique({
+    where: { id: shopId },
+    select: QUOTA_SHOP_SELECT,
+  });
+  if (!shop) return 0;
+  const quota = monthlyEmailQuotaFor(shop, { now });
+  if (!Number.isFinite(quota)) return Infinity;
+  if (quota <= 0) return 0;
+  const used = await monthlyBroadcastEmailsUsed(shopId, now);
   return Math.max(0, quota - used);
 }

@@ -32,6 +32,16 @@ export const DEFAULTS = {
  * no metered overage; the dashboard shows a usage meter + upgrade CTA. See
  * apps/api/src/billing/quota.ts for enforcement.
  */
+/**
+ * 🔴 THE EMAIL ALLOWANCES BELOW ARE A PRICING DECISION, not a technical one -
+ * they are Eric's to set and they live here so changing them is one edit.
+ *
+ * Why email has its own number rather than sharing the SMS quota: a text costs
+ * roughly a hundred times what an email does, so a shared budget priced for
+ * SMS would make email pointlessly scarce, and one priced for email would give
+ * away texts. A broadcast by app NOTIFICATION costs nothing to send and is not
+ * metered at all - which is the whole reason the barber is offered the choice.
+ */
 export const PLANS = {
   // "free" is the value of Shop.plan for a shop with NO subscription - a
   // signup trial (full Premium until trialEndsAt) or a lapsed shop (walled).
@@ -41,6 +51,8 @@ export const PLANS = {
     name: "Free",
     priceMonthlyUsd: 0,
     smsMonthlyQuota: 0,
+    // No subscription: a trial shop is on Premium's allowance until trialEndsAt, a lapsed one is walled.
+    emailMonthlyQuota: 0,
     receptionistIncluded: false,
     premiumFeatures: true,
   },
@@ -51,6 +63,8 @@ export const PLANS = {
     name: "Starter",
     priceMonthlyUsd: 20,
     smsMonthlyQuota: 0,
+    // Email is cheap and Starter has no texting at all, so this is its one outbound channel.
+    emailMonthlyQuota: 1000,
     receptionistIncluded: false,
     premiumFeatures: false,
   },
@@ -59,6 +73,8 @@ export const PLANS = {
     name: "Premium",
     priceMonthlyUsd: 34.99,
     smsMonthlyQuota: 600,
+    // Marketing emails per UTC month. See the note above PLANS.
+    emailMonthlyQuota: 5000,
     receptionistIncluded: false,
     premiumFeatures: true,
   },
@@ -67,6 +83,8 @@ export const PLANS = {
     name: "Premium AI",
     priceMonthlyUsd: 74.99,
     smsMonthlyQuota: 2500,
+    // Marketing emails per UTC month. See the note above PLANS.
+    emailMonthlyQuota: 20000,
     receptionistIncluded: true,
     premiumFeatures: true,
   },

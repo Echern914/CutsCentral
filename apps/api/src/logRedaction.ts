@@ -34,6 +34,11 @@ const SENSITIVE_QUERY_PARAMS = ["token", "code", "state"];
  *  - `/api/book/offer/:token`        claim someone's held waitlist slot
  *  - `/api/book/manage/:token`       cancel or reschedule someone's booking
  *  - `/api/page/waitlist/cancel/:token`  cancel someone's place in the queue
+ *  - `/api/unsubscribe/:token`       the SAME Client.magicToken as the rewards
+ *                                    page, carried in the footer of every
+ *                                    broadcast email. A leaked one is not
+ *                                    merely an unsubscribe - it is that
+ *                                    customer's whole rewards session
  *
  * Every one of those is stored HASHED (or resolved by lookup) precisely so a
  * leaked database backup cannot be replayed. Logging the raw value undoes that
@@ -52,6 +57,7 @@ const SECRET_PATH_PATTERNS: readonly RegExp[] = [
   /(\/api\/book\/offer\/)[^/?#]+/,
   /(\/api\/book\/manage\/)[^/?#]+/,
   /(\/api\/page\/waitlist\/cancel\/)[^/?#]+/,
+  /(\/api\/unsubscribe\/)[^/?#]+/,
 ];
 
 /**

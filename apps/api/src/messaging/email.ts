@@ -49,12 +49,15 @@ export const RESEND_TIMEOUT_MS = 20_000;
  *    OWNERS. These look promotional to a filter, so they carry one-click
  *    unsubscribe (Gmail/Yahoo bulk-sender rules) and should not share
  *    reputation with password resets any longer than necessary.
+ *  - "broadcast": a shop's own message to MANY OF ITS CLIENTS at once. This is
+ *    the only genuinely promotional mail ChairBack sends, and the only stream
+ *    that carries a real List-Unsubscribe - see below.
  *
  * Today both streams leave from the same verified domain; the split is what
  * makes moving lifecycle mail to its own subdomain a config change rather
  * than a refactor.
  */
-export type MailStream = "transactional" | "lifecycle";
+export type MailStream = "transactional" | "lifecycle" | "broadcast";
 
 /**
  * A provider rejection, carrying the HTTP status and NOTHING else. Callers
@@ -104,6 +107,13 @@ export interface SendEmailInput {
    * Resend honours the key for 24h - see PROVIDER_IDEMPOTENCY_WINDOW_MS.
    */
   idempotencyKey?: string;
+  /**
+   * The one-click unsubscribe endpoint FOR THIS RECIPIENT. Required on the
+   * "broadcast" stream and ignored on every other: it is what turns a
+   * promotional send into a compliant one, and it must be per-person or it
+   * unsubscribes the wrong client.
+   */
+  unsubscribeUrl?: string;
   /** Correlation only. Never a token, address, or body fragment. */
   meta?: { shopId?: string; appointmentId?: string; kind?: string };
 }
@@ -203,17 +213,34 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
   }
 
   const stream: MailStream = input.stream ?? "transactional";
-  // 🔴 NO List-Unsubscribe HEADER IS SENT, deliberately.
+
+  /**
+   * 🔴 ONE-CLICK UNSUBSCRIBE, ON THE BROADCAST STREAM ONLY.
+   *
+   * The comment below used to say ChairBack sends no marketing email and that
+   * a header pointing at a route which does not exist is worse than none.
+   * Both were true. Client broadcasts changed the first, so the second is
+   * answered rather than repeated: `unsubscribeUrl` is a REAL endpoint that
+   * accepts the POST Gmail and Yahoo send, and the caller supplies it per
+   * recipient. Transactional and lifecycle mail are untouched.
+   */
+  const unsubscribeHeaders =
+    stream === "broadcast" && input.unsubscribeUrl
+      ? {
+          "List-Unsubscribe": `<${input.unsubscribeUrl}>`,
+          "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+        }
+      : undefined;
+
+  // 🔴 NO List-Unsubscribe HEADER IS SENT on the other streams, deliberately.
   //
   // An earlier cut advertised <APP_BASE_URL>/unsubscribe on lifecycle mail.
   // That route does not exist, and a header pointing at a 404 is worse than
   // no header at all: mailbox providers follow it, and a one-click
   // unsubscribe that fails is a stronger negative signal than its absence.
   //
-  // Nor is the right fix simply to build the route here. ChairBack sends NO
-  // marketing email - promotions are SMS-only (routes/promotions.ts). What
-  // the "lifecycle" stream actually carries is trial and AI-trial reminders
-  // to SHOP OWNERS about the state of their own account, which are account
+  // What the "lifecycle" stream carries is trial and AI-trial reminders to
+  // SHOP OWNERS about the state of their own account, which are account
   // notices rather than promotions. Letting an owner one-click their way out
   // of "your trial ends tomorrow" has a billing consequence that belongs to
   // Eric, not to a deliverability patch.
@@ -240,6 +267,7 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
       // renders unpredictably. See wrapEmailHtml.
       ...(input.html ? { html: wrapEmailHtml(input.html, input.subject) } : {}),
       ...(input.replyTo ? { reply_to: [input.replyTo] } : {}),
+      ...(unsubscribeHeaders ? { headers: unsubscribeHeaders } : {}),
     }),
   });
   if (!res.ok) {

@@ -618,6 +618,8 @@ model Shop {
   appointmentOverrides AppointmentOverride[]
   serviceAddOns          ServiceAddOn[]
   bookingQuestions       BookingQuestion[]
+  broadcasts             Broadcast[]
+  broadcastSends         BroadcastSend[]
   serviceGroups          ServiceGroup[]
   goals                  ShopGoal[]
   serviceGoals           ServiceGoal[]
@@ -1069,6 +1071,14 @@ model Client {
   phone            String? // E.164
   email            String?
   optedOut         Boolean   @default(false)
+  // 🔴 A SEPARATE OPT-OUT FROM THE SMS ONE ABOVE, and it has to be. `optedOut`
+  // is the TCPA STOP gate for texting; this is the CAN-SPAM unsubscribe for
+  // marketing EMAIL. A client who stopped texts has not asked to stop hearing
+  // about a shop entirely, and a client who unsubscribed from email must not
+  // silently lose their booking confirmations - which is why this gates
+  // BROADCASTS ONLY and never transactional mail.
+  emailOptedOut    Boolean   @default(false)
+  emailOptedOutAt  DateTime?
   // Why optedOut is set: "sms_stop" (client texted STOP - only the client can
   // reverse it, via START or their rewards page; the dashboard may NOT),
   // "client_self_serve" (rewards-page opt-out), "barber" (dashboard toggle),
@@ -1133,6 +1143,8 @@ model Client {
   @@index([shopId, lastVisitAt])
   @@index([shopId, archivedAt]) // default list/stats filter on (shop, not archived)
   @@index([phone]) // inbound Twilio STOP/START + public resolve-by-phone (cross-tenant phone lookup)
+  broadcastSends BroadcastSend[]
+
 }
 
 // A lead submitted from the public shop page's "Request an appointment" form.
@@ -1500,6 +1512,95 @@ model Visit {
   @@index([status, endAt]) // promotion scan
   @@index([status, scheduledAt]) // cross-shop reminder sweep (synced bookings)
   @@index([shopId, status, scheduledAt]) // insights/trends/avg-ticket + activity feed by (shop, status, date)
+}
+
+// A message a shop sends to many of its clients at once.
+//
+// 🔴 EMAIL AND PUSH ONLY. NEVER SMS, and the enum is how that is enforced
+// rather than a rule someone has to remember: a text to 2,900 clients costs
+// real money per message and would empty a shop's monthly allowance in one
+// tap. Promotions that DO text already exist and are metered separately
+// (routes/promotions.ts); this is the cheap channel, deliberately.
+//
+// A broadcast is composed, PREVIEWED against its real audience, and only then
+// sent. It is never sent by anything automatic - the assistant may draft one,
+// but a person presses the button.
+model Broadcast {
+  id     String @id @default(cuid())
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  // Who wrote it. Null for a draft the assistant proposed that nobody claimed.
+  createdByUserId String?
+  channel BroadcastChannel
+  // WHO IT GOES TO. Empty = every reachable client; otherwise only clients on
+  // one of these loyalty tiers ("all the gold members"). Stored rather than
+  // resolved-and-frozen so a preview and the send agree, and re-reading an old
+  // broadcast still says who it was aimed at.
+  audienceTiers LoyaltyTier[] @default([])
+  // Email only. Push notifications carry a title instead, and the same column
+  // holds it - a push with no title is not worth sending either.
+  subject String?
+  body    String
+  status  BroadcastStatus @default(DRAFT)
+  // Frozen when sending starts, so the report reads the same forever even as
+  // the client book changes underneath it.
+  recipientCount Int @default(0)
+  sentCount      Int @default(0)
+  failedCount    Int @default(0)
+  skippedCount   Int @default(0)
+  sentAt    DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sends BroadcastSend[]
+
+  @@index([shopId, createdAt])
+  @@index([shopId, status])
+}
+
+// One intended recipient of one broadcast.
+//
+// The unique below is the AT-MOST-ONCE guarantee: a retried or double-tapped
+// send can never mail the same client twice, which is the failure nobody
+// forgives. It also makes the send resumable - a run that dies halfway leaves
+// the rows it already wrote, and the next pass skips them.
+model BroadcastSend {
+  id          String @id @default(cuid())
+  broadcastId String
+  broadcast   Broadcast @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+  shopId      String
+  shop        Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  clientId    String
+  client      Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  status      BroadcastSendStatus @default(PENDING)
+  // Why a recipient was SKIPPED, in words the barber can act on ("no email
+  // address", "unsubscribed", "no app installed"). Null on a send that went.
+  reason      String?
+  sentAt      DateTime?
+  createdAt   DateTime @default(now())
+
+  @@unique([broadcastId, clientId])
+  @@index([shopId, createdAt])
+  @@index([broadcastId, status])
+}
+
+enum BroadcastChannel {
+  email
+  push
+}
+
+enum BroadcastStatus {
+  DRAFT
+  SENDING
+  SENT
+  FAILED
+}
+
+enum BroadcastSendStatus {
+  PENDING
+  SENT
+  FAILED
+  SKIPPED
 }
 
 model PunchLedger {
