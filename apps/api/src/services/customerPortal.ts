@@ -12,8 +12,9 @@ import {
   vocabularyForShop,
   type CustomerStatus,
 } from "@chairback/config";
+import { createHmac } from "node:crypto";
 import { buildLoyaltyView, loadLoyaltyInputs } from "./loyaltyView.js";
-import { syncCustomerLinks, type ActiveLink } from "./customerIdentity.js";
+import { syncCustomerLinks, syncCustomerView, type ActiveLink } from "./customerIdentity.js";
 
 /**
  * MY CHAIRBACK'S READ MODEL - everything the customer home, history, details
@@ -100,6 +101,23 @@ export interface PortalRewardSummary {
   readyRewards: string[];
 }
 
+/**
+ * A shop that has a profile carrying one of this account's verified contacts,
+ * which the linking engine would not open on a contact alone - a shared phone
+ * number, most often.
+ *
+ * 🔴 EVERYTHING ABOUT THE PROFILE IS WITHHELD: no name, no count, no visit,
+ * no reward, no link. Only the shop's own public details, so the app can say
+ * which shop to connect and how.
+ */
+export interface PortalAmbiguousShop {
+  key: string;
+  name: string;
+  logoUrl: string | null;
+  city: string | null;
+  region: string | null;
+}
+
 export interface PortalHome {
   firstName: string | null;
   vocabulary: { providerNounPlural: string; serviceNoun: string };
@@ -109,6 +127,8 @@ export interface PortalHome {
   shops: PortalShop[];
   rewards: PortalRewardSummary[];
   recent: PortalAppointment[];
+  /** Shops with a profile that needs the shop's own link to connect. */
+  ambiguous: PortalAmbiguousShop[];
 }
 
 interface ShopRow {
@@ -198,10 +218,21 @@ function isUpcoming(e: { status: CustomerStatus; startsAt: string; endsAt: strin
   return end > now.getTime();
 }
 
+/** Everything one account may open, plus the shops it may not. */
+export interface PortalView {
+  bundles: PortalShopBundle[];
+  ambiguous: PortalAmbiguousShop[];
+}
+
 /** Load every linked shop, each through its own tenant transaction. */
 export async function loadPortal(accountId: string, now = new Date()): Promise<PortalShopBundle[]> {
-  const links = await syncCustomerLinks(accountId, now);
-  if (links.length === 0) return [];
+  return (await loadPortalView(accountId, now)).bundles;
+}
+
+export async function loadPortalView(accountId: string, now = new Date()): Promise<PortalView> {
+  const { links, ambiguousShopIds } = await syncCustomerView(accountId, now);
+  const ambiguous = await ambiguousShops(accountId, ambiguousShopIds);
+  if (links.length === 0) return { bundles: [], ambiguous };
 
   const byShop = new Map<string, ActiveLink[]>();
   for (const l of links) byShop.set(l.shopId, [...(byShop.get(l.shopId) ?? []), l]);
@@ -316,7 +347,39 @@ export async function loadPortal(accountId: string, now = new Date()): Promise<P
       events,
     });
   }
-  return bundles;
+  return { bundles, ambiguous };
+}
+
+/**
+ * The public face of a shop whose profile could not be connected. Read as
+ * owner (Shop is default-deny inside a tenant session) and deliberately
+ * limited to what a stranger could see on the shop's own page anyway.
+ *
+ * The key is an HMAC of (account, shop): stable for this customer, useless to
+ * anybody else, and never a shop id on the wire.
+ */
+async function ambiguousShops(
+  accountId: string,
+  shopIds: string[],
+): Promise<PortalAmbiguousShop[]> {
+  if (shopIds.length === 0) return [];
+  const shops = await runAsOwner((tx) =>
+    tx.shop.findMany({
+      where: { id: { in: shopIds } },
+      select: { id: true, name: true, logoUrl: true, addressCity: true, addressRegion: true },
+      orderBy: { name: "asc" },
+    }),
+  );
+  return shops.map((s) => ({
+    key: createHmac("sha256", `${apiEnv().TOKEN_ENCRYPTION_KEY}:customer_ambiguous_v1`)
+      .update(`${accountId}:${s.id}`, "utf8")
+      .digest("base64url")
+      .slice(0, 16),
+    name: s.name,
+    logoUrl: s.logoUrl,
+    city: s.addressCity,
+    region: s.addressRegion,
+  }));
 }
 
 function normalizeEvents(
@@ -506,12 +569,13 @@ function homeVocabulary(bundles: PortalShopBundle[]): PortalHome["vocabulary"] {
 }
 
 export async function buildHome(accountId: string, now = new Date()): Promise<PortalHome> {
-  const [account, bundles] = await Promise.all([
+  const [account, view] = await Promise.all([
     runAsOwner((tx) =>
       tx.customerAccount.findUnique({ where: { id: accountId }, select: { firstName: true } }),
     ),
-    loadPortal(accountId, now),
+    loadPortalView(accountId, now),
   ]);
+  const { bundles, ambiguous } = view;
   const { upcoming, past } = splitHistory(bundles, now);
   const programs = await rewardPrograms(bundles);
   return {
@@ -522,6 +586,7 @@ export async function buildHome(accountId: string, now = new Date()): Promise<Po
     shops: shopCards(bundles, now),
     rewards: programs.map(summarize).filter((s): s is PortalRewardSummary => s !== null),
     recent: past.slice(0, 3),
+    ambiguous,
   };
 }
 

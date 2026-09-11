@@ -3,6 +3,7 @@ import { apiEnv } from "@chairback/config";
 import { forShop, runAsOwner, type Prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import { redactForAudit } from "./auditBody.js";
+import { accountForClientPush } from "../services/customerIdentity.js";
 
 const env = apiEnv();
 
@@ -433,6 +434,12 @@ export async function sendPushToUser(params: {
  * unlinked, the account switched push off, or it is the demo account. Rows
  * live in the owner-only CustomerDevice table, so reads and prunes run as
  * owner; the client id comes from the send path, never from a request.
+ *
+ * 🔴 THE LINK IS RE-DERIVED HERE, NOT TRUSTED. Everything that invalidates one
+ * happens on the SHOP's side of the product - a corrected phone number, an
+ * archived record, a second person proving a contact this record carries - and
+ * none of it touches the customer's phone. Waiting for their next read would
+ * leave a window in which somebody else's appointment reminder buzzes on it.
  */
 async function deliverToAccountDevices(
   clientId: string,
@@ -443,17 +450,14 @@ async function deliverToAccountDevices(
   const empty: PushSendResult = { sent: 0, pruned: 0, failed: 0, anyDelivered: false };
   let devices: { id: string; expoPushToken: string }[];
   try {
-    devices = await runAsOwner(async (tx) => {
-      const link = await tx.customerClientLink.findFirst({
-        where: { clientId, status: "active" },
-        select: { account: { select: { id: true, pushEnabled: true, isDemo: true } } },
-      });
-      if (!link || !link.account.pushEnabled || link.account.isDemo) return [];
-      return tx.customerDevice.findMany({
-        where: { accountId: link.account.id },
+    const account = await accountForClientPush(clientId);
+    if (!account || !account.pushEnabled) return empty;
+    devices = await runAsOwner((tx) =>
+      tx.customerDevice.findMany({
+        where: { accountId: account.accountId },
         select: { id: true, expoPushToken: true },
-      });
-    });
+      }),
+    );
   } catch (err) {
     logger.error({ err, ...logCtx }, "customer device lookup failed");
     return empty;

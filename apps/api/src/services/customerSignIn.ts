@@ -1,10 +1,9 @@
 import { createHmac } from "node:crypto";
 import { Prisma, runAsOwner } from "@chairback/db";
-import { apiEnv, isLikelyEmail } from "@chairback/config";
+import { apiEnv, isLikelyEmail, randomToken } from "@chairback/config";
 import { toE164 } from "../acuity/clientKey.js";
-import { getMessageProvider } from "../messaging/twilio.js";
-import { sendEmail } from "../messaging/email.js";
-import { logger } from "../logger.js";
+import { kickSignInDelivery, sealSignIn } from "../engines/customerSignInOutbox.js";
+import { signInSmsBody } from "./customerSignInMessage.js";
 import {
   CLEANUP_AFTER_MS,
   CODE_TTL_MS,
@@ -96,26 +95,9 @@ export function normalizeEmail(raw: string | null | undefined): string | null {
   return e;
 }
 
-export function signInSmsBody(code: string): string {
-  // GSM-7 only, one segment; pinned by a segment test. iOS offers the code
-  // straight from the keyboard because the text names it a code.
-  return `ChairBack code: ${code}. Use it to sign in to My ChairBack. Expires in 5 minutes. Reply STOP to opt out.`;
-}
-
-export function signInEmail(code: string): { subject: string; text: string; html: string } {
-  const subject = `Your ChairBack code: ${code}`;
-  const text = [
-    `Your My ChairBack sign-in code is ${code}.`,
-    "",
-    "It expires in 5 minutes. If you didn't ask for it, you can ignore this email - nobody can sign in without the code.",
-  ].join("\n");
-  const html = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#17171b;">
-<p style="margin:0 0 16px;font-size:15px;">Your My ChairBack sign-in code:</p>
-<p style="margin:0 0 20px;font-size:32px;font-weight:700;letter-spacing:6px;">${code}</p>
-<p style="margin:0;font-size:13px;color:#5a5a62;">It expires in 5 minutes. If you didn't ask for it, you can ignore this email - nobody can sign in without the code.</p>
-</div>`;
-  return { subject, text, html };
-}
+/** The message bodies live in their own module (the delivery worker renders
+ *  them too); re-exported here because this is where callers look for them. */
+export { signInEmail, signInSmsBody } from "./customerSignInMessage.js";
 
 function budgetFor(channel: SignInChannel) {
   return channel === "sms"
@@ -134,11 +116,21 @@ function budgetFor(channel: SignInChannel) {
 }
 
 export type SignInIssueOutcome =
-  | { send: true; code: string }
+  | { send: true; code: string; deliveryId: string }
   /** 🔴 INTERNAL ONLY - never echoed to a response, a log line or a metric. */
   | { send: false; reason: "cooldown" | "identifier_cap" | "ip_cap" | "platform_budget" };
 
-/** Mint (or refresh) the one sign-in challenge for this identifier. */
+/**
+ * Mint (or refresh) the one sign-in challenge for this identifier, AND the
+ * promise to deliver it, in ONE transaction.
+ *
+ * 🔴 THE CHALLENGE AND THE DELIVERY COMMIT TOGETHER OR NOT AT ALL. Anything
+ * else leaves a customer holding a code nobody was asked to send, behind a
+ * cooldown telling them to wait. Re-issuing SUPERSEDES the previous delivery
+ * in the same transaction, so a retry can never leave two codes that both
+ * work: there is one live challenge per identifier, and the code that is live
+ * is whichever one this row now holds.
+ */
 export async function issueSignInCode(opts: {
   channel: SignInChannel;
   identifier: string;
@@ -186,37 +178,71 @@ export async function issueSignInCode(opts: {
       return { send: false, reason: "platform_budget" };
     }
 
+    const expiresAt = new Date(now.getTime() + CODE_TTL_MS);
     const fresh = {
       codeHash: codeDigest(channel, identifier, code),
       ipHash,
       attemptCount: 0,
-      expiresAt: new Date(now.getTime() + CODE_TTL_MS),
+      expiresAt,
       consumedAt: null,
       lastSentAt: now,
     };
+    let codeId: string;
     if (existing) {
       await tx.customerSignInCode.update({
         where: { id: existing.id },
         data: { ...fresh, sendCount: inWindow ? existing.sendCount + 1 : 1 },
       });
-      return { send: true, code };
+      codeId = existing.id;
+      // The code this row held a moment ago is gone; so is any promise to
+      // deliver it. Wiping `sealed` is what makes the CHECK that nothing
+      // terminal holds a code true, and stops a worker mid-claim sending a
+      // code that no longer verifies.
+      await tx.customerSignInDelivery.updateMany({
+        where: { codeId, status: "pending" },
+        data: { status: "superseded", sealed: null, claimedAt: null, claimToken: null },
+      });
+    } else {
+      try {
+        const made = await tx.customerSignInCode.create({
+          data: { channel, identifierHash, ...fresh },
+          select: { id: true },
+        });
+        codeId = made.id;
+      } catch (err) {
+        // A raced double-create collapses on the unique index: a cooldown.
+        if ((err as { code?: string }).code === "P2002") return { send: false, reason: "cooldown" };
+        throw err;
+      }
     }
-    try {
-      await tx.customerSignInCode.create({ data: { channel, identifierHash, ...fresh } });
-    } catch (err) {
-      // A raced double-create collapses on the unique index: literally a cooldown.
-      if ((err as { code?: string }).code === "P2002") return { send: false, reason: "cooldown" };
-      throw err;
-    }
-    return { send: true, code };
+
+    const delivery = await tx.customerSignInDelivery.create({
+      data: {
+        codeId,
+        channel,
+        // The ONLY place the code and the destination exist at rest, sealed
+        // under a key derived for this purpose, wiped when the row settles.
+        sealed: sealSignIn({ to: identifier, code }),
+        status: "pending",
+        nextAttemptAt: now,
+        expiresAt,
+        idempotencyKey: `customer-sign-in:${randomToken(12)}`,
+      },
+      select: { id: true },
+    });
+    return { send: true, code, deliveryId: delivery.id };
   });
 }
 
 /**
  * THE one entry the route calls. Answers nothing about the identifier: every
- * path resolves the same way, and the send happens after the caller has
- * already responded. NO RETRY, EVER - retrying an ambiguous send is how one
- * customer gets three texts.
+ * path - known, unknown, capped, budget-refused - resolves the same way, and
+ * nothing waits on a provider, so no send can be timed.
+ *
+ * The delivery is already durable when this returns (issueSignInCode
+ * committed it). The kick below only makes it FAST: it takes the ordinary
+ * claim, and if this process dies mid-flight the scheduled worker picks the
+ * row up once that claim ages out.
  */
 export async function requestSignInCode(opts: {
   channel: SignInChannel;
@@ -226,29 +252,7 @@ export async function requestSignInCode(opts: {
 }): Promise<void> {
   const outcome = await issueSignInCode(opts);
   if (!outcome.send) return;
-  const { channel, identifier } = opts;
-  const code = outcome.code;
-
-  void (async () => {
-    try {
-      if (channel === "sms") {
-        await getMessageProvider().send({ to: identifier, body: signInSmsBody(code) });
-      } else {
-        const mail = signInEmail(code);
-        await sendEmail({
-          to: identifier,
-          subject: mail.subject,
-          text: mail.text,
-          html: mail.html,
-          meta: { kind: "customer_sign_in" },
-        });
-      }
-    } catch {
-      // 🔴 Fixed classification only - the thrown value may carry the phone,
-      // the address, the code, the body or a credential.
-      logger.warn({ channel }, "customer sign-in: code send failed");
-    }
-  })();
+  void kickSignInDelivery(outcome.deliveryId, opts.now);
 }
 
 export type SignInVerifyOutcome = { verified: true } | { verified: false };

@@ -3707,11 +3707,21 @@ model CustomerAccount {
   devices CustomerDevice[]
 }
 
-// One account <-> one shop's Client row. Written ONLY by the linking engine,
-// which re-derives the set from the account's proven contacts on every read:
-// a record whose phone/email no longer matches (or was archived) is DETACHED
-// on the spot, and a record the customer disowned ("This isn't me") stays
-// REJECTED so it is never linked again.
+// One account <-> one shop's Client row. Written ONLY by the linking engine
+// (services/customerIdentity.ts), which re-derives the whole set on every
+// read: a record whose phone/email no longer matches, or that was archived,
+// is DETACHED on the spot, and a record the customer disowned ("This isn't
+// me") stays REJECTED for that account until they explicitly claim it.
+//
+// 🔴 A VERIFIED CONTACT IS NOT PROOF OF IDENTITY WHERE IT IS SHARED. Two
+// people can hold one phone number - a parent booking for a child is the
+// everyday case, and PR #418's duplicate review exists because a shop can see
+// the same thing. So a record links automatically ONLY where the contact
+// names exactly one record at that shop, no OTHER account has proven a
+// contact on it, and the contact is not on so many records that it is plainly
+// a placeholder. Anything else is ambiguous: it shows no appointment, no
+// visit, no reward and no manage link until the customer claims it with the
+// shop's own credential.
 model CustomerClientLink {
   id String @id @default(cuid())
 
@@ -3722,10 +3732,20 @@ model CustomerClientLink {
   shopId    String
   shop      Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
 
-  // Which proven contact matched: "phone" | "email" (CHECK-pinned).
+  // How this record was proven to be the customer's (CHECK-pinned):
+  //   "phone" | "email" - the account's verified contact, AND that contact
+  //                       identifies exactly one record at that shop;
+  //   "claim"           - the customer also produced the shop's own link to
+  //                       this record, which is the only way an AMBIGUOUS
+  //                       record (a shared phone) is ever connected.
   matchedBy String
   // "active" | "rejected" | "detached" (CHECK-pinned).
   status    String    @default("active")
+  // Why it is not active - internal words for operators and tests only.
+  statusReason String?
+  // HMAC of Client.magicToken as it stood at the claim. Set for "claim" and
+  // nothing else (CHECK-pinned); rotating the link revokes the claim.
+  claimDigest  String?
   linkedAt  DateTime  @default(now())
   statusAt  DateTime?
 
@@ -3785,9 +3805,64 @@ model CustomerSignInCode {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  deliveries CustomerSignInDelivery[]
+
   @@unique([channel, identifierHash])
   @@index([expiresAt])
   @@index([ipHash, lastSentAt])
+}
+
+// The PROMISE TO DELIVER one sign-in code, committed in the same transaction
+// as the challenge itself and drained by a lease-guarded worker
+// (engines/customerSignInOutbox.ts).
+//
+// 🔴 A CHALLENGE THAT WAS NEVER DURABLY SCHEDULED IS A LOCKED DOOR. The first
+// cut sent inside a floating promise: the code, its cooldown and its per-day
+// count were committed, the send was not. A deploy in the following
+// milliseconds left the customer waiting for a text nothing was going to
+// send, behind a cooldown telling them not to ask again yet.
+//
+// The code and the destination exist at rest ONLY inside `sealed`
+// (AES-256-GCM under a key derived from TOKEN_ENCRYPTION_KEY for this purpose
+// alone), and only until the row is terminal - a CHECK enforces that nothing
+// terminal still holds one.
+model CustomerSignInDelivery {
+  id String @id @default(cuid())
+
+  codeId String
+  code   CustomerSignInCode @relation(fields: [codeId], references: [id], onDelete: Cascade)
+  // "sms" | "email" (CHECK-pinned).
+  channel String
+
+  /// iv:tag:ciphertext of {"to","code"}. NULL once terminal (CHECK-pinned).
+  sealed String?
+
+  // pending | sent | failed | abandoned | superseded | expired | suppressed
+  status String @default("pending")
+
+  /// Real provider dispatches only: a claim is not an attempt.
+  attempts               Int       @default(0)
+  firstProviderAttemptAt DateTime?
+  /// Written BEFORE the request leaves: a process that dies after the
+  /// provider accepted still leaves a row that says an attempt may be in
+  /// flight. Only a definitive answer clears it.
+  lastAttemptAmbiguous   Boolean   @default(false)
+  nextAttemptAt          DateTime?
+  claimedAt              DateTime?
+  claimToken             String?
+  /// Fixed classification only - never a provider message, never a contact.
+  lastError              String?
+  providerMessageId      String?
+  /// Stable per delivery: a retried EMAIL is collapsed by Resend itself.
+  idempotencyKey         String    @unique
+  expiresAt              DateTime
+  sentAt                 DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([codeId])
 }
 
 // PLATFORM operations - durable, exclusive, resumable admin-initiated runs

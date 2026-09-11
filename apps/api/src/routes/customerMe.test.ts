@@ -468,16 +468,27 @@ describe("🔴 isolation", () => {
     }
   });
 
-  it("a record is ACTIVELY linked to one account - a second account matching it by email is declined", async () => {
+  it("🔴 one record, two people's proven contacts: NEITHER account opens it", async () => {
+    // The record carries one person's phone and another's email - a booking
+    // made for someone else, or a typo. Whoever signed in first used to keep
+    // it for good; now the contest is what decides, and it decides nothing.
     const phone = randomPhone();
     const email = `dup-${randomToken(6)}@test.local`.toLowerCase();
     const c = await client(shopA, { phone, email });
     const byPhone = await account({ phone });
     const byEmail = await account({ email });
-    expect((await get("/api/me/home", byPhone.token)).body.shops).toHaveLength(1);
-    expect((await get("/api/me/home", byEmail.token)).body.shops).toHaveLength(0);
+
+    const phoneHome = (await get("/api/me/home", byPhone.token)).body;
+    const emailHome = (await get("/api/me/home", byEmail.token)).body;
+    expect(phoneHome.shops).toHaveLength(0);
+    expect(emailHome.shops).toHaveLength(0);
+    // Each is told a shop has a profile to connect - and nothing about it.
+    expect(phoneHome.ambiguous).toHaveLength(1);
+    expect(phoneHome.ambiguous[0]).toMatchObject({ name: "Alpha Cuts" });
+    expect(JSON.stringify(phoneHome.ambiguous)).not.toContain("Jordan");
+    expect(emailHome.ambiguous).toHaveLength(1);
     const active = await prisma.customerClientLink.count({ where: { clientId: c.id, status: "active" } });
-    expect(active).toBe(1);
+    expect(active).toBe(0);
   });
 });
 

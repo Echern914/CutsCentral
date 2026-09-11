@@ -12,7 +12,11 @@ import {
   splitHistory,
   storefrontUrl,
 } from "../services/customerPortal.js";
-import { rejectShopForAccount, syncCustomerLinks } from "../services/customerIdentity.js";
+import {
+  claimProfile,
+  rejectProfileForAccount,
+  syncCustomerLinks,
+} from "../services/customerIdentity.js";
 import {
   identifierDigest,
   requestSignInCode,
@@ -85,10 +89,55 @@ customerMeRouter.get("/shops/:key/storefront", async (req, res) => {
   res.json({ url });
 });
 
-/** "This isn't me": stop showing this shop's records, for good. */
+/**
+ * "This isn't me": stop showing THIS profile, for good.
+ *
+ * One profile, not the whole shop. Where a phone is shared - a parent and a
+ * child at the same barbershop - one of the records at that shop really is
+ * theirs, and disowning the other must not take it away too.
+ */
 customerMeRouter.post("/shops/:key/not-me", async (req, res) => {
-  const rejected = await rejectShopForAccount(accountId(req), String(req.params.key));
+  const rejected = await rejectProfileForAccount(accountId(req), String(req.params.key));
   if (!rejected) return notFound(res);
+  res.json({ ok: true });
+});
+
+/**
+ * Connect a profile the contact alone could not: the customer produces the
+ * shop's own link to it (/r/<token>, from their text or email). Accepts the
+ * whole URL or the token.
+ *
+ * Every refusal that could confirm a record exists answers the same 404.
+ */
+const claimSchema = z.object({ link: z.string().min(8).max(500) }).strict();
+
+function tokenFromLink(raw: string): string | null {
+  const trimmed = raw.trim();
+  const fromUrl = /\/r\/([A-Za-z0-9_-]{16,128})/.exec(trimmed);
+  const token = fromUrl?.[1] ?? trimmed;
+  return /^[A-Za-z0-9_-]{16,128}$/.test(token) ? token : null;
+}
+
+customerMeRouter.post("/profiles/claim", async (req, res) => {
+  const parsed = claimSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const token = tokenFromLink(parsed.data.link);
+  if (!token) return notFound(res);
+  const outcome = await claimProfile(accountId(req), token);
+  if (!outcome.ok) {
+    if (outcome.reason === "claimed_elsewhere") {
+      res.status(409).json({ error: "claimed_elsewhere" });
+      return;
+    }
+    if (outcome.reason === "too_many") {
+      res.status(409).json({ error: "too_many" });
+      return;
+    }
+    return notFound(res);
+  }
   res.json({ ok: true });
 });
 

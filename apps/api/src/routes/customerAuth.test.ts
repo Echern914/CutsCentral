@@ -74,8 +74,11 @@ const post = (path: string, body: unknown, ip = RUN_IP) =>
   request(app).post(path).set("X-Forwarded-For", ip).send(body as object);
 
 async function signIn(phone: string): Promise<request.Response> {
+  // Wait for THIS request's text, not any earlier one: re-issuing supersedes
+  // the previous code, so reading the older message would type a dead code.
+  const before = sms.filter((s) => s.to === phone).length;
   await post("/api/customer-auth/start", { channel: "sms", phone });
-  await settle(() => sms.some((s) => s.to === phone));
+  await settle(() => sms.filter((s) => s.to === phone).length > before);
   const res = await post("/api/customer-auth/verify", { channel: "sms", phone, code: lastSmsCode(phone) });
   const aid = res.body.token ? customerSessionFromToken(res.body.token)?.accountId : undefined;
   if (aid) accountIds.add(aid);
