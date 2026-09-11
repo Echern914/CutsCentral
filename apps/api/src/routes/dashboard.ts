@@ -1231,6 +1231,13 @@ dashboardRouter.post("/clients/:clientId/merge", async (req, res) => {
       res.status(404).json({ error: result.reason });
       return;
     }
+    // Somebody at this shop already said these are two different people. The
+    // request is well-formed; it is the shop's own earlier answer that
+    // refuses, so 409 rather than 400.
+    if (result.reason === "marked_different_people") {
+      res.status(409).json({ error: result.reason });
+      return;
+    }
     // same_client: winner and loser are the same row.
     res.status(400).json({ error: result.reason });
     return;

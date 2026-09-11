@@ -42,6 +42,40 @@ CREATE TRIGGER client_merge_event_no_update
   BEFORE UPDATE ON "ClientMergeEvent"
   FOR EACH ROW EXECUTE FUNCTION client_merge_event_immutable();
 
+/* 🔴 BOTH RECORDS MUST BELONG TO THE SHOP THE EVENT IS STAMPED WITH.
+
+   This row is the evidence for a merge - what moved, and from which record to
+   which. A row pairing this shop with another shop's client would be a false
+   account of somebody else's data, written under this shop's tenant policy.
+
+   Checked AT INSERT rather than with a foreign key, because a merge record has
+   to OUTLIVE the rows it describes: a composite FK would either cascade the
+   evidence away or block the deletion that makes it matter. Same reasoning as
+   the ids being plain columns here (AppointmentPriceChange does it too).
+
+   SECURITY DEFINER with a pinned search_path so the check sees the real rows
+   under the tenant role, where Client is only visible through the policy -
+   exactly the stance PunchLedger's append-only trigger takes. */
+CREATE OR REPLACE FUNCTION client_merge_event_same_shop() RETURNS trigger AS $fn$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM "Client"
+     WHERE "id" = NEW."survivorClientId" AND "shopId" = NEW."shopId"
+  ) OR NOT EXISTS (
+    SELECT 1 FROM "Client"
+     WHERE "id" = NEW."mergedClientId" AND "shopId" = NEW."shopId"
+  ) THEN
+    RAISE EXCEPTION 'ClientMergeEvent: both clients must belong to shop %', NEW."shopId"
+      USING ERRCODE = 'foreign_key_violation';
+  END IF;
+  RETURN NEW;
+END;
+$fn$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+CREATE TRIGGER client_merge_event_same_shop
+  BEFORE INSERT ON "ClientMergeEvent"
+  FOR EACH ROW EXECUTE FUNCTION client_merge_event_same_shop();
+
 /* Tenant isolation, like every other shop table. */
 GRANT SELECT, INSERT ON "ClientMergeEvent" TO chairback_app;
 REVOKE UPDATE, DELETE ON "ClientMergeEvent" FROM chairback_app;

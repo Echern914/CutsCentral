@@ -108,9 +108,13 @@ function DuplicateGroupCard({ group }: { group: DuplicateGroupView }) {
     const reason = `Duplicates review: ${matchLabel.toLowerCase()}`;
     startTransition(async () => {
       let merged = 0;
+      let refusal: string | undefined;
       for (const c of toMerge) {
         const r = await mergeClientAction(keep.id, c.id, reason);
-        if (!r.ok) break;
+        if (!r.ok) {
+          refusal = r.error;
+          break;
+        }
         merged++;
       }
       if (merged === toMerge.length) {
@@ -121,10 +125,15 @@ function DuplicateGroupCard({ group }: { group: DuplicateGroupView }) {
           "success",
         );
       } else {
+        // Say WHICH refusal. Somebody here already answered this question, and
+        // "couldn't merge" invites them to try again on something that will
+        // never work.
         toast(
-          merged === 0
-            ? "Couldn't merge those clients."
-            : `Merged ${merged} of ${toMerge.length}. The rest are still here to try again.`,
+          refusal === "marked_different_people"
+            ? "These were marked as different people, so they can't be merged."
+            : merged === 0
+              ? "Couldn't merge those clients."
+              : `Merged ${merged} of ${toMerge.length}. The rest are still here to try again.`,
           "error",
         );
       }

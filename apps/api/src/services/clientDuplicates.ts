@@ -1,4 +1,5 @@
-import { runWithShop } from "@chairback/db";
+import { asOwnerWithin, runWithShop } from "@chairback/db";
+import { settleClientLinks } from "./customerIdentity.js";
 
 /**
  * The duplicates review: clients in ONE shop that share a phone number or an
@@ -230,6 +231,13 @@ export async function dismissDuplicates(
       }
     }
     const written = await tx.clientDuplicateDismissal.createMany({ data, skipDuplicates: true });
+    // 🔴 SAYING SO CHANGES WHAT A CUSTOMER'S APP MAY OPEN - IN THIS
+    // TRANSACTION. These records share a contact, and one of them may be
+    // linked to a My ChairBack account on the strength of that contact alone.
+    // The shop has just said they are different people, so that link is no
+    // longer safe; settling it here rather than at the account's next read
+    // means the correction lands with the decision that caused it.
+    await asOwnerWithin(tx, (otx) => settleClientLinks(otx, ids));
     return { ok: true, pairs: written.count };
   });
 }

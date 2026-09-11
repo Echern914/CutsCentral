@@ -1,6 +1,7 @@
-import { forShop, runWithShop } from "@chairback/db";
+import { asOwnerWithin, forShop, runWithShop } from "@chairback/db";
 import { recomputeCadence } from "../engines/cadence.js";
 import { toE164 } from "../acuity/clientKey.js";
+import { settleLinksForMerge } from "./customerIdentity.js";
 
 /**
  * Barber edits to a client's own profile. The barber is admin over their book:
@@ -126,7 +127,18 @@ export async function unarchiveClient(
 export type MergeResult =
   | { ok: true; balance: number; movedVisits: number; moved: Record<string, number> }
   | { ok: false; reason: "not_found" }
-  | { ok: false; reason: "same_client" };
+  | { ok: false; reason: "same_client" }
+  | { ok: false; reason: "marked_different_people" };
+
+/**
+ * Test seam: fail the merge AFTER the customer links have been settled, to
+ * prove the whole transaction rolls back together rather than leaving an app
+ * pointing at a record whose history never moved.
+ */
+let mergeFault: "after_links" | null = null;
+export function __setMergeFaultForTests(stage: "after_links" | null): void {
+  mergeFault = stage;
+}
 
 /** Who asked for a merge, and (optionally) why - stored on the ClientMergeEvent. */
 export interface MergeAudit {
@@ -198,6 +210,20 @@ export async function mergeClients(
     // into another one (that would re-attach the history they asked us to drop).
     if (winner.optOutSource === "deleted" || loser.optOutSource === "deleted") {
       return { ok: false as const, reason: "not_found" as const };
+    }
+    // 🔴 "NOT THE SAME PERSON" IS PERMANENT. Somebody at this shop looked at
+    // these two records and said they are different people - the parent and
+    // child on one phone number that the duplicates review exists for. A merge
+    // would fold one person's visits, punches and bookings into the other's,
+    // and the customer side reads the same fact to decide what an account may
+    // open. It is refused here rather than quietly allowed.
+    const [lowId, highId] = [winnerId, loserId].sort();
+    const different = await tx.clientDuplicateDismissal.findFirst({
+      where: { shopId, clientAId: lowId, clientBId: highId },
+      select: { id: true },
+    });
+    if (different) {
+      return { ok: false as const, reason: "marked_different_people" as const };
     }
 
     // Reassign the loser's entire footprint to the winner.
@@ -321,6 +347,18 @@ export async function mergeClients(
         moved: movedCounts,
       },
     });
+
+    // 🔴 THE CUSTOMER'S OWN APP, SETTLED IN THIS TRANSACTION. My ChairBack
+    // links live in platform tables the tenant role cannot touch, so this
+    // steps up to the owner INSIDE the same transaction rather than opening a
+    // second one: the history has just moved, and a link still pointing at the
+    // archived record - or surviving on the wrong account - must never be a
+    // state that outlives a rolled-back merge. See settleLinksForMerge for
+    // which account keeps what.
+    await asOwnerWithin(tx, (otx) =>
+      settleLinksForMerge(otx, { shopId, winnerId, loserId }),
+    );
+    if (mergeFault === "after_links") throw new Error("merge_fault_after_links");
 
     const agg = await tx.punchLedger.aggregate({
       where: { shopId, clientId: winnerId },

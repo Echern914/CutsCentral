@@ -63,7 +63,12 @@ export function MergeClient({
         toast(`Merged ${loser.name} into ${clientName}`, "success");
         router.refresh();
       } else {
-        toast("Couldn't merge those clients.", "error");
+        toast(
+          r.error === "marked_different_people"
+            ? "These were marked as different people, so they can't be merged."
+            : "Couldn't merge those clients.",
+          "error",
+        );
       }
     });
   }
