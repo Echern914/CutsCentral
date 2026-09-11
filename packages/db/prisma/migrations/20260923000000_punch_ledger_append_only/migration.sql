@@ -39,6 +39,56 @@ ALTER TABLE "PunchLedger"
   ADD CONSTRAINT "PunchLedger_visitId_fkey"
   FOREIGN KEY ("visitId") REFERENCES "Visit"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
+/* 🔴 A LEDGER ROW MAY NOT PAIR ONE SHOP WITH ANOTHER SHOP'S CLIENT.
+
+   A balance is money-shaped, and it is read as sum(earned) - sum(redeemed)
+   over (shopId, clientId). Row-level security asks only "is this row's shopId
+   mine?", and a row stamped with MY shopId carrying YOUR client answers yes -
+   so it would be counted into a balance at a shop that never earned it, by a
+   customer who is not that shop's. The single-column foreign key underneath
+   only ever checked that the client exists SOMEWHERE.
+
+   The trigger above deliberately PERMITS re-pointing clientId, because that is
+   how a duplicate merge moves history onto the surviving record. This is what
+   keeps that door from opening onto another shop.
+
+   The referenced pair must be unique for a composite foreign key to point at
+   it; `id` is already the primary key, so this adds no restriction on Client.
+   Created only if absent - PR #413 and the My ChairBack migration add the same
+   constraint under the same name, and whichever runs first must not make the
+   others fail. */
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'Client_id_shopId_key' AND conrelid = '"Client"'::regclass
+  ) THEN
+    ALTER TABLE "Client" ADD CONSTRAINT "Client_id_shopId_key" UNIQUE ("id", "shopId");
+  END IF;
+END $$;
+
+/* Say plainly what is wrong BEFORE the constraint says it cryptically: if any
+   existing row already pairs a shop with another shop's client, this migration
+   stops the deploy with a count rather than "violates foreign key constraint".
+   The old build keeps serving while somebody looks. */
+DO $$
+DECLARE bad bigint;
+BEGIN
+  SELECT count(*) INTO bad
+    FROM "PunchLedger" p
+    JOIN "Client" c ON c."id" = p."clientId"
+   WHERE c."shopId" <> p."shopId";
+  IF bad > 0 THEN
+    RAISE EXCEPTION
+      'PunchLedger has % row(s) whose client belongs to another shop; fix them before this migration can add PunchLedger_client_same_shop_fkey', bad;
+  END IF;
+END $$;
+
+ALTER TABLE "PunchLedger"
+  ADD CONSTRAINT "PunchLedger_client_same_shop_fkey"
+  FOREIGN KEY ("clientId", "shopId") REFERENCES "Client"("id", "shopId")
+  ON DELETE CASCADE ON UPDATE CASCADE;
+
 /* SECURITY DEFINER so the teardown checks see the real Client/Shop rows even
    when the statement runs under the tenant role (where Shop is default-deny
    and would always look "gone" - which would quietly re-open deletes). The
