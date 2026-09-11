@@ -184,8 +184,8 @@ afterAll(async () => {
     await prisma.customerAccount.deleteMany({ where: { id: { in: [...accountIds] } } });
   }
   if (ownerId) {
-    const shops = [shopA, shopB].filter(Boolean);
-    await prisma.punchLedger.deleteMany({ where: { shopId: { in: shops } } });
+    // Deleting the shops cascades everything, the punch ledger included - and
+    // it must go that way: the ledger refuses direct deletes (append-only).
     await prisma.shop.deleteMany({ where: { ownerId } });
     await prisma.user.delete({ where: { id: ownerId } });
   }
