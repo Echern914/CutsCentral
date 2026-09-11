@@ -658,15 +658,18 @@ export async function rewardPrograms(bundles: PortalShopBundle[]): Promise<Porta
             label: row.reward?.name ?? "Reward",
           };
         }
-        if (row.visitId !== null) {
-          return {
-            date: row.createdAt.toISOString(),
-            kind: "earned" as const,
-            punches,
-            label: row.visit?.serviceName ?? "Visit",
-          };
+        // Bonus by the row's own SYSTEM note, not by a missing visit link: a
+        // visit earn whose visit was later cancelled keeps its row with the
+        // link detached, and it was still a visit, not a gift.
+        if (row.note === "bonus") {
+          return { date: row.createdAt.toISOString(), kind: "bonus" as const, punches, label: "Bonus" };
         }
-        return { date: row.createdAt.toISOString(), kind: "bonus" as const, punches, label: "Bonus" };
+        return {
+          date: row.createdAt.toISOString(),
+          kind: "earned" as const,
+          punches,
+          label: row.visit?.serviceName ?? "Visit",
+        };
       }),
       otherProfileHasPunches: data.otherBalances.some(
         (g) => (g._sum.punchesEarned ?? 0) - (g._sum.punchesRedeemed ?? 0) > 0,
