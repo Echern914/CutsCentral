@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeShopHandle } from "./shopHandle.js";
+import { normalizeShopHandle, shopHandleKey, shopSlugFromName } from "./shopHandle.js";
 
 describe("normalizeShopHandle — forgiving about input", () => {
   it("takes the handle as typed", () => {
@@ -11,6 +11,70 @@ describe("normalizeShopHandle — forgiving about input", () => {
     expect(normalizeShopHandle("  Drickcuttinup ")).toBe("drickcuttinup");
     expect(normalizeShopHandle("@drickcuttinup")).toBe("drickcuttinup");
     expect(normalizeShopHandle("@@DrickCuttinUp")).toBe("drickcuttinup");
+  });
+
+  it("🔴 takes the shop's own NAME, which is the thing a customer actually knows", () => {
+    // The defect this closes. Shop creation turns "United Barbershop" into
+    // `united-barbershop`; this used to reject a space outright, so the one
+    // string guaranteed to be right was the one string that could never
+    // resolve. Checked against production: every live shop 404'd by name.
+    for (const typed of [
+      "United Barbershop",
+      "united barbershop",
+      "UNITED BARBERSHOP",
+      "  United   Barbershop  ",
+      "United_Barbershop",
+      "United - Barbershop",
+    ]) {
+      expect(normalizeShopHandle(typed), typed).toBe("united-barbershop");
+    }
+  });
+
+  it("folds accents rather than eating the letter under them", () => {
+    // Collapsing "é" as punctuation would give `irza-beaut`, losing a letter
+    // and the shop with it.
+    expect(normalizeShopHandle("Irza Beauté")).toBe("irza-beaute");
+    expect(shopSlugFromName("Señor Fades")).toBe("senor-fades");
+  });
+
+  it("mints and reads with ONE transform, so a name always finds its own shop", () => {
+    // The two used to be separate implementations; that is how they drifted.
+    for (const name of [
+      "United Barbershop",
+      "JUP Design Studio",
+      "Deltrimz studio",
+      "FadesByMikey Barbershop",
+      "Irza beaute",
+    ]) {
+      expect(normalizeShopHandle(name), name).toBe(shopSlugFromName(name));
+    }
+  });
+});
+
+describe("shopHandleKey — where the spaces fall is not knowledge", () => {
+  it("collapses every spelling of the same letters to one key", () => {
+    // "FadesByMikey Barbershop" mints `fadesbymikey-barbershop`: one word then
+    // two, with the dash where nobody would guess it.
+    const key = shopHandleKey("fadesbymikey-barbershop");
+    expect(key).toBe("fadesbymikeybarbershop");
+    for (const typed of [
+      "FadesByMikey Barbershop",
+      "fades by mikey barbershop",
+      "fadesbymikeybarbershop",
+      "Fades-By-Mikey-Barbershop",
+    ]) {
+      expect(shopHandleKey(normalizeShopHandle(typed)!), typed).toBe(key);
+    }
+  });
+
+  it("🔴 is still every letter, in order - it is not a fuzzy key", () => {
+    const key = shopHandleKey("united-barbershop");
+    // A prefix, a typo and a missing letter all key differently, so the loose
+    // lookup can no more discover a shop than the exact one can.
+    expect(shopHandleKey("united")).not.toBe(key);
+    expect(shopHandleKey("untied-barbershop")).not.toBe(key);
+    expect(shopHandleKey("united-barbersho")).not.toBe(key);
+    expect(shopHandleKey("barbershop")).not.toBe(key);
   });
 
   it("accepts the link the shop texted them, in every shape it arrives", () => {
@@ -53,18 +117,25 @@ describe("normalizeShopHandle — 🔴 exact about matching", () => {
       "   ",
       "@",
       "a", // too short for SLUG_REGEX
-      "-leading-hyphen",
-      "trailing-hyphen-",
-      "has spaces",
-      "UPPER CASE WORDS",
-      "emoji🙂handle",
-      "under_score",
+      "-", // nothing but a separator
+      "!!!",
+      "🙂",
       "a".repeat(60), // too long
-      "https://getchairback.com/",
       "%",
     ]) {
       expect(normalizeShopHandle(junk), JSON.stringify(junk)).toBeNull();
     }
+  });
+
+  it("🔴 spacing and punctuation are SHAPE, not knowledge - they resolve", () => {
+    // These used to be refused outright, which is what made a shop unfindable
+    // by its own name. They are the same letters in different clothes, and
+    // every one of them still requires knowing all of them.
+    expect(normalizeShopHandle("has spaces")).toBe("has-spaces");
+    expect(normalizeShopHandle("UPPER CASE WORDS")).toBe("upper-case-words");
+    expect(normalizeShopHandle("under_score")).toBe("under-score");
+    expect(normalizeShopHandle("-leading-hyphen")).toBe("leading-hyphen");
+    expect(normalizeShopHandle("trailing-hyphen-")).toBe("trailing-hyphen");
   });
 
   it("is idempotent — normalizing twice changes nothing", () => {
