@@ -1,5 +1,6 @@
 import { createHash, createHmac } from "node:crypto";
 import { apiEnv } from "@chairback/config";
+import { logger } from "../logger.js";
 
 /**
  * THE UNSUBSCRIBE CREDENTIAL, AND NOTHING ELSE.
@@ -32,22 +33,67 @@ import { apiEnv } from "@chairback/config";
  *     so a presented token can be looked up in one indexed read. A leaked
  *     database backup yields digests, and a digest cannot be mailed to anyone.
  *
- * The purpose string is domain separation: the same secret signs session
- * cookies and affiliate attribution, and a value minted here must never be
- * mistakable for one of those (or vice versa). The `v1` is what lets the
- * scheme be rotated later without ambiguity.
+ * The purpose string is domain separation: a value minted here must never be
+ * mistakable for a session signature or an affiliate attribution (or vice
+ * versa). The `v1` is what lets the scheme be replaced later without ambiguity.
  *
- * ROTATING SESSION_SECRET invalidates every outstanding unsubscribe link along
- * with every session - deliberately noted here so it is a known consequence
- * rather than a surprise. Nothing else breaks: `magicToken` is untouched, so
- * rewards sessions are unaffected by anything in this file.
+ * ── Its own key, for its own lifetime ───────────────────────────────────────
+ *
+ * 🔴 THIS USED TO DERIVE FROM SESSION_SECRET, AND THAT WAS WRONG. Whatever
+ * signs these tokens decides how long a link in a three-week-old email keeps
+ * working - so tying them to the session key tied an unsubscribe's lifetime to
+ * a value whose entire purpose is to be rotatable. Rotate sessions after a
+ * leak, on a schedule, or because somebody left, and every outstanding
+ * unsubscribe link silently stops matching: not at rotation, which would at
+ * least be noticeable, but at each client's NEXT broadcast, when the worker
+ * derives a new token and overwrites their stored digest. CAN-SPAM requires
+ * the opposite, and a link that does nothing is how a customer stops clicking
+ * unsubscribe and starts clicking "this is spam".
+ *
+ * UNSUBSCRIBE_TOKEN_SECRET is therefore separate and long-lived. Production
+ * REFUSES TO BOOT without it (see packages/config/src/env.ts) rather than
+ * falling back, because a fallback nobody is told about is how this quietly
+ * becomes one secret again. Development and CI may fall back, once, loudly.
+ *
+ * The guarantee this buys, stated exactly: an unsubscribe link keeps working
+ * for the life of UNSUBSCRIBE_TOKEN_SECRET. Rotating THAT key does invalidate
+ * every outstanding link - it is the one action that should, and it is now a
+ * deliberate act rather than a side effect of unrelated hygiene.
+ *
+ * Nothing here touches `magicToken`, so rewards sessions are unaffected by any
+ * of it.
  */
 
 const PURPOSE = "chairback:unsubscribe:v1";
 
+let warnedAboutFallback = false;
+
+/**
+ * The key these tokens are derived from.
+ *
+ * Unreachable in production: the environment schema refuses to start without
+ * the dedicated secret. Everywhere else the fallback is announced once, so a
+ * developer who later wonders why a staging unsubscribe link stopped working
+ * after a session rotation has the answer in the log rather than in a bisect.
+ */
+function signingKey(): string {
+  const env = apiEnv();
+  if (env.UNSUBSCRIBE_TOKEN_SECRET) return env.UNSUBSCRIBE_TOKEN_SECRET;
+  if (!warnedAboutFallback) {
+    warnedAboutFallback = true;
+    logger.warn(
+      { reason: "unsubscribe_token_secret_unset" },
+      "UNSUBSCRIBE_TOKEN_SECRET is not set - deriving unsubscribe tokens from the session key. Outstanding links will break if sessions are rotated. Production refuses to start in this state.",
+    );
+  }
+  // Domain-separated even here, so a fallback token is not a session signature
+  // by another name.
+  return `${PURPOSE}:fallback:${env.SESSION_SECRET}`;
+}
+
 /** The token that goes in ONE customer's unsubscribe link. */
 export function unsubscribeTokenFor(clientId: string): string {
-  return createHmac("sha256", apiEnv().SESSION_SECRET)
+  return createHmac("sha256", signingKey())
     .update(`${PURPOSE}:${clientId}`)
     .digest("base64url");
 }

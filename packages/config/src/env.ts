@@ -30,6 +30,41 @@ const apiSchema = z.object({
   API_BASE_URL: cleanUrl(),
 
   SESSION_SECRET: z.string().min(16),
+  /**
+   * 🔴 THE UNSUBSCRIBE CREDENTIAL'S OWN SECRET, and it has to be its own.
+   *
+   * Unsubscribe tokens are DERIVED from this (engines/unsubscribeToken.ts), so
+   * whatever signs them decides how long a link in a three-week-old email
+   * keeps working. Deriving them from SESSION_SECRET tied that lifetime to a
+   * key whose whole purpose is to be rotatable: rotate sessions - after a leak,
+   * on a schedule, because somebody left - and every outstanding unsubscribe
+   * link silently stops matching at the client's next broadcast, when the
+   * worker rewrites their digest under the new secret. CAN-SPAM requires the
+   * opposite, and a broken unsubscribe is the strongest negative signal a
+   * mailbox provider records.
+   *
+   * So: separate key, separate lifetime, rotated only when somebody decides
+   * that invalidating every outstanding unsubscribe link is the right trade.
+   *
+   * At least 43 characters, which is what 32 random bytes come to in base64 -
+   * `openssl rand -base64 32`. Optional in the SCHEMA only so development and
+   * CI keep working; production is refused below, because a fallback nobody is
+   * told about is how this would quietly go back to being one secret.
+   */
+  // A BLANK VALUE MEANS UNSET, not malformed. `.env.example` ships this key
+  // empty so it is visible and obviously required, and somebody copying that
+  // file must land in the development fallback (announced in the log) rather
+  // than on a boot failure they then "fix" by deleting the line.
+  UNSUBSCRIBE_TOKEN_SECRET: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z
+      .string()
+      .min(43, {
+        message:
+          "must carry at least 32 bytes of entropy - generate one with: openssl rand -base64 32",
+      })
+      .optional(),
+  ),
   // Must decode to exactly 32 bytes (AES-256 key). Validate at boot so a
   // malformed key crashes the process loudly here rather than at the first
   // token encrypt/decrypt deep in a request. Mirrors loadKey() in crypto.ts.
@@ -299,13 +334,48 @@ const apiSchema = z.object({
   DEV_SEED_ACUITY_ACCOUNT_ID: z.string().optional().default(""),
 });
 
+/**
+ * Cross-field rules - the ones a single field cannot answer for itself.
+ *
+ * Kept as a superRefine rather than stricter field types so development and CI
+ * stay runnable with a partial environment, while production is held to the
+ * whole contract. A boot that fails here fails loudly, at startup, naming the
+ * variable and how to make one - which is the cheapest place in the system to
+ * find out.
+ */
+const apiSchemaChecked = apiSchema.superRefine((env, ctx) => {
+  if (env.NODE_ENV !== "production") return;
+
+  // 🔴 NO SILENT FALLBACK IN PRODUCTION. Unsubscribe links derived from
+  // SESSION_SECRET break the moment sessions are rotated, and they break
+  // invisibly: nothing errors, the link simply stops matching and the customer
+  // concludes the unsubscribe is broken - then reports the mail as spam.
+  if (!env.UNSUBSCRIBE_TOKEN_SECRET) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["UNSUBSCRIBE_TOKEN_SECRET"],
+      message:
+        "required in production - unsubscribe links must not depend on a rotatable session key. Generate one with: openssl rand -base64 32",
+    });
+  } else if (env.UNSUBSCRIBE_TOKEN_SECRET === env.SESSION_SECRET) {
+    // Setting it to the same value is the fallback written out by hand, and it
+    // has exactly the same consequence.
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["UNSUBSCRIBE_TOKEN_SECRET"],
+      message:
+        "must not be the same value as SESSION_SECRET - the point is that rotating one does not invalidate the other",
+    });
+  }
+});
+
 export type ApiEnv = z.infer<typeof apiSchema>;
 
 let cachedApiEnv: ApiEnv | undefined;
 
 export function apiEnv(source: NodeJS.ProcessEnv = process.env): ApiEnv {
   if (cachedApiEnv) return cachedApiEnv;
-  const parsed = apiSchema.safeParse(source);
+  const parsed = apiSchemaChecked.safeParse(source);
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((i) => `  - ${i.path.join(".")}: ${i.message}`)

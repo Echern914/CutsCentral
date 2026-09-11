@@ -115,6 +115,19 @@ export interface SendEmailInput {
    */
   unsubscribeUrl?: string;
   /**
+   * The caller writes the EmailDelivery row ITSELF, durably, so this module
+   * must not start a floating one behind it.
+   *
+   * 🔴 THE DEFAULT (fire-and-forget) IS A TRADE, AND IT IS NOT ALWAYS PAYABLE.
+   * Losing a transactional email's ledger row costs a lookup nobody may ever
+   * make. Losing a BROADCAST's costs the correlation between a future bounce
+   * and a client - so that client is never suppressed and the next blast mails
+   * a dead address again. A caller that cannot pay it commits the row in its
+   * own transaction and sets this, which also keeps two concurrent upserts off
+   * the same message id.
+   */
+  recordsOwnDelivery?: boolean;
+  /**
    * Correlation only. Never a token, address, or body fragment.
    *
    * `clientId` is what lets a BOUNCE or a spam complaint be acted on later -
@@ -296,8 +309,10 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
   logger.info({ id: data.id, stream, ...input.meta }, "email sent");
   // Record the send so a later delivery/bounce/complaint event has something
   // to attach to. Fire-and-forget: a ledger write must never fail a message
-  // that has already left.
-  if (data.id) recordEmailSent(data.id, input);
+  // that has already left - except where the caller has taken that job on
+  // durably, in which case starting a second, floating write would only race
+  // its own transaction for the same row.
+  if (data.id && !input.recordsOwnDelivery) recordEmailSent(data.id, input);
   return { id: data.id ?? "unknown", status: "sent" };
 }
 

@@ -29,15 +29,14 @@ let ownerId: string;
 let outbox: SendEmailInput[] = [];
 
 beforeAll(async () => {
-  // The injected sender replaces the TRANSPORT, so it has to do what the
-  // transport does on success: record the dispatch in the delivery ledger.
-  // Without that stand-in these tests would exercise a world in which no
-  // message id was ever written down, which is not the one that ships.
+  // The injected sender replaces the TRANSPORT only. It deliberately does NOT
+  // write the delivery ledger: for a broadcast that is the worker's own job
+  // now, done in the transaction that marks the recipient sent, and these
+  // tests should exercise that path rather than a stand-in for the one it
+  // replaced.
   __setSendEmailForTests(async (input) => {
     outbox.push(input);
-    const id = `msg-${outbox.length}-${randomToken(6)}`;
-    recordEmailSent(id, input);
-    return { id, status: "sent" as const };
+    return { id: `msg-${outbox.length}-${randomToken(6)}`, status: "sent" as const };
   });
   const user = await prisma.user.create({
     data: { email: emailAddr, passwordHash: "x", name: "S" },
@@ -117,20 +116,18 @@ async function messageIdFor(clientId: string): Promise<string> {
 }
 
 /**
- * Wait for the dispatch ledger row.
+ * The dispatch ledger row is COMMITTED BY THE WORKER PASS, in the same
+ * transaction that marked the recipient sent - so by the time the pass
+ * returns it is simply there.
  *
- * `recordEmailSent` is fire-and-forget BY DESIGN - it runs after the message
- * has already left, so a ledger problem must never surface as a send failure.
- * That means a test which wants the "our write landed first" ordering has to
- * wait for it rather than assume it. The opposite ordering has its own test.
+ * It used to be a floating promise these tests had to poll for. That polling
+ * was the visible edge of the defect: a write nobody waits for is a write
+ * whose failure nobody notices.
  */
-async function waitForDelivery(messageId: string): Promise<void> {
-  for (let i = 0; i < 100; i++) {
-    const row = await prisma.emailDelivery.findUnique({ where: { messageId } });
-    if (row) return;
-    await new Promise((r) => setTimeout(r, 20));
-  }
-  throw new Error("dispatch ledger row never appeared");
+async function requireDelivery(messageId: string) {
+  const row = await prisma.emailDelivery.findUnique({ where: { messageId } });
+  expect(row, "the worker did not commit a delivery row").not.toBeNull();
+  return row!;
 }
 
 describe("🔴 a bounce attaches to a person, without storing their address", () => {
@@ -138,7 +135,7 @@ describe("🔴 a bounce attaches to a person, without storing their address", ()
     const c = await makeClient();
     const sent = await blastAndCollect();
     expect(sent).toHaveLength(1);
-    await waitForDelivery(await messageIdFor(c.id));
+    await requireDelivery(await messageIdFor(c.id));
 
     const delivery = await prisma.emailDelivery.findFirst({ where: { clientId: c.id } });
     expect(delivery).not.toBeNull();
@@ -160,7 +157,7 @@ describe("🔴 suppression, and what it is NOT", () => {
     const c = await makeClient();
     await blastAndCollect();
     const messageId = await messageIdFor(c.id);
-    await waitForDelivery(messageId);
+    await requireDelivery(messageId);
 
     expect(await applyEmailEvent({ messageId, event: "email.bounced", svixId: randomToken(8) }))
       .toBe("applied");
@@ -188,7 +185,7 @@ describe("🔴 suppression, and what it is NOT", () => {
     const c = await makeClient();
     await blastAndCollect();
     const messageId = await messageIdFor(c.id);
-    await waitForDelivery(messageId);
+    await requireDelivery(messageId);
 
     await applyEmailEvent({ messageId, event: "email.complained", svixId: randomToken(8) });
 
@@ -204,7 +201,7 @@ describe("🔴 suppression, and what it is NOT", () => {
     const c = await makeClient();
     await blastAndCollect();
     const messageId = await messageIdFor(c.id);
-    await waitForDelivery(messageId);
+    await requireDelivery(messageId);
 
     await applyEmailEvent({ messageId, event: "email.failed", svixId: randomToken(8) });
     const after = await prisma.client.findUnique({
@@ -218,7 +215,7 @@ describe("🔴 suppression, and what it is NOT", () => {
     const c = await makeClient();
     await blastAndCollect();
     const messageId = await messageIdFor(c.id);
-    await waitForDelivery(messageId);
+    await requireDelivery(messageId);
 
     await applyEmailEvent({ messageId, event: "email.delivered", svixId: randomToken(8) });
     const after = await prisma.client.findUnique({
@@ -232,7 +229,7 @@ describe("🔴 suppression, and what it is NOT", () => {
     const c = await makeClient();
     await blastAndCollect();
     const messageId = await messageIdFor(c.id);
-    await waitForDelivery(messageId);
+    await requireDelivery(messageId);
 
     await applyEmailEvent({ messageId, event: "email.bounced", svixId: randomToken(8) });
     const first = await prisma.client.findUnique({
@@ -254,7 +251,7 @@ describe("🔴 suppression, and what it is NOT", () => {
     const c = await makeClient();
     await blastAndCollect();
     const messageId = await messageIdFor(c.id);
-    await waitForDelivery(messageId);
+    await requireDelivery(messageId);
     const svixId = randomToken(8);
 
     expect(await applyEmailEvent({ messageId, event: "email.bounced", svixId })).toBe("applied");
@@ -310,7 +307,7 @@ describe("🔴 suppression, and what it is NOT", () => {
     // a far worse failure than a wasted send.
     const c = await makeClient();
     await blastAndCollect();
-    await waitForDelivery(await messageIdFor(c.id));
+    await requireDelivery(await messageIdFor(c.id));
     await applyEmailEvent({
       messageId: await messageIdFor(c.id),
       event: "email.bounced",

@@ -108,55 +108,96 @@ async function suppressClientEmail(
   });
 }
 
+/** Who a dispatched message was for. Ids only - never an address or a subject. */
+export interface DispatchMeta {
+  messageId: string;
+  kind: string;
+  shopId?: string | null;
+  appointmentId?: string | null;
+  clientId?: string | null;
+}
+
 /**
- * Record a dispatch. Fire-and-forget by design: this runs after the message
- * has already left, so a ledger problem must never surface as a send failure.
+ * 🔴 THE ONE PLACE A DISPATCH IS CORRELATED, and it takes the caller's
+ * transaction.
+ *
+ * Two callers need this and they need it to mean the same thing: the
+ * fire-and-forget recorder below (every legacy send), and the broadcast
+ * worker, which cannot afford fire-and-forget and commits this in the SAME
+ * transaction that marks the recipient sent. Two implementations of "attach
+ * the metadata, do not touch the status, suppress if it already bounced" would
+ * drift, and the half that drifted would be the half nobody was watching.
+ *
+ * 🔴 METADATA ONLY, NEVER THE STATUS. A webhook routinely beats the sender's
+ * own write - the provider has already delivered or bounced the message by the
+ * time we get here. Writing "sent" would walk a real outcome backwards, so the
+ * update fills in the correlation fields the event could not know and leaves
+ * status, failureClass and the timestamps exactly as the event left them.
+ *
+ * Correlation fields are only ever WRITTEN, never blanked: a caller that does
+ * not know the clientId must not erase one an earlier write established.
+ */
+export async function recordDispatchInTx(
+  tx: Prisma.TransactionClient,
+  meta: DispatchMeta,
+  now: Date = new Date(),
+): Promise<void> {
+  const correlation = {
+    kind: meta.kind,
+    ...(meta.shopId ? { shopId: meta.shopId } : {}),
+    ...(meta.appointmentId ? { appointmentId: meta.appointmentId } : {}),
+    ...(meta.clientId ? { clientId: meta.clientId } : {}),
+  };
+  const row = await tx.emailDelivery.upsert({
+    where: { messageId: meta.messageId },
+    create: {
+      messageId: meta.messageId,
+      kind: meta.kind,
+      shopId: meta.shopId ?? null,
+      appointmentId: meta.appointmentId ?? null,
+      clientId: meta.clientId ?? null,
+      status: "sent",
+    },
+    update: { ...correlation, awaitingDispatchMeta: false },
+  });
+
+  // 🔴 THE OTHER ORDER, WHICH IS NOT RARE. A verified bounce routinely arrives
+  // before this write - the provider has already rejected the message by the
+  // time our own metadata lands. That event could not suppress anybody,
+  // because at the moment it applied there was no clientId on the row to
+  // suppress. Now that there is one, the suppression it should have caused is
+  // applied here, inside the same transaction. Without this, a bounce that
+  // beat us was silently lost and the shop kept mailing a dead address for
+  // ever.
+  const clientId = meta.clientId ?? row.clientId;
+  if (clientId && SUPPRESSING.has(row.status)) {
+    await suppressClientEmail(tx, clientId, row.failureClass ?? row.status, now);
+  }
+}
+
+/**
+ * Record a dispatch. Fire-and-forget by design: this runs after the message has
+ * already left, so a ledger problem must never surface as a send failure.
+ *
+ * 🔴 THAT TRADE IS ONLY ACCEPTABLE WHERE LOSING THE ROW IS SURVIVABLE. For a
+ * transactional email it is: the worst case is one message whose delivery
+ * outcome cannot be looked up later. For a BROADCAST it is not - losing the
+ * correlation means a bounce can never be attached to a client, that client is
+ * never suppressed, and the next blast mails a dead address again. So the
+ * broadcast worker does not use this; it settles durably and passes
+ * `recordsOwnDelivery` so nothing floats behind it. See engines/broadcastWorker.ts.
  */
 export function recordEmailSent(messageId: string, input: SendEmailInput): void {
   void (async () => {
-    await runAsOwner(async (tx) => {
-      const row = await tx.emailDelivery.upsert({
-        where: { messageId },
-        create: {
-          messageId,
-          kind: input.meta?.kind ?? "unknown",
-          shopId: input.meta?.shopId ?? null,
-          appointmentId: input.meta?.appointmentId ?? null,
-          clientId: input.meta?.clientId ?? null,
-          status: "sent",
-        },
-        // 🔴 METADATA ONLY, NEVER THE STATUS. A webhook routinely beats the
-        // sender's own write - the provider has already delivered (or bounced)
-        // the message by the time this promise resolves. Writing "sent" here
-        // would walk a real outcome backwards, so the update fills in the
-        // correlation fields the event could not know and leaves status,
-        // failureClass and the timestamps exactly as the event left them.
-        update: {
-          kind: input.meta?.kind ?? "unknown",
-          shopId: input.meta?.shopId ?? null,
-          appointmentId: input.meta?.appointmentId ?? null,
-          clientId: input.meta?.clientId ?? null,
-          awaitingDispatchMeta: false,
-        },
-      });
-
-      // 🔴 THE OTHER ORDER, WHICH IS NOT RARE. A verified bounce routinely
-      // arrives before this write - the provider has already rejected the
-      // message by the time our own metadata lands. That event could not
-      // suppress anybody, because at the moment it applied there was no
-      // clientId on the row to suppress. Now that there is one, the
-      // suppression it should have caused is applied here. Without this, a
-      // bounce that beat us was silently lost and the shop kept mailing a dead
-      // address forever.
-      if (input.meta?.clientId && SUPPRESSING.has(row.status)) {
-        await suppressClientEmail(
-          tx,
-          input.meta.clientId,
-          row.failureClass ?? row.status,
-          new Date(),
-        );
-      }
-    });
+    await runAsOwner((tx) =>
+      recordDispatchInTx(tx, {
+        messageId,
+        kind: input.meta?.kind ?? "unknown",
+        shopId: input.meta?.shopId ?? null,
+        appointmentId: input.meta?.appointmentId ?? null,
+        clientId: input.meta?.clientId ?? null,
+      }),
+    );
   })().catch(() => {});
 }
 

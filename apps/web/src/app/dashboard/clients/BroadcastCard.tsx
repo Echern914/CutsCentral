@@ -272,7 +272,11 @@ export function BroadcastCard() {
             value={body}
             onChange={(e) => setBody(e.target.value)}
             maxLength={limits.body}
-            placeholder="Two chairs open this Friday — first come, first served."
+            // A mechanic has bays, not chairs. The example a barber is shown
+            // while composing is presentation copy like any other, and reading
+            // the wrong trade's word back at him is how a shop decides this
+            // tool was not built for it.
+            placeholder={`Two ${vocab.stationNounPlural} open this Friday — first come, first served.`}
             aria-label="Message"
           />
           {/* The count only appears once it starts to matter: a character

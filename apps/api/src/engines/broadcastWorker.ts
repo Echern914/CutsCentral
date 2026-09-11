@@ -15,6 +15,7 @@ import {
   unsubscribeUrlFor,
   type BroadcastShop,
 } from "./broadcast.js";
+import { recordDispatchInTx } from "../services/emailDelivery.js";
 import { unsubscribeDigestFor } from "./unsubscribeToken.js";
 
 /**
@@ -128,6 +129,20 @@ let crashHook: CrashHook | undefined;
 /** Test-only: simulate the process dying at one edge of the dispatch window. */
 export function __setBroadcastCrashHookForTests(fn: CrashHook | undefined): void {
   crashHook = fn;
+}
+
+let settlementFault: (() => void) | undefined;
+
+/**
+ * Test-only: make the authoritative settlement transaction fail AFTER the
+ * delivery upsert and BEFORE it commits.
+ *
+ * That is the one window where a half-written settlement would be invisible
+ * afterwards, so the only way to show it rolls back atomically is to break it
+ * there on purpose.
+ */
+export function __setBroadcastSettlementFaultForTests(fn: (() => void) | undefined): void {
+  settlementFault = fn;
 }
 
 /**
@@ -419,8 +434,12 @@ async function deliverRecipient(params: {
       });
       crashHook?.("after_dispatch", { broadcastId: ctx.id, clientId: client.id });
       if (res.anyDelivered) {
-        await settleSent(row.id, null, now);
-        return "sent";
+        // Push has no provider message id and no delivery ledger, but it gets
+        // the same claim check: a worker whose claim aged out mid-send must
+        // not write over whatever its successor has since decided.
+        return (await settleSent({ rowId: row.id, claimToken: params.claimToken, now }))
+          ? "sent"
+          : "stale_claim";
       }
       // Every device is gone (pruned 404/410) - there is nobody to notify and
       // no later attempt that could change it.
@@ -452,6 +471,10 @@ async function deliverRecipient(params: {
       // 🔴 IDS ONLY. The clientId is what lets a bounce be acted on later;
       // the address, the subject and the body stay out of every ledger.
       meta: { shopId: ctx.shopId, clientId: client.id, kind: "broadcast" },
+      // 🔴 The settlement below writes the delivery row in its own
+      // transaction. A floating one started here would race it for the same
+      // message id and swallow whatever it lost.
+      recordsOwnDelivery: true,
     });
     crashHook?.("after_dispatch", { broadcastId: ctx.id, clientId: client.id });
 
@@ -461,8 +484,42 @@ async function deliverRecipient(params: {
     if (result.status !== "sent" || !result.id || result.id === "unknown") {
       return ambiguous(row.id, attemptNo, now, "no_message_id", ctx.channel);
     }
-    await settleSent(row.id, result.id, now);
-    return "sent";
+
+    // 🔴 ONE TRANSACTION SETTLES BOTH HALVES, and it is the authoritative one.
+    //
+    // The recipient going SENT and the delivery row learning whose message
+    // this was are the same fact. Split apart - the worker writing one and a
+    // floating promise inside sendEmail writing the other - they could
+    // disagree permanently: a bounce that arrived first creates a delivery row
+    // with no clientId, the floating metadata write then fails and is
+    // swallowed, the webhook is acknowledged, and that bounce is disconnected
+    // from its client for ever. Nobody is suppressed, and the next blast mails
+    // the dead address again.
+    //
+    // If this throws, the message HAS been accepted and nothing recorded it -
+    // which is precisely what the ambiguity marker already on the row is for.
+    // Retry, under the identical provider key, or abandon once that key stops
+    // being honoured. Never a fresh logical email.
+    try {
+      const settled = await settleSent({
+        rowId: row.id,
+        claimToken: params.claimToken,
+        now,
+        messageId: result.id,
+        delivery: { kind: "broadcast", shopId: ctx.shopId, clientId: client.id },
+      });
+      if (!settled) return "stale_claim";
+      return "sent";
+    } catch {
+      // A classification only: an error from here carries the statement it
+      // failed on, and its parameters are the message id and the ids we are
+      // correlating.
+      logger.error(
+        { broadcastId: ctx.id, reason: "settlement_failed" },
+        "broadcast accepted by the provider but not settled locally - will retry under the same key",
+      );
+      return ambiguous(row.id, attemptNo, now, "settlement_failed", ctx.channel);
+    }
   } catch (err) {
     if (err instanceof BroadcastCrash) throw err;
     if (err instanceof ResendSendError) {
@@ -716,23 +773,72 @@ async function transientAmbiguousPush(
   return "retry";
 }
 
-/** Confirmed acceptance - the only thing besides a rejection that clears ambiguity. */
-async function settleSent(rowId: string, messageId: string | null, now: Date): Promise<void> {
-  await runAsOwner((tx) =>
-    tx.broadcastSend.update({
-      where: { id: rowId },
+/**
+ * Confirmed acceptance, committed as ONE unit.
+ *
+ * Everything that becomes true when the provider accepts a message becomes
+ * true together: the recipient is SENT, the message id is recorded against
+ * them, the claim and the backoff and the ambiguity are cleared, and - for
+ * email - the delivery ledger learns which shop and which client this message
+ * belonged to. Either all of that lands or none of it does; there is no state
+ * in between worth being in.
+ *
+ * 🔴 THE MOVE IS A COMPARE-AND-SET ON THE CLAIM. A worker whose claim aged out
+ * while the request was in flight no longer owns this recipient, and must not
+ * write over whatever its successor has since decided. Zero rows moved means
+ * exactly that, and nothing else in the transaction runs.
+ *
+ * Returns false when the claim was lost. Throws when the database refused -
+ * and a throw here rolls back the whole settlement, delivery row included, so
+ * a retry starts from the state that existed before it.
+ */
+async function settleSent(params: {
+  rowId: string;
+  claimToken: string;
+  now: Date;
+  messageId?: string;
+  delivery?: { kind: string; shopId: string; clientId: string };
+}): Promise<boolean> {
+  return runAsOwner(async (tx) => {
+    const moved = await tx.broadcastSend.updateMany({
+      where: { id: params.rowId, status: "PENDING", claimToken: params.claimToken },
       data: {
         status: "SENT",
-        sentAt: now,
-        messageId,
+        sentAt: params.now,
+        ...(params.messageId ? { messageId: params.messageId } : {}),
         claimedAt: null,
         claimToken: null,
         nextAttemptAt: null,
         lastError: null,
         lastAttemptAmbiguous: false,
       },
-    }),
-  );
+    });
+    if (moved.count === 0) return false;
+
+    if (params.delivery && params.messageId) {
+      // The shared rule, not a second copy of it: attach the correlation,
+      // never touch a status a webhook has already advanced, and suppress the
+      // client if what it advanced to was a bounce or a complaint. See
+      // services/emailDelivery.ts.
+      await recordDispatchInTx(
+        tx,
+        {
+          messageId: params.messageId,
+          kind: params.delivery.kind,
+          shopId: params.delivery.shopId,
+          clientId: params.delivery.clientId,
+        },
+        params.now,
+      );
+    }
+
+    // 🔴 A TEST SEAM FOR THE CRASH BETWEEN THE UPSERT AND THE COMMIT. Placed
+    // here on purpose: a fault thrown from this point proves the ENTIRE
+    // settlement rolls back - the recipient row and the delivery row together -
+    // rather than leaving one half committed. Undefined in every real process.
+    settlementFault?.();
+    return true;
+  });
 }
 
 /**

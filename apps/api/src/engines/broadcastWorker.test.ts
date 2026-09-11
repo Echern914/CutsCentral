@@ -9,8 +9,10 @@ import {
 import { __setPushSenderForTests } from "../messaging/push.js";
 import { queueBroadcast } from "./broadcast.js";
 import { unsubscribeDigestFor, unsubscribeTokenFor } from "./unsubscribeToken.js";
+import { applyEmailEvent } from "../services/emailDelivery.js";
 import {
   __setBroadcastCrashHookForTests,
+  __setBroadcastSettlementFaultForTests,
   BroadcastCrash,
   broadcastIdempotencyKey,
   CLAIM_TTL_MS,
@@ -46,6 +48,15 @@ const cleanupUsers: string[] = [];
 let outbox: SendEmailInput[] = [];
 /** When set, the next N sends throw this instead of succeeding. */
 let failWith: { error: unknown; times: number } | null = null;
+/**
+ * When set, the provider returns THIS message id.
+ *
+ * Needed for the early-webhook ordering: a bounce that beat us named a message
+ * id, and a retry under the same idempotency key is the same message, so the
+ * provider hands back the same id. Letting the fake mint a fresh one each time
+ * would test a world where the provider forgets its own collapsing.
+ */
+let sendEmailIdOverride: string | null = null;
 
 beforeAll(async () => {
   const email = `bw-${randomToken(6)}@test.local`.toLowerCase();
@@ -78,7 +89,10 @@ beforeAll(async () => {
       failWith.times -= 1;
       throw failWith.error;
     }
-    return { id: `msg-${outbox.length}-${randomToken(4)}`, status: "sent" as const };
+    return {
+      id: sendEmailIdOverride ?? `msg-${outbox.length}-${randomToken(4)}`,
+      status: "sent" as const,
+    };
   });
 });
 
@@ -92,7 +106,9 @@ afterAll(async () => {
 beforeEach(async () => {
   outbox = [];
   failWith = null;
+  sendEmailIdOverride = null;
   __setBroadcastCrashHookForTests(undefined);
+  __setBroadcastSettlementFaultForTests(undefined);
   await prisma.broadcast.deleteMany({ where: { shopId } });
   await prisma.client.deleteMany({ where: { shopId } });
   await prisma.shopEmailQuota.deleteMany({ where: { shopId } });
@@ -100,6 +116,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   __setBroadcastCrashHookForTests(undefined);
+  __setBroadcastSettlementFaultForTests(undefined);
   __setPushSenderForTests(undefined);
 });
 
@@ -262,6 +279,126 @@ describe("🔴 a worker that dies AFTER the provider accepted", () => {
     const b = await prisma.broadcast.findUnique({ where: { id } });
     expect(b!.status).toBe("FAILED");
     expect(b!.sentCount).toBe(0);
+  });
+});
+
+describe("🔴 the message left but nothing recorded it", () => {
+  /**
+   * The window this closes: Resend has accepted the message, and the write
+   * that would have said so failed. If the delivery row never learns whose
+   * message it was, a bounce arriving later has nobody to attach to - that
+   * client is never suppressed, and the next blast mails the dead address
+   * again. Which is why the recipient's SENT and the delivery correlation are
+   * now one transaction rather than two writes hoping to agree.
+   */
+  function failSettlementOnce(): () => void {
+    let fired = false;
+    __setBroadcastSettlementFaultForTests(() => {
+      if (fired) return;
+      fired = true;
+      throw new Error("settlement transaction lost its connection");
+    });
+    return () => __setBroadcastSettlementFaultForTests(undefined);
+  }
+
+  it("🔴 rolls the WHOLE settlement back and stays retryable under the same key", async () => {
+    const c = await makeClient();
+    const id = await queued("email");
+    const restore = failSettlementOnce();
+
+    const first = await runBroadcastWorker();
+    // The provider took it.
+    expect(outbox).toHaveLength(1);
+    const messageId = outbox[0]!.idempotencyKey;
+    expect(messageId).toBe(broadcastIdempotencyKey(id, c.id));
+    expect(first.sent).toBe(0);
+    expect(first.retry).toBe(1);
+
+    const [row] = await rowsOf(id);
+    // 🔴 NOT SENT. The local record of a send that was never recorded would be
+    // the lie this whole change exists to stop telling.
+    expect(row!.status).toBe("PENDING");
+    expect(row!.messageId).toBeNull();
+    // 🔴 STILL AMBIGUOUS: the message may well have been delivered, and the
+    // row has to keep saying so or a later retry would be unsafe.
+    expect(row!.lastAttemptAmbiguous).toBe(true);
+    expect(row!.attempts).toBe(1);
+    expect(row!.nextAttemptAt).not.toBeNull();
+    expect(row!.lastError).toBe("settlement_failed");
+
+    // 🔴 AND THE DELIVERY ROW ROLLED BACK WITH IT. Half a settlement - a
+    // correlated delivery row beside a recipient still marked PENDING - is the
+    // state that would make the retry look like a second message.
+    expect(await prisma.emailDelivery.count({ where: { clientId: c.id } })).toBe(0);
+
+    restore();
+    const later = new Date(Date.now() + 5 * 60_000);
+    expect((await runBroadcastWorker({ now: later })).sent).toBe(1);
+
+    // The retry carried the IDENTICAL provider key, so Resend collapsed it and
+    // the customer received one email.
+    expect(outbox).toHaveLength(2);
+    expect(outbox[1]!.idempotencyKey).toBe(messageId);
+
+    const [settled] = await rowsOf(id);
+    expect(settled!.status).toBe("SENT");
+    expect(settled!.messageId).not.toBeNull();
+
+    // And the correlation the whole thing is for now exists.
+    const delivery = await prisma.emailDelivery.findUnique({
+      where: { messageId: settled!.messageId! },
+    });
+    expect(delivery!.clientId).toBe(c.id);
+    expect(delivery!.shopId).toBe(shopId);
+    expect(delivery!.kind).toBe("broadcast");
+  });
+
+  it("🔴 a bounce that arrived while we could not record the send still suppresses", async () => {
+    // The exact ordering that used to lose a bounce for ever: accepted ->
+    // local settlement fails -> a verified bounce creates the delivery row
+    // with no clientId -> the floating metadata write fails and is swallowed
+    // -> the webhook is acknowledged -> nobody is ever suppressed.
+    const c = await makeClient();
+    const id = await queued("email");
+    const restore = failSettlementOnce();
+    await runBroadcastWorker();
+    expect(outbox).toHaveLength(1);
+    restore();
+
+    // The provider's verdict arrives before any metadata exists. It knows a
+    // message id and nothing else.
+    const messageId = `msg-early-${randomToken(8)}`;
+    expect(await applyEmailEvent({ messageId, event: "email.bounced", svixId: randomToken(8) }))
+      .toBe("created");
+    const orphan = await prisma.emailDelivery.findUnique({ where: { messageId } });
+    expect(orphan!.clientId).toBeNull();
+    expect(orphan!.status).toBe("bounced");
+
+    // Recovery retries under the same key; the provider hands back the id the
+    // bounce was reported against.
+    sendEmailIdOverride = messageId;
+    const later = new Date(Date.now() + 5 * 60_000);
+    expect((await runBroadcastWorker({ now: later })).sent).toBe(1);
+    expect(outbox[1]!.idempotencyKey).toBe(outbox[0]!.idempotencyKey);
+
+    // 🔴 The settlement attaches the client WITHOUT downgrading the bounce.
+    const delivery = await prisma.emailDelivery.findUnique({ where: { messageId } });
+    expect(delivery!.clientId).toBe(c.id);
+    expect(delivery!.shopId).toBe(shopId);
+    expect(delivery!.status).toBe("bounced");
+    expect(delivery!.failureClass).toBe("hard_bounce");
+
+    // 🔴 And the client is suppressed - which is the entire point, and the
+    // thing that silently never happened before.
+    const after = await prisma.client.findUnique({
+      where: { id: c.id },
+      select: { emailSuppressedAt: true, emailSuppressionReason: true, emailOptedOut: true },
+    });
+    expect(after!.emailSuppressedAt).not.toBeNull();
+    expect(after!.emailSuppressionReason).toBe("hard_bounce");
+    // A bounce is not an unsubscribe. It never was and it must never be
+    // written down as one.
+    expect(after!.emailOptedOut).toBe(false);
   });
 });
 
