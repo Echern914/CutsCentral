@@ -12,7 +12,14 @@ import {
 } from "./format";
 import { Cancel, Details, MapPin, Reschedule } from "./icons";
 import { Avatar, Button, Group, ProgressBar, Row, Separator, StatusLabel, Tap, Txt, useLargeText } from "./ui";
-import type { Appointment, AppointmentDetail, RewardProgram, RewardSummary, Shop } from "./types";
+import type {
+  AmbiguousShop,
+  Appointment,
+  AppointmentDetail,
+  RewardProgram,
+  RewardSummary,
+  Shop,
+} from "./types";
 
 /**
  * The home's building blocks - pure presentation, data in and callbacks out,
@@ -180,6 +187,52 @@ export function ShopList({ shops, onOpen, now }: { shops: Shop[]; onOpen: (shop:
             }
             accessibilityLabel={`Book at ${shop.name}. ${shopSubtitle(shop, now)}`}
             accessibilityHint="Opens the shop's page"
+          />
+        </View>
+      ))}
+    </Group>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// A profile that needs connecting
+// ---------------------------------------------------------------------------
+
+/**
+ * A shop whose profile the API would not open on a contact alone, because
+ * somebody else's record carries that contact too.
+ *
+ * The tone is deliberate: this is not an error and not a warning, it is the
+ * app being careful with somebody's visits. It says what happened in one
+ * sentence, in the customer's own terms ("more than one person uses this
+ * number"), and offers the one thing that settles it - the link the shop
+ * already sent them. It never shows or hints at the other profile.
+ */
+export function ConnectProfileList({
+  shops,
+  onConnect,
+}: {
+  shops: AmbiguousShop[];
+  onConnect: (shop: AmbiguousShop) => void;
+}) {
+  return (
+    <Group>
+      {shops.map((shop, i) => (
+        <View key={shop.key}>
+          {i > 0 ? <Separator inset={space.s2 + 52 + 12} /> : null}
+          <Row
+            onPress={() => onConnect(shop)}
+            chevron={false}
+            leading={<Avatar uri={shop.logoUrl} name={shop.name} size={52} />}
+            title={shop.name}
+            subtitle="Connect with the link they sent you"
+            trailing={
+              <Txt variant="subheadStrong" tone="gold">
+                Connect
+              </Txt>
+            }
+            accessibilityLabel={`Connect your profile at ${shop.name}`}
+            accessibilityHint="Explains how to connect the right profile"
           />
         </View>
       ))}

@@ -42,6 +42,23 @@ export interface AppointmentDetail extends Appointment {
   priceCents: number | null;
 }
 
+/**
+ * A shop holding a profile that carries one of this customer's verified
+ * contacts, which the API will NOT open on that contact alone - most often a
+ * phone number more than one person uses.
+ *
+ * 🔴 NOTHING ABOUT THE PROFILE IS SENT: no name, no count, no visit, no
+ * reward, no link. Only the shop's own public details, so the app can say
+ * which shop needs connecting and how. There is nothing more to ask for.
+ */
+export interface AmbiguousShop {
+  key: string;
+  name: string;
+  logoUrl: string | null;
+  city: string | null;
+  region: string | null;
+}
+
 export interface Shop extends ShopRef {
   heroImageUrl: string | null;
   lastVisitAt: string | null;
@@ -70,6 +87,8 @@ export interface Home {
   shops: Shop[];
   rewards: RewardSummary[];
   recent: Appointment[];
+  /** Shops with a profile that needs the shop's own link to connect. */
+  ambiguous: AmbiguousShop[];
 }
 
 export interface History {

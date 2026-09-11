@@ -59,6 +59,12 @@ function Gate() {
         <Stack.Screen name="shop/[key]" options={{ presentation: "fullScreenModal", headerShown: true }} />
         <Stack.Screen name="manage/[id]" options={{ presentation: "modal", headerShown: true, title: "Your appointment" }} />
         <Stack.Screen name="link" options={{ headerShown: true, title: "" }} />
+        {/* Connecting a profile is a deliberate detour from the home, and
+            nothing else can happen until it is answered or dismissed. */}
+        <Stack.Screen
+          name="connect"
+          options={{ presentation: "modal", headerShown: true, title: "", headerBackTitle: "Back" }}
+        />
       </Stack>
       {/* A quiet cover while the keychain answers or a redirect is on its way,
           so no screen flashes that the customer can't actually use. */}

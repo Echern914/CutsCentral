@@ -6,6 +6,7 @@ import { errorCopy } from "@/src/customer/api";
 import { greeting } from "@/src/customer/format";
 import { openAppointment, openDirections, openManage, openStorefront } from "@/src/customer/navigate";
 import {
+  ConnectProfileList,
   HistoryGroup,
   NextAppointmentCard,
   NoUpcomingCard,
@@ -76,6 +77,9 @@ function HomeBody({ data }: { data: Home }) {
   const router = useRouter();
   const next = data.next;
   const moreUpcoming = data.upcomingCount - (next ? 1 : 0);
+  // An app build can outlive the API build that answers it (there is no
+  // over-the-air channel): a missing list is an empty one, never a crash.
+  const ambiguous = data.ambiguous ?? [];
 
   return (
     <View>
@@ -105,17 +109,45 @@ function HomeBody({ data }: { data: Home }) {
       ) : null}
 
       {/* No section action: every row IS "Book" - a third one here was noise. */}
-      <SectionHeader title={`Your ${data.vocabulary.providerNounPlural}`} />
       {data.shops.length > 0 ? (
-        <ShopList shops={data.shops} onOpen={(shop) => openStorefront(router, shop)} />
-      ) : (
-        <View style={styles.findCard}>
-          <Txt variant="subhead" tone="secondary">
-            Shops you've booked with show up here once you've signed in with the same number or email you gave them.
+        <>
+          <SectionHeader title={`Your ${data.vocabulary.providerNounPlural}`} />
+          <ShopList shops={data.shops} onOpen={(shop) => openStorefront(router, shop)} />
+        </>
+      ) : ambiguous.length === 0 ? (
+        <>
+          <SectionHeader title={`Your ${data.vocabulary.providerNounPlural}`} />
+          <View style={styles.findCard}>
+            <Txt variant="subhead" tone="secondary">
+              Shops you've booked with show up here once you've signed in with the same number or email you gave them.
+            </Txt>
+            <Button label="Find a shop" variant="secondary" onPress={() => router.navigate("/customer/book")} style={styles.findButton} />
+          </View>
+        </>
+      ) : null}
+      {/* Nothing here yet AND a profile we can't open: "sign in with the same
+          number" would be nonsense - they did, and it is the reason the shop
+          below is waiting. The connect section speaks for this one. */}
+
+      {/* A profile we won't open on a shared contact alone. Placed under the
+          shops, because it IS a shop of theirs - one we can't safely show
+          yet - and never above the appointment they opened the app for. */}
+      {ambiguous.length > 0 ? (
+        <>
+          <SectionHeader title="Needs connecting" />
+          <Txt variant="subhead" tone="secondary" style={styles.connectNote}>
+            {ambiguous.length === 1
+              ? "Someone else's profile uses the same number or email, so we can't tell which one is yours. Open the link the shop sent you to connect it."
+              : "Other profiles use the same number or email, so we can't tell which ones are yours. Open the link each shop sent you to connect them."}
           </Txt>
-          <Button label="Find a shop" variant="secondary" onPress={() => router.navigate("/customer/book")} style={styles.findButton} />
-        </View>
-      )}
+          <ConnectProfileList
+            shops={ambiguous}
+            onConnect={(shop) =>
+              router.navigate({ pathname: "/customer/connect", params: { shop: shop.name } })
+            }
+          />
+        </>
+      ) : null}
 
       {data.rewards.length > 0 ? (
         <>
@@ -155,4 +187,5 @@ const styles = StyleSheet.create({
   moreUpcoming: { minHeight: 44, justifyContent: "center", alignSelf: "flex-start", marginTop: space.half },
   findCard: { gap: space.s2 },
   findButton: { alignSelf: "flex-start" },
+  connectNote: { marginBottom: space.s2 - 4 },
 });

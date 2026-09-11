@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
 import { Stack, useRouter } from "expo-router";
 import { AppWebView } from "@/src/AppWebView";
@@ -24,6 +24,7 @@ export function WebPage({
   load,
   onClose,
   onMessage,
+  banner,
 }: {
   title: string;
   /** Resolve the page's URL (from the API, or a known link). */
@@ -31,6 +32,8 @@ export function WebPage({
   onClose?: () => void;
   /** Bridge messages the page posts (e.g. "cb:deleted"). */
   onMessage?: (data: string) => void;
+  /** A native strip above the page - used to offer connecting this profile. */
+  banner?: ReactNode;
 }) {
   const router = useRouter();
   const [url, setUrl] = useState<string | null>(null);
@@ -73,6 +76,7 @@ export function WebPage({
           ),
         }}
       />
+      {banner}
       {url ? (
         <AppWebView
           source={{ uri: url }}
