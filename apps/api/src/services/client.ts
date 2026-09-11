@@ -124,9 +124,15 @@ export async function unarchiveClient(
 }
 
 export type MergeResult =
-  | { ok: true; balance: number; movedVisits: number }
+  | { ok: true; balance: number; movedVisits: number; moved: Record<string, number> }
   | { ok: false; reason: "not_found" }
   | { ok: false; reason: "same_client" };
+
+/** Who asked for a merge, and (optionally) why - stored on the ClientMergeEvent. */
+export interface MergeAudit {
+  actorUserId: string | null;
+  reason: string | null;
+}
 
 /**
  * Merge a duplicate client (the LOSER) into the one to keep (the WINNER). The
@@ -149,8 +155,22 @@ export type MergeResult =
  *  - smsConsentAt = the EARLIEST non-null of the two (and keep that record's
  *    source). We never fabricate consent or advance its date by merging.
  *
- * Acuity re-split is accepted: the loser keeps its acuityClientKey, so a future
- * booking under it re-creates/un-archives a separate client. No alias mechanism.
+ * EVERYTHING the customer did moves, not just the loyalty trail: their
+ * appointments and standing appointments (or the survivor shows no upcoming
+ * booking, and the customer's own app loses it), waitlist and walk-in entries,
+ * receptionist conversations and push devices. None of those tables is unique
+ * on the client, so a re-point cannot collide. Immutable audit trails
+ * (WaitlistEvent, WalkInEvent) are left exactly as they were written.
+ *
+ * Every merge writes a ClientMergeEvent in the SAME transaction - who, when,
+ * why (optional) and the row counts that moved - so a merge is never an
+ * untraceable rewrite of someone's history.
+ *
+ * The loser's sync key (acuityClientKey) is retired to `merged:<id>`, so a
+ * later booking under the duplicate's old identity becomes a new, visible
+ * client rather than landing on the archived one. There is no alias from the
+ * old key to the winner (that would touch every booking path); the duplicates
+ * review (clientDuplicates.ts) surfaces the new record next to the winner.
  *
  * Both client rows are locked (id-ascending to avoid deadlocks) for the whole
  * move, so a concurrent earn/redeem on either can't race the reassignment.
@@ -159,6 +179,7 @@ export async function mergeClients(
   shopId: string,
   winnerId: string,
   loserId: string,
+  audit: MergeAudit = { actorUserId: null, reason: null },
 ): Promise<MergeResult> {
   if (winnerId === loserId) return { ok: false, reason: "same_client" };
 
@@ -173,24 +194,25 @@ export async function mergeClients(
     const winner = await tx.client.findFirst({ where: { id: winnerId, shopId } });
     const loser = await tx.client.findFirst({ where: { id: loserId, shopId } });
     if (!winner || !loser) return { ok: false as const, reason: "not_found" as const };
+    // A customer's own deletion is final: their anonymized record never folds
+    // into another one (that would re-attach the history they asked us to drop).
+    if (winner.optOutSource === "deleted" || loser.optOutSource === "deleted") {
+      return { ok: false as const, reason: "not_found" as const };
+    }
 
     // Reassign the loser's entire footprint to the winner.
-    const moved = await tx.visit.updateMany({
-      where: { clientId: loserId, shopId },
-      data: { clientId: winnerId },
-    });
-    await tx.punchLedger.updateMany({
-      where: { clientId: loserId, shopId },
-      data: { clientId: winnerId },
-    });
-    await tx.nudge.updateMany({
-      where: { clientId: loserId, shopId },
-      data: { clientId: winnerId },
-    });
-    await tx.promotionRedemption.updateMany({
-      where: { clientId: loserId, shopId },
-      data: { clientId: winnerId },
-    });
+    const repoint = { where: { clientId: loserId, shopId }, data: { clientId: winnerId } };
+    const moved = await tx.visit.updateMany(repoint);
+    const ledger = await tx.punchLedger.updateMany(repoint);
+    const nudges = await tx.nudge.updateMany(repoint);
+    const promoUses = await tx.promotionRedemption.updateMany(repoint);
+    // The customer's bookings and everything else that is theirs.
+    const appointments = await tx.appointment.updateMany(repoint);
+    const series = await tx.recurringSeries.updateMany(repoint);
+    const waitlist = await tx.waitlistEntry.updateMany(repoint);
+    const walkIns = await tx.walkInEntry.updateMany(repoint);
+    const conversations = await tx.receptionistConversation.updateMany(repoint);
+    const devices = await tx.pushSubscription.updateMany(repoint);
 
     // CardGrant (exclusive-card VIP membership) and WalletPassRegistration both
     // carry a composite unique that a blind re-point can violate when the winner
@@ -263,10 +285,41 @@ export async function mergeClients(
     }
     await tx.client.update({ where: { id: winnerId }, data: update });
 
-    // Soft-archive the loser (recoverable trail; not a hard delete).
+    // Soft-archive the loser (recoverable trail; not a hard delete) and retire
+    // its sync key. Every client upsert - Acuity and Square ingest, native
+    // booking, add-client, import, the receptionist - finds a client by
+    // (shopId, acuityClientKey). Left in place, the next booking under the
+    // duplicate's old identity would attach to THIS archived row: a visit
+    // nobody sees and punches the customer can't use (and a text from the
+    // number would un-archive an empty record). Retired, that booking creates
+    // a fresh, visible client, which the duplicates review offers to merge.
     await tx.client.update({
       where: { id: loserId },
-      data: { archivedAt: new Date() },
+      data: { archivedAt: new Date(), acuityClientKey: `merged:${loserId}` },
+    });
+
+    // The merge's own record, committed WITH the merge.
+    const movedCounts = {
+      visits: moved.count,
+      ledgerEntries: ledger.count,
+      nudges: nudges.count,
+      promoUses: promoUses.count,
+      appointments: appointments.count,
+      standingAppointments: series.count,
+      waitlistEntries: waitlist.count,
+      walkInEntries: walkIns.count,
+      conversations: conversations.count,
+      pushDevices: devices.count,
+    };
+    await tx.clientMergeEvent.create({
+      data: {
+        shopId,
+        survivorClientId: winnerId,
+        mergedClientId: loserId,
+        actorUserId: audit.actorUserId,
+        reason: audit.reason,
+        moved: movedCounts,
+      },
     });
 
     const agg = await tx.punchLedger.aggregate({
@@ -274,11 +327,11 @@ export async function mergeClients(
       _sum: { punchesEarned: true, punchesRedeemed: true },
     });
     const balance = (agg._sum.punchesEarned ?? 0) - (agg._sum.punchesRedeemed ?? 0);
-    return { ok: true as const, balance, movedVisits: moved.count };
+    return { ok: true as const, balance, movedVisits: moved.count, moved: movedCounts };
   });
 
   if (!result.ok) return result;
   // The winner's completed-visit set changed; recompute cadence (reads Visit).
   await recomputeCadence(shopId, winnerId);
-  return { ok: true, balance: result.balance, movedVisits: result.movedVisits };
+  return { ok: true, balance: result.balance, movedVisits: result.movedVisits, moved: result.moved };
 }

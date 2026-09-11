@@ -425,17 +425,32 @@ export async function searchClientsAction(
 export async function mergeClientAction(
   winnerId: string,
   loserId: string,
+  reason?: string,
 ): Promise<{ ok: boolean; error?: string; balance?: number }> {
   const res = await apiSend<{ ok: boolean; balance: number }>(
     "POST",
     `/api/dashboard/clients/${winnerId}/merge`,
-    { loserId },
+    reason?.trim() ? { loserId, reason: reason.trim() } : { loserId },
   );
   revalidatePath(`/dashboard/clients/${winnerId}`);
   revalidatePath(`/dashboard/clients/${loserId}`);
   revalidatePath("/dashboard/clients");
+  revalidatePath("/dashboard/clients/duplicates");
   revalidatePath("/dashboard");
   return { ok: res.ok, error: res.error, balance: res.data?.balance };
+}
+
+/**
+ * "Not the same person": the duplicates review stops grouping these clients.
+ * Nothing about the clients themselves changes.
+ */
+export async function dismissDuplicatesAction(
+  clientIds: string[],
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiSend("POST", "/api/dashboard/clients/duplicates/dismiss", { clientIds });
+  revalidatePath("/dashboard/clients/duplicates");
+  revalidatePath("/dashboard/clients");
+  return { ok: res.ok, error: res.error };
 }
 
 /**

@@ -48,6 +48,7 @@ import {
   mergeClients,
   unarchiveClient,
 } from "../services/client.js";
+import { dismissDuplicates, findDuplicateGroups } from "../services/clientDuplicates.js";
 import { recomputeCadence } from "../engines/cadence.js";
 import { sweepShop, type EligibilityData } from "../engines/nudge.js";
 import { sweepShopWinback } from "../engines/winback.js";
@@ -1157,11 +1158,62 @@ dashboardRouter.post("/clients/:clientId/unarchive", async (req, res) => {
   res.json({ ok: true, archived: result.archived });
 });
 
+// The duplicates review (services/clientDuplicates.ts): active clients who share
+// a phone or email, grouped, suggested keeper first. Suggestions only - nothing
+// merges until the barber uses the merge route below. Registered before
+// GET /clients/:clientId so "duplicates" is never read as a client id.
+dashboardRouter.get("/clients/duplicates", async (req, res) => {
+  const shop = req.shop!;
+  const { groups, total } = await findDuplicateGroups(shop.id);
+  res.json({
+    total,
+    groups: groups.map((g) => ({
+      key: g.key,
+      matchedOn: g.matchedOn,
+      clients: g.clients.map((c) => ({
+        id: c.id,
+        name: name(c),
+        phone: c.phone,
+        email: c.email,
+        completedVisits: c.completedVisits,
+        lastVisitAt: c.lastVisitAt?.toISOString() ?? null,
+        createdAt: c.createdAt.toISOString(),
+      })),
+    })),
+  });
+});
+
+// "Not the same person": never group these clients together again.
+const dismissDuplicatesSchema = z
+  .object({ clientIds: z.array(z.string().min(1)).min(2).max(20) })
+  .strict();
+
+dashboardRouter.post("/clients/duplicates/dismiss", async (req, res) => {
+  const shop = req.shop!;
+  const parsed = dismissDuplicatesSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const result = await dismissDuplicates(shop.id, parsed.data.clientIds, req.userId ?? null);
+  if (!result.ok) {
+    res.status(404).json({ error: result.reason });
+    return;
+  }
+  res.json({ ok: true });
+});
+
 // Merge a duplicate client into this one. :clientId is the WINNER (kept); the
-// body's loserId is folded in (its visits/ledger/nudges/promo uses move here,
-// consent reconciles opted-out-wins + earliest-consent-wins, then the loser is
-// soft-archived). Tenant-scoped: a foreign winner or loser id 404s.
-const mergeSchema = z.object({ loserId: z.string().min(1) }).strict();
+// body's loserId is folded in (its visits, ledger, appointments and the rest
+// move here, consent reconciles opted-out-wins + earliest-consent-wins, then the
+// loser is soft-archived). Every merge is recorded with who asked and, if given,
+// why. Tenant-scoped: a foreign winner or loser id 404s.
+const mergeSchema = z
+  .object({
+    loserId: z.string().min(1),
+    reason: z.string().trim().min(1).max(200).optional(),
+  })
+  .strict();
 
 dashboardRouter.post("/clients/:clientId/merge", async (req, res) => {
   const shop = req.shop!;
@@ -1170,7 +1222,10 @@ dashboardRouter.post("/clients/:clientId/merge", async (req, res) => {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
     return;
   }
-  const result = await mergeClients(shop.id, req.params.clientId, parsed.data.loserId);
+  const result = await mergeClients(shop.id, req.params.clientId, parsed.data.loserId, {
+    actorUserId: req.userId ?? null,
+    reason: parsed.data.reason ?? null,
+  });
   if (!result.ok) {
     if (result.reason === "not_found") {
       res.status(404).json({ error: result.reason });
@@ -1180,7 +1235,12 @@ dashboardRouter.post("/clients/:clientId/merge", async (req, res) => {
     res.status(400).json({ error: result.reason });
     return;
   }
-  res.json({ ok: true, balance: result.balance, movedVisits: result.movedVisits });
+  res.json({
+    ok: true,
+    balance: result.balance,
+    movedVisits: result.movedVisits,
+    moved: result.moved,
+  });
 });
 
 // Save private notes on a client.
