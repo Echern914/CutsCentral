@@ -96,6 +96,43 @@ export async function runAsOwner<T>(
   });
 }
 
+/**
+ * Run a few owner-scoped statements INSIDE a tenant transaction that is
+ * already open, then drop straight back to the tenant role.
+ *
+ * 🔴 EXISTS FOR ONE REASON: ATOMICITY ACROSS A BOUNDARY. A shop merging two
+ * duplicate records has to settle the PLATFORM-owned customer links in the
+ * same breath - those tables are default-deny to the tenant role, and a
+ * separate runAsOwner() transaction could commit the link changes and then
+ * watch the merge roll back (or the reverse), leaving a customer's app
+ * pointing at a record whose history moved somewhere else.
+ *
+ * It grants nothing the process did not already have: the connection IS the
+ * owner, and runWithShop() dropped it to `chairback_app` a moment ago. Use it
+ * only for the platform tables a tenant operation must keep in step, never to
+ * read or write another shop's tenant rows.
+ */
+export async function asOwnerWithin<T>(
+  tx: Prisma.TransactionClient,
+  fn: (tx: Prisma.TransactionClient) => Promise<T>,
+): Promise<T> {
+  await tx.$executeRawUnsafe("RESET ROLE");
+  await tx.$executeRawUnsafe("SET LOCAL row_security = off");
+  try {
+    return await fn(tx);
+  } finally {
+    // Best effort: if `fn` threw, the transaction is already aborted and
+    // these statements cannot run - the rollback is what restores the session
+    // anyway, so there is nothing to repair.
+    try {
+      await tx.$executeRawUnsafe("SET LOCAL row_security = on");
+      if (ENFORCE_RLS) await tx.$executeRawUnsafe("SET LOCAL ROLE chairback_app");
+    } catch {
+      /* aborted transaction - the rollback restores everything */
+    }
+  }
+}
+
 function stamp<T>(data: T, shopId: string): T {
   return { ...data, shopId } as T;
 }

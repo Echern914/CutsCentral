@@ -21,8 +21,12 @@ export default async function ClientsPage({
   for (const k of ["q", "sort", "filter", "tier", "page"] as const) {
     if (searchParams[k]) qs.set(k, searchParams[k]!);
   }
-  const res = await apiGet<ClientsResponse>(`/api/dashboard/clients?${qs.toString()}`);
+  const [res, dupes] = await Promise.all([
+    apiGet<ClientsResponse>(`/api/dashboard/clients?${qs.toString()}`),
+    apiGet<{ total: number }>("/api/dashboard/clients/duplicates"),
+  ]);
   const data = res.data;
+  const duplicateGroups = dupes.data?.total ?? 0;
   const clients = data?.clients ?? [];
   const page = data?.page ?? 1;
   const pageCount = data?.pageCount ?? 1;
@@ -41,8 +45,18 @@ export default async function ClientsPage({
         </Link>
         <div className="mt-1 flex flex-col gap-2 sm:flex-row sm:items-baseline sm:justify-between">
           <h1 className="font-display text-3xl tracking-tight">Clients</h1>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <span className="text-sm text-muted">{data?.total ?? 0} total</span>
+            {duplicateGroups > 0 && (
+              <Link
+                href="/dashboard/clients/duplicates"
+                className="rounded-full border border-gold/40 px-3 py-1.5 text-xs text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
+              >
+                {duplicateGroups === 1
+                  ? "1 possible duplicate"
+                  : `${duplicateGroups} possible duplicates`}
+              </Link>
+            )}
             <a
               href="/dashboard/export/clients"
               className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"

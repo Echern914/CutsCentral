@@ -607,6 +607,8 @@ model Shop {
   walletPasses        WalletPassRegistration[]
   walletApptPasses    WalletAppointmentPassRegistration[]
   customerLinks       CustomerClientLink[]
+  clientMerges        ClientMergeEvent[]
+  duplicateDismissals ClientDuplicateDismissal[]
 
   // Native booking engine relations
   staff                  Staff[]
@@ -4550,4 +4552,43 @@ model AppointmentPriceChange {
   createdAt DateTime @default(now())
 
   @@index([shopId, appointmentId, createdAt])
+}
+
+// One merge of two duplicate client records of the same person: who did it,
+// when, why (optional), and exactly what moved. Written in the SAME
+// transaction as the merge. APPEND-ONLY (a trigger refuses UPDATE) and
+// tenant-isolated like every shop table.
+model ClientMergeEvent {
+  id     String @id @default(cuid())
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  /// Not FKs on purpose, like AppointmentPriceChange: the record outlives rows.
+  survivorClientId String
+  mergedClientId   String
+  actorUserId      String?
+  /// Staff-only words; never shown to the customer.
+  reason           String?
+  /// Row counts per table that moved, e.g. {"visits":3,"appointments":1}.
+  moved            Json
+  createdAt        DateTime @default(now())
+
+  @@index([shopId, survivorClientId, createdAt])
+  @@index([shopId, mergedClientId])
+}
+
+// A barber looked at two clients the duplicates review flagged (same phone or
+// email) and said "not the same person" - a parent and child on one phone is
+// the everyday case. The pair is never flagged again. Stored as an ordered
+// pair (clientAId < clientBId, CHECK-enforced) so one pair has one row.
+model ClientDuplicateDismissal {
+  id          String   @id @default(cuid())
+  shopId      String
+  shop        Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  /// Not FKs, like ClientMergeEvent: ids are verified in the shop on write.
+  clientAId   String
+  clientBId   String
+  actorUserId String?
+  createdAt   DateTime @default(now())
+
+  @@unique([shopId, clientAId, clientBId])
 }

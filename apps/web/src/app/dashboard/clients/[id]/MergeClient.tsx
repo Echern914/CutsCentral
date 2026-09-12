@@ -18,9 +18,10 @@ const field =
 /**
  * Fold a duplicate client into THIS one (the winner). The barber searches for the
  * duplicate, picks it, and confirms; on the server the duplicate's visits, punch
- * ledger, nudges, and promo uses move here, consent reconciles (opted-out-wins,
- * earliest-consent-wins), and the duplicate is archived. Collapsed by default
- * since it's a rare, deliberate action.
+ * ledger, appointments and the rest move here, consent reconciles (opted-out-wins,
+ * earliest-consent-wins), the duplicate is archived, and the merge is recorded
+ * with who did it. Collapsed by default since it's a rare, deliberate action -
+ * the Possible duplicates page (clients/duplicates) is the guided path.
  */
 export function MergeClient({
   clientId,
@@ -62,7 +63,12 @@ export function MergeClient({
         toast(`Merged ${loser.name} into ${clientName}`, "success");
         router.refresh();
       } else {
-        toast("Couldn't merge those clients.", "error");
+        toast(
+          r.error === "marked_different_people"
+            ? "These were marked as different people, so they can't be merged."
+            : "Couldn't merge those clients.",
+          "error",
+        );
       }
     });
   }
@@ -95,7 +101,7 @@ export function MergeClient({
         </button>
       </div>
       <p className="mb-3 text-xs text-muted">
-        Find the duplicate record. Its visits, punches, and nudge history move into{" "}
+        Find the duplicate record. Its visits, appointments, punches and messages move into{" "}
         <span className="text-offwhite">{clientName}</span>, and the duplicate is archived.
       </p>
 

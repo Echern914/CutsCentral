@@ -608,6 +608,129 @@ export async function accountForClientPush(
   });
 }
 
+/**
+ * Settle the customer links when a shop MERGES two duplicate records, inside
+ * the merge's own transaction.
+ *
+ * 🔴 NOT LEFT TO THE NEXT READ. The loser's history has just moved onto the
+ * survivor; a link that still points at the archived record is an app showing
+ * a customer an empty profile while their visits sit somewhere else, and a
+ * link that survives on the WRONG account is worse than that. Both are decided
+ * here, atomically with the move - if the merge rolls back, so does this.
+ *
+ * The cases, and why:
+ *
+ *   ONE account held either half (or both)   it carries onto the survivor. A
+ *     claimed link carries as a claim, re-bound to the survivor's own
+ *     credential: the shop has just asserted these are one person, which is
+ *     the same authority the claim rested on.
+ *
+ *   TWO DIFFERENT accounts held the two halves   NEITHER keeps it. The shop
+ *     says one person; two accounts say otherwise; the platform cannot tell
+ *     which is right, and the combined record now contains both histories. It
+ *     becomes ambiguous - connectable with the survivor's link, by whoever
+ *     actually holds it.
+ *
+ *   An account that DISOWNED the loser   keeps disowning the survivor. It
+ *     contains what they said was not theirs, so an active link they held on
+ *     the survivor is dropped too.
+ *
+ * Everything then goes through the ordinary settle, so a carried link that
+ * does not stand up (the survivor never carried that contact) is detached in
+ * the same transaction rather than lingering.
+ */
+export async function settleLinksForMerge(
+  tx: Tx,
+  p: { shopId: string; winnerId: string; loserId: string; now?: Date },
+): Promise<void> {
+  const now = p.now ?? new Date();
+  const [winner] = await clientFacts(tx, [p.winnerId]);
+  if (!winner) return;
+
+  const links = (await tx.customerClientLink.findMany({
+    where: { clientId: { in: [p.winnerId, p.loserId] } },
+    select: {
+      id: true,
+      accountId: true,
+      clientId: true,
+      shopId: true,
+      status: true,
+      matchedBy: true,
+      claimDigest: true,
+    },
+  })) as LinkRow[];
+  const onLoser = links.filter((l) => l.clientId === p.loserId);
+  const onWinner = links.filter((l) => l.clientId === p.winnerId);
+  const activeLoser = onLoser.find((l) => l.status === "active") ?? null;
+  const activeWinner = onWinner.find((l) => l.status === "active") ?? null;
+
+  const detach = (ids: string[], reason: string) =>
+    ids.length === 0
+      ? Promise.resolve({ count: 0 })
+      : tx.customerClientLink.updateMany({
+          where: { id: { in: ids }, status: "active" },
+          data: { status: "detached", statusReason: reason, statusAt: now },
+        });
+
+  if (activeLoser && activeWinner && activeLoser.accountId !== activeWinner.accountId) {
+    await detach([activeLoser.id, activeWinner.id], "merge_conflict");
+  } else if (activeLoser) {
+    const target = onWinner.find((l) => l.accountId === activeLoser.accountId);
+    const carried =
+      activeLoser.matchedBy === "claim"
+        ? { matchedBy: "claim", claimDigest: claimDigest(winner.magicToken) }
+        : { matchedBy: activeLoser.matchedBy, claimDigest: null };
+    if (target?.status !== "rejected") {
+      if (target) {
+        await tx.customerClientLink.update({
+          where: { id: target.id },
+          data: { ...carried, status: "active", statusReason: null, statusAt: now },
+        });
+      } else {
+        await tx.customerClientLink.create({
+          data: {
+            ...carried,
+            accountId: activeLoser.accountId,
+            clientId: p.winnerId,
+            shopId: p.shopId,
+            status: "active",
+            statusAt: now,
+          },
+        });
+      }
+    }
+    await detach([activeLoser.id], "merged");
+  }
+
+  // A half somebody disowned taints the whole.
+  for (const rejected of onLoser.filter((l) => l.status === "rejected")) {
+    const target = onWinner.find((l) => l.accountId === rejected.accountId);
+    if (target) {
+      await tx.customerClientLink.updateMany({
+        where: { id: target.id },
+        data: { status: "rejected", statusReason: "not_me_merged", statusAt: now },
+      });
+    } else {
+      await tx.customerClientLink.create({
+        data: {
+          accountId: rejected.accountId,
+          clientId: p.winnerId,
+          shopId: p.shopId,
+          // A disowned row is never matched ON; it only remembers the answer.
+          // 'claim' would demand a credential digest it has no business
+          // holding, so a carried rejection records the plainer basis.
+          matchedBy: rejected.matchedBy === "claim" ? "phone" : rejected.matchedBy,
+          status: "rejected",
+          statusReason: "not_me_merged",
+          statusAt: now,
+        },
+      });
+    }
+  }
+
+  await settleClientLinks(tx, [p.winnerId, p.loserId], now);
+}
+
 export type ClaimOutcome =
   | { ok: true; shopId: string; clientId: string }
   | { ok: false; reason: "not_found" | "claimed_elsewhere" | "too_many" };
