@@ -70,9 +70,12 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   // "local", so `buildNumber` below is the number Apple sees. Bump it by hand
   // for EVERY upload - a repeated number is rejected by App Store Connect, and
   // a repeated VERSION string after submission dies the way build 37 did.
-  //   40 = archived from a tree that PREDATED #417 and uploaded by hand from
-  //        the Organizer on 2026-09-12 - it does NOT contain My ChairBack. Do
-  //        not release it to testers.
+  //   40 = archived from a tree that PREDATED #417 (no My ChairBack). An
+  //        Organizer upload was ATTEMPTED on 2026-09-12 and stopped at the
+  //        symbols step; no distribution certificate was ever created, so it
+  //        almost certainly never reached App Store Connect. Skipped anyway -
+  //        a gap costs nothing, a repeat is rejected. If a "40" ever shows up
+  //        in TestFlight, it is this one: do not release it to testers.
   //   41 = the same 1.0.9 with #417 (My ChairBack) and the animated launch.
   version: "1.0.9",
   orientation: "portrait",
