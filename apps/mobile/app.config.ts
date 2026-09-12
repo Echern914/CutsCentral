@@ -62,7 +62,15 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   // gone to Apple as build 38, and a version string that was already submitted
   // cannot take another build - that is exactly how build 37 died
   // (SUBMISSION_SERVICE_IOS_OLD_APP_VERSION).
-  version: "1.0.8",
+  //
+  // 1.0.9 = build 40, the first build made LOCALLY in Xcode rather than on EAS
+  // (see docs/mobile-release-xcode.md), carrying the animated launch. 🔴 FROM
+  // HERE ON THE BUILD NUMBER LIVES IN THIS FILE. EAS auto-incremented it under
+  // appVersionSource:"remote" and its counter stopped at 39; eas.json now says
+  // "local", so `buildNumber` below is the number Apple sees. Bump it by hand
+  // for EVERY upload - a repeated number is rejected by App Store Connect, and
+  // a repeated VERSION string after submission dies the way build 37 did.
+  version: "1.0.9",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
@@ -75,7 +83,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   ios: {
     // Reverse-DNS bundle id, aligned with the getchairback.com domain + brand.
     bundleIdentifier: "com.getchairback.rewards",
-    buildNumber: "1",
+    // 🔴 The number Apple sees. Was ignored while EAS owned the counter
+    // (appVersionSource:"remote", last EAS build = 39); it is authoritative now
+    // that builds are made locally. Must exceed the previous upload, every time.
+    buildNumber: "40",
     // iPhone-only for v1: the dashboard WebView isn't iPad-optimized, and
     // supporting tablet would require iPad screenshots + iPad review coverage.
     supportsTablet: false,
@@ -161,9 +172,15 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // RecaptchaInterop (no module maps); under Expo's static-library build that
     // breaks `pod install` unless those transitive pods get modular headers.
     "./plugins/withGoogleModularHeaders",
-    // Keep LAST: makes fmt 11.0.2 (bundled by RN 0.81) compile under Xcode 26's
-    // Clang, which Apple now requires for App Store builds. See the plugin.
-    "./plugins/withFmtConstevalFix",
+    // withFmtConstevalFix is GONE, on purpose. It patched fmt's source so it
+    // compiled under Xcode 26, for RN 0.76. RN 0.81 (this SDK) ships fmt
+    // precompiled inside the ReactNativeDependencies framework, so there is no
+    // fmt source target to patch: the plugin found nothing, printed a warning
+    // that looked like a problem, and a full Release build under Xcode 26.6
+    // compiled every pod cleanly without it (2026-09-11, local simulator
+    // build). If a `consteval` error in fmt ever comes back, the headers now
+    // live at Pods/ReactNativeDependencies/Headers/fmt/ - restore the plugin
+    // from git history against THAT path, not the old one.
   ],
   extra: {
     webOrigin: WEB_ORIGIN,
