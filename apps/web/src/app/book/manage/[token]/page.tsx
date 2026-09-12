@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { APP_NAME } from "@chairback/config/constants";
+import type { RequestedReason } from "@chairback/config/customerStatus";
 import { apiPublicGet } from "@/lib/api";
 import { GetTheApp } from "@/components/GetTheApp";
 import { appleItunesApp } from "@/lib/appBanner";
@@ -8,6 +9,12 @@ import { ManageClient } from "./ManageClient";
 
 export interface ManageData {
   status: "BOOKED" | "CANCELED" | "COMPLETED" | "NO_SHOW" | "PENDING";
+  /**
+   * Set only while status is PENDING: who the customer is waiting on. Optional
+   * because an older API deploy does not send it - the page then still says
+   * "Requested", just without naming the reason.
+   */
+  requested?: { reason: RequestedReason } | null;
   firstName: string;
   startsAt: string;
   endsAt: string;

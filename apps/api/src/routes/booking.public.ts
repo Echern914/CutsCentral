@@ -22,6 +22,7 @@ import {
   localMinutesOfDay,
   mapsUrlFor,
   randomToken,
+  requestedReason,
   shopAddressLines,
   vocabularyForShop,
   zonedDateParts,
@@ -2592,6 +2593,9 @@ bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
       etaMinutes: true,
       runningLate: true,
       seriesId: true,
+      // Which of PENDING's three meanings this is - read by requestedReason().
+      holdReason: true,
+      holdExpiresAt: true,
       shop: {
         select: {
           name: true,
@@ -2652,6 +2656,12 @@ bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
 
   res.json({
     status: appt.status,
+    // PENDING is a request, never a booking - and the customer should know who
+    // they are waiting on. The reason only; the hold's expiry stays private.
+    requested:
+      appt.status === "PENDING"
+        ? { reason: requestedReason({ holdReason: appt.holdReason, holdExpiresAt: appt.holdExpiresAt }) }
+        : null,
     firstName: appt.firstName,
     startsAt: appt.startsAt.toISOString(),
     endsAt: appt.endsAt.toISOString(),

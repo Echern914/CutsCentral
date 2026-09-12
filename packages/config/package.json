@@ -16,6 +16,7 @@
     "./shopAddress": "./src/shopAddress.ts",
     "./bookingErrors": "./src/bookingErrors.ts",
     "./relativeTime": "./src/relativeTime.ts",
+    "./customerStatus": "./src/customerStatus.ts",
     "./demo": "./src/demo.ts",
     "./demoTour": "./src/demoTour.ts",
     "./features": "./src/features.ts",

@@ -4,6 +4,11 @@ import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { DEMO } from "@chairback/config/demo";
 import { untilLabel } from "@chairback/config/relativeTime";
+import {
+  CUSTOMER_STATUS_LABEL,
+  customerStatusForAppointment,
+  requestedDetail,
+} from "@chairback/config/customerStatus";
 import { useSignalNativeReady } from "@/lib/nativeReady";
 import { CustomerBack } from "@/components/CustomerBack";
 import { DemoTour } from "@/components/tour/DemoTour";
@@ -99,6 +104,15 @@ export function ManageClient({
   // (or not a series) hides the second cancel button entirely.
   const laterVisits = data.series?.remaining ?? 0;
   const isDone = data.status === "COMPLETED" || data.status === "NO_SHOW";
+  // The customer-facing status comes from the ONE table every customer surface
+  // reads. This page used to decide for itself and called a request nobody had
+  // accepted "Confirmed", and a no-show "Completed".
+  const status = isCanceled ? "canceled" : customerStatusForAppointment(data.status);
+  const statusLabel = CUSTOMER_STATUS_LABEL[status];
+  const requestedLine =
+    status === "requested" && data.requested
+      ? requestedDetail(data.requested.reason, data.shop.name)
+      : null;
 
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-5 py-10 text-offwhite">
@@ -149,16 +163,12 @@ export function ManageClient({
               </dd>
             </div>
           )}
-          <Row
-            label="Status"
-            value={
-              isCanceled
-                ? "Canceled"
-                : isDone
-                  ? "Completed"
-                  : "Confirmed"
-            }
-          />
+          <Row label="Status" value={statusLabel} />
+          {requestedLine && (
+            <p className="text-right text-xs text-muted" data-qa="requested-detail">
+              {requestedLine}
+            </p>
+          )}
         </dl>
 
         {error && (
@@ -183,7 +193,10 @@ export function ManageClient({
           </div>
         ) : isDone ? (
           <p className="mt-6 text-center text-sm text-muted">
-            Thanks for visiting {data.shop.name}!
+            {/* A no-show did not visit; thanking them for it read as a mistake. */}
+            {status === "no_show"
+              ? `${data.shop.name} marked this appointment as a no-show.`
+              : `Thanks for visiting ${data.shop.name}!`}
           </p>
         ) : (
           <div className="mt-6 flex flex-col gap-2" data-tour="checkin">
