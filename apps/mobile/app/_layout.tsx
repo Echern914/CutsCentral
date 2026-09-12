@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -8,6 +8,7 @@ import {
   useFonts,
   BricolageGrotesque_700Bold,
 } from "@expo-google-fonts/bricolage-grotesque";
+import { LaunchScene } from "@/src/LaunchScene";
 
 /**
  * Root layout.
@@ -36,6 +37,11 @@ export default function RootLayout() {
   // EITHER loaded OR error, so a font that never loads can never wedge the app on
   // a permanent splash (mirrors this file's other launch-safety guards).
   const [fontsLoaded, fontError] = useFonts({ BricolageGrotesque_700Bold });
+  // The opening cut (src/LaunchScene.tsx). Mounted from the FIRST render so it
+  // is already on screen when the native splash below is hidden - that is what
+  // makes the handoff seamless. It unmounts itself when it is done, and it is
+  // hard-capped at just over a second, so nothing here can hold the app.
+  const [sceneDone, setSceneDone] = useState(false);
 
   useEffect(() => {
     // Configure foreground notification behavior once, safely.
@@ -83,6 +89,9 @@ export default function RootLayout() {
         {/* The Stripe connection's custom-scheme return (see stripe/connected.tsx). */}
         <Stack.Screen name="stripe/connected" />
       </Stack>
+      {/* Above the Stack, so it covers the first frames of whichever screen is
+          loading underneath. Cold start only; see src/launchSceneRules.ts. */}
+      {!sceneDone && <LaunchScene onDone={() => setSceneDone(true)} />}
     </SafeAreaProvider>
   );
 }
