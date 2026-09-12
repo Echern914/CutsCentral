@@ -8,7 +8,9 @@ import { API_ORIGIN } from "./config";
  * Native push (APNs/FCM via Expo's push service). This is the iOS-app twin of
  * the web's VAPID push: the app asks the OS for permission, gets an Expo push
  * token, and registers it with our backend tagged to the current identity:
- *  - customer: their magicToken (so loyalty/rebooking events reach the device)
+ *  - customer: their My ChairBack account (POST /api/me/devices, from
+ *    src/customer/CustomerProvider.tsx) - so every linked shop reaches the
+ *    phone, not only the last one it registered with
  *  - barber:   their session (so business events reach the device)
  *
  * Everything here is best-effort: a denied permission or a registration failure
@@ -53,25 +55,6 @@ export async function getExpoPushToken(): Promise<string | null> {
   } catch {
     return null;
   }
-}
-
-/**
- * Register a CUSTOMER device for native push, keyed by their magicToken. Hits a
- * public, token-keyed endpoint that mirrors the web push-subscribe route.
- */
-export async function registerCustomerPush(magicToken: string): Promise<void> {
-  const token = await getExpoPushToken();
-  if (!token) return;
-  // The native app calls the API directly (no browser CSP). This is the public,
-  // magicToken-keyed Express endpoint (routes/rewards.ts push-native).
-  await fetch(
-    `${API_ORIGIN}/api/rewards/${encodeURIComponent(magicToken)}/push-native`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ expoPushToken: token, platform: Platform.OS }),
-    },
-  ).catch(() => {});
 }
 
 /**
