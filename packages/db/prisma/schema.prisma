@@ -604,6 +604,7 @@ model Shop {
   pushSubscriptions   PushSubscription[]
   walletPasses        WalletPassRegistration[]
   walletApptPasses    WalletAppointmentPassRegistration[]
+  customerLinks       CustomerClientLink[]
 
   // Native booking engine relations
   staff                  Staff[]
@@ -1162,6 +1163,9 @@ model Client {
   walletRegistrations WalletPassRegistration[]
   receptionistConversations ReceptionistConversation[]
   platformPassTasks   PlatformOperationPassTask[]
+  // The My ChairBack customer account(s) this shop record is linked to - by a
+  // VERIFIED phone or email match, never a name. See CustomerClientLink.
+  customerLinks       CustomerClientLink[]
 
   @@unique([shopId, acuityClientKey]) // tenant-scoped identity + idempotent upsert
   @@index([shopId])
@@ -3650,6 +3654,215 @@ model PhoneRecoveryCode {
   @@unique([purpose, phoneHash])
   @@index([expiresAt]) // the inline cleanup sweep
   @@index([ipHash, lastSentAt]) // the per-IP windowed ceiling
+}
+
+// ---------------------------------------------------------------------------
+// MY CHAIRBACK - the customer's own account.
+//
+// A customer at three shops is three Client rows, one per shop, each owned by
+// that shop. This is the ONE thing that is the customer's rather than a
+// shop's: an identity born only from PROOF (a one-time code to a phone or an
+// email) and linked to the shop records that carry that same proven contact.
+//
+// 🔴 PLATFORM TABLES, NOT TENANT DATA. None of these rows belongs to a shop,
+// so no tenant policy could truthfully apply. Same posture as
+// PhoneRecoveryCode: RLS enabled + FORCED with NO policy and NO app-role
+// grants; every access goes through services/customerIdentity.ts running as
+// the owner. Shop data READ on the customer's behalf is still read inside that
+// shop's own tenant transaction - these tables only say which records to read.
+// ---------------------------------------------------------------------------
+
+model CustomerAccount {
+  id String @id @default(cuid())
+
+  // What the customer calls themselves, for the greeting. Never copied into a
+  // shop's Client row - a shop's record of a name is the shop's.
+  firstName String?
+  lastName  String?
+
+  // The PROVEN contacts. Each is set only by a successful one-time code, and
+  // each belongs to at most one account. Stored normalized (E.164; trimmed +
+  // lowercased) because that is exactly what Client rows are matched against.
+  phoneE164       String?   @unique
+  phoneVerifiedAt DateTime?
+  emailNormalized String?   @unique
+  emailVerifiedAt DateTime?
+
+  // Bumped to revoke every session this account holds (deletion, "sign out
+  // everywhere"). Sessions carry the version they were minted at.
+  tokenVersion Int @default(0)
+
+  // The customer's own push switch, over and above the phone's permission.
+  pushEnabled Boolean @default(true)
+
+  // The App Review / "just looking" account: read-only, linked only to the
+  // seeded demo shop, never registers a device.
+  isDemo Boolean @default(false)
+
+  lastSeenAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  links   CustomerClientLink[]
+  devices CustomerDevice[]
+}
+
+// One account <-> one shop's Client row. Written ONLY by the linking engine
+// (services/customerIdentity.ts), which re-derives the whole set on every
+// read: a record whose phone/email no longer matches, or that was archived,
+// is DETACHED on the spot, and a record the customer disowned ("This isn't
+// me") stays REJECTED for that account until they explicitly claim it.
+//
+// 🔴 A VERIFIED CONTACT IS NOT PROOF OF IDENTITY WHERE IT IS SHARED. Two
+// people can hold one phone number - a parent booking for a child is the
+// everyday case, and PR #418's duplicate review exists because a shop can see
+// the same thing. So a record links automatically ONLY where the contact
+// names exactly one record at that shop, no OTHER account has proven a
+// contact on it, and the contact is not on so many records that it is plainly
+// a placeholder. Anything else is ambiguous: it shows no appointment, no
+// visit, no reward and no manage link until the customer claims it with the
+// shop's own credential.
+model CustomerClientLink {
+  id String @id @default(cuid())
+
+  accountId String
+  account   CustomerAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  clientId  String
+  client    Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  shopId    String
+  shop      Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  // How this record was proven to be the customer's (CHECK-pinned):
+  //   "phone" | "email" - the account's verified contact, AND that contact
+  //                       identifies exactly one record at that shop;
+  //   "claim"           - the customer also produced the shop's own link to
+  //                       this record, which is the only way an AMBIGUOUS
+  //                       record (a shared phone) is ever connected.
+  matchedBy String
+  // "active" | "rejected" | "detached" (CHECK-pinned).
+  status    String    @default("active")
+  // Why it is not active - internal words for operators and tests only.
+  statusReason String?
+  // HMAC of Client.magicToken as it stood at the claim. Set for "claim" and
+  // nothing else (CHECK-pinned); rotating the link revokes the claim.
+  claimDigest  String?
+  linkedAt  DateTime  @default(now())
+  statusAt  DateTime?
+
+  // One row per (account, record) - the memory of a rejection lives here.
+  // 🔴 And at most ONE ACTIVE link per record, across all accounts: a partial
+  // unique index in the migration (Prisma cannot express partial uniques).
+  @@unique([accountId, clientId])
+  @@index([accountId, status])
+  @@index([clientId])
+  @@index([shopId])
+}
+
+// A phone signed in to My ChairBack, for push across every linked shop. The
+// shop's own PushSubscription rows are one-device-one-shop (the token is
+// globally unique and re-pointed on each registration); this is the account
+// half, fanned out by sendPushToClient.
+model CustomerDevice {
+  id String @id @default(cuid())
+
+  accountId     String
+  account       CustomerAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  expoPushToken String          @unique
+  platform      String
+
+  failureCount Int      @default(0)
+  lastSeenAt   DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  @@index([accountId])
+}
+
+// One-time sign-in codes for My ChairBack, by text or by email. The same
+// policy as every other code in the product (engines/otpPolicy.ts) with its
+// own store, because the identifier may be an email and has no shop.
+model CustomerSignInCode {
+  id String @id @default(cuid())
+
+  // "sms" | "email" (CHECK-pinned).
+  channel String
+
+  // HMAC of the normalized phone or email - the lookup/uniqueness/ceiling key.
+  // A bare sha256 of a phone is reversible by enumeration; the keyed hash is
+  // what makes it safe to index.
+  identifierHash String
+
+  // HMAC of the requester's IP at last send: the per-IP ceiling key.
+  ipHash String
+
+  codeHash     String
+  attemptCount Int       @default(0)
+  expiresAt    DateTime
+  consumedAt   DateTime?
+
+  lastSentAt DateTime
+  sendCount  Int      @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  deliveries CustomerSignInDelivery[]
+
+  @@unique([channel, identifierHash])
+  @@index([expiresAt])
+  @@index([ipHash, lastSentAt])
+}
+
+// The PROMISE TO DELIVER one sign-in code, committed in the same transaction
+// as the challenge itself and drained by a lease-guarded worker
+// (engines/customerSignInOutbox.ts).
+//
+// 🔴 A CHALLENGE THAT WAS NEVER DURABLY SCHEDULED IS A LOCKED DOOR. The first
+// cut sent inside a floating promise: the code, its cooldown and its per-day
+// count were committed, the send was not. A deploy in the following
+// milliseconds left the customer waiting for a text nothing was going to
+// send, behind a cooldown telling them not to ask again yet.
+//
+// The code and the destination exist at rest ONLY inside `sealed`
+// (AES-256-GCM under a key derived from TOKEN_ENCRYPTION_KEY for this purpose
+// alone), and only until the row is terminal - a CHECK enforces that nothing
+// terminal still holds one.
+model CustomerSignInDelivery {
+  id String @id @default(cuid())
+
+  codeId String
+  code   CustomerSignInCode @relation(fields: [codeId], references: [id], onDelete: Cascade)
+  // "sms" | "email" (CHECK-pinned).
+  channel String
+
+  /// iv:tag:ciphertext of {"to","code"}. NULL once terminal (CHECK-pinned).
+  sealed String?
+
+  // pending | sent | failed | abandoned | superseded | expired | suppressed
+  status String @default("pending")
+
+  /// Real provider dispatches only: a claim is not an attempt.
+  attempts               Int       @default(0)
+  firstProviderAttemptAt DateTime?
+  /// Written BEFORE the request leaves: a process that dies after the
+  /// provider accepted still leaves a row that says an attempt may be in
+  /// flight. Only a definitive answer clears it.
+  lastAttemptAmbiguous   Boolean   @default(false)
+  nextAttemptAt          DateTime?
+  claimedAt              DateTime?
+  claimToken             String?
+  /// Fixed classification only - never a provider message, never a contact.
+  lastError              String?
+  providerMessageId      String?
+  /// Stable per delivery: a retried EMAIL is collapsed by Resend itself.
+  idempotencyKey         String    @unique
+  expiresAt              DateTime
+  sentAt                 DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([codeId])
 }
 
 // PLATFORM operations - durable, exclusive, resumable admin-initiated runs

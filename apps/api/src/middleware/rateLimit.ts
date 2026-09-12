@@ -240,6 +240,32 @@ export const recoveryReadLimiter = make({
   keyGenerator: publicIpKey,
 });
 
+/**
+ * My ChairBack sign-in (send a code, check a code): the OUTER per-IP belt, the
+ * same shape as recovery. The deterministic ceilings - per phone/email, per
+ * IP digest, the platform text budget - live in services/customerSignIn.ts
+ * against its own table, so no contact detail is ever a key here.
+ */
+export const customerAuthLimiter = make({
+  name: "customerAuth",
+  windowMs: 60 * 1000,
+  limit: 10,
+  keyGenerator: publicIpKey,
+});
+
+/**
+ * My ChairBack reads and writes, keyed by the SESSION rather than the IP: a
+ * signed-in customer on cellular shares a carrier NAT with strangers, and one
+ * busy tower must not 429 everyone's home screen. The session value is hashed
+ * before it reaches the store (credentialKey).
+ */
+export const customerApiLimiter = make({
+  name: "customerApi",
+  windowMs: 60 * 1000,
+  limit: 120,
+  keyGenerator: bearerKey,
+});
+
 export const oauthLimiter = make({ name: "oauth", windowMs: 60 * 1000, limit: 15 });
 
 /** Webhook receivers: generous (legit bursts happen) but bounded. Per IP. */

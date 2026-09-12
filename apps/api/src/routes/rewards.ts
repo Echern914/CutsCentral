@@ -7,16 +7,13 @@ import {
   cadenceToDays,
   type CadenceKey,
   DEMO,
-  LOYALTY_TIERS,
   LOYALTY_TIER_KEYS,
-  loyaltyTierProgress,
-  parseTierPerks,
-  parseTierThresholds,
-  tierPerk,
   randomToken,
   formatShopAddress,
   mapsUrlFor,
 } from "@chairback/config";
+import { buildLoyaltyView } from "../services/loyaltyView.js";
+import { consentView, optInClientInTx, optOutClientInTx } from "../services/clientConsent.js";
 import { prisma, runAsOwner } from "@chairback/db";
 import { toE164 } from "../acuity/clientKey.js";
 import { requestRecoveryChallenge } from "../services/rewardsRecovery.js";
@@ -33,25 +30,6 @@ const env = apiEnv();
  * avoid a token-probing oracle. Never accepts a shopId from the request.
  */
 export const rewardsRouter: Router = Router();
-
-/**
- * Client's view of their own SMS consent, derived from the same fields the
- * textability gate (engines/eligibility.ts) reads. opted_out wins over consent
- * (a STOP since opting in); opted_in needs both consent on file AND not opted
- * out; otherwise consent has never been recorded.
- */
-function consentView(c: {
-  optedOut: boolean;
-  smsConsentAt: Date | null;
-  phone: string | null;
-}): { state: "opted_in" | "needs_consent" | "opted_out"; hasPhone: boolean } {
-  const state = c.optedOut
-    ? "opted_out"
-    : c.smsConsentAt !== null
-      ? "opted_in"
-      : "needs_consent";
-  return { state, hasPhone: Boolean(c.phone) };
-}
 
 rewardsRouter.get("/:magicToken", async (req, res) => {
   // All reads run via runAsOwner: the tenant tables are FORCE RLS, and this
@@ -284,52 +262,16 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
   } = data;
   const now = new Date();
 
-  // Per-card balances; the null key is the default card. The top-level
-  // punches/rewards fields below are the DEFAULT card's view - byte-identical
-  // to the pre-cards payload for every shop with no CardTypes (all rows null).
-  const balanceByCard = new Map(
-    ledgerGroups.map((g) => [
-      g.cardTypeId,
-      (g._sum.punchesEarned ?? 0) - (g._sum.punchesRedeemed ?? 0),
-    ]),
-  );
-  const balance = balanceByCard.get(null) ?? 0;
-  const grantedIds = new Set(grants.map((g) => g.cardTypeId));
-  const rewardsFor = (cardTypeId: string | null) =>
-    rewards.filter((r) => r.cardTypeId === cardTypeId);
-
-  // Loyalty status tier (Bronze/Silver/Gold by lifetime completed visits), how
-  // far to the next one, and what each is worth at this shop.
-  //
-  // 🔴 The tier arithmetic is loyaltyTierProgress() in @chairback/config, not
-  // repeated here. This route used to walk LOYALTY_TIER_KEYS itself, which was
-  // correct but was also a second copy of a rule that has to agree with the
-  // badge, the bar, and whatever reads it next.
-  const progress = loyaltyTierProgress(
+  // Balances, the next reward, the stacked cards and the tier all come from
+  // the ONE loyalty module the My ChairBack app reads too (services/
+  // loyaltyView.ts), so the two surfaces can never disagree about a punch.
+  const { loyalty, balance, nextTarget, rewardsFor, cards } = buildLoyaltyView(client.shop, {
     completedCount,
-    parseTierThresholds(client.shop.tierThresholds),
-  );
-  const perks = parseTierPerks(client.shop.tierPerks);
-  const loyalty = {
-    tier: progress.current,
-    label: progress.current ? LOYALTY_TIERS[progress.current].label : null,
-    color: progress.current ? LOYALTY_TIERS[progress.current].color : null,
-    visits: completedCount,
-    // 0..1 through the CURRENT band, for the progress bar. Measured band to
-    // band rather than from zero, so a client one visit from Gold sees a
-    // nearly-full bar instead of a creeping one.
-    fraction: progress.fraction,
-    // What they get for being where they are. Null when the shop has not said.
-    perk: tierPerk(perks, progress.current),
-    nextTier: progress.next
-      ? {
-          label: LOYALTY_TIERS[progress.next].label,
-          visitsAway: progress.visitsToNext,
-          // What is waiting one tier up - the actual reason to come back.
-          perk: tierPerk(perks, progress.next),
-        }
-      : null,
-  };
+    rewards,
+    cardTypes,
+    grants,
+    ledgerGroups,
+  });
 
   // What "book my usual" would book. Null when we cannot honour it: no prior
   // booking, a shop with no public page, or a shop whose bookings live in
@@ -353,63 +295,6 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
             `&staff=${encodeURIComponent(lastAppointment.staffId)}`,
         }
       : null;
-
-  // The punch grid counts toward the cheapest reward the client can't afford
-  // yet; with everything in reach (or an empty menu) there's no next target.
-  // Scoped per card: a card's grid only targets that card's own rewards.
-  const nextTargetFor = (cardTypeId: string | null, cardBalance: number) =>
-    [...rewardsFor(cardTypeId)]
-      .sort((a, b) => a.punchCost - b.punchCost)
-      .find((r) => r.punchCost > cardBalance) ?? null;
-  const nextTarget = nextTargetFor(null, balance);
-
-  // One stacked-card view per card the client should see: the default card
-  // always, a custom card when it's live for everyone (active + not exclusive),
-  // granted to this client, or holds any of their history (honesty: an archived
-  // or revoked card with punches on it never silently disappears).
-  const cardView = (card: {
-    id: string | null;
-    name: string;
-    emoji: string | null;
-    accentColor: string | null;
-    exclusive: boolean;
-  }) => {
-    const cardBalance = balanceByCard.get(card.id) ?? 0;
-    const target = nextTargetFor(card.id, cardBalance);
-    return {
-      id: card.id,
-      name: card.name,
-      emoji: card.emoji,
-      accentColor: card.accentColor,
-      exclusive: card.exclusive,
-      balance: cardBalance,
-      nextTarget: target
-        ? {
-            name: target.name,
-            punchCost: target.punchCost,
-            remaining: target.punchCost - cardBalance,
-          }
-        : null,
-      rewards: rewardsFor(card.id).map((r) => ({
-        id: r.id,
-        name: r.name,
-        description: r.description,
-        emoji: r.emoji,
-        punchCost: r.punchCost,
-        ready: cardBalance >= r.punchCost,
-        remaining: Math.max(0, r.punchCost - cardBalance),
-      })),
-    };
-  };
-  const cards = [
-    cardView({ id: null, name: "Punch Card", emoji: null, accentColor: null, exclusive: false }),
-    ...cardTypes
-      .filter(
-        (c) =>
-          (c.active && !c.exclusive) || grantedIds.has(c.id) || balanceByCard.has(c.id),
-      )
-      .map((c) => cardView(c)),
-  ];
 
   // Rebooking countdown: deadline = lastVisit + rebookWindowDays. The client-side
   // timer ticks down to this ISO instant. We surface the state so the UI can show
@@ -630,27 +515,8 @@ rewardsRouter.post("/:magicToken/opt-in", async (req, res) => {
       where: { magicToken: req.params.magicToken },
     });
     if (!client) return { error: "not_found" as const };
-
-    const effectivePhone = client.phone ?? bodyPhone;
-    if (!effectivePhone) return { error: "needs_phone" as const };
-
-    // Two writes, deliberately kept separate:
-    //  1. Unconditional: clear any prior STOP and set the phone on first opt-in.
-    //  2. Guarded (smsConsentAt: null): stamp consent FIRST-WINS, never overwrite.
-    await tx.client.update({
-      where: { id: client.id },
-      data: {
-        optedOut: false,
-        // Client-initiated, so it may clear ANY opt-out incl. an SMS STOP.
-        optOutSource: null,
-        ...(client.phone ? {} : { phone: bodyPhone }),
-      },
-    });
-    await tx.client.updateMany({
-      where: { id: client.id, smsConsentAt: null },
-      data: { smsConsentAt: new Date(), smsConsentSource: "client_self_serve" },
-    });
-    return { ok: true as const };
+    // The one opt-in rule, shared with My ChairBack's notification settings.
+    return optInClientInTx(tx, client, bodyPhone);
   });
 
   if ("error" in result) {
@@ -728,16 +594,8 @@ rewardsRouter.post("/:magicToken/opt-out", async (req, res) => {
       where: { magicToken: req.params.magicToken },
     });
     if (!client) return null;
-    await tx.client.update({
-      where: { id: client.id },
-      data: {
-        optedOut: true,
-        // Keep an existing sms_stop lock; otherwise record the web opt-out.
-        ...(client.optedOut && client.optOutSource === "sms_stop"
-          ? {}
-          : { optOutSource: "client_self_serve" }),
-      },
-    });
+    // The one opt-out rule, shared with My ChairBack's notification settings.
+    await optOutClientInTx(tx, client);
     return { hasPhone: Boolean(client.phone) };
   });
   if (!result) {

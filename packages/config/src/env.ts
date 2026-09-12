@@ -340,6 +340,11 @@ const apiSchema = z.object({
   // WOULD expire, writing nothing), so the counts watched before enabling
   // are the counts you get. Sends nothing either way.
   WALK_IN_EXPIRY_ENABLED: boolish.default("false"),
+  // MY CHAIRBACK - the customer's signed-in account in the app. OFF by
+  // default: while false, /api/customer-auth and /api/me answer 404 as if they
+  // do not exist, so the tables and routes merge and sit dark until the app
+  // build that uses them is in testers' hands.
+  CUSTOMER_ACCOUNTS_ENABLED: boolish.default("false"),
   // AFFILIATE PROGRAM - four layered kill switches, all dark by default.
   // boolish accepts exactly "true"/"false"/"1"/"0"; ANY other value (TRUE,
   // yes, an empty string) kills boot - a mistyped flag fails CLOSED, never

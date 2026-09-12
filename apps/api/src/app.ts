@@ -30,6 +30,8 @@ import { squareOAuthRouter } from "./routes/square.oauth.js";
 import { adminRouter } from "./routes/admin.js";
 import { rewardsRouter } from "./routes/rewards.js";
 import { rewardsRecoveryRouter } from "./routes/rewardsRecovery.js";
+import { customerAuthRouter } from "./routes/customerAuth.js";
+import { customerMeRouter } from "./routes/customerMe.js";
 import { findShopRouter } from "./routes/findShop.public.js";
 import { unsubscribeRouter } from "./routes/unsubscribe.public.js";
 import { broadcastsRouter } from "./routes/broadcasts.js";
@@ -181,6 +183,11 @@ export function createApp(): Express {
   // Phone-verified rewards recovery (per-route limiters inside). Mounted on
   // its own prefix so /api/rewards' blanket limiter cannot starve it.
   app.use("/api/rewards-recovery", rewardsRecoveryRouter);
+  // MY CHAIRBACK - the customer's own signed-in account. Both dark behind
+  // CUSTOMER_ACCOUNTS_ENABLED (each router 404s wholesale while it is off).
+  // Sign-in carries its own per-route limits; /api/me is keyed by session.
+  app.use("/api/customer-auth", customerAuthRouter);
+  app.use("/api/me", customerMeRouter);
   app.use("/api/rewards", rewardsLimiter, rewardsRouter);
   app.use("/api/wallet", rewardsLimiter, walletRouter); // Apple Wallet pass web service (public, ApplePass-token auth)
   // 🔴 Its OWN mount, not a /find route under /api/page. publicPageRouter owns

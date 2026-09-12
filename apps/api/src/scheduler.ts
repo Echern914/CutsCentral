@@ -33,6 +33,7 @@ import { sweepExpiredRateCounters } from "./middleware/pgRateStore.js";
 import { runDemoReset } from "./engines/demoReset.js";
 import { runEmailOutbox } from "./engines/emailOutbox.js";
 import { runBroadcastWorker } from "./engines/broadcastWorker.js";
+import { runCustomerSignInOutbox } from "./engines/customerSignInOutbox.js";
 import { runAffiliateCreditExecution } from "./engines/affiliateCredit.js";
 import { reconcilePayments } from "./billing/reconcile.js";
 import { processRotationRun } from "./services/rewardsRotation.js";
@@ -489,6 +490,28 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
       }
     },
     failMsg: "broadcast worker failed",
+  },
+  // My ChairBack sign-in codes: deliver the challenges whose rows were
+  // committed with the code itself.
+  //
+  // 🔴 THE FAST PATH IS THE REQUEST'S OWN KICK, NOT THIS. A customer is
+  // staring at a code field, so the sign-in route claims and delivers its own
+  // row immediately. This pass exists for the seconds in which that process
+  // dies, freezes or is redeployed: it is what turns "the code never came and
+  // the cooldown says wait" into a delay of under a minute. Claims age out in
+  // 90s, so a crashed attempt is retried, and email retries carry the
+  // provider's idempotency key.
+  {
+    cronExpr: "* * * * *",
+    name: "customer-signin-outbox",
+    ttlMs: 3 * MINUTE,
+    run: async () => {
+      const r = await runCustomerSignInOutbox();
+      if (r.sent > 0 || r.failed > 0 || r.abandoned > 0 || r.expired > 0) {
+        logger.info(r, "customer sign-in outbox progressed");
+      }
+    },
+    failMsg: "customer sign-in outbox worker failed",
   },
   // Live-demo shop: nightly restore to canonical state at 04:00 (quietest
   // hour). Clears viewer-submitted junk and re-rolls the seeded dates so the
