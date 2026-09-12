@@ -120,6 +120,17 @@ about submission changed except who made the binary.
   without it. If it ever comes back, the headers are now under
   `Pods/ReactNativeDependencies/Headers/fmt/`; restore the plugin from git
   history against that path.
+- **"Upload Symbols Failed — the archive did not include a dSYM for
+  React.framework / ReactNativeDependencies.framework / hermes.framework"** —
+  NOISE, and you will see exactly these three every time. RN 0.81 ships those
+  as prebuilt binaries with no debug symbols. The binary upload is unaffected;
+  only crash logs inside those three frameworks are less readable. Do not
+  chase it. The app's own dSYM (`ChairBackRewards.app.dSYM`) is in the archive.
+- **Archive finishes but `codesign` fails with `errSecInternalComponent`** (only
+  when archiving from a terminal) — the login keychain will not hand the signing
+  key to a process with no window to ask permission in. Archive once from Xcode
+  itself and click **Always Allow** on the keychain prompt; after that the
+  terminal works too.
 - **`pod install` complains a Swift pod can't be a static library
   (AppCheckCore / GoogleUtilities)** — `plugins/withGoogleModularHeaders.js`
   didn't run. You built from a hand-edited `ios/`; delete it and re-run step 3.
