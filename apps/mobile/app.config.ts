@@ -63,13 +63,17 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   // cannot take another build - that is exactly how build 37 died
   // (SUBMISSION_SERVICE_IOS_OLD_APP_VERSION).
   //
-  // 1.0.9 = build 40, the first build made LOCALLY in Xcode rather than on EAS
-  // (see docs/mobile-release-xcode.md), carrying the animated launch. 🔴 FROM
-  // HERE ON THE BUILD NUMBER LIVES IN THIS FILE. EAS auto-incremented it under
+  // 1.0.9 = builds 40 and 41, the first builds made LOCALLY in Xcode rather
+  // than on EAS (see docs/mobile-release-xcode.md). 🔴 FROM HERE ON THE BUILD
+  // NUMBER LIVES IN THIS FILE. EAS auto-incremented it under
   // appVersionSource:"remote" and its counter stopped at 39; eas.json now says
   // "local", so `buildNumber` below is the number Apple sees. Bump it by hand
   // for EVERY upload - a repeated number is rejected by App Store Connect, and
   // a repeated VERSION string after submission dies the way build 37 did.
+  //   40 = archived from a tree that PREDATED #417 and uploaded by hand from
+  //        the Organizer on 2026-09-12 - it does NOT contain My ChairBack. Do
+  //        not release it to testers.
+  //   41 = the same 1.0.9 with #417 (My ChairBack) and the animated launch.
   version: "1.0.9",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
@@ -86,7 +90,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 🔴 The number Apple sees. Was ignored while EAS owned the counter
     // (appVersionSource:"remote", last EAS build = 39); it is authoritative now
     // that builds are made locally. Must exceed the previous upload, every time.
-    buildNumber: "40",
+    buildNumber: "41",
     // iPhone-only for v1: the dashboard WebView isn't iPad-optimized, and
     // supporting tablet would require iPad screenshots + iPad review coverage.
     supportsTablet: false,
