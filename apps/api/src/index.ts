@@ -1,5 +1,5 @@
 import "./env-bootstrap.js"; // MUST be first - loads .env before anything reads env
-import { apiEnv } from "@chairback/config";
+import { apiEnv, marketingEmailConfigError } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { createApp } from "./app.js";
 import { logger } from "./logger.js";
@@ -16,6 +16,7 @@ import { captureError, initSentry } from "./sentry.js";
 
 const env = apiEnv();
 initSentry();
+reportMarketingEmailConfig();
 warnOnUndersizedPool(env.DATABASE_URL);
 // Hosts (Railway, Render, etc.) inject PORT and route traffic to it. Prefer that;
 // fall back to the API_BASE_URL port, then 4000 for local dev.
@@ -60,6 +61,30 @@ logIntegrationStatusAtBoot({
  * line at boot instead of letting it stall invisibly under load. Production-only
  * so local dev with connection_limit=1 stays quiet.
  */
+/**
+ * 🔴 LOUD, AND NOT FATAL.
+ *
+ * This check used to live in the environment schema, where a missing
+ * `UNSUBSCRIBE_TOKEN_SECRET` refused the boot outright. Main was deployed
+ * without it and the whole API went down - no bookings, no payments, no
+ * dashboards, for every shop - over a variable belonging to marketing email.
+ * The guard was right about the risk and wrong about the blast radius.
+ *
+ * So the platform starts, the FEATURE is refused (engines/broadcast.ts), and
+ * the misconfiguration is said out loud here: an error line in the deploy log
+ * and an entry in Sentry. The one thing it must never be is silent, because a
+ * silent fallback is how unsubscribe links end up signed by a rotatable
+ * session key and quietly stop working weeks later.
+ */
+function reportMarketingEmailConfig(): void {
+  const problem = marketingEmailConfigError(env);
+  if (!problem) return;
+  logger.error({ reason: "marketing_email_unconfigured" }, problem);
+  captureError(new Error("marketing email disabled: UNSUBSCRIBE_TOKEN_SECRET"), {
+    reason: "marketing_email_unconfigured",
+  });
+}
+
 function warnOnUndersizedPool(databaseUrl: string): void {
   if (env.NODE_ENV !== "production") return;
   let limit: number | null = null;

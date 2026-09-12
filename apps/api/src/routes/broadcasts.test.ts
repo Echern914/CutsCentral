@@ -1,7 +1,7 @@
 import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
-import { randomToken } from "@chairback/config";
+import { __resetEnvCacheForTests, randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
 import { __setSendEmailForTests, type SendEmailInput } from "../messaging/email.js";
 import { runBroadcastWorker } from "../engines/broadcastWorker.js";
@@ -31,6 +31,8 @@ const shopIds: string[] = [];
 
 let cookie: string;
 let shopId: string;
+const originalNodeEnv = process.env.NODE_ENV;
+const originalUnsubscribeSecret = process.env.UNSUBSCRIBE_TOKEN_SECRET;
 
 /** Every email the engine tried to send, captured instead of posted. */
 let outbox: SendEmailInput[] = [];
@@ -560,6 +562,52 @@ describe("🔴 unsubscribe", () => {
       select: { emailOptedOut: true },
     });
     expect(recovered!.emailOptedOut).toBe(true);
+  });
+});
+
+describe("🔴 a server with no unsubscribe secret", () => {
+  it("refuses marketing EMAIL and nothing else", async () => {
+    // 🔴 THE REGRESSION THIS PINS IS AN OUTAGE. This guard used to live in the
+    // environment schema and refused the BOOT, so a missing marketing-email
+    // variable took down bookings, payments and every dashboard for every shop.
+    // A configuration guard must not be able to break more than the feature it
+    // guards - and the barber must be told which half is broken.
+    const client = await makeClient({ tier: "GOLD" });
+    await prisma.pushSubscription.create({
+      data: { shopId, clientId: client.id, endpoint: `https://push.test/${randomToken(8)}`, kind: "web" },
+    });
+    process.env.NODE_ENV = "production";
+    delete process.env.UNSUBSCRIBE_TOKEN_SECRET;
+    __resetEnvCacheForTests();
+    try {
+      const email = await preview({ channel: "email", tiers: [] });
+      expect(email.body.blocker.kind).toBe("unsubscribe_not_configured");
+      // It names the way out that works today rather than only what is wrong.
+      expect(String(email.body.blocker.message)).toContain("notification");
+
+      // The send is refused too - a preview that disagrees with the send is
+      // worse than no preview.
+      const created = await draft({
+        channel: "email",
+        tiers: [],
+        subject: "Nope",
+        body: "Should not go out.",
+      });
+      const sent = await send(created.body.id as string);
+      expect(sent.status).toBe(409);
+      expect(outbox).toHaveLength(0);
+
+      // 🔴 AND NOTIFICATIONS STILL WORK. The platform is up; one channel is off.
+      const push = await preview({ channel: "push", tiers: [] });
+      expect(push.body.blocker).toBeNull();
+      expect(push.body.reachable).toBe(1);
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+      if (originalUnsubscribeSecret !== undefined) {
+        process.env.UNSUBSCRIBE_TOKEN_SECRET = originalUnsubscribeSecret;
+      }
+      __resetEnvCacheForTests();
+    }
   });
 });
 

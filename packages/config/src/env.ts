@@ -381,33 +381,50 @@ const apiSchema = z.object({
  * variable and how to make one - which is the cheapest place in the system to
  * find out.
  */
+export type ApiEnv = z.infer<typeof apiSchema>;
+
 const apiSchemaChecked = apiSchema.superRefine((env, ctx) => {
   if (env.NODE_ENV !== "production") return;
-
-  // 🔴 NO SILENT FALLBACK IN PRODUCTION. Unsubscribe links derived from
-  // SESSION_SECRET break the moment sessions are rotated, and they break
-  // invisibly: nothing errors, the link simply stops matching and the customer
-  // concludes the unsubscribe is broken - then reports the mail as spam.
-  if (!env.UNSUBSCRIBE_TOKEN_SECRET) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["UNSUBSCRIBE_TOKEN_SECRET"],
-      message:
-        "required in production - unsubscribe links must not depend on a rotatable session key. Generate one with: openssl rand -base64 32",
-    });
-  } else if (env.UNSUBSCRIBE_TOKEN_SECRET === env.SESSION_SECRET) {
-    // Setting it to the same value is the fallback written out by hand, and it
-    // has exactly the same consequence.
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["UNSUBSCRIBE_TOKEN_SECRET"],
-      message:
-        "must not be the same value as SESSION_SECRET - the point is that rotating one does not invalidate the other",
-    });
-  }
+  // Cross-field production rules live here. Nothing in this block may be a
+  // FEATURE's configuration - see the note above marketingEmailConfigError.
+  void ctx;
 });
 
-export type ApiEnv = z.infer<typeof apiSchema>;
+/**
+ * 🔴 WHY THIS IS NOT A BOOT FAILURE ANY MORE. It was, and it grounded the
+ * platform.
+ *
+ * `UNSUBSCRIBE_TOKEN_SECRET` was added as a hard production requirement, main
+ * was deployed, and the API refused to start: no bookings, no payments, no
+ * rewards, no dashboards, for every shop - because a variable belonging to
+ * MARKETING EMAIL was missing. The guard was right about the risk and wrong
+ * about the blast radius, and the wrong half is the one customers felt.
+ *
+ * A configuration guard must not be able to take down more than the feature it
+ * guards. So the rule now refuses THE FEATURE: with no dedicated secret, this
+ * deployment cannot send a broadcast email (see engines/broadcast.ts), which
+ * costs a barber one promotion he can send as a notification instead. The API
+ * boots, and index.ts reports the misconfiguration loudly at startup and to
+ * Sentry, so it is impossible to miss and impossible to mistake for silence.
+ *
+ * The original hazard is unchanged and still refused: an unsubscribe link
+ * signed by a rotatable session key dies invisibly at the client's next
+ * broadcast, long after the rotation nobody connects it to.
+ *
+ * Returns a sentence for a human, or null when the deployment is fit to send.
+ */
+export function marketingEmailConfigError(env: ApiEnv): string | null {
+  if (env.NODE_ENV !== "production") return null;
+  if (!env.UNSUBSCRIBE_TOKEN_SECRET) {
+    return "UNSUBSCRIBE_TOKEN_SECRET is not set, so marketing email is switched off in this deployment - unsubscribe links must not depend on a rotatable session key. Generate one with: openssl rand -base64 32";
+  }
+  if (env.UNSUBSCRIBE_TOKEN_SECRET === env.SESSION_SECRET) {
+    // Setting it to the same value is the fallback written out by hand, and it
+    // has exactly the same consequence.
+    return "UNSUBSCRIBE_TOKEN_SECRET must not be the same value as SESSION_SECRET, so marketing email is switched off in this deployment - the point is that rotating one does not invalidate the other";
+  }
+  return null;
+}
 
 let cachedApiEnv: ApiEnv | undefined;
 

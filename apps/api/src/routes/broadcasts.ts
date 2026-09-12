@@ -93,6 +93,10 @@ function blockerMessage(blocker: BroadcastBlocker): string {
       return `That's ${blocker.need} emails and you have ${blocker.remaining} left this month. Pick a smaller group, or send it as an app notification instead — those are free.`;
     case "email_not_configured":
       return "Email isn't switched on for this platform yet.";
+    case "unsubscribe_not_configured":
+      // Deliberately not "something went wrong": a barber can act on the
+      // second half of this immediately, and somebody has to be told the first.
+      return "Marketing email is switched off on this server until an operator finishes setting it up. App notifications work now — send one of those instead.";
     case "no_postal_address":
       return "Add your shop's street address first — marketing email has to carry it by law. App notifications don't, so you can send one of those right now.";
     case "already_sending":
