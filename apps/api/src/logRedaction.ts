@@ -34,6 +34,15 @@ const SENSITIVE_QUERY_PARAMS = ["token", "code", "state"];
  *  - `/api/book/offer/:token`        claim someone's held waitlist slot
  *  - `/api/book/manage/:token`       cancel or reschedule someone's booking
  *  - `/api/page/waitlist/cancel/:token`  cancel someone's place in the queue
+ *  - `/api/unsubscribe/:token`       the dedicated marketing opt-out token,
+ *                                    carried in the footer of every broadcast
+ *                                    email. It grants ONE boolean and cannot
+ *                                    reach rewards or any customer data - it
+ *                                    used to be the magic token above, which
+ *                                    was far too much authority for a link
+ *                                    whose job is to stop promotions. It is
+ *                                    still a credential, and a log is still
+ *                                    the wrong place for one
  *
  * Every one of those is stored HASHED (or resolved by lookup) precisely so a
  * leaked database backup cannot be replayed. Logging the raw value undoes that
@@ -52,6 +61,7 @@ const SECRET_PATH_PATTERNS: readonly RegExp[] = [
   /(\/api\/book\/offer\/)[^/?#]+/,
   /(\/api\/book\/manage\/)[^/?#]+/,
   /(\/api\/page\/waitlist\/cancel\/)[^/?#]+/,
+  /(\/api\/unsubscribe\/)[^/?#]+/,
 ];
 
 /**

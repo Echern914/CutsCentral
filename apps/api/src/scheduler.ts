@@ -32,6 +32,7 @@ import { expireDeadWaitlistEntries } from "./engines/waitlistExpiry.js";
 import { sweepExpiredRateCounters } from "./middleware/pgRateStore.js";
 import { runDemoReset } from "./engines/demoReset.js";
 import { runEmailOutbox } from "./engines/emailOutbox.js";
+import { runBroadcastWorker } from "./engines/broadcastWorker.js";
 import { runAffiliateCreditExecution } from "./engines/affiliateCredit.js";
 import { reconcilePayments } from "./billing/reconcile.js";
 import { processRotationRun } from "./services/rewardsRotation.js";
@@ -462,6 +463,32 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
       }
     },
     failMsg: "email outbox worker failed",
+  },
+  // Client broadcasts: drain the frozen recipient rows of any blast a shop has
+  // queued. Every minute, because a barber who has just pressed send is
+  // watching the progress line move.
+  //
+  // 🔴 THIS IS THE ONLY THING THAT DELIVERS A BROADCAST. The send request
+  // freezes the audience, reserves the allowance and answers 202 - it does not
+  // send, deliberately, so that a deploy in the following seconds costs a
+  // minute rather than stranding the blast in SENDING with nothing to resume
+  // it. Bounded batches, a claim that ages out, and a per-recipient unique
+  // index underneath: two replicas here cannot mail anybody twice.
+  //
+  // TTL is generous (10min) because a large blast's pass is a few hundred
+  // provider round-trips; if the lease expired mid-pass a second replica could
+  // start claiming rows this one still holds.
+  {
+    cronExpr: "* * * * *",
+    name: "broadcast-worker",
+    ttlMs: 10 * MINUTE,
+    run: async () => {
+      const r = await runBroadcastWorker();
+      if (r.sent > 0 || r.failed > 0 || r.abandoned > 0 || r.finalized > 0) {
+        logger.info(r, "broadcast worker progressed");
+      }
+    },
+    failMsg: "broadcast worker failed",
   },
   // Live-demo shop: nightly restore to canonical state at 04:00 (quietest
   // hour). Clears viewer-submitted junk and re-rolls the seeded dates so the

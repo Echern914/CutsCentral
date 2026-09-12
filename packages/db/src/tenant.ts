@@ -157,6 +157,11 @@ type RecurringSeriesCreateNoShop = Omit<
   Prisma.RecurringSeriesUncheckedCreateInput,
   "shopId"
 >;
+type BroadcastCreateNoShop = Omit<Prisma.BroadcastUncheckedCreateInput, "shopId">;
+type BroadcastSendCreateNoShop = Omit<
+  Prisma.BroadcastSendUncheckedCreateInput,
+  "shopId"
+>;
 type BookingQuestionCreateNoShop = Omit<
   Prisma.BookingQuestionUncheckedCreateInput,
   "shopId"
@@ -858,6 +863,77 @@ export function forShop(shopId: string) {
       deleteMany: (args: Prisma.ServiceAddOnDeleteManyArgs) =>
         runWithShop(shopId, (tx) =>
           tx.serviceAddOn.deleteMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+    },
+
+    broadcast: {
+      findMany: (args: Prisma.BroadcastFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.broadcast.findMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      findFirst: (args: Prisma.BroadcastFindFirstArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.broadcast.findFirst({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      count: (args: Prisma.BroadcastCountArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.broadcast.count({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      create: (args: { data: BroadcastCreateNoShop }) =>
+        runWithShop(shopId, (tx) =>
+          tx.broadcast.create({
+            data: stamp(args.data, shopId) as Prisma.BroadcastUncheckedCreateInput,
+          }),
+        ),
+      updateMany: (args: Prisma.BroadcastUpdateManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.broadcast.updateMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      deleteMany: (args: Prisma.BroadcastDeleteManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.broadcast.deleteMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+    },
+
+    broadcastSend: {
+      findMany: (args: Prisma.BroadcastSendFindManyArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.broadcastSend.findMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      findFirst: (args: Prisma.BroadcastSendFindFirstArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.broadcastSend.findFirst({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      count: (args: Prisma.BroadcastSendCountArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.broadcastSend.count({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+      createMany: (args: { data: BroadcastSendCreateNoShop[] }) =>
+        runWithShop(shopId, (tx) =>
+          tx.broadcastSend.createMany({
+            data: args.data.map(
+              (d) => stamp(d, shopId) as Prisma.BroadcastSendUncheckedCreateInput,
+            ),
+            // The (broadcastId, clientId) unique is the at-most-once guarantee;
+            // skipping duplicates is what makes a resumed send safe.
+            skipDuplicates: true,
+          }),
+        ),
+      updateMany: (args: Prisma.BroadcastSendUpdateManyArgs) =>
+        runWithShop(shopId, (tx) =>
+          tx.broadcastSend.updateMany({ ...args, where: scopeWhere(args.where, shopId) }),
+        ),
+    },
+
+    // The shop's broadcast-email allowance for a month. Read-only through the
+    // facade: the only WRITES are the reserve/release pair in billing/quota.ts,
+    // which must run inside the caller's freeze transaction with the row
+    // LOCKED. A convenience `update` here would be an invitation to change the
+    // number outside that lock, which is the exact race the row exists to close.
+    shopEmailQuota: {
+      findFirst: (args: Prisma.ShopEmailQuotaFindFirstArgs = {}) =>
+        runWithShop(shopId, (tx) =>
+          tx.shopEmailQuota.findFirst({ ...args, where: scopeWhere(args.where, shopId) }),
         ),
     },
 

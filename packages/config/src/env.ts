@@ -21,6 +21,44 @@ const STRIP_EDGES = /^[\s\u200B-\u200D\uFEFF\u2060]+|[\s\u200B-\u200D\uFEFF\u206
 const cleanUrl = () =>
   z.string().transform((v) => v.replace(STRIP_EDGES, "")).pipe(z.string().url());
 
+/**
+ * How many BYTES a base64 string actually carries, or null if it is not base64.
+ *
+ * 🔴 A LENGTH CHECK IS NOT AN ENTROPY CHECK. `.min(43)` accepted
+ * "please-do-not-use-this-key-in-production!!!" - the right number of
+ * characters and none of the strength the number was standing in for. What
+ * matters for a key is how many random bytes it decodes to, so that is what is
+ * measured.
+ *
+ * `Buffer.from(v, "base64")` cannot be asked on its own: it is deliberately
+ * lenient and silently DISCARDS characters outside the alphabet, so
+ * "hello world!!!..." decodes to a plausible-looking buffer instead of an
+ * error. The shape is therefore checked first, and the result is re-encoded and
+ * compared - a value that does not survive a round trip was not canonical
+ * base64, whatever Buffer made of it.
+ *
+ * Both alphabets are accepted. Standard base64 is what `openssl rand -base64`
+ * emits and what the message names; URL-safe is what Node's
+ * `randomBytes(32).toString("base64url")` emits, and refusing a perfectly
+ * strong key over which of the two somebody reached for would be pedantry with
+ * a real cost - an operator who cannot get the variable accepted removes it.
+ */
+function decodedBase64Bytes(raw: string): number | null {
+  const v = raw.trim();
+  if (v.length === 0) return null;
+  // One alphabet or the other, never a mixture, with optional tail padding.
+  const standard = /^[A-Za-z0-9+/]+={0,2}$/.test(v);
+  const urlSafe = /^[A-Za-z0-9_-]+={0,2}$/.test(v);
+  if (!standard && !urlSafe) return null;
+  const canonical = v.replace(/-/g, "+").replace(/_/g, "/");
+  const buf = Buffer.from(canonical, "base64");
+  if (buf.length === 0) return null;
+  // Round trip, padding-insensitive: proves nothing was quietly dropped.
+  const strip = (x: string) => x.replace(/=+$/, "");
+  if (strip(buf.toString("base64")) !== strip(canonical)) return null;
+  return buf.length;
+}
+
 const apiSchema = z.object({
   DATABASE_URL: cleanUrl(),
   // Direct (non-pooled) connection for prisma migrate. Optional at app runtime.
@@ -30,6 +68,41 @@ const apiSchema = z.object({
   API_BASE_URL: cleanUrl(),
 
   SESSION_SECRET: z.string().min(16),
+  /**
+   * 🔴 THE UNSUBSCRIBE CREDENTIAL'S OWN SECRET, and it has to be its own.
+   *
+   * Unsubscribe tokens are DERIVED from this (engines/unsubscribeToken.ts), so
+   * whatever signs them decides how long a link in a three-week-old email
+   * keeps working. Deriving them from SESSION_SECRET tied that lifetime to a
+   * key whose whole purpose is to be rotatable: rotate sessions - after a leak,
+   * on a schedule, because somebody left - and every outstanding unsubscribe
+   * link silently stops matching at the client's next broadcast, when the
+   * worker rewrites their digest under the new secret. CAN-SPAM requires the
+   * opposite, and a broken unsubscribe is the strongest negative signal a
+   * mailbox provider records.
+   *
+   * So: separate key, separate lifetime, rotated only when somebody decides
+   * that invalidating every outstanding unsubscribe link is the right trade.
+   *
+   * At least 43 characters, which is what 32 random bytes come to in base64 -
+   * `openssl rand -base64 32`. Optional in the SCHEMA only so development and
+   * CI keep working; production is refused below, because a fallback nobody is
+   * told about is how this would quietly go back to being one secret.
+   */
+  // A BLANK VALUE MEANS UNSET, not malformed. `.env.example` ships this key
+  // empty so it is visible and obviously required, and somebody copying that
+  // file must land in the development fallback (announced in the log) rather
+  // than on a boot failure they then "fix" by deleting the line.
+  UNSUBSCRIBE_TOKEN_SECRET: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z
+      .string()
+      .refine((v) => decodedBase64Bytes(v) !== null && decodedBase64Bytes(v)! >= 32, {
+        message:
+          "must be base64 decoding to at least 32 bytes - generate one with: openssl rand -base64 32",
+      })
+      .optional(),
+  ),
   // Must decode to exactly 32 bytes (AES-256 key). Validate at boot so a
   // malformed key crashes the process loudly here rather than at the first
   // token encrypt/decrypt deep in a request. Mirrors loadKey() in crypto.ts.
@@ -299,13 +372,48 @@ const apiSchema = z.object({
   DEV_SEED_ACUITY_ACCOUNT_ID: z.string().optional().default(""),
 });
 
+/**
+ * Cross-field rules - the ones a single field cannot answer for itself.
+ *
+ * Kept as a superRefine rather than stricter field types so development and CI
+ * stay runnable with a partial environment, while production is held to the
+ * whole contract. A boot that fails here fails loudly, at startup, naming the
+ * variable and how to make one - which is the cheapest place in the system to
+ * find out.
+ */
+const apiSchemaChecked = apiSchema.superRefine((env, ctx) => {
+  if (env.NODE_ENV !== "production") return;
+
+  // 🔴 NO SILENT FALLBACK IN PRODUCTION. Unsubscribe links derived from
+  // SESSION_SECRET break the moment sessions are rotated, and they break
+  // invisibly: nothing errors, the link simply stops matching and the customer
+  // concludes the unsubscribe is broken - then reports the mail as spam.
+  if (!env.UNSUBSCRIBE_TOKEN_SECRET) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["UNSUBSCRIBE_TOKEN_SECRET"],
+      message:
+        "required in production - unsubscribe links must not depend on a rotatable session key. Generate one with: openssl rand -base64 32",
+    });
+  } else if (env.UNSUBSCRIBE_TOKEN_SECRET === env.SESSION_SECRET) {
+    // Setting it to the same value is the fallback written out by hand, and it
+    // has exactly the same consequence.
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["UNSUBSCRIBE_TOKEN_SECRET"],
+      message:
+        "must not be the same value as SESSION_SECRET - the point is that rotating one does not invalidate the other",
+    });
+  }
+});
+
 export type ApiEnv = z.infer<typeof apiSchema>;
 
 let cachedApiEnv: ApiEnv | undefined;
 
 export function apiEnv(source: NodeJS.ProcessEnv = process.env): ApiEnv {
   if (cachedApiEnv) return cachedApiEnv;
-  const parsed = apiSchema.safeParse(source);
+  const parsed = apiSchemaChecked.safeParse(source);
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((i) => `  - ${i.path.join(".")}: ${i.message}`)

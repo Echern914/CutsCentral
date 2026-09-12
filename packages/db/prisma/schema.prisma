@@ -618,6 +618,9 @@ model Shop {
   appointmentOverrides AppointmentOverride[]
   serviceAddOns          ServiceAddOn[]
   bookingQuestions       BookingQuestion[]
+  broadcasts             Broadcast[]
+  broadcastSends         BroadcastSend[]
+  emailQuotaPeriods      ShopEmailQuota[]
   serviceGroups          ServiceGroup[]
   goals                  ShopGoal[]
   serviceGoals           ServiceGoal[]
@@ -1069,6 +1072,38 @@ model Client {
   phone            String? // E.164
   email            String?
   optedOut         Boolean   @default(false)
+  // 🔴 A SEPARATE OPT-OUT FROM THE SMS ONE ABOVE, and it has to be. `optedOut`
+  // is the TCPA STOP gate for texting; this is the CAN-SPAM unsubscribe for
+  // marketing EMAIL. A client who stopped texts has not asked to stop hearing
+  // about a shop entirely, and a client who unsubscribed from email must not
+  // silently lose their booking confirmations - which is why this gates
+  // BROADCASTS ONLY and never transactional mail.
+  emailOptedOut    Boolean   @default(false)
+  emailOptedOutAt  DateTime?
+  // 🔴 THE PROVIDER'S REFUSAL, WHICH IS NOT THE PERSON'S. Set when a mailbox
+  // hard-bounces or reports a broadcast as spam. It stops further MARKETING
+  // email exactly as an unsubscribe does, but it is a separate fact and must
+  // stay that way: recording a bounce as "they unsubscribed" invents a choice
+  // the customer never made, and would be quoted back to a barber ("47 people
+  // unsubscribed") as if it were one. Reason is a fixed classification -
+  // "hard_bounce" | "complaint" | "provider_error".
+  emailSuppressedAt      DateTime?
+  emailSuppressionReason String?
+  // 🔴 A DEDICATED, SINGLE-PURPOSE UNSUBSCRIBE CREDENTIAL - and only its hash.
+  //
+  // The first cut put `magicToken` in the footer of every marketing email.
+  // That token is the customer's WHOLE REWARDS SESSION: their visit history,
+  // their punches, their appointments, their opt-out settings. Mailing it to
+  // them monthly, through forwarding, screenshots, shared inboxes and every
+  // link scanner in between, is far too much authority for a link whose entire
+  // job is to set one boolean to true.
+  //
+  // This grants that boolean and nothing else. The raw value is DERIVED (see
+  // engines/unsubscribeToken.ts) rather than stored, so a leaked backup yields
+  // no working links; what is stored is the digest, purely so a presented
+  // token can be looked up. Adding it invalidated no rewards session - the
+  // magic token is untouched and still does its own job.
+  unsubscribeTokenHash   String?   @unique
   // Why optedOut is set: "sms_stop" (client texted STOP - only the client can
   // reverse it, via START or their rewards page; the dashboard may NOT),
   // "client_self_serve" (rewards-page opt-out), "barber" (dashboard toggle),
@@ -1133,6 +1168,8 @@ model Client {
   @@index([shopId, lastVisitAt])
   @@index([shopId, archivedAt]) // default list/stats filter on (shop, not archived)
   @@index([phone]) // inbound Twilio STOP/START + public resolve-by-phone (cross-tenant phone lookup)
+  broadcastSends BroadcastSend[]
+
 }
 
 // A lead submitted from the public shop page's "Request an appointment" form.
@@ -1500,6 +1537,200 @@ model Visit {
   @@index([status, endAt]) // promotion scan
   @@index([status, scheduledAt]) // cross-shop reminder sweep (synced bookings)
   @@index([shopId, status, scheduledAt]) // insights/trends/avg-ticket + activity feed by (shop, status, date)
+}
+
+// A message a shop sends to many of its clients at once.
+//
+// 🔴 EMAIL AND PUSH ONLY. NEVER SMS, and the enum is how that is enforced
+// rather than a rule someone has to remember: a text to 2,900 clients costs
+// real money per message and would empty a shop's monthly allowance in one
+// tap. Promotions that DO text already exist and are metered separately
+// (routes/promotions.ts); this is the cheap channel, deliberately.
+//
+// A broadcast is composed, PREVIEWED against its real audience, and only then
+// sent. It is never sent by anything automatic - the assistant may draft one,
+// but a person presses the button.
+model Broadcast {
+  id     String @id @default(cuid())
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  // Who wrote it. Null for a draft the assistant proposed that nobody claimed.
+  createdByUserId String?
+  channel BroadcastChannel
+  // WHO IT GOES TO. Empty = every reachable client; otherwise only clients on
+  // one of these loyalty tiers ("all the gold members"). Stored rather than
+  // resolved-and-frozen so a preview and the send agree, and re-reading an old
+  // broadcast still says who it was aimed at.
+  audienceTiers LoyaltyTier[] @default([])
+  // Email only. Push notifications carry a title instead, and the same column
+  // holds it - a push with no title is not worth sending either.
+  subject String?
+  body    String
+  // DRAFT -> QUEUED -> SENDING -> SENT | PARTIAL | FAILED.
+  //
+  // 🔴 QUEUED IS THE ONLY THING THE 202 MAY CLAIM. It means the audience is
+  // frozen, the allowance is reserved and the work is durable - not that
+  // anybody has been written to. The barber is told "queued for 412", never
+  // "they'll get it", because at that instant nothing has left.
+  //
+  // PARTIAL exists so the ledger can be honest. A run where 380 landed and 32
+  // were refused is neither SENT nor FAILED, and calling it either one puts a
+  // claim in the record that the rows underneath do not support.
+  status  BroadcastStatus @default(DRAFT)
+  // Frozen when the audience is frozen, so the report reads the same forever
+  // even as the client book changes underneath it.
+  recipientCount Int @default(0)
+  sentCount      Int @default(0)
+  failedCount    Int @default(0)
+  skippedCount   Int @default(0)
+  // 🔴 THE ALLOWANCE TAKEN OUT OF THE SHOP'S MONTH, reserved in the same
+  // transaction that froze the audience. Held in full while the send is in
+  // flight (conservative: two concurrent blasts cannot both spend the last
+  // 400), and the unused remainder is returned in the same atomic step that
+  // moves this row to a terminal status - so a recipient who was never mailed
+  // never costs the shop anything.
+  emailsReserved Int @default(0)
+  queuedAt  DateTime?
+  sentAt    DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sends BroadcastSend[]
+
+  @@index([shopId, createdAt])
+  @@index([shopId, status])
+  // The worker's sweep for broadcasts that still have work, or still need
+  // finalising. Status-first because that set is tiny and shop-independent.
+  @@index([status])
+}
+
+// One intended recipient of one broadcast - and the unit of durable work.
+//
+// The unique below is the AT-MOST-ONCE guarantee: a retried or double-tapped
+// send can never mail the same client twice, which is the failure nobody
+// forgives. It also makes the send resumable - a run that dies halfway leaves
+// the rows it already wrote, and the next pass skips them.
+//
+// 🔴 THE ROW IS THE QUEUE. Everything a worker needs to decide what to do next
+// lives here, not in a worker's memory: the claim that stops two replicas
+// working the same recipient, the attempt count that bounds provider calls,
+// the backoff gate, and the write-ahead ambiguity marker that makes a crash
+// between "Resend accepted it" and "we wrote that down" recoverable without
+// risking a second copy. Mirrors EmailIntent field for field, deliberately -
+// it is the same problem and this repo should only have one answer to it.
+model BroadcastSend {
+  id          String @id @default(cuid())
+  broadcastId String
+  broadcast   Broadcast @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+  shopId      String
+  shop        Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  clientId    String
+  client      Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  // PENDING -> SENT | FAILED | SKIPPED | ABANDONED.
+  //   FAILED    - the provider DEFINITIVELY refused this recipient, or the
+  //               attempt budget ran out after refusals. Nothing was accepted.
+  //   SKIPPED   - never eligible (no address, unsubscribed, no device). Frozen
+  //               at audience time so the report can still say why a year on.
+  //   ABANDONED - we STOPPED WITHOUT KNOWING: the last attempt was ambiguous
+  //               and the provider's idempotency window has closed, so another
+  //               try could deliver a second copy. Counted as a failure in the
+  //               totals, but never called one.
+  status      BroadcastSendStatus @default(PENDING)
+  // Why a recipient was SKIPPED, in words the barber can act on ("no email
+  // address", "unsubscribed", "no app installed"). Null on a send that went.
+  reason      String?
+  // 🔴 REAL PROVIDER DISPATCHES ONLY - never a claim, never a suppressed send.
+  // A worker that crashed five times before ever contacting Resend must not
+  // have exhausted this recipient's budget without a single request leaving.
+  attempts    Int @default(0)
+  // When this recipient's idempotency key was FIRST put in front of the
+  // provider. The 24h collapse window runs from that moment, not from when the
+  // row was written.
+  firstProviderAttemptAt DateTime?
+  // 🔴 WRITE-AHEAD. Set true in the same atomic statement that reserves the
+  // attempt, which commits BEFORE the request leaves - so a process that dies
+  // after acceptance but before the response is handled still leaves a row
+  // that says "an attempt may be in flight". See engines/broadcastWorker.ts.
+  lastAttemptAmbiguous Boolean @default(false)
+  // Bounded backoff gate, so a 429 is not hammered once a minute forever.
+  nextAttemptAt DateTime?
+  // Held while a worker owns this row. A claim older than the TTL is treated
+  // as abandoned, which is what makes a dead worker recoverable rather than a
+  // permanently stuck recipient.
+  claimedAt   DateTime?
+  // The identity of the CURRENT claim. Every attempt reservation is a
+  // compare-and-set on it, so a worker whose claim aged out and was taken over
+  // cannot wake up and spend a provider call on a row it no longer holds.
+  claimToken  String?
+  // Fixed classification only - never provider prose, never a recipient.
+  lastError   String?
+  // Provider message id once accepted; joins to EmailDelivery.
+  messageId   String?
+  sentAt      DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt @default(now())
+
+  @@unique([broadcastId, clientId])
+  @@index([shopId, createdAt])
+  @@index([broadcastId, status])
+  // The worker's claim scan: due, unclaimed (or stale), oldest first.
+  @@index([status, nextAttemptAt])
+  // 🔴 ONE MORE CONSTRAINT LIVES ONLY IN SQL: a composite foreign key on
+  // (clientId, shopId) -> Client(id, shopId), so a row cannot pair one shop's
+  // blast with another shop's client. RLS alone does not catch that - a row
+  // stamped with MY shopId and YOUR clientId satisfies the policy. Modelling
+  // it here would put shopId in two relations at once and complicate every
+  // generated type, so it is hand-written in
+  // 20260920020000_broadcast_send_same_shop, like Shop_handle_key_idx.
+}
+
+enum BroadcastChannel {
+  email
+  push
+}
+
+enum BroadcastStatus {
+  DRAFT
+  QUEUED
+  SENDING
+  SENT
+  PARTIAL
+  FAILED
+}
+
+enum BroadcastSendStatus {
+  PENDING
+  SENT
+  FAILED
+  SKIPPED
+  ABANDONED
+}
+
+// A shop's broadcast-EMAIL allowance for one UTC calendar month.
+//
+// 🔴 THIS ROW EXISTS TO BE LOCKED. Counting sent rows to decide whether a blast
+// fits is a check-then-act race: two sends can both read "400 left", both
+// decide 400 fits, and the shop mails 800 on a 400 allowance. The reservation
+// is taken with this row locked FOR UPDATE inside the same transaction that
+// freezes the audience, so the second send sees the first one's reservation
+// and is refused before anything is written.
+//
+// `reserved` is the authority, not a cache of BroadcastSend counts: it goes UP
+// when an audience is frozen and comes back DOWN by the unused remainder when
+// the broadcast reaches a terminal status. In flight, the whole blast is
+// counted against the month - a shop cannot spend the same last 400 twice by
+// starting two sends at once.
+model ShopEmailQuota {
+  id     String @id @default(cuid())
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  // First instant of the UTC calendar month this allowance belongs to.
+  periodStart DateTime
+  reserved    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([shopId, periodStart])
 }
 
 model PunchLedger {
@@ -3508,6 +3739,12 @@ model EmailDelivery {
 
   shopId        String?
   appointmentId String?
+  // WHICH CLIENT this message was for, so a bounce or a complaint can be acted
+  // on. An id, not an address: the join key stays the provider message id and
+  // this table still stores no recipient, no subject and no body - which is
+  // the whole reason it was safe to build. Null on mail that has no client
+  // (password resets, owner lifecycle notices).
+  clientId      String?
 
    // Latest known state. "sent" is what we observed at dispatch; everything
    // else arrives by webhook. Fixed vocabulary, CHECK-pinned in the migration.
@@ -3533,6 +3770,7 @@ model EmailDelivery {
   @@index([shopId, sentAt])
   @@index([status, sentAt])
   @@index([appointmentId])
+  @@index([clientId])
 }
 
 // One provider webhook delivery, recorded so a REPLAY changes nothing.
