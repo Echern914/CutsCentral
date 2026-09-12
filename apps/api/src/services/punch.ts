@@ -260,48 +260,98 @@ export async function earnPunchForVisitInTx(
   };
 }
 
+/** Who made a manual ledger change, and why. Required on every manual path. */
+export interface LedgerAudit {
+  actorUserId: string | null;
+  reason: string | null;
+}
+
+/** The system's own writes: no person, no stated reason. */
+const SYSTEM: LedgerAudit = { actorUserId: null, reason: null };
+
 /**
- * Tear down a visit's ENTIRE punch-ledger footprint inside an already-open shop
- * transaction. Used whenever a completed visit stops counting: a retroactive
- * Acuity cancel/no-show (ingest) or a barber deleting/re-earning the visit from
- * the dashboard. ONE implementation so the two callers can never drift.
+ * Take a visit's ENTIRE punch-ledger footprint back out, inside an already-open
+ * shop transaction. Used whenever a completed visit stops counting: a
+ * retroactive Acuity/Square cancel or no-show (ingest), a completed native
+ * booking cancelled after the fact, or a barber deleting/re-earning the visit.
+ * ONE implementation so the callers can never drift.
  *
- * A visit's earn can have grown extra rows if the barber corrected it first:
- *   - "undo a punch" (reverseLedgerEntry): a correction row, reversalOfId = earn.id.
- *   - "edit count" (adjustLedgerEntry): a correction row (reversalOfId = earn.id)
- *     PLUS a fresh re-granted earn (correctionOfId = that correction's id).
- * Deleting only the earn would orphan the correction (a standalone -N) and/or the
- * regrant (a standalone +M), throwing the aggregate balance off. So we delete the
- * whole chain deepest-link-first: regrant -> correction -> earn.
+ * 🔴 APPEND-ONLY. This used to DELETE the chain; the ledger now refuses deletes
+ * at the database. Instead every entry in the chain that still counts gets an
+ * OFFSETTING row (earned and redeemed swapped, reversalOfId -> the entry) and
+ * is stamped reversed - exactly what "undo" does. The chain then nets to zero,
+ * the balance is what the old delete produced, and the history keeps every
+ * row: what was earned, what was corrected, and that the visit was taken back.
  *
- * Balance is always derived from the aggregate (sum earned - sum redeemed), so
- * removing these rows keeps it exactly consistent. The caller is responsible for
- * recomputeCadence afterwards (it reads Visit, not the ledger).
+ * The chain: the visit's earn; any correction of it (reversalOfId = earn);
+ * any regrant written by "edit count" (correctionOfId = a correction); and the
+ * same again for each regrant, since a regrant can itself be edited. Entries
+ * already reversed, and corrections themselves, are already netted out.
+ *
+ * Last, the earn's visit link is DETACHED (visitId -> NULL). That frees the
+ * one-earn-per-visit slot, so a visit that comes back (an un-cancel, a date
+ * edit) earns fresh through the normal path - the same behaviour the delete
+ * gave, without destroying the record of the first earn.
+ *
+ * The caller is responsible for recomputeCadence afterwards (it reads Visit,
+ * not the ledger).
  */
 export async function clawBackVisitEarn(
   tx: Prisma.TransactionClient,
   shopId: string,
   visitId: string,
+  audit: LedgerAudit = SYSTEM,
 ): Promise<void> {
-  const earn = await tx.punchLedger.findUnique({
-    where: { visitId },
-    select: { id: true },
-  });
-  if (earn) {
-    const corrections = await tx.punchLedger.findMany({
-      where: { reversalOfId: earn.id },
-      select: { id: true },
-    });
-    const correctionIds = corrections.map((c) => c.id);
-    if (correctionIds.length > 0) {
-      // Re-granted earns from an "edit count" point at these corrections.
-      await tx.punchLedger.deleteMany({
-        where: { correctionOfId: { in: correctionIds } },
-      });
-      await tx.punchLedger.deleteMany({ where: { id: { in: correctionIds } } });
-    }
+  const earn = await tx.punchLedger.findUnique({ where: { visitId } });
+  if (!earn) return;
+
+  // Walk the whole chain (bounded - a person edits a punch a handful of times).
+  const chain = [earn];
+  let frontier = [earn.id];
+  for (let depth = 0; depth < 10 && frontier.length > 0; depth++) {
+    const corrections = await tx.punchLedger.findMany({ where: { reversalOfId: { in: frontier } } });
+    const regrants =
+      corrections.length === 0
+        ? []
+        : await tx.punchLedger.findMany({
+            where: { correctionOfId: { in: corrections.map((c) => c.id) } },
+          });
+    chain.push(...corrections, ...regrants);
+    frontier = regrants.map((r) => r.id);
   }
-  await tx.punchLedger.deleteMany({ where: { visitId } });
+
+  // Everything still counting: an original entry (not a correction) that has
+  // not been reversed. Offset each on its OWN card, in order.
+  const standing = chain
+    .filter((e) => e.reversalOfId === null && e.reversedAt === null)
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  for (const entry of standing) {
+    const agg = await tx.punchLedger.aggregate({
+      where: { shopId, clientId: entry.clientId, cardTypeId: entry.cardTypeId },
+      _sum: { punchesEarned: true, punchesRedeemed: true },
+    });
+    const balance = (agg._sum.punchesEarned ?? 0) - (agg._sum.punchesRedeemed ?? 0);
+    await tx.punchLedger.create({
+      data: {
+        shopId,
+        clientId: entry.clientId,
+        visitId: null,
+        rewardId: entry.rewardId,
+        cardTypeId: entry.cardTypeId,
+        punchesEarned: entry.punchesRedeemed,
+        punchesRedeemed: entry.punchesEarned,
+        runningBalance: balance - entry.punchesEarned + entry.punchesRedeemed,
+        note: `visit taken back: ${entry.note ?? "entry"}`,
+        reversalOfId: entry.id,
+        actorUserId: audit.actorUserId,
+        reason: audit.reason,
+      },
+    });
+    await tx.punchLedger.update({ where: { id: entry.id }, data: { reversedAt: new Date() } });
+  }
+
+  // Free the one-earn-per-visit slot; the rows themselves stay.
+  await tx.punchLedger.update({ where: { id: earn.id }, data: { visitId: null } });
 }
 
 /** Earn for a visit (status-promotion path). Opens its own locked transaction. */
@@ -344,6 +394,8 @@ export async function redeemReward(
   shopId: string,
   clientId: string,
   rewardId: string,
+  /** Who redeemed it (the dashboard passes the signed-in staff member). */
+  audit: LedgerAudit = SYSTEM,
 ): Promise<RedeemResult> {
   // Same master gate as earning: no redemptions while rewards are off (the
   // balance is untouched either way - redeeming is just refused).
@@ -390,6 +442,8 @@ export async function redeemReward(
         // The reward's name, so the ledger reads naturally even if the reward
         // row is later deleted (rewardId then goes null via SetNull).
         note: reward.name,
+        actorUserId: audit.actorUserId,
+        reason: audit.reason,
       },
     });
     return {
@@ -418,6 +472,12 @@ export async function grantBonusPunches(
   clientId: string,
   count: number,
   cardTypeId: string | null = null,
+  /**
+   * 🔴 A bonus is a MANUAL adjustment: the dashboard route requires a reason
+   * and passes the signed-in staff member. The system default exists only so
+   * seeders and tests can mint balances.
+   */
+  audit: LedgerAudit = SYSTEM,
 ): Promise<BonusResult> {
   // Same master gate as earning/redeeming: a rewards-off shop's ledger is
   // frozen - bonus grants must not mint balances either.
@@ -460,6 +520,8 @@ export async function grantBonusPunches(
         punchesRedeemed: 0,
         runningBalance: balance + count,
         note: "bonus",
+        actorUserId: audit.actorUserId,
+        reason: audit.reason,
       },
     });
     return { ok: true as const, newBalance: balance + count, cardTypeId, cardName };
@@ -534,6 +596,8 @@ export async function reverseLedgerEntry(
   shopId: string,
   clientId: string,
   entryId: string,
+  /** A MANUAL adjustment: the route requires a reason (see grantBonusPunches). */
+  audit: LedgerAudit = SYSTEM,
 ): Promise<ReverseResult> {
   return runWithShop(shopId, async (tx) => {
     await tx.$queryRaw`SELECT id FROM "Client" WHERE id = ${clientId} FOR UPDATE`;
@@ -571,6 +635,8 @@ export async function reverseLedgerEntry(
         runningBalance: newBalance,
         note: `undo: ${entry.note ?? "entry"}`,
         reversalOfId: entry.id,
+        actorUserId: audit.actorUserId,
+        reason: audit.reason,
       },
     });
     await tx.punchLedger.update({
@@ -615,6 +681,8 @@ export async function adjustLedgerEntry(
   clientId: string,
   entryId: string,
   newPunches: number,
+  /** A MANUAL adjustment: the route requires a reason (see grantBonusPunches). */
+  audit: LedgerAudit = SYSTEM,
 ): Promise<AdjustResult> {
   return runWithShop(shopId, async (tx) => {
     await tx.$queryRaw`SELECT id FROM "Client" WHERE id = ${clientId} FOR UPDATE`;
@@ -658,6 +726,8 @@ export async function adjustLedgerEntry(
         runningBalance: afterReversal,
         note: `edit: ${entry.note ?? "entry"}`,
         reversalOfId: entry.id,
+        actorUserId: audit.actorUserId,
+        reason: audit.reason,
       },
     });
     await tx.punchLedger.update({
@@ -680,6 +750,8 @@ export async function adjustLedgerEntry(
         runningBalance: finalBalance,
         note: `corrected: ${entry.note ?? "entry"}`,
         correctionOfId: correction.id,
+        actorUserId: audit.actorUserId,
+        reason: audit.reason,
       },
     });
 

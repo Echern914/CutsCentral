@@ -4,6 +4,11 @@ import { useState, useTransition } from "react";
 import { Card } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
 import { adjustPunchAction, reversePunchAction } from "../../actions";
+import { ReasonPicker } from "./ReasonPicker";
+
+/** The common reasons, one tap each; "Other…" takes a few words. */
+const UNDO_REASONS = ["Given by mistake", "Wrong client", "Visit didn't happen"];
+const EDIT_REASONS = ["Counted wrong", "Service changed"];
 
 export interface LedgerEntry {
   id: string;
@@ -12,6 +17,10 @@ export interface LedgerEntry {
   redeemed: number;
   runningBalance: number;
   note: string | null;
+  /** Who made a manual entry (null for the system's own, and older history). */
+  by?: string | null;
+  /** Why, in their words - the shop's own trail, never shown to the client. */
+  reason?: string | null;
   /** Which punch card this entry sits on; null = the shop's default card. */
   card: { id: string; name: string; emoji: string | null; accentColor: string | null } | null;
   reversed: boolean;
@@ -67,9 +76,9 @@ export function PunchHistory({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>("");
 
-  function undo(entry: LedgerEntry) {
+  function undo(entry: LedgerEntry, reason: string) {
     startTransition(async () => {
-      const r = await reversePunchAction(clientId, entry.id);
+      const r = await reversePunchAction(clientId, entry.id, reason);
       setConfirmUndoId(null);
       if (r.ok) toast("Punch undone", "success");
       else toast(reasonText(r.error), "error");
@@ -82,18 +91,25 @@ export function PunchHistory({
     setConfirmUndoId(null);
   }
 
-  function saveEdit(entry: LedgerEntry) {
+  /** A valid new count, or null (after saying why not). */
+  function editedCount(entry: LedgerEntry): number | null {
     const punches = Number(editValue);
     if (!Number.isInteger(punches) || punches < 1 || punches > 20) {
       toast("Enter a whole number from 1 to 20.", "error");
-      return;
+      return null;
     }
     if (punches === entry.earned) {
       setEditingId(null);
-      return;
+      return null;
     }
+    return punches;
+  }
+
+  function saveEdit(entry: LedgerEntry, reason: string) {
+    const punches = editedCount(entry);
+    if (punches === null) return;
     startTransition(async () => {
-      const r = await adjustPunchAction(clientId, entry.id, punches);
+      const r = await adjustPunchAction(clientId, entry.id, punches, reason);
       setEditingId(null);
       if (r.ok) toast("Punch count updated", "success");
       else toast(reasonText(r.error), "error");
@@ -145,6 +161,12 @@ export function PunchHistory({
                     bal {e.runningBalance} · {fmt(e.at)}
                   </span>
                 </div>
+                {/* Who and why, for a manual change - the shop's own trail. */}
+                {e.by || e.reason ? (
+                  <p className="mt-0.5 text-[11px] text-muted">
+                    {[e.by ? `by ${e.by}` : null, e.reason].filter(Boolean).join(" · ")}
+                  </p>
+                ) : null}
 
                 {/* Controls: only on live (not reversed, not a correction) rows. */}
                 {!dimmed && !isEditing && !isConfirming && (
@@ -174,55 +196,41 @@ export function PunchHistory({
                   </div>
                 )}
 
-                {/* Undo confirm. */}
+                {/* Undo: choosing the reason IS the confirmation. */}
                 {isConfirming && (
-                  <div className="mt-2 flex items-center gap-2">
-                    <span className="text-[11px] text-muted">
-                      Undo this {e.redeemed > 0 ? "redemption" : "punch"}?
-                    </span>
-                    <button
-                      onClick={() => undo(e)}
-                      disabled={pending}
-                      className="rounded-full bg-danger-soft/90 px-3 py-1 text-[11px] font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-danger-soft disabled:opacity-50"
-                    >
-                      {pending ? "…" : "Yes, undo"}
-                    </button>
-                    <button
-                      onClick={() => setConfirmUndoId(null)}
-                      disabled={pending}
-                      className="text-[11px] text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
-                    >
-                      Cancel
-                    </button>
-                  </div>
+                  <ReasonPicker
+                    prompt={`Why undo this ${e.redeemed > 0 ? "redemption" : "punch"}?`}
+                    presets={UNDO_REASONS}
+                    busy={pending}
+                    onPick={(reason) => undo(e, reason)}
+                    onCancel={() => setConfirmUndoId(null)}
+                  />
                 )}
 
-                {/* Edit count. */}
+                {/* Edit count, then why. */}
                 {isEditing && (
-                  <div className="mt-2 flex items-center gap-2">
-                    <label className="text-[11px] text-muted">Punches earned</label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={20}
-                      value={editValue}
-                      onChange={(ev) => setEditValue(ev.target.value)}
-                      className="w-16 rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-sm text-offwhite outline-none focus:border-gold/50"
+                  <div className="mt-2">
+                    <div className="flex items-center gap-2">
+                      <label className="text-[11px] text-muted" htmlFor={`count-${e.id}`}>
+                        Punches earned
+                      </label>
+                      <input
+                        id={`count-${e.id}`}
+                        type="number"
+                        min={1}
+                        max={20}
+                        value={editValue}
+                        onChange={(ev) => setEditValue(ev.target.value)}
+                        className="w-16 rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-sm text-offwhite outline-none focus:border-gold/50"
+                      />
+                    </div>
+                    <ReasonPicker
+                      prompt="Why change it?"
+                      presets={EDIT_REASONS}
+                      busy={pending}
+                      onPick={(reason) => saveEdit(e, reason)}
+                      onCancel={() => setEditingId(null)}
                     />
-                    <button
-                      onClick={() => saveEdit(e)}
-                      disabled={pending}
-                      className="rounded-full bg-gold px-3 py-1 text-[11px] font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50"
-                    >
-                      {pending ? "…" : "Save"}
-                    </button>
-                    <button
-                      onClick={() => setEditingId(null)}
-                      disabled={pending}
-                      className="text-[11px] text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
-                    >
-                      Cancel
-                    </button>
                   </div>
                 )}
               </li>

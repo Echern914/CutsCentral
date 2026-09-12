@@ -136,6 +136,8 @@ model User {
   pushSubscriptions   PushSubscription[]
   // Assistants (ChatGPT/Claude) this person connected to one of their shops.
   mcpConnections      McpConnection[]
+  // Punch-ledger entries this person made by hand (bonus, undo, edit, redeem).
+  ledgerActions       PunchLedger[] @relation("LedgerActor")
 
   // Affiliate/referral reporting: "how many signups did code X drive?"
   @@index([referralCode])
@@ -1744,7 +1746,10 @@ model PunchLedger {
   clientId        String
   client          Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
   visitId         String?  @unique // one EARN per visit; redemptions use null (Postgres allows many NULLs)
-  visit           Visit?   @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  // SetNull, not Cascade: deleting a visit must never delete ledger history.
+  // A visit that stops counting is clawed back with OFFSETTING rows first
+  // (clawBackVisitEarn), which also detaches this link to free the slot.
+  visit           Visit?   @relation(fields: [visitId], references: [id], onDelete: SetNull)
   // Which menu reward a redemption bought. SetNull keeps the ledger history
   // intact if the barber later deletes the reward (note still has the name).
   rewardId        String?
@@ -1759,8 +1764,29 @@ model PunchLedger {
   punchesEarned   Int      @default(0)
   punchesRedeemed Int      @default(0)
   runningBalance  Int // per-card snapshot after this entry (card = this row's cardTypeId)
+  // A SYSTEM label ("visit", "bonus", the reward's name, "undo: ..."). The
+  // customer's rewards page shows it for redemptions - never put a person's
+  // words here; they go in `reason`.
   note            String?
   createdAt       DateTime @default(now())
+
+  // Who made a MANUAL change - a bonus, an undo, an edit, a redemption. Null
+  // for the system's own writes (visit earns, claw-backs) and for history
+  // written before this column existed.
+  actorUserId     String?
+  actor           User?    @relation("LedgerActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  // Why, in the staff member's own words. Required for bonuses, undos and
+  // edits (the routes refuse without one). STAFF-ONLY: no customer-facing
+  // select ever names this column.
+  reason          String?
+
+  // 🔴 APPEND-ONLY, ENFORCED BY THE DATABASE (migration
+  // 20260920000000_punch_ledger_append_only): a trigger refuses any UPDATE
+  // that changes an amount, balance, note, card, reason or date, and any
+  // DELETE except when the whole client or shop is being torn down. The only
+  // edits it permits are the bookkeeping ones: stamping reversedAt once,
+  // detaching a link (visitId/rewardId/reversalOfId/correctionOfId/actor ->
+  // NULL), and re-pointing clientId when two duplicate records are merged.
 
   // Barber-correctable ledger. The ledger stays append-only - the barber never
   // deletes a row. "Undo a punch" writes a NEW offsetting correction row and

@@ -80,6 +80,55 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
+describe("🔴 a manual adjustment needs a reason, and records who made it", () => {
+  it("a bonus, an undo and an edit without a reason are refused - and write nothing", async () => {
+    const before = (await ledger(cookieA)).entries.length;
+    const bonus = await request(app)
+      .post(`/api/dashboard/clients/${clientId}/bonus`)
+      .set("Cookie", cookieA)
+      .send({ count: 1 });
+    expect(bonus.status).toBe(400);
+    expect(bonus.body.error).toBe("reason_required");
+    const blank = await request(app)
+      .post(`/api/dashboard/clients/${clientId}/bonus`)
+      .set("Cookie", cookieA)
+      .send({ count: 1, reason: "   " });
+    expect(blank.body.error).toBe("reason_required");
+    expect((await ledger(cookieA)).entries.length).toBe(before);
+
+    await request(app)
+      .post(`/api/dashboard/clients/${clientId}/bonus`)
+      .set("Cookie", cookieA)
+      .send({ count: 1, reason: "Loyal regular" });
+    const target = (await ledger(cookieA)).entries.find((e) => e.note === "bonus" && !e.reversed)!;
+    const undo = await request(app)
+      .post(`/api/dashboard/clients/${clientId}/ledger/${target.id}/reverse`)
+      .set("Cookie", cookieA)
+      .send({});
+    expect(undo.body.error).toBe("reason_required");
+    const edit = await request(app)
+      .post(`/api/dashboard/clients/${clientId}/ledger/${target.id}/adjust`)
+      .set("Cookie", cookieA)
+      .send({ punches: 3 });
+    expect(edit.body.error).toBe("reason_required");
+  });
+
+  it("the ledger shows who made each manual entry and why", async () => {
+    await request(app)
+      .post(`/api/dashboard/clients/${clientId}/bonus`)
+      .set("Cookie", cookieA)
+      .send({ count: 1, reason: "Brought a friend" });
+    const res = await request(app)
+      .get(`/api/dashboard/clients/${clientId}/ledger`)
+      .set("Cookie", cookieA);
+    const entry = (res.body.entries as { reason: string | null; by: string | null }[]).find(
+      (e) => e.reason === "Brought a friend",
+    );
+    expect(entry).toBeDefined();
+    expect(entry!.by).toBe("Ledger Tester");
+  });
+});
+
 describe("ledger reverse/adjust routes", () => {
   it("requires auth", async () => {
     const res = await request(app).post(
@@ -92,7 +141,7 @@ describe("ledger reverse/adjust routes", () => {
     await request(app)
       .post(`/api/dashboard/clients/${clientId}/bonus`)
       .set("Cookie", cookieA)
-      .send({ count: 2 });
+      .send({ count: 2, reason: "Test adjustment" });
     const { entries } = await ledger(cookieA);
     const bonus = entries.find((e) => e.note === "bonus");
     expect(bonus).toBeDefined();
@@ -109,7 +158,8 @@ describe("ledger reverse/adjust routes", () => {
 
     const res = await request(app)
       .post(`/api/dashboard/clients/${clientId}/ledger/${bonus.id}/reverse`)
-      .set("Cookie", cookieA);
+      .set("Cookie", cookieA)
+      .send({ reason: "Test adjustment" });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.newBalance).toBe(before - 2);
@@ -124,7 +174,8 @@ describe("ledger reverse/adjust routes", () => {
   it("404s reversing an unknown entry id", async () => {
     const res = await request(app)
       .post(`/api/dashboard/clients/${clientId}/ledger/does-not-exist/reverse`)
-      .set("Cookie", cookieA);
+      .set("Cookie", cookieA)
+      .send({ reason: "Test adjustment" });
     expect(res.status).toBe(404);
     expect(res.body.error).toBe("entry_not_found");
   });
@@ -133,17 +184,19 @@ describe("ledger reverse/adjust routes", () => {
     await request(app)
       .post(`/api/dashboard/clients/${clientId}/bonus`)
       .set("Cookie", cookieA)
-      .send({ count: 1 });
+      .send({ count: 1, reason: "Test adjustment" });
     const { entries } = await ledger(cookieA);
     const fresh = entries.find((e) => e.note === "bonus" && !e.reversed)!;
 
     const first = await request(app)
       .post(`/api/dashboard/clients/${clientId}/ledger/${fresh.id}/reverse`)
-      .set("Cookie", cookieA);
+      .set("Cookie", cookieA)
+      .send({ reason: "Test adjustment" });
     expect(first.status).toBe(200);
     const second = await request(app)
       .post(`/api/dashboard/clients/${clientId}/ledger/${fresh.id}/reverse`)
-      .set("Cookie", cookieA);
+      .set("Cookie", cookieA)
+      .send({ reason: "Test adjustment" });
     expect(second.status).toBe(409);
     expect(second.body.error).toBe("already_reversed");
   });
@@ -153,7 +206,8 @@ describe("ledger reverse/adjust routes", () => {
     const correction = entries.find((e) => e.isCorrection)!;
     const res = await request(app)
       .post(`/api/dashboard/clients/${clientId}/ledger/${correction.id}/reverse`)
-      .set("Cookie", cookieA);
+      .set("Cookie", cookieA)
+      .send({ reason: "Test adjustment" });
     expect(res.status).toBe(409);
     expect(res.body.error).toBe("is_a_correction");
   });
@@ -162,7 +216,7 @@ describe("ledger reverse/adjust routes", () => {
     await request(app)
       .post(`/api/dashboard/clients/${clientId}/bonus`)
       .set("Cookie", cookieA)
-      .send({ count: 2 });
+      .send({ count: 2, reason: "Test adjustment" });
     const start = await ledger(cookieA);
     const earn = start.entries.find((e) => e.editable)!;
     const before = start.balance;
@@ -171,7 +225,7 @@ describe("ledger reverse/adjust routes", () => {
     const bad = await request(app)
       .post(`/api/dashboard/clients/${clientId}/ledger/${earn.id}/adjust`)
       .set("Cookie", cookieA)
-      .send({ punches: 0 });
+      .send({ punches: 0, reason: "Test adjustment" });
     expect(bad.status).toBe(400);
     expect(bad.body.error).toBe("invalid_input");
 
@@ -179,7 +233,7 @@ describe("ledger reverse/adjust routes", () => {
     const ok = await request(app)
       .post(`/api/dashboard/clients/${clientId}/ledger/${earn.id}/adjust`)
       .set("Cookie", cookieA)
-      .send({ punches: 4 });
+      .send({ punches: 4, reason: "Test adjustment" });
     expect(ok.status).toBe(200);
     expect(ok.body.newBalance).toBe(before + 2);
     expect((await ledger(cookieA)).balance).toBe(before + 2);
@@ -190,7 +244,7 @@ describe("ledger reverse/adjust routes", () => {
     await request(app)
       .post(`/api/dashboard/clients/${clientId}/bonus`)
       .set("Cookie", cookieA)
-      .send({ count: 5 });
+      .send({ count: 5, reason: "Test adjustment" });
     const reward = await request(app)
       .post("/api/loyalty/rewards")
       .set("Cookie", cookieA)
@@ -207,7 +261,7 @@ describe("ledger reverse/adjust routes", () => {
     const res = await request(app)
       .post(`/api/dashboard/clients/${clientId}/ledger/${redemption.id}/adjust`)
       .set("Cookie", cookieA)
-      .send({ punches: 3 });
+      .send({ punches: 3, reason: "Test adjustment" });
     expect(res.status).toBe(409);
     expect(res.body.error).toBe("not_an_earn");
   });
@@ -219,7 +273,8 @@ describe("ledger reverse/adjust routes", () => {
     // so B gets a 404 (the client isn't theirs) - never touches A's ledger.
     const res = await request(app)
       .post(`/api/dashboard/clients/${clientId}/ledger/${target.id}/reverse`)
-      .set("Cookie", cookieB);
+      .set("Cookie", cookieB)
+      .send({ reason: "Test adjustment" });
     expect(res.status).toBe(404);
     // And A's entry is untouched (still not reversed if it was editable).
     const after = await ledger(cookieA);

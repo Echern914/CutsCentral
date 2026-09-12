@@ -10,6 +10,10 @@ import {
   toggleOptOutAction,
 } from "../../actions";
 import { recordPromoUseAction } from "../../promotions/actions";
+import { ReasonPicker } from "./ReasonPicker";
+
+/** Why a bonus punch - one tap for the usual reasons, a few words otherwise. */
+const BONUS_REASONS = ["Referral", "Made up for a problem", "Promotion", "Loyal regular"];
 
 export interface RedeemableReward {
   id: string;
@@ -60,6 +64,9 @@ export function ClientActions({
   const [visitPickerOpen, setVisitPickerOpen] = useState(false);
   const [punchPickerOpen, setPunchPickerOpen] = useState(false);
   const [promoPickerOpen, setPromoPickerOpen] = useState(false);
+  // The bonus waiting for its reason: which card it goes on (undefined = the
+  // default card), or null when no bonus is in progress.
+  const [bonusFor, setBonusFor] = useState<{ cardTypeId?: string } | null>(null);
   const [isOptedOut, setIsOptedOut] = useState(optedOut);
   // Cards you can PUNCH: archived cards are retired and never take a new punch
   // (mirrors auto-routing, which skips inactive cards). The default card is
@@ -95,10 +102,12 @@ export function ClientActions({
     });
   }
 
-  function bonusPunch(cardTypeId?: string) {
+  function bonusPunch(reason: string) {
+    const target = bonusFor;
+    if (!target) return;
     startTransition(async () => {
-      const r = await bonusPunchAction(clientId, 1, cardTypeId);
-      setPunchPickerOpen(false);
+      const r = await bonusPunchAction(clientId, 1, reason, target.cardTypeId);
+      setBonusFor(null);
       if (r.ok) toast("Bonus punch added", "success");
       else toast("Could not add punch", "error");
     });
@@ -204,12 +213,34 @@ export function ClientActions({
         <div className="relative">
           <button
             disabled={pending}
-            onClick={() => (hasCards ? setPunchPickerOpen((v) => !v) : bonusPunch())}
+            onClick={() => {
+              if (hasCards) setPunchPickerOpen((v) => !v);
+              else setBonusFor((v) => (v ? null : {}));
+            }}
             className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
           >
             +1 punch
           </button>
-          {punchPickerOpen && <CardPicker label="Add the punch to…" onPick={bonusPunch} />}
+          {punchPickerOpen && (
+            <CardPicker
+              label="Add the punch to…"
+              onPick={(cardTypeId) => {
+                setPunchPickerOpen(false);
+                setBonusFor({ cardTypeId });
+              }}
+            />
+          )}
+          {bonusFor && (
+            <div className="absolute right-0 z-10 mt-2 w-72 rounded-2xl border border-subtle bg-charcoal-800 p-3 shadow-glow-sm">
+              <ReasonPicker
+                prompt={`Why the bonus punch${bonusFor.cardTypeId ? ` on ${cardName(bonusFor.cardTypeId)}` : ""}?`}
+                presets={BONUS_REASONS}
+                busy={pending}
+                onPick={bonusPunch}
+                onCancel={() => setBonusFor(null)}
+              />
+            </div>
+          )}
         </div>
       )}
 

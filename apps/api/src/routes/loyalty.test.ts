@@ -165,7 +165,7 @@ describe("loyalty designer", () => {
     await request(app)
       .post(`/api/dashboard/clients/${clientId}/bonus`)
       .set("Cookie", cookieA)
-      .send({ count: 3 });
+      .send({ count: 3, reason: "Test adjustment" });
 
     const broke = await request(app)
       .post(`/api/dashboard/redeem/${clientId}`)
@@ -178,7 +178,7 @@ describe("loyalty designer", () => {
     await request(app)
       .post(`/api/dashboard/clients/${clientId}/bonus`)
       .set("Cookie", cookieA)
-      .send({ count: 1 });
+      .send({ count: 1, reason: "Test adjustment" });
 
     const ok = await request(app)
       .post(`/api/dashboard/redeem/${clientId}`)
