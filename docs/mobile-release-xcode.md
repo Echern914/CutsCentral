@@ -29,11 +29,11 @@ app's team, Xcode cannot provision `com.getchairback.rewards` at all and stops
 with *"No profiles for 'com.getchairback.rewards' were found"*. That is a safe
 failure. Pick the other team and it goes away.
 
-The only signing identity currently on this Mac is an **Apple Development**
-cert (team `ZLP9T7HSYJ`). There is **no Apple Distribution cert** yet — Xcode
-creates one the first time you archive with automatic signing, as long as that
-team is the one that owns the bundle id in App Store Connect. If it isn't, see
-the failure above and pick the right team.
+The team is **ZLP9T7HSYJ — Eric Chernichaw**. Verified 2026-09-11: it owns
+`com.getchairback.rewards` (EAS's own App Store profile for the app is on this
+team), and it is the same team as the other apps built on this Mac, so there is
+only one to pick. Xcode creates the **Apple Distribution** cert the first time
+you Distribute; that prompt is expected.
 
 ## 1. Version and build number — you own the counter now
 
@@ -100,7 +100,19 @@ about submission changed except who made the binary.
 
 ## 5. If it fails
 
-- **"No profiles for 'com.getchairback.rewards'"** — wrong team selected. See §0.
+- **"Your team has no devices from which to generate a provisioning profile …
+  No profiles for 'com.getchairback.rewards' were found"** — NOT the wrong
+  team (that error reads *"An App ID with Identifier … is not available"*).
+  Xcode signs the archive with a *development* profile first and only
+  re-signs for the store on upload; a development profile needs at least one
+  registered device, and EAS never needed one, so the team had zero. Register
+  one: developer.apple.com → Devices → add your iPhone's UDID (Xcode → Window →
+  Devices and Simulators shows it; or `xcrun devicectl list devices` then
+  `device info details`). Plugging the phone in is not enough on its own unless
+  Developer Mode is on (Settings → Privacy & Security). Then **Try Again**.
+  Done once, 2026-09-11, with Eric's iPhone 16; the profile lasts a year.
+- **"An App ID with Identifier 'com.getchairback.rewards' is not available"** —
+  THAT one is the wrong team. See §0.
 - **A C++ error in `fmt` mentioning `consteval`** — this was real on RN 0.76
   and Xcode 26, and a plugin (`withFmtConstevalFix`) patched fmt's source. RN
   0.81 ships fmt precompiled inside `ReactNativeDependencies`, so the plugin had
