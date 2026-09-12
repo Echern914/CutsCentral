@@ -1,4 +1,4 @@
-import { apiEnv } from "@chairback/config";
+import { apiEnv, marketingEmailConfigError } from "@chairback/config";
 import { Prisma, forShop, prisma, runWithShop, type LoyaltyTier } from "@chairback/db";
 import { logger } from "../logger.js";
 import { emailEnabled, wrapEmailHtml } from "../messaging/email.js";
@@ -78,6 +78,8 @@ export type BroadcastBlocker =
   | { kind: "no_recipients" }
   | { kind: "over_quota"; need: number; remaining: number }
   | { kind: "email_not_configured" }
+  /** This deployment has no dedicated unsubscribe secret - see the engine note. */
+  | { kind: "unsubscribe_not_configured" }
   | { kind: "no_postal_address" }
   /** Somebody already pressed send; this one is queued, in flight or done. */
   | { kind: "already_sending" }
@@ -252,6 +254,13 @@ export async function previewBroadcast(params: {
   if (params.channel === "email") {
     if (!emailEnabled()) {
       blocker = { kind: "email_not_configured" };
+    } else if (marketingEmailConfigError(apiEnv()) !== null) {
+      // 🔴 THE FEATURE IS OFF, NOT THE PLATFORM. A missing unsubscribe secret
+      // means links in a sent email could stop working the next time sessions
+      // are rotated, so this deployment must not send marketing email - but it
+      // must go on taking bookings, which is what refusing to BOOT stopped it
+      // doing. Push is unaffected and available right now.
+      blocker = { kind: "unsubscribe_not_configured" };
     } else if (!shop || shop.postal === null) {
       // 🔴 NOT A NAG. US law requires the sender's physical address in
       // commercial email, so this is the difference between a compliant send
@@ -346,6 +355,9 @@ export async function queueBroadcast(params: {
 
         if (broadcast.channel === "email") {
           if (!emailEnabled()) throw new Refused({ kind: "email_not_configured" });
+          if (marketingEmailConfigError(apiEnv()) !== null) {
+            throw new Refused({ kind: "unsubscribe_not_configured" });
+          }
           if (!shop || shop.postal === null) throw new Refused({ kind: "no_postal_address" });
         }
         if (split.reachable.length === 0) throw new Refused({ kind: "no_recipients" });

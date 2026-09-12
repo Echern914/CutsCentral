@@ -175,6 +175,12 @@ It is built to be lawful to send rather than retrofitted later.
   without the dedicated secret**, and refuses it set equal to `SESSION_SECRET`.
   It must be base64 decoding to at least 32 bytes. Development and CI fall back
   once, loudly; a blank value counts as unset so copying `.env.example` works.
+  🔴 **Missing it switches marketing email OFF; it does not stop the API.** An
+  earlier cut refused the boot, main was deployed without the variable, and the
+  whole platform went down over a setting that belongs to one feature. A
+  configuration guard must not be able to break more than the feature it
+  guards, so the send is refused (with a sentence naming notifications as the
+  way out) and the misconfiguration is reported to the deploy log and Sentry.
   Only the SHA-256 digest is stored, so a leaked backup yields no working links.
 - **The shop's postal address in every footer**, and a shop without one is
   refused for email — with a sentence it can fix in a minute — rather than sent
@@ -243,8 +249,9 @@ consequence there is the same: a pass that claims far more than it intended.
 - **Three migrations**, in order: enum values (isolated — Postgres cannot use a
   new enum value in the transaction that adds it), then columns +
   `ShopEmailQuota` + RLS + **the `job_lease` seed**, then the composite FK.
-- **`UNSUBSCRIBE_TOKEN_SECRET` must be set in Railway before deploy** —
-  production will not boot without it. `openssl rand -base64 32`.
+- **Set `UNSUBSCRIBE_TOKEN_SECRET` in Railway** (`openssl rand -base64 32`).
+  Until it is set, this deployment refuses to send marketing email and says so
+  every boot. It no longer refuses to start — that cost an outage once already.
 - The mobile app needs no build for this; it is web + API only.
 
 ## Verification
