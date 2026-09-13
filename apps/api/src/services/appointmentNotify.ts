@@ -558,6 +558,12 @@ export async function notifySyncedVisitReminder(params: {
             status: true,
             scheduledAt: true,
             serviceName: true,
+            // The provider's own manage page + whether the client may use it.
+            // 🔴 Selected HERE and used ONLY to build the email button - never
+            // logged, never returned to a caller. The URL's id[] is a
+            // per-appointment token; holding it authorises changing the booking.
+            customerManageUrl: true,
+            customerCanReschedule: true,
             reminderSentAt: true,
             reminderEmailSentAt: true,
             client: {
@@ -632,6 +638,17 @@ export async function notifySyncedVisitReminder(params: {
           serviceName: visit.serviceName,
           startsAt: visit.scheduledAt,
           timezone: shop.timezone,
+          // 🔴 BOTH HALVES, OR NOTHING. Acuity returns a confirmationPage for
+          // every appointment - including ones the shop has forbidden clients
+          // to change - so the URL alone is not permission. Offering a button
+          // onto a page with no reschedule option is the same failure as
+          // pointing at the booking page: the customer taps, gets nowhere, and
+          // now believes the shop is unreachable. Without both, the shell's
+          // "contact the shop" line stands.
+          manageUrl:
+            visit.customerCanReschedule && visit.customerManageUrl
+              ? visit.customerManageUrl
+              : null,
         });
         const sent = await sendAppointmentEmail({
           shopId: shop.id,

@@ -75,6 +75,15 @@ describe("appointment emails point at the button, never at a reply", () => {
       expect(email.html).not.toContain("Reschedule or cancel");
     });
 
+    it("🔴 never dresses the booking page up as a reschedule link", () => {
+      // The shop's booking URL books a NEW appointment; it cannot move this
+      // one. A customer who taps "Reschedule" and lands there books a second
+      // slot believing the first is gone - the shop loses a chair AND still
+      // holds the original.
+      expect(email.html).not.toContain("Reschedule");
+      expect(email.text).not.toContain("Reschedule");
+    });
+
     it("points at the SHOP instead of a reply nobody reads", () => {
       expect(email.html.toLowerCase()).not.toContain("just reply");
       expect(email.html.toLowerCase()).not.toContain("reply to this email");
@@ -127,6 +136,54 @@ describe("the app link on reminders", () => {
     // action, because moving the appointment is still the point of the mail.
     expect(nativeReminder.html).toContain("Reschedule or cancel");
     expect(nativeReminder.html).toContain("/book/manage/");
+  });
+});
+
+/**
+ * A SYNCED reminder may carry the PROVIDER's own manage page - but only when
+ * the provider also says the customer is allowed to use it.
+ *
+ * 🔴 THE TWO ARE NOT THE SAME FACT. Acuity returns a confirmationPage for every
+ * appointment, including ones the shop has locked; verified against a live
+ * account on 2026-09-13, where every upcoming appointment had a URL and
+ * `canClientReschedule` was false on all of them. A button onto a page that
+ * offers no reschedule is the same failure as pointing at the booking page.
+ */
+describe("synced booking WITH a permitted provider link", () => {
+  const base2 = {
+    firstName: "Casey",
+    shopName: "Drick's Barbershop",
+    serviceName: "Skin Fade",
+    startsAt: base.startsAt,
+    timezone: base.timezone,
+  };
+  const ACUITY = "https://app.acuityscheduling.com/schedule.php?owner=27210928&id[]=abc123&action=appt";
+
+  it("offers a real button when a permitted link is passed", () => {
+    const email = buildSyncedVisitReminderEmail({ ...base2, manageUrl: ACUITY });
+    expect(email.html).toContain("Reschedule or cancel");
+    expect(email.html).toContain("schedule.php");
+    expect(email.text).toContain("Reschedule or cancel:");
+    // ...and stops telling them to go and find the shop themselves.
+    expect(email.html).not.toContain("Contact Drick&#39;s Barbershop directly");
+  });
+
+  it("🔴 falls back to 'contact the shop' when no link is passed", () => {
+    // Which is what the caller does whenever canClientReschedule is false.
+    for (const manageUrl of [null, undefined]) {
+      const email = buildSyncedVisitReminderEmail({ ...base2, manageUrl });
+      expect(email.html).toContain("Contact Drick&#39;s Barbershop directly");
+      expect(email.html).not.toContain("Reschedule or cancel");
+      expect(email.text).not.toContain("Reschedule or cancel");
+    }
+  });
+
+  it("escapes the provider URL into the href rather than trusting it", () => {
+    // It is a third party's string arriving over the wire and going into an
+    // HTML attribute; `[]` and `&` in Acuity's own format must survive intact.
+    const email = buildSyncedVisitReminderEmail({ ...base2, manageUrl: ACUITY });
+    expect(email.html).toContain("&amp;id[]=abc123");
+    expect(email.html).not.toContain('"><script');
   });
 });
 

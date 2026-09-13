@@ -1520,6 +1520,32 @@ model Visit {
   noShow              Boolean     @default(false)
   price               Decimal?    @db.Decimal(10, 2)
   serviceName         String?
+  // 🔴 THE PROVIDER'S OWN MANAGEMENT PAGE FOR THIS ONE APPOINTMENT, and the two
+  // booleans that say whether the customer may actually use it.
+  //
+  // A synced booking lives in the shop's Acuity/Square calendar, so ChairBack
+  // holds no manage token for it and /book/manage/<token> would 404. Acuity
+  // does return a per-appointment `confirmationPage`, so a reminder CAN offer a
+  // real button - but only where the shop has allowed client changes. Verified
+  // against a live connected account on 2026-09-13: every upcoming appointment
+  // carried a confirmationPage while `canClientReschedule` and
+  // `canClientCancel` were BOTH false, because that shop has client changes
+  // switched off in Acuity. Linking there anyway is a button onto a page that
+  // offers nothing.
+  //
+  // Named `customer*`, NOT `external*`: booking.appointmentDetail.ts already
+  // exposes an `externalManageUrl`, and it is a different thing entirely - a
+  // static BARBER-facing link to the platform's own appointment list. This is a
+  // per-appointment CUSTOMER credential. One of the two is safe in a dashboard
+  // payload and one is not, so they must not share a name.
+  //
+  // 🔴 customerManageUrl IS A CREDENTIAL. Its `id[]` parameter is a
+  // 32-character per-appointment token, and holding it is what authorises
+  // changing the booking. Same handling as Appointment.manageToken: never
+  // logged, never returned on a dashboard read.
+  customerManageUrl     String?
+  customerCanReschedule Boolean  @default(false)
+  customerCanCancel     Boolean  @default(false)
   // Reminder idempotency for SYNCED bookings (Acuity/Square). The native side
   // stamps the same pair on Appointment; a Visit needs its own because a shop
   // that kept its old calendar has no Appointment row to stamp, and until this

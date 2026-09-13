@@ -129,6 +129,16 @@ export async function ingestAppointment(
       existing?.status === "COMPLETED" &&
       (status === "CANCELED" || status === "NO_SHOW");
 
+    // 🔴 A URL WITHOUT PERMISSION IS NOT A BUTTON. Acuity hands back a
+    // confirmationPage for every appointment, including ones the shop has
+    // forbidden clients to change - so the capability flags travel with it and
+    // the email decides from those, not from the URL's mere existence.
+    const externalManage = {
+      customerManageUrl: appt.confirmationPage ?? null,
+      customerCanReschedule: appt.canClientReschedule === true,
+      customerCanCancel: appt.canClientCancel === true,
+    };
+
     const visit = await tx.visit.upsert({
       where: {
         shopId_acuityAppointmentId: { shopId: shop.id, acuityAppointmentId: acuityId },
@@ -144,6 +154,7 @@ export async function ingestAppointment(
         serviceName: appt.type ?? null,
         noShow: appt.noShow ?? false,
         canceledAt: status === "CANCELED" ? new Date() : null,
+        ...externalManage,
       },
       update: {
         status: keepCompleted ? undefined : status,
@@ -154,6 +165,12 @@ export async function ingestAppointment(
         noShow: appt.noShow ?? false,
         canceledAt: status === "CANCELED" ? new Date() : null,
         completedAt: revokeCompleted ? null : undefined,
+        // Refreshed on EVERY pass, which is also the backfill: the half-hourly
+        // resync re-ingests a 365-day window, so existing appointments pick the
+        // link up on the next sweep with no data migration. It also means a
+        // shop that later turns client changes ON in Acuity starts offering the
+        // button within the half hour, and one that turns it OFF stops.
+        ...externalManage,
       },
     });
 

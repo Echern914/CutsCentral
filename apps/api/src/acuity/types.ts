@@ -56,6 +56,14 @@ export const acuityAppointmentSchema = z
     calendarID: z.union([z.number(), z.string()]).nullish(),
     canceled: z.boolean().nullish(),
     noShow: z.boolean().nullish(),
+    // The customer's own page for THIS appointment, and whether the shop's
+    // Acuity settings let them act on it. Verified present on a live account
+    // 2026-09-13 (see the Visit.customerManageUrl note in schema.prisma).
+    // Nullish like everything else here: Acuity does not formally document the
+    // list response, so a missing field must degrade, never throw.
+    confirmationPage: z.string().nullish(),
+    canClientReschedule: z.boolean().nullish(),
+    canClientCancel: z.boolean().nullish(),
     duration: z.union([z.number(), z.string()]).nullish(),
     timezone: z.string().nullish(),
     // Intake answers - only populated when requested with pastFormAnswers=true.

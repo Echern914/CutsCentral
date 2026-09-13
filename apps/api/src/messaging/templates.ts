@@ -730,9 +730,22 @@ export function buildAppointmentReminderEmail(params: {
 
 /**
  * Reminder EMAIL for a SYNCED booking - the email twin of
- * buildSyncedVisitReminderBody. No manage button (no ChairBack manage page
- * exists for it) and no staff line (Visit carries no staff), so the card
- * degrades to shop + service + when, and the footer asks for a reply.
+ * buildSyncedVisitReminderBody. No staff line (Visit carries no staff), so the
+ * card degrades to shop + service + when.
+ *
+ * 🔴 THE BUTTON APPEARS ONLY WITH A REAL, PERMITTED LINK, and it must never be
+ * faked with the shop's booking URL. That link books a NEW appointment; it
+ * cannot move this one, which lives in the shop's own Acuity/Square calendar.
+ * A customer who taps "Reschedule", lands on a booking page and picks a slot
+ * believing the first is gone leaves the shop short a chair AND still holding
+ * the original.
+ *
+ * The sync now captures Acuity's own per-appointment confirmationPage, so
+ * `manageUrl` can be genuine. The CALLER passes it only when Acuity also
+ * reports `canClientReschedule` (see services/appointmentNotify.ts): the URL
+ * exists even for appointments the shop has locked, and a button onto a page
+ * that offers nothing is its own kind of lie. With no permitted link the
+ * shared shell keeps its "contact the shop" footer, exactly as before.
  *
  * 🔴 THE MISSING "RESCHEDULE" BUTTON IS NOT AN OVERSIGHT, and it must not be
  * papered over with the shop's booking URL. That link books a NEW appointment;
@@ -753,6 +766,11 @@ export function buildSyncedVisitReminderEmail(params: {
   serviceName: string | null;
   startsAt: Date;
   timezone: string;
+  /**
+   * The PROVIDER's own page for this appointment (Acuity's confirmationPage),
+   * passed ONLY when that provider also says the customer may reschedule it.
+   */
+  manageUrl?: string | null;
 }): EmailCopy {
   const when = formatApptTime(params.startsAt, params.timezone);
   const who = params.firstName ?? "there";
@@ -762,6 +780,9 @@ export function buildSyncedVisitReminderEmail(params: {
     subject: `Reminder: ${service} at ${params.shopName}`,
     text:
       `Reminder, ${who}: ${what} at ${params.shopName} is ${when}. See you then!\n\n` +
+      // The action first when there is one, the app second - a customer who
+      // opened this to change a time should not have to read past an advert.
+      (params.manageUrl ? `Reschedule or cancel: ${params.manageUrl}\n\n` : "") +
       `Keep your appointments and rewards in one place - get the ChairBack app: ${MOBILE_APP.appStoreUrl}`,
     html: appointmentEmailHtml({
       heading: "See you soon",
@@ -769,6 +790,8 @@ export function buildSyncedVisitReminderEmail(params: {
       shopName: params.shopName,
       serviceName: service,
       when,
+      // Absent -> the shell keeps its "contact the shop" footer, unchanged.
+      manageUrl: params.manageUrl ?? undefined,
       appStoreUrl: MOBILE_APP.appStoreUrl,
     }),
   };
