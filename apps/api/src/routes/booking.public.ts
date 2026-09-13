@@ -85,7 +85,6 @@ import {
 import {
   PAYMENT_HOLD_MINUTES,
   collectsAtBooking,
-  collectsPaymentUpFront,
   paymentHoldExpiry,
   promotePaidHold,
 } from "../services/appointmentPaymentHold.js";
@@ -1467,8 +1466,8 @@ const PUBLIC_MAX_OCCURRENCES = 12;
  * approval-mode shops: a series of twelve requests is twelve decisions for the
  * barber, which is not what "approve each booking" was asking for.
  *
- * Reuses collectsPaymentUpFront for the payment half rather than re-deriving
- * it, with a priced-service sentinel: if a $1 service would be charged, every
+ * Reuses collectsAtBooking for the payment half rather than re-deriving it,
+ * with a priced-service sentinel: if a $1 service would be charged, every
  * priced service would be.
  */
 function recurringOfferedTo(shop: {
@@ -1478,14 +1477,27 @@ function recurringOfferedTo(shop: {
   stripeConnectAccountId: string | null;
 }): boolean {
   if (shop.requireBookingApproval) return false;
-  return !collectsPaymentUpFront({
-    connectEnabled: connectEnabled(),
-    paymentsMode: shop.paymentsMode,
-    requireBookingApproval: shop.requireBookingApproval,
-    connectChargesEnabled: shop.connectChargesEnabled,
-    stripeConnectAccountId: shop.stripeConnectAccountId,
-    chargeCents: 1,
-  });
+  // 🔴 collectsAtBooking, NOT collectsPaymentUpFront. The narrower predicate
+  // knows only `ahead` and `deposit`, so a CARD ON FILE shop fell straight
+  // through this guard and was offered a standing appointment - which the
+  // series write path then created without ever asking for the card. Drick
+  // booked twelve that way on 2026-09-13: twelve chairs held, no card, no
+  // no-show protection, and a confirmation screen that looked normal.
+  //
+  // Both predicates answer "does this shop take something at booking?" and
+  // only one of them answers it completely. Recurring must consult the
+  // complete one, because the whole point of the gate is that a series must
+  // never silently skip a collection the shop asked for.
+  return (
+    collectsAtBooking({
+      connectEnabled: connectEnabled(),
+      paymentsMode: shop.paymentsMode,
+      requireBookingApproval: shop.requireBookingApproval,
+      connectChargesEnabled: shop.connectChargesEnabled,
+      stripeConnectAccountId: shop.stripeConnectAccountId,
+      chargeCents: 1,
+    }) === null
+  );
 }
 
 const createSchema = z

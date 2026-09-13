@@ -263,6 +263,25 @@ describe("🔴 the page offers recurring exactly when the write accepts it", () 
       false,
     ],
     [
+      // 🔴 THE REGRESSION. card_on_file is a shop that takes something at
+      // booking - a card, not a charge - and the guard used to consult a
+      // predicate that had never heard of it. So the page offered a standing
+      // appointment and the write created twelve of them without ever asking
+      // for the card. Until the series path can collect one card for the whole
+      // series, the honest answer is to not offer it.
+      "keeps a card on file with Stripe Connect live",
+      async () => {
+        stripeState.connect = true;
+        await setShop({
+          paymentsMode: "card_on_file",
+          requireBookingApproval: false,
+          connectChargesEnabled: true,
+          stripeConnectAccountId: `acct_${randomToken(8)}`,
+        });
+      },
+      false,
+    ],
+    [
       "wants to approve each booking",
       async () => {
         stripeState.connect = false;
