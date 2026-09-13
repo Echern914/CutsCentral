@@ -263,12 +263,17 @@ describe("🔴 the page offers recurring exactly when the write accepts it", () 
       false,
     ],
     [
-      // 🔴 THE REGRESSION. card_on_file is a shop that takes something at
-      // booking - a card, not a charge - and the guard used to consult a
-      // predicate that had never heard of it. So the page offered a standing
-      // appointment and the write created twelve of them without ever asking
-      // for the card. Until the series path can collect one card for the whole
-      // series, the honest answer is to not offer it.
+      // 🔴 THE REGRESSION, now the supported case. card_on_file is a shop that
+      // takes something at booking - a card, not a charge - and the guard used
+      // to consult a predicate that had never heard of it, so the page offered
+      // a standing appointment and the write created twelve without ever
+      // asking for the card.
+      //
+      // Recurring IS offered here, because the series path now collects ONE
+      // card for the whole series and holds the chairs until it is saved. That
+      // the card is genuinely demanded, and that nothing is confirmed without
+      // it, is pinned in billing/cardOnFileSeries.test.ts - this case only
+      // holds the read/write parity that the two must agree.
       "keeps a card on file with Stripe Connect live",
       async () => {
         stripeState.connect = true;
@@ -279,7 +284,7 @@ describe("🔴 the page offers recurring exactly when the write accepts it", () 
           stripeConnectAccountId: `acct_${randomToken(8)}`,
         });
       },
-      false,
+      true,
     ],
     [
       "wants to approve each booking",

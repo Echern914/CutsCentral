@@ -30,6 +30,7 @@ import { readableOn } from "@/lib/contrast";
 import {
   bookAction,
   bookingStatusAction,
+  cardSavedAction,
   getDayBundlesAction,
   getMergedSlotsAction,
   getOpenDaysAction,
@@ -1544,6 +1545,11 @@ export function BookingClient({
         }
         return;
       }
+      // A STANDING APPOINTMENT keeps its series summary across the card step.
+      // Set BEFORE the early return below: the confirmation screen reads it
+      // after the card clears, and without this a card-on-file series showed a
+      // bare "You're booked" with no mention of the other eleven visits.
+      setSeriesResult(res.series ?? null);
       // Pay-ahead: the booking is created; collect payment before confirming.
       if (res.paymentClientSecret) {
         setManageTokenPending(res.manageToken ?? null);
@@ -1563,7 +1569,6 @@ export function BookingClient({
         return;
       }
       setWasRequest(Boolean(res.pending));
-      setSeriesResult(res.series ?? null);
       setConfirmedToken(res.manageToken ?? null);
     });
   }
@@ -1579,6 +1584,28 @@ export function BookingClient({
    */
   async function confirmAfterPayment(token: string) {
     setPayConfirm("checking");
+
+    // 🔴 CARD ON FILE: ASK THE SERVER TO CHECK WITH STRIPE, DON'T WAIT FOR A
+    // WEBHOOK. A saved card is promoted by `setup_intent.succeeded`, and if
+    // that webhook is slow - or the shop's endpoint was never configured - the
+    // hold simply lapses. For a standing appointment that is up to twelve
+    // chairs lost at once on a ten-minute fuse.
+    //
+    // The server does not believe the browser: it retrieves the intent and
+    // runs the same path the webhook would. Failure here is not fatal, because
+    // the poll below still catches the webhook if it wins the race.
+    if (payCharge?.kind === "setup") {
+      const verified = await cardSavedAction(token);
+      // The real number of occurrences that became bookings, counted from the
+      // rows after promotion - a chair can be taken while a card is typed, and
+      // the screen must not claim it.
+      if (verified.ok && verified.series) {
+        setSeriesResult((prev) =>
+          prev ? { ...prev, booked: verified.series!.booked } : prev,
+        );
+      }
+    }
+
     const deadline = Date.now() + 25_000;
     for (;;) {
       const res = await bookingStatusAction(token);

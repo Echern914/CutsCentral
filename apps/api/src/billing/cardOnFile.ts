@@ -34,7 +34,15 @@ import { errorClassification, stripeErrorFacts } from "./stripeErrors.js";
 
 export interface CreateCardOnFileInput {
   shopId: string;
+  /**
+   * The appointment this card belongs to. For a STANDING APPOINTMENT this is
+   * the series ANCHOR (occurrence 0) and `seriesId` is set alongside it: one
+   * card covers every occurrence, and the anchor is simply where it is filed
+   * so that every existing lookup-by-appointment keeps working.
+   */
   appointmentId: string;
+  /** Set only for a standing appointment. One card for the whole series. */
+  seriesId?: string | null;
   connectAccountId: string;
   customer: { name: string; email: string | null; phone: string | null };
   description: string;
@@ -93,7 +101,12 @@ export async function createCardOnFileSetupIntent(
         // screen already says so.
         automatic_payment_methods: { enabled: true },
         description: input.description,
-        metadata: { shopId: input.shopId, appointmentId: input.appointmentId, cardOnFileId },
+        metadata: {
+          shopId: input.shopId,
+          appointmentId: input.appointmentId,
+          cardOnFileId,
+          ...(input.seriesId ? { seriesId: input.seriesId } : {}),
+        },
       },
       { idempotencyKey: `seti-create:${cardOnFileId}` },
     );
@@ -107,6 +120,7 @@ export async function createCardOnFileSetupIntent(
           stripeCustomerId: customer.id,
           stripeSetupIntentId: intent.id,
           status: "pending",
+          seriesId: input.seriesId ?? null,
         },
       }),
     );
@@ -166,9 +180,36 @@ export async function markCardSaved(
   );
   if (updated.count === 0) return "already";
 
+  // 🔴 Is this one booking, or a standing appointment? Read it from OUR row,
+  // never from the intent's metadata: metadata is a copy made at create time
+  // and this decides how many chairs get confirmed.
+  const row = await runWithShop(shopId, (tx) =>
+    tx.cardOnFile.findUnique({ where: { id: cardOnFileId }, select: { seriesId: true } }),
+  );
+
+  const { promotePaidHold, promoteSeriesHolds } = await import(
+    "../services/appointmentPaymentHold.js"
+  );
+
+  if (row?.seriesId) {
+    // One card just covered up to twelve held chairs. Promote them together.
+    const result = await promoteSeriesHolds({ seriesId: row.seriesId, shopId });
+    // Release the card ONLY if the whole series failed to land. If even one
+    // occurrence became a real booking the card is doing its job for that
+    // booking, and detaching it would leave a confirmed appointment with the
+    // no-show protection the shop asked for silently missing.
+    if (result.promoted === 0) {
+      await releaseCardOnFile({
+        shopId,
+        appointmentId,
+        reason: result.lapsed > 0 ? "series_hold_lapsed" : "series_slots_taken",
+      });
+    }
+    return "saved";
+  }
+
   // Same promotion the deposit flow uses. On "lapsed"/"slot_taken" there is
   // nothing to refund (nothing was charged); release the card instead.
-  const { promotePaidHold } = await import("../services/appointmentPaymentHold.js");
   const outcome = await promotePaidHold({ appointmentId });
   if (outcome === "lapsed" || outcome === "slot_taken") {
     await releaseCardOnFile({ shopId, appointmentId, reason: outcome });

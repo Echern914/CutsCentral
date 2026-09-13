@@ -87,6 +87,7 @@ import {
   collectsAtBooking,
   paymentHoldExpiry,
   promotePaidHold,
+  promoteSeriesHolds,
 } from "../services/appointmentPaymentHold.js";
 import {
   notifyAppointmentConfirmation,
@@ -1477,27 +1478,29 @@ function recurringOfferedTo(shop: {
   stripeConnectAccountId: string | null;
 }): boolean {
   if (shop.requireBookingApproval) return false;
-  // 🔴 collectsAtBooking, NOT collectsPaymentUpFront. The narrower predicate
-  // knows only `ahead` and `deposit`, so a CARD ON FILE shop fell straight
-  // through this guard and was offered a standing appointment - which the
-  // series write path then created without ever asking for the card. Drick
-  // booked twelve that way on 2026-09-13: twelve chairs held, no card, no
-  // no-show protection, and a confirmation screen that looked normal.
+  // 🔴 ASK WHAT THIS SHOP COLLECTS, THEN ANSWER WHETHER THE SERIES PATH CAN
+  // COLLECT IT. The old version asked collectsPaymentUpFront, which knows only
+  // `ahead` and `deposit`, so a CARD ON FILE shop fell straight through and was
+  // offered a standing appointment the write then created without ever asking
+  // for the card. Drick booked twelve that way on 2026-09-13.
   //
-  // Both predicates answer "does this shop take something at booking?" and
-  // only one of them answers it completely. Recurring must consult the
-  // complete one, because the whole point of the gate is that a series must
-  // never silently skip a collection the shop asked for.
-  return (
-    collectsAtBooking({
-      connectEnabled: connectEnabled(),
-      paymentsMode: shop.paymentsMode,
-      requireBookingApproval: shop.requireBookingApproval,
-      connectChargesEnabled: shop.connectChargesEnabled,
-      stripeConnectAccountId: shop.stripeConnectAccountId,
-      chargeCents: 1,
-    }) === null
-  );
+  // Written as an allow-list of collection kinds the series branch actually
+  // implements, so a kind added later is refused by default instead of
+  // silently skipped - which is exactly how the original defect behaved.
+  const collects = collectsAtBooking({
+    connectEnabled: connectEnabled(),
+    paymentsMode: shop.paymentsMode,
+    requireBookingApproval: shop.requireBookingApproval,
+    connectChargesEnabled: shop.connectChargesEnabled,
+    stripeConnectAccountId: shop.stripeConnectAccountId,
+    chargeCents: 1,
+  });
+  // null      - nothing is collected at booking; book the series outright.
+  // "card"    - ONE SetupIntent covers every occurrence; the series branch
+  //             holds the chairs and confirms them when the card is saved.
+  // "payment" - twelve deposits, or twelve full charges, is a money question
+  //             for a person to answer. Deliberately still not offered.
+  return collects === null || collects === "card";
 }
 
 const createSchema = z
@@ -1979,6 +1982,30 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       startMin: localMinutesOfDay(startsAt, shop.timezone),
       count: d.recurrence.count,
     };
+    // WILL THIS SERIES COLLECT ANYTHING? Decided BEFORE a single occurrence is
+    // written, because it changes what gets written.
+    //
+    // 🔴 This is the decision the series path used to skip entirely. It
+    // returned `payment: null` and confirmed twelve chairs, so a card-on-file
+    // shop got twelve bookings and no card - see recurringOfferedTo above for
+    // how it slipped past the gate as well.
+    //
+    // Only "card" can reach here: recurringOfferedTo refuses ahead and deposit
+    // outright, because twelve deposits is a question for a person. If that
+    // ever changes, the `payment` case must be built before the gate opens.
+    const seriesCollection = collectsAtBooking({
+      connectEnabled: connectEnabled(),
+      paymentsMode: shop.paymentsMode,
+      requireBookingApproval: shop.requireBookingApproval,
+      connectChargesEnabled: shop.connectChargesEnabled,
+      stripeConnectAccountId: shop.stripeConnectAccountId,
+      // Sentinel, matching recurringOfferedTo: if a $1 service would be
+      // charged, every priced service would be.
+      chargeCents: 1,
+    });
+    const seriesHoldExpiresAt =
+      seriesCollection === "card" ? paymentHoldExpiry(now) : null;
+
     const series = await materializeSeries({
       shopId: shop.id,
       staffId: d.staffId,
@@ -2002,6 +2029,9 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       pattern,
       anchor: startsAt,
       now,
+      // Every occurrence is a PENDING payment hold until the one card is
+      // saved. Null for a pay-at-the-chair shop, which books outright.
+      hold: seriesHoldExpiresAt ? { expiresAt: seriesHoldExpiresAt } : null,
     });
 
     const first = series.booked[0];
@@ -2017,16 +2047,89 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       select: { manageToken: true, endsAt: true },
     });
 
+    // A CARD IS DUE: hold the chairs, ask for one card, confirm nothing yet.
+    //
+    // Everything below the notifications in the pay-in-person case is
+    // deliberately NOT run here. No confirmation is sent, because there is
+    // nothing to confirm until the card is saved - which is the whole defect
+    // this path used to have, in miniature.
+    let seriesPayment: {
+      kind: "setup";
+      clientSecret: string;
+      amountCents: number;
+      isDeposit: boolean;
+      balanceDueCents: number;
+      holdMinutes: number;
+      expiresAt: string | null;
+    } | null = null;
+
+    if (seriesHoldExpiresAt && shop.stripeConnectAccountId) {
+      // ONE SetupIntent for the whole series, filed against the anchor and
+      // tagged with the series id. Twelve intents for one decision would be
+      // twelve ways to half-succeed.
+      const created = await createCardOnFileSetupIntent({
+        shopId: shop.id,
+        appointmentId: first.appointmentId,
+        seriesId: series.seriesId,
+        connectAccountId: shop.stripeConnectAccountId,
+        customer: {
+          name: [d.firstName, d.lastName].filter(Boolean).join(" "),
+          email: d.email ?? null,
+          phone: phone ?? null,
+        },
+        description: `Card on file for a standing ${service.name} at ${shop.name}`,
+      });
+      if (created) {
+        seriesPayment = {
+          kind: "setup",
+          clientSecret: created.clientSecret,
+          amountCents: 0,
+          isDeposit: false,
+          balanceDueCents: 0,
+          holdMinutes: PAYMENT_HOLD_MINUTES,
+          expiresAt: seriesHoldExpiresAt.toISOString(),
+        };
+      } else {
+        // Stripe was unreachable. Same rule the single booking already
+        // follows: a Stripe hiccup must never cost a customer their
+        // appointments. Confirm the series; they pay at the chair.
+        logger.warn(
+          { shopId: shop.id, seriesId: series.seriesId },
+          "standing appointment: no SetupIntent - confirming for pay-in-person",
+        );
+        const settled = await promoteSeriesHolds({
+          seriesId: series.seriesId,
+          shopId: shop.id,
+          now,
+          // The confirmation is sent by the shared path below, once, so that
+          // held and unheld series read identically to the customer.
+          notify: false,
+        });
+        if (settled.promoted === 0) {
+          logger.error(
+            { shopId: shop.id, seriesId: series.seriesId, ...settled },
+            "standing appointment: fallback promotion landed nothing",
+          );
+        }
+      }
+    }
+
     // ONE confirmation, for the first visit, not twelve. The series is one
     // decision the customer made; the email says it repeats. Each later
     // occurrence still carries its own manage token, so each can be moved or
     // cancelled on its own from its reminder.
-    void notifyAppointmentConfirmation({ shopId: shop.id, appointmentId: first.appointmentId });
-    void notifyBarberBookingEvent({
-      shopId: shop.id,
-      appointmentId: first.appointmentId,
-      kind: "booked",
-    });
+    //
+    // WITHHELD while a card is outstanding: promoteSeriesHolds sends it when
+    // the card actually clears. Telling someone they are booked and then
+    // asking for a card is the order this whole file exists to prevent.
+    if (!seriesPayment) {
+      void notifyAppointmentConfirmation({ shopId: shop.id, appointmentId: first.appointmentId });
+      void notifyBarberBookingEvent({
+        shopId: shop.id,
+        appointmentId: first.appointmentId,
+        kind: "booked",
+      });
+    }
     await noteAvailabilityChanged(shop.id);
 
     res.status(201).json({
@@ -2035,13 +2138,19 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       startsAt: startsAt.toISOString(),
       endsAt: firstRow?.endsAt?.toISOString() ?? null,
       pending: false,
-      payment: null,
+      payment: seriesPayment,
       series: {
         id: series.seriesId,
         // What actually landed versus what was asked for. A customer who asked
         // for twelve and got ten must be told which two, not left to find out
         // from a missing reminder in March.
+        //
+        // While a card is outstanding these are the chairs HELD for them, not
+        // chairs confirmed - `held` says which of the two this is, so the
+        // screen can word it honestly rather than promising twelve bookings
+        // that do not exist yet.
         booked: series.booked.length,
+        held: Boolean(seriesPayment),
         total: d.recurrence.count,
         skipped: series.skipped.map((k) => ({
           startsAt: k.startsAt.toISOString(),
@@ -2937,14 +3046,33 @@ bookingPublicRouter.post(
   async (req, res) => {
     const appt = await prisma.appointment.findUnique({
       where: { manageToken: String(req.params.token) },
-      select: { id: true, shopId: true, status: true },
+      select: { id: true, shopId: true, status: true, seriesId: true },
     });
     if (!appt) {
       res.status(404).json({ error: "not_found" });
       return;
     }
+    /**
+     * For a STANDING APPOINTMENT, how many occurrences actually became
+     * bookings. Counted from the rows rather than assumed from what was held:
+     * minutes passed while the card was being typed, and a chair that was
+     * taken in the meantime must be reported as not booked rather than
+     * quietly included in a count the customer will act on.
+     */
+    const seriesBooked = async () =>
+      appt.seriesId
+        ? {
+            series: {
+              id: appt.seriesId,
+              booked: await prisma.appointment.count({
+                where: { seriesId: appt.seriesId, status: "BOOKED" },
+              }),
+            },
+          }
+        : {};
+
     if (appt.status === "BOOKED") {
-      res.json({ ok: true, status: "BOOKED" });
+      res.json({ ok: true, status: "BOOKED", ...(await seriesBooked()) });
       return;
     }
     const outcome = await verifyCardSaved({ shopId: appt.shopId, appointmentId: appt.id });
@@ -2952,7 +3080,12 @@ bookingPublicRouter.post(
       where: { id: appt.id },
       select: { status: true },
     });
-    res.json({ ok: true, outcome, status: after?.status ?? appt.status });
+    res.json({
+      ok: true,
+      outcome,
+      status: after?.status ?? appt.status,
+      ...(await seriesBooked()),
+    });
   },
 );
 
