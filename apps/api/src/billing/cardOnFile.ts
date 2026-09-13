@@ -204,7 +204,12 @@ export async function markCardSaved(
         appointmentId,
         reason: result.lapsed > 0 ? "series_hold_lapsed" : "series_slots_taken",
       });
+      return "saved";
     }
+    // Every occurrence that became a booking gets its own chargeable row over
+    // the one saved card. Without this the no-show path could resolve a card
+    // for the anchor and for nothing else.
+    await fanOutSeriesCard({ shopId, seriesId: row.seriesId });
     return "saved";
   }
 
@@ -239,6 +244,109 @@ export async function verifyCardSaved(params: {
 }
 
 /**
+ * Give every occurrence of a standing appointment its OWN chargeable card row,
+ * all pointing at the one Stripe customer and payment method the customer
+ * actually saved.
+ *
+ * 🔴 WHY A ROW PER OCCURRENCE AND NOT ONE SHARED ROW. Everything downstream -
+ * chargeCardOnFile, releaseCardOnFile, settleCardOnFile, the "your card was
+ * charged" email, the manage page's fee quote - finds the card by
+ * `appointmentId`, because until now a card belonged to exactly one booking.
+ * Leaving the series card filed only against the anchor would mean occurrences
+ * two through twelve could not resolve a card at all: a no-show on any of them
+ * would find nothing to charge, and the protection the shop switched on would
+ * be silently absent for eleven twelfths of the series.
+ *
+ * A shared row does not work either. The charge path claims the row by moving
+ * it `saved` -> `charging` -> `charged`, so the first no-show in a series would
+ * consume the card and every later one would return "already". Two no-shows in
+ * a twelve-week series are two separate harms.
+ *
+ * So each occurrence gets its own row over the same payment method. `seriesId`
+ * stays on the ANCHOR alone, where its unique index goes on doing its job of
+ * refusing a second SetupIntent for a series that already has one.
+ *
+ * Idempotent: `appointmentId` is unique, and an occurrence that already has a
+ * row is left exactly as it is.
+ */
+export async function fanOutSeriesCard(params: {
+  shopId: string;
+  seriesId: string;
+}): Promise<number> {
+  const anchor = await runWithShop(params.shopId, (tx) =>
+    tx.cardOnFile.findUnique({
+      where: { seriesId: params.seriesId },
+      select: {
+        id: true,
+        appointmentId: true,
+        status: true,
+        stripeCustomerId: true,
+        stripeSetupIntentId: true,
+        stripePaymentMethodId: true,
+        brand: true,
+        last4: true,
+        savedAt: true,
+      },
+    }),
+  );
+  // Nothing to hand out until the card is actually saved.
+  if (!anchor || anchor.status !== "saved" || !anchor.stripePaymentMethodId) return 0;
+
+  const siblings = await runWithShop(params.shopId, (tx) =>
+    tx.appointment.findMany({
+      where: {
+        seriesId: params.seriesId,
+        shopId: params.shopId,
+        status: "BOOKED",
+        id: { not: anchor.appointmentId },
+        cardOnFile: { is: null },
+      },
+      select: { id: true },
+    }),
+  );
+
+  let made = 0;
+  for (const appt of siblings) {
+    try {
+      await runWithShop(params.shopId, (tx) =>
+        tx.cardOnFile.create({
+          data: {
+            id: cryptoRandomId(),
+            shopId: params.shopId,
+            appointmentId: appt.id,
+            stripeCustomerId: anchor.stripeCustomerId,
+            // The SetupIntent is the ANCHOR's; it is recorded here only as
+            // provenance. Its unique index is on the anchor row, so the copies
+            // carry a per-row marker instead of duplicating it.
+            stripeSetupIntentId: `${anchor.stripeSetupIntentId}:${appt.id}`,
+            stripePaymentMethodId: anchor.stripePaymentMethodId,
+            brand: anchor.brand,
+            last4: anchor.last4,
+            status: "saved",
+            savedAt: anchor.savedAt,
+          },
+        }),
+      );
+      made += 1;
+    } catch (err) {
+      // A concurrent settle already made it, or the occurrence vanished. Not
+      // fatal: the anchor still holds the card and the next call fills the gap.
+      logger.warn(
+        { seriesId: params.seriesId, appointmentId: appt.id, ...stripeErrorFacts(err) },
+        "standing appointment: could not copy the card to an occurrence",
+      );
+    }
+  }
+  if (made > 0) {
+    logger.info(
+      { shopId: params.shopId, seriesId: params.seriesId, made },
+      "standing appointment: card made chargeable on every occurrence",
+    );
+  }
+  return made;
+}
+
+/**
  * Let go of the card: detach the payment method (so nothing can ever charge it
  * again) and mark the row released. Called when the appointment completes or
  * is cancelled without a fee, or when its hold lapsed. Best-effort on the
@@ -257,12 +365,36 @@ export async function releaseCardOnFile(params: {
   );
   if (!row || row.status === "released" || row.status === "charged") return;
   if (row.stripePaymentMethodId) {
-    try {
-      await stripeClient().paymentMethods.detach(row.stripePaymentMethodId);
-    } catch (err) {
-      logger.warn(
-        { cardOnFileId: row.id, ...stripeErrorFacts(err) },
-        "card on file: detach failed (already detached?)",
+    // 🔴 A STANDING APPOINTMENT SHARES ONE PAYMENT METHOD ACROSS ITS
+    // OCCURRENCES. Detaching it because THIS visit finished would strip the
+    // protection from every later visit in the series - the customer would
+    // still see a card on file and the shop would have nothing to charge.
+    //
+    // So detach only when no sibling row still holds it. The row itself is
+    // always marked released either way: this appointment is done with the
+    // card regardless of who else is still using it.
+    const stillInUse = await runWithShop(params.shopId, (tx) =>
+      tx.cardOnFile.count({
+        where: {
+          stripePaymentMethodId: row.stripePaymentMethodId,
+          id: { not: row.id },
+          status: { in: ["pending", "saved", "charging"] },
+        },
+      }),
+    );
+    if (stillInUse === 0) {
+      try {
+        await stripeClient().paymentMethods.detach(row.stripePaymentMethodId);
+      } catch (err) {
+        logger.warn(
+          { cardOnFileId: row.id, ...stripeErrorFacts(err) },
+          "card on file: detach failed (already detached?)",
+        );
+      }
+    } else {
+      logger.info(
+        { cardOnFileId: row.id, stillInUse },
+        "card on file: kept attached - later visits in this series still need it",
       );
     }
   }

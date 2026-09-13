@@ -43,6 +43,7 @@ const fake = vi.hoisted(() => {
     customers: [] as unknown[],
     setupIntents: [] as { customer: string; metadata: Record<string, string> }[],
     detached: [] as string[],
+    charges: [] as { amount: number; payment_method: string }[],
   };
   let n = 0;
   // When true the next setupIntents.create throws, standing in for Stripe
@@ -85,6 +86,17 @@ const fake = vi.hoisted(() => {
           const si = setupIntents.get(id);
           if (!si) throw new Error(`no such setup intent ${id}`);
           return si;
+        }),
+      },
+      paymentIntents: {
+        create: vi.fn(async (params: { amount: number; payment_method: string }) => {
+          calls.charges.push(params);
+          return {
+            id: `pi_fake_${++n}`,
+            status: "succeeded",
+            amount_received: params.amount,
+            latest_charge: `ch_fake_${n}`,
+          };
         }),
       },
       paymentMethods: {
@@ -140,10 +152,11 @@ interface SeriesBody {
 }
 
 /**
- * Book a weekly series. Each test uses its OWN HOUR rather than its own start
- * day: a weekly series from day 3 occupies days 3, 10 and 17, so two tests
- * starting a week apart collide on two of their three occurrences and the
- * second one silently books fewer. Distinct hours keep them independent.
+ * Book a weekly series. Each test gets its own (day, hour) cell rather than its
+ * own start WEEK: a weekly series from day 3 occupies days 3, 10 and 17, so two
+ * tests starting a week apart collide on two of their three occurrences and the
+ * second silently books fewer. Availability is 09:00-17:00, so hours run 9..16
+ * on day 3 and then continue on day 4, which cannot overlap day 3's grid.
  */
 async function bookSeries(daysAhead: number, hourUtc: number, count = 3) {
   const res = await request(app)
@@ -357,6 +370,128 @@ describe("a standing appointment at a card-on-file shop", () => {
     // And the card is not kept for appointments that will never happen.
     const after = await cardFor(seriesId);
     expect(after!.status).toBe("released");
+  });
+
+  it("🔴 EVERY occurrence can resolve the card through the real charging path", async () => {
+    // The point of the whole feature. Filing the card against the anchor alone
+    // would leave occurrences two and three with nothing to charge, and a
+    // no-show on either would find no card at all.
+    const body = await bookSeries(3, 16, 3);
+    const card = await cardFor(body.series!.id);
+    fake.succeed(card!.stripeSetupIntentId);
+    await request(app).post(`/api/book/manage/${body.manageToken}/card-saved`).send({});
+
+    const occ = await occurrencesOf(body.series!.id);
+    expect(occ).toHaveLength(3);
+    const rows = await prisma.cardOnFile.findMany({
+      where: { appointmentId: { in: occ.map((a) => a.id) } },
+      select: { appointmentId: true, status: true, stripePaymentMethodId: true, last4: true },
+    });
+    // One chargeable row per occurrence, all over the SAME saved card.
+    expect(rows).toHaveLength(3);
+    for (const r of rows) {
+      expect(r.status).toBe("saved");
+      expect(r.stripePaymentMethodId).toBeTruthy();
+      expect(r.last4).toBe("4242");
+    }
+    expect(new Set(rows.map((r) => r.stripePaymentMethodId)).size).toBe(1);
+
+    // And a NON-anchor occurrence really can be charged through the live path.
+    const { chargeCardOnFile } = await import("./cardOnFile.js");
+    const nonAnchor = occ[2]!;
+    const before = fake.calls.charges.length;
+    const outcome = await chargeCardOnFile({
+      shopId,
+      appointmentId: nonAnchor.id,
+      cents: 1500,
+      reason: "no_show",
+      description: "No-show fee",
+    });
+    expect(outcome.outcome).toBe("charged");
+    expect(fake.calls.charges.length - before).toBe(1);
+    expect(fake.calls.charges.at(-1)!.amount).toBe(1500);
+  });
+
+  it("🔴 finishing ONE visit does not detach the card the later visits need", async () => {
+    const body = await bookSeries(3, 9, 3);
+    const card = await cardFor(body.series!.id);
+    fake.succeed(card!.stripeSetupIntentId);
+    await request(app).post(`/api/book/manage/${body.manageToken}/card-saved`).send({});
+
+    const occ = await occurrencesOf(body.series!.id);
+    const { releaseCardOnFile } = await import("./cardOnFile.js");
+    const detachedBefore = fake.calls.detached.length;
+
+    // The first visit happened and is done with the card.
+    await releaseCardOnFile({ shopId, appointmentId: occ[0]!.id, reason: "completed" });
+    // Its own row is released...
+    const first = await prisma.cardOnFile.findUnique({
+      where: { appointmentId: occ[0]!.id },
+      select: { status: true },
+    });
+    expect(first!.status).toBe("released");
+    // ...but the card itself is still attached, because two visits remain.
+    expect(fake.calls.detached.length).toBe(detachedBefore);
+    const rest = await prisma.cardOnFile.findMany({
+      where: { appointmentId: { in: [occ[1]!.id, occ[2]!.id] } },
+      select: { status: true },
+    });
+    expect(rest.every((r) => r.status === "saved")).toBe(true);
+
+    // Only the LAST one to let go actually detaches it.
+    await releaseCardOnFile({ shopId, appointmentId: occ[1]!.id, reason: "completed" });
+    expect(fake.calls.detached.length).toBe(detachedBefore);
+    await releaseCardOnFile({ shopId, appointmentId: occ[2]!.id, reason: "completed" });
+    expect(fake.calls.detached.length).toBe(detachedBefore + 1);
+  });
+
+  it("🔴 the webhook and the browser racing produce ONE confirmation, not two", async () => {
+    const body = await bookSeries(4, 10, 2);
+    const card = await cardFor(body.series!.id);
+    fake.succeed(card!.stripeSetupIntentId);
+
+    // The webhook path and the browser's verify path, both for the same card.
+    const { markCardSaved } = await import("./cardOnFile.js");
+    const si = fake.setupIntents.get(card!.stripeSetupIntentId)!;
+    const viaWebhook = await markCardSaved(si as never, { eventId: "evt_race_1" });
+    const viaBrowser = await request(app)
+      .post(`/api/book/manage/${body.manageToken}/card-saved`)
+      .send({});
+
+    expect(viaWebhook).toBe("saved");
+    expect(viaBrowser.status).toBe(200);
+
+    // Exactly one of them did the work; the other found nothing to do.
+    const occ = await occurrencesOf(body.series!.id);
+    expect(occ.every((a) => a.status === "BOOKED")).toBe(true);
+
+    // The confirmation stamp is the at-most-once record, and there is one
+    // series confirmation - on the anchor - however many callers raced.
+    const stamped = await prisma.appointment.findMany({
+      where: { seriesId: body.series!.id, confirmationEmailSentAt: { not: null } },
+      select: { id: true },
+    });
+    expect(stamped.length).toBeLessThanOrEqual(1);
+  });
+
+  it("🔴 an intent carrying another shop's id cannot confirm this shop's series", async () => {
+    const body = await bookSeries(4, 11, 2);
+    const card = await cardFor(body.series!.id);
+    fake.succeed(card!.stripeSetupIntentId);
+
+    // Same real card row, but the intent claims to belong to a different shop.
+    // Tenant isolation must refuse it rather than promote someone else's chairs.
+    const si = fake.setupIntents.get(card!.stripeSetupIntentId)!;
+    const foreign = { ...si, metadata: { ...si.metadata, shopId: `shop_${randomToken(8)}` } };
+    const { markCardSaved } = await import("./cardOnFile.js");
+    const outcome = await markCardSaved(foreign as never, { eventId: "evt_foreign" });
+
+    // Nothing was confirmed and nothing was saved under the wrong tenant.
+    expect(outcome).not.toBe("saved");
+    const occ = await occurrencesOf(body.series!.id);
+    expect(occ.every((a) => a.status === "PENDING")).toBe(true);
+    const after = await cardFor(body.series!.id);
+    expect(after!.status).toBe("pending");
   });
 
   it("🔴 Stripe being unreachable costs nobody their standing appointment", async () => {
