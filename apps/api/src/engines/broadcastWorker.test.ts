@@ -410,16 +410,19 @@ describe("🔴 the message left but nothing recorded it", () => {
 describe("🔴 a pass claims only what it asked for", () => {
   it("stops at the batch size", async () => {
     /**
-     * 🔴 THIS WAS NOT TRUE, AND THE COMMENT SAYING IT WAS IS WHY NOBODY
-     * LOOKED. `LIMIT ${batch}` bound the size as a query PARAMETER and the
-     * limit was then not applied at all: one pass claimed EVERY due recipient
-     * across EVERY shop - thousands of rows under one claim token, held for
-     * however long the pass took, with nothing else able to touch them.
+     * 🔴 THIS WAS NOT TRUE ONCE, AND THIS TEST IS WHAT FOUND IT: it asked for
+     * one row and was handed four. Bounded batches are what keep one blast off
+     * one connection, what let a second replica share the work, and what
+     * bounds how much is lost to a single stalled pass.
      *
-     * The damage is not theoretical. Bounded batches are what keep one blast
-     * off one connection, what let a second replica share the work, and what
-     * bounds how much is lost to a single stalled pass. A test that asked for
-     * one row and was handed four is what found it.
+     * 🔴 AND THE DIAGNOSIS THAT FOLLOWED WAS WRONG. It was recorded here that
+     * binding the size as a query PARAMETER meant the limit was never applied,
+     * and the fix inlined the number into the SQL. PostgreSQL does support a
+     * parameterized LIMIT, including inside a subquery with FOR UPDATE SKIP
+     * LOCKED - measured against this very query shape, `LIMIT $n` bound to 1
+     * claims one row of eight and bound to 3 claims three. The binding is
+     * restored; this test goes on proving the behaviour either way, which is
+     * the point of testing the behaviour rather than the mechanism.
      */
     for (let i = 0; i < 4; i++) await makeClient();
     const id = await queued("email");
@@ -440,9 +443,11 @@ describe("🔴 a pass claims only what it asked for", () => {
     expect(outbox).toHaveLength(4);
   });
 
-  it("refuses a nonsensical batch rather than inlining it", async () => {
-    // The size is interpolated into SQL, so "it is always a number" has to be
-    // enforced rather than assumed - even though every caller today is our own.
+  it("refuses a nonsensical batch", async () => {
+    // boundedBatch is a CAP, not the thing that makes the SQL safe - the
+    // parameter binding does that. It still earns its place: it stops a caller
+    // asking for a batch big enough to hold thousands of rows under one claim
+    // token for the length of a pass.
     await makeClient();
     const id = await queued("email");
     expect((await runBroadcastWorker({ batch: 0 })).claimed).toBe(1);
@@ -459,7 +464,13 @@ describe("🔴 two workers on the same rows", () => {
     // Both replicas tick in the same instant, as they do every minute in prod.
     const [a, b] = await Promise.all([runBroadcastWorker(), runBroadcastWorker()]);
 
-    // Between them they did all the work and no more.
+    // 🔴 WHAT THIS DOES AND DOES NOT SHOW. Two simultaneous passes took
+    // disjoint sets of rows and each recipient was contacted once: that is
+    // FOR UPDATE SKIP LOCKED plus the claim token doing their job for THIS
+    // interleaving. It is not a proof that no recipient can ever be contacted
+    // twice across retries, a crash mid-dispatch, or a claim that goes stale
+    // and is taken over. Those are held by the provider idempotency key and
+    // the write-ahead ambiguity marker, and they have their own tests above.
     expect(a.sent + b.sent).toBe(6);
     expect(outbox).toHaveLength(6);
     const keys = outbox.map((m) => m.idempotencyKey);
