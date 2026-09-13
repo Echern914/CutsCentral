@@ -49,3 +49,12 @@ apps/api/scripts/backup-*.json
 
 # private founder/legal documents - never commit
 FOUNDER-AGREEMENT-TERMSHEET.md
+
+# iCloud sync-conflict copies: "broadcast 2.ts", "CLAUDE 2.md", ".gitattributes 2".
+# This clone lives inside iCloud Drive, which duplicates files it thinks are in
+# conflict. They are byte-copies (or STALE copies) of tracked sources, so they
+# are never work - and they are actively harmful: a stray "launchScene 2.ts"
+# beside the real one has already broken Metro and tripped TS1149 on
+# case-insensitive macOS. 907 of them accumulated by 2026-09-13.
+* [0-9]
+* [0-9].*
