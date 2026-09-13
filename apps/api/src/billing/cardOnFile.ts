@@ -244,6 +244,41 @@ export async function verifyCardSaved(params: {
 }
 
 /**
+ * The payment method that backs one appointment's card.
+ *
+ * A single booking's row owns its method outright. A standing appointment's
+ * occurrence rows deliberately carry none (see fanOutSeriesCard for why), so
+ * the method is read from the series ANCHOR - the one row that represents the
+ * card the customer actually saved.
+ *
+ * Returns null when there is genuinely nothing to charge, which is the same
+ * answer the caller already handles as `no_card`.
+ */
+async function paymentMethodFor(
+  shopId: string,
+  appointmentId: string,
+  ownMethodId: string | null,
+): Promise<string | null> {
+  if (ownMethodId) return ownMethodId;
+  const appt = await runWithShop(shopId, (tx) =>
+    tx.appointment.findFirst({
+      where: { id: appointmentId, shopId },
+      select: { seriesId: true },
+    }),
+  );
+  if (!appt?.seriesId) return null;
+  const anchorRow = await runWithShop(shopId, (tx) =>
+    tx.cardOnFile.findUnique({
+      where: { seriesId: appt.seriesId as string },
+      select: { status: true, stripePaymentMethodId: true },
+    }),
+  );
+  // The anchor having been released or charged does not bar a sibling: each
+  // occurrence is its own chance to no-show. Only an absent method does.
+  return anchorRow?.stripePaymentMethodId ?? null;
+}
+
+/**
  * Give every occurrence of a standing appointment its OWN chargeable card row,
  * all pointing at the one Stripe customer and payment method the customer
  * actually saved.
@@ -319,7 +354,27 @@ export async function fanOutSeriesCard(params: {
             // provenance. Its unique index is on the anchor row, so the copies
             // carry a per-row marker instead of duplicating it.
             stripeSetupIntentId: `${anchor.stripeSetupIntentId}:${appt.id}`,
-            stripePaymentMethodId: anchor.stripePaymentMethodId,
+            // 🔴 DELIBERATELY NULL, AND THIS IS THE ROLLBACK STORY.
+            //
+            // The PREVIOUS release path detaches any payment method it finds on
+            // a row, with no notion of siblings. Had these copies carried the
+            // shared method, rolling the API back would mean the first
+            // occurrence to complete detaches the card for the entire series -
+            // and during a rolling deploy an old instance could do it while a
+            // new one is still promising protection.
+            //
+            // With this null the copies are INERT to the old code: it finds no
+            // method, so it neither detaches nor charges, and a sibling row
+            // simply looks like a card that was never completed. Only the
+            // anchor holds the method, where the old code treats it exactly as
+            // it always treated a single booking's card. Rolling back
+            // therefore introduces no new class of behaviour.
+            //
+            // The new code resolves the method through the anchor at charge
+            // time - see paymentMethodFor below.
+            stripePaymentMethodId: null,
+            // Display only: the manage page and the charged-email name the card
+            // the customer actually saved.
             brand: anchor.brand,
             last4: anchor.last4,
             status: "saved",
@@ -360,51 +415,89 @@ export async function releaseCardOnFile(params: {
   const row = await runWithShop(params.shopId, (tx) =>
     tx.cardOnFile.findUnique({
       where: { appointmentId: params.appointmentId },
-      select: { id: true, status: true, stripePaymentMethodId: true },
+      select: { id: true, status: true, stripePaymentMethodId: true, seriesId: true },
     }),
   );
   if (!row || row.status === "released" || row.status === "charged") return;
-  if (row.stripePaymentMethodId) {
-    // 🔴 A STANDING APPOINTMENT SHARES ONE PAYMENT METHOD ACROSS ITS
-    // OCCURRENCES. Detaching it because THIS visit finished would strip the
-    // protection from every later visit in the series - the customer would
-    // still see a card on file and the shop would have nothing to charge.
-    //
-    // So detach only when no sibling row still holds it. The row itself is
-    // always marked released either way: this appointment is done with the
-    // card regardless of who else is still using it.
-    const stillInUse = await runWithShop(params.shopId, (tx) =>
-      tx.cardOnFile.count({
-        where: {
-          stripePaymentMethodId: row.stripePaymentMethodId,
-          id: { not: row.id },
-          status: { in: ["pending", "saved", "charging"] },
-        },
-      }),
-    );
-    if (stillInUse === 0) {
-      try {
-        await stripeClient().paymentMethods.detach(row.stripePaymentMethodId);
-      } catch (err) {
-        logger.warn(
-          { cardOnFileId: row.id, ...stripeErrorFacts(err) },
-          "card on file: detach failed (already detached?)",
-        );
-      }
-    } else {
-      logger.info(
-        { cardOnFileId: row.id, stillInUse },
-        "card on file: kept attached - later visits in this series still need it",
-      );
-    }
-  }
+
+  // Which standing appointment, if any, this card belongs to. The ANCHOR row
+  // says so directly; an occurrence row is linked through its appointment.
+  const seriesId =
+    row.seriesId ??
+    (
+      await runWithShop(params.shopId, (tx) =>
+        tx.appointment.findFirst({
+          where: { id: params.appointmentId, shopId: params.shopId },
+          select: { seriesId: true },
+        }),
+      )
+    )?.seriesId ??
+    null;
+
+  // Mark this appointment done with the card FIRST, so the "is anyone still
+  // using it?" question below counts only rows that genuinely still need it.
+  // Ordering matters: doing it the other way round leaves the last release
+  // seeing itself as a live user and never detaching.
   await runWithShop(params.shopId, (tx) =>
     tx.cardOnFile.update({
       where: { id: row.id },
       data: { status: "released", releasedAt: new Date() },
     }),
   );
+
+  if (seriesId) {
+    // 🔴 ONE PAYMENT METHOD, MANY OCCURRENCES. Detaching because THIS visit
+    // finished would strip the protection from every later visit in the
+    // series: the customer would still see a card on file and the shop would
+    // have nothing to charge. So the method is let go only when the LAST
+    // occurrence is done with it - whichever occurrence that turns out to be.
+    const stillInUse = await runWithShop(params.shopId, (tx) =>
+      tx.cardOnFile.count({
+        where: {
+          status: { in: ["pending", "saved", "charging"] },
+          appointment: { seriesId },
+        },
+      }),
+    );
+    if (stillInUse > 0) {
+      logger.info(
+        { cardOnFileId: row.id, seriesId, stillInUse, reason: params.reason },
+        "card on file: kept attached - later visits in this series still need it",
+      );
+      return;
+    }
+    // Last one out. The method lives on the ANCHOR row, not necessarily on this
+    // one, so ask the anchor for it.
+    const anchorRow = await runWithShop(params.shopId, (tx) =>
+      tx.cardOnFile.findUnique({
+        where: { seriesId },
+        select: { id: true, stripePaymentMethodId: true },
+      }),
+    );
+    await detachMethod(anchorRow?.stripePaymentMethodId ?? null, anchorRow?.id ?? row.id);
+    logger.info(
+      { cardOnFileId: row.id, seriesId, reason: params.reason },
+      "card on file released - last visit of the series, card let go",
+    );
+    return;
+  }
+
+  // An ordinary single booking: it owns its method outright.
+  await detachMethod(row.stripePaymentMethodId, row.id);
   logger.info({ cardOnFileId: row.id, reason: params.reason }, "card on file released");
+}
+
+/** Best effort: the row is always marked, whatever Stripe says. */
+async function detachMethod(methodId: string | null, cardOnFileId: string): Promise<void> {
+  if (!methodId) return;
+  try {
+    await stripeClient().paymentMethods.detach(methodId);
+  } catch (err) {
+    logger.warn(
+      { cardOnFileId, ...stripeErrorFacts(err) },
+      "card on file: detach failed (already detached?)",
+    );
+  }
 }
 
 function cryptoRandomId(): string {
@@ -454,7 +547,8 @@ export async function chargeCardOnFile(params: {
         where: { appointmentId: params.appointmentId },
         select: { id: true, status: true, stripeCustomerId: true, stripePaymentMethodId: true },
       });
-      if (!row || !row.stripePaymentMethodId) return null;
+      // A series occurrence has no method of its own; it is resolved below.
+      if (!row) return null;
       if (row.status !== "saved") return { row, won: false } as const;
       const cas = await tx.cardOnFile.updateMany({
         where: { id: row.id, status: "saved" },
@@ -465,8 +559,13 @@ export async function chargeCardOnFile(params: {
     if (!claimed) return { outcome: "no_card" };
     if (!claimed.won) return { outcome: "already" };
     const { row } = claimed;
-    // Narrowed inside the tx above; TypeScript loses it across the return.
-    const paymentMethodId = row.stripePaymentMethodId;
+    // Its own method, or the series anchor's. Resolved AFTER the claim so the
+    // compare-and-set still serialises two settlements racing on one row.
+    const paymentMethodId = await paymentMethodFor(
+      params.shopId,
+      params.appointmentId,
+      row.stripePaymentMethodId,
+    );
     if (!paymentMethodId) {
       await setStatus(params.shopId, row.id, "saved");
       return { outcome: "no_card" };

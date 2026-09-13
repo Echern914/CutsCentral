@@ -387,14 +387,18 @@ describe("a standing appointment at a card-on-file shop", () => {
       where: { appointmentId: { in: occ.map((a) => a.id) } },
       select: { appointmentId: true, status: true, stripePaymentMethodId: true, last4: true },
     });
-    // One chargeable row per occurrence, all over the SAME saved card.
+    // One chargeable row per occurrence, every one showing the saved card.
     expect(rows).toHaveLength(3);
     for (const r of rows) {
       expect(r.status).toBe("saved");
-      expect(r.stripePaymentMethodId).toBeTruthy();
       expect(r.last4).toBe("4242");
     }
-    expect(new Set(rows.map((r) => r.stripePaymentMethodId)).size).toBe(1);
+    // 🔴 ONLY THE ANCHOR HOLDS THE METHOD, and that is the rollback property:
+    // the PREVIOUS release path detaches any method it finds with no notion of
+    // siblings, so a copy carrying one would let an old instance strip the card
+    // from the whole series. With none, the copies are inert to that code.
+    const withMethod = rows.filter((r) => r.stripePaymentMethodId);
+    expect(withMethod).toHaveLength(1);
 
     // And a NON-anchor occurrence really can be charged through the live path.
     const { chargeCardOnFile } = await import("./cardOnFile.js");
@@ -488,6 +492,123 @@ describe("a standing appointment at a card-on-file shop", () => {
 
     // Nothing was confirmed and nothing was saved under the wrong tenant.
     expect(outcome).not.toBe("saved");
+    const occ = await occurrencesOf(body.series!.id);
+    expect(occ.every((a) => a.status === "PENDING")).toBe(true);
+    const after = await cardFor(body.series!.id);
+    expect(after!.status).toBe("pending");
+  });
+
+  it("🔴 a date lost while the card was typed is NOT counted as booked", async () => {
+    const body = await bookSeries(5, 10, 3);
+    const occ = await occurrencesOf(body.series!.id);
+    expect(occ).toHaveLength(3);
+
+    // Somebody else takes the middle chair while the customer is on the card
+    // screen. A real competing booking, not a doctored row.
+    //
+    // Offset by ten minutes on purpose: it OVERLAPS the held slot, which is
+    // what the promotion guard checks, while avoiding the partial unique on
+    // (staffId, startsAt) that the held row already occupies. Booking exactly
+    // on top of a live hold is refused by the database, so a competitor in
+    // real life arrives beside it, not on it.
+    const stolen = occ[1]!;
+    const rivalStart = new Date(stolen.startsAt.getTime() + 10 * 60_000);
+    await prisma.appointment.create({
+      data: {
+        shopId,
+        staffId,
+        serviceId,
+        firstName: "Walk",
+        lastName: "In",
+        status: "BOOKED",
+        startsAt: rivalStart,
+        endsAt: new Date(rivalStart.getTime() + 30 * 60_000),
+        manageToken: randomToken(),
+      },
+    });
+
+    const card = await cardFor(body.series!.id);
+    fake.succeed(card!.stripeSetupIntentId);
+    const saved = await request(app)
+      .post(`/api/book/manage/${body.manageToken}/card-saved`)
+      .send({});
+    expect(saved.status).toBe(200);
+
+    // Two landed, one did not - and the count the screen reads says exactly
+    // that rather than rounding the series up to three.
+    expect(saved.body.series.booked).toBe(2);
+    const after = await occurrencesOf(body.series!.id);
+    expect(after.filter((a) => a.status === "BOOKED")).toHaveLength(2);
+    const lost = after.find((a) => a.id === stolen.id);
+    expect(lost!.status).not.toBe("BOOKED");
+  });
+
+  it("🔴 when NOTHING survives, the screen is told zero and the card is let go", async () => {
+    const body = await bookSeries(5, 11, 3);
+    const seriesId = body.series!.id;
+    await prisma.appointment.updateMany({
+      where: { seriesId },
+      data: { holdExpiresAt: new Date(Date.now() - 60_000) },
+    });
+    const card = await cardFor(seriesId);
+    fake.succeed(card!.stripeSetupIntentId);
+
+    const saved = await request(app)
+      .post(`/api/book/manage/${body.manageToken}/card-saved`)
+      .send({});
+    expect(saved.status).toBe(200);
+    // Zero, stated plainly - never "you're booked" over an empty series.
+    expect(saved.body.series.booked).toBe(0);
+    expect(saved.body.status).not.toBe("BOOKED");
+    const after = await cardFor(seriesId);
+    expect(after!.status).toBe("released");
+  });
+
+  it("🔴 another customer's intent cannot confirm this customer's series", async () => {
+    // Two real standing appointments at the same shop, two different people.
+    const mine = await bookSeries(5, 12, 2);
+    const theirs = await bookSeries(5, 13, 2);
+    const theirCard = await cardFor(theirs.series!.id);
+    fake.succeed(theirCard!.stripeSetupIntentId);
+
+    // THEIR card clears. Mine must be untouched by it.
+    const { markCardSaved } = await import("./cardOnFile.js");
+    const si = fake.setupIntents.get(theirCard!.stripeSetupIntentId)!;
+    expect(await markCardSaved(si as never, { eventId: "evt_theirs" })).toBe("saved");
+
+    const mineOcc = await occurrencesOf(mine.series!.id);
+    expect(mineOcc.every((a) => a.status === "PENDING")).toBe(true);
+    const mineCard = await cardFor(mine.series!.id);
+    expect(mineCard!.status).toBe("pending");
+    // And theirs really did land, so the test is not passing vacuously.
+    const theirOcc = await occurrencesOf(theirs.series!.id);
+    expect(theirOcc.every((a) => a.status === "BOOKED")).toBe(true);
+  });
+
+  it("🔴 an intent minted outside this Stripe context confirms nothing", async () => {
+    const body = await bookSeries(5, 14, 2);
+    const card = await cardFor(body.series!.id);
+
+    // An intent that succeeded somewhere we have no record of: the card id it
+    // names belongs to no row of ours. Nothing may be promoted on its word.
+    const foreign = {
+      id: `seti_other_${randomToken(6)}`,
+      object: "setup_intent",
+      status: "succeeded",
+      client_secret: "cs_other",
+      customer: `cus_other_${randomToken(6)}`,
+      payment_method: `pm_other_${randomToken(6)}`,
+      metadata: {
+        shopId,
+        appointmentId: (await occurrencesOf(body.series!.id))[0]!.id,
+        cardOnFileId: `cof_${randomToken(10)}`,
+      },
+    };
+    const { markCardSaved } = await import("./cardOnFile.js");
+    const outcome = await markCardSaved(foreign as never, { eventId: "evt_outside" });
+    // It names a card we do not have, so it cannot mark one saved.
+    expect(outcome).not.toBe("saved");
+
     const occ = await occurrencesOf(body.series!.id);
     expect(occ.every((a) => a.status === "PENDING")).toBe(true);
     const after = await cardFor(body.series!.id);

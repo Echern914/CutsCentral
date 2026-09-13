@@ -1912,10 +1912,18 @@ export function BookingClient({
             </div>
           ) : payConfirm === "gone" ? (
             <div role="alert" className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-200">
-              <p className="font-medium">That time was released before the payment landed.</p>
+              <p className="font-medium">
+                {seriesResult
+                  ? "None of those dates could be held long enough to finish."
+                  : "That time was released before the payment landed."}
+              </p>
               <p className="mt-1 text-amber-200/80">
-                You have not been charged — anything taken is refunded in full.
-                Please pick another time, or call {data.shop.name}.
+                You have not been charged — anything taken is refunded in full, and
+                the card you entered has been let go.
+                {seriesResult
+                  ? " No visits were booked. Please start again, or call "
+                  : " Please pick another time, or call "}
+                {data.shop.name}.
               </p>
             </div>
           ) : (
@@ -2001,6 +2009,20 @@ export function BookingClient({
                   Already taken, so not booked:{" "}
                   {seriesResult.skipped.map((d) => dateFmt.format(new Date(d))).join(", ")}.
                   Book those separately if you still want them.
+                </span>
+              )}
+              {/* Dates lost BETWEEN booking and the card clearing. The count
+                  above comes from the rows after the series settled, so it is
+                  already right; this names the shortfall the list above cannot
+                  account for, rather than letting the two silently disagree. */}
+              {seriesResult.booked + seriesResult.skipped.length < seriesResult.total && (
+                <span className="block text-xs text-muted">
+                  {seriesResult.total - seriesResult.booked - seriesResult.skipped.length} more
+                  {" "}
+                  {seriesResult.total - seriesResult.booked - seriesResult.skipped.length === 1
+                    ? "date was"
+                    : "dates were"}{" "}
+                  taken while you were paying. Call {data.shop.name} to find replacements.
                 </span>
               )}
             </p>

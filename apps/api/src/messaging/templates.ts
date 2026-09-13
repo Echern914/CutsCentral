@@ -486,6 +486,11 @@ function appointmentEmailHtml(params: {
    * link 404s is worse than no button.
    */
   walletPassUrl?: string | null;
+  /**
+   * A pre-rendered block placed under the details card - today the standing
+   * appointment summary. Already escaped by its caller.
+   */
+  extraBlock?: string | null;
   /** The one-line "get the app" close. Confirmation emails only. */
   appStoreUrl?: string | null;
   /**
@@ -553,6 +558,7 @@ function appointmentEmailHtml(params: {
       <div style="color:#D4AF37;font-size:15px;font-weight:600;margin-top:8px">${escapeHtml(params.when)}</div>
       ${whereBlock}
     </div>
+    ${params.extraBlock ?? ""}
     ${keepRow}
     <div style="padding:4px 28px 28px">
       ${footer}
@@ -585,6 +591,24 @@ export function buildAppointmentConfirmationEmail(params: {
   /** Set by the caller iff appointmentWalletEnabled() - the template cannot know. */
   walletPassAvailable?: boolean;
   address?: ShopAddressInput | null;
+  /**
+   * A STANDING APPOINTMENT this booking belongs to.
+   *
+   * 🔴 THE EMAIL MUST NOT ROUND UP. A customer who asked for twelve and got
+   * one has to read "1 of 12", not "you're booked" over a single date with the
+   * other eleven unmentioned - which is exactly what this email did before,
+   * despite a comment in the booking route claiming "the email says it
+   * repeats". It said nothing at all.
+   *
+   * `confirmed` is counted from the rows AFTER the series settles, never from
+   * what was requested or held.
+   */
+  series?: {
+    requested: number;
+    confirmed: number;
+    /** Already formatted in the shop's zone, soonest first. */
+    dates: string[];
+  } | null;
 }): EmailCopy {
   const when = formatApptTime(params.startsAt, params.timezone);
   const manageUrl = `${env.APP_BASE_URL}/book/manage/${params.manageToken}`;
@@ -596,10 +620,45 @@ export function buildAppointmentConfirmationEmail(params: {
   const who = params.firstName ?? "there";
   const withWhom = params.staffName ? ` with ${params.staffName}` : "";
   const address = params.address ? formatShopAddress(params.address) : null;
+
+  // The standing-appointment summary, worded from what actually landed.
+  const ser = params.series ?? null;
+  const shortfall = ser ? ser.requested - ser.confirmed : 0;
+  const seriesLine = ser
+    ? shortfall > 0
+      ? `This repeats: ${ser.confirmed} of the ${ser.requested} visits you asked for are booked. ` +
+        `We could not book the other ${shortfall} - those times were already taken. ` +
+        `Call ${params.shopName} if you'd like to find replacements.`
+      : `This repeats: all ${ser.confirmed} visits are booked.`
+    : null;
+  const seriesDates = ser && ser.dates.length > 0 ? ser.dates : [];
+  const seriesText = seriesLine
+    ? `\n${seriesLine}\n` +
+      (seriesDates.length > 0 ? seriesDates.map((d) => `  - ${d}`).join("\n") + "\n" : "")
+    : "";
+  const seriesHtml = seriesLine
+    ? `<div style="margin:0 28px 16px;padding:14px 16px;background:#0f0f0f;border:1px solid ${
+        shortfall > 0 ? "#a16207" : "#2a2a2a"
+      };border-radius:12px">
+      <div style="color:${
+        shortfall > 0 ? "#fbbf24" : "#a1a1aa"
+      };font-size:14px;line-height:1.5">${escapeHtml(seriesLine)}</div>
+      ${
+        seriesDates.length > 0
+          ? `<div style="color:#fafafa;font-size:14px;margin-top:10px">${seriesDates
+              .map((d) => `<div style="padding:2px 0">${escapeHtml(d)}</div>`)
+              .join("")}</div>`
+          : ""
+      }
+    </div>`
+    : "";
+
   return {
     subject: `Booking confirmed: ${params.serviceName} at ${params.shopName}`,
     text:
-      `Hi ${who}, your ${params.serviceName} at ${params.shopName}${withWhom} is booked for ${when}.\n\n` +
+      `Hi ${who}, your ${params.serviceName} at ${params.shopName}${withWhom} is booked for ${when}.\n` +
+      seriesText +
+      `\n` +
       (address ? `Where: ${address}\n\n` : "") +
       `Add to calendar: ${calendarUrl}\n` +
       (walletPassUrl ? `Add to Apple Wallet: ${walletPassUrl}\n` : "") +
@@ -608,6 +667,7 @@ export function buildAppointmentConfirmationEmail(params: {
     html: appointmentEmailHtml({
       heading: "You're booked",
       intro: `Hi ${who}, your appointment is confirmed. Here are the details:`,
+      extraBlock: seriesHtml || null,
       shopName: params.shopName,
       serviceName: params.serviceName,
       when,
