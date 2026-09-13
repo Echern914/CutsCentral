@@ -712,7 +712,8 @@ export function buildAppointmentReminderEmail(params: {
     text:
       `Reminder, ${who}: your ${params.serviceName} at ${params.shopName} is ${when}. See you then!\n\n` +
       (address ? `Where: ${address}\n\n` : "") +
-      `Reschedule or cancel: ${manageUrl}`,
+      `Reschedule or cancel: ${manageUrl}\n\n` +
+      `Keep your appointments and rewards in one place - get the ChairBack app: ${MOBILE_APP.appStoreUrl}`,
     html: appointmentEmailHtml({
       heading: "See you soon",
       intro: `Hi ${who}, this is a reminder about your upcoming appointment:`,
@@ -721,6 +722,7 @@ export function buildAppointmentReminderEmail(params: {
       when,
       staffName: params.staffName,
       manageUrl,
+      appStoreUrl: MOBILE_APP.appStoreUrl,
       address: params.address,
     }),
   };
@@ -731,6 +733,15 @@ export function buildAppointmentReminderEmail(params: {
  * buildSyncedVisitReminderBody. No manage button (no ChairBack manage page
  * exists for it) and no staff line (Visit carries no staff), so the card
  * degrades to shop + service + when, and the footer asks for a reply.
+ *
+ * 🔴 THE MISSING "RESCHEDULE" BUTTON IS NOT AN OVERSIGHT, and it must not be
+ * papered over with the shop's booking URL. That link books a NEW appointment;
+ * it cannot move this one, which lives in the shop's own Acuity/Square
+ * calendar. A customer who taps "Reschedule" and lands on a booking page will
+ * book a second slot believing the first is gone - so the shop loses a chair
+ * AND still has the original on the books. Until the sync captures the
+ * provider's own reschedule link (Acuity returns one per appointment; nothing
+ * stores it today), "contact the shop" is the only honest instruction.
  *
  * Email matters more here than on the native side: a shop that has not cleared
  * 10DLC is SMS-dark, and for those shops this is the only reminder that can
@@ -749,13 +760,16 @@ export function buildSyncedVisitReminderEmail(params: {
   const what = params.serviceName ? `your ${params.serviceName}` : "your appointment";
   return {
     subject: `Reminder: ${service} at ${params.shopName}`,
-    text: `Reminder, ${who}: ${what} at ${params.shopName} is ${when}. See you then!`,
+    text:
+      `Reminder, ${who}: ${what} at ${params.shopName} is ${when}. See you then!\n\n` +
+      `Keep your appointments and rewards in one place - get the ChairBack app: ${MOBILE_APP.appStoreUrl}`,
     html: appointmentEmailHtml({
       heading: "See you soon",
       intro: `Hi ${who}, this is a reminder about your upcoming appointment:`,
       shopName: params.shopName,
       serviceName: service,
       when,
+      appStoreUrl: MOBILE_APP.appStoreUrl,
     }),
   };
 }

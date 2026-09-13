@@ -80,6 +80,53 @@ describe("appointment emails point at the button, never at a reply", () => {
       expect(email.html.toLowerCase()).not.toContain("reply to this email");
       expect(email.html).toContain("Drick&#39;s Barbershop");
     });
+
+    it("🔴 never dresses the booking page up as a reschedule link", () => {
+      // The shop's booking URL books a NEW appointment; it cannot move this
+      // one, which lives in the shop's own Acuity/Square calendar. A customer
+      // who taps "Reschedule" and lands there books a second slot believing
+      // the first is gone - the shop loses a chair AND still has the original.
+      expect(email.html).not.toContain("Reschedule");
+      expect(email.text).not.toContain("Reschedule");
+    });
+  });
+});
+
+/**
+ * 🔴 EVERY REMINDER CARRIES THE APP LINK, not just the confirmation.
+ *
+ * A reminder is the most-opened mail this product sends - it arrives when
+ * somebody is already thinking about the appointment - and it was the one
+ * customer email with no way into the app. Both kinds carry it now: the native
+ * one alongside its manage button, and the synced one where it is the ONLY
+ * thing a customer can act on.
+ */
+describe("the app link on reminders", () => {
+  const nativeReminder = buildAppointmentReminderEmail(base);
+  const syncedReminder = buildSyncedVisitReminderEmail({
+    firstName: "Casey",
+    shopName: "Drick's Barbershop",
+    serviceName: "Skin Fade",
+    startsAt: base.startsAt,
+    timezone: base.timezone,
+  });
+
+  for (const [name, email] of [
+    ["native", nativeReminder],
+    ["synced", syncedReminder],
+  ] as const) {
+    it(`${name} reminder links to the App Store, in both halves`, () => {
+      expect(email.html).toContain("https://apps.apple.com/app/id6783995804");
+      expect(email.html).toContain("get the ChairBack app");
+      expect(email.text).toContain("https://apps.apple.com/app/id6783995804");
+    });
+  }
+
+  it("does not cost the native reminder its manage button", () => {
+    // The app link is a quiet footer row; the gold button stays the one loud
+    // action, because moving the appointment is still the point of the mail.
+    expect(nativeReminder.html).toContain("Reschedule or cancel");
+    expect(nativeReminder.html).toContain("/book/manage/");
   });
 });
 
