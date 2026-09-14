@@ -1,7 +1,7 @@
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
-import { randomToken } from "@chairback/config";
+import { randomToken, __resetEnvCacheForTests } from "@chairback/config";
 
 /**
  * A customer books a standing appointment from the public page.
@@ -54,6 +54,10 @@ function customer() {
 }
 
 beforeAll(async () => {
+  // The card-on-file parity case below asserts the ACTIVATED behaviour; the
+  // gate's own refusal has its own test at the end of this file.
+  process.env.SERIES_CARD_ON_FILE_ENABLED = "true";
+  __resetEnvCacheForTests();
   const email = `recur-${randomToken(6)}@test.local`.toLowerCase();
   const signup = await request(app)
     .post("/api/auth/signup")
@@ -102,6 +106,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  delete process.env.SERIES_CARD_ON_FILE_ENABLED;
+  __resetEnvCacheForTests();
   if (shopId) await prisma.shop.deleteMany({ where: { id: shopId } });
 });
 
@@ -354,5 +360,55 @@ describe("🔴 the page offers recurring exactly when the write accepts it", () 
     });
     expect(res.status).toBe(201);
     expect(res.body.series).toBeUndefined();
+  });
+});
+
+describe("🔴 the activation gate on shared-card standing appointments", () => {
+  /**
+   * 🔴 WHY A GATE AND NOT DEPLOYMENT ORDER. A card-on-file series keeps ONE
+   * Stripe payment method for many appointments. The API that shipped before
+   * this work detaches any method it finds on a card row with no notion of
+   * siblings, so a SINGLE instance still running that code strips the card
+   * from an entire series the moment its first visit completes. A rolling
+   * deploy serves both versions at once, so ordering cannot prevent it.
+   *
+   * The gate can: while it is off, no such series can be CREATED at all. The
+   * code ships everywhere dark, is verified everywhere, and is then switched
+   * on - which is the only sequence in which no shared-card series ever exists
+   * alongside an instance that cannot handle one.
+   */
+  it("refuses a card-on-file series while the gate is off, and offers it when on", async () => {
+    stripeState.connect = true;
+    await setShop({
+      paymentsMode: "card_on_file",
+      requireBookingApproval: false,
+      connectChargesEnabled: true,
+      stripeConnectAccountId: `acct_${randomToken(8)}`,
+    });
+    try {
+      process.env.SERIES_CARD_ON_FILE_ENABLED = "false";
+      __resetEnvCacheForTests();
+      const off = await page();
+      expect(off.body.shop.recurringAvailable).toBe(false);
+      const refused = await book({
+        ...customer(),
+        staffId,
+        serviceId,
+        startsAt: futureAtHour(40, 15).toISOString(),
+        recurrence: { interval: 2, count: 2 },
+      });
+      // The write agrees with the page, which is the invariant this file holds.
+      expect(refused.status).toBe(409);
+      expect(refused.body.error).toBe("recurrence_unavailable");
+
+      process.env.SERIES_CARD_ON_FILE_ENABLED = "true";
+      __resetEnvCacheForTests();
+      const on = await page();
+      expect(on.body.shop.recurringAvailable).toBe(true);
+    } finally {
+      process.env.SERIES_CARD_ON_FILE_ENABLED = "true";
+      __resetEnvCacheForTests();
+      await payInPerson();
+    }
   });
 });

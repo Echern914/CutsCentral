@@ -1500,7 +1500,15 @@ function recurringOfferedTo(shop: {
   //             holds the chairs and confirms them when the card is saved.
   // "payment" - twelve deposits, or twelve full charges, is a money question
   //             for a person to answer. Deliberately still not offered.
-  return collects === null || collects === "card";
+  if (collects === null) return true;
+  // 🔴 THE ACTIVATION GATE. A shared-card series may not be CREATED until every
+  // instance that can charge or release a card runs code that understands one.
+  // An older instance detaches a card row's method with no notion of siblings,
+  // so one of them completing a first visit strips the card from the whole
+  // series - and during a rolling deploy both versions serve at once, which is
+  // why deployment ORDER cannot close this and a gate can. Off by default;
+  // switched on only after every instance is verified. See env.ts.
+  return collects === "card" && apiEnv().SERIES_CARD_ON_FILE_ENABLED;
 }
 
 const createSchema = z

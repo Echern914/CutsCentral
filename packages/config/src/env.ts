@@ -345,6 +345,28 @@ const apiSchema = z.object({
   // do not exist, so the tables and routes merge and sit dark until the app
   // build that uses them is in testers' hands.
   CUSTOMER_ACCOUNTS_ENABLED: boolish.default("false"),
+  // 🔴 SHARED-CARD STANDING APPOINTMENTS - an ACTIVATION gate, not a feature
+  // preference, and the reason it exists is rollback rather than product.
+  //
+  // A card-on-file series keeps ONE Stripe payment method for many
+  // appointments. The API that shipped before this flag detaches any method it
+  // finds on a card row, with no notion of siblings, so ONE instance running
+  // that older code is enough to strip the card from an entire series when its
+  // first visit completes. Deployment ORDER cannot prevent that: during a
+  // rolling deploy both versions serve at once.
+  //
+  // So the gate is the thing that makes it safe, not the ordering. While this
+  // is false no shared-card series can be CREATED at all - a card-on-file shop
+  // is simply not offered a standing appointment, which is the same refusal
+  // that shipped as the interim fix. The code can therefore be deployed
+  // everywhere, verified everywhere, and only then switched on.
+  //
+  // 🔴 TURNING IT OFF AGAIN DOES NOT UNDO ANYTHING. It stops new shared-card
+  // series; the ones already created still need code that resolves a sibling's
+  // method through the anchor and refuses to detach while siblings are live.
+  // See docs/runbook/series-card-on-file-rollout.md for what may and may not
+  // be rolled back once any such series exists.
+  SERIES_CARD_ON_FILE_ENABLED: boolish.default("false"),
   // AFFILIATE PROGRAM - four layered kill switches, all dark by default.
   // boolish accepts exactly "true"/"false"/"1"/"0"; ANY other value (TRUE,
   // yes, an empty string) kills boot - a mistyped flag fails CLOSED, never

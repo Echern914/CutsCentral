@@ -43,7 +43,12 @@ const fake = vi.hoisted(() => {
     customers: [] as unknown[],
     setupIntents: [] as { customer: string; metadata: Record<string, string> }[],
     detached: [] as string[],
-    charges: [] as { amount: number; payment_method: string }[],
+    charges: [] as {
+      amount: number;
+      payment_method: string;
+      on_behalf_of?: string;
+      transfer_data?: { destination: string };
+    }[],
   };
   let n = 0;
   // When true the next setupIntents.create throws, standing in for Stripe
@@ -89,7 +94,21 @@ const fake = vi.hoisted(() => {
         }),
       },
       paymentIntents: {
-        create: vi.fn(async (params: { amount: number; payment_method: string }) => {
+        create: vi.fn(async (params: {
+          amount: number;
+          payment_method: string;
+          on_behalf_of?: string;
+          transfer_data?: { destination: string };
+        }) => {
+          // Stripe refuses a detached method. Modelling that is the whole point
+          // of the rollback test below: without it, "detached" would be a
+          // bookkeeping detail rather than a loss of coverage.
+          if (calls.detached.includes(params.payment_method)) {
+            throw Object.assign(new Error("payment method has been detached"), {
+              type: "StripeInvalidRequestError",
+              code: "payment_method_unattached",
+            });
+          }
           calls.charges.push(params);
           return {
             id: `pi_fake_${++n}`,
@@ -192,6 +211,10 @@ const cardFor = (seriesId: string) =>
 beforeAll(async () => {
   process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
   process.env.STRIPE_CONNECT_WEBHOOK_SECRET = "whsec_test_dummy";
+  // This suite exercises the ACTIVATED feature. The gate's own behaviour - that
+  // a shared-card series cannot be created while it is off - is pinned in
+  // routes/bookingRecurring.public.test.ts.
+  process.env.SERIES_CARD_ON_FILE_ENABLED = "true";
   __resetEnvCacheForTests();
   const { createApp } = await import("../app.js");
   app = createApp();
@@ -253,6 +276,7 @@ beforeAll(async () => {
 afterAll(async () => {
   delete process.env.STRIPE_SECRET_KEY;
   delete process.env.STRIPE_CONNECT_WEBHOOK_SECRET;
+  delete process.env.SERIES_CARD_ON_FILE_ENABLED;
   __resetEnvCacheForTests();
   const user = await prisma.user.findUnique({ where: { email } });
   if (user) {
@@ -585,12 +609,20 @@ describe("a standing appointment at a card-on-file shop", () => {
     expect(theirOcc.every((a) => a.status === "BOOKED")).toBe(true);
   });
 
-  it("🔴 an intent minted outside this Stripe context confirms nothing", async () => {
+  it("🔴 an intent naming a card row we do not have confirms nothing", async () => {
     const body = await bookSeries(5, 14, 2);
     const card = await cardFor(body.series!.id);
 
     // An intent that succeeded somewhere we have no record of: the card id it
     // names belongs to no row of ours. Nothing may be promoted on its word.
+    //
+    // 🔴 THIS IS NOT THE ACCOUNT-CONTEXT TEST, and naming it as though it were
+    // would overstate it. Rejecting an event from the wrong Stripe account
+    // happens at the SIGNATURE boundary in billing/connect.ts, before this
+    // function is reached at all - pinned by webhooks.integrity.test.ts ("an
+    // invalid signature causes no database mutation" and the live-mode
+    // refusal). This covers a different hole: an accepted event naming a card
+    // we do not own. The routing half is the test above.
     const foreign = {
       id: `seti_other_${randomToken(6)}`,
       object: "setup_intent",
@@ -613,6 +645,113 @@ describe("a standing appointment at a card-on-file shop", () => {
     expect(occ.every((a) => a.status === "PENDING")).toBe(true);
     const after = await cardFor(body.series!.id);
     expect(after!.status).toBe("pending");
+  });
+
+  it("🔴 THE ROLLBACK HAZARD: old-code release strips a live sibling's card", async () => {
+    /**
+     * 🔴 THIS IS THE EXECUTION THE ACTIVATION GATE EXISTS TO PREVENT.
+     *
+     * The API that shipped before this work detaches whatever payment method
+     * it finds on a card row, with no notion of siblings:
+     *
+     *     if (row.stripePaymentMethodId) {
+     *       await stripeClient().paymentMethods.detach(row.stripePaymentMethodId);
+     *     }
+     *
+     * Run that against a series ANCHOR whose later visits are still live and
+     * the whole series loses its card, while the customer still sees one on
+     * file. Deployment order cannot prevent it: during a rolling deploy one old
+     * instance serving one completion is enough.
+     *
+     * The test below performs exactly that detach, then proves a sibling can no
+     * longer be charged - and that the CURRENT release path, on the same
+     * anchor, leaves the sibling chargeable.
+     */
+    const body = await bookSeries(6, 10, 3);
+    const card = await cardFor(body.series!.id);
+    fake.succeed(card!.stripeSetupIntentId);
+    await request(app).post(`/api/book/manage/${body.manageToken}/card-saved`).send({});
+
+    const occ = await occurrencesOf(body.series!.id);
+    const anchor = await prisma.cardOnFile.findUnique({
+      where: { seriesId: body.series!.id },
+      select: { stripePaymentMethodId: true },
+    });
+    const method = anchor!.stripePaymentMethodId!;
+    const { chargeCardOnFile, releaseCardOnFile } = await import("./cardOnFile.js");
+
+    // FIRST, the code as it stands: releasing the anchor while siblings are
+    // live must NOT let the method go.
+    await releaseCardOnFile({ shopId, appointmentId: occ[0]!.id, reason: "completed" });
+    expect(fake.calls.detached).not.toContain(method);
+    const stillWorks = await chargeCardOnFile({
+      shopId,
+      appointmentId: occ[2]!.id,
+      cents: 1000,
+      reason: "no_show",
+      description: "No-show fee",
+    });
+    expect(stillWorks.outcome).toBe("charged");
+
+    // NOW the old behaviour, performed verbatim against the same method while
+    // occurrence 2 is still live and unbilled.
+    await fake.client.paymentMethods.detach(method);
+
+    const afterOldCode = await chargeCardOnFile({
+      shopId,
+      appointmentId: occ[1]!.id,
+      cents: 1000,
+      reason: "no_show",
+      description: "No-show fee",
+    });
+    // The sibling is uncovered. Not charged in error - simply unprotected,
+    // which is the loss the gate and the rollback floor exist to avoid.
+    expect(afterOldCode.outcome).not.toBe("charged");
+  });
+
+  it("🔴 the charge is aimed by OUR shop row, not by anything Stripe sent us", async () => {
+    /**
+     * WHERE ACCOUNT CONTEXT IS ENFORCED, and it is not here.
+     *
+     * A forged or foreign event never reaches this code: billing/connect.ts
+     * verifyConnectWebhook accepts only payloads signed with OUR endpoint
+     * secrets, and routes/webhooks.integrity.test.ts already pins that an
+     * invalid signature causes no database mutation at all, and that a
+     * live-mode event is refused by a test-mode process.
+     *
+     * What is left to show is the second layer: even for an event we DO accept,
+     * the connected account that money is aimed at is read from our own shop
+     * row and never from the payload. The SetupIntent metadata carries no
+     * account field, so there is nothing there to trust in the first place -
+     * this asserts the destination is the shop's stored account.
+     */
+    const body = await bookSeries(6, 11, 2);
+    const card = await cardFor(body.series!.id);
+    fake.succeed(card!.stripeSetupIntentId);
+    await request(app).post(`/api/book/manage/${body.manageToken}/card-saved`).send({});
+
+    const occ = await occurrencesOf(body.series!.id);
+    const { chargeCardOnFile } = await import("./cardOnFile.js");
+    const before = fake.calls.charges.length;
+    const out = await chargeCardOnFile({
+      shopId,
+      appointmentId: occ[1]!.id,
+      cents: 2000,
+      reason: "no_show",
+      description: "No-show fee",
+    });
+    expect(out.outcome).toBe("charged");
+    expect(fake.calls.charges.length - before).toBe(1);
+
+    const charge = fake.calls.charges.at(-1)!;
+    expect(charge.on_behalf_of).toBe(ACCT);
+    expect(charge.transfer_data?.destination).toBe(ACCT);
+
+    // And the intent we were handed never named an account, so the routing
+    // could not have come from it even had the code wanted to use it.
+    const si = fake.setupIntents.get(card!.stripeSetupIntentId)!;
+    expect(si.metadata).not.toHaveProperty("on_behalf_of");
+    expect(si.metadata).not.toHaveProperty("account");
   });
 
   it("🔴 Stripe being unreachable costs nobody their standing appointment", async () => {
