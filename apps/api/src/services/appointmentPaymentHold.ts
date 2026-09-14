@@ -269,6 +269,117 @@ export async function promotePaidHold(params: {
 }
 
 /**
+ * What happened to a whole standing appointment when its one card was saved.
+ *
+ * Counts rather than a single verdict, because a series genuinely can land
+ * partially: twelve chairs were claimed minutes ago, and one of them can be
+ * gone by the time the card clears. Eleven real bookings plus one honest
+ * "we could not keep that date" beats failing all twelve.
+ */
+export interface SeriesPromotion {
+  total: number;
+  promoted: number;
+  /** The window closed before the card did. */
+  lapsed: number;
+  /** Someone else took that specific chair while the card was being entered. */
+  taken: number;
+  /** The earliest occurrence that actually became a booking, if any. */
+  anchorAppointmentId: string | null;
+}
+
+/**
+ * Promote EVERY held occurrence of a standing appointment, once its single
+ * card is saved.
+ *
+ * 🔴 ONE CARD, ONE DECISION, TWELVE CHAIRS. The customer agreed once. So the
+ * card is saved once and this runs once, rather than twelve SetupIntents with
+ * twelve ways to half-succeed.
+ *
+ * Each occurrence still goes through promotePaidHold individually, which means
+ * each one re-asserts the slot under the same advisory lock every other write
+ * path uses. That is the part that must not be optimised away: between the
+ * holds being placed and the card clearing, minutes have passed, and a chair
+ * that has genuinely gone must not be promoted over whoever now holds it.
+ *
+ * Notifications are suppressed per occurrence and ONE confirmation is sent for
+ * the earliest promoted date, matching what the pay-in-person series already
+ * does. Twelve confirmation emails for one decision is not a confirmation, it
+ * is a mailbox full of noise.
+ */
+export async function promoteSeriesHolds(params: {
+  seriesId: string;
+  shopId: string;
+  now?: Date;
+  /** Send the one withheld confirmation. Default true. */
+  notify?: boolean;
+}): Promise<SeriesPromotion> {
+  const now = params.now ?? new Date();
+  const held = await prisma.appointment.findMany({
+    where: {
+      seriesId: params.seriesId,
+      shopId: params.shopId,
+      status: "PENDING",
+      holdReason: "payment",
+    },
+    select: { id: true },
+    // Earliest first, so the confirmation names the date that comes soonest
+    // and the anchor is the occurrence the customer is actually thinking of.
+    orderBy: { startsAt: "asc" },
+  });
+
+  const out: SeriesPromotion = {
+    total: held.length,
+    promoted: 0,
+    lapsed: 0,
+    taken: 0,
+    anchorAppointmentId: null,
+  };
+
+  for (const row of held) {
+    // notify:false on every one - the single confirmation is sent below, after
+    // we know what actually landed. Sending per occurrence here would mean the
+    // customer is told about occurrence 1 before we know occurrence 2 failed.
+    const outcome = await promotePaidHold({ appointmentId: row.id, now, notify: false });
+    if (outcome === "promoted" || outcome === "already_booked") {
+      out.promoted += 1;
+      if (!out.anchorAppointmentId) out.anchorAppointmentId = row.id;
+    } else if (outcome === "lapsed") {
+      out.lapsed += 1;
+    } else if (outcome === "slot_taken") {
+      out.taken += 1;
+    }
+  }
+
+  logger.info(
+    {
+      shopId: params.shopId,
+      seriesId: params.seriesId,
+      total: out.total,
+      promoted: out.promoted,
+      lapsed: out.lapsed,
+      taken: out.taken,
+    },
+    "standing appointment: card saved, holds settled",
+  );
+
+  // ONE confirmation, for the soonest occurrence that survived. The series
+  // wording in the email already says it repeats, and every occurrence still
+  // carries its own manage token for moving or cancelling it on its own.
+  if (params.notify !== false && out.anchorAppointmentId) {
+    void notifyAppointmentConfirmation({
+      shopId: params.shopId,
+      appointmentId: out.anchorAppointmentId,
+    });
+    void notifyBarberBookingEvent({
+      shopId: params.shopId,
+      appointmentId: out.anchorAppointmentId,
+      kind: "booked",
+    });
+  }
+  return out;
+}
+
+/**
  * We took the money but cannot give them the chair (the hold lapsed, or the
  * slot went while they were paying). Give it back in full and make sure the
  * appointment is dead.

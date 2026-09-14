@@ -192,6 +192,43 @@ describe("synced booking WITH a permitted provider link", () => {
  * to Apple Wallet" only while the appointment pass type is configured, the
  * app-store CTA closing, the manage button untouched - and NONE of it in SMS.
  */
+describe("a standing appointment is never rounded up", () => {
+  /**
+   * 🔴 The confirmation email said NOTHING about a series, while the booking
+   * route carried a comment claiming "the email says it repeats". A customer
+   * who asked for twelve and got one received an ordinary one-date
+   * confirmation and had no way to learn the other eleven never happened.
+   */
+  it("names the shortfall when dates were skipped", () => {
+    const e = buildAppointmentConfirmationEmail({
+      ...base,
+      series: { requested: 12, confirmed: 1, dates: ["Sun, Sep 27 at 11:00 AM"] },
+    });
+    expect(e.text).toContain("1 of the 12 visits you asked for are booked");
+    expect(e.text).toContain("could not book the other 11");
+    expect(e.html).toContain("1 of the 12 visits");
+    // The one date that IS real is named.
+    expect(e.text).toContain("Sun, Sep 27 at 11:00 AM");
+    // And it must never claim the whole series landed.
+    expect(e.text).not.toContain("all 12 visits are booked");
+  });
+
+  it("says so plainly when every date landed", () => {
+    const e = buildAppointmentConfirmationEmail({
+      ...base,
+      series: { requested: 3, confirmed: 3, dates: ["a", "b", "c"] },
+    });
+    expect(e.text).toContain("all 3 visits are booked");
+    expect(e.text).not.toContain("could not book");
+  });
+
+  it("a single booking carries no series wording at all", () => {
+    const e = buildAppointmentConfirmationEmail(base);
+    expect(e.text).not.toContain("This repeats");
+    expect(e.html).not.toContain("This repeats");
+  });
+});
+
 describe("calendar, wallet and the app CTA", () => {
   const dark = buildAppointmentConfirmationEmail(base);
   const lit = buildAppointmentConfirmationEmail({ ...base, walletPassAvailable: true });

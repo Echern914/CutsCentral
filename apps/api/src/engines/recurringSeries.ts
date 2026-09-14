@@ -143,6 +143,23 @@ export interface MaterializeInput {
   pattern: RecurrencePattern;
   anchor: Date; // occurrence 0's instant
   now?: Date;
+  /**
+   * Write every occurrence as a PAYMENT HOLD instead of a confirmed booking.
+   *
+   * Set by the public route when the shop keeps a card on file: the customer
+   * is about to be shown a card screen, and until that card is actually saved
+   * the series is a claim on twelve chairs, not twelve bookings. Each row is
+   * PENDING with holdExpiresAt + holdReason "payment", which is byte for byte
+   * the shape the single-booking path already writes - so the expiry sweep,
+   * the busy set, the overlap guards and the Acuity mirror all treat these
+   * rows correctly with no new cases anywhere.
+   *
+   * The holds are promoted together by promoteSeriesHolds once Stripe confirms
+   * the setup. If the customer walks away, they lapse on their own and the
+   * chairs go back on sale - which is the entire reason this is a hold rather
+   * than a booking someone has to remember to clean up.
+   */
+  hold?: { expiresAt: Date } | null;
 }
 
 /**
@@ -155,6 +172,9 @@ export async function materializeSeries(
   input: MaterializeInput,
 ): Promise<SeriesResult> {
   const now = input.now ?? new Date();
+  // null when this series is confirmed on the spot; a Date when every
+  // occurrence is a payment hold awaiting one card.
+  const holdUntil = input.hold?.expiresAt ?? null;
   const occurrences = computeOccurrences(input.pattern, input.anchor, input.timezone);
   // Collected per occurrence, dispatched after the whole series commits.
   const mirrorIntents: { outboxId: string; appointmentId: string }[] = [];
@@ -262,7 +282,9 @@ export async function materializeSeries(
             lastName: input.lastName,
             phone: input.phone,
             email: input.email,
-            status: "BOOKED",
+            status: holdUntil ? "PENDING" : "BOOKED",
+            holdExpiresAt: holdUntil,
+            holdReason: holdUntil ? "payment" : null,
             startsAt,
             endsAt,
             priceAtBooking: price ?? undefined,
@@ -285,10 +307,14 @@ export async function materializeSeries(
           startsAt,
           endsAt,
           occupancy: {
-            status: "BOOKED",
+            // A payment hold IS mirrored, exactly like the single-booking
+            // path: a real customer is on the card screen and Acuity must not
+            // sell these chairs underneath them while they finish.
+            status: holdUntil ? "PENDING" : "BOOKED",
             startsAt,
             endsAt,
-            holdExpiresAt: null,
+            holdExpiresAt: holdUntil,
+            holdReason: holdUntil ? "payment" : null,
             visitId: null,
           },
         });

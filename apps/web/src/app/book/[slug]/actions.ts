@@ -369,6 +369,37 @@ export async function bookingStatusAction(
   return { ok: true, status: res.data.status };
 }
 
+/**
+ * Card on file: tell the server the SetupIntent cleared, and have it CHECK.
+ *
+ * 🔴 THIS ENDPOINT EXISTED AND NOTHING CALLED IT. It was built so a customer's
+ * confirmation would never wait on a webhook subscription, and then only the
+ * test suite ever used it - so in production a card-on-file booking sat on
+ * `setup_intent.succeeded` arriving.
+ *
+ * For a STANDING APPOINTMENT that gap is not cosmetic. Up to twelve chairs are
+ * held on one ten-minute fuse, and if the webhook is slow or the shop's
+ * endpoint is not configured at all, every one of them lapses and the customer
+ * loses the lot with no explanation. Asking the server to retrieve the intent
+ * from Stripe itself turns a webhook dependency into a direct answer.
+ *
+ * The server does NOT take the browser's word for it: it retrieves the intent
+ * and runs the same path the webhook would. Safe to call twice.
+ */
+export async function cardSavedAction(token: string): Promise<{
+  ok: boolean;
+  status?: string;
+  /** Standing appointments only: how many occurrences are really booked. */
+  series?: { id: string; booked: number };
+}> {
+  const res = await apiPublicSend<{
+    status: string;
+    series?: { id: string; booked: number };
+  }>("POST", `/api/book/manage/${encodeURIComponent(token)}/card-saved`, {});
+  if (!res.ok || !res.data) return { ok: false };
+  return { ok: true, status: res.data.status, series: res.data.series };
+}
+
 /** A date+time preference. Null on either half means ANY for that half. */
 export interface WaitlistWindowInput {
   startDate: string | null;

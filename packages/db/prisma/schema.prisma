@@ -2963,6 +2963,8 @@ model RecurringSeries {
   updatedAt DateTime @updatedAt
 
   appointments Appointment[]
+  // At most one - the single card that covers every occurrence.
+  cardOnFile   CardOnFile?
 
   @@index([shopId, status])
   @@index([shopId, staffId])
@@ -3062,6 +3064,16 @@ model CardOnFile {
   lastWebhookEventId    String?
   createdAt             DateTime    @default(now())
   updatedAt             DateTime    @updatedAt
+
+  // A STANDING APPOINTMENT keeps ONE card for the WHOLE series, never one per
+  // occurrence: the customer agreed once, to one card, for one commitment.
+  // appointmentId stays the series ANCHOR (occurrence 0), so every existing
+  // single-appointment path - settle, charge, release - keeps working with no
+  // change at all. This column is what lets those paths find the card from any
+  // OTHER occurrence, and the unique is what stops a retry minting a second
+  // setup for a series that already has one.
+  seriesId              String?          @unique
+  series                RecurringSeries? @relation(fields: [seriesId], references: [id], onDelete: Cascade)
 
   @@index([shopId, status])
 }

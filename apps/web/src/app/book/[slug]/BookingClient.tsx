@@ -30,6 +30,7 @@ import { readableOn } from "@/lib/contrast";
 import {
   bookAction,
   bookingStatusAction,
+  cardSavedAction,
   getDayBundlesAction,
   getMergedSlotsAction,
   getOpenDaysAction,
@@ -1544,6 +1545,11 @@ export function BookingClient({
         }
         return;
       }
+      // A STANDING APPOINTMENT keeps its series summary across the card step.
+      // Set BEFORE the early return below: the confirmation screen reads it
+      // after the card clears, and without this a card-on-file series showed a
+      // bare "You're booked" with no mention of the other eleven visits.
+      setSeriesResult(res.series ?? null);
       // Pay-ahead: the booking is created; collect payment before confirming.
       if (res.paymentClientSecret) {
         setManageTokenPending(res.manageToken ?? null);
@@ -1563,7 +1569,6 @@ export function BookingClient({
         return;
       }
       setWasRequest(Boolean(res.pending));
-      setSeriesResult(res.series ?? null);
       setConfirmedToken(res.manageToken ?? null);
     });
   }
@@ -1579,6 +1584,28 @@ export function BookingClient({
    */
   async function confirmAfterPayment(token: string) {
     setPayConfirm("checking");
+
+    // 🔴 CARD ON FILE: ASK THE SERVER TO CHECK WITH STRIPE, DON'T WAIT FOR A
+    // WEBHOOK. A saved card is promoted by `setup_intent.succeeded`, and if
+    // that webhook is slow - or the shop's endpoint was never configured - the
+    // hold simply lapses. For a standing appointment that is up to twelve
+    // chairs lost at once on a ten-minute fuse.
+    //
+    // The server does not believe the browser: it retrieves the intent and
+    // runs the same path the webhook would. Failure here is not fatal, because
+    // the poll below still catches the webhook if it wins the race.
+    if (payCharge?.kind === "setup") {
+      const verified = await cardSavedAction(token);
+      // The real number of occurrences that became bookings, counted from the
+      // rows after promotion - a chair can be taken while a card is typed, and
+      // the screen must not claim it.
+      if (verified.ok && verified.series) {
+        setSeriesResult((prev) =>
+          prev ? { ...prev, booked: verified.series!.booked } : prev,
+        );
+      }
+    }
+
     const deadline = Date.now() + 25_000;
     for (;;) {
       const res = await bookingStatusAction(token);
@@ -1885,10 +1912,18 @@ export function BookingClient({
             </div>
           ) : payConfirm === "gone" ? (
             <div role="alert" className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-200">
-              <p className="font-medium">That time was released before the payment landed.</p>
+              <p className="font-medium">
+                {seriesResult
+                  ? "None of those dates could be held long enough to finish."
+                  : "That time was released before the payment landed."}
+              </p>
               <p className="mt-1 text-amber-200/80">
-                You have not been charged — anything taken is refunded in full.
-                Please pick another time, or call {data.shop.name}.
+                You have not been charged — anything taken is refunded in full, and
+                the card you entered has been let go.
+                {seriesResult
+                  ? " No visits were booked. Please start again, or call "
+                  : " Please pick another time, or call "}
+                {data.shop.name}.
               </p>
             </div>
           ) : (
@@ -1974,6 +2009,20 @@ export function BookingClient({
                   Already taken, so not booked:{" "}
                   {seriesResult.skipped.map((d) => dateFmt.format(new Date(d))).join(", ")}.
                   Book those separately if you still want them.
+                </span>
+              )}
+              {/* Dates lost BETWEEN booking and the card clearing. The count
+                  above comes from the rows after the series settled, so it is
+                  already right; this names the shortfall the list above cannot
+                  account for, rather than letting the two silently disagree. */}
+              {seriesResult.booked + seriesResult.skipped.length < seriesResult.total && (
+                <span className="block text-xs text-muted">
+                  {seriesResult.total - seriesResult.booked - seriesResult.skipped.length} more
+                  {" "}
+                  {seriesResult.total - seriesResult.booked - seriesResult.skipped.length === 1
+                    ? "date was"
+                    : "dates were"}{" "}
+                  taken while you were paying. Call {data.shop.name} to find replacements.
                 </span>
               )}
             </p>

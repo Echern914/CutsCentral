@@ -254,6 +254,9 @@ async function loadAppointment(shopId: string, appointmentId: string) {
         reminderSentAt: true,
         confirmationEmailSentAt: true,
         reminderEmailSentAt: true,
+        // A standing appointment this booking belongs to, so the confirmation
+        // can say how many of the requested visits actually landed.
+        seriesId: true,
         firstName: true,
         email: true, // what the booker typed (preferred email target)
         service: { select: { name: true } },
@@ -375,8 +378,30 @@ export async function notifyAppointmentConfirmation(params: {
           "appointment confirmation email skipped",
         );
       } else {
+        // 🔴 COUNTED FROM THE ROWS, NEVER FROM WHAT WAS REQUESTED OR HELD.
+        // A customer who asked for twelve and got one must read "1 of 12".
+        const series = appt.seriesId
+          ? await runWithShop(shop.id, async (tx) => {
+              const row = await tx.recurringSeries.findFirst({
+                where: { id: appt.seriesId as string, shopId: shop.id },
+                select: { count: true },
+              });
+              if (!row?.count) return null;
+              const booked = await tx.appointment.findMany({
+                where: { seriesId: appt.seriesId as string, shopId: shop.id, status: "BOOKED" },
+                select: { startsAt: true },
+                orderBy: { startsAt: "asc" },
+              });
+              return {
+                requested: row.count,
+                confirmed: booked.length,
+                dates: booked.map((b) => formatApptTime(b.startsAt, shop.timezone)),
+              };
+            })
+          : null;
         const email = buildAppointmentConfirmationEmail({
           address: shop,
+          series,
           firstName: appt.firstName,
           shopName: shop.name,
           serviceName: appt.service.name,
