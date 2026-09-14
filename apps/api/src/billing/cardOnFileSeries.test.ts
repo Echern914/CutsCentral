@@ -477,12 +477,19 @@ describe("a standing appointment at a card-on-file shop", () => {
     expect(fake.calls.detached.length).toBe(detachedBefore + 1);
   });
 
-  it("🔴 the webhook and the browser racing produce ONE confirmation, not two", async () => {
+  it("🔴 the webhook and the browser both reporting the card confirm it once", async () => {
     const body = await bookSeries(4, 10, 2);
     const card = await cardFor(body.series!.id);
     fake.succeed(card!.stripeSetupIntentId);
 
-    // The webhook path and the browser's verify path, both for the same card.
+    // Both delivery paths for the same card, one after the other. Deliberately
+    // NOT named as a race and not shaped as one: this is duplicate DELIVERY,
+    // which is what actually happens in production when a webhook and the
+    // browser's verify call both arrive. The at-most-once property being
+    // pinned here is the row's pending-only compare-and-set, not an
+    // interleaving. src/concurrencyTestShape.test.ts refuses a title that
+    // promises a race without a barrier, and it was right to refuse the
+    // previous one.
     const { markCardSaved } = await import("./cardOnFile.js");
     const si = fake.setupIntents.get(card!.stripeSetupIntentId)!;
     const viaWebhook = await markCardSaved(si as never, { eventId: "evt_race_1" });
