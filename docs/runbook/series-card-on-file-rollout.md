@@ -97,11 +97,46 @@ rather than being triggerable from any of the twelve.
 It is a reduction in blast radius, not an elimination. The floor above still
 applies.
 
+## Account context: why a code guard, not endpoint configuration
+
+Every card-on-file SetupIntent is created in **platform** context —
+`billing/cardOnFile.ts` passes no `stripeAccount` and names the barber's
+account with `on_behalf_of` instead. A genuine `setup_intent.succeeded` for one
+of ours therefore arrives with **no `event.account`**.
+
+**Configuration does not exclude the connected-account context.** Both
+`STRIPE_CONNECT_WEBHOOK_SECRET` and `STRIPE_PLATFORM_WEBHOOK_SECRET` are set in
+production (verified 2026-09-13), and `verifyConnectWebhook` accepts either. So
+the Connected-accounts endpoint **is** a live destination: an event describing
+an intent created on a connected account reaches `applyPaymentEvent` correctly
+signed and same-mode.
+
+Signature verification cannot distinguish it. It proves Stripe sent the event,
+not that the object belongs to the account we expect. A connected account
+controls its own intents' metadata, so a `cardOnFileId` copied into a foreign
+intent would otherwise flip one of our pending rows to `saved` and confirm a
+standing appointment whose card never existed on the platform.
+
+`applyPaymentEvent` therefore refuses `setup_intent.succeeded` outright when
+`event.account` is set, returning handled so Stripe stops redelivering.
+
+Evidence:
+
+- `cardOnFileSeries.test.ts` → *"WEBHOOK: a correctly signed event in a
+  CONNECTED-account context confirms nothing"*. It feeds the same intent object
+  twice, once with an account and once without, so only the context differs.
+  Removing the guard fails it with `expected false to be true`.
+- `cardOnFileSeries.test.ts` → *"BROWSER: verification retrieves on the PLATFORM
+  and keeps the stored associations"*. No `{stripeAccount}` option is passed on
+  retrieve, the intent id comes from our own row rather than the request, and
+  asking under the wrong shop returns `unknown` rather than verifying another
+  shop's card.
+- `routes/webhooks.integrity.test.ts` covers the separate, earlier boundary:
+  invalid signature and live-mode mismatch.
+
 ## Related
 
 - Audit of the original defect and the one affected appointment:
   `docs/audit/2026-09-13-card-on-file-series.md`
-- Account-context enforcement lives at the webhook signature boundary
-  (`billing/connect.ts`, `verifyConnectWebhook`), pinned by
-  `routes/webhooks.integrity.test.ts`. The charge's destination account is read
-  from the shop row, never from a payload.
+- The charge's destination account is read from the shop row, never from a
+  payload — `cardOnFileSeries.test.ts` → *"the charge is aimed by OUR shop row"*.

@@ -43,6 +43,7 @@ const fake = vi.hoisted(() => {
     customers: [] as unknown[],
     setupIntents: [] as { customer: string; metadata: Record<string, string> }[],
     detached: [] as string[],
+    retrieves: [] as { id: string; options: unknown[] }[],
     charges: [] as {
       amount: number;
       payment_method: string;
@@ -87,7 +88,10 @@ const fake = vi.hoisted(() => {
             return si;
           },
         ),
-        retrieve: vi.fn(async (id: string) => {
+        retrieve: vi.fn(async (id: string, ...rest: unknown[]) => {
+          // `rest` is how a connected-account retrieve would announce itself
+          // (Stripe takes {stripeAccount} as the request-options argument).
+          calls.retrieves.push({ id, options: rest });
           const si = setupIntents.get(id);
           if (!si) throw new Error(`no such setup intent ${id}`);
           return si;
@@ -752,6 +756,94 @@ describe("a standing appointment at a card-on-file shop", () => {
     const si = fake.setupIntents.get(card!.stripeSetupIntentId)!;
     expect(si.metadata).not.toHaveProperty("on_behalf_of");
     expect(si.metadata).not.toHaveProperty("account");
+  });
+
+  it("🔴 WEBHOOK: a correctly signed event in a CONNECTED-account context confirms nothing", async () => {
+    /**
+     * 🔴 THE GAP THIS CLOSES, and signature verification does not.
+     *
+     * Every card-on-file SetupIntent we create is made in PLATFORM context -
+     * cardOnFile.ts passes no `stripeAccount` and names the barber's account
+     * with `on_behalf_of` instead. A genuine success therefore arrives with NO
+     * `event.account`.
+     *
+     * An event carrying one describes an intent created ON that connected
+     * account. Our Connected-accounts endpoint is a configured destination, so
+     * such a payload is correctly signed by Stripe and passes the livemode
+     * check - the signature proves Stripe sent it, never that the object
+     * belongs to the account we expect. A connected account controls its own
+     * intents' metadata, so a `cardOnFileId` copied into one would otherwise
+     * flip a pending row to "saved" and confirm a series whose card never
+     * existed on the platform.
+     *
+     * This exercises applyPaymentEvent, which is what the verified webhook
+     * route dispatches to, with the SAME object that would legitimately work
+     * in platform context - so only the account context differs.
+     */
+    const body = await bookSeries(6, 12, 2);
+    const card = await cardFor(body.series!.id);
+    fake.succeed(card!.stripeSetupIntentId);
+    const si = fake.setupIntents.get(card!.stripeSetupIntentId)!;
+
+    const { applyPaymentEvent } = await import("./payments.js");
+    const inConnectedContext = {
+      id: `evt_${randomToken(8)}`,
+      type: "setup_intent.succeeded",
+      livemode: false,
+      // 🔴 the only difference from a legitimate event.
+      account: `acct_someone_else_${randomToken(6)}`,
+      data: { object: si },
+    };
+    const handled = await applyPaymentEvent(inConnectedContext as never);
+    // Handled (so Stripe stops redelivering) but deliberately acted on in no way.
+    expect(handled).toBe(true);
+
+    const occ = await occurrencesOf(body.series!.id);
+    expect(occ.every((a) => a.status === "PENDING")).toBe(true);
+    const after = await cardFor(body.series!.id);
+    expect(after!.status).toBe("pending");
+
+    // And the identical event WITHOUT an account does confirm it, so the test
+    // is pinning the account context and not some unrelated refusal.
+    const inPlatformContext = { ...inConnectedContext, id: `evt_${randomToken(8)}`, account: undefined };
+    expect(await applyPaymentEvent(inPlatformContext as never)).toBe(true);
+    const settled = await occurrencesOf(body.series!.id);
+    expect(settled.every((a) => a.status === "BOOKED")).toBe(true);
+  });
+
+  it("🔴 BROWSER: verification retrieves on the PLATFORM and keeps the stored associations", async () => {
+    const body = await bookSeries(6, 13, 2);
+    const card = await cardFor(body.series!.id);
+    fake.succeed(card!.stripeSetupIntentId);
+
+    const before = fake.calls.retrieves.length;
+    const saved = await request(app)
+      .post(`/api/book/manage/${body.manageToken}/card-saved`)
+      .send({});
+    expect(saved.status).toBe(200);
+
+    const used = fake.calls.retrieves.slice(before);
+    expect(used.length).toBeGreaterThan(0);
+    for (const r of used) {
+      // 🔴 PLATFORM CONTEXT: no {stripeAccount} request option is ever passed,
+      // which is what makes the retrieve read the same account the intent was
+      // created on.
+      expect(r.options.filter(Boolean)).toHaveLength(0);
+    }
+    // 🔴 THE INTENT ID CAME FROM OUR ROW, never from the request: the browser
+    // sends only a manage token, and the token resolves the appointment, which
+    // resolves the shop, which scopes the row lookup.
+    expect(used.some((r) => r.id === card!.stripeSetupIntentId)).toBe(true);
+
+    // And the shop association is load-bearing, not decorative: asking under
+    // the wrong shop finds no row at all rather than verifying someone else's.
+    const { verifyCardSaved } = await import("./cardOnFile.js");
+    const occ = await occurrencesOf(body.series!.id);
+    const wrongShop = await verifyCardSaved({
+      shopId: `shop_${randomToken(10)}`,
+      appointmentId: occ[0]!.id,
+    });
+    expect(wrongShop).toBe("unknown");
   });
 
   it("🔴 Stripe being unreachable costs nobody their standing appointment", async () => {

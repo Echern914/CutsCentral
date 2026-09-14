@@ -417,6 +417,35 @@ export async function applyPaymentEvent(event: Stripe.Event): Promise<boolean> {
       // Card on file: the customer's card is attached; promote the hold. Same
       // idempotency posture as the intents above (the row's status is the CAS).
       // Dynamic import: cardOnFile.ts imports this module's neighbours.
+      //
+      // 🔴 THIS MUST BE A PLATFORM EVENT, AND UNTIL NOW NOTHING CHECKED.
+      //
+      // Every card-on-file SetupIntent we create is made in PLATFORM context -
+      // billing/cardOnFile.ts passes no `stripeAccount`, using `on_behalf_of`
+      // to name the barber's account instead. A genuine success for one of our
+      // intents therefore arrives with NO `event.account`.
+      //
+      // An event that DOES carry one describes a SetupIntent created on that
+      // connected account, which cannot be ours. It is not hypothetical that
+      // such an event reaches here: our Connected-accounts endpoint is a
+      // configured destination, so the payload is correctly signed and passes
+      // the livemode check, and only this guard distinguishes it. A connected
+      // account controls its own intents' metadata, so without this a
+      // `cardOnFileId` copied into a foreign intent would flip one of our
+      // pending rows to "saved" and confirm a standing appointment whose card
+      // never existed on the platform.
+      //
+      // Signature verification cannot cover this. It proves Stripe sent the
+      // event, not that the object belongs to the account we expect.
+      if (event.account) {
+        logger.warn(
+          { stripeEventId: event.id, account: event.account },
+          "setup_intent.succeeded refused: connected-account context, platform expected",
+        );
+        // Handled, deliberately, so Stripe stops redelivering an event we will
+        // never act on. Refusing it is the correct terminal outcome.
+        return true;
+      }
       const si = event.data.object as Stripe.SetupIntent;
       const { markCardSaved } = await import("./cardOnFile.js");
       await markCardSaved(si, { eventId: event.id });
