@@ -78,22 +78,24 @@ function backoffFor(attempts: number): number {
 }
 
 /**
- * 🔴 THE BATCH SIZE IS INLINED, AND IT HAS TO BE.
+ * A CEILING ON THE BATCH SIZE. Defensive, not load-bearing.
  *
- * `LIMIT ${batch}` looked like every other interpolation in this file and was
- * not: bound as a query PARAMETER, the limit was not applied at all - so one
- * pass claimed EVERY due recipient across every shop, thousands of rows under a
- * single claim token, held for as long as the pass took. "Bounded batches" was
- * true in the comment and nowhere else. Caught by a test that asked for one row
- * and was handed four.
+ * 🔴 THIS COMMENT USED TO SAY THE LIMIT HAD TO BE INLINED INTO THE SQL,
+ * because a bound parameter "was not applied at all". That was wrong, and the
+ * inlining it justified has been removed.
  *
- * Same family as the `::timestamp` rule below: raw SQL plus driver parameter
- * binding, where getting it wrong produces a working-looking query rather than
- * an error.
+ * PostgreSQL supports a parameterized LIMIT, including inside a subquery with
+ * FOR UPDATE SKIP LOCKED. Measured against this exact query shape: eight due
+ * rows, `LIMIT $n` bound to 1 claims one row, bound to 3 claims three. The
+ * original diagnosis - a test asking for one row and being handed four - was
+ * real, but the parameter was not the cause, and inlining is what actually
+ * changed nothing while removing the driver's escaping.
  *
- * Inlining a value into SQL is only safe when it cannot be anything but a
- * number, so this makes that true rather than assuming it - a positive integer,
- * capped, derived from our own constants and never from a request.
+ * So the value is bound again. This function stays because a cap derived from
+ * our own constants is worth keeping on its own merits: it stops a caller
+ * asking for a batch large enough to hold thousands of rows under one claim
+ * token for the length of a pass. It is no longer what makes the SQL safe -
+ * the parameter binding is.
  */
 function boundedBatch(requested: number): number {
   const n = Math.floor(requested);
@@ -228,7 +230,7 @@ export async function runBroadcastWorker(
             AND (s."claimedAt" IS NULL
                  OR s."claimedAt" < ${staleBefore.toISOString()}::timestamp)
           ORDER BY s."nextAttemptAt" NULLS FIRST, s."createdAt"
-          LIMIT ${Prisma.raw(String(batch))}
+          LIMIT ${batch}
           FOR UPDATE OF s SKIP LOCKED
        )
       RETURNING "id", "broadcastId", "shopId", "clientId"`),
