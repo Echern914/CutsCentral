@@ -5,12 +5,14 @@ import { Screen } from "@/src/customer/Screen";
 import { errorCopy } from "@/src/customer/api";
 import { greeting } from "@/src/customer/format";
 import { openAppointment, openDirections, openManage, openStorefront } from "@/src/customer/navigate";
+import { useSavedShopActions } from "@/src/customer/savedShops";
 import {
   ConnectProfileList,
   HistoryGroup,
   NextAppointmentCard,
   NoUpcomingCard,
   RewardSummaryList,
+  SavedShopList,
   ShopList,
 } from "@/src/customer/sections";
 import { space } from "@/src/customer/theme";
@@ -67,19 +69,21 @@ export default function HomeScreen() {
       ) : !data ? (
         <ErrorState {...errorCopy(home.error)} onRetry={home.refresh} />
       ) : (
-        <HomeBody data={data} />
+        <HomeBody data={data} onChanged={home.refresh} />
       )}
     </Screen>
   );
 }
 
-function HomeBody({ data }: { data: Home }) {
+function HomeBody({ data, onChanged }: { data: Home; onChanged: () => void }) {
   const router = useRouter();
+  const savedActions = useSavedShopActions();
   const next = data.next;
   const moreUpcoming = data.upcomingCount - (next ? 1 : 0);
   // An app build can outlive the API build that answers it (there is no
   // over-the-air channel): a missing list is an empty one, never a crash.
   const ambiguous = data.ambiguous ?? [];
+  const saved = data.saved ?? [];
 
   return (
     <View>
@@ -109,17 +113,30 @@ function HomeBody({ data }: { data: Home }) {
       ) : null}
 
       {/* No section action: every row IS "Book" - a third one here was noise. */}
-      {data.shops.length > 0 ? (
+      {data.shops.length > 0 || saved.length > 0 ? (
         <>
           <SectionHeader title={`Your ${data.vocabulary.providerNounPlural}`} />
-          <ShopList shops={data.shops} onOpen={(shop) => openStorefront(router, shop)} />
+          {data.shops.length > 0 ? (
+            <ShopList shops={data.shops} onOpen={(shop) => openStorefront(router, shop)} />
+          ) : null}
+          {/* Shops they added by name sit under the ones they've booked with:
+              a booked shop is the stronger fact. */}
+          {saved.length > 0 ? (
+            <View style={data.shops.length > 0 ? styles.savedGap : undefined}>
+              <SavedShopList
+                shops={saved}
+                onOpen={savedActions.open}
+                onRemove={(shop) => savedActions.remove(shop, onChanged)}
+              />
+            </View>
+          ) : null}
         </>
       ) : ambiguous.length === 0 ? (
         <>
           <SectionHeader title={`Your ${data.vocabulary.providerNounPlural}`} />
           <View style={styles.findCard}>
             <Txt variant="subhead" tone="secondary">
-              Shops you've booked with show up here once you've signed in with the same number or email you gave them.
+              Shops you've booked with show up here once you've signed in with the same number or email you gave them. You can also find a shop by name and add it.
             </Txt>
             <Button label="Find a shop" variant="secondary" onPress={() => router.navigate("/customer/book")} style={styles.findButton} />
           </View>
@@ -186,6 +203,7 @@ const styles = StyleSheet.create({
   placeholders: { gap: space.s2 },
   moreUpcoming: { minHeight: 44, justifyContent: "center", alignSelf: "flex-start", marginTop: space.half },
   findCard: { gap: space.s2 },
+  savedGap: { marginTop: space.s1 + 4 },
   findButton: { alignSelf: "flex-start" },
   connectNote: { marginBottom: space.s2 - 4 },
 });

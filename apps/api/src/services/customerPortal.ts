@@ -15,6 +15,7 @@ import {
 import { createHmac } from "node:crypto";
 import { buildLoyaltyView, loadLoyaltyInputs } from "./loyaltyView.js";
 import { syncCustomerLinks, syncCustomerView, type ActiveLink } from "./customerIdentity.js";
+import { PUBLIC_SHOP_SELECT, toPublicShop } from "./shopByHandle.js";
 
 /**
  * MY CHAIRBACK'S READ MODEL - everything the customer home, history, details
@@ -129,6 +130,26 @@ export interface PortalHome {
   recent: PortalAppointment[];
   /** Shops with a profile that needs the shop's own link to connect. */
   ambiguous: PortalAmbiguousShop[];
+  /** Shops the customer added by name and has no linked profile at. */
+  saved: PortalSavedShop[];
+}
+
+/**
+ * A shop the customer added to My ChairBack by name ("Add to my shops").
+ *
+ * Public details only - exactly what "Find a shop" returns - and only while the
+ * shop's public page is on; switched off, it drops out of the list and comes
+ * back if the page does. A shop the account already has a linked profile at is
+ * listed once, in `shops`, and not again here.
+ */
+export interface PortalSavedShop {
+  /** The saved row's own id - the key for taking it back off the list. */
+  key: string;
+  name: string;
+  handle: string;
+  logoUrl: string | null;
+  town: string | null;
+  bookUrl: string;
 }
 
 interface ShopRow {
@@ -577,7 +598,10 @@ export async function buildHome(accountId: string, now = new Date()): Promise<Po
   ]);
   const { bundles, ambiguous } = view;
   const { upcoming, past } = splitHistory(bundles, now);
-  const programs = await rewardPrograms(bundles);
+  const [programs, saved] = await Promise.all([
+    rewardPrograms(bundles),
+    savedShops(accountId, new Set(bundles.map((b) => b.shop.id))),
+  ]);
   return {
     firstName: account?.firstName ?? null,
     vocabulary: homeVocabulary(bundles),
@@ -587,7 +611,39 @@ export async function buildHome(accountId: string, now = new Date()): Promise<Po
     rewards: programs.map(summarize).filter((s): s is PortalRewardSummary => s !== null),
     recent: past.slice(0, 3),
     ambiguous,
+    saved,
   };
+}
+
+/**
+ * The shops this account added by name. Public details only, through the same
+ * projection "Find a shop" uses - so never a shop whose public page is off - and
+ * never a shop the account already has a linked profile at, which `shops`
+ * already lists.
+ */
+async function savedShops(accountId: string, linkedShopIds: Set<string>): Promise<PortalSavedShop[]> {
+  const rows = await runAsOwner((tx) =>
+    tx.customerSavedShop.findMany({
+      where: { accountId },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, shop: { select: PUBLIC_SHOP_SELECT } },
+    }),
+  );
+  const out: PortalSavedShop[] = [];
+  for (const row of rows) {
+    if (linkedShopIds.has(row.shop.id)) continue;
+    const shop = toPublicShop(row.shop);
+    if (!shop) continue;
+    out.push({
+      key: row.id,
+      name: shop.name,
+      handle: shop.handle,
+      logoUrl: shop.logoUrl,
+      town: shop.town,
+      bookUrl: shop.bookUrl,
+    });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------

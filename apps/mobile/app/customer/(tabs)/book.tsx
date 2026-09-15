@@ -6,7 +6,8 @@ import { useResource } from "@/src/customer/CustomerProvider";
 import { Screen } from "@/src/customer/Screen";
 import { errorCopy } from "@/src/customer/api";
 import { openStorefront } from "@/src/customer/navigate";
-import { ShopList } from "@/src/customer/sections";
+import { useSavedShopActions } from "@/src/customer/savedShops";
+import { SavedShopList, ShopList } from "@/src/customer/sections";
 import { color, radius, space, type } from "@/src/customer/theme";
 import type { Home } from "@/src/customer/types";
 import { Avatar, Button, ErrorState, Group, Placeholder, Row, SectionHeader, StaleBanner, Txt } from "@/src/customer/ui";
@@ -15,12 +16,16 @@ import { Avatar, Button, ErrorState, Group, Placeholder, Row, SectionHeader, Sta
  * BOOK - "Your shops" first, always. The app never chooses a shop for the
  * customer: they pick one of their own, or find a new one by its full name
  * (the existing exact-handle lookup - a lookup, not a search, so nobody can
- * browse other people's businesses), or open the link a shop sent them.
+ * browse other people's businesses), or open the link a shop sent them. A shop
+ * they find can be added to their shops so it is always here.
  */
 export default function BookScreen() {
   const router = useRouter();
   const home = useResource<Home>("/api/me/home");
   const data = home.data;
+  // An older API answer has no saved list: that is an empty one, never a crash.
+  const saved = data?.saved ?? [];
+  const actions = useSavedShopActions();
 
   return (
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>
@@ -30,20 +35,31 @@ export default function BookScreen() {
           <Placeholder height={180} />
         ) : !data ? (
           <ErrorState {...errorCopy(home.error)} onRetry={home.refresh} />
-        ) : data.shops.length > 0 ? (
+        ) : data.shops.length > 0 || saved.length > 0 ? (
           <>
             <Txt variant="headline" accessibilityRole="header" style={styles.sub}>
               {`Your ${data.vocabulary.providerNounPlural}`}
             </Txt>
-            <ShopList shops={data.shops} onOpen={(shop) => openStorefront(router, shop)} />
+            {data.shops.length > 0 ? (
+              <ShopList shops={data.shops} onOpen={(shop) => openStorefront(router, shop)} />
+            ) : null}
+            {saved.length > 0 ? (
+              <View style={data.shops.length > 0 ? styles.gap : undefined}>
+                <SavedShopList
+                  shops={saved}
+                  onOpen={actions.open}
+                  onRemove={(shop) => actions.remove(shop, home.refresh)}
+                />
+              </View>
+            ) : null}
           </>
         ) : (
           <Txt variant="subhead" tone="secondary">
-            You haven't booked with a shop on ChairBack yet - or you booked with a different number or email. Find the shop below, or add that number in Profile.
+            You haven't booked with a shop on ChairBack yet - or you booked with a different number or email. Find the shop below and add it, or add that number in Profile.
           </Txt>
         )}
 
-        <FindShop />
+        <FindShop savedHandles={saved.map((s) => s.handle)} onAdded={home.refresh} />
         <OpenLink />
       </Screen>
     </KeyboardAvoidingView>
@@ -52,17 +68,24 @@ export default function BookScreen() {
 
 interface Found {
   name: string;
+  handle: string;
   logoUrl: string | null;
   town: string | null;
   pageUrl: string;
+  bookUrl: string;
 }
 
-function FindShop() {
+function FindShop({ savedHandles, onAdded }: { savedHandles: string[]; onAdded: () => void }) {
   const router = useRouter();
+  const actions = useSavedShopActions();
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [found, setFound] = useState<Found | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [needsName, setNeedsName] = useState(false);
+
+  const miss = "No shop with that name. Check the full name with them, or use the link they sent.";
 
   async function find() {
     const typed = value.trim();
@@ -70,12 +93,13 @@ function FindShop() {
     setBusy(true);
     setMessage(null);
     setFound(null);
+    setNeedsName(false);
     try {
       const res = await fetch(`${API_ORIGIN}/api/find-shop?handle=${encodeURIComponent(typed)}`);
       if (!res.ok) {
         // One answer for every miss, matching the API's single refusal - it
         // must never hint that a shop exists but is private.
-        setMessage("No shop with that name. Check the full name with them, or use the link they sent.");
+        setMessage(miss);
         return;
       }
       const body = (await res.json()) as { shop: Found };
@@ -86,6 +110,25 @@ function FindShop() {
       setBusy(false);
     }
   }
+
+  async function add() {
+    if (!found || adding) return;
+    setAdding(true);
+    setNeedsName(false);
+    setMessage(null);
+    try {
+      const outcome = await actions.add(found.handle);
+      if (outcome === "added") onAdded();
+      else if (outcome === "name_required") setNeedsName(true);
+      // The page was switched off between finding and adding: the same single
+      // answer as any other miss.
+      else if (outcome === "not_found") setMessage(miss);
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  const isSaved = found ? savedHandles.includes(found.handle) : false;
 
   return (
     <View>
@@ -113,17 +156,45 @@ function FindShop() {
         </Txt>
       ) : null}
       {found ? (
-        <Group style={styles.gap}>
-          <Row
-            leading={<Avatar uri={found.logoUrl} name={found.name} size={44} />}
-            title={found.name}
-            subtitle={found.town}
-            onPress={() =>
-              router.push({ pathname: "/customer/link", params: { url: found.pageUrl, name: found.name } })
-            }
-            accessibilityHint="Opens the shop's page"
-          />
-        </Group>
+        <>
+          <Group style={styles.gap}>
+            <Row
+              leading={<Avatar uri={found.logoUrl} name={found.name} size={44} />}
+              title={found.name}
+              subtitle={found.town}
+              onPress={() =>
+                router.push({ pathname: "/customer/link", params: { url: found.pageUrl, name: found.name } })
+              }
+              accessibilityHint="Opens the shop's page"
+            />
+          </Group>
+          {isSaved ? (
+            <Txt variant="footnote" tone="secondary" style={styles.gap} accessibilityLiveRegion="polite">
+              In your shops.
+            </Txt>
+          ) : (
+            <>
+              <Button label="Add to my shops" variant="secondary" busy={adding} onPress={add} style={styles.gap} />
+              {/* Said before the tap: adding is the moment the shop learns who you are. */}
+              <Txt variant="footnote" tone="secondary" style={styles.gap}>
+                {`${found.name} will see your name.`}
+              </Txt>
+            </>
+          )}
+          {needsName ? (
+            <View style={styles.gap}>
+              <Txt variant="footnote" tone="secondary" accessibilityLiveRegion="polite">
+                {`Add your name first - ${found.name} sees who saved them.`}
+              </Txt>
+              <Button
+                label="Add my name"
+                variant="secondary"
+                onPress={() => router.navigate("/customer/profile")}
+                style={styles.gap}
+              />
+            </View>
+          ) : null}
+        </>
       ) : null}
     </View>
   );

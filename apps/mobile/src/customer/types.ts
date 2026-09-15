@@ -89,6 +89,22 @@ export interface Home {
   recent: Appointment[];
   /** Shops with a profile that needs the shop's own link to connect. */
   ambiguous: AmbiguousShop[];
+  /**
+   * Shops added by name ("Add to my shops"). Optional: this app can outlive the
+   * API build that answers it, and an older answer simply has none.
+   */
+  saved?: SavedShop[];
+}
+
+/** A shop the customer added by name. Public details only - what "Find a shop" shows. */
+export interface SavedShop {
+  /** The saved row's id - the key for taking it back off the list. */
+  key: string;
+  name: string;
+  handle: string;
+  logoUrl: string | null;
+  town: string | null;
+  bookUrl: string;
 }
 
 export interface History {
