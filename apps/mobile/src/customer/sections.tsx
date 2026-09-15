@@ -11,6 +11,7 @@ import {
   untilLabel,
 } from "./format";
 import { Cancel, Details, MapPin, Reschedule } from "./icons";
+import { tierProgressLine } from "./tierStatus";
 import { Avatar, Button, Group, ProgressBar, Row, Separator, StatusLabel, Tap, Txt, useLargeText } from "./ui";
 import type {
   AmbiguousShop,
@@ -301,6 +302,15 @@ export function RewardProgramCard({ program, now = new Date() }: { program: Rewa
           ) : null}
         </View>
       </View>
+
+      {/* What the next tier still needs, in words only. The tier's BAR lives on
+          Profile: here it sat right above the punch card's bar, and two gold
+          bars an inch apart that measure different things read as one. */}
+      {program.tier.next ? (
+        <Txt variant="footnote" tone="secondary">
+          {tierProgressLine(program)}
+        </Txt>
+      ) : null}
 
       {program.cards.map((card) => {
         const line = card.next ? progressLine(card.balance, card.next.cost, card.unit) : `${card.balance} ${card.unit}`;
