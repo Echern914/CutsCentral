@@ -5,6 +5,7 @@ import { DemoTour } from "@/components/tour/DemoTour";
 import { BroadcastCard } from "./BroadcastCard";
 import { ClientsControls } from "./ClientsControls";
 import { ClientsList, type ClientRow } from "./ClientsList";
+import { SavedByCard, type SavedByPerson } from "./SavedByCard";
 
 interface ClientsResponse {
   clients: ClientRow[];
@@ -22,9 +23,10 @@ export default async function ClientsPage({
   for (const k of ["q", "sort", "filter", "tier", "page"] as const) {
     if (searchParams[k]) qs.set(k, searchParams[k]!);
   }
-  const [res, dupes, me] = await Promise.all([
+  const [res, dupes, savedBy, me] = await Promise.all([
     apiGet<ClientsResponse>(`/api/dashboard/clients?${qs.toString()}`),
     apiGet<{ total: number }>("/api/dashboard/clients/duplicates"),
+    apiGet<{ total: number; people: SavedByPerson[] }>("/api/dashboard/saved-by"),
     // Memoized per render - the layout already fetched it.
     getMe(),
   ]);
@@ -80,6 +82,14 @@ export default async function ClientsPage({
       <div className="mb-5">
         <BroadcastCard rewardsEnabled={me.data?.rewardsEnabled ?? true} />
       </div>
+      {/* People who added the shop in their app. Nothing renders until someone
+          has, or if this read fails - it is a nice-to-know, never a reason the
+          client list can't load. */}
+      {savedBy.data && savedBy.data.total > 0 && (
+        <div className="mb-5">
+          <SavedByCard total={savedBy.data.total} people={savedBy.data.people} />
+        </div>
+      )}
 
       <ClientsControls />
 

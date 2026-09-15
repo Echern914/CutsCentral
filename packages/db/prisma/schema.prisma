@@ -607,6 +607,7 @@ model Shop {
   walletPasses        WalletPassRegistration[]
   walletApptPasses    WalletAppointmentPassRegistration[]
   customerLinks       CustomerClientLink[]
+  customerSaves       CustomerSavedShop[]
   clientMerges        ClientMergeEvent[]
   duplicateDismissals ClientDuplicateDismissal[]
 
@@ -3769,8 +3770,9 @@ model CustomerAccount {
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
-  links   CustomerClientLink[]
-  devices CustomerDevice[]
+  links      CustomerClientLink[]
+  devices    CustomerDevice[]
+  savedShops CustomerSavedShop[]
 }
 
 // One account <-> one shop's Client row. Written ONLY by the linking engine
@@ -3822,6 +3824,29 @@ model CustomerClientLink {
   @@index([accountId, status])
   @@index([clientId])
   @@index([shopId])
+}
+
+// "Add to my shops": a shop a customer keeps in My ChairBack by name, whether
+// or not they have ever been a client there. Found with the SAME exact-handle
+// lookup as "Find a shop" (services/shopByHandle.ts), so saving can never
+// discover a shop that finding could not.
+//
+// 🔴 The shop may see WHO saved it - the saver's name from this account, and
+// when - through an owner read filtered to that shop. Never a phone or email.
+// Platform-owned like every Customer* table: REVOKEd from the tenant role, RLS
+// forced with no policies.
+model CustomerSavedShop {
+  id        String          @id @default(cuid())
+  accountId String
+  account   CustomerAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  shopId    String
+  shop      Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  createdAt DateTime        @default(now())
+
+  // Saving twice is still one save.
+  @@unique([accountId, shopId])
+  // The shop's list, newest first.
+  @@index([shopId, createdAt])
 }
 
 // A phone signed in to My ChairBack, for push across every linked shop. The

@@ -578,6 +578,41 @@ function buildClientFilterSql(filter: string, tier: string): Prisma.Sql {
   return parts.length ? Prisma.join(parts, " ") : Prisma.empty;
 }
 
+/**
+ * Who added this shop to their My ChairBack - "saved your shop".
+ *
+ * 🔴 NAMES AND DATES, NOTHING ELSE. No phone, no email, and nothing that says
+ * whether a saver is also a client here: a customer who saved a shop agreed to
+ * be seen by name, not to hand over a way to text them. Read as owner - the
+ * table is platform-owned and a shop session sees none of it - and filtered to
+ * THIS shop in the query itself. Demo accounts never appear.
+ */
+dashboardRouter.get("/saved-by", async (req, res) => {
+  const shopId = req.shop!.id;
+  const data = await runAsOwner(async (tx) => {
+    const where = { shopId, account: { isDemo: false } };
+    const total = await tx.customerSavedShop.count({ where });
+    const rows = await tx.customerSavedShop.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: 100,
+      select: { createdAt: true, account: { select: { firstName: true, lastName: true } } },
+    });
+    return { total, rows };
+  });
+  res.json({
+    total: data.total,
+    people: data.rows.map((r) => ({
+      name:
+        [r.account.firstName, r.account.lastName]
+          .map((part) => part?.trim())
+          .filter(Boolean)
+          .join(" ") || "A ChairBack customer",
+      savedAt: r.createdAt.toISOString(),
+    })),
+  });
+});
+
 dashboardRouter.get("/clients", async (req, res) => {
   const shop = req.shop!;
   const q = String(req.query.q ?? "").trim();

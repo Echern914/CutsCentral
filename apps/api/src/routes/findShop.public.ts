@@ -1,6 +1,5 @@
 import { Router } from "express";
-import { apiEnv, normalizeShopHandle, shopHandleKey } from "@chairback/config";
-import { Prisma, prisma } from "@chairback/db";
+import { findShopByHandle } from "../services/shopByHandle.js";
 
 /**
  * Find one shop by its exact handle.
@@ -25,93 +24,40 @@ import { Prisma, prisma } from "@chairback/db";
  * leading @, or the whole pasted URL all resolve, because those are the same
  * knowledge wearing different clothes. See normalizeShopHandle.
  *
+ * The lookup itself lives in services/shopByHandle.ts, because "Add to my
+ * shops" must use exactly this one and no other.
+ *
  * ── What comes back ─────────────────────────────────────────────────────────
  *
  * Only what the shop's own public page already shows anybody who opens it:
  * name, logo, town. No phone, no email, no address line, no owner, no counts,
- * nothing about clients. Finding a shop must never reveal more than visiting
- * it would.
+ * nothing about clients - and not the internal id. Finding a shop must never
+ * reveal more than visiting it would.
  */
 export const findShopRouter = Router();
 
-const env = apiEnv();
-
 findShopRouter.get("/", async (req, res) => {
   const raw = typeof req.query.handle === "string" ? req.query.handle : "";
-  const handle = normalizeShopHandle(raw);
+  const shop = await findShopByHandle(raw);
 
   // 🔴 ONE REFUSAL FOR EVERY MISS. Unparseable input, a handle nobody has, and
   // a shop that has switched its public page off all answer identically. Three
   // different answers here would let someone tell "that shop exists but is
   // private" from "that shop does not exist", which is a fact about a real
   // business that we have no business handing out.
-  const miss = () => res.status(404).json({ error: "not_found" });
-
-  if (!handle) return miss();
-
-  const SELECT = {
-    name: true,
-    slug: true,
-    logoUrl: true,
-    addressCity: true,
-    addressRegion: true,
-    publicPageEnabled: true,
-    bookingMode: true,
-    bookingUrl: true,
-  } as const;
-
-  let shop = await prisma.shop.findUnique({ where: { slug: handle }, select: SELECT });
-
-  // 🔴 SECOND LOOK, SEPARATORS IGNORED - and only on a miss, so the common
-  // case is still one indexed unique lookup.
-  //
-  // "FadesByMikey Barbershop" mints `fadesbymikey-barbershop`: one word, then
-  // two, with the dash in a place nobody would guess. A customer who knows the
-  // shop perfectly well types "fades by mikey barbershop" and gets nothing.
-  // Comparing with the dashes stripped makes every spelling of the same
-  // letters resolve, and buys no ability to guess a shop nobody told you
-  // about: every letter is still required, in order.
-  //
-  // Matched in SQL against the SAME expression the index is built on, so this
-  // stays a single index probe rather than a scan over every shop.
   if (!shop) {
-    const key = shopHandleKey(handle);
-    const hit = await prisma.$queryRaw<{ slug: string }[]>(
-      Prisma.sql`SELECT "slug" FROM "Shop"
-                 WHERE replace("slug", '-', '') = ${key}
-                 LIMIT 2`,
-    );
-    // Two shops whose handles differ only by dashes cannot be told apart from
-    // what was typed, so neither is offered - the same refusal as a miss.
-    if (hit.length === 1) {
-      shop = await prisma.shop.findUnique({ where: { slug: hit[0]!.slug }, select: SELECT });
-    }
+    res.status(404).json({ error: "not_found" });
+    return;
   }
-  if (!shop || !shop.publicPageEnabled || !shop.slug) return miss();
-
-  // Where to send them. A native shop books here; a shop whose calendar lives
-  // in Acuity or Square books at its own link, and if it has not set one, the
-  // public page is still the right destination.
-  const pageUrl = `${env.APP_BASE_URL}/s/${shop.slug}`;
-  const bookUrl =
-    shop.bookingMode === "native"
-      ? `${env.APP_BASE_URL}/book/${shop.slug}`
-      : (shop.bookingUrl ?? pageUrl);
 
   res.json({
     shop: {
       name: shop.name,
-      handle: shop.slug,
+      handle: shop.handle,
       logoUrl: shop.logoUrl,
-      // The town, so someone with the right handle can confirm it is the shop
-      // they meant. Never the street address - that is a level of detail the
-      // public page itself does not print.
-      town:
-        shop.addressCity && shop.addressRegion
-          ? `${shop.addressCity}, ${shop.addressRegion}`
-          : (shop.addressCity ?? null),
-      pageUrl,
-      bookUrl,
+      town: shop.town,
+      pageUrl: shop.pageUrl,
+      bookUrl: shop.bookUrl,
     },
   });
 });
