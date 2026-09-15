@@ -2,7 +2,7 @@ import { useState } from "react";
 import { KeyboardAvoidingView, Platform, StyleSheet, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
 import { API_ORIGIN } from "@/src/config";
-import { useResource } from "@/src/customer/CustomerProvider";
+import { useCustomer, useResource } from "@/src/customer/CustomerProvider";
 import { Screen } from "@/src/customer/Screen";
 import { errorCopy } from "@/src/customer/api";
 import { openStorefront } from "@/src/customer/navigate";
@@ -77,6 +77,7 @@ interface Found {
 
 function FindShop({ savedHandles, onAdded }: { savedHandles: string[]; onAdded: () => void }) {
   const router = useRouter();
+  const { isDemo } = useCustomer();
   const actions = useSavedShopActions();
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
@@ -171,6 +172,12 @@ function FindShop({ savedHandles, onAdded }: { savedHandles: string[]; onAdded: 
           {isSaved ? (
             <Txt variant="footnote" tone="secondary" style={styles.gap} accessibilityLiveRegion="polite">
               In your shops.
+            </Txt>
+          ) : isDemo ? (
+            // The demo account is read-only on the server; say so rather than
+            // offer a button that can only fail.
+            <Txt variant="footnote" tone="secondary" style={styles.gap}>
+              Sign in with your own number to add shops.
             </Txt>
           ) : (
             <>
