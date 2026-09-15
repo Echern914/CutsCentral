@@ -8,7 +8,9 @@ import { Screen } from "@/src/customer/Screen";
 import { ApiError, errorCopy } from "@/src/customer/api";
 import { displayPhone } from "@/src/customer/format";
 import { color, radius, space, type } from "@/src/customer/theme";
-import type { Notifications, Profile } from "@/src/customer/types";
+import { ProfileHero, TierStatusCard } from "@/src/customer/status";
+import { bestTier, displayName, heroLine } from "@/src/customer/tierStatus";
+import type { Notifications, Profile, RewardProgram } from "@/src/customer/types";
 import { Button, ErrorState, Group, Placeholder, Row, SectionHeader, Separator, StaleBanner, Tap, Txt } from "@/src/customer/ui";
 
 /**
@@ -21,6 +23,11 @@ export default function ProfileScreen() {
   const { api, signOut, isDemo } = useCustomer();
   const profile = useResource<{ profile: Profile }>("/api/me");
   const me = profile.data?.profile;
+  // Tiers are per shop and come with the rewards: a shop with rewards off has
+  // no tier to show, so it is simply not in this list.
+  const rewards = useResource<{ programs: RewardProgram[] }>("/api/me/rewards");
+  const programs = rewards.data?.programs ?? [];
+  const best = bestTier(programs);
 
   async function confirmDelete() {
     Alert.alert(
@@ -46,7 +53,14 @@ export default function ProfileScreen() {
 
   return (
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-      <Screen title="Profile" refreshing={profile.refreshing} onRefresh={profile.refresh}>
+      <Screen
+        title="Profile"
+        refreshing={profile.refreshing || rewards.refreshing}
+        onRefresh={() => {
+          void profile.refresh();
+          void rewards.refresh();
+        }}
+      >
         {profile.stale ? <StaleBanner onRetry={profile.refresh} /> : null}
         {isDemo ? (
           <View style={styles.demo}>
@@ -57,6 +71,19 @@ export default function ProfileScreen() {
               Nothing here is real, and changes are switched off. Sign in with your own number to see your appointments.
             </Txt>
           </View>
+        ) : null}
+
+        {/* Who they are and the tier they wear, then where they stand at each
+            shop. Rewards that fail to load leave the hero with no ring rather
+            than an error: the rest of Profile still has to work. */}
+        {me ? <ProfileHero name={displayName(me)} best={best} line={heroLine(best, programs)} /> : null}
+        {programs.length > 0 ? (
+          <>
+            <SectionHeader title="Your status" />
+            {programs.map((p) => (
+              <TierStatusCard key={p.shop.key} program={p} onOpen={() => router.navigate("/customer/rewards")} />
+            ))}
+          </>
         ) : null}
 
         {!me && profile.loading ? (

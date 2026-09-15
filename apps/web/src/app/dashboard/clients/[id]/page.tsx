@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import {
-  LOYALTY_TIERS,
   CADENCE_OPTIONS,
   type LoyaltyTierKey,
   type CadenceKey,
@@ -17,6 +16,7 @@ import { MergeClient } from "./MergeClient";
 import { NotesEditor } from "./NotesEditor";
 import { PunchHistory } from "./PunchHistory";
 import { RebookPanel } from "./RebookPanel";
+import { TierStanding, type ClientTier } from "./TierStanding";
 import { VisitHistory } from "./VisitHistory";
 
 interface ClientDetail {
@@ -38,6 +38,8 @@ interface ClientDetail {
     loyaltyTier: LoyaltyTierKey | null;
     preferredCadence: CadenceKey | null;
   };
+  /** The tier under the shop's rules right now, and what the next one needs. */
+  tier?: ClientTier;
   balance: number;
   cards: {
     id: string | null; // null = the default card
@@ -141,18 +143,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
               </span>
             )}
           </h1>
-          {client.loyaltyTier && (
-            <span
-              className="mt-1.5 inline-block rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
-              style={{
-                color: LOYALTY_TIERS[client.loyaltyTier].color,
-                backgroundColor: `${LOYALTY_TIERS[client.loyaltyTier].color}1A`,
-              }}
-              title="Loyalty tier (by lifetime completed visits)"
-            >
-              {LOYALTY_TIERS[client.loyaltyTier].label} member
-            </span>
-          )}
+          <TierStanding tier={res.data.tier} storedTier={client.loyaltyTier} />
           <p className="mt-1 text-sm text-muted">
             {client.phone ?? "no phone"}
             {client.email ? ` · ${client.email}` : ""}
