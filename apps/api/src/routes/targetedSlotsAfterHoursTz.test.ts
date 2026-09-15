@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken, zonedWallTimeToUtc } from "@chairback/config";
 import { createApp } from "../app.js";
+import { dayAfter, shopDayAhead } from "../testing/shopDay.js";
 
 /**
  * After-hours targeted slots in a shop that is NOT on UTC.
@@ -30,10 +31,16 @@ const email = `tstz-${randomToken(6)}@test.local`.toLowerCase();
 const password = "supersecret123";
 
 const TZ = "America/New_York";
-/** A fixed EDT date well clear of "today", lead time, and the DST changeover. */
-const DAY = { y: 2026, m0: 8, d: 15 }; // 2026-09-15, a Tuesday, UTC-4
-const DAY_KEY = "2026-09-15";
-/** 10:00 PM shop-local. In UTC this is 2026-09-16T02:00:00Z - the NEXT day. */
+/**
+ * 🔴 A week out, counted from NOW, and clear of a DST changeover. This used to
+ * be a fixed "2026-09-15 ... well clear of today" - which it was, until it was
+ * today. Any day past the lead time works: the staff hours below cover all
+ * seven weekdays, and 10 PM New York falls on the next UTC day in EDT and EST.
+ */
+const DAY = shopDayAhead(7, TZ, { avoidDstChange: true });
+const DAY_KEY = DAY.key;
+const NEXT_DAY_KEY = dayAfter(DAY, 1, TZ).key;
+/** 10:00 PM shop-local - on the NEXT day in UTC. */
 const AFTER_HOURS = zonedWallTimeToUtc(DAY.y, DAY.m0, DAY.d, 22 * 60, TZ);
 
 let cookie: string;
@@ -120,7 +127,7 @@ afterAll(async () => {
 describe("the premise", () => {
   it("the slot really does straddle midnight in UTC", () => {
     // If this ever stops being true the rest of the file proves nothing.
-    expect(AFTER_HOURS.toISOString()).toBe("2026-09-16T02:00:00.000Z");
+    expect(AFTER_HOURS.toISOString().slice(0, 10)).toBe(NEXT_DAY_KEY);
     expect(AFTER_HOURS.toISOString().slice(0, 10)).not.toBe(DAY_KEY);
   });
 });
@@ -138,8 +145,8 @@ describe("a 10 PM special in a New York shop", () => {
   });
 
   it("does NOT leak onto the following day", async () => {
-    // The mirror of the bug: bucketing by UTC would file it under the 16th.
-    const res = await request(app).get(`/api/book/${slug}/day?date=2026-09-16`);
+    // The mirror of the bug: bucketing by UTC would file it under the next day.
+    const res = await request(app).get(`/api/book/${slug}/day?date=${NEXT_DAY_KEY}`);
     expect(res.status).toBe(200);
     const leaked = daySvcs(res.body)
       .find((s) => s.id === serviceId)

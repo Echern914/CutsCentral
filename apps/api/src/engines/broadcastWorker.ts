@@ -182,9 +182,16 @@ export function __setBroadcastSettlementFaultForTests(fn: (() => void) | undefin
  *
  * `now` is a parameter throughout so a test can age a claim or cross the
  * provider's idempotency window without sleeping for a day.
+ *
+ * `shopId` is for TESTS ONLY. It narrows the claim to one shop, so test files
+ * running side by side cannot take each other's rows - under full-suite load
+ * the global claim let broadcastWorker.test.ts and broadcasts.test.ts each
+ * drain the other's broadcasts, and both went red at random. The scheduler
+ * calls this with NO arguments, and scheduler.broadcastWorkerScope.test.ts pins
+ * that: production always drains every shop.
  */
 export async function runBroadcastWorker(
-  opts: { now?: Date; batch?: number } = {},
+  opts: { now?: Date; batch?: number; shopId?: string } = {},
 ): Promise<BroadcastWorkerResult> {
   const now = opts.now ?? new Date();
   /**
@@ -225,6 +232,7 @@ export async function runBroadcastWorker(
            JOIN "Broadcast" b ON b."id" = s."broadcastId"
           WHERE s."status" = 'PENDING'
             AND b."status" IN ('QUEUED', 'SENDING')
+            ${opts.shopId ? Prisma.sql`AND s."shopId" = ${opts.shopId}` : Prisma.empty}
             AND (s."nextAttemptAt" IS NULL
                  OR s."nextAttemptAt" <= ${now.toISOString()}::timestamp)
             AND (s."claimedAt" IS NULL

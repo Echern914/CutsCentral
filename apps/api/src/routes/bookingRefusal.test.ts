@@ -4,6 +4,7 @@ import { prisma } from "@chairback/db";
 import { randomToken, zonedWallTimeToUtc } from "@chairback/config";
 import { createApp } from "../app.js";
 import { readBookingRefusals, recordBookingRefusal } from "../services/bookingRefusal.js";
+import { shopDayAhead } from "../testing/shopDay.js";
 
 /**
  * The booking canary.
@@ -16,6 +17,13 @@ import { readBookingRefusals, recordBookingRefusal } from "../services/bookingRe
 
 const app = createApp();
 const TZ = "America/New_York";
+/**
+ * 🔴 A week out, counted from NOW. This file used to book 2026-09-12 by hand;
+ * from the 13th every request was refused as too_soon instead of the refusal it
+ * meant to provoke, and a successful booking could not happen at all. A week
+ * clears the 2-hour lead time and sits well inside the 60-day window.
+ */
+const DAY = shopDayAhead(7, TZ);
 const emails: string[] = [];
 let slug: string;
 let shopId: string;
@@ -91,7 +99,7 @@ describe("refusals become visible without anyone instrumenting them", () => {
       .send({
         staffId,
         serviceId,
-        startsAt: zonedWallTimeToUtc(2026, 8, 12, 15 * 60 + 47, TZ).toISOString(),
+        startsAt: zonedWallTimeToUtc(DAY.y, DAY.m0, DAY.d, 15 * 60 + 47, TZ).toISOString(),
         firstName: "Zz",
         lastName: "Canary",
         email: "zz@test.local",
@@ -119,7 +127,7 @@ describe("refusals become visible without anyone instrumenting them", () => {
   });
 
   it("does NOT count a successful booking", async () => {
-    const startsAt = zonedWallTimeToUtc(2026, 8, 12, 11 * 60, TZ);
+    const startsAt = zonedWallTimeToUtc(DAY.y, DAY.m0, DAY.d, 11 * 60, TZ);
     const res = await request(app)
       .post(`/api/book/${slug}`)
       .send({
@@ -198,17 +206,20 @@ describe("alerting on the shapes that mean WE are broken", () => {
 
 describe("the board carries counts and nothing else", () => {
   it("stores no customer, phone, name or slot time in its keys", async () => {
-    await request(app)
+    const res = await request(app)
       .post(`/api/book/${slug}`)
       .send({
         staffId,
         serviceId,
-        startsAt: zonedWallTimeToUtc(2026, 8, 12, 15 * 60 + 47, TZ).toISOString(),
+        startsAt: zonedWallTimeToUtc(DAY.y, DAY.m0, DAY.d, 15 * 60 + 47, TZ).toISOString(),
         firstName: "Zebediah",
         lastName: "Quill",
         phone: "+12125557788",
         email: "zeb@test.local",
       });
+    // The refusal this test inspects is the invalid_slot one. With the old
+    // hard-coded date it had quietly become too_soon and still passed.
+    expect(res.body.error).toBe("invalid_slot");
     await settle();
     const rows = await prisma.rateLimitCounter.findMany({
       where: { key: { startsWith: "bookRefuse:" } },

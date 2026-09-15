@@ -255,7 +255,7 @@ describe("🔴 what the send request actually does", () => {
     });
     expect(res.status).toBe(202);
 
-    const pass = await runBroadcastWorker();
+    const pass = await runBroadcastWorker({ shopId });
     expect(pass.sent).toBe(2);
     expect(outbox).toHaveLength(2);
 
@@ -272,7 +272,7 @@ describe("🔴 what the send request actually does", () => {
       subject: "Chair open Friday",
       body: "Two spots left this Friday.",
     });
-    await runBroadcastWorker();
+    await runBroadcastWorker({ shopId });
 
     // 🔴 Every promotional email must carry a working one-click unsubscribe and
     // the sender's postal address; without both it is not lawful to send, and
@@ -299,7 +299,7 @@ describe("🔴 what the send request actually does", () => {
       subject: "Deal",
       body: "<script>alert(1)</script> half off",
     });
-    await runBroadcastWorker();
+    await runBroadcastWorker({ shopId });
     expect(outbox[0]!.html).not.toContain("<script>");
     expect(outbox[0]!.html).toContain("&lt;script&gt;");
   });
@@ -319,8 +319,8 @@ describe("🔴 what the send request actually does", () => {
     expect(second.status).toBe(409);
     expect(second.body.error).toBe("already_sent");
 
-    await runBroadcastWorker();
-    await runBroadcastWorker();
+    await runBroadcastWorker({ shopId });
+    await runBroadcastWorker({ shopId });
     expect(outbox).toHaveLength(1);
     const sends = await prisma.broadcastSend.count({ where: { broadcastId: id } });
     expect(sends).toBe(1);
@@ -340,7 +340,7 @@ describe("🔴 what the send request actually does", () => {
     const codes = [a.status, b.status].sort();
     expect(codes).toEqual([202, 409]);
 
-    await runBroadcastWorker();
+    await runBroadcastWorker({ shopId });
     expect(outbox).toHaveLength(1);
   });
 
@@ -398,7 +398,7 @@ describe("🔴 the history the barber watches", () => {
     });
 
     // One recipient done, one still to go.
-    await runBroadcastWorker({ batch: 1 });
+    await runBroadcastWorker({ shopId, batch: 1 });
     const mid = await history();
     const row = (mid.body.broadcasts as { id: string; status: string; sentCount: number; pendingCount: number }[])
       .find((b) => b.id === id)!;
@@ -409,7 +409,7 @@ describe("🔴 the history the barber watches", () => {
     expect(row.sentCount).toBe(1);
     expect(row.pendingCount).toBe(1);
 
-    await runBroadcastWorker();
+    await runBroadcastWorker({ shopId });
     const done = await history();
     const final = (done.body.broadcasts as { id: string; status: string; sentCount: number }[])
       .find((b) => b.id === id)!;
@@ -423,7 +423,7 @@ describe("🔴 unsubscribe", () => {
   async function mailOneAndGetUnsubscribeUrl(): Promise<{ clientId: string; url: string }> {
     const c = await makeClient({ tier: "GOLD" });
     await queue({ channel: "email", tiers: [], subject: "Hi", body: "Hello there." });
-    await runBroadcastWorker();
+    await runBroadcastWorker({ shopId });
     expect(outbox).toHaveLength(1);
     return { clientId: c.id, url: outbox[0]!.unsubscribeUrl! };
   }

@@ -136,7 +136,7 @@ async function sendBlastAndCaptureLink(clientId: string): Promise<string> {
   });
   const queued = await queueBroadcast({ shopId, broadcastId: b.id });
   expect(queued.ok, JSON.stringify(queued)).toBe(true);
-  await runBroadcastWorker();
+  await runBroadcastWorker({ shopId });
   const mail = outbox.find((m) => m.to === client!.email && m.unsubscribeUrl);
   expect(mail, "the blast carried no unsubscribe link to this client").toBeDefined();
   return new URL(mail!.unsubscribeUrl!).pathname;

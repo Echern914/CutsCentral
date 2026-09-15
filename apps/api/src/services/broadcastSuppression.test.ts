@@ -101,7 +101,7 @@ async function blastAndCollect(): Promise<SendEmailInput[]> {
     select: { id: true },
   });
   expect((await queueBroadcast({ shopId, broadcastId: b.id })).ok).toBe(true);
-  await runBroadcastWorker();
+  await runBroadcastWorker({ shopId });
   return outbox;
 }
 
