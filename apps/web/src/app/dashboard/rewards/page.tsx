@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import type { TierRules } from "@chairback/config/tierRules";
 import { apiGet } from "@/lib/api";
 import { getMe } from "@/lib/me";
 import { DemoTour } from "@/components/tour/DemoTour";
@@ -14,6 +15,8 @@ export interface LoyaltyConfig {
   tierPerks: Partial<Record<"BRONZE" | "SILVER" | "GOLD", string>>;
   /** What it takes to reach each tier at this shop (defaults when unset). */
   tierThresholds?: Record<"BRONZE" | "SILVER" | "GOLD", number>;
+  /** The tier rules in force: custom ones, else the thresholds as rules. */
+  tierRules?: TierRules;
   cards: {
     id: string;
     name: string;
@@ -99,6 +102,7 @@ export default async function RewardsPage() {
           searching "gold" landed somewhere that never said the word. */}
       <TierPerks
         initial={res.data.tierPerks ?? {}}
+        initialRules={res.data.tierRules}
         initialThresholds={res.data.tierThresholds}
       />
     </main>

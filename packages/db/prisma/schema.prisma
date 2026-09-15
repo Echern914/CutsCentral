@@ -258,6 +258,15 @@ model Shop {
   // Client.loyaltyTier at this shop - the tier is a stored column, so stale
   // rows would keep showing what the old numbers said.
   tierThresholds      Json?
+  // What it takes to reach each tier HERE, when the shop wants more than a
+  // visit count: {"version":1,"tiers":{BRONZE|SILVER|GOLD: {visits, spend,
+  // match}}} - visits and/or money, each over its own window, all or any.
+  // Null = tierThresholds (above) decides, which is every shop until it opts
+  // in. Always read through parseTierRules(); config/tierRules.ts is the ONE
+  // evaluation. 🔴 Same stored-column rule as tierThresholds: writing it
+  // re-stamps every Client.loyaltyTier in the same transaction, and a rule
+  // with a window or money is re-checked daily (engines/tierRecomputeJob.ts).
+  tierRules           Json?
   // Base loyalty earn rate: punches per completed visit. Service-specific
   // EarnRule rows override it for matching services.
   punchesPerVisit     Int     @default(1)

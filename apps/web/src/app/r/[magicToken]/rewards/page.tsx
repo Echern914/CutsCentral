@@ -40,19 +40,25 @@ export interface RewardsData {
     preference: CadenceKey | null;
     computed: boolean;
   };
-  // Loyalty status tier by lifetime completed visits. `tier` is null below the
-  // first threshold; `nextTier` shows how many visits to the next one (or to the
-  // first tier for a brand-new client), and is null once the top tier is reached.
+  // Loyalty status tier under the shop's rules. `tier` is null below the first
+  // tier; `nextTier` says what is left to reach the next one (or the first, for
+  // a brand-new client), and is null once the top tier is reached.
   loyalty: {
     tier: "BRONZE" | "SILVER" | "GOLD" | null;
     label: string | null;
     color: string | null;
     visits: number;
-    /** 0..1 through the CURRENT tier band, for the progress bar. */
+    /** 0..1 toward the next tier, for the progress bar. */
     fraction: number;
     /** What this shop gives at the tier they hold. Null if it has not said. */
     perk: string | null;
-    nextTier: { label: string; visitsAway: number; perk: string | null } | null;
+    nextTier: {
+      label: string;
+      visitsAway: number;
+      perk: string | null;
+      /** "1 more visit in the last 30 days to reach Gold". Absent from an older API. */
+      summary?: string | null;
+    } | null;
   };
   /**
    * What "book my usual" would book - the service and provider from this

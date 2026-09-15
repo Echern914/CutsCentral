@@ -19,4 +19,5 @@ export * from "./supportCapabilities.js";
 export * from "./supportEngine.js";
 export * from "./shopPolicy.js";
 export * from "./tierPerks.js";
+export * from "./tierRules.js";
 export * from "./shopHandle.js";
