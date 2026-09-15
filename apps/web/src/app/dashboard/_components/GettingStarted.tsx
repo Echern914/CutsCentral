@@ -48,10 +48,11 @@ export function GettingStarted({
       href: clientsHref ?? undefined,
       cta: "Go to Clients",
     },
-    // Rewards are opt-in - a booking-only shop has no rewards step to do, and
-    // the registry is what knows that (the `rewardsEnabled` flag on the entry),
-    // rather than this card testing the prop for itself.
-    ...(rewardsHref
+    // Rewards are opt-in - a booking-only shop has no rewards step to do. The
+    // registry used to say so with the `rewardsEnabled` flag on the entry, but
+    // the Rewards page now holds its own on/off switch and must stay reachable
+    // while rewards are off, so this step asks the flag directly.
+    ...(rewardsEnabled && rewardsHref
       ? [
           {
             done: false,

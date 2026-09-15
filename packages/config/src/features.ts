@@ -619,7 +619,9 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     href: "/dashboard/rewards",
     category: "retention",
     tourStepId: "rewards-punch-card",
-    flag: "rewardsEnabled",
+    // 🔴 NOT FLAGGED, ON PURPOSE. This page holds the rewards on/off switch, so
+    // hiding it while rewards were off hid the only way to turn them back on.
+    // The features that exist only while rewards are ON keep the flag below.
   },
   {
     id: "vip-cards",

@@ -68,7 +68,7 @@ const IN_FLIGHT = new Set(["QUEUED", "SENDING"]);
 const field =
   "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 
-export function BroadcastCard() {
+export function BroadcastCard({ rewardsEnabled = true }: { rewardsEnabled?: boolean }) {
   const { toast } = useToast();
   const vocab = useVocab();
   const [pending, start] = useTransition();
@@ -173,7 +173,11 @@ export function BroadcastCard() {
       <Card className="p-5">
         <CardHeader
           title={`Message your ${vocab.clientNounPlural}`}
-          subtitle="One message to everyone, or just one loyalty group."
+          subtitle={
+            rewardsEnabled
+              ? "One message to everyone, or just one loyalty group."
+              : "One message to everyone."
+          }
         />
         <button
           type="button"
@@ -239,23 +243,31 @@ export function BroadcastCard() {
             >
               Everyone
             </button>
-            {TIERS.map((t) => (
-              <button
-                key={t.value}
-                type="button"
-                onClick={() => toggleTier(t.value)}
-                aria-pressed={tiers.includes(t.value)}
-                className={cn(
-                  "rounded-full px-3 py-1 text-xs font-medium transition-colors",
-                  tiers.includes(t.value)
-                    ? "bg-gold/20 text-gold"
-                    : "border border-subtle text-muted hover:text-offwhite",
-                )}
-              >
-                {t.label}
-              </button>
-            ))}
+            {/* Tiers are part of rewards. With rewards off there are no gold
+                members to aim at - and the API refuses a tier audience anyway. */}
+            {rewardsEnabled &&
+              TIERS.map((t) => (
+                <button
+                  key={t.value}
+                  type="button"
+                  onClick={() => toggleTier(t.value)}
+                  aria-pressed={tiers.includes(t.value)}
+                  className={cn(
+                    "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                    tiers.includes(t.value)
+                      ? "bg-gold/20 text-gold"
+                      : "border border-subtle text-muted hover:text-offwhite",
+                  )}
+                >
+                  {t.label}
+                </button>
+              ))}
           </div>
+          {!rewardsEnabled && (
+            <p className="mt-1.5 text-xs text-muted">
+              Sending to Gold, Silver or Bronze needs rewards turned on.
+            </p>
+          )}
         </div>
 
         <input

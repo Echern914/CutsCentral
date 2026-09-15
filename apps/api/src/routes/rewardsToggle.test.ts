@@ -4,6 +4,7 @@ import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { earnPunchForVisitInTx, redeemReward } from "../services/punch.js";
 import { createApp } from "../app.js";
+import { buildPassForClient } from "../wallet/pass.js";
 
 /**
  * The master rewards switch: OFF = no earning, no redeeming, no rewards data on
@@ -122,6 +123,10 @@ describe("rewardsEnabled gate", () => {
     expect(r.body.redemptions).toEqual([]);
     expect(r.body.punches.balance).toBe(0);
     expect(r.body.wallet.available).toBe(false);
+    // No tier either. nextTier is the falsifiable one: a client with no visits
+    // has no tier yet, but Bronze is still "one visit away" if it leaks.
+    expect(r.body.loyalty.nextTier).toBeNull();
+    expect(r.body.loyalty.perk).toBeNull();
     // The page is still a working hub: shop identity + consent survive.
     expect(r.body.shop.name).toBe("Toggle Cuts");
     expect(r.body.consent).toBeDefined();
@@ -130,6 +135,8 @@ describe("rewardsEnabled gate", () => {
     expect(s.status).toBe(200);
     expect(s.body.rewardsEnabled).toBe(false);
     expect(s.body.rewards).toEqual([]);
+    expect(s.body.tierThresholds).toBeNull();
+    expect(s.body.tierPerks).toEqual({});
   });
 
   it("toggling ON starts earning + redeeming; toggling OFF preserves balances intact", async () => {
@@ -247,5 +254,67 @@ describe("bonus punches respect the master gate", () => {
       .send({ count: 1, reason: "Test adjustment" });
     expect(ok.status).toBe(200);
     expect(await balance()).toBe(before + 1);
+  });
+});
+
+/**
+ * 🔴 A TIER IS A REWARDS THING. With rewards off the shop has told its clients
+ * there is no program, so a message aimed at "the gold members" would be the
+ * program speaking after it was switched off.
+ */
+describe("broadcasts cannot target a tier while rewards are off", () => {
+  it("the preview names the refusal - and 'everyone' is unaffected", async () => {
+    await setRewards(false);
+    const tiered = await request(app)
+      .post("/api/broadcasts/preview")
+      .set("Cookie", cookie)
+      .send({ channel: "push", tiers: ["GOLD"] });
+    expect(tiered.status).toBe(200);
+    expect(tiered.body.blocker?.kind).toBe("tiers_need_rewards");
+
+    const everyone = await request(app)
+      .post("/api/broadcasts/preview")
+      .set("Cookie", cookie)
+      .send({ channel: "push" });
+    expect(everyone.status).toBe(200);
+    expect(everyone.body.blocker?.kind).not.toBe("tiers_need_rewards");
+
+    await setRewards(true);
+    const on = await request(app)
+      .post("/api/broadcasts/preview")
+      .set("Cookie", cookie)
+      .send({ channel: "push", tiers: ["GOLD"] });
+    expect(on.status).toBe(200);
+    expect(on.body.blocker?.kind).not.toBe("tiers_need_rewards");
+  });
+
+  it("a tier draft written while rewards were on is refused at send once they're off", async () => {
+    await setRewards(true);
+    const draft = await request(app)
+      .post("/api/broadcasts")
+      .set("Cookie", cookie)
+      .send({ channel: "push", tiers: ["GOLD"], subject: "Gold only", body: "A late slot opened tonight" });
+    expect(draft.status).toBe(201);
+
+    await setRewards(false);
+    const send = await request(app)
+      .post(`/api/broadcasts/${draft.body.id}/send`)
+      .set("Cookie", cookie);
+    expect(send.status).toBe(409);
+    expect(send.body.error).toBe("tiers_need_rewards");
+
+    // Refused before anything was frozen: the draft is still a draft.
+    const row = await prisma.broadcast.findUnique({
+      where: { id: draft.body.id },
+      select: { status: true },
+    });
+    expect(row?.status).toBe("DRAFT");
+  });
+});
+
+describe("the Apple Wallet punch card", () => {
+  it("is never built while rewards are off - a new download and a refresh alike", async () => {
+    await setRewards(false);
+    await expect(buildPassForClient(clientId)).resolves.toBeNull();
   });
 });

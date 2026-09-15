@@ -99,6 +99,8 @@ function blockerMessage(blocker: BroadcastBlocker): string {
       return "Marketing email is switched off on this server until an operator finishes setting it up. App notifications work now — send one of those instead.";
     case "no_postal_address":
       return "Add your shop's street address first — marketing email has to carry it by law. App notifications don't, so you can send one of those right now.";
+    case "tiers_need_rewards":
+      return "Rewards are off, so there are no Gold, Silver or Bronze members to send to. Send it to everyone, or turn rewards on first.";
     case "already_sending":
       return "This one has already been sent.";
     case "not_found":

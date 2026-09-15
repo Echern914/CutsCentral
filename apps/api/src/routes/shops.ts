@@ -973,8 +973,10 @@ publicPageRouter.get("/:slug", async (req, res) => {
     waitlistEnabled: shop.waitlistEnabled,
     punchesPerVisit: shop.punchesPerVisit,
     rewardsEnabled: shop.rewardsEnabled,
-    tierPerks: parseTierPerks(shop.tierPerks),
-    tierThresholds: parseTierThresholds(shop.tierThresholds),
+    // Tiers are part of rewards: with rewards off this PUBLIC payload says
+    // nothing about them, the same way it carries no reward menu.
+    tierPerks: shop.rewardsEnabled ? parseTierPerks(shop.tierPerks) : {},
+    tierThresholds: shop.rewardsEnabled ? parseTierThresholds(shop.tierThresholds) : null,
     rewards,
     promotions: promotions.map((p) => ({
       ...p,
