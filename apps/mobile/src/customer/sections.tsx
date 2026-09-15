@@ -18,6 +18,7 @@ import type {
   AppointmentDetail,
   RewardProgram,
   RewardSummary,
+  SavedShop,
   Shop,
 } from "./types";
 
@@ -187,6 +188,47 @@ export function ShopList({ shops, onOpen, now }: { shops: Shop[]; onOpen: (shop:
             }
             accessibilityLabel={`Book at ${shop.name}. ${shopSubtitle(shop, now)}`}
             accessibilityHint="Opens the shop's page"
+          />
+        </View>
+      ))}
+    </Group>
+  );
+}
+
+/**
+ * Shops added by name. The row opens the shop's booking page; the trailing
+ * "Remove" is its own target, so taking a shop off the list is never a
+ * mis-tap on the row.
+ */
+export function SavedShopList({
+  shops,
+  onOpen,
+  onRemove,
+}: {
+  shops: SavedShop[];
+  onOpen: (shop: SavedShop) => void;
+  onRemove: (shop: SavedShop) => void;
+}) {
+  return (
+    <Group>
+      {shops.map((shop, i) => (
+        <View key={shop.key}>
+          {i > 0 ? <Separator inset={space.s2 + 52 + 12} /> : null}
+          <Row
+            onPress={() => onOpen(shop)}
+            chevron={false}
+            leading={<Avatar uri={shop.logoUrl} name={shop.name} size={52} />}
+            title={shop.name}
+            subtitle={shop.town ? `Saved · ${shop.town}` : "Saved"}
+            trailing={
+              <Tap onPress={() => onRemove(shop)} accessibilityLabel={`Remove ${shop.name} from your shops`}>
+                <Txt variant="subhead" tone="secondary">
+                  Remove
+                </Txt>
+              </Tap>
+            }
+            accessibilityLabel={`${shop.name}, saved${shop.town ? `, ${shop.town}` : ""}`}
+            accessibilityHint="Opens the shop's booking page"
           />
         </View>
       ))}

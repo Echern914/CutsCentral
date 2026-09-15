@@ -23,6 +23,7 @@ import {
   verifySignInCode,
 } from "../services/customerSignIn.js";
 import { consentView, optInClientInTx, optOutClientInTx } from "../services/clientConsent.js";
+import { findShopByHandle } from "../services/shopByHandle.js";
 import { resolveIdentifier } from "./customerAuth.js";
 import { logger } from "../logger.js";
 
@@ -99,6 +100,68 @@ customerMeRouter.get("/shops/:key/storefront", async (req, res) => {
 customerMeRouter.post("/shops/:key/not-me", async (req, res) => {
   const rejected = await rejectProfileForAccount(accountId(req), String(req.params.key));
   if (!rejected) return notFound(res);
+  res.json({ ok: true });
+});
+
+/**
+ * "Add to my shops": keep a shop the customer found by name, whether or not they
+ * have ever booked there.
+ *
+ * 🔴 THE SHOP SEES WHO SAVED IT - by name, and nothing else. So a name is
+ * required first (409 name_required), and the app says so before the tap. Never
+ * a phone, never an email: a shop holding a stranger's number could text someone
+ * who never opted in to its messages.
+ *
+ * The shop is found with the SAME exact-handle lookup as "Find a shop"
+ * (services/shopByHandle.ts), with the same single refusal for every miss, so
+ * saving can never discover a shop that finding could not. Saving twice is still
+ * one save.
+ */
+const saveShopSchema = z.object({ handle: z.string().min(1).max(200) }).strict();
+
+customerMeRouter.post("/shops/saved", async (req, res) => {
+  const parsed = saveShopSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const shop = await findShopByHandle(parsed.data.handle);
+  if (!shop) return notFound(res);
+
+  const id = accountId(req);
+  const account = await runAsOwner((tx) =>
+    tx.customerAccount.findUnique({ where: { id }, select: { firstName: true } }),
+  );
+  if (!account?.firstName?.trim()) {
+    res.status(409).json({ error: "name_required" });
+    return;
+  }
+
+  await runAsOwner((tx) =>
+    tx.customerSavedShop.upsert({
+      where: { accountId_shopId: { accountId: id, shopId: shop.id } },
+      create: { accountId: id, shopId: shop.id },
+      update: {},
+    }),
+  );
+  res.json({
+    ok: true,
+    shop: { name: shop.name, handle: shop.handle, logoUrl: shop.logoUrl, town: shop.town },
+  });
+});
+
+/**
+ * Take a saved shop back off the list. The key is the saved row's own id, and it
+ * only ever matches a row belonging to THIS account - anybody else's is the same
+ * 404 as a key that never existed.
+ */
+customerMeRouter.delete("/shops/saved/:key", async (req, res) => {
+  const { count } = await runAsOwner((tx) =>
+    tx.customerSavedShop.deleteMany({
+      where: { id: String(req.params.key), accountId: accountId(req) },
+    }),
+  );
+  if (count === 0) return notFound(res);
   res.json({ ok: true });
 });
 
