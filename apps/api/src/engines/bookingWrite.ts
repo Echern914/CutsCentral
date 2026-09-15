@@ -176,6 +176,11 @@ export async function lockStaffAndAssertSlotFree(
      */
     waitlistOfferIdToIgnore?: string;
     /**
+     * Claiming a tier opening: exclude that opening's OWN hold so the claim
+     * doesn't conflict with itself. Any other live hold still blocks.
+     */
+    tierOpeningIdToIgnore?: string;
+    /**
      * BARBER-driven writes (dashboard create/approve/reschedule, recurring
      * series) pass true: the barber booking over a customer's live waitlist
      * hold is overriding their own automation, so the hold is RELEASED in
@@ -183,6 +188,10 @@ export async function lockStaffAndAssertSlotFree(
      * paths (public create/reschedule, receptionist, gap-fill) leave the
      * default false and are blocked like any other taken slot - the held
      * time belongs to exactly one customer until it expires.
+     *
+     * The same answer covers an opening held for a loyalty tier: the barber
+     * made that hold, so booking over it is him changing his mind, and it is
+     * released here; every customer-driven write is refused by it.
      */
     overrideWaitlistHolds?: boolean;
     /**
@@ -407,6 +416,31 @@ export async function lockStaffAndAssertSlotFree(
         metadata: { code: "override", via: "booking_write" },
       });
     }
+  }
+
+  // Openings held for a loyalty tier: while HELD and before heldUntil, the
+  // span is promised to that tier's members - the same shape as a waitlist
+  // hold, promised to a group instead of one person. Past heldUntil the row
+  // stops matching and the time is anyone's, with nothing to sweep. The claim
+  // excludes its OWN opening; barber-driven writers release it, as above.
+  const tierIgnoreFragment = opts.tierOpeningIdToIgnore
+    ? Prisma.sql`AND "id" <> ${opts.tierOpeningIdToIgnore}`
+    : Prisma.empty;
+  const tierHoldOverlap = await tx.$queryRaw<{ id: string }[]>(
+    Prisma.sql`SELECT id FROM "TierOpening"
+               WHERE "staffId" = ${opts.staffId}
+                 AND "status" = 'HELD'
+                 AND "heldUntil" > ${now.toISOString()}::timestamp
+                 ${tierIgnoreFragment}
+                 AND "startsAt" < ${overlapEnd.toISOString()}::timestamp
+                 AND "endsAt" > ${overlapStart.toISOString()}::timestamp`,
+  );
+  if (tierHoldOverlap.length > 0) {
+    if (!opts.overrideWaitlistHolds) throw new SlotTakenError();
+    await tx.tierOpening.updateMany({
+      where: { id: { in: tierHoldOverlap.map((h) => h.id) }, status: "HELD" },
+      data: { status: "RELEASED" },
+    });
   }
 
   // Active walk-ins: someone is standing in the shop with this chair promised
