@@ -1,7 +1,7 @@
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
-import { randomToken } from "@chairback/config";
+import { randomToken, rulesFromThresholds } from "@chairback/config";
 import { createApp } from "../app.js";
 import { recomputeLoyaltyTiers } from "./loyaltyTierRecompute.js";
 
@@ -87,7 +87,7 @@ beforeAll(async () => {
   silver = await clientWithVisits("Seven", 7);
   gold = await clientWithVisits("Twelve", 12);
   // Stamp them under the DEFAULT thresholds, as cadence.ts would have.
-  await recomputeLoyaltyTiers(shopId, { BRONZE: 1, SILVER: 6, GOLD: 12 });
+  await recomputeLoyaltyTiers(shopId, rulesFromThresholds({ BRONZE: 1, SILVER: 6, GOLD: 12 }));
 });
 
 afterAll(async () => {

@@ -29,6 +29,11 @@ import {
   TIER_MIN_VISITS,
   parseTierThresholds,
   validateTierThresholds,
+  parseTierRules,
+  rulesFromThresholds,
+  toStoredTierRules,
+  validateTierRules,
+  TIER_WINDOWS,
   shopSlugFromName,
 } from "@chairback/config";
 import { Prisma, prisma, runWithShop } from "@chairback/db";
@@ -210,6 +215,19 @@ const createShopSchema = z
   })
   .strict();
 
+/** One tier's rule, shape only. See validateTierRules for what makes it valid. */
+const tierWindowSchema = z
+  .number()
+  .int()
+  .refine((d) => (TIER_WINDOWS as readonly number[]).includes(d), "Pick one of the offered windows");
+const tierRuleSchema = z
+  .object({
+    visits: z.object({ min: z.number().int(), windowDays: tierWindowSchema }).strict().nullable(),
+    spend: z.object({ minCents: z.number().int(), windowDays: tierWindowSchema }).strict().nullable(),
+    match: z.enum(["all", "any"]),
+  })
+  .strict();
+
 // The single-reward fields moved to the loyalty designer (/api/loyalty); the
 // rest of the shop settings remain editable here, plus the public page fields.
 const updateShopSchema = createShopSchema
@@ -314,6 +332,16 @@ const updateShopSchema = createShopSchema
         BRONZE: z.number().int().min(TIER_MIN_VISITS).max(TIER_MAX_VISITS),
         SILVER: z.number().int().min(TIER_MIN_VISITS).max(TIER_MAX_VISITS),
         GOLD: z.number().int().min(TIER_MIN_VISITS).max(TIER_MAX_VISITS),
+      })
+      .strict(),
+    // Custom tier rules: visits and/or money per tier, each over its own
+    // window, all or any. Shape only here - ranges and the order rule are
+    // validateTierRules in config, the one function the page runs too.
+    tierRules: z
+      .object({
+        BRONZE: tierRuleSchema,
+        SILVER: tierRuleSchema,
+        GOLD: tierRuleSchema,
       })
       .strict(),
     // Transactional loyalty SMS to clients (earn/redeem confirmations). Off by
@@ -709,6 +737,18 @@ shopsRouter.patch("/me", requireUser, requireShop, requireActiveAccess, async (r
     res.status(403).json({ error: "forbidden_role", required: ["OWNER", "MANAGER"] });
     return;
   }
+  // The loyalty ladder is the shop's program - what a customer has to do for
+  // Gold, and what Gold promises - and changing it re-stamps every client's
+  // badge. That is an owner's or manager's call, not a barber seat's.
+  if (
+    (parsed.data.tierRules !== undefined ||
+      parsed.data.tierThresholds !== undefined ||
+      parsed.data.tierPerks !== undefined) &&
+    req.shopRole === "BARBER"
+  ) {
+    res.status(403).json({ error: "forbidden_role", required: ["OWNER", "MANAGER"] });
+    return;
+  }
   // `gallery` (items-with-captions) isn't a Shop column - it maps to galleryItems
   // (Json) and supersedes the legacy galleryUrls. Pull it out before the spread.
   const { gallery, ...rest } = parsed.data;
@@ -790,7 +830,22 @@ shopsRouter.patch("/me", requireUser, requireShop, requireActiveAccess, async (r
     // stored column, so writing new numbers without re-stamping every client
     // leaves badges asserting the OLD rules - silently, and on the customer's
     // own rewards page. One transaction, or neither.
-    if (data.tierThresholds !== undefined) {
+    if (data.tierRules !== undefined && data.tierThresholds !== undefined) {
+      // Two answers to "what does Gold take" in one request - refuse rather
+      // than guess which one the owner meant.
+      res.status(400).json({ error: "invalid_tier_rules", reason: "rules_and_thresholds" });
+      return;
+    }
+    let tierRules: ReturnType<typeof rulesFromThresholds> | null = null;
+    if (data.tierRules !== undefined) {
+      const checked = validateTierRules(data.tierRules);
+      if (!checked.ok) {
+        res.status(400).json({ error: "invalid_tier_rules", reason: checked.error, tier: checked.tier });
+        return;
+      }
+      data.tierRules = toStoredTierRules(checked.value);
+      tierRules = checked.value;
+    } else if (data.tierThresholds !== undefined) {
       const checked = validateTierThresholds(
         data.tierThresholds as Record<string, unknown>,
       );
@@ -801,11 +856,18 @@ shopsRouter.patch("/me", requireUser, requireShop, requireActiveAccess, async (r
         return;
       }
       data.tierThresholds = checked.value;
+      // Plain visit counts replace any custom rules: the owner's latest answer
+      // is the one in force, and a stale rule must not keep outranking it.
+      data.tierRules = Prisma.DbNull;
+      tierRules = rulesFromThresholds(checked.value);
+    }
+    if (tierRules) {
+      const rules = tierRules;
       const shopId = req.shop!.id;
       let recompute: { clients: number; changed: number } = { clients: 0, changed: 0 };
       const updated = await runWithShop(shopId, async (tx) => {
         const row = await prisma.shop.update({ where: { id: shopId }, data });
-        recompute = await recomputeLoyaltyTiers(shopId, checked.value, tx);
+        recompute = await recomputeLoyaltyTiers(shopId, rules, tx);
         return row;
       });
       res.json({ ...serializeShop(updated), tierRecompute: recompute });
@@ -1534,6 +1596,7 @@ function serializeShop(shop: {
   twilioNumber: string | null;
   tierPerks: unknown;
   tierThresholds: unknown;
+  tierRules: unknown;
 }) {
   // Note: webhookSecret is intentionally NOT exposed to the client.
   return {
@@ -1583,6 +1646,10 @@ function serializeShop(shop: {
     // the way out: both are Json columns.
     tierPerks: parseTierPerks(shop.tierPerks),
     tierThresholds: parseTierThresholds(shop.tierThresholds),
+    // The rules in force: the custom ones when set, else the thresholds above
+    // expressed as rules - so the editor always has one shape to show.
+    tierRules: parseTierRules(shop.tierRules, shop.tierThresholds),
+    tierRulesCustom: shop.tierRules !== null,
     loyaltyTextsEnabled: shop.loyaltyTextsEnabled,
     bookingMode: shop.bookingMode,
     bookingLeadHours: shop.bookingLeadHours,

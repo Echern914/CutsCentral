@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import type { TierRules } from "@chairback/config/tierRules";
 import { apiGet, apiSend } from "@/lib/api";
 
 /**
@@ -196,18 +197,21 @@ export async function revokeCardAction(
  */
 export async function saveTierPerksAction(
   perks: Partial<Record<"BRONZE" | "SILVER" | "GOLD", string>>,
-  /** Omitted when the typed numbers are not valid - the API is never sent
-   *  thresholds the page already knows it would refuse. */
-  thresholds?: Record<"BRONZE" | "SILVER" | "GOLD", number>,
-): Promise<{ saved?: boolean; error?: string }> {
-  const res = await apiSend("PATCH", "/api/shops/me", {
+  /** Sent only when the owner changed what a tier takes, and only once the page
+   *  has run the same validator the API does. Omitted, the stored rules - and
+   *  every client's badge - are left exactly as they are. */
+  rules?: TierRules,
+): Promise<{ saved?: boolean; moved?: number; error?: string }> {
+  const res = await apiSend<{ tierRecompute?: { changed: number } }>("PATCH", "/api/shops/me", {
     tierPerks: {
       BRONZE: (perks.BRONZE ?? "").trim(),
       SILVER: (perks.SILVER ?? "").trim(),
       GOLD: (perks.GOLD ?? "").trim(),
     },
-    ...(thresholds ? { tierThresholds: thresholds } : {}),
+    ...(rules ? { tierRules: rules } : {}),
   });
   revalidatePath("/dashboard/rewards");
-  return res.ok ? { saved: true } : { error: "Could not save tier perks." };
+  if (res.ok) return { saved: true, moved: res.data?.tierRecompute?.changed };
+  if (res.status === 403) return { error: "Only the owner or a manager can change tiers." };
+  return { error: "Could not save tiers." };
 }

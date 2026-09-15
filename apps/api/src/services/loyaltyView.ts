@@ -1,11 +1,20 @@
 import type { Prisma } from "@chairback/db";
 import {
   LOYALTY_TIERS,
-  loyaltyTierProgress,
+  LOYALTY_TIER_KEYS,
+  describeRequirementProgress,
+  describeTierGap,
+  describeTierRule,
   parseTierPerks,
-  parseTierThresholds,
+  parseTierRules,
   tierPerk,
+  tierRulesProgress,
+  type LoyaltyTierKey,
+  type TierRequirementProgress,
+  type TierRules,
+  type TierStats,
 } from "@chairback/config";
+import { loadClientTierStats } from "../engines/tierStats.js";
 
 /**
  * WHAT A CUSTOMER'S PUNCH CARDS SAY - computed in ONE place.
@@ -37,8 +46,10 @@ export interface LoyaltyCardType {
 }
 
 export interface LoyaltyInputs {
-  /** Lifetime COMPLETED visits at this shop - drives the tier. */
+  /** Lifetime COMPLETED visits at this shop. */
   completedCount: number;
+  /** The numbers the shop's tier rules are decided on (engines/tierStats.ts). */
+  tierStats: TierStats;
   rewards: LoyaltyReward[];
   cardTypes: LoyaltyCardType[];
   grants: { cardTypeId: string }[];
@@ -53,8 +64,10 @@ export async function loadLoyaltyInputs(
   tx: Prisma.TransactionClient,
   shopId: string,
   clientId: string,
+  rules: TierRules,
+  now: Date,
 ): Promise<LoyaltyInputs> {
-  const [rewards, completedCount, cardTypes, grants, ledgerGroups] = await Promise.all([
+  const [rewards, completedCount, cardTypes, grants, ledgerGroups, tierStats] = await Promise.all([
     tx.reward.findMany({
       where: { shopId, active: true },
       orderBy: [{ sortOrder: "asc" }, { punchCost: "asc" }],
@@ -72,8 +85,30 @@ export async function loadLoyaltyInputs(
       where: { shopId, clientId },
       _sum: { punchesEarned: true, punchesRedeemed: true },
     }),
+    loadClientTierStats(tx, shopId, clientId, rules, now),
   ]);
-  return { rewards, completedCount, cardTypes, grants, ledgerGroups };
+  return { rewards, completedCount, tierStats, cardTypes, grants, ledgerGroups };
+}
+
+/** One requirement of the next tier, as a customer is shown it. */
+export interface LoyaltyRequirementView {
+  kind: TierRequirementProgress["kind"];
+  have: number;
+  need: number;
+  windowDays: TierRequirementProgress["windowDays"];
+  met: boolean;
+  /** "1 of 2 visits in the last 30 days" */
+  text: string;
+}
+
+/** A rung of the shop's ladder: what each tier takes and what it is worth. */
+export interface LoyaltyLadderRung {
+  tier: LoyaltyTierKey;
+  label: string;
+  color: string;
+  /** "2 visits in the last 30 days and $300 spent" */
+  takes: string;
+  perk: string | null;
 }
 
 export interface LoyaltyCardView {
@@ -97,13 +132,25 @@ export interface LoyaltyCardView {
 
 export interface LoyaltyView {
   loyalty: {
-    tier: ReturnType<typeof loyaltyTierProgress>["current"];
+    tier: LoyaltyTierKey | null;
     label: string | null;
     color: string | null;
     visits: number;
     fraction: number;
     perk: string | null;
-    nextTier: { label: string; visitsAway: number; perk: string | null } | null;
+    nextTier: {
+      label: string;
+      /** Visits still needed for the next tier's visit requirement; 0 if it has none. */
+      visitsAway: number;
+      perk: string | null;
+      /** How the next tier's requirements combine. */
+      match: "all" | "any";
+      requirements: LoyaltyRequirementView[];
+      /** "1 more visit in the last 30 days to reach Gold" - what is left, in one line. */
+      summary: string | null;
+    } | null;
+    /** Every tier, low to high: what it takes here and what it is worth. */
+    ladder: LoyaltyLadderRung[];
   };
   /** The DEFAULT card's balance (cardTypeId null). */
   balance: number;
@@ -116,10 +163,14 @@ export interface LoyaltyView {
 }
 
 export function buildLoyaltyView(
-  shop: { tierThresholds: Prisma.JsonValue | null; tierPerks: Prisma.JsonValue | null },
+  shop: {
+    tierRules: Prisma.JsonValue | null;
+    tierThresholds: Prisma.JsonValue | null;
+    tierPerks: Prisma.JsonValue | null;
+  },
   inputs: LoyaltyInputs,
 ): LoyaltyView {
-  const { rewards, completedCount, cardTypes, grants, ledgerGroups } = inputs;
+  const { rewards, completedCount, tierStats, cardTypes, grants, ledgerGroups } = inputs;
 
   // Per-card balances; the null key is the default card. The top-level
   // punches/rewards fields are the DEFAULT card's view - byte-identical to the
@@ -135,24 +186,22 @@ export function buildLoyaltyView(
   const rewardsFor = (cardTypeId: string | null) =>
     rewards.filter((r) => r.cardTypeId === cardTypeId);
 
-  // Loyalty status tier (Bronze/Silver/Gold by lifetime completed visits), how
-  // far to the next one, and what each is worth at this shop.
+  // Loyalty status tier, what is left to reach the next one, and what each is
+  // worth at this shop.
   //
-  // 🔴 The tier arithmetic is loyaltyTierProgress() in @chairback/config, not
-  // repeated here - it has to agree with the badge, the bar, and whatever reads
-  // it next.
-  const progress = loyaltyTierProgress(
-    completedCount,
-    parseTierThresholds(shop.tierThresholds),
-  );
+  // 🔴 The tier arithmetic is tierRulesProgress() in @chairback/config, not
+  // repeated here - it is the same evaluation that stamps the stored badge, so
+  // the bar and the badge cannot disagree.
+  const rules = parseTierRules(shop.tierRules, shop.tierThresholds);
+  const progress = tierRulesProgress(tierStats, rules);
   const perks = parseTierPerks(shop.tierPerks);
   const loyalty = {
     tier: progress.current,
     label: progress.current ? LOYALTY_TIERS[progress.current].label : null,
     color: progress.current ? LOYALTY_TIERS[progress.current].color : null,
     visits: completedCount,
-    // 0..1 through the CURRENT band, for the progress bar. Measured band to
-    // band rather than from zero, so a client one visit from Gold sees a
+    // 0..1 toward the next tier, for the progress bar. Measured band to band
+    // rather than from zero, so a client one visit from Gold sees a
     // nearly-full bar instead of a creeping one.
     fraction: progress.fraction,
     // What they get for being where they are. Null when the shop has not said.
@@ -163,8 +212,25 @@ export function buildLoyaltyView(
           visitsAway: progress.visitsToNext,
           // What is waiting one tier up - the actual reason to come back.
           perk: tierPerk(perks, progress.next),
+          match: progress.match,
+          requirements: progress.requirements.map((r) => ({
+            kind: r.kind,
+            have: r.have,
+            need: r.need,
+            windowDays: r.windowDays,
+            met: r.met,
+            text: describeRequirementProgress(r),
+          })),
+          summary: describeTierGap(progress),
         }
       : null,
+    ladder: LOYALTY_TIER_KEYS.map((key) => ({
+      tier: key,
+      label: LOYALTY_TIERS[key].label,
+      color: LOYALTY_TIERS[key].color,
+      takes: describeTierRule(rules[key]),
+      perk: tierPerk(perks, key),
+    })),
   };
 
   // The punch grid counts toward the cheapest reward the client can't afford

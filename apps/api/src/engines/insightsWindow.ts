@@ -551,14 +551,17 @@ const SYNCED_STATUSES = ["SCHEDULED", "RESCHEDULED", "COMPLETED", "NO_SHOW"] as 
  * staff, so a staff-filtered read returns native rows ONLY - attributing an
  * Acuity visit to the selected barber would invent work he may not have done.
  * Callers surface that caveat via the returned `syncedExcluded` flag.
+ *
+ * `clientId` narrows both halves to one client - how a loyalty tier counts
+ * what that person has spent, with exactly the money rule revenue uses.
  */
 export async function readChairEvents(
   shopId: string,
   from: Date,
   to: Date,
-  opts: { staffId?: string; tx?: Prisma.TransactionClient } = {},
+  opts: { staffId?: string; clientId?: string; tx?: Prisma.TransactionClient } = {},
 ): Promise<{ events: ChairEvent[]; syncedExcluded: boolean }> {
-  const { staffId } = opts;
+  const { staffId, clientId } = opts;
   // Appointment and Visit are ENABLE+FORCE RLS tables (tenant_isolation checks
   // app.current_shop_id): a bare prisma read returns ZERO rows under an
   // enforcing role, so the reads run inside a shop-scoped transaction. Every
@@ -574,6 +577,7 @@ export async function readChairEvents(
       where: {
         shopId,
         ...(staffId ? { staffId } : {}),
+        ...(clientId ? { clientId } : {}),
         holdExpiresAt: null,
         status: { in: [...NATIVE_STATUSES] },
         startsAt: { gte: from, lt: to },
@@ -611,6 +615,7 @@ export async function readChairEvents(
       : await tx.visit.findMany({
           where: {
             shopId,
+            ...(clientId ? { clientId } : {}),
             appointment: null,
             status: { in: [...SYNCED_STATUSES] },
             scheduledAt: { gte: from, lt: to },

@@ -7,13 +7,14 @@ import {
   customerStatusForVisit,
   formatShopAddress,
   isUpcomingStatus,
+  parseTierRules,
   requestedDetail,
   requestedReason,
   vocabularyForShop,
   type CustomerStatus,
 } from "@chairback/config";
 import { createHmac } from "node:crypto";
-import { buildLoyaltyView, loadLoyaltyInputs } from "./loyaltyView.js";
+import { buildLoyaltyView, loadLoyaltyInputs, type LoyaltyView } from "./loyaltyView.js";
 import { syncCustomerLinks, syncCustomerView, type ActiveLink } from "./customerIdentity.js";
 
 /**
@@ -148,6 +149,7 @@ interface ShopRow {
   serviceNoun: string | null;
   businessTypeSelectedAt: Date | null;
   tierThresholds: unknown;
+  tierRules: unknown;
   tierPerks: unknown;
 }
 
@@ -259,6 +261,7 @@ export async function loadPortalView(accountId: string, now = new Date()): Promi
         serviceNoun: true,
         businessTypeSelectedAt: true,
         tierThresholds: true,
+        tierRules: true,
         tierPerks: true,
       },
     }),
@@ -605,10 +608,18 @@ export interface PortalRewardCard {
 export interface PortalRewardProgram {
   shop: PortalShopRef;
   tier: {
+    /** The tier held, as its key. Null before the first one. */
+    key: LoyaltyView["loyalty"]["tier"];
     label: string | null;
+    color: string | null;
     visits: number;
+    /** 0..1 toward the next tier; 1 at the top. */
+    fraction: number;
     perk: string | null;
-    next: { label: string; visitsAway: number; perk: string | null } | null;
+    /** What the next tier takes and how far along they are. */
+    next: LoyaltyView["loyalty"]["nextTier"];
+    /** Every tier here, low to high, with what it takes. */
+    ladder: LoyaltyView["loyalty"]["ladder"];
   };
   cards: PortalRewardCard[];
   activity: { date: string; kind: "earned" | "redeemed" | "bonus" | "adjusted"; punches: number; label: string }[];
@@ -627,12 +638,14 @@ export interface PortalRewardProgram {
  */
 export async function rewardPrograms(bundles: PortalShopBundle[]): Promise<PortalRewardProgram[]> {
   const programs: PortalRewardProgram[] = [];
+  const now = new Date();
   for (const b of bundles) {
     if (!b.shop.rewardsEnabled) continue;
     const primary = b.primaryClientId;
     const others = b.links.map((l) => l.clientId).filter((id) => id !== primary);
+    const rules = parseTierRules(b.shop.tierRules, b.shop.tierThresholds);
     const data = await runWithShop(b.shop.id, async (tx) => {
-      const inputs = await loadLoyaltyInputs(tx, b.shop.id, primary);
+      const inputs = await loadLoyaltyInputs(tx, b.shop.id, primary, rules, now);
       const [earnRules, cardUnits, ledger, otherBalances] = await Promise.all([
         tx.earnRule.count({ where: { shopId: b.shop.id, active: true } }),
         tx.cardType.findMany({ where: { shopId: b.shop.id }, select: { id: true, punchesPerVisit: true } }),
@@ -667,7 +680,11 @@ export async function rewardPrograms(bundles: PortalShopBundle[]): Promise<Porta
 
     if (data.inputs.rewards.length === 0) continue;
     const view = buildLoyaltyView(
-      { tierThresholds: b.shop.tierThresholds as never, tierPerks: b.shop.tierPerks as never },
+      {
+        tierRules: b.shop.tierRules as never,
+        tierThresholds: b.shop.tierThresholds as never,
+        tierPerks: b.shop.tierPerks as never,
+      },
       data.inputs,
     );
     const perVisit = new Map(data.cardUnits.map((c) => [c.id, c.punchesPerVisit]));
@@ -701,10 +718,14 @@ export async function rewardPrograms(bundles: PortalShopBundle[]): Promise<Porta
     programs.push({
       shop: b.ref,
       tier: {
+        key: view.loyalty.tier,
         label: view.loyalty.label,
+        color: view.loyalty.color,
         visits: view.loyalty.visits,
+        fraction: view.loyalty.fraction,
         perk: view.loyalty.perk,
         next: view.loyalty.nextTier,
+        ladder: view.loyalty.ladder,
       },
       cards,
       activity: data.ledger.map((row) => {
