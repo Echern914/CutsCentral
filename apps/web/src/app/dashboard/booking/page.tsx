@@ -26,6 +26,8 @@ export interface BookingShop {
   // PR): the Live line tab renders its enabled/off state from these.
   walkInEnabled: boolean;
   walkInAcceptingNow: boolean;
+  /** Rewards on = the shop has tiers, so "Offer to a tier" is offered. */
+  rewardsEnabled: boolean;
 }
 
 /** Live connect status for the branded platform cards. */

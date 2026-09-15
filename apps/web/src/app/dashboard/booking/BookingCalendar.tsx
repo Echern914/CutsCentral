@@ -63,6 +63,7 @@ import {
 } from "./WaitlistBoard";
 import { AppointmentSheet, type SheetView } from "./AppointmentSheet";
 import { BlockOffForm } from "./BlockOffForm";
+import { TierOpeningForm } from "./TierOpeningForm";
 import { useRouter } from "next/navigation";
 
 type Toast = (msg: string, kind?: "success" | "error") => void;
@@ -161,6 +162,7 @@ export function BookingCalendar({
   services,
   toast,
   openAppointmentId,
+  tierOpenings = false,
 }: {
   initial: AgendaResponse;
   initialWaitlist: WaitlistRow[];
@@ -177,6 +179,8 @@ export function BookingCalendar({
    * on it meant finding the row and opening it, three or four taps in.
    */
   openAppointmentId?: string;
+  /** Rewards are on, so there are tiers to hold an opening for. */
+  tierOpenings?: boolean;
 }) {
   const tz = initial.timezone;
   const router = useRouter();
@@ -189,6 +193,8 @@ export function BookingCalendar({
     null,
   );
   const [blockDay, setBlockDay] = useState<{ dayKey: string; hour: number } | null>(null);
+  // "Offer to a tier" - the shop-tz day it opened on.
+  const [tierDay, setTierDay] = useState<string | null>(null);
 
   // Live count for the waitlist shortcut. Seeded from the server prop so the
   // badge is right on the first frame, then reconciled against the API's own
@@ -620,6 +626,7 @@ export function BookingCalendar({
             staff={staff}
             onAddAt={(hour) => setAddAt(isoForDayHour(shownDay, hour, tz))}
             onBlock={() => setBlockDay({ dayKey: shownDay, hour: 12 })}
+            onOfferToTier={tierOpenings ? () => setTierDay(shownDay) : undefined}
             onChanged={refreshAgenda}
             waitingCount={waitingCount}
             onOpenWaitlist={onOpenWaitlist}
@@ -724,6 +731,7 @@ export function BookingCalendar({
               staff={staff}
               onAddAt={(hour) => setAddAt(isoForDayHour(selectedDay, hour, tz))}
               onBlock={() => setBlockDay({ dayKey: selectedDay, hour: 12 })}
+              onOfferToTier={tierOpenings ? () => setTierDay(selectedDay) : undefined}
               onChanged={refreshAgenda}
             waitingCount={waitingCount}
             onOpenWaitlist={onOpenWaitlist}
@@ -774,6 +782,22 @@ export function BookingCalendar({
           onClose={() => setWaitlistBooking(null)}
           onCreated={() => {
             setWaitlistBooking(null);
+            refreshAgenda();
+            router.refresh();
+          }}
+          toast={toast}
+        />
+      )}
+      {isNative && tierDay && (
+        <TierOpeningForm
+          staff={staff}
+          services={services}
+          timezone={tz}
+          dayKey={tierDay}
+          todayKey={todayKey}
+          onClose={() => setTierDay(null)}
+          onHeld={() => {
+            setTierDay(null);
             refreshAgenda();
             router.refresh();
           }}
@@ -1262,6 +1286,7 @@ function DayPlanner({
   staff,
   onAddAt,
   onBlock,
+  onOfferToTier,
   onChanged,
   waitingCount,
   onOpenWaitlist,
@@ -1281,6 +1306,8 @@ function DayPlanner({
   staff: StaffRow[];
   onAddAt: (hour: number) => void;
   onBlock: () => void;
+  /** "Offer to a tier" - absent when the shop has no tiers (rewards off). */
+  onOfferToTier?: () => void;
   /** Refetch the agenda so a row mutation shows without waiting for the poll. */
   onChanged: () => void;
   /** How many people are WAITING right now - the shortcut's badge. */
@@ -1484,6 +1511,15 @@ function DayPlanner({
           >
             Block off time
           </button>
+          {onOfferToTier && (
+            <button
+              type="button"
+              onClick={onOfferToTier}
+              className={cn(ROW_BTN, "border border-subtle text-muted hover:text-offwhite")}
+            >
+              Offer to a tier
+            </button>
+          )}
           <WaitlistShortcut count={waitingCount} onOpen={onOpenWaitlist} />
         </div>
       )}

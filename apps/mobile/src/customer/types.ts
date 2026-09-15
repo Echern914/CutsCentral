@@ -106,6 +106,27 @@ export interface RewardCard {
 
 export type TierKey = "BRONZE" | "SILVER" | "GOLD";
 
+/**
+ * A slot a shop is holding for this customer's tier: theirs to book until
+ * `heldUntil`, then anyone's.
+ */
+export interface Opening {
+  id: string;
+  shop: { name: string; logoUrl: string | null; timezone: string };
+  startsAt: string;
+  endsAt: string;
+  serviceName: string | null;
+  staffName: string | null;
+  /** The shop's listed price, in dollars. Null when it has not priced it. */
+  price: number | null;
+  /** "Gold members", "Silver and Gold members" */
+  audience: string;
+  tierLabel: string;
+  heldUntil: string;
+  /** This shop approves bookings: booking sends a request, not a booking. */
+  requiresApproval: boolean;
+}
+
 /** One requirement of the next tier, as the shop's rules count it. */
 export interface TierRequirement {
   kind: "visits" | "spend";
