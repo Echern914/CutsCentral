@@ -369,6 +369,7 @@ export function BookingManager({
             services={initialServices}
             toast={toast}
             openAppointmentId={openAppointmentId}
+            tierOpenings={shop.rewardsEnabled}
           />
         </div>
       )}
