@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { parseTierPerks, parseTierThresholds } from "@chairback/config";
+import { parseTierPerks, parseTierRules, parseTierThresholds } from "@chairback/config";
 import { forShop, prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
@@ -130,6 +130,9 @@ loyaltyRouter.get("/", async (req, res) => {
     tierPerks: parseTierPerks(shop.tierPerks),
     // What it takes to reach each tier here, parsed for the same reason.
     tierThresholds: parseTierThresholds(shop.tierThresholds),
+    // The rules in force (custom, else the thresholds as rules) - see
+    // config/tierRules.ts.
+    tierRules: parseTierRules(shop.tierRules, shop.tierThresholds),
     cards: cards.map((c) => ({
       id: c.id,
       name: c.name,

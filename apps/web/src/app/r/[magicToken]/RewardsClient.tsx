@@ -255,9 +255,11 @@ export function RewardsClient({
                   />
                 </div>
                 <p className="mt-1.5 text-xs" style={{ color: t.muted }}>
-                  {loyalty.nextTier.visitsAway}{" "}
-                  {loyalty.nextTier.visitsAway === 1 ? "visit" : "visits"} to{" "}
-                  {loyalty.nextTier.label}
+                  {/* The shop's rules can ask for money or a recent stretch of
+                      visits, so the API says what is left in words; the visit
+                      count is only for an API that predates rules. */}
+                  {loyalty.nextTier.summary ??
+                    `${loyalty.nextTier.visitsAway} ${loyalty.nextTier.visitsAway === 1 ? "visit" : "visits"} to ${loyalty.nextTier.label}`}
                   {loyalty.nextTier.perk ? ` — ${loyalty.nextTier.perk}` : ""}
                 </p>
               </div>
