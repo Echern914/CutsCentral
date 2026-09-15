@@ -59,10 +59,10 @@ async function client(name: string, visits: { daysAgo: number; price: number; st
 const tierOf = (id: string) =>
   prisma.client.findUnique({ where: { id }, select: { loyaltyTier: true } }).then((c) => c?.loyaltyTier ?? null);
 
-/** Bronze: a visit. Silver: $100 spent. Gold: 2 visits in the last 30 days AND $200 spent. */
+/** Bronze: a visit. Silver: $100 in the last 3 months. Gold: 2 visits in the last 30 days AND $200 all time. */
 const RULES = {
   BRONZE: { visits: { min: 1, windowDays: 0 }, spend: null, match: "all" },
-  SILVER: { visits: null, spend: { minCents: 10_000, windowDays: 0 }, match: "all" },
+  SILVER: { visits: null, spend: { minCents: 10_000, windowDays: 90 }, match: "all" },
   GOLD: { visits: { min: 2, windowDays: 30 }, spend: { minCents: 20_000, windowDays: 0 }, match: "all" },
 };
 
@@ -115,7 +115,7 @@ describe("PATCH /api/shops/me { tierRules }", () => {
     expect(res.body.tierRecompute).toEqual({ clients: 5, changed: 4 });
 
     expect(await tierOf(regular.id)).toBe("GOLD"); // 2 this month, $240
-    expect(await tierOf(bigSpender.id)).toBe("SILVER"); // $300, but not in lately
+    expect(await tierOf(bigSpender.id)).toBe("SILVER"); // $300 two months ago, not in lately
     expect(await tierOf(cheapRegular.id)).toBe("BRONZE"); // in often, $60
     // 🔴 The $500 no-show earned nothing - counting its ticket would make this Silver.
     expect(await tierOf(noShow.id)).toBe("BRONZE");
@@ -139,11 +139,11 @@ describe("what the customer is shown", () => {
       { kind: "visits", have: 0, need: 2, windowDays: 30, met: false, text: "0 of 2 visits in the last 30 days" },
       { kind: "spend", have: 30_000, need: 20_000, windowDays: 0, met: true, text: "$300 spent" },
     ]);
-    // Visits 0 of 2; money already past Silver's $100 floor to Gold's $200.
+    // Visits 0 of 2; money already done.
     expect(loyalty.fraction).toBeCloseTo(0.5, 10);
     expect(loyalty.ladder.map((r: { tier: string; takes: string }) => [r.tier, r.takes])).toEqual([
       ["BRONZE", "1 visit"],
-      ["SILVER", "$100 spent"],
+      ["SILVER", "$100 spent in the last 3 months"],
       ["GOLD", "2 visits in the last 30 days and $200 spent"],
     ]);
   });
@@ -166,20 +166,22 @@ describe("every writer lands on the same tier", () => {
     expect(await tierOf(cheapRegular.id)).toBe("GOLD");
   });
 
-  it("🔴 the daily job takes Gold away once the visits age out of the window", async () => {
+  it("🔴 the daily job takes tiers away once visits and money age out of their windows", async () => {
     const r = await runTierRecompute({ shopId, now: new Date(Date.now() + 31 * DAY) });
-    expect(r).toMatchObject({ shops: 1, failed: 0, changed: 2 });
-    // Nothing in the last 30 days any more; the money still makes them Silver.
+    expect(r).toMatchObject({ shops: 1, failed: 0, changed: 3 });
+    // Nothing in the last 30 days any more; recent money still makes them Silver.
     expect(await tierOf(regular.id)).toBe("SILVER");
     expect(await tierOf(cheapRegular.id)).toBe("SILVER");
-    expect(await tierOf(bigSpender.id)).toBe("SILVER");
+    // The $300 is now 91 days old - outside Silver's 3 months.
+    expect(await tierOf(bigSpender.id)).toBe("BRONZE");
     expect(await tierOf(noShow.id)).toBe("BRONZE");
   });
 
-  it("and puts it back when the job runs at today's date again", async () => {
+  it("and puts them back when the job runs at today's date again", async () => {
     const r = await runTierRecompute({ shopId });
-    expect(r.changed).toBe(2);
+    expect(r.changed).toBe(3);
     expect(await tierOf(regular.id)).toBe("GOLD");
+    expect(await tierOf(bigSpender.id)).toBe("SILVER");
   });
 });
 
@@ -191,7 +193,7 @@ describe("refusals change nothing", () => {
       .send({
         tierRules: {
           ...RULES,
-          GOLD: { visits: null, spend: { minCents: 5_000, windowDays: 0 }, match: "all" },
+          GOLD: { visits: null, spend: { minCents: 5_000, windowDays: 90 }, match: "all" },
         },
       });
     expect(res.status).toBe(400);
