@@ -1367,3 +1367,54 @@ export async function mintWalkInKioskUrlAction(): Promise<{
   if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
   return { ok: true, url: res.data.url };
 }
+
+// --- Openings held for a loyalty tier ---------------------------------------------
+
+export type TierKey = "BRONZE" | "SILVER" | "GOLD";
+
+export interface TierOpeningRow {
+  id: string;
+  staffName: string | null;
+  serviceName: string | null;
+  startsAt: string;
+  endsAt: string;
+  minTier: TierKey;
+  heldUntil: string;
+  state: "held" | "claimed" | "released" | "open";
+  recipients: number;
+  claimedBy: string | null;
+}
+
+/** Who would hear about a hold for this tier - asked before anything is held. */
+export async function previewTierOpeningAction(
+  minTier: TierKey,
+): Promise<{ ok: boolean; members?: number; inApp?: number }> {
+  const res = await apiSend<{ members: number; inApp: number }>("POST", "/api/tier-openings/preview", { minTier });
+  if (!res.ok || !res.data) return { ok: false };
+  return { ok: true, members: res.data.members, inApp: res.data.inApp };
+}
+
+/** Hold a slot for a tier and tell its members. `error` is the API's code. */
+export async function createTierOpeningAction(input: {
+  staffId: string;
+  serviceId: string;
+  startsAt: string;
+  minTier: TierKey;
+  holdMinutes: number;
+}): Promise<{ ok: boolean; heldUntil?: string; recipients?: number; error?: string }> {
+  const res = await apiSend<{ heldUntil: string; recipients: number }>("POST", "/api/tier-openings", input);
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  revalidatePath("/dashboard/booking");
+  return { ok: true, heldUntil: res.data.heldUntil, recipients: res.data.recipients };
+}
+
+export async function listTierOpeningsAction(): Promise<{ ok: boolean; openings?: TierOpeningRow[] }> {
+  const res = await apiGet<{ openings: TierOpeningRow[] }>("/api/tier-openings");
+  if (!res.ok || !res.data) return { ok: false };
+  return { ok: true, openings: res.data.openings };
+}
+
+/** End a hold early: the slot goes straight back on the booking page. */
+export async function releaseTierOpeningAction(id: string): Promise<Result> {
+  return done(await apiSend("POST", `/api/tier-openings/${encodeURIComponent(id)}/release`));
+}
