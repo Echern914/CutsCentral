@@ -50,7 +50,7 @@ function freshStart(): Date {
   return new Date(base + lane++ * 2 * 3600_000);
 }
 
-async function member(tier: "BRONZE" | "SILVER" | "GOLD" | null, name: string) {
+async function member(tier: "BRONZE" | "SILVER" | "GOLD" | null, name: string, demo = false) {
   const phone = randomPhone();
   const client = await prisma.client.create({
     data: {
@@ -65,11 +65,11 @@ async function member(tier: "BRONZE" | "SILVER" | "GOLD" | null, name: string) {
     select: { id: true },
   });
   const account = await prisma.customerAccount.create({
-    data: { firstName: name, phoneE164: phone, phoneVerifiedAt: new Date() },
+    data: { firstName: name, phoneE164: phone, phoneVerifiedAt: new Date(), isDemo: demo },
     select: { id: true },
   });
   accountIds.push(account.id);
-  const token = mintCustomerSession(account.id, 0);
+  const token = mintCustomerSession(account.id, 0, { demo });
   // Linking happens on the customer's own read, exactly as in the app.
   expect((await request(app).get("/api/me/home").set("Authorization", `Bearer ${token}`)).status).toBe(200);
   return { accountId: account.id, token, clientId: client.id };
@@ -134,6 +134,9 @@ beforeAll(async () => {
   gold = await member("GOLD", "Goldie");
   gold2 = await member("GOLD", "Aurum");
   silver = await member("SILVER", "Sterling");
+  // The live demo: a Gold record on a demo account. It must never be invited -
+  // the App Store reviewer is not one of this shop's customers.
+  await member("GOLD", "Demo", true);
 });
 
 afterEach(() => {
@@ -149,11 +152,12 @@ afterAll(async () => {
 });
 
 describe("holding a slot for a tier", () => {
-  it("says who would hear about it before anything is held", async () => {
+  it("says who would hear about it before anything is held - and never counts the demo", async () => {
+    // Three Gold records, but one of them is the live demo account.
     const gold = await request(app).post("/api/tier-openings/preview").set("Cookie", cookie).send({ minTier: "GOLD" });
-    expect(gold.body).toEqual({ members: 2, inApp: 2 });
+    expect(gold.body).toEqual({ members: 3, inApp: 2 });
     const silverUp = await request(app).post("/api/tier-openings/preview").set("Cookie", cookie).send({ minTier: "SILVER" });
-    expect(silverUp.body).toEqual({ members: 3, inApp: 3 });
+    expect(silverUp.body).toEqual({ members: 4, inApp: 3 });
   });
 
   it("🔴 a held slot is gone from the public grid AND refused by the booking guard", async () => {
