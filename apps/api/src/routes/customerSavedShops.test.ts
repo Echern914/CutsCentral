@@ -193,6 +193,16 @@ describe("the barber's side: who saved your shop", () => {
     expect(names.some((n) => n.startsWith("Lee Elsewhere"))).toBe(false);
   });
 
+  it("a demo account never appears", async () => {
+    // The demo can't save through the API at all (read-only session); this is
+    // the second line, for a row that got there any other way.
+    const demo = await account({ firstName: "Demo", lastName: `Browser${randomToken(4)}` });
+    await prisma.customerAccount.update({ where: { id: demo.id }, data: { isDemo: true } });
+    await prisma.customerSavedShop.create({ data: { accountId: demo.id, shopId: shopA.id } });
+    const names = (await savedBy()).people.map((p) => String(p.name));
+    expect(names.some((n) => n.startsWith("Demo Browser"))).toBe(false);
+  });
+
   it("a removed save, or a deleted account, leaves the list", async () => {
     const tag = randomToken(5);
     const kim = await account({ firstName: "Kim", lastName: `Removes${tag}` });
