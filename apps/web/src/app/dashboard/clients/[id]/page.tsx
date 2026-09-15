@@ -25,6 +25,10 @@ interface ClientDetail {
     name: string;
     firstName: string | null;
     lastName: string | null;
+    /** What the customer calls themselves in My ChairBack. Never the shop's own record. */
+    appName?: string | null;
+    /** The shop had no name for this client, so `name` above IS the app name. */
+    nameFromApp?: boolean;
     phone: string | null;
     email: string | null;
     optedOut: boolean;
@@ -141,6 +145,22 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
               </span>
             )}
           </h1>
+          {/* The name the customer set in their own ChairBack app. Beside the
+              shop's name, never over it - the shop's record belongs to the shop
+              and to its sync source. Hidden when it just repeats the headline. */}
+          {client.appName &&
+            (client.nameFromApp ||
+              client.appName.toLowerCase() !== client.name.toLowerCase()) && (
+              <p className="mt-1 text-xs text-muted">
+                {client.nameFromApp ? (
+                  "Name from their ChairBack app"
+                ) : (
+                  <>
+                    Name in their app: <span className="text-offwhite">{client.appName}</span>
+                  </>
+                )}
+              </p>
+            )}
           {client.loyaltyTier && (
             <span
               className="mt-1.5 inline-block rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
