@@ -9,9 +9,15 @@ import {
   frequencySegment,
   cadenceToDays,
   LOYALTY_TIER_KEYS,
+  LOYALTY_TIERS,
   REFERRAL,
+  describeRequirementProgress,
+  describeTierGap,
+  parseTierRules,
+  tierRulesProgress,
   type LoyaltyTierKey,
 } from "@chairback/config";
+import { loadClientTierStats } from "../engines/tierStats.js";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 import {
@@ -1839,6 +1845,7 @@ dashboardRouter.delete("/clients/:clientId/visits/:visitId", async (req, res) =>
 dashboardRouter.get("/clients/:clientId", async (req, res) => {
   const shop = req.shop!;
   const now = new Date();
+  const tierRules = parseTierRules(shop.tierRules, shop.tierThresholds);
   // Read everything this page needs inside ONE tenant transaction (one DB
   // connection), not the old findFirst + five parallel forShop() calls. Each
   // forShop()/currentBalance opens its own interactive $transaction, and an
@@ -1919,15 +1926,19 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
       },
       orderBy: { createdAt: "desc" },
     });
-    return { client, visits, nudges, upcoming, groups, shopCards, rewards, livePromos };
+    // Where they stand under THIS shop's tier rules, counted by the same loader
+    // the stored badge and the customer's own bar use.
+    const tierStats = await loadClientTierStats(tx, shop.id, client.id, tierRules, now);
+    return { client, visits, nudges, upcoming, groups, shopCards, rewards, livePromos, tierStats };
   });
 
   if (!data) {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const { client, visits, nudges, upcoming, groups, shopCards, rewards, livePromos } =
+  const { client, visits, nudges, upcoming, groups, shopCards, rewards, livePromos, tierStats } =
     data;
+  const tierProgress = tierRulesProgress(tierStats, tierRules);
   const balanceByCard = new Map(
     groups.map((g) => [
       g.cardTypeId,
@@ -1964,6 +1975,25 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
       nextExpectedAt: client.nextExpectedAt?.toISOString() ?? null,
       loyaltyTier: client.loyaltyTier,
       preferredCadence: client.preferredCadence,
+    },
+    // The tier as the shop's rules put it RIGHT NOW, and what the next one
+    // takes. The stored loyaltyTier above can lag a rule with a time window by
+    // up to a day (the daily recompute); this is the one to show on the page.
+    tier: {
+      current: tierProgress.current,
+      label: tierProgress.current ? LOYALTY_TIERS[tierProgress.current].label : null,
+      color: tierProgress.current ? LOYALTY_TIERS[tierProgress.current].color : null,
+      fraction: tierProgress.fraction,
+      next: tierProgress.next
+        ? {
+            label: LOYALTY_TIERS[tierProgress.next].label,
+            summary: describeTierGap(tierProgress),
+            requirements: tierProgress.requirements.map((r) => ({
+              met: r.met,
+              text: describeRequirementProgress(r),
+            })),
+          }
+        : null,
     },
     balance,
     cards: [

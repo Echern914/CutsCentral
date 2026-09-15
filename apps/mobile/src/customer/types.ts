@@ -120,13 +120,49 @@ export interface RewardCard {
   rewards: { name: string; description: string | null; cost: number; ready: boolean; remaining: number }[];
 }
 
+export type TierKey = "BRONZE" | "SILVER" | "GOLD";
+
+/** One requirement of the next tier, as the shop's rules count it. */
+export interface TierRequirement {
+  kind: "visits" | "spend";
+  met: boolean;
+  /** "1 of 2 visits in the last 30 days" / "$300 spent" */
+  text: string;
+}
+
+/** A rung of a shop's ladder: what the tier takes there, and what it gets. */
+export interface TierRung {
+  tier: TierKey;
+  label: string;
+  color: string;
+  takes: string;
+  perk: string | null;
+}
+
 export interface RewardProgram {
   shop: ShopRef;
+  /**
+   * Everything added after the first release is optional: an app build can
+   * outlive the API that answers it, and an older answer simply lacks them.
+   */
   tier: {
+    key?: TierKey | null;
     label: string | null;
+    color?: string | null;
     visits: number;
+    /** 0..1 toward the next tier; 1 at the top. */
+    fraction?: number;
     perk: string | null;
-    next: { label: string; visitsAway: number; perk: string | null } | null;
+    next: {
+      label: string;
+      visitsAway: number;
+      perk: string | null;
+      match?: "all" | "any";
+      requirements?: TierRequirement[];
+      /** "1 more visit in the last 30 days to reach Gold" */
+      summary?: string | null;
+    } | null;
+    ladder?: TierRung[];
   };
   cards: RewardCard[];
   activity: { date: string; kind: "earned" | "redeemed" | "bonus" | "adjusted"; punches: number; label: string }[];

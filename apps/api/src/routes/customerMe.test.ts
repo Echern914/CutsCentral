@@ -556,6 +556,34 @@ describe("rewards", () => {
     expect(activity.map((a: { kind: string }) => a.kind)).toEqual(["bonus", "redeemed", "bonus"]);
     expect(activity[1]).toMatchObject({ label: "$10 off", punches: -5 });
   });
+
+  it("the tier carries what the profile draws: its key, colour, bar, what is left, and the ladder", async () => {
+    const phone = randomPhone();
+    const c = await client(shopA, { phone });
+    for (let i = 0; i < 4; i++) {
+      await visit(shopA, c.id, { id: `tier-${randomToken(8)}`, status: "COMPLETED", at: from(-(i + 1) * 7 * DAY) });
+    }
+    const me = await account({ phone });
+    const [program] = (await get("/api/me/rewards", me.token)).body.programs;
+    // Alpha Cuts never set tier rules: Bronze 1, Silver 6, Gold 12.
+    expect(program.tier).toMatchObject({
+      key: "BRONZE",
+      label: "Bronze",
+      color: "#B8772F",
+      visits: 4,
+      next: { label: "Silver", visitsAway: 2, match: "all", summary: "2 more visits to Silver" },
+    });
+    // 3 of the 5 visits between Bronze (1) and Silver (6).
+    expect(program.tier.fraction).toBeCloseTo(0.6, 10);
+    expect(program.tier.next.requirements).toEqual([
+      { kind: "visits", have: 4, need: 6, windowDays: 0, met: false, text: "4 of 6 visits" },
+    ]);
+    expect(program.tier.ladder.map((r: { tier: string; takes: string }) => [r.tier, r.takes])).toEqual([
+      ["BRONZE", "1 visit"],
+      ["SILVER", "6 visits"],
+      ["GOLD", "12 visits"],
+    ]);
+  });
 });
 
 describe("links out to the shop's own pages", () => {
