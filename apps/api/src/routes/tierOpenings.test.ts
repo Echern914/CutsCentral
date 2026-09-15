@@ -134,9 +134,13 @@ beforeAll(async () => {
   gold = await member("GOLD", "Goldie");
   gold2 = await member("GOLD", "Aurum");
   silver = await member("SILVER", "Sterling");
-  // The live demo: a Gold record on a demo account. It must never be invited -
-  // the App Store reviewer is not one of this shop's customers.
-  await member("GOLD", "Demo", true);
+  // The live demo: a Gold record on a demo account, LINKED like any other -
+  // the linking engine refuses demo accounts, so the link is written directly.
+  // It must never be invited: the App Store reviewer is not a customer here.
+  const demo = await member("GOLD", "Demo", true);
+  await prisma.customerClientLink.create({
+    data: { accountId: demo.accountId, clientId: demo.clientId, shopId, matchedBy: "phone", status: "active" },
+  });
 });
 
 afterEach(() => {
@@ -226,6 +230,9 @@ describe("booking it", () => {
     const nothing = await request(app).post(`/api/me/openings/no-such-opening/book`).set(asCustomer(silver));
     expect(nothing.status).toBe(404);
     expect(outsider.body).toEqual(nothing.body);
+    // 🔴 The INVITATION is what refused them, not their link to some record:
+    // both answer 404 to the customer, so only the engine can tell them apart.
+    expect(await claimTierOpening({ accountId: silver.accountId, openingId })).toEqual({ outcome: "not_found" });
 
     const booked = await request(app).post(`/api/me/openings/${openingId}/book`).set(asCustomer(gold));
     expect(booked.status).toBe(201);
