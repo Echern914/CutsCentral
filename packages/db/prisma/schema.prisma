@@ -609,6 +609,7 @@ model Shop {
   waitlistWindows     WaitlistWindow[]
   waitlistOffers      WaitlistOffer[]
   waitlistEvents      WaitlistEvent[]
+  tierOpenings        TierOpening[]
   reviews             Review[]
   receptionistConversations ReceptionistConversation[]
   receptionistMessages      ReceptionistMessage[]
@@ -1179,6 +1180,8 @@ model Client {
   // The My ChairBack customer account(s) this shop record is linked to - by a
   // VERIFIED phone or email match, never a name. See CustomerClientLink.
   customerLinks       CustomerClientLink[]
+  // Openings held for this record's tier that it was told about. See TierOpening.
+  tierOpeningInvites  TierOpeningRecipient[]
 
   @@unique([shopId, acuityClientKey]) // tenant-scoped identity + idempotent upsert
   @@index([shopId])
@@ -1430,6 +1433,74 @@ model WaitlistOffer {
   @@index([shopId, status, expiresAt])
   @@index([shopId, staffId, startsAt])
   @@index([entryId])
+}
+
+// An opening the barber held for a loyalty tier: "Gold members get first pick
+// of Tuesday 3pm until noon, then it's anyone's". engines/tierOpenings.ts.
+//
+// 🔑 A HOLD, ENFORCED LIKE EVERY OTHER HOLD. While status = HELD and heldUntil
+// is in the future, the slot grid (engines/slots.ts) subtracts the span for
+// everyone and the booking guard (engines/bookingWrite.ts) refuses any write
+// over it - except the claim itself, which excludes its own row. Past
+// heldUntil nothing needs to happen: both checks stop matching and the time is
+// simply back on the booking page. That IS "then anyone".
+//
+// Who may claim is not recomputed from tiers at claim time: it is the frozen
+// TierOpeningRecipient list written with the hold, so everyone who was told
+// can book it and nobody who wasn't can.
+model TierOpening {
+  id     String @id @default(cuid())
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  // The physical slot, on one barber, for one service - exactly what the
+  // picker offered when the barber chose it.
+  staffId   String
+  serviceId String
+  startsAt  DateTime
+  endsAt    DateTime
+
+  // The lowest tier invited: GOLD = Gold only, SILVER = Silver and Gold,
+  // BRONZE = every member with a tier.
+  minTier   LoyaltyTier
+  heldUntil DateTime
+
+  // HELD | CLAIMED | RELEASED. A HELD row past heldUntil is simply over.
+  status String @default("HELD")
+
+  claimedAppointmentId String?      @unique
+  claimedAppointment   Appointment? @relation("TierOpeningClaim", fields: [claimedAppointmentId], references: [id], onDelete: SetNull)
+
+  createdByUserId String?
+  recipientCount  Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  recipients TierOpeningRecipient[]
+
+  // The guard and the grid ask "is a live hold on this barber in this span".
+  @@index([shopId, staffId, status, heldUntil])
+  @@index([shopId, createdAt])
+}
+
+// Who was invited to one TierOpening: one My ChairBack account, and the shop
+// record it books as. Frozen when the hold is made.
+//
+// 🔴 PLATFORM-OWNED, like the other customer-account tables: it joins a shop
+// record to a person's account, so the tenant role cannot read it at all.
+model TierOpeningRecipient {
+  id        String          @id @default(cuid())
+  openingId String
+  opening   TierOpening     @relation(fields: [openingId], references: [id], onDelete: Cascade)
+  accountId String
+  account   CustomerAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  clientId  String
+  client    Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdAt DateTime        @default(now())
+
+  @@unique([openingId, accountId])
+  @@index([accountId, createdAt])
 }
 
 // APPEND-ONLY history of every waitlist lifecycle mutation: who did what to
@@ -2914,6 +2985,8 @@ model Appointment {
   // the claimed offer that produced it.
   waitlistEntry WaitlistEntry? @relation("WaitlistBooked")
   waitlistOffer WaitlistOffer? @relation("WaitlistOfferClaim")
+  // Set when this appointment was a tier member claiming an opening held for them.
+  tierOpening   TierOpening?   @relation("TierOpeningClaim")
   // Set when this appointment was created by starting a walk-in queue entry.
   walkInEntry   WalkInEntry?   @relation("WalkInStarted")
 
@@ -3780,6 +3853,7 @@ model CustomerAccount {
 
   links   CustomerClientLink[]
   devices CustomerDevice[]
+  tierOpeningInvites TierOpeningRecipient[]
 }
 
 // One account <-> one shop's Client row. Written ONLY by the linking engine

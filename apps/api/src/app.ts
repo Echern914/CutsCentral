@@ -35,6 +35,7 @@ import { customerMeRouter } from "./routes/customerMe.js";
 import { findShopRouter } from "./routes/findShop.public.js";
 import { unsubscribeRouter } from "./routes/unsubscribe.public.js";
 import { broadcastsRouter } from "./routes/broadcasts.js";
+import { tierOpeningsRouter } from "./routes/tierOpenings.js";
 import { walletRouter } from "./routes/wallet.js";
 import { dashboardRouter } from "./routes/dashboard.js";
 import { barberRouter } from "./routes/barber.js";
@@ -272,6 +273,8 @@ export function createApp(): Express {
   // every other authenticated surface - a route that can reach a shop's whole
   // client book is the last one that should be exempt from rate limiting.
   app.use("/api/broadcasts", dashboardLimiter, broadcastsRouter);
+  // Openings held for a loyalty tier - same wall and limiter as broadcasts.
+  app.use("/api/tier-openings", dashboardLimiter, tierOpeningsRouter);
   app.use("/api/loyalty", dashboardLimiter, loyaltyRouter);
   app.use("/api/promos", dashboardLimiter, promotionsRouter);
   app.use("/api/billing", dashboardLimiter, billingRouter);

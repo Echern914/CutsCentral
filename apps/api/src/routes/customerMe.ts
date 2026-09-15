@@ -25,6 +25,8 @@ import {
 import { consentView, optInClientInTx, optOutClientInTx } from "../services/clientConsent.js";
 import { resolveIdentifier } from "./customerAuth.js";
 import { logger } from "../logger.js";
+import { claimTierOpening, openingsForAccount } from "../engines/tierOpenings.js";
+import { notifyAppointmentConfirmation, notifyBarberBookingEvent } from "../services/appointmentNotify.js";
 
 /**
  * /api/me - the signed-in customer's own ChairBack.
@@ -145,6 +147,66 @@ customerMeRouter.post("/profiles/claim", async (req, res) => {
 
 customerMeRouter.get("/rewards", async (req, res) => {
   res.json({ programs: await rewardPrograms(await loadPortal(accountId(req))) });
+});
+
+// --- Openings held for your tier --------------------------------------------------------
+
+/** Live openings a shop held for a tier this customer was invited as. */
+customerMeRouter.get("/openings", async (req, res) => {
+  res.json({ openings: await openingsForAccount(accountId(req)) });
+});
+
+/**
+ * Book one. Every refusal that could reveal an opening this account was not
+ * invited to is the same 404.
+ */
+customerMeRouter.post("/openings/:id/book", async (req, res) => {
+  const result = await claimTierOpening({ accountId: accountId(req), openingId: String(req.params.id) });
+  switch (result.outcome) {
+    case "claimed": {
+      // Same post-commit side effects as any customer booking, including the
+      // approval split: a PENDING request is confirmed when the barber approves.
+      if (!result.pending) {
+        void notifyAppointmentConfirmation({ shopId: result.shopId, appointmentId: result.appointmentId });
+      }
+      void notifyBarberBookingEvent({
+        shopId: result.shopId,
+        appointmentId: result.appointmentId,
+        kind: result.pending ? "requested" : "booked",
+      });
+      res.status(201).json({
+        ok: true,
+        startsAt: result.startsAt.toISOString(),
+        endsAt: result.endsAt.toISOString(),
+        pending: result.pending,
+      });
+      return;
+    }
+    case "not_found":
+    case "not_linked":
+      // A record the shop corrected since the invitation is not this person's
+      // to book as - and saying so would confirm whose it is.
+      return notFound(res);
+    case "ended":
+      res.status(410).json({ error: "opening_ended" });
+      return;
+    case "slot_taken":
+    case "unavailable_external":
+      res.status(409).json({ error: "slot_taken" });
+      return;
+    case "day_full":
+      res.status(409).json({ error: "day_full" });
+      return;
+    case "deposit_required":
+      res.status(409).json({ error: "deposit_required" });
+      return;
+    default: {
+      // Exhaustive: a new outcome is a build failure, never a hung request.
+      const unhandled: never = result;
+      logger.error({ outcome: (unhandled as { outcome?: string })?.outcome }, "tier opening claim: unhandled outcome");
+      res.status(500).json({ error: "internal" });
+    }
+  }
 });
 
 // --- Profile ----------------------------------------------------------------------------
