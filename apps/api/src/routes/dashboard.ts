@@ -49,6 +49,7 @@ import {
   unarchiveClient,
 } from "../services/client.js";
 import { dismissDuplicates, findDuplicateGroups } from "../services/clientDuplicates.js";
+import { appNamesForClients } from "../services/customerAppName.js";
 import { recomputeCadence } from "../engines/cadence.js";
 import { sweepShop, type EligibilityData } from "../engines/nudge.js";
 import { sweepShopWinback } from "../engines/winback.js";
@@ -680,11 +681,20 @@ dashboardRouter.get("/clients", async (req, res) => {
   const balById = new Map(
     balances.map((b) => [b.clientId, (b._sum.punchesEarned ?? 0) - (b._sum.punchesRedeemed ?? 0)]),
   );
+  // Rows the shop has no name for - typically a walk-in logged by phone. If the
+  // person behind one set a name in their own ChairBack app, that beats
+  // "Unknown", and the row says where it came from. Only these rows are looked
+  // up, so a page of named clients costs nothing extra.
+  const appNames = await appNamesForClients(
+    shop.id,
+    clients.filter((c) => name(c) === "Unknown").map((c) => c.id),
+  );
 
   res.json({
     clients: clients.map((c) => ({
       id: c.id,
-      name: name(c),
+      name: appNames.get(c.id) ?? name(c),
+      nameFromApp: appNames.has(c.id),
       phone: c.phone,
       email: c.email,
       optedOut: c.optedOut,
@@ -1891,11 +1901,18 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
   );
   const balance = [...balanceByCard.values()].reduce((sum, b) => sum + b, 0);
   const cardBalance = (cardTypeId: string | null) => balanceByCard.get(cardTypeId) ?? 0;
+  // What the customer calls themselves in My ChairBack - shown BESIDE the shop's
+  // own name, never written over it (services/customerAppName.ts).
+  const shopName = name(client);
+  const appName = (await appNamesForClients(shop.id, [client.id])).get(client.id) ?? null;
+  const nameFromApp = shopName === "Unknown" && appName !== null;
 
   res.json({
     client: {
       id: client.id,
-      name: name(client),
+      name: nameFromApp && appName ? appName : shopName,
+      appName,
+      nameFromApp,
       firstName: client.firstName,
       lastName: client.lastName,
       phone: client.phone,
