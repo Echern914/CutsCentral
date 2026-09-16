@@ -88,8 +88,8 @@ describe("resolveFeature — the navigation gate", () => {
   });
 
   it("a flag that is off removes the destination entirely", () => {
-    expect(resolveFeature("punch-cards").ok).toBe(true);
-    const r = resolveFeature("punch-cards", { flagsOff: ["rewardsEnabled"] });
+    expect(resolveFeature("loyalty-tiers").ok).toBe(true);
+    const r = resolveFeature("loyalty-tiers", { flagsOff: ["rewardsEnabled"] });
     expect(r.ok).toBe(false);
     expect(r.ok === false && r.reason).toBe("flag");
   });
@@ -214,10 +214,18 @@ describe("visibleFeatures — what a surface may browse", () => {
 
   it("drops rewards features when the shop switched rewards off", () => {
     const ids = visibleFeatures({ flagsOff: ["rewardsEnabled"] }).map((f) => f.id);
-    for (const id of ["punch-cards", "vip-cards", "loyalty-tiers"]) {
+    for (const id of ["vip-cards", "loyalty-tiers"]) {
       expect(ids, id).not.toContain(id);
     }
     expect(ids).toContain("clients");
+  });
+
+  // 🔴 The Rewards page holds the on/off switch. Hiding it behind the flag it
+  // controls is how a shop that turned rewards off lost the way to turn them on.
+  it("keeps the page with the rewards switch reachable while rewards are off", () => {
+    const ids = visibleFeatures({ flagsOff: ["rewardsEnabled"] }).map((f) => f.id);
+    expect(ids).toContain("punch-cards");
+    expect(resolveHref("punch-cards", { flagsOff: ["rewardsEnabled"] })).toBe("/dashboard/rewards");
   });
 });
 

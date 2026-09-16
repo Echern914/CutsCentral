@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { apiGet } from "@/lib/api";
 import { getMe } from "@/lib/me";
 import { DemoTour } from "@/components/tour/DemoTour";
 import { RewardsBuilder } from "./RewardsBuilder";
+import { RewardsSwitch } from "./RewardsSwitch";
 import { TierPerks } from "./TierPerks";
 
 export const metadata: Metadata = { title: "Rewards" };
@@ -54,23 +54,22 @@ export default async function RewardsPage() {
   // is memoized so it's ~free; this removes a serial API hop from the load.
   const [me, res] = await Promise.all([getMe(), apiGet<LoyaltyConfig>("/api/loyalty")]);
 
-  // Rewards off (deep link / stale tab - the nav pill is already hidden): a
-  // clear "flip it on in Settings" note instead of a dead builder.
-  if (me.ok && me.data && !me.data.rewardsEnabled) {
+  // Unknown (a /me hiccup) reads as ON - the same default the nav uses, so a
+  // paying shop's reward menu never vanishes behind a transient failure.
+  const rewardsOn = !(me.ok && me.data && !me.data.rewardsEnabled);
+
+  // Rewards off: this page is where they come back on. It used to say "flip it
+  // on in Settings" and send the owner hunting for a checkbox somewhere else.
+  if (!rewardsOn) {
     return (
-      <main className="mx-auto w-full max-w-xl px-5 py-16 text-center">
-        <h1 className="font-display text-2xl">Rewards are off</h1>
-        <p className="mt-2 text-sm text-muted">
-          Punch cards &amp; rewards are turned off for this shop, so clients
-          don&apos;t see any of it. Flip them on from the Settings card to
-          build your reward menu - any punches already earned are safe.
+      <main className="mx-auto w-full max-w-2xl px-5 py-8">
+        <header className="mb-6">
+          <h1 className="font-display text-3xl tracking-tight">Rewards</h1>
+        </header>
+        <RewardsSwitch on={false} />
+        <p className="text-sm text-muted">
+          Turn rewards on to build your menu of punch cards, rewards and tiers.
         </p>
-        <Link
-          href="/dashboard"
-          className="mt-5 inline-block rounded-full bg-gold px-5 py-2 text-sm font-semibold text-charcoal-900"
-        >
-          Go to Settings
-        </Link>
       </main>
     );
   }
@@ -91,6 +90,7 @@ export default async function RewardsPage() {
           Everything here shows up on your clients&apos; rewards page.
         </p>
       </header>
+      <RewardsSwitch on />
       <div data-tour="menu">
         <RewardsBuilder config={res.data} />
       </div>

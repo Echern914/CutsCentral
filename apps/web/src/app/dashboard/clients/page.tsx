@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { apiGet } from "@/lib/api";
+import { getMe } from "@/lib/me";
 import { DemoTour } from "@/components/tour/DemoTour";
 import { BroadcastCard } from "./BroadcastCard";
 import { ClientsControls } from "./ClientsControls";
@@ -21,9 +22,11 @@ export default async function ClientsPage({
   for (const k of ["q", "sort", "filter", "tier", "page"] as const) {
     if (searchParams[k]) qs.set(k, searchParams[k]!);
   }
-  const [res, dupes] = await Promise.all([
+  const [res, dupes, me] = await Promise.all([
     apiGet<ClientsResponse>(`/api/dashboard/clients?${qs.toString()}`),
     apiGet<{ total: number }>("/api/dashboard/clients/duplicates"),
+    // Memoized per render - the layout already fetched it.
+    getMe(),
   ]);
   const data = res.data;
   const duplicateGroups = dupes.data?.total ?? 0;
@@ -71,9 +74,11 @@ export default async function ClientsPage({
           packages/config/src/demoTour.ts */}
       <DemoTour tour="dashboard" route="clients" />
       {/* One message to the whole book, or one loyalty group. Above the list
-          because it is about all of them, not about the row you tapped. */}
+          because it is about all of them, not about the row you tapped.
+          Unknown rewards state reads as ON, like the nav: the API refuses a
+          tier audience for a rewards-off shop regardless. */}
       <div className="mb-5">
-        <BroadcastCard />
+        <BroadcastCard rewardsEnabled={me.data?.rewardsEnabled ?? true} />
       </div>
 
       <ClientsControls />

@@ -81,6 +81,8 @@ export type BroadcastBlocker =
   /** This deployment has no dedicated unsubscribe secret - see the engine note. */
   | { kind: "unsubscribe_not_configured" }
   | { kind: "no_postal_address" }
+  /** A tier is part of rewards, and this shop has rewards switched off. */
+  | { kind: "tiers_need_rewards" }
   /** Somebody already pressed send; this one is queued, in flight or done. */
   | { kind: "already_sending" }
   | { kind: "not_found" };
@@ -164,6 +166,8 @@ export interface BroadcastShop {
   slug: string | null;
   ownerEmail: string | null;
   postal: string | null;
+  /** Tiers exist only while this is on - see the tiers_need_rewards blocker. */
+  rewardsEnabled: boolean;
 }
 
 /** The shop facts a send needs. */
@@ -183,6 +187,7 @@ export async function loadBroadcastShop(shopId: string): Promise<BroadcastShop |
       addressCity: true,
       addressRegion: true,
       addressPostal: true,
+      rewardsEnabled: true,
     },
   });
   if (!shop) return null;
@@ -191,6 +196,7 @@ export async function loadBroadcastShop(shopId: string): Promise<BroadcastShop |
     slug: shop.slug,
     ownerEmail: shop.owner?.email ?? null,
     postal: postalAddress(shop),
+    rewardsEnabled: shop.rewardsEnabled,
   };
 }
 
@@ -251,7 +257,15 @@ export async function previewBroadcast(params: {
   let emailsRemaining: number | null = null;
   let blocker: BroadcastBlocker | null = null;
 
-  if (params.channel === "email") {
+  // 🔴 A TIER IS A REWARDS THING. With rewards off the shop has told its clients
+  // there is no program, so a message to "the gold members" would be the program
+  // speaking after it was switched off. Checked first, because no channel fixes
+  // it - and fail-closed on a shop that could not be read.
+  if (params.tiers.length > 0 && !shop?.rewardsEnabled) {
+    blocker = { kind: "tiers_need_rewards" };
+  }
+
+  if (!blocker && params.channel === "email") {
     if (!emailEnabled()) {
       blocker = { kind: "email_not_configured" };
     } else if (marketingEmailConfigError(apiEnv()) !== null) {
@@ -348,6 +362,12 @@ export async function queueBroadcast(params: {
         const broadcast = locked[0];
         if (!broadcast) throw new Refused({ kind: "not_found" });
         if (broadcast.status !== "DRAFT") throw new Refused({ kind: "already_sending" });
+        // The preview's rule, taken again at the moment of commitment: a draft
+        // aimed at a tier while rewards were on must not go out after they were
+        // switched off.
+        if (broadcast.audienceTiers.length > 0 && !shop?.rewardsEnabled) {
+          throw new Refused({ kind: "tiers_need_rewards" });
+        }
 
         // 2. THE REAL AUDIENCE, now, under the lock.
         const clients = await loadClientsInTx(tx, params.shopId);

@@ -103,6 +103,10 @@ beforeEach(async () => {
       addressCity: "Newark",
       addressRegion: "NJ",
       addressPostal: "07102",
+      // These tests aim messages at loyalty tiers, and a tier only exists while
+      // rewards are on - a NEW shop starts with them off. The rewards-off refusal
+      // itself is proven in rewardsToggle.test.ts.
+      rewardsEnabled: true,
     },
   });
 });

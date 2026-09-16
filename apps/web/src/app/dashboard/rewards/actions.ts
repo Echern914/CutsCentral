@@ -8,6 +8,21 @@ import { apiGet, apiSend } from "@/lib/api";
  * server-fetched config re-renders with the change.
  */
 
+/**
+ * THE rewards on/off switch.
+ *
+ * Revalidates the whole dashboard LAYOUT, not just this page: the flag rides on
+ * getMe(), which the nav, the Settings card and the Clients page's broadcast
+ * card all read - and a stale one would keep offering tiers to a shop that just
+ * switched rewards off.
+ */
+export async function setRewardsEnabledAction(on: boolean): Promise<{ ok: boolean }> {
+  const res = await apiSend("PATCH", "/api/shops/me", { rewardsEnabled: on });
+  if (!res.ok) return { ok: false };
+  revalidatePath("/dashboard", "layout");
+  return { ok: true };
+}
+
 export interface RewardInput {
   name: string;
   description?: string;

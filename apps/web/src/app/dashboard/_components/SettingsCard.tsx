@@ -95,35 +95,21 @@ export function SettingsCard({ settings }: { settings: ShopSettings }) {
             <input name="dailySendCap" type="number" min={1} defaultValue={settings.dailySendCap} className={`mt-1 ${field}`} />
           </label>
         </div>
-        {settings.rewardsEnabled && (
-          <p className="-mt-2 text-xs text-muted">
-            Looking for your reward setup? It moved to the{" "}
-            <a href="/dashboard/rewards" className="text-gold hover:underline">
-              Rewards
-            </a>{" "}
-            tab, where you can build a full menu.
-          </p>
-        )}
-
-        {/* Master rewards switch. Off = a pure booking app: no punch cards, no
-            rewards pages, no loyalty notifications - anywhere. Balances are
-            kept, so turning it back on picks up right where it left off. */}
-        <label className="flex items-start gap-3">
-          <input
-            type="checkbox"
-            name="rewardsEnabled"
-            defaultChecked={settings.rewardsEnabled}
-            className="mt-0.5 h-4 w-4 shrink-0 accent-gold"
-          />
-          <span className="text-sm text-offwhite">
-            Punch cards &amp; rewards
-            <span className="mt-0.5 block text-xs text-muted">
-              Off = just a booking app. Clients don&apos;t see punch cards or
-              rewards anywhere. Any punches already earned are kept and come
-              back if you turn it on again.
-            </span>
+        {/* 🔴 NO REWARDS CHECKBOX HERE ANY MORE. The switch lives on the Rewards
+            page, and only there. This form posts every field it renders, so a
+            checkbox here turned rewards back on from any Settings tab opened
+            before somebody switched them off. */}
+        <p className="-mt-2 text-xs text-muted">
+          Punch cards &amp; rewards are{" "}
+          <span className="font-medium text-offwhite">
+            {settings.rewardsEnabled ? "on" : "off"}
           </span>
-        </label>
+          .{" "}
+          <a href="/dashboard/rewards" className="text-gold hover:underline">
+            {settings.rewardsEnabled ? "Build your menu or turn them off" : "Turn them on"}
+          </a>{" "}
+          on the Rewards page.
+        </p>
 
         {/* Rebooking window (powers the client countdown timer) */}
         <label className={labelCls}>

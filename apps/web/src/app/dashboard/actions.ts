@@ -155,7 +155,8 @@ export async function saveSettingsAction(
     dailySendCap: Number(formData.get("dailySendCap") ?? 50),
     rebookWindowDays: Number(formData.get("rebookWindowDays") ?? 14),
     smsTemplate: smsTemplate === "" ? null : smsTemplate,
-    rewardsEnabled: formData.get("rewardsEnabled") === "on",
+    // rewardsEnabled is deliberately absent: it has its own switch on the
+    // Rewards page, and this PATCH treats a missing field as unchanged.
     loyaltyTextsEnabled: formData.get("loyaltyTextsEnabled") === "on",
   });
   revalidatePath("/dashboard");

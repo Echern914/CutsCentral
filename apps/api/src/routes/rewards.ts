@@ -408,7 +408,12 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
       preference: client.preferredCadence,
       computed: client.medianIntervalDays != null,
     },
-    loyalty,
+    // 🔴 No tier with rewards off - not even to a raw API reader, which is what
+    // the gate comment above promises. Same shape rather than null, so a web
+    // page deployed before this API never dereferences a missing object.
+    loyalty: rewardsOn
+      ? loyalty
+      : { ...loyalty, tier: null, label: null, color: null, fraction: 0, perk: null, nextTier: null },
     consent: consentView(client),
     // Whether the API can mint Apple Wallet passes (WALLET_* env configured) -
     // drives the rewards page's Add-to-Wallet button. Hidden while rewards are

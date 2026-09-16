@@ -125,7 +125,8 @@ export function hexToRgb(hex: string | null, fallback: string): string {
 /**
  * Build + sign the CURRENT pass for one client. Public-path trust model: the
  * caller has already authenticated (magicToken route or ApplePass token), so
- * reads run as owner. Returns null when the client is gone.
+ * reads run as owner. Returns null when the client is gone, or when their shop
+ * has rewards switched off.
  */
 export async function buildPassForClient(clientId: string): Promise<Buffer | null> {
   const data = await runAsOwner(async (tx) => {
@@ -135,10 +136,15 @@ export async function buildPassForClient(clientId: string): Promise<Buffer | nul
         id: true,
         firstName: true,
         magicToken: true,
-        shop: { select: { id: true, name: true, accentColor: true } },
+        shop: { select: { id: true, name: true, accentColor: true, rewardsEnabled: true } },
       },
     });
-    if (!client) return null;
+    // 🔴 THE PASS IS A PUNCH CARD. A shop with rewards off has told its clients
+    // there is no punch card, so there is no pass: a fresh download 404s, and an
+    // iPhone refreshing a card it added earlier gets the same answer instead of
+    // a balance. Both doors come through here, which is why the check is here
+    // rather than in either route.
+    if (!client || !client.shop.rewardsEnabled) return null;
     // The pass shows the DEFAULT card's view (cardTypeId null) - same as the
     // rewards page's top-level balance. Identical to the total for every shop
     // without custom card types.
