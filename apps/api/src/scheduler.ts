@@ -34,6 +34,7 @@ import { runDemoReset } from "./engines/demoReset.js";
 import { runEmailOutbox } from "./engines/emailOutbox.js";
 import { runBroadcastWorker } from "./engines/broadcastWorker.js";
 import { runCustomerSignInOutbox } from "./engines/customerSignInOutbox.js";
+import { runTierRecompute } from "./engines/tierRecomputeJob.js";
 import { runAffiliateCreditExecution } from "./engines/affiliateCredit.js";
 import { reconcilePayments } from "./billing/reconcile.js";
 import { processRotationRun } from "./services/rewardsRotation.js";
@@ -522,6 +523,20 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
     ttlMs: 10 * MINUTE,
     run: () => runDemoReset(),
     failMsg: "demo reset failed",
+  },
+  // Loyalty tiers whose rules move with time: "2 visits in the last 30 days"
+  // stops being true with nobody touching anything, and money moves on refunds
+  // and checkouts. Daily at 03:30 re-stamps only the shops with such rules; a
+  // shop on plain visit counts is kept exact by its visit writes.
+  {
+    cronExpr: "30 3 * * *",
+    name: "tier-recompute",
+    ttlMs: 30 * MINUTE,
+    run: async () => {
+      const r = await runTierRecompute();
+      if (r.changed > 0 || r.failed > 0) logger.info(r, "tier recompute moved clients");
+    },
+    failMsg: "tier recompute failed",
   },
 ];
 

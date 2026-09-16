@@ -8,11 +8,13 @@ import {
   type CadenceKey,
   DEMO,
   LOYALTY_TIER_KEYS,
+  parseTierRules,
   randomToken,
   formatShopAddress,
   mapsUrlFor,
 } from "@chairback/config";
 import { buildLoyaltyView } from "../services/loyaltyView.js";
+import { loadClientTierStats } from "../engines/tierStats.js";
 import { consentView, optInClientInTx, optOutClientInTx } from "../services/clientConsent.js";
 import { prisma, runAsOwner } from "@chairback/db";
 import { toE164 } from "../acuity/clientKey.js";
@@ -56,6 +58,7 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
       grants,
       ledgerGroups,
       lastAppointment,
+      tierStats,
     ] =
       await Promise.all([
       tx.visit.findMany({
@@ -225,6 +228,15 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
           staff: { select: { name: true } },
         },
       }),
+      // The numbers this shop's tier rules are decided on - the same loader the
+      // stored badge is stamped from, so the bar agrees with it.
+      loadClientTierStats(
+        tx,
+        client.shopId,
+        client.id,
+        parseTierRules(client.shop.tierRules, client.shop.tierThresholds),
+        now,
+      ),
     ]);
     return {
       client,
@@ -239,6 +251,7 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
       cardTypes,
       grants,
       ledgerGroups,
+      tierStats,
     };
   });
 
@@ -259,6 +272,7 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
     cardTypes,
     grants,
     ledgerGroups,
+    tierStats,
   } = data;
   const now = new Date();
 
@@ -267,6 +281,7 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
   // loyaltyView.ts), so the two surfaces can never disagree about a punch.
   const { loyalty, balance, nextTarget, rewardsFor, cards } = buildLoyaltyView(client.shop, {
     completedCount,
+    tierStats,
     rewards,
     cardTypes,
     grants,
