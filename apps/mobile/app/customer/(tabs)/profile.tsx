@@ -135,14 +135,18 @@ export default function ProfileScreen() {
 function NameEditor({ profile, disabled, onSaved }: { profile: Profile; disabled: boolean; onSaved: () => void }) {
   const { api } = useCustomer();
   const [first, setFirst] = useState(profile.firstName ?? "");
+  const [last, setLast] = useState(profile.lastName ?? "");
   const [busy, setBusy] = useState(false);
   useEffect(() => setFirst(profile.firstName ?? ""), [profile.firstName]);
-  const dirty = first.trim() !== (profile.firstName ?? "");
+  useEffect(() => setLast(profile.lastName ?? ""), [profile.lastName]);
+  const dirty = first.trim() !== (profile.firstName ?? "") || last.trim() !== (profile.lastName ?? "");
 
   async function save() {
     setBusy(true);
     try {
-      await api.send("PATCH", "/api/me", { firstName: first });
+      // Both, always: clearing a last name is a real change too. The API turns
+      // an empty field into "no name" rather than an empty string.
+      await api.send("PATCH", "/api/me", { firstName: first, lastName: last });
       invalidate("/api/me");
       onSaved();
     } catch (err) {
@@ -155,7 +159,7 @@ function NameEditor({ profile, disabled, onSaved }: { profile: Profile; disabled
   return (
     <View>
       <Txt variant="footnoteStrong" tone="secondary" style={styles.fieldLabel}>
-        What should we call you?
+        Your name
       </Txt>
       <TextInput
         value={first}
@@ -171,6 +175,24 @@ function NameEditor({ profile, disabled, onSaved }: { profile: Profile; disabled
         accessibilityLabel="First name"
         style={styles.input}
       />
+      <TextInput
+        value={last}
+        onChangeText={setLast}
+        editable={!disabled}
+        placeholder="Last name"
+        placeholderTextColor={color.textTertiary}
+        autoCapitalize="words"
+        textContentType="familyName"
+        autoComplete="family-name"
+        returnKeyType="done"
+        onSubmitEditing={() => dirty && void save()}
+        accessibilityLabel="Last name"
+        style={[styles.input, styles.gap]}
+      />
+      {/* Said before they save, not after: this name leaves the phone. */}
+      <Txt variant="footnote" tone="secondary" style={styles.gap}>
+        Shops you visit see this name, next to their own record of you.
+      </Txt>
       {dirty ? <Button label="Save name" variant="secondary" busy={busy} onPress={save} style={styles.gap} /> : null}
     </View>
   );

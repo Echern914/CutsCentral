@@ -17,6 +17,8 @@ import { bulkClientAction } from "../actions";
 export interface ClientRow {
   id: string;
   name: string;
+  /** The shop had no name, so `name` is what the customer set in their own app. */
+  nameFromApp?: boolean;
   phone: string | null;
   email: string | null;
   optedOut: boolean;
@@ -185,13 +187,24 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
                   <p className="truncate text-sm font-medium text-offwhite">{c.name}</p>
                   {/* Badges on their own wrapping line so a long name can't push
                       them off-screen (they carry the consent/opt-out signal). */}
-                  {(c.source === "manual" ||
+                  {(c.nameFromApp ||
+                    c.source === "manual" ||
                     c.optedOut ||
                     !c.smsConsent ||
                     c.archived ||
                     c.loyaltyTier ||
                     c.frequencySegment) && (
                     <span className="mt-1 flex flex-wrap gap-1.5">
+                      {/* The shop had no name for this row; the one shown is the
+                          customer's own, from their ChairBack app - say so. */}
+                      {c.nameFromApp && (
+                        <span
+                          className="rounded-full bg-charcoal-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted"
+                          title="You have no name for this client. This is the name they set in their own ChairBack app."
+                        >
+                          name from app
+                        </span>
+                      )}
                       {c.loyaltyTier && (
                         <span
                           className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
