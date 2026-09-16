@@ -526,6 +526,27 @@ export async function computeFreeRanges(
           select: { startsAt: true, endsAt: true },
         });
 
+    // Openings HELD for a loyalty tier: until heldUntil they belong to that
+    // tier's members, who book them in the app - so the public grid must not
+    // show them to anyone. The instant the hold lapses this stops matching and
+    // the slot is back for everyone, which is the whole "then anyone" rule.
+    // Skipped by the write-path check like waitlist holds: the tx guard in
+    // bookingWrite.ts is authoritative there, and it is what lets a claim
+    // exclude its OWN opening.
+    const tierHolds = input.ignoreBooked
+      ? []
+      : await tx.tierOpening.findMany({
+          where: {
+            staffId: input.staffId,
+            shopId: input.shopId,
+            status: "HELD",
+            heldUntil: { gt: now },
+            startsAt: { lt: new Date(rangeEnd) },
+            endsAt: { gt: new Date(rangeStart) },
+          },
+          select: { startsAt: true, endsAt: true },
+        });
+
     // Synced EXTERNAL appointments (Acuity/Square Visits) occupy their span
     // too. A shop that switches to native booking often still has FUTURE
     // synced appointments on the books — without this the picker offers those
@@ -598,6 +619,7 @@ export async function computeFreeRanges(
       exceptions,
       booked,
       waitlistHolds,
+      tierHolds,
       externalVisits,
       externalBlocks,
       targeted,
@@ -615,6 +637,7 @@ export async function computeFreeRanges(
     exceptions,
     booked,
     waitlistHolds,
+    tierHolds,
     externalVisits,
     externalBlocks,
     targeted,
@@ -759,6 +782,13 @@ export async function computeFreeRanges(
   // Live waitlist holds: buffered exactly like the appointment each would
   // become, so the surrounding grid stays claim-compatible.
   for (const h of waitlistHolds) {
+    blocks.push({
+      start: h.startsAt.getTime(),
+      end: h.endsAt.getTime() + buffer * MS_PER_MIN,
+    });
+  }
+  // Tier holds: the same treatment - each is the appointment it would become.
+  for (const h of tierHolds) {
     blocks.push({
       start: h.startsAt.getTime(),
       end: h.endsAt.getTime() + buffer * MS_PER_MIN,

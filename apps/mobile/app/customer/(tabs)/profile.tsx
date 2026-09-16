@@ -8,9 +8,10 @@ import { Screen } from "@/src/customer/Screen";
 import { ApiError, errorCopy } from "@/src/customer/api";
 import { displayPhone } from "@/src/customer/format";
 import { color, radius, space, type } from "@/src/customer/theme";
+import { OpeningCard } from "@/src/customer/openings";
 import { ProfileHero, TierStatusCard } from "@/src/customer/status";
 import { bestTier, displayName, heroLine } from "@/src/customer/tierStatus";
-import type { Notifications, Profile, RewardProgram } from "@/src/customer/types";
+import type { Notifications, Opening, Profile, RewardProgram } from "@/src/customer/types";
 import { Button, ErrorState, Group, Placeholder, Row, SectionHeader, Separator, StaleBanner, Tap, Txt } from "@/src/customer/ui";
 
 /**
@@ -28,6 +29,10 @@ export default function ProfileScreen() {
   const rewards = useResource<{ programs: RewardProgram[] }>("/api/me/rewards");
   const programs = rewards.data?.programs ?? [];
   const best = bestTier(programs);
+  // Slots a shop is holding for this customer's tier right now. Time-critical,
+  // so they sit above everything else on this screen.
+  const openings = useResource<{ openings: Opening[] }>("/api/me/openings");
+  const held = openings.data?.openings ?? [];
 
   async function confirmDelete() {
     Alert.alert(
@@ -55,10 +60,11 @@ export default function ProfileScreen() {
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>
       <Screen
         title="Profile"
-        refreshing={profile.refreshing || rewards.refreshing}
+        refreshing={profile.refreshing || rewards.refreshing || openings.refreshing}
         onRefresh={() => {
           void profile.refresh();
           void rewards.refresh();
+          void openings.refresh();
         }}
       >
         {profile.stale ? <StaleBanner onRetry={profile.refresh} /> : null}
@@ -77,6 +83,17 @@ export default function ProfileScreen() {
             shop. Rewards that fail to load leave the hero with no ring rather
             than an error: the rest of Profile still has to work. */}
         {me ? <ProfileHero name={displayName(me)} best={best} line={heroLine(best, programs)} /> : null}
+
+        {/* A slot a shop is keeping for their tier, and the time it runs out. */}
+        {held.length > 0 ? (
+          <>
+            <SectionHeader title="Held for you" />
+            {held.map((o) => (
+              <OpeningCard key={o.id} opening={o} onBooked={() => void openings.refresh()} />
+            ))}
+          </>
+        ) : null}
+
         {programs.length > 0 ? (
           <>
             <SectionHeader title="Your status" />

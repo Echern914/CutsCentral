@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Stack } from "expo-router";
+import { router, Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import * as SplashScreen from "expo-splash-screen";
@@ -9,6 +9,7 @@ import {
   BricolageGrotesque_700Bold,
 } from "@expo-google-fonts/bricolage-grotesque";
 import { LaunchScene } from "@/src/LaunchScene";
+import { routeForNotification } from "@/src/pushTap";
 
 /**
  * Root layout.
@@ -59,6 +60,28 @@ export default function RootLayout() {
     } catch {
       /* non-fatal */
     }
+  }, []);
+
+  useEffect(() => {
+    // A TAPPED notification. Only one kind needs to take the customer
+    // somewhere - an opening held for their tier, which is on Profile and
+    // expires - so the rule lives in src/pushTap.ts and everything else keeps
+    // opening the app where it was. Covers a tap that LAUNCHED the app too.
+    let alive = true;
+    const go = (data: unknown) => {
+      const path = routeForNotification(data);
+      if (alive && path) router.navigate(path as "/customer/profile");
+    };
+    Notifications.getLastNotificationResponseAsync()
+      .then((res) => go(res?.notification.request.content.data))
+      .catch(() => {});
+    const sub = Notifications.addNotificationResponseReceivedListener((res) =>
+      go(res.notification.request.content.data),
+    );
+    return () => {
+      alive = false;
+      sub.remove();
+    };
   }, []);
 
   useEffect(() => {
