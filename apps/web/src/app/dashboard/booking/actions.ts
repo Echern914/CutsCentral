@@ -244,7 +244,13 @@ export interface AcuityStaffMapping {
   bookable: boolean;
   calendarId: string | null;
   calendarName: string | null;
-  /** null = fine. "unmapped" | "stale" | "invalid". */
+  /**
+   * Other calendars this SAME chair is sold on - only for Acuity accounts that
+   * split one barber across several service-named calendars. One booking
+   * blocks every one of them.
+   */
+  extraCalendarIds: string[];
+  /** null = fine. "unmapped" | "stale" | "invalid" | "extra_invalid". */
   problem: string | null;
 }
 export interface AcuityMappingData {
@@ -279,6 +285,27 @@ export async function setStaffAcuityCalendarAction(
     "PUT",
     `/api/booking/staff/${encodeURIComponent(staffId)}/acuity-calendar`,
     { calendarId, connectedAt },
+  );
+  revalidatePath("/dashboard/booking");
+  return done(res);
+}
+
+/**
+ * The OTHER calendars this one chair is sold on (empty clears them).
+ *
+ * Only accounts that run one barber across several service-named calendars
+ * need this: an Acuity block is calendar-scoped, so blocking the primary alone
+ * leaves the same hour bookable on every other one.
+ */
+export async function setStaffAcuityExtraCalendarsAction(
+  staffId: string,
+  calendarIds: string[],
+  connectedAt: string | null,
+): Promise<Result> {
+  const res = await apiSend(
+    "PUT",
+    `/api/booking/staff/${encodeURIComponent(staffId)}/acuity-extra-calendars`,
+    { calendarIds, connectedAt },
   );
   revalidatePath("/dashboard/booking");
   return done(res);

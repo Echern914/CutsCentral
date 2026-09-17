@@ -318,7 +318,7 @@ export function registerAppointmentEdit(
       }
     }
 
-    let mirrorOutboxId: string | null = null;
+    let mirrorOutboxIds: string[] = [];
     try {
       await runWithShop(shopId, async (tx) => {
         if (timeMoved) {
@@ -389,7 +389,7 @@ export function registerAppointmentEdit(
           },
         });
         if (timeMoved) {
-          mirrorOutboxId = await swapForReschedule(tx, {
+          mirrorOutboxIds = await swapForReschedule(tx, {
             shopId,
             now,
             appointmentId: appt.id,
@@ -473,7 +473,7 @@ export function registerAppointmentEdit(
     // The outcome is reported so the UI can be honest when Acuity did not
     // confirm, rather than showing a clean success over an unresolved move.
     const mirror = timeMoved
-      ? await completeReschedule(shopId, appt.id, mirrorOutboxId)
+      ? await completeReschedule(shopId, appt.id, mirrorOutboxIds)
       : "skipped";
 
     // Operational audit: WHO changed WHICH fields, and the before/after times.

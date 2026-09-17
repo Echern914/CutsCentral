@@ -96,6 +96,7 @@ import {
   ConnectionChangedError,
   getMappingSnapshot,
   setStaffCalendar,
+  setStaffExtraCalendars,
 } from "../engines/acuityCalendarMap.js";
 
 import { requireActiveAccess } from "../middleware/billing.js";
@@ -1620,11 +1621,15 @@ bookingDashboardRouter.get("/acuity/calendars", async (req, res) => {
     // ONE snapshot: readiness and the calendar list come from the same live
     // fetch, so the badge can never disagree with the list under it.
     const snap = await getMappingSnapshot(shopId);
-    const assigned = new Map(
-      snap.readiness.staff
-        .filter((s) => s.acuityCalendarId)
-        .map((s) => [s.acuityCalendarId!, { staffId: s.id, staffName: s.name }]),
-    );
+    // A calendar is "taken" by whichever chair holds it - as its primary OR as
+    // one of its extras. Both count: two chairs on one calendar would have each
+    // one's bookings blocking the other's day.
+    const assigned = new Map<string, { staffId: string; staffName: string }>();
+    for (const s of snap.readiness.staff) {
+      const owner = { staffId: s.id, staffName: s.name };
+      if (s.acuityCalendarId) assigned.set(s.acuityCalendarId, owner);
+      for (const extra of s.acuityExtraCalendarIds) assigned.set(extra, owner);
+    }
     res.json({
       mode: shop?.acuityOutboundMode ?? "OFF",
       bookingMode: shop?.bookingMode ?? "link",
@@ -1647,6 +1652,7 @@ bookingDashboardRouter.get("/acuity/calendars", async (req, res) => {
         bookable: s.bookable,
         calendarId: s.acuityCalendarId,
         calendarName: s.calendarName,
+        extraCalendarIds: s.acuityExtraCalendarIds,
         problem: s.problem,
       })),
     });
@@ -1724,6 +1730,73 @@ bookingDashboardRouter.put("/staff/:id/acuity-calendar", async (req, res) => {
       return;
     }
     logger.error({ err, shopId, staffId: staff.id }, "acuity calendar map failed");
+    res.status(502).json({ error: "acuity_unavailable" });
+    return;
+  }
+  const snap = await getMappingSnapshot(shopId);
+  res.json({ ok: true, ready: snap.readiness.ready });
+});
+
+const setExtraCalendarsSchema = z
+  .object({
+    // Capped because each one is another outbound HTTP call on every single
+    // booking for this chair. Even the worst real account seen so far sells
+    // one barber through seven calendars.
+    calendarIds: z.array(z.string().min(1)).max(20),
+    connectedAt: z.string().nullable().optional(),
+  })
+  .strict();
+
+/**
+ * The OTHER Acuity calendars one chair is sold on.
+ *
+ * For accounts that split a single barber across several service-named
+ * calendars: a block is calendar-scoped, so blocking only the primary leaves
+ * the same hour bookable on the rest - and those barbers are already blocking
+ * every calendar by hand, one at a time, for every appointment they take.
+ * Listing them here makes one ChairBack booking write one block per calendar.
+ *
+ * An empty array clears them and returns the chair to one-calendar behaviour.
+ */
+bookingDashboardRouter.put("/staff/:id/acuity-extra-calendars", async (req, res) => {
+  const shopId = req.shop!.id;
+  const parsed = setExtraCalendarsSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const staff = await forShop(shopId).staff.findFirst({
+    where: { id: req.params.id },
+    select: { id: true },
+  });
+  if (!staff) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const expectedConnectedAt =
+    parsed.data.connectedAt === undefined || parsed.data.connectedAt === null
+      ? null
+      : new Date(parsed.data.connectedAt);
+  try {
+    await setStaffExtraCalendars(shopId, staff.id, parsed.data.calendarIds, expectedConnectedAt);
+  } catch (err) {
+    if (err instanceof CalendarNotOnAccountError) {
+      res.status(409).json({ error: "calendar_not_on_account" });
+      return;
+    }
+    if (err instanceof CalendarTakenError) {
+      res.status(409).json({ error: "calendar_already_mapped" });
+      return;
+    }
+    if (err instanceof ConnectionChangedError) {
+      res.status(409).json({ error: "acuity_connection_changed" });
+      return;
+    }
+    if (err instanceof NotConnectedError) {
+      res.status(409).json({ error: "acuity_not_connected" });
+      return;
+    }
+    logger.error({ err, shopId, staffId: staff.id }, "acuity extra calendars save failed");
     res.status(502).json({ error: "acuity_unavailable" });
     return;
   }
@@ -2899,7 +2972,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
     return;
   }
 
-  let mirrorOutboxId: string | null = null;
+  let mirrorOutboxIds: string[] = [];
   try {
     // RECURRING: build the whole series (occurrence 0 included). The client is
     // upserted once, then materializeSeries generates each occurrence in its own
@@ -3058,7 +3131,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
       // Barber-driven, so dispatch after commit is best-effort (see below):
       // refusing a barber's own booking because Acuity blinked would be worse
       // than a block the reconciler places a minute later.
-      mirrorOutboxId = await recordMirrorIntent(tx, {
+      mirrorOutboxIds = await recordMirrorIntent(tx, {
         shopId,
         now,
         appointmentId: appt.id,
@@ -3129,7 +3202,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
     // After commit: place the block. Best-effort by design - the barber is
     // looking at their own calendar, and the reconciler owns any row that
     // does not land now.
-    await dispatchAfterCommit(mirrorOutboxId, {
+    await dispatchAfterCommit(mirrorOutboxIds, {
       shopId,
       appointmentId: result.id,
       via: "dashboard_create",
@@ -3315,7 +3388,7 @@ bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
     return;
   }
 
-  let mirrorOutboxId: string | null = null;
+  let mirrorOutboxIds: string[] = [];
   try {
     await prisma.$transaction(async (tx) => {
       await lockStaffAndAssertSlotFree(tx, {
@@ -3351,7 +3424,7 @@ bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
           cancellationEmailSentAt: null,
         },
       });
-      mirrorOutboxId = await recordMirrorIntent(tx, {
+      mirrorOutboxIds = await recordMirrorIntent(tx, {
         shopId,
         now,
         appointmentId: appt.id,
@@ -3398,7 +3471,7 @@ bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
     return;
   }
 
-  await dispatchAfterCommit(mirrorOutboxId, {
+  await dispatchAfterCommit(mirrorOutboxIds, {
     shopId,
     appointmentId: appt.id,
     via: "dashboard_restore",
@@ -3585,7 +3658,7 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
     }
   }
 
-  let rescheduleOutboxId: string | null = null;
+  let rescheduleOutboxIds: string[] = [];
   try {
     await prisma.$transaction(async (tx) => {
       const guard = await lockStaffAndAssertSlotFree(tx, {
@@ -3646,7 +3719,7 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
       // Retire the old mirror row and record the new time's intent in the SAME
       // transaction. The HTTP swap (create new, THEN delete old) happens after
       // commit - see completeReschedule for why that order is load-bearing.
-      rescheduleOutboxId = await swapForReschedule(tx, {
+      rescheduleOutboxIds = await swapForReschedule(tx, {
         shopId,
         now,
         appointmentId: appt.id,
@@ -3689,7 +3762,7 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
   // Create the block at the NEW time, then delete the old one. Never the
   // reverse: delete-first would expose the new slot in Acuity for the length
   // of the create, which is the exact window this whole engine closes.
-  await completeReschedule(shopId, appt.id, rescheduleOutboxId);
+  await completeReschedule(shopId, appt.id, rescheduleOutboxIds);
 
   // The customer is told their time moved. No barber alert here, unlike the
   // customer-initiated path - the barber is the one who just did it.
@@ -5508,9 +5581,9 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
     // So the walk-in is recorded and the mirror is skipped, loudly. The chair
     // is genuinely double-bookable in the external calendar until someone maps
     // the barber, and that is a worse-of-two-evils we take on purpose.
-    let outboxId: string | null = null;
+    let outboxIds: string[] = [];
     try {
-      outboxId = await recordMirrorIntent(tx, {
+      outboxIds = await recordMirrorIntent(tx, {
         shopId,
         now,
         appointmentId: appt.id,
@@ -5532,7 +5605,7 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
         "mirror: ENFORCE with an unmapped chair - walk-in RECORDED ANYWAY and NOT mirrored",
       );
     }
-    return { kind: "ok" as const, id: appt.id, staffId, outboxId };
+    return { kind: "ok" as const, id: appt.id, staffId, outboxIds };
   });
 
   if (result.kind === "bad_staff") {
@@ -5548,7 +5621,7 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
   // BEST-EFFORT, always. The customer is physically in the chair - a walk-in
   // can never be refused because Acuity was unreachable, so this dispatches
   // and the reconciler owns anything that does not land.
-  await dispatchAfterCommit(result.outboxId, {
+  await dispatchAfterCommit(result.outboxIds, {
     shopId,
     appointmentId: result.id,
     via: "walk_in",

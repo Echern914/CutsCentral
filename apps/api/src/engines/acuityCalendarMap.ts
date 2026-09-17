@@ -37,16 +37,24 @@ export interface StaffMappingRow {
   /** Genuinely bookable = active AND offering at least one active service. */
   bookable: boolean;
   acuityCalendarId: string | null;
+  /**
+   * Other calendars the SAME chair is sold on. Blocks are calendar-scoped, so
+   * an account that splits one barber across "Haircut" / "Retwists" /
+   * "After hours" needs every one of them blocked for a single booking.
+   */
+  acuityExtraCalendarIds: string[];
   acuityCalendarMappedAt: Date | null;
 }
 
-export type MappingProblem = "unmapped" | "stale" | "invalid";
+export type MappingProblem = "unmapped" | "stale" | "invalid" | "extra_invalid";
 
 export interface StaffMappingStatus extends StaffMappingRow {
   /** null = nothing wrong with this chair's mapping. */
   problem: MappingProblem | null;
   /** The live calendar name, when the id still resolves. */
   calendarName: string | null;
+  /** Each extra, with the live name when it still resolves. */
+  extraCalendars: { id: string; name: string | null }[];
 }
 
 export interface MappingSnapshot {
@@ -103,11 +111,20 @@ export function computeMappingReadiness(input: {
 
   const staff: StaffMappingStatus[] = input.staff.map((s) => {
     const cal = s.acuityCalendarId ? byId.get(s.acuityCalendarId) : undefined;
+    const extras = (s.acuityExtraCalendarIds ?? []).map((id) => ({
+      id,
+      name: byId.get(id)?.name ?? null,
+    }));
     let problem: MappingProblem | null = null;
     if (!s.acuityCalendarId) problem = "unmapped";
     else if (!cal) problem = "invalid";
     else if (isMappingStale(s.acuityCalendarMappedAt, input.connectedAt)) problem = "stale";
-    return { ...s, problem, calendarName: cal?.name ?? null };
+    // An extra that is no longer on the account is a REAL hole, not cosmetic:
+    // every create for this chair would send a block to a calendar Acuity will
+    // refuse, and a definitive refusal fails the whole booking closed. Better
+    // to say so here, where one edit fixes it, than at a customer's checkout.
+    else if (extras.some((e) => !byId.has(e.id))) problem = "extra_invalid";
+    return { ...s, problem, calendarName: cal?.name ?? null, extraCalendars: extras };
   });
 
   // Only BOOKABLE chairs gate enforcement. An inactive barber, or one with no
@@ -135,6 +152,7 @@ export async function loadStaffMappingRows(shopId: string): Promise<StaffMapping
         name: true,
         active: true,
         acuityCalendarId: true,
+        acuityExtraCalendarIds: true,
         acuityCalendarMappedAt: true,
         services: {
           where: { service: { active: true } },
@@ -149,6 +167,7 @@ export async function loadStaffMappingRows(shopId: string): Promise<StaffMapping
       active: s.active,
       bookable: s.active && s.services.length > 0,
       acuityCalendarId: s.acuityCalendarId,
+      acuityExtraCalendarIds: s.acuityExtraCalendarIds,
       acuityCalendarMappedAt: s.acuityCalendarMappedAt,
     }));
   });
@@ -261,11 +280,18 @@ export async function setStaffCalendar(
       // calendar id is someone else's chair. Refuse rather than stamp it fresh.
       if (now !== then) throw new ConnectionChangedError();
 
-      // One calendar, one chair. The partial unique index is the real
-      // guarantee (it holds under concurrency); this pre-check exists only to
-      // return a clean 409 instead of surfacing a P2002 as a 500.
+      // One calendar, one chair - counting EXTRAS on both sides. Two chairs
+      // sharing a calendar would have each one's bookings blocking the other's
+      // day, which reads in Acuity as a barber who is never available.
       const taken = await tx.staff.findFirst({
-        where: { shopId, acuityCalendarId: calendarId, id: { not: staffId } },
+        where: {
+          shopId,
+          id: { not: staffId },
+          OR: [
+            { acuityCalendarId: calendarId },
+            { acuityExtraCalendarIds: { has: calendarId } },
+          ],
+        },
         select: { id: true },
       });
       if (taken) throw new CalendarTakenError();
@@ -276,7 +302,82 @@ export async function setStaffCalendar(
       data: {
         acuityCalendarId: calendarId,
         acuityCalendarMappedAt: calendarId === null ? null : new Date(),
+        // Unmapping the chair drops its extras with it. Extras are "the OTHER
+        // calendars this same chair sits on", so they mean nothing without a
+        // primary - and keeping them would silently resurrect a months-old list
+        // the day someone maps this chair again.
+        ...(calendarId === null ? { acuityExtraCalendarIds: [] } : {}),
       },
+    });
+  });
+}
+
+/**
+ * The OTHER calendars one chair is sold on.
+ *
+ * Only ever needed by accounts that split a single person across several
+ * calendars - "Haircut", "Retwists", "After hours", "LAST MIN" - where a block
+ * on the primary alone leaves the same hour bookable on the rest. Listing them
+ * here makes one ChairBack booking write one block per calendar.
+ *
+ * Same three guarantees as the primary mapping, for the same reasons: every id
+ * is validated against a LIVE GET /calendars (never trusted from the request),
+ * the connection generation must not have moved since the caller listed them,
+ * and no calendar may belong to two chairs. Passing an empty array clears the
+ * extras and returns the chair to ordinary one-calendar behaviour.
+ */
+export async function setStaffExtraCalendars(
+  shopId: string,
+  staffId: string,
+  calendarIds: string[],
+  expectedConnectedAt: Date | null,
+): Promise<void> {
+  const wanted = [...new Set(calendarIds.map((c) => c.trim()).filter((c) => c.length > 0))];
+
+  if (wanted.length > 0) {
+    const acuity = await getAcuityClientForShop(shopId);
+    const calendars = await acuity.listCalendars();
+    const onAccount = new Set(calendars.map((c) => c.id));
+    if (wanted.some((id) => !onAccount.has(id))) throw new CalendarNotOnAccountError();
+  }
+
+  await prisma.$transaction(async (tx) => {
+    const me = await tx.staff.findFirst({
+      where: { id: staffId, shopId },
+      select: { acuityCalendarId: true },
+    });
+    if (!me) return;
+
+    if (wanted.length > 0) {
+      const conn = await tx.acuityConnection.findUnique({
+        where: { shopId },
+        select: { connectedAt: true },
+      });
+      if (!conn) throw new ConnectionChangedError();
+      const now = conn.connectedAt?.getTime() ?? null;
+      const then = expectedConnectedAt?.getTime() ?? null;
+      if (now !== then) throw new ConnectionChangedError();
+
+      const taken = await tx.staff.findFirst({
+        where: {
+          shopId,
+          id: { not: staffId },
+          OR: [
+            { acuityCalendarId: { in: wanted } },
+            { acuityExtraCalendarIds: { hasSome: wanted } },
+          ],
+        },
+        select: { id: true },
+      });
+      if (taken) throw new CalendarTakenError();
+    }
+
+    // The chair's own primary is already blocked on every booking, so keeping
+    // it in the extras list would only ever produce a duplicate row.
+    const extras = wanted.filter((id) => id !== me.acuityCalendarId);
+    await tx.staff.updateMany({
+      where: { id: staffId, shopId },
+      data: { acuityExtraCalendarIds: extras },
     });
   });
 }

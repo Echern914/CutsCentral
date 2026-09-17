@@ -10,6 +10,7 @@ import {
   isRecoveryMatch,
   shouldMirrorOnCreate,
   shouldObserve,
+  targetCalendarIds,
   type MirrorShopSlice,
   type OccupancySlice,
 } from "./acuityMirrorRules.js";
@@ -122,9 +123,16 @@ export interface MirrorIntentInput {
 /**
  * Record the intent to mirror, INSIDE the caller's booking transaction.
  *
- * Returns the outbox row id to dispatch after commit, or null when this
- * appointment is not mirrorable (ephemeral hold, already-past span, a row
- * promoted from a synced Visit, or the shop simply is not enforcing).
+ * Returns ONE OUTBOX ROW ID PER CALENDAR THIS CHAIR OCCUPIES, to dispatch
+ * after commit - empty when this appointment is not mirrorable (ephemeral
+ * hold, already-past span, a row promoted from a synced Visit, or the shop
+ * simply is not enforcing).
+ *
+ * 🔴 A LIST, not a single id, because an Acuity block is calendar-scoped and
+ * one barber may be sold through several calendars (see targetCalendarIds).
+ * Each calendar gets its own row, its own reference and its own lifecycle, so
+ * one failing create can never silently stand in for the others - the caller
+ * folds the outcomes and the reconciler finishes whichever rows are unresolved.
  *
  * Throws MirrorNotConfiguredError when the shop IS enforcing but the chair has
  * no Acuity calendar. That is deliberately loud: enforcing with an unmapped
@@ -136,29 +144,29 @@ export interface MirrorIntentInput {
 export async function recordMirrorIntent(
   tx: Prisma.TransactionClient,
   input: MirrorIntentInput,
-): Promise<string | null> {
+): Promise<string[]> {
   const now = input.now;
   const shop = await loadShopSlice(input.shopId);
-  if (!shop) return null;
+  if (!shop) return [];
 
   const observing = shouldObserve(shop);
-  if (!isMirrorEligible(shop, "create") && !observing) return null;
-  if (!shouldMirrorOnCreate(input.occupancy, now)) return null;
+  if (!isMirrorEligible(shop, "create") && !observing) return [];
+  if (!shouldMirrorOnCreate(input.occupancy, now)) return [];
 
   const staff = await tx.staff.findFirst({
     where: { id: input.staffId, shopId: input.shopId },
-    select: { acuityCalendarId: true },
+    select: { acuityCalendarId: true, acuityExtraCalendarIds: true },
   });
-  const calendarId = staff?.acuityCalendarId ?? null;
+  const calendarIds = staff ? targetCalendarIds(staff) : [];
 
-  if (!calendarId) {
+  if (calendarIds.length === 0) {
     if (observing) {
       logTransition(
         "observe: would mirror, but this chair has no Acuity calendar",
         { shopId: input.shopId, staffId: input.staffId, appointmentId: input.appointmentId },
         "warn",
       );
-      return null;
+      return [];
     }
     throw new MirrorNotConfiguredError(input.staffId);
   }
@@ -168,32 +176,62 @@ export async function recordMirrorIntent(
       shopId: input.shopId,
       appointmentId: input.appointmentId,
       staffId: input.staffId,
-      calendarId,
+      calendarIds,
       startsAt: input.startsAt.toISOString(),
       endsAt: input.endsAt.toISOString(),
     });
-    return null; // OBSERVE records nothing and writes nothing
+    return []; // OBSERVE records nothing and writes nothing
   }
 
-  const row = await tx.acuityOutboundBlock.create({
-    data: {
-      shopId: input.shopId,
-      appointmentId: input.appointmentId,
-      staffId: input.staffId,
-      acuityCalendarId: calendarId,
-      startsAt: input.startsAt,
-      endsAt: input.endsAt,
-      state: "PENDING",
-    },
-    select: { id: true },
-  });
+  // Calendars this appointment ALREADY holds a live row for. Normally none -
+  // but a chair that gained an extra calendar after its bookings were made
+  // needs the missing calendars filled in, and creating a duplicate for the
+  // ones it already has would hit the unique index and abort the whole
+  // transaction, leaving the new calendars unprotected forever.
+  const held = new Map(
+    (
+      await tx.acuityOutboundBlock.findMany({
+        where: {
+          shopId: input.shopId,
+          appointmentId: input.appointmentId,
+          state: { in: ["PENDING", "ACTIVE", "UNKNOWN"] },
+        },
+        select: { id: true, acuityCalendarId: true },
+      })
+    ).map((r) => [r.acuityCalendarId, r.id] as const),
+  );
+
+  const outboxIds: string[] = [];
+  for (const calendarId of calendarIds) {
+    const existing = held.get(calendarId);
+    if (existing) {
+      // Returned, not skipped: it is one of the rows holding this appointment,
+      // and dispatching it again is idempotent (ACTIVE answers "active", an
+      // UNKNOWN row stays the reconciler's to settle).
+      outboxIds.push(existing);
+      continue;
+    }
+    const row = await tx.acuityOutboundBlock.create({
+      data: {
+        shopId: input.shopId,
+        appointmentId: input.appointmentId,
+        staffId: input.staffId,
+        acuityCalendarId: calendarId,
+        startsAt: input.startsAt,
+        endsAt: input.endsAt,
+        state: "PENDING",
+      },
+      select: { id: true },
+    });
+    outboxIds.push(row.id);
+  }
   logTransition("intent recorded", {
     shopId: input.shopId,
     appointmentId: input.appointmentId,
-    outboxId: row.id,
-    calendarId,
+    outboxIds,
+    calendarIds,
   });
-  return row.id;
+  return outboxIds;
 }
 
 /**
@@ -261,6 +299,37 @@ export async function dispatchCreate(outboxId: string): Promise<DispatchOutcome>
 }
 
 /**
+ * Dispatch every row one appointment recorded, and fold the outcomes into the
+ * ONE answer the caller acts on.
+ *
+ * The fold is deliberately pessimistic, in this order:
+ *
+ *   failed   ANY calendar definitively refused. The chair is provably still
+ *            sellable somewhere in Acuity, so a fail-closed caller must treat
+ *            the whole booking as unmirrored - partially blocking a barber who
+ *            sells the same hour on four calendars is the "looks protected and
+ *            isn't" state this engine refuses.
+ *   unknown  no definitive failure, but at least one calendar is unresolved.
+ *            Never compensate on ambiguity (the block may exist); the
+ *            reconciler owns those rows.
+ *   active   every row landed.
+ *   skipped  nothing to do (OFF/OBSERVE, or nothing was recorded).
+ *
+ * Every row is attempted even after one fails: they are independent blocks on
+ * independent calendars, and stopping early would leave rows PENDING that the
+ * reconciler then has to clean up anyway.
+ */
+export async function dispatchCreateAll(outboxIds: string[]): Promise<DispatchOutcome> {
+  if (outboxIds.length === 0) return "skipped";
+  const outcomes: DispatchOutcome[] = [];
+  for (const id of outboxIds) outcomes.push(await dispatchCreate(id));
+  if (outcomes.includes("failed")) return "failed";
+  if (outcomes.includes("unknown")) return "unknown";
+  if (outcomes.includes("active")) return "active";
+  return "skipped";
+}
+
+/**
  * Post-commit dispatch for BARBER-DRIVEN and conversational paths.
  *
  * Never throws and never unwinds the appointment. The public customer path
@@ -272,16 +341,16 @@ export async function dispatchCreate(outboxId: string): Promise<DispatchOutcome>
  * them, which converges on the same end state a few minutes later.
  */
 export async function dispatchAfterCommit(
-  outboxId: string | null,
+  outboxIds: string[],
   context: { shopId: string; appointmentId: string; via: string },
 ): Promise<DispatchOutcome> {
-  if (!outboxId) return "skipped";
+  if (outboxIds.length === 0) return "skipped";
   try {
-    const outcome = await dispatchCreate(outboxId);
+    const outcome = await dispatchCreateAll(outboxIds);
     if (outcome === "failed" || outcome === "unknown") {
       logTransition(
         `dispatch ${outcome} on ${context.via} - reconciler owns it`,
-        { ...context, outboxId },
+        { ...context, outboxIds },
         outcome === "failed" ? "error" : "warn",
       );
     }
@@ -289,7 +358,7 @@ export async function dispatchAfterCommit(
   } catch (err) {
     logTransition(
       "dispatch threw - reconciler owns it",
-      { ...context, outboxId, detail: safeError(err).detail },
+      { ...context, outboxIds, detail: safeError(err).detail },
       "error",
     );
     return "unknown";
@@ -389,9 +458,10 @@ export async function releaseRow(outboxId: string): Promise<void> {
 export async function swapForReschedule(
   tx: Prisma.TransactionClient,
   input: MirrorIntentInput,
-): Promise<string | null> {
+): Promise<string[]> {
   // Retire the current live rows within the same transaction, so the partial
-  // unique (one live row per appointment) admits the replacement.
+  // unique (one live row per appointment PER CALENDAR) admits the replacement
+  // - including the replacement for the very same calendar.
   await tx.acuityOutboundBlock.updateMany({
     where: {
       shopId: input.shopId,
@@ -429,32 +499,49 @@ export async function swapForReschedule(
 export async function completeReschedule(
   shopId: string,
   appointmentId: string,
-  newOutboxId: string | null,
+  newOutboxIds: string[],
 ): Promise<DispatchOutcome> {
-  const outcome = newOutboxId ? await dispatchCreate(newOutboxId) : "skipped";
+  const outcome = await dispatchCreateAll(newOutboxIds);
   const stale = await prisma.acuityOutboundBlock.findMany({
     where: { shopId, appointmentId, state: "RELEASING" },
-    select: { id: true },
+    select: { id: true, acuityCalendarId: true },
   });
   if (stale.length === 0) return outcome;
 
   if (outcome === "unknown") {
     logTransition(
       "reschedule replacement UNKNOWN - old block RETAINED until reconciled",
-      { shopId, appointmentId, outboxId: newOutboxId },
+      { shopId, appointmentId, outboxIds: newOutboxIds },
       "warn",
     );
     return outcome;
   }
 
   if (outcome === "failed") {
-    // The replacement is terminal-failed, so it no longer occupies the partial
-    // unique (PENDING/ACTIVE/UNKNOWN) and the old rows can legitimately go back
-    // to ACTIVE - which is what they still are on Acuity's side.
-    for (const row of stale) await restoreReleasingRow(row.id);
+    // At least one calendar definitively refused - but with several calendars
+    // the others may well have landed, so the old rows are resolved ONE
+    // CALENDAR AT A TIME rather than restored wholesale:
+    //
+    //   replacement ACTIVE      that calendar already holds the new time, so
+    //                           the old block is redundant - and restoring it
+    //                           would put two live rows on one calendar, which
+    //                           the partial unique forbids outright.
+    //   replacement in flight   leave it RELEASING; the reconciler resolves the
+    //                           replacement before freeing anything.
+    //   no live replacement     the failed one. Put the old row back to ACTIVE,
+    //                           which is what it still is on Acuity's side, so
+    //                           the old time stays held.
+    for (const row of stale) {
+      const replacement = await liveReplacementFor(shopId, appointmentId, row);
+      if (!replacement) {
+        await restoreReleasingRow(row.id);
+      } else if (replacement.state === "ACTIVE") {
+        await releaseRow(row.id);
+      }
+    }
     logTransition(
       "reschedule replacement FAILED - old block RETAINED (still live in Acuity)",
-      { shopId, appointmentId, outboxId: newOutboxId },
+      { shopId, appointmentId, outboxIds: newOutboxIds },
       "error",
     );
     return outcome;
@@ -462,6 +549,36 @@ export async function completeReschedule(
 
   for (const s of stale) await releaseRow(s.id);
   return outcome;
+}
+
+/**
+ * The row that has taken over THIS CALENDAR for this appointment, if any.
+ *
+ * 🔴 SCOPED TO THE CALENDAR, not just the appointment. An appointment can hold
+ * several calendars at once, so "is there another row for this appointment" no
+ * longer answers "has the old block on this calendar been replaced" - asking
+ * the looser question would make one calendar's successful replacement stand in
+ * for another's, and free a block whose new time was never placed.
+ *
+ * FAILED and RELEASED are excluded deliberately: they hold nothing, so a row in
+ * either state is not a replacement, and the old block on that calendar is
+ * still the only thing keeping the time off the market.
+ */
+async function liveReplacementFor(
+  shopId: string,
+  appointmentId: string,
+  row: { id: string; acuityCalendarId: string },
+): Promise<{ state: string } | null> {
+  return prisma.acuityOutboundBlock.findFirst({
+    where: {
+      shopId,
+      appointmentId,
+      acuityCalendarId: row.acuityCalendarId,
+      id: { not: row.id },
+      state: { in: ["PENDING", "ACTIVE", "UNKNOWN"] },
+    },
+    select: { state: true },
+  });
 }
 
 /**
@@ -514,21 +631,27 @@ export async function reconcileShop(shopId: string, now = new Date()): Promise<{
       // A RELEASING row is the OLD half of a reschedule. Releasing it while
       // its replacement is still in flight would free the customer's old time
       // in Acuity with nothing holding the new one - the exact exposure
-      // completeReschedule refuses to create. Resolve the replacement first.
-      const replacement = await prisma.acuityOutboundBlock.findFirst({
-        where: {
-          shopId,
-          appointmentId: row.appointmentId,
-          id: { not: row.id },
-          state: { in: ["PENDING", "UNKNOWN", "FAILED"] },
-        },
-        select: { state: true },
-      });
-      if (replacement && replacement.state !== "FAILED") continue; // still in flight
-      if (replacement?.state === "FAILED") {
-        // The move never landed on Acuity's side; the old block is still live.
-        await restoreReleasingRow(row.id);
-        continue;
+      // completeReschedule refuses to create. Resolve the replacement first,
+      // ON THIS CALENDAR: another calendar's replacement says nothing about
+      // whether this one has been re-held.
+      const inFlight = await liveReplacementFor(shopId, row.appointmentId, row);
+      if (inFlight && inFlight.state !== "ACTIVE") continue; // still in flight
+      if (!inFlight) {
+        const failedReplacement = await prisma.acuityOutboundBlock.findFirst({
+          where: {
+            shopId,
+            appointmentId: row.appointmentId,
+            acuityCalendarId: row.acuityCalendarId,
+            id: { not: row.id },
+            state: "FAILED",
+          },
+          select: { id: true },
+        });
+        if (failedReplacement) {
+          // The move never landed on this calendar; the old block is still live.
+          await restoreReleasingRow(row.id);
+          continue;
+        }
       }
       await releaseRow(row.id);
       released++;
@@ -768,6 +891,12 @@ export interface ObserveReport {
     appointmentId: string;
     staffId: string;
     calendarId: string | null;
+    /**
+     * EVERY calendar this one booking would block - the primary plus any
+     * extras the chair is also sold on. The count is the point of the
+     * rehearsal for a multi-calendar account: one appointment, four blocks.
+     */
+    calendarIds: string[];
     startsAt: string;
     endsAt: string;
     blocked: boolean;
@@ -800,7 +929,14 @@ export async function buildObserveReport(
       holdExpiresAt: true,
       holdReason: true, // shouldMirrorOnCreate below reads it; the slice is cast, not inferred
       visitId: true,
-      staff: { select: { name: true, acuityCalendarId: true, acuityCalendarMappedAt: true } },
+      staff: {
+        select: {
+          name: true,
+          acuityCalendarId: true,
+          acuityExtraCalendarIds: true,
+          acuityCalendarMappedAt: true,
+        },
+      },
     },
   });
   const conn = await prisma.acuityConnection.findUnique({
@@ -812,6 +948,7 @@ export async function buildObserveReport(
   for (const a of appts) {
     if (!shouldMirrorOnCreate(a as unknown as OccupancySlice, now)) continue;
     const cal = a.staff?.acuityCalendarId ?? null;
+    const cals = a.staff ? targetCalendarIds(a.staff) : [];
     const stale = isMappingStale(a.staff?.acuityCalendarMappedAt ?? null, conn?.connectedAt ?? null);
     const reason = !cal ? "unmapped" : stale ? "stale_mapping" : null;
     if (reason && a.staff) unmapped.set(a.staffId, a.staff.name);
@@ -819,6 +956,7 @@ export async function buildObserveReport(
       appointmentId: a.id,
       staffId: a.staffId,
       calendarId: cal,
+      calendarIds: cals,
       startsAt: a.startsAt.toISOString(),
       endsAt: a.endsAt.toISOString(),
       blocked: reason !== null,

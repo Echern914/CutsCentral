@@ -15,6 +15,7 @@ import {
   matchesReference,
   shouldMirrorOnCreate,
   shouldObserve,
+  targetCalendarIds,
   type MirrorShopSlice,
   type OccupancySlice,
 } from "./acuityMirrorRules.js";
@@ -225,5 +226,57 @@ describe("ambiguous-create recovery matching", () => {
 
   it("refuses when Acuity gave no parseable span", () => {
     expect(isRecoveryMatch({ ...candidate, startsAt: null, endsAt: null }, want)).toBe(false);
+  });
+});
+
+/**
+ * EVERY CALENDAR ONE CHAIR OCCUPIES.
+ *
+ * The hole this closes: an Acuity block is calendar-scoped, and some accounts
+ * sell one barber through several service-named calendars. Blocking the
+ * primary alone leaves the same hour on sale everywhere else - so this list is
+ * the difference between real protection and a shop that only looks protected.
+ */
+describe("targetCalendarIds", () => {
+  it("an ordinary chair blocks exactly its one calendar", () => {
+    expect(targetCalendarIds({ acuityCalendarId: "cal_1", acuityExtraCalendarIds: [] })).toEqual([
+      "cal_1",
+    ]);
+  });
+
+  it("returns the primary FIRST, then every extra", () => {
+    expect(
+      targetCalendarIds({
+        acuityCalendarId: "cal_main",
+        acuityExtraCalendarIds: ["cal_retwist", "cal_afterhours"],
+      }),
+    ).toEqual(["cal_main", "cal_retwist", "cal_afterhours"]);
+  });
+
+  it("an UNMAPPED chair targets nothing - extras are not a mapping", () => {
+    // The caller turns this into MirrorNotConfiguredError rather than
+    // half-blocking a chair whose real calendar nobody has named.
+    expect(
+      targetCalendarIds({ acuityCalendarId: null, acuityExtraCalendarIds: ["cal_x"] }),
+    ).toEqual([]);
+    expect(targetCalendarIds({ acuityCalendarId: "  ", acuityExtraCalendarIds: [] })).toEqual([]);
+  });
+
+  it("never asks for the same calendar twice - one block, not two", () => {
+    expect(
+      targetCalendarIds({
+        acuityCalendarId: "cal_1",
+        acuityExtraCalendarIds: ["cal_1", "cal_2", "cal_2"],
+      }),
+    ).toEqual(["cal_1", "cal_2"]);
+  });
+
+  it("ignores blank and whitespace-only ids rather than blocking calendar ''", () => {
+    expect(
+      targetCalendarIds({
+        acuityCalendarId: " cal_1 ",
+        acuityExtraCalendarIds: ["", "   ", " cal_2 "],
+      }),
+    ).toEqual(["cal_1", "cal_2"]);
   });
 });

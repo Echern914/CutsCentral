@@ -513,7 +513,7 @@ export async function claimTierOpening(params: {
   now?: Date;
 }): Promise<ClaimTierOpeningResult> {
   const now = params.now ?? new Date();
-  let outboxId: string | null = null;
+  let outboxIds: string[] = [];
   let result: ClaimTierOpeningResult;
 
   try {
@@ -616,7 +616,7 @@ export async function claimTierOpening(params: {
         },
         select: { id: true, manageToken: true },
       });
-      outboxId = await recordMirrorIntent(tx, {
+      outboxIds = await recordMirrorIntent(tx, {
         shopId: opening.shopId,
         now,
         appointmentId: appt.id,
@@ -653,8 +653,8 @@ export async function claimTierOpening(params: {
   }
 
   if (result.outcome === "claimed") {
-    if (outboxId) {
-      await dispatchAfterCommit(outboxId, {
+    if (outboxIds.length > 0) {
+      await dispatchAfterCommit(outboxIds, {
         shopId: result.shopId,
         appointmentId: result.appointmentId,
         via: "tier_opening_claim",
