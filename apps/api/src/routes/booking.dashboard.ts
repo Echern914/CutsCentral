@@ -74,7 +74,12 @@ import {
   TARGETED_RULE_HORIZON_DAYS,
   type RuleSchedule,
 } from "../engines/targetedSlotRules.js";
-import { effectiveDurationAt, effectivePriceAt } from "../engines/pricing.js";
+import {
+  effectiveDurationAt,
+  effectivePriceAt,
+  openingSpansForWeekday,
+  parseServiceHours,
+} from "../engines/pricing.js";
 import { slotServiceIds } from "../engines/targetedSlotServices.js";
 import { validateUpgradeRule } from "../engines/serviceUpgradeRules.js";
 import {
@@ -1374,8 +1379,57 @@ bookingDashboardRouter.get("/staff/:id/availability", async (req, res) => {
       isBlock: e.isBlock,
       reason: e.reason,
     })),
+    // 🔴 THE DAY THE BARBER TURNS ON THAT STILL SHOWS NOTHING.
+    //
+    // Two gates decide a bookable day and only one of them is in this editor:
+    // the staff schedule says WHEN this person works, and each service's own
+    // hours say WHETHER that service is offered that weekday. A weekday
+    // present-but-empty in a service's hoursWindows means "not offered", and
+    // that veto is applied AFTER the staff hours - so a barber can tick
+    // Sunday, see it ticked, and watch the public page keep showing Sunday
+    // struck through, with nothing anywhere saying why. That is a real support
+    // text (2026-09-17, a barber who had turned Sunday on twice).
+    //
+    // So the API says which weekdays have no service behind them, and the
+    // editor can warn on exactly the days the barber just enabled.
+    weekdaysWithNoService: await weekdaysWithNoServiceFor(req.shop!.id, req.params.id!),
   });
 });
+
+/**
+ * Weekdays on which NOT ONE of this staff member's active services is offered.
+ *
+ * Mirrors engines/slots.ts exactly, by calling the same two parsers rather than
+ * restating their rules: a weekday ABSENT from hoursWindows is unrestricted,
+ * PRESENT-and-empty is closed, and an "also open these hours" window
+ * (timeOverrides) opens the day back up regardless of the restriction.
+ */
+async function weekdaysWithNoServiceFor(shopId: string, staffId: string): Promise<number[]> {
+  const db = forShop(shopId);
+  const links = await db.serviceStaff.findMany({
+    where: { staffId },
+    select: { serviceId: true },
+  });
+  if (links.length === 0) return []; // no services at all is its own readiness item
+  const services = await db.service.findMany({
+    where: { id: { in: links.map((l) => l.serviceId) }, active: true },
+    select: { hoursWindows: true, timeOverrides: true },
+  });
+  if (services.length === 0) return [];
+  const out: number[] = [];
+  for (let weekday = 0; weekday < 7; weekday++) {
+    const covered = services.some((s) => {
+      const map = parseServiceHours(s.hoursWindows);
+      const windows = map.get(weekday);
+      // Absent = unrestricted; present with windows = offered within them.
+      if (windows === undefined || windows.length > 0) return true;
+      // Present but empty: only an explicit opening window can still open it.
+      return openingSpansForWeekday(s.timeOverrides, weekday).length > 0;
+    });
+    if (!covered) out.push(weekday);
+  }
+  return out;
+}
 
 // Replace the entire weekly rule set for a staff member in one transaction.
 bookingDashboardRouter.put("/staff/:id/availability", async (req, res) => {
