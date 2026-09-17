@@ -84,7 +84,7 @@ describe("computeMappingReadiness", () => {
       connectedAt: CONNECTED,
     });
     expect(r.ready).toBe(false);
-    expect(r.blocking[0].problem).toBe("extra_invalid");
+    expect(r.blocking[0]!.problem).toBe("extra_invalid");
   });
 
   it("extras that are all still on the account keep the chair ready", () => {
@@ -94,7 +94,7 @@ describe("computeMappingReadiness", () => {
       connectedAt: CONNECTED,
     });
     expect(r.ready).toBe(true);
-    expect(r.staff[0].extraCalendars).toEqual([{ id: "cal_2", name: "Chair 2" }]);
+    expect(r.staff[0]!.extraCalendars).toEqual([{ id: "cal_2", name: "Chair 2" }]);
   });
 
   it("a mapping predating a RECONNECT is stale - the id may be another account's chair", () => {
