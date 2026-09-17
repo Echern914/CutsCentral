@@ -86,7 +86,7 @@ export const SUPPORT_EVAL_BASELINE: EvalReport = {
       "mcp": "correct_answer"
     },
     "location": {
-      "in_app": "near_miss"
+      "in_app": "shrug"
     },
     "services": {
       "in_app": "correct_answer",
@@ -235,6 +235,30 @@ export const SUPPORT_EVAL_BASELINE: EvalReport = {
       "in_app": "correct_answer",
       "mcp": "correct_answer"
     },
+    "acuity-both": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "acuity-both-terse": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "find-shop": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "find-shop-terse": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "confirmation-text-missing": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "standing-not-offered": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
     "tier-rules": {
       "in_app": "correct_answer",
       "mcp": "correct_answer"
@@ -275,22 +299,22 @@ export const SUPPORT_EVAL_BASELINE: EvalReport = {
     }
   },
   "inApp": {
-    "correct_answer": 58,
-    "near_miss": 5,
-    "shrug": 3,
+    "correct_answer": 64,
+    "near_miss": 4,
+    "shrug": 4,
     "generic_menu": 0,
     "wrong_answer": 0
   },
   "mcp": {
-    "correct_answer": 54,
+    "correct_answer": 60,
     "near_miss": 4,
     "shrug": 3,
     "generic_menu": 0,
     "wrong_answer": 0
   },
   "channelAgreement": {
-    "agree": 60,
-    "of": 60
+    "agree": 66,
+    "of": 66
   },
   "answerableMissedInApp": [
     "waitlist-join",

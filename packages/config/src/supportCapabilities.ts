@@ -444,6 +444,66 @@ export const SUPPORT_CAPABILITIES: readonly SupportCapability[] = [
     neverExpose: ["OAuth tokens", "webhook secrets"],
   },
   {
+    id: "acuity_alongside_chairback",
+    intent: "Can I keep taking bookings in Acuity while I use ChairBack?",
+    // The question every transitioning shop asks, and the corpus only ever
+    // described the inbound half - so the honest answer ("yes, and here is how
+    // to stop the same hour selling twice") did not exist.
+    actors: SEAT_ACTORS,
+    dataClass: "product_knowledge",
+    authority: "help_corpus",
+    corpusIds: ["acuity-both-at-once", "acuity"],
+    mcpTool: "integration_health",
+    readOnly: true,
+    confirmationRequired: false,
+    safeFallback: "Both can run; holding stops the same hour selling twice.",
+    neverExpose: ["OAuth tokens", "webhook secrets"],
+  },
+  {
+    id: "find_shop_by_handle",
+    intent: "A client cannot find my shop when they search for it.",
+    // Finding a shop is an EXACT handle lookup, deliberately not a search -
+    // answering "try searching again" would send them round the same loop.
+    actors: SEAT_ACTORS,
+    dataClass: "product_knowledge",
+    authority: "help_corpus",
+    corpusIds: ["find-my-shop"],
+    mcpTool: "help_find_feature",
+    readOnly: true,
+    confirmationRequired: false,
+    safeFallback: "Send the booking link; the handle is the last part of it.",
+    neverExpose: [],
+  },
+  {
+    id: "confirmation_text_missing",
+    intent: "My client did not get a confirmation TEXT when they booked.",
+    // The corpus said "a confirmation when they book" and the SMS constant is
+    // off, so the obvious reply sent barbers hunting a texting fault that does
+    // not exist. Confirmations are email + push; the texts are the reminders.
+    actors: SEAT_ACTORS,
+    dataClass: "product_knowledge",
+    authority: "help_corpus",
+    corpusIds: ["confirmation-text", "confirmation-email"],
+    mcpTool: "help_find_feature",
+    readOnly: true,
+    confirmationRequired: false,
+    safeFallback: "Confirmations are email and push, not SMS.",
+    neverExpose: [],
+  },
+  {
+    id: "standing_appointment_unavailable",
+    intent: "Why is the standing-appointment option not offered?",
+    actors: SEAT_ACTORS,
+    dataClass: "product_knowledge",
+    authority: "help_corpus",
+    corpusIds: ["standing-unavailable", "recurring"],
+    mcpTool: "help_find_feature",
+    readOnly: true,
+    confirmationRequired: false,
+    safeFallback: "Off for approval mode and for shops collecting at booking.",
+    neverExpose: [],
+  },
+  {
     id: "acuity_blocked_times_why",
     intent: "Why does one ChairBack booking create several Blocked Time entries in Acuity?",
     // Asked by a live barber the day it shipped, and the dangerous answer is
