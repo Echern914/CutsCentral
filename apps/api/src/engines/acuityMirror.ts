@@ -678,9 +678,13 @@ export async function reconcileShop(shopId: string, now = new Date()): Promise<{
   adopted: number;
   retried: number;
   released: number;
+  /** Blocks that had been deleted in Acuity and were put back. */
+  restored: number;
 }> {
   const shop = await loadShopSlice(shopId);
-  if (!shop || !shop.acuityConnected) return { adopted: 0, retried: 0, released: 0 };
+  if (!shop || !shop.acuityConnected) {
+    return { adopted: 0, retried: 0, released: 0, restored: 0 };
+  }
 
   const rows = await prisma.acuityOutboundBlock.findMany({
     where: { shopId, state: { in: ["PENDING", "UNKNOWN", "RELEASING"] } },
@@ -779,7 +783,125 @@ export async function reconcileShop(shopId: string, now = new Date()): Promise<{
     });
     retried++;
   }
-  return { adopted, retried, released };
+  const restored = await restoreImminentBlocks(shopId, shop, now);
+  return { adopted, retried, released, restored };
+}
+
+/** How far ahead a block is re-verified. See restoreImminentBlocks. */
+const VERIFY_HORIZON_MS = 48 * 60 * 60 * 1000;
+/**
+ * 🔴 HOW LONG A BLOCK IS LEFT ALONE AFTER WE TOUCH IT.
+ *
+ * "Not in Acuity's listing" is only evidence of deletion once the listing has
+ * had a chance to show it. A sweep landing seconds after a booking would read
+ * a just-created block as missing and create it AGAIN - a duplicate on the
+ * barber's calendar, from the repair itself. Ten minutes is far longer than
+ * any list lag and far shorter than the exposure being defended against.
+ */
+const VERIFY_SETTLE_MS = 10 * 60 * 1000;
+/** Acuity caps a block listing at 100; a full page cannot prove absence. */
+const BLOCK_PAGE_CAP = 100;
+
+/**
+ * PUT BACK THE BLOCKS SOMEONE DELETED IN ACUITY.
+ *
+ * 🔴 AN ACTIVE ROW WAS NEVER RE-CHECKED. The reconciler drains PENDING,
+ * UNKNOWN and RELEASING - every state that is still in motion - and treats
+ * ACTIVE as settled forever. It is not: a barber looking at four "Blocked
+ * Time" entries he did not make deletes them, and ChairBack goes on believing
+ * the chair is held while Acuity is free to sell it. Silent, and exactly
+ * backwards from the failure this engine is allowed to have. Seen within hours
+ * of the first multi-calendar shop going live (2026-09-17).
+ *
+ * Only the IMMINENT ones, and that bound is deliberate:
+ *
+ *  - it is where the harm is. A block missing next month has weeks of sweeps
+ *    left to catch it; one missing tomorrow morning is a double booking today.
+ *  - it keeps this to ONE list call over a two-day window, which cannot hit
+ *    Acuity's 100-row page cap on any real shop - and a full page is treated
+ *    as "cannot prove absence" rather than as absence, because re-creating
+ *    from a truncated list would mint duplicate blocks forever.
+ *
+ * Gated on create-eligibility: a shop that has been switched OFF must not have
+ * blocks re-created under it. Releasing stays ungated (isMirrorEligible), so
+ * cleanup still runs either way.
+ */
+async function restoreImminentBlocks(
+  shopId: string,
+  shop: MirrorShopSlice,
+  now: Date,
+): Promise<number> {
+  if (!isMirrorEligible(shop, "create")) return 0;
+  const horizon = new Date(now.getTime() + VERIFY_HORIZON_MS);
+  const rows = await prisma.acuityOutboundBlock.findMany({
+    where: {
+      shopId,
+      state: "ACTIVE",
+      acuityBlockId: { not: null },
+      startsAt: { gt: now, lt: horizon },
+      // Settled rows only - see VERIFY_SETTLE_MS.
+      updatedAt: { lt: new Date(now.getTime() - VERIFY_SETTLE_MS) },
+    },
+    take: 100,
+  });
+  if (rows.length === 0) return 0;
+
+  let blocks: { id: string }[];
+  try {
+    const acuity = await getAcuityClientForShop(shopId);
+    const ymd = (d: Date) => d.toISOString().slice(0, 10);
+    blocks = await acuity.listBlocks({
+      minDate: ymd(new Date(now.getTime() - 86_400_000)),
+      maxDate: ymd(new Date(horizon.getTime() + 86_400_000)),
+      max: BLOCK_PAGE_CAP,
+    });
+  } catch (err) {
+    logTransition(
+      "could not verify imminent blocks",
+      { shopId, detail: safeError(err).detail },
+      "warn",
+    );
+    return 0;
+  }
+  // A full page means Acuity had more to give: anything not in it may simply
+  // be on the next page, and "not in this list" would be a guess.
+  if (blocks.length >= BLOCK_PAGE_CAP) {
+    logTransition("block listing hit the page cap - absence unprovable", { shopId }, "warn");
+    return 0;
+  }
+  const present = new Set(blocks.map((b) => String(b.id)));
+
+  let restored = 0;
+  for (const row of rows) {
+    if (present.has(String(row.acuityBlockId))) continue;
+    // Only re-block time the appointment still owns - a row whose booking was
+    // cancelled belongs to the release path, not to this one.
+    const appt = await prisma.appointment.findUnique({
+      where: { id: row.appointmentId },
+      select: { status: true, startsAt: true, endsAt: true, holdExpiresAt: true, visitId: true },
+    });
+    if (!appt || !appointmentOccupiesTime(appt as OccupancySlice, now)) continue;
+
+    await prisma.acuityOutboundBlock.update({
+      where: { id: row.id },
+      data: { state: "PENDING", acuityBlockId: null, lastError: "block_absent_in_acuity" },
+    });
+    const outcome = await dispatchCreate(row.id);
+    if (outcome === "active") restored++;
+    logTransition(
+      "block was gone from Acuity - re-placed",
+      {
+        shopId,
+        appointmentId: row.appointmentId,
+        outboxId: row.id,
+        calendarId: row.acuityCalendarId,
+        startsAt: row.startsAt.toISOString(),
+        outcome,
+      },
+      "warn",
+    );
+  }
+  return restored;
 }
 
 async function dispatchCreateIfEligible(
@@ -883,17 +1005,20 @@ export async function runAcuityOutboundReconcile(now = new Date()): Promise<{
   adopted: number;
   retried: number;
   released: number;
+  restored: number;
 }> {
   const conns = await prisma.acuityConnection.findMany({ select: { shopId: true } });
   let adopted = 0;
   let retried = 0;
   let released = 0;
+  let restored = 0;
   for (const conn of conns) {
     try {
       const r = await reconcileShop(conn.shopId, now);
       adopted += r.adopted;
       retried += r.retried;
       released += r.released;
+      restored += r.restored;
     } catch (err) {
       logger.error(
         { err, shopId: conn.shopId },
@@ -901,15 +1026,16 @@ export async function runAcuityOutboundReconcile(now = new Date()): Promise<{
       );
     }
   }
-  if (adopted || retried || released) {
+  if (adopted || retried || released || restored) {
     logTransition("reconcile sweep complete", {
       shops: conns.length,
       adopted,
       retried,
       released,
+      restored,
     });
   }
-  return { shops: conns.length, adopted, retried, released };
+  return { shops: conns.length, adopted, retried, released, restored };
 }
 
 //  Mode controls (operator surface)
