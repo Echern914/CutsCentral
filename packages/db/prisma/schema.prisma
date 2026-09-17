@@ -642,6 +642,7 @@ model Shop {
   serviceGoals           ServiceGoal[]
   externalBlocks         ExternalBlock[]
   acuityOutboundBlocks   AcuityOutboundBlock[]
+  bookingConflicts       BookingConflict[]
   notifyPrefs            BarberNotifyPref[]
   targetedSlots          TargetedSlot[]
   targetedSlotRules      TargetedSlotRule[]
@@ -825,6 +826,9 @@ model BarberNotifyPref {
   // Reactive alerts that already existed - now switchable.
   newBookingEnabled Boolean @default(true)
   cancelEnabled     Boolean @default(true)
+  /// A double-booked chair is a SAFETY alert, not a marketing one, so it
+  /// defaults ON for every shop including those that silenced the others.
+  conflictEnabled   Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -3009,6 +3013,14 @@ model Appointment {
 
   // The double-booking guard (a partial unique on BOOKED rows) is added by hand
   // in the migration - Prisma can't express a WHERE-filtered unique index.
+  /// CLIENT-GENERATED OPERATION ID, for receipts that must not double-write.
+  /// Minted once when a submission BEGINS and reused by every retry of that
+  /// same submission, so a timeout or a double tap collapses to one row while
+  /// two genuine cuts seconds apart stay two rows. Nullable: every row written
+  /// before this existed, and every path that is not a receipt, carries NULL -
+  /// which the partial unique index below deliberately does not constrain.
+  operationId        String?
+
   @@index([shopId, staffId, startsAt]) // overlap checks + barber day view
   @@index([status, startsAt]) // reminder + promotion scans
   @@index([shopId, status, startsAt]) // dashboard upcoming list
@@ -4753,4 +4765,45 @@ model ClientDuplicateDismissal {
   createdAt   DateTime @default(now())
 
   @@unique([shopId, clientAId, clientBId])
+}
+
+/// A write that was RECORDED despite colliding with time already reserved.
+///
+/// Only receipts land here. A reservation request that collides is refused and
+/// never exists; a receipt - the walk-in quick log - is kept, because the cash
+/// is already in the till and refusing it would lose the money rather than free
+/// the chair. This row is how that collision stops being invisible: it outlives
+/// a log line, it can be listed, and it can be marked resolved by a human.
+///
+/// ONE ROW PER (receipt, conflicting record) PAIR. The unique index is the
+/// idempotency, so repeated detection - a retry, a re-sync, a second sweep -
+/// updates nothing and alerts nobody a second time.
+model BookingConflict {
+  id     String @id @default(cuid())
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  /// Whose chair. Not a FK: the record must outlive a deleted staff row.
+  staffId String
+
+  /// The receipt that was written anyway (an Appointment id today).
+  receiptId String
+  /// What it collided with, and what kind of thing that is - an appointment, a
+  /// synced visit, or blocked time. Not a FK for the same reason as staffId.
+  conflictingId   String
+  conflictingKind String
+
+  /// The overlap itself, half-open [start, end), so a reader needs no join.
+  overlapStart DateTime
+  overlapEnd   DateTime
+
+  /// Which command produced it. "walk_in_quick_log" is the only one today.
+  source     String
+  detectedAt DateTime @default(now())
+
+  /// Set when a human has dealt with it. Null = still open.
+  resolvedAt       DateTime?
+  resolvedByUserId String?
+
+  @@unique([shopId, receiptId, conflictingId])
+  @@index([shopId, resolvedAt, detectedAt])
 }

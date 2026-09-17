@@ -53,18 +53,22 @@ export const NOTIFY_DEFAULTS = {
   dayAheadHour: 19,
   newBookingEnabled: true,
   cancelEnabled: true,
+  /// A double-booked chair is a SAFETY alert, not a marketing one, so it
+  /// defaults ON even for a shop that silenced every other kind.
+  conflictEnabled: true,
 };
 
 export type NotifyPrefs = typeof NOTIFY_DEFAULTS;
 
 /** Which alert a send belongs to, so one switch can silence one kind. */
-export type BarberAlertKind = "nextUp" | "dayAhead" | "newBooking" | "cancel";
+export type BarberAlertKind = "nextUp" | "dayAhead" | "newBooking" | "cancel" | "conflict";
 
 const KIND_SWITCH: Record<BarberAlertKind, keyof NotifyPrefs> = {
   nextUp: "nextUpEnabled",
   dayAhead: "dayAheadEnabled",
   newBooking: "newBookingEnabled",
   cancel: "cancelEnabled",
+  conflict: "conflictEnabled",
 };
 
 /**
@@ -95,6 +99,7 @@ export async function resolveNotifyPrefs(
     dayAheadHour: row.dayAheadHour,
     newBookingEnabled: row.newBookingEnabled,
     cancelEnabled: row.cancelEnabled,
+    conflictEnabled: row.conflictEnabled,
   };
 }
 
