@@ -8,6 +8,7 @@ import {
   classifyFailure,
   isMirrorEligible,
   isRecoveryMatch,
+  matchesReference,
   shouldMirrorOnCreate,
   shouldObserve,
   targetCalendarIds,
@@ -422,6 +423,7 @@ export async function releaseRow(outboxId: string): Promise<void> {
       outboxId: row.id,
       acuityBlockId: row.acuityBlockId,
     });
+    await sweepReferenceTwins(row);
   } catch (err) {
     const { status, detail } = safeError(err);
     // Already gone in Acuity (the barber deleted it by hand) is a SUCCESS -
@@ -431,6 +433,8 @@ export async function releaseRow(outboxId: string): Promise<void> {
         where: { id: row.id },
         data: { state: "RELEASED", lastError: "already_absent" },
       });
+      // The id we held is gone, but a twin created alongside it may not be.
+      await sweepReferenceTwins(row);
       return;
     }
     await prisma.acuityOutboundBlock.update({
@@ -549,6 +553,67 @@ export async function completeReschedule(
 
   for (const s of stale) await releaseRow(s.id);
   return outcome;
+}
+
+/**
+ * DELETE THE BLOCKS ACUITY MADE THAT IT NEVER TOLD US ABOUT.
+ *
+ * 🔴 ONE `POST /blocks` DOES NOT ALWAYS MEAN ONE BLOCK. Measured on a live
+ * account 2026-09-17: a single create on one calendar produced THREE blocks -
+ * identical calendar, span and notes, differing only in `serviceGroupID`
+ * (7261203, 14157268, 14158365) - because that calendar belongs to three
+ * service groups. Acuity returns ONE id, so the other two are invisible to us.
+ *
+ * Blocking extra is harmless while the appointment stands. On release it is
+ * not: deleting only the id we stored leaves the twins behind, holding time the
+ * customer just gave back, with nothing in ChairBack pointing at them. Six
+ * bookings on that account had already produced twelve such blocks.
+ *
+ * The reference is per outbox ROW, so every block carrying it is ours by
+ * construction and deleting it is exact - never a guess at the barber's own
+ * blocks, which carry no reference at all.
+ *
+ * Best-effort on purpose: the row's own block is already gone, so the release
+ * succeeded. A failure here leaves a twin to clean up later and must not drag
+ * the row back out of RELEASED.
+ */
+async function sweepReferenceTwins(row: {
+  id: string;
+  shopId: string;
+  acuityCalendarId: string;
+  acuityBlockId: string | null;
+  startsAt: Date;
+  endsAt: Date;
+}): Promise<void> {
+  try {
+    const acuity = await getAcuityClientForShop(row.shopId);
+    const ymd = (d: Date) => d.toISOString().slice(0, 10);
+    const blocks = await acuity.listBlocks({
+      minDate: ymd(new Date(row.startsAt.getTime() - 86_400_000)),
+      maxDate: ymd(new Date(row.endsAt.getTime() + 86_400_000)),
+    });
+    let deleted = 0;
+    for (const b of blocks) {
+      if (String(b.id) === String(row.acuityBlockId)) continue; // already gone
+      if (!matchesReference(b.notes ?? b.description, row.id)) continue;
+      await acuity.deleteBlock(String(b.id));
+      deleted++;
+    }
+    if (deleted > 0) {
+      logTransition("released Acuity's extra copies of one block", {
+        shopId: row.shopId,
+        outboxId: row.id,
+        calendarId: row.acuityCalendarId,
+        deleted,
+      });
+    }
+  } catch (err) {
+    logTransition(
+      "could not sweep Acuity's extra copies - a block may be left behind",
+      { shopId: row.shopId, outboxId: row.id, detail: safeError(err).detail },
+      "warn",
+    );
+  }
 }
 
 /**
