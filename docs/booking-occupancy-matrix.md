@@ -58,7 +58,7 @@ new write is refused. "Override" = an *existing* authorized mechanism exists.
 | **Walk-in queue — Start Service** | yes | same as above | **yes**, but `completedInProgress:"ignore"` and `walkInCapacity:{excludeEntryId}` | no | as above |
 | **Acuity / Square Visit** (`SCHEDULED`, `RESCHEDULED`, not promoted from a native row) | yes (all but `CANCELED`) | **yes, shop-wide** — a Visit carries no `staffId` | **yes** | no | `Visit.scheduledAt` / `endAt` (nullable — see below) |
 | **Visit CANCELED / NO_SHOW / COMPLETED** | `CANCELED` hidden; others shown | **no** | no | n/a | — |
-| **ExternalBlock** (Acuity blocked time) | yes | **yes, shop-wide** | **yes** (`externalBlocks:"enforce"`, the default) | **YES** — `externalBlockConfirmation` digest → audited `AppointmentOverride` | `startsAt` / `endsAt` |
+| **ExternalBlock** (Acuity blocked time) | yes | **yes, shop-wide** | **reservation: yes** (`externalBlocks:"enforce"`). **receipt: NOT flagged** — see below | **YES** — `externalBlockConfirmation` digest → audited `AppointmentOverride` | `startsAt` / `endsAt` |
 | **AvailabilityException** (Block Off Time) | yes | **yes** | **yes** | no | `startsAt` / `endsAt`, one row per day |
 | **Administrative override** | — | — | — | `AppointmentOverride`, `kind` = `"external_block"` **only** | `blockedFrom` / `blockedTo` |
 
@@ -75,6 +75,15 @@ himself.
 rows, which is self-consistent and wrong in the same direction: the calendar drew
 the visit and the booking page sold its time. `visitSpan()` now supplies a
 conservative span instead.
+
+**🔴 A BLOCK REFUSES A RESERVATION AND DOES NOT FLAG A RECEIPT.** This is the
+one row where the two commands genuinely diverge, and it is deliberate: the
+walk-in passes `externalBlocks: "ignore"` because the person is physically in
+the chair with the money already taken, and ejecting them over a calendar entry
+the barber drew would be the wrong answer. A *reservation* into that same block
+is refused and can only cross it through the audited override. The two share
+the overlap detection and differ in the answer — `bookingWriteOccupancy.test.ts`
+asserts exactly that, per fixture.
 
 **A reported conflict is not an override.** The walk-in path records despite a
 collision because a receipt is not a request, and it says so loudly — that is

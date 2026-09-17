@@ -4,7 +4,11 @@ Read-only aggregate counts taken against production on 2026-09-17, via
 `railway run` (owner connection, `SELECT` only, no customer fields read).
 Re-runnable: `apps/api/scripts/interval-audit.mjs`.
 
-## Headline: no production data repair is needed, and no migration belongs in this PR
+## Headline: no production data REPAIR is needed
+
+(Superseded in part — see "The migration this PR does carry" at the end. No
+existing row needs repairing; durable conflict records and receipt idempotency
+do need new, additive schema.)
 
 Every broken span in production is **in the past**. Nothing currently on the
 books can cause a future double-book through a malformed interval. The fix is
@@ -68,10 +72,49 @@ evidence for choosing half-open `[start, end)`.
 
 ## Consequences for this PR
 
-1. **No backfill, no migration.** There is nothing forward-dated to repair.
+1. **No backfill, and no migration of EXISTING data.** There is nothing
+   forward-dated to repair. (New, additive schema is a separate matter - see
+   "The migration this PR does carry".)
 2. **🔴 Do NOT add `NOT NULL` to `Visit.endAt`.** It would fail against 21,115
    historical rows, and those rows are harmless. The reads are made
    NULL-tolerant instead, which is the fix that actually closes the hole.
 3. **Half-open is not a preference.** 7 live pairs depend on it.
 4. Historical repair, if ever wanted, is a separate change with its own
    assessment — it is cosmetic (past rows) and must not ride along with a P0.
+
+---
+
+## The migration this PR does carry
+
+The original "no migration" claim was true of the first two fixes and stopped
+being true once conflicts had to outlive a log line and receipts had to survive
+a retry. `20260930000000_booking_conflicts_and_receipt_idempotency` is
+**expand-only**: every statement is additive, and a running old API neither
+reads nor writes any of it.
+
+| change | shape | why it is safe on existing data |
+|---|---|---|
+| `Appointment.operationId TEXT` | nullable | all 273 existing rows stay NULL |
+| partial unique `(shopId, operationId) WHERE operationId IS NOT NULL` | partial | 🔴 without the `WHERE` this index **cannot be created at all** — every existing row is NULL and they would all collide |
+| `BarberNotifyPref.conflictEnabled BOOLEAN NOT NULL DEFAULT true` | defaulted | existing rows get `true`; a double-booked chair is a safety alert, so it is on even where other kinds were silenced |
+| `BookingConflict` table + RLS | new | nothing to migrate |
+| unique `(shopId, receiptId, conflictingId)` | new table | this index **is** the deduplication: repeated detection writes nothing |
+
+**Deploy order.** Expand first, then code — Railway already does this
+(`railway.json` `preDeployCommand` runs `migrate deploy` before traffic). There
+is no contract step: nothing is dropped, narrowed or made NOT NULL, so the old
+and new code can both run against this schema.
+
+**Rollback.** Revert the commits and redeploy. The schema stays — and that is
+the honest position rather than a pretence:
+
+- `operationId` values already written stay written. Harmless: the old code
+  never reads the column, and the partial index only constrains rows that have
+  one.
+- `BookingConflict` rows already written stay written. They are a record that a
+  chair was double-booked; deleting them to tidy up a rollback would destroy
+  exactly the evidence the table exists for.
+- Nothing customer-facing depends on either, so a revert is a code-only step.
+
+Dropping the table would be a separate, deliberate contract migration, and only
+once nobody wants the history.
