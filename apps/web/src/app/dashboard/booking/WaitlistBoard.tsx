@@ -4,6 +4,7 @@ import { cap, useVocab } from "@/components/VocabProvider";
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import { Card } from "@/components/ui/Card";
 import { cn } from "@/lib/cn";
+import { mailtoUri, smsUri } from "@/lib/contactUri";
 import {
   BTN_BASE,
   NAME_WRAP_CLS,
@@ -354,6 +355,11 @@ function WaitlistCard({
   }
 
   const contact = entry.phone ?? entry.email;
+  // Same handoff rules as the appointment sheet's Contact menu, from the same
+  // module: a waitlist row is the other place a barber reaches a client from,
+  // and a number that is only SHOWN is a number nobody can tap.
+  const smsHref = smsUri(entry.phone);
+  const mailHref = mailtoUri(entry.email);
   const active = status === "WAITING" || status === "CONTACTED";
   // Only the facts that exist - an empty part must never leave a dangling "·".
   const meta = [
@@ -424,17 +430,25 @@ function WaitlistCard({
         {entry.note && <p className="text-[11px] text-muted/80">“{entry.note}”</p>}
         {contact && (
           <p>
-            {entry.phone && (
-              <a href={`sms:${entry.phone}`} className="text-gold hover:underline">
-                {entry.phone}
-              </a>
-            )}
+            {entry.phone &&
+              (smsHref ? (
+                <a href={smsHref} className="text-gold hover:underline">
+                  {entry.phone}
+                </a>
+              ) : (
+                // Unreachable, but still worth reading: a number we cannot
+                // text is shown plainly, never as a link that dead-ends.
+                <span className="text-offwhite/75">{entry.phone}</span>
+              ))}
             {entry.phone && entry.email && <span className="text-muted"> · </span>}
-            {entry.email && (
-              <a href={`mailto:${entry.email}`} className="text-gold hover:underline">
-                {entry.email}
-              </a>
-            )}
+            {entry.email &&
+              (mailHref ? (
+                <a href={mailHref} className="text-gold hover:underline">
+                  {entry.email}
+                </a>
+              ) : (
+                <span className="text-offwhite/75">{entry.email}</span>
+              ))}
           </p>
         )}
         {/* A BOOKED entry says WHICH appointment - or admits there isn't one. */}

@@ -4,6 +4,7 @@ import { cap, useVocab } from "@/components/VocabProvider";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { cn } from "@/lib/cn";
+import { copyText, mailtoUri, smsUri, telUri } from "@/lib/contactUri";
 import { Dialog } from "@/components/ui/Dialog";
 import { INPUT } from "./formkit";
 import {
@@ -60,8 +61,10 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
  * 🔴 CONTACT NEVER LEAVES THE DEVICE ACTION. `tel:` / `sms:` / `mailto:` and
  * the clipboard are the only places a number or address goes. No toast, log,
  * analytics event or URL ever carries one — "Phone number copied" says nothing
- * about WHICH number, deliberately. And Text is only a live action where the
- * shop may actually text: consent is a gate, not a formality.
+ * about WHICH number, deliberately. The handoff is the barber's own Messages,
+ * Phone or Mail app, so MISSING consent does not decide whether Text is live —
+ * having a number does. An explicit OPT-OUT is the one exception, and it is
+ * respected here as everywhere. See ContactMenu.
  */
 
 export type SheetView = "detail" | "edit" | "charges" | "pay";
@@ -1481,9 +1484,19 @@ function ActionMenu({
         role="menu"
         aria-label={title}
         onBlur={(e) => {
-          // Only when focus left the menu entirely — moving between items
-          // fires blur too, with relatedTarget still inside.
-          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) onClose();
+          // Only when focus MOVED TO something outside the menu. Moving between
+          // items fires blur too, with relatedTarget still inside.
+          //
+          // 🔴 A NULL relatedTarget IS NOT "FOCUS LEFT". On iOS, tapping a link
+          // does not focus it, but it DOES blur whatever was focused — so the
+          // first row, auto-focused when the menu opens, blurs with a null
+          // relatedTarget the instant the barber taps any OTHER row. Reading
+          // that as "left the menu" closed the menu and unmounted the very
+          // anchor being tapped, before Safari could follow its href: Text and
+          // Email did nothing at all, while Call — the focused row, which never
+          // blurs — worked. Escape and the scrim still close, so nothing traps.
+          const next = e.relatedTarget as Node | null;
+          if (next && !e.currentTarget.contains(next)) onClose();
         }}
         className="relative w-full max-w-md rounded-t-2xl border border-subtle bg-charcoal-900 p-2 shadow-ambient-lg sm:max-w-xs sm:rounded-2xl"
         style={{ paddingBottom: "calc(0.5rem + env(safe-area-inset-bottom, 0px))" }}
@@ -1514,6 +1527,9 @@ function ActionMenu({
 }
 
 function MenuRow({ item, onDone }: { item: MenuItem; onDone: () => void }) {
+  // ONE TAP, ONE HANDOFF. A device row stays mounted through its own tap (see
+  // the href branch), so a second tap would otherwise open a second draft.
+  const fired = useRef(false);
   const cls = cn(
     // 44px floor, and the label wraps rather than clipping at 320px.
     "flex min-h-[2.75rem] w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm transition-colors duration-150 ease-out",
@@ -1558,7 +1574,23 @@ function MenuRow({ item, onDone }: { item: MenuItem; onDone: () => void }) {
         role="menuitem"
         href={item.href}
         {...(item.external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
-        onClick={onDone}
+        onClick={(e) => {
+          if (fired.current) {
+            e.preventDefault();
+            return;
+          }
+          fired.current = true;
+          // 🔴 DO NOT CLOSE IN THIS TICK. React flushes a click's state update
+          // synchronously, so closing here unmounts this <a> while the browser
+          // is still dispatching — and a disconnected anchor never follows its
+          // href. Handing the close to a later task keeps the node connected
+          // through the OS handoff and still reads as instant.
+          //
+          // It is also why this is a real anchor and not a button that assigns
+          // location: the navigation stays the user's own tap, which is the
+          // only kind iOS lets through to Messages, Phone and Mail.
+          setTimeout(onDone, 0);
+        }}
         className={cls}
       >
         {body}
@@ -1583,12 +1615,33 @@ function MenuRow({ item, onDone }: { item: MenuItem; onDone: () => void }) {
 /**
  * REACHING THE CLIENT. Every entry is a device handoff — `tel:`, `sms:`,
  * `mailto:` or the clipboard — so a channel with nothing behind it is not
- * rendered at all.
+ * rendered at all. Every URI comes from `lib/contactUri`, which returns null
+ * for anything it cannot make dialable; a row exists only when its handoff
+ * would really work.
  *
- * 🔴 TEXT IS THE ONE EXCEPTION and it stays VISIBLE while disabled: a number
- * we may not text looks identical to one we may, and silently hiding Text
- * would leave the barber wondering. It says which of the two "no"s it is,
- * because only one of them is theirs to fix.
+ * 🔴 MISSING CONSENT DOES NOT GATE TEXT. AN EXPLICIT OPT-OUT DOES. Those are
+ * two different facts about a client and they do not deserve the same answer:
+ *
+ *   no_consent — nobody ever asked them. `sms:` sends nothing: it opens the
+ *                barber's OWN Messages app, empty, and they write and send it
+ *                themselves from their own number, so there is nothing here
+ *                for consent to govern. Blocking it disabled the common case
+ *                — every Acuity-synced client starts in this state, so a
+ *                migrating shop had a dead Text row for its whole book —
+ *                while preventing nothing, because Call and Copy phone number
+ *                hand over the same number, ungated, one tap away.
+ *   opted_out  — they texted STOP. That is a person telling this shop to stop
+ *                texting them, and it does not stop being true because the
+ *                message would leave from a different app. Text is DISABLED,
+ *                and stays VISIBLE saying why: a hidden row reads as a missing
+ *                number, and the barber needs to know this is not theirs to
+ *                undo. Only the client can, with START.
+ *
+ * 🔴 A CALL IS NOT A TEXT. An opt-out is consent to be TEXTED withdrawn, so
+ * Call stays live in that state — and so does Copy phone number.
+ *
+ * Whether AUTOMATED texts will send is a third question again, and the Client
+ * panel above answers it in every state.
  *
  * 🔴 A copy toast never names the value. "Phone number copied" is the whole
  * message on purpose — a contact detail must not ride in a toast, a log line
@@ -1604,44 +1657,53 @@ function ContactMenu({
   onClose: () => void;
 }) {
   const { phone, phoneDisplay, email } = detail.contact;
-  const canText = detail.sms.state === "ok";
+  const tel = telUri(phone);
+  const sms = smsUri(phone);
+  const mail = mailtoUri(email);
 
   const copy = useCallback(
     async (kind: "phone" | "email", value: string) => {
-      try {
-        await navigator.clipboard.writeText(value);
-        toast(kind === "phone" ? "Phone number copied" : "Email copied", "success");
-      } catch {
-        toast("Couldn't copy — press and hold to select it instead", "error");
-      }
+      const ok = await copyText(value);
+      toast(
+        ok
+          ? kind === "phone"
+            ? "Phone number copied"
+            : "Email copied"
+          : "Couldn't copy — press and hold to select it instead",
+        ok ? "success" : "error",
+      );
     },
     [toast],
   );
 
   const items: MenuItem[] = [];
-  if (phone) {
+  if (tel) {
     items.push({
       key: "call",
       label: "Call",
       icon: <PhoneIcon />,
-      href: `tel:${phone}`,
+      href: tel,
     });
+  }
+  if (sms) {
+    const optedOut = detail.sms.state === "opted_out";
     items.push({
       key: "text",
       label: "Text",
       icon: <ChatIcon />,
-      // A phone CALL needs no consent; an SMS does. Same number, two rules.
-      ...(canText
-        ? { href: `sms:${phone}` }
-        : { disabled: true, reason: SMS_COPY[detail.sms.state].detail }),
+      // "They texted STOP. Only they can undo it, with START" - the same words
+      // the Client panel uses, because it is the same fact.
+      ...(optedOut
+        ? { disabled: true, reason: SMS_COPY.opted_out.detail }
+        : { href: sms }),
     });
   }
-  if (email) {
+  if (mail) {
     items.push({
       key: "email",
       label: "Email",
       icon: <MailIcon />,
-      href: `mailto:${email}`,
+      href: mail,
     });
   }
   if (phone) {
@@ -1652,7 +1714,7 @@ function ContactMenu({
       onClick: () => void copy("phone", phoneDisplay ?? phone),
     });
   }
-  if (email) {
+  if (mail && email) {
     items.push({
       key: "copy-email",
       label: "Copy email",
