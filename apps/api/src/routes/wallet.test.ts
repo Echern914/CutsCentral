@@ -177,6 +177,11 @@ describe("wallet pass web service", () => {
     });
     const res = await request(app).get(`/api/rewards/${client!.magicToken}`);
     expect(res.status).toBe(200);
-    expect(res.body.wallet).toEqual({ available: true });
+    // TWO passes, two independent gates. This suite configures the punch CARD
+    // (WALLET_*) and not the APPOINTMENT pass (WALLET_APPT_*), so the split is
+    // visible right here: one true, one false, same shop, same payload. The
+    // exact-shape assertion is deliberate - a new wallet flag should have to
+    // come and say so.
+    expect(res.body.wallet).toEqual({ available: true, appointment: false });
   });
 });

@@ -75,6 +75,12 @@ export interface BookShopData {
     /** The most occurrences a customer may book in one tap (API-owned). */
     recurringMaxCount?: number;
   };
+  /**
+   * Whether the confirmation screen may offer "Add to Apple Wallet" for the
+   * booking itself. Optional so a web deploy ahead of the API just hides the
+   * badge rather than rendering one that downloads a 503.
+   */
+  walletPass?: { appointment: boolean };
   staff: { id: string; name: string; bio: string | null; imageUrl: string | null }[];
   services: {
     id: string;

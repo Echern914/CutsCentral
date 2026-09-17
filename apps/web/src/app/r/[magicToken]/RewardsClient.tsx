@@ -17,7 +17,7 @@ import { CadenceCard } from "./CadenceCard";
 import { NextVisitCard } from "./NextVisitCard";
 import { PushOptIn } from "./PushOptIn";
 import { GetTheApp } from "./GetTheApp";
-import { AddToWallet } from "./AddToWallet";
+import { AddToWallet } from "@/components/AddToWallet";
 import { TextToBook } from "@/components/TextToBook";
 import { DeleteMyData } from "./DeleteMyData";
 import { resolveRewardsTheme, rewardsFontVars, surfaceStyle, type RewardsTheme } from "./theme";
@@ -271,8 +271,18 @@ export function RewardsClient({
               rewards-section toggles or the rewards master switch: it is not a
               reward, it is their booking. */}
           {nextVisit && (
-            <motion.div variants={fadeUp}>
+            <motion.div variants={fadeUp} className="flex flex-col gap-3">
               <NextVisitCard visit={nextVisit} theme={t} />
+              {/* The BOOKING in Wallet, not the punch card — and only for a
+                  ChairBack booking, because an Acuity-synced visit has no
+                  manageToken and therefore nothing we can mint a pass from. */}
+              {nextVisit.manageToken && (
+                <AddToWallet
+                  href={`/book/manage/${nextVisit.manageToken}/wallet-pass`}
+                  available={data.wallet?.appointment ?? false}
+                  label="Add this appointment to Apple Wallet"
+                />
+              )}
             </motion.div>
           )}
 
@@ -361,8 +371,9 @@ export function RewardsClient({
           {/* Apple Wallet punch card - iOS Safari only, and only once the API
               can mint passes (wallet.available). Renders nothing elsewhere. */}
           <AddToWallet
-            magicToken={magicToken}
+            href={`/r/${magicToken}/wallet-pass`}
             available={data.wallet?.available ?? false}
+            label="Add your punch card to Apple Wallet"
           />
 
           {/* SMS consent - prominent when not yet opted in, quiet once handled */}

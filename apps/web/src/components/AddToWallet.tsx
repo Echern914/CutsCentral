@@ -3,25 +3,36 @@
 import { useEffect, useState } from "react";
 
 /**
- * "Add to Apple Wallet" for the punch card. Renders ONLY when:
- *  - the API can mint passes (wallet.available - the WALLET_* env is set),
+ * "Add to Apple Wallet" — the one badge, used for both pass kinds.
+ *
+ * TWO CALLERS, TWO PASSES: the punch card on the rewards page, and the
+ * appointment itself on the booking confirmation and beside the customer's next
+ * visit. They differ only in where the .pkpass comes from, so the gating, the
+ * markup and Apple's badge styling live here once.
+ *
+ * Renders ONLY when:
+ *  - the API can actually mint THAT pass (`available` — each kind has its own
+ *    env and its own gate; a badge that downloads a 503 is worse than no badge),
  *  - we're in iOS Safari (Wallet is an Apple thing), and
  *  - we're NOT inside the native app WebView (WKWebView can't present the
- *    Add-Pass sheet from a plain navigation; customers coming from the SMS
- *    magic link land in Safari, which is exactly where this works).
+ *    Add-Pass sheet from a plain navigation; customers coming from an SMS magic
+ *    link land in Safari, which is exactly where this works).
  *
- * The link is a same-tab navigation to the same-origin Next relay
- * (./wallet-pass/route.ts) - Safari sees application/vnd.apple.pkpass and
- * opens the Add-to-Wallet sheet over the page. Badge styling follows Apple's
- * Add-to-Wallet guidelines (black badge, white mark + text).
+ * `href` is always a same-origin Next relay (`…/wallet-pass/route.ts`) — the CSP
+ * blocks direct browser fetches to the API origin, and Safari needs a plain
+ * same-tab navigation to present the Add-to-Wallet sheet.
  */
 export function AddToWallet({
-  magicToken,
+  href,
   available,
+  label,
 }: {
-  magicToken: string;
-  /** From the rewards payload: false until the Wallet env is configured. */
+  /** Same-origin relay path that streams the signed .pkpass. */
+  href: string;
+  /** From the payload: false until that pass kind's WALLET_* env is set. */
   available: boolean;
+  /** Accessible name — says WHICH pass, since a page may offer both. */
+  label: string;
 }) {
   // Client-only gates (userAgent, the RN bridge) - start hidden, reveal in an
   // effect so SSR never renders a badge the client would remove (hydration).
@@ -41,8 +52,8 @@ export function AddToWallet({
   return (
     <div className="flex justify-center">
       <a
-        href={`/r/${magicToken}/wallet-pass`}
-        aria-label="Add your punch card to Apple Wallet"
+        href={href}
+        aria-label={label}
         className="inline-flex items-center gap-2.5 rounded-lg bg-black px-5 py-2.5 transition-transform duration-200 ease-out hover:scale-[1.02]"
         style={{ border: "1px solid rgba(255,255,255,0.25)" }}
       >
