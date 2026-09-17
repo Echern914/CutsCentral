@@ -899,7 +899,7 @@ async function bookAppointment(
     }
   }
 
-  let bookOutboxId: string | null = null;
+  let bookOutboxIds: string[] = [];
   try {
     const bookedId = await prisma.$transaction(async (tx) => {
       // Our own live-or-expired hold on this exact slot, if any.
@@ -969,7 +969,7 @@ async function bookAppointment(
         });
         // The HOLD was never mirrored (ephemeral, self-lapsing). Now that it
         // is a real booking that owns the chair indefinitely, it is.
-        bookOutboxId = await recordMirrorIntent(tx, {
+        bookOutboxIds = await recordMirrorIntent(tx, {
           shopId: ctx.shopId,
           now: ctx.now,
           appointmentId: hold.id,
@@ -1020,7 +1020,7 @@ async function bookAppointment(
         },
         select: { id: true },
       });
-      bookOutboxId = await recordMirrorIntent(tx, {
+      bookOutboxIds = await recordMirrorIntent(tx, {
         shopId: ctx.shopId,
         now: ctx.now,
         appointmentId: appt.id,
@@ -1042,7 +1042,7 @@ async function bookAppointment(
     // caller is mid-conversation and the agent has already said it is booked,
     // so tearing it down over an Acuity blip would be worse than a block the
     // reconciler places a minute later.
-    await dispatchAfterCommit(bookOutboxId, {
+    await dispatchAfterCommit(bookOutboxIds, {
       shopId: ctx.shopId,
       appointmentId: bookedId,
       via: "receptionist_book",
@@ -1167,7 +1167,7 @@ async function rescheduleTool(
   });
   if (!bookable) return fail("that new time is outside the shop's bookable hours");
 
-  let reschedOutboxId: string | null = null;
+  let reschedOutboxIds: string[] = [];
   try {
     await prisma.$transaction(async (tx) => {
       // Consume the client's live holds first. The normal flow holds the
@@ -1221,7 +1221,7 @@ async function rescheduleTool(
           runningLate: false,
         },
       });
-      reschedOutboxId = await swapForReschedule(tx, {
+      reschedOutboxIds = await swapForReschedule(tx, {
         shopId: ctx.shopId,
         now: ctx.now,
         appointmentId: appt.id,
@@ -1250,7 +1250,7 @@ async function rescheduleTool(
   await noteAvailabilityChanged(ctx.shopId);
 
   // New block first, then release the old - never the reverse.
-  await completeReschedule(ctx.shopId, appt.id, reschedOutboxId);
+  await completeReschedule(ctx.shopId, appt.id, reschedOutboxIds);
 
   return ok({
     rescheduled: true,

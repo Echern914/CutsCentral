@@ -87,7 +87,7 @@ export async function startEntry(opts: {
   });
   if (!shop) throw new WalkInNotFoundError();
 
-  let outboxId: string | null = null;
+  let outboxIds: string[] = [];
   let appointmentId = "";
 
   const view = await runWithShop(shopId, async (tx) => {
@@ -225,7 +225,7 @@ export async function startEntry(opts: {
     // LOUDLY and the start stands (the walk-in precedent - the customer is
     // physically in the chair).
     try {
-      outboxId = await recordMirrorIntent(tx, {
+      outboxIds = await recordMirrorIntent(tx, {
         shopId,
         // The SAME instant that opened this transaction and became the
         // appointment's startsAt - not a fresh read. The mirror decides
@@ -281,7 +281,7 @@ export async function startEntry(opts: {
 
   // After commit: push the block out to Acuity, best-effort. The reconciler
   // owns any failure; the start already stands.
-  void dispatchAfterCommit(outboxId, {
+  void dispatchAfterCommit(outboxIds, {
     shopId,
     appointmentId,
     via: "walk_in_queue",

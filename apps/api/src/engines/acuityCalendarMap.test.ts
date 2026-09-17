@@ -19,6 +19,7 @@ function chair(over: Partial<StaffMappingRow> = {}): StaffMappingRow {
     active: true,
     bookable: true,
     acuityCalendarId: "cal_1",
+    acuityExtraCalendarIds: [],
     acuityCalendarMappedAt: new Date("2026-08-02T00:00:00Z"),
     ...over,
   };
@@ -71,6 +72,29 @@ describe("computeMappingReadiness", () => {
       connectedAt: CONNECTED,
     });
     expect(r.blocking[0]!.problem).toBe("invalid");
+  });
+
+  it("an EXTRA calendar that vanished from the account blocks too", () => {
+    // Every create for this chair would send one block to a calendar Acuity
+    // will refuse, and a definitive refusal fails the whole booking closed -
+    // so this is caught here, where one edit fixes it, not at a checkout.
+    const r = computeMappingReadiness({
+      staff: [chair({ acuityExtraCalendarIds: ["cal_2", "cal_deleted"] })],
+      calendars: CALS,
+      connectedAt: CONNECTED,
+    });
+    expect(r.ready).toBe(false);
+    expect(r.blocking[0].problem).toBe("extra_invalid");
+  });
+
+  it("extras that are all still on the account keep the chair ready", () => {
+    const r = computeMappingReadiness({
+      staff: [chair({ acuityExtraCalendarIds: ["cal_2"] })],
+      calendars: CALS,
+      connectedAt: CONNECTED,
+    });
+    expect(r.ready).toBe(true);
+    expect(r.staff[0].extraCalendars).toEqual([{ id: "cal_2", name: "Chair 2" }]);
   });
 
   it("a mapping predating a RECONNECT is stale - the id may be another account's chair", () => {

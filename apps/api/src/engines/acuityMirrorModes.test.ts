@@ -144,7 +144,7 @@ describe("OFF makes zero outbound writes", () => {
   it("records no intent and calls Acuity not once", async () => {
     await setMode("OFF");
     const a = await makeAppt(mapped);
-    expect(await intent(a.id, mapped)).toBeNull();
+    expect(await intent(a.id, mapped)).toEqual([]);
     expect(await prisma.acuityOutboundBlock.count({ where: { shopId } })).toBe(0);
     expect(acuityMock.createBlock).not.toHaveBeenCalled();
     expect(acuityMock.deleteBlock).not.toHaveBeenCalled();
@@ -164,7 +164,7 @@ describe("OBSERVE evaluates but writes nothing", () => {
   it("records no outbox row and makes no Acuity call", async () => {
     await setMode("OBSERVE");
     const a = await makeAppt(mapped);
-    expect(await intent(a.id, mapped)).toBeNull();
+    expect(await intent(a.id, mapped)).toEqual([]);
     expect(await prisma.acuityOutboundBlock.count({ where: { shopId } })).toBe(0);
     expect(acuityMock.createBlock).not.toHaveBeenCalled();
   });
@@ -247,7 +247,7 @@ describe("what gets mirrored", () => {
   it("an indefinite approval REQUEST is mirrored - it holds the chair", async () => {
     await setMode("ENFORCE");
     const a = await makeAppt(mapped, "PENDING");
-    expect(await intent(a.id, mapped, "PENDING")).not.toBeNull();
+    expect(await intent(a.id, mapped, "PENDING")).toHaveLength(1);
   });
 
   it("an EPHEMERAL receptionist hold is not mirrored", async () => {
@@ -270,7 +270,7 @@ describe("what gets mirrored", () => {
         },
       }),
     );
-    expect(id).toBeNull();
+    expect(id).toEqual([]);
   });
 
   it("an appointment promoted from a synced Visit is never echoed back out", async () => {
@@ -308,7 +308,7 @@ describe("what gets mirrored", () => {
         },
       }),
     );
-    expect(id).toBeNull();
+    expect(id).toEqual([]);
     expect(acuityMock.createBlock).not.toHaveBeenCalled();
   });
 });

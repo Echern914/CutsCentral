@@ -478,9 +478,9 @@ export async function backfillShop(
       continue;
     }
 
-    let outboxId: string | null = null;
+    let outboxIds: string[] = [];
     try {
-      outboxId = await prisma.$transaction((tx) =>
+      outboxIds = await prisma.$transaction((tx) =>
         recordMirrorIntent(tx, {
           shopId,
           appointmentId: appt.id,
@@ -513,7 +513,7 @@ export async function backfillShop(
       throw err;
     }
 
-    if (!outboxId) {
+    if (outboxIds.length === 0) {
       // The engine itself declined - the only correct response is to agree.
       result.skippedIneligible += 1;
       continue;
@@ -524,13 +524,16 @@ export async function backfillShop(
       shopId,
       appointmentId: appt.id,
       staffId: appt.staffId,
-      outboxId,
+      outboxIds,
+      // One appointment, one row PER CALENDAR the chair is sold on - so a
+      // multi-calendar barber's run reads "50 appointments, 200 blocks".
+      blocks: outboxIds.length,
       calendarId: chair.calendarId,
       startsAt: appt.startsAt.toISOString(),
       endsAt: appt.endsAt.toISOString(),
     });
 
-    const outcome = await dispatchAfterCommit(outboxId, {
+    const outcome = await dispatchAfterCommit(outboxIds, {
       shopId,
       appointmentId: appt.id,
       via: "backfill",

@@ -753,7 +753,7 @@ export async function claimOffer(params: {
   const now = params.now ?? new Date();
   const hash = sha256Hex(params.token);
   // Captured inside the transaction, dispatched after it commits.
-  let claimOutboxId: string | null = null;
+  let claimOutboxIds: string[] = [];
   let claimedApptId: string | null = null;
 
   try {
@@ -943,7 +943,7 @@ export async function claimOffer(params: {
       // whether this occupies as a BOOKED row or an indefinite PENDING
       // request - both hold the chair, so both mirror.
       claimedApptId = appt.id;
-      claimOutboxId = await recordMirrorIntent(tx, {
+      claimOutboxIds = await recordMirrorIntent(tx, {
         shopId: offer.shopId,
         now,
         appointmentId: appt.id,
@@ -1007,8 +1007,8 @@ export async function claimOffer(params: {
     // customer is mid-conversation on a link they were sent, and tearing the
     // claim down because Acuity was briefly unreachable would be worse than a
     // block the reconciler places a minute later.
-    if (claimOutboxId && claimedApptId) {
-      await dispatchAfterCommit(claimOutboxId, {
+    if (claimOutboxIds.length > 0 && claimedApptId) {
+      await dispatchAfterCommit(claimOutboxIds, {
         shopId: claimResult && "shopId" in claimResult ? String(claimResult.shopId) : "",
         appointmentId: claimedApptId,
         via: "waitlist_claim",

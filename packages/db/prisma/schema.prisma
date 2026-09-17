@@ -2085,6 +2085,22 @@ model Staff {
   // colleague's chair. Populated from Acuity's GET /calendars (acuity/
   // outbound.ts) and assigned per chair from the booking dashboard.
   acuityCalendarId String?
+  // EVERY OTHER CALENDAR THIS ONE CHAIR ALSO OCCUPIES.
+  //
+  // 🔴 A BLOCK IS PER CALENDAR, AND SOME ACCOUNTS SPLIT ONE PERSON ACROSS
+  // SEVERAL. A barber running "Haircut", "Retwists", "After hours" and
+  // "LAST MIN" as separate Acuity calendars is ONE human with one chair: a
+  // block on "Haircut" alone leaves the other three sellable at that exact
+  // hour, which is the double-booking this engine exists to stop. (Barbers
+  // already work around it by hand - one account had the same hour blocked on
+  // seven calendars.) Listing them here makes one ChairBack booking write one
+  // block per calendar, each tracked as its own row.
+  //
+  // Empty for every shop that maps one chair to one calendar - the normal
+  // shape, completely unchanged. A calendar may belong to only ONE chair,
+  // primary or extra: two chairs claiming it would have each blocking the
+  // other's day.
+  acuityExtraCalendarIds String[] @default([])
   // When the mapping was last saved/validated. Staleness is DERIVED, never
   // swept: a mapping is stale when mappedAt predates the connection's
   // connectedAt (an OAuth reconnect may be a different Acuity account, whose

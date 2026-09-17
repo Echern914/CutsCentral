@@ -177,7 +177,7 @@ export async function materializeSeries(
   const holdUntil = input.hold?.expiresAt ?? null;
   const occurrences = computeOccurrences(input.pattern, input.anchor, input.timezone);
   // Collected per occurrence, dispatched after the whole series commits.
-  const mirrorIntents: { outboxId: string; appointmentId: string }[] = [];
+  const mirrorIntents: { outboxIds: string[]; appointmentId: string }[] = [];
 
   // Create the series row first (owner-scoped inside runWithShop so RLS + the
   // shopId stamp are correct). manageToken enables a login-less "cancel all".
@@ -299,7 +299,7 @@ export async function materializeSeries(
         // a 26-week series does not hold a transaction open across 26 HTTP
         // calls. A partial dispatch failure is contained to the occurrences
         // that failed - the reconciler finishes those individually.
-        const outboxId = await recordMirrorIntent(tx, {
+        const outboxIds = await recordMirrorIntent(tx, {
           shopId: input.shopId,
           now,
           appointmentId: created.id,
@@ -318,7 +318,7 @@ export async function materializeSeries(
             visitId: null,
           },
         });
-        if (outboxId) mirrorIntents.push({ outboxId, appointmentId: created.id });
+        if (outboxIds.length > 0) mirrorIntents.push({ outboxIds, appointmentId: created.id });
         return created;
       });
       booked.push({ index: occ.index, startsAt, appointmentId: appt.id });
@@ -369,7 +369,7 @@ export async function materializeSeries(
   // because Acuity rate-limited the eleventh week. Whatever does not land
   // stays in the outbox for the reconciler.
   for (const intent of mirrorIntents) {
-    await dispatchAfterCommit(intent.outboxId, {
+    await dispatchAfterCommit(intent.outboxIds, {
       shopId: input.shopId,
       appointmentId: intent.appointmentId,
       via: "recurring_series",

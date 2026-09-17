@@ -58,6 +58,43 @@ export function shouldObserve(shop: MirrorShopSlice): boolean {
   );
 }
 
+//  1b. Which calendars does this one chair occupy?
+
+export interface StaffCalendarSlice {
+  acuityCalendarId: string | null;
+  /** Every OTHER calendar the same chair is sold on. Usually empty. */
+  acuityExtraCalendarIds: string[];
+}
+
+/**
+ * EVERY Acuity calendar that must be blocked for one ChairBack booking.
+ *
+ * An Acuity block is calendar-scoped, and some accounts sell ONE person's day
+ * through several calendars - "Haircut", "Retwists", "After hours",
+ * "LAST MIN". Blocking only the primary leaves the others sellable at that
+ * exact hour, which is the double booking this engine exists to stop. (Barbers
+ * on those accounts already work around it by hand: one had the same hour
+ * blocked on seven calendars.)
+ *
+ * The primary is the gate. With no primary calendar the chair is UNMAPPED and
+ * the caller must refuse - extras alone are not a mapping, and treating them
+ * as one would let a half-configured chair look protected.
+ *
+ * Order is primary-first and duplicates are dropped, so the ordinary shape
+ * (one chair, one calendar, no extras) returns exactly what it always did: a
+ * single-element list.
+ */
+export function targetCalendarIds(staff: StaffCalendarSlice): string[] {
+  const primary = staff.acuityCalendarId?.trim();
+  if (!primary) return [];
+  const out = [primary];
+  for (const raw of staff.acuityExtraCalendarIds ?? []) {
+    const id = typeof raw === "string" ? raw.trim() : "";
+    if (id && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
 //  2. Occupancy
 
 export interface OccupancySlice {

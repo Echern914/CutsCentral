@@ -2,10 +2,12 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import {
+  CalendarNotOnAccountError,
   CalendarTakenError,
   ConnectionChangedError,
   getMappingSnapshot,
   setStaffCalendar,
+  setStaffExtraCalendars,
 } from "./acuityCalendarMap.js";
 
 /**
@@ -88,7 +90,7 @@ afterEach(async () => {
   vi.clearAllMocks();
   await prisma.staff.updateMany({
     where: { shopId },
-    data: { acuityCalendarId: null, acuityCalendarMappedAt: null },
+    data: { acuityCalendarId: null, acuityExtraCalendarIds: [], acuityCalendarMappedAt: null },
   });
 });
 
@@ -243,11 +245,125 @@ describe("RLS", () => {
     expect(policies.map((p) => p.polname)).toContain("tenant_isolation");
   });
 
+  it("the live-block index is scoped to (appointment, CALENDAR)", async () => {
+    // One live block per appointment PER CALENDAR. Scoped to the appointment
+    // alone - which is what it used to be - a barber sold through four
+    // calendars could only ever have one of them blocked.
+    const [idx] = await prisma.$queryRaw<{ indexdef: string }[]>`
+      SELECT indexdef FROM pg_indexes
+       WHERE indexname = 'AcuityOutboundBlock_live_per_appointment_calendar'`;
+    expect(idx?.indexdef).toContain("UNIQUE");
+    expect(idx?.indexdef).toMatch(/appointmentId.*acuityCalendarId/s);
+    expect(idx?.indexdef).toMatch(/PENDING.*ACTIVE.*UNKNOWN/s);
+    // ...and the appointment-only index it replaced is gone, or the two would
+    // contradict each other and the narrower rule would never be reachable.
+    const old = await prisma.$queryRaw<{ indexname: string }[]>`
+      SELECT indexname FROM pg_indexes
+       WHERE indexname = 'AcuityOutboundBlock_live_per_appointment'`;
+    expect(old).toHaveLength(0);
+  });
+
   it("the partial unique index exists with the right predicate", async () => {
     const [idx] = await prisma.$queryRaw<{ indexdef: string }[]>`
       SELECT indexdef FROM pg_indexes
        WHERE indexname = 'Staff_shopId_acuityCalendarId_key'`;
     expect(idx?.indexdef).toContain("UNIQUE");
     expect(idx?.indexdef).toMatch(/acuityCalendarId.*IS NOT NULL/s);
+  });
+});
+
+/**
+ * THE OTHER CALENDARS ONE CHAIR IS SOLD ON.
+ *
+ * Same three guarantees as the primary mapping, because they exist for the
+ * same reason: every id here aims a real block at a real person's working day.
+ * The rule that gets its own attention is "one calendar, one chair" - two
+ * chairs sharing a calendar would have each one's bookings blocking the
+ * other's day, which reads in Acuity as a barber who is never available.
+ */
+describe("extra calendars for one chair", () => {
+  const THREE = [...CALS, { id: "cal_3", name: "After hours" }];
+
+  it("refuses an id that is not on the live account", async () => {
+    acuityMock.listCalendars.mockResolvedValue(THREE);
+    await expect(
+      setStaffExtraCalendars(shopId, staffA, ["cal_ghost"], connectedAt),
+    ).rejects.toThrow(CalendarNotOnAccountError);
+  });
+
+  it("refuses a calendar another chair holds as its PRIMARY", async () => {
+    acuityMock.listCalendars.mockResolvedValue(THREE);
+    await setStaffCalendar(shopId, staffB, "cal_2", connectedAt);
+    await expect(
+      setStaffExtraCalendars(shopId, staffA, ["cal_2"], connectedAt),
+    ).rejects.toThrow(CalendarTakenError);
+  });
+
+  it("refuses a calendar another chair holds as an EXTRA", async () => {
+    acuityMock.listCalendars.mockResolvedValue(THREE);
+    await setStaffExtraCalendars(shopId, staffB, ["cal_3"], connectedAt);
+    await expect(
+      setStaffExtraCalendars(shopId, staffA, ["cal_3"], connectedAt),
+    ).rejects.toThrow(CalendarTakenError);
+  });
+
+  it("an extra also puts that calendar out of reach as another chair's PRIMARY", async () => {
+    acuityMock.listCalendars.mockResolvedValue(THREE);
+    await setStaffExtraCalendars(shopId, staffA, ["cal_3"], connectedAt);
+    await expect(setStaffCalendar(shopId, staffB, "cal_3", connectedAt)).rejects.toThrow(
+      CalendarTakenError,
+    );
+  });
+
+  it("never stores the chair's OWN primary as an extra - that would double-block it", async () => {
+    acuityMock.listCalendars.mockResolvedValue(THREE);
+    await setStaffCalendar(shopId, staffA, "cal_1", connectedAt);
+    await setStaffExtraCalendars(shopId, staffA, ["cal_1", "cal_3"], connectedAt);
+    const row = await prisma.staff.findUnique({
+      where: { id: staffA },
+      select: { acuityExtraCalendarIds: true },
+    });
+    expect(row!.acuityExtraCalendarIds).toEqual(["cal_3"]);
+  });
+
+  it("refuses to save when the connection changed since the caller listed calendars", async () => {
+    acuityMock.listCalendars.mockResolvedValue(THREE);
+    // A reconnect may be a DIFFERENT Acuity account, where cal_3 is a
+    // stranger's chair - exactly the primary mapping's reconnect race.
+    await expect(
+      setStaffExtraCalendars(shopId, staffA, ["cal_3"], new Date(connectedAt.getTime() - 5_000)),
+    ).rejects.toThrow(ConnectionChangedError);
+  });
+
+  it("clearing the chair's primary clears its extras with it", async () => {
+    acuityMock.listCalendars.mockResolvedValue(THREE);
+    await setStaffCalendar(shopId, staffA, "cal_1", connectedAt);
+    await setStaffExtraCalendars(shopId, staffA, ["cal_3"], connectedAt);
+
+    await setStaffCalendar(shopId, staffA, null, connectedAt);
+
+    const row = await prisma.staff.findUnique({
+      where: { id: staffA },
+      select: { acuityCalendarId: true, acuityExtraCalendarIds: true },
+    });
+    // Extras mean nothing without a primary, and keeping them would silently
+    // resurrect a months-old list the day this chair is mapped again.
+    expect(row!.acuityCalendarId).toBeNull();
+    expect(row!.acuityExtraCalendarIds).toEqual([]);
+  });
+
+  it("an empty list clears the extras without asking Acuity anything", async () => {
+    acuityMock.listCalendars.mockResolvedValue(THREE);
+    await setStaffExtraCalendars(shopId, staffA, ["cal_3"], connectedAt);
+    acuityMock.listCalendars.mockClear();
+
+    await setStaffExtraCalendars(shopId, staffA, [], connectedAt);
+
+    expect(acuityMock.listCalendars).not.toHaveBeenCalled();
+    const row = await prisma.staff.findUnique({
+      where: { id: staffA },
+      select: { acuityExtraCalendarIds: true },
+    });
+    expect(row!.acuityExtraCalendarIds).toEqual([]);
   });
 });

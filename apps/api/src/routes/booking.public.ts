@@ -40,7 +40,8 @@ import {
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import {
   completeReschedule,
-  dispatchCreate,
+  dispatchCreateAll,
+  releaseForAppointment,
   staffMirrorBlocked,
   MirrorNotConfiguredError,
   recordMirrorIntent,
@@ -1611,6 +1612,13 @@ const createSchema = z
  * If THIS write fails the appointment survives unmirrored - no worse than
  * before the mirror existed, and the outbox row (still PENDING/FAILED) is what
  * the reconciler picks up.
+ *
+ * 🔴 AND IT RELEASES THE BLOCKS THAT DID LAND. A chair sold on four Acuity
+ * calendars writes four blocks, and "failed" means at least one was refused -
+ * not that none exist. Cancelling the appointment while three blocks stand
+ * would take three real calendars off the barber's board for a booking that
+ * no longer exists, with nothing left pointing at them; release is never gated
+ * on the shop's mode precisely so this cleanup always runs.
  */
 async function compensateUnmirroredBooking(
   shopId: string,
@@ -1630,6 +1638,7 @@ async function compensateUnmirroredBooking(
         });
       }
     });
+    await releaseForAppointment(shopId, appointmentId);
   } catch (err) {
     logger.error(
       { err, shopId, appointmentId },
@@ -2209,7 +2218,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
 
   let appointmentId: string;
   let manageToken: string;
-  let mirrorOutboxId: string | null = null;
+  let mirrorOutboxIds: string[] = [];
   try {
     // One transaction as the connection owner (NO runWithShop - the public route
     // has no shop context). Availability was validated above; here the advisory
@@ -2316,7 +2325,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       // call happens after commit - doing it here would hold a pooled
       // connection and the staff advisory lock across 200-800ms of Acuity
       // latency and serialize every booking for this barber behind it.
-      const outboxId = await recordMirrorIntent(tx, {
+      const outboxIds = await recordMirrorIntent(tx, {
         shopId: shop.id,
         now,
         appointmentId: appt.id,
@@ -2336,11 +2345,11 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
           visitId: null,
         },
       });
-      return { ...appt, outboxId };
+      return { ...appt, outboxIds };
     });
     appointmentId = result.id;
     manageToken = result.manageToken;
-    mirrorOutboxId = result.outboxId;
+    mirrorOutboxIds = result.outboxIds;
   } catch (err) {
     // The barber's cap for that weekday filled while this customer was on the
     // page. Its own code, not slot_taken: the time itself may well still be
@@ -2408,8 +2417,12 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
   // created - otherwise "You're booked!" is a claim we cannot back, which is
   // precisely how a ChairBack booking that had held 6:10pm for eleven days got
   // sold over from the Acuity side.
-  if (mirrorOutboxId) {
-    const outcome = await dispatchCreate(mirrorOutboxId);
+  if (mirrorOutboxIds.length > 0) {
+    // One dispatch PER CALENDAR this chair is sold on, folded into one answer.
+    // Anything short of "every calendar is blocked" is not protection: a
+    // barber whose Acuity account splits him across four calendars is still
+    // sellable at this hour on the three that did not land.
+    const outcome = await dispatchCreateAll(mirrorOutboxIds);
     if (outcome === "failed") {
       // DEFINITIVE rejection - Acuity looked at it and declined, so no block
       // exists. Undo the booking and give the customer the same clean answer
@@ -2426,7 +2439,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       // strand a live block. Keep the booking, say nothing confirmatory, and
       // let the reconciler settle it by reference.
       logger.warn(
-        { shopId: shop.id, appointmentId, outboxId: mirrorOutboxId },
+        { shopId: shop.id, appointmentId, outboxIds: mirrorOutboxIds },
         "acuity mirror: ambiguous create - holding booking, suppressing confirmations",
       );
       // This return happens BEFORE any PaymentIntent is created, so a payment
@@ -3364,7 +3377,7 @@ bookingPublicRouter.post(
       return;
     }
 
-    let publicReschedOutboxId: string | null = null;
+    let publicReschedOutboxIds: string[] = [];
     try {
       await prisma.$transaction(async (tx) => {
         // Same shared guard as create, EXCLUDING this appt's own row.
@@ -3414,7 +3427,7 @@ bookingPublicRouter.post(
             runningLate: false,
           },
         });
-        publicReschedOutboxId = await swapForReschedule(tx, {
+        publicReschedOutboxIds = await swapForReschedule(tx, {
           shopId: appt.shopId,
           now,
           appointmentId: appt.id,
@@ -3454,7 +3467,7 @@ bookingPublicRouter.post(
 
     // New block first, then release the old. Delete-first would leave the new
     // time briefly bookable in Acuity - the exact window this engine closes.
-    await completeReschedule(appt.shopId, appt.id, publicReschedOutboxId);
+    await completeReschedule(appt.shopId, appt.id, publicReschedOutboxIds);
 
     // Devices holding this appointment's Wallet pass re-fetch the NEW time.
     // Fire-and-forget: a wallet problem must never affect the reschedule.
