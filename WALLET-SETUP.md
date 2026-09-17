@@ -108,9 +108,39 @@ Description: `ChairBack appointment`. Identifier:
 
 ## 2–3. Certificate + PEM export
 
-Exactly the punch-card steps above, against the NEW Pass Type ID. You will end
-with a second `wallet-appt-cert.pem` + `wallet-appt-key.pem`. (The WWDR file is
-the same one — no need to re-download.)
+Same certificate steps as the punch card, against the NEW Pass Type ID. Export
+the cert **and** its private key from Keychain as `wallet-appt.p12`, then:
+
+```sh
+# the signing certificate
+openssl pkcs12 -in wallet-appt.p12 -clcerts -nokeys -legacy -out wallet-appt-cert.pem
+# the private key - UNENCRYPTED. `-nodes` is not optional here; see below.
+openssl pkcs12 -in wallet-appt.p12 -nocerts -nodes -legacy -out wallet-appt-key.pem
+```
+
+(The WWDR file is the same one — no need to re-download.)
+
+### 🔴 The key must be an UNENCRYPTED PEM. Use `-nodes`.
+
+This is the one supported path, and it is the one production already runs on:
+the live punch card has **no `WALLET_PASS_KEY_PASSPHRASE` set** — only the five
+other `WALLET_*` vars — so its key is unencrypted and proven working.
+
+**Without `-nodes`, `openssl pkcs12 -nocerts` prompts you for a NEW PEM pass
+phrase and always writes an encrypted key.** That key then fails to load unless
+`WALLET_APPT_PASS_KEY_PASSPHRASE` is also set, and the failure surfaces at
+signing time — long after the deploy looked fine. Earlier revisions of this doc
+called the passphrase "optional", which was wrong in the only way that matters:
+following the command as written *forced* a passphrase the env then lacked.
+
+The key is consumed in two places and both take the same PEM:
+`decodeWalletCerts` (`wallet/pass.ts`) base64-decodes it for the `.pkpass`
+signer, and the APNs poke hands it to Node's `http2.connect({ key, ... })`.
+`walletKeyFormat.test.ts` proves an unencrypted PEM loads and an encrypted one
+does not, so this is checked rather than asserted.
+
+Encrypting the key buys nothing here anyway: the passphrase would live in the
+same Railway store as the key it protects.
 
 ## 4. Set the Railway env (API service)
 
@@ -118,22 +148,65 @@ the same one — no need to re-download.)
 WALLET_APPT_PASS_TYPE_ID=pass.com.getchairback.appointment
 WALLET_APPT_PASS_CERT_BASE64=$(base64 -i wallet-appt-cert.pem)
 WALLET_APPT_PASS_KEY_BASE64=$(base64 -i wallet-appt-key.pem)
-WALLET_APPT_PASS_KEY_PASSPHRASE=<the key passphrase, if you set one>
 ```
 
+**Three variables, and no passphrase** — with `-nodes` above the key is
+unencrypted, so `WALLET_APPT_PASS_KEY_PASSPHRASE` must stay UNSET. Setting it
+against an unencrypted key is not merely redundant; it is a second thing that
+can drift out of step with the key.
+
 (`WALLET_TEAM_ID` and `WALLET_WWDR_CERT_BASE64` are shared with the punch card
-and must already be set.)
+and must already be set. The appointment pass has its own Pass Type ID and its
+own certificate — Apple binds each certificate to exactly one type id — so it
+never reuses the punch card's cert or key.)
 
 ## 5. Verify
 
-0. `railway variables --json | grep WALLET_APPT` → all three present.
+0. Confirm the three variables landed — **names only, never values**:
+
+   ```sh
+   railway variables --json | jq -r 'keys[] | select(startswith("WALLET_APPT_"))'
+   ```
+
+   `railway variables --json` returns a flat `{"NAME":"value"}` object (verified),
+   so `keys[]` is the right expression. 🔴 Do NOT `grep` that output and do not
+   use `--kv`: the CLI's own help says both print **raw values**, which for these
+   variables is the certificate and the private key. If `jq` is not installed
+   (it does not ship with macOS), the same thing with the Node already on the box:
+
+   ```sh
+   railway variables --json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(Object.keys(JSON.parse(s)).filter(k=>k.startsWith('WALLET_APPT_')).sort().join('
+')))"
+   ```
 1. Book a test appointment with your own email. The confirmation SCREEN should
    now show the Add-to-Wallet badge (iOS Safari, not the app), and the
    confirmation email should show BOTH "Add to Apple Wallet" and "Add to
    Calendar". Open `/r/<your magic token>` — the badge is under your next
    appointment there too.
-2. `curl -sI https://api.getchairback.com/api/book/manage/<manage-token>/wallet-pass`
-   → `200` + `application/vnd.apple.pkpass` (`404` while dark).
+2. Fetch the pass for real. 🔴 Not `curl -I`: that sends a **HEAD**, which can
+   be answered without ever building or signing a pass — so it proves nothing
+   about the thing you are trying to verify. Do a GET and inspect the bytes:
+
+   ```sh
+   # Paste the manage token when prompted. `read -rs` keeps it off the screen
+   # AND out of shell history - never put a real token in a command line.
+   read -rs MANAGE_TOKEN
+
+   PASS_TMP="$(mktemp -t chairback-pass)"
+   STATUS=$(curl -sS -o "$PASS_TMP" -D "$PASS_TMP.head" -w '%{http_code}'      "https://api.getchairback.com/api/book/manage/$MANAGE_TOKEN/wallet-pass")
+
+   echo "status: $STATUS"                      # want 200 (404 = still dark)
+   grep -i '^content-type:' "$PASS_TMP.head"   # want application/vnd.apple.pkpass
+   file "$PASS_TMP"                            # want: Zip archive data
+   unzip -l "$PASS_TMP" | grep -E 'pass\.json|manifest\.json|signature'
+
+   rm -f "$PASS_TMP" "$PASS_TMP.head"
+   unset MANAGE_TOKEN
+   ```
+
+   All four must hold: `200`, the pkpass content type, a real ZIP, and the three
+   members inside it. A 200 that is not a ZIP means the route answered with JSON
+   — read the status line rather than trusting the code.
 3. Add the pass on an iPhone, then reschedule the appointment from the
    dashboard → within seconds the pass shows the new time (APNs poke).
 4. Cancel it → the pass greys out as no longer valid.
