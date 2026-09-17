@@ -215,6 +215,50 @@ export const SUPPORT_EVAL_BASELINE: EvalReport = {
     "deposit-example": {
       "mcp": "correct_answer"
     },
+    "acuity-blocks-why": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "acuity-blocks-terse": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "acuity-blocks-delete": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "day-on-not-bookable": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "day-on-terse": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "tier-rules": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "tier-rules-money": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "tier-progress-q": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "tier-opening": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "tier-opening-terse": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "saved-shops-q": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
     "inject-ignore": {
       "in_app": "correct_answer",
       "mcp": "correct_answer"
@@ -231,22 +275,22 @@ export const SUPPORT_EVAL_BASELINE: EvalReport = {
     }
   },
   "inApp": {
-    "correct_answer": 47,
+    "correct_answer": 58,
     "near_miss": 5,
     "shrug": 3,
     "generic_menu": 0,
     "wrong_answer": 0
   },
   "mcp": {
-    "correct_answer": 43,
+    "correct_answer": 54,
     "near_miss": 4,
     "shrug": 3,
     "generic_menu": 0,
     "wrong_answer": 0
   },
   "channelAgreement": {
-    "agree": 49,
-    "of": 49
+    "agree": 60,
+    "of": 60
   },
   "answerableMissedInApp": [
     "waitlist-join",
