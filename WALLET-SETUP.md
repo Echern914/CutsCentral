@@ -77,15 +77,27 @@ Redeploy the API. That's it — no web env needed (the page reads
 
 # Appointment pass (second pass type) — go-live steps
 
-The confirmation email offers "Add to Apple Wallet" for the BOOKING itself: an
-eventTicket showing the date, time, service and barber, which updates itself on
-reschedule and greys out (voids) on cancellation. It is a SEPARATE Pass Type ID
+"Add to Apple Wallet" for the BOOKING itself: an eventTicket showing the date,
+time, service and barber, which updates itself on reschedule and greys out
+(voids) on cancellation. It is offered in THREE places, all gated on the same
+three vars below:
+
+- the **confirmation email**;
+- the **booking confirmation screen**, under "View / change my appointment";
+- the **customer's home** (`/r/<magicToken>`), under their next appointment.
+
+A pass is never offered for a booking still awaiting the barber's approval —
+a pass saying someone has an appointment they do not yet have is worse than no
+pass — and the badge never renders outside iOS Safari, nor inside the app's
+WebView, where WKWebView cannot present the Add-Pass sheet. It is a SEPARATE Pass Type ID
 from the punch card — Apple binds each certificate to exactly one type id — so
 it needs its own identifier + certificate, but reuses the same Team ID and WWDR
 intermediate you already exported above.
 
-Ships DARK: until the three `WALLET_APPT_*` vars are set the email hides the
-button and every appointment-pass route 404s. "Add to Calendar" (.ics) does NOT
+Ships DARK: until the three `WALLET_APPT_*` vars are set, all three surfaces
+hide the button and every appointment-pass route 404s (never 500 — see
+`appointmentWalletDisabled.test.ts`, which pins the fail-closed state).
+Switching it on touches nothing about the punch card. "Add to Calendar" (.ics) does NOT
 depend on any of this — it works from the moment the code deploys.
 
 ## 1. Create the second Pass Type ID
@@ -114,8 +126,12 @@ and must already be set.)
 
 ## 5. Verify
 
-1. Book a test appointment with your own email → the confirmation email now
-   shows BOTH "Add to Apple Wallet" and "Add to Calendar".
+0. `railway variables --json | grep WALLET_APPT` → all three present.
+1. Book a test appointment with your own email. The confirmation SCREEN should
+   now show the Add-to-Wallet badge (iOS Safari, not the app), and the
+   confirmation email should show BOTH "Add to Apple Wallet" and "Add to
+   Calendar". Open `/r/<your magic token>` — the badge is under your next
+   appointment there too.
 2. `curl -sI https://api.getchairback.com/api/book/manage/<manage-token>/wallet-pass`
    → `200` + `application/vnd.apple.pkpass` (`404` while dark).
 3. Add the pass on an iPhone, then reschedule the appointment from the
