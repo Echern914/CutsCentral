@@ -206,55 +206,55 @@ export function AcuityCalendarMap() {
           return (
             <li key={s.id} className="flex flex-col gap-3 rounded-lg border border-subtle p-3">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <div className="min-w-0">
-                <p className="[overflow-wrap:anywhere] text-sm font-semibold text-offwhite">
-                  {s.name}
-                  {!s.bookable && (
-                    <span className="ml-2 rounded-full bg-charcoal-700 px-1.5 py-0.5 text-[10px] font-medium text-muted">
-                      {s.active ? "No active services" : "Inactive"}
-                    </span>
-                  )}
-                </p>
-                {s.bookable && s.problem && (
-                  <p className="mt-0.5 text-[11px] text-amber-300">
-                    {s.problem === "unmapped"
-                      ? "Not mapped yet"
-                      : s.problem === "stale"
-                        ? `Mapped before you last reconnected Acuity — confirm it still points at the right ${vocab.stationNoun}`
-                        : s.problem === "extra_invalid"
-                          ? "One of the extra calendars below is no longer on your Acuity account — untick it"
-                          : "That calendar is no longer on your Acuity account"}
+                <div className="min-w-0">
+                  <p className="[overflow-wrap:anywhere] text-sm font-semibold text-offwhite">
+                    {s.name}
+                    {!s.bookable && (
+                      <span className="ml-2 rounded-full bg-charcoal-700 px-1.5 py-0.5 text-[10px] font-medium text-muted">
+                        {s.active ? "No active services" : "Inactive"}
+                      </span>
+                    )}
                   </p>
-                )}
-              </div>
-
-              <label className="flex shrink-0 items-center gap-2">
-                <span className="sr-only">{`Acuity calendar for ${s.name}`}</span>
-                <select
-                  value={value || (suggested ?? "")}
-                  disabled={savingId === s.id}
-                  onChange={(e) => save(s.id, e.target.value || null, data.connectedAt)}
-                  className="h-11 min-w-[12rem] rounded-lg border border-subtle bg-charcoal-900 px-3 text-sm text-offwhite disabled:opacity-50 sm:h-9"
-                >
-                  <option value="">Not mapped</option>
-                  {data.calendars.map((c) => {
-                    // One calendar, one chair: a calendar another chair owns is
-                    // shown but unselectable, so the owner can see WHY it is
-                    // unavailable instead of hitting a conflict on save.
-                    const taken = c.takenByStaffId !== null && c.takenByStaffId !== s.id;
-                    return (
-                      <option key={c.id} value={c.id} disabled={taken}>
-                        {(c.name ?? `Calendar ${c.id}`) + (taken ? " — already mapped" : "")}
-                      </option>
-                    );
-                  })}
-                  {/* A stored id that vanished from Acuity still needs to be
-                      visible, or the row would silently read "Not mapped". */}
-                  {s.calendarId && !data.calendars.some((c) => c.id === s.calendarId) && (
-                    <option value={s.calendarId}>{`Unknown calendar (${s.calendarId})`}</option>
+                  {s.bookable && s.problem && (
+                    <p className="mt-0.5 text-[11px] text-amber-300">
+                      {s.problem === "unmapped"
+                        ? "Not mapped yet"
+                        : s.problem === "stale"
+                          ? `Mapped before you last reconnected Acuity — confirm it still points at the right ${vocab.stationNoun}`
+                          : s.problem === "extra_invalid"
+                            ? "One of the extra calendars below is no longer on your Acuity account — untick it"
+                            : "That calendar is no longer on your Acuity account"}
+                    </p>
                   )}
-                </select>
-              </label>
+                </div>
+
+                <label className="flex shrink-0 items-center gap-2">
+                  <span className="sr-only">{`Acuity calendar for ${s.name}`}</span>
+                  <select
+                    value={value || (suggested ?? "")}
+                    disabled={savingId === s.id}
+                    onChange={(e) => save(s.id, e.target.value || null, data.connectedAt)}
+                    className="h-11 min-w-[12rem] rounded-lg border border-subtle bg-charcoal-900 px-3 text-sm text-offwhite disabled:opacity-50 sm:h-9"
+                  >
+                    <option value="">Not mapped</option>
+                    {data.calendars.map((c) => {
+                      // One calendar, one chair: a calendar another chair owns is
+                      // shown but unselectable, so the owner can see WHY it is
+                      // unavailable instead of hitting a conflict on save.
+                      const taken = c.takenByStaffId !== null && c.takenByStaffId !== s.id;
+                      return (
+                        <option key={c.id} value={c.id} disabled={taken}>
+                          {(c.name ?? `Calendar ${c.id}`) + (taken ? " — already mapped" : "")}
+                        </option>
+                      );
+                    })}
+                    {/* A stored id that vanished from Acuity still needs to be
+                        visible, or the row would silently read "Not mapped". */}
+                    {s.calendarId && !data.calendars.some((c) => c.id === s.calendarId) && (
+                      <option value={s.calendarId}>{`Unknown calendar (${s.calendarId})`}</option>
+                    )}
+                  </select>
+                </label>
               </div>
 
               {/* THE OTHER CALENDARS THIS SAME PERSON IS SOLD ON.
