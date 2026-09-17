@@ -10,6 +10,7 @@ import {
 import {
   isMirrorEligible,
   shouldMirrorOnCreate,
+  targetCalendarIds,
   type MirrorShopSlice,
   type OccupancySlice,
 } from "./acuityMirrorRules.js";
@@ -41,8 +42,10 @@ import {
  * HTTP call, batches are bounded, and the walk is keyset-paginated oldest-first
  * - so a crash, a deploy, or a hung Acuity leaves a partial run that the next
  * run continues and the reconciler finishes. Re-running is free: an appointment
- * that already owns a live row is skipped, and the partial unique index
- * (AcuityOutboundBlock_live_per_appointment) is the backstop under the check.
+ * already holding EVERY calendar its chair is sold on is skipped, and the
+ * partial unique index (AcuityOutboundBlock_live_per_appointment_calendar) is
+ * the backstop under the check. Note "every calendar" - a booking holding only
+ * the primary while its chair sits on three more is half-blocked, not done.
  */
 
 /** Small on purpose: this is an operator action against a rate-limited API. */
@@ -186,13 +189,28 @@ interface ChairState {
   id: string;
   name: string;
   calendarId: string | null;
+  /** The OTHER calendars this chair is sold on; one block each. */
+  extraCalendarIds: string[];
   problem: CoverageBlocker | null;
 }
+
+/** Every calendar one booking on this chair has to block. */
+const chairTargets = (chair: ChairState): string[] =>
+  targetCalendarIds({
+    acuityCalendarId: chair.calendarId,
+    acuityExtraCalendarIds: chair.extraCalendarIds,
+  });
 
 async function loadChairs(shopId: string, connectedAt: Date | null): Promise<Map<string, ChairState>> {
   const rows = await prisma.staff.findMany({
     where: { shopId },
-    select: { id: true, name: true, acuityCalendarId: true, acuityCalendarMappedAt: true },
+    select: {
+      id: true,
+      name: true,
+      acuityCalendarId: true,
+      acuityExtraCalendarIds: true,
+      acuityCalendarMappedAt: true,
+    },
   });
   return new Map(
     rows.map((s) => [
@@ -201,6 +219,7 @@ async function loadChairs(shopId: string, connectedAt: Date | null): Promise<Map
         id: s.id,
         name: s.name,
         calendarId: s.acuityCalendarId,
+        extraCalendarIds: s.acuityExtraCalendarIds,
         // Same two-part rule staffMirrorBlocked applies: a calendar must exist
         // AND have been attested against the CURRENT connection. A reconnect
         // may be a different Acuity account where that id is someone else.
@@ -214,13 +233,41 @@ async function loadChairs(shopId: string, connectedAt: Date | null): Promise<Map
   );
 }
 
-/** Appointment ids that already own a live (PENDING/ACTIVE/UNKNOWN) row. */
-async function loadProtected(shopId: string): Promise<Set<string>> {
+/**
+ * Which CALENDARS each appointment already holds a live (PENDING/ACTIVE/
+ * UNKNOWN) row for.
+ *
+ * 🔴 Per calendar, not per appointment. A barber sold on four calendars whose
+ * booking holds only the primary is NOT protected - it is the exact
+ * half-blocked state this engine exists to prevent - and an appointment-level
+ * set would call it done and skip it on every future run.
+ */
+async function loadLiveCalendars(shopId: string): Promise<Map<string, Set<string>>> {
   const rows = await prisma.acuityOutboundBlock.findMany({
     where: { shopId, state: { in: ["PENDING", "ACTIVE", "UNKNOWN"] } },
-    select: { appointmentId: true },
+    select: { appointmentId: true, acuityCalendarId: true },
   });
-  return new Set(rows.map((r) => r.appointmentId));
+  const byAppt = new Map<string, Set<string>>();
+  for (const r of rows) {
+    const set = byAppt.get(r.appointmentId) ?? new Set<string>();
+    set.add(r.acuityCalendarId);
+    byAppt.set(r.appointmentId, set);
+  }
+  return byAppt;
+}
+
+/**
+ * Is this appointment holding EVERY calendar its chair occupies?
+ *
+ * When the chair cannot be resolved or has no mapping there is no target list
+ * to check against, and any live row is as protected as it can be - the same
+ * answer this gave before calendars were counted.
+ */
+function isFullyProtected(live: Set<string> | undefined, chair: ChairState | undefined): boolean {
+  if (!live || live.size === 0) return false;
+  const targets = chair ? chairTargets(chair) : [];
+  if (targets.length === 0) return true;
+  return targets.every((c) => live.has(c));
 }
 
 /**
@@ -248,9 +295,9 @@ export async function auditCoverage(
     const truncated = candidates.length > AUDIT_SCAN_CAP;
     const window = truncated ? candidates.slice(0, AUDIT_SCAN_CAP) : candidates;
 
-    const [chairs, protectedIds] = await Promise.all([
+    const [chairs, liveCalendars] = await Promise.all([
       loadChairs(shopId, connectedAt),
-      loadProtected(shopId),
+      loadLiveCalendars(shopId),
     ]);
     const blocking = new Map<string, { staffId: string; staffName: string; problem: CoverageBlocker }>();
 
@@ -277,11 +324,11 @@ export async function auditCoverage(
       }
       counts.eligible += 1;
       if (appt.status === "COMPLETED") counts.walkInsInChair += 1;
-      if (protectedIds.has(appt.id)) {
+      const chair = chairs.get(appt.staffId);
+      if (isFullyProtected(liveCalendars.get(appt.id), chair)) {
         counts.protected += 1;
         continue;
       }
-      const chair = chairs.get(appt.staffId);
       if (!chair || chair.problem !== null) {
         counts.blocked += 1;
         if (chair) {
@@ -437,9 +484,9 @@ export async function backfillShop(
     return result;
   }
 
-  const [chairs, protectedIds] = await Promise.all([
+  const [chairs, liveCalendars] = await Promise.all([
     loadChairs(shopId, connectedAt),
-    loadProtected(shopId),
+    loadLiveCalendars(shopId),
   ]);
 
   auditEvent("run started", {
@@ -461,11 +508,11 @@ export async function backfillShop(
     }
     // Fast path only. The REAL guarantee is the partial unique index, proven by
     // disabling this check and watching the P2002 branch below hold the line.
-    if (protectedIds.has(appt.id)) {
+    const chair = chairs.get(appt.staffId);
+    if (isFullyProtected(liveCalendars.get(appt.id), chair)) {
       result.skippedProtected += 1;
       continue;
     }
-    const chair = chairs.get(appt.staffId);
     if (!chair || chair.problem !== null) {
       result.skippedBlocked += 1;
       auditEvent("refused: chair has no fresh mapping", {

@@ -183,8 +183,34 @@ export async function recordMirrorIntent(
     return []; // OBSERVE records nothing and writes nothing
   }
 
+  // Calendars this appointment ALREADY holds a live row for. Normally none -
+  // but a chair that gained an extra calendar after its bookings were made
+  // needs the missing calendars filled in, and creating a duplicate for the
+  // ones it already has would hit the unique index and abort the whole
+  // transaction, leaving the new calendars unprotected forever.
+  const held = new Map(
+    (
+      await tx.acuityOutboundBlock.findMany({
+        where: {
+          shopId: input.shopId,
+          appointmentId: input.appointmentId,
+          state: { in: ["PENDING", "ACTIVE", "UNKNOWN"] },
+        },
+        select: { id: true, acuityCalendarId: true },
+      })
+    ).map((r) => [r.acuityCalendarId, r.id] as const),
+  );
+
   const outboxIds: string[] = [];
   for (const calendarId of calendarIds) {
+    const existing = held.get(calendarId);
+    if (existing) {
+      // Returned, not skipped: it is one of the rows holding this appointment,
+      // and dispatching it again is idempotent (ACTIVE answers "active", an
+      // UNKNOWN row stays the reconciler's to settle).
+      outboxIds.push(existing);
+      continue;
+    }
     const row = await tx.acuityOutboundBlock.create({
       data: {
         shopId: input.shopId,

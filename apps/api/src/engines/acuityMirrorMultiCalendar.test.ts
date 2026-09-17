@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { AcuityError } from "../acuity/client.js";
+import { auditCoverage, backfillShop } from "./acuityBackfill.js";
 import { blockReference } from "./acuityMirrorRules.js";
 import {
   buildObserveReport,
@@ -502,5 +503,90 @@ describe("reschedule resolves ONE CALENDAR AT A TIME", () => {
     expect(deleted.sort()).toEqual(["blk_b_old", "blk_main_old"]);
     const rows = await rowsFor(apptId);
     expect(rows.find((r) => r.acuityBlockId === "blk_a_old")!.state).toBe("RELEASING");
+  });
+});
+
+/**
+ * THE ORDER REAL SHOPS DO THIS IN: bookings first, extra calendars later.
+ *
+ * A barber's Tuesdays are already sold when someone finally lists the other
+ * three calendars he is on. Those existing bookings hold the primary and
+ * nothing else - and "this appointment has a block" was the old definition of
+ * protected, so every future run would skip them and the other calendars would
+ * stay bookable for as long as those appointments exist.
+ */
+describe("a chair that gains a calendar after its bookings were made", () => {
+  /** An appointment holding ONLY the primary, as it would be before extras. */
+  async function bookedOnPrimaryOnly() {
+    const a = await makeAppt(split);
+    await prisma.acuityOutboundBlock.create({
+      data: {
+        shopId,
+        appointmentId: a.id,
+        staffId: split,
+        acuityCalendarId: MAIN,
+        startsAt: START,
+        endsAt: END,
+        state: "ACTIVE",
+        acuityBlockId: "blk_main_old",
+      },
+    });
+    return a;
+  }
+
+  it("records only the calendars that are MISSING, instead of colliding", async () => {
+    const a = await bookedOnPrimaryOnly();
+
+    const ids = await intent(a.id, split);
+
+    // All three calendars are accounted for, and the primary's existing row is
+    // reused rather than duplicated - a blind create would hit the unique
+    // index and abort the transaction, leaving the two new calendars unwritten.
+    expect(ids).toHaveLength(3);
+    const rows = await rowsFor(a.id);
+    expect(rows).toHaveLength(3);
+    expect(rows.filter((r) => r.acuityCalendarId === MAIN)).toHaveLength(1);
+    expect(ids).toContain(rows.find((r) => r.acuityBlockId === "blk_main_old")!.id);
+  });
+
+  it("the backfill tops the booking up instead of calling it protected", async () => {
+    const a = await bookedOnPrimaryOnly();
+    acuityMock.createBlock
+      .mockResolvedValueOnce({ id: "blk_a" })
+      .mockResolvedValueOnce({ id: "blk_b" });
+
+    const run = await backfillShop(shopId);
+
+    expect(run.skippedProtected).toBe(0);
+    expect(run.created).toBe(1);
+    // Only the two missing calendars are sent - the primary is already held.
+    expect(acuityMock.createBlock.mock.calls.map((c) => c[0].calendarID).sort()).toEqual(
+      [EXTRA_A, EXTRA_B].sort(),
+    );
+    const rows = await rowsFor(a.id);
+    expect(rows).toHaveLength(3);
+    expect(rows.every((r) => r.state === "ACTIVE")).toBe(true);
+  });
+
+  it("and once every calendar is held, a rerun does nothing at all", async () => {
+    await bookedOnPrimaryOnly();
+    acuityMock.createBlock
+      .mockResolvedValueOnce({ id: "blk_a" })
+      .mockResolvedValueOnce({ id: "blk_b" });
+    await backfillShop(shopId);
+    acuityMock.createBlock.mockClear();
+
+    const rerun = await backfillShop(shopId);
+
+    expect(rerun.created).toBe(0);
+    expect(rerun.skippedProtected).toBe(1);
+    expect(acuityMock.createBlock).not.toHaveBeenCalled();
+  });
+
+  it("the dry run counts a half-blocked booking as MISSING, not protected", async () => {
+    await bookedOnPrimaryOnly();
+    const audit = await auditCoverage([shopId]);
+    expect(audit.shops[0]!.counts.protected).toBe(0);
+    expect(audit.shops[0]!.counts.missing).toBe(1);
   });
 });
