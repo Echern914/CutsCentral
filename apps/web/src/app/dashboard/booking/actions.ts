@@ -836,12 +836,35 @@ export async function completeAppointmentAction(id: string): Promise<Result> {
  * shop or the signed-in barber itself and only answers `staff_required` when it
  * genuinely cannot tell, so the UI asks only when it has to.
  */
+export type WalkInResult =
+  | { ok: true; conflict?: { withAppointmentIds: string[] } }
+  | { ok: false; error: string };
+
 export async function recordWalkInAction(input: {
   amount: number;
   staffId?: string;
   method?: "cash" | "direct" | "card" | "other";
-}): Promise<Result> {
-  return done(await apiSend("POST", "/api/booking/appointments/walk-in", input));
+  /**
+   * Minted by the caller ONCE per submission and reused by every retry of it,
+   * so a timeout or a double tap collapses to one receipt while two real cuts
+   * seconds apart stay two.
+   */
+  operationId?: string;
+}): Promise<WalkInResult> {
+  const res = await apiSend<{
+    ok: boolean;
+    id: string;
+    conflict?: { withAppointmentIds: string[] };
+  }>("POST", "/api/booking/appointments/walk-in", input);
+  if (!res.ok) return { ok: false, error: res.error ?? "failed" };
+  revalidatePath("/dashboard/booking");
+  // 🔴 NOT `done()`. That helper throws the response BODY away and returns
+  // only {ok}, which is exactly how a recorded-but-conflicting receipt reached
+  // the barber as a plain success toast. The conflict has to survive the trip
+  // or none of the server-side detection is worth anything.
+  return res.data?.conflict
+    ? { ok: true, conflict: res.data.conflict }
+    : { ok: true };
 }
 
 /** Barber marks the client as physically arrived (check-in pill -> Arrived). */
