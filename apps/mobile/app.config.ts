@@ -77,6 +77,15 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   //        a gap costs nothing, a repeat is rejected. If a "40" ever shows up
   //        in TestFlight, it is this one: do not release it to testers.
   //   41 = the same 1.0.9 with #417 (My ChairBack) and the animated launch.
+  //   42 = 1.0.9 again, carrying what landed on top of 41: a customer's first
+  //        AND last name (#423), "Add to my shops" (#424), the tier card with
+  //        its progress bar (#426) and tier-held openings (#427). All four
+  //        changed apps/mobile, so none of them reached a build-41 device - the
+  //        WebView only ever carries the WEB half of a feature.
+  //        🔑 The VERSION deliberately stays 1.0.9: a new version string is
+  //        forced only once the previous one has been SUBMITTED FOR REVIEW,
+  //        which is what killed build 37. TestFlight accepts any build number
+  //        App Store Connect has not already seen.
   version: "1.0.9",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
@@ -93,7 +102,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 🔴 The number Apple sees. Was ignored while EAS owned the counter
     // (appVersionSource:"remote", last EAS build = 39); it is authoritative now
     // that builds are made locally. Must exceed the previous upload, every time.
-    buildNumber: "41",
+    buildNumber: "42",
     // iPhone-only for v1: the dashboard WebView isn't iPad-optimized, and
     // supporting tablet would require iPad screenshots + iPad review coverage.
     supportsTablet: false,
