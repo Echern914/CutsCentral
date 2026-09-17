@@ -18,6 +18,7 @@ import { pokeAppointmentPass } from "../wallet/appointmentPass.js";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import { ExternalBlockError, lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
+import { occupyingWhere } from "../engines/chairOccupancy.js";
 import {
   blockedTimeIsTheOnlyObstacle,
   blockSentence,
@@ -5569,6 +5570,16 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
   }
   const shopId = req.shop!.id;
   const now = new Date();
+  // Read OUTSIDE runWithShop: Shop carries RLS with no policy for the app
+  // role, so this select returns null inside the tenant transaction.
+  const shop = await prisma.shop.findUnique({
+    where: { id: shopId },
+    select: { bookingBufferMin: true },
+  });
+  if (!shop) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
 
   const result = await runWithShop(shopId, async (tx) => {
     // Whose chair, in order of confidence: an explicit pick, the signed-in
@@ -5597,6 +5608,76 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
 
     const service = await ensureWalkInService(tx, shopId);
     const walkInEnd = new Date(now.getTime() + service.durationMin * 60_000);
+
+    // 🔴 THE GUARD THIS ROUTE NEVER HAD. It created a real Appointment
+    // occupying [now, now + duration) with no advisory lock and no overlap
+    // check at all - and the partial unique index only covers BOOKED|PENDING,
+    // so a COMPLETED walk-in had no database backstop either. This is the
+    // shape of the incident chairOccupancy.ts was written about: a walk-in
+    // laid over a customer's real 9pm cut.
+    //
+    // Recording the service and RESERVING the time are different questions,
+    // and only the second one is asked here. A historical walk-in still does
+    // not block anything (chairOccupancy bounds COMPLETED by endsAt > now);
+    // what is refused is writing a NEW one across a live reservation.
+    //
+    // 🔴 IT DETECTS. IT DOES NOT REFUSE. A walk-in POST is a RECEIPT for a
+    // cut that already happened, with cash already in the till - not a request
+    // to reserve time. Refusing it does not free the chair; it loses the money
+    // from the books and rolls back a payment. Both live shops log walk-ins
+    // back to back as a matter of course (Drick seven seconds apart, Mikey
+    // fifteen), and walkInOccupancy.test.ts pins that deliberately.
+    //
+    // So the asymmetry is the rule, not an exception:
+    //   a RESERVATION REQUEST (public booking, dashboard create, reschedule)
+    //     is refused when it collides;
+    //   a RECEIPT for work already done is recorded, and the collision is
+    //     detected and surfaced instead.
+    //
+    // The guard still runs, and that is the point of running it: it takes the
+    // per-chair advisory lock, so two concurrent walk-in writes serialise here
+    // rather than interleaving, and the conflict test below sees a settled
+    // state. The throw is caught because the ANSWER differs, not the check.
+    // null = no collision. An EMPTY array still means a collision, with
+    // something that is not a native appointment - a synced visit, a block, a
+    // hold. Losing that distinction would under-report the very case the
+    // external calendar makes most likely.
+    let conflict: { withAppointmentIds: string[] } | null = null;
+    try {
+      await lockStaffAndAssertSlotFree(tx, {
+        staffId,
+        shopId,
+        startsAt: now,
+        endsAt: walkInEnd,
+        bufferMin: shop.bookingBufferMin,
+        serviceDayLimit: null,
+        // Barber-driven, the same answers the dashboard create gives.
+        walkInCapacity: "ignore",
+        // The person is in the chair; an Acuity entry does not eject them.
+        externalBlocks: "ignore",
+        overrideWaitlistHolds: true,
+        now,
+      });
+    } catch (err) {
+      if (!(err instanceof SlotTakenError)) throw err;
+      conflict = { withAppointmentIds: [] };
+      // Name what it collided with, through the SAME canonical predicate the
+      // guard and the slot grid use, so the log cannot drift from the rule.
+      conflict.withAppointmentIds = (
+        await tx.appointment.findMany({
+          where: {
+            shopId,
+            staffId,
+            startsAt: { lt: walkInEnd },
+            endsAt: { gt: now },
+            ...occupyingWhere(now),
+          },
+          select: { id: true },
+          take: 5,
+        })
+      ).map((a) => a.id);
+    }
+
     const appt = await tx.appointment.create({
       data: {
         shopId,
@@ -5619,6 +5700,25 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
       },
       select: { id: true },
     });
+    // 🔴 NOTHING IS SILENTLY LOST. The receipt is recorded and the collision
+    // is reported with everything a human needs to act on it. The durable
+    // BookingConflict record and the manager alert are the next PR; this line
+    // is what makes the evidence exist in the meantime.
+    if (conflict) {
+      logger.warn(
+        {
+          shopId,
+          staffId,
+          appointmentId: appt.id,
+          conflictsWith: conflict.withAppointmentIds,
+          source: "walk_in_quick_log",
+          startsAt: now.toISOString(),
+          endsAt: walkInEnd.toISOString(),
+        },
+        "walk-in RECORDED over an occupied chair - receipt kept, conflict needs a human",
+      );
+    }
+
     // A walk-in is stored COMPLETED because the money is already in the till -
     // but the client is IN THE CHAIR until walkInEnd, so the time is genuinely
     // occupied and must not be offered in Acuity mid-cut. appointmentOccupies
@@ -5659,7 +5759,7 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
         "mirror: ENFORCE with an unmapped chair - walk-in RECORDED ANYWAY and NOT mirrored",
       );
     }
-    return { kind: "ok" as const, id: appt.id, staffId, outboxIds };
+    return { kind: "ok" as const, id: appt.id, staffId, outboxIds, conflict };
   });
 
   if (result.kind === "bad_staff") {
@@ -5684,7 +5784,15 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
     { shopId, appointmentId: result.id, amount: parsed.data.amount },
     "walk-in recorded",
   );
-  res.status(201).json({ ok: true, id: result.id });
+  // 🔴 THE BARBER IS TOLD, IN THE ANSWER. The receipt is kept either way,
+  // but a collision that only reaches a log line is a collision nobody acts on.
+  // The dashboard can put "this overlaps an existing booking" in front of the
+  // person who can still ring the customer, while they are standing there.
+  res.status(201).json({
+    ok: true,
+    id: result.id,
+    ...(result.conflict ? { conflict: result.conflict } : {}),
+  });
 });
 
 /**

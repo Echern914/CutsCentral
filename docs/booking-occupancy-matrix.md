@@ -9,6 +9,25 @@ from this morning starts blocking this afternoon.
    `lockStaffAndAssertSlotFree` (`engines/bookingWrite.ts`) inside an advisory
    lock. It asks (1) again, under the lock, and adds rules of its own.
 
+## 🔴 The asymmetry: a request is refused, a receipt is recorded
+
+Not every write that collides should be refused, and treating them alike is its
+own integrity failure.
+
+- A **reservation request** — public booking, dashboard create, reschedule — is
+  asking to *hold* future time. A collision means the answer is no. **Refused.**
+- A **receipt** — the walk-in quick log — is recording a cut that has already
+  happened, with cash already in the till. Refusing it does not free the chair;
+  it loses the money from the books and rolls back a payment. **Recorded, and
+  the collision is detected and reported** — in the response, so the barber sees
+  it while they can still ring the customer, and in a structured log line.
+
+Both live shops log walk-ins back to back as a matter of course (seven seconds
+apart at one, fifteen at the other). `walkInOccupancy.test.ts` pins that
+deliberately, and it is why "enforcement" here means *never silently lost*
+rather than *refused*. The advisory lock is taken either way — that is what
+serialises two concurrent walk-in writes so the second one can see the first.
+
 A record can render on the calendar without reserving the chair (a cancelled
 booking), and can reserve the chair without being "upcoming" (a walk-in
 mid-cut). Neither follows from the other.
@@ -35,7 +54,7 @@ new write is refused. "Override" = an *existing* authorized mechanism exists.
 | **Native NO_SHOW** | yes | **no** | no | n/a | — |
 | **Native COMPLETED — historical** (`endsAt <= now`) | yes | **no** | no | n/a | `startsAt` / `endsAt` |
 | **Native COMPLETED — in progress** (`endsAt > now`) | yes | **yes** | **yes** | no | `startsAt` / `endsAt` |
-| **Walk-in (quick log)** | yes | **yes while `endsAt > now`**, then no | **yes** — and the write itself is now guarded | no | `startsAt = now`, `endsAt = now + Service.durationMin` |
+| **Walk-in (quick log)** | yes | **yes while `endsAt > now`**, then no | **no — recorded, and the conflict reported** (see the asymmetry above) | n/a | `startsAt = now`, `endsAt = now + Service.durationMin` |
 | **Walk-in queue — Start Service** | yes | same as above | **yes**, but `completedInProgress:"ignore"` and `walkInCapacity:{excludeEntryId}` | no | as above |
 | **Acuity / Square Visit** (`SCHEDULED`, `RESCHEDULED`, not promoted from a native row) | yes (all but `CANCELED`) | **yes, shop-wide** — a Visit carries no `staffId` | **yes** | no | `Visit.scheduledAt` / `endAt` (nullable — see below) |
 | **Visit CANCELED / NO_SHOW / COMPLETED** | `CANCELED` hidden; others shown | **no** | no | n/a | — |
@@ -57,6 +76,13 @@ rows, which is self-consistent and wrong in the same direction: the calendar dre
 the visit and the booking page sold its time. `visitSpan()` now supplies a
 conservative span instead.
 
+**A reported conflict is not an override.** The walk-in path records despite a
+collision because a receipt is not a request, and it says so loudly — that is
+the opposite of an override, which is a deliberate authorisation recorded
+against a *refusal*. The durable `BookingConflict` record and the manager alert
+are the follow-up; today the evidence is the response body and a structured log
+line carrying shop, chair, both appointment ids and the source.
+
 **There is no override for appointment-vs-appointment conflict, and this PR does
 not invent one.** `AppointmentOverride.kind` is `"external_block"` today. A
 barber crossing a *block* confirms and is audited; a write that collides with a
@@ -64,6 +90,7 @@ real reservation is simply refused. Adding a second override kind is a product
 decision, not a P0 fix.
 
 **`completedInProgress: "ignore"` is for the barber's own hand only.** Starting
-the next queued walk-in *is* the statement that the chair turned over. Every
-customer-facing path keeps `"occupy"`, and so does the quick-log — see its call
-site for why.
+the next queued walk-in *is* the statement that the chair turned over, so that
+path genuinely does not see the previous walk-in. Every customer-facing path
+keeps the `"occupy"` default, and so does the quick-log — which is why a second
+walk-in mid-cut is *detected* there, even though it is not refused.
