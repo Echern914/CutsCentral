@@ -3835,6 +3835,10 @@ function StaffHoursSheet({
   // JSON snapshot of the last loaded/saved state; `dirty` = unsaved edits exist.
   const [savedSnapshot, setSavedSnapshot] = useState<string>("");
   const dirty = loaded && JSON.stringify(rows) !== savedSnapshot;
+  // Weekdays on which none of this person's services is offered. Ticking one
+  // here changes nothing a customer can see, because each service's own hours
+  // veto the day afterwards — so the row says so rather than looking saved.
+  const [noServiceDays, setNoServiceDays] = useState<number[]>([]);
 
   // Load this staff member's hours on mount (the Sheet only opens for one).
   useEffect(() => {
@@ -3867,6 +3871,7 @@ function StaffHoursSheet({
             reason: b.reason ?? "",
           });
         }
+        setNoServiceDays(r.data.weekdaysWithNoService ?? []);
       }
       setRows(next);
       setSavedSnapshot(JSON.stringify(next)); // this loaded state IS the baseline
@@ -4000,6 +4005,23 @@ function StaffHoursSheet({
                     aria-label={`${WEEKDAYS[i]} end`}
                   />
                 </div>
+
+                {/* 🔴 The day that is ON here and still shows nothing to a
+                    customer. A service's own hours can mark a weekday "not
+                    offered", and that veto is applied AFTER these hours — so
+                    without this line the barber ticks the day, sees it ticked,
+                    and the booking link keeps showing it struck through. */}
+                {r.on && noServiceDays.includes(i) && (
+                  <p className="mt-2 rounded-lg border border-amber-400/40 bg-amber-400/10 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-300">
+                    No service is offered on {WEEKDAYS[i]}s, so customers still
+                    can&apos;t book this day. Turn {WEEKDAYS[i]} on for each
+                    service under{" "}
+                    <span className="text-offwhite">
+                      Services → Available hours for this service
+                    </span>
+                    .
+                  </p>
+                )}
 
                 {/* Recurring breaks for this weekday (a standing lunch etc.) -
                     subtracted from the shift automatically every week. */}

@@ -39,6 +39,13 @@ export interface AvailabilityData {
     isBlock: boolean;
     reason: string | null;
   }[];
+  /**
+   * Weekdays (0=Sun) on which not one of this person's services is offered.
+   * Turning such a day on here changes nothing a customer can see — the
+   * service's own hours veto it — so the editor says so instead of letting the
+   * barber believe a ticked box is enough.
+   */
+  weekdaysWithNoService?: number[];
 }
 
 /** Load a staff member's weekly availability + upcoming exceptions. */
