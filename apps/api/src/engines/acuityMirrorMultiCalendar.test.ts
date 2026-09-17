@@ -692,3 +692,153 @@ describe("the copies Acuity makes and does not mention", () => {
     expect((await rowsFor(appointmentId))[0]!.state).toBe("RELEASED");
   });
 });
+
+/**
+ * THE BLOCK SOMEONE DELETED IN ACUITY.
+ *
+ * An ACTIVE row means "the chair is held over there", and nothing ever went
+ * back to check. Within hours of the first multi-calendar shop going live a
+ * barber looked at four "Blocked Time" entries he had not made, deleted one,
+ * and ChairBack carried on believing that hour was protected while Acuity was
+ * free to sell it. Tomorrow-morning silent, and backwards from the only
+ * failure direction this engine is allowed (over-block, never under-block).
+ *
+ * The reconciler now re-verifies the IMMINENT ones - where the harm is, and
+ * small enough to cost one list call that cannot hit Acuity's page cap.
+ */
+describe("a block deleted in Acuity comes back", () => {
+  /**
+   * An ACTIVE row for a booking `hours` from now.
+   *
+   * `settled` backdates updatedAt past the settle window. A block written
+   * seconds ago is deliberately NOT verified - Acuity's listing has not had a
+   * chance to show it - so a fixture at the current instant would exercise
+   * nothing. That rule has its own test below.
+   */
+  async function activeSoon(hours: number, acuityBlockId: string, settled = true) {
+    const startsAt = new Date(Date.now() + hours * 60 * 60 * 1000);
+    const endsAt = new Date(startsAt.getTime() + 30 * 60_000);
+    const a = await makeAppt(single, startsAt, endsAt);
+    await prisma.acuityOutboundBlock.create({
+      data: {
+        shopId,
+        appointmentId: a.id,
+        staffId: single,
+        acuityCalendarId: SOLO,
+        startsAt,
+        endsAt,
+        state: "ACTIVE",
+        acuityBlockId,
+        ...(settled ? { updatedAt: new Date(Date.now() - 60 * 60_000) } : {}),
+      },
+    });
+    return a.id;
+  }
+
+  it("re-places a block that is no longer on the account", async () => {
+    const appointmentId = await activeSoon(5, "blk_deleted_by_hand");
+    acuityMock.listBlocks.mockResolvedValue([]); // the barber deleted it
+    acuityMock.createBlock.mockResolvedValueOnce({ id: "blk_replacement" });
+
+    const r = await reconcileShop(shopId);
+
+    expect(r.restored).toBe(1);
+    const rows = await rowsFor(appointmentId);
+    expect(rows[0]!.state).toBe("ACTIVE");
+    expect(rows[0]!.acuityBlockId).toBe("blk_replacement");
+  });
+
+  it("leaves a block that is still there alone", async () => {
+    await activeSoon(5, "blk_still_there");
+    acuityMock.listBlocks.mockResolvedValue([{ id: "blk_still_there", calendarID: SOLO }]);
+
+    const r = await reconcileShop(shopId);
+
+    expect(r.restored).toBe(0);
+    expect(acuityMock.createBlock).not.toHaveBeenCalled();
+  });
+
+  it("🔴 never treats a FULL page of blocks as proof of absence", async () => {
+    // Acuity caps a listing at 100. Re-creating from a truncated list would
+    // mint a duplicate block on every sweep, forever - the one way this
+    // repair could be worse than the hole it fixes.
+    await activeSoon(5, "blk_on_page_two");
+    acuityMock.listBlocks.mockResolvedValue(
+      Array.from({ length: 100 }, (_, i) => ({ id: `other_${i}`, calendarID: SOLO })),
+    );
+
+    const r = await reconcileShop(shopId);
+
+    expect(r.restored).toBe(0);
+    expect(acuityMock.createBlock).not.toHaveBeenCalled();
+  });
+
+  it("does not re-block a booking that no longer occupies the chair", async () => {
+    const appointmentId = await activeSoon(5, "blk_for_cancelled");
+    await prisma.appointment.update({
+      where: { id: appointmentId },
+      data: { status: "CANCELED", canceledAt: new Date() },
+    });
+    acuityMock.listBlocks.mockResolvedValue([]);
+
+    const r = await reconcileShop(shopId);
+
+    expect(r.restored).toBe(0);
+    expect(acuityMock.createBlock).not.toHaveBeenCalled();
+  });
+
+  it("does not TOUCH the rows of a shop that has been switched OFF", async () => {
+    const appointmentId = await activeSoon(5, "blk_while_off");
+    acuityMock.listBlocks.mockResolvedValue([]);
+    await prisma.shop.update({ where: { id: shopId }, data: { acuityOutboundMode: "OFF" } });
+    try {
+      const r = await reconcileShop(shopId);
+      expect(r.restored).toBe(0);
+      expect(acuityMock.createBlock).not.toHaveBeenCalled();
+      // 🔴 THE ASSERTION THIS TEST LACKED until the guard was falsified and it
+      // stayed green. dispatchCreate refuses an OFF shop by itself, so "no
+      // block was created" proves nothing about the mode check here. What only
+      // this check prevents is the row being knocked ACTIVE -> PENDING with its
+      // acuityBlockId ERASED on the way - throwing away the only handle on a
+      // block that is still live on the barber's calendar, which no later
+      // release could ever clean up.
+      const row = (await rowsFor(appointmentId))[0]!;
+      expect(row.state).toBe("ACTIVE");
+      expect(row.acuityBlockId).toBe("blk_while_off");
+    } finally {
+      await prisma.shop.update({
+        where: { id: shopId },
+        data: { acuityOutboundMode: "ENFORCE" },
+      });
+    }
+  });
+
+  it("🔴 leaves a block we JUST created alone, however empty the listing looks", async () => {
+    // The repair's own duplicate risk. A sweep landing seconds after a booking
+    // would read a block Acuity has not listed yet as deleted and create it
+    // again - putting a second block on the barber's calendar, from the thing
+    // meant to protect it. Absence only counts once the listing has had time.
+    const appointmentId = await activeSoon(5, "blk_written_just_now", false);
+    acuityMock.listBlocks.mockResolvedValue([]);
+
+    const r = await reconcileShop(shopId);
+
+    expect(r.restored).toBe(0);
+    expect(acuityMock.createBlock).not.toHaveBeenCalled();
+    const row = (await rowsFor(appointmentId))[0]!;
+    expect(row.acuityBlockId).toBe("blk_written_just_now");
+  });
+
+  it("only verifies what is imminent, so the check stays one small call", async () => {
+    // Ten days out and missing: real, but it has dozens of sweeps left to
+    // catch it, and verifying the whole horizon is what blows past the page
+    // cap on a busy shop.
+    await activeSoon(24 * 10, "blk_far_future");
+    acuityMock.listBlocks.mockResolvedValue([]);
+
+    const r = await reconcileShop(shopId);
+
+    expect(r.restored).toBe(0);
+    expect(acuityMock.createBlock).not.toHaveBeenCalled();
+  });
+});
