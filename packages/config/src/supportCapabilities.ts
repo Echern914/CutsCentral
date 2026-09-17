@@ -444,6 +444,40 @@ export const SUPPORT_CAPABILITIES: readonly SupportCapability[] = [
     neverExpose: ["OAuth tokens", "webhook secrets"],
   },
   {
+    id: "acuity_blocked_times_why",
+    intent: "Why does one ChairBack booking create several Blocked Time entries in Acuity?",
+    // Asked by a live barber the day it shipped, and the dangerous answer is
+    // "must be a bug, delete them" - which puts the hour back on sale while
+    // ChairBack still has the chair booked. An Acuity block covers exactly one
+    // calendar (their API requires calendarID), so a chair sold on six
+    // calendars needs six.
+    actors: SEAT_ACTORS,
+    dataClass: "product_knowledge",
+    authority: "help_corpus",
+    corpusIds: ["acuity-blocked-times"],
+    mcpTool: "integration_health",
+    readOnly: true,
+    confirmationRequired: false,
+    safeFallback: "One block per calendar, and deleting one re-opens that hour.",
+    neverExpose: ["OAuth tokens", "webhook secrets"],
+  },
+  {
+    id: "weekday_enabled_not_bookable",
+    intent: "I turned a weekday on in my hours and clients still cannot book it.",
+    // Two gates decide a bookable day and only one is in the hours editor: a
+    // service can be switched off for a whole weekday, applied AFTER staff
+    // hours. Answering "your hours look fine" is the confidently-wrong reply.
+    actors: SEAT_ACTORS,
+    dataClass: "shop_data",
+    authority: "live_state",
+    corpusIds: ["day-not-bookable", "slot-not-showing"],
+    mcpTool: "readiness_report",
+    readOnly: true,
+    confirmationRequired: false,
+    safeFallback: "Check each service's own hours for that weekday.",
+    neverExpose: [],
+  },
+  {
     id: "double_booking_why",
     intent: "Why did a double booking happen?",
     actors: SEAT_ACTORS,
@@ -467,6 +501,49 @@ export const SUPPORT_CAPABILITIES: readonly SupportCapability[] = [
     readOnly: true,
     confirmationRequired: false,
     safeFallback: "The Rewards page explains and configures it.",
+    neverExpose: [],
+  },
+  {
+    id: "loyalty_tier_rules",
+    intent: "How do loyalty tiers work, and what can I set them to require?",
+    actors: SEAT_ACTORS,
+    dataClass: "product_knowledge",
+    authority: "help_corpus",
+    // `vip-cards` used to answer this WRONGLY - "lifetime visits" stopped being
+    // true when tiers became configurable (visits and/or money, monthly or
+    // lifetime). It now defers here instead of restating a rule it no longer
+    // knows, which is the failure mode this registry exists to catch.
+    corpusIds: ["loyalty-tier-rules", "tier-progress"],
+    mcpTool: "help_find_feature",
+    readOnly: true,
+    confirmationRequired: false,
+    safeFallback: "Tier rules are set per tier on the Rewards page.",
+    neverExpose: [],
+  },
+  {
+    id: "tier_opening_offer",
+    intent: "Can I offer an open slot to a loyalty tier before everyone else?",
+    actors: SEAT_ACTORS,
+    dataClass: "product_knowledge",
+    authority: "help_corpus",
+    corpusIds: ["tier-openings"],
+    mcpTool: "help_find_feature",
+    readOnly: true,
+    confirmationRequired: false,
+    safeFallback: "An opening is held from the day view, for one tier.",
+    neverExpose: [],
+  },
+  {
+    id: "saved_shops",
+    intent: "Can a client save my shop, and can I see who has?",
+    actors: SEAT_ACTORS,
+    dataClass: "product_knowledge",
+    authority: "help_corpus",
+    corpusIds: ["saved-shops"],
+    mcpTool: "help_find_feature",
+    readOnly: true,
+    confirmationRequired: false,
+    safeFallback: "The client book shows who saved the shop.",
     neverExpose: [],
   },
   {
