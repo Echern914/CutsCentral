@@ -109,6 +109,18 @@ export const SUPPORT_FIXTURES: readonly SupportFixture[] = [
   { id: "day-on-not-bookable", capabilityId: "weekday_enabled_not_bookable", actor: "owner", channels: BOTH, question: "i changed my availability to sunday on the app but when i go through the link its blocked off", probe: "frustrated" },
   { id: "day-on-terse", capabilityId: "weekday_enabled_not_bookable", actor: "owner", channels: BOTH, question: "turned sunday on still cant book", probe: "terse" },
 
+  /* ──────── questions the corpus could not answer, found by audit ────────
+   * Mined from our own incident notes rather than from a ticket queue: each
+   * one is a question a shop demonstrably asks, where the corpus either said
+   * nothing or said something that has since stopped being true.
+   */
+  { id: "acuity-both", capabilityId: "acuity_alongside_chairback", actor: "owner", channels: BOTH, question: "can I keep taking bookings on acuity at the same time as chairback", probe: "canonical" },
+  { id: "acuity-both-terse", capabilityId: "acuity_alongside_chairback", actor: "owner", channels: BOTH, question: "use both while I switch over", probe: "terse" },
+  { id: "find-shop", capabilityId: "find_shop_by_handle", actor: "owner", channels: BOTH, question: "my client says she cant find my shop when she searches for it", probe: "frustrated" },
+  { id: "find-shop-terse", capabilityId: "find_shop_by_handle", actor: "manager", channels: BOTH, question: "shop not coming up in search", probe: "terse" },
+  { id: "confirmation-text-missing", capabilityId: "confirmation_text_missing", actor: "owner", channels: BOTH, question: "my client didnt get a confirmation text when she booked", probe: "frustrated" },
+  { id: "standing-not-offered", capabilityId: "standing_appointment_unavailable", actor: "owner", channels: BOTH, question: "why is there no option for a standing appointment", probe: "canonical" },
+
   /* ───────────────── loyalty tiers, openings and saved shops ───────────── */
   { id: "tier-rules", capabilityId: "loyalty_tier_rules", actor: "owner", channels: BOTH, question: "How do loyalty tiers work and can I change what they require?", probe: "canonical" },
   { id: "tier-rules-money", capabilityId: "loyalty_tier_rules", actor: "owner", channels: BOTH, question: "can gold need money spent and a number of cuts a month", probe: "paraphrase" },

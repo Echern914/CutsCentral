@@ -127,6 +127,18 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     category: "start",
   },
   {
+    id: "find-my-shop",
+    q: "A client says they can't find my shop when they search for it",
+    a: "They need your exact handle — the last part of your booking link — not your shop's name typed into a search box. “drickcuttinup” finds that shop; “drick” finds nothing.\n\nIt's forgiving about the shape of it: capitals, a leading @, or the whole pasted link all work. So the fix is to send them your link, or tell them the handle exactly as it appears in it.\n\nThat's on purpose, not a gap. A search over shop names would turn every shop on ChairBack into a browsable directory that a rival could scroll — so a shop can only be found by someone who already knows its handle, which is exactly the position a client with your link is in.",
+    keywords: [
+      "cant find", "can't find", "find my shop", "search", "searching",
+      "not coming up", "doesnt show up", "handle", "username", "lookup",
+      "find me", "look me up",
+    ],
+    category: "start",
+    action: { label: "Your booking link", featureId: "online-booking" },
+  },
+  {
     id: "booking-link",
     q: "Where's my booking link?",
     a: "Your public page is your booking link — it's on your Shop page settings, ready to copy.\n\nPut it in your Instagram bio, your Google listing, and your text signature. It's the one link that does everything: services, prices, live openings, and booking.",
@@ -270,7 +282,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "reminders",
     q: "Do clients get reminders?",
-    a: "Automatically. A confirmation when they book, then reminders 24 hours and 2 hours before the appointment. You don't do anything.\n\nThat pair is the single biggest thing you can do about no-shows.",
+    a: "Automatically. A confirmation when they book — by email, and as a push if they use the app — then reminders 24 hours and 2 hours before the appointment. You don't do anything.\n\nThat pair is the single biggest thing you can do about no-shows.",
     keywords: ["reminder", "no show", "noshow", "confirmation", "notify", "forget", "24 hour", "text before"],
     category: "booking",
     action: { label: "Open booking settings", featureId: "reminders" },
@@ -612,7 +624,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "acuity",
     q: "Does it work with my Acuity account?",
-    a: "Yes. Connect Acuity once with one click. Past appointments backfill automatically, and new ones flow in as they happen.\n\nBlocked time on your Acuity calendar syncs too, so your ChairBack availability matches reality without you maintaining two calendars.",
+    a: "Yes. Connect Acuity once with one click. Past appointments backfill automatically, and new ones flow in as they happen.\n\nBlocked time on your Acuity calendar syncs too, so your ChairBack availability matches reality without you maintaining two calendars.\n\nIt can also run the other way: with holding switched on, a ChairBack booking blocks that time in Acuity, so the same hour can't be sold on both. See “Can I keep taking bookings in Acuity while I use ChairBack?”.",
     keywords: ["acuity", "acuity scheduling", "connect acuity", "squarespace scheduling", "sync"],
     category: "integrations",
     action: { label: "Connect a calendar", featureId: "integrations" },
@@ -631,6 +643,18 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     a: "Appointments and blocked time, both directions of change: a booking that moves in Acuity moves here, and one that's deleted there disappears here.\n\nSynced appointments also block your ChairBack slots, so the two calendars can't double-book you. It re-syncs on its own every 30 minutes on top of the live updates.",
     keywords: ["sync", "syncing", "what syncs", "how often", "refresh", "update", "backfill", "two calendars"],
     category: "integrations",
+  },
+  {
+    id: "acuity-both-at-once",
+    q: "Can I keep taking bookings in Acuity while I use ChairBack?",
+    a: "Yes — that's the normal way to move across, and you don't have to pick a day to switch.\n\nBookings made in Acuity flow into ChairBack and hold the chair here. Going the other way is a setting: with holding switched on, a booking taken in ChairBack blocks that time in Acuity, so neither page can sell an hour the other already sold. Until you turn that on, ChairBack bookings are invisible to Acuity and the same slot can go twice.\n\nIf your chair is sold through several Acuity calendars, one ChairBack booking blocks every one of them — which is why you may see more than one “Blocked Time” entry for a single appointment.",
+    keywords: [
+      "both", "at the same time", "same time", "transition", "switching",
+      "move over", "keep using acuity", "two calendars", "side by side",
+      "migrate", "still use acuity",
+    ],
+    category: "integrations",
+    action: { label: "Open integrations", featureId: "integrations" },
   },
   {
     id: "acuity-blocked-times",
@@ -932,6 +956,27 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     ],
     category: "booking",
     action: { label: "Open services", featureId: "services" },
+  },
+  {
+    id: "confirmation-text",
+    q: "My client didn't get a confirmation TEXT when they booked",
+    a: "That one isn't a text. A booking confirmation goes out by email, and as a push notification if the client uses the app — the confirmation SMS is deliberately off, because a text per booking costs every shop money for something the email already does.\n\nThe texts clients do get are the reminders: 24 hours and 2 hours before the appointment.\n\nSo if they're waiting on a confirmation, check the email side — their address on the booking, and their spam folder. If a REMINDER didn't arrive, that's a different question with different causes.",
+    keywords: [
+      "confirmation text", "confirmation sms", "no text when they booked",
+      "didnt get a text", "booking text", "text after booking",
+      "no confirmation",
+    ],
+    category: "texting",
+  },
+  {
+    id: "standing-unavailable",
+    q: "Why can't a client book a standing appointment?",
+    a: "Standing appointments are offered only where the series can be booked cleanly, so they're switched off in two cases:\n\n1. Your shop takes money at booking — a deposit, payment ahead, or a card on file. Twelve fortnightly bookings is a real money question (twelve deposits, one, or none), and that's a decision for you rather than something to settle silently.\n2. You approve each booking. A series would be a dozen requests to approve, which isn't what approval mode was asking for.\n\nShops that get paid at the chair, with instant booking, see the option. It's the same rule on the booking page and on the save, so a client is never offered a series the booking then refuses.",
+    keywords: [
+      "standing", "recurring", "series", "every 2 weeks", "repeat booking",
+      "not offered", "cant book recurring", "option missing", "no standing",
+    ],
+    category: "booking",
   },
   {
     id: "day-not-bookable",
