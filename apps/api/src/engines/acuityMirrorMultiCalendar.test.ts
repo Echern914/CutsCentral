@@ -590,3 +590,105 @@ describe("a chair that gains a calendar after its bookings were made", () => {
     expect(audit.shops[0]!.counts.missing).toBe(1);
   });
 });
+
+/**
+ * ONE CREATE, THREE BLOCKS - ACUITY'S DOING, NOT OURS.
+ *
+ * Measured on a live account 2026-09-17: a single POST /blocks came back with
+ * one id, and the calendar ended up with THREE identical blocks, differing only
+ * in serviceGroupID, because that calendar belongs to three service groups.
+ *
+ * Over-blocking is harmless while the booking stands. On release it is a leak:
+ * the two copies we were never told about would hold time the customer just
+ * gave back, with nothing in ChairBack pointing at them - six bookings on that
+ * account had already produced twelve such blocks.
+ */
+describe("the copies Acuity makes and does not mention", () => {
+  async function activeBlockOn(calendarId: string, acuityBlockId: string) {
+    const a = await makeAppt(single);
+    const row = await prisma.acuityOutboundBlock.create({
+      data: {
+        shopId,
+        appointmentId: a.id,
+        staffId: single,
+        acuityCalendarId: calendarId,
+        startsAt: START,
+        endsAt: END,
+        state: "ACTIVE",
+        acuityBlockId,
+      },
+      select: { id: true },
+    });
+    return { appointmentId: a.id, outboxId: row.id };
+  }
+
+  it("releasing also deletes the copies carrying the same reference", async () => {
+    const { appointmentId, outboxId } = await activeBlockOn(SOLO, "blk_known");
+    acuityMock.deleteBlock.mockResolvedValue(undefined);
+    // What Acuity really returns: three blocks, one reference, one known id.
+    acuityMock.listBlocks.mockResolvedValue([
+      { id: "blk_known", calendarID: SOLO, notes: blockReference(outboxId) },
+      { id: "blk_twin_1", calendarID: SOLO, notes: blockReference(outboxId) },
+      { id: "blk_twin_2", calendarID: SOLO, notes: blockReference(outboxId) },
+    ]);
+
+    await releaseForAppointment(shopId, appointmentId);
+
+    expect(acuityMock.deleteBlock.mock.calls.map((c) => c[0]).sort()).toEqual([
+      "blk_known",
+      "blk_twin_1",
+      "blk_twin_2",
+    ]);
+    expect((await rowsFor(appointmentId))[0]!.state).toBe("RELEASED");
+  });
+
+  it("never touches a block that is not ours", async () => {
+    const { appointmentId, outboxId } = await activeBlockOn(SOLO, "blk_known");
+    acuityMock.deleteBlock.mockResolvedValue(undefined);
+    acuityMock.listBlocks.mockResolvedValue([
+      { id: "blk_known", calendarID: SOLO, notes: blockReference(outboxId) },
+      // The barber's own lunch, and another appointment's block. Neither
+      // carries THIS row's reference, and deleting either would be us
+      // clearing time the barber deliberately held.
+      { id: "blk_lunch", calendarID: SOLO, notes: "lunch" },
+      { id: "blk_other", calendarID: SOLO, notes: blockReference("ob_someone_else") },
+      { id: "blk_bare", calendarID: SOLO, notes: "" },
+    ]);
+
+    await releaseForAppointment(shopId, appointmentId);
+
+    expect(acuityMock.deleteBlock.mock.calls.map((c) => c[0])).toEqual(["blk_known"]);
+  });
+
+  it("sweeps even when our own id was already gone from Acuity", async () => {
+    const { appointmentId, outboxId } = await activeBlockOn(SOLO, "blk_known");
+    const { AcuityError } = await import("../acuity/client.js");
+    // 404 on the id we held - the barber deleted that one by hand. The copies
+    // Acuity made alongside it are still there.
+    acuityMock.deleteBlock.mockRejectedValueOnce(new AcuityError(404, "gone"));
+    acuityMock.deleteBlock.mockResolvedValue(undefined);
+    acuityMock.listBlocks.mockResolvedValue([
+      { id: "blk_twin_1", calendarID: SOLO, notes: blockReference(outboxId) },
+    ]);
+
+    await releaseForAppointment(shopId, appointmentId);
+
+    expect(acuityMock.deleteBlock.mock.calls.map((c) => c[0])).toEqual([
+      "blk_known",
+      "blk_twin_1",
+    ]);
+    expect((await rowsFor(appointmentId))[0]!.state).toBe("RELEASED");
+  });
+
+  it("a sweep that fails does not drag the row back out of RELEASED", async () => {
+    const { appointmentId } = await activeBlockOn(SOLO, "blk_known");
+    acuityMock.deleteBlock.mockResolvedValue(undefined);
+    acuityMock.listBlocks.mockRejectedValue(new Error("ECONNRESET"));
+
+    await releaseForAppointment(shopId, appointmentId);
+
+    // Our block IS gone from Acuity, so the release succeeded. A copy we could
+    // not look for is a cleanup problem, not a reason to reopen the release.
+    expect((await rowsFor(appointmentId))[0]!.state).toBe("RELEASED");
+  });
+});
