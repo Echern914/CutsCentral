@@ -662,6 +662,132 @@ export async function checkoutAppointmentAction(
   );
 }
 
+/** What a payment method can do for this cut, and why not when it cannot. */
+export interface CheckoutMethodState {
+  available: boolean;
+  blocker?: string | null;
+  maxCents?: number;
+  card?: { brand: string | null; last4: string | null } | null;
+}
+
+export interface CheckoutAttemptView {
+  id: string;
+  state: string;
+  method: string;
+  amountCents: number;
+  currency: string;
+  card: { brand: string; last4: string } | null;
+  failureReason: string | null;
+  settledAt: string | null;
+  createdAt: string;
+}
+
+export interface CheckoutState {
+  appointment: {
+    id: string;
+    clientName: string | null;
+    serviceName: string | null;
+    startsAt: string;
+    endsAt: string;
+    status: string;
+    paidAt: string | null;
+    paidMethod: string | null;
+  };
+  totalCents: number | null;
+  collectedCents: number;
+  remainingCents: number | null;
+  methods: {
+    savedCard: CheckoutMethodState;
+    tapToPay: CheckoutMethodState;
+    cashOther: CheckoutMethodState;
+  };
+  liveAttempt: CheckoutAttemptView | null;
+}
+
+/**
+ * What the checkout screen may offer for this cut.
+ *
+ * 🔴 Read fresh every time the screen opens. The amount and the methods are the
+ * SERVER's answer, never the agenda row's - a stale figure is how a barber
+ * confirms one number while another is charged.
+ */
+export async function getCheckoutAction(
+  appointmentId: string,
+): Promise<{ ok: boolean; data?: CheckoutState; error?: string }> {
+  const res = await apiGet<CheckoutState>(`/api/checkout/appointments/${appointmentId}`);
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, data: res.data };
+}
+
+export type ChargeCardResult = Result & {
+  result?: "paid" | "requires_action" | "processing" | "ambiguous" | "declined" | "unavailable";
+  amountCents?: number;
+  card?: { brand: string | null; last4: string | null } | null;
+  paidAt?: string | null;
+  receiptReference?: string | null;
+  replay?: boolean;
+  attempt?: CheckoutAttemptView;
+  message?: string;
+  maxCents?: number;
+};
+
+/**
+ * Charge the saved card. `requestId` identifies ONE press of the button: send
+ * the same value again and the server replays the first answer instead of
+ * charging twice, which is what makes a double tap and a lost response safe.
+ */
+export async function chargeSavedCardAction(
+  appointmentId: string,
+  input: { amountCents: number; requestId: string },
+): Promise<ChargeCardResult> {
+  const res = await apiSend(
+    "POST",
+    `/api/checkout/appointments/${appointmentId}/charge-card`,
+    input,
+  );
+  const body = (res.data ?? {}) as Record<string, unknown>;
+  return {
+    ok: res.ok,
+    error: res.ok ? undefined : ((body.error as string) ?? res.error ?? "failed"),
+    ...(body as object),
+  } as ChargeCardResult;
+}
+
+/** Record money taken in person. Creates no Stripe charge of any kind. */
+export async function recordCashCheckoutAction(
+  appointmentId: string,
+  input: {
+    amountCents: number;
+    method: "cash" | "direct" | "other";
+    requestId: string;
+    confirmed: true;
+  },
+): Promise<ChargeCardResult> {
+  const res = await apiSend("POST", `/api/checkout/appointments/${appointmentId}/cash`, input);
+  const body = (res.data ?? {}) as Record<string, unknown>;
+  return {
+    ok: res.ok,
+    error: res.ok ? undefined : ((body.error as string) ?? res.error ?? "failed"),
+    ...(body as object),
+  } as ChargeCardResult;
+}
+
+/**
+ * Conclude an attempt that is waiting on customer authentication, so another
+ * method becomes available. The API refuses this for an `ambiguous` attempt -
+ * that one may only be resolved by reading Stripe's own answer.
+ */
+export async function cancelCheckoutAttemptAction(
+  appointmentId: string,
+  attemptId: string,
+): Promise<Result> {
+  return done(
+    await apiSend("POST", `/api/checkout/appointments/${appointmentId}/cancel-attempt`, {
+      attemptId,
+    }),
+  );
+}
+
 /**
  * Correct a booking's price from the sheet. `collected` is accepted by the API
  * only once the booking has been checked out — before that, checkout owns the

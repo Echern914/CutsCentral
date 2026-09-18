@@ -224,6 +224,13 @@ export interface BookInput {
    * the questions themselves, so the rules live in one place.
    */
   intake?: { questionId: string; value: string }[];
+  /**
+   * The customer's own agreement that a card kept on file may be charged for
+   * the SERVICE after their appointment - separate from the no-show-fee consent
+   * the card-on-file mode already carries. Omitted means not given, which keeps
+   * the card and simply means paying at the chair.
+   */
+  serviceChargeConsent?: boolean;
 }
 
 /**

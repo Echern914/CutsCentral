@@ -2416,7 +2416,7 @@ function AppointmentBlock({
               out already completes the cut — a barber who taps this never needs
               Done, and one who works for free still has Done next to it. */}
           <button
-            onClick={() => setSheet("charges")}
+            onClick={() => setSheet("pay")}
             disabled={pending}
             className={cn(
               BTN_BASE,

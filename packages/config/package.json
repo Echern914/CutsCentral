@@ -30,7 +30,8 @@
     "./tierRules": "./src/tierRules.ts",
     "./affiliateProgram": "./src/affiliateProgram.ts",
     "./supportCapabilities": "./src/supportCapabilities.ts",
-    "./supportEngine": "./src/supportEngine.ts"
+    "./supportEngine": "./src/supportEngine.ts",
+    "./checkoutConsent": "./src/checkoutConsent.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
