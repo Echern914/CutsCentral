@@ -800,7 +800,11 @@ model BarberNotifyPref {
   // that is one text per appointment, which is real money - opt IN.
   smsRemindersEnabled Boolean @default(false)
   emailEnabled Boolean @default(false)
-  // Where SMS goes. Falls back to Shop.notifyPhone, then the owner's phone.
+  // Where SMS goes: this number, else Shop.notifyPhone. That is the WHOLE
+  // chain - there is no owner-phone fallback and there cannot be one, because
+  // User has no phone column. An earlier version of this comment claimed a
+  // third link; it was wrong, and services/barberAlertSmsRecipient.test.ts now
+  // pins the real behaviour (neither configured => no send attempt at all).
   notifyPhone  String?
 
   // --- Events ---

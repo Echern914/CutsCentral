@@ -19,7 +19,9 @@ const listConflictsAction = vi.hoisted(() => vi.fn());
 const resolveConflictAction = vi.hoisted(() => vi.fn());
 vi.mock("./conflictActions", () => ({ listConflictsAction, resolveConflictAction }));
 
-const { ConflictInbox } = await import("./ConflictInbox");
+const { ConflictInbox, ConflictTabBadge, useUnresolvedConflictCount } = await import(
+  "./ConflictInbox"
+);
 
 const row = (over: Record<string, unknown> = {}) => ({
   id: "c1",
@@ -261,6 +263,97 @@ describe("audit fields", () => {
   });
 });
 
+describe("the badge count", () => {
+  it("🔴 DECREMENTS IMMEDIATELY on confirm, before the server answers", async () => {
+    const onCount = vi.fn();
+    listConflictsAction.mockResolvedValue(page([row()], { unresolvedCount: 3 }));
+    // Hold the resolve open so the optimistic step can be observed on its own.
+    let release!: (v: unknown) => void;
+    resolveConflictAction.mockReturnValue(new Promise((r) => (release = r)));
+
+    render(<ConflictInbox onUnresolvedCount={onCount} />);
+    await waitFor(() => expect(onCount).toHaveBeenCalledWith(3));
+    fireEvent.click(await screen.findByRole("button", { name: /mark resolved/i }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: /^mark resolved$/i }));
+
+    // The badge has already moved while the request is still in flight - a
+    // badge that lags makes a manager think the click did not land.
+    await waitFor(() => expect(onCount).toHaveBeenLastCalledWith(2));
+    release({ ok: true, changed: true });
+  });
+
+  it("then RECONCILES with whatever the server says", async () => {
+    const onCount = vi.fn();
+    listConflictsAction
+      .mockResolvedValueOnce(page([row()], { unresolvedCount: 3 }))
+      // A teammate resolved two more while this one was in flight.
+      .mockResolvedValueOnce(page([], { unresolvedCount: 0 }));
+    render(<ConflictInbox onUnresolvedCount={onCount} />);
+    await waitFor(() => expect(onCount).toHaveBeenCalledWith(3));
+    fireEvent.click(await screen.findByRole("button", { name: /mark resolved/i }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: /^mark resolved$/i }));
+    // Not 2 (the optimistic guess) - the server's number wins.
+    await waitFor(() => expect(onCount).toHaveBeenLastCalledWith(0));
+  });
+
+  it("🔴 a FAILED resolution puts the count back", async () => {
+    const onCount = vi.fn();
+    listConflictsAction.mockResolvedValue(page([row()], { unresolvedCount: 3 }));
+    resolveConflictAction.mockResolvedValue({ ok: false, error: "failed" });
+    render(<ConflictInbox onUnresolvedCount={onCount} />);
+    await waitFor(() => expect(onCount).toHaveBeenCalledWith(3));
+    fireEvent.click(await screen.findByRole("button", { name: /mark resolved/i }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: /^mark resolved$/i }));
+    // Back to 3, not stuck at the optimistic 2 - a badge one short hides real work.
+    await waitFor(() => expect(onCount).toHaveBeenLastCalledWith(3));
+    expect(await screen.findByText(/nothing was changed/i)).toBeInTheDocument();
+  });
+
+  it("never publishes a negative count", async () => {
+    const onCount = vi.fn();
+    // The count and the list disagree (a teammate just resolved it): the
+    // optimistic step must floor at zero rather than show "-1".
+    listConflictsAction.mockResolvedValue(page([row()], { unresolvedCount: 0 }));
+    resolveConflictAction.mockResolvedValue({ ok: true, changed: false });
+    render(<ConflictInbox onUnresolvedCount={onCount} />);
+    await screen.findByText("Sam");
+    fireEvent.click(screen.getByRole("button", { name: /mark resolved/i }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: /^mark resolved$/i }));
+    await waitFor(() => expect(resolveConflictAction).toHaveBeenCalled());
+    for (const call of onCount.mock.calls) expect(call[0]).toBeGreaterThanOrEqual(0);
+  });
+
+  it("🔴 ZERO conflicts reports 0, so the badge can hide entirely", async () => {
+    const onCount = vi.fn();
+    listConflictsAction.mockResolvedValue(page([], { unresolvedCount: 0 }));
+    render(<ConflictInbox onUnresolvedCount={onCount} />);
+    await waitFor(() => expect(onCount).toHaveBeenCalledWith(0));
+    // And the empty state is reassuring, not an alarm.
+    expect(screen.getByText(/nothing to deal with/i)).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("holds no module-level cache - a remount refetches from scratch", async () => {
+    // Switching shops redirects to /dashboard, which unmounts this. The count
+    // must come from the server on the way back in, never from a stale module
+    // variable that would show the previous shop's number.
+    listConflictsAction.mockResolvedValue(page([row()], { unresolvedCount: 5 }));
+    const first = render(<ConflictInbox />);
+    await screen.findByText("Sam");
+    first.unmount();
+    listConflictsAction.mockClear();
+    listConflictsAction.mockResolvedValue(page([], { unresolvedCount: 0 }));
+    const onCount = vi.fn();
+    render(<ConflictInbox onUnresolvedCount={onCount} />);
+    await waitFor(() => expect(listConflictsAction).toHaveBeenCalled());
+    await waitFor(() => expect(onCount).toHaveBeenLastCalledWith(0));
+  });
+});
+
 describe("phone width (the app is a WebView)", () => {
   it("nothing forces the row wider than a phone", async () => {
     listConflictsAction.mockResolvedValue(
@@ -285,5 +378,76 @@ describe("phone width (the app is a WebView)", () => {
     const dialog = await screen.findByRole("dialog");
     const input = within(dialog).getByPlaceholderText(/called the client/i);
     expect(input.className).toMatch(/\btext-base\b/);
+  });
+});
+
+describe("the manager entry point (badge + mount fetch)", () => {
+  /**
+   * 🔴 THESE ARE ABOUT BEING SEEN AT ALL. Everything else in this file assumes
+   * the manager already opened the Conflicts tab. The entry point is what gets
+   * them there, and the failure this whole feature exists to fix is a conflict
+   * nobody went looking for.
+   */
+  function Harness() {
+    const [count] = useUnresolvedConflictCount();
+    // Stands in for the tab strip: the badge renders WITHOUT the inbox being
+    // mounted, which is the property under test.
+    return (
+      <button type="button">
+        Conflicts
+        <ConflictTabBadge count={count} />
+      </button>
+    );
+  }
+
+  it("🔴 the badge appears WITHOUT the Conflicts tab ever being opened", async () => {
+    listConflictsAction.mockResolvedValue(page([], { unresolvedCount: 4 }));
+    render(<Harness />);
+    expect(await screen.findByLabelText("4 unresolved")).toBeInTheDocument();
+    // ...and it fetched on mount, cheaply.
+    expect(listConflictsAction).toHaveBeenCalledWith({ status: "open", limit: 1 });
+  });
+
+  it("🔴 ZERO renders NOTHING - no misleading alert on a healthy shop", async () => {
+    listConflictsAction.mockResolvedValue(page([], { unresolvedCount: 0 }));
+    render(<Harness />);
+    await waitFor(() => expect(listConflictsAction).toHaveBeenCalled());
+    // A permanent "0" trains people to ignore the tab, and then they miss the 1.
+    expect(screen.queryByLabelText(/unresolved/)).toBeNull();
+    expect(screen.getByRole("button")).toHaveTextContent(/^Conflicts$/);
+  });
+
+  it("a failed count stays silent rather than alarming", async () => {
+    listConflictsAction.mockResolvedValue({ ok: false, error: "boom" });
+    render(<Harness />);
+    await waitFor(() => expect(listConflictsAction).toHaveBeenCalled());
+    expect(screen.queryByLabelText(/unresolved/)).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("🔴 a REMOUNT refetches - the previous shop's count cannot persist", async () => {
+    // Switching shops redirects to /dashboard, unmounting this. If the count
+    // were cached at module scope, shop B would briefly wear shop A's number.
+    listConflictsAction.mockResolvedValue(page([], { unresolvedCount: 9 }));
+    const first = render(<Harness />);
+    expect(await screen.findByLabelText("9 unresolved")).toBeInTheDocument();
+    first.unmount();
+
+    listConflictsAction.mockResolvedValue(page([], { unresolvedCount: 1 }));
+    render(<Harness />);
+    expect(await screen.findByLabelText("1 unresolved")).toBeInTheDocument();
+    expect(screen.queryByLabelText("9 unresolved")).toBeNull();
+  });
+
+  it("the badge is a plain inline span - it wraps with the tab on a phone", async () => {
+    listConflictsAction.mockResolvedValue(page([], { unresolvedCount: 12 }));
+    const { container } = render(<Harness />);
+    await screen.findByLabelText("12 unresolved");
+    const badge = container.querySelector('[aria-label="12 unresolved"]')!;
+    // No fixed width and no absolute positioning: at 390px the tab strip
+    // scrolls as one row, and a badge that escaped its button would overlap
+    // the next tab.
+    expect(badge.className).not.toMatch(/absolute|fixed|w-\[/);
+    expect(badge.tagName).toBe("SPAN");
   });
 });

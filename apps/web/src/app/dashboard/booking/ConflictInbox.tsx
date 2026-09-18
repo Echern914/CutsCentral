@@ -59,6 +59,58 @@ function minutes(startIso: string, endIso: string): number {
   return Math.max(0, Math.round((new Date(endIso).getTime() - new Date(startIso).getTime()) / 60000));
 }
 
+/**
+ * How many double-booked chairs are waiting, for the tab badge.
+ *
+ * 🔴 FETCHED ON MOUNT, not when the Conflicts tab is opened. A count you only
+ * see after finding the tab is not an entry point, and *not going looking* is
+ * the exact failure this whole feature exists to fix.
+ *
+ * Lives here rather than inside BookingManager so it can be tested on its own -
+ * and so the count's rules stay next to the surface that owns them. It returns
+ * the setter too, so the open inbox can keep the badge in step as the manager
+ * works through the list.
+ *
+ * There is deliberately NO module-level cache. Switching shops redirects to
+ * /dashboard, which unmounts this; the count must come back from the server on
+ * the way in, never from a variable still holding the previous shop's number.
+ */
+export function useUnresolvedConflictCount(): [number, (n: number) => void] {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    let live = true;
+    void listConflictsAction({ status: "open", limit: 1 }).then((r) => {
+      // Silent on failure: a badge that cannot load must not put an error in
+      // front of somebody who came here to do something else.
+      if (live && r.ok && r.data) setCount(r.data.unresolvedCount);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  return [count, setCount];
+}
+
+/**
+ * The count on the Conflicts tab.
+ *
+ * 🔴 RENDERS NOTHING AT ZERO. A badge showing "0" is a permanent mark on the
+ * tab that means "everything is fine", which trains people to ignore it - and
+ * the one time it says 1 they will not notice. Amber rather than red: nothing
+ * is broken and no money was lost, somebody just has to make a call.
+ */
+export function ConflictTabBadge({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <span
+      className="rounded-full bg-amber-400/20 px-1.5 text-[11px] font-semibold text-amber-300"
+      aria-label={`${count} unresolved`}
+    >
+      {count}
+    </span>
+  );
+}
+
 export function ConflictInbox({
   onUnresolvedCount,
 }: {
@@ -75,6 +127,21 @@ export function ConflictInbox({
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  /**
+   * The open count, held locally so it can move the instant the manager acts.
+   * Kept in step with the parent badge through `publishCount`: two copies that
+   * can drift is how a badge ends up claiming work that is already done.
+   */
+  const [openCount, setOpenCount] = useState(0);
+
+  const publishCount = useCallback(
+    (n: number) => {
+      const safe = Math.max(0, n);
+      setOpenCount(safe);
+      onUnresolvedCount?.(safe);
+    },
+    [onUnresolvedCount],
+  );
 
   const load = useCallback(
     async (next: ConflictStatus) => {
@@ -88,9 +155,9 @@ export function ConflictInbox({
       }
       setRows(res.data.items);
       setCursor(res.data.nextCursor);
-      onUnresolvedCount?.(res.data.unresolvedCount);
+      publishCount(res.data.unresolvedCount);
     },
-    [onUnresolvedCount],
+    [publishCount],
   );
 
   useEffect(() => {
@@ -113,15 +180,33 @@ export function ConflictInbox({
       return [...prev, ...res.data!.items.filter((r) => !seen.has(r.id))];
     });
     setCursor(res.data.nextCursor);
-    onUnresolvedCount?.(res.data.unresolvedCount);
+    publishCount(res.data.unresolvedCount);
   }
 
   async function confirmResolve() {
     if (!confirming) return;
     setSaving(true);
+
+    /**
+     * 🔴 OPTIMISTIC, THEN RECONCILED, AND REVERTED IF IT FAILED.
+     *
+     * The badge drops the moment they confirm, because the manager is looking
+     * at it and a badge that still says "3" after they dealt with one reads as
+     * "it didn't work" - which is how somebody resolves the same conflict twice
+     * or goes looking for a fourth that was never there.
+     *
+     * `before` is captured so a failure puts the truth back rather than leaving
+     * the badge one short. The reload afterwards is the reconciliation: the
+     * server's count wins, including when a teammate resolved something else in
+     * the same moment.
+     */
+    const before = openCount;
+    publishCount(before - 1);
+
     const res = await resolveConflictAction(confirming.id, note);
     setSaving(false);
     if (!res.ok) {
+      publishCount(before);
       setNotice("Couldn't mark that resolved. Nothing was changed.");
       return;
     }

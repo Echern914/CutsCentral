@@ -1,0 +1,46 @@
+-- The conflict inbox's hot query, given an index that actually serves it.
+--
+-- THE QUERY (Prisma's, captured from the driver - not an approximation):
+--   SELECT ... FROM "BookingConflict"
+--   WHERE "shopId" = $1 AND "resolvedAt" IS NULL
+--   ORDER BY "detectedAt" DESC, "id" DESC LIMIT $2
+--
+-- MEASURED, not assumed. EXPLAIN (ANALYZE) over 120k rows, 25 shops, ~8% open:
+--
+--   plan with only the existing (shopId, resolvedAt, detectedAt) index:
+--     Bitmap Heap Scan + SORT      1.53 ms   <- sorts every open row to take 21
+--   plan with this index:
+--     Index Scan, no sort          0.015 ms
+--
+-- The existing index can find the open rows but cannot deliver them in order,
+-- so every page sorts the shop's whole open set to return twenty. This one
+-- carries the ORDER BY in the index, so a page is a bounded index scan.
+--
+-- 🔴 IT DOES NOT REPLACE THE EXISTING INDEX, and that was checked rather than
+-- assumed. A partial index on "open" cannot serve the RESOLVED-history filter
+-- at all (those rows are not in it). For a normal-sized shop that query is
+-- 6.6 ms on a seq scan and 1.0 ms on (shopId, resolvedAt, detectedAt). The two
+-- are complementary: this one owns the inbox, that one owns the archive.
+--
+-- PARTIAL, for the reason that is true here: open conflicts are the small,
+-- self-limiting slice (they get resolved) while history only grows. At the
+-- volume above the partial index is 464 kB against a 17 MB table. It also
+-- states the scope - this index exists for the inbox.
+--
+-- Declared in raw SQL only: Prisma's schema language cannot express a partial
+-- index, the same reason Appointment_shop_operation_key lives here and not in
+-- schema.prisma.
+--
+-- 🔴 LOCKING. A plain CREATE INDEX takes a lock that blocks writes to the
+-- table, and CREATE INDEX CONCURRENTLY cannot be used here because Prisma runs
+-- each migration inside a transaction. That is exactly why this goes in NOW:
+-- production holds ZERO BookingConflict rows, so the build is instant and
+-- blocks nothing. Adding it later, against a table with real history, is the
+-- version that would need a concurrent build outside the migration runner.
+--
+-- EXPAND ONLY. Additive; a running old API neither reads nor writes it, and
+-- rollback is dropping the index (optional - a redundant index costs only
+-- write amplification, never correctness).
+CREATE INDEX IF NOT EXISTS "BookingConflict_shop_open_recent_idx"
+  ON "BookingConflict" ("shopId", "detectedAt" DESC, "id" DESC)
+  WHERE "resolvedAt" IS NULL;

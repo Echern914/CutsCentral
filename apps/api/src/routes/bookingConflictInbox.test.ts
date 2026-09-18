@@ -455,6 +455,41 @@ describe("8. no destructive side effects", () => {
     ).not.toBeNull();
   });
 
+  it("🔴 resolving sends NOTHING and moves NO availability", async () => {
+    const receipt = await appointment(A, 50);
+    const other = await appointment(A, 55, "BOOKED");
+    const row = await conflict(A, { receiptId: receipt.id, conflictingId: other.id });
+
+    // Availability is a per-shop GENERATION counter; every write that could
+    // change what the booking page offers bumps it. Resolving is bookkeeping,
+    // so the counter must not move - if it did, every replica would throw away
+    // a warm availability cache because somebody ticked off a to-do.
+    const genBefore = (
+      await prisma.shop.findUniqueOrThrow({
+        where: { id: A.shopId },
+        select: { availabilityGeneration: true },
+      })
+    ).availabilityGeneration;
+    const outboxBefore = await prisma.emailIntent.count({ where: { shopId: A.shopId } });
+    const paymentsBefore = await prisma.payment.count({ where: { shopId: A.shopId } });
+
+    expect((await resolve(A, row.id, { note: "rang them" })).status).toBe(200);
+
+    const genAfter = (
+      await prisma.shop.findUniqueOrThrow({
+        where: { id: A.shopId },
+        select: { availabilityGeneration: true },
+      })
+    ).availabilityGeneration;
+    expect(genAfter).toBe(genBefore);
+    // 🔴 And no customer hears about it. A conflict is the shop's problem to
+    // sort out by ringing whoever is affected - ChairBack must never decide to
+    // message a customer about a double-booking on the shop's behalf.
+    expect(await prisma.emailIntent.count({ where: { shopId: A.shopId } })).toBe(outboxBefore);
+    // No money moved either way.
+    expect(await prisma.payment.count({ where: { shopId: A.shopId } })).toBe(paymentsBefore);
+  });
+
   it("a resolved conflict stays readable forever", async () => {
     const row = await conflict(A);
     await resolve(A, row.id, { note: "handled" });
