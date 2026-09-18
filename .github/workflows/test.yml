@@ -60,8 +60,16 @@ jobs:
     env:
       # The throwaway database. vitest.setup.ts refuses to run if DATABASE_URL
       # looks like production, and points everything at TEST_DATABASE_URL.
-      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/chairback_test
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/chairback_test
+      #
+      # 🔴 connection_limit IS LOAD-BEARING, not tuning. Prisma sizes its pool
+      # at cores x 2 + 1, which is 17 on a developer laptop and 5 on a 2-core
+      # runner. The concurrency tests park a dozen racers inside open
+      # transactions on purpose - bookingAvailabilityTruth's "twenty attempts,
+      # one appointment" says so in its own comment - so with a pool of 5 most
+      # racers never reach the guard and the test measures Prisma instead of the
+      # thing under test. Pinned to the number those tests were written against.
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/chairback_test?connection_limit=20
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/chairback_test?connection_limit=20
       # Prisma migrations read DIRECT_URL, not DATABASE_URL - overriding only
       # the latter silently targets whatever the datasource block resolves to.
       DIRECT_URL: postgresql://postgres:postgres@localhost:5432/chairback_test
