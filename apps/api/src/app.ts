@@ -61,6 +61,7 @@ import { affiliateDashboardRouter } from "./routes/affiliate.dashboard.js";
 import { stripeWebhookRouter } from "./routes/webhooks.stripe.js";
 import { connectWebhookRouter } from "./routes/webhooks.connect.js";
 import { paymentsDashboardRouter } from "./routes/payments.dashboard.js";
+import { checkoutRouter } from "./routes/booking.checkout.js";
 import { adminPortalRouter } from "./routes/adminPortal.js";
 import { demoRouter } from "./routes/demo.js";
 import { captureError } from "./sentry.js";
@@ -278,6 +279,11 @@ export function createApp(): Express {
   // queue is not booking config). Dark behind WALK_IN_MODE_ENABLED.
   app.use("/api/walk-ins", dashboardLimiter, walkInDashboardRouter);
   app.use("/api/payments", dashboardLimiter, paymentsDashboardRouter); // barber payment settings
+  // Post-service checkout: collect the balance after the cut. Its own router,
+  // NOT part of bookingDashboardRouter - that file is booking CONFIG and is
+  // edited by the Square stack, while this one moves money and wants to be
+  // reviewed on its own.
+  app.use("/api/checkout", dashboardLimiter, checkoutRouter);
   // One message to many clients. Behind the ordinary dashboard limiter like
   // every other authenticated surface - a route that can reach a shop's whole
   // client book is the last one that should be exempt from rate limiting.

@@ -386,6 +386,10 @@ export async function applyPaymentEvent(event: Stripe.Event): Promise<boolean> {
     case "payment_intent.processing": {
       const pi = event.data.object as Stripe.PaymentIntent;
       await applyIntentSnapshot(pi, event.id);
+      // 🔴 The webhook is what SETTLES a checkout, not the browser's reply to
+      // the barber. Running it before the promotion below means an attempt
+      // reaches its final state whichever of the two arrives first.
+      await settleCheckoutAttemptForIntent(pi);
       if (pi.status === "succeeded") await promoteHoldForPaidIntent(pi);
       return true;
     }
@@ -519,6 +523,12 @@ async function promoteHoldForPaidIntent(pi: Stripe.PaymentIntent): Promise<void>
   const appointmentId = pi.metadata?.appointmentId;
   const shopId = pi.metadata?.shopId;
   if (!appointmentId || !shopId) return; // not a booking payment (terminal, etc.)
+  // 🔴 A SERVICE CHECKOUT IS NOT A HOLD. It carries the same appointment and
+  // shop metadata, so without this it would enter the promotion path - and for
+  // an appointment cancelled between the charge and the webhook, `promotePaidHold`
+  // answers "lapsed" and `refundUnhonoredHold` would hand back money the barber
+  // earned for a cut they had already given.
+  if (pi.metadata?.purpose === "service_checkout") return;
   try {
     const { promotePaidHold, refundUnhonoredHold } = await import(
       "../services/appointmentPaymentHold.js"
@@ -532,6 +542,36 @@ async function promoteHoldForPaidIntent(pi: Stripe.PaymentIntent): Promise<void>
     // re-run the reconcile above. The row is already correct; the appointment
     // is recoverable by hand and loud in the log.
     logger.error({ appointmentId, errName: errorClassification(err) }, "promoting a paid hold failed");
+  }
+}
+
+/**
+ * Settle the CheckoutAttempt this intent belongs to, if it belongs to one.
+ *
+ * Dynamically imported for the same reason as the hold promotion above: the
+ * attempt service reaches back into billing, and a static import would close
+ * the cycle.
+ *
+ * Never throws into the webhook. A failure here must not make Stripe redeliver
+ * the whole event - the Payment row is already correct, and the attempt is
+ * recoverable by the reconciler.
+ */
+async function settleCheckoutAttemptForIntent(pi: Stripe.PaymentIntent): Promise<void> {
+  const attemptId = pi.metadata?.checkoutAttemptId;
+  if (!attemptId) return;
+  try {
+    const { settleAttemptFromIntent } = await import("../services/serviceCheckoutAttempt.js");
+    await settleAttemptFromIntent({
+      attemptId,
+      status: pi.status,
+      paymentIntentId: pi.id,
+      failureReason: pi.last_payment_error?.code ?? pi.last_payment_error?.type ?? null,
+    });
+  } catch (err) {
+    logger.error(
+      { attemptId, errName: errorClassification(err) },
+      "settling a checkout attempt from its intent failed",
+    );
   }
 }
 
