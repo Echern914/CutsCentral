@@ -2,7 +2,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken, __resetEnvCacheForTests } from "@chairback/config";
 import request from "supertest";
-import { __setMessageProviderForTests, type MessageProvider } from "../messaging/twilio.js";
+import { __setMessageProviderForTests } from "../messaging/twilio.js";
+import type { MessageProvider } from "../messaging/provider.js";
 import { createApp } from "../app.js";
 import { sendToBarber } from "./barberNotify.js";
 
@@ -78,7 +79,7 @@ beforeEach(async () => {
 
 afterAll(async () => {
   await prisma.shop.deleteMany({ where: { id: shopId } });
-  __setMessageProviderForTests(null);
+  __setMessageProviderForTests(undefined);
   if (ORIGINAL_DRY_RUN === undefined) delete process.env.DRY_RUN;
   else process.env.DRY_RUN = ORIGINAL_DRY_RUN;
   __resetEnvCacheForTests();
