@@ -60,6 +60,14 @@ dev answer as if it were prod.
 
 Never `prisma db push` against prod. `migrate deploy` only.
 
+🔴 **A migration prefix is a SEQUENCE NUMBER, not a date.** These stopped being
+wall-clock timestamps long ago and now run ahead of the real calendar — e.g.
+`20260929000000_acuity_block_all_calendars` was committed 2026-09-17. The only
+rule is that a new migration must sort **after every migration that already
+exists**, so take the highest prefix on `main` and add one step. Naming a new
+migration with today's real date would sort it *before* a dozen already-applied
+migrations, which is the reordering hazard rather than the fix for it.
+
 🔴 **Migrations read `DIRECT_URL`, not `DATABASE_URL`.** The datasource sets
 `directUrl = env("DIRECT_URL")`, so overriding only `DATABASE_URL` on a
 `prisma migrate` command silently targets whatever `.env` says — the **dev

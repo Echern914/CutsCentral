@@ -1,5 +1,7 @@
 import { prisma, runWithShop } from "@chairback/db";
 import { recomputeCadence } from "../engines/cadence.js";
+import { moveSpan } from "../engines/interval.js";
+import { logger } from "../logger.js";
 import {
   clawBackVisitEarn,
   currentBalance,
@@ -141,6 +143,30 @@ export async function editVisit(
       input.serviceName === undefined ? visit.serviceName : input.serviceName || null;
     const newWhen = input.when ?? visit.completedAt ?? visit.scheduledAt;
 
+    // 🔴 MOVING A VISIT MUST CARRY ITS DURATION WITH IT.
+    //
+    // This used to read `endAt: input.when ?? undefined` - the NEW START
+    // written into the END. The resulting zero-length span [t, t) contains no
+    // instant, so under half-open overlap it collides with nothing: the edited
+    // visit stopped blocking its own time on the availability grid AND in the
+    // write guard, while still drawing on the barber's calendar. "The calendar
+    // says busy, the booking page says free", and a chair sold twice.
+    //
+    // The authoritative duration is the visit's OWN existing span - it came
+    // from Acuity's endTime/duration at ingest - so moveSpan preserves that
+    // delta rather than substituting a guess. `derived` means the prior span
+    // was itself unusable (a historical null end); we then block conservatively
+    // for the default rather than silently freeing the chair, and say so.
+    const moved = input.when
+      ? moveSpan({ start: visit.scheduledAt, end: visit.endAt }, input.when)
+      : null;
+    if (moved?.derived) {
+      logger.warn(
+        { shopId: shop.id, visitId, reason: "prior_span_unusable" },
+        "visit edit: could not recover the real duration, applied the default span",
+      );
+    }
+
     const fieldUpdate = {
       scheduledAt: input.when ?? undefined,
       serviceName: input.serviceName === undefined ? undefined : newService,
@@ -148,7 +174,7 @@ export async function editVisit(
       // completed visit, so cadence reads the edited date.
       completedAt:
         visit.status === "COMPLETED" && input.when ? input.when : undefined,
-      endAt: input.when ?? undefined,
+      endAt: moved ? moved.end : undefined,
     };
 
     if (visit.status !== "COMPLETED") {

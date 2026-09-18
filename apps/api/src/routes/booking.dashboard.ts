@@ -18,6 +18,9 @@ import { pokeAppointmentPass } from "../wallet/appointmentPass.js";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import { ExternalBlockError, lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
+import { findConflicts, recordConflicts } from "../engines/bookingConflict.js";
+import { sendToBarber } from "../services/barberNotify.js";
+import { apiEnv } from "@chairback/config";
 import {
   blockedTimeIsTheOnlyObstacle,
   blockSentence,
@@ -5508,6 +5511,20 @@ const walkInSchema = z
     // 'cash' is the default because that is what a walk-in almost always is;
     // the barber can correct it on the appointment afterwards.
     method: z.enum(["cash", "direct", "card", "other"]).default("cash"),
+    /**
+     * IDEMPOTENCY, and only for a genuine retry.
+     *
+     * Minted by the client ONCE when a submission begins and reused by every
+     * retry of that same submission, so a timeout or a double tap collapses to
+     * one receipt - while two real cuts seconds apart carry different ids and
+     * stay two receipts. Never derived from the customer, the amount, the
+     * service or a time window: those all guess, and guessing away a receipt
+     * loses money that was actually taken.
+     *
+     * OPTIONAL on purpose. An older client that does not send one keeps
+     * today's behaviour exactly; nothing is deduplicated by inference.
+     */
+    operationId: z.string().trim().min(8).max(100).optional(),
   })
   .strict();
 
@@ -5569,6 +5586,16 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
   }
   const shopId = req.shop!.id;
   const now = new Date();
+  // Read OUTSIDE runWithShop: Shop carries RLS with no policy for the app
+  // role, so this select returns null inside the tenant transaction.
+  const shop = await prisma.shop.findUnique({
+    where: { id: shopId },
+    select: { bookingBufferMin: true },
+  });
+  if (!shop) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
 
   const result = await runWithShop(shopId, async (tx) => {
     // Whose chair, in order of confidence: an explicit pick, the signed-in
@@ -5595,8 +5622,113 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
       return { kind: "staff_required" as const, staff: active };
     }
 
+    // 🔴 A RETRY IS NOT A SECOND CUT. Checked first, inside the transaction:
+    //
+    // This read is an OPTIMISATION, not the guarantee - proved by removing
+    // it, which left every idempotency test green. The wall is the partial
+    // unique index on (shopId, operationId); two retries that both miss here
+    // race to insert and the loser is caught by P2002 below and replays. The
+    // read exists so the common retry costs one SELECT instead of a failed
+    // INSERT and a rollback.
+    // if this submission already landed, hand back exactly what it produced -
+    // no second receipt, no second conflict row, no second alert. Two genuine
+    // cuts seconds apart carry different operation ids and both proceed.
+    if (parsed.data.operationId) {
+      const prior = await tx.appointment.findFirst({
+        where: { shopId, operationId: parsed.data.operationId },
+        select: { id: true },
+      });
+      if (prior) {
+        const conflicts = await tx.bookingConflict.findMany({
+          where: { shopId, receiptId: prior.id },
+          select: { conflictingId: true, conflictingKind: true },
+        });
+        return {
+          kind: "ok" as const,
+          id: prior.id,
+          staffId,
+          outboxIds: [] as string[],
+          conflict:
+            conflicts.length > 0
+              ? { withAppointmentIds: conflicts.filter((c) => c.conflictingKind === "appointment").map((c) => c.conflictingId) }
+              : null,
+          replayed: true,
+          newConflicts: 0,
+        };
+      }
+    }
+
     const service = await ensureWalkInService(tx, shopId);
     const walkInEnd = new Date(now.getTime() + service.durationMin * 60_000);
+
+    // 🔴 THE GUARD THIS ROUTE NEVER HAD. It created a real Appointment
+    // occupying [now, now + duration) with no advisory lock and no overlap
+    // check at all - and the partial unique index only covers BOOKED|PENDING,
+    // so a COMPLETED walk-in had no database backstop either. This is the
+    // shape of the incident chairOccupancy.ts was written about: a walk-in
+    // laid over a customer's real 9pm cut.
+    //
+    // Recording the service and RESERVING the time are different questions,
+    // and only the second one is asked here. A historical walk-in still does
+    // not block anything (chairOccupancy bounds COMPLETED by endsAt > now);
+    // what is refused is writing a NEW one across a live reservation.
+    //
+    // 🔴 IT DETECTS. IT DOES NOT REFUSE. A walk-in POST is a RECEIPT for a
+    // cut that already happened, with cash already in the till - not a request
+    // to reserve time. Refusing it does not free the chair; it loses the money
+    // from the books and rolls back a payment. Both live shops log walk-ins
+    // back to back as a matter of course (Drick seven seconds apart, Mikey
+    // fifteen), and walkInOccupancy.test.ts pins that deliberately.
+    //
+    // So the asymmetry is the rule, not an exception:
+    //   a RESERVATION REQUEST (public booking, dashboard create, reschedule)
+    //     is refused when it collides;
+    //   a RECEIPT for work already done is recorded, and the collision is
+    //     detected and surfaced instead.
+    //
+    // The guard still runs, and that is the point of running it: it takes the
+    // per-chair advisory lock, so two concurrent walk-in writes serialise here
+    // rather than interleaving, and the conflict test below sees a settled
+    // state. The throw is caught because the ANSWER differs, not the check.
+    // null = no collision. An EMPTY array still means a collision, with
+    // something that is not a native appointment - a synced visit, a block, a
+    // hold. Losing that distinction would under-report the very case the
+    // external calendar makes most likely.
+    let conflict: { withAppointmentIds: string[] } | null = null;
+    let detected: Awaited<ReturnType<typeof findConflicts>> = [];
+    try {
+      await lockStaffAndAssertSlotFree(tx, {
+        staffId,
+        shopId,
+        startsAt: now,
+        endsAt: walkInEnd,
+        bufferMin: shop.bookingBufferMin,
+        serviceDayLimit: null,
+        // Barber-driven, the same answers the dashboard create gives.
+        walkInCapacity: "ignore",
+        // The person is in the chair; an Acuity entry does not eject them.
+        externalBlocks: "ignore",
+        overrideWaitlistHolds: true,
+        now,
+      });
+    } catch (err) {
+      if (!(err instanceof SlotTakenError)) throw err;
+      // Name what it collided with, through the SAME canonical predicate and
+      // span rule the guard uses, so the record cannot drift from the refusal.
+      detected = await findConflicts(tx, {
+        shopId,
+        staffId,
+        start: now,
+        end: walkInEnd,
+        now,
+      });
+      conflict = {
+        withAppointmentIds: detected
+          .filter((c) => c.kind === "appointment")
+          .map((c) => c.id),
+      };
+    }
+
     const appt = await tx.appointment.create({
       data: {
         shopId,
@@ -5616,9 +5748,40 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
         paidMethod: parsed.data.method,
         paidAt: now,
         manageToken: randomToken(),
+        // The partial unique index on (shopId, operationId) is what actually
+        // enforces this; the read above is the fast path, this is the wall.
+        ...(parsed.data.operationId ? { operationId: parsed.data.operationId } : {}),
       },
       select: { id: true },
     });
+    // 🔴 NOTHING IS SILENTLY LOST. The receipt is written and the collision
+    // becomes a DURABLE row - one per (receipt, conflicting record) pair, so a
+    // retry or a re-sync detects the same thing and creates nothing. Only
+    // genuinely new rows are alerted on, which is the deduplication.
+    let newConflicts = 0;
+    if (detected.length > 0) {
+      newConflicts = await recordConflicts(tx, {
+        shopId,
+        staffId,
+        receiptId: appt.id,
+        source: "walk_in_quick_log",
+        receiptStart: now,
+        receiptEnd: walkInEnd,
+        conflicts: detected,
+      });
+      logger.warn(
+        {
+          shopId,
+          staffId,
+          appointmentId: appt.id,
+          conflictsWith: detected.map((c) => `${c.kind}:${c.id}`),
+          recorded: newConflicts,
+          source: "walk_in_quick_log",
+        },
+        "walk-in RECORDED over an occupied chair - receipt kept, conflict needs a human",
+      );
+    }
+
     // A walk-in is stored COMPLETED because the money is already in the till -
     // but the client is IN THE CHAIR until walkInEnd, so the time is genuinely
     // occupied and must not be offered in Acuity mid-cut. appointmentOccupies
@@ -5659,7 +5822,42 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
         "mirror: ENFORCE with an unmapped chair - walk-in RECORDED ANYWAY and NOT mirrored",
       );
     }
-    return { kind: "ok" as const, id: appt.id, staffId, outboxIds };
+    return { kind: "ok" as const, id: appt.id, staffId, outboxIds, conflict, replayed: false, newConflicts };
+  }).catch(async (err: unknown) => {
+    // 🔴 THE RACE THE READ ABOVE CANNOT WIN. Two retries of one submission can
+    // both find nothing and both try to insert; the unique index refuses the
+    // loser, and the loser must answer with the WINNER's result rather than an
+    // error - a retry that reports failure is how a barber ends up tapping
+    // Save again and genuinely double-recording.
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === "P2002" &&
+      parsed.data.operationId
+    ) {
+      const winner = await prisma.appointment.findFirst({
+        where: { shopId, operationId: parsed.data.operationId },
+        select: { id: true },
+      });
+      if (winner) {
+        const conflicts = await prisma.bookingConflict.findMany({
+          where: { shopId, receiptId: winner.id, conflictingKind: "appointment" },
+          select: { conflictingId: true },
+        });
+        return {
+          kind: "ok" as const,
+          id: winner.id,
+          staffId: null,
+          outboxIds: [] as string[],
+          conflict:
+            conflicts.length > 0
+              ? { withAppointmentIds: conflicts.map((c) => c.conflictingId) }
+              : null,
+          replayed: true,
+          newConflicts: 0,
+        };
+      }
+    }
+    throw err;
   });
 
   if (result.kind === "bad_staff") {
@@ -5684,7 +5882,52 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
     { shopId, appointmentId: result.id, amount: parsed.data.amount },
     "walk-in recorded",
   );
-  res.status(201).json({ ok: true, id: result.id });
+
+  // 🔴 THE MANAGER IS TOLD, ONCE. Gated on rows genuinely CREATED, not on
+  // rows detected - a retry re-detects the same collision, creates nothing, and
+  // must not alert again. Best-effort and after commit, like every other barber
+  // alert: a notification problem must never roll back money already taken.
+  if (result.newConflicts > 0) {
+    void (async () => {
+      try {
+        const shopRow = await prisma.shop.findUnique({
+          where: { id: shopId },
+          select: { ownerId: true },
+        });
+        if (!shopRow) return;
+        const chair = result.staffId
+          ? await prisma.staff.findUnique({
+              where: { id: result.staffId },
+              select: { userId: true, name: true },
+            })
+          : null;
+        await sendToBarber({
+          shopId,
+          userId: chair?.userId ?? shopRow.ownerId,
+          kind: "conflict",
+          message: {
+            title: "Double-booked chair",
+            // Safe fields only: no customer name, number or price. And no
+            // claim about money: the walk-in stores a barber-typed amount that
+            // ChairBack never handled, so it says what it can stand behind.
+            body: `A walk-in was recorded on ${chair?.name ?? "a chair"} over time that was already booked. Nothing was discarded - check the other booking.`,
+            url: `${apiEnv().APP_BASE_URL}/dashboard/booking`,
+          },
+        });
+      } catch {
+        // sendToBarber never throws, but the lookups above can.
+      }
+    })();
+  }
+  // 🔴 THE BARBER IS TOLD, IN THE ANSWER. The receipt is kept either way,
+  // but a collision that only reaches a log line is a collision nobody acts on.
+  // The dashboard can put "this overlaps an existing booking" in front of the
+  // person who can still ring the customer, while they are standing there.
+  res.status(201).json({
+    ok: true,
+    id: result.id,
+    ...(result.conflict ? { conflict: result.conflict } : {}),
+  });
 });
 
 /**

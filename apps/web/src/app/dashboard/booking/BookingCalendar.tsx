@@ -1144,7 +1144,7 @@ const BLOCK_STRIPES =
  * AND the API says it can't tell whose chair it was - a solo shop and a
  * signed-in barber both resolve server-side and never see it.
  */
-function WalkInBar({
+export function WalkInBar({
   staff,
   toast,
   onRecorded,
@@ -1160,6 +1160,10 @@ function WalkInBar({
   const [needStaff, setNeedStaff] = useState(false);
   const [staffId, setStaffId] = useState("");
   const [pending, start] = useTransition();
+  /** Non-null once a receipt landed on time that was already taken. */
+  const [conflicted, setConflicted] = useState<number | null>(null);
+  /** Stable across retries of ONE submission; cleared on success or Cancel. */
+  const operationIdRef = useRef<string | null>(null);
   const active = staff.filter((s) => s.active);
 
   function reset() {
@@ -1167,6 +1171,9 @@ function WalkInBar({
     setAmount("");
     setNeedStaff(false);
     setStaffId("");
+    setConflicted(null);
+    // Cancel abandons this submission, so the next one is genuinely new.
+    operationIdRef.current = null;
   }
 
   function submit() {
@@ -1181,15 +1188,32 @@ function WalkInBar({
       toast(`Pick whose ${vocab.stationNoun}`, "error");
       return;
     }
+    // 🔴 ONE ID PER SUBMISSION, REUSED BY ITS RETRIES. Minted here and only
+    // cleared on success or Cancel, so tapping Save again after a timeout sends
+    // the SAME id and the server returns the original receipt instead of
+    // writing a second one. A genuinely new walk-in starts from reset() and
+    // therefore gets a new id - two cuts seconds apart stay two receipts.
+    operationIdRef.current ??=
+      globalThis.crypto?.randomUUID?.() ?? `op-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
     start(async () => {
       const res = await recordWalkInAction({
         amount: value,
         ...(staffId ? { staffId } : {}),
+        operationId: operationIdRef.current!,
       });
       if (res.ok) {
+        operationIdRef.current = null;
+        onRecorded();
+        if (res.conflict) {
+          // 🔴 NOT A SUCCESS TOAST. The receipt is safe, but this chair is
+          // double-booked and a toast would slide away before anyone read it.
+          setConflicted(res.conflict.withAppointmentIds.length);
+          setAmount("");
+          return;
+        }
         toast("Walk-in recorded", "success");
         reset();
-        onRecorded();
         return;
       }
       if (res.error === "staff_required") {
@@ -1200,6 +1224,48 @@ function WalkInBar({
       }
       toast("Couldn't record that walk-in", "error");
     });
+  }
+
+  // 🔴 THE WARNING, NOT A TOAST. All four facts a barber needs, in the place
+  // they were already looking, staying until they dismiss it: the walk-in is
+  // on the books, the chair is double-booked, someone must be called, nothing
+  // was thrown away. A success toast here is what hid this for months.
+  //
+  // 🔴 IT DOES NOT SAY "PAYMENT SAVED", and the distinction is not pedantry.
+  // The walk-in stores what the barber TYPED - paidAmount, paidMethod, paidAt -
+  // money ChairBack never touched, never authorised and cannot confirm; the
+  // amount is even allowed to be 0. "The payment was saved" would read as
+  // "we've got your money", which is a promise nothing here can keep. What is
+  // true, in every case including the zero one, is that the walk-in went onto
+  // the books and nothing was thrown away - so that is what it says.
+  if (conflicted !== null) {
+    return (
+      <div
+        role="alert"
+        className="flex flex-col gap-1.5 rounded-lg border border-amber-400/60 bg-amber-400/10 px-3 py-2"
+      >
+        <p className="text-xs font-semibold text-amber-300">
+          Walk-in recorded - but this chair is double-booked
+        </p>
+        <p className="text-[11px] leading-snug text-offwhite/80">
+          The walk-in is on the books and nothing was discarded. This time overlaps
+          {conflicted === 1
+            ? " an appointment that was already booked"
+            : conflicted > 1
+              ? ` ${conflicted} appointments that were already booked`
+              : " something already on the calendar"}
+          . Check the calendar and call whoever is booked so nobody turns up to
+          a chair that is taken.
+        </p>
+        <button
+          type="button"
+          onClick={reset}
+          className="self-start rounded-lg bg-amber-400/20 px-3 py-1 text-[11px] font-semibold text-amber-200 transition-colors hover:bg-amber-400/30"
+        >
+          Got it
+        </button>
+      </div>
+    );
   }
 
   if (!open) {
