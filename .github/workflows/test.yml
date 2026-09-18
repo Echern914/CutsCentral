@@ -85,7 +85,17 @@ jobs:
       TWILIO_ACCOUNT_SID: ci-dummy-twilio-sid
       TWILIO_AUTH_TOKEN: ci-dummy-twilio-token
       TWILIO_FROM_NUMBER: "+15550000000"
+      # The admin surfaces 401 without this, and the receptionist reports
+      # "no_anthropic_key" and hides a shop's number. Both were found by running
+      # the workflow, not by reading the schema.
+      ADMIN_TOKEN: ci-dummy-admin-token-not-real
+      ANTHROPIC_API_KEY: ci-dummy-anthropic-key-not-real
       DRY_RUN: "true"
+      # 🔴 UTC, because Railway runs UTC. Stated rather than inherited: a suite
+      # that passes only in the author's timezone is asserting behaviour
+      # production does not have. The runner already defaults to UTC; pinning it
+      # means a green run here means green in production's timezone.
+      TZ: UTC
       NODE_ENV: test
       # "silent" is not in the enum (fatal|error|warn|info|debug|trace).
       LOG_LEVEL: error
