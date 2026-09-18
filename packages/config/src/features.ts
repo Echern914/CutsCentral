@@ -210,6 +210,7 @@ export const BOOKING_TABS = [
   "Appointments",
   "Waitlist",
   "Walk-ins",
+  "Conflicts",
   "Staff",
   "Services",
   "Settings",
@@ -488,6 +489,21 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     // waitlist precedent gates the TAB's content, not the destination - a
     // manager whose shop has it off sees the tab explain how to turn it on.
     questions: ["who is in the walk-in line", "how do walk-in check-ins work"],
+  },
+  {
+    id: "conflicts",
+    name: "Conflicts",
+    // The manager's list of double-booked chairs: every walk-in that was
+    // RECORDED over something already on the chair (#439/#440). "walk in" and
+    // "double booking" themselves stay with `appointments`/the help corpus;
+    // this is the inbox where a collision waits until a person deals with it.
+    synonyms: ["double-booked", "double booked", "conflict", "conflicts tab", "unresolved conflicts", "booking conflicts"],
+    description: "Double-booked chairs waiting for someone to deal with them",
+    href: "/dashboard/booking?tab=Conflicts",
+    category: "booking",
+    // The API is requireManager; a barber seat never reaches it.
+    minRole: "MANAGER",
+    questions: ["do I have any double-booked chairs", "what is the conflicts tab"],
   },
   {
     id: "requests",

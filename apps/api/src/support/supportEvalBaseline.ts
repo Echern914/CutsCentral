@@ -259,6 +259,46 @@ export const SUPPORT_EVAL_BASELINE: EvalReport = {
       "in_app": "correct_answer",
       "mcp": "correct_answer"
     },
+    "walkin-double-booked": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "walkin-double-booked-terse": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "double-booked-still": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "slot-taken": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "slot-taken-terse": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "conflicts-tab": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "conflicts-badge": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "resolve-cancels": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "resolve-already": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "walkin-twice": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
     "tier-rules": {
       "in_app": "correct_answer",
       "mcp": "correct_answer"
@@ -299,22 +339,22 @@ export const SUPPORT_EVAL_BASELINE: EvalReport = {
     }
   },
   "inApp": {
-    "correct_answer": 64,
+    "correct_answer": 74,
     "near_miss": 4,
     "shrug": 4,
     "generic_menu": 0,
     "wrong_answer": 0
   },
   "mcp": {
-    "correct_answer": 60,
+    "correct_answer": 70,
     "near_miss": 4,
     "shrug": 3,
     "generic_menu": 0,
     "wrong_answer": 0
   },
   "channelAgreement": {
-    "agree": 66,
-    "of": 66
+    "agree": 76,
+    "of": 76
   },
   "answerableMissedInApp": [
     "waitlist-join",

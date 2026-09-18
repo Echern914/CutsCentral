@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Card } from "@/components/ui/Card";
 import { Dialog } from "@/components/ui/Dialog";
 import { cn } from "@/lib/cn";
+import { useVocab } from "@/components/VocabProvider";
 import {
   listConflictsAction,
   resolveConflictAction,
@@ -117,6 +118,9 @@ export function ConflictInbox({
   /** Lets the tab badge track the count without a second request. */
   onUnresolvedCount?: (n: number) => void;
 }) {
+  // Vertical vocabulary: a nail studio has stations, not chairs. The lint in
+  // packages/config refuses hard-coded barbershop words on this surface.
+  const vocab = useVocab();
   const [status, setStatus] = useState<ConflictStatus>("open");
   const [rows, setRows] = useState<ConflictRow[]>([]);
   const [cursor, setCursor] = useState<ConflictCursor | null>(null);
@@ -225,11 +229,9 @@ export function ConflictInbox({
   return (
     <div className="flex flex-col gap-4">
       <Card>
-        <h2 className="text-base font-semibold text-offwhite">Double-booked chairs</h2>
+        <h2 className="text-base font-semibold text-offwhite">{`Double-booked ${vocab.stationNounPlural}`}</h2>
         <p className="mt-1 text-sm text-muted">
-          A walk-in was recorded on a chair that was already booked. The money stayed on the books
-          and nothing was thrown away &mdash; but two people may be expecting the same slot, so
-          someone needs to open both bookings and make a call.
+          {`A walk-in was recorded on a ${vocab.stationNoun} that was already booked. The money stayed on the books and nothing was thrown away — but two people may be expecting the same slot, so someone needs to open both bookings and make a call.`}
         </p>
         <p className="mt-2 text-xs text-muted/80">
           Marking one resolved is a note for your records. It does not cancel, move or refund
@@ -278,7 +280,7 @@ export function ConflictInbox({
         <Card>
           <p className="text-sm text-muted">
             {status === "open"
-              ? "No double-booked chairs. Nothing to deal with."
+              ? `No double-booked ${vocab.stationNounPlural}. Nothing to deal with.`
               : "Nothing here."}
           </p>
         </Card>
@@ -298,7 +300,7 @@ export function ConflictInbox({
                     {KIND_LABEL[r.kind] ?? r.kind}
                   </span>
                   <span className="text-sm font-medium text-offwhite">
-                    {r.staffName ?? "Unknown chair"}
+                    {r.staffName ?? `Unknown ${vocab.stationNoun}`}
                   </span>
                   {r.resolvedAt && (
                     <span className="rounded-full border border-subtle px-2 py-0.5 text-[11px] text-muted">
@@ -314,12 +316,12 @@ export function ConflictInbox({
                   </span>
                 </p>
                 <p className="mt-1 text-xs text-muted">
-                  {KIND_HINT[r.kind] ?? "Something already held this chair."}
+                  {KIND_HINT[r.kind] ?? `Something already held this ${vocab.stationNoun}.`}
                 </p>
 
                 <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
                   <RefCell label="Walk-in recorded" ctx={r.receipt} />
-                  <RefCell label="Already on the chair" ctx={r.conflicting} />
+                  <RefCell label={`Already on the ${vocab.stationNoun}`} ctx={r.conflicting} />
                 </dl>
 
                 {r.resolvedAt ? (

@@ -37,8 +37,11 @@ vi.mock("./actions", () => ({
   createAppointmentAction: vi.fn(),
   saveBookingSettingsAction: vi.fn(),
 }));
+// The vocabulary the mocked hook hands out. Neutral by default; a test that
+// needs a specific vertical sets `current` and puts it back.
+const vocabHolder = vi.hoisted(() => ({ current: null as null | { stationNoun: string } }));
 vi.mock("@/components/VocabProvider", () => ({
-  useVocab: () => NEUTRAL_VOCABULARY,
+  useVocab: () => vocabHolder.current ?? NEUTRAL_VOCABULARY,
   cap: (w: string) => w.charAt(0).toUpperCase() + w.slice(1),
 }));
 
@@ -180,5 +183,41 @@ describe("the operation id is stable per submission, fresh per walk-in", () => {
     const first = recordWalkInAction.mock.calls[0]![0].operationId;
     const second = recordWalkInAction.mock.calls[1]![0].operationId;
     expect(second).not.toBe(first);
+  });
+});
+
+describe("vertical vocabulary in the warning", () => {
+  /**
+   * 🔴 "this chair is double-booked" was hard-coded and shipped that way; the
+   * config package's vocabulary lint caught it. A lint proves the literal is
+   * gone - this proves the replacement is wired: a barbershop reads "chair",
+   * the neutral default reads "station", and nothing reads "undefined".
+   */
+  it("names the station in the shop's own words", async () => {
+    const { vocabularyFor } = await import("@chairback/config/businessTypes");
+    const barbershop = vocabularyFor("barber");
+    expect(barbershop.stationNoun).toBe("chair");
+    recordWalkInAction.mockResolvedValue({ ok: true, conflict: { withAppointmentIds: ["a1"] } });
+
+    // This file mocks the vocabulary module wholesale, so the provider cannot
+    // be used here; the hook is switched instead.
+    vocabHolder.current = barbershop;
+    const view = render(<WalkInBar staff={staff} toast={toast} onRecorded={onRecorded} />);
+    fireEvent.click(screen.getByRole("button", { name: /^walk-in$/i }));
+    fireEvent.change(screen.getByLabelText(/amount the walk-in paid/i), { target: { value: "35" } });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/this chair is double-booked/i);
+    expect(alert).toHaveTextContent(/a chair that is taken/i);
+    view.unmount();
+
+    vocabHolder.current = null;
+    render(<WalkInBar staff={staff} toast={toast} onRecorded={onRecorded} />);
+    fireEvent.click(screen.getByRole("button", { name: /^walk-in$/i }));
+    fireEvent.change(screen.getByLabelText(/amount the walk-in paid/i), { target: { value: "35" } });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    const neutral = await screen.findByRole("alert");
+    expect(neutral).toHaveTextContent(new RegExp(`this ${NEUTRAL_VOCABULARY.stationNoun} is double-booked`, "i"));
+    expect(neutral).not.toHaveTextContent(/undefined/);
   });
 });

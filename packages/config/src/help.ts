@@ -310,9 +310,81 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "double-booking",
     q: "Can I get double-booked?",
-    a: "No. A slot is held the instant it's taken and stops being offered to anyone else — including bookings that arrive from Acuity or Square, and including time you've blocked off.\n\nSynced appointments from your other calendar block your ChairBack slots too, so the two can't collide.",
-    keywords: ["double book", "double booking", "overlap", "conflict", "two clients", "same time", "collide"],
+    // 🔴 This used to say a flat "No." That stopped being the whole truth when
+    // walk-ins started being RECORDED over a booked chair on purpose (a receipt
+    // for a cut that already happened is not a reservation request). A barber
+    // reading the amber warning and asking this question was being told it
+    // could not happen.
+    a: "Not by a booking. A slot is held the instant it's taken and stops being offered to anyone else — including bookings that arrive from Acuity or Square, and time you've blocked off. Anyone trying to book a chair that's already taken for that time is refused.\n\nA walk-in is the one deliberate exception. A walk-in is a receipt for a cut that already happened — the money's in the till and the person is in the chair — so ChairBack records it even if that chair was already booked for the time, and warns you straight away: an amber panel on the calendar, a push to whoever's chair it is, and a line under the Conflicts tab until someone deals with it. Nothing gets cancelled for you. You ring whoever's booked and decide.",
+    keywords: ["double book", "double booking", "double-booked", "double booked", "overlap", "conflict", "two clients", "same time", "collide"],
     category: "booking",
+    action: { label: "Open Conflicts", featureId: "conflicts" },
+  },
+  {
+    id: "slot-taken",
+    q: "It says the slot is taken when I try to book someone in",
+    a: "Because that chair really is occupied for that time — by another booking, a synced appointment from Acuity or Square, or a hold someone still has on it. Booking is refused rather than squeezed in, so nobody ends up double-booked.\n\nPick another time — or, if you're recording a cut that already happened, use the walk-in instead. A walk-in is a receipt, not a reservation, so it goes on the books even when the chair was busy, with a warning if it overlaps something.",
+    keywords: [
+      "slot taken", "slot_taken", "time taken", "already taken", "cant book that time",
+      "can't book that time", "wont let me book", "won't let me book", "refused",
+      "taken when i book", "overlapping booking",
+    ],
+    category: "booking",
+    action: { label: "Open calendar", featureId: "online-booking" },
+  },
+  {
+    id: "walk-in-double-booked",
+    q: "It says “Walk-in recorded - but this chair is double-booked”. What do I do?",
+    a: "Two things happened, and neither is bad news about the money.\n\nThe walk-in went on the books — the amount you typed is recorded and nothing was thrown away. (That's a record of what you took at the chair; ChairBack didn't take the payment itself.)\n\nAnd the time you recorded overlaps something already on that chair — a booking, a synced appointment from Acuity or Square, or blocked time. Somebody may be about to turn up to a chair that's taken. Check the calendar and ring whoever is booked. ChairBack won't cancel or move anyone for you; that's your call.\n\nThe warning stays until you dismiss it, and the collision is listed under the Conflicts tab, so it's still there tomorrow if the panel was closed.",
+    keywords: [
+      "chair is double-booked", "chair is double booked", "walk-in recorded but", "walk in recorded but",
+      "amber", "amber warning", "orange warning", "warning on walk-in", "walk-in warning",
+      "overlaps", "already booked", "what do i do",
+    ],
+    category: "booking",
+    action: { label: "Open Conflicts", featureId: "conflicts" },
+  },
+  {
+    id: "conflicts-tab",
+    q: "What's the Conflicts tab, and the number on it?",
+    a: "It's the list of double-booked chairs — every time a walk-in was recorded over something that was already on that chair. The number is how many nobody has dealt with yet; it disappears at zero.\n\nEach one shows the chair, the overlapping time, what was already there (a ChairBack booking, a synced booking from Acuity or Square, or blocked time) and the walk-in that landed on top. Open both on the calendar, ring whoever's affected, then mark it resolved.\n\nIt's for owners and managers; barber seats don't see it. Whoever logs the walk-in gets the amber warning at the time, and the chair's barber — or the owner, if the chair isn't linked to a login — gets a push, plus a text if the shop has an alert number set.",
+    keywords: [
+      "conflicts", "conflicts tab", "conflict tab", "number on conflicts", "badge",
+      "amber number", "orange number", "unresolved", "double booked list",
+      "double-booked chairs", "list of conflicts",
+    ],
+    category: "booking",
+    action: { label: "Open Conflicts", featureId: "conflicts" },
+  },
+  {
+    id: "resolve-conflict",
+    q: "What does “Mark resolved” do on a conflict?",
+    a: "It notes that a person has dealt with it — that's all. Nothing about either booking changes: it doesn't cancel, move or refund anything, and it doesn't message the customer. If someone needs moving, do that on the calendar as you normally would.\n\nYou can add a line saying what you did (“rang him, moved to 3pm”) for whoever reads the list next. It's kept, with who resolved it and when — resolved conflicts move to the Resolved filter rather than disappearing.\n\nIf you see “Already resolved by …”, a teammate got there first; the list shows their name, not yours.",
+    keywords: [
+      "mark resolved", "marking resolved", "mark it resolved", "resolve", "resolved", "resolving",
+      "already resolved", "resolved by", "resolved by someone", "someone else resolved",
+      "resolve conflict", "resolve a conflict", "resolving a conflict", "marking a conflict resolved",
+      "does resolving cancel", "cancel the other appointment", "clear the conflict", "dismiss conflict",
+      "what does that mean",
+    ],
+    // "resolved" is this entry's word. Without it declared, "already resolved
+    // by someone else" scored "already" against slot-taken, and "cancel the
+    // other appointment" pulled toward the cancellation entries - both were
+    // near-misses in the eval, one suggestion away from a right answer.
+    primaryFor: ["resolved", "resolve"],
+    category: "booking",
+    action: { label: "Open Conflicts", featureId: "conflicts" },
+  },
+  {
+    id: "walk-in-saved-twice",
+    q: "I tapped Save twice on a walk-in — is it in there twice?",
+    a: "No. A double tap, a timeout or a flaky connection on ONE walk-in lands as one walk-in: the app tags each save, so a retry of the same one is recognised and folds into it.\n\nTwo real walk-ins seconds apart are two, though — separate cuts, separate money. ChairBack never merges two receipts just because they look alike.",
+    keywords: [
+      "twice", "double tap", "tapped save twice", "pressed save twice", "duplicate walk-in",
+      "recorded twice", "two walk-ins", "timed out", "saved twice", "did it save", "in there twice",
+    ],
+    category: "booking",
+    action: { label: "Open calendar", featureId: "online-booking" },
   },
 
   /* ========================= Plans & getting paid ======================== */
@@ -963,9 +1035,14 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     a: "That one isn't a text. A booking confirmation goes out by email, and as a push notification if the client uses the app — the confirmation SMS is deliberately off, because a text per booking costs every shop money for something the email already does.\n\nThe texts clients do get are the reminders: 24 hours and 2 hours before the appointment.\n\nSo if they're waiting on a confirmation, check the email side — their address on the booking, and their spam folder. If a REMINDER didn't arrive, that's a different question with different causes.",
     keywords: [
       "confirmation text", "confirmation sms", "no text when they booked",
-      "didnt get a text", "booking text", "text after booking",
+      "booking text", "text after booking",
       "no confirmation",
     ],
+    // 🔴 NOT "didnt get a text". Scoring is per token, so that phrase handed
+    // this entry "didnt"/"get"/"text" at keyword weight and it swallowed the
+    // plain "my client didnt get her text" - a reminder or promo question that
+    // belongs to client-didnt-get-text. The confirmation question still lands
+    // here on "confirmation" and "booked", which the generic one never says.
     category: "texting",
   },
   {
@@ -998,6 +1075,11 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     keywords: [
       "didnt get", "not received", "no text", "text didnt send", "missing text",
       "never got", "delivery", "not delivered", "failed", "wasnt sent",
+      // The plain report, in the words a shop actually uses. Without these the
+      // confirmation-text entry's own question ("MY CLIENT didn't get...")
+      // out-scored this one on "my"/"client" and took the generic complaint.
+      "my client didnt get her text", "my client didnt get his text", "client says she didnt get",
+      "client says he didnt get", "didnt get her text", "didnt get his text", "didnt get their text",
       "never got the reminder", "didnt get the reminder", "no reminder", "reminder didnt",
     ],
     category: "texting",
@@ -1211,7 +1293,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "walk-in",
     q: "How do I add a walk-in?",
-    a: "On the calendar, add a walk-in on the chair and time they sat down. No name, no phone number, no signup — it exists so the money and the chair time get recorded without making someone stand there while you type their details.\n\nIt counts in Insights and Chair time like any other cut. If they want the loyalty punch, add them as a client instead.",
+    a: "On the calendar, add a walk-in on the chair and time they sat down. No name, no phone number, no signup — it exists so the money and the chair time get recorded without making someone stand there while you type their details.\n\nIt counts in Insights and Chair time like any other cut. If they want the loyalty punch, add them as a client instead.\n\nIf that chair was already booked for the time you're recording, the walk-in still goes on the books — and an amber warning says so, right there, because someone may be about to turn up to a taken chair. See “It says the chair is double-booked” for what to do.",
     keywords: ["walk in", "walkin", "walk-in", "off the street", "no appointment", "someone walked in", "add walk"],
     category: "booking",
     action: { label: "Open calendar", featureId: "online-booking" },

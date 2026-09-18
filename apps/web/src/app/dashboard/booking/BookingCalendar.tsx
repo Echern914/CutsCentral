@@ -1245,7 +1245,7 @@ export function WalkInBar({
         className="flex flex-col gap-1.5 rounded-lg border border-amber-400/60 bg-amber-400/10 px-3 py-2"
       >
         <p className="text-xs font-semibold text-amber-300">
-          Walk-in recorded - but this chair is double-booked
+          Walk-in recorded - but this {vocab.stationNoun} is double-booked
         </p>
         <p className="text-[11px] leading-snug text-offwhite/80">
           The walk-in is on the books and nothing was discarded. This time overlaps
@@ -1255,7 +1255,7 @@ export function WalkInBar({
               ? ` ${conflicted} appointments that were already booked`
               : " something already on the calendar"}
           . Check the calendar and call whoever is booked so nobody turns up to
-          a chair that is taken.
+          a {vocab.stationNoun} that is taken.
         </p>
         <button
           type="button"

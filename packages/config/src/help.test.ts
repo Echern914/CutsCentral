@@ -277,6 +277,48 @@ describe("findHelp — questions asked cold", () => {
   });
 
   /**
+   * Double-booked chairs. The walk-in RECORDS over a booked chair on purpose
+   * and flags it (#439), and the inbox lists them (#440). Six entries share
+   * the words "walk-in", "double", "conflict" and "resolve", so each question
+   * below is one that a neighbouring entry could plausibly steal.
+   */
+  it("routes the double-booking questions to the right entry", () => {
+    // Adding a walk-in is still the how-to, not the warning.
+    expectAnswer("how do i add a walk in", "walk-in");
+    // The old headline question still lands on its own entry...
+    expectAnswer("can i get double booked", "double-booking");
+    // ...and the warning's own words land on the warning.
+    expectAnswer("it says the chair is double-booked what do i do", "walk-in-double-booked");
+    expectAnswer("walk-in recorded but this chair is double-booked", "walk-in-double-booked");
+    expectAnswer("what is the conflicts tab", "conflicts-tab");
+    expectAnswer("whats the number on the conflicts tab", "conflicts-tab");
+    expectAnswer("what does mark resolved do", "resolve-conflict");
+    expectAnswer("does resolving a conflict cancel the appointment", "resolve-conflict");
+    expectAnswer("i tapped save twice on a walk in", "walk-in-saved-twice");
+    expectAnswer("it says slot taken when i try to book someone", "slot-taken");
+  });
+
+  /**
+   * 🔴 "Can I get double-booked?" used to answer "No." That became a
+   * confidently wrong answer the day walk-ins started being recorded over a
+   * booked chair. The entry must carry both halves of the rule and must never
+   * claim ChairBack cancels anyone by itself.
+   */
+  it("tells the truth about walk-ins and double-booking", () => {
+    const dbl = helpAnswerById("double-booking")!;
+    expect(dbl.a).not.toMatch(/^No\./);
+    expect(dbl.a).toMatch(/walk-in/i);
+    expect(dbl.a).toMatch(/nothing gets cancelled for you/i);
+    const warn = helpAnswerById("walk-in-double-booked")!;
+    // It must not tell the barber the payment was taken by ChairBack.
+    expect(warn.a).not.toMatch(/payment (was )?(saved|captured|processed)/i);
+    expect(warn.a).toMatch(/on the books/i);
+    const res = helpAnswerById("resolve-conflict")!;
+    expect(res.a).toMatch(/doesn't cancel, move or refund/i);
+    expect(res.a).toMatch(/doesn't message the customer/i);
+  });
+
+  /**
    * The corpus contradicted itself about money: "trial" promised a free plan
    * to drop onto, "whats-free" said bookings stop. The code is unambiguous -
    * hasActiveAccess() is subscription-or-trial, and the public payload carries
