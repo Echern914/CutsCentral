@@ -67,7 +67,7 @@ beforeEach(() => {
 describe("what it says about itself", () => {
   it("🔴 says plainly that resolving changes no booking", async () => {
     render(<ConflictInbox />);
-    await screen.findByText(/double-booked chairs/i);
+    await screen.findByRole("heading", { name: /double-booked/i });
     expect(
       screen.getByText(/does not cancel, move or refund anything/i),
     ).toBeInTheDocument();
@@ -75,7 +75,7 @@ describe("what it says about itself", () => {
 
   it("does not claim the payment was captured", async () => {
     render(<ConflictInbox />);
-    await screen.findByText(/double-booked chairs/i);
+    await screen.findByRole("heading", { name: /double-booked/i });
     // Same rule as the walk-in panel: the amount is barber-typed and ChairBack
     // never handled it. "On the books" is the claim it can stand behind.
     expect(document.body.textContent).toMatch(/on the books/i);
@@ -449,5 +449,46 @@ describe("the manager entry point (badge + mount fetch)", () => {
     // the next tab.
     expect(badge.className).not.toMatch(/absolute|fixed|w-\[/);
     expect(badge.tagName).toBe("SPAN");
+  });
+});
+
+describe("vertical vocabulary", () => {
+  /**
+   * 🔴 THE WORDS COME FROM THE SHOP'S BUSINESS TYPE, NOT FROM THIS FILE. The
+   * first version hard-coded "chair" in eight places and shipped that way -
+   * the config package's vocabulary lint caught it, but a lint only proves the
+   * literal is gone. This proves the replacement is WIRED: a barbershop reads
+   * "chairs", and with no provider at all the neutral vocabulary renders
+   * complete words rather than blanks.
+   */
+  it("says chairs for a barbershop and stations by default", async () => {
+    const { VocabProvider } = await import("@/components/VocabProvider");
+    const { vocabularyFor } = await import("@chairback/config/businessTypes");
+    const barbershop = vocabularyFor("barber");
+    // Guard the fixture itself: if the id is wrong, fail here, not silently.
+    expect(barbershop.stationNounPlural).toBe("chairs");
+
+    const withShop = render(
+      <VocabProvider value={barbershop}>
+        <ConflictInbox />
+      </VocabProvider>,
+    );
+    expect(
+      await screen.findByRole("heading", { name: /double-booked chairs/i }),
+    ).toBeInTheDocument();
+    withShop.unmount();
+
+    // No provider: the NEUTRAL vocabulary, whatever word it uses - read from
+    // the constant rather than guessed, so a copy change there cannot make
+    // this test lie about wiring.
+    const { NEUTRAL_VOCABULARY } = await import("@chairback/config/businessTypes");
+    expect(NEUTRAL_VOCABULARY.stationNounPlural).not.toBe("chairs");
+    render(<ConflictInbox />);
+    expect(
+      await screen.findByRole("heading", {
+        name: new RegExp(`double-booked ${NEUTRAL_VOCABULARY.stationNounPlural}`, "i"),
+      }),
+    ).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/undefined/);
   });
 });

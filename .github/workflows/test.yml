@@ -1,0 +1,165 @@
+name: Tests
+
+# 🔴 THE GATE THAT DID NOT EXIST.
+#
+# Until now the only PR checks on this repo were the two Vercel builds. Every
+# suite ran on one laptop, by hand, from memory - so a suite that nobody
+# remembered to run could go red on `main` and stay red. That is not
+# hypothetical: #439/#440 shipped eight vocabulary-lint violations because the
+# config package's tests were never in anyone's gate, and #436 shipped a red
+# help-route assertion the same way. Both sat on `main` for days.
+#
+# So this runs EVERY suite on every pull request, and a red one blocks. Four
+# packages, in dependency order, then the two builds the deploys actually use.
+#
+# NO REAL CREDENTIALS. Every value below is a throwaway literal, and that is
+# deliberate rather than lazy: the suites are designed to run without reaching
+# any external service, and handing CI a production secret would make a test
+# run capable of touching real customers. If a test ever needs a real service,
+# that test is wrong.
+#
+# 🔴 NO STRIPE_* VARS, ON PURPOSE. Billing must read as OFF here. Setting them
+# flips billingEnabled(), test shops read as lapsed, their SMS quota drops to
+# zero and ~20 unrelated engine tests fail with errors that point nowhere near
+# the cause. apps/api/vitest.setup.ts strips them defensively; this file simply
+# never provides them.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# A second push to the same PR makes the first run's answer irrelevant.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    services:
+      postgres:
+        # Match production (Supabase runs 17) and the local test database, so a
+        # migration or a query that behaves differently by major version fails
+        # here rather than on deploy.
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: chairback_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # The throwaway database. vitest.setup.ts refuses to run if DATABASE_URL
+      # looks like production, and points everything at TEST_DATABASE_URL.
+      #
+      # 🔴 connection_limit IS LOAD-BEARING, not tuning. Prisma sizes its pool
+      # at cores x 2 + 1, which is 17 on a developer laptop and 5 on a 2-core
+      # runner. The concurrency tests park a dozen racers inside open
+      # transactions on purpose - bookingAvailabilityTruth's "twenty attempts,
+      # one appointment" says so in its own comment - so with a pool of 5 most
+      # racers never reach the guard and the test measures Prisma instead of the
+      # thing under test. Pinned to the number those tests were written against.
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/chairback_test?connection_limit=20
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/chairback_test?connection_limit=20
+      # Prisma migrations read DIRECT_URL, not DATABASE_URL - overriding only
+      # the latter silently targets whatever the datasource block resolves to.
+      DIRECT_URL: postgresql://postgres:postgres@localhost:5432/chairback_test
+
+      # Dummy values for the vars the API env schema requires. Shapes matter
+      # (SESSION_SECRET needs 16+ chars, the URLs need 16+), the values do not.
+      SESSION_SECRET: ci-session-secret-not-a-real-one
+      # These two are VALIDATED FOR SHAPE, not just presence: both must be
+      # base64 that decodes to 32 bytes. Plain strings were rejected on this
+      # workflow's first run. They decode to "chairback-ci-dummy-..." - real
+      # values live in Railway and never come near CI.
+      UNSUBSCRIBE_TOKEN_SECRET: Y2hhaXJiYWNrLWNpLWR1bW15LXVuc3ViLXNlY3JldC0=
+      TOKEN_ENCRYPTION_KEY: Y2hhaXJiYWNrLWNpLWR1bW15LWVuYy1rZXktTk9UUkU=
+      APP_BASE_URL: http://localhost:3000
+      API_BASE_URL: http://localhost:4000
+      ACUITY_OAUTH_CLIENT_ID: ci-dummy-acuity-client-id
+      ACUITY_OAUTH_CLIENT_SECRET: ci-dummy-acuity-client-secret
+      ACUITY_OAUTH_REDIRECT_URI: http://localhost:4000/api/acuity/callback
+      # The messaging kill switch stays ON here. A suite that could reach a
+      # provider is a suite that could text a real person.
+      TWILIO_ACCOUNT_SID: ci-dummy-twilio-sid
+      TWILIO_AUTH_TOKEN: ci-dummy-twilio-token
+      TWILIO_FROM_NUMBER: "+15550000000"
+      # The admin surfaces 401 without this, and the receptionist reports
+      # "no_anthropic_key" and hides a shop's number. Both were found by running
+      # the workflow, not by reading the schema.
+      ADMIN_TOKEN: ci-dummy-admin-token-not-real
+      ANTHROPIC_API_KEY: ci-dummy-anthropic-key-not-real
+      DRY_RUN: "true"
+      # 🔴 UTC, because Railway runs UTC. Stated rather than inherited: a suite
+      # that passes only in the author's timezone is asserting behaviour
+      # production does not have. The runner already defaults to UTC; pinning it
+      # means a green run here means green in production's timezone.
+      TZ: UTC
+      NODE_ENV: test
+      # "silent" is not in the enum (fatal|error|warn|info|debug|trace).
+      LOG_LEVEL: error
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        # --frozen-lockfile: a PR that edits a dependency without committing the
+        # lockfile fails here rather than resolving to something different from
+        # what anyone reviewed. packages/db's postinstall runs prisma generate,
+        # so the client exists after this step.
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply migrations to the test database
+        # migrate deploy, never db push: the same command production runs, so a
+        # migration that cannot apply cleanly fails here.
+        run: pnpm --filter @chairback/db migrate:deploy
+
+      # ── The suites, in dependency order. Each is its own step so a failure
+      #    names the package rather than a wall of turbo output. ──────────────
+
+      - name: Config tests (vocabulary lint, help corpus, feature registry)
+        # 🔴 THE ONE THIS WORKFLOW EXISTS FOR. It holds the lint that refuses
+        # hard-coded barbershop words on a covered surface (a nail studio has
+        # stations, not chairs), the help-corpus route guards, and the booking
+        # tab pinning. It was never in anyone's manual gate.
+        run: pnpm --filter @chairback/config test
+
+      - name: DB tests (RLS and tenant isolation)
+        run: pnpm --filter @chairback/db test
+
+      - name: API tests
+        run: pnpm --filter @chairback/api test
+
+      - name: Web tests
+        run: pnpm --filter @chairback/web test
+
+      # ── The builds. These are the type-check gate: the API build is `tsc`
+      #    over the whole project INCLUDING .test.ts (which is what Railway
+      #    does), and `next build` type-checks the web app. ──────────────────
+
+      - name: Web build
+        run: pnpm --filter @chairback/web build
+
+      - name: API build
+        # Last, matching the documented local order: it typechecks test files
+        # too, and it is the gate that catches what would otherwise break the
+        # Railway deploy after merge.
+        run: pnpm --filter @chairback/api build

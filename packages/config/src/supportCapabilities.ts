@@ -443,6 +443,82 @@ export const SUPPORT_CAPABILITIES: readonly SupportCapability[] = [
     safeFallback: "Integration health names the broken link.",
     neverExpose: ["OAuth tokens", "webhook secrets"],
   },
+  /* ───────────── double-booked chairs: the walk-in receipt rule ───────────
+   * The product rule these all rest on: a RESERVATION that collides is
+   * refused; a RECEIPT (a walk-in, for a cut that already happened) is
+   * recorded and flagged. Every answer here has to hold both halves, and none
+   * may claim ChairBack cancels, moves, refunds or messages anyone by itself.
+   */
+  {
+    id: "walk_in_double_booked",
+    intent: "The walk-in warned me the chair is double-booked - what happened and what do I do?",
+    // The amber panel is the moment this gets asked, so the answer must say
+    // the money is on the books, nothing was cancelled, and who to ring.
+    actors: SEAT_ACTORS,
+    dataClass: "product_knowledge",
+    authority: "help_corpus",
+    corpusIds: ["walk-in-double-booked", "double-booking"],
+    mcpTool: "help_find_feature",
+    readOnly: true,
+    confirmationRequired: false,
+    safeFallback: "The walk-in is on the books; check the calendar and ring whoever is booked.",
+    neverExpose: ["customer names", "customer phone numbers", "amounts paid"],
+  },
+  {
+    id: "booking_slot_taken",
+    intent: "Booking someone in was refused because the slot is taken.",
+    actors: SEAT_ACTORS,
+    dataClass: "product_knowledge",
+    authority: "help_corpus",
+    corpusIds: ["slot-taken", "double-booking"],
+    mcpTool: "help_find_feature",
+    readOnly: true,
+    confirmationRequired: false,
+    safeFallback: "The chair is genuinely occupied then; pick another time, or record a finished cut as a walk-in.",
+    neverExpose: [],
+  },
+  {
+    id: "conflict_inbox",
+    intent: "What is the Conflicts tab and the number on it?",
+    // Barber seats can ASK; the honest answer tells them it is a manager surface.
+    actors: SEAT_ACTORS,
+    dataClass: "product_knowledge",
+    authority: "help_corpus",
+    corpusIds: ["conflicts-tab"],
+    mcpTool: "help_find_feature",
+    readOnly: true,
+    confirmationRequired: false,
+    safeFallback: "It lists double-booked chairs nobody has dealt with yet; owners and managers see it.",
+    neverExpose: ["customer names", "customer phone numbers"],
+  },
+  {
+    id: "resolve_conflict_meaning",
+    intent: "What does marking a conflict resolved actually do?",
+    // 🔴 The dangerous wrong answer is "it cancels the other booking". It
+    // changes nothing about either booking and messages nobody.
+    actors: SEAT_ACTORS,
+    dataClass: "product_knowledge",
+    authority: "help_corpus",
+    corpusIds: ["resolve-conflict"],
+    mcpTool: "help_find_feature",
+    readOnly: true,
+    confirmationRequired: false,
+    safeFallback: "It only records that a person dealt with it; no booking is cancelled, moved or refunded.",
+    neverExpose: [],
+  },
+  {
+    id: "walk_in_retry_idempotent",
+    intent: "I tapped Save twice on a walk-in - is it recorded twice?",
+    actors: SEAT_ACTORS,
+    dataClass: "product_knowledge",
+    authority: "help_corpus",
+    corpusIds: ["walk-in-saved-twice"],
+    mcpTool: "help_find_feature",
+    readOnly: true,
+    confirmationRequired: false,
+    safeFallback: "A retry of one save lands once; two genuine walk-ins stay two.",
+    neverExpose: [],
+  },
   {
     id: "acuity_alongside_chairback",
     intent: "Can I keep taking bookings in Acuity while I use ChairBack?",

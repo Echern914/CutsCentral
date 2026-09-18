@@ -121,6 +121,22 @@ export const SUPPORT_FIXTURES: readonly SupportFixture[] = [
   { id: "confirmation-text-missing", capabilityId: "confirmation_text_missing", actor: "owner", channels: BOTH, question: "my client didnt get a confirmation text when she booked", probe: "frustrated" },
   { id: "standing-not-offered", capabilityId: "standing_appointment_unavailable", actor: "owner", channels: BOTH, question: "why is there no option for a standing appointment", probe: "canonical" },
 
+  /* ──────────── double-booked chairs (walk-in receipts + the inbox) ───────
+   * Shipped in #439/#440. The walk-in RECORDS over a booked chair and flags
+   * it; the inbox lists them. Before this the corpus answered "can I get
+   * double-booked?" with a flat "No", which the amber warning contradicts.
+   */
+  { id: "walkin-double-booked", capabilityId: "walk_in_double_booked", actor: "owner", channels: BOTH, question: "it says walk-in recorded but this chair is double-booked, what do i do", probe: "frustrated" },
+  { id: "walkin-double-booked-terse", capabilityId: "walk_in_double_booked", actor: "barber", channels: BOTH, question: "walk in warning double booked", probe: "terse" },
+  { id: "double-booked-still", capabilityId: "walk_in_double_booked", actor: "owner", channels: BOTH, question: "can i still get double booked", probe: "paraphrase" },
+  { id: "slot-taken", capabilityId: "booking_slot_taken", actor: "owner", channels: BOTH, question: "it says slot taken when i try to book a client in", probe: "canonical" },
+  { id: "slot-taken-terse", capabilityId: "booking_slot_taken", actor: "manager", channels: BOTH, question: "wont let me book says taken", probe: "terse" },
+  { id: "conflicts-tab", capabilityId: "conflict_inbox", actor: "owner", channels: BOTH, question: "what is the conflicts tab", probe: "canonical" },
+  { id: "conflicts-badge", capabilityId: "conflict_inbox", actor: "manager", channels: BOTH, question: "whats the orange number on conflicts", probe: "paraphrase" },
+  { id: "resolve-cancels", capabilityId: "resolve_conflict_meaning", actor: "owner", channels: BOTH, question: "does marking a conflict resolved cancel the other appointment", probe: "canonical" },
+  { id: "resolve-already", capabilityId: "resolve_conflict_meaning", actor: "manager", channels: BOTH, question: "it says already resolved by someone else what does that mean", probe: "paraphrase" },
+  { id: "walkin-twice", capabilityId: "walk_in_retry_idempotent", actor: "owner", channels: BOTH, question: "i pressed save twice on a walk in is it in there twice", probe: "canonical" },
+
   /* ───────────────── loyalty tiers, openings and saved shops ───────────── */
   { id: "tier-rules", capabilityId: "loyalty_tier_rules", actor: "owner", channels: BOTH, question: "How do loyalty tiers work and can I change what they require?", probe: "canonical" },
   { id: "tier-rules-money", capabilityId: "loyalty_tier_rules", actor: "owner", channels: BOTH, question: "can gold need money spent and a number of cuts a month", probe: "paraphrase" },

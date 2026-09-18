@@ -106,8 +106,21 @@ describe("runTrialReminders", () => {
     expect(summaries).toEqual([]);
     expect(mine().length).toBe(1);
 
-    // 12 hours before expiry -> stage 2.
-    const dayBefore = new Date(NOW.getTime() + 5.5 * MS_PER_DAY);
+    // ~19 hours before expiry -> stage 2.
+    //
+    // 🔴 NOT 12 HOURS, AND THE HALF-DAY WAS THE BUG. The stage-2 copy says
+    // "today" when the trial ends on the same CALENDAR day as now, and
+    // friendlyDate formats in the AMBIENT timezone. NOW+5.5d is 02:00 UTC on
+    // the same date the trial ends, so under UTC - which is what Railway runs -
+    // this scenario is genuinely "ends today", and the assertion below was
+    // describing behaviour production does not have. It only passed because
+    // the author's machine is America/New_York, where 02:00 UTC is the
+    // previous evening.
+    //
+    // 19.2 hours lands on the previous calendar day in UTC and in ET, so the
+    // scenario really is "ends tomorrow" in both, and it is still inside the
+    // 24-hour stage-2 window. Found when CI first ran the suite in UTC.
+    const dayBefore = new Date(NOW.getTime() + 5.2 * MS_PER_DAY);
     summaries = await runFiltered(dayBefore);
     expect(summaries).toEqual([{ shopId: shop.id, stage: 2, ownerEmail }]);
     expect(mine().length).toBe(2);
