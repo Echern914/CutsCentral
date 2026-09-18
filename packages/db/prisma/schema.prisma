@@ -4798,8 +4798,18 @@ model BookingConflict {
   detectedAt DateTime @default(now())
 
   /// Set when a human has dealt with it. Null = still open.
+  ///
+  /// 🔴 RESOLVING IS A BOOKKEEPING ACT, NOT A BOOKING ONE. It records that a
+  /// person has dealt with the collision - rang the customer, moved someone,
+  /// decided it was fine. It does not cancel, move or refund either booking,
+  /// and the row is never deleted, so the history of a double-booked chair
+  /// stays auditable after someone has tidied the list.
   resolvedAt       DateTime?
   resolvedByUserId String?
+  /// What they did about it, in their own words. Optional and short - it is a
+  /// note for the next person who opens the list, not a case file. No customer
+  /// name, number or price belongs here any more than in the row above.
+  resolutionNote   String?
 
   @@unique([shopId, receiptId, conflictingKind, conflictingId])
   @@index([shopId, resolvedAt, detectedAt])

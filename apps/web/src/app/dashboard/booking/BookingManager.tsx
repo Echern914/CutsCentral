@@ -32,6 +32,8 @@ import type {
   WaitlistRow,
 } from "./page";
 import { BookingCalendar } from "./BookingCalendar";
+import { ConflictInbox } from "./ConflictInbox";
+import { listConflictsAction } from "./conflictActions";
 import { ShopQrCard } from "./ShopQrCard";
 import { HolidayPricing } from "./HolidayPricing";
 import { ConnectPlatforms } from "./ConnectPlatforms";
@@ -99,7 +101,7 @@ const labelCls = "text-xs text-muted";
 // always landed on shop config instead of on today's appointments.
 // Kept in step with BOOKING_TABS in @chairback/config (the registry pins the
 // ?tab= deep links against that list).
-const tabs = ["Appointments", "Waitlist", "Walk-ins", "Staff", "Services", "Settings"] as const;
+const tabs = ["Appointments", "Waitlist", "Walk-ins", "Conflicts", "Staff", "Services", "Settings"] as const;
 type Tab = (typeof tabs)[number];
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -208,6 +210,27 @@ export function BookingManager({
   const bookUrl = `${appBase}/book/${shop.slug ?? "your-shop"}`;
   const needsSetup = initialStaff.length === 0 || initialServices.length === 0;
 
+  /**
+   * How many double-booked chairs are waiting, for the tab badge.
+   *
+   * 🔴 FETCHED ON MOUNT, not when the tab is opened. A count that only appears
+   * once you have already found the tab is not an entry point - the whole
+   * failure this fixes is a conflict nobody went looking for. `limit: 1` keeps
+   * it to one cheap row; the count is a separate aggregate either way.
+   */
+  const [unresolvedConflicts, setUnresolvedConflicts] = useState(0);
+  useEffect(() => {
+    let live = true;
+    void listConflictsAction({ status: "open", limit: 1 }).then((r) => {
+      // Silent on failure: a badge that cannot load must not put an error in
+      // front of someone who came here to do something else.
+      if (live && r.ok && r.data) setUnresolvedConflicts(r.data.unresolvedCount);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
   // Dirty-check registered by the OPEN service-group editor (null = none open).
   // Group edits persist only on Save, and switching tabs unmounts the Services
   // tab — without this guard a mid-configuration tab tap silently discarded
@@ -296,16 +319,30 @@ export function BookingManager({
             key={t}
             onClick={() => switchTab(t)}
             className={cn(
-              "rounded-full px-4 py-1.5 text-sm font-medium transition-colors duration-150 ease-out",
+              "flex shrink-0 items-center gap-1.5 rounded-full px-4 py-1.5 text-sm font-medium transition-colors duration-150 ease-out",
               tab === t
                 ? "bg-gold/15 text-gold"
                 : "text-muted hover:bg-charcoal-700 hover:text-offwhite",
             )}
           >
             {t}
+            {/* 🔴 THE ENTRY POINT. A double-booked chair is only useful if
+                somebody notices it, so the count sits on the tab itself rather
+                than waiting to be found. Amber, not red: nothing is broken and
+                no money was lost - somebody just has to make a call. */}
+            {t === "Conflicts" && unresolvedConflicts > 0 && (
+              <span
+                className="rounded-full bg-amber-400/20 px-1.5 text-[11px] font-semibold text-amber-300"
+                aria-label={`${unresolvedConflicts} unresolved`}
+              >
+                {unresolvedConflicts}
+              </span>
+            )}
           </button>
         ))}
       </div>
+
+      {tab === "Conflicts" && <ConflictInbox onUnresolvedCount={setUnresolvedConflicts} />}
 
       {tab === "Settings" && (
         <div className="flex flex-col gap-5">

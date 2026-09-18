@@ -52,6 +52,7 @@ import { teamRouter } from "./routes/team.js";
 import { teamJoinRouter } from "./routes/teamJoin.js";
 import { bookingPublicRouter } from "./routes/booking.public.js";
 import { bookingDashboardRouter } from "./routes/booking.dashboard.js";
+import { bookingConflictsRouter } from "./routes/booking.conflicts.js";
 import { loyaltyRouter } from "./routes/loyalty.js";
 import { promotionsRouter } from "./routes/promotions.js";
 import { billingRouter } from "./routes/billing.js";
@@ -264,6 +265,14 @@ export function createApp(): Express {
   // still be able to SEE and REVOKE what it connected while it was paying.
   app.use("/api/mcp", mcpConnectionsRouter);
   app.use("/api/booking", dashboardLimiter, bookingDashboardRouter); // barber booking config
+  // The manager's conflict inbox: double-booked chairs the walk-in path
+  // RECORDED rather than refused. Its own router, NOT part of
+  // bookingDashboardRouter (same reason the walk-in queue has its own - the
+  // Square stack edits that file, and an incident list is not booking config).
+  // Read-and-acknowledge only: it can change no booking. NOT behind
+  // requireActiveAccess - a shop that lapsed still has to be able to see that
+  // one of its chairs is double-booked.
+  app.use("/api/booking-conflicts", dashboardLimiter, bookingConflictsRouter);
   // Walk-In Mode manager surface (the Live Queue board). Its own router, NOT
   // part of bookingDashboardRouter (the Square stack edits that file, and a
   // queue is not booking config). Dark behind WALK_IN_MODE_ENABLED.
