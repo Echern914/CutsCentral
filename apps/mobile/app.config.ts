@@ -63,7 +63,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   // cannot take another build - that is exactly how build 37 died
   // (SUBMISSION_SERVICE_IOS_OLD_APP_VERSION).
   //
-  // 1.0.9 = builds 40 and 41, the first builds made LOCALLY in Xcode rather
+  // 1.0.9 = builds 40 and 41 (41 SUBMITTED FOR REVIEW, which closed the
+  // version), the first builds made LOCALLY in Xcode rather
   // than on EAS (see docs/mobile-release-xcode.md). 🔴 FROM HERE ON THE BUILD
   // NUMBER LIVES IN THIS FILE. EAS auto-incremented it under
   // appVersionSource:"remote" and its counter stopped at 39; eas.json now says
@@ -77,16 +78,25 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   //        a gap costs nothing, a repeat is rejected. If a "40" ever shows up
   //        in TestFlight, it is this one: do not release it to testers.
   //   41 = the same 1.0.9 with #417 (My ChairBack) and the animated launch.
-  //   42 = 1.0.9 again, carrying what landed on top of 41: a customer's first
-  //        AND last name (#423), "Add to my shops" (#424), the tier card with
-  //        its progress bar (#426) and tier-held openings (#427). All four
-  //        changed apps/mobile, so none of them reached a build-41 device - the
-  //        WebView only ever carries the WEB half of a feature.
-  //        🔑 The VERSION deliberately stays 1.0.9: a new version string is
-  //        forced only once the previous one has been SUBMITTED FOR REVIEW,
-  //        which is what killed build 37. TestFlight accepts any build number
-  //        App Store Connect has not already seen.
-  version: "1.0.9",
+  //   42 = carrying what landed on top of 41: a customer's first AND last name
+  //        (#423), "Add to my shops" (#424), the tier card with its progress bar
+  //        (#426) and tier-held openings (#427). All four changed apps/mobile,
+  //        so none of them reached a build-41 device - the WebView only ever
+  //        carries the WEB half of a feature.
+  //
+  //        🔴 IT SHIPS AS 1.1.0, NOT THE 1.0.9 IT WAS CUT AS. Build 42 was
+  //        committed but never uploaded, and in the meantime 1.0.9 (build 41)
+  //        was SUBMITTED FOR REVIEW. A submitted version is closed to new
+  //        builds - SUBMISSION_SERVICE_IOS_OLD_APP_VERSION, the wall that
+  //        killed build 37 - so the string has to move before 42 can go up.
+  //        The trigger is SUBMISSION, not release: the moment a version is
+  //        submitted, the next build needs a new version string.
+  //
+  //        The build number stays 42. It must only exceed the last upload (41)
+  //        and be one App Store Connect has not seen, and 42 was never uploaded.
+  //
+  // 1.1.0 = build 42. Minor, not patch: #423/#424/#426/#427 are features.
+  version: "1.1.0",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
