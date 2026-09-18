@@ -245,7 +245,7 @@ describe("booking with a card on file", () => {
     expect(asked.customer).toBe(row!.stripeCustomerId);
     expect((asked.metadata as Record<string, string>).appointmentId).toBe(appt!.id);
     // No Payment row: nothing moved.
-    expect(await prisma.payment.findUnique({ where: { appointmentId: appt!.id } })).toBeNull();
+    expect(await prisma.payment.findFirst({ where: { appointmentId: appt!.id } })).toBeNull();
   });
 
   it("🔴 becomes a booking only when Stripe confirms the card - our verify call, not the browser's word", async () => {

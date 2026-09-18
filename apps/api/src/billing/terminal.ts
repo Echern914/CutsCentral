@@ -139,8 +139,13 @@ export async function createTerminalPaymentIntent(
   const currency = input.currency ?? "usd";
   const feeAmount = Math.floor((input.amountCents * input.platformFeeBps) / 10000);
 
-  const existing = await prisma.payment.findUnique({
-    where: { appointmentId: input.appointmentId },
+  // The card-present row for THIS cut. Scoped to `service_checkout` since the
+  // ledger became one-to-many: a deposit taken at booking is money for the same
+  // appointment but not the same collection, and treating it as "a payment
+  // already exists" is what used to make Tap to Pay impossible on any booking
+  // that had paid one.
+  const existing = await prisma.payment.findFirst({
+    where: { appointmentId: input.appointmentId, purpose: "service_checkout" },
     select: { id: true, stripePaymentIntentId: true, mode: true, status: true },
   });
   if (existing && !(existing.mode === "terminal" && isPendingIntentId(existing.stripePaymentIntentId))) {
@@ -197,6 +202,10 @@ export async function createTerminalPaymentIntent(
           stripePaymentIntentId: pendingIntentId(paymentId),
           stripeConnectAccountId: input.connectAccountId,
           mode: "terminal",
+          // Card-present money is collected AFTER the service, so it is a
+          // service checkout - not booking money. This is what lets it sit
+          // beside a deposit instead of colliding with it.
+          purpose: "service_checkout",
           amount: input.amountCents,
           currency,
           applicationFeeAmount: feeAmount,

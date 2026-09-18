@@ -131,11 +131,14 @@ export async function createAheadPaymentIntent(
   }
   const feeAmount = Math.floor((input.amountCents * input.platformFeeBps) / 10000);
   try {
-    // One Payment row per appointment (unique). A prior attempt that got as far
-    // as a real intent is simply handed back; one that never got an answer is
-    // the retry case below.
-    const existing = await prisma.payment.findUnique({
-      where: { appointmentId: input.appointmentId },
+    // One BOOKING payment per appointment (partial unique index). A prior
+    // attempt that got as far as a real intent is simply handed back; one that
+    // never got an answer is the retry case below. The `purpose` filter is what
+    // keeps this exact now that a later service checkout or fee can sit beside
+    // it on the same appointment - without it, this would sometimes find the
+    // wrong row and hand back a balance charge as though it were the deposit.
+    const existing = await prisma.payment.findFirst({
+      where: { appointmentId: input.appointmentId, purpose: "booking" },
       select: {
         id: true,
         stripePaymentIntentId: true,

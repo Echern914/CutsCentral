@@ -247,7 +247,7 @@ describe("the switch is ON", () => {
     expect(key).toBe(`cof-charge:${b.cardOnFileId}`);
 
     expect(await cardStatus(b.appointmentId)).toBe("charged");
-    const payment = await prisma.payment.findUnique({ where: { appointmentId: b.appointmentId } });
+    const payment = await prisma.payment.findFirst({ where: { appointmentId: b.appointmentId } });
     expect(payment).toMatchObject({ mode: "card_on_file", amount: 2000, status: "succeeded", capturedAmount: 2000 });
 
     expect(chargeEmails()).toHaveLength(1);
@@ -310,7 +310,7 @@ describe("the switch is ON", () => {
     expect(res.status).toBe(200);
     expect(fake.state.charges).toHaveLength(1);
     expect(await cardStatus(b.appointmentId)).toBe("failed");
-    const payment = await prisma.payment.findUnique({ where: { appointmentId: b.appointmentId } });
+    const payment = await prisma.payment.findFirst({ where: { appointmentId: b.appointmentId } });
     expect(payment?.status).toBe("failed");
     expect(payment?.stripePaymentIntentId).toMatch(/^pi_declined_/);
     expect(chargeAlerts()).toHaveLength(1);

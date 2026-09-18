@@ -594,10 +594,16 @@ export async function readChairEvents(
         // ticket when set - see `earned` below.
         paidAmount: true,
         service: { select: { name: true } },
-        // Real money, when the shop takes payment through the app. Null for
+        // Real money, when the shop takes payment through the app. EMPTY for
         // every cash / pay-direct shop, which is why `earned` falls back to
         // the ticket rather than to zero.
-        payment: {
+        //
+        // Every purpose is summed on purpose. A booking deposit, a balance
+        // collected at checkout and a no-show fee are all money this shop
+        // actually took, and each one already accounts for its own refunds and
+        // partial captures. Filtering to one purpose here would have made a
+        // deposit-then-checkout cut report only the deposit.
+        payments: {
           select: {
             status: true,
             amount: true,
@@ -635,11 +641,15 @@ export async function readChairEvents(
   for (const a of appts) {
     const ticketCents = a.priceAtBooking === null ? null : decimalToCents(a.priceAtBooking);
     const noShow = a.status === "NO_SHOW";
+    // Every Stripe row against this cut, added. They never overlap: a deposit,
+    // a balance and a fee are separate collections of separate money.
+    const stripeCents = a.payments.reduce((sum, p) => sum + collectedCents(p), 0);
+    const hasStripeMoney = a.payments.length > 0;
     const earnedCents =
       a.paidAmount != null
-        ? decimalToCents(a.paidAmount) + (a.payment ? collectedCents(a.payment) : 0)
-        : a.payment
-          ? collectedCents(a.payment)
+        ? decimalToCents(a.paidAmount) + stripeCents
+        : hasStripeMoney
+          ? stripeCents
           : noShow
             ? 0
             : (ticketCents ?? 0);
@@ -659,7 +669,7 @@ export async function readChairEvents(
       // cash shop, which is most of them, from reading $0.
       earned: earnedCents / 100,
       earnedCents,
-      settledCents: a.payment ? collectedCents(a.payment) : 0,
+      settledCents: stripeCents,
       noShow,
       serviceId: a.serviceId,
       serviceName: a.service?.name ?? null,

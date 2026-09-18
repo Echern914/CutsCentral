@@ -652,6 +652,7 @@ model Shop {
   serviceUpgradeRuleSources ServiceUpgradeRuleSource[]
   payments               Payment[]
   cardsOnFile            CardOnFile[]
+  checkoutAttempts       CheckoutAttempt[]
 
   // Team: who else can sign in to this shop, and outstanding invites.
   members     ShopMember[]
@@ -2998,8 +2999,15 @@ model Appointment {
   createdAt          DateTime          @default(now())
   updatedAt          DateTime          @updatedAt
 
-  payment Payment? // the customer payment for this booking (if any)
+  // Money taken for this booking. A LIST since the service-checkout release:
+  // an appointment can carry a booking payment (deposit / pay-ahead / hold), a
+  // fee charge, and the balance collected at the chair, all at once. At most
+  // one row may be `purpose: "booking"` (partial unique index), so the old
+  // one-payment reads stay exact - they just filter for it explicitly.
+  payments Payment[]
   cardOnFile CardOnFile? // the card kept at booking (card_on_file mode)
+  // Every attempt to collect the balance at checkout, successful or not.
+  checkoutAttempts CheckoutAttempt[]
   nudges  Nudge[] // appointment-scoped sends (checkin_nudge + replies)
   // Set when this booking claimed a barber-published targeted slot.
   targetedSlot TargetedSlot?
@@ -3117,8 +3125,14 @@ model Payment {
   id                     String       @id @default(cuid())
   shopId                 String
   shop                   Shop         @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  appointmentId          String       @unique
+  appointmentId          String
   appointment            Appointment  @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  /// Which money this row is. `booking` = taken at booking time (deposit,
+  /// pay-ahead, hold) and still capped at ONE per appointment by a partial
+  /// unique index, so every pre-existing read keeps its exact meaning.
+  /// `fee` = a no-show or late-cancellation charge. `service_checkout` = the
+  /// balance collected after the cut. CHECK-pinned in SQL.
+  purpose                String       @default("booking")
   stripePaymentIntentId  String       @unique
   stripeChargeId         String?
   stripeConnectAccountId String // snapshot of the shop's acct_ at charge time
@@ -3148,6 +3162,7 @@ model Payment {
 
   @@index([shopId, status])
   @@index([status, holdExpiresAt]) // the hold-release/capture-retry sweep
+  @@index([appointmentId])
 }
 
 /// A card kept at booking without being charged (paymentsMode card_on_file).
@@ -3174,6 +3189,24 @@ model CardOnFile {
   savedAt               DateTime?
   releasedAt            DateTime?
   lastWebhookEventId    String?
+
+  /// 🔴 AUTHORISATION TO CHARGE FOR THE SERVICE ITSELF - a separate agreement
+  /// from the one that lets a no-show fee be taken. The card-on-file consent
+  /// collected at booking covers no-shows and late cancellations only; reading
+  /// it as permission to charge for the haircut would be taking money on an
+  /// agreement the customer never made.
+  ///
+  /// NULL on every card saved before this shipped, and there is no backfill:
+  /// those cards are fee-only forever. Nothing lets a barber attest to this on
+  /// the customer's behalf - the customer accepts it, or it does not exist.
+  serviceChargeConsentVersion String?
+  serviceChargeConsentAt      DateTime?
+  /// `single` = this appointment. `series` = every occurrence of the standing
+  /// appointment. A series authorisation is shown and accepted on its own; it
+  /// is never inferred from agreeing to a single one. CHECK-pinned in SQL
+  /// together with the two columns above, so a scope without a timestamp and a
+  /// version cannot exist.
+  serviceChargeConsentScope   String?
   createdAt             DateTime    @default(now())
   updatedAt             DateTime    @updatedAt
 
@@ -3188,6 +3221,73 @@ model CardOnFile {
   series                RecurringSeries? @relation(fields: [seriesId], references: [id], onDelete: Cascade)
 
   @@index([shopId, status])
+}
+
+/// One attempt to collect an appointment's balance after the service.
+///
+/// Written BEFORE any Stripe call, so an attempt whose outcome we never learned
+/// is still a fact we hold rather than a gap. That is what makes a double tap,
+/// a timeout, a webhook that beats the HTTP response, and an app killed
+/// mid-charge all recoverable instead of a second charge on the customer.
+///
+/// 🔴 AT MOST ONE LIVE ATTEMPT PER APPOINTMENT, across every method. A saved-card
+/// charge still waiting on Stripe blocks Tap to Pay and blocks Cash, because the
+/// honest answer to "did that go through?" is not yet known and collecting again
+/// is how a customer gets charged twice. Enforced by a partial unique index, so
+/// it holds under real concurrency and not merely in the code path that reads it.
+model CheckoutAttempt {
+  id            String      @id
+  shopId        String
+  shop          Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  appointmentId String
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  /// Who was charged, and who pressed the button. "Which barber collected this"
+  /// is an audit question that does get asked.
+  clientId      String?
+  actorUserId   String?
+
+  /// The client's handle for ONE press of Charge. Two taps send the same one and
+  /// collapse onto this row; a different one is a genuinely new attempt, and is
+  /// still refused while this one is unresolved.
+  requestId     String
+  /// saved_card | tap_to_pay | cash_other (CHECK-pinned in SQL)
+  method        String
+  /// Always `service_checkout` today; present so a future reason can never be
+  /// mistaken for this one at the ledger level.
+  reason        String      @default("service_checkout")
+  amountCents   Int
+  currency      String      @default("usd")
+
+  /// Display-safe only. ChairBack stores no card data: these are Stripe's own
+  /// words about a method the customer saved, kept so a receipt can name the
+  /// card without ever holding a number.
+  paymentMethodId String?
+  cardBrand       String?
+  cardLast4       String?
+
+  /// The authorisation this charge was taken under, COPIED at charge time so a
+  /// later consent change cannot rewrite what this charge rested on.
+  consentVersion String?
+  consentAt      DateTime?
+
+  stripePaymentIntentId String?
+  /// The exact key handed to Stripe. Attempt-scoped, never card-scoped: the
+  /// no-show fee helper keys on the CARD, and sharing that key would make a
+  /// service charge silently replay the fee's result.
+  idempotencyKey String @unique
+
+  /// pending | processing | requires_action | succeeded | failed | canceled |
+  /// ambiguous (CHECK-pinned in SQL). The four unresolved ones hold the live
+  /// lock above; the three terminal ones release it.
+  state         String    @default("pending")
+  failureReason String?
+  settledAt     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([appointmentId, requestId])
+  @@index([shopId, state])
+  @@index([stripePaymentIntentId])
 }
 
 // Cross-replica mutex for the in-process node-cron scheduler. One row per named

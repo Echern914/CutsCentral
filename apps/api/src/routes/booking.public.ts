@@ -3275,7 +3275,10 @@ bookingPublicRouter.post(
         serviceId: true,
         status: true,
         startsAt: true,
-        payment: { select: { status: true, amount: true } },
+        // The BOOKING payment: what the customer prepaid to hold this slot.
+        // A balance collected at the chair belongs to a cut that already
+        // happened and must not gate rescheduling a future one.
+        payments: { where: { purpose: "booking" }, select: { status: true, amount: true } },
         service: {
           select: {
             durationMin: true,
@@ -3357,8 +3360,9 @@ bookingPublicRouter.post(
     // a self-serve reschedule can't reconcile the captured charge in v1 (no
     // partial capture/top-up here). Block it and point the customer at the shop,
     // rather than silently leaving them over/under-charged.
+    const bookingPayment = appt.payments[0] ?? null;
     const paidAmount =
-      appt.payment && appt.payment.status === "succeeded" ? appt.payment.amount : null;
+      bookingPayment && bookingPayment.status === "succeeded" ? bookingPayment.amount : null;
     if (paidAmount !== null) {
       const newCents = toCents(effectivePrice);
       if (newCents !== null && newCents !== paidAmount) {

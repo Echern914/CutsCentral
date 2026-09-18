@@ -216,7 +216,10 @@ export async function cancelAppointment(
         startsAt: true,
         priceAtBooking: true,
         service: { select: { name: true } },
-        payment: { select: { id: true } },
+        // The BOOKING payment: the one promotion may capture or refund. A
+        // balance collected at checkout is money already settled for a cut that
+        // happened, and must never be swept up by this path.
+        payments: { where: { purpose: "booking" }, select: { id: true } },
         // Card on file: what to charge or let go of AFTER the tx (Stripe call).
         cardOnFile: { select: { id: true, status: true } },
       },
@@ -293,7 +296,7 @@ export async function cancelAppointment(
     return {
       clientId: appt.clientId,
       hadVisit: Boolean(appt.visitId),
-      paymentId: appt.payment?.id ?? null,
+      paymentId: appt.payments[0]?.id ?? null,
       startsAt: appt.startsAt,
       priceAtBooking: appt.priceAtBooking,
       serviceName: appt.service?.name ?? null,

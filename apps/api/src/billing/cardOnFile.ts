@@ -590,6 +590,10 @@ export async function chargeCardOnFile(params: {
           stripePaymentIntentId: `pending:${paymentId}`,
           stripeConnectAccountId: shop.stripeConnectAccountId!,
           mode: "card_on_file",
+          // A no-show / late-cancellation fee. Labelled so the balance owed for
+          // the SERVICE never counts fee money as though the customer had paid
+          // toward their haircut with it.
+          purpose: "fee",
           amount: params.cents,
           currency: "usd",
           applicationFeeAmount: feeAmount,

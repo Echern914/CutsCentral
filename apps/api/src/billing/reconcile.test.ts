@@ -81,7 +81,7 @@ const cofStatus = (appointmentId: string) =>
   runWithShop(shopId, (tx) =>
     tx.cardOnFile.findUnique({ where: { appointmentId }, select: { status: true } }),
   );
-const payment = (appointmentId: string) => prisma.payment.findUnique({ where: { appointmentId } });
+const payment = (appointmentId: string) => prisma.payment.findFirst({ where: { appointmentId } });
 
 function pi(over: Partial<{ id: string; status: string; paymentId: string }>) {
   return {
