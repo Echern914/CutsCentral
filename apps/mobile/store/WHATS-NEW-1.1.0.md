@@ -1,4 +1,4 @@
-# What's New — 1.0.9 (build 42)
+# What's New — 1.1.0 (build 42)
 
 Previous upload: **1.0.9 = build 41**, the first build cut locally in Xcode
 (`docs/mobile-release-xcode.md`), carrying My ChairBack (#417) and the animated
@@ -6,11 +6,15 @@ launch. Build 40 was archived from a tree that predated #417 and almost
 certainly never reached App Store Connect — if a "40" ever appears in
 TestFlight, do not release it to testers.
 
-Build 42 is the same **1.0.9**. The version string only has to change once a
-version has been **submitted for review** — that is the wall build 37 hit
-(`SUBMISSION_SERVICE_IOS_OLD_APP_VERSION`). TestFlight accepts any build number
-App Store Connect has not already seen, so 1.0.9 / 42 is correct here. If 1.0.9
-has since been submitted for review, bump to 1.1.0 before uploading.
+🔴 **This was cut as 1.0.9 / 42 and is shipping as 1.1.0 / 42.** Build 42 was
+committed on 2026-09-17 and never uploaded; in the meantime **1.0.9 (build 41)
+was submitted for review**, and a submitted version is closed to further builds
+(`SUBMISSION_SERVICE_IOS_OLD_APP_VERSION` — the wall build 37 hit). The trigger
+is SUBMISSION, not release.
+
+The build number stays **42**: it only has to exceed the last upload (41) and be
+one App Store Connect has not already seen, and 42 was never uploaded. Minor
+rather than patch because #423/#424/#426/#427 are features, not fixes.
 
 ## Paste into App Store Connect → "What's New in This Version"
 
@@ -38,7 +42,7 @@ mentions — the same rules as the listing (see `LISTING.md`).
 
 ## Before archiving
 
-- `apps/mobile/app.config.ts` says `version: "1.0.9"`, `buildNumber: "42"`.
+- `apps/mobile/app.config.ts` says `version: "1.1.0"`, `buildNumber: "42"`.
   The number Apple sees now lives in this file (`eas.json` is
   `appVersionSource: "local"`); bump it by hand for every upload.
 - Build from a commit that is **on `main`**, never a branch tip, or the build

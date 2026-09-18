@@ -151,6 +151,13 @@ jobs:
       - name: Web tests
         run: pnpm --filter @chairback/web test
 
+      - name: Mobile tests
+        # Ten files - the native bridge, deep-link intent routing, push taps,
+        # the session store, the customer surfaces. Left out of the first cut of
+        # this workflow, which repeated the very gap it was written to close.
+        # No build here: the iOS binary is archived by hand in Xcode.
+        run: pnpm --filter @chairback/mobile test
+
       # ── The builds. These are the type-check gate: the API build is `tsc`
       #    over the whole project INCLUDING .test.ts (which is what Railway
       #    does), and `next build` type-checks the web app. ──────────────────
