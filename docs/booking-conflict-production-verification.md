@@ -1,8 +1,51 @@
 # Booking-integrity P0 — controlled production verification
 
-**Status: NOT YET RUN.** Every box below is unchecked. This document is the
-procedure, written before the deploy so the pass/fail criteria cannot be
-adjusted afterwards to match whatever happened.
+**Status: RUN AND PASSED, 2026-09-18.** Merge commit `7800e71`, Railway
+deployment `9c39840b-2e67-44aa-95f2-c45b86e301f5`. The procedure below was
+written BEFORE the deploy so the pass/fail criteria could not be adjusted
+afterwards to match whatever happened; the results are recorded against it
+unchanged.
+
+## Results, 2026-09-18
+
+| # | Step | Result |
+|---|---|---|
+| 1 | Migration before traffic | **PASS** — migration finished `03:28:26.908Z`, API started `03:28:46.252Z` (19.3s margin) |
+| 2 | Existing bookings/walk-ins usable | **PASS** — all real shops 200 on page + `/day`; every pre-existing appointment still `operationId IS NULL` |
+| 3 | Controlled conflicting reservation | **PASS** — created on the fixture chair via the ordinary dashboard create |
+| 4 | Walk-in RECORDED, not 409 | **PASS** — HTTP **201**, body carried `conflict.withAppointmentIds` |
+| 5 | Amber warning on the real dashboard | **PASS** — screenshotted in production; persistent, survived 6s |
+| 6 | Exactly one `BookingConflict` | **PASS** — 1 row for the first receipt; 12 across the whole run, **0 duplicates** |
+| 7 | Correct shop/chair/interval/receipt/kind/id | **PASS** — overlap correctly clipped to both spans |
+| 8 | Manager alert attempted once | **PASS** — one per receipt that created NEW conflicts; **no SMS attempted at all** |
+| 9 | Retry returns the original | **PASS** — identical appointment id, conflict still reported |
+| 10 | Retry creates no second receipt/conflict/alert | **PASS** — 4 receipts from 5 submissions; 4 alert lines, not 5 |
+| 11 | New operation id = separate receipt | **PASS** — different id, and it correctly saw the in-progress walk-in as occupying |
+| 12 | Cache invalidation | **PARTIAL** — generation/`/day` path verified live (22→21 slots, taken slot gone on the very next read). The **Acuity-specific** leg was NOT verified in production: the fixture has no Acuity connection and creating one would reach a real calendar. Covered by `acuityCacheInvalidation.test.ts` only. |
+| 13 | Adjacent appointments still allowed | **PASS** — booking at the exact end instant **201**; one minute earlier **409 `slot_taken`** |
+| 14 | Unrelated shops unchanged | **PASS** — every non-fixture count identical to the pre-merge baseline; 0 conflicts elsewhere; 0 operationIds outside the fixture |
+
+**The text a barber actually saw, in production:**
+
+> **Walk-in recorded - but this chair is double-booked**
+> The walk-in is on the books and nothing was discarded. This time overlaps 5
+> appointments that were already booked. Check the calendar and call whoever is
+> booked so nobody turns up to a chair that is taken. · *Got it*
+
+No claim about payment, money, paid or charged — asserted negatively by the
+browser check as well as by `WalkInConflictWarning.test.tsx`.
+
+**Cleanup:** the blocking reservation was cancelled through
+`POST /appointments/:id/cancel`, then the fixture shop and account were deleted
+through `DELETE /api/shops/me` and `DELETE /api/auth/me`. Production returned to
+its exact pre-merge baseline (shops 22, appointments 275, visits 24,821, staff
+16, blocks 275), zero fixture residue, zero error-level log lines throughout.
+
+**No rollback was triggered. No alert reached a real person.**
+
+---
+
+## The procedure (as written before the deploy)
 
 ## Why this exists
 
