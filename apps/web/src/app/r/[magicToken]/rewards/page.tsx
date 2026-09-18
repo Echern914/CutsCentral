@@ -32,7 +32,9 @@ export interface RewardsData {
   client: { firstName: string | null };
   // Apple Wallet punch card: available once the API's WALLET_* env is set.
   // Optional so a web deploy ahead of the API doesn't break the page.
-  wallet?: { available: boolean };
+  /** `available` = the punch CARD (needs rewards on). `appointment` = the
+   *  BOOKING, gated only on its own certs. Each dark until configured. */
+  wallet?: { available: boolean; appointment?: boolean };
   // Self-reported visit cadence. `preference` is null until the client answers
   // the one-tap prompt; `computed` is true once there's enough visit history for
   // the engine to derive a cadence (after which the prompt is moot).

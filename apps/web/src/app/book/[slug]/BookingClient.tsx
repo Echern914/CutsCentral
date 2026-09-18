@@ -20,6 +20,7 @@ import {
   type BookingErrorField,
 } from "@chairback/config/bookingErrors";
 import { BackToDashboard } from "@/components/BackToDashboard";
+import { AddToWallet } from "@/components/AddToWallet";
 import { CustomerBack } from "@/components/CustomerBack";
 import { PullToRefresh } from "@/components/PullToRefresh";
 import { useSignalNativeReady } from "@/lib/nativeReady";
@@ -2056,6 +2057,20 @@ export function BookingClient({
           >
             View / change my appointment
           </Link>
+          {/* 🔴 NOT FOR A REQUEST. `wasRequest` means the barber has not said
+              yes yet — a Wallet pass sitting in someone's phone saying they
+              have an appointment they do NOT yet have is worse than no pass.
+              The confirmation email applies the same rule; it waits for the
+              approval. */}
+          {!wasRequest && (
+            <div className="mt-4">
+              <AddToWallet
+                href={`/book/manage/${confirmedToken}/wallet-pass`}
+                available={data.walletPass?.appointment ?? false}
+                label="Add this appointment to Apple Wallet"
+              />
+            </div>
+          )}
           {/* Escape hatch: in the app WebView the confirmation was a dead end
               (no browser chrome) — pop back to wherever the customer started
               (rewards home or shop page). */}

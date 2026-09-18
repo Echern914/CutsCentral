@@ -636,6 +636,11 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
       // that appeared after the booking had already been written.
       payment: publicPaymentSummary(shop),
     },
+    // Whether "Add to Apple Wallet" is a real action on the confirmation
+    // screen. DARK until the WALLET_APPT_* env is set, and the page must know
+    // BEFORE it renders — a badge that downloads a 503 is worse than no badge.
+    // Same fact the confirmation email consults (appointmentNotify.ts).
+    walletPass: { appointment: appointmentWalletEnabled() },
     staff,
     services: services.map((s) => {
       const base = s.price === null ? null : Number(s.price);

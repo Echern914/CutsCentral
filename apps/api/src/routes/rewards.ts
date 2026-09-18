@@ -21,6 +21,7 @@ import { toE164 } from "../acuity/clientKey.js";
 import { requestRecoveryChallenge } from "../services/rewardsRecovery.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 import { buildPassForClient, walletEnabled } from "../wallet/pass.js";
+import { appointmentWalletEnabled } from "../wallet/appointmentPass.js";
 import { receptionistEnabledForShop } from "../receptionist/config.js";
 import { logger } from "../logger.js";
 
@@ -436,7 +437,15 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
     // One-tap rebook of the client's usual. Distinct from `rebook` below, which
     // is the countdown STATE ("you're due"); this is WHAT to book.
     usual,
-    wallet: { available: rewardsOn && walletEnabled() },
+    // TWO passes, two independent gates. `available` is the punch CARD, which
+    // also needs rewards switched on — a card with no programme behind it is
+    // not a thing to carry. `appointment` is the BOOKING, which has nothing to
+    // do with rewards: a shop that runs no punch card still has customers who
+    // want the cut in their Wallet. Each is dark until its own certs exist.
+    wallet: {
+      available: rewardsOn && walletEnabled(),
+      appointment: appointmentWalletEnabled(),
+    },
     punches: {
       balance: rewardsOn ? balance : 0,
       // Grid target: progress toward the next reward out of reach (null when
