@@ -12,14 +12,43 @@ import { visitSpan } from "./interval.js";
  * recorded here instead — durably, because a log line cannot power a manager's
  * follow-up three days later.
  *
- * 🔴 ONE ROW PER (receipt, conflicting record) PAIR, enforced by a unique index
+ * 🔴 ONE ROW PER (receipt, conflicting KIND + id), enforced by a unique index
  * rather than by remembering to check. That is what makes repeated detection —
  * a client retry, a re-sync, a second sweep — write nothing and alert nobody a
  * second time. `recordConflicts` returns how many rows were genuinely NEW, and
  * the caller alerts only on that.
  */
 
-/** Something that already held the chair when the receipt was written. */
+/**
+ * Something that already held the chair when the receipt was written.
+ *
+ * 🔴 THE PAIR (kind, id) IS THE IDENTITY, and the unique index uses both. These
+ * ids come from three independent tables and nothing in the database makes
+ * their id spaces disjoint - no shared sequence, no shared domain, no
+ * cross-table constraint. Keying on the id alone would mean resting on cuid
+ * collisions being improbable, and the failure mode is the wrong way round: the
+ * second record - a real, separate double-booking - would be silently swallowed
+ * by `skipDuplicates` and never alerted on.
+ *
+ * ALL THREE KINDS ARE GENUINELY REACHABLE, which is why this is polymorphic
+ * rather than premature - but they are not reachable equally, and pretending
+ * otherwise would be the same sort of lie:
+ *
+ * | kind          | how a walk-in reaches it                                    |
+ * |---------------|-------------------------------------------------------------|
+ * | `appointment` | on its own - the guard throws SlotTakenError on an overlapping
+ * |               | Appointment (bookingWrite.ts, appointment probe) and this runs |
+ * | `visit`       | on its own - same, via the synced-Visit probe                 |
+ * | `block`       | ONLY IN COMPANY. The walk-in passes `externalBlocks:"ignore"`,
+ * |               | so an ExternalBlock alone never throws and this never runs. A
+ * |               | block is recorded when an appointment or visit ALSO overlaps:
+ * |               | that throws, and the sweep below then names everything holding
+ * |               | the chair, blocks included.                                  |
+ *
+ * That asymmetry is deliberate, not an oversight: a person is physically in the
+ * chair, so an Acuity entry must not eject them - but once the chair is known
+ * to be contested, the manager should see everything that claims it.
+ */
 export interface DetectedConflict {
   id: string;
   kind: "appointment" | "visit" | "block";

@@ -5907,8 +5907,10 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
           kind: "conflict",
           message: {
             title: "Double-booked chair",
-            // Safe fields only: no customer name, number or price.
-            body: `A walk-in was recorded on ${chair?.name ?? "a chair"} over time that was already booked. The payment was kept - check the other booking.`,
+            // Safe fields only: no customer name, number or price. And no
+            // claim about money: the walk-in stores a barber-typed amount that
+            // ChairBack never handled, so it says what it can stand behind.
+            body: `A walk-in was recorded on ${chair?.name ?? "a chair"} over time that was already booked. Nothing was discarded - check the other booking.`,
             url: `${apiEnv().APP_BASE_URL}/dashboard/booking`,
           },
         });

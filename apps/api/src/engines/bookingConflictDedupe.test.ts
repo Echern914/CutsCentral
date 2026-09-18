@@ -161,4 +161,71 @@ describe("recordConflicts", () => {
     expect(await record([])).toBe(0);
     expect(await prisma.bookingConflict.count({ where: { shopId } })).toBe(0);
   });
+
+  /**
+   * 🔴 THE IDENTITY IS (kind, id), NOT id.
+   *
+   * `conflictingId` is a cuid drawn from THREE independent tables - Appointment,
+   * Visit and ExternalBlock - and nothing in this database makes those id spaces
+   * disjoint: no shared sequence, no shared domain, no cross-table constraint.
+   * A key of (shopId, receiptId, conflictingId) would therefore be resting on
+   * cuid collisions being improbable, which is not a guarantee, and the failure
+   * mode is the bad one: the SECOND record - a real, different double-booking -
+   * is silently dropped by skipDuplicates and never alerted on.
+   *
+   * The key includes `conflictingKind` so the constraint matches the domain
+   * identity. This test states that in the only way that cannot rot: it hands
+   * `recordConflicts` the SAME identifier under two different kinds and demands
+   * two rows.
+   */
+  it("🔴 two DIFFERENT KINDS sharing an identifier are two conflicts", async () => {
+    const shared = "same-id-different-table";
+    const created = await recordConflicts(prisma, {
+      shopId,
+      staffId,
+      receiptId,
+      source: "walk_in_quick_log",
+      receiptStart: span.start,
+      receiptEnd: span.end,
+      conflicts: [
+        { id: shared, kind: "appointment", start: span.start, end: span.end },
+        { id: shared, kind: "visit", start: span.start, end: span.end },
+        { id: shared, kind: "block", start: span.start, end: span.end },
+      ],
+    });
+    expect(created).toBe(3);
+    const kinds = await prisma.bookingConflict.findMany({
+      where: { shopId, conflictingId: shared },
+      select: { conflictingKind: true },
+      orderBy: { conflictingKind: "asc" },
+    });
+    expect(kinds.map((k) => k.conflictingKind)).toEqual([
+      "appointment",
+      "block",
+      "visit",
+    ]);
+  });
+
+  it("...and re-detecting that same set still writes nothing", async () => {
+    const shared = "same-id-different-table";
+    const args = {
+      shopId,
+      staffId,
+      receiptId,
+      source: "walk_in_quick_log",
+      receiptStart: span.start,
+      receiptEnd: span.end,
+      conflicts: [
+        { id: shared, kind: "appointment" as const, start: span.start, end: span.end },
+        { id: shared, kind: "visit" as const, start: span.start, end: span.end },
+      ],
+    };
+    expect(await recordConflicts(prisma, args)).toBe(2);
+    // Widening the key must not have widened it so far that dedupe stops
+    // working - the whole point of the index is that a sweep is idempotent.
+    expect(await recordConflicts(prisma, args)).toBe(0);
+    expect(
+      await prisma.bookingConflict.count({ where: { shopId, conflictingId: shared } }),
+    ).toBe(2);
+  });
 });

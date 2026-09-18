@@ -94,11 +94,75 @@ reads nor writes any of it.
 
 | change | shape | why it is safe on existing data |
 |---|---|---|
-| `Appointment.operationId TEXT` | nullable | all 273 existing rows stay NULL |
-| partial unique `(shopId, operationId) WHERE operationId IS NOT NULL` | partial | 🔴 without the `WHERE` this index **cannot be created at all** — every existing row is NULL and they would all collide |
-| `BarberNotifyPref.conflictEnabled BOOLEAN NOT NULL DEFAULT true` | defaulted | existing rows get `true`; a double-booked chair is a safety alert, so it is on even where other kinds were silenced |
+| `Appointment.operationId TEXT` | nullable | all 274 existing rows stay NULL |
+| partial unique `(shopId, operationId) WHERE operationId IS NOT NULL` | partial | every existing row is NULL and is simply **not in the index**; see the correction below |
 | `BookingConflict` table + RLS | new | nothing to migrate |
-| unique `(shopId, receiptId, conflictingId)` | new table | this index **is** the deduplication: repeated detection writes nothing |
+| unique `(shopId, receiptId, conflictingKind, conflictingId)` | new table | this index **is** the deduplication: repeated detection writes nothing |
+
+### 🔴 Correction: why the index is partial
+
+An earlier version of this document, and the comment in the migration itself,
+said the partial predicate was **required** — that without the `WHERE` clause
+the index "cannot be created at all", because all 274 existing rows are NULL and
+would collide. **That is wrong, and it was wrong about PostgreSQL itself.**
+
+PostgreSQL treats NULLs as **distinct** in a unique index by default, so any
+number of NULL rows coexist in a plain unique index. Measured rather than
+argued, on PG 17.10 against the real column type: a plain
+`UNIQUE (shopId, operationId)` built over **350** NULL rows without complaint,
+and a 351st NULL still inserted afterwards. The only thing that would have
+collided is the PG-15+ opt-in `NULLS NOT DISTINCT`, which this migration does
+not use and which `conflict-verify.mjs schema` asserts is absent.
+
+The partial index is still the right shape, for the reasons that survive
+contact with the engine:
+
+* it indexes only rows that can participate in idempotency, so it holds the
+  receipts rather than every appointment ever booked;
+* it states the scope in the schema — "this constraint is about rows that carry
+  an operation id" — instead of leaving it implied by NULL semantics;
+* it does not depend on NULLs-are-distinct staying the default. A constraint
+  whose correctness rests on an unstated default is one setting away from
+  rejecting every legacy row.
+
+`apps/api/src/routes/migrationNullSemantics.test.ts` pins all three behaviours
+against the real engine — unlimited NULLs accepted, a duplicate non-null
+rejected, the same id in another shop allowed — plus a `pg_index` assertion that
+the deployed index really is partial and really is not `NULLS NOT DISTINCT`. The
+lesson is the general one: **a comment asserting engine behaviour is worth
+nothing until something executes it.**
+
+### 🔴 Correction: the notification column was removed
+
+An earlier draft added `BarberNotifyPref.conflictEnabled BOOLEAN NOT NULL
+DEFAULT true`. It is gone, because **nothing could ever write it** — no route,
+no settings toggle — which made it a preference in name only and exactly the
+kind of misleading model this audit was looking for.
+
+The policy is now stated in code instead: a conflict alert is **mandatory in
+kind** (there is no switch; a double-booked chair is operational integrity, not
+communication) and **optional in channel** (it still respects `pushEnabled`,
+`smsEnabled`, `emailEnabled` — mandatory decides whether there is something to
+say, never by what route). The honest consequence, pinned by
+`services/conflictAlertPolicy.test.ts`: with push off, SMS behind `DRY_RUN` and
+email off by default, **the alert can reach nobody**. That is why the two
+deliveries that cannot be switched off — the amber panel in the response and the
+durable `BookingConflict` row — are the real ones.
+
+### Migration naming: a sequence, not a wall clock
+
+`20260930000000` is **not** a date claim, and this repo's migration prefixes
+have not been wall-clock timestamps for some time. The latest migration on
+`main`, `20260929000000_acuity_block_all_calendars`, was committed on
+**2026-09-17** and is already applied in production; the sequence has drifted
+about twelve days ahead of the calendar.
+
+So `20260930000000` is simply the next value after everything on `main`, in
+production (166 applied), and on every other open branch. **Renaming it to a
+real current timestamp would sort it *before* eleven already-applied
+migrations** — the reordering hazard, inverted and much worse. The prefix is an
+ordering key; the only rule that matters is that a new migration sorts after
+every migration that already exists.
 
 **Deploy order.** Expand first, then code — Railway already does this
 (`railway.json` `preDeployCommand` runs `migrate deploy` before traffic). There
@@ -114,6 +178,9 @@ the honest position rather than a pretence:
 - `BookingConflict` rows already written stay written. They are a record that a
   chair was double-booked; deleting them to tidy up a rollback would destroy
   exactly the evidence the table exists for.
+- The controlled production check that proves all of this is
+  `docs/booking-conflict-production-verification.md`, backed by the read-only
+  `apps/api/scripts/conflict-verify.mjs`.
 - Nothing customer-facing depends on either, so a revert is a code-only step.
 
 Dropping the table would be a separate, deliberate contract migration, and only

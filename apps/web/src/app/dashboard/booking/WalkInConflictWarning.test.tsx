@@ -12,7 +12,7 @@ import { NEUTRAL_VOCABULARY } from "@chairback/config/businessTypes";
  *
  * 🔴 A TOAST IS NOT ENOUGH HERE, which is why these assert a persistent panel.
  * Four facts have to be visible at once, because leaving any of them out
- * produces the wrong action: the money is SAFE (or the barber re-enters it),
+ * produces the wrong action: the receipt is SAFE (or the barber re-enters it),
  * the chair is DOUBLE-BOOKED (or nobody calls), someone must be CHECKED (the
  * actual remedy), and nothing was DISCARDED (or they assume it failed).
  *
@@ -77,6 +77,18 @@ describe("a conflicting receipt warns, loudly and persistently", () => {
     expect(alert).toHaveTextContent(/overlaps an appointment that was already booked/i);
     expect(alert).toHaveTextContent(/call whoever is booked/i);
     expect(alert).toHaveTextContent(/nothing was discarded/i);
+    // ...and it says the walk-in is on the BOOKS, which is the thing that
+    // actually happened.
+    expect(alert).toHaveTextContent(/on the books/i);
+
+    // 🔴 AND IT CLAIMS NOTHING ABOUT MONEY. The walk-in stores a barber-typed
+    // amount (allowed to be 0) that ChairBack never authorised, captured or
+    // confirmed - so "the payment was saved" is a promise it cannot keep, and
+    // a barber who reads it may not re-take a payment that never happened.
+    expect(alert).not.toHaveTextContent(/payment/i);
+    expect(alert).not.toHaveTextContent(/money/i);
+    expect(alert).not.toHaveTextContent(/paid/i);
+    expect(alert).not.toHaveTextContent(/charged/i);
 
     // 🔴 The success toast must NOT fire - that is what hid this.
     expect(toast).not.toHaveBeenCalledWith("Walk-in recorded", "success");

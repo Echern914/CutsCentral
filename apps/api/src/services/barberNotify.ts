@@ -53,9 +53,6 @@ export const NOTIFY_DEFAULTS = {
   dayAheadHour: 19,
   newBookingEnabled: true,
   cancelEnabled: true,
-  /// A double-booked chair is a SAFETY alert, not a marketing one, so it
-  /// defaults ON even for a shop that silenced every other kind.
-  conflictEnabled: true,
 };
 
 export type NotifyPrefs = typeof NOTIFY_DEFAULTS;
@@ -63,12 +60,36 @@ export type NotifyPrefs = typeof NOTIFY_DEFAULTS;
 /** Which alert a send belongs to, so one switch can silence one kind. */
 export type BarberAlertKind = "nextUp" | "dayAhead" | "newBooking" | "cancel" | "conflict";
 
-const KIND_SWITCH: Record<BarberAlertKind, keyof NotifyPrefs> = {
+/**
+ * 🔴 `conflict` IS DELIBERATELY ABSENT, and that is the whole policy.
+ *
+ * Every other kind tells a barber about business that is going fine - a
+ * booking arrived, one cancelled, the next client is due. Those are theirs to
+ * silence. A conflict alert says a customer is going to walk in and find
+ * somebody else in the chair. It is operational integrity, not communication,
+ * so it has NO per-kind switch: there is no `conflictEnabled` column, no API
+ * that writes one, and no toggle in settings - rather than a column that
+ * exists, defaults on, and can never be changed, which only looks like a
+ * preference.
+ *
+ * WHAT IT STILL RESPECTS: the CHANNEL switches below (`pushEnabled`,
+ * `smsEnabled`, `emailEnabled`). Mandatory decides *whether there is something
+ * to say*, never *by what route* - a barber who turned push off does not get
+ * push back because the news is bad.
+ *
+ * WHICH MEANS THE ALERT CAN REACH NOBODY, and that is understood rather than
+ * hidden: push needs a registered subscription, barber-alert SMS is behind
+ * DRY_RUN (default true, so it sends nothing in production today) and email
+ * defaults off. So the alert is the BONUS channel. The two deliveries that
+ * cannot be switched off are the amber panel in the walk-in bar - on the screen
+ * of the person who just did it, while they can still ring the customer - and
+ * the durable BookingConflict row, which waits however long it takes.
+ */
+const KIND_SWITCH: Record<Exclude<BarberAlertKind, "conflict">, keyof NotifyPrefs> = {
   nextUp: "nextUpEnabled",
   dayAhead: "dayAheadEnabled",
   newBooking: "newBookingEnabled",
   cancel: "cancelEnabled",
-  conflict: "conflictEnabled",
 };
 
 /**
@@ -99,7 +120,6 @@ export async function resolveNotifyPrefs(
     dayAheadHour: row.dayAheadHour,
     newBookingEnabled: row.newBookingEnabled,
     cancelEnabled: row.cancelEnabled,
-    conflictEnabled: row.conflictEnabled,
   };
 }
 
@@ -169,7 +189,11 @@ export async function sendToBarber(params: {
   const out: BarberSendResult = { pushed: false, texted: false, emailed: false };
   try {
     const prefs = params.prefs ?? (await resolveNotifyPrefs(params.shopId, params.userId));
-    if (!params.force && !prefs[KIND_SWITCH[params.kind]]) return out;
+    // `conflict` has no switch to consult (see KIND_SWITCH above): it is a
+    // mandatory integrity alert and passes straight to the channel gates.
+    if (params.kind !== "conflict" && !params.force && !prefs[KIND_SWITCH[params.kind]]) {
+      return out;
+    }
 
     const shop = await prisma.shop.findUnique({
       where: { id: params.shopId },

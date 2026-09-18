@@ -826,9 +826,6 @@ model BarberNotifyPref {
   // Reactive alerts that already existed - now switchable.
   newBookingEnabled Boolean @default(true)
   cancelEnabled     Boolean @default(true)
-  /// A double-booked chair is a SAFETY alert, not a marketing one, so it
-  /// defaults ON for every shop including those that silenced the others.
-  conflictEnabled   Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -4804,6 +4801,6 @@ model BookingConflict {
   resolvedAt       DateTime?
   resolvedByUserId String?
 
-  @@unique([shopId, receiptId, conflictingId])
+  @@unique([shopId, receiptId, conflictingKind, conflictingId])
   @@index([shopId, resolvedAt, detectedAt])
 }

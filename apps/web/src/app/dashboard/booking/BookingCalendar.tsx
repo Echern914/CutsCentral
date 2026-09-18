@@ -1227,9 +1227,17 @@ export function WalkInBar({
   }
 
   // 🔴 THE WARNING, NOT A TOAST. All four facts a barber needs, in the place
-  // they were already looking, staying until they dismiss it: the money is
-  // safe, the chair is double-booked, someone must be called, nothing was
-  // thrown away. A success toast here is what hid this for months.
+  // they were already looking, staying until they dismiss it: the walk-in is
+  // on the books, the chair is double-booked, someone must be called, nothing
+  // was thrown away. A success toast here is what hid this for months.
+  //
+  // 🔴 IT DOES NOT SAY "PAYMENT SAVED", and the distinction is not pedantry.
+  // The walk-in stores what the barber TYPED - paidAmount, paidMethod, paidAt -
+  // money ChairBack never touched, never authorised and cannot confirm; the
+  // amount is even allowed to be 0. "The payment was saved" would read as
+  // "we've got your money", which is a promise nothing here can keep. What is
+  // true, in every case including the zero one, is that the walk-in went onto
+  // the books and nothing was thrown away - so that is what it says.
   if (conflicted !== null) {
     return (
       <div
@@ -1240,7 +1248,7 @@ export function WalkInBar({
           Walk-in recorded - but this chair is double-booked
         </p>
         <p className="text-[11px] leading-snug text-offwhite/80">
-          The payment was saved and nothing was discarded. This time overlaps
+          The walk-in is on the books and nothing was discarded. This time overlaps
           {conflicted === 1
             ? " an appointment that was already booked"
             : conflicted > 1
