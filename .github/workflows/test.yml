@@ -69,8 +69,12 @@ jobs:
       # Dummy values for the vars the API env schema requires. Shapes matter
       # (SESSION_SECRET needs 16+ chars, the URLs need 16+), the values do not.
       SESSION_SECRET: ci-session-secret-not-a-real-one
-      UNSUBSCRIBE_TOKEN_SECRET: ci-unsubscribe-secret-not-a-real-one
-      TOKEN_ENCRYPTION_KEY: ci-token-encryption-key-not-a-real-one
+      # These two are VALIDATED FOR SHAPE, not just presence: both must be
+      # base64 that decodes to 32 bytes. Plain strings were rejected on this
+      # workflow's first run. They decode to "chairback-ci-dummy-..." - real
+      # values live in Railway and never come near CI.
+      UNSUBSCRIBE_TOKEN_SECRET: Y2hhaXJiYWNrLWNpLWR1bW15LXVuc3ViLXNlY3JldC0=
+      TOKEN_ENCRYPTION_KEY: Y2hhaXJiYWNrLWNpLWR1bW15LWVuYy1rZXktTk9UUkU=
       APP_BASE_URL: http://localhost:3000
       API_BASE_URL: http://localhost:4000
       ACUITY_OAUTH_CLIENT_ID: ci-dummy-acuity-client-id
@@ -83,7 +87,8 @@ jobs:
       TWILIO_FROM_NUMBER: "+15550000000"
       DRY_RUN: "true"
       NODE_ENV: test
-      LOG_LEVEL: silent
+      # "silent" is not in the enum (fatal|error|warn|info|debug|trace).
+      LOG_LEVEL: error
 
     steps:
       - uses: actions/checkout@v4
