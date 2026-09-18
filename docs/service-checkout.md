@@ -43,17 +43,39 @@ outright (`amount_not_authorized`). Tips and raised totals are out of this
 release — a barber pressing a button is not the customer agreeing to a bigger
 bill.
 
-**3. A fee already charged does not reduce what is owed for the service.**
+**3. Checkout takes money. It does not finish the cut.**
+`POST /appointments/:id/complete` (**Done**) remains the sole owner of
+completion *and* of the loyalty punch. Checkout writes `paidAt`, `paidAmount`,
+`paidMethod` and the ledger rows, and touches `status` never.
+
+That separation is what makes "exactly one punch" provable rather than hoped
+for: nothing on the payment path awards one at all, so a payment retry, a
+webhook replay, a second collection attempt and the choice of method cannot
+add a second. Completion stays idempotent on its own `booking:<id>` visit key,
+and `PunchLedger.visitId` is `UNIQUE` — one earn per visit, enforced by the
+database.
+
+Both methods behave identically here: neither completes anything, and both
+release a kept card afterwards (a card this checkout just charged is already
+`charged`, and `releaseCardOnFile` returns early for that, so the same call is
+correct for both).
+
+One interaction worth knowing, and it is pre-existing rather than new:
+**completion releases a kept card.** A barber who presses Done *first* can no
+longer charge the saved card, and the screen says `card_not_saved` instead of
+offering a card it cannot charge. Cash still works.
+
+**4. A fee already charged does not reduce what is owed for the service.**
 `purpose: "fee"` rows are excluded from the balance. Counting them would hand
 someone a free cut because they were once charged for missing one.
 
-**4. The webhook settles, not the browser.** The HTTP response tells the barber
+**5. The webhook settles, not the browser.** The HTTP response tells the barber
 what Stripe said at that instant; `applyPaymentEvent` →
 `settleAttemptFromIntent` is what moves a `CheckoutAttempt` to its final state.
 They can arrive in either order; whichever is second finds the work done.
 Terminal states refuse to reopen.
 
-**5. One unresolved collection per appointment, across all methods.** A partial
+**6. One unresolved collection per appointment, across all methods.** A partial
 unique index, not a read:
 
 ```sql
@@ -66,7 +88,7 @@ A card charge that timed out **blocks Tap to Pay and blocks Cash**. "I don't
 know if that went through" is exactly the state in which collecting again
 charges the customer twice.
 
-**6. `ambiguous` is not dismissible.** Only the reconciler, which reads Stripe's
+**7. `ambiguous` is not dismissible.** Only the reconciler, which reads Stripe's
 own answer, may resolve one. `requires_action` **is** cancellable, because it is
 knowably unpaid — and the cancel cancels the intent at Stripe first, refusing to
 free the appointment if that fails.
@@ -206,6 +228,46 @@ real low-dollar payment has gone through on a physical supported iPhone and the
 webhook, the ChairBack ledger and the connected Stripe account all agree. The
 screen advertises Tap to Pay as actionable only where the native capability and
 the account are ready, so until then it reads "Not set up on this device yet".
+
+### The real-iPhone test script
+
+Run this once the entitlement is granted and the build is on the device. Do it
+on a **real shop's own connected account** with a **$1.00** ticket, and do not
+claim Tap to Pay works until every line is ticked.
+
+1. **Device check.** iPhone XS or later, iOS 16.4+, signed into the device's
+   own Apple ID, NFC not blocked by a case. Open ChairBack, sign in as the
+   shop owner.
+2. **Account check.** In Stripe, confirm the connected account has accepted the
+   Tap to Pay terms and that a Terminal Location exists for the shop
+   (`Shop.stripeTerminalLocationId` is non-null after the first connection
+   token).
+3. **Create the ticket.** Book a $1.00 appointment for a test client, in the
+   past, so it is checkout-eligible.
+4. **Open checkout.** Appointment → **Start checkout**. Tap to Pay must now be
+   an actionable row, not the "Not set up on this device yet" line. If it is
+   still inert, stop: the device or the account is not ready and nothing below
+   will mean anything.
+5. **Confirm, then tap.** Choose Tap to Pay, check the confirm screen says
+   **$1.00**, press Charge, and hold a real card to the phone.
+6. **Result screen.** It must say Paid $1.00, name the card, carry a timestamp
+   and a reference, and offer the way back to the appointment.
+7. **Three-way agreement — this is the actual test.**
+   - **Stripe:** a `card_present` PaymentIntent, `succeeded`, $1.00, with
+     `on_behalf_of` and `transfer_data.destination` set to the shop's connected
+     account, and the application fee as expected.
+   - **ChairBack ledger:** one `Payment` row, `purpose='service_checkout'`,
+     `status='succeeded'`, `amount=100`; one `CheckoutAttempt`,
+     `method='tap_to_pay'`, `state='succeeded'`, `settledAt` set.
+   - **Connected account:** the $1.00 appears in that account's balance, not
+     the platform's.
+8. **Webhook.** Confirm the `payment_intent.succeeded` event was delivered and
+   that the attempt reached `succeeded` **from the webhook** — kill the app
+   immediately after the tap and re-open it; the appointment must read Paid
+   without the client ever having seen the response.
+9. **Refund it.** Refund the $1.00 in Stripe and confirm `refundedAmount`
+   updates on the Payment row.
+10. **Then, and only then**, say Tap to Pay works.
 
 ---
 

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { Prisma, forShop, prisma, runWithShop } from "@chairback/db";
+import { Prisma, forShop, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 import { requireActiveAccess } from "../middleware/billing.js";
@@ -21,8 +21,6 @@ import {
   updateCheckoutAttempt,
   type AttemptRow,
 } from "../services/serviceCheckoutAttempt.js";
-import { promoteOneAppointmentInTx } from "../engines/appointmentPromotion.js";
-import { recomputeCadence } from "../engines/cadence.js";
 
 /**
  * POST-SERVICE CHECKOUT — the barber finishes the cut and collects the balance.
@@ -687,12 +685,20 @@ checkoutRouter.post("/appointments/:id/cancel-attempt", async (req, res) => {
 });
 
 /**
- * Close the chair moment: `paidAt` (+ the chair figure and method).
+ * Record that the money was collected: `paidAt`, the chair figure, the method.
  *
- * 🔴 STATUS IS NOT TOUCHED. Paying for a cut is not the same event as finishing
- * it, and a card charge must never silently mark an appointment COMPLETED on
- * the barber's behalf. Loyalty still runs, through the one promotion path, so a
- * checked-out cut earns its punch exactly as it always did.
+ * 🔴 THIS DOES NOT COMPLETE THE APPOINTMENT, AND MUST NOT.
+ *
+ * Taking payment and finishing the cut are two different events, and only one
+ * of them is this endpoint's to decide. **Done** (`POST /appointments/:id/complete`)
+ * stays the sole owner of completion and of the loyalty punch, so:
+ *
+ *   - a cut can be paid for before it is marked done, and marking it done later
+ *     earns exactly ONE punch, through the one promotion path
+ *     (`promoteOneAppointmentInTx`, idempotent on the `booking:{id}` visit key);
+ *   - a payment RETRY, a webhook REPLAY and a second collection attempt cannot
+ *     award a punch, because nothing on this path awards one at all;
+ *   - the two payment methods behave identically - neither completes anything.
  *
  * The write is a compare-and-set on `paidAt: null`, so two collections racing
  * for one cut record exactly one.
@@ -704,62 +710,26 @@ async function markCollected(params: {
   method: string;
   now: Date;
 }): Promise<boolean> {
-  const shop = await prisma.shop.findUnique({
-    where: { id: params.shopId },
-    select: { id: true, punchesPerVisit: true },
-  });
-  if (!shop) return false;
-
-  const result = await runWithShop(params.shopId, async (tx) => {
-    const appt = await tx.appointment.findFirst({
-      where: { id: params.appointmentId, shopId: params.shopId },
-      select: {
-        id: true,
-        clientId: true,
-        startsAt: true,
-        endsAt: true,
-        priceAtBooking: true,
-        paidAt: true,
-        service: { select: { name: true } },
-      },
-    });
-    if (!appt || appt.paidAt) return null;
-    const claimed = await tx.appointment.updateMany({
-      where: { id: appt.id, paidAt: null },
+  const claimed = await runWithShop(params.shopId, (tx) =>
+    tx.appointment.updateMany({
+      where: { id: params.appointmentId, shopId: params.shopId, paidAt: null },
       data: {
         paidAmount: new Prisma.Decimal((params.chairCents / 100).toFixed(2)),
         paidMethod: params.method,
         paidAt: params.now,
       },
-    });
-    if (claimed.count === 0) return null;
+    }),
+  );
+  if (claimed.count === 0) return false;
 
-    let earn = null;
-    if (appt.clientId) {
-      earn = await promoteOneAppointmentInTx(
-        tx,
-        shop,
-        {
-          id: appt.id,
-          clientId: appt.clientId,
-          startsAt: appt.startsAt,
-          endsAt: appt.endsAt,
-          priceAtBooking: appt.priceAtBooking,
-          serviceName: appt.service?.name ?? null,
-        },
-        params.now,
-      );
-    }
-    return { clientId: appt.clientId, earn };
-  });
-  if (!result) return false;
-
-  // Settled at the chair: a card kept only for a no-show fee is let go.
+  // The collection succeeded, so a card kept only to cover a no-show fee has
+  // nothing left to cover. Uniform across methods: a card this checkout just
+  // charged is already `charged`, and releaseCardOnFile returns early for that,
+  // so the same call is correct for both.
   void releaseCardOnFile({
     shopId: params.shopId,
     appointmentId: params.appointmentId,
     reason: "checked_out",
   });
-  if (result.clientId) await recomputeCadence(params.shopId, result.clientId);
   return true;
 }

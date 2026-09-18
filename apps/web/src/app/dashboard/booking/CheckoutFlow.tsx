@@ -244,6 +244,15 @@ export function CheckoutFlow({
             <p className="mt-2 text-xs leading-relaxed text-danger-soft">{outcome.message}</p>
           )}
         </div>
+        {/* Taking the money does not finish the cut - Done still does, and Done
+            is where the punch is earned. Saying so here is the difference
+            between a barber who knows there is a step left and one who finds
+            out at the end of the day. */}
+        {paid && state.appointment.status === "BOOKED" && (
+          <p className="text-center text-xs text-muted">
+            Still on the books — mark it done when you are finished.
+          </p>
+        )}
         <button
           type="button"
           data-qa="back-to-appointment"

@@ -254,6 +254,21 @@ async function seedAppointment(opts: {
   return appt.id;
 }
 
+/**
+ * A native booking's Visit is keyed `booking:<appointmentId>` - the same key
+ * `promoteOneAppointmentInTx` upserts on, which is what makes completion
+ * idempotent.
+ */
+const visitCount = (appointmentId: string) =>
+  prisma.visit.count({ where: { shopId, acuityAppointmentId: `booking:${appointmentId}` } });
+
+/** Punches EARNED by this client. `PunchLedger.visitId` is unique: one per visit. */
+const punchCount = (clientId: string) =>
+  prisma.punchLedger.count({ where: { clientId, visitId: { not: null } } });
+
+const complete = (id: string, c = cookie) =>
+  request(app).post(`/api/booking/appointments/${id}/complete`).set("Cookie", c).send({});
+
 const getCheckout = (id: string, c = cookie) =>
   request(app).get(`/api/checkout/appointments/${id}`).set("Cookie", c);
 
@@ -287,7 +302,14 @@ beforeAll(async () => {
   // account id is UNIQUE per shop, so they cannot share one.
   await prisma.shop.update({
     where: { id: shopId },
-    data: { stripeConnectAccountId: ACCT, paymentsMode: "card_on_file", compAccess: true },
+    data: {
+      stripeConnectAccountId: ACCT,
+      paymentsMode: "card_on_file",
+      compAccess: true,
+      // Loyalty ON, or `earnPunchForVisitInTx` returns null and the
+      // "exactly one punch" tests below would pass for the wrong reason.
+      rewardsEnabled: true,
+    },
   });
   await prisma.shop.update({
     where: { id: otherShopId },
@@ -383,15 +405,12 @@ describe("charging the saved card", () => {
       select: { paidAt: true, status: true, canceledAt: true },
     });
     expect(appt!.paidAt).not.toBeNull();
-    // Checking a cut out completes it, through the SAME promotion path the
-    // cash checkout and the Done button already use - deliberately, because
-    // that is the one place a Visit is written and a loyalty punch is earned.
-    // Making the card path differ would silently cost customers their punch on
-    // every card checkout, which is a worse surprise than the status moving.
-    expect(appt!.status).toBe("COMPLETED");
-    // What a payment must NOT touch: nothing else moves. In particular a
-    // charge can never resurrect or cancel a booking.
+    // 🔴 TAKING THE MONEY IS NOT FINISHING THE CUT. Done owns completion and
+    // the loyalty punch; a charge must never make that call for the barber.
+    expect(appt!.status).toBe("BOOKED");
     expect(appt!.canceledAt).toBeNull();
+    // Nothing loyalty-shaped happened either.
+    expect(await visitCount(id)).toBe(0);
 
     const rows = await prisma.payment.findMany({ where: { appointmentId: id } });
     expect(rows).toHaveLength(1);
@@ -630,6 +649,130 @@ describe("collecting twice", () => {
     expect(results.filter((r) => r === "charged")).toHaveLength(1);
     expect(results.filter((r) => r === "already")).toHaveLength(1);
     expect(fake.calls.paymentIntents).toHaveLength(1);
+  });
+});
+
+/**
+ * 🔴 CHECKOUT TAKES MONEY. **DONE** FINISHES THE CUT AND EARNS THE PUNCH.
+ *
+ * Keeping those separate is what makes "exactly one punch" provable rather
+ * than hoped for: nothing on the payment path awards one at all, so a retry, a
+ * webhook replay and a second method cannot add a second. Completion stays
+ * idempotent on its own `booking:<id>` visit key.
+ */
+describe("checkout never earns the punch - Done does", () => {
+  const clientOf = async (apptId: string) =>
+    (await prisma.appointment.findUnique({
+      where: { id: apptId },
+      select: { clientId: true },
+    }))!.clientId!;
+
+  it("cash: no punch at checkout, exactly one after Done", async () => {
+    fake.reset();
+    const id = await seedAppointment({ shopId, priceDollars: 40 });
+    const clientId = await clientOf(id);
+
+    expect(
+      (await payCash(id, { amountCents: 4000, method: "cash", requestId: press(), confirmed: true }))
+        .status,
+    ).toBe(200);
+    expect(await visitCount(id)).toBe(0);
+    expect(await punchCount(clientId)).toBe(0);
+
+    expect((await complete(id)).status).toBe(200);
+    expect(await visitCount(id)).toBe(1);
+    expect(await punchCount(clientId)).toBe(1);
+  });
+
+  it("saved card: no punch at checkout, exactly one after Done", async () => {
+    fake.reset();
+    const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "single" } });
+    const clientId = await clientOf(id);
+
+    expect((await chargeCard(id, { amountCents: 4000, requestId: press() })).status).toBe(200);
+    expect(await visitCount(id)).toBe(0);
+    expect(await punchCount(clientId)).toBe(0);
+
+    expect((await complete(id)).status).toBe(200);
+    expect(await visitCount(id)).toBe(1);
+    // The number that matters: the SAME as the cash path, not one more.
+    expect(await punchCount(clientId)).toBe(1);
+  });
+
+  it("🔴 a webhook replay and a repeated press add no further punch", async () => {
+    fake.reset();
+    const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "single" } });
+    const clientId = await clientOf(id);
+    const requestId = press();
+
+    await chargeCard(id, { amountCents: 4000, requestId });
+    // The same press again, and Done.
+    await chargeCard(id, { amountCents: 4000, requestId });
+    expect((await complete(id)).status).toBe(200);
+    expect(await punchCount(clientId)).toBe(1);
+
+    // Stripe redelivers the success twice more, after the cut was completed.
+    const attempt = await prisma.checkoutAttempt.findFirst({ where: { appointmentId: id } });
+    const pay = await prisma.payment.findFirst({ where: { appointmentId: id } });
+    const { applyPaymentEvent } = await import("../billing/payments.js");
+    const event = {
+      id: `evt_${randomToken(10)}`,
+      type: "payment_intent.succeeded",
+      data: {
+        object: {
+          id: pay!.stripePaymentIntentId,
+          status: "succeeded",
+          amount_received: 4000,
+          latest_charge: `ch_${randomToken(8)}`,
+          metadata: {
+            shopId,
+            appointmentId: id,
+            paymentId: pay!.id,
+            checkoutAttemptId: attempt!.id,
+            purpose: "service_checkout",
+          },
+        },
+      },
+    } as never;
+    await applyPaymentEvent(event);
+    await applyPaymentEvent(event);
+
+    expect(await punchCount(clientId)).toBe(1);
+    expect(await visitCount(id)).toBe(1);
+    expect(await prisma.payment.count({ where: { appointmentId: id } })).toBe(1);
+    expect(fake.calls.paymentIntents).toHaveLength(1);
+  });
+
+  it("collecting AFTER Done still records the money and still leaves one punch", async () => {
+    fake.reset();
+    const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "single" } });
+    const clientId = await clientOf(id);
+
+    expect((await complete(id)).status).toBe(200);
+    expect(await punchCount(clientId)).toBe(1);
+
+    // 🔴 THE SAVED CARD IS GONE BY NOW, and that is the pre-existing rule, not
+    // this feature's: completion releases a kept card ("the visit happened: a
+    // kept card has nothing left to protect"). So a barber who presses Done
+    // first has to collect another way, and the screen says so rather than
+    // offering a card it cannot charge.
+    const card = await chargeCard(id, { amountCents: 4000, requestId: press() });
+    expect(card.status).toBe(409);
+    expect(card.body.error).toBe("card_not_saved");
+    expect(fake.calls.paymentIntents).toHaveLength(0);
+
+    // Cash still works, and the punch does not move.
+    expect(
+      (await payCash(id, { amountCents: 4000, method: "cash", requestId: press(), confirmed: true }))
+        .status,
+    ).toBe(200);
+    expect(await punchCount(clientId)).toBe(1);
+    const appt = await prisma.appointment.findUnique({
+      where: { id },
+      select: { paidAt: true, status: true },
+    });
+    expect(appt!.paidAt).not.toBeNull();
+    expect(appt!.status).toBe("COMPLETED");
   });
 });
 

@@ -2412,9 +2412,10 @@ function AppointmentBlock({
             </button>
           )}
           {/* Checkout: the money moment - THE primary action on the card, so
-              it's the one solid-gold button. Sits BEFORE Done because checking
-              out already completes the cut — a barber who taps this never needs
-              Done, and one who works for free still has Done next to it. */}
+              it's the one solid-gold button. Sits BEFORE Done because that is
+              the order the chair runs in: take the money, then finish the cut.
+              🔴 Checkout does NOT complete the appointment - Done still does,
+              and Done is still where the loyalty punch is earned. */}
           <button
             onClick={() => setSheet("pay")}
             disabled={pending}
