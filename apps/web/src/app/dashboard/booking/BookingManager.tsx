@@ -32,6 +32,7 @@ import type {
   WaitlistRow,
 } from "./page";
 import { BookingCalendar } from "./BookingCalendar";
+import { ConflictInbox, ConflictTabBadge, useUnresolvedConflictCount } from "./ConflictInbox";
 import { ShopQrCard } from "./ShopQrCard";
 import { HolidayPricing } from "./HolidayPricing";
 import { ConnectPlatforms } from "./ConnectPlatforms";
@@ -99,7 +100,7 @@ const labelCls = "text-xs text-muted";
 // always landed on shop config instead of on today's appointments.
 // Kept in step with BOOKING_TABS in @chairback/config (the registry pins the
 // ?tab= deep links against that list).
-const tabs = ["Appointments", "Waitlist", "Walk-ins", "Staff", "Services", "Settings"] as const;
+const tabs = ["Appointments", "Waitlist", "Walk-ins", "Conflicts", "Staff", "Services", "Settings"] as const;
 type Tab = (typeof tabs)[number];
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -208,6 +209,10 @@ export function BookingManager({
   const bookUrl = `${appBase}/book/${shop.slug ?? "your-shop"}`;
   const needsSetup = initialStaff.length === 0 || initialServices.length === 0;
 
+  // How many double-booked chairs are waiting, for the tab badge. Fetched on
+  // MOUNT (see the hook) so the count is there before anyone finds the tab.
+  const [unresolvedConflicts, setUnresolvedConflicts] = useUnresolvedConflictCount();
+
   // Dirty-check registered by the OPEN service-group editor (null = none open).
   // Group edits persist only on Save, and switching tabs unmounts the Services
   // tab — without this guard a mid-configuration tab tap silently discarded
@@ -296,16 +301,22 @@ export function BookingManager({
             key={t}
             onClick={() => switchTab(t)}
             className={cn(
-              "rounded-full px-4 py-1.5 text-sm font-medium transition-colors duration-150 ease-out",
+              "flex shrink-0 items-center gap-1.5 rounded-full px-4 py-1.5 text-sm font-medium transition-colors duration-150 ease-out",
               tab === t
                 ? "bg-gold/15 text-gold"
                 : "text-muted hover:bg-charcoal-700 hover:text-offwhite",
             )}
           >
             {t}
+            {/* 🔴 THE ENTRY POINT. A double-booked chair is only useful if
+                somebody notices it, so the count sits on the tab itself rather
+                than waiting to be found. Renders nothing at zero. */}
+            {t === "Conflicts" && <ConflictTabBadge count={unresolvedConflicts} />}
           </button>
         ))}
       </div>
+
+      {tab === "Conflicts" && <ConflictInbox onUnresolvedCount={setUnresolvedConflicts} />}
 
       {tab === "Settings" && (
         <div className="flex flex-col gap-5">
