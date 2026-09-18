@@ -14,10 +14,11 @@ import { randomToken } from "@chairback/config";
  *   2. the CONFLICT ROW - committed in the SAME transaction. Evidence.
  *   3. the ALERT        - fire-and-forget, AFTER commit, best-effort.
  *
- * 🔴 (3) CAN FAIL AND MUST NOT MATTER. Push needs a registered subscription,
- * barber-alert SMS sits behind DRY_RUN (default true, so it sends nothing in
- * production today) and email defaults off - so a conflict alert genuinely can
- * reach nobody. That is understood rather than hidden: the two deliveries that
+ * 🔴 (3) CAN FAIL AND MUST NOT MATTER. Push needs a registered subscription;
+ * SMS needs a notifyPhone (and DRY_RUN false, which production sets, so it does
+ * really send there); email defaults off. A shop with no device and no notify
+ * phone gets nothing, so a conflict alert genuinely can reach nobody, and
+ * nothing retries. That is understood rather than hidden: the two deliveries that
  * cannot be switched off are the amber panel in the response, on the screen of
  * the person who just did it, and the durable row, which waits as long as it
  * takes. This file pins that a failing alert costs neither.

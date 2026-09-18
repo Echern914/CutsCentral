@@ -78,12 +78,19 @@ export type BarberAlertKind = "nextUp" | "dayAhead" | "newBooking" | "cancel" | 
  * push back because the news is bad.
  *
  * WHICH MEANS THE ALERT CAN REACH NOBODY, and that is understood rather than
- * hidden: push needs a registered subscription, barber-alert SMS is behind
- * DRY_RUN (default true, so it sends nothing in production today) and email
- * defaults off. So the alert is the BONUS channel. The two deliveries that
- * cannot be switched off are the amber panel in the walk-in bar - on the screen
- * of the person who just did it, while they can still ring the customer - and
- * the durable BookingConflict row, which waits however long it takes.
+ * hidden. In PRODUCTION today two channels are live - push (needs a registered
+ * subscription) and SMS (DRY_RUN is `false` in the production environment, so
+ * the provider is really called, but only when a notifyPhone is set on the
+ * barber's prefs or the shop). Email defaults off. A shop with no registered
+ * device and no notify phone gets NOTHING, and nothing retries.
+ *
+ * 🔴 Do not read the schema default as the production value: DRY_RUN defaults
+ * to "true" (packages/config/src/env.ts) and production overrides it to false.
+ *
+ * So the alert is the BONUS channel. The two deliveries that cannot be switched
+ * off are the amber panel in the walk-in bar - on the screen of the person who
+ * just did it, while they can still ring the customer - and the durable
+ * BookingConflict row, which waits however long it takes.
  */
 const KIND_SWITCH: Record<Exclude<BarberAlertKind, "conflict">, keyof NotifyPrefs> = {
   nextUp: "nextUpEnabled",

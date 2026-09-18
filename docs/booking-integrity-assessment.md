@@ -144,8 +144,10 @@ kind** (there is no switch; a double-booked chair is operational integrity, not
 communication) and **optional in channel** (it still respects `pushEnabled`,
 `smsEnabled`, `emailEnabled` — mandatory decides whether there is something to
 say, never by what route). The honest consequence, pinned by
-`services/conflictAlertPolicy.test.ts`: with push off, SMS behind `DRY_RUN` and
-email off by default, **the alert can reach nobody**. That is why the two
+`services/conflictAlertPolicy.test.ts`: with push off, no notify phone for SMS
+to reach and email off by default, **the alert can reach nobody**. (Production
+sets `DRY_RUN=false`, so a shop that HAS a notify phone does also get a text -
+the point is that neither channel is guaranteed.) That is why the two
 deliveries that cannot be switched off — the amber panel in the response and the
 durable `BookingConflict` row — are the real ones.
 

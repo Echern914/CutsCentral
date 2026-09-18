@@ -154,10 +154,12 @@ describe("...but OPTIONAL in channel", () => {
     const res = await sendToBarber({ shopId, userId: ownerId, kind: "conflict", message });
     expect(sendPushToUser).not.toHaveBeenCalled();
     expect(res.pushed).toBe(false);
-    // 🔴 AND THIS IS THE HONEST CONSEQUENCE: with push off, SMS behind DRY_RUN
-    // and email off by default, the alert reached NOBODY. Nothing threw and
-    // nothing retried. It is the durable BookingConflict row and the amber
-    // panel - neither switchable - that carry the news in this state.
+    // 🔴 AND THIS IS THE HONEST CONSEQUENCE: push off, no notifyPhone for SMS
+    // to reach, email off - the alert reached NOBODY. Nothing threw and nothing
+    // retried. It is the durable BookingConflict row and the amber panel -
+    // neither switchable - that carry the news in this state. (Production does
+    // set DRY_RUN=false, so a shop WITH a notify phone would also get a text;
+    // the point is that neither channel is guaranteed.)
     expect(res).toEqual({ pushed: false, texted: false, emailed: false });
   });
 
