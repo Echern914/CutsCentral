@@ -102,6 +102,35 @@ function futureAtHour(daysAhead: number, hourUtc: number): Date {
   return d;
 }
 
+/**
+ * 🔴 THE CLOCK, PINNED - for the two tests that need an appointment INSIDE the
+ * 24-hour cancel window.
+ *
+ * Those need a start that is (a) in the future, (b) within 24h, and (c) inside
+ * the fixture's 09:00-17:00 hours. From the REAL clock that is only satisfiable
+ * for part of each day, which is why they used to `return` early outside it -
+ * passing vacuously most of the day and failing on the 09:00 boundary (#442).
+ * A test that skips itself is not a passing test.
+ *
+ * So the clock is faked to a fixed instant and the booking is five hours past
+ * it: 13:00, inside hours, inside the window, past the 1h lead. Date ONLY -
+ * faking timers too would stall supertest (see barberReminders.test.ts).
+ *
+ * The instant is in the PAST on purpose. The fixture shop's trial ends 14 days
+ * after its real creation; a frozen "now" beyond that would make the shop read
+ * as lapsed and refuse the booking, and one within it would drift back onto
+ * the real calendar. A fixed past instant is always inside the trial.
+ */
+const FROZEN_NOW = new Date("2026-09-08T08:00:00.000Z"); // a Tuesday
+async function insideTheWindow<T>(fn: (startsAt: Date) => Promise<T>): Promise<T> {
+  vi.useFakeTimers({ toFake: ["Date"], now: FROZEN_NOW });
+  try {
+    return await fn(new Date(FROZEN_NOW.getTime() + 5 * 3_600_000));
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 /** Book with a card on file and confirm the card - the state every test starts from. */
 async function bookedWithCard(daysAhead: number, hourUtc: number) {
   const res = await request(app)
@@ -228,27 +257,24 @@ describe("the switch is ON", () => {
     expect(chargeAlerts()).toHaveLength(0);
   });
 
-  it("a customer's cancel INSIDE the window charges; the manage page quotes it as a fee", async () => {
-    // Book ~5 hours out: inside the 24h window.
-    const start = new Date(Date.now() + 5 * 3_600_000);
-    start.setUTCMinutes(0, 0, 0);
-    if (start.getUTCHours() < 9 || start.getUTCHours() >= 17) return; // outside the fixture's hours: nothing to assert honestly
-    const res = await request(app).post(`/api/book/${slug}`).send({
-      staffId, serviceId, startsAt: start.toISOString(), firstName: "Late", lastName: "Canceler", phone: "(302) 555-0198", email: `late-${randomToken(4)}@example.com`,
-    });
-    expect(res.status).toBe(201);
-    const token = res.body.manageToken as string;
-    const appt = (await prisma.appointment.findUnique({ where: { manageToken: token }, select: { id: true } }))!;
-    const row = (await prisma.cardOnFile.findUnique({ where: { appointmentId: appt.id } }))!;
-    fake.succeed(row.stripeSetupIntentId);
-    await request(app).post(`/api/book/manage/${token}/card-saved`);
+  it("a customer's cancel INSIDE the window charges; the manage page quotes it as a fee", async () =>
+    insideTheWindow(async (start) => {
+      const res = await request(app).post(`/api/book/${slug}`).send({
+        staffId, serviceId, startsAt: start.toISOString(), firstName: "Late", lastName: "Canceler", phone: "(302) 555-0198", email: `late-${randomToken(4)}@example.com`,
+      });
+      expect(res.status).toBe(201);
+      const token = res.body.manageToken as string;
+      const appt = (await prisma.appointment.findUnique({ where: { manageToken: token }, select: { id: true } }))!;
+      const row = (await prisma.cardOnFile.findUnique({ where: { appointmentId: appt.id } }))!;
+      fake.succeed(row.stripeSetupIntentId);
+      await request(app).post(`/api/book/manage/${token}/card-saved`);
 
-    const cancel = await request(app).post(`/api/book/manage/${token}/cancel`);
-    expect(cancel.status).toBe(200);
-    expect(fake.state.charges).toHaveLength(1);
-    expect((fake.state.charges[0]!.params.metadata as Record<string, string>).reason).toBe("late_cancel");
-    expect(await cardStatus(appt.id)).toBe("charged");
-  });
+      const cancel = await request(app).post(`/api/book/manage/${token}/cancel`);
+      expect(cancel.status).toBe(200);
+      expect(fake.state.charges).toHaveLength(1);
+      expect((fake.state.charges[0]!.params.metadata as Record<string, string>).reason).toBe("late_cancel");
+      expect(await cardStatus(appt.id)).toBe("charged");
+    }));
 
   it("a customer's cancel OUTSIDE the window releases the card - nothing owed", async () => {
     const b = await bookedWithCard(6, 15); // six days out, 24h window
@@ -330,29 +356,34 @@ describe("the switch is OFF", () => {
 });
 
 describe("the receptionist's cancel tool", () => {
-  it("quotes the same cents the card is about to be charged", async () => {
-    const start = new Date(Date.now() + 5 * 3_600_000);
-    start.setUTCMinutes(0, 0, 0);
-    if (start.getUTCHours() < 9 || start.getUTCHours() >= 17) return;
-    const res = await request(app).post(`/api/book/${slug}`).send({
-      staffId, serviceId, startsAt: start.toISOString(), firstName: "Quote", lastName: "Me", phone: "(302) 555-0197", email: `q-${randomToken(4)}@example.com`,
-    });
-    const token = res.body.manageToken as string;
-    const appt = (await prisma.appointment.findUnique({ where: { manageToken: token }, select: { id: true, clientId: true } }))!;
-    const row = (await prisma.cardOnFile.findUnique({ where: { appointmentId: appt.id } }))!;
-    fake.succeed(row.stripeSetupIntentId);
-    await request(app).post(`/api/book/manage/${token}/card-saved`);
+  it("quotes the same cents the card is about to be charged", async () =>
+    insideTheWindow(async (start) => {
+      const res = await request(app).post(`/api/book/${slug}`).send({
+        staffId, serviceId, startsAt: start.toISOString(), firstName: "Quote", lastName: "Me", phone: "(302) 555-0197", email: `q-${randomToken(4)}@example.com`,
+      });
+      // The booking itself is an assertion now - it used to be the silent
+      // failure behind "expected undefined to be true".
+      expect(res.status).toBe(201);
+      const token = res.body.manageToken as string;
+      const appt = (await prisma.appointment.findUnique({ where: { manageToken: token }, select: { id: true, clientId: true } }))!;
+      const row = (await prisma.cardOnFile.findUnique({ where: { appointmentId: appt.id } }))!;
+      fake.succeed(row.stripeSetupIntentId);
+      await request(app).post(`/api/book/manage/${token}/card-saved`);
 
-    const { makeToolExecutor } = await import("../receptionist/tools.js");
-    const exec = makeToolExecutor({ shopId, clientId: appt.clientId!, conversationId: "conv_test", now: new Date() } as never);
-    const out = (await exec("cancel_appointment", { appointment_id: appt.id })) as unknown as {
-      ok: boolean;
-      result?: Record<string, unknown>;
-    };
-    expect(out.ok).toBe(true);
-    expect(out.result?.fee_cents).toBe(2000);
-    // ...and the charge that followed took exactly that.
-    expect(fake.state.charges).toHaveLength(1);
-    expect(fake.state.charges[0]!.params.amount).toBe(2000);
-  });
+      const { makeToolExecutor } = await import("../receptionist/tools.js");
+      const exec = makeToolExecutor({ shopId, clientId: appt.clientId!, conversationId: "conv_test", now: new Date() } as never);
+      // 🔴 THE TOOL IS NAMED "cancel" AND ANSWERS { result, isError }. This test
+      // shipped in #397 calling "cancel_appointment" and reading `out.ok` -
+      // neither exists - and its hour-of-day self-skip meant it almost never
+      // ran, so "unknown tool" hid behind "expected undefined to be true" for
+      // fifteen days (#442). Same contract every other tool test uses.
+      const out = await exec("cancel", { appointment_id: appt.id });
+      expect(out.isError).toBe(false);
+      const payload = JSON.parse(out.result) as { cancelled: boolean; fee_cents: number };
+      expect(payload.cancelled).toBe(true);
+      expect(payload.fee_cents).toBe(2000);
+      // ...and the charge that followed took exactly that.
+      expect(fake.state.charges).toHaveLength(1);
+      expect(fake.state.charges[0]!.params.amount).toBe(2000);
+    }));
 });
