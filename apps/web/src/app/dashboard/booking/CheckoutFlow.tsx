@@ -1,8 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
-import { INPUT } from "./formkit";
 import {
   cancelCheckoutAttemptAction,
   chargeSavedCardAction,
@@ -17,7 +16,7 @@ import {
  * of them, so every rule here is about not taking the wrong money in public.
  *
  * Three steps, and the middle one is not skippable:
- *   review  — who, what, when, and what is due. `Modify` lives here.
+ *   review  — who, what, when, and the balance due, which is not editable.
  *   confirm — the exact amount and the exact method, once more, alone on the
  *             screen. Nothing is charged before this is pressed.
  *   result  — what happened, with a reference, and the way back.
@@ -58,6 +57,8 @@ const BLOCKER_COPY: Record<string, string> = {
   // The distinction the whole consent split exists for.
   no_service_consent: "This card was only approved for no-show fees",
   consent_not_for_this_appointment: "This card was approved for a different appointment",
+  // The 72-hour post-service window has closed.
+  retention_expired: "Too long since this appointment to charge the saved card",
   native_not_ready: "Not set up on this device yet",
   disabled: "Not enabled for this shop",
 };
@@ -87,10 +88,6 @@ export function CheckoutFlow({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // "Modify": the barber may take LESS than what is owed. The server refuses
-  // more, so this input can only ever discount.
-  const [editing, setEditing] = useState(false);
-  const [amountInput, setAmountInput] = useState("");
 
   /** Minted when confirm opens; every retry of THAT press reuses it. */
   const requestId = useRef<string | null>(null);
@@ -103,21 +100,21 @@ export function CheckoutFlow({
     }
     setState(res.data);
     setLoadError(null);
-    setAmountInput(((res.data.remainingCents ?? 0) / 100).toFixed(2));
   }, [appointmentId]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
+  /**
+   * 🔴 ONE FIGURE, AND THE BARBER CANNOT EDIT IT. v1 collects the whole
+   * remaining balance or nothing: a lower number is a partial payment or a
+   * silent discount, a higher one is over-collection or a tip, and the API
+   * refuses all four. A barber who needs a different total edits the PRICE on
+   * the appointment, which is an audited change, and comes back here.
+   */
   const dueCents = state?.remainingCents ?? null;
-  const parsedAmount = useMemo(() => {
-    const n = Number.parseFloat(amountInput);
-    if (!Number.isFinite(n) || n < 0) return null;
-    return Math.round(n * 100);
-  }, [amountInput]);
-  /** What will actually be charged: the barber's figure, or the balance. */
-  const chargeCents = parsedAmount ?? dueCents ?? 0;
+  const chargeCents = dueCents ?? 0;
 
   if (loadError) {
     return (
@@ -342,7 +339,7 @@ export function CheckoutFlow({
               return;
             }
             if (!res.ok && !res.result) {
-              setError(errorCopy(res.error, savedCard.maxCents));
+              setError(errorCopy(res.error, res.dueCents));
               return;
             }
             setOutcome(res);
@@ -404,45 +401,15 @@ export function CheckoutFlow({
       <div className="border-t border-subtle pt-3">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <span className="text-sm text-muted">Amount due</span>
-          {editing ? (
-            <div className="flex items-center gap-1">
-              <span className="text-lg text-muted">$</span>
-              <input
-                autoFocus
-                type="text"
-                inputMode="decimal"
-                aria-label="Amount to collect"
-                value={amountInput}
-                onChange={(e) => setAmountInput(e.target.value)}
-                className={cn(INPUT, "w-28 text-right tabular-nums")}
-              />
-            </div>
-          ) : (
-            <span
-              className="font-display text-3xl tabular-nums text-offwhite"
-              data-qa="amount-due"
-            >
-              {dueCents === null ? "—" : money(chargeCents)}
-            </span>
-          )}
+          <span className="font-display text-3xl tabular-nums text-offwhite" data-qa="amount-due">
+            {dueCents === null ? "—" : money(chargeCents)}
+          </span>
         </div>
-        <button
-          type="button"
-          data-qa="modify-total"
-          onClick={() => setEditing((v) => !v)}
-          className="mt-1 text-xs text-gold underline"
-        >
-          {editing ? "Done" : "Modify"}
-        </button>
-        {/* The one thing Modify cannot do, said before it is tried. */}
-        {savedCard.available &&
-          parsedAmount !== null &&
-          parsedAmount > (savedCard.maxCents ?? 0) && (
-            <p role="alert" className="mt-1 text-xs text-danger-soft">
-              A saved card can only be charged up to {money(savedCard.maxCents ?? 0)} — what the
-              customer approved. Take the difference another way.
-            </p>
-          )}
+        {/* Said plainly, so a barber looking for the edit box knows where the
+            number comes from instead of hunting for one that is not there. */}
+        <p className="mt-1 text-xs text-muted">
+          The full balance. To change it, edit the {"price"} on the appointment.
+        </p>
       </div>
 
       <div>
@@ -570,10 +537,12 @@ function methodLabel(choice: Choice | null, outcome: ChargeCardResult): string {
   return "Recorded in person";
 }
 
-function errorCopy(error: string | undefined, maxCents: number | undefined): string {
+function errorCopy(error: string | undefined, dueCents: number | undefined): string {
   switch (error) {
     case "amount_not_authorized":
-      return `The customer approved up to ${money(maxCents ?? 0)}. Lower the amount or take the difference another way.`;
+      // The screen and the server are looking at different money - almost
+      // always a price edited in another tab. Re-reading fixes it.
+      return `The balance is ${money(dueCents ?? 0)}, not what this screen showed. Close and reopen checkout.`;
     case "collection_in_progress":
       return "Another collection is still open on this appointment.";
     case "paid_already":

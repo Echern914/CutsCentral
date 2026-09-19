@@ -1,4 +1,4 @@
-import { serviceChargeAuthorized } from "@chairback/config";
+import { serviceChargeAuthorized, serviceChargeWindowClosed } from "@chairback/config";
 import { stripeCollectedCents } from "./appointmentPayment.js";
 
 /**
@@ -58,6 +58,10 @@ export interface ServiceCheckoutInput {
   card: CheckoutCardFacts | null;
   /** True when another system owns this booking's money (Acuity/Square). */
   external: boolean;
+  /** When the appointment ended - the start of the post-service window. */
+  endsAt: Date;
+  /** Passed in, never read from the clock, so every branch stays testable. */
+  now: Date;
 }
 
 /** Why a saved card cannot be offered. Each is shown to the barber verbatim. */
@@ -65,7 +69,9 @@ export type SavedCardBlocker =
   | "no_card"
   | "card_not_saved"
   | "no_service_consent"
-  | "consent_not_for_this_appointment";
+  | "consent_not_for_this_appointment"
+  /** The 72-hour post-service window has closed. */
+  | "retention_expired";
 
 export interface ServiceCheckoutState {
   /** Ticket total in cents; null when the booking carries no price. */
@@ -78,12 +84,18 @@ export interface ServiceCheckoutState {
    */
   remainingCents: number | null;
   /**
-   * The most that may be charged to a SAVED CARD. Equal to `remainingCents`,
-   * and it is a ceiling, not a default: the barber may take less (a discount),
-   * never more. A tip or an increased total is a new agreement with the
-   * customer, and the barber pressing a button is not the customer making one.
+   * The ONE amount this checkout may collect, by any method: the whole
+   * remaining balance, to the cent.
+   *
+   * 🔴 NOT A CEILING. v1 collects the balance or it collects nothing. Allowing
+   * anything lower would be a partial payment or a silent discount, and
+   * allowing anything higher would be over-collection or a tip - all four are
+   * out of scope, and each one would leave `paidAt` set on an appointment that
+   * is not actually settled. A barber who wants to charge a different figure
+   * edits the PRICE first, which is an audited change with its own ledger row,
+   * and then collects the balance that follows from it.
    */
-  maxSavedCardCents: number;
+  chargeableCents: number;
   /** True when a saved card may be offered at all. */
   savedCardEligible: boolean;
   /** Why not, when it may not. Null when it may. */
@@ -142,6 +154,11 @@ export function serviceCheckoutState(input: ServiceCheckoutInput): ServiceChecko
     })
   ) {
     blocker = "consent_not_for_this_appointment";
+  } else if (serviceChargeWindowClosed(input.endsAt, input.now)) {
+    // Checked LAST, so a card that was never authorised still reports the more
+    // useful reason. An open-ended right to charge for a haircut somebody had
+    // last month is not what they agreed to.
+    blocker = "retention_expired";
   }
 
   // An externally-owned booking has no ChairBack balance to speak of, so there
@@ -150,31 +167,33 @@ export function serviceCheckoutState(input: ServiceCheckoutInput): ServiceChecko
     blocker = blocker ?? "no_card";
   }
 
-  const maxSavedCardCents = Math.max(0, remainingCents ?? 0);
+  const chargeableCents = Math.max(0, remainingCents ?? 0);
   return {
     totalCents,
     collectedCents,
     remainingCents,
-    maxSavedCardCents,
+    chargeableCents,
     // Nothing owed is not an error, but it is not a charge either: offering a
     // card button that would take $0 is a dead end.
-    savedCardEligible: blocker === null && maxSavedCardCents > 0,
+    savedCardEligible: blocker === null && chargeableCents > 0,
     savedCardBlocker: blocker,
     card: card ? { brand: card.brand, last4: card.last4 } : null,
   };
 }
 
 /**
- * Is `requested` an amount this checkout may charge to a saved card?
+ * Is `requested` the amount this checkout may collect? EXACTLY the balance, by
+ * every method.
  *
- * Lower is allowed - that is a discount, and the shop is free to take less than
- * it is owed. Higher is refused, because the customer authorised payment for
- * the service they booked, not whatever total the screen was later set to.
+ * The confirmed figure is still sent and still checked, rather than ignored in
+ * favour of the server's own number: a request that disagrees means the screen
+ * and the server are looking at different money, and taking the server's figure
+ * anyway would charge someone an amount nobody on the screen ever saw.
  */
-export function savedCardAmountAllowed(
+export function checkoutAmountAllowed(
   state: ServiceCheckoutState,
   requestedCents: number,
 ): boolean {
   if (!Number.isInteger(requestedCents) || requestedCents <= 0) return false;
-  return requestedCents <= state.maxSavedCardCents;
+  return requestedCents === state.chargeableCents;
 }

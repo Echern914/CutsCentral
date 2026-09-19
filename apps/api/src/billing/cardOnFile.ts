@@ -1,7 +1,12 @@
 import type Stripe from "stripe";
 import { prisma, runWithShop } from "@chairback/db";
 import type { CardOnFileChargeReason, ServiceChargeConsentScope } from "@chairback/config";
-import { SERVICE_CHARGE_CONSENT_VERSION } from "@chairback/config";
+import {
+  SERVICE_CHARGE_CONSENT_VERSION,
+  serviceChargeAuthorized,
+  serviceChargeWindowClosed,
+} from "@chairback/config";
+import { serviceCollectedCents } from "../engines/serviceCheckout.js";
 import { logger } from "../logger.js";
 import { stripeClient } from "./stripe.js";
 import { errorClassification, stripeErrorFacts } from "./stripeErrors.js";
@@ -459,6 +464,25 @@ export async function releaseCardOnFile(params: {
   );
   if (!row || row.status === "released" || row.status === "charged") return;
 
+  // 🔴 COMPLETION MUST NOT TAKE THE CARD AWAY FROM A CUT THAT STILL OWES.
+  //
+  // This is POST-service checkout: the barber presses Done and collects, in
+  // either order. Releasing on `completed` meant a barber who pressed Done
+  // first found the card gone a moment later and had to ask the customer for
+  // another way to pay - for a charge they had already agreed to.
+  //
+  // So a consented card with an unpaid balance is RETAINED, and bounded: the
+  // 72-hour window in SERVICE_CHARGE_RETENTION_HOURS. Past it, this guard stops
+  // applying and the ordinary release below takes the card as it always did.
+  // Every other reason - hold lapsed, fee settled, checked out - is unaffected.
+  if (params.reason === "completed" && (await retainedForServiceCheckout(params, row))) {
+    logger.info(
+      { shopId: params.shopId, appointmentId: params.appointmentId },
+      "card on file: retained past completion - the service balance is unpaid",
+    );
+    return;
+  }
+
   // Which standing appointment, if any, this card belongs to. The ANCHOR row
   // says so directly; an occurrence row is linked through its appointment.
   const seriesId =
@@ -750,6 +774,84 @@ function randomHex(bytes: number): string {
   return Array.from(buf, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/**
+ * Should completion leave this card alone so the barber can still collect?
+ *
+ * Three things must all be true, and each one is the customer's protection:
+ * they agreed to a SERVICE charge, there is still a balance to collect, and the
+ * post-service window is open. Miss any one and the card goes, exactly as it
+ * did before.
+ */
+async function retainedForServiceCheckout(
+  params: { shopId: string; appointmentId: string },
+  row: { status: string; stripePaymentMethodId: string | null },
+): Promise<boolean> {
+  if (row.status !== "saved") return false;
+  const card = await runWithShop(params.shopId, (tx) =>
+    tx.cardOnFile.findUnique({
+      where: { appointmentId: params.appointmentId },
+      select: {
+        appointmentId: true,
+        seriesId: true,
+        serviceChargeConsentVersion: true,
+        serviceChargeConsentAt: true,
+        serviceChargeConsentScope: true,
+      },
+    }),
+  );
+  if (!card?.serviceChargeConsentVersion || !card.serviceChargeConsentAt) return false;
+
+  const appt = await runWithShop(params.shopId, (tx) =>
+    tx.appointment.findFirst({
+      where: { id: params.appointmentId, shopId: params.shopId },
+      select: { id: true, seriesId: true, endsAt: true, paidAt: true, priceAtBooking: true },
+    }),
+  );
+  if (!appt || appt.paidAt) return false; // already settled: nothing to retain for
+  if (serviceChargeWindowClosed(appt.endsAt, new Date())) return false;
+  if (!serviceChargeAuthorized(card, { appointmentId: appt.id, seriesId: appt.seriesId })) {
+    return false;
+  }
+
+  // A balance must actually be outstanding. Fee rows are excluded: money taken
+  // for a MISSED cut does not pay for one that happened.
+  const payments = await runWithShop(params.shopId, (tx) =>
+    tx.payment.findMany({
+      where: { appointmentId: params.appointmentId },
+      select: { purpose: true, status: true, amount: true, capturedAmount: true, refundedAmount: true },
+    }),
+  );
+  const ticketCents =
+    appt.priceAtBooking == null ? 0 : Math.round(Number(appt.priceAtBooking) * 100);
+  const collected = serviceCollectedCents(payments, null);
+  return ticketCents - collected > 0;
+}
+
+/**
+ * Hand a card back to the fee path after a service charge was CONFIRMED dead.
+ *
+ * The only legitimate caller is the cancel-attempt route, and only once Stripe
+ * has actually cancelled the intent. `charging` is what protects a card from a
+ * no-show fee while a service intent is still confirmable, so releasing it on
+ * anything less than a confirmed cancellation would re-open exactly the race it
+ * exists to prevent.
+ *
+ * Deliberately a compare-and-set FROM `charging`: a row that has meanwhile been
+ * `charged` (the intent succeeded after all) must never be walked backwards.
+ */
+export async function restoreCardAfterCanceledCharge(params: {
+  shopId: string;
+  appointmentId: string;
+}): Promise<boolean> {
+  const { count } = await runWithShop(params.shopId, (tx) =>
+    tx.cardOnFile.updateMany({
+      where: { appointmentId: params.appointmentId, status: "charging" },
+      data: { status: "saved" },
+    }),
+  );
+  return count === 1;
+}
+
 export type ServiceChargeOutcome =
   | { outcome: "charged"; paymentId: string; paymentIntentId: string; cents: number }
   | { outcome: "requires_action"; paymentId: string; paymentIntentId: string }
@@ -904,9 +1006,16 @@ export async function chargeSavedCardForService(params: {
             ...(pi.status === "succeeded" ? { capturedAmount: pi.amount_received } : {}),
           },
         });
-        // The card is spent only when money actually moved. An authentication
-        // request leaves it `saved` so another attempt is possible; a decline
-        // marks it failed so the barber is not sent back to it.
+        // 🔴 THE CARD STAYS `charging` WHILE THE INTENT IS LIVE.
+        //
+        // `processing` and `requires_action` both mean Stripe still holds a
+        // confirmable intent against this card. Putting the row back to `saved`
+        // there - which it used to do - would hand it straight back to the fee
+        // path, and a no-show marked in that window could take a
+        // late-cancellation fee on a card that is mid-charge for the service.
+        // `charging` is exactly the state that stops that, and it is released
+        // only by a CONFIRMED cancellation (cancel-attempt, after Stripe has
+        // cancelled the intent) or by a definitive failure below.
         await tx.cardOnFile.update({
           where: { id: row.id },
           data: {
@@ -914,7 +1023,7 @@ export async function chargeSavedCardForService(params: {
               pi.status === "succeeded"
                 ? "charged"
                 : pi.status === "requires_action" || pi.status === "processing"
-                  ? "saved"
+                  ? "charging"
                   : "failed",
           },
         });

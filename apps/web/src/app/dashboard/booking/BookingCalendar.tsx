@@ -2417,7 +2417,7 @@ function AppointmentBlock({
               🔴 Checkout does NOT complete the appointment - Done still does,
               and Done is still where the loyalty punch is earned. */}
           <button
-            onClick={() => setSheet("pay")}
+            onClick={() => setSheet("charges")}
             disabled={pending}
             className={cn(
               BTN_BASE,

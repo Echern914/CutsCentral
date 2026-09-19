@@ -269,6 +269,23 @@ const punchCount = (clientId: string) =>
 const complete = (id: string, c = cookie) =>
   request(app).post(`/api/booking/appointments/${id}/complete`).set("Cookie", c).send({});
 
+
+/** `releaseCardOnFile` is fire-and-forget on completion; give it a moment. */
+async function cardStatusEventually(appointmentId: string, want: string): Promise<string> {
+  for (let i = 0; i < 40; i++) {
+    const row = await prisma.cardOnFile.findUnique({
+      where: { appointmentId },
+      select: { status: true },
+    });
+    if (row?.status === want) return row.status;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  return (
+    (await prisma.cardOnFile.findUnique({ where: { appointmentId }, select: { status: true } }))
+      ?.status ?? "missing"
+  );
+}
+
 const getCheckout = (id: string, c = cookie) =>
   request(app).get(`/api/checkout/appointments/${id}`).set("Cookie", c);
 
@@ -281,6 +298,8 @@ const payCash = (id: string, body: Record<string, unknown>, c = cookie) =>
 beforeAll(async () => {
   process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
   process.env.STRIPE_CONNECT_WEBHOOK_SECRET = "whsec_test_dummy";
+  // The surface is dark by default; every test below needs it mounted.
+  process.env.SERVICE_CHECKOUT_ENABLED = "true";
   __resetEnvCacheForTests();
   const { createApp } = await import("../app.js");
   // 🔴 Resolve the mocked module ONCE before any race runs. Two racers hitting
@@ -342,7 +361,7 @@ describe("what the checkout screen may offer", () => {
     expect(res.body.remainingCents).toBe(4000);
     expect(res.body.methods.savedCard.available).toBe(true);
     expect(res.body.methods.savedCard.card).toEqual({ brand: "visa", last4: "4242" });
-    expect(res.body.methods.savedCard.maxCents).toBe(4000);
+    expect(res.body.methods.savedCard.dueCents).toBe(4000);
   });
 
   it("does NOT offer a saved card when there is none", async () => {
@@ -375,7 +394,7 @@ describe("what the checkout screen may offer", () => {
     expect(res.body.totalCents).toBe(4000);
     expect(res.body.collectedCents).toBe(1500);
     expect(res.body.remainingCents).toBe(2500);
-    expect(res.body.methods.savedCard.maxCents).toBe(2500);
+    expect(res.body.methods.savedCard.dueCents).toBe(2500);
   });
 });
 
@@ -445,18 +464,44 @@ describe("charging the saved card", () => {
     const res = await chargeCard(id, { amountCents: 6000, requestId: press() });
     expect(res.status).toBe(409);
     expect(res.body.error).toBe("amount_not_authorized");
-    expect(res.body.maxCents).toBe(4000);
+    expect(res.body.dueCents).toBe(4000);
     expect(fake.calls.paymentIntents).toHaveLength(0);
     const appt = await prisma.appointment.findUnique({ where: { id }, select: { paidAt: true } });
     expect(appt!.paidAt).toBeNull();
   });
 
-  it("allows less than the balance - a discount is the shop's to give", async () => {
+  it("🔴 refuses LESS than the balance too - no partial payments, no silent discounts", async () => {
     fake.reset();
     const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "single" } });
     const res = await chargeCard(id, { amountCents: 3500, requestId: press() });
-    expect(res.status).toBe(200);
-    expect(fake.calls.paymentIntents[0]!.params.amount).toBe(3500);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("amount_not_authorized");
+    expect(res.body.dueCents).toBe(4000);
+    expect(fake.calls.paymentIntents).toHaveLength(0);
+    // And nothing was recorded as settled on the way past.
+    const appt = await prisma.appointment.findUnique({ where: { id }, select: { paidAt: true } });
+    expect(appt!.paidAt).toBeNull();
+  });
+
+  it("🔴 cash is held to the SAME exact balance", async () => {
+    const id = await seedAppointment({ shopId, priceDollars: 40 });
+    const short = await payCash(id, {
+      amountCents: 2000,
+      method: "cash",
+      requestId: press(),
+      confirmed: true,
+    });
+    expect(short.status).toBe(409);
+    expect(short.body.error).toBe("amount_not_authorized");
+    const over = await payCash(id, {
+      amountCents: 9900,
+      method: "cash",
+      requestId: press(),
+      confirmed: true,
+    });
+    expect(over.status).toBe(409);
+    const appt = await prisma.appointment.findUnique({ where: { id }, select: { paidAt: true } });
+    expect(appt!.paidAt).toBeNull();
   });
 
   it("🔴 a decline leaves the cut UNPAID and retryable", async () => {
@@ -743,25 +788,14 @@ describe("checkout never earns the punch - Done does", () => {
     expect(fake.calls.paymentIntents).toHaveLength(1);
   });
 
-  it("collecting AFTER Done still records the money and still leaves one punch", async () => {
+  it("collecting in CASH after Done records the money and leaves one punch", async () => {
     fake.reset();
-    const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "single" } });
+    const id = await seedAppointment({ shopId, priceDollars: 40 });
     const clientId = await clientOf(id);
 
     expect((await complete(id)).status).toBe(200);
     expect(await punchCount(clientId)).toBe(1);
 
-    // 🔴 THE SAVED CARD IS GONE BY NOW, and that is the pre-existing rule, not
-    // this feature's: completion releases a kept card ("the visit happened: a
-    // kept card has nothing left to protect"). So a barber who presses Done
-    // first has to collect another way, and the screen says so rather than
-    // offering a card it cannot charge.
-    const card = await chargeCard(id, { amountCents: 4000, requestId: press() });
-    expect(card.status).toBe(409);
-    expect(card.body.error).toBe("card_not_saved");
-    expect(fake.calls.paymentIntents).toHaveLength(0);
-
-    // Cash still works, and the punch does not move.
     expect(
       (await payCash(id, { amountCents: 4000, method: "cash", requestId: press(), confirmed: true }))
         .status,
@@ -773,6 +807,259 @@ describe("checkout never earns the punch - Done does", () => {
     });
     expect(appt!.paidAt).not.toBeNull();
     expect(appt!.status).toBe("COMPLETED");
+  });
+});
+
+/**
+ * 🔴 THE CARD STAYS CLAIMED WHILE A SERVICE INTENT IS LIVE.
+ *
+ * `charging` is the one thing standing between a mid-flight service charge and
+ * a no-show fee taken on the same card. Putting the row back to `saved` on
+ * processing or authentication - which it used to - handed it straight back to
+ * the fee path.
+ */
+describe("the card is not handed back while a charge is live", () => {
+  const cardStatus = async (appointmentId: string) =>
+    (await prisma.cardOnFile.findUnique({
+      where: { appointmentId },
+      select: { status: true },
+    }))!.status;
+
+  it("authentication-required leaves the card `charging`, not `saved`", async () => {
+    fake.reset();
+    fake.setNextOutcome("requires_action");
+    const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "single" } });
+    expect((await chargeCard(id, { amountCents: 4000, requestId: press() })).status).toBe(409);
+    expect(await cardStatus(id)).toBe("charging");
+  });
+
+  it("🔴 a no-show fee cannot claim a card mid-service-charge", async () => {
+    fake.reset();
+    fake.setNextOutcome("requires_action");
+    const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "single" } });
+    await chargeCard(id, { amountCents: 4000, requestId: press() });
+
+    const { chargeCardOnFile } = await import("../billing/cardOnFile.js");
+    const fee = await chargeCardOnFile({
+      shopId,
+      appointmentId: id,
+      cents: 1000,
+      reason: "no_show",
+      description: "fee",
+    });
+    // The CAS refuses: the card is claimed by the live service intent.
+    expect(fee.outcome).toBe("already");
+    expect(fake.calls.paymentIntents).toHaveLength(1);
+  });
+
+  it("an ambiguous outcome also keeps the card claimed", async () => {
+    fake.reset();
+    fake.setNextOutcome("timeout");
+    const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "single" } });
+    await chargeCard(id, { amountCents: 4000, requestId: press() });
+    expect(await cardStatus(id)).toBe("charging");
+  });
+
+  it("a CONFIRMED cancellation is what hands it back", async () => {
+    fake.reset();
+    fake.setNextOutcome("requires_action");
+    const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "single" } });
+    await chargeCard(id, { amountCents: 4000, requestId: press() });
+    const attempt = await prisma.checkoutAttempt.findFirst({
+      where: { appointmentId: id, state: "requires_action" },
+    });
+    const cancel = await request(app)
+      .post(`/api/checkout/appointments/${id}/cancel-attempt`)
+      .set("Cookie", cookie)
+      .send({ attemptId: attempt!.id });
+    expect(cancel.status).toBe(200);
+    // Stripe was asked to cancel FIRST, and only then was the card released.
+    expect(fake.calls.canceled).toHaveLength(1);
+    expect(await cardStatus(id)).toBe("saved");
+  });
+});
+
+/**
+ * 🔴 DONE BEFORE CHECKOUT. This is POST-service checkout, so pressing Done
+ * first is the ordinary case, not an edge one - and it used to take the card
+ * away a moment before the barber came to collect.
+ */
+describe("Done first, then collect", () => {
+  const clientOfAppt = async (apptId: string) =>
+    (await prisma.appointment.findUnique({ where: { id: apptId }, select: { clientId: true } }))!
+      .clientId!;
+
+  it("keeps a consented card usable after completion, and earns exactly one punch", async () => {
+    fake.reset();
+    const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "single" } });
+    const clientId = await clientOfAppt(id);
+
+    expect((await complete(id)).status).toBe(200);
+    expect(await punchCount(clientId)).toBe(1);
+    // The card survived completion, because the balance is unpaid and the
+    // 72-hour window is open.
+    const card = await prisma.cardOnFile.findUnique({ where: { appointmentId: id } });
+    expect(card!.status).toBe("saved");
+
+    const screen = await getCheckout(id);
+    expect(screen.body.methods.savedCard.available).toBe(true);
+
+    const paid = await chargeCard(id, { amountCents: 4000, requestId: press() });
+    expect(paid.status).toBe(200);
+    expect(paid.body.result).toBe("paid");
+
+    // One payment, one punch - the punch came from Done, not from the charge.
+    expect(await prisma.payment.count({ where: { appointmentId: id } })).toBe(1);
+    expect(await punchCount(clientId)).toBe(1);
+    expect(await visitCount(id)).toBe(1);
+  });
+
+  it("🔴 lets the card go once the balance IS settled", async () => {
+    fake.reset();
+    const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "single" } });
+    await payCash(id, { amountCents: 4000, method: "cash", requestId: press(), confirmed: true });
+    expect((await complete(id)).status).toBe(200);
+    // Nothing left to collect, so nothing left to hold the card for.
+    expect(await cardStatusEventually(id, "released")).toBe("released");
+  });
+
+  it("🔴 a fee-only card is NOT retained past completion", async () => {
+    fake.reset();
+    const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "none" } });
+    expect((await complete(id)).status).toBe(200);
+    // It was never chargeable for the service, so completion releases it
+    // exactly as it always did.
+    expect(await cardStatusEventually(id, "released")).toBe("released");
+  });
+
+  it("🔴 the retention window closes - an old cut cannot be charged", async () => {
+    fake.reset();
+    const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "single" } });
+    // Four days ago: past the 72-hour post-service window.
+    const old = new Date(Date.now() - 4 * 24 * 60 * 60 * 1000);
+    await prisma.appointment.update({
+      where: { id },
+      data: { startsAt: old, endsAt: new Date(old.getTime() + 45 * 60 * 1000) },
+    });
+    const screen = await getCheckout(id);
+    expect(screen.body.methods.savedCard.available).toBe(false);
+    expect(screen.body.methods.savedCard.blocker).toBe("retention_expired");
+    const res = await chargeCard(id, { amountCents: 4000, requestId: press() });
+    expect(res.status).toBe(409);
+    expect(fake.calls.paymentIntents).toHaveLength(0);
+  });
+});
+
+/**
+ * 🔴 ONE SETTLEMENT PATH. Three things learn the outcome - the response, the
+ * webhook, the reconciler - and each must leave the SAME four records correct.
+ */
+describe("settlement is the same whoever learns it first", () => {
+  it("🔴 a lost response is repaired by the webhook alone - the cut still reads Paid", async () => {
+    fake.reset();
+    const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "single" } });
+    // The charge landed and the barber's reply never arrived: the attempt
+    // exists, the card is claimed, nothing else was written.
+    const attempt = await prisma.checkoutAttempt.create({
+      data: {
+        id: `cka_${randomToken(12)}`,
+        shopId,
+        appointmentId: id,
+        requestId: press(),
+        method: "saved_card",
+        amountCents: 4000,
+        idempotencyKey: `svc-checkout:${randomToken(16)}`,
+        state: "processing",
+        stripePaymentIntentId: `pi_lost_${randomToken(8)}`,
+        updatedAt: new Date(),
+      },
+    });
+    await prisma.cardOnFile.updateMany({
+      where: { appointmentId: id },
+      data: { status: "charging" },
+    });
+
+    const { settleAttemptFromIntent } = await import("../services/serviceCheckoutAttempt.js");
+    await settleAttemptFromIntent({
+      attemptId: attempt.id,
+      status: "succeeded",
+      paymentIntentId: attempt.stripePaymentIntentId!,
+    });
+
+    // All four records, from the webhook alone.
+    const after = await prisma.checkoutAttempt.findUnique({ where: { id: attempt.id } });
+    expect(after!.state).toBe("succeeded");
+    const appt = await prisma.appointment.findUnique({
+      where: { id },
+      select: { paidAt: true, paidMethod: true },
+    });
+    expect(appt!.paidAt).not.toBeNull();
+    expect(appt!.paidMethod).toBe("saved_card");
+    const card = await prisma.cardOnFile.findUnique({ where: { appointmentId: id } });
+    expect(card!.status).toBe("charged");
+  });
+
+  it("the response settling first makes the webhook a no-op", async () => {
+    fake.reset();
+    const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "single" } });
+    await chargeCard(id, { amountCents: 4000, requestId: press() });
+    const before = await prisma.appointment.findUnique({
+      where: { id },
+      select: { paidAt: true },
+    });
+
+    const attempt = await prisma.checkoutAttempt.findFirst({ where: { appointmentId: id } });
+    const { settleAttemptFromIntent } = await import("../services/serviceCheckoutAttempt.js");
+    await settleAttemptFromIntent({
+      attemptId: attempt!.id,
+      status: "succeeded",
+      paymentIntentId: attempt!.stripePaymentIntentId!,
+    });
+
+    const after = await prisma.appointment.findUnique({
+      where: { id },
+      select: { paidAt: true },
+    });
+    // Same instant: the second arrival changed nothing.
+    expect(after!.paidAt!.toISOString()).toBe(before!.paidAt!.toISOString());
+    expect(await prisma.payment.count({ where: { appointmentId: id } })).toBe(1);
+  });
+
+  it("🔴 the reconciler adopting an ambiguous attempt RELEASES the live lock", async () => {
+    fake.reset();
+    fake.setNextOutcome("timeout");
+    const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "single" } });
+    await chargeCard(id, { amountCents: 4000, requestId: press() });
+
+    const stuck = await prisma.checkoutAttempt.findFirst({
+      where: { appointmentId: id, state: "ambiguous" },
+    });
+    expect(stuck).not.toBeNull();
+
+    // Stripe's own answer: it succeeded after all.
+    const pay = await prisma.payment.findFirst({ where: { appointmentId: id } });
+    const { settleServiceCheckoutFromReconciler } = await import(
+      "../services/serviceCheckoutSettlement.js"
+    );
+    await settleServiceCheckoutFromReconciler({
+      shopId,
+      appointmentId: id,
+      stripePaymentIntentId: pay!.stripePaymentIntentId,
+      stripeStatus: "succeeded",
+    });
+
+    // The lock is gone, the cut reads paid, and the card is spent.
+    const live = await prisma.checkoutAttempt.findFirst({
+      where: {
+        appointmentId: id,
+        state: { in: ["pending", "processing", "requires_action", "ambiguous"] },
+      },
+    });
+    expect(live).toBeNull();
+    const appt = await prisma.appointment.findUnique({ where: { id }, select: { paidAt: true } });
+    expect(appt!.paidAt).not.toBeNull();
+    const card = await prisma.cardOnFile.findUnique({ where: { appointmentId: id } });
+    expect(card!.status).toBe("charged");
   });
 });
 

@@ -1,16 +1,21 @@
-import { Router } from "express";
+import { Router, type Request, type Response } from "express";
 import { z } from "zod";
+import { apiEnv } from "@chairback/config";
 import { Prisma, forShop, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 import { requireActiveAccess } from "../middleware/billing.js";
 import { logger } from "../logger.js";
-import { chargeSavedCardForService, releaseCardOnFile } from "../billing/cardOnFile.js";
+import {
+  chargeSavedCardForService,
+  releaseCardOnFile,
+  restoreCardAfterCanceledCharge,
+} from "../billing/cardOnFile.js";
 import { connectEnabled } from "../billing/stripe.js";
 import { terminalEnabled } from "../billing/terminal.js";
 import { appointmentOwnedByPlatform } from "../engines/visitOrigin.js";
 import {
-  savedCardAmountAllowed,
+  checkoutAmountAllowed,
   serviceCheckoutState,
   type ServiceCheckoutState,
 } from "../engines/serviceCheckout.js";
@@ -21,6 +26,7 @@ import {
   updateCheckoutAttempt,
   type AttemptRow,
 } from "../services/serviceCheckoutAttempt.js";
+import { settleServiceCheckout } from "../services/serviceCheckoutSettlement.js";
 
 /**
  * POST-SERVICE CHECKOUT — the barber finishes the cut and collects the balance.
@@ -32,12 +38,15 @@ import {
  *     happen;
  *   - this is taken because it DID.
  *
- * 🔴 THE CLIENT NEVER NAMES THE PRICE. The screen shows a figure and asks the
- * barber to confirm it, but what may actually be charged is computed here from
- * the ticket and the payments already recorded (`engines/serviceCheckout.ts`).
- * A request may confirm an amount at or below that; it can never raise it. A
- * barber pressing a button is not the customer agreeing to a larger bill, which
- * is also why tips and total increases are not in this release.
+ * 🔴 THE CLIENT NEVER NAMES THE PRICE, AND v1 COLLECTS THE WHOLE BALANCE OR
+ * NOTHING. What may be collected is computed here from the ticket and the
+ * payments already recorded (`engines/serviceCheckout.ts`); the confirmed
+ * figure is checked against it and must match to the cent, by every method.
+ * Anything lower is a partial payment or a silent discount, anything higher is
+ * over-collection or a tip - all four are out of scope, and every one of them
+ * would leave `paidAt` set on an appointment that is not actually settled. A
+ * barber who wants a different figure edits the PRICE, which is an audited
+ * change with its own ledger row, and then collects what follows from it.
  *
  * 🔴 NOTHING IS PAID BECAUSE THE BROWSER SAYS SO. A card charge returns what
  * Stripe said at that instant, and the CheckoutAttempt reaches its final state
@@ -60,7 +69,43 @@ import {
  * itself reported.
  */
 export const checkoutRouter: Router = Router();
-checkoutRouter.use(requireUser, requireShop, requireManager, requireActiveAccess);
+
+/**
+ * 🔴 THE KILL SWITCH, and the reason it is the FIRST middleware.
+ *
+ * `SERVICE_CHECKOUT_ENABLED` is default-off, so this whole surface ships dark:
+ * while it is false every route here answers 404, indistinguishable from a
+ * route that was never mounted, and the appointment sheet keeps the original
+ * chair-checkout screen. Nothing is taken away and nothing new is offered.
+ *
+ * This is the rollback lever on purpose. Nulling the consent columns would
+ * destroy the customer's own record of what they agreed to, and rolling the
+ * BUILD back is unsafe once an appointment has more than one Payment row - an
+ * old build reads `payment.findUnique({ appointmentId })` and would pick a row
+ * at random. A flag that closes the door and leaves every record intact is the
+ * only undo that costs nothing.
+ */
+function requireServiceCheckout(_req: Request, res: Response, next: () => void): void {
+  if (!apiEnv().SERVICE_CHECKOUT_ENABLED) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  next();
+}
+
+/** Readable from elsewhere (the appointment detail payload) so the UI can hide
+ *  the entry point rather than offering a button that 404s. */
+export function serviceCheckoutEnabled(): boolean {
+  return apiEnv().SERVICE_CHECKOUT_ENABLED;
+}
+
+checkoutRouter.use(
+  requireServiceCheckout,
+  requireUser,
+  requireShop,
+  requireManager,
+  requireActiveAccess,
+);
 
 /** The appointment facts every checkout read needs. */
 const APPT_SELECT = {
@@ -107,6 +152,7 @@ type CheckoutAppt = {
 async function loadCheckout(
   shopId: string,
   appointmentId: string,
+  now: Date = new Date(),
 ): Promise<{
   appt: CheckoutAppt;
   state: ServiceCheckoutState;
@@ -183,6 +229,8 @@ async function loadCheckout(
     payments,
     card,
     external: appointmentOwnedByPlatform(appt),
+    endsAt: appt.endsAt,
+    now,
   });
 
   return {
@@ -248,7 +296,7 @@ checkoutRouter.get("/appointments/:id", async (req, res) => {
         // must not show "Charge card ending ••••4242" it cannot honour.
         available: state.savedCardEligible && connectEnabled(),
         blocker: state.savedCardBlocker,
-        maxCents: state.maxSavedCardCents,
+        dueCents: state.chargeableCents,
         card: state.card,
       },
       // Phase 2. Advertised as actionable only where the native capability and
@@ -314,10 +362,13 @@ checkoutRouter.post("/appointments/:id/charge-card", async (req, res) => {
     res.status(409).json({ error: state.savedCardBlocker ?? "card_unavailable" });
     return;
   }
-  if (!savedCardAmountAllowed(state, parsed.data.amountCents)) {
+  if (!checkoutAmountAllowed(state, parsed.data.amountCents)) {
+    // Exactly the balance, or nothing. A lower figure is a partial payment or a
+    // silent discount and a higher one is over-collection - all out of scope,
+    // and any of them would set `paidAt` on an appointment that is not settled.
     res.status(409).json({
       error: "amount_not_authorized",
-      maxCents: state.maxSavedCardCents,
+      dueCents: state.chargeableCents,
     });
     return;
   }
@@ -391,23 +442,20 @@ checkoutRouter.post("/appointments/:id/charge-card", async (req, res) => {
 
   switch (charged.outcome) {
     case "charged": {
-      await updateCheckoutAttempt({
-        shopId,
-        attemptId: attempt.id,
-        state: "succeeded",
-        stripePaymentIntentId: charged.paymentIntentId,
-      });
-      // Money is in. Close the chair moment WITHOUT touching status - a cut
-      // that was BOOKED stays BOOKED and simply reads Paid. Completion is the
-      // barber's own call and is not something a card charge may make for them.
-      await markCollected({
+      // THE SAME settlement the webhook and the reconciler use. Whichever of
+      // the three learns the outcome first does the work; the others find it
+      // done. Nothing here is a special case for "the barber was watching".
+      await settleServiceCheckout({
         shopId,
         appointmentId: appt.id,
+        attemptId: attempt.id,
+        outcome: "paid",
+        stripePaymentIntentId: charged.paymentIntentId,
         // Card money lives in the Payment row; paidAmount is the CHAIR half and
         // must stay 0 here or revenue would count the same cents twice.
         chairCents: 0,
         method: "card",
-        now: new Date(),
+        source: "response",
       });
       const after = await loadCheckout(shopId, appt.id);
       res.json({
@@ -425,12 +473,14 @@ checkoutRouter.post("/appointments/:id/charge-card", async (req, res) => {
       // completed by the barber, and the appointment must not read Paid. The
       // attempt stays live until it is resolved or cancelled, which is what
       // stops the barber simply taking cash as well.
-      await updateCheckoutAttempt({
+      await settleServiceCheckout({
         shopId,
+        appointmentId: appt.id,
         attemptId: attempt.id,
-        state: "requires_action",
+        outcome: "requires_action",
         stripePaymentIntentId: charged.paymentIntentId,
         failureReason: "authentication_required",
+        source: "response",
       });
       res.status(409).json({
         result: "requires_action",
@@ -441,11 +491,13 @@ checkoutRouter.post("/appointments/:id/charge-card", async (req, res) => {
       return;
     }
     case "processing": {
-      await updateCheckoutAttempt({
+      await settleServiceCheckout({
         shopId,
+        appointmentId: appt.id,
         attemptId: attempt.id,
-        state: "processing",
+        outcome: "processing",
         stripePaymentIntentId: charged.paymentIntentId,
+        source: "response",
       });
       res.status(202).json({
         result: "processing",
@@ -455,11 +507,13 @@ checkoutRouter.post("/appointments/:id/charge-card", async (req, res) => {
     }
     case "ambiguous": {
       // The one state where doing anything else is dangerous.
-      await updateCheckoutAttempt({
+      await settleServiceCheckout({
         shopId,
+        appointmentId: appt.id,
         attemptId: attempt.id,
-        state: "ambiguous",
+        outcome: "ambiguous",
         failureReason: "stripe_no_answer",
+        source: "response",
       });
       res.status(409).json({
         result: "ambiguous",
@@ -470,11 +524,13 @@ checkoutRouter.post("/appointments/:id/charge-card", async (req, res) => {
       return;
     }
     case "declined": {
-      await updateCheckoutAttempt({
+      await settleServiceCheckout({
         shopId,
+        appointmentId: appt.id,
         attemptId: attempt.id,
-        state: "failed",
+        outcome: "declined",
         failureReason: charged.reason,
+        source: "response",
       });
       res.status(402).json({
         result: "declined",
@@ -486,11 +542,13 @@ checkoutRouter.post("/appointments/:id/charge-card", async (req, res) => {
     case "already":
     case "no_card":
     default: {
-      await updateCheckoutAttempt({
+      await settleServiceCheckout({
         shopId,
+        appointmentId: appt.id,
         attemptId: attempt.id,
-        state: "failed",
+        outcome: "declined",
         failureReason: charged.outcome === "error" ? charged.reason : charged.outcome,
+        source: "response",
       });
       res.status(409).json({
         result: "unavailable",
@@ -503,7 +561,9 @@ checkoutRouter.post("/appointments/:id/charge-card", async (req, res) => {
 
 const cashSchema = z
   .object({
-    amountCents: z.number().int().min(0).max(10_000_000),
+    // Checked against the server's own figure below; the range here only keeps
+    // an absurd number out of the maths.
+    amountCents: z.number().int().positive().max(1_000_000),
     method: z.enum(["cash", "direct", "other"]),
     requestId: z.string().min(8).max(64),
     /** The screen states plainly that this records money, and takes no card. */
@@ -534,7 +594,7 @@ checkoutRouter.post("/appointments/:id/cash", async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const { appt } = loaded;
+  const { appt, state } = loaded;
   // Same rule as the card path: one press, one answer, however often it is sent.
   const prior = await attemptForRequest(shopId, appt.id, parsed.data.requestId);
   if (prior) {
@@ -543,6 +603,17 @@ checkoutRouter.post("/appointments/:id/cash", async (req, res) => {
   }
   if (appt.paidAt) {
     res.status(409).json({ error: "paid_already" });
+    return;
+  }
+  // 🔴 THE SAME EXACT-BALANCE RULE AS THE CARD. Cash is where it is easiest to
+  // type a different number, and a $40 cut marked paid with $20 in the drawer
+  // is the same broken record as a partial card charge - `paidAt` would say
+  // settled while the balance says otherwise.
+  if (!checkoutAmountAllowed(state, parsed.data.amountCents)) {
+    res.status(409).json({
+      error: "amount_not_authorized",
+      dueCents: state.chargeableCents,
+    });
     return;
   }
 
@@ -567,11 +638,16 @@ checkoutRouter.post("/appointments/:id/cash", async (req, res) => {
   }
 
   const now = new Date();
-  const claimed = await markCollected({
+  // The SAME settlement the card path uses, so the two methods cannot drift
+  // into recording a collection differently.
+  const { markedPaid: claimed } = await settleServiceCheckout({
     shopId,
     appointmentId: appt.id,
+    attemptId: opened.attempt.id,
+    outcome: "paid",
     chairCents: parsed.data.amountCents,
     method: parsed.data.method,
+    source: "response",
     now,
   });
   if (!claimed) {
@@ -586,12 +662,7 @@ checkoutRouter.post("/appointments/:id/cash", async (req, res) => {
     return;
   }
 
-  await updateCheckoutAttempt({
-    shopId,
-    attemptId: opened.attempt.id,
-    state: "succeeded",
-    settledAt: now,
-  });
+  // The attempt was already moved to `succeeded` by the settlement above.
   logger.info(
     {
       shopId,
@@ -676,7 +747,10 @@ checkoutRouter.post("/appointments/:id/cancel-attempt", async (req, res) => {
     state: "canceled",
     failureReason: "canceled_by_barber",
   });
-  // The card was left `saved` on an authentication request, so nothing to undo.
+  // Stripe has confirmed the intent is dead, so the card is safe to hand back
+  // to the fee path. This is the ONLY place that undoes `charging`, and it runs
+  // only after the cancel above actually succeeded.
+  await restoreCardAfterCanceledCharge({ shopId, appointmentId: req.params.id! });
   logger.info(
     { shopId, appointmentId: req.params.id, attemptId: attempt.id, actorUserId: req.userId ?? null },
     "service checkout: attempt canceled by barber",
@@ -684,52 +758,3 @@ checkoutRouter.post("/appointments/:id/cancel-attempt", async (req, res) => {
   res.json({ ok: true });
 });
 
-/**
- * Record that the money was collected: `paidAt`, the chair figure, the method.
- *
- * 🔴 THIS DOES NOT COMPLETE THE APPOINTMENT, AND MUST NOT.
- *
- * Taking payment and finishing the cut are two different events, and only one
- * of them is this endpoint's to decide. **Done** (`POST /appointments/:id/complete`)
- * stays the sole owner of completion and of the loyalty punch, so:
- *
- *   - a cut can be paid for before it is marked done, and marking it done later
- *     earns exactly ONE punch, through the one promotion path
- *     (`promoteOneAppointmentInTx`, idempotent on the `booking:{id}` visit key);
- *   - a payment RETRY, a webhook REPLAY and a second collection attempt cannot
- *     award a punch, because nothing on this path awards one at all;
- *   - the two payment methods behave identically - neither completes anything.
- *
- * The write is a compare-and-set on `paidAt: null`, so two collections racing
- * for one cut record exactly one.
- */
-async function markCollected(params: {
-  shopId: string;
-  appointmentId: string;
-  chairCents: number;
-  method: string;
-  now: Date;
-}): Promise<boolean> {
-  const claimed = await runWithShop(params.shopId, (tx) =>
-    tx.appointment.updateMany({
-      where: { id: params.appointmentId, shopId: params.shopId, paidAt: null },
-      data: {
-        paidAmount: new Prisma.Decimal((params.chairCents / 100).toFixed(2)),
-        paidMethod: params.method,
-        paidAt: params.now,
-      },
-    }),
-  );
-  if (claimed.count === 0) return false;
-
-  // The collection succeeded, so a card kept only to cover a no-show fee has
-  // nothing left to cover. Uniform across methods: a card this checkout just
-  // charged is already `charged`, and releaseCardOnFile returns early for that,
-  // so the same call is correct for both.
-  void releaseCardOnFile({
-    shopId: params.shopId,
-    appointmentId: params.appointmentId,
-    reason: "checked_out",
-  });
-  return true;
-}

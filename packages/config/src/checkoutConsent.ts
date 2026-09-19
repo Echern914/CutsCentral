@@ -23,6 +23,28 @@
 /** Which appointments one acceptance covers. */
 export type ServiceChargeConsentScope = "single" | "series";
 
+/**
+ * 🔴 HOW LONG A CONSENTED CARD STAYS CHARGEABLE AFTER THE APPOINTMENT ENDS.
+ *
+ * Checkout happens AFTER the service, so a card cannot be let go the moment the
+ * cut is marked done - a barber who presses Done first would otherwise find the
+ * card gone when they came to collect thirty seconds later. It equally cannot
+ * be held indefinitely: an open-ended right to charge somebody's card for a
+ * haircut they had last month is not what they agreed to.
+ *
+ * 72 hours covers the realistic cases (collected at the chair, collected at the
+ * end of the day, collected on the next shift) and expires on its own. After
+ * it, the card is no longer eligible for a SERVICE charge and the ordinary
+ * release path lets it go. The fee rules are unaffected - they have their own
+ * window, in the shop's cancellation policy.
+ */
+export const SERVICE_CHARGE_RETENTION_HOURS = 72;
+
+/** Has the window closed on charging this card for the service? */
+export function serviceChargeWindowClosed(endsAt: Date, now: Date): boolean {
+  return now.getTime() - endsAt.getTime() > SERVICE_CHARGE_RETENTION_HOURS * 60 * 60 * 1000;
+}
+
 export interface ServiceChargeConsent {
   /** Stored verbatim on the card. Never reused for different wording. */
   version: string;

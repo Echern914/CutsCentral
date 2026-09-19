@@ -20,6 +20,7 @@ import {
 import { CheckoutFlow } from "./CheckoutFlow";
 import {
   cancelAppointmentAction,
+  checkoutAppointmentAction,
   completeAppointmentAction,
   updateAppointmentPriceAction,
   getAppointmentDetailAction,
@@ -73,6 +74,13 @@ export type SheetView = "detail" | "edit" | "charges" | "pay";
 type MenuKind = "contact" | "more" | null;
 
 
+const METHODS = [
+  { key: "cash" as const, label: "Cash", hint: "You keep 100%" },
+  { key: "direct" as const, label: "Zelle · Venmo · Cash App", hint: "Sent to your handle" },
+  { key: "card" as const, label: "Card", hint: "Your own reader" },
+  { key: "other" as const, label: "Other", hint: "Comp, trade, split" },
+];
+
 const METHOD_LABEL: Record<string, string> = {
   cash: "Cash",
   direct: "Zelle · Venmo · Cash App",
@@ -97,7 +105,7 @@ export function AppointmentSheet({
   initialView?: SheetView;
 }) {
   const vocab = useVocab();
-  const [view, setView] = useState<SheetView>(initialView);
+  const [rawView, setView] = useState<SheetView>(initialView);
   const [menu, setMenu] = useState<MenuKind>(null);
   const [detail, setDetail] = useState<AppointmentDetail | null>(null);
   const [loadError, setLoadError] = useState(false);
@@ -174,10 +182,54 @@ export function AppointmentSheet({
     (detail.status === "upcoming" || detail.status === "completed") &&
     detail.checkedOutAt === null;
 
-  // Checkout itself lives in CheckoutFlow: it re-reads the amount and the
-  // available methods from the server every time it opens, because the agenda
-  // row's price is a cache and charging against a cache is how a barber
-  // confirms one figure while another is taken.
+  /**
+   * 🔴 TWO CHECKOUT SCREENS, AND THE FLAG PICKS ONE.
+   *
+   * `serviceCheckoutEnabled` is the platform kill switch, read from the server
+   * with the booking. ON, the sheet opens CheckoutFlow, which re-reads the
+   * amount and the available methods from the API every time - the agenda
+   * row's price is a cache, and charging against a cache is how a barber
+   * confirms one figure while another is taken. OFF, the sheet keeps the
+   * ORIGINAL charges -> pay screens below, unchanged, so turning the feature
+   * off removes the new flow without removing checkout from the product.
+   */
+  const newCheckout = detail?.serviceCheckoutEnabled ?? false;
+  /**
+   * The calendar card opens `charges`, which in the ORIGINAL flow is the
+   * itemised step before paying. The new flow's own review screen replaces it,
+   * so with the flag on the two collapse into one rather than asking the barber
+   * to press Next through a screen that now says the same thing twice.
+   */
+  const view = newCheckout && rawView === "charges" ? "pay" : rawView;
+
+  //  ── the ORIGINAL chair checkout, used while the flag is off ──
+  const [amount, setAmount] = useState<string | null>(null);
+  const [method, setMethod] = useState<(typeof METHODS)[number]["key"] | null>(null);
+  const parsedAmount = Number.parseFloat(amount ?? "");
+  const amountValid = Number.isFinite(parsedAmount) && parsedAmount >= 0;
+  const amountValue = amount ?? ((owedCents ?? 0) / 100).toFixed(2);
+
+  function submitCheckout() {
+    if (!method || !amountValid) return;
+    start(async () => {
+      const res = await checkoutAppointmentAction(row.id, {
+        amount: Number(parsedAmount.toFixed(2)),
+        method,
+      });
+      if (!res.ok) {
+        toast(
+          res.error === "paid_already"
+            ? `This ${vocab.serviceNoun} was already checked out`
+            : "Couldn't save the checkout",
+          "error",
+        );
+        return;
+      }
+      toast(`Paid $${parsedAmount.toFixed(2)} · ${row.clientName}`, "success");
+      onChanged();
+      onClose();
+    });
+  }
 
   /**
    * A status transition from the More menu. Every one of these is the SAME
@@ -220,7 +272,7 @@ export function AppointmentSheet({
           detail: () => setView("detail"),
           edit: () => setView("detail"),
           charges: () => setView("detail"),
-          pay: () => setView("detail"),
+          pay: () => setView(newCheckout ? "detail" : "charges"),
         }[view];
 
   /**
@@ -251,10 +303,23 @@ export function AppointmentSheet({
         primary={{ label: "Next", onClick: () => setView("pay") }}
       />
     ) : view === "pay" ? (
-      // No footer: CheckoutFlow owns its own actions, and a second "pay"
-      // button down here would be a way to charge from a step that has not
-      // shown the amount.
-      null
+      // CheckoutFlow owns its own actions - a second "pay" button down here
+      // would be a way to charge from a step that has not shown the amount.
+      // The ORIGINAL screen keeps the footer it always had.
+      newCheckout ? null : (
+        <TwoUp
+          secondary={{ label: "Back", onClick: () => setView("charges") }}
+          primary={{
+            label: pending
+              ? "Saving…"
+              : method
+                ? `Mark paid · $${amountValid ? parsedAmount.toFixed(2) : "—"}`
+                : "Pick a payment method",
+            onClick: submitCheckout,
+            disabled: pending || !method || !amountValid,
+          }}
+        />
+      )
     ) : (
       <DetailFooter detail={detail} onEdit={() => setView("edit")} />
     );
@@ -296,14 +361,29 @@ export function AppointmentSheet({
           owedCents={owedCents}
         />
       ) : view === "pay" ? (
-        <CheckoutFlow
-          appointmentId={row.id}
-          onDone={() => {
-            onChanged();
-            load();
-          }}
-          onBackToAppointment={() => setView("detail")}
-        />
+        newCheckout ? (
+          <CheckoutFlow
+            appointmentId={row.id}
+            onDone={() => {
+              onChanged();
+              load();
+            }}
+            onBackToAppointment={() => setView("detail")}
+          />
+        ) : (
+          <PayView
+            row={row}
+            dateLabel={dateLabel}
+            timeLabel={timeLabel}
+            amount={amountValue}
+            setAmount={setAmount}
+            amountValid={amountValid}
+            prepaidCents={prepaidCents}
+            ticketCents={ticketCents}
+            method={method}
+            setMethod={setMethod}
+          />
+        )
       ) : (
         <DetailView
           row={row}
@@ -321,7 +401,7 @@ export function AppointmentSheet({
           menu={menu}
           setMenu={setMenu}
           onEdit={() => setView("edit")}
-          onCheckout={() => setView("pay")}
+          onCheckout={() => setView(newCheckout ? "pay" : "charges")}
           onAct={act}
           onPriceSaved={() => {
             onChanged();
@@ -1838,6 +1918,107 @@ function ChargesView({
           {money(owedCents ?? 0)}
         </span>
       </div>
+    </div>
+  );
+}
+
+function PayView({
+  row,
+  dateLabel,
+  timeLabel,
+  amount,
+  setAmount,
+  amountValid,
+  prepaidCents,
+  ticketCents,
+  method,
+  setMethod,
+}: {
+  row: AgendaRow;
+  dateLabel: string;
+  timeLabel: string;
+  amount: string;
+  setAmount: (v: string) => void;
+  amountValid: boolean;
+  prepaidCents: number;
+  ticketCents: number | null;
+  method: string | null;
+  setMethod: (m: (typeof METHODS)[number]["key"]) => void;
+}) {
+  const vocab = useVocab();
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="rounded-xl border border-subtle bg-charcoal-800/40 px-4 py-3 text-center text-xs text-muted">
+        <p className="[overflow-wrap:anywhere] font-medium text-offwhite">{row.clientName}</p>
+        <p className="mt-0.5">
+          {dateLabel} · {timeLabel}
+        </p>
+      </div>
+
+      <div className="py-2 text-center">
+        <label className="sr-only" htmlFor="checkout-amount">
+          Amount collected
+        </label>
+        <div className="flex items-center justify-center gap-1">
+          <span className="font-display text-3xl text-muted">$</span>
+          <input
+            id="checkout-amount"
+            type="text"
+            inputMode="decimal"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            aria-invalid={!amountValid || undefined}
+            className="w-40 min-w-0 bg-transparent text-center font-display text-5xl tabular-nums text-offwhite outline-none focus-visible:ring-2 focus-visible:ring-gold/50"
+          />
+        </div>
+        {!amountValid ? (
+          <p role="alert" className="mt-1 text-xs text-danger-soft">
+            Enter an amount.
+          </p>
+        ) : (
+          <p className="mt-1 text-xs text-muted">
+            {prepaidCents > 0
+              ? `${money(prepaidCents)} already paid online · ${
+                  ticketCents === null ? "no" : money(ticketCents)
+                } ticket`
+              : "Tap to change — tips and discounts go here"}
+          </p>
+        )}
+      </div>
+
+      <div>
+        <p className="text-[11px] font-medium uppercase tracking-wide text-muted">
+          How did they pay?
+        </p>
+        <div className="mt-2 flex flex-col gap-1.5">
+          {METHODS.map((m) => (
+            <button
+              key={m.key}
+              type="button"
+              onClick={() => setMethod(m.key)}
+              aria-pressed={method === m.key}
+              className={cn(
+                "flex min-h-[2.75rem] flex-wrap items-center justify-between gap-x-3 gap-y-0.5 rounded-lg border px-3.5 py-3 text-left text-sm transition-colors duration-150 ease-out",
+                method === m.key
+                  ? "border-gold/50 bg-gold/10 text-gold"
+                  : "border-subtle text-offwhite hover:border-subtle-strong",
+              )}
+            >
+              <span className="font-medium">{m.label}</span>
+              <span
+                className={cn("text-[11px]", method === m.key ? "text-gold/80" : "text-muted")}
+              >
+                {m.hint}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <p className="text-center text-[11px] leading-relaxed text-muted">
+        Records the sale and marks the {vocab.serviceNoun} done. ChairBack never touches the money —
+        you keep 100%.
+      </p>
     </div>
   );
 }

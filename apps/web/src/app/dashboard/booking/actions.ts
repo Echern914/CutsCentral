@@ -666,7 +666,8 @@ export async function checkoutAppointmentAction(
 export interface CheckoutMethodState {
   available: boolean;
   blocker?: string | null;
-  maxCents?: number;
+  /** The ONE amount this method may collect: the whole remaining balance. */
+  dueCents?: number;
   card?: { brand: string | null; last4: string | null } | null;
 }
 
@@ -728,7 +729,7 @@ export type ChargeCardResult = Result & {
   replay?: boolean;
   attempt?: CheckoutAttemptView;
   message?: string;
-  maxCents?: number;
+  dueCents?: number;
 };
 
 /**
@@ -1331,6 +1332,13 @@ export interface AppointmentDetail {
    * is idempotent and 409s a second attempt.
    */
   checkedOutAt: string | null;
+  /**
+   * Whether the post-service checkout surface exists for this deploy. False
+   * keeps the ORIGINAL chair-checkout screen, so the kill switch takes the new
+   * flow away without taking checkout away. Optional so an API that predates
+   * the flag reads as "off" rather than crashing the sheet.
+   */
+  serviceCheckoutEnabled?: boolean;
   editable: boolean;
   readOnlyReason: "external" | "not_editable" | null;
   externalManageUrl: string | null;

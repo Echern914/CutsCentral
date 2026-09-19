@@ -284,26 +284,33 @@ export async function settleAttemptFromIntent(params: {
 }): Promise<void> {
   const row = await prisma.checkoutAttempt.findUnique({
     where: { id: params.attemptId },
-    select: { id: true, shopId: true, state: true },
+    select: { id: true, shopId: true, appointmentId: true, state: true },
   });
   if (!row) return;
 
-  const state =
+  const outcome =
     params.status === "succeeded"
-      ? "succeeded"
+      ? "paid"
       : params.status === "requires_action" || params.status === "requires_confirmation"
         ? "requires_action"
         : params.status === "processing"
           ? "processing"
           : params.status === "canceled"
             ? "canceled"
-            : "failed";
+            : "declined";
 
-  await updateCheckoutAttempt({
+  // 🔴 EVERYTHING, not just the attempt. Moving only this row is what used to
+  // leave Stripe paid and the appointment showing unpaid when the barber's
+  // response was lost. Dynamically imported to keep the dependency one-way -
+  // the settlement module reaches back into billing.
+  const { settleServiceCheckout } = await import("./serviceCheckoutSettlement.js");
+  await settleServiceCheckout({
     shopId: row.shopId,
+    appointmentId: row.appointmentId,
     attemptId: row.id,
-    state,
+    outcome,
     stripePaymentIntentId: params.paymentIntentId,
     failureReason: params.failureReason ?? null,
+    source: "webhook",
   });
 }

@@ -388,6 +388,18 @@ const apiSchema = z.object({
   // OFF (the default) means DRY RUN: it reads Stripe, reports counts, writes
   // nothing. Same contract as the affiliate execution flag.
   PAYMENTS_RECONCILE_ENABLED: boolish.default("false"),
+  // Post-service checkout (collect the balance after the cut). OFF by default:
+  // while false the entire /api/checkout surface answers 404 as if it does not
+  // exist, and the appointment sheet keeps the ORIGINAL chair-checkout screen,
+  // so the feature merges and sits dark without taking anything away.
+  //
+  // 🔴 THIS IS THE ROLLBACK LEVER, and it exists because the other candidates
+  // are worse. Nulling the consent columns would destroy the customer's own
+  // evidence of what they agreed to, and rolling the build back is unsafe once
+  // an appointment has more than one Payment row (see docs/service-checkout.md).
+  // A flag that turns the surface off and leaves every record intact is the one
+  // undo that costs nothing.
+  SERVICE_CHECKOUT_ENABLED: boolish.default("false"),
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace"])
     .default("info"),

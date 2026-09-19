@@ -35,13 +35,18 @@ refuses a charge without it. They read the same file so they cannot drift.
 - Changing the wording means minting a new version. The old entry stays in that
   file forever, so a charge taken last month can still be explained.
 
-**2. The client never names the price.** The screen shows a figure and asks the
-barber to confirm it, but what may be charged is computed in
+**2. The client never names the price, and v1 collects the WHOLE balance or
+nothing.** What may be collected is computed in
 `apps/api/src/engines/serviceCheckout.ts` from the ticket and the payments
-already recorded. A request may confirm at or below that; above it is refused
-outright (`amount_not_authorized`). Tips and raised totals are out of this
-release — a barber pressing a button is not the customer agreeing to a bigger
-bill.
+already recorded. The confirmed figure must match it **to the cent, by every
+method including cash**; anything else is `amount_not_authorized`.
+
+Lower would be a partial payment or a silent discount, higher would be
+over-collection or a tip — all four are out of scope, and each would leave
+`paidAt` set on an appointment that is not actually settled. A barber who wants
+a different figure edits the **price**, which is an audited change with its own
+ledger row, and then collects what follows from it. There is deliberately no
+amount box on the checkout screen.
 
 **3. Checkout takes money. It does not finish the cut.**
 `POST /appointments/:id/complete` (**Done**) remains the sole owner of
@@ -56,14 +61,29 @@ and `PunchLedger.visitId` is `UNIQUE` — one earn per visit, enforced by the
 database.
 
 Both methods behave identically here: neither completes anything, and both
-release a kept card afterwards (a card this checkout just charged is already
-`charged`, and `releaseCardOnFile` returns early for that, so the same call is
-correct for both).
+release a kept card once the balance is settled (a card this checkout just
+charged is already `charged`, and `releaseCardOnFile` returns early for that, so
+the same call is correct for both).
 
-One interaction worth knowing, and it is pre-existing rather than new:
-**completion releases a kept card.** A barber who presses Done *first* can no
-longer charge the saved card, and the screen says `card_not_saved` instead of
-offering a card it cannot charge. Cash still works.
+**Done first, then collect, is the ordinary case — not an edge one.** This is
+POST-service checkout, so completion deliberately does *not* take the card away
+from a cut that still owes. A card is retained past Done when all three hold:
+
+1. the customer gave **service-charge consent**,
+2. a **balance is outstanding**, and
+3. the appointment ended less than `SERVICE_CHARGE_RETENTION_HOURS` (**72h**) ago.
+
+Miss any one and completion releases it exactly as it always did — a fee-only
+card is never retained. Past the window the card stops being eligible for a
+service charge (`retention_expired`) and the ordinary release takes it. An
+open-ended right to charge for a haircut somebody had last month is not what
+they agreed to.
+
+**A card mid-charge is not available to the fee path.** `processing`,
+`requires_action` and `ambiguous` all keep the CardOnFile row `charging`, so a
+no-show marked in that window cannot take a fee on a card whose service intent
+is still confirmable. Only a **confirmed** cancellation (the intent cancelled at
+Stripe first) or a definitive failure hands it back.
 
 **4. A fee already charged does not reduce what is owed for the service.**
 `purpose: "fee"` rows are excluded from the balance. Counting them would hand
@@ -159,47 +179,84 @@ Nothing customer-sensitive is logged: ids, amounts and outcomes only.
 
 ## Rollout
 
-The feature is **inert for every existing shop** on deploy, because eligibility
-requires a consent that no existing card has. That is the safety property to
-lean on.
+The feature is **dark on deploy**: `SERVICE_CHECKOUT_ENABLED` defaults to
+false, so `/api/checkout` answers 404 and the appointment sheet keeps the
+original chair-checkout screen. Nothing is added and nothing is taken away.
 
-1. **Migrate.** Railway runs `migrate deploy` as `preDeployCommand`, before the
+(The consent requirement is a second, independent floor — no card saved before
+this release is eligible for a service charge — but it is not by itself a kill
+switch, because Cash/Other needs no consent. The flag is the switch.)
+
+1. **Deploy with the flag OFF** and confirm nothing changed: the sheet still
+   shows the original checkout, and `GET /api/checkout/...` is 404.
+2. **Migrate.** Railway runs `migrate deploy` as `preDeployCommand`, before the
    new container takes traffic, so a failed migration blocks the deploy rather
    than half-applying. The migration is additive; the only destructive step is
    dropping `Payment_appointmentId_key`, which is replaced by a partial unique
    in the same transaction.
-2. **Deploy the API first, then the web.** The web calls `/api/checkout`; the
+3. **Deploy the API first, then the web.** The web calls `/api/checkout`; the
    API tolerates a web that never calls it.
-3. **Confirm the webhook.** `payment_intent.succeeded`,
+4. **Confirm the webhook.** `payment_intent.succeeded`,
    `payment_intent.payment_failed`, `payment_intent.processing` and
    `payment_intent.canceled` must be subscribed on the live Connect endpoint. A
    charge still works without them — the HTTP response reports it — but nothing
    would ever *settle*, and every appointment would stay locked behind a live
    attempt. **Check this before letting a real shop use it.**
-4. **Watch the first live charges.** `service checkout: saved card attempt` in
+5. **Watch the first live charges.** `service checkout: saved card attempt` in
    the API log carries shopId, appointmentId, attemptId, actorUserId, amount and
    outcome.
-5. **Reconciler.** `PAYMENTS_RECONCILE_ENABLED=true` is what resolves an
+6. **Reconciler.** `PAYMENTS_RECONCILE_ENABLED=true` is what resolves an
    `ambiguous` attempt without a human. Until it is on, an ambiguous attempt
    stays locked and someone has to look at Stripe.
+7. **Then turn it on** — `SERVICE_CHECKOUT_ENABLED=true` — for one shop first.
 
 ### Rollback
 
-- **Code:** revert the three commits, or roll the API back. The migration is
-  additive, so old code runs against the new schema with one exception: old code
-  does `payment.findUnique({ where: { appointmentId } })`, which is no longer a
-  unique — that is a compile-time shape, so a rolled-back **build** is
-  self-consistent. Data written by the new code (extra `Payment` rows with
-  `purpose='service_checkout'`) is invisible to the old reads.
-- **Feature only, no deploy:** stop offering the consent checkbox (the web half),
-  and no new card becomes eligible. Cards already consented stay chargeable.
-- **Hard stop:** `UPDATE "CardOnFile" SET "serviceChargeConsentVersion" = NULL,
-  "serviceChargeConsentAt" = NULL, "serviceChargeConsentScope" = NULL;` makes
-  every saved card fee-only again and the saved-card option disappears
-  everywhere. Cash checkout keeps working.
-- **Do not** drop the `purpose` column without first re-checking that no
-  appointment has two payment rows — the old unique index cannot be recreated
-  while one does.
+**The undo is the flag.** `SERVICE_CHECKOUT_ENABLED=false` closes the whole
+surface: every `/api/checkout` route answers 404, the appointment sheet goes
+back to the original chair-checkout screen, and every record stays exactly as
+it is. It needs no deploy, loses no data, and is safe at any time.
+
+```
+SERVICE_CHECKOUT_ENABLED=false   # takes effect on the next API boot
+```
+
+🔴 **There is a rollback FLOOR, and it is the first successful checkout.**
+
+Before that point, reverting the build is safe: the migration is additive, and
+nothing has written a second `Payment` row for any appointment.
+
+After it, **reverting the build is not a safe rollback.** An old build reads
+`payment.findUnique({ where: { appointmentId } })`. That is no longer a unique
+index, so on an appointment carrying both a deposit and a service checkout the
+old code does not fail — it reads **one of the two rows, unpredictably**, and
+then refunds, reschedules or quotes a cancellation fee against whichever it
+happened to get. Silent, and about money.
+
+So past the floor: **flag off and roll forward.** If the schema itself must be
+undone, do it deliberately and in this order:
+
+1. `SERVICE_CHECKOUT_ENABLED=false`, and confirm no attempt is unresolved:
+   `SELECT count(*) FROM "CheckoutAttempt"
+    WHERE state IN ('pending','processing','requires_action','ambiguous');`
+2. Find every appointment the old shape cannot represent:
+   `SELECT "appointmentId", count(*) FROM "Payment"
+    GROUP BY 1 HAVING count(*) > 1;`
+3. Reconcile those by hand — there is no automatic answer, because deciding
+   which row is "the" payment is exactly the judgement the old schema could not
+   make.
+4. Only once that query is empty can `Payment_appointmentId_key` be recreated
+   and the old build run safely.
+
+🔴 **Never null the consent columns as a rollback.**
+`serviceChargeConsentVersion` / `At` / `Scope` are the customer's own record of
+what they agreed to and when. Deleting them destroys the evidence for charges
+that have already been taken, and leaves a charged card with nothing on file
+explaining why it was chargeable. The flag achieves the same "no new service
+charges" outcome and keeps the history.
+
+- **Narrower stop, no deploy:** remove the consent checkbox from the booking
+  page and no NEW card becomes eligible, while existing ones keep working.
 
 ---
 

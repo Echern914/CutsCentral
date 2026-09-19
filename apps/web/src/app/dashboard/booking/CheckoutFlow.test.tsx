@@ -52,7 +52,7 @@ const stateFor = (over: Partial<CheckoutState> = {}): CheckoutState => ({
     savedCard: {
       available: true,
       blocker: null,
-      maxCents: 5500,
+      dueCents: 5500,
       card: { brand: "visa", last4: "4242" },
     },
     tapToPay: { available: false, blocker: "native_not_ready" },
@@ -95,7 +95,7 @@ describe("what the screen offers", () => {
           savedCard: {
             available: true,
             blocker: null,
-            maxCents: 3500,
+            dueCents: 3500,
             card: { brand: "visa", last4: "4242" },
           },
         },
@@ -116,7 +116,7 @@ describe("what the screen offers", () => {
           savedCard: {
             available: false,
             blocker: "no_service_consent",
-            maxCents: 5500,
+            dueCents: 5500,
             card: { brand: "visa", last4: "4242" },
           },
         },
@@ -135,7 +135,7 @@ describe("what the screen offers", () => {
       data: stateFor({
         methods: {
           ...stateFor().methods,
-          savedCard: { available: false, blocker: "no_card", maxCents: 5500, card: null },
+          savedCard: { available: false, blocker: "no_card", dueCents: 5500, card: null },
         },
       }),
     });
@@ -143,6 +143,38 @@ describe("what the screen offers", () => {
     await waitFor(() => expect(screen.getByText("Cash")).toBeTruthy());
     expect(screen.queryByText(/Charge card ending/)).toBeNull();
     expect(screen.queryByText(/no-show fees/i)).toBeNull();
+  });
+
+  it("🔴 the amount cannot be edited - v1 collects the balance or nothing", async () => {
+    renderFlow();
+    await waitFor(() => expect(screen.getByText("Cash")).toBeTruthy());
+    // No Modify, no input: a partial payment or a silent discount is not
+    // something the screen can express, so the API never has to refuse one.
+    expect(document.querySelector('[data-qa="modify-total"]')).toBeNull();
+    expect(document.querySelector("input")).toBeNull();
+    expect(screen.getByText(/The full balance/i)).toBeTruthy();
+  });
+
+  it("says why a card is too old to charge, rather than just hiding it", async () => {
+    getCheckoutAction.mockResolvedValue({
+      ok: true,
+      data: stateFor({
+        methods: {
+          ...stateFor().methods,
+          savedCard: {
+            available: false,
+            blocker: "retention_expired",
+            dueCents: 5500,
+            card: { brand: "visa", last4: "4242" },
+          },
+        },
+      }),
+    });
+    renderFlow();
+    await waitFor(() =>
+      expect(screen.getByText(/Too long since this appointment/i)).toBeTruthy(),
+    );
+    expect(screen.queryByText(/Charge card ending/)).toBeNull();
   });
 
   it("🔴 does not offer Tap to Pay as an actionable button until the device is ready", async () => {
