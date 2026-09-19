@@ -1,6 +1,12 @@
 import type Stripe from "stripe";
 import { prisma, runWithShop } from "@chairback/db";
-import type { CardOnFileChargeReason } from "@chairback/config";
+import type { CardOnFileChargeReason, ServiceChargeConsentScope } from "@chairback/config";
+import {
+  SERVICE_CHARGE_CONSENT_VERSION,
+  serviceChargeAuthorized,
+  serviceChargeWindowClosed,
+} from "@chairback/config";
+import { serviceCollectedCents } from "../engines/serviceCheckout.js";
 import { logger } from "../logger.js";
 import { stripeClient } from "./stripe.js";
 import { errorClassification, stripeErrorFacts } from "./stripeErrors.js";
@@ -46,6 +52,18 @@ export interface CreateCardOnFileInput {
   connectAccountId: string;
   customer: { name: string; email: string | null; phone: string | null };
   description: string;
+  /**
+   * 🔴 THE CUSTOMER'S OWN AGREEMENT that this card may be charged for the
+   * SERVICE after their appointment - a separate promise from letting a
+   * no-show fee be taken, and recorded separately.
+   *
+   * Absent means they did not agree, which is a perfectly ordinary outcome:
+   * the card is still kept, the booking still stands, and they pay at the
+   * chair like everyone else. Nothing here may be supplied on the customer's
+   * behalf - a barber cannot tick this for them, which is why it is only ever
+   * read off the booking request the customer themselves submitted.
+   */
+  serviceChargeConsent?: { accepted: boolean; scope: ServiceChargeConsentScope } | null;
 }
 
 export async function createCardOnFileSetupIntent(
@@ -121,6 +139,16 @@ export async function createCardOnFileSetupIntent(
           stripeSetupIntentId: intent.id,
           status: "pending",
           seriesId: input.seriesId ?? null,
+          // Stamped with the version the customer actually read, so a later
+          // change to the wording cannot retroactively widen what they agreed
+          // to. A CHECK constraint keeps the three columns consistent.
+          ...(input.serviceChargeConsent?.accepted
+            ? {
+                serviceChargeConsentVersion: SERVICE_CHARGE_CONSENT_VERSION,
+                serviceChargeConsentAt: new Date(),
+                serviceChargeConsentScope: input.serviceChargeConsent.scope,
+              }
+            : {}),
         },
       }),
     );
@@ -321,6 +349,9 @@ export async function fanOutSeriesCard(params: {
         brand: true,
         last4: true,
         savedAt: true,
+        serviceChargeConsentVersion: true,
+        serviceChargeConsentAt: true,
+        serviceChargeConsentScope: true,
       },
     }),
   );
@@ -379,6 +410,19 @@ export async function fanOutSeriesCard(params: {
             last4: anchor.last4,
             status: "saved",
             savedAt: anchor.savedAt,
+            // 🔴 CARRIED ONLY IF THE CUSTOMER AGREED TO THE WHOLE SERIES.
+            // `single` scope stops at the anchor: someone who agreed that one
+            // haircut may be charged has not agreed to the other eleven, and
+            // copying it forward would manufacture consent they never gave.
+            // Left NULL, an occurrence is simply not chargeable for services -
+            // the barber takes payment at the chair, which is the status quo.
+            ...(anchor.serviceChargeConsentScope === "series"
+              ? {
+                  serviceChargeConsentVersion: anchor.serviceChargeConsentVersion,
+                  serviceChargeConsentAt: anchor.serviceChargeConsentAt,
+                  serviceChargeConsentScope: "series",
+                }
+              : {}),
           },
         }),
       );
@@ -419,6 +463,25 @@ export async function releaseCardOnFile(params: {
     }),
   );
   if (!row || row.status === "released" || row.status === "charged") return;
+
+  // 🔴 COMPLETION MUST NOT TAKE THE CARD AWAY FROM A CUT THAT STILL OWES.
+  //
+  // This is POST-service checkout: the barber presses Done and collects, in
+  // either order. Releasing on `completed` meant a barber who pressed Done
+  // first found the card gone a moment later and had to ask the customer for
+  // another way to pay - for a charge they had already agreed to.
+  //
+  // So a consented card with an unpaid balance is RETAINED, and bounded: the
+  // 72-hour window in SERVICE_CHARGE_RETENTION_HOURS. Past it, this guard stops
+  // applying and the ordinary release below takes the card as it always did.
+  // Every other reason - hold lapsed, fee settled, checked out - is unaffected.
+  if (params.reason === "completed" && (await retainedForServiceCheckout(params, row))) {
+    logger.info(
+      { shopId: params.shopId, appointmentId: params.appointmentId },
+      "card on file: retained past completion - the service balance is unpaid",
+    );
+    return;
+  }
 
   // Which standing appointment, if any, this card belongs to. The ANCHOR row
   // says so directly; an occurrence row is linked through its appointment.
@@ -590,6 +653,10 @@ export async function chargeCardOnFile(params: {
           stripePaymentIntentId: `pending:${paymentId}`,
           stripeConnectAccountId: shop.stripeConnectAccountId!,
           mode: "card_on_file",
+          // A no-show / late-cancellation fee. Labelled so the balance owed for
+          // the SERVICE never counts fee money as though the customer had paid
+          // toward their haircut with it.
+          purpose: "fee",
           amount: params.cents,
           currency: "usd",
           applicationFeeAmount: feeAmount,
@@ -705,4 +772,347 @@ function randomHex(bytes: number): string {
   const buf = new Uint8Array(bytes);
   crypto.getRandomValues(buf);
   return Array.from(buf, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Should completion leave this card alone so the barber can still collect?
+ *
+ * Three things must all be true, and each one is the customer's protection:
+ * they agreed to a SERVICE charge, there is still a balance to collect, and the
+ * post-service window is open. Miss any one and the card goes, exactly as it
+ * did before.
+ */
+async function retainedForServiceCheckout(
+  params: { shopId: string; appointmentId: string },
+  row: { status: string; stripePaymentMethodId: string | null },
+): Promise<boolean> {
+  if (row.status !== "saved") return false;
+  const card = await runWithShop(params.shopId, (tx) =>
+    tx.cardOnFile.findUnique({
+      where: { appointmentId: params.appointmentId },
+      select: {
+        appointmentId: true,
+        seriesId: true,
+        serviceChargeConsentVersion: true,
+        serviceChargeConsentAt: true,
+        serviceChargeConsentScope: true,
+      },
+    }),
+  );
+  if (!card?.serviceChargeConsentVersion || !card.serviceChargeConsentAt) return false;
+
+  const appt = await runWithShop(params.shopId, (tx) =>
+    tx.appointment.findFirst({
+      where: { id: params.appointmentId, shopId: params.shopId },
+      select: { id: true, seriesId: true, endsAt: true, paidAt: true, priceAtBooking: true },
+    }),
+  );
+  if (!appt || appt.paidAt) return false; // already settled: nothing to retain for
+  if (serviceChargeWindowClosed(appt.endsAt, new Date())) return false;
+  if (!serviceChargeAuthorized(card, { appointmentId: appt.id, seriesId: appt.seriesId })) {
+    return false;
+  }
+
+  // A balance must actually be outstanding. Fee rows are excluded: money taken
+  // for a MISSED cut does not pay for one that happened.
+  const payments = await runWithShop(params.shopId, (tx) =>
+    tx.payment.findMany({
+      where: { appointmentId: params.appointmentId },
+      select: { purpose: true, status: true, amount: true, capturedAmount: true, refundedAmount: true },
+    }),
+  );
+  const ticketCents =
+    appt.priceAtBooking == null ? 0 : Math.round(Number(appt.priceAtBooking) * 100);
+  const collected = serviceCollectedCents(payments, null);
+  return ticketCents - collected > 0;
+}
+
+/**
+ * Hand a card back to the fee path after a service charge was CONFIRMED dead.
+ *
+ * The only legitimate caller is the cancel-attempt route, and only once Stripe
+ * has actually cancelled the intent. `charging` is what protects a card from a
+ * no-show fee while a service intent is still confirmable, so releasing it on
+ * anything less than a confirmed cancellation would re-open exactly the race it
+ * exists to prevent.
+ *
+ * Deliberately a compare-and-set FROM `charging`: a row that has meanwhile been
+ * `charged` (the intent succeeded after all) must never be walked backwards.
+ */
+export async function restoreCardAfterCanceledCharge(params: {
+  shopId: string;
+  appointmentId: string;
+}): Promise<boolean> {
+  const { count } = await runWithShop(params.shopId, (tx) =>
+    tx.cardOnFile.updateMany({
+      where: { appointmentId: params.appointmentId, status: "charging" },
+      data: { status: "saved" },
+    }),
+  );
+  return count === 1;
+}
+
+export type ServiceChargeOutcome =
+  | { outcome: "charged"; paymentId: string; paymentIntentId: string; cents: number }
+  | { outcome: "requires_action"; paymentId: string; paymentIntentId: string }
+  | { outcome: "processing"; paymentId: string; paymentIntentId: string }
+  | { outcome: "declined"; paymentId: string; reason: string }
+  /** Stripe did not answer. The card stays `charging`; the reconciler decides. */
+  | { outcome: "ambiguous"; paymentId: string }
+  | { outcome: "no_card" }
+  | { outcome: "already" }
+  | { outcome: "error"; reason: string };
+
+/**
+ * CHARGE THE SAVED CARD FOR THE SERVICE ITSELF, after the cut.
+ *
+ * Sibling of `chargeCardOnFile`, NOT a call into it, and the differences are
+ * the whole point:
+ *
+ *  - THE IDEMPOTENCY KEY IS THE ATTEMPT'S, not the card's. `chargeCardOnFile`
+ *    keys Stripe on `cof-charge:<cardRowId>`, which is right for a fee (one
+ *    card, one fee, ever). Reusing it here would mean a service charge and a
+ *    no-show fee on the same card share a key - and Stripe would answer the
+ *    second one by REPLAYING the first, silently returning the wrong amount's
+ *    result and charging nothing.
+ *  - THE PAYMENT ROW IS `purpose: "service_checkout"`, so it sits beside a
+ *    deposit instead of colliding with it, and so the balance maths can tell
+ *    money-for-the-haircut from money-for-a-missed-one.
+ *  - `requires_action` IS NOT A DECLINE. An off-session charge that wants
+ *    authentication has not failed and has not succeeded; it is returned as its
+ *    own outcome so the barber is offered another method instead of being told
+ *    a lie in either direction.
+ *
+ * WHAT IS DELIBERATELY IDENTICAL: the `saved -> charging` compare-and-set on
+ * the CardOnFile row. That single CAS is what serialises this against a no-show
+ * or late-cancellation charge on the same card - whichever claims the row
+ * first wins, and the other is told `already` rather than both charging.
+ */
+export async function chargeSavedCardForService(params: {
+  shopId: string;
+  appointmentId: string;
+  cents: number;
+  description: string;
+  /** The attempt this charge belongs to. Owns the Stripe idempotency key. */
+  attemptId: string;
+  idempotencyKey: string;
+}): Promise<ServiceChargeOutcome> {
+  if (params.cents <= 0) return { outcome: "error", reason: "nothing_to_charge" };
+  try {
+    const claimed = await runWithShop(params.shopId, async (tx) => {
+      const row = await tx.cardOnFile.findUnique({
+        where: { appointmentId: params.appointmentId },
+        select: {
+          id: true,
+          status: true,
+          stripeCustomerId: true,
+          stripePaymentMethodId: true,
+          brand: true,
+          last4: true,
+        },
+      });
+      if (!row) return null;
+      if (row.status !== "saved") return { row, won: false } as const;
+      // The same CAS the fee path uses. Two settlements racing on one card -
+      // a checkout and a no-show marked in the same second - cannot both pass.
+      const cas = await tx.cardOnFile.updateMany({
+        where: { id: row.id, status: "saved" },
+        data: { status: "charging" },
+      });
+      return { row, won: cas.count === 1 } as const;
+    });
+    if (!claimed) return { outcome: "no_card" };
+    if (!claimed.won) return { outcome: "already" };
+    const { row } = claimed;
+
+    const paymentMethodId = await paymentMethodFor(
+      params.shopId,
+      params.appointmentId,
+      row.stripePaymentMethodId,
+    );
+    if (!paymentMethodId) {
+      await setStatus(params.shopId, row.id, "saved");
+      return { outcome: "no_card" };
+    }
+
+    const shop = await prisma.shop.findUnique({
+      where: { id: params.shopId },
+      select: { stripeConnectAccountId: true, platformFeeBps: true },
+    });
+    if (!shop?.stripeConnectAccountId) {
+      await setStatus(params.shopId, row.id, "saved");
+      return { outcome: "error", reason: "no_connect_account" };
+    }
+
+    const feeAmount = Math.floor((params.cents * shop.platformFeeBps) / 10000);
+    const paymentId = `pay_${randomHex(24)}`;
+    // ROW FIRST, STRIPE SECOND - so a charge whose answer never arrives is
+    // still a row we hold, and the reconciler has something to repair.
+    await runWithShop(params.shopId, (tx) =>
+      tx.payment.create({
+        data: {
+          id: paymentId,
+          shopId: params.shopId,
+          appointmentId: params.appointmentId,
+          stripePaymentIntentId: `pending:${paymentId}`,
+          stripeConnectAccountId: shop.stripeConnectAccountId!,
+          mode: "card_on_file",
+          purpose: "service_checkout",
+          amount: params.cents,
+          currency: "usd",
+          applicationFeeAmount: feeAmount,
+          status: "requires_confirmation",
+        },
+      }),
+    );
+
+    try {
+      const pi = await stripeClient().paymentIntents.create(
+        {
+          amount: params.cents,
+          currency: "usd",
+          customer: row.stripeCustomerId,
+          payment_method: paymentMethodId,
+          off_session: true,
+          confirm: true,
+          // The same Connect shape as every other charge here: a destination
+          // charge on the platform account, on behalf of the barber.
+          on_behalf_of: shop.stripeConnectAccountId,
+          transfer_data: { destination: shop.stripeConnectAccountId },
+          ...(feeAmount > 0 ? { application_fee_amount: feeAmount } : {}),
+          description: params.description,
+          metadata: {
+            shopId: params.shopId,
+            appointmentId: params.appointmentId,
+            paymentId,
+            cardOnFileId: row.id,
+            // Read by the webhook to settle the attempt, and by
+            // promoteHoldForPaidIntent to know this is NOT booking money.
+            checkoutAttemptId: params.attemptId,
+            purpose: "service_checkout",
+          },
+        },
+        { idempotencyKey: params.idempotencyKey },
+      );
+      const chargeId =
+        typeof pi.latest_charge === "string" ? pi.latest_charge : (pi.latest_charge?.id ?? null);
+      await runWithShop(params.shopId, async (tx) => {
+        await tx.payment.update({
+          where: { id: paymentId },
+          data: {
+            stripePaymentIntentId: pi.id,
+            status: pi.status,
+            ...(chargeId ? { stripeChargeId: chargeId } : {}),
+            ...(pi.status === "succeeded" ? { capturedAmount: pi.amount_received } : {}),
+          },
+        });
+        // 🔴 THE CARD STAYS `charging` WHILE THE INTENT IS LIVE.
+        //
+        // `processing` and `requires_action` both mean Stripe still holds a
+        // confirmable intent against this card. Putting the row back to `saved`
+        // there - which it used to do - would hand it straight back to the fee
+        // path, and a no-show marked in that window could take a
+        // late-cancellation fee on a card that is mid-charge for the service.
+        // `charging` is exactly the state that stops that, and it is released
+        // only by a CONFIRMED cancellation (cancel-attempt, after Stripe has
+        // cancelled the intent) or by a definitive failure below.
+        await tx.cardOnFile.update({
+          where: { id: row.id },
+          data: {
+            status:
+              pi.status === "succeeded"
+                ? "charged"
+                : pi.status === "requires_action" || pi.status === "processing"
+                  ? "charging"
+                  : "failed",
+          },
+        });
+      });
+
+      if (pi.status === "succeeded") {
+        return { outcome: "charged", paymentId, paymentIntentId: pi.id, cents: params.cents };
+      }
+      if (pi.status === "requires_action") {
+        return { outcome: "requires_action", paymentId, paymentIntentId: pi.id };
+      }
+      if (pi.status === "processing") {
+        return { outcome: "processing", paymentId, paymentIntentId: pi.id };
+      }
+      return { outcome: "declined", paymentId, reason: pi.status };
+    } catch (err) {
+      const facts = stripeErrorFacts(err);
+      if (!facts.definitive) {
+        // 🔴 AMBIGUOUS. The card may be charged right now with nothing here
+        // saying so. The CardOnFile row stays `charging` (so nothing else can
+        // charge it) and the Payment is flagged for the reconciler. Calling
+        // this "declined" is what would send the barber to collect a second
+        // time.
+        await runWithShop(params.shopId, (tx) =>
+          tx.payment.update({ where: { id: paymentId }, data: { ambiguousAt: new Date() } }),
+        );
+        logger.error(
+          { appointmentId: params.appointmentId, cardOnFileId: row.id, paymentId, ...facts },
+          "service checkout: charge outcome unknown - left charging for the reconciler",
+        );
+        return { outcome: "ambiguous", paymentId };
+      }
+      const reason = stripeErrorCode(err);
+      const piId = stripeErrorIntentId(err);
+
+      // 🔴 AUTHENTICATION REQUIRED ARRIVES AS A THROWN ERROR, NOT A STATUS.
+      //
+      // Found by the real Stripe test-mode run; no fake modelled it. For an
+      // OFF-SESSION `confirm: true` intent, a card that needs 3DS does not come
+      // back as a PaymentIntent with `status: "requires_action"` - Stripe
+      // RAISES a card error with `code: "authentication_required"` and hangs
+      // the intent off it. So this branch used to call it a decline, and three
+      // things went wrong at once:
+      //
+      //   1. the barber was told the card was DECLINED, which is a different
+      //      fact with a different remedy;
+      //   2. the CardOnFile row was marked `failed`, handing the card back to
+      //      the fee path while a confirmable intent still existed;
+      //   3. worst, the attempt went terminal and RELEASED the live lock - so
+      //      the barber could take cash while the customer could still complete
+      //      authentication later and be charged a second time. Precisely the
+      //      double charge this ledger exists to prevent.
+      //
+      // It is the same state the success path calls `requires_action`, so it
+      // gets the same treatment: the card stays claimed, the lock stays held,
+      // and only the cancel-attempt route (which cancels the intent at Stripe
+      // first) may conclude it.
+      if (reason === "authentication_required" && piId) {
+        await runWithShop(params.shopId, (tx) =>
+          tx.payment.update({
+            where: { id: paymentId },
+            data: { status: "requires_action", stripePaymentIntentId: piId },
+          }),
+        );
+        logger.warn(
+          { appointmentId: params.appointmentId, paymentId, requestId: facts.requestId },
+          "service checkout: the card needs authentication - NOT charged, NOT declined",
+        );
+        return { outcome: "requires_action", paymentId, paymentIntentId: piId };
+      }
+
+      await runWithShop(params.shopId, async (tx) => {
+        await tx.payment.update({
+          where: { id: paymentId },
+          data: { status: "failed", ...(piId ? { stripePaymentIntentId: piId } : {}) },
+        });
+        await tx.cardOnFile.update({ where: { id: row.id }, data: { status: "failed" } });
+      });
+      logger.warn(
+        { appointmentId: params.appointmentId, reason, requestId: facts.requestId },
+        "service checkout: charge declined",
+      );
+      return { outcome: "declined", paymentId, reason };
+    }
+  } catch (err) {
+    logger.error(
+      { appointmentId: params.appointmentId, errName: errorClassification(err) },
+      "chargeSavedCardForService failed",
+    );
+    return { outcome: "error", reason: errorClassification(err) };
+  }
 }

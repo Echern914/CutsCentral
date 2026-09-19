@@ -1112,7 +1112,10 @@ async function loadOwnAppointment(ctx: ToolContext, appointmentId: string) {
         serviceId: true,
         startsAt: true,
         endsAt: true,
-        payment: { select: { status: true, amount: true } },
+        // The BOOKING payment only: this guard is about a prepaid booking whose
+        // price would change on a new date. A balance collected at the chair is
+        // for a cut that already happened and has no bearing on rescheduling.
+        payments: { where: { purpose: "booking" }, select: { status: true, amount: true } },
       },
     }),
   );
@@ -1145,8 +1148,9 @@ async function rescheduleTool(
 
   // Paid booking + different price on the new date: self-serve can't reconcile
   // the captured charge (same rule as the public manage page) - hand off.
+  const bookingPayment = appt.payments[0] ?? null;
   const paidCents =
-    appt.payment && appt.payment.status === "succeeded" ? appt.payment.amount : null;
+    bookingPayment && bookingPayment.status === "succeeded" ? bookingPayment.amount : null;
   if (paidCents !== null) {
     const newCents = slot.price === null ? null : Math.round(slot.price * 100);
     if (newCents !== null && newCents !== paidCents) {
@@ -1282,8 +1286,11 @@ async function cancelTool(ctx: ToolContext, rawInput: unknown): Promise<ToolExec
     where: { id: ctx.shopId },
     select: { timezone: true, cancelWindowHours: true, cancelFeeBps: true, chargeCardOnFileFees: true },
   });
-  const payment = await prisma.payment.findUnique({
-    where: { appointmentId: appt.id },
+  // What was collected AT BOOKING - the base the cancellation fee is quoted
+  // against. Never a balance collected at the chair: a cut that was paid for
+  // after it happened cannot also be cancelled.
+  const payment = await prisma.payment.findFirst({
+    where: { appointmentId: appt.id, purpose: "booking" },
     select: { amount: true, capturedAmount: true, status: true },
   });
   const collectedCents =

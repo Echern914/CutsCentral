@@ -14,6 +14,10 @@ import { serviceColorHex } from "@chairback/config/constants";
 import { NEUTRAL_VOCABULARY } from "@chairback/config/businessTypes";
 import { zonedMinutesOfDay } from "@chairback/config/time";
 import {
+  SERVICE_CHARGE_CONSENT,
+  SERVICE_CHARGE_CONSENT_SERIES,
+} from "@chairback/config/checkoutConsent";
+import {
   INVALID_EMAIL_MESSAGE,
   SLOT_CONFLICT_MESSAGE,
   isLikelyEmail,
@@ -277,6 +281,12 @@ export function BookingClient({
   // TCPA and is explicitly rejected by 10DLC campaign vetting (the box must be
   // actively selected by the user). See the booking consent label below.
   const [consent, setConsent] = useState(false);
+  /**
+   * Whether the customer agreed that a card kept on file may be charged for the
+   * SERVICE after their appointment. Defaults to FALSE and is never preselected:
+   * an authorisation to take money is not something to have by default.
+   */
+  const [serviceChargeConsent, setServiceChargeConsent] = useState(false);
   /**
    * The shop's own booking questions, keyed by question id.
    *
@@ -1443,6 +1453,11 @@ export function BookingClient({
         // sent, which matches what the customer can see on the screen.
         recurrence:
           repeatOffered && repeat ? { interval: repeat.interval, count: repeat.count } : undefined,
+        // Only ever true because the customer ticked it on this screen. Sent
+        // only where a card is actually being kept - a shop that takes no card
+        // has nothing for this to authorise.
+        serviceChargeConsent:
+          data.shop.payment?.collects === "card" && serviceChargeConsent ? true : undefined,
       });
       /**
        * Refresh the available times, then say what happened.
@@ -3234,6 +3249,40 @@ export function BookingClient({
                 .
               </span>
             </label>
+
+            {/* 🔴 A SEPARATE PROMISE FROM THE ONE ABOVE, AND FROM THE CARD
+                ITSELF. Keeping a card on file covers no-shows and late
+                cancellations; it does not make it fair to charge someone for
+                the haircut. So this is its own box, worded by the API and the
+                page from ONE file (packages/config/checkoutConsent.ts) with a
+                version stamped against the card.
+
+                Optional on purpose: leaving it unticked keeps the card, keeps
+                the booking, and simply means paying at the chair. Nothing else
+                in the product can set it - a barber cannot tick it later on the
+                customer's behalf. */}
+            {data.shop.payment?.collects === "card" && (
+              <label className="flex items-start gap-2 rounded-lg border border-white/10 p-2.5 text-xs text-muted">
+                <input
+                  type="checkbox"
+                  checked={serviceChargeConsent}
+                  onChange={(e) => setServiceChargeConsent(e.target.checked)}
+                  className="mt-0.5"
+                  data-qa="service-charge-consent"
+                />
+                <span>
+                  <strong className="text-offwhite">
+                    {repeatOffered && repeat
+                      ? `${SERVICE_CHARGE_CONSENT.label}, and for every appointment in this standing series`
+                      : SERVICE_CHARGE_CONSENT.label}
+                  </strong>
+                  <br />
+                  {SERVICE_CHARGE_CONSENT.body}
+                  {repeatOffered && repeat ? ` ${SERVICE_CHARGE_CONSENT_SERIES.body}` : ""}
+                </span>
+              </label>
+            )}
+
             {error && (
               <p role="alert" className="text-xs text-red-400">
                 {error}

@@ -7,6 +7,7 @@ import {
 } from "../engines/appointmentPayment.js";
 import { appointmentOwnedByPlatform } from "../engines/visitOrigin.js";
 import { readIntakeSnapshot, type IntakeAnswer } from "../engines/bookingIntake.js";
+import { serviceCheckoutEnabled } from "./booking.checkout.js";
 
 /**
  * ONE BOOKING, IN FULL — the read behind the appointment sheet.
@@ -151,6 +152,12 @@ export interface AppointmentDetail {
    * attempt, so offering the button again would be offering a dead end.
    */
   checkedOutAt: string | null;
+  /**
+   * Whether the post-service checkout surface exists for this deploy. False
+   * keeps the ORIGINAL chair-checkout screen, so the kill switch takes the new
+   * flow away without taking checkout away.
+   */
+  serviceCheckoutEnabled: boolean;
   /** False for anything Acuity owns, and for a terminal (canceled/done) row. */
   editable: boolean;
   /** Why editing is off, so the sheet can say it instead of hiding a button. */
@@ -543,6 +550,7 @@ export function registerAppointmentDetail(router: Router): void {
         cardOnFile: appt.cardOnFile ?? null,
       }),
       checkedOutAt: appt.paidAt ? appt.paidAt.toISOString() : null,
+      serviceCheckoutEnabled: serviceCheckoutEnabled(shopId),
       editable,
       readOnlyReason: editable ? null : external ? "external" : "not_editable",
       externalManageUrl: source.manageUrl,
@@ -659,6 +667,7 @@ export function registerAppointmentDetail(router: Router): void {
         external: true,
       }),
       checkedOutAt: null,
+      serviceCheckoutEnabled: serviceCheckoutEnabled(shopId),
       editable: false,
       readOnlyReason: "external",
       externalManageUrl: source.manageUrl,

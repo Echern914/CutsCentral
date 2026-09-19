@@ -388,6 +388,34 @@ const apiSchema = z.object({
   // OFF (the default) means DRY RUN: it reads Stripe, reports counts, writes
   // nothing. Same contract as the affiliate execution flag.
   PAYMENTS_RECONCILE_ENABLED: boolish.default("false"),
+  // Post-service checkout (collect the balance after the cut). OFF by default:
+  // while false the entire /api/checkout surface answers 404 as if it does not
+  // exist, and the appointment sheet keeps the ORIGINAL chair-checkout screen,
+  // so the feature merges and sits dark without taking anything away.
+  //
+  // 🔴 THIS IS THE ROLLBACK LEVER, and it exists because the other candidates
+  // are worse. Nulling the consent columns would destroy the customer's own
+  // evidence of what they agreed to, and rolling the build back is unsafe once
+  // an appointment has more than one Payment row (see docs/service-checkout.md).
+  // A flag that turns the surface off and leaves every record intact is the one
+  // undo that costs nothing.
+  SERVICE_CHECKOUT_ENABLED: boolish.default("false"),
+  /**
+   * 🔴 THE CANARY. Comma-separated shop ids; empty means EVERY shop.
+   *
+   * `SERVICE_CHECKOUT_ENABLED` alone is all-or-nothing, and turning it on to
+   * try the feature with one barber would hand Cash/Other checkout to every
+   * shop on the platform at the same moment - the consent requirement gates
+   * the CARD, not cash. So the rollout is two dials: the global switch says
+   * whether the surface exists at all, and this says who may reach it.
+   *
+   *   ENABLED=false                         -> off everywhere (the default)
+   *   ENABLED=true,  SHOP_IDS=""            -> on for every shop
+   *   ENABLED=true,  SHOP_IDS="shop_a"      -> on for shop_a only; every other
+   *                                            shop gets the same 404 as if the
+   *                                            feature did not exist
+   */
+  SERVICE_CHECKOUT_SHOP_IDS: z.string().default(""),
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace"])
     .default("info"),

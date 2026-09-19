@@ -393,8 +393,10 @@ export async function refundUnhonoredHold(params: {
   shopId: string;
 }): Promise<void> {
   try {
-    const payment = await prisma.payment.findUnique({
-      where: { appointmentId: params.appointmentId },
+    // The BOOKING payment: the money taken to hold this slot, and the only
+    // money an unhonoured hold should ever hand back.
+    const payment = await prisma.payment.findFirst({
+      where: { appointmentId: params.appointmentId, purpose: "booking" },
       select: { id: true },
     });
     if (payment) await refundForCancellation({ paymentId: payment.id, feeCents: 0 });
@@ -466,8 +468,8 @@ export async function sweepExpiredPaymentHolds(now: Date = new Date()): Promise<
       // in-flight intent (cancel it) and collected money (refund it), so a
       // customer who paid in the last seconds of the window is made whole by
       // the same call.
-      const payment = await prisma.payment.findUnique({
-        where: { appointmentId: appt.id },
+      const payment = await prisma.payment.findFirst({
+        where: { appointmentId: appt.id, purpose: "booking" },
         select: { id: true },
       });
       if (payment) await refundForCancellation({ paymentId: payment.id, feeCents: 0 });

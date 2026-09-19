@@ -17,6 +17,7 @@ import {
   AppointmentEditFields,
   useAppointmentEdit,
 } from "./AppointmentEditForm";
+import { CheckoutFlow } from "./CheckoutFlow";
 import {
   cancelAppointmentAction,
   checkoutAppointmentAction,
@@ -72,6 +73,7 @@ export type SheetView = "detail" | "edit" | "charges" | "pay";
 /** Which action surface is open over the sheet, if any. */
 type MenuKind = "contact" | "more" | null;
 
+
 const METHODS = [
   { key: "cash" as const, label: "Cash", hint: "You keep 100%" },
   { key: "direct" as const, label: "Zelle · Venmo · Cash App", hint: "Sent to your handle" },
@@ -103,7 +105,7 @@ export function AppointmentSheet({
   initialView?: SheetView;
 }) {
   const vocab = useVocab();
-  const [view, setView] = useState<SheetView>(initialView);
+  const [rawView, setView] = useState<SheetView>(initialView);
   const [menu, setMenu] = useState<MenuKind>(null);
   const [detail, setDetail] = useState<AppointmentDetail | null>(null);
   const [loadError, setLoadError] = useState(false);
@@ -180,7 +182,27 @@ export function AppointmentSheet({
     (detail.status === "upcoming" || detail.status === "completed") &&
     detail.checkedOutAt === null;
 
-  //  ── checkout step 3: how it was paid ────────────────────────────────────
+  /**
+   * 🔴 TWO CHECKOUT SCREENS, AND THE FLAG PICKS ONE.
+   *
+   * `serviceCheckoutEnabled` is the platform kill switch, read from the server
+   * with the booking. ON, the sheet opens CheckoutFlow, which re-reads the
+   * amount and the available methods from the API every time - the agenda
+   * row's price is a cache, and charging against a cache is how a barber
+   * confirms one figure while another is taken. OFF, the sheet keeps the
+   * ORIGINAL charges -> pay screens below, unchanged, so turning the feature
+   * off removes the new flow without removing checkout from the product.
+   */
+  const newCheckout = detail?.serviceCheckoutEnabled ?? false;
+  /**
+   * The calendar card opens `charges`, which in the ORIGINAL flow is the
+   * itemised step before paying. The new flow's own review screen replaces it,
+   * so with the flag on the two collapse into one rather than asking the barber
+   * to press Next through a screen that now says the same thing twice.
+   */
+  const view = newCheckout && rawView === "charges" ? "pay" : rawView;
+
+  //  ── the ORIGINAL chair checkout, used while the flag is off ──
   const [amount, setAmount] = useState<string | null>(null);
   const [method, setMethod] = useState<(typeof METHODS)[number]["key"] | null>(null);
   const parsedAmount = Number.parseFloat(amount ?? "");
@@ -195,8 +217,6 @@ export function AppointmentSheet({
         method,
       });
       if (!res.ok) {
-        // The 409 is the double-tap guard and deserves its own words: the money
-        // DID land, so "try again" would be exactly the wrong advice.
         toast(
           res.error === "paid_already"
             ? `This ${vocab.serviceNoun} was already checked out`
@@ -252,7 +272,7 @@ export function AppointmentSheet({
           detail: () => setView("detail"),
           edit: () => setView("detail"),
           charges: () => setView("detail"),
-          pay: () => setView("charges"),
+          pay: () => setView(newCheckout ? "detail" : "charges"),
         }[view];
 
   /**
@@ -283,18 +303,23 @@ export function AppointmentSheet({
         primary={{ label: "Next", onClick: () => setView("pay") }}
       />
     ) : view === "pay" ? (
-      <TwoUp
-        secondary={{ label: "Back", onClick: () => setView("charges") }}
-        primary={{
-          label: pending
-            ? "Saving…"
-            : method
-              ? `Mark paid · $${amountValid ? parsedAmount.toFixed(2) : "—"}`
-              : "Pick a payment method",
-          onClick: submitCheckout,
-          disabled: pending || !method || !amountValid,
-        }}
-      />
+      // CheckoutFlow owns its own actions - a second "pay" button down here
+      // would be a way to charge from a step that has not shown the amount.
+      // The ORIGINAL screen keeps the footer it always had.
+      newCheckout ? null : (
+        <TwoUp
+          secondary={{ label: "Back", onClick: () => setView("charges") }}
+          primary={{
+            label: pending
+              ? "Saving…"
+              : method
+                ? `Mark paid · $${amountValid ? parsedAmount.toFixed(2) : "—"}`
+                : "Pick a payment method",
+            onClick: submitCheckout,
+            disabled: pending || !method || !amountValid,
+          }}
+        />
+      )
     ) : (
       <DetailFooter detail={detail} onEdit={() => setView("edit")} />
     );
@@ -336,18 +361,29 @@ export function AppointmentSheet({
           owedCents={owedCents}
         />
       ) : view === "pay" ? (
-        <PayView
-          row={row}
-          dateLabel={dateLabel}
-          timeLabel={timeLabel}
-          amount={amountValue}
-          setAmount={setAmount}
-          amountValid={amountValid}
-          prepaidCents={prepaidCents}
-          ticketCents={ticketCents}
-          method={method}
-          setMethod={setMethod}
-        />
+        newCheckout ? (
+          <CheckoutFlow
+            appointmentId={row.id}
+            onDone={() => {
+              onChanged();
+              load();
+            }}
+            onBackToAppointment={() => setView("detail")}
+          />
+        ) : (
+          <PayView
+            row={row}
+            dateLabel={dateLabel}
+            timeLabel={timeLabel}
+            amount={amountValue}
+            setAmount={setAmount}
+            amountValid={amountValid}
+            prepaidCents={prepaidCents}
+            ticketCents={ticketCents}
+            method={method}
+            setMethod={setMethod}
+          />
+        )
       ) : (
         <DetailView
           row={row}
@@ -365,7 +401,7 @@ export function AppointmentSheet({
           menu={menu}
           setMenu={setMenu}
           onEdit={() => setView("edit")}
-          onCheckout={() => setView("charges")}
+          onCheckout={() => setView(newCheckout ? "pay" : "charges")}
           onAct={act}
           onPriceSaved={() => {
             onChanged();

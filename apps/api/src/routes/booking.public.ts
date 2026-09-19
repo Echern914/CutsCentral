@@ -1548,6 +1548,15 @@ const createSchema = z
       .optional()
       .or(z.literal("")),
     smsConsent: z.boolean().optional(),
+    /**
+     * 🔴 The customer's own agreement that a card kept on file may be charged
+     * for the SERVICE once their appointment is done. Separate from the
+     * no-show-fee consent the card-on-file mode already carries, and optional:
+     * leaving it off keeps the card, keeps the booking and simply means they
+     * pay at the chair. Only ever set by the customer's own submission - there
+     * is no barber-side path that can supply it.
+     */
+    serviceChargeConsent: z.boolean().optional(),
     // Chosen service add-ons (ids). Invalid/foreign ids are dropped server-side.
     addOnIds: z.array(z.string().min(1)).max(20).optional(),
     // Answers to the shop's own booking questions. Ids that aren't this shop's
@@ -2100,6 +2109,12 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
           phone: phone ?? null,
         },
         description: `Card on file for a standing ${service.name} at ${shop.name}`,
+        // A STANDING appointment is a `series` authorisation or none: agreeing
+        // that one haircut may be charged is not agreeing that twelve may be,
+        // so the booking page asks for this one in its own sentence.
+        serviceChargeConsent: d.serviceChargeConsent
+          ? { accepted: true, scope: "series" as const }
+          : null,
       });
       if (created) {
         seriesPayment = {
@@ -2534,6 +2549,9 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
         phone: phone ?? null,
       },
       description: `Card on file for ${service.name} at ${shop.name}`,
+      serviceChargeConsent: d.serviceChargeConsent
+        ? { accepted: true, scope: "single" as const }
+        : null,
     });
     if (created) {
       payment = {
@@ -3275,7 +3293,10 @@ bookingPublicRouter.post(
         serviceId: true,
         status: true,
         startsAt: true,
-        payment: { select: { status: true, amount: true } },
+        // The BOOKING payment: what the customer prepaid to hold this slot.
+        // A balance collected at the chair belongs to a cut that already
+        // happened and must not gate rescheduling a future one.
+        payments: { where: { purpose: "booking" }, select: { status: true, amount: true } },
         service: {
           select: {
             durationMin: true,
@@ -3357,8 +3378,9 @@ bookingPublicRouter.post(
     // a self-serve reschedule can't reconcile the captured charge in v1 (no
     // partial capture/top-up here). Block it and point the customer at the shop,
     // rather than silently leaving them over/under-charged.
+    const bookingPayment = appt.payments[0] ?? null;
     const paidAmount =
-      appt.payment && appt.payment.status === "succeeded" ? appt.payment.amount : null;
+      bookingPayment && bookingPayment.status === "succeeded" ? bookingPayment.amount : null;
     if (paidAmount !== null) {
       const newCents = toCents(effectivePrice);
       if (newCents !== null && newCents !== paidAmount) {

@@ -2230,12 +2230,12 @@ type ApptAgendaRow = {
   paidAmount: Prisma.Decimal | null;
   paidMethod: string | null;
   paidAt: Date | null;
-  payment: {
+  payments: {
     status: string;
     amount: number;
     capturedAmount: number | null;
     refundedAmount: number;
-  } | null;
+  }[];
 };
 
 /** Dollars collected AT THE CHAIR (null until the barber checks the cut out). */
@@ -2253,14 +2253,17 @@ function chairPaid(a: { paidAmount: Prisma.Decimal | null }): number | null {
  * sheet can never form two different opinions about whether a cut is paid.
  */
 function stripeCollected(a: {
-  payment: {
+  payments: {
     status: string;
     amount: number;
     capturedAmount: number | null;
     refundedAmount: number;
-  } | null;
+  }[];
 }): number {
-  return stripeCollectedCents(a.payment) / 100;
+  // Every row, added: a deposit taken at booking and a balance collected at
+  // checkout are both money Stripe holds for this cut, and showing only one of
+  // them would tell the barber a paid-in-full appointment still owes.
+  return a.payments.reduce((sum, p) => sum + stripeCollectedCents(p), 0) / 100;
 }
 type VisitAgendaRow = {
   id: string;
@@ -2467,7 +2470,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         paidAmount: true,
         paidMethod: true,
         paidAt: true,
-        payment: { select: { status: true, amount: true, capturedAmount: true, refundedAmount: true } },
+        payments: { select: { status: true, amount: true, capturedAmount: true, refundedAmount: true } },
       },
     })) as unknown as ApptAgendaRow[];
     if (rows.length >= BOOKING_CAP) truncated = true;
@@ -3423,7 +3426,7 @@ bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
       visitId: true,
       startsAt: true,
       endsAt: true,
-      payment: { select: { id: true } },
+      payments: { select: { id: true } },
     },
   });
   if (!appt) {
@@ -3438,7 +3441,7 @@ bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
     res.status(409).json({ error: "too_late" });
     return;
   }
-  if (appt.visitId || appt.payment) {
+  if (appt.visitId || appt.payments.length > 0) {
     // Loyalty clawed back, or money already sent back. Re-booking is the
     // honest path from here, and the UI says so.
     res.status(409).json({ error: "not_restorable" });
@@ -3625,7 +3628,9 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
       serviceId: true,
       status: true,
       startsAt: true,
-      payment: { select: { status: true, amount: true } },
+      // The BOOKING payment: this guard is about a prepaid booking whose price
+      // would change on a new date.
+      payments: { where: { purpose: "booking" }, select: { status: true, amount: true } },
       service: {
         select: {
           durationMin: true,
@@ -3676,9 +3681,10 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
   // (no partial capture or top-up on this path), so it's refused rather than
   // silently leaving the customer over- or under-charged. Same rule the
   // customer's own reschedule follows.
-  if (appt.payment && appt.payment.status === "succeeded") {
+  const bookingPayment = appt.payments[0] ?? null;
+  if (bookingPayment && bookingPayment.status === "succeeded") {
     const newCents = toCents(effectivePrice);
-    if (newCents !== null && newCents !== appt.payment.amount) {
+    if (newCents !== null && newCents !== bookingPayment.amount) {
       res.status(409).json({
         error: "price_changed",
         message:
@@ -5998,7 +6004,7 @@ bookingDashboardRouter.post("/appointments/:id/price", async (req, res) => {
       paidAmount: true,
       priceAtBooking: true,
       visit: { select: { acuityAppointmentId: true } },
-      payment: { select: { status: true, amount: true, capturedAmount: true, refundedAmount: true } },
+      payments: { select: { status: true, amount: true, capturedAmount: true, refundedAmount: true } },
     },
   });
   if (!appt) {
@@ -6013,7 +6019,9 @@ bookingDashboardRouter.post("/appointments/:id/price", async (req, res) => {
     res.status(409).json({ error: "not_priceable" });
     return;
   }
-  const onlineCents = stripeCollectedCents(appt.payment);
+  // Every cent Stripe has taken for this cut, whatever collected it. A new
+  // price below that would claim the shop collected more than the cut cost.
+  const onlineCents = appt.payments.reduce((sum, p) => sum + stripeCollectedCents(p), 0);
   if (amountCents < onlineCents) {
     res.status(409).json({ error: "below_online_payment", onlineCents });
     return;

@@ -127,7 +127,7 @@ describe("createAheadPaymentIntent: row first, Stripe second", () => {
     const appointmentId = await appointment();
     let rowAtCallTime: { stripePaymentIntentId: string; status: string } | null = null;
     create.mockImplementation(async () => {
-      rowAtCallTime = await prisma.payment.findUnique({
+      rowAtCallTime = await prisma.payment.findFirst({
         where: { appointmentId },
         select: { stripePaymentIntentId: true, status: true },
       });
@@ -137,7 +137,7 @@ describe("createAheadPaymentIntent: row first, Stripe second", () => {
     expect(res?.clientSecret).toBe("pi_secret_x");
     expect(rowAtCallTime).not.toBeNull();
     expect(rowAtCallTime!.stripePaymentIntentId).toBe(pendingIntentId(res!.paymentId));
-    const after = await prisma.payment.findUnique({ where: { appointmentId } });
+    const after = await prisma.payment.findFirst({ where: { appointmentId } });
     expect(after?.stripePaymentIntentId).toBe("pi_first");
     expect(after?.ambiguousAt).toBeNull();
     expect(create).toHaveBeenCalledTimes(1);
@@ -149,7 +149,7 @@ describe("createAheadPaymentIntent: row first, Stripe second", () => {
     create.mockRejectedValueOnce(transport());
     const first = await createAheadPaymentIntent(base(appointmentId));
     expect(first).toBeNull();
-    const pending = await prisma.payment.findUnique({ where: { appointmentId } });
+    const pending = await prisma.payment.findFirst({ where: { appointmentId } });
     expect(pending).not.toBeNull();
     expect(pending!.stripePaymentIntentId).toBe(pendingIntentId(pending!.id));
     expect(pending!.status).toBe("requires_payment_method"); // NOT "failed"
@@ -166,7 +166,7 @@ describe("createAheadPaymentIntent: row first, Stripe second", () => {
     expect(secondOpts).toEqual(firstOpts);
     expect(secondParams.amount).toBe(firstParams.amount);
     expect(secondParams.amount).toBe(6000);
-    const adopted = await prisma.payment.findUnique({ where: { appointmentId } });
+    const adopted = await prisma.payment.findFirst({ where: { appointmentId } });
     expect(adopted?.stripePaymentIntentId).toBe("pi_recovered");
     expect(adopted?.ambiguousAt).toBeNull();
   });
@@ -175,7 +175,7 @@ describe("createAheadPaymentIntent: row first, Stripe second", () => {
     const appointmentId = await appointment();
     create.mockRejectedValueOnce(definitive());
     expect(await createAheadPaymentIntent(base(appointmentId))).toBeNull();
-    const row = await prisma.payment.findUnique({ where: { appointmentId } });
+    const row = await prisma.payment.findFirst({ where: { appointmentId } });
     expect(row?.ambiguousAt).toBeNull();
     expect(row?.stripePaymentIntentId).toBe(pendingIntentId(row!.id));
   });
@@ -196,7 +196,7 @@ describe("createAheadPaymentIntent: row first, Stripe second", () => {
     ]) {
       const appointmentId = await appointment();
       expect(await createAheadPaymentIntent({ ...base(appointmentId), ...bad })).toBeNull();
-      expect(await prisma.payment.findUnique({ where: { appointmentId } })).toBeNull();
+      expect(await prisma.payment.findFirst({ where: { appointmentId } })).toBeNull();
     }
     expect(create).not.toHaveBeenCalled();
   });

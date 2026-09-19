@@ -77,6 +77,7 @@ type Row = {
   status: string;
   amount: number;
   mode: string;
+  purpose: string;
   ambiguousAt: Date | null;
 };
 
@@ -128,6 +129,7 @@ export async function reconcilePayments(
       status: true,
       amount: true,
       mode: true,
+      purpose: true,
       ambiguousAt: true,
     },
     orderBy: { updatedAt: "asc" },
@@ -203,7 +205,19 @@ export async function reconcileOne(row: Row, now: Date, dryRun: boolean): Promis
       where: { id: row.id, stripePaymentIntentId: row.stripePaymentIntentId },
       data: { status: "failed", ambiguousAt: null, reconciledAt: now },
     });
-    if (row.mode === "card_on_file") {
+    if (row.purpose === "service_checkout") {
+      // The request never reached Stripe, so nothing was ever confirmable: the
+      // attempt is definitively dead and must release the live lock, or the
+      // barber can never collect this cut by any method again.
+      const { settleServiceCheckout } = await import("../services/serviceCheckoutSettlement.js");
+      await settleServiceCheckout({
+        shopId: row.shopId,
+        appointmentId: row.appointmentId,
+        outcome: "declined",
+        failureReason: "nothing_landed_at_stripe",
+        source: "reconciler",
+      });
+    } else if (row.mode === "card_on_file") {
       await runWithShop(row.shopId, (tx) =>
         tx.cardOnFile.updateMany({
           where: { appointmentId: row.appointmentId, status: "charging" },
@@ -263,6 +277,29 @@ export async function reconcileOne(row: Row, now: Date, dryRun: boolean): Promis
  */
 async function settleCardOnFile(row: Row, pi: Stripe.PaymentIntent): Promise<void> {
   if (row.mode !== "card_on_file") return;
+
+  // 🔴 A SERVICE CHECKOUT SETTLES THROUGH ITS OWN SHARED PATH, which also moves
+  // the CheckoutAttempt and the appointment's paid fields. Repairing only the
+  // card here - as this used to - left an adopted ambiguous attempt holding the
+  // live lock forever, so the barber could never collect by any method.
+  if (row.purpose === "service_checkout") {
+    const { settleServiceCheckoutFromReconciler } = await import(
+      "../services/serviceCheckoutSettlement.js"
+    );
+    await settleServiceCheckoutFromReconciler({
+      shopId: row.shopId,
+      appointmentId: row.appointmentId,
+      stripePaymentIntentId: pi.id,
+      stripeStatus: pi.status,
+    });
+    if (pi.status === "succeeded") {
+      escalate("a service checkout settled from the reconciler - the barber was never told", {
+        paymentId: row.id,
+        appointmentId: row.appointmentId,
+      });
+    }
+    return;
+  }
   const final =
     pi.status === "succeeded" ? "charged" : pi.status === "canceled" || pi.status === "requires_payment_method" ? "failed" : null;
   if (!final) return;

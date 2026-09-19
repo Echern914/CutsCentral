@@ -137,7 +137,7 @@ describe("Tap to Pay intent guards", () => {
       .post(url(id))
       .set("Cookie", S.cookie)
       .send({ amount: 9999, amountCents: 999_900 });
-    const payment = await prisma.payment.findUnique({
+    const payment = await prisma.payment.findFirst({
       where: { appointmentId: id },
       select: { amount: true },
     });
