@@ -12,6 +12,7 @@ import {
   appAuthUrl,
   dashboardUrl,
   demoDashboardUrl,
+  TAP_TO_PAY_NATIVE_ENABLED,
   WEB_ORIGIN,
 } from "@/src/config";
 import { clearSession, loadSession } from "@/src/session";
@@ -128,10 +129,16 @@ export default function BarberScreen() {
       <ModeSwitchBar label="Shop" />
       {/* Tap to Pay lives here rather than around the whole app: it needs the
           barber's dashboard session, and the customer screens have no use for
-          a card reader. 🔴 In DEMO mode it is left out entirely - the demo
-          tenant is shared with App Review and must not be able to reach a
-          payment reader at all. */}
-      {isDemo ? (
+          a card reader.
+          🔴 LEFT OUT ENTIRELY in two cases, and "entirely" is deliberate - no
+          provider, no SDK, no announcement:
+            - DEMO mode: that tenant is shared with App Review and must not be
+              able to reach a payment reader at all;
+            - a build without TAP_TO_PAY_NATIVE_ENABLED: there is no Apple
+              entitlement in the binary, so initialising the Terminal SDK could
+              only end at a failure the barber cannot act on. The page hears
+              nothing and shows "Not set up on this device yet". */}
+      {isDemo || !TAP_TO_PAY_NATIVE_ENABLED ? (
         <AppWebView
           source={source}
           style={styles.flex}

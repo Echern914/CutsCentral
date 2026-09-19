@@ -19,7 +19,37 @@ else, and step 1 is the long pole because Apple decides the timing.
 | Attempt ledger, the live lock, settlement | `apps/api/src/routes/booking.checkout.ts` | against a fake Stripe only |
 | Connection tokens + per-shop Terminal Location | `apps/api/src/routes/payments.dashboard.ts` | never called by a real reader |
 | Native SDK integration, the page↔shell bridge | `apps/mobile/src/tapToPay/` | **never run on a device** |
-| The entitlement declaration | `apps/mobile/app.config.ts` | **never signed** |
+| The entitlement, behind a default-off flag | `apps/mobile/app.config.ts` | both generated configs tested; **never signed with it on** |
+
+---
+
+## 0. The flag: `TAP_TO_PAY_NATIVE_ENABLED`
+
+**Nothing in this file changes how the app builds today.** Tap to Pay's native
+half is behind a build-time flag that **defaults to false**, so an ordinary
+build signs and ships exactly as it did before this landed — no entitlement, no
+location permission string, and the shell tells the dashboard nothing, so the
+checkout screen reads "Not set up on this device yet".
+
+```bash
+# The default. Signs normally. Tap to Pay is not offered.
+eas build --platform ios
+
+# Only once Apple has granted the entitlement (step 1).
+TAP_TO_PAY_NATIVE_ENABLED=true eas build --platform ios
+```
+
+Accepted as on: `true`, `1`, any casing, surrounding spaces. **Anything else —
+including a typo like `yes` or `on` — reads as off**, because a mistyped build
+script must not be what puts an ungranted entitlement into a binary.
+
+🔴 **One flag, three consequences, deliberately inseparable.** Setting it true
+adds the entitlement, adds the Stripe Terminal config plugin (the Info.plist
+permission strings), *and* tells the JS bundle it may announce the capability.
+They are one decision because a binary that advertises Tap to Pay without the
+entitlement hands the barber a button that dies at the reader with a customer
+standing in front of them. `apps/mobile/src/tapToPay/appConfig.test.ts` asserts
+both generated configurations and that these three can never disagree.
 
 ---
 
@@ -32,12 +62,10 @@ bundle id — ours is `com.getchairback.rewards`.
 the Tap to Pay on iPhone request form. Apple reviews it; this is not a checkbox
 that takes effect immediately.
 
-**🔴 Until it is granted, a build carrying the entitlement will fail to sign.**
-The declaration is already in `app.config.ts`, so the first build attempt after
-merging this branch will fail if the entitlement is not yet on the account. That
-is deliberate — a silent fallback would ship a button that cannot work — but it
-means **do not merge this to a release branch while a build is due out**, or
-comment the `entitlements` block out until the grant arrives.
+**🔴 A build carrying the entitlement fails to sign until it is granted.** That
+is why the flag above exists and why it defaults off: with the default, this
+wall is simply not in the way, and no release is blocked waiting on Apple. Turn
+the flag on only after the grant lands.
 
 **Apple takes no cut.** The entitlement is permission to use the NFC hardware.
 A haircut is a real-world service and is expressly excluded from in-app
@@ -72,9 +100,16 @@ connection-token request and cached on `Shop.stripeTerminalLocationId`.
 
 ## 5. Build
 
-A native build — `@stripe/stripe-terminal-react-native` is a config plugin and
-a native module, so **it does nothing in an OTA update.** EAS build, then
-TestFlight.
+A native build **with the flag on** — `TAP_TO_PAY_NATIVE_ENABLED=true` — since
+`@stripe/stripe-terminal-react-native` is a config plugin and a native module,
+so **it does nothing in an OTA update.** EAS build, then TestFlight.
+
+Check the build actually carries it before testing on a device: the generated
+`ios/` project should contain the entitlement, and
+`Constants.expoConfig.extra.tapToPayNativeEnabled` should be `true` in the
+running app. If the flag was missed, the app behaves exactly like the default
+build — Tap to Pay simply is not offered — which looks identical to a device
+that cannot do it.
 
 Note the SDK version: `0.0.1-beta.33`. That is the only React Native SDK Stripe
 publishes for Terminal, and the beta version string is Stripe's, not a signal
@@ -101,8 +136,10 @@ false, and even with it on, a device that announces no capability shows
 
 ## What to do if the entitlement is refused or delayed
 
-The rest of checkout is unaffected — saved card and cash do not touch any of
-this. Remove the `entitlements` block from `app.config.ts` and the Stripe
-Terminal plugin entry, and the app builds and ships exactly as it does today
-with the Tap to Pay option reading "Not set up on this device yet". The server
-half is inert without a client that can reach it.
+**Nothing.** That is the whole point of the default. Leave
+`TAP_TO_PAY_NATIVE_ENABLED` unset and the app builds, signs and ships as it
+always has, with the Tap to Pay option reading "Not set up on this device yet".
+No code needs editing and no block needs commenting out.
+
+The rest of checkout is unaffected either way — saved card and cash never touch
+any of this, and the server half is inert without a client that can reach it.

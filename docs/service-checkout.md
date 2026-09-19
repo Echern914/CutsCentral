@@ -293,9 +293,13 @@ cannot read a card. Everything below the API layer is unproven, and the tests
 that exist prove decisions against fakes — not hardware.
 
 The remaining work is an account, an approval and a device, and is written up
-separately in **`docs/tap-to-pay-setup.md`**. Read that before attempting a
-build: the entitlement declaration is already in `app.config.ts`, so a build
-will **fail to sign** until Apple grants it.
+separately in **`docs/tap-to-pay-setup.md`**.
+
+It does not block anything in the meantime: the native half sits behind
+`TAP_TO_PAY_NATIVE_ENABLED`, which **defaults to false**, so ordinary iOS
+builds sign and ship exactly as before — no entitlement, no permission string,
+and the shell announces nothing. Turn it on only once Apple has granted the
+entitlement, or the build will **fail to sign**.
 
 ### How a tap actually flows
 
