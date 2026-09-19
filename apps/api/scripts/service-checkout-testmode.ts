@@ -31,6 +31,7 @@
  * Prints a pass/fail table, stops on the first failure inside a scenario, and
  * exits non-zero if anything failed.
  */
+import type Stripe from "stripe";
 import { prisma } from "@chairback/db";
 import { randomToken, SERVICE_CHARGE_CONSENT_VERSION } from "@chairback/config";
 import { stripeClient } from "../src/billing/stripe.js";
@@ -182,16 +183,27 @@ async function seedAppointmentWithCard(ctx: Ctx, testPaymentMethod: string): Pro
     name: "Test Customer",
     metadata: { shopId: ctx.shop.id, appointmentId: appt.id },
   });
-  const pm = await stripeClient().paymentMethods.attach(testPaymentMethod, {
-    customer: customer.id,
-  });
-  const si = await stripeClient().setupIntents.create({
-    customer: customer.id,
-    payment_method: pm.id,
-    usage: "off_session",
-    confirm: true,
-    automatic_payment_methods: { enabled: true, allow_redirects: "never" },
-  });
+  let pm: Stripe.PaymentMethod;
+  let si: Stripe.SetupIntent;
+  try {
+    pm = await stripeClient().paymentMethods.attach(testPaymentMethod, {
+      customer: customer.id,
+    });
+    si = await stripeClient().setupIntents.create({
+      customer: customer.id,
+      payment_method: pm.id,
+      usage: "off_session",
+      confirm: true,
+      automatic_payment_methods: { enabled: true, allow_redirects: "never" },
+    });
+  } catch (err) {
+    // A fixture problem, not a product one: this card cannot even be SAVED, so
+    // the scenario it was chosen for never ran. Say which, or the failure reads
+    // as a checkout defect.
+    throw new Error(
+      `fixture: ${testPaymentMethod} could not be saved (${(err as Error).message})`,
+    );
+  }
 
   await prisma.cardOnFile.create({
     data: {
@@ -312,7 +324,7 @@ async function scenarioSuccess(ctx: Ctx): Promise<void> {
 async function scenarioDecline(ctx: Ctx): Promise<void> {
   // eslint-disable-next-line no-console
   console.log("\n2. DECLINE - not paid, lock released");
-  const id = await seedAppointmentWithCard(ctx, "pm_card_chargeDeclined");
+  const id = await seedAppointmentWithCard(ctx, "pm_card_chargeCustomerFail");
   const res = await chargeViaApi(id);
   check("decline: route answers 402", res.status === 402, String(res.status));
   check("decline: result is declined", res.json.result === "declined", String(res.json.result));
@@ -413,9 +425,28 @@ async function scenarioAmbiguous(ctx: Ctx): Promise<void> {
   const live = await prisma.checkoutAttempt.findUnique({ where: { id: attempt!.id } });
   check("ambiguous: the lock is held before the reconciler runs", live?.state === "ambiguous");
 
-  // 🔴 THE REAL RECONCILER, against the real row and Stripe's real search
-  // index. Search lags the write by up to a minute, so retry rather than
-  // reporting a flake as a failure.
+  // 🔴 WAIT FOR STRIPE'S SEARCH INDEX FIRST, and do it OUTSIDE the reconciler.
+  //
+  // The reconciler's contract is that after PENDING_GRACE_MS (10 minutes) a
+  // reservation Stripe has never heard of means the request never landed - a
+  // terminal verdict, deliberately. This test compresses that timeline: it
+  // ages `createdAt` by 20 minutes while the intent is seconds old, so calling
+  // the reconciler immediately would ask it to judge a window that has not
+  // really elapsed, it would rightly answer "nothing landed", and it would
+  // terminally fail an attempt whose money is sitting at Stripe.
+  //
+  // That is the test lying about time, not the product misbehaving. So: wait
+  // until the intent is genuinely findable - which is the state a real
+  // ten-minute-old reservation would be in - and only then run the reconciler.
+  await until("Stripe's search index finds the intent", 180000, async () => {
+    const found = await stripeClient().paymentIntents.search({
+      query: `metadata['paymentId']:'${pay!.id}'`,
+      limit: 1,
+    });
+    return found.data.length === 1 ? found.data[0] : null;
+  });
+  check("Stripe: the intent is findable by our own metadata", true);
+
   const row = {
     id: pay!.id,
     shopId: ctx.shop.id,
@@ -427,11 +458,15 @@ async function scenarioAmbiguous(ctx: Ctx): Promise<void> {
     purpose: "service_checkout",
     ambiguousAt: new Date(),
   };
-  const outcome = await until("reconciler adopts the intent", 120000, async () => {
-    const o = await reconcileOne(row, new Date(), false);
-    return o === "adopted" || o === "repaired" ? o : null;
-  });
-  check(`reconciler: outcome is ${outcome}`, true);
+  const outcome = await reconcileOne(row, new Date(), false);
+  check(
+    `reconciler: outcome is adopted/repaired (got ${outcome})`,
+    outcome === "adopted" || outcome === "repaired",
+    outcome,
+  );
+  if (outcome !== "adopted" && outcome !== "repaired") {
+    fail("reconciler", `expected the intent to be adopted, got ${outcome}`);
+  }
 
   const repaired = await prisma.payment.findUnique({ where: { id: pay!.id } });
   check("reconciler: the Payment row carries the real intent", repaired?.stripePaymentIntentId === realIntent, String(repaired?.stripePaymentIntentId));

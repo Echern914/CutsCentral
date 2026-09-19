@@ -43,7 +43,13 @@ const fake = vi.hoisted(() => {
   };
   let n = 0;
   /** What the next paymentIntents.create should do. */
-  let nextOutcome: "succeeded" | "requires_action" | "decline" | "timeout" = "succeeded";
+  let nextOutcome:
+    | "succeeded"
+    | "requires_action"
+    | "decline"
+    | "timeout"
+    /** Stripe THROWS for off-session 3DS - it does not return a status. */
+    | "auth_required_throw" = "succeeded";
   return {
     intents,
     calls,
@@ -94,6 +100,32 @@ const fake = vi.hoisted(() => {
               // A transport failure with NO Stripe error shape: the charge may
               // or may not have been taken. This is the `ambiguous` path.
               throw new Error("socket hang up");
+            }
+            if (nextOutcome === "auth_required_throw") {
+              // 🔴 THE SHAPE REAL STRIPE ACTUALLY SENDS for an off-session
+              // `confirm: true` intent whose card needs authentication: a
+              // thrown card error carrying the intent, NOT a returned
+              // PaymentIntent with status `requires_action`. The fake modelled
+              // only the latter, which is why this went unnoticed until the
+              // real test-mode run.
+              const piId = `pi_auth_${++n}`;
+              const pi: FakeIntent = {
+                id: piId,
+                object: "payment_intent",
+                status: "requires_action",
+                amount: params.amount as number,
+                amount_received: 0,
+                client_secret: `${piId}_secret`,
+                latest_charge: null,
+                metadata: (params.metadata ?? {}) as Record<string, string>,
+              };
+              intents.set(piId, pi);
+              throw Object.assign(new Error("Authentication required"), {
+                type: "StripeCardError",
+                code: "authentication_required",
+                decline_code: undefined,
+                payment_intent: { id: piId },
+              });
             }
             if (nextOutcome === "decline") {
               const err = Object.assign(new Error("Your card was declined."), {
@@ -561,6 +593,53 @@ describe("charging the saved card", () => {
       confirmed: true,
     });
     expect(cash2.status).toBe(200);
+  });
+
+
+  it("🔴 an off-session card that needs 3DS is NOT a decline - Stripe THROWS that", async () => {
+    /**
+     * FOUND BY THE REAL STRIPE TEST-MODE RUN, not by a fake.
+     *
+     * For an off-session `confirm: true` intent, Stripe does not hand back a
+     * PaymentIntent with `status: "requires_action"` - it RAISES a card error
+     * with `code: "authentication_required"`. The catch block treated that as
+     * a definitive decline, and three things went wrong together: the barber
+     * was told "declined", the card was released to the fee path, and the
+     * attempt went terminal - releasing the live lock while a confirmable
+     * intent still existed at Stripe. The barber could then take cash and the
+     * customer could still complete authentication and be charged twice.
+     */
+    fake.reset();
+    fake.setNextOutcome("auth_required_throw");
+    const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "single" } });
+    const res = await chargeCard(id, { amountCents: 4000, requestId: press() });
+
+    expect(res.status).toBe(409);
+    expect(res.body.result).toBe("requires_action");
+    expect(res.body.result).not.toBe("declined");
+
+    const appt = await prisma.appointment.findUnique({ where: { id }, select: { paidAt: true } });
+    expect(appt!.paidAt).toBeNull();
+    // The card stays claimed, so a no-show fee cannot take it mid-flight.
+    expect((await prisma.cardOnFile.findUnique({ where: { appointmentId: id } }))!.status).toBe(
+      "charging",
+    );
+    // And the lock is STILL HELD - cash must not be collectable yet.
+    const attempt = await prisma.checkoutAttempt.findFirst({ where: { appointmentId: id } });
+    expect(attempt!.state).toBe("requires_action");
+    const cash = await payCash(id, {
+      amountCents: 4000,
+      method: "cash",
+      requestId: press(),
+      confirmed: true,
+    });
+    expect(cash.status).toBe(409);
+    expect(cash.body.error).toBe("collection_in_progress");
+
+    // The Payment row says requires_action too, not failed.
+    const pay = await prisma.payment.findFirst({ where: { appointmentId: id } });
+    expect(pay!.status).toBe("requires_action");
+    expect(pay!.stripePaymentIntentId).toMatch(/^pi_auth_/);
   });
 
   it("🔴 an unknown outcome is ambiguous: not paid, not declined, and NOT collectable another way", async () => {

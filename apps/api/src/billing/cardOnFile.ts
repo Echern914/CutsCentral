@@ -1058,6 +1058,43 @@ export async function chargeSavedCardForService(params: {
       }
       const reason = stripeErrorCode(err);
       const piId = stripeErrorIntentId(err);
+
+      // 🔴 AUTHENTICATION REQUIRED ARRIVES AS A THROWN ERROR, NOT A STATUS.
+      //
+      // Found by the real Stripe test-mode run; no fake modelled it. For an
+      // OFF-SESSION `confirm: true` intent, a card that needs 3DS does not come
+      // back as a PaymentIntent with `status: "requires_action"` - Stripe
+      // RAISES a card error with `code: "authentication_required"` and hangs
+      // the intent off it. So this branch used to call it a decline, and three
+      // things went wrong at once:
+      //
+      //   1. the barber was told the card was DECLINED, which is a different
+      //      fact with a different remedy;
+      //   2. the CardOnFile row was marked `failed`, handing the card back to
+      //      the fee path while a confirmable intent still existed;
+      //   3. worst, the attempt went terminal and RELEASED the live lock - so
+      //      the barber could take cash while the customer could still complete
+      //      authentication later and be charged a second time. Precisely the
+      //      double charge this ledger exists to prevent.
+      //
+      // It is the same state the success path calls `requires_action`, so it
+      // gets the same treatment: the card stays claimed, the lock stays held,
+      // and only the cancel-attempt route (which cancels the intent at Stripe
+      // first) may conclude it.
+      if (reason === "authentication_required" && piId) {
+        await runWithShop(params.shopId, (tx) =>
+          tx.payment.update({
+            where: { id: paymentId },
+            data: { status: "requires_action", stripePaymentIntentId: piId },
+          }),
+        );
+        logger.warn(
+          { appointmentId: params.appointmentId, paymentId, requestId: facts.requestId },
+          "service checkout: the card needs authentication - NOT charged, NOT declined",
+        );
+        return { outcome: "requires_action", paymentId, paymentIntentId: piId };
+      }
+
       await runWithShop(params.shopId, async (tx) => {
         await tx.payment.update({
           where: { id: paymentId },
