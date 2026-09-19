@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
+import { useVocab } from "@/components/VocabProvider";
 import {
   cancelCheckoutAttemptAction,
   chargeSavedCardAction,
@@ -87,6 +88,7 @@ export function CheckoutFlow({
   const [outcome, setOutcome] = useState<ChargeCardResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const vocab = useVocab();
 
 
   /** Minted when confirm opens; every retry of THAT press reuses it. */
@@ -339,7 +341,7 @@ export function CheckoutFlow({
               return;
             }
             if (!res.ok && !res.result) {
-              setError(errorCopy(res.error, res.dueCents));
+              setError(errorCopy(res.error, res.dueCents, vocab.serviceNoun));
               return;
             }
             setOutcome(res);
@@ -537,7 +539,14 @@ function methodLabel(choice: Choice | null, outcome: ChargeCardResult): string {
   return "Recorded in person";
 }
 
-function errorCopy(error: string | undefined, dueCents: number | undefined): string {
+function errorCopy(
+  error: string | undefined,
+  dueCents: number | undefined,
+  // The shop's own word for the thing being paid for; a barbershop reads "cut"
+  // and a clinic reads "appointment". Passed in because this is a plain
+  // function - the hook that resolves it belongs to the component.
+  serviceNoun: string,
+): string {
   switch (error) {
     case "amount_not_authorized":
       // The screen and the server are looking at different money - almost
@@ -546,7 +555,7 @@ function errorCopy(error: string | undefined, dueCents: number | undefined): str
     case "collection_in_progress":
       return "Another collection is still open on this appointment.";
     case "paid_already":
-      return "This cut has already been checked out.";
+      return `This ${serviceNoun} has already been checked out.`;
     case "no_service_consent":
       return "This card was only approved for no-show fees.";
     default:
