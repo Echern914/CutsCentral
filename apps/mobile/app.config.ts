@@ -139,6 +139,24 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       NSPhotoLibraryUsageDescription:
         "Lets you choose photos for your shop page and gallery.",
     },
+    // 🔴 TAP TO PAY ON IPHONE. This entitlement is NOT added by the Stripe
+    // Terminal config plugin - that one only writes Info.plist permission
+    // strings - so it is declared here, and it is the single line that decides
+    // whether a build can use the NFC reader at all.
+    //
+    // It is granted per bundle id by Apple, on request, through the developer
+    // account; until that request is approved a build carrying this entitlement
+    // WILL FAIL TO SIGN. That is why the surface is written to degrade: with no
+    // entitlement there is no native capability, the shell announces nothing,
+    // and the screen reads "Not set up on this device yet" instead of offering
+    // a button that cannot work.
+    //
+    // Apple takes no cut of these payments: the entitlement is permission to
+    // use the hardware, and a haircut is a real-world service expressly
+    // excluded from in-app purchase.
+    entitlements: {
+      "com.apple.developer.proximity-reader.payment.acceptance": true,
+    },
   },
   android: {
     package: "com.getchairback.rewards",
@@ -193,6 +211,24 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     [
       "@react-native-google-signin/google-signin",
       { iosUrlScheme: GOOGLE_IOS_URL_SCHEME },
+    ],
+    // Stripe Terminal, for Tap to Pay on iPhone. The plugin writes the
+    // Info.plist permission strings the SDK requires - location is MANDATORY
+    // for Terminal (Stripe uses it for fraud and dispute evidence on
+    // card-present charges), not optional chrome we could drop for being
+    // intrusive. The Bluetooth and local-network strings come with it because
+    // the same SDK also drives physical readers; ChairBack uses only the
+    // built-in NFC one, and the strings say what is true either way.
+    //
+    // 🔴 A CONFIG PLUGIN DOES NOTHING IN AN OTA UPDATE. This needs a new native
+    // build, like expo-web-browser and expo-secure-store above.
+    [
+      "@stripe/stripe-terminal-react-native",
+      {
+        bluetoothBackgroundMode: false,
+        locationWhenInUsePermission:
+          "Location is required by our card processor to accept card payments at your chair.",
+      },
     ],
     // GoogleSignIn 9.x pulls in AppCheckCore (Swift) + GoogleUtilities /
     // RecaptchaInterop (no module maps); under Expo's static-library build that

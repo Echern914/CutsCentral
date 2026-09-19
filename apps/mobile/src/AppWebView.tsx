@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import {
   View,
   Text,
@@ -180,8 +180,25 @@ export function AppWebView({
   onMessage: callerOnMessage,
   onShouldStartLoadWithRequest: callerShouldStart,
   onNavigationStateChange: callerNavStateChange,
+  webviewRef,
+  extraBeforeContentLoaded,
   ...props
-}: WebViewProps & { awaitsReady?: boolean }) {
+}: WebViewProps & {
+  awaitsReady?: boolean;
+  /**
+   * A caller that needs to inject into the page later (Tap to Pay answering a
+   * collection). Filled alongside this component's own ref rather than
+   * replacing it - the watchdog and the back handler still need theirs.
+   */
+  webviewRef?: MutableRefObject<WebView | null>;
+  /**
+   * Appended to this component's own pre-content scripts, NOT substituted for
+   * them. Passing `injectedJavaScriptBeforeContentLoaded` as a plain prop would
+   * silently drop the viewport lock and the App Store UI hiding, which are not
+   * optional.
+   */
+  extraBeforeContentLoaded?: string;
+}) {
   const [errored, setErrored] = useState(false);
   const [loading, setLoading] = useState(true);
   const [key, setKey] = useState(0); // bump to force a fresh WebView on retry
@@ -292,7 +309,10 @@ export function AppWebView({
     <View style={styles.flex}>
       <WebView
         key={key}
-        ref={webref}
+        ref={(w) => {
+          webref.current = w;
+          if (webviewRef) webviewRef.current = w;
+        }}
         onNavigationStateChange={(navState) => {
           canGoBack.current = navState.canGoBack;
           callerNavStateChange?.(navState);
@@ -307,7 +327,7 @@ export function AppWebView({
         setBuiltInZoomControls={false}
         setDisplayZoomControls={false}
         injectedJavaScriptBeforeContentLoaded={
-          LOCK_VIEWPORT + HIDE_FORBIDDEN_UI + ANNOUNCE_CAPABILITIES
+          LOCK_VIEWPORT + HIDE_FORBIDDEN_UI + ANNOUNCE_CAPABILITIES + (extraBeforeContentLoaded ?? "")
         }
         bounces={false}
         overScrollMode="never"

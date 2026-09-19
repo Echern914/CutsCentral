@@ -24,12 +24,26 @@ const getCheckoutAction = vi.fn();
 const chargeSavedCardAction = vi.fn();
 const recordCashCheckoutAction = vi.fn();
 const cancelCheckoutAttemptAction = vi.fn();
+const startTapToPayAction = vi.fn();
+const settleTapToPayAction = vi.fn();
+const terminalConnectionTokenAction = vi.fn();
 
 vi.mock("./actions", () => ({
   getCheckoutAction: (...a: unknown[]) => getCheckoutAction(...a),
   chargeSavedCardAction: (...a: unknown[]) => chargeSavedCardAction(...a),
   recordCashCheckoutAction: (...a: unknown[]) => recordCashCheckoutAction(...a),
   cancelCheckoutAttemptAction: (...a: unknown[]) => cancelCheckoutAttemptAction(...a),
+  startTapToPayAction: (...a: unknown[]) => startTapToPayAction(...a),
+  settleTapToPayAction: (...a: unknown[]) => settleTapToPayAction(...a),
+  terminalConnectionTokenAction: (...a: unknown[]) => terminalConnectionTokenAction(...a),
+}));
+
+const nativeTapToPayAvailable = vi.fn(() => false);
+const collectWithPhone = vi.fn();
+
+vi.mock("./tapToPayBridge", () => ({
+  nativeTapToPayAvailable: (...a: unknown[]) => nativeTapToPayAvailable(...a),
+  collectWithPhone: (...a: unknown[]) => collectWithPhone(...a),
 }));
 
 const { CheckoutFlow } = await import("./CheckoutFlow");
@@ -71,6 +85,232 @@ function renderFlow() {
 beforeEach(() => {
   vi.clearAllMocks();
   getCheckoutAction.mockResolvedValue({ ok: true, data: stateFor() });
+  nativeTapToPayAvailable.mockReturnValue(false);
+});
+
+/** A state where BOTH halves say Tap to Pay is possible. */
+const tapReady = () =>
+  stateFor({
+    methods: {
+      savedCard: {
+        available: false,
+        blocker: "no_card",
+        dueCents: 5500,
+        card: null,
+      },
+      tapToPay: { available: true, blocker: null, dueCents: 5500 },
+      cashOther: { available: true },
+    },
+  });
+
+describe("Tap to Pay", () => {
+  it("🔴 needs BOTH halves: the server saying yes is not enough", async () => {
+    // The server knows the flag, Connect and where the money goes. It cannot
+    // know whether this device has the reader - so on the web, on Android and
+    // in a build with no entitlement, this must not be a button.
+    getCheckoutAction.mockResolvedValue({ ok: true, data: tapReady() });
+    nativeTapToPayAvailable.mockReturnValue(false);
+    renderFlow();
+    await waitFor(() => expect(screen.getByText("Marcus Bell")).toBeTruthy());
+
+    expect(document.querySelector('[data-qa="method-tap-to-pay"]')).toBeNull();
+    expect(screen.getByText(/Not set up on this device yet/)).toBeTruthy();
+  });
+
+  it("offers it when the device says it can too", async () => {
+    getCheckoutAction.mockResolvedValue({ ok: true, data: tapReady() });
+    nativeTapToPayAvailable.mockReturnValue(true);
+    renderFlow();
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-qa="method-tap-to-pay"]'),
+      ).toBeTruthy(),
+    );
+    // Still nothing charged by choosing it.
+    expect(startTapToPayAction).not.toHaveBeenCalled();
+  });
+
+  it("opens the attempt, hands the phone the secret, then asks the SERVER", async () => {
+    getCheckoutAction.mockResolvedValue({ ok: true, data: tapReady() });
+    nativeTapToPayAvailable.mockReturnValue(true);
+    startTapToPayAction.mockResolvedValue({
+      ok: true,
+      attemptId: "att_1",
+      clientSecret: "pi_1_secret_2",
+      connectAccountId: "acct_1",
+    });
+    terminalConnectionTokenAction.mockResolvedValue({
+      ok: true,
+      secret: "pst_1",
+      locationId: "tml_1",
+      connectAccountId: "acct_1",
+    });
+    collectWithPhone.mockResolvedValue({
+      requestId: "r",
+      outcome: "collected",
+      message: null,
+    });
+    settleTapToPayAction.mockResolvedValue({
+      ok: true,
+      attempt: { state: "succeeded" },
+    });
+
+    renderFlow();
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-qa="method-tap-to-pay"]'),
+      ).toBeTruthy(),
+    );
+    fireEvent.click(document.querySelector('[data-qa="method-tap-to-pay"]')!);
+    fireEvent.click(document.querySelector('[data-qa="confirm-charge"]')!);
+
+    await waitFor(() => expect(settleTapToPayAction).toHaveBeenCalled());
+    // The amount was never sent by the device - it came from the server's own
+    // figure when the attempt opened.
+    expect(startTapToPayAction).toHaveBeenCalledWith("appt1", {
+      amountCents: 5500,
+      requestId: expect.any(String),
+    });
+    expect(settleTapToPayAction).toHaveBeenCalledWith("appt1", {
+      attemptId: "att_1",
+    });
+  });
+
+  it("🔴 the PHONE saying 'collected' does not make it paid - the server decides", async () => {
+    // The single most expensive mistake available in this flow: believing a
+    // client that says it took money.
+    getCheckoutAction.mockResolvedValue({ ok: true, data: tapReady() });
+    nativeTapToPayAvailable.mockReturnValue(true);
+    startTapToPayAction.mockResolvedValue({
+      ok: true,
+      attemptId: "att_1",
+      clientSecret: "pi_1_secret_2",
+      connectAccountId: "acct_1",
+    });
+    terminalConnectionTokenAction.mockResolvedValue({
+      ok: true,
+      secret: "p",
+      locationId: "tml_1",
+      connectAccountId: "acct_1",
+    });
+    collectWithPhone.mockResolvedValue({
+      requestId: "r",
+      outcome: "collected",
+      message: null,
+    });
+    // Stripe disagrees with the device.
+    settleTapToPayAction.mockResolvedValue({
+      ok: true,
+      attempt: { state: "failed" },
+    });
+
+    renderFlow();
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-qa="method-tap-to-pay"]'),
+      ).toBeTruthy(),
+    );
+    fireEvent.click(document.querySelector('[data-qa="method-tap-to-pay"]')!);
+    fireEvent.click(document.querySelector('[data-qa="confirm-charge"]')!);
+
+    await waitFor(() => expect(settleTapToPayAction).toHaveBeenCalled());
+    // No receipt screen, and the balance is re-read rather than declared paid.
+    expect(document.querySelector('[data-qa="result-paid"]')).toBeNull();
+  });
+
+  it("a device that cannot do it says so, without implying a card failed", async () => {
+    // A barber told "declined" asks the customer for another card. The truth is
+    // this phone cannot take contactless payments at all.
+    getCheckoutAction.mockResolvedValue({ ok: true, data: tapReady() });
+    nativeTapToPayAvailable.mockReturnValue(true);
+    startTapToPayAction.mockResolvedValue({
+      ok: true,
+      attemptId: "att_1",
+      clientSecret: "pi_1_secret_2",
+      connectAccountId: "acct_1",
+    });
+    terminalConnectionTokenAction.mockResolvedValue({
+      ok: true,
+      secret: "p",
+      locationId: "tml_1",
+      connectAccountId: "acct_1",
+    });
+    collectWithPhone.mockResolvedValue({
+      requestId: "r",
+      outcome: "unavailable",
+      message: null,
+    });
+    settleTapToPayAction.mockResolvedValue({
+      ok: true,
+      attempt: { state: "processing" },
+    });
+
+    renderFlow();
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-qa="method-tap-to-pay"]'),
+      ).toBeTruthy(),
+    );
+    fireEvent.click(document.querySelector('[data-qa="method-tap-to-pay"]')!);
+    fireEvent.click(document.querySelector('[data-qa="confirm-charge"]')!);
+
+    await waitFor(() =>
+      expect(screen.getByText(/can't take contactless payments/)).toBeTruthy(),
+    );
+  });
+
+  it("🔴 a replay of a press that already collected does not put the phone back out", async () => {
+    // The server answers a repeated press with the FIRST press's outcome. If
+    // that outcome was "paid", showing the reader again invites the customer
+    // to tap a second time for a cut they have already paid for.
+    getCheckoutAction.mockResolvedValue({ ok: true, data: tapReady() });
+    nativeTapToPayAvailable.mockReturnValue(true);
+    startTapToPayAction.mockResolvedValue({
+      ok: true,
+      replay: true,
+      attemptId: "att_1",
+      attempt: { state: "succeeded" },
+    });
+
+    renderFlow();
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-qa="method-tap-to-pay"]'),
+      ).toBeTruthy(),
+    );
+    fireEvent.click(document.querySelector('[data-qa="method-tap-to-pay"]')!);
+    fireEvent.click(document.querySelector('[data-qa="confirm-charge"]')!);
+
+    await waitFor(() => expect(startTapToPayAction).toHaveBeenCalled());
+    expect(collectWithPhone).not.toHaveBeenCalled();
+    expect(terminalConnectionTokenAction).not.toHaveBeenCalled();
+  });
+
+  it("tells a shop-level refusal apart from a device one", async () => {
+    // Different fact, different remedy: one is fixed by using another phone,
+    // the other by an owner changing a setting.
+    getCheckoutAction.mockResolvedValue({ ok: true, data: tapReady() });
+    nativeTapToPayAvailable.mockReturnValue(true);
+    startTapToPayAction.mockResolvedValue({
+      ok: false,
+      error: "tap_to_pay_disabled",
+    });
+
+    renderFlow();
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-qa="method-tap-to-pay"]'),
+      ).toBeTruthy(),
+    );
+    fireEvent.click(document.querySelector('[data-qa="method-tap-to-pay"]')!);
+    fireEvent.click(document.querySelector('[data-qa="confirm-charge"]')!);
+
+    await waitFor(() =>
+      expect(screen.getByText(/isn't turned on for this shop/)).toBeTruthy(),
+    );
+    // Never reached the phone: there was nothing to collect against.
+    expect(collectWithPhone).not.toHaveBeenCalled();
+  });
 });
 
 describe("what the screen offers", () => {

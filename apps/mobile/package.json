@@ -19,6 +19,7 @@
     "@expo/metro-runtime": "~6.1.2",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-google-signin/google-signin": "16.1.2",
+    "@stripe/stripe-terminal-react-native": "0.0.1-beta.33",
     "expo": "^54.0.0",
     "expo-apple-authentication": "~8.0.8",
     "expo-constants": "~18.0.13",

@@ -791,6 +791,9 @@ checkoutRouter.post("/appointments/:id/tap-to-pay-intent", async (req, res) => {
     res.status(200).json({
       replay: true,
       attempt: publicAttempt(prior),
+      // Named the same as on a fresh open, so a caller resuming a press does
+      // not have to read two different shapes to find the same attempt.
+      attemptId: prior.id,
       // A resumed press needs the secret again - the app may have been killed
       // between the tap and the card. Minted under the attempt's own
       // idempotency key, so this is the same intent, never a second one.
