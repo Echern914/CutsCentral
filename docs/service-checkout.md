@@ -183,6 +183,22 @@ The feature is **dark on deploy**: `SERVICE_CHECKOUT_ENABLED` defaults to
 false, so `/api/checkout` answers 404 and the appointment sheet keeps the
 original chair-checkout screen. Nothing is added and nothing is taken away.
 
+**Two dials, because one is not enough.** The global switch says whether the
+surface exists; `SERVICE_CHECKOUT_SHOP_IDS` (comma-separated, empty = everyone)
+says who may reach it. Without the second, turning the feature on to try it with
+one barber would hand Cash/Other checkout to **every shop at the same moment** —
+the consent requirement gates the card, not cash.
+
+```
+SERVICE_CHECKOUT_ENABLED=false                       # off everywhere (default)
+SERVICE_CHECKOUT_ENABLED=true  SERVICE_CHECKOUT_SHOP_IDS=<drick>   # canary
+SERVICE_CHECKOUT_ENABLED=true  SERVICE_CHECKOUT_SHOP_IDS=          # everyone
+```
+
+A shop outside the allowlist gets the same 404 as one on a build without the
+feature, and its appointment detail reports `serviceCheckoutEnabled: false`, so
+its sheet keeps the original screen.
+
 (The consent requirement is a second, independent floor — no card saved before
 this release is eligible for a service charge — but it is not by itself a kill
 switch, because Cash/Other needs no consent. The flag is the switch.)
@@ -197,8 +213,8 @@ switch, because Cash/Other needs no consent. The flag is the switch.)
 3. **Deploy the API first, then the web.** The web calls `/api/checkout`; the
    API tolerates a web that never calls it.
 4. **Confirm the webhook.** `payment_intent.succeeded`,
-   `payment_intent.payment_failed`, `payment_intent.processing` and
-   `payment_intent.canceled` must be subscribed on the live Connect endpoint. A
+   `payment_intent.payment_failed`, `payment_intent.processing`,
+   `payment_intent.canceled` and `charge.refunded` must all be subscribed. A
    charge still works without them — the HTTP response reports it — but nothing
    would ever *settle*, and every appointment would stay locked behind a live
    attempt. **Check this before letting a real shop use it.**
@@ -208,7 +224,10 @@ switch, because Cash/Other needs no consent. The flag is the switch.)
 6. **Reconciler.** `PAYMENTS_RECONCILE_ENABLED=true` is what resolves an
    `ambiguous` attempt without a human. Until it is on, an ambiguous attempt
    stays locked and someone has to look at Stripe.
-7. **Then turn it on** — `SERVICE_CHECKOUT_ENABLED=true` — for one shop first.
+7. **Canary.** `SERVICE_CHECKOUT_ENABLED=true` **and**
+   `SERVICE_CHECKOUT_SHOP_IDS=<one shop id>`. Watch that shop's collections.
+8. **Widen** by adding ids, and finally clear `SERVICE_CHECKOUT_SHOP_IDS` to
+   reach every shop.
 
 ### Rollback
 

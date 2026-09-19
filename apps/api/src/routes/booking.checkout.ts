@@ -93,16 +93,48 @@ function requireServiceCheckout(_req: Request, res: Response, next: () => void):
   next();
 }
 
-/** Readable from elsewhere (the appointment detail payload) so the UI can hide
- *  the entry point rather than offering a button that 404s. */
-export function serviceCheckoutEnabled(): boolean {
-  return apiEnv().SERVICE_CHECKOUT_ENABLED;
+/**
+ * May THIS shop reach the checkout surface?
+ *
+ * Two dials, and the second is what makes a canary possible. The global switch
+ * says whether the surface exists; `SERVICE_CHECKOUT_SHOP_IDS` says who may
+ * reach it. Empty means everyone - so a rollout goes off → one shop → all,
+ * and "try it with Drick" never means "hand Cash/Other to the platform".
+ *
+ * Read from elsewhere (the appointment detail payload) so the UI can hide the
+ * entry point rather than offering a button that 404s.
+ */
+export function serviceCheckoutEnabled(shopId?: string): boolean {
+  const env = apiEnv();
+  if (!env.SERVICE_CHECKOUT_ENABLED) return false;
+  const allowed = env.SERVICE_CHECKOUT_SHOP_IDS.split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (allowed.length === 0) return true;
+  // With an allowlist set, a caller that cannot name its shop is refused: the
+  // safe answer to "which shop is this?" when we do not know is "not yours".
+  return shopId !== undefined && allowed.includes(shopId);
+}
+
+/**
+ * The per-shop half of the gate. Runs AFTER `requireShop`, because that is the
+ * first point at which there is a shop to check - and it answers 404 for the
+ * same reason the global gate does: a shop outside the canary must not be able
+ * to tell the feature exists.
+ */
+function requireShopInCanary(req: Request, res: Response, next: () => void): void {
+  if (!serviceCheckoutEnabled(req.shop?.id)) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  next();
 }
 
 checkoutRouter.use(
   requireServiceCheckout,
   requireUser,
   requireShop,
+  requireShopInCanary,
   requireManager,
   requireActiveAccess,
 );

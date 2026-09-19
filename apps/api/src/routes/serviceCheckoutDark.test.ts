@@ -69,6 +69,7 @@ afterAll(async () => {
   if (shopId) await prisma.shop.deleteMany({ where: { id: shopId } });
   // Leave the flag as this suite found it; other files set their own.
   delete process.env.SERVICE_CHECKOUT_ENABLED;
+  delete process.env.SERVICE_CHECKOUT_SHOP_IDS;
   __resetEnvCacheForTests();
 });
 
@@ -133,6 +134,76 @@ describe("with SERVICE_CHECKOUT_ENABLED off", () => {
       .set("Cookie", cookie);
     expect(detail.status).toBe(200);
     expect(detail.body.serviceCheckoutEnabled).toBe(false);
+  });
+
+  /**
+   * 🔴 THE CANARY, which is what makes "turn it on for one shop" true rather
+   * than a sentence in a document. The global switch says the surface exists;
+   * the allowlist says who reaches it. Without this, trying the feature with
+   * one barber would hand Cash/Other checkout to every shop at once - the
+   * consent requirement gates the CARD, not cash.
+   *
+   * The env is re-read per call, so these flip it in place rather than needing
+   * a third file.
+   */
+  it("🔴 an allowlist lets ONE shop in and keeps every other shop out", async () => {
+    const { serviceCheckoutEnabled } = await import("./booking.checkout.js");
+
+    process.env.SERVICE_CHECKOUT_ENABLED = "true";
+    process.env.SERVICE_CHECKOUT_SHOP_IDS = "";
+    __resetEnvCacheForTests();
+    expect(serviceCheckoutEnabled(shopId)).toBe(true);
+    expect(serviceCheckoutEnabled("some_other_shop")).toBe(true);
+
+    // Now the canary: this shop only.
+    process.env.SERVICE_CHECKOUT_SHOP_IDS = `${shopId}, another_shop`;
+    __resetEnvCacheForTests();
+    expect(serviceCheckoutEnabled(shopId)).toBe(true);
+    expect(serviceCheckoutEnabled("another_shop")).toBe(true);
+    expect(serviceCheckoutEnabled("some_other_shop")).toBe(false);
+    // A caller that cannot name its shop is refused while an allowlist is set.
+    expect(serviceCheckoutEnabled(undefined)).toBe(false);
+
+    // The global switch still wins over the allowlist.
+    process.env.SERVICE_CHECKOUT_ENABLED = "false";
+    __resetEnvCacheForTests();
+    expect(serviceCheckoutEnabled(shopId)).toBe(false);
+
+    process.env.SERVICE_CHECKOUT_ENABLED = "false";
+    process.env.SERVICE_CHECKOUT_SHOP_IDS = "";
+    __resetEnvCacheForTests();
+  });
+
+  it("🔴 a shop outside the canary gets 404 from the live routes", async () => {
+    const id = await seedAppointment();
+    process.env.SERVICE_CHECKOUT_ENABLED = "true";
+    process.env.SERVICE_CHECKOUT_SHOP_IDS = "a_different_shop_entirely";
+    __resetEnvCacheForTests();
+
+    const get = await request(app).get(`/api/checkout/appointments/${id}`).set("Cookie", cookie);
+    expect(get.status).toBe(404);
+    const cash = await request(app)
+      .post(`/api/checkout/appointments/${id}/cash`)
+      .set("Cookie", cookie)
+      .send({ amountCents: 4000, method: "cash", requestId: `req_${randomToken(12)}`, confirmed: true });
+    expect(cash.status).toBe(404);
+    // And the detail payload tells the sheet to keep the original screen.
+    const detail = await request(app)
+      .get(`/api/booking/appointments/${id}/detail`)
+      .set("Cookie", cookie);
+    expect(detail.body.serviceCheckoutEnabled).toBe(false);
+
+    // Inside the canary, the same shop is let through.
+    process.env.SERVICE_CHECKOUT_SHOP_IDS = shopId;
+    __resetEnvCacheForTests();
+    const allowed = await request(app)
+      .get(`/api/checkout/appointments/${id}`)
+      .set("Cookie", cookie);
+    expect(allowed.status).toBe(200);
+
+    process.env.SERVICE_CHECKOUT_ENABLED = "false";
+    process.env.SERVICE_CHECKOUT_SHOP_IDS = "";
+    __resetEnvCacheForTests();
   });
 
   it("🔴 the ORIGINAL chair checkout still works - the switch removes the new flow, not checkout", async () => {
